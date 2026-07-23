@@ -23,6 +23,8 @@ not require migration later.
 - Initialize Workbook inside an existing Git repository with `workbook init`.
 - Create, read, list, update, and tombstone tasks using immutable operation
   commits under `refs/workbook/tasks/`.
+- Discover canonical task membership by enumerating the exact Workbook task-ref
+  prefix, without a mutable manifest or index ref.
 - Store a versioned `state.json` checkpoint beside every `operation.json` so
   current-state reads do not require replaying the task's complete history.
 - Provide stable machine-readable JSON alongside human-readable CLI output.
@@ -43,6 +45,7 @@ The POC does not include:
 - exclusive or leased claims;
 - multi-parent conflict reconciliation;
 - sealing, destructive history compaction, or automatic retention policies;
+- multiple independent Workbook projects inside one Git repository;
 - comments, attachments, implementation links, or commit trailers;
 - editable web views, authentication, or non-local hosting;
 - a daemon, PID-file management, or an operating-system service;
@@ -104,14 +107,20 @@ from third-party packages.
 1. discovers the repository and common Git directory through Git;
 2. verifies that Git can read and update local refs;
 3. writes a tracked, versioned `.workbook/config.json` containing the format
-   identifier, configuration version, and project key;
+   identifier, configuration version, immutable project ID, and project key;
 4. creates the private cache directory below the common Git directory; and
-5. reports the repository, project key, and current task count.
+5. reports the repository, project ID, project key, and current task count.
 
-The default project key is `WB`. A supplied key must contain two to ten
-uppercase ASCII letters or digits and begin with a letter. Running `init`
-again with matching configuration succeeds without changing state. An
-incompatible existing configuration is an error.
+Workbook supports exactly one project per Git repository in the POC. `init`
+generates an immutable ULID `projectId`; clones retain it through the tracked
+configuration. The default human-facing project key is `WB`. A supplied key
+must contain two to ten uppercase ASCII letters or digits and begin with a
+letter. The key does not need to be globally unique because the project ID and
+Git repository establish identity.
+
+Running `init` again with matching configuration succeeds without changing
+state. A different project ID, incompatible format version, or conflicting key
+is an error rather than a second project.
 
 Initialization does not create a synthetic task, push refs, install hooks, or
 write a SQLite database before one is required.
@@ -122,7 +131,10 @@ Task IDs have the form `<project-key>-<ULID>`, for example
 `WB-01K0M6B8A4FTT8C39MXXYTW7C2`. Commands accept a full task ID or an
 unambiguous case-insensitive prefix. Ambiguous prefixes are validation errors.
 Operation IDs are separate ULIDs and remain independent of task IDs and Git
-object IDs.
+object IDs. Every operation and state document also carries the repository's
+immutable project ID. Stored task IDs and ref suffixes always use their
+canonical uppercase encoding; case-insensitive input never creates a second
+case variant.
 
 Each task owns one ref:
 
@@ -163,6 +175,108 @@ The stored format permits multi-parent operation histories and parentless
 compaction checkpoints later, but the POC creates only an append-only root and
 linear descendants.
 
+## Task discovery and ref namespace safety
+
+Workbook owns the complete `refs/workbook/` hierarchy. The POC creates
+canonical task heads only at:
+
+```text
+refs/workbook/tasks/<task-id>
+```
+
+Future synchronization may use separate tracking refs:
+
+```text
+refs/workbook/remotes/<remote-name>/tasks/<task-id>
+```
+
+Those tracking refs are not canonical local task heads and are never included
+when listing tasks.
+
+Workbook discovers task membership with one prefix-filtered Git query:
+
+```sh
+git for-each-ref \
+  --format='%(refname)%00%(objectname)' \
+  refs/workbook/tasks/
+```
+
+Git handles loose and packed refs behind this interface. Workbook never reads
+or writes files under `.git/refs` and never assumes that a ref is loose. A
+single manifest or index ref is not canonical because it would create global
+write contention and could drift from the per-task refs. SQLite remains the
+disposable cross-task query index.
+
+Each discovered entry must have exactly one task-ID path component after the
+prefix, pass Git ref-name validation, point to a commit, and contain matching
+versioned operation and state documents. Their project ID must equal the
+repository configuration, their task ID must equal the ref suffix, and its key
+prefix must equal the configured project key. Workbook reports any unexpected
+or malformed entry inside the owned task namespace as corrupt durable data; it
+does not silently omit that entry.
+
+The namespace is isolation by convention, not a security boundary. Normal
+branch, tag, checkout, and commit commands do not target it. Git maintenance
+may pack its refs or objects without changing their values. However, any
+process with repository write access can deliberately update or delete a
+Workbook ref, and broad mirror or custom-refspec operations can include the
+namespace.
+
+### Local ref protection
+
+Workbook constructs ref names only from validated identifiers and confirms the
+complete name with `git check-ref-format`. It advances a task through Git's
+compare-and-swap form of `update-ref`, supplying the exact previously observed
+object ID. Creation supplies an empty expected old value so it fails if the ref
+already exists.
+
+Every Workbook ref update requests a reflog with `--create-reflog` and records a
+descriptive reason. Custom refs do not otherwise receive reflogs under the
+usual Git configuration. Reflogs provide a time-limited local recovery aid,
+not canonical history or protection against a writer that can also delete the
+reflog.
+
+Once the SQLite projection exists, it records each last-seen task head. If a ref
+in the same history generation moves backward or sideways from that head,
+Workbook reports an external rewrite and stops instead of silently accepting
+it. Compare-and-swap prevents races among cooperating Workbook processes; no
+local design can prevent a different process with equivalent repository access
+from intentionally bypassing Workbook.
+
+### Future remote protection
+
+Remote synchronization must never fetch directly over
+`refs/workbook/tasks/*`. It fetches remote task refs into the isolated
+`refs/workbook/remotes/<remote-name>/tasks/*` tracking namespace, validates
+their objects, reconciles them with canonical local heads, and then advances
+local task refs with compare-and-swap.
+
+Pushes name one fully qualified task ref at a time and require the remote ref to
+equal an explicit expected object ID. Workbook must not use broad wildcard
+pushes, unconditional force, direct-fetch mappings over canonical refs, or
+mirror mode. Fetch pruning may affect only the remote-tracking namespace
+selected by Workbook's exact refspec; it must never prune canonical local task
+refs.
+
+Where the Git server is controllable, an optional receive hook may reject
+Workbook ref deletion, non-fast-forward updates, and malformed operation
+commits. Hooks improve defense in depth but are never required for client
+correctness.
+
+### Namespace scalability
+
+A synthetic local benchmark on Git 2.50.1 created 10,000 task refs pointing to
+one commit. One prefix enumeration took approximately 169 ms while the refs
+were loose and 18 ms after `git pack-refs --all`; loose refs occupied
+approximately 39 MiB of filesystem blocks and the packed-ref file approximately
+716 KiB.
+
+The result is directional and does not include reading 10,000 task-state blobs,
+but it supports using prefix enumeration for the POC's expected thousands of
+tasks. Workbook should retain a repeatable benchmark and revisit ref storage or
+an additional derived accelerator before claiming support for hundreds of
+thousands of task refs.
+
 ## Operation packs
 
 Every mutation stores one JSON document with this envelope:
@@ -171,6 +285,7 @@ Every mutation stores one JSON document with this envelope:
 {
   "format": "workbook.operation-pack",
   "version": 1,
+  "projectId": "01K0M65GBZ8F5ZQX0VC1J8H3TP",
   "taskId": "WB-01K0M6B8A4FTT8C39MXXYTW7C2",
   "historyGeneration": "01K0M6F4TDAJ4MZ0FB3X8W6Q9K",
   "actor": {
@@ -192,6 +307,7 @@ invocation are applied together. The POC uses these operation types:
 
 The pack actor defaults to the email in the repository's Git configuration.
 Actor and Git commit identity are attribution, not verified identity.
+`projectId` must match the immutable repository configuration.
 `historyGeneration` is a ULID established by `task.create` and copied unchanged
 by every ordinary descendant. It gives future clients an explicit boundary for
 detecting destructive compaction instead of inferring one from missing parents.
@@ -212,6 +328,7 @@ Every operation tree contains a second versioned document:
 {
   "format": "workbook.task-state",
   "version": 1,
+  "projectId": "01K0M65GBZ8F5ZQX0VC1J8H3TP",
   "taskId": "WB-01K0M6B8A4FTT8C39MXXYTW7C2",
   "history": {
     "generation": "01K0M6F4TDAJ4MZ0FB3X8W6Q9K",
@@ -299,6 +416,7 @@ A POC task projects to:
 
 ```text
 id
+projectId
 title
 description
 status
@@ -318,6 +436,7 @@ one of `backlog`, `ready`, `in-progress`, `blocked`, or `done`. Priority is one
 of `low`, `medium`, or `high`. Labels and dependencies are sets. New tasks
 default to `backlog`, `medium`, no labels, and no dependencies.
 
+`projectId` must match the repository configuration and is immutable.
 `createdAt` and `updatedAt` are display projections from operation wall times;
 they do not participate in semantic ordering. `head` is the Git object ID from
 which the projection was built and is not serialized inside `state.json`.
@@ -392,8 +511,8 @@ an empty queue as an operational failure.
 The initial in-memory projector enumerates `refs/workbook/tasks/` and reads each
 tip commit's `state.json`, so ordinary current-state queries do not walk task
 history. It schema-validates the checkpoint and tip operation pack, verifies
-that their task ID, history generation, and logical clock agree, and adds the
-tip Git object ID as `head`.
+that their project ID, task ID, history generation, and logical clock agree,
+and adds the tip Git object ID as `head`.
 
 The later SQLite projection lives at
 `<git-common-dir>/workbook/cache.sqlite`. It stores normalized projected tasks,
@@ -492,9 +611,10 @@ embedded web assets keep that future packaging path straightforward.
 ## Validation and failure behavior
 
 Core validation rejects blank titles, unknown statuses or priorities, malformed
-IDs and ranks, invalid project keys, dependency cycles, mutation of tombstoned
-tasks, and reads of unsupported durable formats. Git command failures retain
-their diagnostic cause but are mapped to stable Workbook error categories.
+IDs and ranks, invalid project keys, project-ID mismatches, dependency cycles,
+mutation of tombstoned tasks, malformed owned refs, and reads of unsupported
+durable formats. Git command failures retain their diagnostic cause but are
+mapped to stable Workbook error categories.
 
 Commands write task refs only after all requested operations validate. A
 failed command cannot partially update a task. Workbook never pushes code or
@@ -504,14 +624,16 @@ Workbook refs, installs hooks, or changes the current branch during the POC.
 
 Unit tests cover operation validation, deterministic state serialization,
 operation-to-state transition validation, history-generation mismatch,
-tombstones, rank generation and comparison, dependency cycles, and next-task
-selection.
+project-ID mismatch, tombstones, rank generation and comparison, dependency
+cycles, and next-task selection.
 
 Git integration tests use temporary repositories for root and linear task
 histories, direct tip-state reads, full replay equivalence, mismatch rejection,
-task-ref discovery, compare-and-swap success and rejection, unreachable objects
-after rejected updates, cache deletion and reconstruction, and both SHA-1 and
-SHA-256 repositories when supported by the installed Git.
+loose and packed task-ref discovery, malformed and foreign-project ref
+rejection, reflog creation, compare-and-swap success and rejection, external
+rewrite detection after projection, unreachable objects after rejected
+updates, cache deletion and reconstruction, and both SHA-1 and SHA-256
+repositories when supported by the installed Git.
 
 CLI tests cover every command's human and JSON modes, filters, unambiguous ID
 prefixes, stable error payloads, and exit codes. Golden tests cover wide and
@@ -530,6 +652,10 @@ The POC is complete when:
   PATH directory;
 - a fresh temporary Git repository can initialize and complete the full task
   create, list/show, update, and tombstone lifecycle;
+- initialization creates one immutable project ID and rejects a conflicting
+  second Workbook project in the repository;
+- task discovery returns the same validated tasks with loose or packed refs and
+  rejects malformed or foreign-project entries in the owned namespace;
 - every accepted task commit contains matching versioned operation and state
   documents;
 - Workbook's remaining POC work is represented and selected as Workbook tasks;
@@ -537,6 +663,7 @@ The POC is complete when:
 - direct tip-state reads and complete operation replay produce identical task
   state;
 - local compare-and-swap prevents silent concurrent overwrites;
+- Workbook-created task refs have recovery reflogs;
 - ASCII list and board output and the read-only browser board present the same
   tasks with matching priority, rank, and ID order inside each status; and
 - README examples clearly distinguish implemented local behavior from proposed
