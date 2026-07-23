@@ -649,6 +649,29 @@ func TestREADMEDocumentsSourceInstallationPrerequisites(t *testing.T) {
 	}
 }
 
+func TestREADMEDocumentsCommonProjectIdentityGuard(t *testing.T) {
+	readmePath := filepath.Join("..", "..", "README.md")
+	contents, err := os.ReadFile(readmePath)
+	if err != nil {
+		t.Fatalf("read %s: %v", readmePath, err)
+	}
+	readme := strings.Join(strings.Fields(string(contents)), " ")
+
+	for _, required := range []string{
+		"`<git-common-dir>/workbook/project.json`",
+		"one Workbook project per common Git repository",
+		"linked worktrees",
+		"tracked and common identities do not match",
+		"atomically backfills",
+		"portable tracked configuration",
+		"private coordination metadata",
+	} {
+		if !strings.Contains(readme, required) {
+			t.Errorf("README project identity section is missing %q", required)
+		}
+	}
+}
+
 func TestREADMECommandPolicyRejectsUnimplementedCommandOutsideProposedSection(t *testing.T) {
 	const claim = "## Current workflow\n\nRun `workbook serve` to start the board.\n"
 	violations := readmeCommandPolicyViolations(claim)

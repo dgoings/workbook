@@ -106,17 +106,28 @@ from third-party packages.
 
 1. discovers the repository and common Git directory through Git;
 2. verifies that Git can read and update local refs;
-3. writes a tracked, versioned `.workbook/config.json` containing the format
-   identifier, configuration version, immutable project ID, and project key;
-4. creates the private cache directory below the common Git directory; and
+3. creates the private metadata directory below the common Git directory;
+4. reconciles the tracked, versioned `.workbook/config.json` with the private
+   identity guard at `<git-common-dir>/workbook/project.json`, creating whichever
+   artifacts are needed for a new or previously initialized repository; and
 5. reports the repository, project ID, project key, and current task count.
 
-Workbook supports exactly one project per Git repository in the POC. `init`
-generates an immutable ULID `projectId`; clones retain it through the tracked
-configuration. The default human-facing project key is `WB`. A supplied key
-must contain two to ten uppercase ASCII letters or digits and begin with a
-letter. The key does not need to be globally unique because the project ID and
-Git repository establish identity.
+`.workbook/config.json` remains the portable tracked configuration: clones retain
+the immutable project identity through that file. The common guard is private
+coordination metadata and is not a replacement for tracked configuration. Because
+all linked worktrees share one common Git directory, Workbook supports exactly one
+project per common Git repository in the POC. Configuration loading and repository
+operations reject a tracked/common identity mismatch.
+
+For a repository initialized before the common guard existed, the first
+configuration load or repeated `init` atomically backfills the guard from the
+tracked configuration. Concurrent first users converge on the identity that wins
+publication and reject it if it differs from their tracked identity.
+
+For a new repository, `init` generates an immutable ULID `projectId`. The default
+human-facing project key is `WB`. A supplied key must contain two to ten uppercase
+ASCII letters or digits and begin with a letter. The key does not need to be
+globally unique because the project ID and Git repository establish identity.
 
 Running `init` again with matching configuration succeeds without changing
 state. A different project ID, incompatible format version, or conflicting key

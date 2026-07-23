@@ -100,6 +100,23 @@ List and show read the current task checkpoint from each task ref's tip. The
 current POC does not yet implement dependency-aware ordering, SQLite, terminal or
 web boards, remote operations, claims, or implementation links.
 
+### Project identity across worktrees
+
+`.workbook/config.json` remains the portable tracked configuration that carries a
+Workbook project's identity across clones. Workbook also records that identity in
+a private guard at `<git-common-dir>/workbook/project.json`. The guard is private
+coordination metadata shared by every worktree attached to the same common Git
+directory; it does not replace the tracked configuration or travel with a clone.
+
+The current POC permits one Workbook project per common Git repository, including
+all linked worktrees. Every configuration load compares the portable configuration
+with the common guard, and Workbook rejects repository use when the tracked and
+common identities do not match. For repositories initialized before the guard was
+introduced, the first configuration load or repeated `workbook init` atomically
+backfills the missing guard from `.workbook/config.json`. Concurrent first users
+must either publish that same identity or observe and validate the identity another
+user published.
+
 ## Proposed post-POC commands
 
 The following examples describe future remote coordination and are not implemented:
