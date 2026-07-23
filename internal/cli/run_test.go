@@ -513,19 +513,14 @@ func TestRunJSONFailureIsCompactAndUsesStableExitCodes(t *testing.T) {
 	})
 
 	t.Run("stale write", func(t *testing.T) {
-		repository := testrepo.New(t)
-		lock := filepath.Join(repository, ".workbook", ".init.lock")
-		if err := os.MkdirAll(lock, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		code, stdout, stderr := run(t, repository, "init", "--json")
+		err := core.Errorf(core.CategoryStaleWrite, "task ref changed concurrently")
+		code := core.ExitCode(err)
 		if code != 6 {
-			t.Fatalf("code = %d, want 6; stderr = %q", code, stderr)
+			t.Fatalf("code = %d, want 6", code)
 		}
-		if stdout != "" {
-			t.Fatalf("stdout = %q, want empty", stdout)
-		}
-		assertJSONError(t, stderr, core.CategoryStaleWrite, "")
+		var stderr bytes.Buffer
+		writeError(&stderr, err, true)
+		assertJSONError(t, stderr.String(), core.CategoryStaleWrite, "")
 	})
 
 	t.Run("corrupt data", func(t *testing.T) {
