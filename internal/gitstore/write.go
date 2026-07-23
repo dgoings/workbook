@@ -41,6 +41,9 @@ func (r *Repository) Write(
 		if strings.TrimSpace(parent.Head) == "" {
 			return core.Snapshot{}, core.Errorf(core.CategoryValidation, "parent head must not be blank")
 		}
+		if err := r.validateParentHead(ctx, parent.Head); err != nil {
+			return core.Snapshot{}, err
+		}
 		if err := core.ValidateCheckpoint(&parent.State, pack, state, config.Key); err != nil {
 			return core.Snapshot{}, err
 		}
@@ -86,13 +89,24 @@ func (r *Repository) Write(
 		expected = parent.Head
 	}
 	if _, err := r.Git(ctx, nil, "update-ref", "--create-reflog", "-m", "workbook: "+reason, ref, head, expected); err != nil {
-		if isStaleRefUpdate(err) {
+		if r.refValueDiffers(ctx, ref, expected) {
 			return core.Snapshot{}, core.Wrap(core.CategoryStaleWrite, "task ref changed concurrently", err)
 		}
 		return core.Snapshot{}, err
 	}
 
 	return core.Snapshot{Head: head, Operation: pack, State: state}, nil
+}
+
+func (r *Repository) validateParentHead(ctx context.Context, head string) error {
+	resolved, err := r.Git(ctx, nil, "rev-parse", "--verify", head+"^{commit}")
+	if err != nil {
+		return core.Wrap(core.CategoryValidation, "parent head must be a commit object ID", err)
+	}
+	if strings.TrimSpace(string(resolved)) != head {
+		return core.Errorf(core.CategoryValidation, "parent head must be a canonical commit object ID")
+	}
+	return nil
 }
 
 func validateWriteIdentity(config core.ProjectConfig, pack core.OperationPack, state core.StateDocument) error {
@@ -177,8 +191,16 @@ func (r *Repository) writeCommit(ctx context.Context, tree string, parent *core.
 	return strings.TrimSpace(string(output)), nil
 }
 
-func isStaleRefUpdate(err error) bool {
-	message := err.Error()
-	return strings.Contains(message, "reference already exists") ||
-		(strings.Contains(message, "is at ") && strings.Contains(message, "but expected"))
+func (r *Repository) refValueDiffers(ctx context.Context, ref, expected string) bool {
+	output, err := r.Git(ctx, nil, "for-each-ref", "--format=%(refname) %(objectname)", ref)
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[0] == ref {
+			return fields[1] != expected
+		}
+	}
+	return expected != ""
 }

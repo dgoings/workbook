@@ -90,6 +90,67 @@ func TestWriteRejectsStaleHeadWithoutMovingTaskRef(t *testing.T) {
 	}
 }
 
+func TestWriteRejectsNonCanonicalParentHeadsBeforeWritingObjectsOrMovingRefs(t *testing.T) {
+	repo, config := writeRepository(t)
+	created, _, createState := writeRoot(t, repo, config)
+	tree := gitOutput(t, repo, "rev-parse", created.Head+"^{tree}")
+
+	for _, test := range []struct {
+		name string
+		head string
+	}{
+		{name: "refname", head: taskRef(writeTaskID)},
+		{name: "abbreviated object ID", head: created.Head[:len(created.Head)-1]},
+		{name: "tree object ID", head: tree},
+		{name: "tree-ish", head: created.Head + "^{tree}"},
+		{name: "nonexistent object", head: "does-not-exist"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			parent := created
+			parent.Head = test.head
+			pack := writeUpdatePack(2, "01K0M6B8A4FTT8C39MXXYTW7C5", "ready")
+			state := writeState(t, &createState, pack)
+			before := gitOutput(t, repo, "count-objects", "-v")
+
+			_, err := repo.Write(context.Background(), config, &parent, pack, state, "mark ready")
+			if got, want := core.CategoryOf(err), core.CategoryValidation; got != want {
+				t.Fatalf("Write() category = %q, want %q; error = %v", got, want, err)
+			}
+			if after := gitOutput(t, repo, "count-objects", "-v"); after != before {
+				t.Fatalf("Write() wrote objects for parent head %q: before %q, after %q", test.head, before, after)
+			}
+			if got := gitOutput(t, repo, "rev-parse", taskRef(writeTaskID)); got != created.Head {
+				t.Fatalf("task ref after parent head %q = %q, want %q", test.head, got, created.Head)
+			}
+		})
+	}
+}
+
+func TestWriteDoesNotClassifyNamespaceCollisionAsStale(t *testing.T) {
+	repo, config := writeRepository(t)
+	pack := writeCreatePack()
+	state := writeState(t, nil, pack)
+	contents, err := core.EncodeDocument(pack)
+	if err != nil {
+		t.Fatalf("EncodeDocument() error = %v", err)
+	}
+	object, err := repo.Git(context.Background(), contents, "hash-object", "-w", "--stdin")
+	if err != nil {
+		t.Fatalf("Git(hash-object) error = %v", err)
+	}
+	if _, err := repo.Git(context.Background(), nil, "update-ref", taskRef(pack.TaskID)+"/extra", strings.TrimSpace(string(object))); err != nil {
+		t.Fatalf("Git(update-ref) error = %v", err)
+	}
+
+	_, err = repo.Write(context.Background(), config, nil, pack, state, "create task")
+	if got, want := core.CategoryOf(err), core.CategoryInvocation; got != want {
+		t.Fatalf("Write() category = %q, want original Git category %q; error = %v", got, want, err)
+	}
+	if _, err := repo.Git(context.Background(), nil, "rev-parse", "--verify", taskRef(pack.TaskID)); err == nil {
+		t.Fatal("Write() created task ref despite namespace collision")
+	}
+}
+
 func TestWriteRejectsInvalidCheckpointBeforeWritingObjectsOrRefs(t *testing.T) {
 	repo, config := writeRepository(t)
 	pack := writeCreatePack()
