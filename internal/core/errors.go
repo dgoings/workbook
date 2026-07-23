@@ -1,0 +1,73 @@
+package core
+
+import (
+	"errors"
+	"fmt"
+)
+
+type Category string
+
+const (
+	CategoryInvocation     Category = "invalid-invocation"
+	CategoryNotInitialized Category = "not-initialized"
+	CategoryNotFound       Category = "not-found"
+	CategoryValidation     Category = "validation"
+	CategoryStaleWrite     Category = "stale-write"
+	CategoryCorruptData    Category = "corrupt-data"
+)
+
+type Error struct {
+	Category Category
+	Message  string
+	Cause    error
+}
+
+func (e *Error) Error() string {
+	if e.Cause == nil {
+		return e.Message
+	}
+	return e.Message + ": " + e.Cause.Error()
+}
+
+func (e *Error) Unwrap() error {
+	return e.Cause
+}
+
+func Errorf(category Category, format string, args ...any) error {
+	return &Error{Category: category, Message: fmt.Sprintf(format, args...)}
+}
+
+func Wrap(category Category, message string, cause error) error {
+	return &Error{Category: category, Message: message, Cause: cause}
+}
+
+func CategoryOf(err error) Category {
+	var typed *Error
+	if errors.As(err, &typed) {
+		return typed.Category
+	}
+	return ""
+}
+
+func ExitCode(err error) int {
+	switch CategoryOf(err) {
+	case CategoryInvocation:
+		return 2
+	case CategoryNotInitialized:
+		return 3
+	case CategoryNotFound:
+		return 4
+	case CategoryValidation:
+		return 5
+	case CategoryStaleWrite:
+		return 6
+	case CategoryCorruptData:
+		return 7
+	}
+
+	var typed *Error
+	if errors.As(err, &typed) {
+		return 7
+	}
+	return 1
+}
