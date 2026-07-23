@@ -103,7 +103,11 @@ func (r *Repository) validateParentHead(ctx context.Context, head string) error 
 	if err != nil {
 		return core.Wrap(core.CategoryValidation, "parent head must be a commit object ID", err)
 	}
-	if strings.TrimSpace(string(resolved)) != head {
+	resolvedHead, err := gitSingleLine(resolved)
+	if err != nil {
+		return core.Wrap(core.CategoryOperational, "Git returned an invalid parent object ID", err)
+	}
+	if resolvedHead != head {
 		return core.Errorf(core.CategoryValidation, "parent head must be a canonical commit object ID")
 	}
 	return nil
@@ -164,7 +168,11 @@ func (r *Repository) writeBlob(ctx context.Context, contents []byte) (string, er
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(output)), nil
+	objectID, err := gitSingleLine(output)
+	if err != nil {
+		return "", core.Wrap(core.CategoryOperational, "Git returned an invalid blob object ID", err)
+	}
+	return objectID, nil
 }
 
 func (r *Repository) writeTaskTree(ctx context.Context, operationBlob, stateBlob string) (string, error) {
@@ -175,7 +183,11 @@ func (r *Repository) writeTaskTree(ctx context.Context, operationBlob, stateBlob
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(output)), nil
+	treeID, err := gitSingleLine(output)
+	if err != nil {
+		return "", core.Wrap(core.CategoryOperational, "Git returned an invalid tree object ID", err)
+	}
+	return treeID, nil
 }
 
 func (r *Repository) writeCommit(ctx context.Context, tree string, parent *core.Snapshot, reason string) (string, error) {
@@ -188,7 +200,11 @@ func (r *Repository) writeCommit(ctx context.Context, tree string, parent *core.
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(output)), nil
+	commitID, err := gitSingleLine(output)
+	if err != nil {
+		return "", core.Wrap(core.CategoryOperational, "Git returned an invalid commit object ID", err)
+	}
+	return commitID, nil
 }
 
 func (r *Repository) refValueDiffers(ctx context.Context, ref, expected string) bool {
@@ -196,7 +212,13 @@ func (r *Repository) refValueDiffers(ctx context.Context, ref, expected string) 
 	if err != nil {
 		return false
 	}
-	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+	if len(output) == 0 {
+		return expected != ""
+	}
+	if output[len(output)-1] != '\n' {
+		return false
+	}
+	for _, line := range strings.Split(string(output[:len(output)-1]), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) == 2 && fields[0] == ref {
 			return fields[1] != expected

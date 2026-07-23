@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -36,10 +37,18 @@ func Open(ctx context.Context, startDir string) (*Repository, error) {
 	if err != nil {
 		return nil, core.Wrap(core.CategoryNotInitialized, "cannot find Git common directory", err)
 	}
+	rootPath, err := gitSingleLine(root)
+	if err != nil {
+		return nil, core.Wrap(core.CategoryOperational, "Git returned an invalid repository root", err)
+	}
+	commonGitPath, err := gitSingleLine(commonGitDir)
+	if err != nil {
+		return nil, core.Wrap(core.CategoryOperational, "Git returned an invalid common directory", err)
+	}
 
 	return &Repository{
-		Root:         filepath.Clean(strings.TrimSpace(string(root))),
-		CommonGitDir: filepath.Clean(strings.TrimSpace(string(commonGitDir))),
+		Root:         filepath.Clean(rootPath),
+		CommonGitDir: filepath.Clean(commonGitPath),
 		gitPath:      gitPath,
 	}, nil
 }
@@ -62,8 +71,16 @@ func (r *Repository) verifyIdentity(ctx context.Context) error {
 	if err != nil {
 		return core.Wrap(core.CategoryNotInitialized, "cannot verify Git common directory", err)
 	}
-	if filepath.Clean(strings.TrimSpace(string(root))) != filepath.Clean(r.Root) ||
-		filepath.Clean(strings.TrimSpace(string(commonGitDir))) != filepath.Clean(r.CommonGitDir) {
+	rootPath, err := gitSingleLine(root)
+	if err != nil {
+		return core.Wrap(core.CategoryOperational, "Git returned an invalid repository root", err)
+	}
+	commonGitPath, err := gitSingleLine(commonGitDir)
+	if err != nil {
+		return core.Wrap(core.CategoryOperational, "Git returned an invalid common directory", err)
+	}
+	if filepath.Clean(rootPath) != filepath.Clean(r.Root) ||
+		filepath.Clean(commonGitPath) != filepath.Clean(r.CommonGitDir) {
 		return core.Errorf(core.CategoryNotInitialized, "repository paths do not match Git metadata")
 	}
 	return nil
@@ -92,15 +109,54 @@ func (r *Repository) Actor(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(output)), nil
+	actor, err := gitSingleLine(output)
+	if err != nil {
+		return "", core.Wrap(core.CategoryOperational, "Git returned an invalid actor email", err)
+	}
+	return actor, nil
 }
 
 func runGit(ctx context.Context, gitPath, directory string, stdin []byte, args ...string) ([]byte, error) {
 	command := exec.CommandContext(ctx, gitPath, append([]string{"-C", directory}, args...)...)
 	command.Stdin = bytes.NewReader(stdin)
-	output, err := command.CombinedOutput()
+	command.Env = gitEnvironment(os.Environ())
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	err := command.Run()
 	if err != nil {
-		return nil, fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+		detail := strings.TrimSuffix(stderr.String(), "\n")
+		detail = strings.TrimSuffix(detail, "\r")
+		if detail == "" {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: %s", err, detail)
 	}
-	return output, nil
+	return stdout.Bytes(), nil
+}
+
+func gitEnvironment(environ []string) []string {
+	const key = "GIT_NO_REPLACE_OBJECTS="
+	result := make([]string, 0, len(environ)+1)
+	for _, entry := range environ {
+		if !strings.HasPrefix(entry, key) {
+			result = append(result, entry)
+		}
+	}
+	return append(result, key+"1")
+}
+
+func gitSingleLine(output []byte) (string, error) {
+	if len(output) == 0 || output[len(output)-1] != '\n' {
+		return "", fmt.Errorf("expected one trailing newline")
+	}
+	line := output[:len(output)-1]
+	if len(line) > 0 && line[len(line)-1] == '\r' {
+		line = line[:len(line)-1]
+	}
+	if bytes.ContainsAny(line, "\r\n") {
+		return "", fmt.Errorf("expected exactly one output line")
+	}
+	return string(line), nil
 }

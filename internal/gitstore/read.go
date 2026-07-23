@@ -163,7 +163,11 @@ func (r *Repository) readTip(ctx context.Context, config core.ProjectConfig, tas
 	if err != nil {
 		return core.Snapshot{}, core.Wrap(core.CategoryCorruptData, "cannot determine task ref object type", err)
 	}
-	if strings.TrimSpace(string(objectType)) != "commit" {
+	typeName, err := gitSingleLine(objectType)
+	if err != nil {
+		return core.Snapshot{}, core.Wrap(core.CategoryCorruptData, "Git returned an invalid task object type", err)
+	}
+	if typeName != "commit" {
 		return core.Snapshot{}, core.Errorf(core.CategoryCorruptData, "task ref does not point directly to a commit")
 	}
 

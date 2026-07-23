@@ -43,6 +43,25 @@ func TestOpenFromNestedWorkingTree(t *testing.T) {
 	}
 }
 
+func TestOpenPreservesLeadingAndTrailingWhitespaceInRepositoryPath(t *testing.T) {
+	repoDir := filepath.Join(t.TempDir(), " repository ")
+	if err := os.Mkdir(repoDir, 0o755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	gitRun(t, repoDir, "init", "--quiet")
+
+	repo, err := Open(context.Background(), repoDir)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if got, want := repo.Root, gitReportedPath(t, repoDir, "rev-parse", "--show-toplevel"); got != want {
+		t.Fatalf("Open().Root = %q, want byte-preserving path %q", got, want)
+	}
+	if got, want := repo.CommonGitDir, gitReportedPath(t, repoDir, "rev-parse", "--path-format=absolute", "--git-common-dir"); got != want {
+		t.Fatalf("Open().CommonGitDir = %q, want %q", got, want)
+	}
+}
+
 func TestOpenOutsideGitIsNotInitialized(t *testing.T) {
 	_, err := Open(context.Background(), t.TempDir())
 	if got, want := core.CategoryOf(err), core.CategoryNotInitialized; got != want {
@@ -95,8 +114,57 @@ func TestGitUsesResolvedPathForValidConstructedRepository(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Git() error = %v", err)
 	}
-	if got, want := filepath.Clean(strings.TrimSpace(string(output))), opened.Root; got != want {
+	line, err := gitSingleLine(output)
+	if err != nil {
+		t.Fatalf("gitSingleLine() error = %v", err)
+	}
+	if got, want := filepath.Clean(line), opened.Root; got != want {
 		t.Fatalf("Git() output = %q, want %q", got, want)
+	}
+}
+
+func TestGitSeparatesStdoutAndStderrAndSetsReplaceProtection(t *testing.T) {
+	t.Setenv("WORKBOOK_ENV_SENTINEL", "preserved")
+	gitPath := filepath.Join(t.TempDir(), "git")
+	script := `#!/bin/sh
+printf '%s:%s\n' "$GIT_NO_REPLACE_OBJECTS" "$WORKBOOK_ENV_SENTINEL"
+printf 'warning on stderr\n' >&2
+`
+	if err := os.WriteFile(gitPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("WriteFile(fake git) error = %v", err)
+	}
+	repo := &Repository{Root: t.TempDir(), gitPath: gitPath}
+
+	output, err := repo.Git(context.Background(), nil, "status")
+	if err != nil {
+		t.Fatalf("Git() error = %v", err)
+	}
+	if got, want := string(output), "1:preserved\n"; got != want {
+		t.Fatalf("Git() stdout = %q, want %q", got, want)
+	}
+}
+
+func TestGitFailureReportsStderrWithoutContaminatingItWithStdout(t *testing.T) {
+	gitPath := filepath.Join(t.TempDir(), "git")
+	script := `#!/bin/sh
+printf 'misleading stdout\n'
+printf 'fatal stderr detail\n' >&2
+exit 9
+`
+	if err := os.WriteFile(gitPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("WriteFile(fake git) error = %v", err)
+	}
+	repo := &Repository{Root: t.TempDir(), gitPath: gitPath}
+
+	_, err := repo.Git(context.Background(), nil, "status")
+	if got, want := core.CategoryOf(err), core.CategoryOperational; got != want {
+		t.Fatalf("Git() category = %q, want %q; error = %v", got, want, err)
+	}
+	if !strings.Contains(err.Error(), "fatal stderr detail") {
+		t.Fatalf("Git() error = %q, want stderr detail", err)
+	}
+	if strings.Contains(err.Error(), "misleading stdout") {
+		t.Fatalf("Git() error contains stdout: %q", err)
 	}
 }
 
@@ -115,5 +183,10 @@ func gitReportedPath(t *testing.T, dir string, args ...string) string {
 	if err != nil {
 		t.Fatalf("git %v: %v", args, err)
 	}
-	return filepath.Clean(strings.TrimSpace(string(output)))
+	line := strings.TrimSuffix(string(output), "\n")
+	line = strings.TrimSuffix(line, "\r")
+	if line == string(output) {
+		t.Fatalf("git %v output has no trailing newline: %q", args, output)
+	}
+	return filepath.Clean(line)
 }

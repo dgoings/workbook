@@ -44,6 +44,33 @@ func TestGetReadsCanonicalTipWithoutReplayingParents(t *testing.T) {
 	}
 }
 
+func TestGetIgnoresGitReplaceObjects(t *testing.T) {
+	repo, config := writeRepository(t)
+	original, _, _ := writeRoot(t, repo, config)
+
+	replacementPack := writeCreatePack()
+	replacementPack.Operations[0].ID = "01K0M6B8A4FTT8C39MXXYTW7C9"
+	replacementPack.Operations[0].Task.Title = "Replacement title"
+	replacementState := writeState(t, nil, replacementPack)
+	operationBlob := writeDocumentBlob(t, repo, replacementPack)
+	stateBlob := writeDocumentBlob(t, repo, replacementState)
+	tree := gitOutputWithInput(t, repo, []byte(fmt.Sprintf(
+		"100644 blob %s\toperation.json\n100644 blob %s\tstate.json\n",
+		operationBlob,
+		stateBlob,
+	)), "mktree")
+	replacementHead := gitOutput(t, repo, "commit-tree", tree, "-m", "replacement task")
+	gitOutput(t, repo, "replace", original.Head, replacementHead)
+
+	got, err := repo.Get(context.Background(), config, original.Operation.TaskID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if !reflect.DeepEqual(got, original) {
+		t.Fatalf("Get() followed replace ref:\n got %#v\nwant %#v", got, original)
+	}
+}
+
 func TestGetRejectsAnnotatedTagTarget(t *testing.T) {
 	repo, config := writeRepository(t)
 	snapshot, pack, _ := writeRoot(t, repo, config)
