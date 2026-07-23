@@ -82,6 +82,113 @@ func TestRunInvalidInvocationAndEarlyJSONErrors(t *testing.T) {
 	}
 }
 
+func TestRunJSONIntentMatchesGoBooleanFlagSyntax(t *testing.T) {
+	repository := initializedRepository(t)
+
+	for _, spelling := range []string{
+		"-json",
+		"--json",
+		"--json=1",
+		"-json=t",
+		"--json=T",
+		"-json=TRUE",
+		"--json=true",
+		"-json=True",
+	} {
+		t.Run("true "+spelling, func(t *testing.T) {
+			code, stdout, stderr := run(t, repository, "create", "", spelling)
+			if code != 5 {
+				t.Fatalf("code = %d, want 5; stderr = %q", code, stderr)
+			}
+			if stdout != "" {
+				t.Fatalf("stdout = %q, want empty", stdout)
+			}
+			assertJSONError(t, stderr, core.CategoryValidation, "title is required")
+		})
+	}
+
+	for _, spelling := range []string{
+		"--json=0",
+		"-json=f",
+		"--json=F",
+		"-json=FALSE",
+		"--json=false",
+		"-json=False",
+	} {
+		t.Run("false "+spelling, func(t *testing.T) {
+			code, stdout, stderr := run(t, repository, "create", "", spelling)
+			if code != 5 {
+				t.Fatalf("code = %d, want 5; stderr = %q", code, stderr)
+			}
+			if stdout != "" {
+				t.Fatalf("stdout = %q, want empty", stdout)
+			}
+			assertHumanError(t, stderr, "title is required")
+		})
+	}
+
+	for _, test := range []struct {
+		name string
+		args []string
+		json bool
+	}{
+		{
+			name: "true before parse error",
+			args: []string{"create", "Title", "-json=TRUE", "--unknown"},
+			json: true,
+		},
+		{
+			name: "true after parse error",
+			args: []string{"create", "Title", "--unknown", "-json"},
+			json: true,
+		},
+		{
+			name: "invalid value is JSON intent",
+			args: []string{"create", "Title", "--json=not-a-bool"},
+			json: true,
+		},
+		{
+			name: "last repeated value is false",
+			args: []string{"create", "", "--json=1", "-json=FALSE"},
+			json: false,
+		},
+		{
+			name: "last repeated value is true",
+			args: []string{"create", "", "--json=0", "-json=TRUE"},
+			json: true,
+		},
+		{
+			name: "invalid repeated value stops parsing",
+			args: []string{"create", "Title", "--json=invalid", "--json=false"},
+			json: true,
+		},
+		{
+			name: "literal terminator stops recognition",
+			args: []string{"create", "", "--", "--json=TRUE"},
+			json: false,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			code, stdout, stderr := run(t, repository, test.args...)
+			if code != 2 && code != 5 {
+				t.Fatalf("code = %d, want invocation or validation failure; stderr = %q", code, stderr)
+			}
+			if stdout != "" {
+				t.Fatalf("stdout = %q, want empty", stdout)
+			}
+			if test.json {
+				category := core.CategoryInvocation
+				if code == 5 {
+					category = core.CategoryValidation
+				}
+				assertJSONError(t, stderr, category, "")
+			} else {
+				assertHumanError(t, stderr, "")
+			}
+		})
+	}
+}
+
 func TestRunRequiresInitializationAndInitIsIdempotent(t *testing.T) {
 	repository := testrepo.New(t)
 
@@ -384,5 +491,18 @@ func assertJSONError(t *testing.T, output string, category core.Category, messag
 	}
 	if message != "" && document.Error.Message != message {
 		t.Fatalf("error message = %q, want %q", document.Error.Message, message)
+	}
+}
+
+func assertHumanError(t *testing.T, output, message string) {
+	t.Helper()
+	if strings.HasPrefix(output, "{") {
+		t.Fatalf("error unexpectedly uses JSON: %q", output)
+	}
+	if !strings.HasPrefix(output, "workbook: ") {
+		t.Fatalf("human error = %q, want workbook prefix", output)
+	}
+	if message != "" && !strings.Contains(output, message) {
+		t.Fatalf("human error = %q, want message %q", output, message)
 	}
 }

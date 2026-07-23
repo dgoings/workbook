@@ -3,6 +3,8 @@ package cli
 import (
 	"flag"
 	"io"
+	"strconv"
+	"strings"
 
 	"github.com/dgoings/workbook/internal/core"
 )
@@ -49,10 +51,28 @@ func requiredFirstArgument(command, name string, args []string) (string, []strin
 }
 
 func requestedJSON(args []string) bool {
+	jsonMode := false
 	for _, argument := range args {
-		if argument == "--json" || argument == "--json=true" {
+		if argument == "--" {
+			break
+		}
+		if argument == "-json" || argument == "--json" {
+			jsonMode = true
+			continue
+		}
+
+		value, found := strings.CutPrefix(argument, "-json=")
+		if !found {
+			value, found = strings.CutPrefix(argument, "--json=")
+		}
+		if !found {
+			continue
+		}
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
 			return true
 		}
+		jsonMode = parsed
 	}
-	return false
+	return jsonMode
 }

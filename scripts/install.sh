@@ -27,6 +27,7 @@ esac
 repository_root=$(CDPATH= cd -- "${script_directory}/.." && pwd)
 
 mkdir -p -- "${destination}"
+destination=$(CDPATH= cd -- "${destination}" && pwd -P)
 (
 	cd -- "${repository_root}"
 	go build -trimpath -o "${destination}/workbook" ./cmd/workbook

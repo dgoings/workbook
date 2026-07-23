@@ -12,7 +12,13 @@ import (
 
 func TestInstallBuildsRunnableWorkbookInDestination(t *testing.T) {
 	root, script := paths(t)
-	destination := filepath.Join(t.TempDir(), "bin")
+	destinationRoot := t.TempDir()
+	destination := filepath.Join(destinationRoot, "bin")
+	physicalDestinationRoot, err := filepath.EvalSymlinks(destinationRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installedDestination := filepath.Join(physicalDestinationRoot, "bin")
 
 	command := exec.Command(script, destination)
 	command.Dir = root
@@ -22,7 +28,7 @@ func TestInstallBuildsRunnableWorkbookInDestination(t *testing.T) {
 		t.Fatalf("install: %v\n%s", err, output)
 	}
 
-	binary := filepath.Join(destination, "workbook")
+	binary := filepath.Join(installedDestination, "workbook")
 	if !strings.Contains(string(output), "Installed Workbook at "+binary) {
 		t.Fatalf("installer output = %q, want installed path %q", output, binary)
 	}
@@ -49,6 +55,40 @@ func TestInstallBuildsRunnableWorkbookInDestination(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(root, "workbook")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("repository root workbook binary exists or cannot be checked: %v", err)
+	}
+}
+
+func TestInstallResolvesRelativeDestinationFromCallerDirectory(t *testing.T) {
+	root, script := paths(t)
+	callerDirectory := t.TempDir()
+	relativeDestination := "relative-bin"
+	physicalCallerDirectory, err := filepath.EvalSymlinks(callerDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(physicalCallerDirectory, relativeDestination)
+	repositoryDestination := filepath.Join(root, relativeDestination)
+	if _, err := os.Stat(repositoryDestination); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("repository destination exists before test or cannot be checked: %v", err)
+	}
+
+	command := exec.Command(script, relativeDestination)
+	command.Dir = callerDirectory
+	command.Env = append(os.Environ(), "GOCACHE="+filepath.Join(t.TempDir(), "gocache"))
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("install: %v\n%s", err, output)
+	}
+
+	binary := filepath.Join(destination, "workbook")
+	if !strings.Contains(string(output), "Installed Workbook at "+binary) {
+		t.Fatalf("installer output = %q, want caller-relative installed path %q", output, binary)
+	}
+	if _, err := os.Stat(binary); err != nil {
+		t.Fatalf("stat caller-relative installed binary: %v", err)
+	}
+	if _, err := os.Stat(repositoryDestination); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("installer created repository-root destination or it cannot be checked: %v", err)
 	}
 }
 
