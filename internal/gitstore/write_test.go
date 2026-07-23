@@ -406,6 +406,84 @@ func TestWriteValidatesAgainstStateStoredAtParentHead(t *testing.T) {
 	}
 }
 
+func TestWriteRejectsDivergentRootParentEvenWhenCallerMatchesStoredState(t *testing.T) {
+	repo, config := writeRepository(t)
+	created, createPack, _ := writeRoot(t, repo, config)
+	tamperedState := created.State
+	tamperedState.Task.Title = "Different state title"
+	replaceTaskTree(
+		t,
+		repo,
+		created,
+		gitOutput(t, repo, "rev-parse", created.Head+":operation.json"),
+		writeDocumentBlob(t, repo, tamperedState),
+	)
+	tamperedHead := gitOutput(t, repo, "rev-parse", taskRef(createPack.TaskID))
+	parent := core.Snapshot{Head: tamperedHead, Operation: createPack, State: tamperedState}
+	pack := writeAddLabelPack(2, "01K0M6B8A4FTT8C39MXXYTW7C5", "direct-write")
+	state := writeState(t, &parent.State, pack)
+
+	_, err := repo.Write(context.Background(), config, &parent, pack, state, "extend malformed root")
+	if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
+		t.Fatalf("Write() category = %q, want %q; error = %v", got, want, err)
+	}
+	if got := gitOutput(t, repo, "rev-parse", taskRef(createPack.TaskID)); got != tamperedHead {
+		t.Fatalf("Write() advanced malformed root from %q to %q", tamperedHead, got)
+	}
+}
+
+func TestWriteRejectsRootParentWhoseLogicalClockStartsAtTwo(t *testing.T) {
+	repo, config := writeRepository(t)
+	created, createPack, _ := writeRoot(t, repo, config)
+	tamperedPack := created.Operation
+	tamperedPack.LogicalClock = 2
+	tamperedState := created.State
+	tamperedState.LogicalClock = 2
+	replaceTaskTree(
+		t,
+		repo,
+		created,
+		writeDocumentBlob(t, repo, tamperedPack),
+		writeDocumentBlob(t, repo, tamperedState),
+	)
+	tamperedHead := gitOutput(t, repo, "rev-parse", taskRef(createPack.TaskID))
+	parent := core.Snapshot{Head: tamperedHead, Operation: tamperedPack, State: tamperedState}
+	pack := writeAddLabelPack(3, "01K0M6B8A4FTT8C39MXXYTW7C5", "direct-write")
+	state := writeState(t, &parent.State, pack)
+
+	_, err := repo.Write(context.Background(), config, &parent, pack, state, "extend malformed root")
+	if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
+		t.Fatalf("Write() category = %q, want %q; error = %v", got, want, err)
+	}
+	if got := gitOutput(t, repo, "rev-parse", taskRef(createPack.TaskID)); got != tamperedHead {
+		t.Fatalf("Write() advanced malformed root from %q to %q", tamperedHead, got)
+	}
+}
+
+func TestWriteAcceptsValidatedRootAndLinearParents(t *testing.T) {
+	repo, config := writeRepository(t)
+	created, createPack, createState := writeRoot(t, repo, config)
+	firstPack := writeAddLabelPack(2, "01K0M6B8A4FTT8C39MXXYTW7C5", "first")
+	firstState := writeState(t, &createState, firstPack)
+	first, err := repo.Write(context.Background(), config, &created, firstPack, firstState, "add first label")
+	if err != nil {
+		t.Fatalf("Write(root parent) error = %v", err)
+	}
+
+	secondPack := writeAddLabelPack(3, "01K0M6B8A4FTT8C39MXXYTW7C6", "second")
+	secondState := writeState(t, &firstState, secondPack)
+	second, err := repo.Write(context.Background(), config, &first, secondPack, secondState, "add second label")
+	if err != nil {
+		t.Fatalf("Write(linear parent) error = %v", err)
+	}
+	if got, want := gitOutput(t, repo, "rev-list", "--parents", "-n", "1", second.Head), second.Head+" "+first.Head; got != want {
+		t.Fatalf("second update commit parents = %q, want %q", got, want)
+	}
+	if got := gitOutput(t, repo, "rev-parse", taskRef(createPack.TaskID)); got != second.Head {
+		t.Fatalf("task ref = %q, want %q", got, second.Head)
+	}
+}
+
 func writeRepository(t *testing.T) (*Repository, core.ProjectConfig) {
 	t.Helper()
 	repo, err := Open(context.Background(), testrepo.New(t))

@@ -53,14 +53,21 @@ func (r *Repository) Write(
 		if err := core.ValidateCheckpoint(&parent.State, pack, state, config.Key); err != nil {
 			return core.Snapshot{}, err
 		}
-		storedParent, err := r.readState(ctx, parent.Head)
+		current, found, err := r.taskRef(ctx, pack.TaskID)
 		if err != nil {
 			return core.Snapshot{}, err
 		}
-		if err := validateStoredParentIdentity(config, pack, storedParent); err != nil {
+		if !found || current.objectID != parent.Head {
+			return core.Snapshot{}, core.Errorf(core.CategoryStaleWrite, "task ref changed concurrently")
+		}
+		storedParent, err := r.readTip(ctx, config, pack.TaskID, parent.Head)
+		if err != nil {
 			return core.Snapshot{}, err
 		}
-		if err := core.ValidateCheckpoint(&storedParent, pack, state, config.Key); err != nil {
+		if err := validateStoredParentIdentity(config, pack, storedParent.State); err != nil {
+			return core.Snapshot{}, err
+		}
+		if err := core.ValidateCheckpoint(&storedParent.State, pack, state, config.Key); err != nil {
 			return core.Snapshot{}, err
 		}
 	}
@@ -158,18 +165,6 @@ func validateStoredParentIdentity(config core.ProjectConfig, pack core.Operation
 		return core.Errorf(core.CategoryCorruptData, "parent state task ID does not match operation pack")
 	}
 	return nil
-}
-
-func (r *Repository) readState(ctx context.Context, head string) (core.StateDocument, error) {
-	contents, err := r.Git(ctx, nil, "show", head+":state.json")
-	if err != nil {
-		return core.StateDocument{}, core.Wrap(core.CategoryCorruptData, "cannot read parent state", err)
-	}
-	state, err := core.DecodeStateDocument(contents)
-	if err != nil {
-		return core.StateDocument{}, err
-	}
-	return state, nil
 }
 
 func (r *Repository) writeBlob(ctx context.Context, contents []byte) (string, error) {
