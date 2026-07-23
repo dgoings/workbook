@@ -12,17 +12,15 @@ func EncodeDocument(value any) ([]byte, error) {
 	var document any
 	switch typed := value.(type) {
 	case OperationPack:
-		normalized, err := normalizeOperationPackDocument(typed)
-		if err != nil {
+		if err := validateOperationPackDurableDocument(typed); err != nil {
 			return nil, err
 		}
-		document = normalized
+		document = typed
 	case StateDocument:
-		normalized, err := normalizeStateDocument(typed)
-		if err != nil {
+		if err := validateStateDurableDocument(typed); err != nil {
 			return nil, err
 		}
-		document = normalized
+		document = typed
 	default:
 		return nil, Errorf(CategoryValidation, "cannot encode unsupported document type %T", value)
 	}
@@ -40,14 +38,7 @@ func DecodeOperationPack(data []byte) (OperationPack, error) {
 	if err := decodeOneJSON(data, &pack); err != nil {
 		return OperationPack{}, err
 	}
-	projectKey, err := projectKeyFromTaskID(pack.TaskID)
-	if err != nil {
-		return OperationPack{}, Wrap(CategoryCorruptData, "operation pack task ID is invalid", err)
-	}
-	if err := validateOperationPackEnvelope(pack, projectKey); err != nil {
-		return OperationPack{}, err
-	}
-	if err := validateOperationPackDocument(pack, projectKey); err != nil {
+	if err := validateOperationPackDurableDocument(pack); err != nil {
 		return OperationPack{}, err
 	}
 	return pack, nil
@@ -59,60 +50,26 @@ func DecodeStateDocument(data []byte) (StateDocument, error) {
 	if err := decodeOneJSON(data, &state); err != nil {
 		return StateDocument{}, err
 	}
-	projectKey, err := projectKeyFromTaskID(state.TaskID)
-	if err != nil {
-		return StateDocument{}, Wrap(CategoryCorruptData, "task state task ID is invalid", err)
-	}
-	if err := validateStateDocument(state, projectKey); err != nil {
+	if err := validateStateDurableDocument(state); err != nil {
 		return StateDocument{}, err
 	}
 	return state, nil
 }
 
-func normalizeOperationPackDocument(pack OperationPack) (OperationPack, error) {
+func validateOperationPackDurableDocument(pack OperationPack) error {
 	projectKey, err := projectKeyFromTaskID(pack.TaskID)
 	if err != nil {
-		return OperationPack{}, err
+		return Wrap(CategoryCorruptData, "operation pack task ID is invalid", err)
 	}
-	if err := validateOperationPackEnvelope(pack, projectKey); err != nil {
-		return OperationPack{}, err
-	}
-
-	normalized := pack
-	normalized.Operations = make([]Operation, len(pack.Operations))
-	for i, operation := range pack.Operations {
-		normalizedOperation := operation
-		if operation.Task != nil {
-			task, err := normalizeCanonicalTask(projectKey, copyTaskData(*operation.Task))
-			if err != nil {
-				return OperationPack{}, Wrap(CategoryValidation, "operation task is invalid", err)
-			}
-			normalizedOperation.Task = &task
-		}
-		normalized.Operations[i] = normalizedOperation
-	}
-	return normalized, nil
+	return validateOperationPackDocument(pack, projectKey)
 }
 
-func normalizeStateDocument(state StateDocument) (StateDocument, error) {
+func validateStateDurableDocument(state StateDocument) error {
 	projectKey, err := projectKeyFromTaskID(state.TaskID)
 	if err != nil {
-		return StateDocument{}, err
+		return Wrap(CategoryCorruptData, "task state task ID is invalid", err)
 	}
-	if err := validateStateEnvelope(state, projectKey); err != nil {
-		return StateDocument{}, err
-	}
-
-	normalized := state
-	normalized.Task, err = normalizeCanonicalTask(projectKey, copyTaskData(state.Task))
-	if err != nil {
-		return StateDocument{}, Wrap(CategoryValidation, "state task is invalid", err)
-	}
-	if state.History.CompactedFrom != nil {
-		compactedFrom := *state.History.CompactedFrom
-		normalized.History.CompactedFrom = &compactedFrom
-	}
-	return normalized, nil
+	return validateStateDocument(state, projectKey)
 }
 
 func decodeOneJSON(data []byte, destination any) error {

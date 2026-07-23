@@ -18,7 +18,7 @@ func TestEncodeDocumentUsesCanonicalJSON(t *testing.T) {
 		Task: TaskData{
 			Title: "Build Git store", Description: "",
 			Status: StatusBacklog, Priority: PriorityMedium,
-			Labels: []string{"poc", "git"}, Rank: "1/1",
+			Labels: []string{"git", "poc"}, Rank: "1/1",
 			Dependencies: []string{}, CreatedAt: createdAt,
 			UpdatedAt: createdAt, Deleted: false,
 		},
@@ -172,6 +172,115 @@ func TestDecodeOperationPackRejectsInvalidOperations(t *testing.T) {
 				t.Fatalf("json.Marshal(operation pack) error = %v", err)
 			}
 			_, err = DecodeOperationPack(encoded)
+			assertCorrupt(t, err)
+		})
+	}
+}
+
+func TestEncodeDocumentRejectsMalformedDurableDocuments(t *testing.T) {
+	validState, err := Apply(nil, createPack(), "WB")
+	if err != nil {
+		t.Fatalf("Apply(create) error = %v", err)
+	}
+	compactedFrom := "0123456789abcdef"
+
+	tests := map[string]any{
+		"invalid operation ID": func() OperationPack {
+			pack := createPack()
+			pack.Operations[0].ID = "not-a-ulid"
+			return pack
+		}(),
+		"duplicate operation ID": func() OperationPack {
+			pack := updatePack(2)
+			pack.Operations = append(pack.Operations, Operation{
+				ID: operationID2, Type: OperationFieldSet, Field: "priority", Value: "high",
+			})
+			return pack
+		}(),
+		"invalid project ID": func() OperationPack {
+			pack := createPack()
+			pack.ProjectID = "not-a-ulid"
+			return pack
+		}(),
+		"invalid history generation": func() OperationPack {
+			pack := createPack()
+			pack.HistoryGeneration = "not-a-ulid"
+			return pack
+		}(),
+		"noncanonical create task": func() OperationPack {
+			pack := createPack()
+			pack.Operations[0].Task.Labels = []string{"poc", "git"}
+			return pack
+		}(),
+		"noncanonical state": func() StateDocument {
+			state := validState
+			state.Task.Labels = []string{"poc", "git"}
+			return state
+		}(),
+		"unsupported compaction metadata": func() StateDocument {
+			state := validState
+			state.History.CompactedFrom = &compactedFrom
+			return state
+		}(),
+	}
+
+	for name, document := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := EncodeDocument(document)
+			assertCorrupt(t, err)
+		})
+	}
+}
+
+func TestDecodeDocumentsRejectMalformedIdentifiersAndCompactionMetadata(t *testing.T) {
+	validState, err := Apply(nil, createPack(), "WB")
+	if err != nil {
+		t.Fatalf("Apply(create) error = %v", err)
+	}
+	compactedFrom := "0123456789abcdef"
+
+	tests := map[string]any{
+		"operation project ID": func() OperationPack {
+			pack := createPack()
+			pack.ProjectID = "not-a-ulid"
+			return pack
+		}(),
+		"operation history generation": func() OperationPack {
+			pack := createPack()
+			pack.HistoryGeneration = strings.ToLower(generationID)
+			return pack
+		}(),
+		"state project ID": func() StateDocument {
+			state := validState
+			state.ProjectID = "not-a-ulid"
+			return state
+		}(),
+		"state history generation": func() StateDocument {
+			state := validState
+			state.History.Generation = strings.ToLower(generationID)
+			return state
+		}(),
+		"state compaction metadata": func() StateDocument {
+			state := validState
+			state.History.CompactedFrom = &compactedFrom
+			return state
+		}(),
+	}
+
+	for name, document := range tests {
+		t.Run(name, func(t *testing.T) {
+			encoded, err := json.Marshal(document)
+			if err != nil {
+				t.Fatalf("json.Marshal() error = %v", err)
+			}
+			switch document.(type) {
+			case OperationPack:
+				_, err = DecodeOperationPack(encoded)
+			case StateDocument:
+				_, err = DecodeStateDocument(encoded)
+			default:
+				t.Fatalf("unsupported test document type %T", document)
+			}
 			assertCorrupt(t, err)
 		})
 	}

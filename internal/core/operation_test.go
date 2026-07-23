@@ -2,6 +2,7 @@ package core
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -276,6 +277,59 @@ func TestApplyRejectsUnknownPackFormatsAndVersions(t *testing.T) {
 			assertCorrupt(t, applyError(nil, pack, "WB"))
 		})
 	}
+}
+
+func TestApplyRejectsMalformedDurableIdentifiersAndDuplicateOperations(t *testing.T) {
+	for name, mutate := range map[string]func(*OperationPack){
+		"invalid project ID": func(pack *OperationPack) {
+			pack.ProjectID = "not-a-ulid"
+		},
+		"noncanonical project ID": func(pack *OperationPack) {
+			pack.ProjectID = strings.ToLower(projectID)
+		},
+		"invalid history generation": func(pack *OperationPack) {
+			pack.HistoryGeneration = "not-a-ulid"
+		},
+		"noncanonical history generation": func(pack *OperationPack) {
+			pack.HistoryGeneration = strings.ToLower(generationID)
+		},
+		"invalid operation ID": func(pack *OperationPack) {
+			pack.Operations[0].ID = "not-a-ulid"
+		},
+		"noncanonical operation ID": func(pack *OperationPack) {
+			pack.Operations[0].ID = strings.ToLower(operationID1)
+		},
+		"noncanonical create task": func(pack *OperationPack) {
+			pack.Operations[0].Task.Labels = []string{"poc", "git"}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			pack := createPack()
+			mutate(&pack)
+			assertCorrupt(t, applyError(nil, pack, "WB"))
+		})
+	}
+
+	parent, err := Apply(nil, createPack(), "WB")
+	if err != nil {
+		t.Fatalf("Apply(create) error = %v", err)
+	}
+	duplicate := updatePack(2)
+	duplicate.Operations = append(duplicate.Operations, Operation{
+		ID: operationID2, Type: OperationFieldSet, Field: "priority", Value: "high",
+	})
+	assertCorrupt(t, applyError(&parent, duplicate, "WB"))
+}
+
+func TestApplyRejectsUnsupportedCompactionMetadata(t *testing.T) {
+	parent, err := Apply(nil, createPack(), "WB")
+	if err != nil {
+		t.Fatalf("Apply(create) error = %v", err)
+	}
+	compactedFrom := "0123456789abcdef"
+	parent.History.CompactedFrom = &compactedFrom
+
+	assertCorrupt(t, applyError(&parent, updatePack(2), "WB"))
 }
 
 func TestValidateCheckpointRejectsByteDifferentState(t *testing.T) {

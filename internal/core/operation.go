@@ -65,7 +65,7 @@ type StateDocument struct {
 
 // Apply validates and applies one immutable operation pack to a task state.
 func Apply(parent *StateDocument, pack OperationPack, projectKey string) (StateDocument, error) {
-	if err := validateOperationPackEnvelope(pack, projectKey); err != nil {
+	if err := validateOperationPackDocument(pack, projectKey); err != nil {
 		return StateDocument{}, err
 	}
 
@@ -242,14 +242,14 @@ func validateOperationPackEnvelope(pack OperationPack, projectKey string) error 
 	if pack.Version != documentVersion {
 		return corrupt("unsupported operation pack version %d", pack.Version)
 	}
-	if strings.TrimSpace(pack.ProjectID) == "" {
-		return corrupt("operation pack project ID must not be blank")
+	if err := validateCanonicalULID("operation pack project ID", pack.ProjectID); err != nil {
+		return err
 	}
 	if err := ValidateTaskID(projectKey, pack.TaskID); err != nil {
 		return Wrap(CategoryCorruptData, "operation pack task ID is invalid", err)
 	}
-	if strings.TrimSpace(pack.HistoryGeneration) == "" {
-		return corrupt("operation pack history generation must not be blank")
+	if err := validateCanonicalULID("operation pack history generation", pack.HistoryGeneration); err != nil {
+		return err
 	}
 	if strings.TrimSpace(pack.Actor.ID) == "" {
 		return corrupt("operation pack actor ID must not be blank")
@@ -292,14 +292,17 @@ func validateStateEnvelope(state StateDocument, projectKey string) error {
 	if state.Version != documentVersion {
 		return corrupt("unsupported task state version %d", state.Version)
 	}
-	if strings.TrimSpace(state.ProjectID) == "" {
-		return corrupt("task state project ID must not be blank")
+	if err := validateCanonicalULID("task state project ID", state.ProjectID); err != nil {
+		return err
 	}
 	if err := ValidateTaskID(projectKey, state.TaskID); err != nil {
 		return Wrap(CategoryCorruptData, "task state task ID is invalid", err)
 	}
-	if strings.TrimSpace(state.History.Generation) == "" {
-		return corrupt("task state history generation must not be blank")
+	if err := validateCanonicalULID("task state history generation", state.History.Generation); err != nil {
+		return err
+	}
+	if state.History.CompactedFrom != nil {
+		return corrupt("task state compaction metadata is unsupported in the append-only POC")
 	}
 	if state.LogicalClock == 0 {
 		return corrupt("task state logical clock must be positive")
@@ -340,6 +343,9 @@ func validateOperation(operation Operation) error {
 }
 
 func validateOperationPackDocument(pack OperationPack, projectKey string) error {
+	if err := validateOperationPackEnvelope(pack, projectKey); err != nil {
+		return err
+	}
 	seen := make(map[string]struct{}, len(pack.Operations))
 	for _, operation := range pack.Operations {
 		if err := validateOperationDocument(operation, projectKey); err != nil {
@@ -375,9 +381,13 @@ func validateOperationDocument(operation Operation, projectKey string) error {
 }
 
 func validateOperationID(id string) error {
+	return validateCanonicalULID("operation ID", id)
+}
+
+func validateCanonicalULID(description, id string) error {
 	parsed, err := ulid.ParseStrict(id)
 	if err != nil || parsed.String() != id {
-		return corrupt("operation ID %q must contain a canonical uppercase ULID", id)
+		return corrupt("%s %q must contain a canonical uppercase ULID", description, id)
 	}
 	return nil
 }

@@ -193,6 +193,77 @@ func TestWriteRejectsInvalidCheckpointBeforeWritingObjectsOrRefs(t *testing.T) {
 	}
 }
 
+func TestWriteRejectsMalformedAndDuplicateOperationIDsBeforePublishing(t *testing.T) {
+	t.Run("malformed operation ID", func(t *testing.T) {
+		repo, config := writeRepository(t)
+		pack := writeCreatePack()
+		pack.Operations[0].ID = "not-a-ulid"
+		state := core.StateDocument{
+			Format: "workbook.task-state", Version: 1, ProjectID: pack.ProjectID, TaskID: pack.TaskID,
+			History: core.History{Generation: pack.HistoryGeneration}, LogicalClock: 1,
+			Task: *pack.Operations[0].Task,
+		}
+		before := gitOutput(t, repo, "count-objects", "-v")
+
+		_, err := repo.Write(context.Background(), config, nil, pack, state, "invalid operation")
+		if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
+			t.Fatalf("Write() category = %q, want %q; error = %v", got, want, err)
+		}
+		if after := gitOutput(t, repo, "count-objects", "-v"); after != before {
+			t.Fatalf("Write() wrote objects: before %q, after %q", before, after)
+		}
+		if _, err := repo.Git(context.Background(), nil, "rev-parse", "--verify", taskRef(pack.TaskID)); err == nil {
+			t.Fatal("Write() created a task ref for malformed operation ID")
+		}
+	})
+
+	t.Run("duplicate operation ID", func(t *testing.T) {
+		repo, config := writeRepository(t)
+		created, _, parentState := writeRoot(t, repo, config)
+		pack := writeUpdatePack(2, "01K0M6B8A4FTT8C39MXXYTW7C5", "ready")
+		pack.Operations = append(pack.Operations, core.Operation{
+			ID: "01K0M6B8A4FTT8C39MXXYTW7C5", Type: core.OperationFieldSet, Field: "priority", Value: "high",
+		})
+		state := parentState
+		state.LogicalClock = pack.LogicalClock
+		state.Task.Status = core.StatusReady
+		state.Task.Priority = core.PriorityHigh
+		state.Task.UpdatedAt = pack.WallTime
+		before := gitOutput(t, repo, "count-objects", "-v")
+
+		_, err := repo.Write(context.Background(), config, &created, pack, state, "duplicate operation")
+		if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
+			t.Fatalf("Write() category = %q, want %q; error = %v", got, want, err)
+		}
+		if after := gitOutput(t, repo, "count-objects", "-v"); after != before {
+			t.Fatalf("Write() wrote objects: before %q, after %q", before, after)
+		}
+		if got := gitOutput(t, repo, "rev-parse", taskRef(pack.TaskID)); got != created.Head {
+			t.Fatalf("task ref moved to %q, want %q", got, created.Head)
+		}
+	})
+}
+
+func TestWriteRejectsUnsupportedCompactionMetadataBeforePublishing(t *testing.T) {
+	repo, config := writeRepository(t)
+	pack := writeCreatePack()
+	state := writeState(t, nil, pack)
+	compactedFrom := "0123456789abcdef"
+	state.History.CompactedFrom = &compactedFrom
+	before := gitOutput(t, repo, "count-objects", "-v")
+
+	_, err := repo.Write(context.Background(), config, nil, pack, state, "compacted state")
+	if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
+		t.Fatalf("Write() category = %q, want %q; error = %v", got, want, err)
+	}
+	if after := gitOutput(t, repo, "count-objects", "-v"); after != before {
+		t.Fatalf("Write() wrote objects: before %q, after %q", before, after)
+	}
+	if _, err := repo.Git(context.Background(), nil, "rev-parse", "--verify", taskRef(pack.TaskID)); err == nil {
+		t.Fatal("Write() created a task ref for unsupported compaction metadata")
+	}
+}
+
 func TestWriteValidatesAgainstStateStoredAtParentHead(t *testing.T) {
 	repo, config := writeRepository(t)
 	created, _, createState := writeRoot(t, repo, config)
