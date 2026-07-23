@@ -187,6 +187,9 @@ func (r *Repository) readTip(ctx context.Context, config core.ProjectConfig, tas
 	if err != nil {
 		return core.Snapshot{}, err
 	}
+	if err := r.validateTipTopology(ctx, objectID, pack); err != nil {
+		return core.Snapshot{}, err
+	}
 	state, err := decodeCanonicalState(stateBytes)
 	if err != nil {
 		return core.Snapshot{}, err
@@ -195,6 +198,48 @@ func (r *Repository) readTip(ctx context.Context, config core.ProjectConfig, tas
 		return core.Snapshot{}, err
 	}
 	return core.Snapshot{Head: objectID, Operation: pack, State: state}, nil
+}
+
+func (r *Repository) validateTipTopology(ctx context.Context, objectID string, pack core.OperationPack) error {
+	contents, err := r.Git(ctx, nil, "cat-file", "commit", objectID)
+	if err != nil {
+		return core.Wrap(core.CategoryCorruptData, "cannot read raw task commit", err)
+	}
+	headerEnd := bytes.Index(contents, []byte("\n\n"))
+	if headerEnd < 0 {
+		return core.Errorf(core.CategoryCorruptData, "task commit has no header terminator")
+	}
+
+	parentCount := 0
+	for _, line := range bytes.Split(contents[:headerEnd], []byte{'\n'}) {
+		if !bytes.HasPrefix(line, []byte("parent ")) {
+			continue
+		}
+		if fields := bytes.Fields(line); len(fields) != 2 {
+			return core.Errorf(core.CategoryCorruptData, "task commit has an invalid parent header")
+		}
+		parentCount++
+	}
+
+	containsCreate := false
+	for _, operation := range pack.Operations {
+		if operation.Type == core.OperationTaskCreate {
+			containsCreate = true
+		}
+	}
+	if containsCreate {
+		if len(pack.Operations) != 1 || pack.Operations[0].Type != core.OperationTaskCreate {
+			return core.Errorf(core.CategoryCorruptData, "task.create must be the only operation in a root pack")
+		}
+		if parentCount != 0 {
+			return core.Errorf(core.CategoryCorruptData, "task.create tip must have no parents")
+		}
+		return nil
+	}
+	if parentCount != 1 {
+		return core.Errorf(core.CategoryCorruptData, "ordinary task tip must have exactly one parent")
+	}
+	return nil
 }
 
 func (r *Repository) rejectSymbolicTaskRef(ctx context.Context, refName string) error {

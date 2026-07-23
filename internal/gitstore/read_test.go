@@ -44,6 +44,80 @@ func TestGetReadsCanonicalTipWithoutReplayingParents(t *testing.T) {
 	}
 }
 
+func TestGetAcceptsRootAndLinearTipTopology(t *testing.T) {
+	repo, config := writeRepository(t)
+	created, pack, state := writeRoot(t, repo, config)
+	if _, err := repo.Get(context.Background(), config, pack.TaskID); err != nil {
+		t.Fatalf("Get(root) error = %v", err)
+	}
+
+	updatePack := writeUpdatePack(2, "01K0M6B8A4FTT8C39MXXYTW7C5", string(core.StatusReady))
+	updateState := writeState(t, &state, updatePack)
+	if _, err := repo.Write(context.Background(), config, &created, updatePack, updateState, "mark ready"); err != nil {
+		t.Fatalf("Write(update) error = %v", err)
+	}
+	if _, err := repo.Get(context.Background(), config, pack.TaskID); err != nil {
+		t.Fatalf("Get(linear) error = %v", err)
+	}
+}
+
+func TestGetRejectsUnsupportedTipTopology(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(t *testing.T, repo *Repository, snapshot core.Snapshot) string
+	}{
+		{
+			name: "parented create",
+			mutate: func(t *testing.T, repo *Repository, snapshot core.Snapshot) string {
+				tree := gitOutput(t, repo, "rev-parse", snapshot.Head+"^{tree}")
+				parent := gitOutput(t, repo, "commit-tree", gitOutput(t, repo, "mktree"), "-m", "parent")
+				return gitOutput(t, repo, "commit-tree", tree, "-p", parent, "-m", "parented create")
+			},
+		},
+		{
+			name: "parentless update",
+			mutate: func(t *testing.T, repo *Repository, snapshot core.Snapshot) string {
+				tree := gitOutput(t, repo, "rev-parse", snapshot.Head+"^{tree}")
+				return gitOutput(t, repo, "commit-tree", tree, "-m", "parentless update")
+			},
+		},
+		{
+			name: "multi-parent update",
+			mutate: func(t *testing.T, repo *Repository, snapshot core.Snapshot) string {
+				tree := gitOutput(t, repo, "rev-parse", snapshot.Head+"^{tree}")
+				secondParent := gitOutput(t, repo, "commit-tree", gitOutput(t, repo, "mktree"), "-m", "second parent")
+				parentLine := gitOutput(t, repo, "rev-list", "--parents", "-n", "1", snapshot.Head)
+				firstParent := strings.Fields(parentLine)[1]
+				return gitOutput(t, repo, "commit-tree", tree, "-p", firstParent, "-p", secondParent, "-m", "merged update")
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repo, config := writeRepository(t)
+			created, pack, state := writeRoot(t, repo, config)
+			tip := created
+			if test.name != "parented create" {
+				updatePack := writeUpdatePack(2, "01K0M6B8A4FTT8C39MXXYTW7C5", string(core.StatusReady))
+				updateState := writeState(t, &state, updatePack)
+				var err error
+				tip, err = repo.Write(context.Background(), config, &created, updatePack, updateState, "mark ready")
+				if err != nil {
+					t.Fatalf("Write(update) error = %v", err)
+				}
+			}
+			invalidTip := test.mutate(t, repo, tip)
+			gitOutput(t, repo, "update-ref", taskRef(pack.TaskID), invalidTip)
+
+			_, err := repo.Get(context.Background(), config, pack.TaskID)
+			if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
+				t.Fatalf("Get() category = %q, want %q; error = %v", got, want, err)
+			}
+		})
+	}
+}
+
 func TestGetIgnoresGitReplaceObjects(t *testing.T) {
 	repo, config := writeRepository(t)
 	original, _, _ := writeRoot(t, repo, config)
