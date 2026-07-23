@@ -18,7 +18,7 @@ func (r *Repository) List(ctx context.Context, config core.ProjectConfig) ([]cor
 	if err := r.verifyIdentity(ctx); err != nil {
 		return nil, err
 	}
-	if err := validateReadConfig(config); err != nil {
+	if err := r.validateRepositoryConfig(config); err != nil {
 		return nil, err
 	}
 
@@ -46,7 +46,7 @@ func (r *Repository) Get(ctx context.Context, config core.ProjectConfig, taskID 
 	if err := r.verifyIdentity(ctx); err != nil {
 		return core.Snapshot{}, err
 	}
-	if err := validateReadConfig(config); err != nil {
+	if err := r.validateRepositoryConfig(config); err != nil {
 		return core.Snapshot{}, err
 	}
 	if err := core.ValidateTaskID(config.Key, taskID); err != nil {
@@ -330,6 +330,20 @@ func validateReadConfig(config core.ProjectConfig) error {
 	}
 	if err := core.ValidateProjectKey(config.Key); err != nil {
 		return err
+	}
+	return nil
+}
+
+func (r *Repository) validateRepositoryConfig(config core.ProjectConfig) error {
+	if err := validateReadConfig(config); err != nil {
+		return err
+	}
+	canonical, err := r.LoadConfig()
+	if err != nil {
+		return err
+	}
+	if config != canonical {
+		return core.Errorf(core.CategoryValidation, "project configuration does not match this repository")
 	}
 	return nil
 }

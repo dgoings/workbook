@@ -278,6 +278,62 @@ func TestLoadConfigReturnsExistingConfig(t *testing.T) {
 	}
 }
 
+func TestLoadConfigPublishesTrackedIdentityAsMissingCommonGuard(t *testing.T) {
+	repo, err := Open(context.Background(), testrepo.New(t))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	want := core.ProjectConfig{
+		Format: projectFormat, Version: projectVersion, ProjectID: fixedProjectID, Key: "WB",
+	}
+	writeProjectConfigFile(t, filepath.Join(repo.Root, configPath), want)
+
+	got, err := repo.LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if got != want {
+		t.Fatalf("LoadConfig() = %#v, want %#v", got, want)
+	}
+	assertProjectConfigFile(t, filepath.Join(repo.CommonGitDir, "workbook", projectGuard), want)
+}
+
+func TestLoadConfigRejectsMismatchedCommonProjectGuard(t *testing.T) {
+	repo, err := Open(context.Background(), testrepo.New(t))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	tracked := core.ProjectConfig{
+		Format: projectFormat, Version: projectVersion, ProjectID: fixedProjectID, Key: "WB",
+	}
+	guard := tracked
+	guard.ProjectID = "01K0M65GBZ8F5ZQX0VC1J8H3TQ"
+	writeProjectConfigFile(t, filepath.Join(repo.Root, configPath), tracked)
+	writeProjectConfigFile(t, filepath.Join(repo.CommonGitDir, "workbook", projectGuard), guard)
+
+	_, err = repo.LoadConfig()
+	if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
+		t.Fatalf("LoadConfig() category = %q, want %q; error = %v", got, want, err)
+	}
+}
+
+func TestLoadConfigRequiresInitWhenOnlyCommonProjectGuardExists(t *testing.T) {
+	repo, err := Open(context.Background(), testrepo.New(t))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	guard := core.ProjectConfig{
+		Format: projectFormat, Version: projectVersion, ProjectID: fixedProjectID, Key: "WB",
+	}
+	writeProjectConfigFile(t, filepath.Join(repo.CommonGitDir, "workbook", projectGuard), guard)
+
+	_, err = repo.LoadConfig()
+	if got, want := core.CategoryOf(err), core.CategoryNotInitialized; got != want {
+		t.Fatalf("LoadConfig() category = %q, want %q; error = %v", got, want, err)
+	}
+	assertPathMissing(t, filepath.Join(repo.Root, configPath))
+}
+
 func TestInitRejectsInvalidConstructedRepository(t *testing.T) {
 	baseDir := t.TempDir()
 	repository := &Repository{

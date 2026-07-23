@@ -104,14 +104,34 @@ func (r *Repository) Init(ctx context.Context, key string, ids core.IDSource) (c
 
 // LoadConfig returns the repository's validated Workbook configuration.
 func (r *Repository) LoadConfig() (core.ProjectConfig, error) {
-	config, exists, err := r.readConfig()
+	tracked, exists, err := r.readConfig()
 	if err != nil {
 		return core.ProjectConfig{}, err
 	}
 	if !exists {
 		return core.ProjectConfig{}, core.Errorf(core.CategoryNotInitialized, "Workbook is not initialized")
 	}
-	return config, nil
+	guard, guardExists, err := r.readProjectGuard()
+	if err != nil {
+		return core.ProjectConfig{}, err
+	}
+	if guardExists {
+		if tracked != guard {
+			return core.ProjectConfig{}, core.Errorf(core.CategoryCorruptData, "tracked Workbook configuration does not match common project guard")
+		}
+		return tracked, nil
+	}
+	if err := r.ensurePrivateCache(); err != nil {
+		return core.ProjectConfig{}, err
+	}
+	persisted, _, err := r.publishProjectGuard(tracked)
+	if err != nil {
+		return core.ProjectConfig{}, err
+	}
+	if persisted != tracked {
+		return core.ProjectConfig{}, core.Errorf(core.CategoryCorruptData, "tracked Workbook configuration does not match concurrently published project guard")
+	}
+	return tracked, nil
 }
 
 func (r *Repository) readConfig() (core.ProjectConfig, bool, error) {

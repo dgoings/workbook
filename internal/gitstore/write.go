@@ -24,6 +24,9 @@ func (r *Repository) Write(
 	if err := r.verifyIdentity(ctx); err != nil {
 		return core.Snapshot{}, err
 	}
+	if err := r.validateRepositoryConfig(config); err != nil {
+		return core.Snapshot{}, err
+	}
 	if err := validateWriteIdentity(config, pack, state); err != nil {
 		return core.Snapshot{}, err
 	}

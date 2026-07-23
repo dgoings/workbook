@@ -3,6 +3,7 @@ package gitstore
 import (
 	"bytes"
 	"context"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -110,6 +111,127 @@ func TestWriteNeverDereferencesSymbolicTaskRef(t *testing.T) {
 	}
 	if got := gitOutput(t, repo, "symbolic-ref", taskRef(createPack.TaskID)); got != targetRef {
 		t.Fatalf("task ref stopped pointing to %q: got %q", targetRef, got)
+	}
+}
+
+func TestGitStoreRejectsCallerSuppliedForeignProjectConfig(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(t *testing.T, repo *Repository, config core.ProjectConfig) error
+	}{
+		{
+			name: "List",
+			call: func(t *testing.T, repo *Repository, config core.ProjectConfig) error {
+				_, err := repo.List(context.Background(), config)
+				return err
+			},
+		},
+		{
+			name: "Get",
+			call: func(t *testing.T, repo *Repository, config core.ProjectConfig) error {
+				_, err := repo.Get(context.Background(), config, writeTaskID)
+				return err
+			},
+		},
+		{
+			name: "Write",
+			call: func(t *testing.T, repo *Repository, config core.ProjectConfig) error {
+				pack := writeCreatePack()
+				pack.ProjectID = config.ProjectID
+				state := writeState(t, nil, pack)
+				_, err := repo.Write(context.Background(), config, nil, pack, state, "foreign task")
+				return err
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repo, config := writeRepository(t)
+			foreign := config
+			foreign.ProjectID = "01K0M6B8A4FTT8C39MXXYTW7C9"
+
+			err := test.call(t, repo, foreign)
+			if got, want := core.CategoryOf(err), core.CategoryValidation; got != want {
+				t.Fatalf("%s() category = %q, want %q; error = %v", test.name, got, want, err)
+			}
+			assertNoTaskRefs(t, repo)
+		})
+	}
+}
+
+func TestConflictingLinkedWorktreeConfigCannotAccessSharedTaskRefs(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(t *testing.T, repo *Repository, config core.ProjectConfig) error
+	}{
+		{
+			name: "CRUD create",
+			call: func(t *testing.T, repo *Repository, config core.ProjectConfig) error {
+				service := testService(repo, config)
+				_, err := service.Create(context.Background(), core.CreateInput{Title: "Foreign task"})
+				return err
+			},
+		},
+		{
+			name: "List",
+			call: func(t *testing.T, repo *Repository, config core.ProjectConfig) error {
+				_, err := repo.List(context.Background(), config)
+				return err
+			},
+		},
+		{
+			name: "Get",
+			call: func(t *testing.T, repo *Repository, config core.ProjectConfig) error {
+				_, err := repo.Get(context.Background(), config, writeTaskID)
+				return err
+			},
+		},
+		{
+			name: "Write",
+			call: func(t *testing.T, repo *Repository, config core.ProjectConfig) error {
+				pack := writeCreatePack()
+				pack.ProjectID = config.ProjectID
+				state := writeState(t, nil, pack)
+				_, err := repo.Write(context.Background(), config, nil, pack, state, "foreign task")
+				return err
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			guarded, linked, original, foreign := conflictingLinkedWorktrees(t)
+
+			err := test.call(t, linked, foreign)
+			if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
+				t.Fatalf("%s() category = %q, want %q; error = %v", test.name, got, want, err)
+			}
+			assertNoTaskRefs(t, guarded)
+			assertProjectConfigFile(t, filepath.Join(guarded.CommonGitDir, "workbook", projectGuard), original)
+
+			if test.name == "CRUD create" {
+				service := testService(guarded, original)
+				task, err := service.Create(context.Background(), core.CreateInput{Title: "Guarded task"})
+				if err != nil {
+					t.Fatalf("Create(original identity) error = %v", err)
+				}
+				listed, err := service.List(context.Background(), core.ListFilter{})
+				if err != nil {
+					t.Fatalf("List(original identity) error = %v", err)
+				}
+				if len(listed) != 1 || listed[0].ID != task.ID {
+					t.Fatalf("List(original identity) = %#v, want task %q", listed, task.ID)
+				}
+				shown, err := service.Show(context.Background(), task.ID)
+				if err != nil {
+					t.Fatalf("Show(original identity) error = %v", err)
+				}
+				if shown.ID != task.ID {
+					t.Fatalf("Show(original identity).ID = %q, want %q", shown.ID, task.ID)
+				}
+			}
+		})
 	}
 }
 
@@ -290,7 +412,11 @@ func writeRepository(t *testing.T) (*Repository, core.ProjectConfig) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	return repo, core.ProjectConfig{Format: "workbook.project", Version: 1, ProjectID: writeProjectID, Key: "WB"}
+	config, _, err := repo.Init(context.Background(), "WB", idsFor(writeProjectID))
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	return repo, config
 }
 
 func writeRoot(t *testing.T, repo *Repository, config core.ProjectConfig) (core.Snapshot, core.OperationPack, core.StateDocument) {
@@ -373,4 +499,51 @@ func gitOutput(t *testing.T, repo *Repository, args ...string) string {
 		t.Fatalf("Git(%v) error = %v", args, err)
 	}
 	return strings.TrimSuffix(string(output), "\n")
+}
+
+func assertNoTaskRefs(t *testing.T, repo *Repository) {
+	t.Helper()
+	output, err := repo.Git(context.Background(), nil, "for-each-ref", "--format=%(refname)", taskRefPrefix)
+	if err != nil {
+		t.Fatalf("Git(for-each-ref) error = %v", err)
+	}
+	if len(output) != 0 {
+		t.Fatalf("task refs = %q, want none", output)
+	}
+}
+
+func conflictingLinkedWorktrees(t *testing.T) (*Repository, *Repository, core.ProjectConfig, core.ProjectConfig) {
+	t.Helper()
+	repositories := linkedWorktreeRepositories(t)
+	guarded := repositories[0]
+	linked := repositories[1]
+	original, _, err := guarded.Init(context.Background(), "WB", idsFor(writeProjectID))
+	if err != nil {
+		t.Fatalf("Init(guarded worktree) error = %v", err)
+	}
+	foreign := original
+	foreign.ProjectID = "01K0M6B8A4FTT8C39MXXYTW7C9"
+	writeProjectConfigFile(t, filepath.Join(linked.Root, configPath), foreign)
+	assertNoTaskRefs(t, guarded)
+	return guarded, linked, original, foreign
+}
+
+func testService(repo *Repository, config core.ProjectConfig) core.Service {
+	ids := []string{
+		"01K0M6B8A4FTT8C39MXXYTW7D1",
+		"01K0M6B8A4FTT8C39MXXYTW7D2",
+		"01K0M6B8A4FTT8C39MXXYTW7D3",
+	}
+	index := 0
+	return core.Service{
+		Config: config,
+		Store:  repo,
+		IDs: core.IDSourceFunc(func() (string, error) {
+			id := ids[index]
+			index++
+			return id, nil
+		}),
+		Now:   func() time.Time { return writeCreatedAt },
+		Actor: "writer@example.test",
+	}
 }
