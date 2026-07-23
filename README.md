@@ -30,11 +30,14 @@ Workbook aims for a middle ground:
 
 A developer keeps task state in the repository's Git object database and queries it locally. A remote is optional, although pushing Workbook refs provides backup and portability across clones.
 
-### Small teams
+### Proposed small-team workflow
 
-Team members share task operations through the repository's existing Git remote. Workbook synchronizes only its own refs, automatically reconciles concurrent edits, and does not modify or push a developer's code branch.
+A future remote workflow would let team members share task operations through the
+repository's existing Git remote. Workbook would synchronize only its own refs,
+reconcile concurrent edits according to documented domain rules, and leave each
+developer's code branch untouched.
 
-Onboarding should be approximately:
+The proposed onboarding flow would be approximately:
 
 ```sh
 git clone <repository>
@@ -42,11 +45,13 @@ git clone <repository>
 workbook ready
 ```
 
-### Ephemeral coding agents
+### Proposed ephemeral coding-agent workflow
 
-A fresh VM or sandbox clones the repository, bootstraps Workbook, claims a task using a remote compare-and-swap, reads the relevant context, implements the work, and records the resulting commit before the environment is discarded.
+A future ephemeral-agent workflow would clone the repository, bootstrap Workbook,
+claim a task using a remote compare-and-swap, read the relevant context, implement
+the work, and record the resulting commit before the environment is discarded.
 
-A proposed flow is:
+The proposed command flow is:
 
 ```sh
 git clone <repository>
@@ -148,11 +153,16 @@ ref
 - The root commit has no parents and contains `task.create`.
 - A normal edit commit has one parent.
 - A future reconciliation or resolution commit can have multiple parents.
-- Git parent edges define causal history.
+- Immutable `operation.json` packs are the authoritative record of task intent,
+  and Git parent ancestry is the authoritative record of causality.
 - Every current POC commit tree contains exactly the edit's versioned operation
-  pack in `operation.json` and a versioned full-task checkpoint in `state.json`.
-- Ordinary `list` and `show` reads validate and use the tip commit's
-  `operation.json` and `state.json`; they do not replay the complete history.
+  pack in `operation.json` and a deterministic, durable task materialization in
+  `state.json`.
+- Each `state.json` checkpoint must match the result of applying that commit's
+  operation pack to its parent state, or to no parent state for a root commit.
+- Ordinary `list` and `show` reads validate and use the tip checkpoint without
+  replaying the complete history. This read optimization does not change the
+  authority of the immutable operations or their Git ancestry.
 - History replay and checkpoint reconstruction are reserved for later POC work.
 
 Using one ref per task avoids a single global state-branch bottleneck: local

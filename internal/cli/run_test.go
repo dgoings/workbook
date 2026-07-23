@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -535,6 +537,69 @@ func TestREADMEImplementedCommands(t *testing.T) {
 			t.Errorf("proposed commands missing %q", command)
 		}
 	}
+
+	readme := string(contents)
+	assertREADMECommandPolicy(t, readme)
+	if !strings.Contains(readme, "### Proposed small-team workflow") {
+		t.Error("README small-team workflow is not labeled proposed")
+	}
+	for _, stale := range []string{
+		"Workbook synchronizes only its own refs",
+		"automatically reconciles concurrent edits",
+	} {
+		if strings.Contains(readme, stale) {
+			t.Errorf("README contains stale present-tense claim %q", stale)
+		}
+	}
+}
+
+func TestREADMECommandPolicyRejectsUnimplementedCommandOutsideProposedSection(t *testing.T) {
+	const claim = "## Current workflow\n\nRun `workbook serve` to start the board.\n"
+	violations := readmeCommandPolicyViolations(claim)
+	if len(violations) != 1 || !strings.Contains(violations[0], `"serve"`) {
+		t.Fatalf("violations = %q, want one for workbook serve", violations)
+	}
+
+	const proposal = "## Proposed web workflow\n\nA future release may run `workbook serve`.\n"
+	if violations := readmeCommandPolicyViolations(proposal); len(violations) != 0 {
+		t.Fatalf("proposed command violations = %q, want none", violations)
+	}
+}
+
+func assertREADMECommandPolicy(t *testing.T, readme string) {
+	t.Helper()
+	if violations := readmeCommandPolicyViolations(readme); len(violations) != 0 {
+		t.Fatalf("README presents unimplemented commands outside proposed sections:\n%s", strings.Join(violations, "\n"))
+	}
+}
+
+func readmeCommandPolicyViolations(readme string) []string {
+	implemented := map[string]bool{
+		"init": true, "create": true, "list": true,
+		"show": true, "update": true, "delete": true,
+	}
+	commandPattern := regexp.MustCompile(`\bworkbook ([a-z][a-z0-9-]*)\b`)
+	var h2, h3 string
+	var violations []string
+	for index, line := range strings.Split(readme, "\n") {
+		switch {
+		case strings.HasPrefix(line, "## "):
+			h2 = strings.TrimSpace(strings.TrimPrefix(line, "## "))
+			h3 = ""
+		case strings.HasPrefix(line, "### "):
+			h3 = strings.TrimSpace(strings.TrimPrefix(line, "### "))
+		}
+
+		headingPath := strings.TrimSpace(strings.Join([]string{h2, h3}, " / "))
+		isProposed := strings.Contains(strings.ToLower(headingPath), "proposed")
+		for _, match := range commandPattern.FindAllStringSubmatch(line, -1) {
+			if !implemented[match[1]] && !isProposed {
+				violations = append(violations,
+					fmt.Sprintf("line %d under %q uses %q", index+1, headingPath, match[1]))
+			}
+		}
+	}
+	return violations
 }
 
 func readmeCommandSections(t *testing.T, readme string) (string, string) {
