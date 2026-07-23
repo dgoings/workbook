@@ -235,6 +235,102 @@ func TestServicePropagatesStaleWriteWithoutRetry(t *testing.T) {
 	}
 }
 
+func TestServiceCreateRejectsInvalidOrDuplicateGeneratedIDsBeforeWrite(t *testing.T) {
+	tests := []struct {
+		name string
+		ids  []string
+	}{
+		{
+			name: "malformed operation ID",
+			ids:  []string{"01K0M6B8A4FTT8C39MXXYTW7D2", "01K0M6B8A4FTT8C39MXXYTW7D3", "not-a-ulid"},
+		},
+		{
+			name: "noncanonical history generation",
+			ids:  []string{"01K0M6B8A4FTT8C39MXXYTW7D2", "01k0m6b8a4ftt8c39mxxytw7d3", "01K0M6B8A4FTT8C39MXXYTW7D4"},
+		},
+		{
+			name: "duplicate task and history IDs",
+			ids:  []string{"01K0M6B8A4FTT8C39MXXYTW7D2", "01K0M6B8A4FTT8C39MXXYTW7D2", "01K0M6B8A4FTT8C39MXXYTW7D4"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := newMemoryTaskStore()
+			service := serviceUnderTest(store, &sequenceIDSource{values: test.ids})
+
+			_, err := service.Create(context.Background(), CreateInput{Title: "Reject invalid IDs"})
+			if got, want := CategoryOf(err), CategoryValidation; got != want {
+				t.Fatalf("Create() error category = %q, want %q (error: %v)", got, want, err)
+			}
+			if got, want := len(store.writes), 0; got != want {
+				t.Fatalf("Write() calls = %d, want %d", got, want)
+			}
+		})
+	}
+}
+
+func TestServiceUpdateRejectsInvalidOrCollidingOperationIDsBeforeWrite(t *testing.T) {
+	snapshot := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", TaskData{
+		Title: "Old title", Description: "old", Status: StatusBacklog, Priority: PriorityMedium, Rank: "1/1",
+	})
+	tests := []struct {
+		name string
+		ids  []string
+	}{
+		{
+			name: "malformed operation ID",
+			ids:  []string{"not-a-ulid", "01K0M6B8A4FTT8C39MXXYTW7D2"},
+		},
+		{
+			name: "noncanonical operation ID",
+			ids:  []string{"01k0m6b8a4ftt8c39mxxytw7d2", "01K0M6B8A4FTT8C39MXXYTW7D3"},
+		},
+		{
+			name: "duplicate operations",
+			ids:  []string{"01K0M6B8A4FTT8C39MXXYTW7D2", "01K0M6B8A4FTT8C39MXXYTW7D2"},
+		},
+		{
+			name: "operation duplicates task ULID suffix",
+			ids:  []string{"01K0M6B8A4FTT8C39MXXYTW7D1", "01K0M6B8A4FTT8C39MXXYTW7D2"},
+		},
+		{
+			name: "operation duplicates history generation",
+			ids:  []string{"01K0M6B8A4FTT8C39MXXYTW7D9", "01K0M6B8A4FTT8C39MXXYTW7D2"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := newMemoryTaskStore(snapshot)
+			service := serviceUnderTest(store, &sequenceIDSource{values: test.ids})
+			title, description := "New title", "new"
+
+			_, err := service.Update(context.Background(), snapshot.State.TaskID, UpdateInput{Title: &title, Description: &description})
+			if got, want := CategoryOf(err), CategoryValidation; got != want {
+				t.Fatalf("Update() error category = %q, want %q (error: %v)", got, want, err)
+			}
+			if got, want := len(store.writes), 0; got != want {
+				t.Fatalf("Write() calls = %d, want %d", got, want)
+			}
+		})
+	}
+}
+
+func TestServiceDeleteRejectsInvalidGeneratedIDBeforeWrite(t *testing.T) {
+	snapshot := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", TaskData{Title: "Delete", Status: StatusBacklog, Priority: PriorityMedium, Rank: "1/1"})
+	store := newMemoryTaskStore(snapshot)
+	service := serviceUnderTest(store, &sequenceIDSource{values: []string{"not-a-ulid"}})
+
+	_, err := service.Delete(context.Background(), snapshot.State.TaskID)
+	if got, want := CategoryOf(err), CategoryValidation; got != want {
+		t.Fatalf("Delete() error category = %q, want %q (error: %v)", got, want, err)
+	}
+	if got, want := len(store.writes), 0; got != want {
+		t.Fatalf("Write() calls = %d, want %d", got, want)
+	}
+}
+
 func serviceUnderTest(store TaskStore, ids IDSource) Service {
 	return Service{Config: serviceTestConfig, Store: store, IDs: ids, Now: func() time.Time { return serviceTestNow }, Actor: "developer@example.com"}
 }

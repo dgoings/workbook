@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/oklog/ulid/v2"
 )
 
 type Service struct {
@@ -73,18 +75,11 @@ func (s Service) Create(ctx context.Context, input CreateInput) (Task, error) {
 		return Task{}, err
 	}
 
-	taskULID, err := s.newID()
+	ids, err := s.newMutationIDs(3)
 	if err != nil {
 		return Task{}, err
 	}
-	generation, err := s.newID()
-	if err != nil {
-		return Task{}, err
-	}
-	operationID, err := s.newID()
-	if err != nil {
-		return Task{}, err
-	}
+	taskULID, generation, operationID := ids[0], ids[1], ids[2]
 	taskID := s.Config.Key + "-" + taskULID
 	pack := OperationPack{
 		Format:            operationPackFormat,
@@ -186,7 +181,7 @@ func (s Service) Update(ctx context.Context, idOrPrefix string, input UpdateInpu
 	if len(operations) == 0 {
 		return Task{}, Errorf(CategoryValidation, "update does not change task")
 	}
-	if err := s.assignOperationIDs(operations); err != nil {
+	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
 		return Task{}, err
 	}
 	return s.writeMutation(ctx, &parent, operations, "update task")
@@ -201,7 +196,7 @@ func (s Service) Delete(ctx context.Context, idOrPrefix string) (Task, error) {
 		return Task{}, Errorf(CategoryValidation, "cannot delete a tombstoned task")
 	}
 	operations := []Operation{{Type: OperationTaskTombstone}}
-	if err := s.assignOperationIDs(operations); err != nil {
+	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
 		return Task{}, err
 	}
 	return s.writeMutation(ctx, &parent, operations, "delete task")
@@ -248,15 +243,50 @@ func (s Service) writeMutation(ctx context.Context, parent *Snapshot, operations
 	return Project(written), nil
 }
 
-func (s Service) assignOperationIDs(operations []Operation) error {
-	for i := range operations {
-		id, err := s.newID()
-		if err != nil {
-			return err
-		}
+func (s Service) assignOperationIDs(operations []Operation, reserved ...string) error {
+	ids, err := s.newMutationIDs(len(operations), reserved...)
+	if err != nil {
+		return err
+	}
+	for i, id := range ids {
 		operations[i].ID = id
 	}
 	return nil
+}
+
+func (s Service) newMutationIDs(count int, reserved ...string) ([]string, error) {
+	seen := make(map[string]struct{}, count+len(reserved))
+	for _, id := range reserved {
+		seen[id] = struct{}{}
+	}
+	ids := make([]string, count)
+	for i := range ids {
+		id, err := s.newID()
+		if err != nil {
+			return nil, err
+		}
+		if err := validateGeneratedULID(id); err != nil {
+			return nil, err
+		}
+		if _, exists := seen[id]; exists {
+			return nil, Errorf(CategoryValidation, "ID source returned duplicate ULID %q", id)
+		}
+		seen[id] = struct{}{}
+		ids[i] = id
+	}
+	return ids, nil
+}
+
+func validateGeneratedULID(id string) error {
+	parsed, err := ulid.ParseStrict(id)
+	if err != nil || parsed.String() != id {
+		return Errorf(CategoryValidation, "ID source returned a noncanonical ULID %q", id)
+	}
+	return nil
+}
+
+func taskULIDSuffix(taskID, projectKey string) string {
+	return strings.TrimPrefix(taskID, projectKey+"-")
 }
 
 func (s Service) newID() (string, error) {
