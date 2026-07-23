@@ -14,6 +14,75 @@ type stringListValue struct {
 	set    bool
 }
 
+type flagKind uint8
+
+const (
+	stringFlag flagKind = iota
+	boolFlag
+)
+
+type commandSchema struct {
+	requiredFirstArgument bool
+	flags                 map[string]flagKind
+}
+
+var commandSchemas = map[string]commandSchema{
+	"init": {
+		flags: map[string]flagKind{
+			"key":  stringFlag,
+			"json": boolFlag,
+		},
+	},
+	"create": {
+		requiredFirstArgument: true,
+		flags: map[string]flagKind{
+			"description": stringFlag,
+			"status":      stringFlag,
+			"priority":    stringFlag,
+			"label":       stringFlag,
+			"json":        boolFlag,
+		},
+	},
+	"list": {
+		flags: map[string]flagKind{
+			"status":   stringFlag,
+			"priority": stringFlag,
+			"label":    stringFlag,
+			"all":      boolFlag,
+			"json":     boolFlag,
+		},
+	},
+	"show": {
+		requiredFirstArgument: true,
+		flags: map[string]flagKind{
+			"json": boolFlag,
+		},
+	},
+	"update": {
+		requiredFirstArgument: true,
+		flags: map[string]flagKind{
+			"title":        stringFlag,
+			"description":  stringFlag,
+			"status":       stringFlag,
+			"priority":     stringFlag,
+			"label":        stringFlag,
+			"clear-labels": boolFlag,
+			"json":         boolFlag,
+		},
+	},
+	"delete": {
+		requiredFirstArgument: true,
+		flags: map[string]flagKind{
+			"json": boolFlag,
+		},
+	},
+}
+
+type commandFlagSet struct {
+	*flag.FlagSet
+	schema commandSchema
+}
+
 func (value *stringListValue) String() string {
 	if len(value.values) == 0 {
 		return ""
@@ -27,13 +96,39 @@ func (value *stringListValue) Set(item string) error {
 	return nil
 }
 
-func newFlagSet(command string) *flag.FlagSet {
-	flags := flag.NewFlagSet(command, flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
-	return flags
+func newFlagSet(command string) *commandFlagSet {
+	schema, exists := commandSchemas[command]
+	if !exists {
+		panic("missing flag schema for " + command)
+	}
+	flagSet := flag.NewFlagSet(command, flag.ContinueOnError)
+	flagSet.SetOutput(io.Discard)
+	return &commandFlagSet{FlagSet: flagSet, schema: schema}
 }
 
-func parseFlags(flags *flag.FlagSet, args []string) error {
+func (flags *commandFlagSet) String(name, value, usage string) *string {
+	flags.requireKind(name, stringFlag)
+	return flags.FlagSet.String(name, value, usage)
+}
+
+func (flags *commandFlagSet) Bool(name string, value bool, usage string) *bool {
+	flags.requireKind(name, boolFlag)
+	return flags.FlagSet.Bool(name, value, usage)
+}
+
+func (flags *commandFlagSet) Var(value flag.Value, name, usage string) {
+	flags.requireKind(name, stringFlag)
+	flags.FlagSet.Var(value, name, usage)
+}
+
+func (flags *commandFlagSet) requireKind(name string, wanted flagKind) {
+	if got, exists := flags.schema.flags[name]; !exists || got != wanted {
+		panic("flag schema mismatch for " + flags.Name() + " --" + name)
+	}
+}
+
+func parseFlags(flags *commandFlagSet, args []string) error {
+	flags.validateSchema()
 	if err := flags.Parse(args); err != nil {
 		return core.Wrap(core.CategoryInvocation, "invalid "+flags.Name()+" arguments", err)
 	}
@@ -43,36 +138,97 @@ func parseFlags(flags *flag.FlagSet, args []string) error {
 	return nil
 }
 
+func (flags *commandFlagSet) validateSchema() {
+	defined := make(map[string]struct{}, flags.NFlag())
+	flags.VisitAll(func(item *flag.Flag) {
+		defined[item.Name] = struct{}{}
+	})
+	for name := range flags.schema.flags {
+		if _, exists := defined[name]; !exists {
+			panic("flag schema defines unregistered " + flags.Name() + " --" + name)
+		}
+	}
+}
+
 func requiredFirstArgument(command, name string, args []string) (string, []string, error) {
-	if len(args) == 0 || len(args[0]) > 0 && args[0][0] == '-' {
+	if len(args) == 0 || !isRequiredFirstArgument(args[0]) {
 		return "", nil, core.Errorf(core.CategoryInvocation, "%s must be the first argument after %s", name, command)
 	}
 	return args[0], args[1:], nil
 }
 
 func requestedJSON(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+
+	schema, exists := commandSchemas[args[0]]
+	if !exists {
+		schema = commandSchema{flags: map[string]flagKind{"json": boolFlag}}
+	}
+	args = args[1:]
+	if schema.requiredFirstArgument && len(args) > 0 && isRequiredFirstArgument(args[0]) {
+		args = args[1:]
+	}
+
 	jsonMode := false
-	for _, argument := range args {
+	for index := 0; index < len(args); index++ {
+		argument := args[index]
 		if argument == "--" {
 			break
 		}
-		if argument == "-json" || argument == "--json" {
-			jsonMode = true
+		name, value, hasValue, isFlag := splitFlag(argument)
+		if !isFlag {
+			break
+		}
+
+		kind, known := schema.flags[name]
+		if !known {
+			continue
+		}
+		if kind == stringFlag {
+			if !hasValue && index+1 < len(args) {
+				index++
+			}
 			continue
 		}
 
-		value, found := strings.CutPrefix(argument, "-json=")
-		if !found {
-			value, found = strings.CutPrefix(argument, "--json=")
-		}
-		if !found {
+		if !hasValue {
+			if name == "json" {
+				jsonMode = true
+			}
 			continue
 		}
+
 		parsed, err := strconv.ParseBool(value)
 		if err != nil {
-			return true
+			if name == "json" {
+				return true
+			}
+			return jsonMode
 		}
-		jsonMode = parsed
+		if name == "json" {
+			jsonMode = parsed
+		}
 	}
 	return jsonMode
+}
+
+func isRequiredFirstArgument(argument string) bool {
+	return argument == "" || argument[0] != '-'
+}
+
+func splitFlag(argument string) (name, value string, hasValue, ok bool) {
+	if len(argument) < 2 || argument[0] != '-' {
+		return "", "", false, false
+	}
+	prefixLength := 1
+	if argument[1] == '-' {
+		prefixLength = 2
+	}
+	if len(argument) == prefixLength {
+		return "", "", false, false
+	}
+	name, value, hasValue = strings.Cut(argument[prefixLength:], "=")
+	return name, value, hasValue, name != ""
 }

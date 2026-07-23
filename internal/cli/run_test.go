@@ -64,7 +64,7 @@ func TestRunInvalidInvocationAndEarlyJSONErrors(t *testing.T) {
 	}{
 		{name: "positional title after flag", args: []string{"create", "--json", "Late title"}},
 		{name: "unknown flag", args: []string{"create", "Title", "--unknown", "--json"}},
-		{name: "extra positional argument", args: []string{"show", "WB-123", "extra", "--json"}},
+		{name: "extra positional argument", args: []string{"show", "WB-123", "--json", "extra"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			code, stdout, stderr := run(t, repository, test.args...)
@@ -80,6 +80,68 @@ func TestRunInvalidInvocationAndEarlyJSONErrors(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRunJSONIntentAccountsForStringFlagValuesAndParserStops(t *testing.T) {
+	t.Run("init string value consumes terminator before JSON flag", func(t *testing.T) {
+		repository := testrepo.New(t)
+		code, stdout, stderr := run(t, repository, "init", "--key", "--", "--json")
+		if code != 5 {
+			t.Fatalf("code = %d, want 5; stderr = %q", code, stderr)
+		}
+		if stdout != "" {
+			t.Fatalf("stdout = %q, want empty", stdout)
+		}
+		assertJSONError(t, stderr, core.CategoryValidation, "")
+	})
+
+	t.Run("init string value consumes JSON-looking token", func(t *testing.T) {
+		repository := testrepo.New(t)
+		code, stdout, stderr := run(t, repository, "init", "--key", "--json")
+		if code != 5 {
+			t.Fatalf("code = %d, want 5; stderr = %q", code, stderr)
+		}
+		if stdout != "" {
+			t.Fatalf("stdout = %q, want empty", stdout)
+		}
+		assertHumanError(t, stderr, "")
+	})
+
+	t.Run("create string value consumes terminator before JSON flag", func(t *testing.T) {
+		repository := initializedRepository(t)
+		code, stdout, stderr := run(t, repository, "create", "Title", "--status", "--", "--json")
+		if code != 5 {
+			t.Fatalf("code = %d, want 5; stderr = %q", code, stderr)
+		}
+		if stdout != "" {
+			t.Fatalf("stdout = %q, want empty", stdout)
+		}
+		assertJSONError(t, stderr, core.CategoryValidation, "")
+	})
+
+	t.Run("create string value consumes JSON-looking token", func(t *testing.T) {
+		repository := initializedRepository(t)
+		code, stdout, stderr := run(t, repository, "create", "Title", "--status", "--json")
+		if code != 5 {
+			t.Fatalf("code = %d, want 5; stderr = %q", code, stderr)
+		}
+		if stdout != "" {
+			t.Fatalf("stdout = %q, want empty", stdout)
+		}
+		assertHumanError(t, stderr, "")
+	})
+
+	t.Run("unconsumed positional stops JSON recognition", func(t *testing.T) {
+		repository := initializedRepository(t)
+		code, stdout, stderr := run(t, repository, "create", "Title", "extra", "--json")
+		if code != 2 {
+			t.Fatalf("code = %d, want 2; stderr = %q", code, stderr)
+		}
+		if stdout != "" {
+			t.Fatalf("stdout = %q, want empty", stdout)
+		}
+		assertHumanError(t, stderr, "")
+	})
 }
 
 func TestRunJSONIntentMatchesGoBooleanFlagSyntax(t *testing.T) {
