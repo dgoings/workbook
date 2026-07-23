@@ -197,6 +197,11 @@ func (r *Repository) readTip(ctx context.Context, config core.ProjectConfig, tas
 	if err := validateTipIdentity(config, taskID, pack, state); err != nil {
 		return core.Snapshot{}, err
 	}
+	if len(pack.Operations) == 1 && pack.Operations[0].Type == core.OperationTaskCreate {
+		if err := core.ValidateCheckpoint(nil, pack, state, config.Key); err != nil {
+			return core.Snapshot{}, err
+		}
+	}
 	return core.Snapshot{Head: objectID, Operation: pack, State: state}, nil
 }
 

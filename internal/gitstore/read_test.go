@@ -61,6 +61,85 @@ func TestGetAcceptsRootAndLinearTipTopology(t *testing.T) {
 	}
 }
 
+func TestGetValidatesRootOperationAndStateCheckpointEquivalence(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(t *testing.T, repo *Repository, snapshot core.Snapshot)
+	}{
+		{name: "valid root"},
+		{
+			name: "operation and state titles differ",
+			mutate: func(t *testing.T, repo *Repository, snapshot core.Snapshot) {
+				state := snapshot.State
+				state.Task.Title = "Different state title"
+				replaceTaskTree(
+					t,
+					repo,
+					snapshot,
+					gitOutput(t, repo, "rev-parse", snapshot.Head+":operation.json"),
+					writeDocumentBlob(t, repo, state),
+				)
+			},
+		},
+		{
+			name: "root logical clock is two",
+			mutate: func(t *testing.T, repo *Repository, snapshot core.Snapshot) {
+				pack := snapshot.Operation
+				pack.LogicalClock = 2
+				state := snapshot.State
+				state.LogicalClock = 2
+				replaceTaskTree(t, repo, snapshot, writeDocumentBlob(t, repo, pack), writeDocumentBlob(t, repo, state))
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repo, config := writeRepository(t)
+			snapshot, pack, _ := writeRoot(t, repo, config)
+			if test.mutate != nil {
+				test.mutate(t, repo, snapshot)
+			}
+
+			_, err := repo.Get(context.Background(), config, pack.TaskID)
+			if test.mutate == nil {
+				if err != nil {
+					t.Fatalf("Get(valid root) error = %v", err)
+				}
+				return
+			}
+			if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
+				t.Fatalf("Get() category = %q, want %q; error = %v", got, want, err)
+			}
+		})
+	}
+}
+
+func TestCRUDCannotExtendMalformedRootCheckpoint(t *testing.T) {
+	repo, config := writeRepository(t)
+	snapshot, pack, _ := writeRoot(t, repo, config)
+	state := snapshot.State
+	state.Task.Title = "Different state title"
+	replaceTaskTree(
+		t,
+		repo,
+		snapshot,
+		gitOutput(t, repo, "rev-parse", snapshot.Head+":operation.json"),
+		writeDocumentBlob(t, repo, state),
+	)
+	tamperedHead := gitOutput(t, repo, "rev-parse", taskRef(pack.TaskID))
+
+	title := "Attempted extension"
+	service := testService(repo, config)
+	_, err := service.Update(context.Background(), pack.TaskID, core.UpdateInput{Title: &title})
+	if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
+		t.Fatalf("Update() category = %q, want %q; error = %v", got, want, err)
+	}
+	if got := gitOutput(t, repo, "rev-parse", taskRef(pack.TaskID)); got != tamperedHead {
+		t.Fatalf("Update() advanced malformed root from %q to %q", tamperedHead, got)
+	}
+}
+
 func TestGetRejectsUnsupportedTipTopology(t *testing.T) {
 	tests := []struct {
 		name   string
