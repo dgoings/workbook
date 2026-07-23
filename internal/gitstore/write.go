@@ -32,6 +32,9 @@ func (r *Repository) Write(
 	if _, err := r.Git(ctx, nil, "check-ref-format", ref); err != nil {
 		return core.Snapshot{}, core.Wrap(core.CategoryValidation, "task ref is invalid", err)
 	}
+	if err := r.rejectSymbolicTaskRef(ctx, ref); err != nil {
+		return core.Snapshot{}, err
+	}
 
 	if parent == nil {
 		if err := core.ValidateCheckpoint(nil, pack, state, config.Key); err != nil {
@@ -88,7 +91,10 @@ func (r *Repository) Write(
 	if parent != nil {
 		expected = parent.Head
 	}
-	if _, err := r.Git(ctx, nil, "update-ref", "--create-reflog", "-m", "workbook: "+reason, ref, head, expected); err != nil {
+	if _, err := r.Git(ctx, nil, "update-ref", "--no-deref", "--create-reflog", "-m", "workbook: "+reason, ref, head, expected); err != nil {
+		if symbolicErr := r.rejectSymbolicTaskRef(ctx, ref); symbolicErr != nil {
+			return core.Snapshot{}, symbolicErr
+		}
 		if r.refValueDiffers(ctx, ref, expected) {
 			return core.Snapshot{}, core.Wrap(core.CategoryStaleWrite, "task ref changed concurrently", err)
 		}

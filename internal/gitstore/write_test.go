@@ -90,6 +90,29 @@ func TestWriteRejectsStaleHeadWithoutMovingTaskRef(t *testing.T) {
 	}
 }
 
+func TestWriteNeverDereferencesSymbolicTaskRef(t *testing.T) {
+	repo, config := writeRepository(t)
+	created, createPack, createState := writeRoot(t, repo, config)
+	targetRef := "refs/workbook/symbolic-target"
+	gitOutput(t, repo, "update-ref", targetRef, created.Head)
+	gitOutput(t, repo, "update-ref", "-d", taskRef(createPack.TaskID))
+	gitOutput(t, repo, "symbolic-ref", taskRef(createPack.TaskID), targetRef)
+
+	pack := writeUpdatePack(2, "01K0M6B8A4FTT8C39MXXYTW7C5", "ready")
+	state := writeState(t, &createState, pack)
+	_, err := repo.Write(context.Background(), config, &created, pack, state, "mark ready")
+	category := core.CategoryOf(err)
+	if category != core.CategoryStaleWrite && category != core.CategoryCorruptData {
+		t.Fatalf("Write() category = %q, want stale-write or corrupt-data; error = %v", category, err)
+	}
+	if got := gitOutput(t, repo, "rev-parse", targetRef); got != created.Head {
+		t.Fatalf("symbolic target moved to %q, want unchanged %q", got, created.Head)
+	}
+	if got := gitOutput(t, repo, "symbolic-ref", taskRef(createPack.TaskID)); got != targetRef {
+		t.Fatalf("task ref stopped pointing to %q: got %q", targetRef, got)
+	}
+}
+
 func TestWriteRejectsNonCanonicalParentHeadsBeforeWritingObjectsOrMovingRefs(t *testing.T) {
 	repo, config := writeRepository(t)
 	created, _, createState := writeRoot(t, repo, config)
