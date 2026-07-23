@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -15,6 +16,10 @@ const fixedProjectID = "01K0M65GBZ8F5ZQX0VC1J8H3TP"
 
 func fixedIDs() core.IDSource {
 	return core.IDSourceFunc(func() (string, error) { return fixedProjectID, nil })
+}
+
+func idsFor(projectID string) core.IDSource {
+	return core.IDSourceFunc(func() (string, error) { return projectID, nil })
 }
 
 func TestInitCreatesTrackedConfigAndPrivateCache(t *testing.T) {
@@ -140,11 +145,14 @@ func TestInitRejectsConflictingKeyWithoutRewriting(t *testing.T) {
 
 func TestInitRejectsCorruptExistingConfig(t *testing.T) {
 	tests := map[string][]byte{
-		"malformed":          []byte(`{"format":`),
-		"foreign format":     []byte(`{"format":"other.project","version":1,"projectId":"01K0M65GBZ8F5ZQX0VC1J8H3TP","key":"WB"}`),
-		"foreign version":    []byte(`{"format":"workbook.project","version":2,"projectId":"01K0M65GBZ8F5ZQX0VC1J8H3TP","key":"WB"}`),
-		"invalid project ID": []byte(`{"format":"workbook.project","version":1,"projectId":"not-a-ulid","key":"WB"}`),
-		"invalid key":        []byte(`{"format":"workbook.project","version":1,"projectId":"01K0M65GBZ8F5ZQX0VC1J8H3TP","key":"wb"}`),
+		"malformed":             []byte(`{"format":`),
+		"foreign format":        []byte(`{"format":"other.project","version":1,"projectId":"01K0M65GBZ8F5ZQX0VC1J8H3TP","key":"WB"}`),
+		"foreign version":       []byte(`{"format":"workbook.project","version":2,"projectId":"01K0M65GBZ8F5ZQX0VC1J8H3TP","key":"WB"}`),
+		"invalid project ID":    []byte(`{"format":"workbook.project","version":1,"projectId":"not-a-ulid","key":"WB"}`),
+		"invalid key":           []byte(`{"format":"workbook.project","version":1,"projectId":"01K0M65GBZ8F5ZQX0VC1J8H3TP","key":"wb"}`),
+		"valid JSON without LF": []byte(`{"format":"workbook.project","version":1,"projectId":"01K0M65GBZ8F5ZQX0VC1J8H3TP","key":"WB"}`),
+		"pretty JSON":           []byte("{\n  \"format\": \"workbook.project\",\n  \"version\": 1,\n  \"projectId\": \"01K0M65GBZ8F5ZQX0VC1J8H3TP\",\n  \"key\": \"WB\"\n}\n"),
+		"duplicate member":      []byte(`{"format":"workbook.project","version":1,"projectId":"01K0M65GBZ8F5ZQX0VC1J8H3TP","key":"WB","key":"WB"}` + "\n"),
 	}
 
 	for name, contents := range tests {
@@ -193,5 +201,146 @@ func TestLoadConfigReturnsExistingConfig(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("LoadConfig() = %#v, want %#v", got, want)
+	}
+}
+
+func TestInitRejectsInvalidConstructedRepository(t *testing.T) {
+	baseDir := t.TempDir()
+	repository := &Repository{
+		Root:         filepath.Join(baseDir, "not-a-repository"),
+		CommonGitDir: filepath.Join(baseDir, "not-a-git-directory"),
+	}
+
+	_, _, err := repository.Init(context.Background(), "WB", fixedIDs())
+	if got, want := core.CategoryOf(err), core.CategoryNotInitialized; got != want {
+		t.Fatalf("Init() category = %q, want %q; error = %v", got, want, err)
+	}
+	assertPathMissing(t, filepath.Join(repository.Root, ".workbook"))
+	assertPathMissing(t, filepath.Join(repository.CommonGitDir, "workbook"))
+}
+
+func TestInitConcurrentSameKeyReturnsPersistedConfig(t *testing.T) {
+	repoDir := testrepo.New(t)
+	results := concurrentInit(t, repoDir,
+		initRequest{key: "WB", ids: idsFor("01K0M65GBZ8F5ZQX0VC1J8H3TP")},
+		initRequest{key: "WB", ids: idsFor("01K0M65GBZ8F5ZQX0VC1J8H3TQ")},
+	)
+
+	created := 0
+	for _, result := range results {
+		if result.err != nil {
+			t.Fatalf("concurrent Init() error = %v", result.err)
+		}
+		if result.created {
+			created++
+		}
+	}
+	if got, want := created, 1; got != want {
+		t.Fatalf("concurrent Init() created count = %d, want %d", got, want)
+	}
+	if results[0].config != results[1].config {
+		t.Fatalf("concurrent Init() configs differ: %#v and %#v", results[0].config, results[1].config)
+	}
+	repo, err := Open(context.Background(), repoDir)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	persisted, err := repo.LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if results[0].config != persisted {
+		t.Fatalf("concurrent Init() config = %#v, persisted config = %#v", results[0].config, persisted)
+	}
+}
+
+func TestInitConcurrentDifferentKeysReturnsValidationError(t *testing.T) {
+	repoDir := testrepo.New(t)
+	results := concurrentInit(t, repoDir,
+		initRequest{key: "WB", ids: idsFor("01K0M65GBZ8F5ZQX0VC1J8H3TP")},
+		initRequest{key: "OTHER", ids: idsFor("01K0M65GBZ8F5ZQX0VC1J8H3TQ")},
+	)
+
+	successes := 0
+	validationErrors := 0
+	for _, result := range results {
+		switch core.CategoryOf(result.err) {
+		case "":
+			successes++
+		case core.CategoryValidation:
+			validationErrors++
+		default:
+			t.Fatalf("concurrent Init() error category = %q, error = %v", core.CategoryOf(result.err), result.err)
+		}
+	}
+	if successes != 1 || validationErrors != 1 {
+		t.Fatalf("concurrent Init() successes/errors = %d/%d, want 1/1", successes, validationErrors)
+	}
+}
+
+func TestInitRejectsStaleInitializationLock(t *testing.T) {
+	repoDir := testrepo.New(t)
+	repo, err := Open(context.Background(), repoDir)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	lockDir := filepath.Join(repoDir, ".workbook", ".init.lock")
+	if err := os.MkdirAll(lockDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(lock) error = %v", err)
+	}
+
+	_, _, err = repo.Init(context.Background(), "WB", fixedIDs())
+	if got, want := core.CategoryOf(err), core.CategoryStaleWrite; got != want {
+		t.Fatalf("Init() category = %q, want %q; error = %v", got, want, err)
+	}
+	assertPathMissing(t, filepath.Join(repoDir, configPath))
+	assertPathMissing(t, filepath.Join(repo.CommonGitDir, "workbook"))
+}
+
+type initRequest struct {
+	key string
+	ids core.IDSource
+}
+
+type initResult struct {
+	config  core.ProjectConfig
+	created bool
+	err     error
+}
+
+func concurrentInit(t *testing.T, repoDir string, requests ...initRequest) []initResult {
+	t.Helper()
+	results := make([]initResult, len(requests))
+	start := make(chan struct{})
+	ready := make(chan struct{}, len(requests))
+	var wait sync.WaitGroup
+
+	for index, request := range requests {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			repo, err := Open(context.Background(), repoDir)
+			if err != nil {
+				results[index].err = err
+				ready <- struct{}{}
+				return
+			}
+			ready <- struct{}{}
+			<-start
+			results[index].config, results[index].created, results[index].err = repo.Init(context.Background(), request.key, request.ids)
+		}()
+	}
+	for range requests {
+		<-ready
+	}
+	close(start)
+	wait.Wait()
+	return results
+}
+
+func assertPathMissing(t *testing.T, path string) {
+	t.Helper()
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("Stat(%q) error = %v, want not exist", path, err)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/oklog/ulid/v2"
@@ -17,11 +18,18 @@ const (
 	configPath     = ".workbook/config.json"
 	projectFormat  = "workbook.project"
 	projectVersion = 1
+	initLockName   = ".init.lock"
+
+	initLockRetryDelay  = 10 * time.Millisecond
+	initLockMaxAttempts = 20
 )
 
 // Init creates a repository's tracked Workbook configuration when absent. An
 // existing valid configuration is returned unchanged when it has the same key.
 func (r *Repository) Init(ctx context.Context, key string, ids core.IDSource) (core.ProjectConfig, bool, error) {
+	if err := r.verifyIdentity(ctx); err != nil {
+		return core.ProjectConfig{}, false, err
+	}
 	config, exists, err := r.readConfig()
 	if err != nil {
 		return core.ProjectConfig{}, false, err
@@ -42,6 +50,26 @@ func (r *Repository) Init(ctx context.Context, key string, ids core.IDSource) (c
 	if ids == nil {
 		return core.ProjectConfig{}, false, core.Errorf(core.CategoryInvocation, "project ID source is required")
 	}
+	releaseLock, err := r.acquireInitializationLock(ctx)
+	if err != nil {
+		return core.ProjectConfig{}, false, err
+	}
+	defer releaseLock()
+
+	config, exists, err = r.readConfig()
+	if err != nil {
+		return core.ProjectConfig{}, false, err
+	}
+	if exists {
+		if config.Key != key {
+			return core.ProjectConfig{}, false, core.Errorf(core.CategoryValidation, "repository is already initialized with project key %q", config.Key)
+		}
+		if err := r.ensurePrivateCache(); err != nil {
+			return core.ProjectConfig{}, false, err
+		}
+		return config, false, nil
+	}
+
 	projectID, err := ids.New()
 	if err != nil {
 		return core.ProjectConfig{}, false, core.Wrap(core.CategoryInvocation, "cannot generate project ID", err)
@@ -63,6 +91,28 @@ func (r *Repository) Init(ctx context.Context, key string, ids core.IDSource) (c
 		return core.ProjectConfig{}, false, err
 	}
 	return config, true, nil
+}
+
+func (r *Repository) acquireInitializationLock(ctx context.Context) (func(), error) {
+	configDir := filepath.Join(r.Root, ".workbook")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		return nil, core.Wrap(core.CategoryInvocation, "cannot create Workbook configuration directory", err)
+	}
+	lockDir := filepath.Join(configDir, initLockName)
+	for attempt := 0; attempt < initLockMaxAttempts; attempt++ {
+		if err := os.Mkdir(lockDir, 0o700); err == nil {
+			return func() { _ = os.Remove(lockDir) }, nil
+		} else if !errors.Is(err, os.ErrExist) {
+			return nil, core.Wrap(core.CategoryInvocation, "cannot acquire Workbook initialization lock", err)
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, core.Wrap(core.CategoryStaleWrite, "Workbook initialization lock wait cancelled", ctx.Err())
+		case <-time.After(initLockRetryDelay):
+		}
+	}
+	return nil, core.Errorf(core.CategoryStaleWrite, "Workbook initialization lock is held")
 }
 
 // LoadConfig returns the repository's validated Workbook configuration.
@@ -173,6 +223,13 @@ func decodeConfig(contents []byte) (core.ProjectConfig, error) {
 	}
 	if err := core.ValidateProjectKey(config.Key); err != nil {
 		return core.ProjectConfig{}, core.Wrap(core.CategoryCorruptData, "Workbook configuration project key is invalid", err)
+	}
+	canonical, err := encodeConfig(config)
+	if err != nil {
+		return core.ProjectConfig{}, core.Wrap(core.CategoryCorruptData, "cannot canonicalize Workbook configuration", err)
+	}
+	if !bytes.Equal(contents, canonical) {
+		return core.ProjectConfig{}, core.Errorf(core.CategoryCorruptData, "Workbook configuration is not canonical")
 	}
 	return config, nil
 }

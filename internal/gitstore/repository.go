@@ -44,6 +44,32 @@ func Open(ctx context.Context, startDir string) (*Repository, error) {
 	}, nil
 }
 
+func (r *Repository) verifyIdentity(ctx context.Context) error {
+	gitPath := r.gitPath
+	if gitPath == "" {
+		var err error
+		gitPath, err = exec.LookPath("git")
+		if err != nil {
+			return core.Wrap(core.CategoryInvocation, "cannot find git executable", err)
+		}
+	}
+
+	root, err := runGit(ctx, gitPath, r.Root, nil, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return core.Wrap(core.CategoryNotInitialized, "cannot verify Git repository", err)
+	}
+	commonGitDir, err := runGit(ctx, gitPath, r.Root, nil, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return core.Wrap(core.CategoryNotInitialized, "cannot verify Git common directory", err)
+	}
+	if filepath.Clean(strings.TrimSpace(string(root))) != filepath.Clean(r.Root) ||
+		filepath.Clean(strings.TrimSpace(string(commonGitDir))) != filepath.Clean(r.CommonGitDir) {
+		return core.Errorf(core.CategoryNotInitialized, "repository paths do not match Git metadata")
+	}
+	r.gitPath = gitPath
+	return nil
+}
+
 // Git executes Git against this repository's working-tree root.
 func (r *Repository) Git(ctx context.Context, stdin []byte, args ...string) ([]byte, error) {
 	output, err := runGit(ctx, r.gitPath, r.Root, stdin, args...)
