@@ -154,8 +154,12 @@ func (r *Repository) readTip(ctx context.Context, config core.ProjectConfig, tas
 	if err := core.ValidateTaskID(config.Key, taskID); err != nil {
 		return core.Snapshot{}, core.Wrap(core.CategoryCorruptData, "task ref ID is invalid", err)
 	}
-	if _, err := r.Git(ctx, nil, "cat-file", "-e", objectID+"^{commit}"); err != nil {
-		return core.Snapshot{}, core.Wrap(core.CategoryCorruptData, "task ref does not point to a commit", err)
+	objectType, err := r.Git(ctx, nil, "cat-file", "-t", objectID)
+	if err != nil {
+		return core.Snapshot{}, core.Wrap(core.CategoryCorruptData, "cannot determine task ref object type", err)
+	}
+	if strings.TrimSpace(string(objectType)) != "commit" {
+		return core.Snapshot{}, core.Errorf(core.CategoryCorruptData, "task ref does not point directly to a commit")
 	}
 
 	if err := r.validateTaskTree(ctx, objectID); err != nil {

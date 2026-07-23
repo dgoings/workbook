@@ -44,6 +44,19 @@ func TestGetReadsCanonicalTipWithoutReplayingParents(t *testing.T) {
 	}
 }
 
+func TestGetRejectsAnnotatedTagTarget(t *testing.T) {
+	repo, config := writeRepository(t)
+	snapshot, pack, _ := writeRoot(t, repo, config)
+	gitOutput(t, repo, "tag", "-a", "workbook-task-tip", "-m", "tagged task tip", snapshot.Head)
+	tagObject := gitOutput(t, repo, "rev-parse", "workbook-task-tip")
+	gitOutput(t, repo, "update-ref", taskRef(pack.TaskID), tagObject)
+
+	_, err := repo.Get(context.Background(), config, pack.TaskID)
+	if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
+		t.Fatalf("Get() category = %q, want %q; error = %v", got, want, err)
+	}
+}
+
 func TestListFindsCanonicalTasksAfterPackingRefs(t *testing.T) {
 	repo, config := writeRepository(t)
 	first, firstPack, _ := writeRoot(t, repo, config)
