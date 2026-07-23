@@ -86,3 +86,16 @@ func TestValidateTaskID(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateTaskIDRejectsNonCanonicalULIDBody(t *testing.T) {
+	for name, taskID := range map[string]string{
+		"lowercase":  "WB-01k0m6b8a4ftt8c39mxxytw7c2",
+		"mixed case": "WB-01K0m6B8A4FTT8C39MXXYTW7C2",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := CategoryOf(ValidateTaskID("WB", taskID)); got != CategoryValidation {
+				t.Fatalf("ValidateTaskID(%q) category = %q, want %q", taskID, got, CategoryValidation)
+			}
+		})
+	}
+}

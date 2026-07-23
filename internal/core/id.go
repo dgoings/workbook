@@ -61,8 +61,13 @@ func ValidateTaskID(key, taskID string) error {
 	if !strings.HasPrefix(taskID, prefix) {
 		return Errorf(CategoryValidation, "task ID %q must begin with %q", taskID, prefix)
 	}
-	if _, err := ulid.ParseStrict(strings.TrimPrefix(taskID, prefix)); err != nil {
+	suffix := strings.TrimPrefix(taskID, prefix)
+	parsed, err := ulid.ParseStrict(suffix)
+	if err != nil {
 		return Wrap(CategoryValidation, "task ID must contain a canonical ULID", err)
+	}
+	if parsed.String() != suffix {
+		return Errorf(CategoryValidation, "task ID must contain a canonical uppercase ULID")
 	}
 	return nil
 }
