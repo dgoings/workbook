@@ -3,6 +3,8 @@ package gitstore
 import (
 	"bytes"
 	"context"
+	"errors"
+	"os/exec"
 	"sort"
 	"strings"
 
@@ -154,6 +156,9 @@ func (r *Repository) readTip(ctx context.Context, config core.ProjectConfig, tas
 	if err := core.ValidateTaskID(config.Key, taskID); err != nil {
 		return core.Snapshot{}, core.Wrap(core.CategoryCorruptData, "task ref ID is invalid", err)
 	}
+	if err := r.rejectSymbolicTaskRef(ctx, taskRefPrefix+taskID); err != nil {
+		return core.Snapshot{}, err
+	}
 	objectType, err := r.Git(ctx, nil, "cat-file", "-t", objectID)
 	if err != nil {
 		return core.Snapshot{}, core.Wrap(core.CategoryCorruptData, "cannot determine task ref object type", err)
@@ -186,6 +191,18 @@ func (r *Repository) readTip(ctx context.Context, config core.ProjectConfig, tas
 		return core.Snapshot{}, err
 	}
 	return core.Snapshot{Head: objectID, Operation: pack, State: state}, nil
+}
+
+func (r *Repository) rejectSymbolicTaskRef(ctx context.Context, refName string) error {
+	if _, err := r.Git(ctx, nil, "symbolic-ref", "--quiet", refName); err == nil {
+		return core.Errorf(core.CategoryCorruptData, "task ref %q must not be symbolic", refName)
+	} else {
+		var exitError *exec.ExitError
+		if errors.As(err, &exitError) && exitError.ExitCode() == 1 {
+			return nil
+		}
+		return core.Wrap(core.CategoryCorruptData, "cannot determine whether task ref is symbolic", err)
+	}
 }
 
 func (r *Repository) validateTaskTree(ctx context.Context, objectID string) error {

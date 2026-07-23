@@ -57,6 +57,43 @@ func TestGetRejectsAnnotatedTagTarget(t *testing.T) {
 	}
 }
 
+func TestGetAndListRejectSymbolicTaskRefs(t *testing.T) {
+	reads := []struct {
+		name string
+		read func(context.Context, *Repository, core.ProjectConfig, string) error
+	}{
+		{
+			name: "Get",
+			read: func(ctx context.Context, repo *Repository, config core.ProjectConfig, taskID string) error {
+				_, err := repo.Get(ctx, config, taskID)
+				return err
+			},
+		},
+		{
+			name: "List",
+			read: func(ctx context.Context, repo *Repository, config core.ProjectConfig, _ string) error {
+				_, err := repo.List(ctx, config)
+				return err
+			},
+		},
+	}
+
+	for _, read := range reads {
+		t.Run(read.name, func(t *testing.T) {
+			repo, config := writeRepository(t)
+			snapshot, pack, _ := writeRoot(t, repo, config)
+			gitOutput(t, repo, "update-ref", "refs/workbook/symbolic-target", snapshot.Head)
+			gitOutput(t, repo, "update-ref", "-d", taskRef(pack.TaskID))
+			gitOutput(t, repo, "symbolic-ref", taskRef(pack.TaskID), "refs/workbook/symbolic-target")
+
+			err := read.read(context.Background(), repo, config, pack.TaskID)
+			if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
+				t.Fatalf("%s() category = %q, want %q; error = %v", read.name, got, want, err)
+			}
+		})
+	}
+}
+
 func TestListFindsCanonicalTasksAfterPackingRefs(t *testing.T) {
 	repo, config := writeRepository(t)
 	first, firstPack, _ := writeRoot(t, repo, config)
