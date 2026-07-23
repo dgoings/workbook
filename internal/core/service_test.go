@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -65,6 +66,25 @@ func TestServiceCreateBuildsOneRootPackWithSeparateIDsAndBucketRank(t *testing.T
 		ID: "01K0M6B8A4FTT8C39MXXYTW7D4", Type: OperationTaskCreate, Task: &task.TaskData,
 	}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("Create() operations = %#v, want %#v", got, want)
+	}
+}
+
+func TestServiceClassifiesIDGenerationFailureAsOperational(t *testing.T) {
+	cause := errors.New("random source failed")
+	store := newMemoryTaskStore()
+	service := serviceUnderTest(store, IDSourceFunc(func() (string, error) {
+		return "", cause
+	}))
+
+	_, err := service.Create(context.Background(), CreateInput{Title: "Task"})
+	if got, want := CategoryOf(err), CategoryOperational; got != want {
+		t.Fatalf("Create() category = %q, want %q; error = %v", got, want, err)
+	}
+	if !errors.Is(err, cause) {
+		t.Fatalf("Create() error = %v, want cause %v", err, cause)
+	}
+	if len(store.writes) != 0 {
+		t.Fatalf("Create() writes = %d, want none", len(store.writes))
 	}
 }
 

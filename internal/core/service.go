@@ -291,9 +291,13 @@ func taskULIDSuffix(taskID, projectKey string) string {
 
 func (s Service) newID() (string, error) {
 	if s.IDs == nil {
-		return "", Errorf(CategoryInvocation, "ID source is required")
+		return "", Errorf(CategoryOperational, "ID source is required")
 	}
-	return s.IDs.New()
+	id, err := s.IDs.New()
+	if err != nil {
+		return "", Wrap(CategoryOperational, "cannot generate ID", err)
+	}
+	return id, nil
 }
 
 func (s Service) now() time.Time {

@@ -74,11 +74,11 @@ func (r *Repository) Init(ctx context.Context, key string, ids core.IDSource) (c
 	}
 
 	if ids == nil {
-		return core.ProjectConfig{}, false, core.Errorf(core.CategoryInvocation, "project ID source is required")
+		return core.ProjectConfig{}, false, core.Errorf(core.CategoryOperational, "project ID source is required")
 	}
 	projectID, err := ids.New()
 	if err != nil {
-		return core.ProjectConfig{}, false, core.Wrap(core.CategoryInvocation, "cannot generate project ID", err)
+		return core.ProjectConfig{}, false, core.Wrap(core.CategoryOperational, "cannot generate project ID", err)
 	}
 	if err := validateProjectID(projectID); err != nil {
 		return core.ProjectConfig{}, false, err
@@ -148,7 +148,7 @@ func readConfigFile(path, description string) (core.ProjectConfig, bool, error) 
 		return core.ProjectConfig{}, false, nil
 	}
 	if err != nil {
-		return core.ProjectConfig{}, false, core.Wrap(core.CategoryCorruptData, "cannot read "+description, err)
+		return core.ProjectConfig{}, false, core.Wrap(core.CategoryOperational, "cannot read "+description, err)
 	}
 	config, err := decodeConfig(contents)
 	if err != nil {
@@ -231,32 +231,32 @@ func (r *Repository) writeConfig(config core.ProjectConfig) error {
 	}
 	configDir := filepath.Join(r.Root, ".workbook")
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
-		return core.Wrap(core.CategoryInvocation, "cannot create Workbook configuration directory", err)
+		return core.Wrap(core.CategoryOperational, "cannot create Workbook configuration directory", err)
 	}
 
 	temporary, err := os.CreateTemp(configDir, ".config-*.tmp")
 	if err != nil {
-		return core.Wrap(core.CategoryInvocation, "cannot create temporary Workbook configuration", err)
+		return core.Wrap(core.CategoryOperational, "cannot create temporary Workbook configuration", err)
 	}
 	temporaryPath := temporary.Name()
 	defer os.Remove(temporaryPath)
 
 	if _, err := temporary.Write(contents); err != nil {
 		temporary.Close()
-		return core.Wrap(core.CategoryInvocation, "cannot write Workbook configuration", err)
+		return core.Wrap(core.CategoryOperational, "cannot write Workbook configuration", err)
 	}
 	if err := temporary.Sync(); err != nil {
 		temporary.Close()
-		return core.Wrap(core.CategoryInvocation, "cannot sync Workbook configuration", err)
+		return core.Wrap(core.CategoryOperational, "cannot sync Workbook configuration", err)
 	}
 	if err := temporary.Close(); err != nil {
-		return core.Wrap(core.CategoryInvocation, "cannot close Workbook configuration", err)
+		return core.Wrap(core.CategoryOperational, "cannot close Workbook configuration", err)
 	}
 	if err := os.Chmod(temporaryPath, 0o644); err != nil {
-		return core.Wrap(core.CategoryInvocation, "cannot set Workbook configuration permissions", err)
+		return core.Wrap(core.CategoryOperational, "cannot set Workbook configuration permissions", err)
 	}
 	if err := os.Rename(temporaryPath, filepath.Join(r.Root, configPath)); err != nil {
-		return core.Wrap(core.CategoryInvocation, "cannot install Workbook configuration", err)
+		return core.Wrap(core.CategoryOperational, "cannot install Workbook configuration", err)
 	}
 	return nil
 }
@@ -264,10 +264,10 @@ func (r *Repository) writeConfig(config core.ProjectConfig) error {
 func (r *Repository) ensurePrivateCache() error {
 	cacheDir := filepath.Join(r.CommonGitDir, "workbook")
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-		return core.Wrap(core.CategoryInvocation, "cannot create Workbook private cache", err)
+		return core.Wrap(core.CategoryOperational, "cannot create Workbook private cache", err)
 	}
 	if err := os.Chmod(cacheDir, 0o755); err != nil {
-		return core.Wrap(core.CategoryInvocation, "cannot set Workbook private cache permissions", err)
+		return core.Wrap(core.CategoryOperational, "cannot set Workbook private cache permissions", err)
 	}
 	return nil
 }

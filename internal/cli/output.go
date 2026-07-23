@@ -70,6 +70,9 @@ func writeError(output io.Writer, err error, jsonMode bool) {
 func publicErrorMessage(err error) string {
 	var typed *core.Error
 	if errors.As(err, &typed) {
+		if core.CategoryOf(err) == core.CategoryOperational {
+			return err.Error()
+		}
 		return typed.Message
 	}
 	return err.Error()

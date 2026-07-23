@@ -40,7 +40,7 @@ func (s CryptoULIDSource) New() (string, error) {
 
 	id, err := ulid.New(ulid.Timestamp(now().UTC()), entropy)
 	if err != nil {
-		return "", err
+		return "", Wrap(CategoryOperational, "cannot generate ULID", err)
 	}
 	return id.String(), nil
 }

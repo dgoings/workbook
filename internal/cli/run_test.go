@@ -106,7 +106,14 @@ func TestRunReportsGitProcessFailuresAsOperationalWithoutUsage(t *testing.T) {
 		if stdout != "" {
 			t.Fatalf("Run() stdout = %q, want empty", stdout)
 		}
-		assertJSONError(t, stderr, core.CategoryOperational, "git config --get user.email failed")
+		assertJSONError(t, stderr, core.CategoryOperational, "")
+		var document errorDocument
+		if err := json.Unmarshal([]byte(stderr), &document); err != nil {
+			t.Fatalf("decode JSON error: %v; output = %q", err, stderr)
+		}
+		if !strings.Contains(document.Error.Message, "exit status 1") {
+			t.Fatalf("operational JSON message = %q, want process cause", document.Error.Message)
+		}
 		if strings.Contains(stderr, "Usage:") {
 			t.Fatalf("Run() operational JSON stderr contains usage: %q", stderr)
 		}
@@ -121,10 +128,40 @@ func TestRunReportsGitProcessFailuresAsOperationalWithoutUsage(t *testing.T) {
 			t.Fatalf("Run() stdout = %q, want empty", stdout)
 		}
 		assertHumanError(t, stderr, "git config --get user.email failed")
+		if !strings.Contains(stderr, "exit status 1") {
+			t.Fatalf("operational human stderr = %q, want process cause", stderr)
+		}
 		if strings.Contains(stderr, "Usage:") {
 			t.Fatalf("Run() operational stderr contains usage: %q", stderr)
 		}
 	})
+}
+
+func TestRunReportsConfigurationFilesystemFailureAsOperational(t *testing.T) {
+	repository := testrepo.New(t)
+	blockingPath := filepath.Join(repository, ".workbook")
+	if err := os.WriteFile(blockingPath, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("WriteFile(.workbook) error = %v", err)
+	}
+
+	code, stdout, stderr := run(t, repository, "init", "--json")
+	if code != 1 {
+		t.Fatalf("Run() code = %d, want 1; stderr = %q", code, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("Run() stdout = %q, want empty", stdout)
+	}
+	assertJSONError(t, stderr, core.CategoryOperational, "")
+	var document errorDocument
+	if err := json.Unmarshal([]byte(stderr), &document); err != nil {
+		t.Fatalf("decode JSON error: %v; output = %q", err, stderr)
+	}
+	if !strings.Contains(document.Error.Message, filepath.Join(".workbook", "config.json")) {
+		t.Fatalf("operational JSON message = %q, want failing configuration path", document.Error.Message)
+	}
+	if strings.Contains(stderr, "Usage:") {
+		t.Fatalf("Run() operational stderr contains usage: %q", stderr)
+	}
 }
 
 func TestRunJSONIntentAccountsForStringFlagValuesAndParserStops(t *testing.T) {

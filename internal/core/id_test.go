@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/oklog/ulid/v2"
@@ -43,6 +44,22 @@ func TestCryptoULIDSourceUsesInjectedClockAndEntropy(t *testing.T) {
 	}
 	if gotTime := time.UnixMilli(int64(parsed.Time())); !gotTime.Equal(now.UTC()) {
 		t.Fatalf("New() timestamp = %s, want %s", gotTime, now.UTC())
+	}
+}
+
+func TestCryptoULIDSourceClassifiesEntropyFailureAsOperational(t *testing.T) {
+	cause := errors.New("entropy unavailable")
+	source := CryptoULIDSource{
+		Now:     func() time.Time { return time.Date(2026, time.July, 23, 12, 0, 0, 0, time.UTC) },
+		Entropy: iotest.ErrReader(cause),
+	}
+
+	_, err := source.New()
+	if got, want := CategoryOf(err), CategoryOperational; got != want {
+		t.Fatalf("New() category = %q, want %q; error = %v", got, want, err)
+	}
+	if !errors.Is(err, cause) {
+		t.Fatalf("New() error = %v, want cause %v", err, cause)
 	}
 }
 

@@ -3,6 +3,7 @@ package gitstore
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -77,6 +78,26 @@ func TestInitCreatesTrackedConfigAndPrivateCache(t *testing.T) {
 	} else if len(output) != 0 {
 		t.Fatalf("Init() created task refs: %q", output)
 	}
+}
+
+func TestInitClassifiesProjectIDGenerationFailureAsOperational(t *testing.T) {
+	repo, err := Open(context.Background(), testrepo.New(t))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	cause := errors.New("entropy failed")
+
+	_, _, err = repo.Init(context.Background(), "WB", core.IDSourceFunc(func() (string, error) {
+		return "", cause
+	}))
+	if got, want := core.CategoryOf(err), core.CategoryOperational; got != want {
+		t.Fatalf("Init() category = %q, want %q; error = %v", got, want, err)
+	}
+	if !errors.Is(err, cause) {
+		t.Fatalf("Init() error = %v, want cause %v", err, cause)
+	}
+	assertPathMissing(t, filepath.Join(repo.Root, configPath))
+	assertPathMissing(t, filepath.Join(repo.CommonGitDir, "workbook", projectGuard))
 }
 
 func TestInitIsIdempotentForTheSameKey(t *testing.T) {
@@ -332,6 +353,53 @@ func TestLoadConfigRequiresInitWhenOnlyCommonProjectGuardExists(t *testing.T) {
 		t.Fatalf("LoadConfig() category = %q, want %q; error = %v", got, want, err)
 	}
 	assertPathMissing(t, filepath.Join(repo.Root, configPath))
+}
+
+func TestConfigurationFilesystemFailuresAreOperational(t *testing.T) {
+	config := core.ProjectConfig{
+		Format: projectFormat, Version: projectVersion, ProjectID: fixedProjectID, Key: "WB",
+	}
+
+	t.Run("read tracked config", func(t *testing.T) {
+		repo, err := Open(context.Background(), testrepo.New(t))
+		if err != nil {
+			t.Fatalf("Open() error = %v", err)
+		}
+		if err := os.MkdirAll(filepath.Join(repo.Root, configPath), 0o755); err != nil {
+			t.Fatalf("MkdirAll(config path) error = %v", err)
+		}
+
+		_, err = repo.LoadConfig()
+		if got, want := core.CategoryOf(err), core.CategoryOperational; got != want {
+			t.Fatalf("LoadConfig() category = %q, want %q; error = %v", got, want, err)
+		}
+	})
+
+	t.Run("write tracked config", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, ".workbook"), []byte("not a directory"), 0o600); err != nil {
+			t.Fatalf("WriteFile(.workbook) error = %v", err)
+		}
+		repo := &Repository{Root: root}
+
+		err := repo.writeConfig(config)
+		if got, want := core.CategoryOf(err), core.CategoryOperational; got != want {
+			t.Fatalf("writeConfig() category = %q, want %q; error = %v", got, want, err)
+		}
+	})
+
+	t.Run("create private cache", func(t *testing.T) {
+		commonGitDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(commonGitDir, "workbook"), []byte("not a directory"), 0o600); err != nil {
+			t.Fatalf("WriteFile(workbook) error = %v", err)
+		}
+		repo := &Repository{CommonGitDir: commonGitDir}
+
+		err := repo.ensurePrivateCache()
+		if got, want := core.CategoryOf(err), core.CategoryOperational; got != want {
+			t.Fatalf("ensurePrivateCache() category = %q, want %q; error = %v", got, want, err)
+		}
+	})
 }
 
 func TestInitRejectsInvalidConstructedRepository(t *testing.T) {
