@@ -503,6 +503,66 @@ func TestRunJSONFailureIsCompactAndUsesStableExitCodes(t *testing.T) {
 	})
 }
 
+func TestREADMEImplementedCommands(t *testing.T) {
+	readmePath := filepath.Join("..", "..", "README.md")
+	contents, err := os.ReadFile(readmePath)
+	if err != nil {
+		t.Fatalf("read %s: %v", readmePath, err)
+	}
+
+	implemented, proposed := readmeCommandSections(t, string(contents))
+	var got []string
+	for _, line := range strings.Split(implemented, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "workbook ") {
+			got = append(got, line)
+		}
+	}
+	want := []string{
+		"workbook init",
+		"workbook create",
+		"workbook list",
+		"workbook show",
+		"workbook update",
+		"workbook delete",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("implemented commands = %q, want exactly %q", got, want)
+	}
+
+	for _, command := range []string{"workbook claim", "workbook sync"} {
+		if !strings.Contains(proposed, command) {
+			t.Errorf("proposed commands missing %q", command)
+		}
+	}
+}
+
+func readmeCommandSections(t *testing.T, readme string) (string, string) {
+	t.Helper()
+	const (
+		implementedHeading = "## Implemented POC commands"
+		proposedHeading    = "## Proposed post-POC commands"
+	)
+	implementedStart := strings.Index(readme, implementedHeading)
+	if implementedStart < 0 {
+		t.Fatalf("README missing %q section", implementedHeading)
+	}
+	proposedStart := strings.Index(readme, proposedHeading)
+	if proposedStart < 0 {
+		t.Fatalf("README missing %q section", proposedHeading)
+	}
+	if proposedStart <= implementedStart {
+		t.Fatalf("%q must follow %q", proposedHeading, implementedHeading)
+	}
+
+	implemented := readme[implementedStart+len(implementedHeading) : proposedStart]
+	proposed := readme[proposedStart+len(proposedHeading):]
+	if nextHeading := strings.Index(proposed, "\n## "); nextHeading >= 0 {
+		proposed = proposed[:nextHeading]
+	}
+	return implemented, proposed
+}
+
 func initializedRepository(t *testing.T) string {
 	t.Helper()
 	repository := testrepo.New(t)

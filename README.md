@@ -2,9 +2,14 @@
 
 Workbook is a lightweight, repository-native project tracker for humans and coding agents.
 
-The goal is to keep structured project state close to the code without requiring a hosted issue tracker. A local CLI provides task operations and fast queries, Git provides durable synchronization, and SQLite provides a disposable materialized view.
+The goal is to keep structured project state close to the code without requiring
+a hosted issue tracker. The current local CLI stores task operations durably in
+Git objects and refs. The intended architecture adds Git-remote synchronization
+and a disposable SQLite materialized view.
 
-> **Status:** design and prototyping. The commands and formats below describe the intended architecture; they are not implemented yet.
+> **Status:** initial local POC. Repository initialization and local task CRUD are
+> implemented on the POC branch. Task ordering, SQLite projection, terminal and
+> web boards, remote synchronization, and packaged distribution remain proposed.
 
 ## Why Workbook?
 
@@ -55,6 +60,47 @@ workbook show TASK-123 --json
 workbook finish TASK-123 --commit HEAD --push --json
 ```
 
+## Implemented POC commands
+
+The current CLI implements these six local commands. Each supports human-readable
+output and a machine-readable `--json` mode:
+
+```text
+workbook init
+workbook create
+workbook list
+workbook show
+workbook update
+workbook delete
+```
+
+`workbook init` creates a tracked `.workbook/config.json` with the project ID and
+key. Create, update, and delete append immutable task commits under
+`refs/workbook/tasks/`; delete records a tombstone instead of removing the ref.
+List and show read the current task checkpoint from each task ref's tip. The
+current POC does not yet implement dependency-aware ordering, SQLite, terminal or
+web boards, remote operations, claims, or implementation links.
+
+## Proposed post-POC commands
+
+The following examples describe future remote coordination and are not implemented:
+
+```sh
+workbook claim TASK-123 --remote-required --json
+workbook fetch
+workbook push
+workbook sync
+```
+
+Remote compare-and-swap claims, fetch/push refspec management, automatic conflict
+reconciliation, and a combined `workbook finish --commit HEAD --push` flow remain
+design proposals. A future packaged distribution might also support a Homebrew
+installation such as the following; no tap or formula is published yet:
+
+```sh
+brew install dgoings/tap/workbook
+```
+
 ## Architecture
 
 Workbook separates its data model, transport, and query engine:
@@ -62,21 +108,22 @@ Workbook separates its data model, transport, and query engine:
 ```mermaid
 flowchart TD
     CLI["CLI / IDE / agent"] --> Core["Workbook core"]
-    Core --> Ops["Immutable task operations"]
+    Core --> Ops["Immutable task operations + tip checkpoints"]
     Ops --> Refs["Tool-private Git refs"]
-    Refs <--> Remote["Existing Git remote"]
-    Ops --> SQLite["Disposable SQLite projection"]
+    Refs -. proposed .-> Remote["Existing Git remote"]
+    Ops -. proposed .-> SQLite["Disposable SQLite projection"]
 ```
 
 | Layer | Responsibility |
 | --- | --- |
-| Operation model | Defines task history, causality, validation, and merge semantics |
-| Git refs and objects | Durably store and synchronize operations |
-| SQLite | Materializes current task state for fast local queries |
-| CLI/core library | Owns synchronization, validation, projection, and user-facing operations |
-| Optional adapters | IDE integrations, local API, MCP, or a coordination relay |
+| Operation model | Defines task history, current tip checkpoints, causality, and validation |
+| Git refs and objects | Currently store local task operations durably; synchronization is proposed |
+| SQLite (proposed) | Will materialize current task state for fast local queries |
+| CLI/core library | Currently owns initialization, local validation, CRUD, and user-facing output |
+| Optional adapters (proposed) | IDE integrations, local API, MCP, or a coordination relay |
 
-The working tree contains only bootstrap configuration and documentation. Task state does not live on the currently checked-out code branch.
+Workbook adds only tracked bootstrap configuration to the working tree. Task state
+does not live on the currently checked-out code branch.
 
 ## Git storage model
 
@@ -95,43 +142,47 @@ ref
       ├── parent commit(s)
       └── tree
            ├── operation.json blob
-           └── optional attachment blobs
+           └── state.json blob
 ```
 
 - The root commit has no parents and contains `task.create`.
 - A normal edit commit has one parent.
-- A reconciliation or resolution commit can have multiple parents.
+- A future reconciliation or resolution commit can have multiple parents.
 - Git parent edges define causal history.
-- The commit tree contains only that edit's operation pack, not a full task snapshot.
-- The complete task is reconstructed by traversing all commits reachable from its ref.
+- Every current POC commit tree contains exactly the edit's versioned operation
+  pack in `operation.json` and a versioned full-task checkpoint in `state.json`.
+- Ordinary `list` and `show` reads validate and use the tip commit's
+  `operation.json` and `state.json`; they do not replay the complete history.
+- History replay and checkpoint reconstruction are reserved for later POC work.
 
-Using one ref per task avoids a single global state-branch bottleneck: agents working on different tasks update different refs. Concurrent edits to the same task form branches in that task's operation DAG and are merged according to Workbook's domain rules.
+Using one ref per task avoids a single global state-branch bottleneck: local
+commands working on different tasks update different refs. Future concurrent edits
+to the same task can form branches in that task's operation DAG and will require
+the proposed domain reconciliation rules.
 
 ### Operation pack
 
-One CLI action creates one versioned operation pack. A pack can hold multiple operations that should be applied atomically:
+Each task mutation creates one versioned operation pack. A pack can hold multiple
+operations that should be applied atomically:
 
 ```json
 {
   "format": "workbook.operation-pack",
   "version": 1,
-  "taskId": "TASK-123",
+  "projectId": "01K0M65GBZ8F5ZQX0VC1J8H3TP",
+  "taskId": "WB-01K0M6B8A4FTT8C39MXXYTW7C1",
+  "historyGeneration": "01K0M6B8A4FTT8C39MXXYTW7C2",
   "actor": {
     "id": "agent-7"
   },
-  "logicalClock": 18,
+  "logicalClock": 2,
   "wallTime": "2026-07-22T14:35:00-04:00",
   "operations": [
-    {
-      "id": "01K0M6B8A4FTT8C39MXXYTW7C2",
-      "type": "implementation.link",
-      "commit": "da73c0..."
-    },
     {
       "id": "01K0M6B8A4FTT8C39MXXYTW7C3",
       "type": "field.set",
       "field": "status",
-      "value": "implemented"
+      "value": "ready"
     }
   ]
 }
@@ -139,11 +190,11 @@ One CLI action creates one versioned operation pack. A pack can hold multiple op
 
 Operation IDs are globally unique and independent of Git object IDs. Git commit ancestry provides causal ordering; a logical clock assists validation and deterministic presentation. Wall-clock time is for display only and must not decide semantic conflicts.
 
-The initial format is expected to support operations such as:
+The current POC format supports task creation, scalar and label updates, and
+tombstones. Later CLI and format work is expected to add:
 
-- `task.create` and `task.tombstone`;
-- `field.set` for title, status, priority, and other scalar fields;
-- `set.add` and `set.remove` for labels and dependencies;
+- dependency commands using the existing `set.add` and `set.remove` operation
+  semantics;
 - `comment.add`;
 - `claim.acquire`, `claim.release`, and heartbeat/lease operations;
 - `implementation.link` for associating work with code commits.
@@ -152,7 +203,8 @@ Historical operation commits are immutable. Tasks are tombstoned rather than del
 
 ## Concurrency and synchronization
 
-Workbook follows a local-first, operation-based model:
+Remote synchronization and concurrent reconciliation are proposed. The intended
+local-first, operation-based model is:
 
 1. Fetch the relevant Workbook ref.
 2. Merge any newly discovered operation DAGs.
@@ -170,7 +222,9 @@ Workbook must not rely on Git hooks for correctness. Hooks may refresh caches, a
 
 ## Relationship to code branches
 
-Workflow state and code availability are separate facts.
+Implementation links and landed-state reporting are proposed; the current POC
+does not implement them. The intended model keeps workflow state and code
+availability as separate facts.
 
 A task operation can record an implementation commit, while Workbook computes whether that implementation is reachable from the current branch or the configured target branch. This supports states such as:
 
@@ -188,7 +242,10 @@ Facts Git can derive, such as whether work has landed on `main`, should not be d
 
 ## SQLite projection
 
-SQLite is a local cache and query engine, never the canonical source of truth. It may contain normalized tables for tasks, dependencies, labels, comments, implementation links, full-text search, and projection metadata.
+The SQLite projection is proposed and is not created by the current POC. When
+implemented, SQLite will be a local cache and query engine, never the canonical
+source of truth. It may contain normalized tables for tasks, dependencies, labels,
+comments, implementation links, full-text search, and projection metadata.
 
 The database can be deleted and rebuilt entirely from Workbook refs. Direct SQL writes to projected state are unsupported and will be lost during reconstruction.
 
@@ -196,7 +253,10 @@ A projected task records the Git object ID of the task head from which it was bu
 
 ## Bootstrap and portability
 
-A normal Git clone does not fetch arbitrary custom ref namespaces. A tracked bootstrap configuration and `init.sh` should therefore:
+A normal Git clone does not fetch arbitrary custom ref namespaces. The implemented
+`workbook init` command creates local project configuration and a private cache
+directory; it does not install the CLI, fetch custom refs, build SQLite, or install
+hooks. A future bootstrap command or `init.sh` should:
 
 1. install or discover the Workbook CLI;
 2. detect the repository and its remote;
@@ -229,21 +289,24 @@ At least initially, Workbook is not intended to provide:
 - a required MCP server or IDE integration;
 - field-level permissions beyond the repository's Git access controls.
 
-## Proposed roadmap
+## POC roadmap
 
-1. Specify the operation-pack schema and task projection rules.
-2. Prototype Git object/ref creation, fetching, merging, and pushing.
-3. Implement deterministic SQLite projection and rebuilds.
-4. Build the core CLI with structured JSON output.
-5. Add remote-required claiming and conflict tests.
-6. Add bootstrap configuration and a one-command repository initializer.
-7. Explore IDE, local API, and MCP adapters after the CLI is stable.
-8. Evaluate an optional coordination relay only when real workloads require it.
+The POC now has versioned operation and state documents, local Git object/ref CRUD,
+structured CLI output, and repository initialization. Remaining work is:
+
+1. Add exact task ordering, dependencies, cycle rejection, and next selection.
+2. Implement deterministic SQLite projection and rebuilds from tip checkpoints.
+3. Render wide and narrow terminal task tables and an ASCII board.
+4. Serve a read-only web Kanban board.
+5. Complete replay, reconstruction, Git hash, renderer, HTTP, installer, and
+   documentation acceptance coverage.
+
+Remote synchronization, claims, conflict reconciliation, packaged distribution,
+and optional adapters follow the local POC rather than being part of it.
 
 ## Open questions
 
-- Implementation language and distribution format.
-- Human-facing task ID format versus globally unique internal IDs.
+- Distribution format beyond source builds.
 - Exact status workflow and customization model.
 - Per-field CRDT and conflict-resolution semantics.
 - Actor identity and optional operation signing.
