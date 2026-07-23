@@ -66,13 +66,20 @@ func (r *Repository) verifyIdentity(ctx context.Context) error {
 		filepath.Clean(strings.TrimSpace(string(commonGitDir))) != filepath.Clean(r.CommonGitDir) {
 		return core.Errorf(core.CategoryNotInitialized, "repository paths do not match Git metadata")
 	}
-	r.gitPath = gitPath
 	return nil
 }
 
 // Git executes Git against this repository's working-tree root.
 func (r *Repository) Git(ctx context.Context, stdin []byte, args ...string) ([]byte, error) {
-	output, err := runGit(ctx, r.gitPath, r.Root, stdin, args...)
+	gitPath := r.gitPath
+	if gitPath == "" {
+		var err error
+		gitPath, err = exec.LookPath("git")
+		if err != nil {
+			return nil, core.Wrap(core.CategoryInvocation, "cannot find git executable", err)
+		}
+	}
+	output, err := runGit(ctx, gitPath, r.Root, stdin, args...)
 	if err != nil {
 		return nil, core.Wrap(core.CategoryInvocation, fmt.Sprintf("git %s failed", strings.Join(args, " ")), err)
 	}

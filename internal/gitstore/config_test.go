@@ -254,6 +254,34 @@ func TestInitConcurrentSameKeyReturnsPersistedConfig(t *testing.T) {
 	}
 }
 
+func TestInitConcurrentSameRepositoryReturnsPersistedConfig(t *testing.T) {
+	repo, err := Open(context.Background(), testrepo.New(t))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	repo.gitPath = ""
+	results := concurrentInitOnRepository(t, repo,
+		initRequest{key: "WB", ids: idsFor("01K0M65GBZ8F5ZQX0VC1J8H3TP")},
+		initRequest{key: "WB", ids: idsFor("01K0M65GBZ8F5ZQX0VC1J8H3TQ")},
+	)
+
+	created := 0
+	for _, result := range results {
+		if result.err != nil {
+			t.Fatalf("concurrent Init() error = %v", result.err)
+		}
+		if result.created {
+			created++
+		}
+	}
+	if got, want := created, 1; got != want {
+		t.Fatalf("concurrent Init() created count = %d, want %d", got, want)
+	}
+	if results[0].config != results[1].config {
+		t.Fatalf("concurrent Init() configs differ: %#v and %#v", results[0].config, results[1].config)
+	}
+}
+
 func TestInitConcurrentDifferentKeysReturnsValidationError(t *testing.T) {
 	repoDir := testrepo.New(t)
 	results := concurrentInit(t, repoDir,
@@ -325,6 +353,30 @@ func concurrentInit(t *testing.T, repoDir string, requests ...initRequest) []ini
 				ready <- struct{}{}
 				return
 			}
+			ready <- struct{}{}
+			<-start
+			results[index].config, results[index].created, results[index].err = repo.Init(context.Background(), request.key, request.ids)
+		}()
+	}
+	for range requests {
+		<-ready
+	}
+	close(start)
+	wait.Wait()
+	return results
+}
+
+func concurrentInitOnRepository(t *testing.T, repo *Repository, requests ...initRequest) []initResult {
+	t.Helper()
+	results := make([]initResult, len(requests))
+	start := make(chan struct{})
+	ready := make(chan struct{}, len(requests))
+	var wait sync.WaitGroup
+
+	for index, request := range requests {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
 			ready <- struct{}{}
 			<-start
 			results[index].config, results[index].created, results[index].err = repo.Init(context.Background(), request.key, request.ids)

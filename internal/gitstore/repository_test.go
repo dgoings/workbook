@@ -84,6 +84,22 @@ func TestActorReturnsRepositoryEmail(t *testing.T) {
 	}
 }
 
+func TestGitUsesResolvedPathForValidConstructedRepository(t *testing.T) {
+	opened, err := Open(context.Background(), testrepo.New(t))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	repo := &Repository{Root: opened.Root, CommonGitDir: opened.CommonGitDir}
+
+	output, err := repo.Git(context.Background(), nil, "rev-parse", "--show-toplevel")
+	if err != nil {
+		t.Fatalf("Git() error = %v", err)
+	}
+	if got, want := filepath.Clean(strings.TrimSpace(string(output))), opened.Root; got != want {
+		t.Fatalf("Git() output = %q, want %q", got, want)
+	}
+}
+
 func gitRun(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	command := exec.Command("git", append([]string{"-C", dir}, args...)...)
