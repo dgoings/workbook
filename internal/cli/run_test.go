@@ -591,6 +591,27 @@ func TestREADMEImplementedCommands(t *testing.T) {
 	}
 }
 
+func TestREADMEDocumentsSourceInstallationPrerequisites(t *testing.T) {
+	readmePath := filepath.Join("..", "..", "README.md")
+	contents, err := os.ReadFile(readmePath)
+	if err != nil {
+		t.Fatalf("read %s: %v", readmePath, err)
+	}
+	readme := string(contents)
+
+	for _, required := range []string{
+		"## Source installation prerequisites",
+		"Go 1.26",
+		"Git",
+		"./scripts/install.sh",
+		"$HOME/.local/bin",
+	} {
+		if !strings.Contains(readme, required) {
+			t.Errorf("README source installation section is missing %q", required)
+		}
+	}
+}
+
 func TestREADMECommandPolicyRejectsUnimplementedCommandOutsideProposedSection(t *testing.T) {
 	const claim = "## Current workflow\n\nRun `workbook serve` to start the board.\n"
 	violations := readmeCommandPolicyViolations(claim)

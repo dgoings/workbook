@@ -65,6 +65,20 @@ workbook show TASK-123 --json
 workbook finish TASK-123 --commit HEAD --push --json
 ```
 
+## Source installation prerequisites
+
+The current POC builds from source and requires Go 1.26 or newer and Git to be
+available on `PATH`. Install it with:
+
+```sh
+./scripts/install.sh
+```
+
+The script accepts an optional destination directory, defaults to
+`$HOME/.local/bin`, creates the destination when needed, and builds the
+`workbook` executable there. It prints the installed path and, when necessary,
+the `PATH` export needed to run it.
+
 ## Implemented POC commands
 
 The current CLI implements these six local commands. Each supports human-readable
