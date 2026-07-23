@@ -3,6 +3,7 @@ package core
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -111,6 +112,67 @@ func TestDecodeDocumentsRejectUnknownFieldsAndTrailingData(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			assertCorrupt(t, test.decode(test.bytes))
+		})
+	}
+}
+
+func TestDecodeOperationPackRejectsInvalidOperations(t *testing.T) {
+	tests := map[string]func(*OperationPack){
+		"unknown type": func(pack *OperationPack) {
+			pack.Operations[0].Type = "future.operation"
+			pack.Operations[0].Task = nil
+		},
+		"unsupported field": func(pack *OperationPack) {
+			pack.Operations[0] = Operation{ID: operationID1, Type: OperationFieldSet, Field: "labels", Value: "git"}
+		},
+		"invalid status value": func(pack *OperationPack) {
+			pack.Operations[0] = Operation{ID: operationID1, Type: OperationFieldSet, Field: "status", Value: "later"}
+		},
+		"empty set label": func(pack *OperationPack) {
+			pack.Operations[0] = Operation{ID: operationID1, Type: OperationSetAdd, Field: "labels", Value: ""}
+		},
+		"invalid set dependency": func(pack *OperationPack) {
+			pack.Operations[0] = Operation{ID: operationID1, Type: OperationSetRemove, Field: "dependencies", Value: "WB-not-a-ulid"}
+		},
+		"payload-bearing tombstone": func(pack *OperationPack) {
+			pack.Operations[0].Type = OperationTaskTombstone
+			pack.Operations[0].Field = "status"
+		},
+		"field set task payload": func(pack *OperationPack) {
+			pack.Operations[0].Type = OperationFieldSet
+			pack.Operations[0].Field = "title"
+			pack.Operations[0].Value = "Build Git store"
+		},
+		"invalid operation ULID": func(pack *OperationPack) {
+			pack.Operations[0].ID = "not-a-ulid"
+		},
+		"noncanonical operation ULID": func(pack *OperationPack) {
+			pack.Operations[0].ID = strings.ToLower(operationID1)
+		},
+		"duplicate operation ID": func(pack *OperationPack) {
+			pack.Operations = append(pack.Operations, Operation{ID: operationID1, Type: OperationFieldSet, Field: "status", Value: "ready"})
+		},
+		"task create payload shape": func(pack *OperationPack) {
+			pack.Operations[0].Field = "title"
+		},
+		"task create invalid task": func(pack *OperationPack) {
+			pack.Operations[0].Task.Title = " "
+		},
+		"task create noncanonical task": func(pack *OperationPack) {
+			pack.Operations[0].Task.Labels = []string{"poc", "git"}
+		},
+	}
+
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			pack := createPack()
+			mutate(&pack)
+			encoded, err := json.Marshal(pack)
+			if err != nil {
+				t.Fatalf("json.Marshal(operation pack) error = %v", err)
+			}
+			_, err = DecodeOperationPack(encoded)
+			assertCorrupt(t, err)
 		})
 	}
 }

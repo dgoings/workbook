@@ -47,6 +47,9 @@ func DecodeOperationPack(data []byte) (OperationPack, error) {
 	if err := validateOperationPackEnvelope(pack, projectKey); err != nil {
 		return OperationPack{}, err
 	}
+	if err := validateOperationPackDocument(pack, projectKey); err != nil {
+		return OperationPack{}, err
+	}
 	return pack, nil
 }
 

@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"strings"
 	"time"
+
+	"github.com/oklog/ulid/v2"
 )
 
 const (
@@ -189,69 +191,46 @@ func applyOperation(task *TaskData, operation Operation, projectKey string) erro
 }
 
 func applyFieldSet(task *TaskData, operation Operation) error {
+	if err := validateFieldSetOperation(operation); err != nil {
+		return err
+	}
 	switch operation.Field {
 	case "title":
-		if strings.TrimSpace(operation.Value) == "" {
-			return corrupt("field.set title must not be blank")
-		}
 		task.Title = operation.Value
 	case "description":
 		task.Description = operation.Value
 	case "status":
-		status := Status(operation.Value)
-		if !isValidStatus(status) {
-			return corrupt("field.set status %q is invalid", operation.Value)
-		}
-		task.Status = status
+		task.Status = Status(operation.Value)
 	case "priority":
-		priority := Priority(operation.Value)
-		if !isValidPriority(priority) {
-			return corrupt("field.set priority %q is invalid", operation.Value)
-		}
-		task.Priority = priority
+		task.Priority = Priority(operation.Value)
 	case "rank":
-		if !rankPattern.MatchString(operation.Value) {
-			return corrupt("field.set rank %q is invalid", operation.Value)
-		}
 		task.Rank = operation.Value
-	default:
-		return corrupt("field.set does not support field %q", operation.Field)
 	}
 	return nil
 }
 
 func applySetAdd(task *TaskData, operation Operation, projectKey string) error {
+	if err := validateSetOperation(operation, projectKey); err != nil {
+		return err
+	}
 	switch operation.Field {
 	case "labels":
-		if operation.Value == "" {
-			return corrupt("set.add label must not be empty")
-		}
 		task.Labels = append(task.Labels, operation.Value)
 	case "dependencies":
-		if err := ValidateTaskID(projectKey, operation.Value); err != nil {
-			return Wrap(CategoryCorruptData, "set.add dependency is invalid", err)
-		}
 		task.Dependencies = append(task.Dependencies, operation.Value)
-	default:
-		return corrupt("set.add does not support field %q", operation.Field)
 	}
 	return nil
 }
 
 func applySetRemove(task *TaskData, operation Operation, projectKey string) error {
+	if err := validateSetOperation(operation, projectKey); err != nil {
+		return err
+	}
 	switch operation.Field {
 	case "labels":
-		if operation.Value == "" {
-			return corrupt("set.remove label must not be empty")
-		}
 		task.Labels = removeValue(task.Labels, operation.Value)
 	case "dependencies":
-		if err := ValidateTaskID(projectKey, operation.Value); err != nil {
-			return Wrap(CategoryCorruptData, "set.remove dependency is invalid", err)
-		}
 		task.Dependencies = removeValue(task.Dependencies, operation.Value)
-	default:
-		return corrupt("set.remove does not support field %q", operation.Field)
 	}
 	return nil
 }
@@ -356,6 +335,116 @@ func validateOperation(operation Operation) error {
 		}
 	default:
 		return corrupt("unsupported operation type %q", operation.Type)
+	}
+	return nil
+}
+
+func validateOperationPackDocument(pack OperationPack, projectKey string) error {
+	seen := make(map[string]struct{}, len(pack.Operations))
+	for _, operation := range pack.Operations {
+		if err := validateOperationDocument(operation, projectKey); err != nil {
+			return err
+		}
+		if _, duplicate := seen[operation.ID]; duplicate {
+			return corrupt("operation pack contains duplicate operation ID %q", operation.ID)
+		}
+		seen[operation.ID] = struct{}{}
+	}
+	return nil
+}
+
+func validateOperationDocument(operation Operation, projectKey string) error {
+	if err := validateOperationID(operation.ID); err != nil {
+		return err
+	}
+	switch operation.Type {
+	case OperationTaskCreate:
+		return validateTaskCreateOperation(operation, projectKey)
+	case OperationFieldSet:
+		return validateFieldSetOperation(operation)
+	case OperationSetAdd, OperationSetRemove:
+		return validateSetOperation(operation, projectKey)
+	case OperationTaskTombstone:
+		if operation.Task != nil || operation.Field != "" || operation.Value != "" {
+			return corrupt("task.tombstone must not contain a payload")
+		}
+		return nil
+	default:
+		return corrupt("unsupported operation type %q", operation.Type)
+	}
+}
+
+func validateOperationID(id string) error {
+	parsed, err := ulid.ParseStrict(id)
+	if err != nil || parsed.String() != id {
+		return corrupt("operation ID %q must contain a canonical uppercase ULID", id)
+	}
+	return nil
+}
+
+func validateTaskCreateOperation(operation Operation, projectKey string) error {
+	if operation.Task == nil || operation.Field != "" || operation.Value != "" {
+		return corrupt("task.create must contain only task data")
+	}
+	if operation.Task.Deleted {
+		return corrupt("task.create cannot create a deleted task")
+	}
+	if operation.Task.CreatedAt.IsZero() {
+		return corrupt("task.create requires createdAt")
+	}
+	normalized, err := normalizeCanonicalTask(projectKey, copyTaskData(*operation.Task))
+	if err != nil {
+		return Wrap(CategoryCorruptData, "task.create contains an invalid task", err)
+	}
+	if !reflect.DeepEqual(*operation.Task, normalized) {
+		return corrupt("task.create task data is not canonical")
+	}
+	return nil
+}
+
+func validateFieldSetOperation(operation Operation) error {
+	if operation.Task != nil {
+		return corrupt("field.set must not contain task data")
+	}
+	switch operation.Field {
+	case "title":
+		if strings.TrimSpace(operation.Value) == "" {
+			return corrupt("field.set title must not be blank")
+		}
+	case "description":
+	case "status":
+		if !isValidStatus(Status(operation.Value)) {
+			return corrupt("field.set status %q is invalid", operation.Value)
+		}
+	case "priority":
+		if !isValidPriority(Priority(operation.Value)) {
+			return corrupt("field.set priority %q is invalid", operation.Value)
+		}
+	case "rank":
+		if !rankPattern.MatchString(operation.Value) {
+			return corrupt("field.set rank %q is invalid", operation.Value)
+		}
+	default:
+		return corrupt("field.set does not support field %q", operation.Field)
+	}
+	return nil
+}
+
+func validateSetOperation(operation Operation, projectKey string) error {
+	if operation.Task != nil {
+		return corrupt("%s must not contain task data", operation.Type)
+	}
+	switch operation.Field {
+	case "labels":
+		if operation.Value == "" {
+			return corrupt("%s label must not be empty", operation.Type)
+		}
+	case "dependencies":
+		if err := ValidateTaskID(projectKey, operation.Value); err != nil {
+			return Wrap(CategoryCorruptData, string(operation.Type)+" dependency is invalid", err)
+		}
+	default:
+		return corrupt("%s does not support field %q", operation.Type, operation.Field)
 	}
 	return nil
 }
