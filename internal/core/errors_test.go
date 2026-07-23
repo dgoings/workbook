@@ -35,6 +35,7 @@ func TestExitCode(t *testing.T) {
 		{"validation", Errorf(CategoryValidation, "bad task"), 5},
 		{"stale write", Errorf(CategoryStaleWrite, "head changed"), 6},
 		{"corrupt data", Errorf(CategoryCorruptData, "bad state"), 7},
+		{"operational", Errorf(CategoryOperational, "git failed"), 1},
 		{"unknown typed category", Errorf(Category("future"), "unknown"), 7},
 		{"unexpected", errors.New("network unavailable"), 1},
 	}

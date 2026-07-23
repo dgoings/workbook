@@ -126,7 +126,7 @@ func TestWriteRejectsNonCanonicalParentHeadsBeforeWritingObjectsOrMovingRefs(t *
 	}
 }
 
-func TestWriteDoesNotClassifyNamespaceCollisionAsStale(t *testing.T) {
+func TestWriteClassifiesNamespaceCollisionAsOperationalNotStale(t *testing.T) {
 	repo, config := writeRepository(t)
 	pack := writeCreatePack()
 	state := writeState(t, nil, pack)
@@ -143,7 +143,7 @@ func TestWriteDoesNotClassifyNamespaceCollisionAsStale(t *testing.T) {
 	}
 
 	_, err = repo.Write(context.Background(), config, nil, pack, state, "create task")
-	if got, want := core.CategoryOf(err), core.CategoryInvocation; got != want {
+	if got, want := core.CategoryOf(err), core.CategoryOperational; got != want {
 		t.Fatalf("Write() category = %q, want original Git category %q; error = %v", got, want, err)
 	}
 	if _, err := repo.Git(context.Background(), nil, "rev-parse", "--verify", taskRef(pack.TaskID)); err == nil {

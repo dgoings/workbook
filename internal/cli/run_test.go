@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -82,6 +83,48 @@ func TestRunInvalidInvocationAndEarlyJSONErrors(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRunReportsGitProcessFailuresAsOperationalWithoutUsage(t *testing.T) {
+	repository := initializedRepository(t)
+	command := exec.Command("git", "-C", repository, "config", "--unset", "user.email")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git config --unset user.email: %v\n%s", err, output)
+	}
+	emptyGlobalConfig := filepath.Join(t.TempDir(), "gitconfig")
+	if err := os.WriteFile(emptyGlobalConfig, nil, 0o600); err != nil {
+		t.Fatalf("WriteFile(empty global Git config) error = %v", err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", emptyGlobalConfig)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+	t.Run("JSON", func(t *testing.T) {
+		code, stdout, stderr := run(t, repository, "list", "--json")
+		if code != 1 {
+			t.Fatalf("Run() code = %d, want 1; stderr = %q", code, stderr)
+		}
+		if stdout != "" {
+			t.Fatalf("Run() stdout = %q, want empty", stdout)
+		}
+		assertJSONError(t, stderr, core.CategoryOperational, "git config --get user.email failed")
+		if strings.Contains(stderr, "Usage:") {
+			t.Fatalf("Run() operational JSON stderr contains usage: %q", stderr)
+		}
+	})
+
+	t.Run("human", func(t *testing.T) {
+		code, stdout, stderr := run(t, repository, "list")
+		if code != 1 {
+			t.Fatalf("Run() code = %d, want 1; stderr = %q", code, stderr)
+		}
+		if stdout != "" {
+			t.Fatalf("Run() stdout = %q, want empty", stdout)
+		}
+		assertHumanError(t, stderr, "git config --get user.email failed")
+		if strings.Contains(stderr, "Usage:") {
+			t.Fatalf("Run() operational stderr contains usage: %q", stderr)
+		}
+	})
 }
 
 func TestRunJSONIntentAccountsForStringFlagValuesAndParserStops(t *testing.T) {

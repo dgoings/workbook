@@ -14,6 +14,7 @@ const (
 	CategoryValidation     Category = "validation"
 	CategoryStaleWrite     Category = "stale-write"
 	CategoryCorruptData    Category = "corrupt-data"
+	CategoryOperational    Category = "operational"
 )
 
 type Error struct {
@@ -63,6 +64,8 @@ func ExitCode(err error) int {
 		return 6
 	case CategoryCorruptData:
 		return 7
+	case CategoryOperational:
+		return 1
 	}
 
 	var typed *Error

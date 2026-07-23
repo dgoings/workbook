@@ -25,7 +25,7 @@ type Repository struct {
 func Open(ctx context.Context, startDir string) (*Repository, error) {
 	gitPath, err := exec.LookPath("git")
 	if err != nil {
-		return nil, core.Wrap(core.CategoryInvocation, "cannot find git executable", err)
+		return nil, core.Wrap(core.CategoryOperational, "cannot find git executable", err)
 	}
 
 	root, err := runGit(ctx, gitPath, startDir, nil, "rev-parse", "--show-toplevel")
@@ -50,7 +50,7 @@ func (r *Repository) verifyIdentity(ctx context.Context) error {
 		var err error
 		gitPath, err = exec.LookPath("git")
 		if err != nil {
-			return core.Wrap(core.CategoryInvocation, "cannot find git executable", err)
+			return core.Wrap(core.CategoryOperational, "cannot find git executable", err)
 		}
 	}
 
@@ -76,12 +76,12 @@ func (r *Repository) Git(ctx context.Context, stdin []byte, args ...string) ([]b
 		var err error
 		gitPath, err = exec.LookPath("git")
 		if err != nil {
-			return nil, core.Wrap(core.CategoryInvocation, "cannot find git executable", err)
+			return nil, core.Wrap(core.CategoryOperational, "cannot find git executable", err)
 		}
 	}
 	output, err := runGit(ctx, gitPath, r.Root, stdin, args...)
 	if err != nil {
-		return nil, core.Wrap(core.CategoryInvocation, fmt.Sprintf("git %s failed", strings.Join(args, " ")), err)
+		return nil, core.Wrap(core.CategoryOperational, fmt.Sprintf("git %s failed", strings.Join(args, " ")), err)
 	}
 	return output, nil
 }
