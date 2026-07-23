@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/oklog/ulid/v2"
@@ -18,10 +17,7 @@ const (
 	configPath     = ".workbook/config.json"
 	projectFormat  = "workbook.project"
 	projectVersion = 1
-	initLockName   = ".init.lock"
-
-	initLockRetryDelay  = 10 * time.Millisecond
-	initLockMaxAttempts = 20
+	projectGuard   = "project.json"
 )
 
 // Init creates a repository's tracked Workbook configuration when absent. An
@@ -30,46 +26,56 @@ func (r *Repository) Init(ctx context.Context, key string, ids core.IDSource) (c
 	if err := r.verifyIdentity(ctx); err != nil {
 		return core.ProjectConfig{}, false, err
 	}
-	config, exists, err := r.readConfig()
-	if err != nil {
-		return core.ProjectConfig{}, false, err
-	}
-	if exists {
-		if config.Key != key {
-			return core.ProjectConfig{}, false, core.Errorf(core.CategoryValidation, "repository is already initialized with project key %q", config.Key)
-		}
-		if err := r.ensurePrivateCache(); err != nil {
-			return core.ProjectConfig{}, false, err
-		}
-		return config, false, nil
-	}
-
 	if err := core.ValidateProjectKey(key); err != nil {
 		return core.ProjectConfig{}, false, err
 	}
+	if err := r.ensurePrivateCache(); err != nil {
+		return core.ProjectConfig{}, false, err
+	}
+
+	tracked, trackedExists, err := r.readConfig()
+	if err != nil {
+		return core.ProjectConfig{}, false, err
+	}
+	guard, guardExists, err := r.readProjectGuard()
+	if err != nil {
+		return core.ProjectConfig{}, false, err
+	}
+
+	switch {
+	case trackedExists && guardExists:
+		if tracked != guard {
+			return core.ProjectConfig{}, false, core.Errorf(core.CategoryCorruptData, "tracked Workbook configuration does not match common project guard")
+		}
+		if err := validateRequestedProjectKey(key, tracked); err != nil {
+			return core.ProjectConfig{}, false, err
+		}
+		return tracked, false, nil
+	case trackedExists:
+		if err := validateRequestedProjectKey(key, tracked); err != nil {
+			return core.ProjectConfig{}, false, err
+		}
+		persisted, _, err := r.publishProjectGuard(tracked)
+		if err != nil {
+			return core.ProjectConfig{}, false, err
+		}
+		if persisted != tracked {
+			return core.ProjectConfig{}, false, core.Errorf(core.CategoryCorruptData, "tracked Workbook configuration does not match concurrently published project guard")
+		}
+		return tracked, false, nil
+	case guardExists:
+		if err := validateRequestedProjectKey(key, guard); err != nil {
+			return core.ProjectConfig{}, false, err
+		}
+		if err := r.writeConfig(guard); err != nil {
+			return core.ProjectConfig{}, false, err
+		}
+		return guard, false, nil
+	}
+
 	if ids == nil {
 		return core.ProjectConfig{}, false, core.Errorf(core.CategoryInvocation, "project ID source is required")
 	}
-	releaseLock, err := r.acquireInitializationLock(ctx)
-	if err != nil {
-		return core.ProjectConfig{}, false, err
-	}
-	defer releaseLock()
-
-	config, exists, err = r.readConfig()
-	if err != nil {
-		return core.ProjectConfig{}, false, err
-	}
-	if exists {
-		if config.Key != key {
-			return core.ProjectConfig{}, false, core.Errorf(core.CategoryValidation, "repository is already initialized with project key %q", config.Key)
-		}
-		if err := r.ensurePrivateCache(); err != nil {
-			return core.ProjectConfig{}, false, err
-		}
-		return config, false, nil
-	}
-
 	projectID, err := ids.New()
 	if err != nil {
 		return core.ProjectConfig{}, false, core.Wrap(core.CategoryInvocation, "cannot generate project ID", err)
@@ -77,42 +83,23 @@ func (r *Repository) Init(ctx context.Context, key string, ids core.IDSource) (c
 	if err := validateProjectID(projectID); err != nil {
 		return core.ProjectConfig{}, false, err
 	}
-
-	config = core.ProjectConfig{
+	candidate := core.ProjectConfig{
 		Format:    projectFormat,
 		Version:   projectVersion,
 		ProjectID: projectID,
 		Key:       key,
 	}
-	if err := r.ensurePrivateCache(); err != nil {
+	persisted, published, err := r.publishProjectGuard(candidate)
+	if err != nil {
 		return core.ProjectConfig{}, false, err
 	}
-	if err := r.writeConfig(config); err != nil {
+	if err := r.writeConfig(persisted); err != nil {
 		return core.ProjectConfig{}, false, err
 	}
-	return config, true, nil
-}
-
-func (r *Repository) acquireInitializationLock(ctx context.Context) (func(), error) {
-	configDir := filepath.Join(r.Root, ".workbook")
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
-		return nil, core.Wrap(core.CategoryInvocation, "cannot create Workbook configuration directory", err)
+	if err := validateRequestedProjectKey(key, persisted); err != nil {
+		return core.ProjectConfig{}, false, err
 	}
-	lockDir := filepath.Join(configDir, initLockName)
-	for attempt := 0; attempt < initLockMaxAttempts; attempt++ {
-		if err := os.Mkdir(lockDir, 0o700); err == nil {
-			return func() { _ = os.Remove(lockDir) }, nil
-		} else if !errors.Is(err, os.ErrExist) {
-			return nil, core.Wrap(core.CategoryInvocation, "cannot acquire Workbook initialization lock", err)
-		}
-
-		select {
-		case <-ctx.Done():
-			return nil, core.Wrap(core.CategoryStaleWrite, "Workbook initialization lock wait cancelled", ctx.Err())
-		case <-time.After(initLockRetryDelay):
-		}
-	}
-	return nil, core.Errorf(core.CategoryStaleWrite, "Workbook initialization lock is held")
+	return persisted, published, nil
 }
 
 // LoadConfig returns the repository's validated Workbook configuration.
@@ -128,18 +115,93 @@ func (r *Repository) LoadConfig() (core.ProjectConfig, error) {
 }
 
 func (r *Repository) readConfig() (core.ProjectConfig, bool, error) {
-	contents, err := os.ReadFile(filepath.Join(r.Root, configPath))
+	return readConfigFile(filepath.Join(r.Root, configPath), "Workbook configuration")
+}
+
+func (r *Repository) readProjectGuard() (core.ProjectConfig, bool, error) {
+	return readConfigFile(filepath.Join(r.CommonGitDir, "workbook", projectGuard), "Workbook common project guard")
+}
+
+func readConfigFile(path, description string) (core.ProjectConfig, bool, error) {
+	contents, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return core.ProjectConfig{}, false, nil
 	}
 	if err != nil {
-		return core.ProjectConfig{}, false, core.Wrap(core.CategoryCorruptData, "cannot read Workbook configuration", err)
+		return core.ProjectConfig{}, false, core.Wrap(core.CategoryCorruptData, "cannot read "+description, err)
 	}
 	config, err := decodeConfig(contents)
 	if err != nil {
 		return core.ProjectConfig{}, false, err
 	}
 	return config, true, nil
+}
+
+func (r *Repository) publishProjectGuard(candidate core.ProjectConfig) (core.ProjectConfig, bool, error) {
+	contents, err := encodeConfig(candidate)
+	if err != nil {
+		return core.ProjectConfig{}, false, err
+	}
+	cacheDir := filepath.Join(r.CommonGitDir, "workbook")
+	temporary, err := os.CreateTemp(cacheDir, ".project-*.tmp")
+	if err != nil {
+		return core.ProjectConfig{}, false, core.Wrap(core.CategoryOperational, "cannot create temporary Workbook project guard", err)
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+
+	if _, err := temporary.Write(contents); err != nil {
+		temporary.Close()
+		return core.ProjectConfig{}, false, core.Wrap(core.CategoryOperational, "cannot write Workbook project guard", err)
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return core.ProjectConfig{}, false, core.Wrap(core.CategoryOperational, "cannot sync Workbook project guard", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return core.ProjectConfig{}, false, core.Wrap(core.CategoryOperational, "cannot close Workbook project guard", err)
+	}
+	if err := os.Chmod(temporaryPath, 0o644); err != nil {
+		return core.ProjectConfig{}, false, core.Wrap(core.CategoryOperational, "cannot set Workbook project guard permissions", err)
+	}
+
+	guardPath := filepath.Join(cacheDir, projectGuard)
+	if err := os.Link(temporaryPath, guardPath); err == nil {
+		if err := syncDirectory(cacheDir); err != nil {
+			return core.ProjectConfig{}, false, err
+		}
+		return candidate, true, nil
+	} else if !errors.Is(err, os.ErrExist) {
+		return core.ProjectConfig{}, false, core.Wrap(core.CategoryOperational, "cannot publish Workbook project guard", err)
+	}
+
+	persisted, exists, err := r.readProjectGuard()
+	if err != nil {
+		return core.ProjectConfig{}, false, err
+	}
+	if !exists {
+		return core.ProjectConfig{}, false, core.Errorf(core.CategoryOperational, "Workbook project guard disappeared during initialization")
+	}
+	return persisted, false, nil
+}
+
+func syncDirectory(path string) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return core.Wrap(core.CategoryOperational, "cannot open Workbook private cache for sync", err)
+	}
+	defer directory.Close()
+	if err := directory.Sync(); err != nil {
+		return core.Wrap(core.CategoryOperational, "cannot sync Workbook private cache", err)
+	}
+	return nil
+}
+
+func validateRequestedProjectKey(requested string, config core.ProjectConfig) error {
+	if config.Key != requested {
+		return core.Errorf(core.CategoryValidation, "repository is already initialized with project key %q", config.Key)
+	}
+	return nil
 }
 
 func (r *Repository) writeConfig(config core.ProjectConfig) error {

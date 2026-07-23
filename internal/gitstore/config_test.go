@@ -115,6 +115,80 @@ func TestInitIsIdempotentForTheSameKey(t *testing.T) {
 	}
 }
 
+func TestInitPublishesTrackedConfigAsCommonProjectGuard(t *testing.T) {
+	repoDir := testrepo.New(t)
+	repo, err := Open(context.Background(), repoDir)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	want := core.ProjectConfig{
+		Format: projectFormat, Version: projectVersion, ProjectID: fixedProjectID, Key: "WB",
+	}
+	writeProjectConfigFile(t, filepath.Join(repo.Root, configPath), want)
+
+	got, created, err := repo.Init(context.Background(), "WB", core.IDSourceFunc(func() (string, error) {
+		t.Fatal("Init() generated an ID despite tracked configuration")
+		return "", nil
+	}))
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	if created {
+		t.Fatal("Init() created = true, want false for existing tracked identity")
+	}
+	if got != want {
+		t.Fatalf("Init() config = %#v, want %#v", got, want)
+	}
+	assertProjectConfigFile(t, filepath.Join(repo.CommonGitDir, "workbook", "project.json"), want)
+}
+
+func TestInitRestoresTrackedConfigFromCommonProjectGuard(t *testing.T) {
+	repo, err := Open(context.Background(), testrepo.New(t))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	want := core.ProjectConfig{
+		Format: projectFormat, Version: projectVersion, ProjectID: fixedProjectID, Key: "WB",
+	}
+	writeProjectConfigFile(t, filepath.Join(repo.CommonGitDir, "workbook", "project.json"), want)
+
+	got, created, err := repo.Init(context.Background(), "WB", core.IDSourceFunc(func() (string, error) {
+		t.Fatal("Init() generated an ID despite common project guard")
+		return "", nil
+	}))
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	if created {
+		t.Fatal("Init() created = true, want false for recovered identity")
+	}
+	if got != want {
+		t.Fatalf("Init() config = %#v, want %#v", got, want)
+	}
+	assertProjectConfigFile(t, filepath.Join(repo.Root, configPath), want)
+}
+
+func TestInitRejectsMismatchedTrackedConfigAndCommonProjectGuard(t *testing.T) {
+	repo, err := Open(context.Background(), testrepo.New(t))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	tracked := core.ProjectConfig{
+		Format: projectFormat, Version: projectVersion, ProjectID: fixedProjectID, Key: "WB",
+	}
+	guard := tracked
+	guard.ProjectID = "01K0M65GBZ8F5ZQX0VC1J8H3TQ"
+	writeProjectConfigFile(t, filepath.Join(repo.Root, configPath), tracked)
+	writeProjectConfigFile(t, filepath.Join(repo.CommonGitDir, "workbook", "project.json"), guard)
+
+	_, _, err = repo.Init(context.Background(), "WB", fixedIDs())
+	if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
+		t.Fatalf("Init() category = %q, want %q; error = %v", got, want, err)
+	}
+	assertProjectConfigFile(t, filepath.Join(repo.Root, configPath), tracked)
+	assertProjectConfigFile(t, filepath.Join(repo.CommonGitDir, "workbook", "project.json"), guard)
+}
+
 func TestInitRejectsConflictingKeyWithoutRewriting(t *testing.T) {
 	repoDir := testrepo.New(t)
 	repo, err := Open(context.Background(), repoDir)
@@ -282,6 +356,34 @@ func TestInitConcurrentSameRepositoryReturnsPersistedConfig(t *testing.T) {
 	}
 }
 
+func TestInitConcurrentLinkedWorktreesSharesOneStableIdentity(t *testing.T) {
+	repositories := linkedWorktreeRepositories(t)
+	results := concurrentInitOnRepositories(t, repositories,
+		initRequest{key: "WB", ids: idsFor("01K0M65GBZ8F5ZQX0VC1J8H3TP")},
+		initRequest{key: "WB", ids: idsFor("01K0M65GBZ8F5ZQX0VC1J8H3TQ")},
+	)
+
+	created := 0
+	for _, result := range results {
+		if result.err != nil {
+			t.Fatalf("concurrent Init() error = %v", result.err)
+		}
+		if result.created {
+			created++
+		}
+	}
+	if got, want := created, 1; got != want {
+		t.Fatalf("concurrent Init() created count = %d, want %d", got, want)
+	}
+	if results[0].config != results[1].config {
+		t.Fatalf("linked-worktree configs differ: %#v and %#v", results[0].config, results[1].config)
+	}
+	for _, repo := range repositories {
+		assertProjectConfigFile(t, filepath.Join(repo.Root, configPath), results[0].config)
+	}
+	assertProjectConfigFile(t, filepath.Join(repositories[0].CommonGitDir, "workbook", "project.json"), results[0].config)
+}
+
 func TestInitConcurrentDifferentKeysReturnsValidationError(t *testing.T) {
 	repoDir := testrepo.New(t)
 	results := concurrentInit(t, repoDir,
@@ -306,7 +408,7 @@ func TestInitConcurrentDifferentKeysReturnsValidationError(t *testing.T) {
 	}
 }
 
-func TestInitRejectsStaleInitializationLock(t *testing.T) {
+func TestInitIgnoresStaleWorktreeLocalInitializationLock(t *testing.T) {
 	repoDir := testrepo.New(t)
 	repo, err := Open(context.Background(), repoDir)
 	if err != nil {
@@ -317,12 +419,15 @@ func TestInitRejectsStaleInitializationLock(t *testing.T) {
 		t.Fatalf("MkdirAll(lock) error = %v", err)
 	}
 
-	_, _, err = repo.Init(context.Background(), "WB", fixedIDs())
-	if got, want := core.CategoryOf(err), core.CategoryStaleWrite; got != want {
-		t.Fatalf("Init() category = %q, want %q; error = %v", got, want, err)
+	config, created, err := repo.Init(context.Background(), "WB", fixedIDs())
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
 	}
-	assertPathMissing(t, filepath.Join(repoDir, configPath))
-	assertPathMissing(t, filepath.Join(repo.CommonGitDir, "workbook"))
+	if !created {
+		t.Fatal("Init() created = false, want true")
+	}
+	assertProjectConfigFile(t, filepath.Join(repoDir, configPath), config)
+	assertProjectConfigFile(t, filepath.Join(repo.CommonGitDir, "workbook", "project.json"), config)
 }
 
 type initRequest struct {
@@ -388,6 +493,88 @@ func concurrentInitOnRepository(t *testing.T, repo *Repository, requests ...init
 	close(start)
 	wait.Wait()
 	return results
+}
+
+func concurrentInitOnRepositories(t *testing.T, repositories []*Repository, requests ...initRequest) []initResult {
+	t.Helper()
+	if len(repositories) != len(requests) {
+		t.Fatalf("repository count = %d, request count = %d", len(repositories), len(requests))
+	}
+	results := make([]initResult, len(requests))
+	start := make(chan struct{})
+	ready := make(chan struct{}, len(requests))
+	var wait sync.WaitGroup
+
+	for index, request := range requests {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			ready <- struct{}{}
+			<-start
+			results[index].config, results[index].created, results[index].err =
+				repositories[index].Init(context.Background(), request.key, request.ids)
+		}()
+	}
+	for range requests {
+		<-ready
+	}
+	close(start)
+	wait.Wait()
+	return results
+}
+
+func linkedWorktreeRepositories(t *testing.T) []*Repository {
+	t.Helper()
+	repoDir := testrepo.New(t)
+	gitRun(t, repoDir, "commit", "--allow-empty", "--quiet", "-m", "initial")
+	linkedDir := filepath.Join(t.TempDir(), "linked")
+	gitRun(t, repoDir, "worktree", "add", "--detach", "--quiet", linkedDir, "HEAD")
+	t.Cleanup(func() { gitRun(t, repoDir, "worktree", "remove", "--force", linkedDir) })
+
+	repositories := make([]*Repository, 0, 2)
+	for _, directory := range []string{repoDir, linkedDir} {
+		repo, err := Open(context.Background(), directory)
+		if err != nil {
+			t.Fatalf("Open(%q) error = %v", directory, err)
+		}
+		repositories = append(repositories, repo)
+	}
+	if repositories[0].CommonGitDir != repositories[1].CommonGitDir {
+		t.Fatalf("linked worktrees have different common Git directories: %q and %q",
+			repositories[0].CommonGitDir,
+			repositories[1].CommonGitDir,
+		)
+	}
+	return repositories
+}
+
+func writeProjectConfigFile(t *testing.T, path string, config core.ProjectConfig) {
+	t.Helper()
+	contents, err := encodeConfig(config)
+	if err != nil {
+		t.Fatalf("encodeConfig() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, contents, 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", path, err)
+	}
+}
+
+func assertProjectConfigFile(t *testing.T, path string, want core.ProjectConfig) {
+	t.Helper()
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+	got, err := decodeConfig(contents)
+	if err != nil {
+		t.Fatalf("decodeConfig(%q) error = %v", path, err)
+	}
+	if got != want {
+		t.Fatalf("config at %q = %#v, want %#v", path, got, want)
+	}
 }
 
 func assertPathMissing(t *testing.T, path string) {
