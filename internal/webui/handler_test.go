@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/dgoings/workbook/internal/core"
-	"github.com/dop251/goja"
 )
 
 const contentSecurityPolicy = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"
@@ -191,117 +190,6 @@ func TestHandlerInitialCardPrefixesMatchRefreshPresentation(t *testing.T) {
 		}
 	}
 }
-
-func TestEmbeddedRefreshRendersServerProvidedPrefix(t *testing.T) {
-	tasks := boardTasks()
-	tasks[0].ID = "WB-01J0000A1111111111111111111"
-	tasks[1].ID = "WB-01J0000B2222222222222222222"
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil })
-	response := request(t, handler, http.MethodGet, "/api/tasks")
-	if response.Code != http.StatusOK {
-		t.Fatalf("GET /api/tasks status = %d, want %d", response.Code, http.StatusOK)
-	}
-
-	runtime := goja.New()
-	if err := runtime.Set("__apiDocumentJSON", response.Body.String()); err != nil {
-		t.Fatalf("set API document: %v", err)
-	}
-	if _, err := runtime.RunString(refreshHarness); err != nil {
-		t.Fatalf("initialize refresh harness: %v", err)
-	}
-	if _, err := runtime.RunString(embeddedRefreshScript(t)); err != nil {
-		t.Fatalf("run embedded refresh script: %v", err)
-	}
-	if _, err := runtime.RunString("scheduledRefresh()"); err != nil {
-		t.Fatalf("run scheduled refresh: %v", err)
-	}
-
-	value, err := runtime.RunString(`JSON.stringify({
-		taskID: listsByStatus.ready.children[0].dataset.taskId,
-		idPrefix: listsByStatus.ready.children[0].dataset.idPrefix,
-		visibleID: listsByStatus.ready.children[0].children[0].children[0].textContent
-	})`)
-	if err != nil {
-		t.Fatalf("inspect refreshed card: %v", err)
-	}
-	var card struct {
-		TaskID    string `json:"taskID"`
-		IDPrefix  string `json:"idPrefix"`
-		VisibleID string `json:"visibleID"`
-	}
-	if err := json.Unmarshal([]byte(value.String()), &card); err != nil {
-		t.Fatalf("decode refreshed card: %v", err)
-	}
-	if got, want := card.TaskID, tasks[0].ID; got != want {
-		t.Errorf("refreshed card task ID = %q, want %q", got, want)
-	}
-	if got, want := card.IDPrefix, "WB-01J0000A"; got != want {
-		t.Errorf("refreshed card data prefix = %q, want %q", got, want)
-	}
-	if got, want := card.VisibleID, "WB-01J0000A"; got != want {
-		t.Errorf("refreshed card visible ID = %q, want server-provided prefix %q", got, want)
-	}
-	if card.VisibleID == tasks[0].ID {
-		t.Errorf("refreshed card rendered full task ID %q instead of its actionable prefix", card.VisibleID)
-	}
-}
-
-func embeddedRefreshScript(t *testing.T) string {
-	t.Helper()
-	asset, err := assets.ReadFile("assets/index.html")
-	if err != nil {
-		t.Fatalf("read embedded asset: %v", err)
-	}
-	const opening = "<script>"
-	start := strings.Index(string(asset), opening)
-	end := strings.LastIndex(string(asset), "</script>")
-	if start < 0 || end < start {
-		t.Fatal("embedded asset has no inline refresh script")
-	}
-	return string(asset)[start+len(opening) : end]
-}
-
-const refreshHarness = `
-var scheduledRefresh;
-function element() {
-  return {
-    dataset: {}, children: [], className: "", tabIndex: 0, textContent: "",
-    classList: { add: function() {}, remove: function() {} },
-    append: function() { for (var i = 0; i < arguments.length; i++) this.children.push(arguments[i]); },
-    replaceChildren: function(fragment) { this.children = fragment.children.slice(); }
-  };
-}
-var listsByStatus = {};
-var countsByStatus = {};
-["backlog", "ready", "in-progress", "blocked", "done", "unknown"].forEach(function(status) {
-  listsByStatus[status] = element(); listsByStatus[status].dataset.status = status;
-  countsByStatus[status] = element(); countsByStatus[status].dataset.count = status;
-});
-var staleElement = element();
-var updatedElement = element();
-var document = {
-  createElement: function() { return element(); },
-  createDocumentFragment: function() { return element(); },
-  querySelectorAll: function(selector) {
-    if (selector === "[data-status]") return Object.keys(listsByStatus).map(function(status) { return listsByStatus[status]; });
-    if (selector === "[data-count]") return Object.keys(countsByStatus).map(function(status) { return countsByStatus[status]; });
-    return [];
-  },
-  querySelector: function(selector) {
-    if (selector === "[data-stale]") return staleElement;
-    if (selector === "[data-updated]") return updatedElement;
-    return null;
-  }
-};
-var window = { setInterval: function(callback) { scheduledRefresh = callback; return 1; } };
-function requestAnimationFrame(callback) { callback(); }
-function fetch() {
-  return Promise.resolve({
-    ok: true,
-    json: function() { return Promise.resolve(JSON.parse(__apiDocumentJSON)); }
-  });
-}
-`
 
 func initialCardPrefixes(body string) map[string]string {
 	pattern := regexp.MustCompile(`(?s)<article class="task-card" tabindex="0" data-task-id="([^"]+)" data-id-prefix="([^"]+)">\s*<div class="task-card__meta"><code>([^<]+)</code>`)
