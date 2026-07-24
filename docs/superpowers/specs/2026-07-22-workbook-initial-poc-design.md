@@ -63,8 +63,8 @@ The POC uses a thin Git-native vertical slice:
    item as a Workbook task.
 4. Add rank/reordering, dependencies, cycle rejection, and `workbook next`.
 5. Add the disposable SQLite projection and reconstruction command.
-6. Add the terminal table and board renderers.
-7. Add the embedded read-only web board.
+6. Add the terminal table and board renderers. **Implemented.**
+7. Add the embedded read-only web board. **Implemented.**
 8. Complete integration coverage and align the README with implemented
    behavior.
 
@@ -475,15 +475,11 @@ repeated labels. List supports status, priority, and label filters. A successful
 mutation prints the resulting task. A successful delete prints the tombstoned
 task, so scripts can record exactly what changed.
 
-After the dogfooding checkpoint, the CLI adds:
+The initial POC now includes the following board commands; the preceding
+ordering, dependency, next-task, and rebuild commands remain proposed:
 
 ```text
-workbook move <id> (--before <id> | --after <id>) [--json]
-workbook depend <id> --on <id> [--json]
-workbook undepend <id> --on <id> [--json]
-workbook next [--json]
-workbook rebuild [--json]
-workbook board [--json]
+workbook board [--wide | --narrow] [--json]
 workbook serve [--addr 127.0.0.1:7331]
 ```
 
@@ -614,9 +610,9 @@ executable and places it in a caller-selected directory, defaulting to a
 prints the PATH change required when the destination is not already
 discoverable.
 
-Go is not currently installed in the development environment, so installing a
-supported Go toolchain is an explicit prerequisite in the implementation plan.
-Homebrew distribution is deferred, but the single-executable layout and
+Go is available in the development environment; a supported Go toolchain remains
+a source-installation prerequisite. Homebrew distribution is deferred, but the
+single-executable layout and
 embedded web assets keep that future packaging path straightforward.
 
 ## Validation and failure behavior

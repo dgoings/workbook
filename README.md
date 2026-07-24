@@ -7,9 +7,10 @@ a hosted issue tracker. The current local CLI stores task operations durably in
 Git objects and refs. The intended architecture adds Git-remote synchronization
 and a disposable SQLite materialized view.
 
-> **Status:** initial local POC. Repository initialization and local task CRUD are
-> implemented on the POC branch. Task ordering, SQLite projection, terminal and
-> web boards, remote synchronization, and packaged distribution remain proposed.
+> **Status:** initial local POC. Repository initialization, local task CRUD, and
+> read-only terminal and web boards are implemented. Task ordering and
+> dependencies, SQLite projection, remote synchronization, and packaged
+> distribution remain proposed.
 
 ## Why Workbook?
 
@@ -81,24 +82,65 @@ the `PATH` export needed to run it.
 
 ## Implemented POC commands
 
-The current CLI implements these six local commands. Each supports human-readable
-output and a machine-readable `--json` mode:
+The current CLI implements these local commands. Commands marked `--json` support
+both human-readable output and a versioned machine-readable result envelope:
 
 ```text
 workbook init
 workbook create
 workbook list
+workbook board [--wide | --narrow] [--json]
 workbook show
 workbook update
 workbook delete
+workbook serve [--addr 127.0.0.1:7331]
 ```
 
 `workbook init` creates a tracked `.workbook/config.json` with the project ID and
 key. Create, update, and delete append immutable task commits under
 `refs/workbook/tasks/`; delete records a tombstone instead of removing the ref.
-List and show read the current task checkpoint from each task ref's tip. The
-current POC does not yet implement dependency-aware ordering, SQLite, terminal or
-web boards, remote operations, claims, or implementation links.
+List and show read the current task checkpoint from each task ref's tip. `board`
+uses the same core task order and presents an actionable, unambiguous task-ID
+prefix with each card's priority, title, and labels. Its JSON output retains full
+task IDs, descriptions, and the rest of the task data. The current POC does not
+yet implement dependency-aware ordering, SQLite, remote operations, claims, or
+implementation links.
+
+### Terminal board
+
+`workbook board` automatically chooses its five-column wide layout on an
+interactive terminal at least 140 columns wide. It uses vertically stacked status
+sections for narrow or noninteractive output; `--wide` and `--narrow` force the
+respective layouts. The task-ID prefixes in human output are accepted anywhere a
+task ID is accepted.
+
+### Read-only web board
+
+`workbook serve` starts a foreground, loopback-only board at
+`http://127.0.0.1:7331` by default. In fish, run it in the foreground with:
+
+```fish
+workbook serve
+```
+
+Or run it in the background with:
+
+```fish
+workbook serve &
+```
+
+The embedded page and its API expose exactly these read-only routes:
+
+```text
+GET /             board HTML
+GET /api/tasks    versioned task JSON
+GET /healthz      versioned health JSON
+```
+
+There are no mutation routes; a non-GET request to a known route receives `405`
+with `Allow: GET`. The executable embeds its HTML, CSS, and JavaScript, and the
+page polls `/api/tasks` every two seconds. Web cards show the actionable task-ID
+prefix, priority, title, optional description, and labels.
 
 ### Project identity across worktrees
 
@@ -333,13 +375,12 @@ At least initially, Workbook is not intended to provide:
 ## POC roadmap
 
 The POC now has versioned operation and state documents, local Git object/ref CRUD,
-structured CLI output, and repository initialization. Remaining work is:
+structured CLI output, repository initialization, and read-only terminal and web
+boards. Remaining work is:
 
 1. Add exact task ordering, dependencies, cycle rejection, and next selection.
 2. Implement deterministic SQLite projection and rebuilds from tip checkpoints.
-3. Render wide and narrow terminal task tables and an ASCII board.
-4. Serve a read-only web Kanban board.
-5. Complete replay, reconstruction, Git hash, renderer, HTTP, installer, and
+3. Complete replay, reconstruction, Git hash, renderer, HTTP, installer, and
    documentation acceptance coverage.
 
 Remote synchronization, claims, conflict reconciliation, packaged distribution,

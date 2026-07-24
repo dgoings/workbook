@@ -589,8 +589,9 @@ func TestREADMEImplementedCommands(t *testing.T) {
 	}
 
 	implemented, proposed := readmeCommandSections(t, string(contents))
+	commandList := firstFencedCodeBlock(t, implemented)
 	var got []string
-	for _, line := range strings.Split(implemented, "\n") {
+	for _, line := range strings.Split(commandList, "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "workbook ") {
 			got = append(got, line)
@@ -600,9 +601,11 @@ func TestREADMEImplementedCommands(t *testing.T) {
 		"workbook init",
 		"workbook create",
 		"workbook list",
+		"workbook board [--wide | --narrow] [--json]",
 		"workbook show",
 		"workbook update",
 		"workbook delete",
+		"workbook serve [--addr 127.0.0.1:7331]",
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("implemented commands = %q, want exactly %q", got, want)
@@ -674,10 +677,10 @@ func TestREADMEDocumentsCommonProjectIdentityGuard(t *testing.T) {
 }
 
 func TestREADMECommandPolicyRejectsUnimplementedCommandOutsideProposedSection(t *testing.T) {
-	const claim = "## Current workflow\n\nRun `workbook serve` to start the board.\n"
+	const claim = "## Current workflow\n\nRun `workbook claim` to acquire work.\n"
 	violations := readmeCommandPolicyViolations(claim)
-	if len(violations) != 1 || !strings.Contains(violations[0], `"serve"`) {
-		t.Fatalf("violations = %q, want one for workbook serve", violations)
+	if len(violations) != 1 || !strings.Contains(violations[0], `"claim"`) {
+		t.Fatalf("violations = %q, want one for workbook claim", violations)
 	}
 
 	const proposal = "## Proposed web workflow\n\nA future release may run `workbook serve`.\n"
@@ -695,8 +698,8 @@ func assertREADMECommandPolicy(t *testing.T, readme string) {
 
 func readmeCommandPolicyViolations(readme string) []string {
 	implemented := map[string]bool{
-		"init": true, "create": true, "list": true,
-		"show": true, "update": true, "delete": true,
+		"init": true, "create": true, "list": true, "board": true,
+		"show": true, "update": true, "delete": true, "serve": true,
 	}
 	commandPattern := regexp.MustCompile(`\bworkbook ([a-z][a-z0-9-]*)\b`)
 	var h2, h3 string
@@ -746,6 +749,21 @@ func readmeCommandSections(t *testing.T, readme string) (string, string) {
 		proposed = proposed[:nextHeading]
 	}
 	return implemented, proposed
+}
+
+func firstFencedCodeBlock(t *testing.T, section string) string {
+	t.Helper()
+	const fence = "```"
+	start := strings.Index(section, fence)
+	if start < 0 {
+		t.Fatal("README implemented-command section has no code block")
+	}
+	section = section[start+len(fence):]
+	end := strings.Index(section, fence)
+	if end < 0 {
+		t.Fatal("README implemented-command code block is unterminated")
+	}
+	return section[:end]
 }
 
 func TestRunServeRejectsInvalidArguments(t *testing.T) {
