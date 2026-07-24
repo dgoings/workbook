@@ -111,31 +111,26 @@ func renderWideBoard(w io.Writer, board presentation.Board, width int) error {
 	var output strings.Builder
 	output.WriteString(border)
 	output.WriteByte('\n')
-	writeWideRow(&output, columns, contentWidth, func(column presentation.Column, _ int) string {
+	writeWideRow(&output, columns, contentWidth, true, func(column presentation.Column, _ int) string {
 		return column.Label + " (" + itoa(len(column.Tasks)) + ")"
 	})
 	output.WriteString(border)
 	output.WriteByte('\n')
 
+	columnLines := make([][]string, len(columns))
 	rows := 1
-	for _, column := range columns {
-		rows = max(rows, len(column.Tasks)*3)
+	for index, column := range columns {
+		for _, task := range column.Tasks {
+			columnLines[index] = append(columnLines[index], wideCardLines(task, contentWidth)...)
+		}
+		rows = max(rows, len(columnLines[index]))
 	}
 	for row := 0; row < rows; row++ {
-		writeWideRow(&output, columns, contentWidth, func(column presentation.Column, _ int) string {
-			taskIndex := row / 3
-			if taskIndex >= len(column.Tasks) {
+		writeWideRow(&output, columns, contentWidth, false, func(_ presentation.Column, index int) string {
+			if row >= len(columnLines[index]) {
 				return ""
 			}
-			task := column.Tasks[taskIndex]
-			switch row % 3 {
-			case 0:
-				return task.IDPrefix + " [" + priorityMarker(task.Task.Priority) + "]"
-			case 1:
-				return task.Task.Title
-			default:
-				return strings.Join(task.Task.Labels, ",")
-			}
+			return columnLines[index][row]
 		})
 	}
 	output.WriteString(border)
@@ -177,13 +172,49 @@ func writeListRow(output *strings.Builder, idWidth, titleWidth, statusWidth, pri
 	output.WriteByte('\n')
 }
 
-func writeWideRow(output *strings.Builder, columns []presentation.Column, contentWidth int, value func(presentation.Column, int) string) {
+func writeWideRow(output *strings.Builder, columns []presentation.Column, contentWidth int, truncate bool, value func(presentation.Column, int) string) {
 	for index, column := range columns {
+		cell := value(column, index)
+		if truncate {
+			cell = fit(cell, contentWidth)
+		}
 		output.WriteString("| ")
-		output.WriteString(pad(fit(value(column, index), contentWidth), contentWidth))
+		output.WriteString(pad(cell, contentWidth))
 		output.WriteByte(' ')
 	}
 	output.WriteString("|\n")
+}
+
+func wideCardLines(task presentation.TaskView, width int) []string {
+	lines := wrapWideMetadata(task.IDPrefix, " ["+priorityMarker(task.Task.Priority)+"]", width)
+	lines = append(lines, fit(task.Task.Title, width), fit(strings.Join(task.Task.Labels, ","), width))
+	return lines
+}
+
+func wrapWideMetadata(prefix, marker string, width int) []string {
+	width = max(1, width)
+	lines := splitASCII(prefix, width)
+	if len(lines) == 0 {
+		return splitASCII(marker, width)
+	}
+	last := len(lines) - 1
+	if len(lines[last])+len(marker) <= width {
+		lines[last] += marker
+		return lines
+	}
+	return append(lines, splitASCII(marker, width)...)
+}
+
+func splitASCII(value string, width int) []string {
+	if value == "" {
+		return nil
+	}
+	lines := make([]string, 0, (len(value)+width-1)/width)
+	for len(value) > width {
+		lines = append(lines, value[:width])
+		value = value[width:]
+	}
+	return append(lines, value)
 }
 
 func narrowSection(label string, tasks []presentation.TaskView, width int) string {

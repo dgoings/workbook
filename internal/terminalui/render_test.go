@@ -2,6 +2,7 @@ package terminalui
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -85,6 +86,44 @@ func TestRenderBoardWideGolden(t *testing.T) {
 		"+--------------------------+--------------------------+--------------------------+--------------------------+--------------------------+\n"
 	if got := output.String(); got != want {
 		t.Fatalf("RenderBoard() =\n%q\nwant\n%q", got, want)
+	}
+}
+
+func TestRenderBoardWidePreservesLongUniquePrefixes(t *testing.T) {
+	board := presentation.NewBoard([]core.Task{
+		{
+			ID: "WB-01ARZ3NDEKTSV4RRFFQ69G5FAV",
+			TaskData: core.TaskData{
+				Title:    "First",
+				Status:   core.StatusBacklog,
+				Priority: core.PriorityHigh,
+			},
+		},
+		{
+			ID: "WB-01ARZ3NDEKTSV4RRFFQ69G5FAW",
+			TaskData: core.TaskData{
+				Title:    "Second",
+				Status:   core.StatusBacklog,
+				Priority: core.PriorityMedium,
+			},
+		},
+	})
+
+	var output bytes.Buffer
+	if err := RenderBoard(&output, board, LayoutWide, 100); err != nil {
+		t.Fatalf("RenderBoard() error = %v", err)
+	}
+
+	last := -1
+	for _, want := range []string{
+		"WB-01ARZ3NDEKTSV", "4RRFFQ69G5FAV", "[H]",
+		"WB-01ARZ3NDEKTSV", "4RRFFQ69G5FAW", "[M]",
+	} {
+		position := strings.Index(output.String()[last+1:], want)
+		if position < 0 {
+			t.Fatalf("wide board = %q, missing actionable metadata %q", output.String(), want)
+		}
+		last += position + len(want)
 	}
 }
 
