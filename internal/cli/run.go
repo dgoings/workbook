@@ -37,6 +37,8 @@ func Run(ctx context.Context, args []string, cwd string, stdout, stderr io.Write
 		err = runCreate(ctx, commandArgs, cwd, stdout)
 	case "list":
 		err = runList(ctx, commandArgs, cwd, stdout)
+	case "board":
+		err = runBoard(ctx, commandArgs, cwd, stdout)
 	case "show":
 		err = runShow(ctx, commandArgs, cwd, stdout)
 	case "update":
@@ -162,7 +164,9 @@ func runList(ctx context.Context, args []string, cwd string, stdout io.Writer) e
 	if *jsonMode {
 		writeResult(stdout, "list", tasks)
 	} else {
-		writeList(stdout, tasks)
+		if err := writeList(stdout, tasks); err != nil {
+			return core.Wrap(core.CategoryOperational, "render list", err)
+		}
 	}
 	return nil
 }

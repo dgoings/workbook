@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/terminalui"
 )
 
 const usage = `Usage: workbook <command> [arguments]
@@ -16,6 +17,7 @@ Commands:
   init [--key WB]
   create <title> [options]
   list [options]
+  board [--wide | --narrow] [--json]
   show <id-or-prefix> [--json]
   update <id-or-prefix> [options]
   delete <id-or-prefix> [--json]
@@ -82,17 +84,12 @@ func writeMutation(output io.Writer, task core.Task) {
 	fmt.Fprintf(output, "%s\t%s\t%s\t%s\n", task.ID, task.Status, task.Priority, task.Title)
 }
 
-func writeList(output io.Writer, tasks []core.Task) {
-	fmt.Fprintln(output, "ID\tTITLE\tSTATUS\tPRIORITY\tLABELS")
-	for _, task := range tasks {
-		fmt.Fprintf(output, "%s\t%s\t%s\t%s\t%s\n",
-			task.ID,
-			task.Title,
-			task.Status,
-			task.Priority,
-			strings.Join(task.Labels, ","),
-		)
+func writeList(output io.Writer, tasks []core.Task) error {
+	width, measured := terminalWidth(output)
+	if !measured {
+		width = nonInteractiveWidth
 	}
+	return terminalui.RenderList(output, tasks, width)
 }
 
 func writeShow(output io.Writer, task core.Task) {

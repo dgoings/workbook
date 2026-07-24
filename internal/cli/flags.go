@@ -52,6 +52,13 @@ var commandSchemas = map[string]commandSchema{
 			"json":     boolFlag,
 		},
 	},
+	"board": {
+		flags: map[string]flagKind{
+			"wide":   boolFlag,
+			"narrow": boolFlag,
+			"json":   boolFlag,
+		},
+	},
 	"show": {
 		requiredFirstArgument: true,
 		flags: map[string]flagKind{

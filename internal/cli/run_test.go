@@ -416,11 +416,11 @@ func TestRunCRUDLifecycleAndOutputContracts(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("list code = %d, want 0; stderr = %q", code, stderr)
 	}
-	if !strings.HasPrefix(stdout, "ID\tTITLE\tSTATUS\tPRIORITY\tLABELS\n") {
-		t.Fatalf("list stdout = %q, want header", stdout)
+	if strings.Contains(stdout, "\t") || !strings.HasPrefix(stdout, "ID") {
+		t.Fatalf("list stdout = %q, want responsive table", stdout)
 	}
-	if !strings.Contains(stdout, created.ID+"\t"+title+"\tready\thigh\tagent,backend\n") {
-		t.Fatalf("list stdout = %q, want complete task row", stdout)
+	if !strings.Contains(stdout, created.ID) || !strings.Contains(stdout, "A full task title th...") || !strings.Contains(stdout, "agent,backend") {
+		t.Fatalf("list stdout = %q, want task ID and deterministic terminal preview", stdout)
 	}
 
 	prefix := created.ID[:12]
