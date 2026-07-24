@@ -18,7 +18,8 @@ type Column struct {
 }
 
 type Board struct {
-	Columns []Column
+	Columns      []Column
+	UnknownTasks []TaskView
 }
 
 var columnDefinitions = [...]struct {
@@ -50,11 +51,16 @@ func NewBoard(tasks []core.Task) Board {
 	}
 
 	for _, task := range TaskViews(tasks) {
+		matched := false
 		for i := range board.Columns {
 			if board.Columns[i].Status == task.Task.Status {
 				board.Columns[i].Tasks = append(board.Columns[i].Tasks, task)
+				matched = true
 				break
 			}
+		}
+		if !matched {
+			board.UnknownTasks = append(board.UnknownTasks, task)
 		}
 	}
 	return board

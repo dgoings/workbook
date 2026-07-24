@@ -139,6 +139,51 @@ func TestNewBoardPreservesInputOrderAndIncludesEmptyColumns(t *testing.T) {
 	}
 }
 
+func TestNewBoardKeepsUnknownStatusesVisible(t *testing.T) {
+	tasks := []core.Task{
+		{ID: "WB-01ARZ3NDEKTSV4RRFFQ69G5FAV", TaskData: core.TaskData{Status: core.StatusReady}},
+		{ID: "WB-01BRZ3NDEKTSV4RRFFQ69G5FAW", TaskData: core.TaskData{Status: "future"}},
+		{ID: "WB-01CRZ3NDEKTSV4RRFFQ69G5FAX", TaskData: core.TaskData{Status: core.StatusDone}},
+		{ID: "WB-01DRZ3NDEKTSV4RRFFQ69G5FAY", TaskData: core.TaskData{Status: "archived"}},
+	}
+
+	got := NewBoard(tasks)
+	if len(got.Columns) != 5 {
+		t.Fatalf("NewBoard() returned %d columns, want 5", len(got.Columns))
+	}
+	for i, want := range []struct {
+		status core.Status
+		label  string
+		ids    []string
+	}{
+		{core.StatusBacklog, "Backlog", []string{}},
+		{core.StatusReady, "Ready", []string{"WB-01ARZ3NDEKTSV4RRFFQ69G5FAV"}},
+		{core.StatusInProgress, "In progress", []string{}},
+		{core.StatusBlocked, "Blocked", []string{}},
+		{core.StatusDone, "Done", []string{"WB-01CRZ3NDEKTSV4RRFFQ69G5FAX"}},
+	} {
+		column := got.Columns[i]
+		if column.Status != want.status || column.Label != want.label {
+			t.Errorf("NewBoard().Columns[%d] = {%q, %q}, want {%q, %q}", i, column.Status, column.Label, want.status, want.label)
+		}
+		ids := make([]string, len(column.Tasks))
+		for j, task := range column.Tasks {
+			ids[j] = task.Task.ID
+		}
+		if !reflect.DeepEqual(ids, want.ids) {
+			t.Errorf("NewBoard().Columns[%d] task IDs = %#v, want %#v", i, ids, want.ids)
+		}
+	}
+
+	unknownIDs := make([]string, len(got.UnknownTasks))
+	for i, task := range got.UnknownTasks {
+		unknownIDs[i] = task.Task.ID
+	}
+	if want := []string{"WB-01BRZ3NDEKTSV4RRFFQ69G5FAW", "WB-01DRZ3NDEKTSV4RRFFQ69G5FAY"}; !reflect.DeepEqual(unknownIDs, want) {
+		t.Errorf("NewBoard().UnknownTasks IDs = %#v, want %#v", unknownIDs, want)
+	}
+}
+
 func assertUniquePrefix(t *testing.T, tasks []core.Task, prefix string) {
 	t.Helper()
 	matches := 0
