@@ -104,6 +104,58 @@ func TestHandlerRefreshesTasksOnEveryAPIRequest(t *testing.T) {
 	}
 }
 
+func TestHandlerProvidesActionablePrefixesForRefresh(t *testing.T) {
+	tasks := boardTasks()
+	tasks[0].ID = "WB-01J0000A1111111111111111111"
+	tasks[1].ID = "WB-01J0000B2222222222222222222"
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil })
+
+	response := request(t, handler, http.MethodGet, "/api/tasks")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /api/tasks status = %d, want %d", response.Code, http.StatusOK)
+	}
+	var document struct {
+		Format       string      `json:"format"`
+		Version      int         `json:"version"`
+		Tasks        []core.Task `json:"tasks"`
+		Presentation []struct {
+			TaskID   string `json:"taskId"`
+			IDPrefix string `json:"idPrefix"`
+		} `json:"presentation"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+		t.Fatalf("decode task document: %v", err)
+	}
+	if !reflect.DeepEqual(document.Tasks, tasks) {
+		t.Errorf("task document tasks = %#v, want full values %#v", document.Tasks, tasks)
+	}
+	prefixes := make(map[string]string, len(document.Presentation))
+	for _, view := range document.Presentation {
+		prefixes[view.TaskID] = view.IDPrefix
+	}
+	if got, want := prefixes[tasks[0].ID], "WB-01J0000A"; got != want {
+		t.Errorf("first ID prefix = %q, want %q", got, want)
+	}
+	if got, want := prefixes[tasks[1].ID], "WB-01J0000B"; got != want {
+		t.Errorf("second ID prefix = %q, want %q", got, want)
+	}
+	if len(prefixes) != len(tasks) {
+		t.Errorf("presentation prefix count = %d, want %d", len(prefixes), len(tasks))
+	}
+
+	page := request(t, handler, http.MethodGet, "/")
+	body := page.Body.String()
+	if !strings.Contains(body, "document.presentation") {
+		t.Error("embedded refresh script does not read server presentation data")
+	}
+	if !strings.Contains(body, "text(id, idPrefix)") {
+		t.Error("embedded refresh script does not render the server-provided ID prefix")
+	}
+	if strings.Contains(body, "text(id, task.id)") {
+		t.Error("embedded refresh script renders full task IDs instead of server-provided prefixes")
+	}
+}
+
 func TestHandlerRejectsUnknownRoutesAndMutationMethods(t *testing.T) {
 	handler := NewHandler(func(context.Context) ([]core.Task, error) { return boardTasks(), nil })
 

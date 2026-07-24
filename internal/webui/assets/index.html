@@ -80,10 +80,10 @@
       const updated = document.querySelector("[data-updated]");
 
       function text(element, value) { element.textContent = value || ""; return element; }
-      function card(task) {
+      function card(task, idPrefix) {
         const article = document.createElement("article"); article.className = "task-card"; article.tabIndex = 0;
         const meta = document.createElement("div"); meta.className = "task-card__meta";
-        const id = document.createElement("code"); text(id, task.id);
+        const id = document.createElement("code"); text(id, idPrefix);
         const priority = document.createElement("span"); priority.className = "priority priority--" + task.priority; text(priority, task.priority);
         meta.append(id, priority); article.append(meta);
         const title = document.createElement("h3"); text(title, task.title); article.append(title);
@@ -91,12 +91,12 @@
         if (task.labels && task.labels.length) { const labels = document.createElement("div"); labels.className = "labels"; task.labels.forEach((label) => { const item = document.createElement("span"); item.className = "label"; text(item, label); labels.append(item); }); article.append(labels); }
         return article;
       }
-      function render(tasks) {
+      function render(tasks, presentation) {
         const grouped = new Map([...lists.keys()].map((status) => [status, []]));
         tasks.forEach((task) => grouped.get(statuses.has(task.status) ? task.status : "unknown").push(task));
         grouped.forEach((items, status) => {
           const list = lists.get(status); list.classList.add("is-refreshing");
-          const fragment = document.createDocumentFragment(); items.forEach((task) => fragment.append(card(task)));
+          const fragment = document.createDocumentFragment(); items.forEach((task) => fragment.append(card(task, presentation.get(task.id))));
           list.replaceChildren(fragment);
           requestAnimationFrame(() => requestAnimationFrame(() => list.classList.remove("is-refreshing")));
           text(counts.get(status), String(items.length));
@@ -106,8 +106,10 @@
         try {
           const response = await fetch("/api/tasks", { cache: "no-store" });
           const document = await response.json();
-          if (!response.ok || document.format !== "workbook.tasks" || document.version !== 1 || !Array.isArray(document.tasks)) throw new Error("invalid task document");
-          render(document.tasks); stale.dataset.visible = "false"; text(updated, "Updated " + new Date().toLocaleTimeString());
+          if (!response.ok || document.format !== "workbook.tasks" || document.version !== 1 || !Array.isArray(document.tasks) || !Array.isArray(document.presentation)) throw new Error("invalid task document");
+          const presentation = new Map(document.presentation.map((view) => [view.taskId, view.idPrefix]));
+          if (presentation.size !== document.tasks.length || document.tasks.some((task) => !presentation.has(task.id))) throw new Error("invalid task presentation");
+          render(document.tasks, presentation); stale.dataset.visible = "false"; text(updated, "Updated " + new Date().toLocaleTimeString());
         } catch (_) { stale.dataset.visible = "true"; }
       }
       window.setInterval(refresh, 2000);

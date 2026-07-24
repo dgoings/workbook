@@ -20,9 +20,15 @@ var assets embed.FS
 type TaskLister func(context.Context) ([]core.Task, error)
 
 type TasksDocument struct {
-	Format  string      `json:"format"`
-	Version int         `json:"version"`
-	Tasks   []core.Task `json:"tasks"`
+	Format       string             `json:"format"`
+	Version      int                `json:"version"`
+	Tasks        []core.Task        `json:"tasks"`
+	Presentation []TaskPresentation `json:"presentation"`
+}
+
+type TaskPresentation struct {
+	TaskID   string `json:"taskId"`
+	IDPrefix string `json:"idPrefix"`
 }
 
 type HealthDocument struct {
@@ -100,10 +106,20 @@ func (handler *handler) serveTasks(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	writeJSON(writer, http.StatusOK, TasksDocument{
-		Format:  "workbook.tasks",
-		Version: 1,
-		Tasks:   tasks,
+		Format:       "workbook.tasks",
+		Version:      1,
+		Tasks:        tasks,
+		Presentation: taskPresentation(tasks),
 	})
+}
+
+func taskPresentation(tasks []core.Task) []TaskPresentation {
+	views := presentation.TaskViews(tasks)
+	result := make([]TaskPresentation, len(views))
+	for index, view := range views {
+		result[index] = TaskPresentation{TaskID: view.Task.ID, IDPrefix: view.IDPrefix}
+	}
+	return result
 }
 
 func (handler *handler) serveHealth(writer http.ResponseWriter, _ *http.Request) {
