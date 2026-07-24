@@ -1,5 +1,5 @@
 {{ define "task" }}
-<article class="task-card" tabindex="0">
+<article class="task-card" tabindex="0" data-task-id="{{ .Task.ID }}" data-id-prefix="{{ .IDPrefix }}">
   <div class="task-card__meta"><code>{{ .IDPrefix }}</code><span class="priority priority--{{ .Task.Priority }}">{{ .Task.Priority }}</span></div>
   <h3>{{ .Task.Title }}</h3>
   {{ if .Task.Description }}<p>{{ .Task.Description }}</p>{{ end }}
@@ -81,7 +81,7 @@
 
       function text(element, value) { element.textContent = value || ""; return element; }
       function card(task, idPrefix) {
-        const article = document.createElement("article"); article.className = "task-card"; article.tabIndex = 0;
+        const article = document.createElement("article"); article.className = "task-card"; article.tabIndex = 0; article.dataset.taskId = task.id; article.dataset.idPrefix = idPrefix;
         const meta = document.createElement("div"); meta.className = "task-card__meta";
         const id = document.createElement("code"); text(id, idPrefix);
         const priority = document.createElement("span"); priority.className = "priority priority--" + task.priority; text(priority, task.priority);

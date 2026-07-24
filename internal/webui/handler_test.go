@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -154,6 +155,51 @@ func TestHandlerProvidesActionablePrefixesForRefresh(t *testing.T) {
 	if strings.Contains(body, "text(id, task.id)") {
 		t.Error("embedded refresh script renders full task IDs instead of server-provided prefixes")
 	}
+}
+
+func TestHandlerInitialCardPrefixesMatchRefreshPresentation(t *testing.T) {
+	tasks := boardTasks()
+	tasks[0].ID = "WB-01J0000A1111111111111111111"
+	tasks[1].ID = "WB-01J0000B2222222222222222222"
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil })
+
+	initial := request(t, handler, http.MethodGet, "/")
+	if initial.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d, want %d", initial.Code, http.StatusOK)
+	}
+	cards := initialCardPrefixes(initial.Body.String())
+	if len(cards) != len(tasks) {
+		t.Fatalf("initial rendered cards = %#v, want one task identity and prefix for each of %#v", cards, tasks)
+	}
+
+	refreshed := request(t, handler, http.MethodGet, "/api/tasks")
+	if refreshed.Code != http.StatusOK {
+		t.Fatalf("GET /api/tasks status = %d, want %d", refreshed.Code, http.StatusOK)
+	}
+	var document TasksDocument
+	if err := json.Unmarshal(refreshed.Body.Bytes(), &document); err != nil {
+		t.Fatalf("decode refreshed task document: %v", err)
+	}
+	prefixes := make(map[string]string, len(document.Presentation))
+	for _, view := range document.Presentation {
+		prefixes[view.TaskID] = view.IDPrefix
+	}
+	for taskID, initialPrefix := range cards {
+		if got := prefixes[taskID]; got != initialPrefix {
+			t.Errorf("refresh presentation prefix for %q = %q, want initial rendered prefix %q", taskID, got, initialPrefix)
+		}
+	}
+}
+
+func initialCardPrefixes(body string) map[string]string {
+	pattern := regexp.MustCompile(`(?s)<article class="task-card" tabindex="0" data-task-id="([^"]+)" data-id-prefix="([^"]+)">\s*<div class="task-card__meta"><code>([^<]+)</code>`)
+	cards := make(map[string]string)
+	for _, match := range pattern.FindAllStringSubmatch(body, -1) {
+		if match[2] == match[3] {
+			cards[match[1]] = match[2]
+		}
+	}
+	return cards
 }
 
 func TestHandlerRejectsUnknownRoutesAndMutationMethods(t *testing.T) {
