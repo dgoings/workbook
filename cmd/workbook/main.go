@@ -3,10 +3,13 @@ package main
 import (
 	"context"
 	"os"
+	"os/signal"
 
 	"github.com/dgoings/workbook/internal/cli"
 )
 
 func main() {
-	os.Exit(cli.Run(context.Background(), os.Args[1:], ".", os.Stdout, os.Stderr))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	os.Exit(cli.Run(ctx, os.Args[1:], ".", os.Stdout, os.Stderr))
 }

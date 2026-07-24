@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -745,6 +746,46 @@ func readmeCommandSections(t *testing.T, readme string) (string, string) {
 		proposed = proposed[:nextHeading]
 	}
 	return implemented, proposed
+}
+
+func TestRunServeRejectsInvalidArguments(t *testing.T) {
+	repository := initializedRepository(t)
+
+	for _, args := range [][]string{
+		{"unexpected"},
+		{"--json"},
+		{"--addr", "127.0.0.1:0", "extra"},
+	} {
+		var stdout, stderr bytes.Buffer
+		err := runServe(context.Background(), args, repository, &stdout, &stderr)
+		if core.CategoryOf(err) != core.CategoryInvocation {
+			t.Errorf("runServe(%q) category = %q, want %q", args, core.CategoryOf(err), core.CategoryInvocation)
+		}
+		if stdout.Len() != 0 {
+			t.Errorf("runServe(%q) stdout = %q, want empty", args, stdout.String())
+		}
+	}
+}
+
+func TestRunServeReportsListenerFailureAsOperational(t *testing.T) {
+	repository := initializedRepository(t)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	var stdout, stderr bytes.Buffer
+	err = runServe(context.Background(), []string{"--addr", listener.Addr().String()}, repository, &stdout, &stderr)
+	if core.CategoryOf(err) != core.CategoryOperational {
+		t.Fatalf("runServe() category = %q, want %q; error = %v", core.CategoryOf(err), core.CategoryOperational, err)
+	}
+	if !strings.Contains(err.Error(), "listen tcp") {
+		t.Fatalf("runServe() error = %q, want listener cause", err)
+	}
+	if stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("runServe() output = stdout %q stderr %q, want empty", stdout.String(), stderr.String())
+	}
 }
 
 func initializedRepository(t *testing.T) string {

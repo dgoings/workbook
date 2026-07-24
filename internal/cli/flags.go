@@ -83,6 +83,11 @@ var commandSchemas = map[string]commandSchema{
 			"json": boolFlag,
 		},
 	},
+	"serve": {
+		flags: map[string]flagKind{
+			"addr": stringFlag,
+		},
+	},
 }
 
 type commandFlagSet struct {

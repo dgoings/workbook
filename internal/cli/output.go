@@ -21,6 +21,7 @@ Commands:
   show <id-or-prefix> [--json]
   update <id-or-prefix> [options]
   delete <id-or-prefix> [--json]
+  serve [--addr 127.0.0.1:7331]
 `
 
 type ResultEnvelope struct {

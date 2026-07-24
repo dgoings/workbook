@@ -1,0 +1,117 @@
+{{ define "task" }}
+<article class="task-card" tabindex="0">
+  <div class="task-card__meta"><code>{{ .IDPrefix }}</code><span class="priority priority--{{ .Task.Priority }}">{{ .Task.Priority }}</span></div>
+  <h3>{{ .Task.Title }}</h3>
+  {{ if .Task.Description }}<p>{{ .Task.Description }}</p>{{ end }}
+  {{ if .Task.Labels }}<div class="labels">{{ range .Task.Labels }}<span class="label">{{ . }}</span>{{ end }}</div>{{ end }}
+</article>
+{{ end }}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Workbook board</title>
+  <style>
+    :root { color-scheme: light; font-family: ui-rounded, "Avenir Next", system-ui, sans-serif; color: #172033; background: #e9eef5; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 20rem; background: #e9eef5; }
+    .skip-link { position: fixed; left: 1rem; top: -4rem; z-index: 2; background: #172033; color: #fff; padding: .55rem .75rem; border-radius: 4px; }
+    .skip-link:focus { top: 1rem; }
+    .app-header { display: flex; align-items: end; justify-content: space-between; gap: 1.25rem; padding: 1.25rem max(1.25rem, calc((100vw - 92rem) / 2)); border-bottom: 1px solid #b9c6d8; background: #fff; }
+    .eyebrow, code, .priority, .label, .ref-label, .updated { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
+    .eyebrow { margin: 0 0 .2rem; color: #2457d6; font-size: .7rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(1.25rem, 2vw, 1.65rem); letter-spacing: -.03em; }
+    .updated { margin: 0; color: #56647a; font-size: .75rem; text-align: right; }
+    main { padding: 1.25rem max(1.25rem, calc((100vw - 92rem) / 2)) 2rem; }
+    .stale { display: none; margin: 0 0 1rem; padding: .55rem .7rem; border-left: 3px solid #b45309; background: #fff6e8; color: #7c3b08; font-size: .875rem; }
+    .stale[data-visible="true"] { display: block; }
+    .board { display: grid; grid-template-columns: repeat(5, minmax(10.5rem, 1fr)); gap: .8rem; overflow-x: auto; padding-bottom: .25rem; }
+    .column { min-width: 10.5rem; border: 1px solid #b9c6d8; background: rgba(255,255,255,.36); }
+    .column__header { min-height: 5.45rem; padding: .7rem .75rem .6rem; border-top: 3px solid #2457d6; border-bottom: 1px solid #b9c6d8; background: #f8faff; }
+    .column__heading { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; margin: 0; font-size: .92rem; }
+    .count { color: #2457d6; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .8rem; }
+    .ref-label { display: block; overflow: hidden; margin-top: .45rem; color: #526b9b; font-size: .65rem; text-overflow: ellipsis; white-space: nowrap; }
+    .task-list { display: grid; gap: .55rem; min-height: 5rem; padding: .55rem; }
+    .task-list.is-refreshing { opacity: .58; }
+    .task-card { border: 1px solid #b9c6d8; border-radius: 4px; background: #fff; padding: .7rem; box-shadow: 0 1px 0 rgba(23,32,51,.05); }
+    .task-card:focus-visible { outline: 3px solid #2457d6; outline-offset: 2px; }
+    .task-card__meta { display: flex; align-items: center; justify-content: space-between; gap: .5rem; color: #526075; font-size: .7rem; }
+    .task-card code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .priority { flex: 0 0 auto; font-size: .64rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+    .priority--high { color: #b42318; } .priority--medium { color: #b45309; } .priority--low { color: #2457d6; }
+    .task-card h3 { margin: .55rem 0 .3rem; font-size: .9rem; line-height: 1.24; overflow-wrap: anywhere; }
+    .task-card p { margin: 0; color: #56647a; font-size: .8rem; line-height: 1.36; overflow-wrap: anywhere; }
+    .labels { display: flex; flex-wrap: wrap; gap: .25rem; margin-top: .65rem; }
+    .label { max-width: 100%; overflow: hidden; padding: .14rem .28rem; border: 1px solid #d5deea; border-radius: 3px; color: #4e5d73; font-size: .64rem; text-overflow: ellipsis; white-space: nowrap; }
+    .unknown { margin-top: 1.1rem; border: 1px solid #b45309; background: #fffaf1; }
+    .unknown .column__header { border-top-color: #b45309; background: #fff7ed; }
+    @media (prefers-reduced-motion: no-preference) { .task-list { transition: opacity 120ms ease; } }
+    @media (max-width: 900px) { .app-header { align-items: start; flex-direction: column; } .updated { text-align: left; } .board { grid-template-columns: 1fr; overflow: visible; } .column { min-width: 0; } }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#board">Skip to task board</a>
+  <header class="app-header">
+    <div><p class="eyebrow">Repository workbench</p><h1>Workbook board</h1></div>
+    <p class="updated" data-updated>Loaded from this checkout</p>
+  </header>
+  <main id="board" tabindex="-1">
+    <p class="stale" data-stale role="status">Task refresh failed. Showing the last successful board.</p>
+    <section class="board" aria-label="Task status board">
+      {{ range .Board.Columns }}
+      <section class="column">
+        <header class="column__header"><h2 class="column__heading">{{ .Label }} <span class="count" data-count="{{ .Status }}">{{ len .Tasks }}</span></h2><code class="ref-label">refs/workbook/status/{{ .Status }}</code></header>
+        <div class="task-list" data-status="{{ .Status }}">{{ range .Tasks }}{{ template "task" . }}{{ end }}</div>
+      </section>
+      {{ end }}
+    </section>
+    <section class="unknown" aria-label="Unrecognized task statuses">
+      <header class="column__header"><h2 class="column__heading">Unrecognized status <span class="count" data-count="unknown">{{ len .Board.UnknownTasks }}</span></h2><code class="ref-label">refs/workbook/status/unrecognized</code></header>
+      <div class="task-list" data-status="unknown">{{ range .Board.UnknownTasks }}{{ template "task" . }}{{ end }}</div>
+    </section>
+  </main>
+  <script>
+    (() => {
+      const statuses = new Set(["backlog", "ready", "in-progress", "blocked", "done"]);
+      const lists = new Map([...document.querySelectorAll("[data-status]")].map((element) => [element.dataset.status, element]));
+      const counts = new Map([...document.querySelectorAll("[data-count]")].map((element) => [element.dataset.count, element]));
+      const stale = document.querySelector("[data-stale]");
+      const updated = document.querySelector("[data-updated]");
+
+      function text(element, value) { element.textContent = value || ""; return element; }
+      function card(task) {
+        const article = document.createElement("article"); article.className = "task-card"; article.tabIndex = 0;
+        const meta = document.createElement("div"); meta.className = "task-card__meta";
+        const id = document.createElement("code"); text(id, task.id);
+        const priority = document.createElement("span"); priority.className = "priority priority--" + task.priority; text(priority, task.priority);
+        meta.append(id, priority); article.append(meta);
+        const title = document.createElement("h3"); text(title, task.title); article.append(title);
+        if (task.description) { const description = document.createElement("p"); text(description, task.description); article.append(description); }
+        if (task.labels && task.labels.length) { const labels = document.createElement("div"); labels.className = "labels"; task.labels.forEach((label) => { const item = document.createElement("span"); item.className = "label"; text(item, label); labels.append(item); }); article.append(labels); }
+        return article;
+      }
+      function render(tasks) {
+        const grouped = new Map([...lists.keys()].map((status) => [status, []]));
+        tasks.forEach((task) => grouped.get(statuses.has(task.status) ? task.status : "unknown").push(task));
+        grouped.forEach((items, status) => {
+          const list = lists.get(status); list.classList.add("is-refreshing");
+          const fragment = document.createDocumentFragment(); items.forEach((task) => fragment.append(card(task)));
+          list.replaceChildren(fragment);
+          requestAnimationFrame(() => requestAnimationFrame(() => list.classList.remove("is-refreshing")));
+          text(counts.get(status), String(items.length));
+        });
+      }
+      async function refresh() {
+        try {
+          const response = await fetch("/api/tasks", { cache: "no-store" });
+          const document = await response.json();
+          if (!response.ok || document.format !== "workbook.tasks" || document.version !== 1 || !Array.isArray(document.tasks)) throw new Error("invalid task document");
+          render(document.tasks); stale.dataset.visible = "false"; text(updated, "Updated " + new Date().toLocaleTimeString());
+        } catch (_) { stale.dataset.visible = "true"; }
+      }
+      window.setInterval(refresh, 2000);
+    })();
+  </script>
+</body>
+</html>

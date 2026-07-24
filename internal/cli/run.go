@@ -5,11 +5,13 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"strings"
 	"time"
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
+	"github.com/dgoings/workbook/internal/webui"
 )
 
 type initResult struct {
@@ -45,6 +47,8 @@ func Run(ctx context.Context, args []string, cwd string, stdout, stderr io.Write
 		err = runUpdate(ctx, commandArgs, cwd, stdout)
 	case "delete":
 		err = runDelete(ctx, commandArgs, cwd, stdout)
+	case "serve":
+		err = runServe(ctx, commandArgs, cwd, stdout, stderr)
 	default:
 		err = core.Errorf(core.CategoryInvocation, "unknown command %q", command)
 	}
@@ -280,6 +284,31 @@ func runDelete(ctx context.Context, args []string, cwd string, stdout io.Writer)
 		writeResult(stdout, "delete", task)
 	} else {
 		writeMutation(stdout, task)
+	}
+	return nil
+}
+
+func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, stderr io.Writer) error {
+	flags := newFlagSet("serve")
+	addr := flags.String("addr", "127.0.0.1:7331", "listener address")
+	if err := parseFlags(flags, args); err != nil {
+		return err
+	}
+
+	service, err := openService(ctx, cwd)
+	if err != nil {
+		return err
+	}
+	handler := webui.NewHandler(func(requestContext context.Context) ([]core.Task, error) {
+		return service.List(requestContext, core.ListFilter{})
+	})
+	listener, err := net.Listen("tcp", *addr)
+	if err != nil {
+		return core.Wrap(core.CategoryOperational, "open board listener", err)
+	}
+	fmt.Fprintf(stderr, "Workbook board: http://%s\n", listener.Addr())
+	if err := webui.Serve(ctx, listener, handler); err != nil {
+		return core.Wrap(core.CategoryOperational, "serve board", err)
 	}
 	return nil
 }

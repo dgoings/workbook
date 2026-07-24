@@ -1,0 +1,254 @@
+package webui
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/dgoings/workbook/internal/core"
+)
+
+const contentSecurityPolicy = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"
+
+func TestHandlerServesBoardTasksAndHealth(t *testing.T) {
+	tasks := boardTasks()
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil })
+
+	board := request(t, handler, http.MethodGet, "/")
+	if board.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d, want %d; body = %s", board.Code, http.StatusOK, board.Body.String())
+	}
+	assertSecurityHeaders(t, board.Result())
+	if got := board.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/html; charset=utf-8") {
+		t.Fatalf("GET / Content-Type = %q, want text/html", got)
+	}
+	for _, fragment := range []string{
+		`data-status="backlog"`,
+		`data-status="ready"`,
+		`data-status="in-progress"`,
+		`data-status="blocked"`,
+		`data-status="done"`,
+		`data-status="unknown"`,
+		"Ready task",
+		"Future status task",
+		"Task refresh failed",
+	} {
+		if !strings.Contains(board.Body.String(), fragment) {
+			t.Errorf("GET / body does not contain %q", fragment)
+		}
+	}
+
+	tasksResponse := request(t, handler, http.MethodGet, "/api/tasks")
+	if tasksResponse.Code != http.StatusOK {
+		t.Fatalf("GET /api/tasks status = %d, want %d; body = %s", tasksResponse.Code, http.StatusOK, tasksResponse.Body.String())
+	}
+	assertSecurityHeaders(t, tasksResponse.Result())
+	if got := tasksResponse.Header().Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
+		t.Fatalf("GET /api/tasks Content-Type = %q, want application/json", got)
+	}
+	var document TasksDocument
+	if err := json.Unmarshal(tasksResponse.Body.Bytes(), &document); err != nil {
+		t.Fatalf("decode task document: %v; body = %s", err, tasksResponse.Body.String())
+	}
+	if document.Format != "workbook.tasks" || document.Version != 1 {
+		t.Fatalf("task document envelope = %#v, want workbook.tasks v1", document)
+	}
+	if !reflect.DeepEqual(document.Tasks, tasks) {
+		t.Fatalf("task document tasks = %#v, want %#v", document.Tasks, tasks)
+	}
+
+	health := request(t, handler, http.MethodGet, "/healthz")
+	if health.Code != http.StatusOK {
+		t.Fatalf("GET /healthz status = %d, want %d; body = %s", health.Code, http.StatusOK, health.Body.String())
+	}
+	assertSecurityHeaders(t, health.Result())
+	if got, want := strings.TrimSpace(health.Body.String()), `{"format":"workbook.health","version":1,"status":"ok"}`; got != want {
+		t.Fatalf("GET /healthz body = %q, want %q", got, want)
+	}
+}
+
+func TestHandlerRefreshesTasksOnEveryAPIRequest(t *testing.T) {
+	first := boardTasks()
+	second := append([]core.Task(nil), first...)
+	second[0].Title = "Updated without restarting"
+	calls := 0
+	handler := NewHandler(func(context.Context) ([]core.Task, error) {
+		calls++
+		if calls == 1 {
+			return first, nil
+		}
+		return second, nil
+	})
+
+	for _, want := range []string{"Ready task", "Updated without restarting"} {
+		response := request(t, handler, http.MethodGet, "/api/tasks")
+		if response.Code != http.StatusOK {
+			t.Fatalf("GET /api/tasks status = %d, want %d", response.Code, http.StatusOK)
+		}
+		var document TasksDocument
+		if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+			t.Fatal(err)
+		}
+		if got := document.Tasks[0].Title; got != want {
+			t.Fatalf("request %d first task title = %q, want %q", calls, got, want)
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("lister calls = %d, want 2", calls)
+	}
+}
+
+func TestHandlerRejectsUnknownRoutesAndMutationMethods(t *testing.T) {
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return boardTasks(), nil })
+
+	unknown := request(t, handler, http.MethodGet, "/missing")
+	if unknown.Code != http.StatusNotFound {
+		t.Fatalf("GET /missing status = %d, want %d", unknown.Code, http.StatusNotFound)
+	}
+	assertSecurityHeaders(t, unknown.Result())
+
+	for _, path := range []string{"/", "/api/tasks", "/healthz"} {
+		response := request(t, handler, http.MethodPost, path)
+		if response.Code != http.StatusMethodNotAllowed {
+			t.Errorf("POST %s status = %d, want %d", path, response.Code, http.StatusMethodNotAllowed)
+		}
+		if got := response.Header().Get("Allow"); got != http.MethodGet {
+			t.Errorf("POST %s Allow = %q, want %q", path, got, http.MethodGet)
+		}
+		assertSecurityHeaders(t, response.Result())
+	}
+}
+
+func TestHandlerMapsTaskErrorsToVersionedErrorDocuments(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantBody   string
+	}{
+		{name: "invalid invocation", err: core.Errorf(core.CategoryInvocation, "bad arguments"), wantStatus: http.StatusBadRequest, wantBody: "bad arguments"},
+		{name: "validation", err: core.Errorf(core.CategoryValidation, "invalid task"), wantStatus: http.StatusBadRequest, wantBody: "invalid task"},
+		{name: "not found", err: core.Errorf(core.CategoryNotFound, "task missing"), wantStatus: http.StatusNotFound, wantBody: "task missing"},
+		{name: "not initialized", err: core.Errorf(core.CategoryNotInitialized, "initialize first"), wantStatus: http.StatusConflict, wantBody: "initialize first"},
+		{name: "stale write", err: core.Errorf(core.CategoryStaleWrite, "stale task"), wantStatus: http.StatusConflict, wantBody: "stale task"},
+		{name: "corrupt data", err: core.Errorf(core.CategoryCorruptData, "bad checkpoint"), wantStatus: http.StatusInternalServerError, wantBody: "bad checkpoint"},
+		{name: "operational includes cause", err: core.Wrap(core.CategoryOperational, "list tasks", errors.New("permission denied")), wantStatus: http.StatusInternalServerError, wantBody: "list tasks: permission denied"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			handler := NewHandler(func(context.Context) ([]core.Task, error) { return nil, test.err })
+			response := request(t, handler, http.MethodGet, "/api/tasks")
+			if response.Code != test.wantStatus {
+				t.Fatalf("GET /api/tasks status = %d, want %d", response.Code, test.wantStatus)
+			}
+			assertSecurityHeaders(t, response.Result())
+			var document ErrorDocument
+			if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+				t.Fatalf("decode error document: %v; body = %s", err, response.Body.String())
+			}
+			if document.Format != "workbook.error" || document.Version != 1 {
+				t.Fatalf("error envelope = %#v, want workbook.error v1", document)
+			}
+			if document.Error.Category != core.CategoryOf(test.err) || document.Error.Message != test.wantBody {
+				t.Fatalf("error body = %#v, want category %q and message %q", document.Error, core.CategoryOf(test.err), test.wantBody)
+			}
+		})
+	}
+}
+
+func TestHandlerEscapesHostileTaskContent(t *testing.T) {
+	tasks := boardTasks()
+	tasks[0].Title = `<img src=x onerror=alert(1)>`
+	tasks[0].Description = `<script>alert("pwned")</script>`
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil })
+
+	response := request(t, handler, http.MethodGet, "/")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d, want %d", response.Code, http.StatusOK)
+	}
+	body := response.Body.String()
+	for _, hostile := range []string{`<img src=x onerror=alert(1)>`, `<script>alert("pwned")</script>`} {
+		if strings.Contains(body, hostile) {
+			t.Errorf("GET / contains executable hostile markup %q", hostile)
+		}
+	}
+	if !strings.Contains(body, "&lt;img src=x onerror=alert(1)&gt;") {
+		t.Fatalf("GET / did not preserve hostile title as escaped text: %s", body)
+	}
+}
+
+func request(t *testing.T, handler http.Handler, method, target string) *httptest.ResponseRecorder {
+	t.Helper()
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(method, target, nil))
+	return response
+}
+
+func assertSecurityHeaders(t *testing.T, response *http.Response) {
+	t.Helper()
+	if got := response.Header.Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Errorf("X-Content-Type-Options = %q, want nosniff", got)
+	}
+	if got := response.Header.Get("Content-Security-Policy"); got != contentSecurityPolicy {
+		t.Errorf("Content-Security-Policy = %q, want %q", got, contentSecurityPolicy)
+	}
+}
+
+func boardTasks() []core.Task {
+	stamp := time.Date(2026, time.July, 24, 13, 0, 0, 0, time.UTC)
+	return []core.Task{
+		{
+			ID:        "WB-01J00000000000000000000001",
+			ProjectID: "01J00000000000000000000000",
+			TaskData: core.TaskData{
+				Title:        "Ready task",
+				Description:  "Build the board surface.",
+				Status:       core.StatusReady,
+				Priority:     core.PriorityHigh,
+				Labels:       []string{"ui", "web"},
+				Rank:         "1/1",
+				Dependencies: []string{"WB-01J00000000000000000000002"},
+				CreatedAt:    stamp,
+				UpdatedAt:    stamp.Add(time.Minute),
+			},
+			HistoryGeneration: "01J00000000000000000000003",
+			Head:              "abcdef0123456789",
+		},
+		{
+			ID:        "WB-01J00000000000000000000002",
+			ProjectID: "01J00000000000000000000000",
+			TaskData: core.TaskData{
+				Title:       "Blocked task",
+				Description: "Await a dependent decision.",
+				Status:      core.StatusBlocked,
+				Priority:    core.PriorityMedium,
+				Labels:      []string{"decision"},
+				Rank:        "2/1",
+				CreatedAt:   stamp,
+				UpdatedAt:   stamp,
+			},
+			HistoryGeneration: "01J00000000000000000000004",
+			Head:              "0123456789abcdef",
+		},
+		{
+			ID:        "WB-01J00000000000000000000005",
+			ProjectID: "01J00000000000000000000000",
+			TaskData: core.TaskData{
+				Title:       "Future status task",
+				Description: "Keep forward-compatible status values visible.",
+				Status:      core.Status("future-status"),
+				Priority:    core.PriorityLow,
+				Rank:        "3/1",
+				CreatedAt:   stamp,
+				UpdatedAt:   stamp,
+			},
+			HistoryGeneration: "01J00000000000000000000006",
+			Head:              "fedcba9876543210",
+		},
+	}
+}
