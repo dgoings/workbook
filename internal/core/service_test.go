@@ -162,6 +162,20 @@ func TestServiceNextSelectsReadyTaskByPriorityExactRankAndID(t *testing.T) {
 	}
 }
 
+func TestServiceNextPrefersMediumPriorityOverLowPriority(t *testing.T) {
+	medium := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", TaskData{Title: "medium", Status: StatusReady, Priority: PriorityMedium, Rank: "1/1"})
+	low := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D2", TaskData{Title: "low", Status: StatusReady, Priority: PriorityLow, Rank: "1/2"})
+	service := serviceUnderTest(newMemoryTaskStore(low, medium), &sequenceIDSource{})
+
+	task, err := service.Next(context.Background())
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if got, want := task.ID, medium.State.TaskID; got != want {
+		t.Fatalf("Next() ID = %q, want %q", got, want)
+	}
+}
+
 func TestServiceNextRequiresEveryDependencyToBeActiveAndDone(t *testing.T) {
 	done := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", TaskData{Title: "done", Status: StatusDone, Priority: PriorityLow, Rank: "1/1"})
 	notDone := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D2", TaskData{Title: "not done", Status: StatusInProgress, Priority: PriorityLow, Rank: "1/1"})
