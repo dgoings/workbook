@@ -936,6 +936,7 @@ func TestRunServeCreatesTaskThroughWebRoute(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	result := make(chan error, 1)
 	var serveStdout, serveStderr bytes.Buffer
 	go func() {
@@ -1006,6 +1007,7 @@ func TestRunServeUpdatesAllTaskFieldsThroughWebRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	result := make(chan error, 1)
 	var serveStdout, serveStderr bytes.Buffer
 	go func() {

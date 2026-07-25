@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -197,6 +198,130 @@ setTimeout(() => {
 	}
 }
 
+func TestHandlerShowsRecoverableErrorWhenInitialTaskLoadFails(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	task := boardTasks()[0]
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return []core.Task{task}, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+task.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<id> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	recoveredDocument, err := json.Marshal(TasksDocument{
+		Format:  "workbook.tasks",
+		Version: 1,
+		Tasks:   []core.Task{task},
+		Presentation: []TaskPresentation{{
+			TaskID:   task.ID,
+			IDPrefix: task.ID,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/"+task.ID, `{}`) + script + `
+setTimeout(async () => {
+  const errorHeading = findElement(main, (element) => element.textContent === "Unable to load task");
+  if (!errorHeading) throw new Error("initial task load failure did not replace the loading route with a visible error");
+  const retry = findElement(main, (element) => element.tagName === "BUTTON" && element.textContent === "Retry");
+  if (!retry || !retry.eventListeners.click) throw new Error("task load error did not render an executable Retry control");
+  const back = findElement(main, (element) => element.tagName === "A" && element.textContent === "Back");
+  if (!back || back.href !== "/") throw new Error("task load error did not retain a Back link");
+
+  taskResponse = ` + string(recoveredDocument) + `;
+  await retry.eventListeners.click();
+  const title = findElement(main, (element) => element.id === "task-title");
+  if (!title || title.value !== ` + strconv.Quote(task.Title) + `) {
+    throw new Error("retry did not recover the task detail form");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("execute rendered client for initial load recovery: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerInterceptsOrdinarySameOriginNavigation(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	task := boardTasks()[0]
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return []core.Task{task}, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	document, err := json.Marshal(TasksDocument{
+		Format:  "workbook.tasks",
+		Version: 1,
+		Tasks:   []core.Task{task},
+		Presentation: []TaskPresentation{{
+			TaskID:   task.ID,
+			IDPrefix: task.ID,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/", string(document)) + script + `
+setTimeout(() => {
+  const click = documentEventListeners.click;
+  if (!click) throw new Error("client did not register delegated click navigation");
+  const taskLink = boardLists.map((list) => findElement(list, (element) => element.tagName === "A" && element.href === "/tasks/" + encodeURIComponent(` + strconv.Quote(task.ID) + `))).find(Boolean);
+  if (!taskLink) throw new Error("refresh did not dynamically render a task link");
+
+  let prevented = false;
+  click({ target: taskLink, button: 0, defaultPrevented: false, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, preventDefault() { prevented = true; } });
+  if (!prevented) throw new Error("ordinary same-origin task navigation was not intercepted");
+  if (historyPaths.length !== 1 || historyPaths[0] !== taskLink.href) throw new Error("ordinary navigation did not use history.pushState");
+  if (!findElement(main, (element) => element.id === "task-title")) throw new Error("ordinary navigation did not render the destination route");
+
+  const back = findElement(main, (element) => element.tagName === "A" && element.textContent === "Back");
+  let backPrevented = false;
+  click({ target: back, button: 0, defaultPrevented: false, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, preventDefault() { backPrevented = true; } });
+  if (!backPrevented || historyPaths.length !== 2 || historyPaths[1] !== "/") throw new Error("Back did not use delegated history navigation");
+
+  const newTask = new TestElement("a"); newTask.href = "/tasks/new?status=in-review"; boardView.append(newTask);
+  let newTaskPrevented = false;
+  click({ target: newTask, button: 0, defaultPrevented: false, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, preventDefault() { newTaskPrevented = true; } });
+  const status = findElement(main, (element) => element.id === "task-status");
+  if (!newTaskPrevented || historyPaths.length !== 3 || historyPaths[2] !== newTask.href || !status || status.value !== "in-review") {
+    throw new Error("New Task did not use delegated history navigation");
+  }
+
+  let modifiedPrevented = false;
+  click({ target: taskLink, button: 0, defaultPrevented: false, metaKey: false, ctrlKey: true, shiftKey: false, altKey: false, preventDefault() { modifiedPrevented = true; } });
+  if (modifiedPrevented || historyPaths.length !== 3) throw new Error("modified click was intercepted");
+
+  const external = new TestElement("a"); external.href = "https://example.com/tasks/external";
+  let externalPrevented = false;
+  click({ target: external, button: 0, defaultPrevented: false, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, preventDefault() { externalPrevented = true; } });
+  if (externalPrevented || historyPaths.length !== 3) throw new Error("external navigation was intercepted");
+
+  const newTab = new TestElement("a"); newTab.href = "/tasks/new"; newTab.target = "_blank";
+  let newTabPrevented = false;
+  click({ target: newTab, button: 0, defaultPrevented: false, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, preventDefault() { newTabPrevented = true; } });
+  if (newTabPrevented || historyPaths.length !== 3) throw new Error("new-tab navigation was intercepted");
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("execute rendered client navigation behavior: %v\n%s", err, output)
+	}
+}
+
 func TestHandlerRefreshesTasksOnEveryAPIRequest(t *testing.T) {
 	first := boardTasks()
 	second := append([]core.Task(nil), first...)
@@ -256,10 +381,26 @@ class TestElement {
     this.disabled = false;
     this.required = false;
   }
-  append(...children) { this.children.push(...children); }
-  replaceChildren(...children) { this.children = children; }
+  append(...children) { children.forEach((child) => { child.parentElement = this; this.children.push(child); }); }
+  replaceChildren(...children) { this.children = []; this.append(...children); }
   setAttribute(name, value) { this.attributes[name] = String(value); }
+  hasAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attributes, name); }
   addEventListener(name, listener) { this.eventListeners[name] = listener; }
+  closest(selector) {
+    for (let element = this; element; element = element.parentElement) {
+      if (selector === "a[href]" && element.tagName === "A" && element.href) return element;
+      if (selector === ".task-card" && element.className === "task-card") return element;
+      if (selector === "[data-drop-status]" && element.dataset.dropStatus) return element;
+      if (selector === "[data-status]" && element.dataset.status) return element;
+    }
+    return null;
+  }
+  contains(element) {
+    for (let current = element; current; current = current.parentElement) {
+      if (current === this) return true;
+    }
+    return false;
+  }
   querySelector(selector) {
     if (selector === "[data-stale]") return stale;
     return null;
@@ -292,6 +433,7 @@ const boardCounts = boardStatuses.map((status) => {
   return element;
 });
 boardView.querySelectorAll = (selector) => selector === "[data-status]" ? boardLists : boardCounts;
+const documentEventListeners = {};
 globalThis.document = {
   title: "",
   querySelector(selector) {
@@ -303,17 +445,25 @@ globalThis.document = {
   querySelectorAll() { return []; },
   createElement(tagName) { return new TestElement(tagName); },
   createDocumentFragment() { return new TestElement("fragment"); },
-  addEventListener() {}
+  addEventListener(name, listener) { documentEventListeners[name] = listener; }
 };
+const initialURL = new URL("http://127.0.0.1` + path + `");
 globalThis.window = {
-  location: { href: "http://127.0.0.1` + path + `" },
+  location: { href: initialURL.href, origin: initialURL.origin },
   addEventListener() {},
   setInterval() {}
 };
-globalThis.history = { pushState() {} };
+const historyPaths = [];
+globalThis.history = {
+  pushState(_state, _title, path) {
+    historyPaths.push(path);
+    window.location.href = new URL(path, window.location.href).href;
+  }
+};
 globalThis.requestAnimationFrame = (callback) => callback();
 const taskDocument = ` + taskDocument + `;
-globalThis.fetch = async () => ({ ok: true, json: async () => taskDocument });
+let taskResponse = taskDocument;
+globalThis.fetch = async () => ({ ok: true, json: async () => taskResponse });
 function findElement(root, predicate) {
   if (predicate(root)) return root;
   for (const child of root.children || []) {

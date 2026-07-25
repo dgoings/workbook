@@ -122,6 +122,7 @@
       let activeDrag = null;
       let latestTasks = [];
       let tasksLoaded = false;
+      let taskLoadFailed = false;
 
       function text(element, value) { element.textContent = value || ""; return element; }
       function card(task, idPrefix) {
@@ -225,14 +226,20 @@
         }
         return document.task;
       }
-      function routeMessage(titleText, message) {
+      function routeMessage(titleText, message, retryable = false) {
         const section = document.createElement("section"); section.className = "task-route"; section.setAttribute("aria-labelledby", "route-message-title");
         const header = document.createElement("header"); header.className = "task-route__header";
         const heading = document.createElement("h2"); heading.id = "route-message-title"; text(heading, titleText); header.append(heading);
         const body = document.createElement("div"); body.className = "route-message";
         const copy = document.createElement("p"); text(copy, message);
         const back = document.createElement("a"); back.className = "board-link"; back.href = "/"; text(back, "Back");
-        body.append(copy, back); section.append(header, body);
+        body.append(copy);
+        if (retryable) {
+          const retry = document.createElement("button"); retry.className = "save-button"; retry.type = "button"; text(retry, "Retry");
+          retry.addEventListener("click", refresh);
+          body.append(retry);
+        }
+        body.append(back); section.append(header, body);
         return section;
       }
       function renderRoute() {
@@ -248,6 +255,11 @@
           return;
         }
         if (!tasksLoaded) {
+          if (taskLoadFailed) {
+            document.title = "Unable to load task · Workbook";
+            main.replaceChildren(routeMessage("Unable to load task", "Task data could not be loaded. Retry now or return to the board.", true));
+            return;
+          }
           document.title = "Loading task · Workbook";
           main.replaceChildren(routeMessage("Loading task", "Reading the latest task state from this checkout."));
           return;
@@ -301,11 +313,27 @@
           if (presentation.size !== document.tasks.length || document.tasks.some((task) => !presentation.has(task.id))) throw new Error("invalid task presentation");
           latestTasks = document.tasks;
           tasksLoaded = true;
+          taskLoadFailed = false;
           render(document.tasks, presentation); stale.dataset.visible = "false"; text(updated, "Updated " + new Date().toLocaleTimeString());
           if (!wasLoaded) renderRoute();
-        } catch (_) { text(stale, "Task refresh failed. Showing the last successful board."); stale.dataset.visible = "true"; }
+        } catch (_) {
+          text(stale, "Task refresh failed. Showing the last successful board."); stale.dataset.visible = "true";
+          if (!tasksLoaded) {
+            taskLoadFailed = true;
+            renderRoute();
+          }
+        }
       }
       window.addEventListener("popstate", renderRoute);
+      document.addEventListener("click", (event) => {
+        if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        const anchor = event.target && event.target.closest && event.target.closest("a[href]");
+        if (!anchor || (anchor.target && anchor.target !== "_self") || anchor.hasAttribute("download")) return;
+        const destination = new URL(anchor.href, window.location.href);
+        if (destination.origin !== window.location.origin) return;
+        event.preventDefault();
+        navigate(destination.pathname + destination.search + destination.hash);
+      });
       document.addEventListener("dragstart", (event) => {
         const item = event.target.closest(".task-card");
         const source = item && item.closest("[data-status]");
