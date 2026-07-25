@@ -139,6 +139,29 @@ func TestServiceListOrdersRanksAsExactRationals(t *testing.T) {
 	assertTaskIDs(t, tasks, []string{twoThirds.State.TaskID, nineTenths.State.TaskID})
 }
 
+func TestServiceListOrdersWorkflowStatuses(t *testing.T) {
+	backlog := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", TaskData{Title: "backlog", Status: StatusBacklog, Priority: PriorityMedium, Rank: "1/1"})
+	ready := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D2", TaskData{Title: "ready", Status: StatusReady, Priority: PriorityMedium, Rank: "1/1"})
+	blocked := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D3", TaskData{Title: "blocked", Status: StatusBlocked, Priority: PriorityMedium, Rank: "1/1"})
+	inProgress := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D4", TaskData{Title: "in progress", Status: StatusInProgress, Priority: PriorityMedium, Rank: "1/1"})
+	inReview := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D5", TaskData{Title: "in review", Status: StatusInReview, Priority: PriorityMedium, Rank: "1/1"})
+	done := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D6", TaskData{Title: "done", Status: StatusDone, Priority: PriorityMedium, Rank: "1/1"})
+	service := serviceUnderTest(newMemoryTaskStore(done, inProgress, ready, inReview, backlog, blocked), &sequenceIDSource{})
+
+	tasks, err := service.List(context.Background(), ListFilter{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	assertTaskIDs(t, tasks, []string{
+		backlog.State.TaskID,
+		ready.State.TaskID,
+		blocked.State.TaskID,
+		inProgress.State.TaskID,
+		inReview.State.TaskID,
+		done.State.TaskID,
+	})
+}
+
 func TestServiceNextSelectsReadyTaskByPriorityExactRankAndID(t *testing.T) {
 	medium := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", TaskData{Title: "medium", Status: StatusReady, Priority: PriorityMedium, Rank: "1/1"})
 	highLater := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D2", TaskData{Title: "high later", Status: StatusReady, Priority: PriorityHigh, Rank: "9/10"})

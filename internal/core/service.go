@@ -625,20 +625,12 @@ func compareTasks(left, right Task) int {
 }
 
 func statusOrder(status Status) int {
-	switch status {
-	case StatusBacklog:
-		return 0
-	case StatusReady:
-		return 1
-	case StatusInProgress:
-		return 2
-	case StatusBlocked:
-		return 3
-	case StatusDone:
-		return 4
-	default:
-		return 5
+	for index, definition := range workflowStatuses {
+		if status == definition.Status {
+			return index
+		}
 	}
+	return len(workflowStatuses)
 }
 
 func priorityOrder(priority Priority) int {
