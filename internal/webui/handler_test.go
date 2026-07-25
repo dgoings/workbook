@@ -19,7 +19,7 @@ const contentSecurityPolicy = "default-src 'none'; style-src 'unsafe-inline'; sc
 
 func TestHandlerServesBoardTasksAndHealth(t *testing.T) {
 	tasks := boardTasks()
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil })
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedStatusUpdate(t))
 
 	board := request(t, handler, http.MethodGet, "/")
 	if board.Code != http.StatusOK {
@@ -84,7 +84,7 @@ func TestHandlerRendersInReviewTasks(t *testing.T) {
 			Priority: core.PriorityMedium,
 		},
 	})
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil })
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedStatusUpdate(t))
 
 	response := request(t, handler, http.MethodGet, "/")
 	if response.Code != http.StatusOK {
@@ -108,7 +108,7 @@ func TestHandlerRefreshesTasksOnEveryAPIRequest(t *testing.T) {
 			return first, nil
 		}
 		return second, nil
-	})
+	}, unexpectedStatusUpdate(t))
 
 	for _, want := range []string{"Ready task", "Updated without restarting"} {
 		response := request(t, handler, http.MethodGet, "/api/tasks")
@@ -128,11 +128,62 @@ func TestHandlerRefreshesTasksOnEveryAPIRequest(t *testing.T) {
 	}
 }
 
+func TestHandlerUpdatesTaskStatus(t *testing.T) {
+	var gotID string
+	var gotStatus core.Status
+	updated := boardTasks()[0]
+	updated.Status = core.StatusInProgress
+	handler := NewHandler(
+		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		func(_ context.Context, id string, status core.Status) (core.Task, error) {
+			gotID = id
+			gotStatus = status
+			return updated, nil
+		},
+	)
+
+	response := requestJSON(t, handler, http.MethodPatch, "/api/tasks/WB-01J00000000000000000000001/status", `{"status":"in-progress"}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("PATCH status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if gotID != "WB-01J00000000000000000000001" || gotStatus != core.StatusInProgress {
+		t.Fatalf("updater saw id/status = %q/%q", gotID, gotStatus)
+	}
+	var document TaskMutationDocument
+	if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+		t.Fatalf("decode mutation document: %v; body = %s", err, response.Body.String())
+	}
+	if document.Format != "workbook.task-mutation" || document.Version != 1 || document.Task.Status != core.StatusInProgress {
+		t.Fatalf("mutation document = %#v", document)
+	}
+}
+
+func TestHandlerMapsStatusUpdateErrorsToVersionedErrorDocuments(t *testing.T) {
+	handler := NewHandler(
+		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		func(context.Context, string, core.Status) (core.Task, error) {
+			return core.Task{}, core.Errorf(core.CategoryValidation, "invalid task status")
+		},
+	)
+
+	response := requestJSON(t, handler, http.MethodPatch, "/api/tasks/WB-01J00000000000000000000001/status", `{"status":"future-status"}`)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("PATCH status = %d, want %d; body = %s", response.Code, http.StatusBadRequest, response.Body.String())
+	}
+	var document ErrorDocument
+	if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+		t.Fatalf("decode error document: %v; body = %s", err, response.Body.String())
+	}
+	if document.Format != "workbook.error" || document.Version != 1 || document.Error.Category != core.CategoryValidation || document.Error.Message != "invalid task status" {
+		t.Fatalf("error document = %#v", document)
+	}
+}
+
 func TestHandlerProvidesActionablePrefixesForRefresh(t *testing.T) {
 	tasks := boardTasks()
 	tasks[0].ID = "WB-01J0000A1111111111111111111"
 	tasks[1].ID = "WB-01J0000B2222222222222222222"
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil })
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedStatusUpdate(t))
 
 	response := request(t, handler, http.MethodGet, "/api/tasks")
 	if response.Code != http.StatusOK {
@@ -184,7 +235,7 @@ func TestHandlerInitialCardPrefixesMatchRefreshPresentation(t *testing.T) {
 	tasks := boardTasks()
 	tasks[0].ID = "WB-01J0000A1111111111111111111"
 	tasks[1].ID = "WB-01J0000B2222222222222222222"
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil })
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedStatusUpdate(t))
 
 	initial := request(t, handler, http.MethodGet, "/")
 	if initial.Code != http.StatusOK {
@@ -214,8 +265,36 @@ func TestHandlerInitialCardPrefixesMatchRefreshPresentation(t *testing.T) {
 	}
 }
 
+func TestHandlerServesDragAndDropBoardControls(t *testing.T) {
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return boardTasks(), nil }, unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	body := response.Body.String()
+	for _, fragment := range []string{
+		`draggable="true"`,
+		`aria-label="Move task Ready task from ready"`,
+		`data-drop-status="ready"`,
+		`PATCH`,
+		`/api/tasks/`,
+		`dragstart`,
+		`dragover`,
+		`drop`,
+		`setDropState`,
+	} {
+		if !strings.Contains(body, fragment) {
+			t.Errorf("GET / body does not contain %q", fragment)
+		}
+	}
+	if strings.Contains(body, `data-drop-status="unknown"`) {
+		t.Error("unknown status list must not be a status drop target")
+	}
+}
+
 func initialCardPrefixes(body string) map[string]string {
-	pattern := regexp.MustCompile(`(?s)<article class="task-card" tabindex="0" data-task-id="([^"]+)" data-id-prefix="([^"]+)">\s*<div class="task-card__meta"><code>([^<]+)</code>`)
+	pattern := regexp.MustCompile(`(?s)<article class="task-card" tabindex="0" data-task-id="([^"]+)" data-id-prefix="([^"]+)"[^>]*>\s*<div class="task-card__meta"><code>([^<]+)</code>`)
 	cards := make(map[string]string)
 	for _, match := range pattern.FindAllStringSubmatch(body, -1) {
 		if match[2] == match[3] {
@@ -226,7 +305,7 @@ func initialCardPrefixes(body string) map[string]string {
 }
 
 func TestHandlerRejectsUnknownRoutesAndMutationMethods(t *testing.T) {
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return boardTasks(), nil })
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return boardTasks(), nil }, unexpectedStatusUpdate(t))
 
 	unknown := request(t, handler, http.MethodGet, "/missing")
 	if unknown.Code != http.StatusNotFound {
@@ -241,6 +320,17 @@ func TestHandlerRejectsUnknownRoutesAndMutationMethods(t *testing.T) {
 		}
 		if got := response.Header().Get("Allow"); got != http.MethodGet {
 			t.Errorf("POST %s Allow = %q, want %q", path, got, http.MethodGet)
+		}
+		assertSecurityHeaders(t, response.Result())
+	}
+
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		response := request(t, handler, method, "/api/tasks/WB-01J00000000000000000000001/status")
+		if response.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s /api/tasks/<id>/status status = %d, want %d", method, response.Code, http.StatusMethodNotAllowed)
+		}
+		if got := response.Header().Get("Allow"); got != http.MethodPatch {
+			t.Errorf("%s /api/tasks/<id>/status Allow = %q, want %q", method, got, http.MethodPatch)
 		}
 		assertSecurityHeaders(t, response.Result())
 	}
@@ -262,7 +352,7 @@ func TestHandlerMapsTaskErrorsToVersionedErrorDocuments(t *testing.T) {
 		{name: "operational includes cause", err: core.Wrap(core.CategoryOperational, "list tasks", errors.New("permission denied")), wantStatus: http.StatusInternalServerError, wantBody: "list tasks: permission denied"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			handler := NewHandler(func(context.Context) ([]core.Task, error) { return nil, test.err })
+			handler := NewHandler(func(context.Context) ([]core.Task, error) { return nil, test.err }, unexpectedStatusUpdate(t))
 			response := request(t, handler, http.MethodGet, "/api/tasks")
 			if response.Code != test.wantStatus {
 				t.Fatalf("GET /api/tasks status = %d, want %d", response.Code, test.wantStatus)
@@ -286,7 +376,7 @@ func TestHandlerEscapesHostileTaskContent(t *testing.T) {
 	tasks := boardTasks()
 	tasks[0].Title = `<img src=x onerror=alert(1)>`
 	tasks[0].Description = `<script>alert("pwned")</script>`
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil })
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedStatusUpdate(t))
 
 	response := request(t, handler, http.MethodGet, "/")
 	if response.Code != http.StatusOK {
@@ -308,6 +398,23 @@ func request(t *testing.T, handler http.Handler, method, target string) *httptes
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest(method, target, nil))
 	return response
+}
+
+func requestJSON(t *testing.T, handler http.Handler, method, target, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(method, target, strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(response, request)
+	return response
+}
+
+func unexpectedStatusUpdate(t *testing.T) TaskStatusUpdater {
+	t.Helper()
+	return func(context.Context, string, core.Status) (core.Task, error) {
+		t.Fatal("unexpected status update")
+		return core.Task{}, nil
+	}
 }
 
 func assertSecurityHeaders(t *testing.T, response *http.Response) {

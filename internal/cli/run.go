@@ -474,9 +474,14 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 	if err != nil {
 		return err
 	}
-	handler := webui.NewHandler(func(requestContext context.Context) ([]core.Task, error) {
-		return service.List(requestContext, core.ListFilter{})
-	})
+	handler := webui.NewHandler(
+		func(requestContext context.Context) ([]core.Task, error) {
+			return service.List(requestContext, core.ListFilter{})
+		},
+		func(requestContext context.Context, id string, status core.Status) (core.Task, error) {
+			return service.Update(requestContext, id, core.UpdateInput{Status: &status})
+		},
+	)
 	listener, err := net.Listen("tcp", *addr)
 	if err != nil {
 		return core.Wrap(core.CategoryOperational, "open board listener", err)

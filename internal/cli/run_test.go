@@ -5,13 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/testrepo"
@@ -677,6 +680,15 @@ func TestREADMEImplementedCommands(t *testing.T) {
 	if !strings.Contains(readme, "### Small-team workflow") {
 		t.Error("README is missing the implemented small-team workflow")
 	}
+	for _, required := range []string{
+		"drag-and-drop status changes",
+		"PATCH /api/tasks/<id>/status",
+		"title, description, labels, priority editing",
+	} {
+		if !strings.Contains(readme, required) {
+			t.Errorf("README web board documentation is missing %q", required)
+		}
+	}
 	for _, stale := range []string{
 		"Workbook synchronizes only its own refs",
 		"automatically reconciles concurrent edits",
@@ -842,6 +854,74 @@ func TestRunServeRejectsInvalidArguments(t *testing.T) {
 	}
 }
 
+func TestRunServeUpdatesTaskStatusThroughWebRoute(t *testing.T) {
+	repository := initializedRepository(t)
+	code, stdout, stderr := run(t, repository, "create", "Serve mutation task", "--status", "ready", "--json")
+	if code != 0 {
+		t.Fatalf("create code = %d, want 0; stderr = %q", code, stderr)
+	}
+	var task core.Task
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "create").Data, &task); err != nil {
+		t.Fatalf("decode created task: %v", err)
+	}
+
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := probe.Addr().String()
+	if err := probe.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result := make(chan error, 1)
+	var serveStdout, serveStderr bytes.Buffer
+	go func() {
+		result <- runServe(ctx, []string{"--addr", addr}, repository, &serveStdout, &serveStderr)
+	}()
+	waitForHTTP(t, "http://"+addr+"/healthz")
+
+	request, err := http.NewRequest(http.MethodPatch, "http://"+addr+"/api/tasks/"+task.ID+"/status", strings.NewReader(`{"status":"in-progress"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("PATCH status: %v", err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("PATCH status = %d, want %d; body = %s", response.StatusCode, http.StatusOK, body)
+	}
+
+	cancel()
+	if err := <-result; err != nil {
+		t.Fatalf("runServe() error = %v; stderr = %q", err, serveStderr.String())
+	}
+
+	code, stdout, stderr = run(t, repository, "show", task.ID, "--json")
+	if code != 0 {
+		t.Fatalf("show code = %d, want 0; stderr = %q", code, stderr)
+	}
+	var updated core.Task
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "show").Data, &updated); err != nil {
+		t.Fatalf("decode shown task: %v", err)
+	}
+	if updated.Status != core.StatusInProgress {
+		t.Fatalf("shown task status = %q, want %q", updated.Status, core.StatusInProgress)
+	}
+	if serveStdout.Len() != 0 {
+		t.Fatalf("serve stdout = %q, want empty", serveStdout.String())
+	}
+}
+
 func TestRunServeReportsListenerFailureAsOperational(t *testing.T) {
 	repository := initializedRepository(t)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -861,6 +941,26 @@ func TestRunServeReportsListenerFailureAsOperational(t *testing.T) {
 	if stdout.Len() != 0 || stderr.Len() != 0 {
 		t.Fatalf("runServe() output = stdout %q stderr %q, want empty", stdout.String(), stderr.String())
 	}
+}
+
+func waitForHTTP(t *testing.T, url string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		response, err := http.Get(url)
+		if err == nil {
+			response.Body.Close()
+			if response.StatusCode == http.StatusOK {
+				return
+			}
+			lastErr = fmt.Errorf("status %d", response.StatusCode)
+		} else {
+			lastErr = err
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s: %v", url, lastErr)
 }
 
 func initializedRepository(t *testing.T) string {
