@@ -349,21 +349,21 @@ func setDifference(left, right []string) []string {
 }
 
 func nextRank(snapshots []Snapshot, status Status, priority Priority) (string, error) {
-	maximum := big.NewInt(0)
+	maximum := big.NewRat(0, 1)
 	for _, snapshot := range snapshots {
 		task := snapshot.State.Task
 		if task.Deleted || task.Status != status || task.Priority != priority {
 			continue
 		}
-		rank, ok := rankInteger(task.Rank)
-		if !ok {
+		rank, err := parseRank(task.Rank)
+		if err != nil {
 			return "", Errorf(CategoryCorruptData, "task %q has invalid rank %q", snapshot.State.TaskID, task.Rank)
 		}
 		if rank.Cmp(maximum) > 0 {
 			maximum = rank
 		}
 	}
-	return new(big.Int).Add(maximum, big.NewInt(1)).String() + "/1", nil
+	return formatRank(new(big.Rat).Add(maximum, big.NewRat(1, 1))), nil
 }
 
 func compareTasks(left, right Task) int {
@@ -373,14 +373,14 @@ func compareTasks(left, right Task) int {
 	if compare := priorityOrder(left.Priority) - priorityOrder(right.Priority); compare != 0 {
 		return compare
 	}
-	leftRank, leftOK := rankInteger(left.Rank)
-	rightRank, rightOK := rankInteger(right.Rank)
-	if leftOK && rightOK {
+	leftRank, leftErr := parseRank(left.Rank)
+	rightRank, rightErr := parseRank(right.Rank)
+	if leftErr == nil && rightErr == nil {
 		if compare := leftRank.Cmp(rightRank); compare != 0 {
 			return compare
 		}
-	} else if leftOK != rightOK {
-		if leftOK {
+	} else if (leftErr == nil) != (rightErr == nil) {
+		if leftErr == nil {
 			return -1
 		}
 		return 1
@@ -416,15 +416,6 @@ func priorityOrder(priority Priority) int {
 	default:
 		return 3
 	}
-}
-
-func rankInteger(rank string) (*big.Int, bool) {
-	numerator, denominator, ok := strings.Cut(rank, "/")
-	if !ok || denominator != "1" || !rankPattern.MatchString(rank) {
-		return nil, false
-	}
-	value, ok := new(big.Int).SetString(numerator, 10)
-	return value, ok
 }
 
 func hasLabel(labels []string, wanted string) bool {

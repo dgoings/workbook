@@ -127,6 +127,31 @@ func TestListFiltersTombstonesAndUsesDeterministicOrder(t *testing.T) {
 	assertTaskIDs(t, filtered, []string{backlogHighLater.State.TaskID})
 }
 
+func TestServiceListOrdersRanksAsExactRationals(t *testing.T) {
+	twoThirds := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", TaskData{Title: "two thirds", Status: StatusBacklog, Priority: PriorityHigh, Rank: "2/3"})
+	nineTenths := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D2", TaskData{Title: "nine tenths", Status: StatusBacklog, Priority: PriorityHigh, Rank: "9/10"})
+	service := serviceUnderTest(newMemoryTaskStore(nineTenths, twoThirds), &sequenceIDSource{})
+
+	tasks, err := service.List(context.Background(), ListFilter{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	assertTaskIDs(t, tasks, []string{twoThirds.State.TaskID, nineTenths.State.TaskID})
+}
+
+func TestNextRankAppendsAfterMaximumRationalRank(t *testing.T) {
+	first := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", TaskData{Title: "first", Status: StatusBacklog, Priority: PriorityHigh, Rank: "7/2"})
+	second := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D2", TaskData{Title: "second", Status: StatusBacklog, Priority: PriorityHigh, Rank: "9/2"})
+
+	got, err := nextRank([]Snapshot{first, second}, StatusBacklog, PriorityHigh)
+	if err != nil {
+		t.Fatalf("nextRank() error = %v", err)
+	}
+	if want := "11/2"; got != want {
+		t.Fatalf("nextRank() = %q, want %q", got, want)
+	}
+}
+
 func TestServiceShowResolvesPrefixAndIncludesTombstone(t *testing.T) {
 	deleted := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", TaskData{Title: "gone", Status: StatusDone, Priority: PriorityLow, Rank: "1/1", Deleted: true})
 	service := serviceUnderTest(newMemoryTaskStore(deleted), &sequenceIDSource{})

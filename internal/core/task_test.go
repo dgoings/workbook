@@ -54,6 +54,16 @@ func TestNormalizeTaskAcceptsEveryStatusAndPriority(t *testing.T) {
 	}
 }
 
+func TestNormalizeTaskAcceptsCanonicalPositiveReducedRanks(t *testing.T) {
+	for _, rank := range []string{"1/2", "5/3", "9/1"} {
+		t.Run(rank, func(t *testing.T) {
+			if _, err := NormalizeTask("WB", validTask(rank)); err != nil {
+				t.Fatalf("NormalizeTask() error = %v", err)
+			}
+		})
+	}
+}
+
 func TestNormalizeTaskRejectsInvalidValues(t *testing.T) {
 	tests := []struct {
 		name string
@@ -81,7 +91,7 @@ func TestNormalizeTaskRejectsInvalidValues(t *testing.T) {
 		},
 	}
 
-	for _, rank := range []string{"", "0/1", "2/2", "1", "1/01", " 1/1"} {
+	for _, rank := range []string{"", "0/1", "2/2", "1/0", "01/2", "1", "1/01", " 1/1"} {
 		tests = append(tests, struct {
 			name string
 			task TaskData
@@ -97,6 +107,15 @@ func TestNormalizeTaskRejectsInvalidValues(t *testing.T) {
 				t.Fatalf("NormalizeTask() category = %q, want %q", got, CategoryValidation)
 			}
 		})
+	}
+}
+
+func validTask(rank string) TaskData {
+	return TaskData{
+		Title:    "Task",
+		Status:   StatusReady,
+		Priority: PriorityMedium,
+		Rank:     rank,
 	}
 }
 
