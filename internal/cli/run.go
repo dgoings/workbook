@@ -47,6 +47,14 @@ func Run(ctx context.Context, args []string, cwd string, stdout, stderr io.Write
 		err = runUpdate(ctx, commandArgs, cwd, stdout)
 	case "delete":
 		err = runDelete(ctx, commandArgs, cwd, stdout)
+	case "move":
+		err = runMove(ctx, commandArgs, cwd, stdout)
+	case "depend":
+		err = runDepend(ctx, commandArgs, cwd, stdout)
+	case "free":
+		err = runFree(ctx, commandArgs, cwd, stdout)
+	case "next":
+		err = runNext(ctx, commandArgs, cwd, stdout)
 	case "fetch":
 		err = runFetch(ctx, commandArgs, cwd, stdout)
 	case "push":
@@ -357,6 +365,100 @@ func runDelete(ctx context.Context, args []string, cwd string, stdout io.Writer)
 		writeResult(stdout, "delete", task)
 	} else {
 		writeMutation(stdout, task)
+	}
+	return nil
+}
+
+func runMove(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+	id, args, err := requiredFirstArgument("move", "task ID", args)
+	if err != nil {
+		return err
+	}
+	flags := newFlagSet("move")
+	before := flags.String("before", "", "move before task ID")
+	after := flags.String("after", "", "move after task ID")
+	jsonMode := flags.Bool("json", false, "emit JSON")
+	if err := parseFlags(flags, args); err != nil {
+		return err
+	}
+	if (*before == "") == (*after == "") {
+		return core.Errorf(core.CategoryInvocation, "move requires exactly one of --before or --after")
+	}
+	service, err := openService(ctx, cwd)
+	if err != nil {
+		return err
+	}
+	task, err := service.Move(ctx, id, core.MoveInput{Before: *before, After: *after})
+	if err != nil {
+		return err
+	}
+	if *jsonMode {
+		writeResult(stdout, "move", task)
+	} else {
+		writeMutation(stdout, task)
+	}
+	return nil
+}
+
+func runDepend(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+	return runDependencyMutation(ctx, "depend", args, cwd, stdout)
+}
+
+func runFree(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+	return runDependencyMutation(ctx, "free", args, cwd, stdout)
+}
+
+func runDependencyMutation(ctx context.Context, command string, args []string, cwd string, stdout io.Writer) error {
+	ids, args, err := requiredArguments(command, []string{"task ID", "dependency task ID"}, args)
+	if err != nil {
+		return err
+	}
+	flags := newFlagSet(command)
+	jsonMode := flags.Bool("json", false, "emit JSON")
+	if err := parseFlags(flags, args); err != nil {
+		return err
+	}
+	service, err := openService(ctx, cwd)
+	if err != nil {
+		return err
+	}
+	var task core.Task
+	if command == "depend" {
+		task, err = service.Depend(ctx, ids[0], ids[1])
+	} else {
+		task, err = service.Free(ctx, ids[0], ids[1])
+	}
+	if err != nil {
+		return err
+	}
+	if *jsonMode {
+		writeResult(stdout, command, task)
+	} else {
+		writeMutation(stdout, task)
+	}
+	return nil
+}
+
+func runNext(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+	flags := newFlagSet("next")
+	jsonMode := flags.Bool("json", false, "emit JSON")
+	if err := parseFlags(flags, args); err != nil {
+		return err
+	}
+	service, err := openService(ctx, cwd)
+	if err != nil {
+		return err
+	}
+	task, err := service.Next(ctx)
+	if err != nil {
+		return err
+	}
+	if *jsonMode {
+		writeResult(stdout, "next", task)
+	} else if task == nil {
+		fmt.Fprintln(stdout, "No eligible task.")
+	} else {
+		writeShow(stdout, *task)
 	}
 	return nil
 }

@@ -8,8 +8,8 @@ objects and refs and explicitly synchronizes them through `origin`. The intended
 architecture also adds a disposable SQLite materialized view.
 
 > **Status:** initial collaborative POC. Repository initialization, local task
-> CRUD, read-only terminal and web boards, and explicit origin-only task
-> fetch/push are implemented. Task ordering and dependencies, SQLite projection,
+> CRUD, task ordering and dependencies, read-only terminal and web boards, and
+> explicit origin-only task fetch/push are implemented. SQLite projection,
 > conflict reconciliation, and packaged distribution remain proposed.
 
 ## Why Workbook?
@@ -97,6 +97,10 @@ workbook board [--wide | --narrow] [--json]
 workbook show
 workbook update
 workbook delete
+workbook move <task> (--before <task> | --after <task>) [--json]
+workbook depend <task> <dependency> [--json]
+workbook free <task> <dependency> [--json]
+workbook next [--json]
 workbook fetch [--json]
 workbook push [--json]
 workbook hooks install [--json]
@@ -106,12 +110,16 @@ workbook serve [--addr 127.0.0.1:7331]
 `workbook init` creates a tracked `.workbook/config.json` with the project ID and
 key. Create, update, and delete append immutable task commits under
 `refs/workbook/tasks/`; delete records a tombstone instead of removing the ref.
-List and show read the current task checkpoint from each task ref's tip. `board`
-uses the same core task order and presents an actionable, unambiguous task-ID
-prefix with each card's priority, title, and labels. Its JSON output retains full
-task IDs, descriptions, and the rest of the task data. The current POC does not
-yet implement dependency-aware ordering, SQLite, claims, or implementation
-links.
+List and show read the current task checkpoint from each task ref's tip. `move`
+orders a task inside its status-and-priority bucket with an exact rational rank;
+it changes only that task. `depend` adds a prerequisite edge and rejects cycles;
+`free` removes one prerequisite edge and is idempotent. `next` chooses the first
+ready task whose dependencies are all active and done, sorting by priority, rank,
+and task ID; it reports no eligible task when none qualify. `board` uses the same
+core task order and presents an actionable, unambiguous task-ID prefix with each
+card's priority, title, and labels. Its JSON output retains full task IDs,
+descriptions, and the rest of the task data. The current POC does not yet
+implement SQLite, claims, or implementation links.
 
 ### Explicit task sharing
 

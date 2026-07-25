@@ -22,8 +22,8 @@ const (
 )
 
 type commandSchema struct {
-	requiredFirstArgument bool
-	flags                 map[string]flagKind
+	requiredArguments int
+	flags             map[string]flagKind
 }
 
 var commandSchemas = map[string]commandSchema{
@@ -34,7 +34,7 @@ var commandSchemas = map[string]commandSchema{
 		},
 	},
 	"create": {
-		requiredFirstArgument: true,
+		requiredArguments: 1,
 		flags: map[string]flagKind{
 			"description": stringFlag,
 			"status":      stringFlag,
@@ -60,13 +60,13 @@ var commandSchemas = map[string]commandSchema{
 		},
 	},
 	"show": {
-		requiredFirstArgument: true,
+		requiredArguments: 1,
 		flags: map[string]flagKind{
 			"json": boolFlag,
 		},
 	},
 	"update": {
-		requiredFirstArgument: true,
+		requiredArguments: 1,
 		flags: map[string]flagKind{
 			"title":        stringFlag,
 			"description":  stringFlag,
@@ -78,7 +78,7 @@ var commandSchemas = map[string]commandSchema{
 		},
 	},
 	"delete": {
-		requiredFirstArgument: true,
+		requiredArguments: 1,
 		flags: map[string]flagKind{
 			"json": boolFlag,
 		},
@@ -99,7 +99,32 @@ var commandSchemas = map[string]commandSchema{
 		},
 	},
 	"hooks": {
-		requiredFirstArgument: true,
+		requiredArguments: 1,
+		flags: map[string]flagKind{
+			"json": boolFlag,
+		},
+	},
+	"move": {
+		requiredArguments: 1,
+		flags: map[string]flagKind{
+			"before": stringFlag,
+			"after":  stringFlag,
+			"json":   boolFlag,
+		},
+	},
+	"depend": {
+		requiredArguments: 2,
+		flags: map[string]flagKind{
+			"json": boolFlag,
+		},
+	},
+	"free": {
+		requiredArguments: 2,
+		flags: map[string]flagKind{
+			"json": boolFlag,
+		},
+	},
+	"next": {
 		flags: map[string]flagKind{
 			"json": boolFlag,
 		},
@@ -185,6 +210,18 @@ func requiredFirstArgument(command, name string, args []string) (string, []strin
 	return args[0], args[1:], nil
 }
 
+func requiredArguments(command string, names []string, args []string) ([]string, []string, error) {
+	values := make([]string, 0, len(names))
+	for _, name := range names {
+		if len(args) == 0 || !isRequiredFirstArgument(args[0]) {
+			return nil, nil, core.Errorf(core.CategoryInvocation, "%s must be the first argument after %s", name, command)
+		}
+		values = append(values, args[0])
+		args = args[1:]
+	}
+	return values, args, nil
+}
+
 func requestedJSON(args []string) bool {
 	if len(args) == 0 {
 		return false
@@ -195,7 +232,10 @@ func requestedJSON(args []string) bool {
 		schema = commandSchema{flags: map[string]flagKind{"json": boolFlag}}
 	}
 	args = args[1:]
-	if schema.requiredFirstArgument && len(args) > 0 && isRequiredFirstArgument(args[0]) {
+	for range schema.requiredArguments {
+		if len(args) == 0 || !isRequiredFirstArgument(args[0]) {
+			break
+		}
 		args = args[1:]
 	}
 
