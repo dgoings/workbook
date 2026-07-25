@@ -95,22 +95,7 @@ type updateTaskRequest struct {
 	Labels      *[]string      `json:"labels"`
 }
 
-// NewHandler accepts either the existing list/status callbacks or the expanded
-// list/create/update/status callback set while command wiring migrates.
-func NewHandler(list TaskLister, callbacks ...any) http.Handler {
-	var create TaskCreator
-	var update TaskUpdater
-	var updateStatus TaskStatusUpdater
-	switch len(callbacks) {
-	case 1:
-		updateStatus = taskStatusUpdater(callbacks[0])
-	case 3:
-		create = taskCreator(callbacks[0])
-		update = taskUpdater(callbacks[1])
-		updateStatus = taskStatusUpdater(callbacks[2])
-	default:
-		panic("webui.NewHandler requires list/status or list/create/update/status callbacks")
-	}
+func NewHandler(list TaskLister, create TaskCreator, update TaskUpdater, updateStatus TaskStatusUpdater) http.Handler {
 	page := template.Must(template.New("index.html").ParseFS(assets, "assets/index.html"))
 	handler := &handler{list: list, create: create, update: update, updateStatus: updateStatus, page: page, mux: http.NewServeMux()}
 	handler.mux.HandleFunc("GET /{$}", handler.serveBoard)
@@ -120,39 +105,6 @@ func NewHandler(list TaskLister, callbacks ...any) http.Handler {
 	handler.mux.HandleFunc("PATCH /api/tasks/{id}/status", handler.updateTaskStatus)
 	handler.mux.HandleFunc("GET /healthz", handler.serveHealth)
 	return http.HandlerFunc(handler.serveHTTP)
-}
-
-func taskCreator(callback any) TaskCreator {
-	switch callback := callback.(type) {
-	case TaskCreator:
-		return callback
-	case func(context.Context, core.CreateInput) (core.Task, error):
-		return TaskCreator(callback)
-	default:
-		panic("webui.NewHandler create callback has the wrong type")
-	}
-}
-
-func taskUpdater(callback any) TaskUpdater {
-	switch callback := callback.(type) {
-	case TaskUpdater:
-		return callback
-	case func(context.Context, string, core.UpdateInput) (core.Task, error):
-		return TaskUpdater(callback)
-	default:
-		panic("webui.NewHandler update callback has the wrong type")
-	}
-}
-
-func taskStatusUpdater(callback any) TaskStatusUpdater {
-	switch callback := callback.(type) {
-	case TaskStatusUpdater:
-		return callback
-	case func(context.Context, string, core.Status) (core.Task, error):
-		return TaskStatusUpdater(callback)
-	default:
-		panic("webui.NewHandler status callback has the wrong type")
-	}
 }
 
 func (handler *handler) serveHTTP(writer http.ResponseWriter, request *http.Request) {
