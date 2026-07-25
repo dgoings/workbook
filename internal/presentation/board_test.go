@@ -105,11 +105,12 @@ func TestNewBoardPreservesInputOrderAndIncludesEmptyColumns(t *testing.T) {
 		{ID: "WB-01BRZ3NDEKTSV4RRFFQ69G5FAW", TaskData: core.TaskData{Status: core.StatusBacklog}},
 		{ID: "WB-01CRZ3NDEKTSV4RRFFQ69G5FAX", TaskData: core.TaskData{Status: core.StatusInProgress}},
 		{ID: "WB-01DRZ3NDEKTSV4RRFFQ69G5FAY", TaskData: core.TaskData{Status: core.StatusBacklog}},
+		{ID: "WB-01ERZ3NDEKTSV4RRFFQ69G5FAZ", TaskData: core.TaskData{Status: core.StatusInReview}},
 	}
 
 	got := NewBoard(tasks)
-	if len(got.Columns) != 5 {
-		t.Fatalf("NewBoard() returned %d columns, want 5", len(got.Columns))
+	if len(got.Columns) != 6 {
+		t.Fatalf("NewBoard() returned %d columns, want 6", len(got.Columns))
 	}
 	want := []struct {
 		status core.Status
@@ -118,8 +119,9 @@ func TestNewBoardPreservesInputOrderAndIncludesEmptyColumns(t *testing.T) {
 	}{
 		{core.StatusBacklog, "Backlog", []string{"WB-01BRZ3NDEKTSV4RRFFQ69G5FAW", "WB-01DRZ3NDEKTSV4RRFFQ69G5FAY"}},
 		{core.StatusReady, "Ready", []string{}},
-		{core.StatusInProgress, "In progress", []string{"WB-01CRZ3NDEKTSV4RRFFQ69G5FAX"}},
 		{core.StatusBlocked, "Blocked", []string{}},
+		{core.StatusInProgress, "In Progress", []string{"WB-01CRZ3NDEKTSV4RRFFQ69G5FAX"}},
+		{core.StatusInReview, "In Review", []string{"WB-01ERZ3NDEKTSV4RRFFQ69G5FAZ"}},
 		{core.StatusDone, "Done", []string{"WB-01ARZ3NDEKTSV4RRFFQ69G5FAV"}},
 	}
 	for i, column := range got.Columns {
@@ -148,8 +150,8 @@ func TestNewBoardKeepsUnknownStatusesVisible(t *testing.T) {
 	}
 
 	got := NewBoard(tasks)
-	if len(got.Columns) != 5 {
-		t.Fatalf("NewBoard() returned %d columns, want 5", len(got.Columns))
+	if len(got.Columns) != 6 {
+		t.Fatalf("NewBoard() returned %d columns, want 6", len(got.Columns))
 	}
 	for i, want := range []struct {
 		status core.Status
@@ -158,8 +160,9 @@ func TestNewBoardKeepsUnknownStatusesVisible(t *testing.T) {
 	}{
 		{core.StatusBacklog, "Backlog", []string{}},
 		{core.StatusReady, "Ready", []string{"WB-01ARZ3NDEKTSV4RRFFQ69G5FAV"}},
-		{core.StatusInProgress, "In progress", []string{}},
 		{core.StatusBlocked, "Blocked", []string{}},
+		{core.StatusInProgress, "In Progress", []string{}},
+		{core.StatusInReview, "In Review", []string{}},
 		{core.StatusDone, "Done", []string{"WB-01CRZ3NDEKTSV4RRFFQ69G5FAX"}},
 	} {
 		column := got.Columns[i]
