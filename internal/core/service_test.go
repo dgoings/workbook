@@ -438,6 +438,20 @@ func TestServiceMovePlacesTaskAfterAnchorBeforeFollowingRank(t *testing.T) {
 	}
 }
 
+func TestServiceMoveAfterFractionalLastRankUsesNextInteger(t *testing.T) {
+	moved := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E1", TaskData{Title: "moved", Status: StatusReady, Priority: PriorityHigh, Rank: "9/1"})
+	last := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E2", TaskData{Title: "last", Status: StatusReady, Priority: PriorityHigh, Rank: "3/2"})
+	service := serviceUnderTest(newMemoryTaskStore(moved, last), &sequenceIDSource{values: []string{"01K0M6B8A4FTT8C39MXXYTW7E3"}})
+
+	task, err := service.Move(context.Background(), moved.State.TaskID, MoveInput{After: last.State.TaskID})
+	if err != nil {
+		t.Fatalf("Move() error = %v", err)
+	}
+	if got, want := task.Rank, "2/1"; got != want {
+		t.Fatalf("Move() rank = %q, want %q", got, want)
+	}
+}
+
 func TestServiceMoveRejectsSelfAndCrossBucketAnchorsWithoutWriting(t *testing.T) {
 	moved := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E1", TaskData{Title: "moved", Status: StatusReady, Priority: PriorityHigh, Rank: "1/1"})
 	crossBucket := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E2", TaskData{Title: "other", Status: StatusBacklog, Priority: PriorityHigh, Rank: "1/1"})
@@ -526,6 +540,22 @@ func TestServiceDependRejectsCycleInActiveGraphWithoutWriting(t *testing.T) {
 	}
 	if got, want := len(store.writes), 0; got != want {
 		t.Fatalf("Depend(cycle) Write() calls = %d, want %d", got, want)
+	}
+}
+
+func TestServiceDependRejectsExistingReachableCycleWithoutWriting(t *testing.T) {
+	a := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E1", TaskData{Title: "a", Status: StatusReady, Priority: PriorityHigh, Rank: "1/1"})
+	b := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E2", TaskData{Title: "b", Status: StatusReady, Priority: PriorityHigh, Rank: "2/1", Dependencies: []string{"WB-01K0M6B8A4FTT8C39MXXYTW7E3"}})
+	c := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E3", TaskData{Title: "c", Status: StatusReady, Priority: PriorityHigh, Rank: "3/1", Dependencies: []string{"WB-01K0M6B8A4FTT8C39MXXYTW7E2"}})
+	store := newMemoryTaskStore(a, b, c)
+	service := serviceUnderTest(store, &sequenceIDSource{})
+
+	_, err := service.Depend(context.Background(), a.State.TaskID, b.State.TaskID)
+	if got, want := CategoryOf(err), CategoryValidation; got != want {
+		t.Fatalf("Depend(existing cycle) category = %q, want %q (error: %v)", got, want, err)
+	}
+	if got, want := len(store.writes), 0; got != want {
+		t.Fatalf("Depend(existing cycle) Write() calls = %d, want %d", got, want)
 	}
 }
 

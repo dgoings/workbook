@@ -498,7 +498,9 @@ func movedRank(snapshots []Snapshot, movedID string, anchor TaskData, before boo
 		if before {
 			return formatRank(new(big.Rat).Quo(anchorRank, big.NewRat(2, 1))), nil
 		}
-		return formatRank(new(big.Rat).Add(anchorRank, big.NewRat(1, 1))), nil
+		nextInteger := new(big.Int).Quo(anchorRank.Num(), anchorRank.Denom())
+		nextInteger.Add(nextInteger, big.NewInt(1))
+		return formatRank(new(big.Rat).SetInt(nextInteger)), nil
 	}
 	return formatRank(new(big.Rat).Quo(new(big.Rat).Add(anchorRank, neighbor), big.NewRat(2, 1))), nil
 }
@@ -510,25 +512,34 @@ func dependencyReaches(snapshots []Snapshot, startID, wantedID string) bool {
 			active[snapshot.State.TaskID] = snapshot.State.Task
 		}
 	}
-	stack := []string{startID}
+	visiting := make(map[string]struct{}, len(active))
 	visited := make(map[string]struct{}, len(active))
-	for len(stack) > 0 {
-		id := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
+	var visit func(string) bool
+	visit = func(id string) bool {
 		if id == wantedID {
 			return true
 		}
-		if _, seen := visited[id]; seen {
-			continue
+		if _, seen := visiting[id]; seen {
+			return true
 		}
-		visited[id] = struct{}{}
+		if _, seen := visited[id]; seen {
+			return false
+		}
 		task, ok := active[id]
 		if !ok {
-			continue
+			return false
 		}
-		stack = append(stack, task.Dependencies...)
+		visiting[id] = struct{}{}
+		for _, dependency := range task.Dependencies {
+			if visit(dependency) {
+				return true
+			}
+		}
+		delete(visiting, id)
+		visited[id] = struct{}{}
+		return false
 	}
-	return false
+	return visit(startID)
 }
 
 func hasDependency(dependencies []string, wanted string) bool {
