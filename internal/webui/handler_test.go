@@ -158,6 +158,158 @@ func TestHandlerUpdatesTaskStatus(t *testing.T) {
 	}
 }
 
+func TestHandlerCreatesTask(t *testing.T) {
+	created := boardTasks()[0]
+	created.ID = "WB-01J00000000000000000000009"
+	created.Title = "Create a detail view"
+	created.Description = "Expose every editable field."
+	created.Status = core.StatusInReview
+	created.Priority = core.PriorityLow
+	created.Labels = []string{"web", "forms"}
+	want := core.CreateInput{
+		Title:       created.Title,
+		Description: created.Description,
+		Status:      created.Status,
+		Priority:    created.Priority,
+		Labels:      created.Labels,
+	}
+	handler := NewHandler(
+		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		func(_ context.Context, input core.CreateInput) (core.Task, error) {
+			if !reflect.DeepEqual(input, want) {
+				t.Fatalf("create input = %#v, want %#v", input, want)
+			}
+			return created, nil
+		},
+		unexpectedTaskUpdate(t),
+		unexpectedStatusUpdate(t),
+	)
+
+	response := requestJSON(t, handler, http.MethodPost, "/api/tasks", `{"title":"Create a detail view","description":"Expose every editable field.","status":"in-review","priority":"low","labels":["web","forms"]}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("POST /api/tasks status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	assertTaskMutationDocument(t, response, created)
+}
+
+func TestHandlerUpdatesAllTaskFields(t *testing.T) {
+	updated := boardTasks()[0]
+	updated.Title = "Edit every task field"
+	updated.Description = "Explicit empty values must remain possible."
+	updated.Status = core.StatusDone
+	updated.Priority = core.PriorityLow
+	updated.Labels = []string{"finished"}
+	want := core.UpdateInput{
+		Title:       &updated.Title,
+		Description: &updated.Description,
+		Status:      &updated.Status,
+		Priority:    &updated.Priority,
+		Labels:      &updated.Labels,
+	}
+	handler := NewHandler(
+		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		unexpectedTaskCreate(t),
+		func(_ context.Context, id string, input core.UpdateInput) (core.Task, error) {
+			if id != "WB-01J00000000000000000000001" {
+				t.Fatalf("update id = %q", id)
+			}
+			if !reflect.DeepEqual(input, want) {
+				t.Fatalf("update input = %#v, want %#v", input, want)
+			}
+			return updated, nil
+		},
+		unexpectedStatusUpdate(t),
+	)
+
+	response := requestJSON(t, handler, http.MethodPatch, "/api/tasks/WB-01J00000000000000000000001", `{"title":"Edit every task field","description":"Explicit empty values must remain possible.","status":"done","priority":"low","labels":["finished"]}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("PATCH /api/tasks/<id> status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	assertTaskMutationDocument(t, response, updated)
+}
+
+func TestHandlerRejectsInvalidTaskMutationRequests(t *testing.T) {
+	handler := NewHandler(
+		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		unexpectedTaskCreate(t),
+		unexpectedTaskUpdate(t),
+		unexpectedStatusUpdate(t),
+	)
+	for _, test := range []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{name: "create malformed JSON", method: http.MethodPost, path: "/api/tasks", body: `{"title":`},
+		{name: "create unknown property", method: http.MethodPost, path: "/api/tasks", body: `{"title":"task","unexpected":true}`},
+		{name: "create multiple JSON values", method: http.MethodPost, path: "/api/tasks", body: `{"title":"task"} {}`},
+		{name: "update malformed JSON", method: http.MethodPatch, path: "/api/tasks/WB-01J00000000000000000000001", body: `{"title":`},
+		{name: "update unknown property", method: http.MethodPatch, path: "/api/tasks/WB-01J00000000000000000000001", body: `{"title":"task","unexpected":true}`},
+		{name: "update multiple JSON values", method: http.MethodPatch, path: "/api/tasks/WB-01J00000000000000000000001", body: `{"title":"task"} {}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := requestJSON(t, handler, test.method, test.path, test.body)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("%s %s status = %d, want %d; body = %s", test.method, test.path, response.Code, http.StatusBadRequest, response.Body.String())
+			}
+			var document ErrorDocument
+			if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+				t.Fatalf("decode error document: %v", err)
+			}
+			if document.Format != "workbook.error" || document.Version != 1 || document.Error.Category != core.CategoryInvocation {
+				t.Fatalf("error document = %#v, want workbook.error v1 invocation", document)
+			}
+		})
+	}
+}
+
+func TestHandlerPreservesStatusMutationRoute(t *testing.T) {
+	called := false
+	handler := NewHandler(
+		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		unexpectedTaskCreate(t),
+		unexpectedTaskUpdate(t),
+		func(context.Context, string, core.Status) (core.Task, error) {
+			called = true
+			return boardTasks()[0], nil
+		},
+	)
+
+	response := requestJSON(t, handler, http.MethodPatch, "/api/tasks/WB-01J00000000000000000000001/status", `{"status":"ready"}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("PATCH /api/tasks/<id>/status status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if !called {
+		t.Fatal("status callback was not called")
+	}
+}
+
+func TestHandlerRejectsWrongMethods(t *testing.T) {
+	handler := NewHandler(
+		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		unexpectedTaskCreate(t),
+		unexpectedTaskUpdate(t),
+		unexpectedStatusUpdate(t),
+	)
+	for _, test := range []struct {
+		method    string
+		path      string
+		wantAllow string
+	}{
+		{method: http.MethodGet, path: "/api/tasks/WB-01J00000000000000000000001", wantAllow: http.MethodPatch},
+		{method: http.MethodPut, path: "/api/tasks", wantAllow: http.MethodGet + ", " + http.MethodPost},
+	} {
+		response := request(t, handler, test.method, test.path)
+		if response.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s %s status = %d, want %d", test.method, test.path, response.Code, http.StatusMethodNotAllowed)
+		}
+		if got := response.Header().Get("Allow"); got != test.wantAllow {
+			t.Errorf("%s %s Allow = %q, want %q", test.method, test.path, got, test.wantAllow)
+		}
+	}
+}
+
 func TestHandlerMapsStatusUpdateErrorsToVersionedErrorDocuments(t *testing.T) {
 	handler := NewHandler(
 		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
@@ -313,7 +465,7 @@ func TestHandlerRejectsUnknownRoutesAndMutationMethods(t *testing.T) {
 	}
 	assertSecurityHeaders(t, unknown.Result())
 
-	for _, path := range []string{"/", "/api/tasks", "/healthz"} {
+	for _, path := range []string{"/", "/healthz"} {
 		response := request(t, handler, http.MethodPost, path)
 		if response.Code != http.StatusMethodNotAllowed {
 			t.Errorf("POST %s status = %d, want %d", path, response.Code, http.StatusMethodNotAllowed)
@@ -414,6 +566,33 @@ func unexpectedStatusUpdate(t *testing.T) TaskStatusUpdater {
 	return func(context.Context, string, core.Status) (core.Task, error) {
 		t.Fatal("unexpected status update")
 		return core.Task{}, nil
+	}
+}
+
+func unexpectedTaskCreate(t *testing.T) TaskCreator {
+	t.Helper()
+	return func(context.Context, core.CreateInput) (core.Task, error) {
+		t.Fatal("unexpected task create")
+		return core.Task{}, nil
+	}
+}
+
+func unexpectedTaskUpdate(t *testing.T) TaskUpdater {
+	t.Helper()
+	return func(context.Context, string, core.UpdateInput) (core.Task, error) {
+		t.Fatal("unexpected task update")
+		return core.Task{}, nil
+	}
+}
+
+func assertTaskMutationDocument(t *testing.T, response *httptest.ResponseRecorder, want core.Task) {
+	t.Helper()
+	var document TaskMutationDocument
+	if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+		t.Fatalf("decode mutation document: %v; body = %s", err, response.Body.String())
+	}
+	if document.Format != "workbook.task-mutation" || document.Version != 1 || !reflect.DeepEqual(document.Task, want) {
+		t.Fatalf("mutation document = %#v, want workbook.task-mutation v1 with task %#v", document, want)
 	}
 }
 
