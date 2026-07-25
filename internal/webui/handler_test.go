@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"reflect"
 	"regexp"
 	"strings"
@@ -151,6 +152,51 @@ func TestHandlerRendersTaskAndNewTaskLinks(t *testing.T) {
 	}
 }
 
+func TestHandlerRequiresCanonicalStatusChoiceForUnknownTask(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	tasks := boardTasks()
+	unknown := tasks[2]
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+unknown.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<unknown-status-task> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	document, err := json.Marshal(TasksDocument{
+		Format:  "workbook.tasks",
+		Version: 1,
+		Tasks:   []core.Task{unknown},
+		Presentation: []TaskPresentation{{
+			TaskID:   unknown.ID,
+			IDPrefix: unknown.ID,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/"+unknown.ID, string(document)) + script + `
+setTimeout(() => {
+  const status = findElement(main, (element) => element.id === "task-status");
+  if (!status) throw new Error("detail form did not render a status control");
+  if (status.value !== "") throw new Error("unknown status defaulted to " + JSON.stringify(status.value) + ", want an explicit empty choice");
+  if (!status.required) throw new Error("unknown status choice is not required");
+  if (!status.firstElementChild || !status.firstElementChild.textContent.includes("future-status")) {
+    throw new Error("unknown current status is not visible in the status control");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("execute rendered client for unknown status: %v\n%s", err, output)
+	}
+}
+
 func TestHandlerRefreshesTasksOnEveryAPIRequest(t *testing.T) {
 	first := boardTasks()
 	second := append([]core.Task(nil), first...)
@@ -180,6 +226,103 @@ func TestHandlerRefreshesTasksOnEveryAPIRequest(t *testing.T) {
 	if calls != 2 {
 		t.Fatalf("lister calls = %d, want 2", calls)
 	}
+}
+
+func renderedClientScript(t *testing.T, body string) string {
+	t.Helper()
+	const open = "<script>"
+	const close = "</script>"
+	start := strings.LastIndex(body, open)
+	end := strings.LastIndex(body, close)
+	if start < 0 || end <= start {
+		t.Fatal("rendered page does not contain an executable client script")
+	}
+	return body[start+len(open) : end]
+}
+
+func clientDOMHarness(path, taskDocument string) string {
+	return `
+class TestElement {
+  constructor(tagName) {
+    this.tagName = tagName.toUpperCase();
+    this.children = [];
+    this.dataset = {};
+    this.attributes = {};
+    this.classList = { add() {}, remove() {}, toggle() {} };
+    this.eventListeners = {};
+    this._value = "";
+    this.textContent = "";
+    this.selected = false;
+    this.disabled = false;
+    this.required = false;
+  }
+  append(...children) { this.children.push(...children); }
+  replaceChildren(...children) { this.children = children; }
+  setAttribute(name, value) { this.attributes[name] = String(value); }
+  addEventListener(name, listener) { this.eventListeners[name] = listener; }
+  querySelector(selector) {
+    if (selector === "[data-stale]") return stale;
+    return null;
+  }
+  querySelectorAll() { return []; }
+  get firstElementChild() { return this.children[0] || null; }
+  get value() {
+    if (this.tagName === "SELECT") {
+      const selected = this.children.find((option) => option.selected);
+      return selected ? selected.value : (this.children[0] ? this.children[0].value : "");
+    }
+    return this._value;
+  }
+  set value(value) { this._value = String(value); }
+}
+const main = new TestElement("main");
+const boardView = new TestElement("div");
+const stale = new TestElement("p");
+const updated = new TestElement("p");
+const boardStatuses = ["backlog", "ready", "blocked", "in-progress", "in-review", "done", "unknown"];
+const boardLists = boardStatuses.map((status) => {
+  const element = new TestElement("div");
+  element.dataset.status = status;
+  if (status !== "unknown") element.dataset.dropStatus = status;
+  return element;
+});
+const boardCounts = boardStatuses.map((status) => {
+  const element = new TestElement("span");
+  element.dataset.count = status;
+  return element;
+});
+boardView.querySelectorAll = (selector) => selector === "[data-status]" ? boardLists : boardCounts;
+globalThis.document = {
+  title: "",
+  querySelector(selector) {
+    if (selector === "main") return main;
+    if (selector === "[data-board-view]") return boardView;
+    if (selector === "[data-updated]") return updated;
+    return null;
+  },
+  querySelectorAll() { return []; },
+  createElement(tagName) { return new TestElement(tagName); },
+  createDocumentFragment() { return new TestElement("fragment"); },
+  addEventListener() {}
+};
+globalThis.window = {
+  location: { href: "http://127.0.0.1` + path + `" },
+  addEventListener() {},
+  setInterval() {}
+};
+globalThis.history = { pushState() {} };
+globalThis.requestAnimationFrame = (callback) => callback();
+const taskDocument = ` + taskDocument + `;
+globalThis.fetch = async () => ({ ok: true, json: async () => taskDocument });
+function findElement(root, predicate) {
+  if (predicate(root)) return root;
+  for (const child of root.children || []) {
+    const match = findElement(child, predicate);
+    if (match) return match;
+  }
+  return null;
+}
+`
 }
 
 func TestHandlerUpdatesTaskStatus(t *testing.T) {

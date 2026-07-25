@@ -177,7 +177,10 @@
         const form = document.createElement("form"); form.className = "task-form";
         const title = document.createElement("input"); title.id = "task-title"; title.name = "title"; title.required = true; title.value = task.title || "";
         const description = document.createElement("textarea"); description.id = "task-description"; description.name = "description"; description.value = task.description || "";
-        const status = select("status", statusDefinitions, task.status);
+        const knownStatus = statuses.has(task.status);
+        const statusOptions = knownStatus ? statusDefinitions : [["", "Choose a canonical status (current: " + task.status + ")"], ...statusDefinitions];
+        const status = select("status", statusOptions, knownStatus ? task.status : ""); status.required = true;
+        if (!knownStatus) status.firstElementChild.disabled = true;
         const priority = select("priority", [["high", "High"], ["medium", "Medium"], ["low", "Low"]], task.priority);
         const labels = document.createElement("input"); labels.id = "task-labels"; labels.name = "labels"; labels.value = (task.labels || []).join(", "); labels.placeholder = "web, docs, release";
         const result = document.createElement("p"); result.className = "form-status"; result.setAttribute("role", "status"); result.setAttribute("aria-live", "polite");
