@@ -98,6 +98,11 @@ var commandSchemas = map[string]commandSchema{
 			"json": boolFlag,
 		},
 	},
+	"sync": {
+		flags: map[string]flagKind{
+			"json": boolFlag,
+		},
+	},
 	"hooks": {
 		requiredArguments: 1,
 		flags: map[string]flagKind{

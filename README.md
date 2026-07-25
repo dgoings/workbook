@@ -9,8 +9,8 @@ architecture also adds a disposable SQLite materialized view.
 
 > **Status:** initial collaborative POC. Repository initialization, local task
 > CRUD, task ordering and dependencies, terminal and web boards, web
-> drag-and-drop status changes, and explicit origin-only task fetch/push are
-> implemented. SQLite projection, conflict reconciliation, and packaged
+> drag-and-drop status changes, and explicit origin-only task fetch/push/sync
+> are implemented. SQLite projection, conflict reconciliation, and packaged
 > distribution remain proposed.
 
 ## Why Workbook?
@@ -49,7 +49,8 @@ workbook fetch
 
 Publish local task changes explicitly with `workbook push`. Teams that want task
 publication tied to ordinary code pushes can opt in once per clone with
-`workbook hooks install`.
+`workbook hooks install`. To perform the safe fetch-then-push sequence manually,
+run `workbook sync`.
 
 ### Proposed ephemeral coding-agent workflow
 
@@ -104,6 +105,7 @@ workbook free <task> <dependency> [--json]
 workbook next [--json]
 workbook fetch [--json]
 workbook push [--json]
+workbook sync [--json]
 workbook hooks install [--json]
 workbook serve [--addr 127.0.0.1:7331]
 ```
@@ -146,8 +148,14 @@ never overwritten; Workbook instead prints manual chaining guidance. Hooks are
 optional convenience only and are not required for correctness.
 
 The collaborative POC supports only the remote named `origin`. Multiple named
-remotes, automatic fetching, divergent-operation reconciliation, and a combined
-fetch-and-push command remain future work.
+remotes, automatic fetching, and divergent-operation reconciliation remain
+future work.
+
+`workbook sync` runs the POC-safe sequence against `origin`: fetch Workbook task
+refs into the isolated tracking namespace, validate and fast-forward/create
+compatible local task refs, stop before pushing if any task history diverged or
+failed validation, then push every local task ref. The command never fetches or
+pushes code branches and does not create a hidden tasks branch.
 
 ### Terminal board
 
@@ -216,7 +224,6 @@ The following examples describe future coordination and are not implemented:
 
 ```sh
 workbook claim TASK-123 --remote-required --json
-workbook sync
 ```
 
 Remote compare-and-swap claims, automatic conflict reconciliation, multiple
@@ -338,8 +345,9 @@ them.
 
 ## Concurrency and synchronization
 
-Explicit fast-forward-only synchronization is implemented. Concurrent domain
-reconciliation is still proposed. The intended later reconciliation model is:
+Explicit fast-forward-only synchronization and a combined fetch-then-push sync
+command are implemented. Concurrent domain reconciliation is still proposed. The
+intended later reconciliation model is:
 
 1. Fetch the relevant Workbook ref.
 2. Merge any newly discovered operation DAGs.
@@ -431,7 +439,8 @@ At least initially, Workbook is not intended to provide:
 The POC now has versioned operation and state documents, local Git object/ref
 CRUD, structured CLI output, repository initialization, terminal and web boards,
 web drag-and-drop status changes, task ordering and dependencies, and explicit
-origin-only task sharing. Remaining POC work is:
+origin-only task sharing including fetch, push, sync, and optional pre-push hook
+installation. Remaining POC work is:
 
 1. Implement deterministic SQLite projection and rebuilds from tip checkpoints.
 2. Complete replay, reconstruction, Git hash, renderer, HTTP, installer, and

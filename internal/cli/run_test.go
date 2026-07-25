@@ -662,6 +662,7 @@ func TestREADMEImplementedCommands(t *testing.T) {
 		"workbook next [--json]",
 		"workbook fetch [--json]",
 		"workbook push [--json]",
+		"workbook sync [--json]",
 		"workbook hooks install [--json]",
 		"workbook serve [--addr 127.0.0.1:7331]",
 	}
@@ -669,7 +670,7 @@ func TestREADMEImplementedCommands(t *testing.T) {
 		t.Fatalf("implemented commands = %q, want exactly %q", got, want)
 	}
 
-	for _, command := range []string{"workbook claim", "workbook sync"} {
+	for _, command := range []string{"workbook claim"} {
 		if !strings.Contains(proposed, command) {
 			t.Errorf("proposed commands missing %q", command)
 		}
@@ -767,7 +768,7 @@ func readmeCommandPolicyViolations(readme string) []string {
 	implemented := map[string]bool{
 		"init": true, "create": true, "list": true, "board": true,
 		"show": true, "update": true, "delete": true, "fetch": true,
-		"push": true, "hooks": true, "serve": true, "move": true,
+		"push": true, "sync": true, "hooks": true, "serve": true, "move": true,
 		"depend": true, "free": true, "next": true,
 	}
 	commandPattern := regexp.MustCompile(`\bworkbook ([a-z][a-z0-9-]*)\b`)
