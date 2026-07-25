@@ -8,9 +8,10 @@ objects and refs and explicitly synchronizes them through `origin`. The intended
 architecture also adds a disposable SQLite materialized view.
 
 > **Status:** initial collaborative POC. Repository initialization, local task
-> CRUD, task ordering and dependencies, read-only terminal and web boards, and
-> explicit origin-only task fetch/push are implemented. SQLite projection,
-> conflict reconciliation, and packaged distribution remain proposed.
+> CRUD, task ordering and dependencies, terminal and web boards, web
+> drag-and-drop status changes, and explicit origin-only task fetch/push are
+> implemented. SQLite projection, conflict reconciliation, and packaged
+> distribution remain proposed.
 
 ## Why Workbook?
 
@@ -156,7 +157,7 @@ sections for narrow or noninteractive output; `--wide` and `--narrow` force the
 respective layouts. The task-ID prefixes in human output are accepted anywhere a
 task ID is accepted.
 
-### Read-only web board
+### Local web board
 
 `workbook serve` starts a foreground, loopback-only board at
 `http://127.0.0.1:7331` by default. In fish, run it in the foreground with:
@@ -171,18 +172,26 @@ Or run it in the background with:
 workbook serve &
 ```
 
-The embedded page and its API expose exactly these read-only routes:
+The embedded page and its API expose these routes:
 
 ```text
-GET /             board HTML
-GET /api/tasks    versioned task JSON
-GET /healthz      versioned health JSON
+GET /                         board HTML
+GET /api/tasks                versioned task JSON
+PATCH /api/tasks/<id>/status  drag-and-drop status changes
+GET /healthz                  versioned health JSON
 ```
 
-There are no mutation routes; a non-GET request to a known route receives `405`
-with `Allow: GET`. The executable embeds its HTML, CSS, and JavaScript, and the
-page polls `/api/tasks` every two seconds. Web cards show the actionable task-ID
-prefix, priority, title, optional description, and labels.
+Drag a task card to another canonical status column to update its status through
+the same core service path as `workbook update --status`. The mutation creates a
+normal Workbook operation commit and returns a versioned JSON task-mutation
+document. The executable embeds its HTML, CSS, and JavaScript, and the page polls
+`/api/tasks` every two seconds. Web cards show the actionable task-ID prefix,
+priority, title, optional description, and labels.
+
+The web board is still local-first and intentionally narrow in scope. General
+title, description, labels, priority editing, authentication, and non-local
+hosting remain future work. A request using the wrong method for a known route
+receives `405` with the route's allowed method.
 
 ### Project identity across worktrees
 
@@ -420,12 +429,12 @@ At least initially, Workbook is not intended to provide:
 ## POC roadmap
 
 The POC now has versioned operation and state documents, local Git object/ref
-CRUD, structured CLI output, repository initialization, read-only terminal and
-web boards, and explicit origin-only task sharing. Remaining work is:
+CRUD, structured CLI output, repository initialization, terminal and web boards,
+web drag-and-drop status changes, task ordering and dependencies, and explicit
+origin-only task sharing. Remaining POC work is:
 
-1. Add exact task ordering, dependencies, cycle rejection, and next selection.
-2. Implement deterministic SQLite projection and rebuilds from tip checkpoints.
-3. Complete replay, reconstruction, Git hash, renderer, HTTP, installer, and
+1. Implement deterministic SQLite projection and rebuilds from tip checkpoints.
+2. Complete replay, reconstruction, Git hash, renderer, HTTP, installer, and
    documentation acceptance coverage.
 
 Remote claims, conflict reconciliation, multiple-remote support, packaged

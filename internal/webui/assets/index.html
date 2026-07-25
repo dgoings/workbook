@@ -1,5 +1,5 @@
 {{ define "task" }}
-<article class="task-card" tabindex="0" data-task-id="{{ .Task.ID }}" data-id-prefix="{{ .IDPrefix }}">
+<article class="task-card" tabindex="0" data-task-id="{{ .Task.ID }}" data-id-prefix="{{ .IDPrefix }}" draggable="true" aria-label="Move task {{ .Task.Title }} from {{ .Task.Status }}">
   <div class="task-card__meta"><code>{{ .IDPrefix }}</code><span class="priority priority--{{ .Task.Priority }}">{{ .Task.Priority }}</span></div>
   <h3>{{ .Task.Title }}</h3>
   {{ if .Task.Description }}<p>{{ .Task.Description }}</p>{{ end }}
@@ -34,8 +34,10 @@
     .ref-label { display: block; overflow: hidden; margin-top: .45rem; color: #526b9b; font-size: .65rem; text-overflow: ellipsis; white-space: nowrap; }
     .task-list { display: grid; gap: .55rem; min-height: 5rem; padding: .55rem; }
     .task-list.is-refreshing { opacity: .58; }
-    .task-card { border: 1px solid #b9c6d8; border-radius: 4px; background: #fff; padding: .7rem; box-shadow: 0 1px 0 rgba(23,32,51,.05); }
+    .task-card { border: 1px solid #b9c6d8; border-radius: 4px; background: #fff; padding: .7rem; box-shadow: 0 1px 0 rgba(23,32,51,.05); cursor: grab; }
+    .task-card:active { cursor: grabbing; }
     .task-card:focus-visible { outline: 3px solid #2457d6; outline-offset: 2px; }
+    .task-card.is-dragging { opacity: .5; }
     .task-card__meta { display: flex; align-items: center; justify-content: space-between; gap: .5rem; color: #526075; font-size: .7rem; }
     .task-card code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .priority { flex: 0 0 auto; font-size: .64rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
@@ -46,6 +48,8 @@
     .label { max-width: 100%; overflow: hidden; padding: .14rem .28rem; border: 1px solid #d5deea; border-radius: 3px; color: #4e5d73; font-size: .64rem; text-overflow: ellipsis; white-space: nowrap; }
     .unknown { margin-top: 1.1rem; border: 1px solid #b45309; background: #fffaf1; }
     .unknown .column__header { border-top-color: #b45309; background: #fff7ed; }
+    .task-list.can-drop { outline: 2px dashed #2457d6; outline-offset: -4px; background: rgba(36,87,214,.08); }
+    .task-list.cannot-drop { outline: 2px dashed #b45309; outline-offset: -4px; background: rgba(180,83,9,.08); }
     @media (prefers-reduced-motion: no-preference) { .task-list { transition: opacity 120ms ease; } }
     @media (max-width: 900px) { .app-header { align-items: start; flex-direction: column; } .updated { text-align: left; } .board { grid-template-columns: 1fr; overflow: visible; } .column { min-width: 0; } }
   </style>
@@ -62,7 +66,7 @@
       {{ range .Board.Columns }}
       <section class="column">
         <header class="column__header"><h2 class="column__heading">{{ .Label }} <span class="count" data-count="{{ .Status }}">{{ len .Tasks }}</span></h2><code class="ref-label">refs/workbook/status/{{ .Status }}</code></header>
-        <div class="task-list" data-status="{{ .Status }}">{{ range .Tasks }}{{ template "task" . }}{{ end }}</div>
+        <div class="task-list" data-status="{{ .Status }}" data-drop-status="{{ .Status }}">{{ range .Tasks }}{{ template "task" . }}{{ end }}</div>
       </section>
       {{ end }}
     </section>
@@ -73,15 +77,16 @@
   </main>
   <script>
     (() => {
-      const statuses = new Set(["backlog", "ready", "in-progress", "in-review", "blocked", "done"]);
+      const statuses = new Set(["backlog", "ready", "blocked", "in-progress", "in-review", "done"]);
       const lists = new Map([...document.querySelectorAll("[data-status]")].map((element) => [element.dataset.status, element]));
       const counts = new Map([...document.querySelectorAll("[data-count]")].map((element) => [element.dataset.count, element]));
       const stale = document.querySelector("[data-stale]");
       const updated = document.querySelector("[data-updated]");
+      let activeDrag = null;
 
       function text(element, value) { element.textContent = value || ""; return element; }
       function card(task, idPrefix) {
-        const article = document.createElement("article"); article.className = "task-card"; article.tabIndex = 0; article.dataset.taskId = task.id; article.dataset.idPrefix = idPrefix;
+        const article = document.createElement("article"); article.className = "task-card"; article.tabIndex = 0; article.dataset.taskId = task.id; article.dataset.idPrefix = idPrefix; article.draggable = true; article.setAttribute("aria-label", "Move task " + task.title + " from " + task.status);
         const meta = document.createElement("div"); meta.className = "task-card__meta";
         const id = document.createElement("code"); text(id, idPrefix);
         const priority = document.createElement("span"); priority.className = "priority priority--" + task.priority; text(priority, task.priority);
@@ -90,6 +95,30 @@
         if (task.description) { const description = document.createElement("p"); text(description, task.description); article.append(description); }
         if (task.labels && task.labels.length) { const labels = document.createElement("div"); labels.className = "labels"; task.labels.forEach((label) => { const item = document.createElement("span"); item.className = "label"; text(item, label); labels.append(item); }); article.append(labels); }
         return article;
+      }
+      function clearDropStates() {
+        lists.forEach((list) => list.classList.remove("can-drop", "cannot-drop"));
+      }
+      function setDropState(list, allowed) {
+        clearDropStates();
+        list.classList.toggle("can-drop", allowed);
+        list.classList.toggle("cannot-drop", !allowed);
+      }
+      function dropTarget(event) {
+        return event.target.closest("[data-drop-status]");
+      }
+      function canDropOn(list) {
+        return !!(activeDrag && list && statuses.has(list.dataset.dropStatus) && list.dataset.dropStatus !== activeDrag.sourceStatus);
+      }
+      async function updateStatus(taskId, status) {
+        const response = await fetch("/api/tasks/" + encodeURIComponent(taskId) + "/status", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status })
+        });
+        const document = await response.json();
+        if (!response.ok || document.format !== "workbook.task-mutation" || document.version !== 1 || !document.task) throw new Error("invalid mutation document");
+        return document.task;
       }
       function render(tasks, presentation) {
         const grouped = new Map([...lists.keys()].map((status) => [status, []]));
@@ -110,8 +139,52 @@
           const presentation = new Map(document.presentation.map((view) => [view.taskId, view.idPrefix]));
           if (presentation.size !== document.tasks.length || document.tasks.some((task) => !presentation.has(task.id))) throw new Error("invalid task presentation");
           render(document.tasks, presentation); stale.dataset.visible = "false"; text(updated, "Updated " + new Date().toLocaleTimeString());
-        } catch (_) { stale.dataset.visible = "true"; }
+        } catch (_) { text(stale, "Task refresh failed. Showing the last successful board."); stale.dataset.visible = "true"; }
       }
+      document.addEventListener("dragstart", (event) => {
+        const item = event.target.closest(".task-card");
+        const source = item && item.closest("[data-status]");
+        if (!item || !source || !source.dataset.dropStatus) return;
+        activeDrag = { taskId: item.dataset.taskId, sourceStatus: source.dataset.status };
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", activeDrag.taskId);
+        item.classList.add("is-dragging");
+      });
+      document.addEventListener("dragend", (event) => {
+        const item = event.target.closest(".task-card");
+        if (item) item.classList.remove("is-dragging");
+        activeDrag = null;
+        clearDropStates();
+      });
+      document.addEventListener("dragover", (event) => {
+        const target = dropTarget(event);
+        if (!target || !activeDrag) return;
+        const allowed = canDropOn(target);
+        setDropState(target, allowed);
+        if (allowed) {
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "move";
+        }
+      });
+      document.addEventListener("dragleave", (event) => {
+        const target = dropTarget(event);
+        if (target && !target.contains(event.relatedTarget)) target.classList.remove("can-drop", "cannot-drop");
+      });
+      document.addEventListener("drop", async (event) => {
+        const target = dropTarget(event);
+        if (!target || !canDropOn(target)) return;
+        event.preventDefault();
+        const taskId = activeDrag.taskId;
+        const status = target.dataset.dropStatus;
+        clearDropStates();
+        try {
+          await updateStatus(taskId, status);
+          await refresh();
+        } catch (_) {
+          text(stale, "Task update failed. Showing the last successful board.");
+          stale.dataset.visible = "true";
+        }
+      });
       window.setInterval(refresh, 2000);
     })();
   </script>

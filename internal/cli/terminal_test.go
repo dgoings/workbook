@@ -38,7 +38,7 @@ func TestRunBoardHonorsWideAndNarrowOverrides(t *testing.T) {
 		flag string
 		want string
 	}{
-		{name: "wide", flag: "--wide", want: "+------------------+------------------+------------------+------------------+------------------+\n"},
+		{name: "wide", flag: "--wide", want: "+---------------+---------------+---------------+---------------+---------------+---------------+\n"},
 		{name: "narrow", flag: "--narrow", want: "BACKLOG (1)\n"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

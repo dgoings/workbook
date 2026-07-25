@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"html/template"
+	"io"
 	"net/http"
+	"strings"
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/presentation"
@@ -19,11 +21,19 @@ var assets embed.FS
 
 type TaskLister func(context.Context) ([]core.Task, error)
 
+type TaskStatusUpdater func(context.Context, string, core.Status) (core.Task, error)
+
 type TasksDocument struct {
 	Format       string             `json:"format"`
 	Version      int                `json:"version"`
 	Tasks        []core.Task        `json:"tasks"`
 	Presentation []TaskPresentation `json:"presentation"`
+}
+
+type TaskMutationDocument struct {
+	Format  string    `json:"format"`
+	Version int       `json:"version"`
+	Task    core.Task `json:"task"`
 }
 
 type TaskPresentation struct {
@@ -49,20 +59,26 @@ type ErrorDocument struct {
 }
 
 type handler struct {
-	list TaskLister
-	page *template.Template
-	mux  *http.ServeMux
+	list         TaskLister
+	updateStatus TaskStatusUpdater
+	page         *template.Template
+	mux          *http.ServeMux
 }
 
 type pageData struct {
 	Board presentation.Board
 }
 
-func NewHandler(list TaskLister) http.Handler {
+type updateStatusRequest struct {
+	Status core.Status `json:"status"`
+}
+
+func NewHandler(list TaskLister, updateStatus TaskStatusUpdater) http.Handler {
 	page := template.Must(template.New("index.html").ParseFS(assets, "assets/index.html"))
-	handler := &handler{list: list, page: page, mux: http.NewServeMux()}
+	handler := &handler{list: list, updateStatus: updateStatus, page: page, mux: http.NewServeMux()}
 	handler.mux.HandleFunc("GET /{$}", handler.serveBoard)
 	handler.mux.HandleFunc("GET /api/tasks", handler.serveTasks)
+	handler.mux.HandleFunc("PATCH /api/tasks/{id}/status", handler.updateTaskStatus)
 	handler.mux.HandleFunc("GET /healthz", handler.serveHealth)
 	return http.HandlerFunc(handler.serveHTTP)
 }
@@ -70,21 +86,37 @@ func NewHandler(list TaskLister) http.Handler {
 func (handler *handler) serveHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Content-Security-Policy", securityPolicy)
 	writer.Header().Set("X-Content-Type-Options", "nosniff")
-	if request.Method != http.MethodGet && isKnownPath(request.URL.Path) {
-		writer.Header().Set("Allow", http.MethodGet)
+	if method, known := allowedMethod(request.URL.Path); known && request.Method != method {
+		writer.Header().Set("Allow", method)
 		writer.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 	handler.mux.ServeHTTP(writer, request)
 }
 
-func isKnownPath(path string) bool {
+func allowedMethod(path string) (string, bool) {
 	switch path {
 	case "/", "/api/tasks", "/healthz":
-		return true
+		return http.MethodGet, true
 	default:
-		return false
+		if taskStatusPathID(path) != "" {
+			return http.MethodPatch, true
+		}
+		return "", false
 	}
+}
+
+func taskStatusPathID(path string) string {
+	const prefix = "/api/tasks/"
+	const suffix = "/status"
+	if !strings.HasPrefix(path, prefix) || !strings.HasSuffix(path, suffix) {
+		return ""
+	}
+	id := strings.TrimSuffix(strings.TrimPrefix(path, prefix), suffix)
+	if id == "" || strings.Contains(id, "/") {
+		return ""
+	}
+	return id
 }
 
 func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Request) {
@@ -110,6 +142,37 @@ func (handler *handler) serveTasks(writer http.ResponseWriter, request *http.Req
 		Version:      1,
 		Tasks:        tasks,
 		Presentation: taskPresentation(tasks),
+	})
+}
+
+func (handler *handler) updateTaskStatus(writer http.ResponseWriter, request *http.Request) {
+	id := request.PathValue("id")
+	if id == "" {
+		id = taskStatusPathID(request.URL.Path)
+	}
+	var input updateStatusRequest
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		handler.writeError(writer, core.Wrap(core.CategoryInvocation, "decode status update", err))
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if err == nil {
+			err = errors.New("multiple JSON values")
+		}
+		handler.writeError(writer, core.Wrap(core.CategoryInvocation, "decode status update", err))
+		return
+	}
+	task, err := handler.updateStatus(request.Context(), id, input.Status)
+	if err != nil {
+		handler.writeError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, TaskMutationDocument{
+		Format:  "workbook.task-mutation",
+		Version: 1,
+		Task:    task,
 	})
 }
 
