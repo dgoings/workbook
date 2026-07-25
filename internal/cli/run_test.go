@@ -685,7 +685,8 @@ func TestREADMEImplementedCommands(t *testing.T) {
 	for _, required := range []string{
 		"drag-and-drop status changes",
 		"PATCH /api/tasks/<id>/status",
-		"title, description, labels, priority editing",
+		"client-rendered form",
+		"shared new-task and detail form",
 	} {
 		if !strings.Contains(readme, required) {
 			t.Errorf("README web board documentation is missing %q", required)
