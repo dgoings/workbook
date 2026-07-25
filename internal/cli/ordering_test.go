@@ -36,6 +36,12 @@ func TestRunMoveDependFreeAndNext(t *testing.T) {
 			t.Fatalf("move missing anchor code/stdout = %d/%q, want 2/empty; stderr = %q", code, stdout, stderr)
 		}
 		assertJSONError(t, stderr, core.CategoryInvocation, "move requires exactly one of --before or --after")
+
+		code, stdout, stderr = run(t, repository, "move", first.ID, "--before", second.ID, "--after", third.ID, "--json")
+		if code != 2 || stdout != "" {
+			t.Fatalf("move conflicting anchors code/stdout = %d/%q, want 2/empty; stderr = %q", code, stdout, stderr)
+		}
+		assertJSONError(t, stderr, core.CategoryInvocation, "move requires exactly one of --before or --after")
 	})
 
 	t.Run("depend and free mutate dependency set", func(t *testing.T) {
@@ -58,6 +64,17 @@ func TestRunMoveDependFreeAndNext(t *testing.T) {
 		}
 		if !strings.HasPrefix(stdout, third.ID+"\t") {
 			t.Fatalf("free stdout = %q, want mutation row", stdout)
+		}
+		code, stdout, stderr = run(t, repository, "show", third.ID, "--json")
+		if code != 0 {
+			t.Fatalf("show after free code = %d, want 0; stderr = %q", code, stderr)
+		}
+		result = assertJSONResult(t, stdout, "show")
+		if err := json.Unmarshal(result.Data, &dependent); err != nil {
+			t.Fatalf("decode task after free: %v", err)
+		}
+		if len(dependent.Dependencies) != 0 {
+			t.Fatalf("persisted dependencies after free = %q, want empty", dependent.Dependencies)
 		}
 	})
 
@@ -100,6 +117,32 @@ func TestRunMoveDependFreeAndNext(t *testing.T) {
 		if string(result.Data) != "null" {
 			t.Fatalf("next JSON data = %s, want null", result.Data)
 		}
+	})
+}
+
+func TestRunOrderingCommandsExposeCoreTargetErrors(t *testing.T) {
+	repository := initializedRepository(t)
+	first := createOrderingTask(t, repository, "First", "high")
+	second := createOrderingTask(t, repository, "Second", "high")
+
+	t.Run("move missing anchor", func(t *testing.T) {
+		code, stdout, stderr := run(t, repository, "move", first.ID, "--before", "WB-NOPE", "--json")
+		if code != 4 || stdout != "" {
+			t.Fatalf("missing move anchor code/stdout = %d/%q, want 4/empty; stderr = %q", code, stdout, stderr)
+		}
+		assertJSONError(t, stderr, core.CategoryNotFound, "")
+	})
+
+	t.Run("depend tombstoned dependency", func(t *testing.T) {
+		code, _, stderr := run(t, repository, "delete", second.ID)
+		if code != 0 {
+			t.Fatalf("delete dependency code = %d, want 0; stderr = %q", code, stderr)
+		}
+		code, stdout, stderr := run(t, repository, "depend", first.ID, second.ID, "--json")
+		if code != 5 || stdout != "" {
+			t.Fatalf("tombstoned dependency code/stdout = %d/%q, want 5/empty; stderr = %q", code, stdout, stderr)
+		}
+		assertJSONError(t, stderr, core.CategoryValidation, "cannot add a dependency involving a tombstoned task")
 	})
 }
 
