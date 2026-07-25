@@ -605,6 +605,9 @@ func TestREADMEImplementedCommands(t *testing.T) {
 		"workbook show",
 		"workbook update",
 		"workbook delete",
+		"workbook fetch [--json]",
+		"workbook push [--json]",
+		"workbook hooks install [--json]",
 		"workbook serve [--addr 127.0.0.1:7331]",
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
@@ -619,8 +622,8 @@ func TestREADMEImplementedCommands(t *testing.T) {
 
 	readme := string(contents)
 	assertREADMECommandPolicy(t, readme)
-	if !strings.Contains(readme, "### Proposed small-team workflow") {
-		t.Error("README small-team workflow is not labeled proposed")
+	if !strings.Contains(readme, "### Small-team workflow") {
+		t.Error("README is missing the implemented small-team workflow")
 	}
 	for _, stale := range []string{
 		"Workbook synchronizes only its own refs",
@@ -699,7 +702,8 @@ func assertREADMECommandPolicy(t *testing.T, readme string) {
 func readmeCommandPolicyViolations(readme string) []string {
 	implemented := map[string]bool{
 		"init": true, "create": true, "list": true, "board": true,
-		"show": true, "update": true, "delete": true, "serve": true,
+		"show": true, "update": true, "delete": true, "fetch": true,
+		"push": true, "hooks": true, "serve": true,
 	}
 	commandPattern := regexp.MustCompile(`\bworkbook ([a-z][a-z0-9-]*)\b`)
 	var h2, h3 string

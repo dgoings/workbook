@@ -3,14 +3,14 @@
 Workbook is a lightweight, repository-native project tracker for humans and coding agents.
 
 The goal is to keep structured project state close to the code without requiring
-a hosted issue tracker. The current local CLI stores task operations durably in
-Git objects and refs. The intended architecture adds Git-remote synchronization
-and a disposable SQLite materialized view.
+a hosted issue tracker. The current CLI stores task operations durably in Git
+objects and refs and explicitly synchronizes them through `origin`. The intended
+architecture also adds a disposable SQLite materialized view.
 
-> **Status:** initial local POC. Repository initialization, local task CRUD, and
-> read-only terminal and web boards are implemented. Task ordering and
-> dependencies, SQLite projection, remote synchronization, and packaged
-> distribution remain proposed.
+> **Status:** initial collaborative POC. Repository initialization, local task
+> CRUD, read-only terminal and web boards, and explicit origin-only task
+> fetch/push are implemented. Task ordering and dependencies, SQLite projection,
+> conflict reconciliation, and packaged distribution remain proposed.
 
 ## Why Workbook?
 
@@ -31,20 +31,24 @@ Workbook aims for a middle ground:
 
 A developer keeps task state in the repository's Git object database and queries it locally. A remote is optional, although pushing Workbook refs provides backup and portability across clones.
 
-### Proposed small-team workflow
+### Small-team workflow
 
-A future remote workflow would let team members share task operations through the
-repository's existing Git remote. Workbook would synchronize only its own refs,
-reconcile concurrent edits according to documented domain rules, and leave each
-developer's code branch untouched.
+Team members explicitly share task refs through the repository's `origin` remote.
+Workbook fetches only its private task namespace, validates fetched task
+histories and checkpoints in isolated tracking refs, and leaves the checked-out
+code branch untouched.
 
-The proposed onboarding flow would be approximately:
+After cloning the repository and installing Workbook, fetch the shared tasks:
 
 ```sh
 git clone <repository>
 ./init.sh
-workbook ready
+workbook fetch
 ```
+
+Publish local task changes explicitly with `workbook push`. Teams that want task
+publication tied to ordinary code pushes can opt in once per clone with
+`workbook hooks install`.
 
 ### Proposed ephemeral coding-agent workflow
 
@@ -93,6 +97,9 @@ workbook board [--wide | --narrow] [--json]
 workbook show
 workbook update
 workbook delete
+workbook fetch [--json]
+workbook push [--json]
+workbook hooks install [--json]
 workbook serve [--addr 127.0.0.1:7331]
 ```
 
@@ -103,8 +110,34 @@ List and show read the current task checkpoint from each task ref's tip. `board`
 uses the same core task order and presents an actionable, unambiguous task-ID
 prefix with each card's priority, title, and labels. Its JSON output retains full
 task IDs, descriptions, and the rest of the task data. The current POC does not
-yet implement dependency-aware ordering, SQLite, remote operations, claims, or
-implementation links.
+yet implement dependency-aware ordering, SQLite, claims, or implementation
+links.
+
+### Explicit task sharing
+
+`workbook fetch` downloads only `refs/workbook/tasks/*` from `origin` into
+`refs/workbook/remotes/origin/tasks/*`. Workbook validates each fetched operation
+history and its state checkpoints before touching the corresponding local task
+ref. A missing local task is created, and a behind local task is fast-forwarded.
+Local-ahead tasks are left alone; divergent task histories remain on their
+separate local and tracking refs and are reported for later resolution. Invalid
+fetched data remains isolated and causes a nonzero exit.
+
+`workbook push` publishes every local `refs/workbook/tasks/*` ref to `origin`
+without force or deletion. Each task is pushed independently, so an unrelated
+task can publish even when another task is rejected as non-fast-forward. The
+command reports every outcome and exits nonzero if any ref is rejected.
+
+`workbook hooks install` opts the clone into automatic task publication during
+an ordinary `git push origin`. The managed pre-push hook is recursion-safe and
+blocks the code push when Workbook task publication fails. Installation is
+idempotent for Workbook-managed hooks. An existing non-Workbook pre-push hook is
+never overwritten; Workbook instead prints manual chaining guidance. Hooks are
+optional convenience only and are not required for correctness.
+
+The collaborative POC supports only the remote named `origin`. Multiple named
+remotes, automatic fetching, divergent-operation reconciliation, and a combined
+fetch-and-push command remain future work.
 
 ### Terminal board
 
@@ -161,19 +194,17 @@ user published.
 
 ## Proposed post-POC commands
 
-The following examples describe future remote coordination and are not implemented:
+The following examples describe future coordination and are not implemented:
 
 ```sh
 workbook claim TASK-123 --remote-required --json
-workbook fetch
-workbook push
 workbook sync
 ```
 
-Remote compare-and-swap claims, fetch/push refspec management, automatic conflict
-reconciliation, and a combined `workbook finish --commit HEAD --push` flow remain
-design proposals. A future packaged distribution might also support a Homebrew
-installation such as the following; no tap or formula is published yet:
+Remote compare-and-swap claims, automatic conflict reconciliation, multiple
+remote selection, and a combined `workbook finish --commit HEAD --push` flow
+remain design proposals. A future packaged distribution might also support a
+Homebrew installation such as the following; no tap or formula is published yet:
 
 ```sh
 brew install dgoings/tap/workbook
@@ -188,14 +219,14 @@ flowchart TD
     CLI["CLI / IDE / agent"] --> Core["Workbook core"]
     Core --> Ops["Immutable task operations + tip checkpoints"]
     Ops --> Refs["Tool-private Git refs"]
-    Refs -. proposed .-> Remote["Existing Git remote"]
+    Refs --> Remote["Explicit origin synchronization"]
     Ops -. proposed .-> SQLite["Disposable SQLite projection"]
 ```
 
 | Layer | Responsibility |
 | --- | --- |
 | Operation model | Defines task history, current tip checkpoints, causality, and validation |
-| Git refs and objects | Currently store local task operations durably; synchronization is proposed |
+| Git refs and objects | Store task operations durably and explicitly synchronize task refs with `origin` |
 | SQLite (proposed) | Will materialize current task state for fast local queries |
 | CLI/core library | Currently owns initialization, local validation, CRUD, and user-facing output |
 | Optional adapters (proposed) | IDE integrations, local API, MCP, or a coordination relay |
@@ -282,12 +313,15 @@ tombstones. Later CLI and format work is expected to add:
 - `claim.acquire`, `claim.release`, and heartbeat/lease operations;
 - `implementation.link` for associating work with code commits.
 
-Historical operation commits are immutable. Tasks are tombstoned rather than deleting their refs, and shared task histories are merged rather than rebased or force-pushed.
+Historical operation commits are immutable. Tasks are tombstoned rather than
+deleting their refs. Shared task histories are never rebased or force-pushed;
+divergent histories remain visible until future reconciliation support resolves
+them.
 
 ## Concurrency and synchronization
 
-Remote synchronization and concurrent reconciliation are proposed. The intended
-local-first, operation-based model is:
+Explicit fast-forward-only synchronization is implemented. Concurrent domain
+reconciliation is still proposed. The intended later reconciliation model is:
 
 1. Fetch the relevant Workbook ref.
 2. Merge any newly discovered operation DAGs.
@@ -301,7 +335,9 @@ Most operations can converge through CRDT-inspired merge rules. Meaningful contr
 
 Exclusive claims are different. When `--remote-required` is used, a claim succeeds only after the remote accepts a fast-forward update based on the task ref that was fetched. If another agent claimed the task first, Workbook refetches and reports that the claim failed instead of merging two exclusive claims. Offline claims, if supported, must be visibly tentative.
 
-Workbook must not rely on Git hooks for correctness. Hooks may refresh caches, add commit trailers, or warn about unsynchronized operations, but fresh clones, alternate Git clients, and remote PR merges cannot be assumed to execute them.
+Workbook does not rely on Git hooks for correctness. The optional managed
+pre-push hook publishes task refs as a convenience, but fresh clones, alternate
+Git clients, and remote PR merges cannot be assumed to execute it.
 
 ## Relationship to code branches
 
@@ -374,17 +410,17 @@ At least initially, Workbook is not intended to provide:
 
 ## POC roadmap
 
-The POC now has versioned operation and state documents, local Git object/ref CRUD,
-structured CLI output, repository initialization, and read-only terminal and web
-boards. Remaining work is:
+The POC now has versioned operation and state documents, local Git object/ref
+CRUD, structured CLI output, repository initialization, read-only terminal and
+web boards, and explicit origin-only task sharing. Remaining work is:
 
 1. Add exact task ordering, dependencies, cycle rejection, and next selection.
 2. Implement deterministic SQLite projection and rebuilds from tip checkpoints.
 3. Complete replay, reconstruction, Git hash, renderer, HTTP, installer, and
    documentation acceptance coverage.
 
-Remote synchronization, claims, conflict reconciliation, packaged distribution,
-and optional adapters follow the local POC rather than being part of it.
+Remote claims, conflict reconciliation, multiple-remote support, packaged
+distribution, and optional adapters follow this collaborative POC.
 
 ## Open questions
 

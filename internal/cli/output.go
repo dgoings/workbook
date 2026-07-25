@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/gitstore"
 	"github.com/dgoings/workbook/internal/terminalui"
 )
 
@@ -21,6 +22,9 @@ Commands:
   show <id-or-prefix> [--json]
   update <id-or-prefix> [options]
   delete <id-or-prefix> [--json]
+  fetch [--json]
+  push [--json]
+  hooks install [--json]
   serve [--addr 127.0.0.1:7331]
 `
 
@@ -83,6 +87,20 @@ func publicErrorMessage(err error) string {
 
 func writeMutation(output io.Writer, task core.Task) {
 	fmt.Fprintf(output, "%s\t%s\t%s\t%s\n", task.ID, task.Status, task.Priority, task.Title)
+}
+
+func writeSyncResult(output io.Writer, result gitstore.SyncResult) {
+	if len(result.Tasks) == 0 {
+		fmt.Fprintf(output, "No task refs on %s.\n", result.Remote)
+		return
+	}
+	for _, task := range result.Tasks {
+		fmt.Fprintf(output, "%s\t%s", task.TaskID, task.Status)
+		if task.Detail != "" {
+			fmt.Fprintf(output, "\t%s", task.Detail)
+		}
+		fmt.Fprintln(output)
+	}
 }
 
 func writeList(output io.Writer, tasks []core.Task) error {
