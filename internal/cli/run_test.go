@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -684,7 +685,8 @@ func TestREADMEImplementedCommands(t *testing.T) {
 	for _, required := range []string{
 		"drag-and-drop status changes",
 		"PATCH /api/tasks/<id>/status",
-		"title, description, labels, priority editing",
+		"client-rendered form",
+		"shared new-task and detail form",
 	} {
 		if !strings.Contains(readme, required) {
 			t.Errorf("README web board documentation is missing %q", required)
@@ -920,6 +922,133 @@ func TestRunServeUpdatesTaskStatusThroughWebRoute(t *testing.T) {
 	}
 	if serveStdout.Len() != 0 {
 		t.Fatalf("serve stdout = %q, want empty", serveStdout.String())
+	}
+}
+
+func TestRunServeCreatesTaskThroughWebRoute(t *testing.T) {
+	repository := initializedRepository(t)
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := probe.Addr().String()
+	if err := probe.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result := make(chan error, 1)
+	var serveStdout, serveStderr bytes.Buffer
+	go func() {
+		result <- runServe(ctx, []string{"--addr", addr}, repository, &serveStdout, &serveStderr)
+	}()
+	waitForHTTP(t, "http://"+addr+"/healthz")
+
+	response, err := http.Post("http://"+addr+"/api/tasks", "application/json", strings.NewReader(`{"title":"Persisted from web","description":"The listener must use the Git-backed service.","status":"in-review","priority":"high","labels":["web","persistence"]}`))
+	if err != nil {
+		t.Fatalf("POST task: %v", err)
+	}
+	body, err := io.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("POST task = %d, want %d; body = %s", response.StatusCode, http.StatusOK, body)
+	}
+	var mutation struct {
+		Task core.Task `json:"task"`
+	}
+	if err := json.Unmarshal(body, &mutation); err != nil {
+		t.Fatalf("decode created task: %v; body = %s", err, body)
+	}
+
+	cancel()
+	if err := <-result; err != nil {
+		t.Fatalf("runServe() error = %v; stderr = %q", err, serveStderr.String())
+	}
+
+	code, stdout, stderr := run(t, repository, "list", "--json")
+	if code != 0 {
+		t.Fatalf("list code = %d, want 0; stderr = %q", code, stderr)
+	}
+	var tasks []core.Task
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "list").Data, &tasks); err != nil {
+		t.Fatalf("decode listed tasks: %v", err)
+	}
+	for _, task := range tasks {
+		if task.ID == mutation.Task.ID {
+			if task.Title != "Persisted from web" || task.Description != "The listener must use the Git-backed service." || task.Status != core.StatusInReview || task.Priority != core.PriorityHigh || !reflect.DeepEqual(task.Labels, []string{"persistence", "web"}) {
+				t.Fatalf("persisted task = %#v, want complete web create fields", task)
+			}
+			return
+		}
+	}
+	t.Fatalf("list did not include created task %q: %#v", mutation.Task.ID, tasks)
+}
+
+func TestRunServeUpdatesAllTaskFieldsThroughWebRoute(t *testing.T) {
+	repository := initializedRepository(t)
+	code, stdout, stderr := run(t, repository, "create", "Before web update", "--json")
+	if code != 0 {
+		t.Fatalf("create code = %d, want 0; stderr = %q", code, stderr)
+	}
+	var created core.Task
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "create").Data, &created); err != nil {
+		t.Fatalf("decode created task: %v", err)
+	}
+
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := probe.Addr().String()
+	if err := probe.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result := make(chan error, 1)
+	var serveStdout, serveStderr bytes.Buffer
+	go func() {
+		result <- runServe(ctx, []string{"--addr", addr}, repository, &serveStdout, &serveStderr)
+	}()
+	waitForHTTP(t, "http://"+addr+"/healthz")
+
+	request, err := http.NewRequest(http.MethodPatch, "http://"+addr+"/api/tasks/"+created.ID, strings.NewReader(`{"title":"After web update","description":"All editable fields reached the core service.","status":"blocked","priority":"low","labels":["updated","web"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("PATCH task: %v", err)
+	}
+	body, err := io.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("PATCH task = %d, want %d; body = %s", response.StatusCode, http.StatusOK, body)
+	}
+
+	cancel()
+	if err := <-result; err != nil {
+		t.Fatalf("runServe() error = %v; stderr = %q", err, serveStderr.String())
+	}
+
+	code, stdout, stderr = run(t, repository, "show", created.ID, "--json")
+	if code != 0 {
+		t.Fatalf("show code = %d, want 0; stderr = %q", code, stderr)
+	}
+	var updated core.Task
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "show").Data, &updated); err != nil {
+		t.Fatalf("decode shown task: %v", err)
+	}
+	if updated.Title != "After web update" || updated.Description != "All editable fields reached the core service." || updated.Status != core.StatusBlocked || updated.Priority != core.PriorityLow || !reflect.DeepEqual(updated.Labels, []string{"updated", "web"}) {
+		t.Fatalf("persisted task = %#v, want complete web update fields", updated)
 	}
 }
 

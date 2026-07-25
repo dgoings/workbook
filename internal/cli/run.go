@@ -499,6 +499,12 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 		func(requestContext context.Context) ([]core.Task, error) {
 			return service.List(requestContext, core.ListFilter{})
 		},
+		func(requestContext context.Context, input core.CreateInput) (core.Task, error) {
+			return service.Create(requestContext, input)
+		},
+		func(requestContext context.Context, id string, input core.UpdateInput) (core.Task, error) {
+			return service.Update(requestContext, id, input)
+		},
 		func(requestContext context.Context, id string, status core.Status) (core.Task, error) {
 			return service.Update(requestContext, id, core.UpdateInput{Status: &status})
 		},

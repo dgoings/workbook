@@ -6,8 +6,10 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -19,7 +21,7 @@ const contentSecurityPolicy = "default-src 'none'; style-src 'unsafe-inline'; sc
 
 func TestHandlerServesBoardTasksAndHealth(t *testing.T) {
 	tasks := boardTasks()
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedStatusUpdate(t))
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
 
 	board := request(t, handler, http.MethodGet, "/")
 	if board.Code != http.StatusOK {
@@ -84,7 +86,7 @@ func TestHandlerRendersInReviewTasks(t *testing.T) {
 			Priority: core.PriorityMedium,
 		},
 	})
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedStatusUpdate(t))
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
 
 	response := request(t, handler, http.MethodGet, "/")
 	if response.Code != http.StatusOK {
@@ -94,6 +96,229 @@ func TestHandlerRendersInReviewTasks(t *testing.T) {
 		if !strings.Contains(response.Body.String(), fragment) {
 			t.Errorf("GET / body does not contain %q", fragment)
 		}
+	}
+}
+
+func TestHandlerServesTaskRouteShell(t *testing.T) {
+	tasks := boardTasks()
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	for _, path := range []string{
+		"/tasks/new",
+		"/tasks/" + tasks[0].ID,
+	} {
+		response := request(t, handler, http.MethodGet, path)
+		if response.Code != http.StatusOK {
+			t.Errorf("GET %s status = %d, want %d; body = %s", path, response.Code, http.StatusOK, response.Body.String())
+			continue
+		}
+		assertSecurityHeaders(t, response.Result())
+		if got := response.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/html; charset=utf-8") {
+			t.Errorf("GET %s Content-Type = %q, want text/html", path, got)
+		}
+		if !strings.Contains(response.Body.String(), "Workbook board") {
+			t.Errorf("GET %s body does not contain the application shell", path)
+		}
+
+		wrongMethod := request(t, handler, http.MethodPost, path)
+		if wrongMethod.Code != http.StatusMethodNotAllowed {
+			t.Errorf("POST %s status = %d, want %d", path, wrongMethod.Code, http.StatusMethodNotAllowed)
+		}
+		if got := wrongMethod.Header().Get("Allow"); got != http.MethodGet {
+			t.Errorf("POST %s Allow = %q, want %q", path, got, http.MethodGet)
+		}
+	}
+}
+
+func TestHandlerRendersTaskAndNewTaskLinks(t *testing.T) {
+	tasks := boardTasks()
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	body := response.Body.String()
+	for _, definition := range core.WorkflowStatuses() {
+		want := `href="/tasks/new?status=` + string(definition.Status) + `"`
+		if !strings.Contains(body, want) {
+			t.Errorf("GET / body does not contain canonical %q New Task link %q", definition.Label, want)
+		}
+	}
+	for _, task := range tasks {
+		want := `href="/tasks/` + task.ID + `">` + task.Title + `</a>`
+		if !strings.Contains(body, want) {
+			t.Errorf("GET / body does not contain full-ID task link %q", want)
+		}
+	}
+}
+
+func TestHandlerRequiresCanonicalStatusChoiceForUnknownTask(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	tasks := boardTasks()
+	unknown := tasks[2]
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+unknown.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<unknown-status-task> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	document, err := json.Marshal(TasksDocument{
+		Format:  "workbook.tasks",
+		Version: 1,
+		Tasks:   []core.Task{unknown},
+		Presentation: []TaskPresentation{{
+			TaskID:   unknown.ID,
+			IDPrefix: unknown.ID,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/"+unknown.ID, string(document)) + script + `
+setTimeout(() => {
+  const status = findElement(main, (element) => element.id === "task-status");
+  if (!status) throw new Error("detail form did not render a status control");
+  if (status.value !== "") throw new Error("unknown status defaulted to " + JSON.stringify(status.value) + ", want an explicit empty choice");
+  if (!status.required) throw new Error("unknown status choice is not required");
+  if (!status.firstElementChild || !status.firstElementChild.textContent.includes("future-status")) {
+    throw new Error("unknown current status is not visible in the status control");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("execute rendered client for unknown status: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerShowsRecoverableErrorWhenInitialTaskLoadFails(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	task := boardTasks()[0]
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return []core.Task{task}, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+task.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<id> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	recoveredDocument, err := json.Marshal(TasksDocument{
+		Format:  "workbook.tasks",
+		Version: 1,
+		Tasks:   []core.Task{task},
+		Presentation: []TaskPresentation{{
+			TaskID:   task.ID,
+			IDPrefix: task.ID,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/"+task.ID, `{}`) + script + `
+setTimeout(async () => {
+  const errorHeading = findElement(main, (element) => element.textContent === "Unable to load task");
+  if (!errorHeading) throw new Error("initial task load failure did not replace the loading route with a visible error");
+  const retry = findElement(main, (element) => element.tagName === "BUTTON" && element.textContent === "Retry");
+  if (!retry || !retry.eventListeners.click) throw new Error("task load error did not render an executable Retry control");
+  const back = findElement(main, (element) => element.tagName === "A" && element.textContent === "Back");
+  if (!back || back.href !== "/") throw new Error("task load error did not retain a Back link");
+
+  taskResponse = ` + string(recoveredDocument) + `;
+  await retry.eventListeners.click();
+  const title = findElement(main, (element) => element.id === "task-title");
+  if (!title || title.value !== ` + strconv.Quote(task.Title) + `) {
+    throw new Error("retry did not recover the task detail form");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("execute rendered client for initial load recovery: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerInterceptsOrdinarySameOriginNavigation(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	task := boardTasks()[0]
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return []core.Task{task}, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	document, err := json.Marshal(TasksDocument{
+		Format:  "workbook.tasks",
+		Version: 1,
+		Tasks:   []core.Task{task},
+		Presentation: []TaskPresentation{{
+			TaskID:   task.ID,
+			IDPrefix: task.ID,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/", string(document)) + script + `
+setTimeout(() => {
+  const click = documentEventListeners.click;
+  if (!click) throw new Error("client did not register delegated click navigation");
+  const taskLink = boardLists.map((list) => findElement(list, (element) => element.tagName === "A" && element.href === "/tasks/" + encodeURIComponent(` + strconv.Quote(task.ID) + `))).find(Boolean);
+  if (!taskLink) throw new Error("refresh did not dynamically render a task link");
+
+  let prevented = false;
+  click({ target: taskLink, button: 0, defaultPrevented: false, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, preventDefault() { prevented = true; } });
+  if (!prevented) throw new Error("ordinary same-origin task navigation was not intercepted");
+  if (historyPaths.length !== 1 || historyPaths[0] !== taskLink.href) throw new Error("ordinary navigation did not use history.pushState");
+  if (!findElement(main, (element) => element.id === "task-title")) throw new Error("ordinary navigation did not render the destination route");
+
+  const back = findElement(main, (element) => element.tagName === "A" && element.textContent === "Back");
+  let backPrevented = false;
+  click({ target: back, button: 0, defaultPrevented: false, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, preventDefault() { backPrevented = true; } });
+  if (!backPrevented || historyPaths.length !== 2 || historyPaths[1] !== "/") throw new Error("Back did not use delegated history navigation");
+
+  const newTask = new TestElement("a"); newTask.href = "/tasks/new?status=in-review"; boardView.append(newTask);
+  let newTaskPrevented = false;
+  click({ target: newTask, button: 0, defaultPrevented: false, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, preventDefault() { newTaskPrevented = true; } });
+  const status = findElement(main, (element) => element.id === "task-status");
+  if (!newTaskPrevented || historyPaths.length !== 3 || historyPaths[2] !== newTask.href || !status || status.value !== "in-review") {
+    throw new Error("New Task did not use delegated history navigation");
+  }
+
+  let modifiedPrevented = false;
+  click({ target: taskLink, button: 0, defaultPrevented: false, metaKey: false, ctrlKey: true, shiftKey: false, altKey: false, preventDefault() { modifiedPrevented = true; } });
+  if (modifiedPrevented || historyPaths.length !== 3) throw new Error("modified click was intercepted");
+
+  const external = new TestElement("a"); external.href = "https://example.com/tasks/external";
+  let externalPrevented = false;
+  click({ target: external, button: 0, defaultPrevented: false, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, preventDefault() { externalPrevented = true; } });
+  if (externalPrevented || historyPaths.length !== 3) throw new Error("external navigation was intercepted");
+
+  const newTab = new TestElement("a"); newTab.href = "/tasks/new"; newTab.target = "_blank";
+  let newTabPrevented = false;
+  click({ target: newTab, button: 0, defaultPrevented: false, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, preventDefault() { newTabPrevented = true; } });
+  if (newTabPrevented || historyPaths.length !== 3) throw new Error("new-tab navigation was intercepted");
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("execute rendered client navigation behavior: %v\n%s", err, output)
 	}
 }
 
@@ -108,7 +333,7 @@ func TestHandlerRefreshesTasksOnEveryAPIRequest(t *testing.T) {
 			return first, nil
 		}
 		return second, nil
-	}, unexpectedStatusUpdate(t))
+	}, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
 
 	for _, want := range []string{"Ready task", "Updated without restarting"} {
 		response := request(t, handler, http.MethodGet, "/api/tasks")
@@ -128,6 +353,128 @@ func TestHandlerRefreshesTasksOnEveryAPIRequest(t *testing.T) {
 	}
 }
 
+func renderedClientScript(t *testing.T, body string) string {
+	t.Helper()
+	const open = "<script>"
+	const close = "</script>"
+	start := strings.LastIndex(body, open)
+	end := strings.LastIndex(body, close)
+	if start < 0 || end <= start {
+		t.Fatal("rendered page does not contain an executable client script")
+	}
+	return body[start+len(open) : end]
+}
+
+func clientDOMHarness(path, taskDocument string) string {
+	return `
+class TestElement {
+  constructor(tagName) {
+    this.tagName = tagName.toUpperCase();
+    this.children = [];
+    this.dataset = {};
+    this.attributes = {};
+    this.classList = { add() {}, remove() {}, toggle() {} };
+    this.eventListeners = {};
+    this._value = "";
+    this.textContent = "";
+    this.selected = false;
+    this.disabled = false;
+    this.required = false;
+  }
+  append(...children) { children.forEach((child) => { child.parentElement = this; this.children.push(child); }); }
+  replaceChildren(...children) { this.children = []; this.append(...children); }
+  setAttribute(name, value) { this.attributes[name] = String(value); }
+  hasAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attributes, name); }
+  addEventListener(name, listener) { this.eventListeners[name] = listener; }
+  closest(selector) {
+    for (let element = this; element; element = element.parentElement) {
+      if (selector === "a[href]" && element.tagName === "A" && element.href) return element;
+      if (selector === ".task-card" && element.className === "task-card") return element;
+      if (selector === "[data-drop-status]" && element.dataset.dropStatus) return element;
+      if (selector === "[data-status]" && element.dataset.status) return element;
+    }
+    return null;
+  }
+  contains(element) {
+    for (let current = element; current; current = current.parentElement) {
+      if (current === this) return true;
+    }
+    return false;
+  }
+  querySelector(selector) {
+    if (selector === "[data-stale]") return stale;
+    return null;
+  }
+  querySelectorAll() { return []; }
+  get firstElementChild() { return this.children[0] || null; }
+  get value() {
+    if (this.tagName === "SELECT") {
+      const selected = this.children.find((option) => option.selected);
+      return selected ? selected.value : (this.children[0] ? this.children[0].value : "");
+    }
+    return this._value;
+  }
+  set value(value) { this._value = String(value); }
+}
+const main = new TestElement("main");
+const boardView = new TestElement("div");
+const stale = new TestElement("p");
+const updated = new TestElement("p");
+const boardStatuses = ["backlog", "ready", "blocked", "in-progress", "in-review", "done", "unknown"];
+const boardLists = boardStatuses.map((status) => {
+  const element = new TestElement("div");
+  element.dataset.status = status;
+  if (status !== "unknown") element.dataset.dropStatus = status;
+  return element;
+});
+const boardCounts = boardStatuses.map((status) => {
+  const element = new TestElement("span");
+  element.dataset.count = status;
+  return element;
+});
+boardView.querySelectorAll = (selector) => selector === "[data-status]" ? boardLists : boardCounts;
+const documentEventListeners = {};
+globalThis.document = {
+  title: "",
+  querySelector(selector) {
+    if (selector === "main") return main;
+    if (selector === "[data-board-view]") return boardView;
+    if (selector === "[data-updated]") return updated;
+    return null;
+  },
+  querySelectorAll() { return []; },
+  createElement(tagName) { return new TestElement(tagName); },
+  createDocumentFragment() { return new TestElement("fragment"); },
+  addEventListener(name, listener) { documentEventListeners[name] = listener; }
+};
+const initialURL = new URL("http://127.0.0.1` + path + `");
+globalThis.window = {
+  location: { href: initialURL.href, origin: initialURL.origin },
+  addEventListener() {},
+  setInterval() {}
+};
+const historyPaths = [];
+globalThis.history = {
+  pushState(_state, _title, path) {
+    historyPaths.push(path);
+    window.location.href = new URL(path, window.location.href).href;
+  }
+};
+globalThis.requestAnimationFrame = (callback) => callback();
+const taskDocument = ` + taskDocument + `;
+let taskResponse = taskDocument;
+globalThis.fetch = async () => ({ ok: true, json: async () => taskResponse });
+function findElement(root, predicate) {
+  if (predicate(root)) return root;
+  for (const child of root.children || []) {
+    const match = findElement(child, predicate);
+    if (match) return match;
+  }
+  return null;
+}
+`
+}
+
 func TestHandlerUpdatesTaskStatus(t *testing.T) {
 	var gotID string
 	var gotStatus core.Status
@@ -135,6 +482,8 @@ func TestHandlerUpdatesTaskStatus(t *testing.T) {
 	updated.Status = core.StatusInProgress
 	handler := NewHandler(
 		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		unexpectedTaskCreate(t),
+		unexpectedTaskUpdate(t),
 		func(_ context.Context, id string, status core.Status) (core.Task, error) {
 			gotID = id
 			gotStatus = status
@@ -158,9 +507,163 @@ func TestHandlerUpdatesTaskStatus(t *testing.T) {
 	}
 }
 
+func TestHandlerCreatesTask(t *testing.T) {
+	created := boardTasks()[0]
+	created.ID = "WB-01J00000000000000000000009"
+	created.Title = "Create a detail view"
+	created.Description = "Expose every editable field."
+	created.Status = core.StatusInReview
+	created.Priority = core.PriorityLow
+	created.Labels = []string{"web", "forms"}
+	want := core.CreateInput{
+		Title:       created.Title,
+		Description: created.Description,
+		Status:      created.Status,
+		Priority:    created.Priority,
+		Labels:      created.Labels,
+	}
+	handler := NewHandler(
+		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		func(_ context.Context, input core.CreateInput) (core.Task, error) {
+			if !reflect.DeepEqual(input, want) {
+				t.Fatalf("create input = %#v, want %#v", input, want)
+			}
+			return created, nil
+		},
+		unexpectedTaskUpdate(t),
+		unexpectedStatusUpdate(t),
+	)
+
+	response := requestJSON(t, handler, http.MethodPost, "/api/tasks", `{"title":"Create a detail view","description":"Expose every editable field.","status":"in-review","priority":"low","labels":["web","forms"]}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("POST /api/tasks status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	assertTaskMutationDocument(t, response, created)
+}
+
+func TestHandlerUpdatesAllTaskFields(t *testing.T) {
+	updated := boardTasks()[0]
+	updated.Title = "Edit every task field"
+	updated.Description = "Explicit empty values must remain possible."
+	updated.Status = core.StatusDone
+	updated.Priority = core.PriorityLow
+	updated.Labels = []string{"finished"}
+	want := core.UpdateInput{
+		Title:       &updated.Title,
+		Description: &updated.Description,
+		Status:      &updated.Status,
+		Priority:    &updated.Priority,
+		Labels:      &updated.Labels,
+	}
+	handler := NewHandler(
+		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		unexpectedTaskCreate(t),
+		func(_ context.Context, id string, input core.UpdateInput) (core.Task, error) {
+			if id != "WB-01J00000000000000000000001" {
+				t.Fatalf("update id = %q", id)
+			}
+			if !reflect.DeepEqual(input, want) {
+				t.Fatalf("update input = %#v, want %#v", input, want)
+			}
+			return updated, nil
+		},
+		unexpectedStatusUpdate(t),
+	)
+
+	response := requestJSON(t, handler, http.MethodPatch, "/api/tasks/WB-01J00000000000000000000001", `{"title":"Edit every task field","description":"Explicit empty values must remain possible.","status":"done","priority":"low","labels":["finished"]}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("PATCH /api/tasks/<id> status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	assertTaskMutationDocument(t, response, updated)
+}
+
+func TestHandlerRejectsInvalidTaskMutationRequests(t *testing.T) {
+	handler := NewHandler(
+		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		unexpectedTaskCreate(t),
+		unexpectedTaskUpdate(t),
+		unexpectedStatusUpdate(t),
+	)
+	for _, test := range []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{name: "create malformed JSON", method: http.MethodPost, path: "/api/tasks", body: `{"title":`},
+		{name: "create unknown property", method: http.MethodPost, path: "/api/tasks", body: `{"title":"task","unexpected":true}`},
+		{name: "create multiple JSON values", method: http.MethodPost, path: "/api/tasks", body: `{"title":"task"} {}`},
+		{name: "update malformed JSON", method: http.MethodPatch, path: "/api/tasks/WB-01J00000000000000000000001", body: `{"title":`},
+		{name: "update unknown property", method: http.MethodPatch, path: "/api/tasks/WB-01J00000000000000000000001", body: `{"title":"task","unexpected":true}`},
+		{name: "update multiple JSON values", method: http.MethodPatch, path: "/api/tasks/WB-01J00000000000000000000001", body: `{"title":"task"} {}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := requestJSON(t, handler, test.method, test.path, test.body)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("%s %s status = %d, want %d; body = %s", test.method, test.path, response.Code, http.StatusBadRequest, response.Body.String())
+			}
+			var document ErrorDocument
+			if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+				t.Fatalf("decode error document: %v", err)
+			}
+			if document.Format != "workbook.error" || document.Version != 1 || document.Error.Category != core.CategoryInvocation {
+				t.Fatalf("error document = %#v, want workbook.error v1 invocation", document)
+			}
+		})
+	}
+}
+
+func TestHandlerPreservesStatusMutationRoute(t *testing.T) {
+	called := false
+	handler := NewHandler(
+		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		unexpectedTaskCreate(t),
+		unexpectedTaskUpdate(t),
+		func(context.Context, string, core.Status) (core.Task, error) {
+			called = true
+			return boardTasks()[0], nil
+		},
+	)
+
+	response := requestJSON(t, handler, http.MethodPatch, "/api/tasks/WB-01J00000000000000000000001/status", `{"status":"ready"}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("PATCH /api/tasks/<id>/status status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if !called {
+		t.Fatal("status callback was not called")
+	}
+}
+
+func TestHandlerRejectsWrongMethods(t *testing.T) {
+	handler := NewHandler(
+		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		unexpectedTaskCreate(t),
+		unexpectedTaskUpdate(t),
+		unexpectedStatusUpdate(t),
+	)
+	for _, test := range []struct {
+		method    string
+		path      string
+		wantAllow string
+	}{
+		{method: http.MethodGet, path: "/api/tasks/WB-01J00000000000000000000001", wantAllow: http.MethodPatch},
+		{method: http.MethodPut, path: "/api/tasks", wantAllow: http.MethodGet + ", " + http.MethodPost},
+	} {
+		response := request(t, handler, test.method, test.path)
+		if response.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s %s status = %d, want %d", test.method, test.path, response.Code, http.StatusMethodNotAllowed)
+		}
+		if got := response.Header().Get("Allow"); got != test.wantAllow {
+			t.Errorf("%s %s Allow = %q, want %q", test.method, test.path, got, test.wantAllow)
+		}
+	}
+}
+
 func TestHandlerMapsStatusUpdateErrorsToVersionedErrorDocuments(t *testing.T) {
 	handler := NewHandler(
 		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		unexpectedTaskCreate(t),
+		unexpectedTaskUpdate(t),
 		func(context.Context, string, core.Status) (core.Task, error) {
 			return core.Task{}, core.Errorf(core.CategoryValidation, "invalid task status")
 		},
@@ -183,7 +686,7 @@ func TestHandlerProvidesActionablePrefixesForRefresh(t *testing.T) {
 	tasks := boardTasks()
 	tasks[0].ID = "WB-01J0000A1111111111111111111"
 	tasks[1].ID = "WB-01J0000B2222222222222222222"
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedStatusUpdate(t))
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
 
 	response := request(t, handler, http.MethodGet, "/api/tasks")
 	if response.Code != http.StatusOK {
@@ -235,7 +738,7 @@ func TestHandlerInitialCardPrefixesMatchRefreshPresentation(t *testing.T) {
 	tasks := boardTasks()
 	tasks[0].ID = "WB-01J0000A1111111111111111111"
 	tasks[1].ID = "WB-01J0000B2222222222222222222"
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedStatusUpdate(t))
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
 
 	initial := request(t, handler, http.MethodGet, "/")
 	if initial.Code != http.StatusOK {
@@ -266,7 +769,7 @@ func TestHandlerInitialCardPrefixesMatchRefreshPresentation(t *testing.T) {
 }
 
 func TestHandlerServesDragAndDropBoardControls(t *testing.T) {
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return boardTasks(), nil }, unexpectedStatusUpdate(t))
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return boardTasks(), nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
 
 	response := request(t, handler, http.MethodGet, "/")
 	if response.Code != http.StatusOK {
@@ -305,7 +808,7 @@ func initialCardPrefixes(body string) map[string]string {
 }
 
 func TestHandlerRejectsUnknownRoutesAndMutationMethods(t *testing.T) {
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return boardTasks(), nil }, unexpectedStatusUpdate(t))
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return boardTasks(), nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
 
 	unknown := request(t, handler, http.MethodGet, "/missing")
 	if unknown.Code != http.StatusNotFound {
@@ -313,7 +816,7 @@ func TestHandlerRejectsUnknownRoutesAndMutationMethods(t *testing.T) {
 	}
 	assertSecurityHeaders(t, unknown.Result())
 
-	for _, path := range []string{"/", "/api/tasks", "/healthz"} {
+	for _, path := range []string{"/", "/healthz"} {
 		response := request(t, handler, http.MethodPost, path)
 		if response.Code != http.StatusMethodNotAllowed {
 			t.Errorf("POST %s status = %d, want %d", path, response.Code, http.StatusMethodNotAllowed)
@@ -352,7 +855,7 @@ func TestHandlerMapsTaskErrorsToVersionedErrorDocuments(t *testing.T) {
 		{name: "operational includes cause", err: core.Wrap(core.CategoryOperational, "list tasks", errors.New("permission denied")), wantStatus: http.StatusInternalServerError, wantBody: "list tasks: permission denied"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			handler := NewHandler(func(context.Context) ([]core.Task, error) { return nil, test.err }, unexpectedStatusUpdate(t))
+			handler := NewHandler(func(context.Context) ([]core.Task, error) { return nil, test.err }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
 			response := request(t, handler, http.MethodGet, "/api/tasks")
 			if response.Code != test.wantStatus {
 				t.Fatalf("GET /api/tasks status = %d, want %d", response.Code, test.wantStatus)
@@ -376,7 +879,7 @@ func TestHandlerEscapesHostileTaskContent(t *testing.T) {
 	tasks := boardTasks()
 	tasks[0].Title = `<img src=x onerror=alert(1)>`
 	tasks[0].Description = `<script>alert("pwned")</script>`
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedStatusUpdate(t))
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
 
 	response := request(t, handler, http.MethodGet, "/")
 	if response.Code != http.StatusOK {
@@ -414,6 +917,33 @@ func unexpectedStatusUpdate(t *testing.T) TaskStatusUpdater {
 	return func(context.Context, string, core.Status) (core.Task, error) {
 		t.Fatal("unexpected status update")
 		return core.Task{}, nil
+	}
+}
+
+func unexpectedTaskCreate(t *testing.T) TaskCreator {
+	t.Helper()
+	return func(context.Context, core.CreateInput) (core.Task, error) {
+		t.Fatal("unexpected task create")
+		return core.Task{}, nil
+	}
+}
+
+func unexpectedTaskUpdate(t *testing.T) TaskUpdater {
+	t.Helper()
+	return func(context.Context, string, core.UpdateInput) (core.Task, error) {
+		t.Fatal("unexpected task update")
+		return core.Task{}, nil
+	}
+}
+
+func assertTaskMutationDocument(t *testing.T, response *httptest.ResponseRecorder, want core.Task) {
+	t.Helper()
+	var document TaskMutationDocument
+	if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+		t.Fatalf("decode mutation document: %v; body = %s", err, response.Body.String())
+	}
+	if document.Format != "workbook.task-mutation" || document.Version != 1 || !reflect.DeepEqual(document.Task, want) {
+		t.Fatalf("mutation document = %#v, want workbook.task-mutation v1 with task %#v", document, want)
 	}
 }
 

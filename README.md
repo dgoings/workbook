@@ -184,7 +184,11 @@ The embedded page and its API expose these routes:
 
 ```text
 GET /                         board HTML
+GET /tasks/new                new-task shell; client-rendered form
+GET /tasks/<id>               linkable task-detail shell; client-rendered form
 GET /api/tasks                versioned task JSON
+POST /api/tasks               create a task
+PATCH /api/tasks/<id>         update task fields
 PATCH /api/tasks/<id>/status  drag-and-drop status changes
 GET /healthz                  versioned health JSON
 ```
@@ -194,12 +198,19 @@ the same core service path as `workbook update --status`. The mutation creates a
 normal Workbook operation commit and returns a versioned JSON task-mutation
 document. The executable embeds its HTML, CSS, and JavaScript, and the page polls
 `/api/tasks` every two seconds. Web cards show the actionable task-ID prefix,
-priority, title, optional description, and labels.
+priority, title, optional description, and labels; each title links to its
+full-ID task-detail URL. Every status column has a New Task link that preselects
+that column's canonical status.
 
-The web board is still local-first and intentionally narrow in scope. General
-title, description, labels, priority editing, authentication, and non-local
-hosting remain future work. A request using the wrong method for a known route
-receives `405` with the route's allowed method.
+The shared new-task and detail form creates or edits title, description, status,
+priority, and labels through the versioned APIs. Saving returns to the board and
+refreshes it. A failed save leaves the entered values in place and shows the
+server error in the form; Back returns to the board without mutating a task.
+
+The web experience is still local-first and intentionally narrow in scope.
+Authentication, hosted deployment, browser deletion, draft persistence, and
+broader collaboration remain future work. A request using the wrong method for
+a known route receives `405` with the route's allowed method.
 
 ### Project identity across worktrees
 

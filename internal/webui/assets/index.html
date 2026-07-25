@@ -1,7 +1,7 @@
 {{ define "task" }}
 <article class="task-card" tabindex="0" data-task-id="{{ .Task.ID }}" data-id-prefix="{{ .IDPrefix }}" draggable="true" aria-label="Move task {{ .Task.Title }} from {{ .Task.Status }}">
   <div class="task-card__meta"><code>{{ .IDPrefix }}</code><span class="priority priority--{{ .Task.Priority }}">{{ .Task.Priority }}</span></div>
-  <h3>{{ .Task.Title }}</h3>
+  <h3><a href="/tasks/{{ .Task.ID }}">{{ .Task.Title }}</a></h3>
   {{ if .Task.Description }}<p>{{ .Task.Description }}</p>{{ end }}
   {{ if .Task.Labels }}<div class="labels">{{ range .Task.Labels }}<span class="label">{{ . }}</span>{{ end }}</div>{{ end }}
 </article>
@@ -32,6 +32,7 @@
     .column__heading { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; margin: 0; font-size: .92rem; }
     .count { color: #2457d6; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .8rem; }
     .ref-label { display: block; overflow: hidden; margin-top: .45rem; color: #526b9b; font-size: .65rem; text-overflow: ellipsis; white-space: nowrap; }
+    .new-task-link { display: inline-block; margin-top: .45rem; color: #2457d6; font-size: .73rem; font-weight: 750; text-decoration-thickness: 1px; text-underline-offset: .18em; }
     .task-list { display: grid; gap: .55rem; min-height: 5rem; padding: .55rem; }
     .task-list.is-refreshing { opacity: .58; }
     .task-card { border: 1px solid #b9c6d8; border-radius: 4px; background: #fff; padding: .7rem; box-shadow: 0 1px 0 rgba(23,32,51,.05); cursor: grab; }
@@ -43,6 +44,9 @@
     .priority { flex: 0 0 auto; font-size: .64rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
     .priority--high { color: #b42318; } .priority--medium { color: #b45309; } .priority--low { color: #2457d6; }
     .task-card h3 { margin: .55rem 0 .3rem; font-size: .9rem; line-height: 1.24; overflow-wrap: anywhere; }
+    .task-card h3 a { color: #172033; text-decoration-color: #a9b7ca; text-decoration-thickness: 1px; text-underline-offset: .16em; }
+    .task-card h3 a:hover { color: #2457d6; text-decoration-color: currentcolor; }
+    .task-card h3 a:focus-visible, .new-task-link:focus-visible, .board-link:focus-visible { outline: 3px solid #2457d6; outline-offset: 2px; }
     .task-card p { margin: 0; color: #56647a; font-size: .8rem; line-height: 1.36; overflow-wrap: anywhere; }
     .labels { display: flex; flex-wrap: wrap; gap: .25rem; margin-top: .65rem; }
     .label { max-width: 100%; overflow: hidden; padding: .14rem .28rem; border: 1px solid #d5deea; border-radius: 3px; color: #4e5d73; font-size: .64rem; text-overflow: ellipsis; white-space: nowrap; }
@@ -50,8 +54,29 @@
     .unknown .column__header { border-top-color: #b45309; background: #fff7ed; }
     .task-list.can-drop { outline: 2px dashed #2457d6; outline-offset: -4px; background: rgba(36,87,214,.08); }
     .task-list.cannot-drop { outline: 2px dashed #b45309; outline-offset: -4px; background: rgba(180,83,9,.08); }
+    .task-route { max-width: 48rem; margin: 0 auto; border: 1px solid #b9c6d8; background: #fff; box-shadow: 0 12px 32px rgba(23,32,51,.08); }
+    .task-route__header { padding: 1rem 1.15rem; border-top: 3px solid #2457d6; border-bottom: 1px solid #d5deea; background: #f8faff; }
+    .task-route__header h2 { margin: .15rem 0 0; font-size: clamp(1.15rem, 3vw, 1.55rem); letter-spacing: -.025em; }
+    .task-route__header code { display: block; margin-top: .35rem; color: #526b9b; font-size: .72rem; overflow-wrap: anywhere; }
+    .task-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; padding: 1.15rem; }
+    .field { display: grid; gap: .35rem; }
+    .field--wide { grid-column: 1 / -1; }
+    .field label { color: #34425a; font-size: .78rem; font-weight: 750; }
+    .field input, .field textarea, .field select { width: 100%; border: 1px solid #9eafc5; border-radius: 4px; background: #fff; color: #172033; font: inherit; padding: .62rem .68rem; }
+    .field textarea { min-height: 8rem; resize: vertical; line-height: 1.45; }
+    .field input:focus, .field textarea:focus, .field select:focus { border-color: #2457d6; outline: 3px solid rgba(36,87,214,.18); }
+    .form-status { grid-column: 1 / -1; min-height: 1.35rem; margin: 0; color: #9c2f25; font-size: .82rem; }
+    .form-actions { display: flex; align-items: center; gap: .85rem; grid-column: 1 / -1; padding-top: .1rem; }
+    .save-button { border: 1px solid #173f9e; border-radius: 4px; background: #2457d6; color: #fff; cursor: pointer; font: inherit; font-size: .86rem; font-weight: 750; padding: .62rem .95rem; }
+    .save-button:hover { background: #1d49b7; }
+    .save-button:focus-visible { outline: 3px solid rgba(36,87,214,.28); outline-offset: 2px; }
+    .save-button:disabled { cursor: wait; opacity: .62; }
+    .board-link { color: #34425a; font-size: .84rem; font-weight: 700; text-underline-offset: .18em; }
+    .route-message { padding: 1.15rem; color: #56647a; }
+    .route-message p { margin: 0 0 1rem; }
     @media (prefers-reduced-motion: no-preference) { .task-list { transition: opacity 120ms ease; } }
     @media (max-width: 900px) { .app-header { align-items: start; flex-direction: column; } .updated { text-align: left; } .board { grid-template-columns: 1fr; overflow: visible; } .column { min-width: 0; } }
+    @media (max-width: 560px) { .task-form { grid-template-columns: 1fr; } .field--wide { grid-column: auto; } }
   </style>
 </head>
 <body>
@@ -61,28 +86,43 @@
     <p class="updated" data-updated>Loaded from this checkout</p>
   </header>
   <main id="board" tabindex="-1">
-    <p class="stale" data-stale role="status">Task refresh failed. Showing the last successful board.</p>
-    <section class="board" aria-label="Task status board">
-      {{ range .Board.Columns }}
-      <section class="column">
-        <header class="column__header"><h2 class="column__heading">{{ .Label }} <span class="count" data-count="{{ .Status }}">{{ len .Tasks }}</span></h2><code class="ref-label">refs/workbook/status/{{ .Status }}</code></header>
-        <div class="task-list" data-status="{{ .Status }}" data-drop-status="{{ .Status }}">{{ range .Tasks }}{{ template "task" . }}{{ end }}</div>
+    <div class="board-view" data-board-view>
+      <p class="stale" data-stale role="status">Task refresh failed. Showing the last successful board.</p>
+      <section class="board" aria-label="Task status board">
+        {{ range .Board.Columns }}
+        <section class="column">
+          <header class="column__header"><h2 class="column__heading">{{ .Label }} <span class="count" data-count="{{ .Status }}">{{ len .Tasks }}</span></h2><a class="new-task-link" href="/tasks/new?status={{ .Status }}">New Task</a><code class="ref-label">refs/workbook/status/{{ .Status }}</code></header>
+          <div class="task-list" data-status="{{ .Status }}" data-drop-status="{{ .Status }}">{{ range .Tasks }}{{ template "task" . }}{{ end }}</div>
+        </section>
+        {{ end }}
       </section>
-      {{ end }}
-    </section>
-    <section class="unknown" aria-label="Unrecognized task statuses">
-      <header class="column__header"><h2 class="column__heading">Unrecognized status <span class="count" data-count="unknown">{{ len .Board.UnknownTasks }}</span></h2><code class="ref-label">refs/workbook/status/unrecognized</code></header>
-      <div class="task-list" data-status="unknown">{{ range .Board.UnknownTasks }}{{ template "task" . }}{{ end }}</div>
-    </section>
+      <section class="unknown" aria-label="Unrecognized task statuses">
+        <header class="column__header"><h2 class="column__heading">Unrecognized status <span class="count" data-count="unknown">{{ len .Board.UnknownTasks }}</span></h2><code class="ref-label">refs/workbook/status/unrecognized</code></header>
+        <div class="task-list" data-status="unknown">{{ range .Board.UnknownTasks }}{{ template "task" . }}{{ end }}</div>
+      </section>
+    </div>
   </main>
   <script>
     (() => {
-      const statuses = new Set(["backlog", "ready", "blocked", "in-progress", "in-review", "done"]);
-      const lists = new Map([...document.querySelectorAll("[data-status]")].map((element) => [element.dataset.status, element]));
-      const counts = new Map([...document.querySelectorAll("[data-count]")].map((element) => [element.dataset.count, element]));
-      const stale = document.querySelector("[data-stale]");
+      const statusDefinitions = [
+        ["backlog", "Backlog"],
+        ["ready", "Ready"],
+        ["blocked", "Blocked"],
+        ["in-progress", "In Progress"],
+        ["in-review", "In Review"],
+        ["done", "Done"]
+      ];
+      const statuses = new Set(statusDefinitions.map(([status]) => status));
+      const main = document.querySelector("main");
+      const boardView = document.querySelector("[data-board-view]");
+      const lists = new Map([...boardView.querySelectorAll("[data-status]")].map((element) => [element.dataset.status, element]));
+      const counts = new Map([...boardView.querySelectorAll("[data-count]")].map((element) => [element.dataset.count, element]));
+      const stale = boardView.querySelector("[data-stale]");
       const updated = document.querySelector("[data-updated]");
       let activeDrag = null;
+      let latestTasks = [];
+      let tasksLoaded = false;
+      let taskLoadFailed = false;
 
       function text(element, value) { element.textContent = value || ""; return element; }
       function card(task, idPrefix) {
@@ -91,10 +131,152 @@
         const id = document.createElement("code"); text(id, idPrefix);
         const priority = document.createElement("span"); priority.className = "priority priority--" + task.priority; text(priority, task.priority);
         meta.append(id, priority); article.append(meta);
-        const title = document.createElement("h3"); text(title, task.title); article.append(title);
+        const title = document.createElement("h3");
+        const link = document.createElement("a"); link.href = "/tasks/" + encodeURIComponent(task.id); text(link, task.title);
+        title.append(link); article.append(title);
         if (task.description) { const description = document.createElement("p"); text(description, task.description); article.append(description); }
         if (task.labels && task.labels.length) { const labels = document.createElement("div"); labels.className = "labels"; task.labels.forEach((label) => { const item = document.createElement("span"); item.className = "label"; text(item, label); labels.append(item); }); article.append(labels); }
         return article;
+      }
+      function route(url = new URL(window.location.href)) {
+        if (url.pathname === "/") return { view: "board" };
+        if (url.pathname === "/tasks/new") {
+          const requestedStatus = url.searchParams.get("status");
+          return { view: "new", status: statuses.has(requestedStatus) ? requestedStatus : "backlog" };
+        }
+        const match = url.pathname.match(/^\/tasks\/([^/]+)$/);
+        if (!match) return { view: "unknown" };
+        try { return { view: "detail", id: decodeURIComponent(match[1]) }; }
+        catch (_) { return { view: "unknown" }; }
+      }
+      function navigate(path) {
+        history.pushState({}, "", path);
+        renderRoute();
+      }
+      function field(labelText, control, wide = false) {
+        const wrapper = document.createElement("div"); wrapper.className = "field" + (wide ? " field--wide" : "");
+        const label = document.createElement("label"); label.htmlFor = control.id; text(label, labelText);
+        wrapper.append(label, control);
+        return wrapper;
+      }
+      function select(name, options, value) {
+        const control = document.createElement("select"); control.id = "task-" + name; control.name = name;
+        options.forEach(([optionValue, label]) => {
+          const option = document.createElement("option"); option.value = optionValue; text(option, label); option.selected = optionValue === value; control.append(option);
+        });
+        return control;
+      }
+      function taskForm(mode, task) {
+        const isNew = mode === "new";
+        const section = document.createElement("section"); section.className = "task-route"; section.setAttribute("aria-labelledby", "task-form-title");
+        const header = document.createElement("header"); header.className = "task-route__header";
+        const eyebrow = document.createElement("p"); eyebrow.className = "eyebrow"; text(eyebrow, isNew ? "New task" : "Task detail");
+        const heading = document.createElement("h2"); heading.id = "task-form-title"; text(heading, isNew ? "Add work to the board" : task.title);
+        header.append(eyebrow, heading);
+        if (!isNew) { const taskID = document.createElement("code"); text(taskID, task.id); header.append(taskID); }
+
+        const form = document.createElement("form"); form.className = "task-form";
+        const title = document.createElement("input"); title.id = "task-title"; title.name = "title"; title.required = true; title.value = task.title || "";
+        const description = document.createElement("textarea"); description.id = "task-description"; description.name = "description"; description.value = task.description || "";
+        const knownStatus = statuses.has(task.status);
+        const statusOptions = knownStatus ? statusDefinitions : [["", "Choose a canonical status (current: " + task.status + ")"], ...statusDefinitions];
+        const status = select("status", statusOptions, knownStatus ? task.status : ""); status.required = true;
+        if (!knownStatus) status.firstElementChild.disabled = true;
+        const priority = select("priority", [["high", "High"], ["medium", "Medium"], ["low", "Low"]], task.priority);
+        const labels = document.createElement("input"); labels.id = "task-labels"; labels.name = "labels"; labels.value = (task.labels || []).join(", "); labels.placeholder = "web, docs, release";
+        const result = document.createElement("p"); result.className = "form-status"; result.setAttribute("role", "status"); result.setAttribute("aria-live", "polite");
+        const actions = document.createElement("div"); actions.className = "form-actions";
+        const save = document.createElement("button"); save.className = "save-button"; save.type = "submit"; text(save, "Save");
+        const back = document.createElement("a"); back.className = "board-link"; back.href = "/"; text(back, "Back");
+        actions.append(save, back);
+        form.append(field("Title", title, true), field("Description", description, true), field("Status", status), field("Priority", priority), field("Labels", labels, true), result, actions);
+
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const values = {
+            title: title.value,
+            description: description.value,
+            status: status.value,
+            priority: priority.value,
+            labels: labels.value.split(",").map((label) => label.trim()).filter(Boolean)
+          };
+          save.disabled = true;
+          text(result, "");
+          try {
+            await mutateTask(isNew ? "POST" : "PATCH", isNew ? "/api/tasks" : "/api/tasks/" + encodeURIComponent(task.id), values);
+            navigate("/");
+            await refresh();
+          } catch (error) {
+            text(result, error instanceof Error ? error.message : "Task update failed.");
+          } finally {
+            save.disabled = false;
+          }
+        });
+        section.append(header, form);
+        return section;
+      }
+      async function mutateTask(method, path, values) {
+        const response = await fetch(path, {
+          method, headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(values),
+        });
+        const document = await response.json();
+        if (!response.ok || document.format !== "workbook.task-mutation" || document.version !== 1) {
+          throw new Error(document.error && document.error.message || "Task update failed.");
+        }
+        return document.task;
+      }
+      function routeMessage(titleText, message, retryable = false) {
+        const section = document.createElement("section"); section.className = "task-route"; section.setAttribute("aria-labelledby", "route-message-title");
+        const header = document.createElement("header"); header.className = "task-route__header";
+        const heading = document.createElement("h2"); heading.id = "route-message-title"; text(heading, titleText); header.append(heading);
+        const body = document.createElement("div"); body.className = "route-message";
+        const copy = document.createElement("p"); text(copy, message);
+        const back = document.createElement("a"); back.className = "board-link"; back.href = "/"; text(back, "Back");
+        body.append(copy);
+        if (retryable) {
+          const retry = document.createElement("button"); retry.className = "save-button"; retry.type = "button"; text(retry, "Retry");
+          retry.addEventListener("click", refresh);
+          body.append(retry);
+        }
+        body.append(back); section.append(header, body);
+        return section;
+      }
+      function renderRoute() {
+        const current = route();
+        if (current.view === "board") {
+          document.title = "Workbook board";
+          if (main.firstElementChild !== boardView) main.replaceChildren(boardView);
+          return;
+        }
+        if (current.view === "unknown") {
+          document.title = "Page not found · Workbook";
+          main.replaceChildren(routeMessage("Page not found", "This Workbook route does not exist."));
+          return;
+        }
+        if (!tasksLoaded) {
+          if (taskLoadFailed) {
+            document.title = "Unable to load task · Workbook";
+            main.replaceChildren(routeMessage("Unable to load task", "Task data could not be loaded. Retry now or return to the board.", true));
+            return;
+          }
+          document.title = "Loading task · Workbook";
+          main.replaceChildren(routeMessage("Loading task", "Reading the latest task state from this checkout."));
+          return;
+        }
+        if (current.view === "new") {
+          document.title = "New task · Workbook";
+          main.replaceChildren(taskForm("new", { title: "", description: "", status: current.status, priority: "medium", labels: [] }));
+          return;
+        }
+        const task = latestTasks.find((candidate) => candidate.id === current.id);
+        if (!task) {
+          document.title = "Task not found · Workbook";
+          main.replaceChildren(routeMessage("Task not found", "No task has the full ID " + current.id + "."));
+          return;
+        }
+        document.title = task.title + " · Workbook";
+        main.replaceChildren(taskForm("detail", task));
       }
       function clearDropStates() {
         lists.forEach((list) => list.classList.remove("can-drop", "cannot-drop"));
@@ -110,16 +292,6 @@
       function canDropOn(list) {
         return !!(activeDrag && list && statuses.has(list.dataset.dropStatus) && list.dataset.dropStatus !== activeDrag.sourceStatus);
       }
-      async function updateStatus(taskId, status) {
-        const response = await fetch("/api/tasks/" + encodeURIComponent(taskId) + "/status", {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ status })
-        });
-        const document = await response.json();
-        if (!response.ok || document.format !== "workbook.task-mutation" || document.version !== 1 || !document.task) throw new Error("invalid mutation document");
-        return document.task;
-      }
       function render(tasks, presentation) {
         const grouped = new Map([...lists.keys()].map((status) => [status, []]));
         tasks.forEach((task) => grouped.get(statuses.has(task.status) ? task.status : "unknown").push(task));
@@ -132,15 +304,36 @@
         });
       }
       async function refresh() {
+        const wasLoaded = tasksLoaded;
         try {
           const response = await fetch("/api/tasks", { cache: "no-store" });
           const document = await response.json();
           if (!response.ok || document.format !== "workbook.tasks" || document.version !== 1 || !Array.isArray(document.tasks) || !Array.isArray(document.presentation)) throw new Error("invalid task document");
           const presentation = new Map(document.presentation.map((view) => [view.taskId, view.idPrefix]));
           if (presentation.size !== document.tasks.length || document.tasks.some((task) => !presentation.has(task.id))) throw new Error("invalid task presentation");
+          latestTasks = document.tasks;
+          tasksLoaded = true;
+          taskLoadFailed = false;
           render(document.tasks, presentation); stale.dataset.visible = "false"; text(updated, "Updated " + new Date().toLocaleTimeString());
-        } catch (_) { text(stale, "Task refresh failed. Showing the last successful board."); stale.dataset.visible = "true"; }
+          if (!wasLoaded) renderRoute();
+        } catch (_) {
+          text(stale, "Task refresh failed. Showing the last successful board."); stale.dataset.visible = "true";
+          if (!tasksLoaded) {
+            taskLoadFailed = true;
+            renderRoute();
+          }
+        }
       }
+      window.addEventListener("popstate", renderRoute);
+      document.addEventListener("click", (event) => {
+        if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        const anchor = event.target && event.target.closest && event.target.closest("a[href]");
+        if (!anchor || (anchor.target && anchor.target !== "_self") || anchor.hasAttribute("download")) return;
+        const destination = new URL(anchor.href, window.location.href);
+        if (destination.origin !== window.location.origin) return;
+        event.preventDefault();
+        navigate(destination.pathname + destination.search + destination.hash);
+      });
       document.addEventListener("dragstart", (event) => {
         const item = event.target.closest(".task-card");
         const source = item && item.closest("[data-status]");
@@ -178,13 +371,15 @@
         const status = target.dataset.dropStatus;
         clearDropStates();
         try {
-          await updateStatus(taskId, status);
+          await mutateTask("PATCH", "/api/tasks/" + encodeURIComponent(taskId) + "/status", { status });
           await refresh();
         } catch (_) {
           text(stale, "Task update failed. Showing the last successful board.");
           stale.dataset.visible = "true";
         }
       });
+      renderRoute();
+      refresh();
       window.setInterval(refresh, 2000);
     })();
   </script>

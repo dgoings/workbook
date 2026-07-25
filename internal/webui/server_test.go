@@ -24,7 +24,9 @@ func TestServeStopsCleanlyWhenContextIsCancelled(t *testing.T) {
 	go func() {
 		result <- Serve(ctx, listener, NewHandler(
 			func(context.Context) ([]core.Task, error) { return nil, nil },
-			func(context.Context, string, core.Status) (core.Task, error) { return core.Task{}, nil },
+			unexpectedTaskCreate(t),
+			unexpectedTaskUpdate(t),
+			unexpectedStatusUpdate(t),
 		))
 	}()
 
@@ -59,7 +61,9 @@ func TestServeReturnsUnexpectedHTTPFailure(t *testing.T) {
 
 	err = Serve(context.Background(), listener, NewHandler(
 		func(context.Context) ([]core.Task, error) { return nil, nil },
-		func(context.Context, string, core.Status) (core.Task, error) { return core.Task{}, nil },
+		unexpectedTaskCreate(t),
+		unexpectedTaskUpdate(t),
+		unexpectedStatusUpdate(t),
 	))
 	if err == nil {
 		t.Fatal("Serve() error = nil, want closed-listener failure")

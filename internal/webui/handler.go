@@ -23,6 +23,10 @@ type TaskLister func(context.Context) ([]core.Task, error)
 
 type TaskStatusUpdater func(context.Context, string, core.Status) (core.Task, error)
 
+type TaskCreator func(context.Context, core.CreateInput) (core.Task, error)
+
+type TaskUpdater func(context.Context, string, core.UpdateInput) (core.Task, error)
+
 type TasksDocument struct {
 	Format       string             `json:"format"`
 	Version      int                `json:"version"`
@@ -60,6 +64,8 @@ type ErrorDocument struct {
 
 type handler struct {
 	list         TaskLister
+	create       TaskCreator
+	update       TaskUpdater
 	updateStatus TaskStatusUpdater
 	page         *template.Template
 	mux          *http.ServeMux
@@ -73,11 +79,31 @@ type updateStatusRequest struct {
 	Status core.Status `json:"status"`
 }
 
-func NewHandler(list TaskLister, updateStatus TaskStatusUpdater) http.Handler {
+type createTaskRequest struct {
+	Title       string        `json:"title"`
+	Description string        `json:"description"`
+	Status      core.Status   `json:"status"`
+	Priority    core.Priority `json:"priority"`
+	Labels      []string      `json:"labels"`
+}
+
+type updateTaskRequest struct {
+	Title       *string        `json:"title"`
+	Description *string        `json:"description"`
+	Status      *core.Status   `json:"status"`
+	Priority    *core.Priority `json:"priority"`
+	Labels      *[]string      `json:"labels"`
+}
+
+func NewHandler(list TaskLister, create TaskCreator, update TaskUpdater, updateStatus TaskStatusUpdater) http.Handler {
 	page := template.Must(template.New("index.html").ParseFS(assets, "assets/index.html"))
-	handler := &handler{list: list, updateStatus: updateStatus, page: page, mux: http.NewServeMux()}
+	handler := &handler{list: list, create: create, update: update, updateStatus: updateStatus, page: page, mux: http.NewServeMux()}
 	handler.mux.HandleFunc("GET /{$}", handler.serveBoard)
+	handler.mux.HandleFunc("GET /tasks/new", handler.serveBoard)
+	handler.mux.HandleFunc("GET /tasks/{id}", handler.serveBoard)
 	handler.mux.HandleFunc("GET /api/tasks", handler.serveTasks)
+	handler.mux.HandleFunc("POST /api/tasks", handler.createTask)
+	handler.mux.HandleFunc("PATCH /api/tasks/{id}", handler.updateTask)
 	handler.mux.HandleFunc("PATCH /api/tasks/{id}/status", handler.updateTaskStatus)
 	handler.mux.HandleFunc("GET /healthz", handler.serveHealth)
 	return http.HandlerFunc(handler.serveHTTP)
@@ -86,7 +112,7 @@ func NewHandler(list TaskLister, updateStatus TaskStatusUpdater) http.Handler {
 func (handler *handler) serveHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Content-Security-Policy", securityPolicy)
 	writer.Header().Set("X-Content-Type-Options", "nosniff")
-	if method, known := allowedMethod(request.URL.Path); known && request.Method != method {
+	if method, known := allowedMethod(request.URL.Path); known && !methodAllowed(request.Method, method) {
 		writer.Header().Set("Allow", method)
 		writer.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -94,16 +120,57 @@ func (handler *handler) serveHTTP(writer http.ResponseWriter, request *http.Requ
 	handler.mux.ServeHTTP(writer, request)
 }
 
+func methodAllowed(requestMethod, allowed string) bool {
+	for _, method := range strings.Split(allowed, ", ") {
+		if requestMethod == method {
+			return true
+		}
+	}
+	return false
+}
+
 func allowedMethod(path string) (string, bool) {
 	switch path {
-	case "/", "/api/tasks", "/healthz":
+	case "/", "/healthz", "/tasks/new":
 		return http.MethodGet, true
+	case "/api/tasks":
+		return http.MethodGet + ", " + http.MethodPost, true
 	default:
 		if taskStatusPathID(path) != "" {
 			return http.MethodPatch, true
 		}
+		if taskPathID(path) != "" {
+			return http.MethodPatch, true
+		}
+		if taskPagePathID(path) != "" {
+			return http.MethodGet, true
+		}
 		return "", false
 	}
+}
+
+func taskPagePathID(path string) string {
+	const prefix = "/tasks/"
+	if !strings.HasPrefix(path, prefix) {
+		return ""
+	}
+	id := strings.TrimPrefix(path, prefix)
+	if id == "" || id == "new" || strings.Contains(id, "/") {
+		return ""
+	}
+	return id
+}
+
+func taskPathID(path string) string {
+	const prefix = "/api/tasks/"
+	if !strings.HasPrefix(path, prefix) {
+		return ""
+	}
+	id := strings.TrimPrefix(path, prefix)
+	if id == "" || strings.Contains(id, "/") {
+		return ""
+	}
+	return id
 }
 
 func taskStatusPathID(path string) string {
@@ -151,16 +218,7 @@ func (handler *handler) updateTaskStatus(writer http.ResponseWriter, request *ht
 		id = taskStatusPathID(request.URL.Path)
 	}
 	var input updateStatusRequest
-	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&input); err != nil {
-		handler.writeError(writer, core.Wrap(core.CategoryInvocation, "decode status update", err))
-		return
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		if err == nil {
-			err = errors.New("multiple JSON values")
-		}
+	if err := decodeRequest(request.Body, &input); err != nil {
 		handler.writeError(writer, core.Wrap(core.CategoryInvocation, "decode status update", err))
 		return
 	}
@@ -169,6 +227,65 @@ func (handler *handler) updateTaskStatus(writer http.ResponseWriter, request *ht
 		handler.writeError(writer, err)
 		return
 	}
+	handler.writeTaskMutation(writer, task)
+}
+
+func (handler *handler) createTask(writer http.ResponseWriter, request *http.Request) {
+	var body createTaskRequest
+	if err := decodeRequest(request.Body, &body); err != nil {
+		handler.writeError(writer, core.Wrap(core.CategoryInvocation, "decode task create", err))
+		return
+	}
+	if handler.create == nil {
+		handler.writeError(writer, core.Errorf(core.CategoryOperational, "task creation is not configured"))
+		return
+	}
+	task, err := handler.create(request.Context(), core.CreateInput(body))
+	if err != nil {
+		handler.writeError(writer, err)
+		return
+	}
+	handler.writeTaskMutation(writer, task)
+}
+
+func (handler *handler) updateTask(writer http.ResponseWriter, request *http.Request) {
+	var body updateTaskRequest
+	if err := decodeRequest(request.Body, &body); err != nil {
+		handler.writeError(writer, core.Wrap(core.CategoryInvocation, "decode task update", err))
+		return
+	}
+	if handler.update == nil {
+		handler.writeError(writer, core.Errorf(core.CategoryOperational, "task updating is not configured"))
+		return
+	}
+	id := request.PathValue("id")
+	if id == "" {
+		id = taskPathID(request.URL.Path)
+	}
+	task, err := handler.update(request.Context(), id, core.UpdateInput(body))
+	if err != nil {
+		handler.writeError(writer, err)
+		return
+	}
+	handler.writeTaskMutation(writer, task)
+}
+
+func decodeRequest(body io.Reader, value any) error {
+	decoder := json.NewDecoder(body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(value); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if err == nil {
+			err = errors.New("multiple JSON values")
+		}
+		return err
+	}
+	return nil
+}
+
+func (handler *handler) writeTaskMutation(writer http.ResponseWriter, task core.Task) {
 	writeJSON(writer, http.StatusOK, TaskMutationDocument{
 		Format:  "workbook.task-mutation",
 		Version: 1,
