@@ -74,6 +74,29 @@ func TestHandlerServesBoardTasksAndHealth(t *testing.T) {
 	}
 }
 
+func TestHandlerRendersInReviewTasks(t *testing.T) {
+	tasks := boardTasks()
+	tasks = append(tasks, core.Task{
+		ID: "WB-01J00000000000000000000007",
+		TaskData: core.TaskData{
+			Title:    "Review task",
+			Status:   core.StatusInReview,
+			Priority: core.PriorityMedium,
+		},
+	})
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil })
+
+	response := request(t, handler, http.MethodGet, "/")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	for _, fragment := range []string{"In Review", `data-status="in-review"`, "Review task"} {
+		if !strings.Contains(response.Body.String(), fragment) {
+			t.Errorf("GET / body does not contain %q", fragment)
+		}
+	}
+}
+
 func TestHandlerRefreshesTasksOnEveryAPIRequest(t *testing.T) {
 	first := boardTasks()
 	second := append([]core.Task(nil), first...)

@@ -34,7 +34,7 @@ func TestNormalizeTaskSortsSetsAndValidatesValues(t *testing.T) {
 }
 
 func TestNormalizeTaskAcceptsEveryStatusAndPriority(t *testing.T) {
-	statuses := []Status{StatusBacklog, StatusReady, StatusInProgress, StatusBlocked, StatusDone}
+	statuses := []Status{StatusBacklog, StatusReady, StatusBlocked, StatusInProgress, StatusInReview, StatusDone}
 	priorities := []Priority{PriorityLow, PriorityMedium, PriorityHigh}
 
 	for _, status := range statuses {
@@ -51,6 +51,20 @@ func TestNormalizeTaskAcceptsEveryStatusAndPriority(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestWorkflowStatusesReturnsCanonicalOrder(t *testing.T) {
+	want := []StatusDefinition{
+		{Status: StatusBacklog, Label: "Backlog"},
+		{Status: StatusReady, Label: "Ready"},
+		{Status: StatusBlocked, Label: "Blocked"},
+		{Status: StatusInProgress, Label: "In Progress"},
+		{Status: StatusInReview, Label: "In Review"},
+		{Status: StatusDone, Label: "Done"},
+	}
+	if got := WorkflowStatuses(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("WorkflowStatuses() = %#v, want %#v", got, want)
 	}
 }
 

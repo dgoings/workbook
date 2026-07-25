@@ -525,6 +525,54 @@ func TestRunCRUDLifecycleAndOutputContracts(t *testing.T) {
 	}
 }
 
+func TestCLIInReviewStatus(t *testing.T) {
+	repository := initializedRepository(t)
+
+	code, stdout, stderr := run(t, repository, "create", "Review from creation", "--status", "in-review", "--json")
+	if code != 0 {
+		t.Fatalf("create code = %d, want 0; stderr = %q", code, stderr)
+	}
+	result := assertJSONResult(t, stdout, "create")
+	var created core.Task
+	if err := json.Unmarshal(result.Data, &created); err != nil {
+		t.Fatalf("decode created task: %v", err)
+	}
+
+	code, stdout, stderr = run(t, repository, "create", "Review from update", "--json")
+	if code != 0 {
+		t.Fatalf("second create code = %d, want 0; stderr = %q", code, stderr)
+	}
+	result = assertJSONResult(t, stdout, "create")
+	var updated core.Task
+	if err := json.Unmarshal(result.Data, &updated); err != nil {
+		t.Fatalf("decode second created task: %v", err)
+	}
+
+	code, _, stderr = run(t, repository, "update", updated.ID, "--status", "in-review", "--json")
+	if code != 0 {
+		t.Fatalf("update code = %d, want 0; stderr = %q", code, stderr)
+	}
+
+	code, stdout, stderr = run(t, repository, "list", "--status", "in-review", "--json")
+	if code != 0 {
+		t.Fatalf("list code = %d, want 0; stderr = %q", code, stderr)
+	}
+	result = assertJSONResult(t, stdout, "list")
+	var tasks []core.Task
+	if err := json.Unmarshal(result.Data, &tasks); err != nil {
+		t.Fatalf("decode in-review tasks: %v", err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("in-review task count = %d, want 2", len(tasks))
+	}
+	if got, want := tasks[0].ID, created.ID; got != want {
+		t.Fatalf("first in-review task ID = %q, want %q", got, want)
+	}
+	if got, want := tasks[1].ID, updated.ID; got != want {
+		t.Fatalf("second in-review task ID = %q, want %q", got, want)
+	}
+}
+
 func TestRunJSONFailureIsCompactAndUsesStableExitCodes(t *testing.T) {
 	t.Run("validation", func(t *testing.T) {
 		repository := initializedRepository(t)

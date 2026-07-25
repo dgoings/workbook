@@ -22,10 +22,29 @@ type Status string
 const (
 	StatusBacklog    Status = "backlog"
 	StatusReady      Status = "ready"
-	StatusInProgress Status = "in-progress"
 	StatusBlocked    Status = "blocked"
+	StatusInProgress Status = "in-progress"
+	StatusInReview   Status = "in-review"
 	StatusDone       Status = "done"
 )
+
+type StatusDefinition struct {
+	Status Status
+	Label  string
+}
+
+var workflowStatuses = [...]StatusDefinition{
+	{Status: StatusBacklog, Label: "Backlog"},
+	{Status: StatusReady, Label: "Ready"},
+	{Status: StatusBlocked, Label: "Blocked"},
+	{Status: StatusInProgress, Label: "In Progress"},
+	{Status: StatusInReview, Label: "In Review"},
+	{Status: StatusDone, Label: "Done"},
+}
+
+func WorkflowStatuses() []StatusDefinition {
+	return append([]StatusDefinition(nil), workflowStatuses[:]...)
+}
 
 type Priority string
 
@@ -113,12 +132,12 @@ func formatRank(rank *big.Rat) string {
 }
 
 func isValidStatus(status Status) bool {
-	switch status {
-	case StatusBacklog, StatusReady, StatusInProgress, StatusBlocked, StatusDone:
-		return true
-	default:
-		return false
+	for _, definition := range workflowStatuses {
+		if status == definition.Status {
+			return true
+		}
 	}
+	return false
 }
 
 func isValidPriority(priority Priority) bool {

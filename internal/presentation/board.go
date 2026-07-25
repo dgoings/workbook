@@ -22,17 +22,6 @@ type Board struct {
 	UnknownTasks []TaskView
 }
 
-var columnDefinitions = [...]struct {
-	status core.Status
-	label  string
-}{
-	{core.StatusBacklog, "Backlog"},
-	{core.StatusReady, "Ready"},
-	{core.StatusInProgress, "In progress"},
-	{core.StatusBlocked, "Blocked"},
-	{core.StatusDone, "Done"},
-}
-
 func TaskViews(tasks []core.Task) []TaskView {
 	views := make([]TaskView, len(tasks))
 	for i, task := range tasks {
@@ -45,9 +34,10 @@ func TaskViews(tasks []core.Task) []TaskView {
 }
 
 func NewBoard(tasks []core.Task) Board {
-	board := Board{Columns: make([]Column, len(columnDefinitions))}
-	for i, definition := range columnDefinitions {
-		board.Columns[i] = Column{Status: definition.status, Label: definition.label}
+	definitions := core.WorkflowStatuses()
+	board := Board{Columns: make([]Column, 0, len(definitions))}
+	for _, definition := range definitions {
+		board.Columns = append(board.Columns, Column{Status: definition.Status, Label: definition.Label})
 	}
 
 	for _, task := range TaskViews(tasks) {
