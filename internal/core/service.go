@@ -34,6 +34,11 @@ type UpdateInput struct {
 	Labels      *[]string
 }
 
+type MoveInput struct {
+	Before string
+	After  string
+}
+
 type ListFilter struct {
 	Status   *Status
 	Priority *Priority
@@ -139,6 +144,44 @@ func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
 	return tasks, nil
 }
 
+// Next returns the highest-priority ready task whose dependencies are all
+// active done tasks. It returns nil when no task is eligible.
+func (s Service) Next(ctx context.Context) (*Task, error) {
+	snapshots, err := s.Store.List(ctx, s.Config)
+	if err != nil {
+		return nil, err
+	}
+
+	active := make(map[string]TaskData, len(snapshots))
+	for _, snapshot := range snapshots {
+		task := snapshot.State.Task
+		if !task.Deleted {
+			active[snapshot.State.TaskID] = task
+		}
+	}
+
+	var selected *Task
+	var selectedRank *big.Rat
+	for _, snapshot := range snapshots {
+		task := snapshot.State.Task
+		if task.Deleted || task.Status != StatusReady || !dependenciesDone(task.Dependencies, active) {
+			continue
+		}
+		rank, err := parseRank(task.Rank)
+		if err != nil {
+			return nil, Errorf(CategoryCorruptData, "task %q has invalid rank %q", snapshot.State.TaskID, task.Rank)
+		}
+		projected := Project(snapshot)
+		if selected == nil || priorityOrder(projected.Priority) < priorityOrder(selected.Priority) ||
+			(priorityOrder(projected.Priority) == priorityOrder(selected.Priority) &&
+				(rank.Cmp(selectedRank) < 0 || (rank.Cmp(selectedRank) == 0 && projected.ID < selected.ID))) {
+			selected = &projected
+			selectedRank = rank
+		}
+	}
+	return selected, nil
+}
+
 func (s Service) Show(ctx context.Context, idOrPrefix string) (Task, error) {
 	snapshot, err := s.resolveSnapshot(ctx, idOrPrefix)
 	if err != nil {
@@ -200,6 +243,106 @@ func (s Service) Delete(ctx context.Context, idOrPrefix string) (Task, error) {
 		return Task{}, err
 	}
 	return s.writeMutation(ctx, &parent, operations, "delete task")
+}
+
+func (s Service) Move(ctx context.Context, idOrPrefix string, input MoveInput) (Task, error) {
+	if (input.Before == "") == (input.After == "") {
+		return Task{}, Errorf(CategoryValidation, "move requires exactly one anchor direction")
+	}
+	parent, err := s.resolveSnapshot(ctx, idOrPrefix)
+	if err != nil {
+		return Task{}, err
+	}
+	if parent.State.Task.Deleted {
+		return Task{}, Errorf(CategoryValidation, "cannot move a tombstoned task")
+	}
+	anchorInput := input.Before
+	if anchorInput == "" {
+		anchorInput = input.After
+	}
+	anchor, err := s.resolveSnapshot(ctx, anchorInput)
+	if err != nil {
+		return Task{}, err
+	}
+	if anchor.State.Task.Deleted {
+		return Task{}, Errorf(CategoryValidation, "cannot use a tombstoned task as an anchor")
+	}
+	if anchor.State.TaskID == parent.State.TaskID {
+		return Task{}, Errorf(CategoryValidation, "cannot use a task as its own move anchor")
+	}
+	if anchor.State.Task.Status != parent.State.Task.Status || anchor.State.Task.Priority != parent.State.Task.Priority {
+		return Task{}, Errorf(CategoryValidation, "move anchor must be in the same status and priority bucket")
+	}
+	snapshots, err := s.Store.List(ctx, s.Config)
+	if err != nil {
+		return Task{}, err
+	}
+	rank, err := movedRank(snapshots, parent.State.TaskID, anchor.State.Task, input.Before != "")
+	if err != nil {
+		return Task{}, err
+	}
+	if rank == parent.State.Task.Rank {
+		return Project(parent), nil
+	}
+	operations := []Operation{{Type: OperationFieldSet, Field: "rank", Value: rank}}
+	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
+		return Task{}, err
+	}
+	return s.writeMutation(ctx, &parent, operations, "move task")
+}
+
+func (s Service) Depend(ctx context.Context, idOrPrefix, dependencyOrPrefix string) (Task, error) {
+	parent, err := s.resolveSnapshot(ctx, idOrPrefix)
+	if err != nil {
+		return Task{}, err
+	}
+	dependency, err := s.resolveSnapshot(ctx, dependencyOrPrefix)
+	if err != nil {
+		return Task{}, err
+	}
+	if parent.State.Task.Deleted || dependency.State.Task.Deleted {
+		return Task{}, Errorf(CategoryValidation, "cannot add a dependency involving a tombstoned task")
+	}
+	if parent.State.TaskID == dependency.State.TaskID {
+		return Task{}, Errorf(CategoryValidation, "a task cannot depend on itself")
+	}
+	if hasDependency(parent.State.Task.Dependencies, dependency.State.TaskID) {
+		return Project(parent), nil
+	}
+	snapshots, err := s.Store.List(ctx, s.Config)
+	if err != nil {
+		return Task{}, err
+	}
+	if dependencyReaches(snapshots, dependency.State.TaskID, parent.State.TaskID) {
+		return Task{}, Errorf(CategoryValidation, "dependency would create a cycle")
+	}
+	operations := []Operation{{Type: OperationSetAdd, Field: "dependencies", Value: dependency.State.TaskID}}
+	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
+		return Task{}, err
+	}
+	return s.writeMutation(ctx, &parent, operations, "add dependency")
+}
+
+func (s Service) Free(ctx context.Context, idOrPrefix, dependencyOrPrefix string) (Task, error) {
+	parent, err := s.resolveSnapshot(ctx, idOrPrefix)
+	if err != nil {
+		return Task{}, err
+	}
+	if parent.State.Task.Deleted {
+		return Task{}, Errorf(CategoryValidation, "cannot remove a dependency from a tombstoned task")
+	}
+	dependency, err := s.resolveSnapshot(ctx, dependencyOrPrefix)
+	if err != nil {
+		return Task{}, err
+	}
+	if !hasDependency(parent.State.Task.Dependencies, dependency.State.TaskID) {
+		return Project(parent), nil
+	}
+	operations := []Operation{{Type: OperationSetRemove, Field: "dependencies", Value: dependency.State.TaskID}}
+	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
+		return Task{}, err
+	}
+	return s.writeMutation(ctx, &parent, operations, "remove dependency")
 }
 
 func Project(snapshot Snapshot) Task {
@@ -349,21 +492,114 @@ func setDifference(left, right []string) []string {
 }
 
 func nextRank(snapshots []Snapshot, status Status, priority Priority) (string, error) {
-	maximum := big.NewInt(0)
+	maximum := big.NewRat(0, 1)
 	for _, snapshot := range snapshots {
 		task := snapshot.State.Task
 		if task.Deleted || task.Status != status || task.Priority != priority {
 			continue
 		}
-		rank, ok := rankInteger(task.Rank)
-		if !ok {
+		rank, err := parseRank(task.Rank)
+		if err != nil {
 			return "", Errorf(CategoryCorruptData, "task %q has invalid rank %q", snapshot.State.TaskID, task.Rank)
 		}
 		if rank.Cmp(maximum) > 0 {
 			maximum = rank
 		}
 	}
-	return new(big.Int).Add(maximum, big.NewInt(1)).String() + "/1", nil
+	return formatRank(new(big.Rat).Add(maximum, big.NewRat(1, 1))), nil
+}
+
+func movedRank(snapshots []Snapshot, movedID string, anchor TaskData, before bool) (string, error) {
+	anchorRank, err := parseRank(anchor.Rank)
+	if err != nil {
+		return "", Errorf(CategoryCorruptData, "anchor task has invalid rank %q", anchor.Rank)
+	}
+	var neighbor *big.Rat
+	for _, snapshot := range snapshots {
+		if snapshot.State.TaskID == movedID {
+			continue
+		}
+		task := snapshot.State.Task
+		if task.Deleted || task.Status != anchor.Status || task.Priority != anchor.Priority {
+			continue
+		}
+		rank, err := parseRank(task.Rank)
+		if err != nil {
+			return "", Errorf(CategoryCorruptData, "task %q has invalid rank %q", snapshot.State.TaskID, task.Rank)
+		}
+		if before {
+			if rank.Cmp(anchorRank) < 0 && (neighbor == nil || rank.Cmp(neighbor) > 0) {
+				neighbor = rank
+			}
+		} else if rank.Cmp(anchorRank) > 0 && (neighbor == nil || rank.Cmp(neighbor) < 0) {
+			neighbor = rank
+		}
+	}
+	if neighbor == nil {
+		if before {
+			return formatRank(new(big.Rat).Quo(anchorRank, big.NewRat(2, 1))), nil
+		}
+		nextInteger := new(big.Int).Quo(anchorRank.Num(), anchorRank.Denom())
+		nextInteger.Add(nextInteger, big.NewInt(1))
+		return formatRank(new(big.Rat).SetInt(nextInteger)), nil
+	}
+	return formatRank(new(big.Rat).Quo(new(big.Rat).Add(anchorRank, neighbor), big.NewRat(2, 1))), nil
+}
+
+func dependencyReaches(snapshots []Snapshot, startID, wantedID string) bool {
+	active := make(map[string]TaskData, len(snapshots))
+	for _, snapshot := range snapshots {
+		if !snapshot.State.Task.Deleted {
+			active[snapshot.State.TaskID] = snapshot.State.Task
+		}
+	}
+	visiting := make(map[string]struct{}, len(active))
+	visited := make(map[string]struct{}, len(active))
+	var visit func(string) bool
+	visit = func(id string) bool {
+		if id == wantedID {
+			return true
+		}
+		if _, seen := visiting[id]; seen {
+			return true
+		}
+		if _, seen := visited[id]; seen {
+			return false
+		}
+		task, ok := active[id]
+		if !ok {
+			return false
+		}
+		visiting[id] = struct{}{}
+		for _, dependency := range task.Dependencies {
+			if visit(dependency) {
+				return true
+			}
+		}
+		delete(visiting, id)
+		visited[id] = struct{}{}
+		return false
+	}
+	return visit(startID)
+}
+
+func hasDependency(dependencies []string, wanted string) bool {
+	for _, dependency := range dependencies {
+		if dependency == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func dependenciesDone(dependencies []string, active map[string]TaskData) bool {
+	for _, dependency := range dependencies {
+		task, ok := active[dependency]
+		if !ok || task.Status != StatusDone {
+			return false
+		}
+	}
+	return true
 }
 
 func compareTasks(left, right Task) int {
@@ -373,14 +609,14 @@ func compareTasks(left, right Task) int {
 	if compare := priorityOrder(left.Priority) - priorityOrder(right.Priority); compare != 0 {
 		return compare
 	}
-	leftRank, leftOK := rankInteger(left.Rank)
-	rightRank, rightOK := rankInteger(right.Rank)
-	if leftOK && rightOK {
+	leftRank, leftErr := parseRank(left.Rank)
+	rightRank, rightErr := parseRank(right.Rank)
+	if leftErr == nil && rightErr == nil {
 		if compare := leftRank.Cmp(rightRank); compare != 0 {
 			return compare
 		}
-	} else if leftOK != rightOK {
-		if leftOK {
+	} else if (leftErr == nil) != (rightErr == nil) {
+		if leftErr == nil {
 			return -1
 		}
 		return 1
@@ -416,15 +652,6 @@ func priorityOrder(priority Priority) int {
 	default:
 		return 3
 	}
-}
-
-func rankInteger(rank string) (*big.Int, bool) {
-	numerator, denominator, ok := strings.Cut(rank, "/")
-	if !ok || denominator != "1" || !rankPattern.MatchString(rank) {
-		return nil, false
-	}
-	value, ok := new(big.Int).SetString(numerator, 10)
-	return value, ok
 }
 
 func hasLabel(labels []string, wanted string) bool {

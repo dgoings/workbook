@@ -431,7 +431,7 @@ func validateFieldSetOperation(operation Operation) error {
 			return corrupt("field.set priority %q is invalid", operation.Value)
 		}
 	case "rank":
-		if !rankPattern.MatchString(operation.Value) {
+		if _, err := parseRank(operation.Value); err != nil {
 			return corrupt("field.set rank %q is invalid", operation.Value)
 		}
 	default:
