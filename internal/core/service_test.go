@@ -139,6 +139,61 @@ func TestServiceListOrdersRanksAsExactRationals(t *testing.T) {
 	assertTaskIDs(t, tasks, []string{twoThirds.State.TaskID, nineTenths.State.TaskID})
 }
 
+func TestServiceNextSelectsReadyTaskByPriorityExactRankAndID(t *testing.T) {
+	medium := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", TaskData{Title: "medium", Status: StatusReady, Priority: PriorityMedium, Rank: "1/1"})
+	highLater := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D2", TaskData{Title: "high later", Status: StatusReady, Priority: PriorityHigh, Rank: "9/10"})
+	highFirstByID := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D3", TaskData{Title: "high first", Status: StatusReady, Priority: PriorityHigh, Rank: "2/3"})
+	highSecondByID := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D4", TaskData{Title: "high second", Status: StatusReady, Priority: PriorityHigh, Rank: "2/3"})
+	backlog := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D5", TaskData{Title: "backlog", Status: StatusBacklog, Priority: PriorityHigh, Rank: "1/1"})
+	deleted := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D6", TaskData{Title: "deleted", Status: StatusReady, Priority: PriorityHigh, Rank: "1/2", Deleted: true})
+	store := newMemoryTaskStore(medium, highLater, highSecondByID, deleted, highFirstByID, backlog)
+	service := serviceUnderTest(store, &sequenceIDSource{})
+
+	task, err := service.Next(context.Background())
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if got, want := task.ID, highFirstByID.State.TaskID; got != want {
+		t.Fatalf("Next() ID = %q, want %q", got, want)
+	}
+	if got, want := store.listCalls, 1; got != want {
+		t.Fatalf("Next() List() calls = %d, want %d", got, want)
+	}
+}
+
+func TestServiceNextRequiresEveryDependencyToBeActiveAndDone(t *testing.T) {
+	done := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", TaskData{Title: "done", Status: StatusDone, Priority: PriorityLow, Rank: "1/1"})
+	notDone := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D2", TaskData{Title: "not done", Status: StatusInProgress, Priority: PriorityLow, Rank: "1/1"})
+	tombstoned := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D3", TaskData{Title: "tombstoned", Status: StatusDone, Priority: PriorityLow, Rank: "1/1", Deleted: true})
+	eligible := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D4", TaskData{Title: "eligible", Status: StatusReady, Priority: PriorityLow, Rank: "4/1", Dependencies: []string{done.State.TaskID}})
+	missing := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D5", TaskData{Title: "missing", Status: StatusReady, Priority: PriorityHigh, Rank: "1/1", Dependencies: []string{"WB-01K0M6B8A4FTT8C39MXXYTW7D9"}})
+	blocked := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E1", TaskData{Title: "blocked", Status: StatusReady, Priority: PriorityHigh, Rank: "2/1", Dependencies: []string{notDone.State.TaskID}})
+	deletedDependency := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E2", TaskData{Title: "deleted dependency", Status: StatusReady, Priority: PriorityHigh, Rank: "3/1", Dependencies: []string{tombstoned.State.TaskID}})
+	service := serviceUnderTest(newMemoryTaskStore(done, notDone, tombstoned, eligible, missing, blocked, deletedDependency), &sequenceIDSource{})
+
+	task, err := service.Next(context.Background())
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if got, want := task.ID, eligible.State.TaskID; got != want {
+		t.Fatalf("Next() ID = %q, want %q", got, want)
+	}
+}
+
+func TestServiceNextReturnsNilWhenNoTaskIsEligible(t *testing.T) {
+	done := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", TaskData{Title: "done", Status: StatusDone, Priority: PriorityHigh, Rank: "1/1"})
+	blocked := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D2", TaskData{Title: "blocked", Status: StatusReady, Priority: PriorityHigh, Rank: "1/1", Dependencies: []string{done.State.TaskID, "WB-01K0M6B8A4FTT8C39MXXYTW7D9"}})
+	service := serviceUnderTest(newMemoryTaskStore(done, blocked), &sequenceIDSource{})
+
+	task, err := service.Next(context.Background())
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if task != nil {
+		t.Fatalf("Next() = %#v, want nil", task)
+	}
+}
+
 func TestNextRankAppendsAfterMaximumRationalRank(t *testing.T) {
 	first := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", TaskData{Title: "first", Status: StatusBacklog, Priority: PriorityHigh, Rank: "7/2"})
 	second := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D2", TaskData{Title: "second", Status: StatusBacklog, Priority: PriorityHigh, Rank: "9/2"})
@@ -601,6 +656,7 @@ type memoryTaskStore struct {
 	snapshots map[string]Snapshot
 	writes    []memoryWrite
 	writeErr  error
+	listCalls int
 }
 
 type memoryWrite struct {
@@ -618,6 +674,7 @@ func newMemoryTaskStore(snapshots ...Snapshot) *memoryTaskStore {
 }
 
 func (s *memoryTaskStore) List(_ context.Context, _ ProjectConfig) ([]Snapshot, error) {
+	s.listCalls++
 	ids := make([]string, 0, len(s.snapshots))
 	for id := range s.snapshots {
 		ids = append(ids, id)

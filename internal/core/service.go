@@ -144,6 +144,44 @@ func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
 	return tasks, nil
 }
 
+// Next returns the highest-priority ready task whose dependencies are all
+// active done tasks. It returns nil when no task is eligible.
+func (s Service) Next(ctx context.Context) (*Task, error) {
+	snapshots, err := s.Store.List(ctx, s.Config)
+	if err != nil {
+		return nil, err
+	}
+
+	active := make(map[string]TaskData, len(snapshots))
+	for _, snapshot := range snapshots {
+		task := snapshot.State.Task
+		if !task.Deleted {
+			active[snapshot.State.TaskID] = task
+		}
+	}
+
+	var selected *Task
+	var selectedRank *big.Rat
+	for _, snapshot := range snapshots {
+		task := snapshot.State.Task
+		if task.Deleted || task.Status != StatusReady || !dependenciesDone(task.Dependencies, active) {
+			continue
+		}
+		rank, err := parseRank(task.Rank)
+		if err != nil {
+			return nil, Errorf(CategoryCorruptData, "task %q has invalid rank %q", snapshot.State.TaskID, task.Rank)
+		}
+		projected := Project(snapshot)
+		if selected == nil || priorityOrder(projected.Priority) < priorityOrder(selected.Priority) ||
+			(priorityOrder(projected.Priority) == priorityOrder(selected.Priority) &&
+				(rank.Cmp(selectedRank) < 0 || (rank.Cmp(selectedRank) == 0 && projected.ID < selected.ID))) {
+			selected = &projected
+			selectedRank = rank
+		}
+	}
+	return selected, nil
+}
+
 func (s Service) Show(ctx context.Context, idOrPrefix string) (Task, error) {
 	snapshot, err := s.resolveSnapshot(ctx, idOrPrefix)
 	if err != nil {
@@ -549,6 +587,16 @@ func hasDependency(dependencies []string, wanted string) bool {
 		}
 	}
 	return false
+}
+
+func dependenciesDone(dependencies []string, active map[string]TaskData) bool {
+	for _, dependency := range dependencies {
+		task, ok := active[dependency]
+		if !ok || task.Status != StatusDone {
+			return false
+		}
+	}
+	return true
 }
 
 func compareTasks(left, right Task) int {
