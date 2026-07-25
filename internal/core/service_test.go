@@ -146,7 +146,8 @@ func TestServiceNextSelectsReadyTaskByPriorityExactRankAndID(t *testing.T) {
 	highSecondByID := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D4", TaskData{Title: "high second", Status: StatusReady, Priority: PriorityHigh, Rank: "2/3"})
 	backlog := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D5", TaskData{Title: "backlog", Status: StatusBacklog, Priority: PriorityHigh, Rank: "1/1"})
 	deleted := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D6", TaskData{Title: "deleted", Status: StatusReady, Priority: PriorityHigh, Rank: "1/2", Deleted: true})
-	store := newMemoryTaskStore(medium, highLater, highSecondByID, deleted, highFirstByID, backlog)
+	lowEarlier := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D7", TaskData{Title: "low earlier", Status: StatusReady, Priority: PriorityLow, Rank: "1/2"})
+	store := newMemoryTaskStore(medium, highLater, highSecondByID, deleted, highFirstByID, backlog, lowEarlier)
 	service := serviceUnderTest(store, &sequenceIDSource{})
 
 	task, err := service.Next(context.Background())
