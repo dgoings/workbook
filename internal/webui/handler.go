@@ -99,6 +99,8 @@ func NewHandler(list TaskLister, create TaskCreator, update TaskUpdater, updateS
 	page := template.Must(template.New("index.html").ParseFS(assets, "assets/index.html"))
 	handler := &handler{list: list, create: create, update: update, updateStatus: updateStatus, page: page, mux: http.NewServeMux()}
 	handler.mux.HandleFunc("GET /{$}", handler.serveBoard)
+	handler.mux.HandleFunc("GET /tasks/new", handler.serveBoard)
+	handler.mux.HandleFunc("GET /tasks/{id}", handler.serveBoard)
 	handler.mux.HandleFunc("GET /api/tasks", handler.serveTasks)
 	handler.mux.HandleFunc("POST /api/tasks", handler.createTask)
 	handler.mux.HandleFunc("PATCH /api/tasks/{id}", handler.updateTask)
@@ -129,7 +131,7 @@ func methodAllowed(requestMethod, allowed string) bool {
 
 func allowedMethod(path string) (string, bool) {
 	switch path {
-	case "/", "/healthz":
+	case "/", "/healthz", "/tasks/new":
 		return http.MethodGet, true
 	case "/api/tasks":
 		return http.MethodGet + ", " + http.MethodPost, true
@@ -140,8 +142,23 @@ func allowedMethod(path string) (string, bool) {
 		if taskPathID(path) != "" {
 			return http.MethodPatch, true
 		}
+		if taskPagePathID(path) != "" {
+			return http.MethodGet, true
+		}
 		return "", false
 	}
+}
+
+func taskPagePathID(path string) string {
+	const prefix = "/tasks/"
+	if !strings.HasPrefix(path, prefix) {
+		return ""
+	}
+	id := strings.TrimPrefix(path, prefix)
+	if id == "" || id == "new" || strings.Contains(id, "/") {
+		return ""
+	}
+	return id
 }
 
 func taskPathID(path string) string {

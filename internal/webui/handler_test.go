@@ -97,6 +97,60 @@ func TestHandlerRendersInReviewTasks(t *testing.T) {
 	}
 }
 
+func TestHandlerServesTaskRouteShell(t *testing.T) {
+	tasks := boardTasks()
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	for _, path := range []string{
+		"/tasks/new",
+		"/tasks/" + tasks[0].ID,
+	} {
+		response := request(t, handler, http.MethodGet, path)
+		if response.Code != http.StatusOK {
+			t.Errorf("GET %s status = %d, want %d; body = %s", path, response.Code, http.StatusOK, response.Body.String())
+			continue
+		}
+		assertSecurityHeaders(t, response.Result())
+		if got := response.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/html; charset=utf-8") {
+			t.Errorf("GET %s Content-Type = %q, want text/html", path, got)
+		}
+		if !strings.Contains(response.Body.String(), "Workbook board") {
+			t.Errorf("GET %s body does not contain the application shell", path)
+		}
+
+		wrongMethod := request(t, handler, http.MethodPost, path)
+		if wrongMethod.Code != http.StatusMethodNotAllowed {
+			t.Errorf("POST %s status = %d, want %d", path, wrongMethod.Code, http.StatusMethodNotAllowed)
+		}
+		if got := wrongMethod.Header().Get("Allow"); got != http.MethodGet {
+			t.Errorf("POST %s Allow = %q, want %q", path, got, http.MethodGet)
+		}
+	}
+}
+
+func TestHandlerRendersTaskAndNewTaskLinks(t *testing.T) {
+	tasks := boardTasks()
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	body := response.Body.String()
+	for _, definition := range core.WorkflowStatuses() {
+		want := `href="/tasks/new?status=` + string(definition.Status) + `"`
+		if !strings.Contains(body, want) {
+			t.Errorf("GET / body does not contain canonical %q New Task link %q", definition.Label, want)
+		}
+	}
+	for _, task := range tasks {
+		want := `href="/tasks/` + task.ID + `">` + task.Title + `</a>`
+		if !strings.Contains(body, want) {
+			t.Errorf("GET / body does not contain full-ID task link %q", want)
+		}
+	}
+}
+
 func TestHandlerRefreshesTasksOnEveryAPIRequest(t *testing.T) {
 	first := boardTasks()
 	second := append([]core.Task(nil), first...)
