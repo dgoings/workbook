@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
 	"sort"
 	"strings"
@@ -14,6 +15,7 @@ import (
 const remoteTaskRefPrefix = "refs/workbook/remotes/origin/tasks/"
 
 type SyncStatus string
+type SyncPhaseStatus string
 
 const (
 	SyncCreated       SyncStatus = "created"
@@ -28,10 +30,22 @@ const (
 	SyncLocalChanged  SyncStatus = "local-changed"
 )
 
+const (
+	SyncPhaseCompleted SyncPhaseStatus = "completed"
+	SyncPhaseFailed    SyncPhaseStatus = "failed"
+	SyncPhaseSkipped   SyncPhaseStatus = "skipped"
+)
+
 type SyncTaskResult struct {
 	TaskID string     `json:"taskId"`
 	Status SyncStatus `json:"status"`
 	Detail string     `json:"detail,omitempty"`
+}
+
+type SyncRunResult struct {
+	Remote string     `json:"remote"`
+	Fetch  SyncResult `json:"fetch"`
+	Push   SyncResult `json:"push"`
 }
 
 // Push publishes every validated local Workbook task ref to origin without
@@ -40,14 +54,14 @@ type SyncTaskResult struct {
 func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncResult, error) {
 	result := SyncResult{Remote: "origin", Tasks: []SyncTaskResult{}}
 	if err := r.verifyIdentity(ctx); err != nil {
-		return result, err
+		return failedSyncPhase(result, "push failed before completion", err)
 	}
 	if err := r.validateRepositoryConfig(config); err != nil {
-		return result, err
+		return failedSyncPhase(result, "push failed before completion", err)
 	}
 	refs, err := r.listTaskRefs(ctx)
 	if err != nil {
-		return result, err
+		return failedSyncPhase(result, "push failed before completion", err)
 	}
 	sort.Slice(refs, func(i, j int) bool { return refs[i].taskID < refs[j].taskID })
 
@@ -67,7 +81,7 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 		}
 		remoteHead, err := r.remoteRefHead(ctx, ref)
 		if err != nil {
-			return result, err
+			return failedSyncPhase(result, "push failed before completion", err)
 		}
 		_, err = r.gitWithEnv(
 			ctx,
@@ -93,6 +107,7 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 		}
 		result.Tasks = append(result.Tasks, item)
 	}
+	result.Status = SyncPhaseCompleted
 	if invalid > 0 {
 		return result, core.Errorf(core.CategoryCorruptData, "%d local task ref(s) failed validation", invalid)
 	}
@@ -129,7 +144,64 @@ func (r *Repository) remoteRefHead(ctx context.Context, ref string) (string, err
 
 type SyncResult struct {
 	Remote string           `json:"remote"`
+	Status SyncPhaseStatus  `json:"status,omitempty"`
+	Detail string           `json:"detail,omitempty"`
 	Tasks  []SyncTaskResult `json:"tasks"`
+}
+
+// Sync performs the POC-safe synchronization sequence: fetch and validate
+// origin's Workbook refs, stop if any task history diverged or failed
+// validation, then publish local Workbook task refs without touching code refs.
+func (r *Repository) Sync(ctx context.Context, config core.ProjectConfig) (SyncRunResult, error) {
+	result := SyncRunResult{
+		Remote: "origin",
+		Fetch:  skippedSyncPhase("fetch not run"),
+		Push:   skippedSyncPhase("push not run"),
+	}
+
+	fetched, fetchErr := r.Fetch(ctx, config)
+	result.Fetch = fetched
+	if fetchErr != nil {
+		result.Push = skippedSyncPhase("push skipped because fetch failed")
+		return result, fetchErr
+	}
+	diverged := countSyncStatus(fetched, SyncDiverged)
+	if diverged > 0 {
+		message := fmt.Sprintf("%d divergent task history(s) require reconciliation before sync can push", diverged)
+		result.Push = skippedSyncPhase("push skipped because " + message)
+		return result, core.Errorf(core.CategoryStaleWrite, "%s", message)
+	}
+
+	pushed, pushErr := r.Push(ctx, config)
+	result.Push = pushed
+	if pushErr != nil {
+		return result, pushErr
+	}
+	return result, nil
+}
+
+func skippedSyncPhase(detail string) SyncResult {
+	return SyncResult{Remote: "origin", Status: SyncPhaseSkipped, Detail: detail, Tasks: []SyncTaskResult{}}
+}
+
+func failedSyncPhase(result SyncResult, detail string, err error) (SyncResult, error) {
+	result.Status = SyncPhaseFailed
+	if err != nil {
+		result.Detail = detail + ": " + err.Error()
+	} else {
+		result.Detail = detail
+	}
+	return result, err
+}
+
+func countSyncStatus(result SyncResult, status SyncStatus) int {
+	count := 0
+	for _, task := range result.Tasks {
+		if task.Status == status {
+			count++
+		}
+	}
+	return count
 }
 
 // Fetch downloads origin's Workbook task refs into an isolated tracking
@@ -138,20 +210,20 @@ type SyncResult struct {
 func (r *Repository) Fetch(ctx context.Context, config core.ProjectConfig) (SyncResult, error) {
 	result := SyncResult{Remote: "origin", Tasks: []SyncTaskResult{}}
 	if err := r.verifyIdentity(ctx); err != nil {
-		return result, err
+		return failedSyncPhase(result, "fetch failed before completion", err)
 	}
 	if err := r.validateRepositoryConfig(config); err != nil {
-		return result, err
+		return failedSyncPhase(result, "fetch failed before completion", err)
 	}
 
 	refspec := "+" + taskRefPrefix + "*:" + remoteTaskRefPrefix + "*"
 	if _, err := r.Git(ctx, nil, "fetch", "--no-tags", "origin", refspec); err != nil {
-		return result, err
+		return failedSyncPhase(result, "fetch failed before completion", err)
 	}
 
 	refs, err := r.listRefs(ctx, remoteTaskRefPrefix)
 	if err != nil {
-		return result, err
+		return failedSyncPhase(result, "fetch failed before completion", err)
 	}
 	invalid := 0
 	for _, remote := range refs {
@@ -166,36 +238,36 @@ func (r *Repository) Fetch(ctx context.Context, config core.ProjectConfig) (Sync
 
 		local, found, err := r.taskRef(ctx, remote.taskID)
 		if err != nil {
-			return result, err
+			return failedSyncPhase(result, "fetch failed before completion", err)
 		}
 		if !found {
 			if err := r.updateCanonicalRef(ctx, remote.taskID, remote.objectID, ""); err != nil {
-				return result, err
+				return failedSyncPhase(result, "fetch failed before completion", err)
 			}
 			item.Status = SyncCreated
 			result.Tasks = append(result.Tasks, item)
 			continue
 		}
 		if _, err := r.readTip(ctx, config, local.taskID, local.objectID); err != nil {
-			return result, err
+			return failedSyncPhase(result, "fetch failed before completion", err)
 		}
 		if local.objectID == remote.objectID {
 			item.Status = SyncUnchanged
 		} else {
 			localBeforeRemote, err := r.isAncestor(ctx, local.objectID, remote.objectID)
 			if err != nil {
-				return result, err
+				return failedSyncPhase(result, "fetch failed before completion", err)
 			}
 			switch {
 			case localBeforeRemote:
 				if err := r.updateCanonicalRef(ctx, remote.taskID, remote.objectID, local.objectID); err != nil {
-					return result, err
+					return failedSyncPhase(result, "fetch failed before completion", err)
 				}
 				item.Status = SyncFastForwarded
 			default:
 				remoteBeforeLocal, err := r.isAncestor(ctx, remote.objectID, local.objectID)
 				if err != nil {
-					return result, err
+					return failedSyncPhase(result, "fetch failed before completion", err)
 				}
 				if remoteBeforeLocal {
 					item.Status = SyncLocalAhead
@@ -206,6 +278,7 @@ func (r *Repository) Fetch(ctx context.Context, config core.ProjectConfig) (Sync
 		}
 		result.Tasks = append(result.Tasks, item)
 	}
+	result.Status = SyncPhaseCompleted
 	if invalid > 0 {
 		return result, core.Errorf(core.CategoryCorruptData, "%d fetched task ref(s) failed validation", invalid)
 	}

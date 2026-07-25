@@ -59,6 +59,8 @@ func Run(ctx context.Context, args []string, cwd string, stdout, stderr io.Write
 		err = runFetch(ctx, commandArgs, cwd, stdout)
 	case "push":
 		err = runPush(ctx, commandArgs, cwd, stdout)
+	case "sync":
+		err = runSync(ctx, commandArgs, cwd, stdout)
 	case "hooks":
 		err = runHooks(ctx, commandArgs, cwd, stdout)
 	case "serve":
@@ -107,6 +109,25 @@ func runPush(ctx context.Context, args []string, cwd string, stdout io.Writer) e
 		writeResult(stdout, "push", result)
 	} else {
 		writeSyncResult(stdout, result)
+	}
+	return syncErr
+}
+
+func runSync(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+	flags := newFlagSet("sync")
+	jsonMode := flags.Bool("json", false, "emit JSON")
+	if err := parseFlags(flags, args); err != nil {
+		return err
+	}
+	repository, config, err := openRepository(ctx, cwd)
+	if err != nil {
+		return err
+	}
+	result, syncErr := repository.Sync(ctx, config)
+	if *jsonMode {
+		writeResult(stdout, "sync", result)
+	} else {
+		writeSyncRunResult(stdout, result)
 	}
 	return syncErr
 }

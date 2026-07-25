@@ -28,6 +28,7 @@ Commands:
   next [--json]
   fetch [--json]
   push [--json]
+  sync [--json]
   hooks install [--json]
   serve [--addr 127.0.0.1:7331]
 `
@@ -94,6 +95,22 @@ func writeMutation(output io.Writer, task core.Task) {
 }
 
 func writeSyncResult(output io.Writer, result gitstore.SyncResult) {
+	if result.Status == gitstore.SyncPhaseFailed {
+		fmt.Fprintf(output, "Failed on %s", result.Remote)
+		if result.Detail != "" {
+			fmt.Fprintf(output, ": %s", result.Detail)
+		}
+		fmt.Fprintln(output)
+		return
+	}
+	if result.Status == gitstore.SyncPhaseSkipped {
+		fmt.Fprintf(output, "Skipped on %s", result.Remote)
+		if result.Detail != "" {
+			fmt.Fprintf(output, ": %s", result.Detail)
+		}
+		fmt.Fprintln(output)
+		return
+	}
 	if len(result.Tasks) == 0 {
 		fmt.Fprintf(output, "No task refs on %s.\n", result.Remote)
 		return
@@ -105,6 +122,13 @@ func writeSyncResult(output io.Writer, result gitstore.SyncResult) {
 		}
 		fmt.Fprintln(output)
 	}
+}
+
+func writeSyncRunResult(output io.Writer, result gitstore.SyncRunResult) {
+	fmt.Fprintln(output, "Fetch:")
+	writeSyncResult(output, result.Fetch)
+	fmt.Fprintln(output, "Push:")
+	writeSyncResult(output, result.Push)
 }
 
 func writeList(output io.Writer, tasks []core.Task) error {

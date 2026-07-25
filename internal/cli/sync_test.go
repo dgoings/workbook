@@ -44,6 +44,121 @@ func TestRunPushAndFetchJSONAcrossClones(t *testing.T) {
 	}
 }
 
+func TestRunSyncFetchesThenPushesJSONAcrossClones(t *testing.T) {
+	first, second := cliSyncRepositories(t)
+	firstTask := cliCreateTask(t, first, "First synced task")
+
+	code, stdout, stderr := run(t, first, "sync", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("first sync = code %d, stderr %q", code, stderr)
+	}
+	firstResult := decodeSyncRunResult(t, stdout, "sync")
+	assertCLISyncStatus(t, firstResult.Push, firstTask.ID, gitstore.SyncPublished)
+
+	secondTask := cliCreateTask(t, second, "Second synced task")
+	code, stdout, stderr = run(t, second, "sync", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("second sync = code %d, stderr %q", code, stderr)
+	}
+	secondResult := decodeSyncRunResult(t, stdout, "sync")
+	assertCLISyncStatus(t, secondResult.Fetch, firstTask.ID, gitstore.SyncCreated)
+	assertCLISyncStatus(t, secondResult.Push, firstTask.ID, gitstore.SyncUpToDate)
+	assertCLISyncStatus(t, secondResult.Push, secondTask.ID, gitstore.SyncPublished)
+
+	code, stdout, stderr = run(t, first, "sync", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("third sync = code %d, stderr %q", code, stderr)
+	}
+	thirdResult := decodeSyncRunResult(t, stdout, "sync")
+	assertCLISyncStatus(t, thirdResult.Fetch, secondTask.ID, gitstore.SyncCreated)
+}
+
+func TestRunSyncReportsDivergenceAndDoesNotPush(t *testing.T) {
+	first, second := cliSyncRepositories(t)
+	conflicting := cliCreateTask(t, first, "Conflicting sync task")
+	if code, _, stderr := run(t, first, "sync"); code != 0 {
+		t.Fatalf("initial sync code = %d; stderr = %q", code, stderr)
+	}
+	if code, _, stderr := run(t, second, "fetch"); code != 0 {
+		t.Fatalf("initial fetch code = %d; stderr = %q", code, stderr)
+	}
+
+	cliUpdateTitle(t, first, conflicting.ID, "Remote branch")
+	if code, _, stderr := run(t, first, "push"); code != 0 {
+		t.Fatalf("remote push code = %d; stderr = %q", code, stderr)
+	}
+	cliUpdateTitle(t, second, conflicting.ID, "Local branch")
+	unrelated := cliCreateTask(t, second, "Unrelated local task")
+
+	code, stdout, stderr := run(t, second, "sync", "--json")
+	if code != 6 {
+		t.Fatalf("divergent sync code = %d, want 6; stderr = %q", code, stderr)
+	}
+	result := decodeSyncRunResult(t, stdout, "sync")
+	assertCLISyncStatus(t, result.Fetch, conflicting.ID, gitstore.SyncDiverged)
+	if result.Push.Status != gitstore.SyncPhaseSkipped {
+		t.Fatalf("divergent sync push status = %q, want %q", result.Push.Status, gitstore.SyncPhaseSkipped)
+	}
+	if !strings.Contains(result.Push.Detail, "push skipped") {
+		t.Fatalf("divergent sync push detail = %q, want skipped detail", result.Push.Detail)
+	}
+	if len(result.Push.Tasks) != 0 {
+		t.Fatalf("divergent sync push tasks = %#v, want none", result.Push.Tasks)
+	}
+	assertJSONError(t, stderr, core.CategoryStaleWrite, "1 divergent task history(s) require reconciliation before sync can push")
+	if remoteHasTaskRef(t, second, unrelated.ID) {
+		t.Fatalf("sync pushed unrelated task %s after divergence", unrelated.ID)
+	}
+}
+
+func TestRunSyncHumanOutputReportsSkippedPushAfterDivergence(t *testing.T) {
+	first, second := cliSyncRepositories(t)
+	conflicting := cliCreateTask(t, first, "Human divergent sync task")
+	if code, _, stderr := run(t, first, "sync"); code != 0 {
+		t.Fatalf("initial sync code = %d; stderr = %q", code, stderr)
+	}
+	if code, _, stderr := run(t, second, "fetch"); code != 0 {
+		t.Fatalf("initial fetch code = %d; stderr = %q", code, stderr)
+	}
+
+	cliUpdateTitle(t, first, conflicting.ID, "Remote branch")
+	if code, _, stderr := run(t, first, "push"); code != 0 {
+		t.Fatalf("remote push code = %d; stderr = %q", code, stderr)
+	}
+	cliUpdateTitle(t, second, conflicting.ID, "Local branch")
+
+	code, stdout, stderr := run(t, second, "sync")
+	if code != 6 {
+		t.Fatalf("divergent human sync code = %d, want 6; stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stdout, "Push:\nSkipped on origin: push skipped because 1 divergent task history(s) require reconciliation before sync can push\n") {
+		t.Fatalf("human sync stdout = %q, want skipped push detail", stdout)
+	}
+	if strings.Contains(stdout, "Push:\nNo task refs on origin.") {
+		t.Fatalf("human sync stdout incorrectly reports empty push phase: %q", stdout)
+	}
+}
+
+func TestRunSyncJSONReportsFailedFetchWhenOriginIsMissing(t *testing.T) {
+	repository := initializedRepository(t)
+
+	code, stdout, stderr := run(t, repository, "sync", "--json")
+	if code != 1 {
+		t.Fatalf("missing-origin sync code = %d, want 1; stderr = %q", code, stderr)
+	}
+	result := decodeSyncRunResult(t, stdout, "sync")
+	if result.Fetch.Status != gitstore.SyncPhaseFailed {
+		t.Fatalf("missing-origin fetch status = %q, want %q", result.Fetch.Status, gitstore.SyncPhaseFailed)
+	}
+	if !strings.Contains(result.Fetch.Detail, "fetch failed before completion") {
+		t.Fatalf("missing-origin fetch detail = %q, want failed detail", result.Fetch.Detail)
+	}
+	if result.Push.Status != gitstore.SyncPhaseSkipped {
+		t.Fatalf("missing-origin push status = %q, want %q", result.Push.Status, gitstore.SyncPhaseSkipped)
+	}
+	assertJSONError(t, stderr, core.CategoryOperational, "")
+}
+
 func TestRunPushReportsPartialRejectionAndNonzeroJSONError(t *testing.T) {
 	first, second := cliSyncRepositories(t)
 	conflicting := cliCreateTask(t, first, "Conflicting task")
@@ -116,6 +231,7 @@ func TestRunSyncCommandsRejectUnexpectedArguments(t *testing.T) {
 	for _, args := range [][]string{
 		{"fetch", "extra"},
 		{"push", "extra"},
+		{"sync", "extra"},
 		{"hooks"},
 		{"hooks", "unknown"},
 		{"hooks", "install", "extra"},
@@ -183,6 +299,15 @@ func decodeSyncResult(t *testing.T, output, command string) gitstore.SyncResult 
 	return result
 }
 
+func decodeSyncRunResult(t *testing.T, output, command string) gitstore.SyncRunResult {
+	t.Helper()
+	var result gitstore.SyncRunResult
+	if err := json.Unmarshal(assertJSONResult(t, output, command).Data, &result); err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
 func assertCLISyncStatus(t *testing.T, result gitstore.SyncResult, taskID string, want gitstore.SyncStatus) {
 	t.Helper()
 	for _, item := range result.Tasks {
@@ -194,6 +319,16 @@ func assertCLISyncStatus(t *testing.T, result gitstore.SyncResult, taskID string
 		}
 	}
 	t.Fatalf("result missing task %s: %#v", taskID, result)
+}
+
+func remoteHasTaskRef(t *testing.T, repository, taskID string) bool {
+	t.Helper()
+	command := exec.Command("git", "-C", repository, "ls-remote", "--refs", "origin", "refs/workbook/tasks/"+taskID)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git ls-remote task ref: %v\n%s", err, output)
+	}
+	return strings.TrimSpace(string(output)) != ""
 }
 
 func cliGit(t *testing.T, directory string, args ...string) {

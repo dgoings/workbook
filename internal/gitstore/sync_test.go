@@ -248,6 +248,114 @@ func TestPushRejectsLocallyCorruptHistoryBeforePublishing(t *testing.T) {
 	}
 }
 
+func TestSyncFetchesThenPushesWorkbookTaskRefs(t *testing.T) {
+	first, second, config := syncRepositories(t)
+	firstTask := createSyncTask(t, first, config, "First shared task")
+
+	firstResult, err := first.Sync(context.Background(), config)
+	if err != nil {
+		t.Fatalf("Sync(first) error = %v; result = %#v", err, firstResult)
+	}
+	assertSyncOutcome(t, firstResult.Push, firstTask.ID, SyncPublished)
+
+	secondTask := createSyncTask(t, second, config, "Second shared task")
+	secondResult, err := second.Sync(context.Background(), config)
+	if err != nil {
+		t.Fatalf("Sync(second) error = %v; result = %#v", err, secondResult)
+	}
+	assertSyncOutcome(t, secondResult.Fetch, firstTask.ID, SyncCreated)
+	assertSyncOutcome(t, secondResult.Push, firstTask.ID, SyncUpToDate)
+	assertSyncOutcome(t, secondResult.Push, secondTask.ID, SyncPublished)
+	if got, want := remoteRefValue(t, second, taskRefPrefix+secondTask.ID), refValue(t, second, taskRefPrefix+secondTask.ID); got != want {
+		t.Fatalf("second task remote tip = %q, want local tip %q", got, want)
+	}
+}
+
+func TestSyncStopsBeforePushWhenFetchedHistoryDiverges(t *testing.T) {
+	first, second, config := syncRepositories(t)
+	conflicting := createSyncTask(t, first, config, "Conflicting task")
+	if _, err := first.Sync(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.Fetch(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+
+	updateSyncTask(t, first, config, conflicting.ID, "Remote branch")
+	if _, err := first.Push(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+	updateSyncTask(t, second, config, conflicting.ID, "Local branch")
+	unrelated := createSyncTask(t, second, config, "Unrelated local task")
+
+	result, err := second.Sync(context.Background(), config)
+	if err == nil {
+		t.Fatalf("Sync(diverged) error = nil; result = %#v", result)
+	}
+	assertSyncOutcome(t, result.Fetch, conflicting.ID, SyncDiverged)
+	if result.Push.Status != SyncPhaseSkipped {
+		t.Fatalf("divergent sync push status = %q, want %q", result.Push.Status, SyncPhaseSkipped)
+	}
+	if !strings.Contains(result.Push.Detail, "push skipped") {
+		t.Fatalf("divergent sync push detail = %q, want skipped detail", result.Push.Detail)
+	}
+	if len(result.Push.Tasks) != 0 {
+		t.Fatalf("Sync(diverged) pushed tasks = %#v, want none", result.Push.Tasks)
+	}
+	if remoteRefExists(t, second, taskRefPrefix+unrelated.ID) {
+		t.Fatalf("sync published unrelated task %s after detecting divergence", unrelated.ID)
+	}
+}
+
+func TestSyncReportsFailedFetchAndSkipsPushWhenOriginIsMissing(t *testing.T) {
+	ctx := context.Background()
+	path := testrepo.New(t)
+	repo, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, _, err := repo.Init(ctx, "WB", core.CryptoULIDSource{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := repo.Sync(ctx, config)
+	if err == nil {
+		t.Fatalf("Sync(missing origin) error = nil; result = %#v", result)
+	}
+	if result.Fetch.Status != SyncPhaseFailed {
+		t.Fatalf("missing-origin fetch status = %q, want %q", result.Fetch.Status, SyncPhaseFailed)
+	}
+	if !strings.Contains(result.Fetch.Detail, "fetch failed before completion") {
+		t.Fatalf("missing-origin fetch detail = %q, want failed detail", result.Fetch.Detail)
+	}
+	if result.Push.Status != SyncPhaseSkipped {
+		t.Fatalf("missing-origin push status = %q, want %q", result.Push.Status, SyncPhaseSkipped)
+	}
+	if len(result.Push.Tasks) != 0 {
+		t.Fatalf("missing-origin push tasks = %#v, want none", result.Push.Tasks)
+	}
+}
+
+func TestTaskOperationCommitsStayOutsideCheckedOutBranchHistory(t *testing.T) {
+	first, _, config := syncRepositories(t)
+	mainBefore := refValue(t, first, "HEAD")
+	task := createSyncTask(t, first, config, "Branch-independent task")
+	updateSyncTask(t, first, config, task.ID, "Still branch-independent")
+	taskHead := refValue(t, first, taskRefPrefix+task.ID)
+	mainAfter := refValue(t, first, "HEAD")
+
+	if mainAfter != mainBefore {
+		t.Fatalf("code branch HEAD moved from %q to %q", mainBefore, mainAfter)
+	}
+	if mergeBaseIsAncestor(t, first.Root, taskHead, mainAfter) {
+		t.Fatalf("task commit %s is reachable from checked-out branch HEAD %s", taskHead, mainAfter)
+	}
+	if mergeBaseIsAncestor(t, first.Root, mainAfter, taskHead) {
+		t.Fatalf("checked-out branch HEAD %s is reachable from task history %s", mainAfter, taskHead)
+	}
+}
+
 func syncRepositories(t *testing.T) (*Repository, *Repository, core.ProjectConfig) {
 	t.Helper()
 	ctx := context.Background()
@@ -370,6 +478,26 @@ func remoteRefValue(t *testing.T, repo *Repository, ref string) string {
 		t.Fatalf("git ls-remote %s output = %q", ref, output)
 	}
 	return fields[0]
+}
+
+func remoteRefExists(t *testing.T, repo *Repository, ref string) bool {
+	t.Helper()
+	output := syncGit(t, repo.Root, "ls-remote", "--refs", "origin", ref)
+	return strings.TrimSpace(output) != ""
+}
+
+func mergeBaseIsAncestor(t *testing.T, directory, ancestor, descendant string) bool {
+	t.Helper()
+	command := exec.Command("git", "-C", directory, "merge-base", "--is-ancestor", ancestor, descendant)
+	err := command.Run()
+	if err == nil {
+		return true
+	}
+	if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 1 {
+		return false
+	}
+	t.Fatalf("git merge-base --is-ancestor %s %s: %v", ancestor, descendant, err)
+	return false
 }
 
 func syncGit(t *testing.T, directory string, args ...string) string {
