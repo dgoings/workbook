@@ -88,6 +88,22 @@ var commandSchemas = map[string]commandSchema{
 			"addr": stringFlag,
 		},
 	},
+	"fetch": {
+		flags: map[string]flagKind{
+			"json": boolFlag,
+		},
+	},
+	"push": {
+		flags: map[string]flagKind{
+			"json": boolFlag,
+		},
+	},
+	"hooks": {
+		requiredFirstArgument: true,
+		flags: map[string]flagKind{
+			"json": boolFlag,
+		},
+	},
 }
 
 type commandFlagSet struct {

@@ -153,10 +153,20 @@ func (r *Repository) taskRef(ctx context.Context, taskID string) (taskRefRecord,
 }
 
 func (r *Repository) readTip(ctx context.Context, config core.ProjectConfig, taskID, objectID string) (core.Snapshot, error) {
+	return r.readTipAtRef(ctx, config, taskID, objectID, taskRefPrefix+taskID)
+}
+
+func (r *Repository) readTipAtRef(
+	ctx context.Context,
+	config core.ProjectConfig,
+	taskID string,
+	objectID string,
+	refName string,
+) (core.Snapshot, error) {
 	if err := core.ValidateTaskID(config.Key, taskID); err != nil {
 		return core.Snapshot{}, core.Wrap(core.CategoryCorruptData, "task ref ID is invalid", err)
 	}
-	if err := r.rejectSymbolicTaskRef(ctx, taskRefPrefix+taskID); err != nil {
+	if err := r.rejectSymbolicTaskRef(ctx, refName); err != nil {
 		return core.Snapshot{}, err
 	}
 	objectType, err := r.Git(ctx, nil, "cat-file", "-t", objectID)

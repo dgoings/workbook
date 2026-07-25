@@ -47,6 +47,12 @@ func Run(ctx context.Context, args []string, cwd string, stdout, stderr io.Write
 		err = runUpdate(ctx, commandArgs, cwd, stdout)
 	case "delete":
 		err = runDelete(ctx, commandArgs, cwd, stdout)
+	case "fetch":
+		err = runFetch(ctx, commandArgs, cwd, stdout)
+	case "push":
+		err = runPush(ctx, commandArgs, cwd, stdout)
+	case "hooks":
+		err = runHooks(ctx, commandArgs, cwd, stdout)
 	case "serve":
 		err = runServe(ctx, commandArgs, cwd, stdout, stderr)
 	default:
@@ -57,6 +63,73 @@ func Run(ctx context.Context, args []string, cwd string, stdout, stderr io.Write
 		return core.ExitCode(err)
 	}
 	return 0
+}
+
+func runFetch(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+	flags := newFlagSet("fetch")
+	jsonMode := flags.Bool("json", false, "emit JSON")
+	if err := parseFlags(flags, args); err != nil {
+		return err
+	}
+	repository, config, err := openRepository(ctx, cwd)
+	if err != nil {
+		return err
+	}
+	result, syncErr := repository.Fetch(ctx, config)
+	if *jsonMode {
+		writeResult(stdout, "fetch", result)
+	} else {
+		writeSyncResult(stdout, result)
+	}
+	return syncErr
+}
+
+func runPush(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+	flags := newFlagSet("push")
+	jsonMode := flags.Bool("json", false, "emit JSON")
+	if err := parseFlags(flags, args); err != nil {
+		return err
+	}
+	repository, config, err := openRepository(ctx, cwd)
+	if err != nil {
+		return err
+	}
+	result, syncErr := repository.Push(ctx, config)
+	if *jsonMode {
+		writeResult(stdout, "push", result)
+	} else {
+		writeSyncResult(stdout, result)
+	}
+	return syncErr
+}
+
+func runHooks(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+	subcommand, args, err := requiredFirstArgument("hooks", "hook command", args)
+	if err != nil {
+		return err
+	}
+	if subcommand != "install" {
+		return core.Errorf(core.CategoryInvocation, "unknown hooks command %q", subcommand)
+	}
+	flags := newFlagSet("hooks")
+	jsonMode := flags.Bool("json", false, "emit JSON")
+	if err := parseFlags(flags, args); err != nil {
+		return err
+	}
+	repository, _, err := openRepository(ctx, cwd)
+	if err != nil {
+		return err
+	}
+	result, err := repository.InstallHooks(ctx)
+	if err != nil {
+		return err
+	}
+	if *jsonMode {
+		writeResult(stdout, "hooks install", result)
+	} else {
+		fmt.Fprintf(stdout, "%s\t%s\t%s\n", result.Hook, result.Status, result.Path)
+	}
+	return nil
 }
 
 func runInit(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
@@ -314,11 +387,7 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 }
 
 func openService(ctx context.Context, cwd string) (core.Service, error) {
-	repository, err := gitstore.Open(ctx, cwd)
-	if err != nil {
-		return core.Service{}, err
-	}
-	config, err := repository.LoadConfig()
+	repository, config, err := openRepository(ctx, cwd)
 	if err != nil {
 		return core.Service{}, err
 	}
@@ -333,4 +402,16 @@ func openService(ctx context.Context, cwd string) (core.Service, error) {
 		Now:    time.Now,
 		Actor:  actor,
 	}, nil
+}
+
+func openRepository(ctx context.Context, cwd string) (*gitstore.Repository, core.ProjectConfig, error) {
+	repository, err := gitstore.Open(ctx, cwd)
+	if err != nil {
+		return nil, core.ProjectConfig{}, err
+	}
+	config, err := repository.LoadConfig()
+	if err != nil {
+		return nil, core.ProjectConfig{}, err
+	}
+	return repository, config, nil
 }

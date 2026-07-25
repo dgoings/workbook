@@ -88,6 +88,10 @@ func (r *Repository) verifyIdentity(ctx context.Context) error {
 
 // Git executes Git against this repository's working-tree root.
 func (r *Repository) Git(ctx context.Context, stdin []byte, args ...string) ([]byte, error) {
+	return r.gitWithEnv(ctx, nil, stdin, args...)
+}
+
+func (r *Repository) gitWithEnv(ctx context.Context, extraEnv []string, stdin []byte, args ...string) ([]byte, error) {
 	gitPath := r.gitPath
 	if gitPath == "" {
 		var err error
@@ -96,7 +100,7 @@ func (r *Repository) Git(ctx context.Context, stdin []byte, args ...string) ([]b
 			return nil, core.Wrap(core.CategoryOperational, "cannot find git executable", err)
 		}
 	}
-	output, err := runGit(ctx, gitPath, r.Root, stdin, args...)
+	output, err := runGitWithEnv(ctx, gitPath, r.Root, extraEnv, stdin, args...)
 	if err != nil {
 		return nil, core.Wrap(core.CategoryOperational, fmt.Sprintf("git %s failed", strings.Join(args, " ")), err)
 	}
@@ -117,9 +121,13 @@ func (r *Repository) Actor(ctx context.Context) (string, error) {
 }
 
 func runGit(ctx context.Context, gitPath, directory string, stdin []byte, args ...string) ([]byte, error) {
+	return runGitWithEnv(ctx, gitPath, directory, nil, stdin, args...)
+}
+
+func runGitWithEnv(ctx context.Context, gitPath, directory string, extraEnv []string, stdin []byte, args ...string) ([]byte, error) {
 	command := exec.CommandContext(ctx, gitPath, append([]string{"-C", directory}, args...)...)
 	command.Stdin = bytes.NewReader(stdin)
-	command.Env = gitEnvironment(os.Environ())
+	command.Env = gitEnvironment(os.Environ(), extraEnv)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	command.Stdout = &stdout
@@ -136,15 +144,25 @@ func runGit(ctx context.Context, gitPath, directory string, stdin []byte, args .
 	return stdout.Bytes(), nil
 }
 
-func gitEnvironment(environ []string) []string {
-	const key = "GIT_NO_REPLACE_OBJECTS="
-	result := make([]string, 0, len(environ)+1)
-	for _, entry := range environ {
-		if !strings.HasPrefix(entry, key) {
-			result = append(result, entry)
+func gitEnvironment(environ []string, extra []string) []string {
+	keys := map[string]struct{}{"GIT_NO_REPLACE_OBJECTS": {}}
+	for _, entry := range extra {
+		if name, _, found := strings.Cut(entry, "="); found {
+			keys[name] = struct{}{}
 		}
 	}
-	return append(result, key+"1")
+	result := make([]string, 0, len(environ)+len(extra)+1)
+	for _, entry := range environ {
+		name, _, found := strings.Cut(entry, "=")
+		if found {
+			if _, overridden := keys[name]; overridden {
+				continue
+			}
+		}
+		result = append(result, entry)
+	}
+	result = append(result, "GIT_NO_REPLACE_OBJECTS=1")
+	return append(result, extra...)
 }
 
 func gitSingleLine(output []byte) (string, error) {
