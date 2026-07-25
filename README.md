@@ -110,16 +110,17 @@ workbook serve [--addr 127.0.0.1:7331]
 `workbook init` creates a tracked `.workbook/config.json` with the project ID and
 key. Create, update, and delete append immutable task commits under
 `refs/workbook/tasks/`; delete records a tombstone instead of removing the ref.
-List and show read the current task checkpoint from each task ref's tip. `move`
-orders a task inside its status-and-priority bucket with an exact rational rank;
-it changes only that task. `depend` adds a prerequisite edge and rejects cycles;
-`free` removes one prerequisite edge and is idempotent. `next` chooses the first
-ready task whose dependencies are all active and done, sorting by priority, rank,
-and task ID; it reports no eligible task when none qualify. `board` uses the same
-core task order and presents an actionable, unambiguous task-ID prefix with each
-card's priority, title, and labels. Its JSON output retains full task IDs,
-descriptions, and the rest of the task data. The current POC does not yet
-implement SQLite, claims, or implementation links.
+List and show read the current task checkpoint from each task ref's tip. Task
+statuses follow this canonical order: Backlog, Ready, Blocked, In Progress, In
+Review, and Done. `move` orders a task inside its status-and-priority bucket with
+an exact rational rank; it changes only that task. `depend` adds a prerequisite
+edge and rejects cycles; `free` removes one prerequisite edge and is idempotent.
+`next` chooses the first Ready task whose dependencies are all active and Done,
+sorting by priority, rank, and task ID; it reports no eligible task when none
+qualify. `board` uses the same core task order and presents an actionable,
+unambiguous task-ID prefix with each card's priority, title, and labels. Its JSON
+output retains full task IDs, descriptions, and the rest of the task data. The
+current POC does not yet implement SQLite, claims, or implementation links.
 
 ### Explicit task sharing
 
@@ -149,7 +150,7 @@ fetch-and-push command remain future work.
 
 ### Terminal board
 
-`workbook board` automatically chooses its five-column wide layout on an
+`workbook board` automatically chooses its six-column wide layout on an
 interactive terminal at least 140 columns wide. It uses vertically stacked status
 sections for narrow or noninteractive output; `--wide` and `--narrow` force the
 respective layouts. The task-ID prefixes in human output are accepted anywhere a
