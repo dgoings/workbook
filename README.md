@@ -184,8 +184,8 @@ The embedded page and its API expose these routes:
 
 ```text
 GET /                         board HTML
-GET /tasks/new                new-task form HTML
-GET /tasks/<id>               linkable task-detail form HTML
+GET /tasks/new                new-task shell; client-rendered form
+GET /tasks/<id>               linkable task-detail shell; client-rendered form
 GET /api/tasks                versioned task JSON
 POST /api/tasks               create a task
 PATCH /api/tasks/<id>         update task fields
