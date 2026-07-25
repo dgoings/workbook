@@ -62,28 +62,39 @@ func TestFitDoesNotSplitUTF8WhenTheCellIsNarrowerThanOneRune(t *testing.T) {
 }
 
 func TestRenderBoardWideGolden(t *testing.T) {
-	board := presentation.NewBoard([]core.Task{{
-		ID: "WB-01ARZ3NDEKTSV4RRFFQ69G5FAV",
-		TaskData: core.TaskData{
-			Title:    "Plan storage",
-			Status:   core.StatusBacklog,
-			Priority: core.PriorityHigh,
-			Labels:   []string{"git", "poc"},
+	board := presentation.NewBoard([]core.Task{
+		{
+			ID: "WB-01ARZ3NDEKTSV4RRFFQ69G5FAV",
+			TaskData: core.TaskData{
+				Title:    "Plan storage",
+				Status:   core.StatusBacklog,
+				Priority: core.PriorityHigh,
+				Labels:   []string{"git", "poc"},
+			},
 		},
-	}})
+		{
+			ID: "WB-01BRZ3NDEKTSV4RRFFQ69G5FAW",
+			TaskData: core.TaskData{
+				Title:    "Ship release",
+				Status:   core.StatusDone,
+				Priority: core.PriorityLow,
+				Labels:   []string{"release"},
+			},
+		},
+	})
 
 	var output bytes.Buffer
 	if err := RenderBoard(&output, board, LayoutWide, 140); err != nil {
 		t.Fatalf("RenderBoard() error = %v", err)
 	}
 
-	const want = "+--------------------------+--------------------------+--------------------------+--------------------------+--------------------------+\n" +
-		"| Backlog (1)              | Ready (0)                | In progress (0)          | Blocked (0)              | Done (0)                 |\n" +
-		"+--------------------------+--------------------------+--------------------------+--------------------------+--------------------------+\n" +
-		"| WB-01ARZ3ND [H]          |                          |                          |                          |                          |\n" +
-		"| Plan storage             |                          |                          |                          |                          |\n" +
-		"| git,poc                  |                          |                          |                          |                          |\n" +
-		"+--------------------------+--------------------------+--------------------------+--------------------------+--------------------------+\n"
+	const want = "+----------------------+----------------------+----------------------+----------------------+----------------------+----------------------+\n" +
+		"| Backlog (1)          | Ready (0)            | Blocked (0)          | In Progress (0)      | In Review (0)        | Done (1)             |\n" +
+		"+----------------------+----------------------+----------------------+----------------------+----------------------+----------------------+\n" +
+		"| WB-01ARZ3ND [H]      |                      |                      |                      |                      | WB-01BRZ3ND [L]      |\n" +
+		"| Plan storage         |                      |                      |                      |                      | Ship release         |\n" +
+		"| git,poc              |                      |                      |                      |                      | release              |\n" +
+		"+----------------------+----------------------+----------------------+----------------------+----------------------+----------------------+\n"
 	if got := output.String(); got != want {
 		t.Fatalf("RenderBoard() =\n%q\nwant\n%q", got, want)
 	}
@@ -116,8 +127,8 @@ func TestRenderBoardWidePreservesLongUniquePrefixes(t *testing.T) {
 
 	last := -1
 	for _, want := range []string{
-		"WB-01ARZ3NDEKTSV", "4RRFFQ69G5FAV", "[H]",
-		"WB-01ARZ3NDEKTSV", "4RRFFQ69G5FAW", "[M]",
+		"WB-01ARZ3NDEK", "TSV4RRFFQ69G5", "FAV [H]",
+		"WB-01ARZ3NDEK", "TSV4RRFFQ69G5", "FAW [M]",
 	} {
 		position := strings.Index(output.String()[last+1:], want)
 		if position < 0 {
@@ -128,15 +139,26 @@ func TestRenderBoardWidePreservesLongUniquePrefixes(t *testing.T) {
 }
 
 func TestRenderBoardNarrowGolden(t *testing.T) {
-	board := presentation.NewBoard([]core.Task{{
-		ID: "WB-01ARZ3NDEKTSV4RRFFQ69G5FAV",
-		TaskData: core.TaskData{
-			Title:    "Plan storage",
-			Status:   core.StatusBacklog,
-			Priority: core.PriorityHigh,
-			Labels:   []string{"git", "poc"},
+	board := presentation.NewBoard([]core.Task{
+		{
+			ID: "WB-01ARZ3NDEKTSV4RRFFQ69G5FAV",
+			TaskData: core.TaskData{
+				Title:    "Plan storage",
+				Status:   core.StatusBacklog,
+				Priority: core.PriorityHigh,
+				Labels:   []string{"git", "poc"},
+			},
 		},
-	}})
+		{
+			ID: "WB-01BRZ3NDEKTSV4RRFFQ69G5FAW",
+			TaskData: core.TaskData{
+				Title:    "Ship release",
+				Status:   core.StatusDone,
+				Priority: core.PriorityLow,
+				Labels:   []string{"release"},
+			},
+		},
+	})
 
 	var output bytes.Buffer
 	if err := RenderBoard(&output, board, LayoutNarrow, 100); err != nil {
@@ -150,15 +172,19 @@ func TestRenderBoardNarrowGolden(t *testing.T) {
 		"READY (0)\n" +
 		"---------\n" +
 		"(empty)\n\n" +
-		"IN PROGRESS (0)\n" +
-		"---------------\n" +
-		"(empty)\n\n" +
 		"BLOCKED (0)\n" +
 		"-----------\n" +
 		"(empty)\n\n" +
-		"DONE (0)\n" +
+		"IN PROGRESS (0)\n" +
+		"---------------\n" +
+		"(empty)\n\n" +
+		"IN REVIEW (0)\n" +
+		"-------------\n" +
+		"(empty)\n\n" +
+		"DONE (1)\n" +
 		"--------\n" +
-		"(empty)\n"
+		"WB-01BRZ3ND [low] Ship release\n" +
+		"  labels: release\n"
 	if got := output.String(); got != want {
 		t.Fatalf("RenderBoard() =\n%q\nwant\n%q", got, want)
 	}
@@ -181,8 +207,9 @@ func TestRenderBoardShowsAllEmptyColumns(t *testing.T) {
 
 	const want = "BACKLOG (0)\n-----------\n(empty)\n\n" +
 		"READY (0)\n---------\n(empty)\n\n" +
-		"IN PROGRESS (0)\n---------------\n(empty)\n\n" +
 		"BLOCKED (0)\n-----------\n(empty)\n\n" +
+		"IN PROGRESS (0)\n---------------\n(empty)\n\n" +
+		"IN REVIEW (0)\n-------------\n(empty)\n\n" +
 		"DONE (0)\n--------\n(empty)\n\n" +
 		"UNKNOWN STATUS (1)\n------------------\n" +
 		"WB-01ARZ3ND [low] Archived task\n"

@@ -102,10 +102,10 @@ func priorityMarker(priority core.Priority) string {
 }
 
 func renderWideBoard(w io.Writer, board presentation.Board, width int) error {
-	const columnCount = 5
+	columns := canonicalColumns(board)
+	columnCount := len(columns)
 	cellWidth := max(3, (width-(columnCount+1))/columnCount)
 	contentWidth := max(1, cellWidth-2)
-	columns := canonicalColumns(board)
 
 	border := "+" + strings.Repeat(strings.Repeat("-", cellWidth)+"+", columnCount)
 	var output strings.Builder
@@ -262,13 +262,7 @@ func writeNarrowTask(output *strings.Builder, task presentation.TaskView, width 
 }
 
 func canonicalColumns(board presentation.Board) []presentation.Column {
-	columns := make([]presentation.Column, 5)
-	for i := range columns {
-		if i < len(board.Columns) {
-			columns[i] = board.Columns[i]
-		}
-	}
-	return columns
+	return board.Columns
 }
 
 func itoa(value int) string {
