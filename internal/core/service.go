@@ -281,6 +281,9 @@ func (s Service) Move(ctx context.Context, idOrPrefix string, input MoveInput) (
 	if err != nil {
 		return Task{}, err
 	}
+	if rank == parent.State.Task.Rank {
+		return Project(parent), nil
+	}
 	operations := []Operation{{Type: OperationFieldSet, Field: "rank", Value: rank}}
 	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
 		return Task{}, err

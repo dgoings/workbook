@@ -469,6 +469,29 @@ func TestServiceMovePlacesTaskBetweenAnchorAndNeighborWithoutWritingAnotherTask(
 	assertOperations(t, store.writes[0].pack.Operations, []Operation{{ID: "01K0M6B8A4FTT8C39MXXYTW7E4", Type: OperationFieldSet, Field: "rank", Value: "3/1"}})
 }
 
+func TestServiceMoveReturnsExistingTaskWhenEquivalentPlacementKeepsRank(t *testing.T) {
+	moved := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E1", TaskData{Title: "moved", Status: StatusReady, Priority: PriorityHigh, Rank: "3/1"})
+	previous := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E2", TaskData{Title: "previous", Status: StatusReady, Priority: PriorityHigh, Rank: "2/1"})
+	anchor := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E3", TaskData{Title: "anchor", Status: StatusReady, Priority: PriorityHigh, Rank: "4/1"})
+	store := newMemoryTaskStore(moved, previous, anchor)
+	ids := &sequenceIDSource{}
+	service := serviceUnderTest(store, ids)
+
+	task, err := service.Move(context.Background(), moved.State.TaskID, MoveInput{Before: anchor.State.TaskID})
+	if err != nil {
+		t.Fatalf("Move() error = %v", err)
+	}
+	if got, want := task, Project(moved); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Move() task = %#v, want existing %#v", got, want)
+	}
+	if got, want := len(store.writes), 0; got != want {
+		t.Fatalf("Move() Write() calls = %d, want %d", got, want)
+	}
+	if got, want := ids.calls, 0; got != want {
+		t.Fatalf("Move() ID requests = %d, want %d", got, want)
+	}
+}
+
 func TestServiceMovePlacesTaskAtBucketBoundaries(t *testing.T) {
 	first := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E1", TaskData{Title: "first", Status: StatusReady, Priority: PriorityHigh, Rank: "2/1"})
 	last := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E2", TaskData{Title: "last", Status: StatusReady, Priority: PriorityHigh, Rank: "4/1"})
