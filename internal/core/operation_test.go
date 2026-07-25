@@ -185,6 +185,40 @@ func TestApplyValidatesOperationFieldsAndValues(t *testing.T) {
 	}
 }
 
+func TestApplyFieldSetRequiresCanonicalRationalRank(t *testing.T) {
+	created, err := Apply(nil, createPack(), "WB")
+	if err != nil {
+		t.Fatalf("Apply(create) error = %v", err)
+	}
+
+	t.Run("rejects noncanonical rank", func(t *testing.T) {
+		update := updatePack(2)
+		update.Operations = []Operation{{ID: operationID2, Type: OperationFieldSet, Field: "rank", Value: "2/4"}}
+		assertCorrupt(t, applyError(&created, update, "WB"))
+	})
+
+	t.Run("accepts canonical rank", func(t *testing.T) {
+		update := updatePack(2)
+		update.Operations = []Operation{{ID: operationID2, Type: OperationFieldSet, Field: "rank", Value: "1/2"}}
+		state, err := Apply(&created, update, "WB")
+		if err != nil {
+			t.Fatalf("Apply(field.set rank) error = %v", err)
+		}
+		if want := "1/2"; state.Task.Rank != want {
+			t.Fatalf("Apply(field.set rank) = %q, want %q", state.Task.Rank, want)
+		}
+	})
+}
+
+func TestValidateFieldSetOperationRequiresCanonicalRationalRank(t *testing.T) {
+	if err := validateFieldSetOperation(Operation{Type: OperationFieldSet, Field: "rank", Value: "2/4"}); err == nil {
+		t.Fatal("validateFieldSetOperation() accepted noncanonical rank")
+	}
+	if err := validateFieldSetOperation(Operation{Type: OperationFieldSet, Field: "rank", Value: "1/2"}); err != nil {
+		t.Fatalf("validateFieldSetOperation() error = %v", err)
+	}
+}
+
 func TestApplySetOperationsAreIdempotent(t *testing.T) {
 	created, err := Apply(nil, createPack(), "WB")
 	if err != nil {
