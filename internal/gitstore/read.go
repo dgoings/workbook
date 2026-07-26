@@ -11,10 +11,15 @@ import (
 	"github.com/dgoings/workbook/internal/core"
 )
 
-// List returns every validated Workbook task snapshot, ordered by canonical
-// task ID. It uses Git's ref enumeration so packed and loose refs behave the
-// same way.
-func (r *Repository) List(ctx context.Context, config core.ProjectConfig) ([]core.Snapshot, error) {
+// TaskHead identifies a task ref and the commit at its tip.
+type TaskHead struct {
+	TaskID   string
+	ObjectID string
+}
+
+// ListTaskHeads returns every Workbook task ref tip, ordered by task ID. It
+// uses Git's ref enumeration so packed and loose refs behave the same way.
+func (r *Repository) ListTaskHeads(ctx context.Context, config core.ProjectConfig) ([]TaskHead, error) {
 	if err := r.verifyIdentity(ctx); err != nil {
 		return nil, err
 	}
@@ -28,9 +33,36 @@ func (r *Repository) List(ctx context.Context, config core.ProjectConfig) ([]cor
 	}
 	sort.Slice(refs, func(i, j int) bool { return refs[i].taskID < refs[j].taskID })
 
-	snapshots := make([]core.Snapshot, 0, len(refs))
+	heads := make([]TaskHead, 0, len(refs))
 	for _, ref := range refs {
-		snapshot, err := r.readTip(ctx, config, ref.taskID, ref.objectID)
+		heads = append(heads, TaskHead{TaskID: ref.taskID, ObjectID: ref.objectID})
+	}
+	return heads, nil
+}
+
+// ReadTaskHead returns the validated snapshot stored at head.
+func (r *Repository) ReadTaskHead(ctx context.Context, config core.ProjectConfig, head TaskHead) (core.Snapshot, error) {
+	if err := r.verifyIdentity(ctx); err != nil {
+		return core.Snapshot{}, err
+	}
+	if err := r.validateRepositoryConfig(config); err != nil {
+		return core.Snapshot{}, err
+	}
+	return r.readTip(ctx, config, head.TaskID, head.ObjectID)
+}
+
+// List returns every validated Workbook task snapshot, ordered by canonical
+// task ID. It uses Git's ref enumeration so packed and loose refs behave the
+// same way.
+func (r *Repository) List(ctx context.Context, config core.ProjectConfig) ([]core.Snapshot, error) {
+	heads, err := r.ListTaskHeads(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+
+	snapshots := make([]core.Snapshot, 0, len(heads))
+	for _, head := range heads {
+		snapshot, err := r.ReadTaskHead(ctx, config, head)
 		if err != nil {
 			return nil, err
 		}
