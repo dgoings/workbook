@@ -46,6 +46,23 @@ func (metadata commandMetadata) optionKind(name string) (flagKind, bool) {
 	return 0, false
 }
 
+func commandMetadataFor(target []string) (commandMetadata, bool) {
+	if len(target) == 0 {
+		return commandMetadata{}, false
+	}
+	metadata, exists := commandSchemas[target[0]]
+	if !exists {
+		return commandMetadata{}, false
+	}
+	for _, name := range target[1:] {
+		metadata, exists = metadata.Subcommands[name]
+		if !exists {
+			return commandMetadata{}, false
+		}
+	}
+	return metadata, true
+}
+
 var commandSchemas = map[string]commandMetadata{
 	"init": {
 		Name:        "init",
@@ -149,7 +166,6 @@ var commandSchemas = map[string]commandMetadata{
 		Synopsis:    "workbook hooks <command> [options]",
 		Description: "Manage optional Git hooks.",
 		Positionals: []string{"<command>"},
-		Options:     []optionMetadata{{Name: "json", Kind: boolFlag, Description: "emit JSON"}},
 		Subcommands: map[string]commandMetadata{
 			"install": {
 				Name:        "install",
@@ -214,12 +230,12 @@ func (value *stringListValue) Set(item string) error {
 	return nil
 }
 
-func newFlagSet(command string) *commandFlagSet {
-	schema, exists := commandSchemas[command]
+func newFlagSet(target ...string) *commandFlagSet {
+	schema, exists := commandMetadataFor(target)
 	if !exists {
-		panic("missing flag schema for " + command)
+		panic("missing flag schema for " + strings.Join(target, " "))
 	}
-	flagSet := flag.NewFlagSet(command, flag.ContinueOnError)
+	flagSet := flag.NewFlagSet(target[0], flag.ContinueOnError)
 	flagSet.SetOutput(io.Discard)
 	return &commandFlagSet{FlagSet: flagSet, schema: schema}
 }
@@ -292,16 +308,21 @@ func requestedJSON(args []string) bool {
 		return false
 	}
 
-	schema, exists := commandSchemas[args[0]]
+	schema, exists := commandMetadataFor(args[:1])
 	if !exists {
 		schema = commandMetadata{Options: []optionMetadata{{Name: "json", Kind: boolFlag}}}
 	}
+	target := args[:1]
 	args = args[1:]
 	for range schema.Positionals {
 		if len(args) == 0 || !isRequiredFirstArgument(args[0]) {
 			break
 		}
+		target = append(target, args[0])
 		args = args[1:]
+	}
+	if resolved, exists := commandMetadataFor(target); exists {
+		schema = resolved
 	}
 
 	jsonMode := false

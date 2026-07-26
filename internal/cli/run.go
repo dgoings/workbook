@@ -140,7 +140,7 @@ func runHooks(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 	if subcommand != "install" {
 		return core.Errorf(core.CategoryInvocation, "unknown hooks command %q", subcommand)
 	}
-	flags := newFlagSet("hooks")
+	flags := newFlagSet("hooks", subcommand)
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
