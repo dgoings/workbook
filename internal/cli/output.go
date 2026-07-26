@@ -26,6 +26,7 @@ Commands:
   depend <id-or-prefix> <dependency-id-or-prefix> [--json]
   free <id-or-prefix> <dependency-id-or-prefix> [--json]
   next [--json]
+  rebuild [--json]
   fetch [--json]
   push [--json]
   sync [--json]

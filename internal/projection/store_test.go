@@ -172,6 +172,86 @@ func TestStoreRebuildsMetadataMatchingDatabaseMissingRequiredTable(t *testing.T)
 	}
 }
 
+func TestRebuildLeavesPreviousDatabaseWhenReplacementFails(t *testing.T) {
+	ctx := context.Background()
+	config := testConfig()
+	previous := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "Previous")
+	replacement := testSnapshot(previous.State.TaskID, "head-2", "Replacement")
+	source := &countingHeadSource{
+		heads:     []gitstore.TaskHead{{TaskID: previous.State.TaskID, ObjectID: previous.Head}},
+		snapshots: map[string]core.Snapshot{previous.Head: previous, replacement.Head: replacement},
+	}
+	store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	if err != nil {
+		t.Fatalf("openStore() error = %v", err)
+	}
+	if _, err := store.Rebuild(ctx); err != nil {
+		t.Fatalf("Rebuild(initial) error = %v", err)
+	}
+
+	source.heads[0].ObjectID = replacement.Head
+	store.rename = func(string, string) error { return errors.New("rename failed") }
+	if _, err := store.Rebuild(ctx); err == nil {
+		t.Fatal("Rebuild(replacement) error = nil, want failure")
+	}
+
+	snapshots, err := store.querySnapshots(ctx)
+	if err != nil {
+		t.Fatalf("querySnapshots() after failed rebuild error = %v", err)
+	}
+	if len(snapshots) != 1 || snapshots[0].Head != previous.Head || snapshots[0].State.Task.Title != "Previous" {
+		t.Fatalf("cache after failed rebuild = %#v, want previous projected snapshot", snapshots)
+	}
+}
+
+func TestRebuildRetriesOnceWhenHeadsChangeDuringBuild(t *testing.T) {
+	ctx := context.Background()
+	config := testConfig()
+	first := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "First")
+	second := testSnapshot(first.State.TaskID, "head-2", "Second")
+	source := &headSequenceSource{
+		headSets: [][]gitstore.TaskHead{
+			{{TaskID: first.State.TaskID, ObjectID: first.Head}},
+			{{TaskID: second.State.TaskID, ObjectID: second.Head}},
+			{{TaskID: second.State.TaskID, ObjectID: second.Head}},
+			{{TaskID: second.State.TaskID, ObjectID: second.Head}},
+		},
+		snapshots: map[string]core.Snapshot{first.Head: first, second.Head: second},
+	}
+	store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	if err != nil {
+		t.Fatalf("openStore() error = %v", err)
+	}
+
+	count, err := store.Rebuild(ctx)
+	if err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("Rebuild() count = %d, want 1", count)
+	}
+	snapshots, err := store.querySnapshots(ctx)
+	if err != nil {
+		t.Fatalf("querySnapshots() error = %v", err)
+	}
+	if len(snapshots) != 1 || snapshots[0].Head != second.Head || snapshots[0].State.Task.Title != "Second" {
+		t.Fatalf("installed cache = %#v, want second task head", snapshots)
+	}
+
+	third := testSnapshot(first.State.TaskID, "head-3", "Third")
+	source.headSets = [][]gitstore.TaskHead{
+		{{TaskID: first.State.TaskID, ObjectID: first.Head}},
+		{{TaskID: second.State.TaskID, ObjectID: second.Head}},
+		{{TaskID: second.State.TaskID, ObjectID: second.Head}},
+		{{TaskID: third.State.TaskID, ObjectID: third.Head}},
+	}
+	source.index = 0
+	source.snapshots[third.Head] = third
+	if _, err := store.Rebuild(ctx); core.CategoryOf(err) != core.CategoryOperational {
+		t.Fatalf("Rebuild() category = %q, want operational; error = %v", core.CategoryOf(err), err)
+	}
+}
+
 func TestStoreQueriesAndRejectsWrites(t *testing.T) {
 	ctx := context.Background()
 	config := testConfig()
@@ -215,6 +295,32 @@ type countingHeadSource struct {
 	snapshots map[string]core.Snapshot
 	reads     int
 	err       error
+}
+
+type headSequenceSource struct {
+	headSets  [][]gitstore.TaskHead
+	snapshots map[string]core.Snapshot
+	index     int
+}
+
+func (s *headSequenceSource) ListTaskHeads(_ context.Context, _ core.ProjectConfig) ([]gitstore.TaskHead, error) {
+	if len(s.headSets) == 0 {
+		return nil, nil
+	}
+	index := s.index
+	if index >= len(s.headSets) {
+		index = len(s.headSets) - 1
+	}
+	s.index++
+	return append([]gitstore.TaskHead(nil), s.headSets[index]...), nil
+}
+
+func (s *headSequenceSource) ReadTaskHead(_ context.Context, _ core.ProjectConfig, head gitstore.TaskHead) (core.Snapshot, error) {
+	snapshot, found := s.snapshots[head.ObjectID]
+	if !found {
+		return core.Snapshot{}, errors.New("missing test snapshot")
+	}
+	return snapshot, nil
 }
 
 func (s *countingHeadSource) ListTaskHeads(_ context.Context, _ core.ProjectConfig) ([]gitstore.TaskHead, error) {

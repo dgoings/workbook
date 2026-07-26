@@ -43,6 +43,7 @@ type Store struct {
 	config    core.ProjectConfig
 	cachePath string
 	db        *sql.DB
+	rename    func(string, string) error
 }
 
 var _ core.TaskStore = (*Store)(nil)
@@ -70,7 +71,7 @@ func openStore(ctx context.Context, source taskHeadSource, config core.ProjectCo
 	if err != nil {
 		return nil, err
 	}
-	return &Store{source: source, config: config, cachePath: cachePath, db: db}, nil
+	return &Store{source: source, config: config, cachePath: cachePath, db: db, rename: os.Rename}, nil
 }
 
 // CachePath returns the disposable cache location shared by repository worktrees.
@@ -95,25 +96,30 @@ func (s *Store) Refresh(ctx context.Context) error {
 // Rebuild recreates the projection from all currently visible Git task heads.
 // It is intentionally a cache-only operation: no Git refs or objects change.
 func (s *Store) Rebuild(ctx context.Context) (int, error) {
-	heads, err := s.source.ListTaskHeads(ctx, s.config)
-	if err != nil {
-		return 0, err
-	}
-	if err := s.replaceDatabase(ctx); err != nil {
-		return 0, err
-	}
-	snapshots := make([]core.Snapshot, 0, len(heads))
-	for _, head := range heads {
-		snapshot, err := s.source.ReadTaskHead(ctx, s.config, head)
+	for attempt := 0; attempt < 2; attempt++ {
+		heads, err := s.source.ListTaskHeads(ctx, s.config)
 		if err != nil {
 			return 0, err
 		}
-		snapshots = append(snapshots, snapshot)
+		temporary, err := s.buildTemporaryDatabase(ctx, heads)
+		if err != nil {
+			return 0, err
+		}
+		current, err := s.source.ListTaskHeads(ctx, s.config)
+		if err != nil {
+			_ = os.Remove(temporary)
+			return 0, err
+		}
+		if equalHeads(heads, current) {
+			if err := s.replaceAtomically(ctx, temporary); err != nil {
+				_ = os.Remove(temporary)
+				return 0, err
+			}
+			return len(heads), nil
+		}
+		_ = os.Remove(temporary)
 	}
-	if err := s.replaceSnapshots(ctx, snapshots); err != nil {
-		return 0, err
-	}
-	return len(heads), nil
+	return 0, core.Errorf(core.CategoryOperational, "task refs changed during projection rebuild; retry workbook rebuild")
 }
 
 // List returns task checkpoints from SQLite after refreshing against Git ref tips.
@@ -298,14 +304,14 @@ func (s *Store) cachedHeads(ctx context.Context) (map[string]string, error) {
 	return heads, nil
 }
 
-func (s *Store) replaceSnapshots(ctx context.Context, snapshots []core.Snapshot) error {
-	transaction, err := s.db.BeginTx(ctx, nil)
+func replaceSnapshots(ctx context.Context, db *sql.DB, snapshots []core.Snapshot) error {
+	transaction, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return s.databaseError("begin projection rebuild", err)
+		return core.Wrap(core.CategoryOperational, "cannot begin projection rebuild", err)
 	}
 	defer transaction.Rollback()
 	if _, err := transaction.ExecContext(ctx, `DELETE FROM task_labels; DELETE FROM task_dependencies; DELETE FROM tasks`); err != nil {
-		return s.databaseError("clear projection rebuild", err)
+		return core.Wrap(core.CategoryOperational, "cannot clear projection rebuild", err)
 	}
 	for _, snapshot := range snapshots {
 		if err := upsertSnapshot(ctx, transaction, snapshot); err != nil {
@@ -313,7 +319,7 @@ func (s *Store) replaceSnapshots(ctx context.Context, snapshots []core.Snapshot)
 		}
 	}
 	if err := transaction.Commit(); err != nil {
-		return s.databaseError("commit projection rebuild", err)
+		return core.Wrap(core.CategoryOperational, "cannot commit projection rebuild", err)
 	}
 	return nil
 }
@@ -489,30 +495,92 @@ func (s *Store) queryStrings(ctx context.Context, query, taskID string) ([]strin
 	return values, nil
 }
 
-func (s *Store) replaceDatabase(ctx context.Context) error {
+func (s *Store) buildTemporaryDatabase(ctx context.Context, heads []gitstore.TaskHead) (string, error) {
+	temporary, err := os.CreateTemp(filepath.Dir(s.cachePath), "."+filepath.Base(s.cachePath)+"-*.tmp")
+	if err != nil {
+		return "", core.Wrap(core.CategoryOperational, "cannot create temporary projection cache", err)
+	}
+	temporaryPath := temporary.Name()
+	if err := temporary.Close(); err != nil {
+		_ = os.Remove(temporaryPath)
+		return "", core.Wrap(core.CategoryOperational, "cannot close temporary projection cache", err)
+	}
+
+	db, err := openDatabase(ctx, temporaryPath)
+	if err != nil {
+		_ = os.Remove(temporaryPath)
+		return "", err
+	}
+	defer func() {
+		_ = db.Close()
+	}()
+	if _, err := db.ExecContext(ctx, schema); err != nil {
+		_ = os.Remove(temporaryPath)
+		return "", core.Wrap(core.CategoryOperational, "cannot create temporary projection schema", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO projection_meta (key, value) VALUES ('schema_version', ?), ('project_id', ?)`, schemaVersion, s.config.ProjectID); err != nil {
+		_ = os.Remove(temporaryPath)
+		return "", core.Wrap(core.CategoryOperational, "cannot initialize temporary projection metadata", err)
+	}
+	snapshots := make([]core.Snapshot, 0, len(heads))
+	for _, head := range heads {
+		snapshot, err := s.source.ReadTaskHead(ctx, s.config, head)
+		if err != nil {
+			_ = os.Remove(temporaryPath)
+			return "", err
+		}
+		snapshots = append(snapshots, snapshot)
+	}
+	if err := replaceSnapshots(ctx, db, snapshots); err != nil {
+		_ = os.Remove(temporaryPath)
+		return "", err
+	}
+	return temporaryPath, nil
+}
+
+func (s *Store) replaceAtomically(ctx context.Context, temporary string) error {
 	if s.db != nil {
 		if err := s.db.Close(); err != nil {
 			return s.databaseError("close projection cache", err)
 		}
 		s.db = nil
 	}
-	if err := os.Remove(s.cachePath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return core.Wrap(core.CategoryOperational, "cannot remove invalid projection cache", err)
+	rename := s.rename
+	if rename == nil {
+		rename = os.Rename
 	}
+	if err := rename(temporary, s.cachePath); err != nil {
+		if reopenErr := s.reopenDatabase(ctx); reopenErr != nil {
+			return core.Wrap(core.CategoryOperational, "cannot replace projection cache and cannot reopen previous cache", errors.Join(err, reopenErr))
+		}
+		return core.Wrap(core.CategoryOperational, "cannot replace projection cache", err)
+	}
+	return s.reopenDatabase(ctx)
+}
+
+func (s *Store) reopenDatabase(ctx context.Context) error {
 	db, err := openDatabase(ctx, s.cachePath)
 	if err != nil {
 		return err
 	}
-	if _, err := db.ExecContext(ctx, schema); err != nil {
-		db.Close()
-		return core.Wrap(core.CategoryOperational, "cannot create projection schema", err)
-	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO projection_meta (key, value) VALUES ('schema_version', ?), ('project_id', ?)`, schemaVersion, s.config.ProjectID); err != nil {
-		db.Close()
-		return core.Wrap(core.CategoryOperational, "cannot initialize projection metadata", err)
-	}
 	s.db = db
 	return nil
+}
+
+func equalHeads(left, right []gitstore.TaskHead) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	byTaskID := make(map[string]string, len(left))
+	for _, head := range left {
+		byTaskID[head.TaskID] = head.ObjectID
+	}
+	for _, head := range right {
+		if byTaskID[head.TaskID] != head.ObjectID {
+			return false
+		}
+	}
+	return true
 }
 
 func openDatabase(_ context.Context, path string) (*sql.DB, error) {

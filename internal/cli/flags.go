@@ -230,10 +230,16 @@ var commandSchemas = map[string]commandMetadata{
 		Description: "Show the next eligible task.",
 		Options:     []optionMetadata{{Name: "json", Kind: boolFlag, Description: "emit JSON"}},
 	},
+	"rebuild": {
+		Name:        "rebuild",
+		Synopsis:    "workbook rebuild [--json]",
+		Description: "Rebuild the local SQLite task projection.",
+		Options:     []optionMetadata{{Name: "json", Kind: boolFlag, Description: "emit JSON"}},
+	},
 }
 
 var commandOrder = []string{
-	"init", "create", "list", "board", "show", "update", "delete", "move", "depend", "free", "next", "fetch", "push", "sync", "hooks", "serve",
+	"init", "create", "list", "board", "show", "update", "delete", "move", "depend", "free", "next", "rebuild", "fetch", "push", "sync", "hooks", "serve",
 }
 
 type commandFlagSet struct {
