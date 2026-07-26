@@ -21,7 +21,23 @@ type initResult struct {
 	TaskCount  int    `json:"taskCount"`
 }
 
+type helpRequest struct {
+	Target []string
+}
+
 func Run(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) int {
+	help, handled, helpErr := parseHelpRequest(args)
+	if handled {
+		if helpErr == nil {
+			helpErr = renderCommandHelp(stdout, help.Target)
+		}
+		if helpErr != nil {
+			writeError(stderr, helpErr, false)
+			return core.ExitCode(helpErr)
+		}
+		return 0
+	}
+
 	jsonMode := requestedJSON(args)
 	if len(args) == 0 {
 		err := core.Errorf(core.CategoryInvocation, "a command is required")
@@ -73,6 +89,88 @@ func Run(ctx context.Context, args []string, cwd string, stdout, stderr io.Write
 		return core.ExitCode(err)
 	}
 	return 0
+}
+
+func parseHelpRequest(args []string) (helpRequest, bool, error) {
+	if len(args) == 0 {
+		return helpRequest{}, true, nil
+	}
+	if args[0] == "-h" || args[0] == "--help" {
+		if len(args) == 1 {
+			return helpRequest{}, true, nil
+		}
+		return helpRequest{}, true, core.Errorf(core.CategoryInvocation, "global help accepts no additional arguments")
+	}
+	if args[0] == "help" {
+		return parseExplicitHelpRequest(args[1:])
+	}
+
+	if _, exists := commandSchemas[args[0]]; !exists {
+		return helpRequest{}, false, nil
+	}
+	if len(args) >= 2 && (args[1] == "-h" || args[1] == "--help") {
+		if len(args) != 2 {
+			return helpRequest{}, true, core.Errorf(core.CategoryInvocation, "%s help accepts no additional arguments", args[0])
+		}
+		return helpRequest{Target: args[:1]}, true, nil
+	}
+	if args[0] == "hooks" && len(args) >= 3 && args[1] == "install" && (args[2] == "-h" || args[2] == "--help") {
+		if len(args) != 3 {
+			return helpRequest{}, true, core.Errorf(core.CategoryInvocation, "hooks install help accepts no additional arguments")
+		}
+		return helpRequest{Target: args[:2]}, true, nil
+	}
+	if hasLocalHelpAlias(args) {
+		return helpRequest{}, true, core.Errorf(core.CategoryInvocation, "%s help accepts no additional arguments", args[0])
+	}
+	return helpRequest{}, false, nil
+}
+
+func hasLocalHelpAlias(args []string) bool {
+	metadata, optionArgs, exists := commandInvocationMetadata(args)
+	if !exists {
+		return false
+	}
+	for index := 0; index < len(optionArgs); index++ {
+		argument := optionArgs[index]
+		if argument == "--" {
+			return false
+		}
+		name, _, hasValue, isFlag := splitFlag(argument)
+		if !isFlag {
+			return false
+		}
+		if name == "h" || name == "help" {
+			return true
+		}
+		kind, known := metadata.optionKind(name)
+		if !known {
+			return false
+		}
+		if kind == stringFlag && !hasValue {
+			index++
+		}
+	}
+	return false
+}
+
+func parseExplicitHelpRequest(args []string) (helpRequest, bool, error) {
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			return helpRequest{}, true, core.Errorf(core.CategoryInvocation, "help accepts no flags")
+		}
+	}
+	switch len(args) {
+	case 0:
+		return helpRequest{}, true, nil
+	case 1:
+		return helpRequest{Target: args}, true, nil
+	case 2:
+		if args[0] == "hooks" && args[1] == "install" {
+			return helpRequest{Target: args}, true, nil
+		}
+	}
+	return helpRequest{}, true, core.Errorf(core.CategoryInvocation, "help accepts a command or hooks install")
 }
 
 func runFetch(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
@@ -140,7 +238,7 @@ func runHooks(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 	if subcommand != "install" {
 		return core.Errorf(core.CategoryInvocation, "unknown hooks command %q", subcommand)
 	}
-	flags := newFlagSet("hooks")
+	flags := newFlagSet("hooks", subcommand)
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err

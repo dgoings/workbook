@@ -40,16 +40,16 @@ type errorDocument struct {
 func TestRunInvalidInvocationAndEarlyJSONErrors(t *testing.T) {
 	repository := testrepo.New(t)
 
-	t.Run("no command", func(t *testing.T) {
+	t.Run("no command renders global help", func(t *testing.T) {
 		code, stdout, stderr := run(t, repository)
-		if code != 2 {
-			t.Fatalf("Run() code = %d, want 2; stderr = %q", code, stderr)
+		if code != 0 {
+			t.Fatalf("Run() code = %d, want 0; stderr = %q", code, stderr)
 		}
-		if stdout != "" {
-			t.Fatalf("Run() stdout = %q, want empty", stdout)
+		if !strings.Contains(stdout, "Usage: workbook <command> [arguments]") {
+			t.Fatalf("Run() stdout = %q, want global help", stdout)
 		}
-		if !strings.Contains(stderr, "Usage: workbook <command>") {
-			t.Fatalf("Run() stderr = %q, want usage", stderr)
+		if stderr != "" {
+			t.Fatalf("Run() stderr = %q, want empty", stderr)
 		}
 	})
 
@@ -229,6 +229,29 @@ func TestRunJSONIntentAccountsForStringFlagValuesAndParserStops(t *testing.T) {
 		}
 		assertHumanError(t, stderr, "")
 	})
+}
+
+func TestRunHooksInvocationErrorsRetainJSONIntent(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args []string
+	}{
+		{name: "missing subcommand", args: []string{"hooks", "--json"}},
+		{name: "unknown subcommand", args: []string{"hooks", "unknown", "--json"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repository := testrepo.New(t)
+			code, stdout, stderr := run(t, repository, test.args...)
+			if code != 2 {
+				t.Fatalf("Run(%q) code = %d, want 2; stderr = %q", test.args, code, stderr)
+			}
+			if stdout != "" {
+				t.Fatalf("Run(%q) stdout = %q, want empty", test.args, stdout)
+			}
+			assertJSONError(t, stderr, core.CategoryInvocation, "")
+			assertNoWorkbookDirectory(t, repository)
+		})
+	}
 }
 
 func TestRunJSONIntentMatchesGoBooleanFlagSyntax(t *testing.T) {
@@ -666,6 +689,7 @@ func TestREADMEImplementedCommands(t *testing.T) {
 		"workbook sync [--json]",
 		"workbook hooks install [--json]",
 		"workbook serve [--addr 127.0.0.1:7331]",
+		"workbook help [command]",
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("implemented commands = %q, want exactly %q", got, want)
@@ -771,7 +795,7 @@ func readmeCommandPolicyViolations(readme string) []string {
 		"init": true, "create": true, "list": true, "board": true,
 		"show": true, "update": true, "delete": true, "fetch": true,
 		"push": true, "sync": true, "hooks": true, "serve": true, "move": true,
-		"depend": true, "free": true, "next": true,
+		"depend": true, "free": true, "next": true, "help": true,
 	}
 	commandPattern := regexp.MustCompile(`\bworkbook ([a-z][a-z0-9-]*)\b`)
 	var h2, h3 string
