@@ -82,6 +82,48 @@ func TestVersionCommandReportsDevelopmentDefaultsAsJSON(t *testing.T) {
 	}
 }
 
+func TestRenderFormulaUsesImmutableDarwinArchives(t *testing.T) {
+	formula, err := release.RenderFormula(
+		"0.1.0",
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		"dgoings/workbook",
+	)
+	if err != nil {
+		t.Fatalf("render formula: %v", err)
+	}
+
+	for _, want := range []string{
+		"class Workbook < Formula",
+		"on_macos do",
+		"on_arm do",
+		"https://github.com/dgoings/workbook/releases/download/v0.1.0/workbook_0.1.0_darwin_arm64.tar.gz",
+		"sha256 \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"",
+		"on_intel do",
+		"https://github.com/dgoings/workbook/releases/download/v0.1.0/workbook_0.1.0_darwin_amd64.tar.gz",
+		"sha256 \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"",
+		"bin.install \"workbook\"",
+		"test do",
+		"workbook version",
+	} {
+		if !strings.Contains(formula, want) {
+			t.Errorf("formula missing %q:\n%s", want, formula)
+		}
+	}
+}
+
+func TestRenderFormulaRejectsMissingChecksums(t *testing.T) {
+	_, err := release.RenderFormula(
+		"0.1.0",
+		"",
+		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		"dgoings/workbook",
+	)
+	if err == nil {
+		t.Fatal("RenderFormula succeeded without an arm64 checksum")
+	}
+}
+
 func TestReleaseScriptCreatesVerifiedDarwinArchives(t *testing.T) {
 	root, script := releasePaths(t)
 	outputDirectory := t.TempDir()
