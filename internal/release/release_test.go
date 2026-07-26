@@ -95,6 +95,7 @@ func TestRenderFormulaUsesImmutableDarwinArchives(t *testing.T) {
 
 	for _, want := range []string{
 		"class Workbook < Formula",
+		"\n  depends_on :macos\n\n  on_macos do",
 		"on_macos do",
 		"on_arm do",
 		"https://github.com/dgoings/workbook/releases/download/v0.1.0/workbook_0.1.0_darwin_arm64.tar.gz",

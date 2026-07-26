@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestRenderHomebrewFormulaReadsExactChecksums(t *testing.T) {
@@ -30,10 +32,12 @@ func TestRenderHomebrewFormulaReadsExactChecksums(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read formula: %v", err)
 	}
-	if !strings.Contains(string(formula), "sha256 \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"") ||
-		!strings.Contains(string(formula), "sha256 \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"") {
-		t.Fatalf("formula checksums = %q, want both checksum-file values", formula)
+	contents := string(formula)
+	if !strings.Contains(contents, "\n  depends_on :macos\n\n  on_macos do") {
+		t.Errorf("rendered formula missing top-level macOS dependency:\n%s", contents)
 	}
+	assertArchitectureFormulaBlock(t, contents, "on_arm do", "on_intel do", "workbook_0.1.0_darwin_arm64.tar.gz", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "workbook_0.1.0_darwin_amd64.tar.gz", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	assertArchitectureFormulaBlock(t, contents, "on_intel do", "  end\n\n  def install", "workbook_0.1.0_darwin_amd64.tar.gz", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "workbook_0.1.0_darwin_arm64.tar.gz", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 }
 
 func TestRenderHomebrewFormulaRejectsMissingOrDuplicateChecksums(t *testing.T) {
@@ -84,11 +88,55 @@ func TestReleaseWorkflowIsTagOnlyAndPublishesFormula(t *testing.T) {
 			t.Errorf("workflow missing %q:\n%s", want, contents)
 		}
 	}
-	if strings.Contains(contents, "pull_request:") || strings.Contains(contents, "workflow_dispatch:") {
-		t.Errorf("workflow has a non-tag trigger:\n%s", contents)
+	var document struct {
+		On map[string]struct {
+			Tags []string `yaml:"tags"`
+		} `yaml:"on"`
+	}
+	if err := yaml.Unmarshal(workflow, &document); err != nil {
+		t.Fatalf("parse release workflow YAML: %v", err)
+	}
+	if len(document.On) != 1 {
+		t.Errorf("workflow triggers = %#v, want only push.tags [v*]", document.On)
+	} else if push, ok := document.On["push"]; !ok || len(push.Tags) != 1 || push.Tags[0] != "v*" {
+		t.Errorf("workflow triggers = %#v, want only push.tags [v*]", document.On)
 	}
 	if strings.Count(contents, "secrets.HOMEBREW_TAP_TOKEN") != 1 || !strings.Contains(contents, "repository: dgoings/homebrew-tap\n          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}") {
 		t.Errorf("tap credential is not scoped to the tap update:\n%s", contents)
+	}
+}
+
+func TestTrackedFormulaDeclaresMacOSDependency(t *testing.T) {
+	root, _ := renderFormulaPaths(t)
+	formula, err := os.ReadFile(filepath.Join(root, "Formula", "workbook.rb"))
+	if err != nil {
+		t.Fatalf("read tracked formula: %v", err)
+	}
+	if !strings.Contains(string(formula), "\n  depends_on :macos\n\n  on_macos do") {
+		t.Errorf("tracked formula missing top-level macOS dependency:\n%s", formula)
+	}
+}
+
+func assertArchitectureFormulaBlock(t *testing.T, formula, start, end, wantArchive, wantChecksum, wrongArchive, wrongChecksum string) {
+	t.Helper()
+	startIndex := strings.Index(formula, start)
+	if startIndex < 0 {
+		t.Fatalf("formula missing %q:\n%s", start, formula)
+	}
+	blockEnd := strings.Index(formula[startIndex:], end)
+	if blockEnd < 0 {
+		t.Fatalf("formula missing %q after %q:\n%s", end, start, formula)
+	}
+	block := formula[startIndex : startIndex+blockEnd]
+	for _, want := range []string{wantArchive, `sha256 "` + wantChecksum + `"`} {
+		if !strings.Contains(block, want) {
+			t.Errorf("%s block missing %q:\n%s", start, want, block)
+		}
+	}
+	for _, wrong := range []string{wrongArchive, `sha256 "` + wrongChecksum + `"`} {
+		if strings.Contains(block, wrong) {
+			t.Errorf("%s block contains opposite-architecture value %q:\n%s", start, wrong, block)
+		}
 	}
 }
 

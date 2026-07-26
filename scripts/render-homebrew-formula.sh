@@ -63,6 +63,7 @@ class Workbook < Formula
   desc "Repository-native project tracker for humans and coding agents"
   homepage "https://github.com/${repository}"
   version "${version}"
+  depends_on :macos
 
   on_macos do
     on_arm do
