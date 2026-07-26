@@ -13,63 +13,39 @@ env:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    environment: release
+    runs-on: ubuntu-24.04
     steps:
       - name: Check out release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           ref: ${{ github.ref }}
           fetch-depth: 0
 
+      - name: Validate release tag
+        run: |
+          VERSION=$(scripts/validate-release-tag.sh "${GITHUB_REF_NAME}")
+          printf 'VERSION=%s\n' "${VERSION}" >> "${GITHUB_ENV}"
+
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
         with:
-          go-version-file: go.mod
+          go-version: "1.26.5"
 
       - name: Test
         run: go test ./...
 
       - name: Build release archives
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          scripts/release.sh "${VERSION}" dist
-
-      - name: Create GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release upload "${GITHUB_REF_NAME}" \
-              "dist/workbook_${VERSION}_darwin_arm64.tar.gz" \
-              "dist/workbook_${VERSION}_darwin_amd64.tar.gz" \
-              dist/checksums.txt \
-              --clobber
-          else
-            gh release create "${GITHUB_REF_NAME}" \
-              "dist/workbook_${VERSION}_darwin_arm64.tar.gz" \
-              "dist/workbook_${VERSION}_darwin_amd64.tar.gz" \
-              dist/checksums.txt \
-              --generate-notes \
-              --title "Workbook ${GITHUB_REF_NAME}"
-          fi
+        run: scripts/release.sh "${VERSION}" dist
 
       - name: Check out Homebrew tap
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           repository: dgoings/homebrew-tap
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           path: homebrew-tap
 
-      - name: Update Homebrew formula
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          scripts/render-homebrew-formula.sh "${VERSION}" dist/checksums.txt \
-            homebrew-tap/Formula/workbook.rb "${REPOSITORY}"
-          git -C homebrew-tap config user.name "github-actions[bot]"
-          git -C homebrew-tap config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git -C homebrew-tap add Formula/workbook.rb
-          if ! git -C homebrew-tap diff --cached --quiet; then
-            git -C homebrew-tap commit -m "workbook ${VERSION}"
-            git -C homebrew-tap push origin HEAD
-          fi
+      - name: Publish release and Homebrew formula
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/publish-release.sh "${GITHUB_REF_NAME}" dist homebrew-tap "${REPOSITORY}"

@@ -11,10 +11,14 @@ checksums_file=$2
 output_file=$3
 repository=$4
 
-if [ -z "${version}" ]; then
-	echo "workbook formula: version must not be empty" >&2
-	exit 2
-fi
+case $0 in
+	*/*) script_directory=${0%/*} ;;
+	*) script_directory=. ;;
+esac
+# shellcheck source=scripts/release-version.sh
+. "${script_directory}/release-version.sh"
+require_safe_release_version "${version}" "workbook formula"
+
 if [ ! -f "${checksums_file}" ]; then
 	echo "workbook formula: checksums file does not exist: ${checksums_file}" >&2
 	exit 2
@@ -56,6 +60,7 @@ temporary_file=$(mktemp "${output_directory}/.workbook-formula.XXXXXX")
 trap 'rm -f -- "${temporary_file}"' EXIT HUP INT TERM
 
 cat > "${temporary_file}" <<EOF
+# typed: strict
 # frozen_string_literal: true
 
 # Homebrew formula for Workbook.
@@ -87,4 +92,5 @@ class Workbook < Formula
 end
 EOF
 
+chmod 0644 "${temporary_file}"
 mv -- "${temporary_file}" "${output_file}"

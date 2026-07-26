@@ -150,13 +150,21 @@ implementation links remain future work.
 Intel archives plus a sorted `checksums.txt` file. Each archive contains only
 the `workbook` executable. The script cross-compiles with the requested version
 and the current Git commit injected into `workbook version`; source builds
-report `dev` and `unknown` instead.
+report `dev` and `unknown` instead. Release versions must use the exact
+`MAJOR.MINOR.PATCH` form without leading zeroes.
 
 Pushing a version tag such as `v0.1.0` runs the release workflow. It tests the
-tag, publishes the two archives and checksums to GitHub Releases, and updates
-the `dgoings/homebrew-tap` formula from those generated checksums. The tap is
-updated with a credential scoped only to that repository. No public release has
-been published yet.
+strict SemVer tag, publishes the two archives and checksums to GitHub Releases,
+and updates the `dgoings/homebrew-tap` formula from those generated checksums.
+The protected release environment exposes a credential scoped only to that tap
+repository after validation. New assets are staged in a draft, the tap update is
+pushed first, and the draft is published last. A rerun verifies existing assets
+byte-for-byte and never overwrites them; a failed final publication reverts the
+tap update and removes only a draft created by that run.
+
+This source repository intentionally does not track an installable
+`Formula/workbook.rb` with placeholder checksums. The workflow renders the real
+formula directly into the tap from the built artifacts.
 
 ### Explicit task sharing
 

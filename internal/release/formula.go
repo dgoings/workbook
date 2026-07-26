@@ -7,13 +7,16 @@ import (
 	"strings"
 )
 
-var repositoryName = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+var (
+	repositoryName  = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+	semanticVersion = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
+)
 
 // RenderFormula produces the macOS-only Homebrew formula for a Workbook
 // release. The checksums must be SHA-256 values for the named release archives.
 func RenderFormula(version, arm64SHA, amd64SHA, repository string) (string, error) {
-	if strings.TrimSpace(version) == "" || strings.TrimSpace(version) != version {
-		return "", fmt.Errorf("release version must not be empty or contain surrounding whitespace")
+	if !semanticVersion.MatchString(version) {
+		return "", fmt.Errorf("release version %q must be MAJOR.MINOR.PATCH without leading zeroes", version)
 	}
 	if !repositoryName.MatchString(repository) {
 		return "", fmt.Errorf("repository %q must be an owner/name pair", repository)
@@ -27,7 +30,8 @@ func RenderFormula(version, arm64SHA, amd64SHA, repository string) (string, erro
 		return "", err
 	}
 
-	return fmt.Sprintf(`# frozen_string_literal: true
+	return fmt.Sprintf(`# typed: strict
+# frozen_string_literal: true
 
 # Homebrew formula for Workbook.
 class Workbook < Formula

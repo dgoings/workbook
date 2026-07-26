@@ -8,22 +8,33 @@ fi
 
 version=$1
 output_directory=$2
-if [ -z "${version}" ]; then
-	echo "workbook release: version must not be empty" >&2
-	exit 2
-fi
 
 case $0 in
 	*/*) script_directory=${0%/*} ;;
 	*) script_directory=. ;;
 esac
-repository_root=$(CDPATH= cd -- "${script_directory}/.." && pwd)
+# shellcheck source=scripts/release-version.sh
+. "${script_directory}/release-version.sh"
+require_safe_release_version "${version}" "workbook release"
+
+repository_root=$(CDPATH='' cd -- "${script_directory}/.." && pwd)
 commit=$(git -C "${repository_root}" rev-parse HEAD)
 
+SOURCE_DATE_EPOCH=0
+TZ=UTC
+LC_ALL=C
+export SOURCE_DATE_EPOCH TZ LC_ALL
+
 mkdir -p -- "${output_directory}"
-output_directory=$(CDPATH= cd -- "${output_directory}" && pwd -P)
+output_directory=$(CDPATH='' cd -- "${output_directory}" && pwd -P)
 temporary_directory=$(mktemp -d "${TMPDIR:-/tmp}/workbook-release.XXXXXX")
 trap 'rm -rf -- "${temporary_directory}"' EXIT HUP INT TERM
+
+(
+	cd -- "${repository_root}"
+	CGO_ENABLED=0 go build -buildvcs=false -trimpath \
+		-o "${temporary_directory}/archive-tool" ./internal/release/archivecmd
+)
 
 for architecture in amd64 arm64; do
 	archive_name="workbook_${version}_darwin_${architecture}.tar.gz"
@@ -34,8 +45,9 @@ for architecture in amd64 arm64; do
 			-ldflags "-X main.version=${version} -X main.commit=${commit}" \
 			-o "${binary_path}" ./cmd/workbook
 	)
-	touch -t 197001010000 "${binary_path}"
-	COPYFILE_DISABLE=1 tar --format ustar --uid 0 --gid 0 --uname root --gname root -cf - -C "${temporary_directory}" workbook | gzip -n > "${output_directory}/${archive_name}"
+	"${temporary_directory}/archive-tool" \
+		"${binary_path}" \
+		"${output_directory}/${archive_name}"
 done
 
 (

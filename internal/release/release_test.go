@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -94,6 +95,7 @@ func TestRenderFormulaUsesImmutableDarwinArchives(t *testing.T) {
 	}
 
 	for _, want := range []string{
+		"# typed: strict\n# frozen_string_literal: true",
 		"class Workbook < Formula",
 		"\n  depends_on :macos\n\n  on_macos do",
 		"on_macos do",
@@ -122,6 +124,97 @@ func TestRenderFormulaRejectsMissingChecksums(t *testing.T) {
 	)
 	if err == nil {
 		t.Fatal("RenderFormula succeeded without an arm64 checksum")
+	}
+}
+
+func TestRenderFormulaRejectsUnsafeVersions(t *testing.T) {
+	for _, version := range []string{
+		"",
+		"0.1",
+		"01.2.3",
+		"1.02.3",
+		"1.2.03",
+		"1.2.3-alpha",
+		"1.2.3+build",
+		"1.2.3/../../formula",
+		"1.2.3\"",
+	} {
+		t.Run(version, func(t *testing.T) {
+			_, err := release.RenderFormula(
+				version,
+				"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+				"dgoings/workbook",
+			)
+			if err == nil {
+				t.Fatalf("RenderFormula(%q) succeeded, want safe SemVer rejection", version)
+			}
+		})
+	}
+}
+
+func TestCompiledBinaryReportsLinkerInjectedVersion(t *testing.T) {
+	root, _ := releasePaths(t)
+	binary := filepath.Join(t.TempDir(), "workbook")
+	build := exec.Command(
+		"go", "build",
+		"-buildvcs=false",
+		"-trimpath",
+		"-ldflags", "-X main.version=9.8.7 -X main.commit=abc123",
+		"-o", binary,
+		"./cmd/workbook",
+	)
+	build.Dir = root
+	build.Env = environmentWith(os.Environ(), "GOCACHE="+filepath.Join(t.TempDir(), "gocache"))
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build linker-injected workbook: %v\n%s", err, output)
+	}
+
+	command := exec.Command(binary, "version", "--json")
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("run linker-injected workbook: %v", err)
+	}
+	var result struct {
+		Data release.Metadata `json:"data"`
+	}
+	if err := json.Unmarshal(output, &result); err != nil {
+		t.Fatalf("decode linker-injected version output: %v; output = %q", err, output)
+	}
+	if result.Data.Version != "9.8.7" || result.Data.Commit != "abc123" {
+		t.Fatalf("linker-injected metadata = %#v, want version 9.8.7 and commit abc123", result.Data)
+	}
+}
+
+func TestReleaseScriptRejectsUnsafeVersionsBeforeCreatingArtifacts(t *testing.T) {
+	root, script := releasePaths(t)
+	for _, version := range []string{
+		"v0.1.0",
+		"0.1",
+		"01.2.3",
+		"1.2.3-alpha",
+		"1.2.3/../../escape",
+		"1.2.3;touch-pwned",
+	} {
+		t.Run(version, func(t *testing.T) {
+			outputDirectory := filepath.Join(t.TempDir(), "dist")
+			command := exec.Command(script, version, outputDirectory)
+			command.Dir = root
+			command.Env = environmentWith(os.Environ(), "GOCACHE="+filepath.Join(t.TempDir(), "gocache"))
+			output, err := command.CombinedOutput()
+			if err == nil {
+				t.Fatalf("release script accepted unsafe version %q; output = %q", version, output)
+			}
+			var exitError *exec.ExitError
+			if !errors.As(err, &exitError) || exitError.ExitCode() != 2 {
+				t.Fatalf("release script error = %v, want exit code 2; output = %q", err, output)
+			}
+			if entries, readErr := os.ReadDir(outputDirectory); readErr == nil && len(entries) != 0 {
+				t.Fatalf("release script created files for unsafe version %q: %v", version, entries)
+			} else if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+				t.Fatalf("read output directory: %v", readErr)
+			}
+		})
 	}
 }
 
@@ -181,10 +274,30 @@ func TestReleaseScriptProducesDeterministicArtifacts(t *testing.T) {
 	root, script := releasePaths(t)
 	firstOutputDirectory := t.TempDir()
 	secondOutputDirectory := t.TempDir()
-	for _, outputDirectory := range []string{firstOutputDirectory, secondOutputDirectory} {
+	hostileToolDirectory := t.TempDir()
+	for _, name := range []string{"gzip", "tar", "touch"} {
+		path := filepath.Join(hostileToolDirectory, name)
+		if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 91\n"), 0o700); err != nil {
+			t.Fatalf("write hostile %s: %v", name, err)
+		}
+	}
+	environments := [][]string{
+		environmentWith(os.Environ(),
+			"GOCACHE="+filepath.Join(t.TempDir(), "gocache"),
+			"TZ=America/Detroit",
+			"SOURCE_DATE_EPOCH=1712345678",
+		),
+		environmentWith(os.Environ(),
+			"GOCACHE="+filepath.Join(t.TempDir(), "gocache"),
+			"TZ=Asia/Tokyo",
+			"SOURCE_DATE_EPOCH=946684800",
+			"PATH="+hostileToolDirectory+string(os.PathListSeparator)+os.Getenv("PATH"),
+		),
+	}
+	for index, outputDirectory := range []string{firstOutputDirectory, secondOutputDirectory} {
 		command := exec.Command(script, "0.1.0", outputDirectory)
 		command.Dir = root
-		command.Env = append(os.Environ(), "GOCACHE="+filepath.Join(t.TempDir(), "gocache"))
+		command.Env = environments[index]
 		if output, err := command.CombinedOutput(); err != nil {
 			t.Fatalf("release script: %v\n%s", err, output)
 		}
@@ -232,12 +345,34 @@ func assertExecutableOnlyArchive(t *testing.T, archivePath string) {
 	if header.Uid != 0 || header.Gid != 0 || header.Uname != "root" || header.Gname != "root" {
 		t.Fatalf("archive owner = uid %d gid %d user %q group %q, want normalized root ownership", header.Uid, header.Gid, header.Uname, header.Gname)
 	}
+	if header.ModTime.Unix() != 0 {
+		t.Fatalf("archive member modification time = %v, want Unix epoch", header.ModTime)
+	}
 	if _, err := io.Copy(io.Discard, tarReader); err != nil {
 		t.Fatalf("read archive payload %s: %v", archivePath, err)
 	}
 	if extra, err := tarReader.Next(); err != io.EOF {
 		t.Fatalf("archive extra member = %#v, %v; want EOF", extra, err)
 	}
+}
+
+func environmentWith(base []string, values ...string) []string {
+	replacements := make(map[string]string, len(values))
+	for _, value := range values {
+		key, _, _ := strings.Cut(value, "=")
+		replacements[key] = value
+	}
+	environment := make([]string, 0, len(base)+len(values))
+	for _, value := range base {
+		key, _, _ := strings.Cut(value, "=")
+		if _, replaced := replacements[key]; !replaced {
+			environment = append(environment, value)
+		}
+	}
+	for _, value := range values {
+		environment = append(environment, value)
+	}
+	return environment
 }
 
 func releasePaths(t *testing.T) (string, string) {

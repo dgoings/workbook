@@ -2,6 +2,7 @@ package scripts_test
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -34,7 +35,17 @@ func TestRenderHomebrewFormulaReadsExactChecksums(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read formula: %v", err)
 	}
+	info, err := os.Stat(output)
+	if err != nil {
+		t.Fatalf("stat formula: %v", err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Fatalf("rendered formula mode = %o, want 644", info.Mode().Perm())
+	}
 	contents := string(formula)
+	if !strings.HasPrefix(contents, "# typed: strict\n# frozen_string_literal: true\n") {
+		t.Errorf("rendered formula missing Homebrew Sorbet sigil:\n%s", contents)
+	}
 	if !strings.Contains(contents, "\n  depends_on :macos\n\n  on_macos do") {
 		t.Errorf("rendered formula missing top-level macOS dependency:\n%s", contents)
 	}
@@ -68,6 +79,67 @@ func TestRenderHomebrewFormulaRejectsMissingOrDuplicateChecksums(t *testing.T) {
 	}
 }
 
+func TestRenderHomebrewFormulaRejectsUnsafeVersionsBeforeWritingOutput(t *testing.T) {
+	root, script := renderFormulaPaths(t)
+	checksums := filepath.Join(t.TempDir(), "checksums.txt")
+	if err := os.WriteFile(checksums, []byte(strings.Join([]string{
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  workbook_0.1.0_darwin_arm64.tar.gz",
+		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  workbook_0.1.0_darwin_amd64.tar.gz",
+		"",
+	}, "\n")), 0o600); err != nil {
+		t.Fatalf("write checksums: %v", err)
+	}
+
+	for _, version := range []string{"v0.1.0", "0.1", "01.2.3", "1.2.3-alpha", "1.2.3/../../formula"} {
+		t.Run(version, func(t *testing.T) {
+			output := filepath.Join(t.TempDir(), "workbook.rb")
+			command := exec.Command(script, version, checksums, output, "dgoings/workbook")
+			command.Dir = root
+			result, err := command.CombinedOutput()
+			if err == nil {
+				t.Fatalf("formula renderer accepted unsafe version %q; output = %q", version, result)
+			}
+			if _, statErr := os.Stat(output); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("formula renderer created output for unsafe version %q: %v", version, statErr)
+			}
+		})
+	}
+}
+
+func TestValidateReleaseTagAcceptsOnlySafeCoreSemVer(t *testing.T) {
+	root, _ := renderFormulaPaths(t)
+	script := filepath.Join(root, "scripts", "validate-release-tag.sh")
+
+	command := exec.Command(script, "v0.1.0")
+	command.Dir = root
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("validate safe release tag: %v\n%s", err, output)
+	}
+	if string(output) != "0.1.0\n" {
+		t.Fatalf("validated version = %q, want 0.1.0", output)
+	}
+
+	for _, tag := range []string{
+		"0.1.0",
+		"v0.1",
+		"v01.2.3",
+		"v1.02.3",
+		"v1.2.03",
+		"v1.2.3-alpha",
+		"v1.2.3+build",
+		"v1.2.3/../../release",
+	} {
+		t.Run(tag, func(t *testing.T) {
+			command := exec.Command(script, tag)
+			command.Dir = root
+			if output, err := command.CombinedOutput(); err == nil {
+				t.Fatalf("tag validator accepted %q; output = %q", tag, output)
+			}
+		})
+	}
+}
+
 func TestReleaseWorkflowIsTagOnlyAndPublishesFormula(t *testing.T) {
 	root, _ := renderFormulaPaths(t)
 	workflow, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "release.yml"))
@@ -78,16 +150,25 @@ func TestReleaseWorkflowIsTagOnlyAndPublishesFormula(t *testing.T) {
 	for _, want := range []string{
 		"push:",
 		"tags: [\"v*\"]",
+		"environment: release",
+		"runs-on: ubuntu-24.04",
+		"Validate release tag",
+		"go-version: \"1.26.5\"",
 		"go test ./...",
-		"workbook_${VERSION}_darwin_arm64.tar.gz",
-		"workbook_${VERSION}_darwin_amd64.tar.gz",
-		"checksums.txt",
-		"gh release create",
+		"scripts/release.sh \"${VERSION}\" dist",
+		"scripts/publish-release.sh",
 		"HOMEBREW_TAP_TOKEN",
 		"dgoings/homebrew-tap",
+		"actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+		"actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c",
 	} {
 		if !strings.Contains(contents, want) {
 			t.Errorf("workflow missing %q:\n%s", want, contents)
+		}
+	}
+	for _, forbidden := range []string{"--clobber", "actions/checkout@v", "actions/setup-go@v", "ubuntu-latest"} {
+		if strings.Contains(contents, forbidden) {
+			t.Errorf("workflow contains unpinned or destructive release behavior %q:\n%s", forbidden, contents)
 		}
 	}
 	if err := validateTagOnlyPushTrigger(workflow); err != nil {
@@ -103,16 +184,19 @@ func TestReleaseWorkflowIsTagOnlyAndPublishesFormula(t *testing.T) {
 	if strings.Count(contents, "secrets.HOMEBREW_TAP_TOKEN") != 1 || !strings.Contains(contents, "repository: dgoings/homebrew-tap\n          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}") {
 		t.Errorf("tap credential is not scoped to the tap update:\n%s", contents)
 	}
+	validateIndex := strings.Index(contents, "name: Validate release tag")
+	secretIndex := strings.Index(contents, "secrets.HOMEBREW_TAP_TOKEN")
+	publishIndex := strings.Index(contents, "scripts/publish-release.sh")
+	if validateIndex < 0 || secretIndex < 0 || publishIndex < 0 || !(validateIndex < secretIndex && validateIndex < publishIndex) {
+		t.Errorf("release tag must be validated before tap credential or publication use:\n%s", contents)
+	}
 }
 
-func TestTrackedFormulaDeclaresMacOSDependency(t *testing.T) {
+func TestRepositoryDoesNotShipPlaceholderHomebrewFormula(t *testing.T) {
 	root, _ := renderFormulaPaths(t)
-	formula, err := os.ReadFile(filepath.Join(root, "Formula", "workbook.rb"))
-	if err != nil {
-		t.Fatalf("read tracked formula: %v", err)
-	}
-	if !strings.Contains(string(formula), "\n  depends_on :macos\n\n  on_macos do") {
-		t.Errorf("tracked formula missing top-level macOS dependency:\n%s", formula)
+	_, err := os.Stat(filepath.Join(root, "Formula", "workbook.rb"))
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("tracked Formula/workbook.rb exists or cannot be checked: %v", err)
 	}
 }
 
