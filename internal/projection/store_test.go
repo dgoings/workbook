@@ -128,6 +128,50 @@ func TestStoreRebuildsMalformedOrWrongProjectDatabase(t *testing.T) {
 	}
 }
 
+func TestOpenRebuildsMalformedCacheFromCanonicalGit(t *testing.T) {
+	ctx := context.Background()
+	repository, config := initializeWorkbook(t, testrepo.New(t))
+	created := createTask(t, repository, config, "Canonical task")
+	cachePath := filepath.Join(repository.CommonGitDir, "workbook", cacheFilename)
+	if err := os.WriteFile(cachePath, []byte("not a sqlite database"), 0o600); err != nil {
+		t.Fatalf("WriteFile(cache) error = %v", err)
+	}
+
+	store, err := Open(ctx, repository, config)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	snapshots, err := store.List(ctx, config)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(snapshots) != 1 || snapshots[0].State.TaskID != created.ID || snapshots[0].State.Task.Title != "Canonical task" {
+		t.Fatalf("recovered snapshots = %#v, want canonical task", snapshots)
+	}
+}
+
+func TestStoreRebuildsMetadataMatchingDatabaseMissingRequiredTable(t *testing.T) {
+	ctx := context.Background()
+	repository, config := initializeWorkbook(t, testrepo.New(t))
+	created := createTask(t, repository, config, "Canonical task")
+	cachePath := filepath.Join(repository.CommonGitDir, "workbook", cacheFilename)
+	if err := writeIncompleteProjectionDatabase(cachePath, config.ProjectID); err != nil {
+		t.Fatalf("writeIncompleteProjectionDatabase() error = %v", err)
+	}
+
+	store, err := Open(ctx, repository, config)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	snapshots, err := store.List(ctx, config)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(snapshots) != 1 || snapshots[0].State.TaskID != created.ID || snapshots[0].State.Task.Title != "Canonical task" {
+		t.Fatalf("recovered snapshots = %#v, want canonical task", snapshots)
+	}
+}
+
 func TestStoreQueriesAndRejectsWrites(t *testing.T) {
 	ctx := context.Background()
 	config := testConfig()
@@ -266,5 +310,18 @@ func writeDatabaseMetadata(path, version, projectID string) error {
 		return err
 	}
 	_, err = db.Exec(`INSERT INTO projection_meta (key, value) VALUES ('schema_version', ?), ('project_id', ?)`, version, projectID)
+	return err
+}
+
+func writeIncompleteProjectionDatabase(path, projectID string) error {
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE projection_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`); err != nil {
+		return err
+	}
+	_, err = db.Exec(`INSERT INTO projection_meta (key, value) VALUES ('schema_version', ?), ('project_id', ?)`, schemaVersion, projectID)
 	return err
 }

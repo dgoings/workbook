@@ -223,7 +223,25 @@ func (s *Store) metaMatches(ctx context.Context) bool {
 		}
 		values[key] = value
 	}
-	return rows.Err() == nil && values["schema_version"] == schemaVersion && values["project_id"] == s.config.ProjectID
+	return rows.Err() == nil && values["schema_version"] == schemaVersion && values["project_id"] == s.config.ProjectID && s.requiredSchemaExists(ctx)
+}
+
+func (s *Store) requiredSchemaExists(ctx context.Context) bool {
+	for _, query := range []string{
+		`SELECT key, value FROM projection_meta LIMIT 0`,
+		`SELECT task_id, head, project_id, history_generation, logical_clock, title, description, status, priority, rank, created_at, updated_at, deleted FROM tasks LIMIT 0`,
+		`SELECT task_id, label FROM task_labels LIMIT 0`,
+		`SELECT task_id, dependency_id FROM task_dependencies LIMIT 0`,
+	} {
+		rows, err := s.db.QueryContext(ctx, query)
+		if err != nil {
+			return false
+		}
+		if err := rows.Close(); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Store) refreshChangedHeads(ctx context.Context, heads []gitstore.TaskHead) error {
@@ -497,13 +515,9 @@ func (s *Store) replaceDatabase(ctx context.Context) error {
 	return nil
 }
 
-func openDatabase(ctx context.Context, path string) (*sql.DB, error) {
+func openDatabase(_ context.Context, path string) (*sql.DB, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
-		return nil, core.Wrap(core.CategoryOperational, "cannot open projection cache", err)
-	}
-	if err := db.PingContext(ctx); err != nil {
-		db.Close()
 		return nil, core.Wrap(core.CategoryOperational, "cannot open projection cache", err)
 	}
 	return db, nil
