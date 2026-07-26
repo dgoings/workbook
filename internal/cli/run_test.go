@@ -105,7 +105,7 @@ func TestRunReportsGitProcessFailuresAsOperationalWithoutUsage(t *testing.T) {
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 
 	t.Run("JSON", func(t *testing.T) {
-		code, stdout, stderr := run(t, repository, "list", "--json")
+		code, stdout, stderr := run(t, repository, "create", "Needs actor", "--json")
 		if code != 1 {
 			t.Fatalf("Run() code = %d, want 1; stderr = %q", code, stderr)
 		}
@@ -126,7 +126,7 @@ func TestRunReportsGitProcessFailuresAsOperationalWithoutUsage(t *testing.T) {
 	})
 
 	t.Run("human", func(t *testing.T) {
-		code, stdout, stderr := run(t, repository, "list")
+		code, stdout, stderr := run(t, repository, "create", "Needs actor")
 		if code != 1 {
 			t.Fatalf("Run() code = %d, want 1; stderr = %q", code, stderr)
 		}

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -18,7 +19,12 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const cacheFilename = "cache.sqlite"
+const (
+	cacheFilename     = "cache.sqlite"
+	cacheRecoveryHint = "run `workbook rebuild` to recreate the SQLite cache"
+)
+
+var errStaleProjectionRefresh = errors.New("projection cache changed during refresh")
 
 type taskHeadSource interface {
 	ListTaskHeads(context.Context, core.ProjectConfig) ([]gitstore.TaskHead, error)
@@ -39,6 +45,7 @@ func (s repositorySource) ReadTaskHead(ctx context.Context, config core.ProjectC
 
 // Store is a read-only task store backed by a disposable SQLite projection.
 type Store struct {
+	mu        sync.Mutex
 	source    taskHeadSource
 	config    core.ProjectConfig
 	cachePath string
@@ -65,7 +72,7 @@ func openStore(ctx context.Context, source taskHeadSource, config core.ProjectCo
 		return nil, core.Errorf(core.CategoryOperational, "projection cache path is required")
 	}
 	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
-		return nil, core.Wrap(core.CategoryOperational, "cannot create projection cache directory", err)
+		return nil, cacheError("create projection cache directory", err)
 	}
 	db, err := openDatabase(ctx, cachePath)
 	if err != nil {
@@ -82,20 +89,38 @@ func (s *Store) CachePath() string {
 // Refresh validates task-ref tips, applying only changed tip checkpoints to
 // the cache. Git remains the canonical source for every changed task.
 func (s *Store) Refresh(ctx context.Context) error {
-	heads, err := s.source.ListTaskHeads(ctx, s.config)
-	if err != nil {
-		return err
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.refreshLocked(ctx)
+}
+
+func (s *Store) refreshLocked(ctx context.Context) error {
+	for attempt := 0; attempt < 2; attempt++ {
+		heads, err := s.source.ListTaskHeads(ctx, s.config)
+		if err != nil {
+			return err
+		}
+		if !s.cacheExists() || !s.metaMatches(ctx) {
+			_, err := s.rebuildLocked(ctx)
+			return err
+		}
+		err = s.refreshChangedHeads(ctx, heads)
+		if !errors.Is(err, errStaleProjectionRefresh) {
+			return err
+		}
 	}
-	if !s.cacheExists() || !s.metaMatches(ctx) {
-		_, err := s.Rebuild(ctx)
-		return err
-	}
-	return s.refreshChangedHeads(ctx, heads)
+	return cacheError("refresh projection cache after a concurrent update", errStaleProjectionRefresh)
 }
 
 // Rebuild recreates the projection from all currently visible Git task heads.
 // It is intentionally a cache-only operation: no Git refs or objects change.
 func (s *Store) Rebuild(ctx context.Context) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.rebuildLocked(ctx)
+}
+
+func (s *Store) rebuildLocked(ctx context.Context) (int, error) {
 	for attempt := 0; attempt < 2; attempt++ {
 		heads, err := s.source.ListTaskHeads(ctx, s.config)
 		if err != nil {
@@ -127,7 +152,9 @@ func (s *Store) List(ctx context.Context, config core.ProjectConfig) ([]core.Sna
 	if err := s.validateConfig(config); err != nil {
 		return nil, err
 	}
-	if err := s.Refresh(ctx); err != nil {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.refreshLocked(ctx); err != nil {
 		return nil, err
 	}
 	return s.querySnapshots(ctx)
@@ -141,7 +168,9 @@ func (s *Store) Get(ctx context.Context, config core.ProjectConfig, taskID strin
 	if err := core.ValidateTaskID(config.Key, taskID); err != nil {
 		return core.Snapshot{}, core.Wrap(core.CategoryValidation, "task ID is invalid", err)
 	}
-	if err := s.Refresh(ctx); err != nil {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.refreshLocked(ctx); err != nil {
 		return core.Snapshot{}, err
 	}
 	snapshot, found, err := s.querySnapshot(ctx, taskID)
@@ -162,7 +191,9 @@ func (s *Store) Resolve(ctx context.Context, config core.ProjectConfig, prefix s
 	if strings.TrimSpace(prefix) == "" {
 		return "", core.Errorf(core.CategoryValidation, "task ID prefix must not be blank")
 	}
-	if err := s.Refresh(ctx); err != nil {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.refreshLocked(ctx); err != nil {
 		return "", err
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT task_id FROM tasks ORDER BY task_id`)
@@ -281,7 +312,7 @@ func (s *Store) refreshChangedHeads(ctx context.Context, heads []gitstore.TaskHe
 		}
 		snapshots = append(snapshots, snapshot)
 	}
-	return s.applyChanges(ctx, snapshots, removed)
+	return s.applyChanges(ctx, cached, snapshots, removed)
 }
 
 func (s *Store) cachedHeads(ctx context.Context) (map[string]string, error) {
@@ -307,11 +338,11 @@ func (s *Store) cachedHeads(ctx context.Context) (map[string]string, error) {
 func replaceSnapshots(ctx context.Context, db *sql.DB, snapshots []core.Snapshot) error {
 	transaction, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return core.Wrap(core.CategoryOperational, "cannot begin projection rebuild", err)
+		return cacheError("begin projection rebuild", err)
 	}
 	defer transaction.Rollback()
 	if _, err := transaction.ExecContext(ctx, `DELETE FROM task_labels; DELETE FROM task_dependencies; DELETE FROM tasks`); err != nil {
-		return core.Wrap(core.CategoryOperational, "cannot clear projection rebuild", err)
+		return cacheError("clear projection rebuild", err)
 	}
 	for _, snapshot := range snapshots {
 		if err := upsertSnapshot(ctx, transaction, snapshot); err != nil {
@@ -319,17 +350,35 @@ func replaceSnapshots(ctx context.Context, db *sql.DB, snapshots []core.Snapshot
 		}
 	}
 	if err := transaction.Commit(); err != nil {
-		return core.Wrap(core.CategoryOperational, "cannot commit projection rebuild", err)
+		return cacheError("commit projection rebuild", err)
 	}
 	return nil
 }
 
-func (s *Store) applyChanges(ctx context.Context, snapshots []core.Snapshot, removed []string) error {
+func (s *Store) applyChanges(ctx context.Context, expectedHeads map[string]string, snapshots []core.Snapshot, removed []string) error {
 	transaction, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return s.databaseError("begin projection refresh", err)
 	}
 	defer transaction.Rollback()
+	for _, taskID := range removed {
+		matches, err := cachedHeadMatches(ctx, transaction, taskID, expectedHeads[taskID])
+		if err != nil {
+			return err
+		}
+		if !matches {
+			return errStaleProjectionRefresh
+		}
+	}
+	for _, snapshot := range snapshots {
+		matches, err := cachedHeadMatches(ctx, transaction, snapshot.State.TaskID, expectedHeads[snapshot.State.TaskID])
+		if err != nil {
+			return err
+		}
+		if !matches {
+			return errStaleProjectionRefresh
+		}
+	}
 	for _, taskID := range removed {
 		if err := deleteTask(ctx, transaction, taskID); err != nil {
 			return err
@@ -349,10 +398,22 @@ func (s *Store) applyChanges(ctx context.Context, snapshots []core.Snapshot, rem
 	return nil
 }
 
+func cachedHeadMatches(ctx context.Context, transaction *sql.Tx, taskID, expectedHead string) (bool, error) {
+	var actualHead string
+	err := transaction.QueryRowContext(ctx, `SELECT head FROM tasks WHERE task_id = ?`, taskID).Scan(&actualHead)
+	if errors.Is(err, sql.ErrNoRows) {
+		return expectedHead == "", nil
+	}
+	if err != nil {
+		return false, cacheError("read projected task head during refresh", err)
+	}
+	return actualHead == expectedHead, nil
+}
+
 func deleteTask(ctx context.Context, transaction *sql.Tx, taskID string) error {
 	for _, table := range []string{"task_labels", "task_dependencies", "tasks"} {
 		if _, err := transaction.ExecContext(ctx, `DELETE FROM `+table+` WHERE task_id = ?`, taskID); err != nil {
-			return core.Wrap(core.CategoryOperational, "cannot remove projected task", err)
+			return cacheError("remove projected task", err)
 		}
 	}
 	return nil
@@ -373,7 +434,7 @@ func upsertSnapshot(ctx context.Context, transaction *sql.Tx, snapshot core.Snap
 		state.TaskID, snapshot.Head, state.ProjectID, state.History.Generation, int64(state.LogicalClock), state.Task.Title, state.Task.Description,
 		string(state.Task.Status), string(state.Task.Priority), state.Task.Rank, formatTime(state.Task.CreatedAt), formatTime(state.Task.UpdatedAt), deleted)
 	if err != nil {
-		return core.Wrap(core.CategoryOperational, "cannot insert projected task", err)
+		return cacheError("insert projected task", err)
 	}
 	labels := append([]string(nil), state.Task.Labels...)
 	dependencies := append([]string(nil), state.Task.Dependencies...)
@@ -381,45 +442,116 @@ func upsertSnapshot(ctx context.Context, transaction *sql.Tx, snapshot core.Snap
 	sort.Strings(dependencies)
 	for _, label := range labels {
 		if _, err := transaction.ExecContext(ctx, `INSERT INTO task_labels (task_id, label) VALUES (?, ?)`, state.TaskID, label); err != nil {
-			return core.Wrap(core.CategoryOperational, "cannot insert projected task label", err)
+			return cacheError("insert projected task label", err)
 		}
 	}
 	for _, dependency := range dependencies {
 		if _, err := transaction.ExecContext(ctx, `INSERT INTO task_dependencies (task_id, dependency_id) VALUES (?, ?)`, state.TaskID, dependency); err != nil {
-			return core.Wrap(core.CategoryOperational, "cannot insert projected task dependency", err)
+			return cacheError("insert projected task dependency", err)
 		}
 	}
 	return nil
 }
 
 func (s *Store) querySnapshots(ctx context.Context) ([]core.Snapshot, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT task_id FROM tasks ORDER BY task_id`)
+	transaction, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, s.databaseError("begin projected task query", err)
+	}
+	defer transaction.Rollback()
+
+	rows, err := transaction.QueryContext(ctx, `
+		SELECT task_id, head, project_id, history_generation, logical_clock, title, description, status, priority, rank, created_at, updated_at, deleted
+		FROM tasks ORDER BY task_id`)
 	if err != nil {
 		return nil, s.databaseError("query projected tasks", err)
 	}
-	defer rows.Close()
 	var snapshots []core.Snapshot
+	byTaskID := make(map[string]int)
 	for rows.Next() {
-		var taskID string
-		if err := rows.Scan(&taskID); err != nil {
-			return nil, s.databaseError("read projected task ID", err)
-		}
-		snapshot, found, err := s.querySnapshot(ctx, taskID)
+		snapshot, err := scanSnapshotScalars(rows)
 		if err != nil {
-			return nil, err
+			_ = rows.Close()
+			if core.CategoryOf(err) == core.CategoryCorruptData {
+				return nil, err
+			}
+			return nil, s.databaseError("read projected task", err)
 		}
-		if !found {
-			return nil, core.Errorf(core.CategoryCorruptData, "projected task disappeared during query")
+		if _, found := byTaskID[snapshot.State.TaskID]; found {
+			_ = rows.Close()
+			return nil, core.Errorf(core.CategoryCorruptData, "projected task %q appears more than once", snapshot.State.TaskID)
 		}
+		byTaskID[snapshot.State.TaskID] = len(snapshots)
 		snapshots = append(snapshots, snapshot)
 	}
 	if err := rows.Err(); err != nil {
+		_ = rows.Close()
 		return nil, s.databaseError("read projected tasks", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, s.databaseError("close projected task query", err)
+	}
+
+	labelRows, err := transaction.QueryContext(ctx, `SELECT task_id, label FROM task_labels ORDER BY task_id, label`)
+	if err != nil {
+		return nil, s.databaseError("query projected task labels", err)
+	}
+	for labelRows.Next() {
+		var taskID, label string
+		if err := labelRows.Scan(&taskID, &label); err != nil {
+			_ = labelRows.Close()
+			return nil, s.databaseError("read projected task label", err)
+		}
+		index, found := byTaskID[taskID]
+		if !found {
+			_ = labelRows.Close()
+			return nil, core.Errorf(core.CategoryCorruptData, "projected label references missing task %q", taskID)
+		}
+		snapshots[index].State.Task.Labels = append(snapshots[index].State.Task.Labels, label)
+	}
+	if err := labelRows.Err(); err != nil {
+		_ = labelRows.Close()
+		return nil, s.databaseError("read projected task labels", err)
+	}
+	if err := labelRows.Close(); err != nil {
+		return nil, s.databaseError("close projected task label query", err)
+	}
+
+	dependencyRows, err := transaction.QueryContext(ctx, `SELECT task_id, dependency_id FROM task_dependencies ORDER BY task_id, dependency_id`)
+	if err != nil {
+		return nil, s.databaseError("query projected task dependencies", err)
+	}
+	for dependencyRows.Next() {
+		var taskID, dependencyID string
+		if err := dependencyRows.Scan(&taskID, &dependencyID); err != nil {
+			_ = dependencyRows.Close()
+			return nil, s.databaseError("read projected task dependency", err)
+		}
+		index, found := byTaskID[taskID]
+		if !found {
+			_ = dependencyRows.Close()
+			return nil, core.Errorf(core.CategoryCorruptData, "projected dependency references missing task %q", taskID)
+		}
+		snapshots[index].State.Task.Dependencies = append(snapshots[index].State.Task.Dependencies, dependencyID)
+	}
+	if err := dependencyRows.Err(); err != nil {
+		_ = dependencyRows.Close()
+		return nil, s.databaseError("read projected task dependencies", err)
+	}
+	if err := dependencyRows.Close(); err != nil {
+		return nil, s.databaseError("close projected task dependency query", err)
+	}
+	if err := transaction.Commit(); err != nil {
+		return nil, s.databaseError("commit projected task query", err)
 	}
 	return snapshots, nil
 }
 
-func (s *Store) querySnapshot(ctx context.Context, taskID string) (core.Snapshot, bool, error) {
+type rowScanner interface {
+	Scan(...any) error
+}
+
+func scanSnapshotScalars(scanner rowScanner) (core.Snapshot, error) {
 	var (
 		snapshot core.Snapshot
 		state    core.StateDocument
@@ -430,27 +562,47 @@ func (s *Store) querySnapshot(ctx context.Context, taskID string) (core.Snapshot
 		deleted  int
 		clock    int64
 	)
-	err := s.db.QueryRowContext(ctx, `
-		SELECT head, project_id, history_generation, logical_clock, title, description, status, priority, rank, created_at, updated_at, deleted
-		FROM tasks WHERE task_id = ?`, taskID).Scan(
-		&snapshot.Head, &state.ProjectID, &state.History.Generation, &clock, &state.Task.Title, &state.Task.Description,
-		&status, &priority, &state.Task.Rank, &created, &updated, &deleted)
+	if err := scanner.Scan(
+		&state.TaskID, &snapshot.Head, &state.ProjectID, &state.History.Generation, &clock, &state.Task.Title, &state.Task.Description,
+		&status, &priority, &state.Task.Rank, &created, &updated, &deleted,
+	); err != nil {
+		return core.Snapshot{}, err
+	}
+	if clock < 0 || (deleted != 0 && deleted != 1) {
+		return core.Snapshot{}, core.Errorf(core.CategoryCorruptData, "projected task %q has invalid scalar values", state.TaskID)
+	}
+	createdAt, err := time.Parse(time.RFC3339Nano, created)
+	if err != nil {
+		return core.Snapshot{}, core.Wrap(core.CategoryCorruptData, "projected task has invalid creation time", err)
+	}
+	updatedAt, err := time.Parse(time.RFC3339Nano, updated)
+	if err != nil {
+		return core.Snapshot{}, core.Wrap(core.CategoryCorruptData, "projected task has invalid update time", err)
+	}
+	state.Format = "workbook.task-state"
+	state.Version = 1
+	state.LogicalClock = uint64(clock)
+	state.Task.Status = core.Status(status)
+	state.Task.Priority = core.Priority(priority)
+	state.Task.CreatedAt = createdAt
+	state.Task.UpdatedAt = updatedAt
+	state.Task.Deleted = deleted == 1
+	snapshot.State = state
+	return snapshot, nil
+}
+
+func (s *Store) querySnapshot(ctx context.Context, taskID string) (core.Snapshot, bool, error) {
+	snapshot, err := scanSnapshotScalars(s.db.QueryRowContext(ctx, `
+		SELECT task_id, head, project_id, history_generation, logical_clock, title, description, status, priority, rank, created_at, updated_at, deleted
+		FROM tasks WHERE task_id = ?`, taskID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return core.Snapshot{}, false, nil
 	}
 	if err != nil {
+		if core.CategoryOf(err) == core.CategoryCorruptData {
+			return core.Snapshot{}, false, err
+		}
 		return core.Snapshot{}, false, s.databaseError("query projected task", err)
-	}
-	if clock < 0 || (deleted != 0 && deleted != 1) {
-		return core.Snapshot{}, false, core.Errorf(core.CategoryCorruptData, "projected task %q has invalid scalar values", taskID)
-	}
-	createdAt, err := time.Parse(time.RFC3339Nano, created)
-	if err != nil {
-		return core.Snapshot{}, false, core.Wrap(core.CategoryCorruptData, "projected task has invalid creation time", err)
-	}
-	updatedAt, err := time.Parse(time.RFC3339Nano, updated)
-	if err != nil {
-		return core.Snapshot{}, false, core.Wrap(core.CategoryCorruptData, "projected task has invalid update time", err)
 	}
 	labels, err := s.queryStrings(ctx, `SELECT label FROM task_labels WHERE task_id = ? ORDER BY label`, taskID)
 	if err != nil {
@@ -460,18 +612,8 @@ func (s *Store) querySnapshot(ctx context.Context, taskID string) (core.Snapshot
 	if err != nil {
 		return core.Snapshot{}, false, err
 	}
-	state.Format = "workbook.task-state"
-	state.Version = 1
-	state.TaskID = taskID
-	state.LogicalClock = uint64(clock)
-	state.Task.Status = core.Status(status)
-	state.Task.Priority = core.Priority(priority)
-	state.Task.Labels = labels
-	state.Task.Dependencies = dependencies
-	state.Task.CreatedAt = createdAt
-	state.Task.UpdatedAt = updatedAt
-	state.Task.Deleted = deleted == 1
-	snapshot.State = state
+	snapshot.State.Task.Labels = labels
+	snapshot.State.Task.Dependencies = dependencies
 	return snapshot, true, nil
 }
 
@@ -498,12 +640,12 @@ func (s *Store) queryStrings(ctx context.Context, query, taskID string) ([]strin
 func (s *Store) buildTemporaryDatabase(ctx context.Context, heads []gitstore.TaskHead) (string, error) {
 	temporary, err := os.CreateTemp(filepath.Dir(s.cachePath), "."+filepath.Base(s.cachePath)+"-*.tmp")
 	if err != nil {
-		return "", core.Wrap(core.CategoryOperational, "cannot create temporary projection cache", err)
+		return "", cacheError("create temporary projection cache", err)
 	}
 	temporaryPath := temporary.Name()
 	if err := temporary.Close(); err != nil {
 		_ = os.Remove(temporaryPath)
-		return "", core.Wrap(core.CategoryOperational, "cannot close temporary projection cache", err)
+		return "", cacheError("close temporary projection cache", err)
 	}
 
 	db, err := openDatabase(ctx, temporaryPath)
@@ -516,11 +658,11 @@ func (s *Store) buildTemporaryDatabase(ctx context.Context, heads []gitstore.Tas
 	}()
 	if _, err := db.ExecContext(ctx, schema); err != nil {
 		_ = os.Remove(temporaryPath)
-		return "", core.Wrap(core.CategoryOperational, "cannot create temporary projection schema", err)
+		return "", cacheError("create temporary projection schema", err)
 	}
 	if _, err := db.ExecContext(ctx, `INSERT INTO projection_meta (key, value) VALUES ('schema_version', ?), ('project_id', ?)`, schemaVersion, s.config.ProjectID); err != nil {
 		_ = os.Remove(temporaryPath)
-		return "", core.Wrap(core.CategoryOperational, "cannot initialize temporary projection metadata", err)
+		return "", cacheError("initialize temporary projection metadata", err)
 	}
 	snapshots := make([]core.Snapshot, 0, len(heads))
 	for _, head := range heads {
@@ -551,9 +693,9 @@ func (s *Store) replaceAtomically(ctx context.Context, temporary string) error {
 	}
 	if err := rename(temporary, s.cachePath); err != nil {
 		if reopenErr := s.reopenDatabase(ctx); reopenErr != nil {
-			return core.Wrap(core.CategoryOperational, "cannot replace projection cache and cannot reopen previous cache", errors.Join(err, reopenErr))
+			return cacheError("replace projection cache and reopen previous cache", errors.Join(err, reopenErr))
 		}
-		return core.Wrap(core.CategoryOperational, "cannot replace projection cache", err)
+		return cacheError("replace projection cache", err)
 	}
 	return s.reopenDatabase(ctx)
 }
@@ -586,15 +728,19 @@ func equalHeads(left, right []gitstore.TaskHead) bool {
 func openDatabase(_ context.Context, path string) (*sql.DB, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
-		return nil, core.Wrap(core.CategoryOperational, "cannot open projection cache", err)
+		return nil, cacheError("open projection cache", err)
 	}
 	return db, nil
 }
 
 func (s *Store) databaseError(action string, err error) error {
-	return core.Wrap(core.CategoryOperational, fmt.Sprintf("cannot %s", action), err)
+	return cacheError(action, err)
+}
+
+func cacheError(action string, err error) error {
+	return core.Wrap(core.CategoryOperational, fmt.Sprintf("cannot %s; %s", action, cacheRecoveryHint), err)
 }
 
 func formatTime(value time.Time) string {
-	return value.UTC().Format(time.RFC3339Nano)
+	return value.Format(time.RFC3339Nano)
 }
