@@ -108,6 +108,50 @@ func TestPublishReleaseRollsBackTapAndNewDraftWhenPublicationFails(t *testing.T)
 	}
 }
 
+func TestPublishReleaseNeverDeletesPublicReleaseAfterAmbiguousPublishFailure(t *testing.T) {
+	root, _ := renderFormulaPaths(t)
+	dist := writeReleaseFixture(t, "0.1.0")
+	tap, remote := newTapRepository(t)
+	fakeBin, fakeGitHub := newFakeGitHubCLI(t)
+
+	output, err := runPublishReleaseCommand(
+		root,
+		fakeBin,
+		fakeGitHub,
+		tap,
+		dist,
+		[]string{"FAKE_GH_PUBLISH_THEN_FAIL=1"},
+	)
+	if err == nil {
+		t.Fatalf("publisher reported success after ambiguous publication failure; output = %q", output)
+	}
+	state, readErr := os.ReadFile(filepath.Join(fakeGitHub, "state"))
+	if readErr != nil {
+		t.Fatalf("read release state after ambiguous publication failure: %v", readErr)
+	}
+	if strings.TrimSpace(string(state)) != "published" {
+		t.Fatalf("release state = %q, want published release preserved", state)
+	}
+	if _, statErr := os.Stat(filepath.Join(fakeGitHub, "assets")); statErr != nil {
+		t.Fatalf("public release assets were deleted: %v", statErr)
+	}
+	if _, showErr := exec.Command("git", "-C", remote, "show", "main:Formula/workbook.rb").CombinedOutput(); showErr == nil {
+		t.Fatal("tap formula remains on remote after ambiguous publication rollback")
+	}
+
+	logContents, readErr := os.ReadFile(filepath.Join(fakeGitHub, "commands.log"))
+	if readErr != nil {
+		t.Fatalf("read fake gh log: %v", readErr)
+	}
+	log := string(logContents)
+	if strings.Contains(log, "release delete ") {
+		t.Fatalf("publisher deleted a public release after ambiguous publication:\n%s", log)
+	}
+	if count := strings.Count(log, "release view v0.1.0"); count < 2 {
+		t.Fatalf("release state lookup count = %d, want fresh rollback confirmation; log:\n%s", count, log)
+	}
+}
+
 func writeReleaseFixture(t *testing.T, version string) string {
 	t.Helper()
 	dist := t.TempDir()
@@ -212,6 +256,11 @@ case "${command}" in
 		echo draft > "${FAKE_GH_ROOT}/state"
 		;;
 	edit)
+		if [ "${FAKE_GH_PUBLISH_THEN_FAIL:-0}" = 1 ]; then
+			echo published > "${FAKE_GH_ROOT}/state"
+			echo "simulated ambiguous publish failure" >&2
+			exit 1
+		fi
 		if [ "${FAKE_GH_FAIL_PUBLISH:-0}" = 1 ]; then
 			echo "simulated publish failure" >&2
 			exit 1

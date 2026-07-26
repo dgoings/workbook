@@ -56,11 +56,17 @@ rollback() {
 		fi
 	fi
 	if [ "${created_release}" -eq 1 ]; then
-		echo "workbook release: deleting newly-created draft ${tag}" >&2
-		if gh release delete "${tag}" --repo "${repository}" --yes; then
-			:
+		rollback_release_is_draft=
+		if rollback_release_is_draft=$(gh release view "${tag}" --repo "${repository}" --json isDraft --jq .isDraft 2>/dev/null) &&
+			[ "${rollback_release_is_draft}" = true ]; then
+			echo "workbook release: deleting confirmed draft ${tag}" >&2
+			if gh release delete "${tag}" --repo "${repository}" --yes; then
+				:
+			else
+				echo "workbook release: automatic draft deletion failed" >&2
+			fi
 		else
-			echo "workbook release: automatic draft deletion failed" >&2
+			echo "workbook release: preserving ${tag}; rollback could not confirm it is still a draft" >&2
 		fi
 	fi
 }

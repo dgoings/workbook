@@ -150,6 +150,8 @@ func TestReleaseWorkflowIsTagOnlyAndPublishesFormula(t *testing.T) {
 	for _, want := range []string{
 		"push:",
 		"tags: [\"v*\"]",
+		"group: release-${{ github.ref }}",
+		"cancel-in-progress: false",
 		"environment: release",
 		"runs-on: ubuntu-24.04",
 		"Validate release tag",
@@ -174,12 +176,22 @@ func TestReleaseWorkflowIsTagOnlyAndPublishesFormula(t *testing.T) {
 	if err := validateTagOnlyPushTrigger(workflow); err != nil {
 		t.Errorf("workflow trigger: %v", err)
 	}
+	if err := validateReleaseConcurrency(workflow); err != nil {
+		t.Errorf("workflow concurrency: %v", err)
+	}
 	mutatedWorkflow := bytes.Replace(workflow, []byte(`tags: ["v*"]`), []byte("tags: [\"v*\"]\n    branches: [main]"), 1)
 	if bytes.Equal(mutatedWorkflow, workflow) {
 		t.Fatal("could not add a branches trigger to workflow fixture")
 	}
 	if err := validateTagOnlyPushTrigger(mutatedWorkflow); err == nil {
 		t.Error("tag-only trigger validation accepted push.branches alongside push.tags")
+	}
+	mutatedWorkflow = bytes.Replace(workflow, []byte("cancel-in-progress: false"), []byte("cancel-in-progress: true"), 1)
+	if bytes.Equal(mutatedWorkflow, workflow) {
+		t.Fatal("could not enable release cancellation in workflow fixture")
+	}
+	if err := validateReleaseConcurrency(mutatedWorkflow); err == nil {
+		t.Error("release concurrency validation accepted cancellation of an in-progress tag release")
 	}
 	if strings.Count(contents, "secrets.HOMEBREW_TAP_TOKEN") != 1 || !strings.Contains(contents, "repository: dgoings/homebrew-tap\n          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}") {
 		t.Errorf("tap credential is not scoped to the tap update:\n%s", contents)
@@ -231,6 +243,41 @@ func validateTagOnlyPushTrigger(workflow []byte) error {
 	}
 	if len(patterns) != 1 || patterns[0] != "v*" {
 		return fmt.Errorf("push.tags = %#v, want [v*]", patterns)
+	}
+	return nil
+}
+
+func validateReleaseConcurrency(workflow []byte) error {
+	var document struct {
+		Concurrency map[string]yaml.Node `yaml:"concurrency"`
+	}
+	if err := yaml.Unmarshal(workflow, &document); err != nil {
+		return fmt.Errorf("parse YAML: %w", err)
+	}
+	if len(document.Concurrency) != 2 {
+		return fmt.Errorf("concurrency = %#v, want tag-scoped group with cancellation disabled", document.Concurrency)
+	}
+	groupNode, ok := document.Concurrency["group"]
+	if !ok {
+		return fmt.Errorf("concurrency = %#v, want group", document.Concurrency)
+	}
+	var group string
+	if err := groupNode.Decode(&group); err != nil {
+		return fmt.Errorf("decode concurrency group: %w", err)
+	}
+	if group != "release-${{ github.ref }}" {
+		return fmt.Errorf("concurrency group = %q, want release-${{ github.ref }}", group)
+	}
+	cancelNode, ok := document.Concurrency["cancel-in-progress"]
+	if !ok {
+		return fmt.Errorf("concurrency = %#v, want cancel-in-progress", document.Concurrency)
+	}
+	var cancel bool
+	if err := cancelNode.Decode(&cancel); err != nil {
+		return fmt.Errorf("decode cancel-in-progress: %w", err)
+	}
+	if cancel {
+		return fmt.Errorf("cancel-in-progress = true, want false")
 	}
 	return nil
 }
