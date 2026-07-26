@@ -35,7 +35,7 @@ for architecture in amd64 arm64; do
 			-o "${binary_path}" ./cmd/workbook
 	)
 	touch -t 197001010000 "${binary_path}"
-	COPYFILE_DISABLE=1 tar --format ustar -cf - -C "${temporary_directory}" workbook | gzip -n > "${output_directory}/${archive_name}"
+	COPYFILE_DISABLE=1 tar --format ustar --uid 0 --gid 0 --uname root --gname root -cf - -C "${temporary_directory}" workbook | gzip -n > "${output_directory}/${archive_name}"
 done
 
 (

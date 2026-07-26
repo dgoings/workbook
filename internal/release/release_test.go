@@ -58,6 +58,30 @@ func TestVersionCommandReportsInjectedBuildMetadataAsJSON(t *testing.T) {
 	}
 }
 
+func TestVersionCommandReportsDevelopmentDefaultsAsJSON(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := cli.Run(context.Background(), []string{"version", "--json"}, t.TempDir(), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("workbook version --json exit code = %d, stderr = %q", code, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("workbook version --json stderr = %q, want empty", stderr.String())
+	}
+
+	var result struct {
+		Data struct {
+			Version string `json:"version"`
+			Commit  string `json:"commit"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("decode version JSON: %v; output = %q", err, stdout.String())
+	}
+	if result.Data.Version != "dev" || result.Data.Commit != "unknown" {
+		t.Fatalf("version JSON data = %#v, want development defaults", result.Data)
+	}
+}
+
 func TestReleaseScriptCreatesVerifiedDarwinArchives(t *testing.T) {
 	root, script := releasePaths(t)
 	outputDirectory := t.TempDir()
@@ -161,6 +185,9 @@ func assertExecutableOnlyArchive(t *testing.T, archivePath string) {
 	}
 	if header.Name != "workbook" || header.Typeflag != tar.TypeReg || header.FileInfo().Mode().Perm()&0o111 == 0 {
 		t.Fatalf("archive member = %#v, want executable regular workbook", header)
+	}
+	if header.Uid != 0 || header.Gid != 0 || header.Uname != "root" || header.Gname != "root" {
+		t.Fatalf("archive owner = uid %d gid %d user %q group %q, want normalized root ownership", header.Uid, header.Gid, header.Uname, header.Gname)
 	}
 	if _, err := io.Copy(io.Discard, tarReader); err != nil {
 		t.Fatalf("read archive payload %s: %v", archivePath, err)
