@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/projection"
 	"github.com/dgoings/workbook/internal/testrepo"
 )
 
@@ -104,7 +105,7 @@ func TestRunReportsGitProcessFailuresAsOperationalWithoutUsage(t *testing.T) {
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 
 	t.Run("JSON", func(t *testing.T) {
-		code, stdout, stderr := run(t, repository, "list", "--json")
+		code, stdout, stderr := run(t, repository, "create", "Needs actor", "--json")
 		if code != 1 {
 			t.Fatalf("Run() code = %d, want 1; stderr = %q", code, stderr)
 		}
@@ -125,7 +126,7 @@ func TestRunReportsGitProcessFailuresAsOperationalWithoutUsage(t *testing.T) {
 	})
 
 	t.Run("human", func(t *testing.T) {
-		code, stdout, stderr := run(t, repository, "list")
+		code, stdout, stderr := run(t, repository, "create", "Needs actor")
 		if code != 1 {
 			t.Fatalf("Run() code = %d, want 1; stderr = %q", code, stderr)
 		}
@@ -400,6 +401,75 @@ func TestRunRequiresInitializationAndInitIsIdempotent(t *testing.T) {
 	}
 	if second != stdout {
 		t.Fatalf("second init stdout differs:\nfirst:  %q\nsecond: %q", stdout, second)
+	}
+}
+
+func TestRunRebuildProducesVersionedResult(t *testing.T) {
+	repository := initializedRepository(t)
+	code, _, stderr := run(t, repository, "create", "Projected")
+	if code != 0 || stderr != "" {
+		t.Fatalf("create = (%d, %q)", code, stderr)
+	}
+
+	code, stdout, stderr := run(t, repository, "rebuild", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("rebuild = (%d, %q, %q)", code, stdout, stderr)
+	}
+	result := assertJSONResult(t, stdout, "rebuild")
+	var data struct {
+		TaskCount int    `json:"taskCount"`
+		CachePath string `json:"cachePath"`
+	}
+	if err := json.Unmarshal(result.Data, &data); err != nil {
+		t.Fatalf("decode rebuild result: %v; data = %s", err, result.Data)
+	}
+	if data.TaskCount != 1 || data.CachePath == "" {
+		t.Fatalf("rebuild data = %#v, want one task and a cache path", data)
+	}
+}
+
+func TestReadCommandsRefreshCachedProjectionAfterGitTipAdvances(t *testing.T) {
+	repository := initializedRepository(t)
+	code, stdout, stderr := run(t, repository, "create", "Before advance", "--status", "ready", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("create = (%d, %q, %q)", code, stdout, stderr)
+	}
+	var created core.Task
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "create").Data, &created); err != nil {
+		t.Fatalf("decode created task: %v", err)
+	}
+
+	code, stdout, stderr = run(t, repository, "rebuild", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("rebuild = (%d, %q, %q)", code, stdout, stderr)
+	}
+	readService, err := openReadService(context.Background(), repository)
+	if err != nil {
+		t.Fatalf("openReadService() error = %v", err)
+	}
+	if _, ok := readService.Store.(*projection.Store); !ok {
+		t.Fatalf("openReadService() store = %T, want *projection.Store", readService.Store)
+	}
+
+	code, stdout, stderr = run(t, repository, "update", created.ID, "--title", "After advance", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("update = (%d, %q, %q)", code, stdout, stderr)
+	}
+
+	for _, command := range [][]string{
+		{"list", "--json"},
+		{"show", created.ID, "--json"},
+		{"board", "--json"},
+		{"next", "--json"},
+	} {
+		code, stdout, stderr = run(t, repository, command...)
+		if code != 0 || stderr != "" {
+			t.Fatalf("%s = (%d, %q, %q)", strings.Join(command, " "), code, stdout, stderr)
+		}
+		result := assertJSONResult(t, stdout, command[0])
+		if !strings.Contains(string(result.Data), "After advance") {
+			t.Fatalf("%s data = %s, want advanced title", strings.Join(command, " "), result.Data)
+		}
 	}
 }
 
@@ -684,6 +754,7 @@ func TestREADMEImplementedCommands(t *testing.T) {
 		"workbook depend <task> <dependency> [--json]",
 		"workbook free <task> <dependency> [--json]",
 		"workbook next [--json]",
+		"workbook rebuild [--json]",
 		"workbook fetch [--json]",
 		"workbook push [--json]",
 		"workbook sync [--json]",
@@ -795,7 +866,7 @@ func readmeCommandPolicyViolations(readme string) []string {
 		"init": true, "create": true, "list": true, "board": true,
 		"show": true, "update": true, "delete": true, "fetch": true,
 		"push": true, "sync": true, "hooks": true, "serve": true, "move": true,
-		"depend": true, "free": true, "next": true, "help": true,
+		"depend": true, "free": true, "next": true, "rebuild": true, "help": true,
 	}
 	commandPattern := regexp.MustCompile(`\bworkbook ([a-z][a-z0-9-]*)\b`)
 	var h2, h3 string
@@ -946,6 +1017,57 @@ func TestRunServeUpdatesTaskStatusThroughWebRoute(t *testing.T) {
 	}
 	if serveStdout.Len() != 0 {
 		t.Fatalf("serve stdout = %q, want empty", serveStdout.String())
+	}
+}
+
+func TestRunServeListsGitTipAdvancedAfterStarting(t *testing.T) {
+	repository := initializedRepository(t)
+	code, stdout, stderr := run(t, repository, "create", "Before web advance", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("create = (%d, %q, %q)", code, stdout, stderr)
+	}
+	var created core.Task
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "create").Data, &created); err != nil {
+		t.Fatalf("decode created task: %v", err)
+	}
+
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := probe.Addr().String()
+	if err := probe.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result := make(chan error, 1)
+	var serveStdout, serveStderr bytes.Buffer
+	go func() {
+		result <- runServe(ctx, []string{"--addr", addr}, repository, &serveStdout, &serveStderr)
+	}()
+	waitForHTTP(t, "http://"+addr+"/healthz")
+
+	code, stdout, stderr = run(t, repository, "update", created.ID, "--title", "After web advance", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("update = (%d, %q, %q)", code, stdout, stderr)
+	}
+	response, err := http.Get("http://" + addr + "/api/tasks")
+	if err != nil {
+		t.Fatalf("GET tasks: %v", err)
+	}
+	body, err := io.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "After web advance") {
+		t.Fatalf("GET /api/tasks = (%d, %s), want advanced task", response.StatusCode, body)
+	}
+
+	cancel()
+	if err := <-result; err != nil {
+		t.Fatalf("runServe() error = %v; stderr = %q", err, serveStderr.String())
 	}
 }
 

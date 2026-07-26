@@ -22,7 +22,7 @@ func TestGlobalHelpListsHelpAndTopLevelCommands(t *testing.T) {
 	}
 	assertInOrder(t, output.String(), []string{
 		"  init", "  create", "  list", "  board", "  show", "  update", "  delete", "  move",
-		"  depend", "  free", "  next", "  fetch", "  push", "  sync", "  hooks", "  serve", "  help [command]",
+		"  depend", "  free", "  next", "  rebuild", "  fetch", "  push", "  sync", "  hooks", "  serve", "  help [command]",
 	})
 }
 
@@ -55,6 +55,13 @@ func TestCommandHelp(t *testing.T) {
 			positionals: nil,
 			options:     []string{"json"},
 		},
+		{
+			name:        "rebuild",
+			target:      []string{"rebuild"},
+			synopsis:    "Usage: workbook rebuild [--json]",
+			positionals: nil,
+			options:     []string{"json"},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var output bytes.Buffer
@@ -75,7 +82,7 @@ func TestCommandHelp(t *testing.T) {
 				t.Errorf("help = %q, want Options section", got)
 			}
 			for _, option := range test.options {
-				if count := strings.Count(got, "--"+option); count != 1 {
+				if count := strings.Count(got, "  --"+option); count != 1 {
 					t.Errorf("help = %q, --%s count = %d, want 1", got, option, count)
 				}
 			}
@@ -110,22 +117,23 @@ func TestHooksInstallUsesChildMetadataForParserFlags(t *testing.T) {
 
 func TestHelpMetadataMatchesSchemas(t *testing.T) {
 	want := map[string]map[string]flagKind{
-		"init":   {"key": stringFlag, "json": boolFlag},
-		"create": {"description": stringFlag, "status": stringFlag, "priority": stringFlag, "label": stringFlag, "json": boolFlag},
-		"list":   {"status": stringFlag, "priority": stringFlag, "label": stringFlag, "all": boolFlag, "json": boolFlag},
-		"board":  {"wide": boolFlag, "narrow": boolFlag, "json": boolFlag},
-		"show":   {"json": boolFlag},
-		"update": {"title": stringFlag, "description": stringFlag, "status": stringFlag, "priority": stringFlag, "label": stringFlag, "clear-labels": boolFlag, "json": boolFlag},
-		"delete": {"json": boolFlag},
-		"serve":  {"addr": stringFlag},
-		"fetch":  {"json": boolFlag},
-		"push":   {"json": boolFlag},
-		"sync":   {"json": boolFlag},
-		"hooks":  {},
-		"move":   {"before": stringFlag, "after": stringFlag, "json": boolFlag},
-		"depend": {"json": boolFlag},
-		"free":   {"json": boolFlag},
-		"next":   {"json": boolFlag},
+		"init":    {"key": stringFlag, "json": boolFlag},
+		"create":  {"description": stringFlag, "status": stringFlag, "priority": stringFlag, "label": stringFlag, "json": boolFlag},
+		"list":    {"status": stringFlag, "priority": stringFlag, "label": stringFlag, "all": boolFlag, "json": boolFlag},
+		"board":   {"wide": boolFlag, "narrow": boolFlag, "json": boolFlag},
+		"show":    {"json": boolFlag},
+		"update":  {"title": stringFlag, "description": stringFlag, "status": stringFlag, "priority": stringFlag, "label": stringFlag, "clear-labels": boolFlag, "json": boolFlag},
+		"delete":  {"json": boolFlag},
+		"serve":   {"addr": stringFlag},
+		"fetch":   {"json": boolFlag},
+		"push":    {"json": boolFlag},
+		"sync":    {"json": boolFlag},
+		"hooks":   {},
+		"move":    {"before": stringFlag, "after": stringFlag, "json": boolFlag},
+		"depend":  {"json": boolFlag},
+		"free":    {"json": boolFlag},
+		"next":    {"json": boolFlag},
+		"rebuild": {"json": boolFlag},
 	}
 
 	install := commandSchemas["hooks"].Subcommands["install"]

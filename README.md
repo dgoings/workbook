@@ -4,14 +4,14 @@ Workbook is a lightweight, repository-native project tracker for humans and codi
 
 The goal is to keep structured project state close to the code without requiring
 a hosted issue tracker. The current CLI stores task operations durably in Git
-objects and refs and explicitly synchronizes them through `origin`. The intended
-architecture also adds a disposable SQLite materialized view.
+objects and refs and explicitly synchronizes them through `origin`. A disposable
+SQLite materialized view accelerates normal task reads while Git remains canonical.
 
 > **Status:** initial collaborative POC. Repository initialization, local task
 > CRUD, task ordering and dependencies, terminal and web boards, web
-> drag-and-drop status changes, and explicit origin-only task fetch/push/sync
-> are implemented. SQLite projection, conflict reconciliation, and packaged
-> distribution remain proposed.
+> drag-and-drop status changes, explicit origin-only task fetch/push/sync, and a
+> disposable SQLite task projection are implemented. Conflict reconciliation and
+> packaged distribution remain proposed.
 
 ## Why Workbook?
 
@@ -24,7 +24,8 @@ Workbook aims for a middle ground:
 - agents can discover, claim, and update work through a small CLI with JSON output;
 - task history is append-only, inspectable, and mergeable;
 - no hosted service or MCP server is required for the default workflow;
-- SQLite enables efficient local filtering, search, dependency queries, and projections.
+- SQLite provides efficient local task reads and filtering without becoming a
+  second source of truth.
 
 ## Target workflows
 
@@ -113,6 +114,7 @@ workbook move <task> (--before <task> | --after <task>) [--json]
 workbook depend <task> <dependency> [--json]
 workbook free <task> <dependency> [--json]
 workbook next [--json]
+workbook rebuild [--json]
 workbook fetch [--json]
 workbook push [--json]
 workbook sync [--json]
@@ -133,8 +135,11 @@ edge and rejects cycles; `free` removes one prerequisite edge and is idempotent.
 sorting by priority, rank, and task ID; it reports no eligible task when none
 qualify. `board` uses the same core task order and presents an actionable,
 unambiguous task-ID prefix with each card's priority, title, and labels. Its JSON
-output retains full task IDs, descriptions, and the rest of the task data. The
-current POC does not yet implement SQLite, claims, or implementation links.
+output retains full task IDs, descriptions, and the rest of the task data. Normal
+`list`, `show`, `board`, and `next` reads use the local SQLite projection;
+task mutations continue to write immutable operations directly to Git. `rebuild`
+recreates the disposable cache and reports its task count and path. Claims and
+implementation links remain future work.
 
 ### Explicit task sharing
 
@@ -267,14 +272,14 @@ flowchart TD
     Core --> Ops["Immutable task operations + tip checkpoints"]
     Ops --> Refs["Tool-private Git refs"]
     Refs --> Remote["Explicit origin synchronization"]
-    Ops -. proposed .-> SQLite["Disposable SQLite projection"]
+    Ops --> SQLite["Disposable SQLite projection"]
 ```
 
 | Layer | Responsibility |
 | --- | --- |
 | Operation model | Defines task history, current tip checkpoints, causality, and validation |
 | Git refs and objects | Store task operations durably and explicitly synchronize task refs with `origin` |
-| SQLite (proposed) | Will materialize current task state for fast local queries |
+| SQLite projection | Materializes current task state for local reads; Git remains canonical |
 | CLI/core library | Currently owns initialization, local validation, CRUD, and user-facing output |
 | Optional adapters (proposed) | IDE integrations, local API, MCP, or a coordination relay |
 
@@ -409,14 +414,21 @@ Facts Git can derive, such as whether work has landed on `main`, should not be d
 
 ## SQLite projection
 
-The SQLite projection is proposed and is not created by the current POC. When
-implemented, SQLite will be a local cache and query engine, never the canonical
-source of truth. It may contain normalized tables for tasks, dependencies, labels,
-comments, implementation links, full-text search, and projection metadata.
+SQLite is a local, disposable read cache, never the canonical source of truth.
+The shared cache is stored at `<git-common-dir>/workbook/cache.sqlite`, so linked
+worktrees use the same projection. It materializes current task state, including
+labels and dependencies; direct SQL writes and arbitrary SQL query support are not
+part of the Workbook interface.
 
-The database can be deleted and rebuilt entirely from Workbook refs. Direct SQL writes to projected state are unsupported and will be lost during reconstruction.
+Before normal task reads (`list`, `show`, `board`, `next`, and web `GET
+/api/tasks`), Workbook validates the cache against current Git task heads and
+refreshes changed checkpoints. Create, update, and other mutations continue to
+write Git operations directly. Run `workbook rebuild` to explicitly recreate the
+cache; it builds a temporary database, checks task heads again, retries once if
+they changed during the build, and atomically installs a stable result. With
+`--json`, the normal result envelope contains `taskCount` and `cachePath`.
 
-A projected task records the Git object ID of the task head from which it was built. If the ref has not moved, the cache is current. When it moves, Workbook applies newly reachable operations or rebuilds that task's projection.
+The cache can be deleted at any time and rebuilt entirely from Workbook refs.
 
 ## Bootstrap and portability
 
@@ -428,7 +440,7 @@ hooks. A future bootstrap command or `init.sh` should:
 1. install or discover the Workbook CLI;
 2. detect the repository and its remote;
 3. explicitly fetch `refs/workbook/*`;
-4. build the SQLite projection;
+4. initialize or validate the SQLite projection through a normal read or `workbook rebuild`;
 5. verify read access and, when requested, write access;
 6. install optional convenience hooks.
 
@@ -464,8 +476,7 @@ web drag-and-drop status changes, task ordering and dependencies, and explicit
 origin-only task sharing including fetch, push, sync, and optional pre-push hook
 installation. Remaining POC work is:
 
-1. Implement deterministic SQLite projection and rebuilds from tip checkpoints.
-2. Complete replay, reconstruction, Git hash, renderer, HTTP, installer, and
+1. Complete replay, reconstruction, Git hash, renderer, HTTP, installer, and
    documentation acceptance coverage.
 
 Remote claims, conflict reconciliation, multiple-remote support, packaged

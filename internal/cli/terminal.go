@@ -48,7 +48,7 @@ func runBoard(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 		return core.Errorf(core.CategoryInvocation, "cannot use --wide with --narrow")
 	}
 
-	service, err := openService(ctx, cwd)
+	service, err := openReadService(ctx, cwd)
 	if err != nil {
 		return err
 	}

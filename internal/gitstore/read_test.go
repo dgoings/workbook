@@ -7,9 +7,59 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dgoings/workbook/internal/core"
 )
+
+func TestListTaskHeadsAndReadTaskHead(t *testing.T) {
+	repository, config := writeRepository(t)
+	ids := []string{
+		"01K0M6B8A4FTT8C39MXXYTW7D1", "01K0M6B8A4FTT8C39MXXYTW7D2", "01K0M6B8A4FTT8C39MXXYTW7D3",
+		"01K0M6B8A4FTT8C39MXXYTW7D4", "01K0M6B8A4FTT8C39MXXYTW7D5", "01K0M6B8A4FTT8C39MXXYTW7D6",
+	}
+	index := 0
+	service := core.Service{
+		Config: config,
+		Store:  repository,
+		IDs: core.IDSourceFunc(func() (string, error) {
+			if index == len(ids) {
+				return "", fmt.Errorf("test ID source exhausted")
+			}
+			id := ids[index]
+			index++
+			return id, nil
+		}),
+		Now:   func() time.Time { return writeCreatedAt },
+		Actor: "writer@example.test",
+	}
+	first, err := service.Create(context.Background(), core.CreateInput{Title: "First"})
+	if err != nil {
+		t.Fatalf("Create(first) error = %v", err)
+	}
+	second, err := service.Create(context.Background(), core.CreateInput{Title: "Second"})
+	if err != nil {
+		t.Fatalf("Create(second) error = %v", err)
+	}
+
+	heads, err := repository.ListTaskHeads(context.Background(), config)
+	if err != nil {
+		t.Fatalf("ListTaskHeads() error = %v", err)
+	}
+	got := []string{heads[0].TaskID, heads[1].TaskID}
+	want := []string{first.ID, second.ID}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("heads = %v, want %v", got, want)
+	}
+
+	snapshot, err := repository.ReadTaskHead(context.Background(), config, heads[0])
+	if err != nil {
+		t.Fatalf("ReadTaskHead() error = %v", err)
+	}
+	if snapshot.Head != heads[0].ObjectID || snapshot.State.TaskID != heads[0].TaskID {
+		t.Fatalf("snapshot = %#v, want head %q for %q", snapshot, heads[0].ObjectID, heads[0].TaskID)
+	}
+}
 
 func TestGetReadsCanonicalTipWithoutReplayingParents(t *testing.T) {
 	repo, config := writeRepository(t)

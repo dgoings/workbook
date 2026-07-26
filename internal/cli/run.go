@@ -11,6 +11,7 @@ import (
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
+	"github.com/dgoings/workbook/internal/projection"
 	"github.com/dgoings/workbook/internal/webui"
 )
 
@@ -19,6 +20,11 @@ type initResult struct {
 	ProjectID  string `json:"projectId"`
 	Key        string `json:"key"`
 	TaskCount  int    `json:"taskCount"`
+}
+
+type rebuildResult struct {
+	TaskCount int    `json:"taskCount"`
+	CachePath string `json:"cachePath"`
 }
 
 type helpRequest struct {
@@ -71,6 +77,8 @@ func Run(ctx context.Context, args []string, cwd string, stdout, stderr io.Write
 		err = runFree(ctx, commandArgs, cwd, stdout)
 	case "next":
 		err = runNext(ctx, commandArgs, cwd, stdout)
+	case "rebuild":
+		err = runRebuild(ctx, commandArgs, cwd, stdout)
 	case "fetch":
 		err = runFetch(ctx, commandArgs, cwd, stdout)
 	case "push":
@@ -348,7 +356,7 @@ func runList(ctx context.Context, args []string, cwd string, stdout io.Writer) e
 		return err
 	}
 
-	service, err := openService(ctx, cwd)
+	service, err := openReadService(ctx, cwd)
 	if err != nil {
 		return err
 	}
@@ -386,7 +394,7 @@ func runShow(ctx context.Context, args []string, cwd string, stdout io.Writer) e
 		return err
 	}
 
-	service, err := openService(ctx, cwd)
+	service, err := openReadService(ctx, cwd)
 	if err != nil {
 		return err
 	}
@@ -564,7 +572,7 @@ func runNext(ctx context.Context, args []string, cwd string, stdout io.Writer) e
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
-	service, err := openService(ctx, cwd)
+	service, err := openReadService(ctx, cwd)
 	if err != nil {
 		return err
 	}
@@ -582,6 +590,33 @@ func runNext(ctx context.Context, args []string, cwd string, stdout io.Writer) e
 	return nil
 }
 
+func runRebuild(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+	flags := newFlagSet("rebuild")
+	jsonMode := flags.Bool("json", false, "emit JSON")
+	if err := parseFlags(flags, args); err != nil {
+		return err
+	}
+	repository, config, err := openRepository(ctx, cwd)
+	if err != nil {
+		return err
+	}
+	store, err := projection.Open(ctx, repository, config)
+	if err != nil {
+		return err
+	}
+	count, err := store.Rebuild(ctx)
+	if err != nil {
+		return err
+	}
+	result := rebuildResult{TaskCount: count, CachePath: store.CachePath()}
+	if *jsonMode {
+		writeResult(stdout, "rebuild", result)
+	} else {
+		fmt.Fprintf(stdout, "Rebuilt %d task(s) at %s.\n", result.TaskCount, result.CachePath)
+	}
+	return nil
+}
+
 func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, stderr io.Writer) error {
 	flags := newFlagSet("serve")
 	addr := flags.String("addr", "127.0.0.1:7331", "listener address")
@@ -589,13 +624,17 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 		return err
 	}
 
+	readService, err := openReadService(ctx, cwd)
+	if err != nil {
+		return err
+	}
 	service, err := openService(ctx, cwd)
 	if err != nil {
 		return err
 	}
 	handler := webui.NewHandler(
 		func(requestContext context.Context) ([]core.Task, error) {
-			return service.List(requestContext, core.ListFilter{})
+			return readService.List(requestContext, core.ListFilter{})
 		},
 		func(requestContext context.Context, input core.CreateInput) (core.Task, error) {
 			return service.Create(requestContext, input)
@@ -634,6 +673,18 @@ func openService(ctx context.Context, cwd string) (core.Service, error) {
 		Now:    time.Now,
 		Actor:  actor,
 	}, nil
+}
+
+func openReadService(ctx context.Context, cwd string) (core.Service, error) {
+	repository, config, err := openRepository(ctx, cwd)
+	if err != nil {
+		return core.Service{}, err
+	}
+	store, err := projection.Open(ctx, repository, config)
+	if err != nil {
+		return core.Service{}, err
+	}
+	return core.Service{Config: config, Store: store, IDs: core.CryptoULIDSource{}, Now: time.Now}, nil
 }
 
 func openRepository(ctx context.Context, cwd string) (*gitstore.Repository, core.ProjectConfig, error) {
