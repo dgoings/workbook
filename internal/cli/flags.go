@@ -236,10 +236,16 @@ var commandSchemas = map[string]commandMetadata{
 		Description: "Rebuild the local SQLite task projection.",
 		Options:     []optionMetadata{{Name: "json", Kind: boolFlag, Description: "emit JSON"}},
 	},
+	"version": {
+		Name:        "version",
+		Synopsis:    "workbook version [--json]",
+		Description: "Show Workbook build metadata.",
+		Options:     []optionMetadata{{Name: "json", Kind: boolFlag, Description: "emit JSON"}},
+	},
 }
 
 var commandOrder = []string{
-	"init", "create", "list", "board", "show", "update", "delete", "move", "depend", "free", "next", "rebuild", "fetch", "push", "sync", "hooks", "serve",
+	"init", "create", "list", "board", "show", "update", "delete", "move", "depend", "free", "next", "rebuild", "version", "fetch", "push", "sync", "hooks", "serve",
 }
 
 type commandFlagSet struct {

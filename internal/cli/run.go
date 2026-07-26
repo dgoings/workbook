@@ -12,6 +12,7 @@ import (
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
 	"github.com/dgoings/workbook/internal/projection"
+	"github.com/dgoings/workbook/internal/release"
 	"github.com/dgoings/workbook/internal/webui"
 )
 
@@ -79,6 +80,8 @@ func Run(ctx context.Context, args []string, cwd string, stdout, stderr io.Write
 		err = runNext(ctx, commandArgs, cwd, stdout)
 	case "rebuild":
 		err = runRebuild(ctx, commandArgs, cwd, stdout)
+	case "version":
+		err = runVersion(commandArgs, stdout)
 	case "fetch":
 		err = runFetch(ctx, commandArgs, cwd, stdout)
 	case "push":
@@ -97,6 +100,21 @@ func Run(ctx context.Context, args []string, cwd string, stdout, stderr io.Write
 		return core.ExitCode(err)
 	}
 	return 0
+}
+
+func runVersion(args []string, stdout io.Writer) error {
+	flags := newFlagSet("version")
+	jsonMode := flags.Bool("json", false, "emit JSON")
+	if err := parseFlags(flags, args); err != nil {
+		return err
+	}
+	if *jsonMode {
+		writeResult(stdout, "version", release.Current())
+		return nil
+	}
+	metadata := release.Current()
+	fmt.Fprintf(stdout, "workbook %s (%s)\n", metadata.Version, metadata.Commit)
+	return nil
 }
 
 func parseHelpRequest(args []string) (helpRequest, bool, error) {
