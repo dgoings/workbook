@@ -95,8 +95,11 @@ func parseHelpRequest(args []string) (helpRequest, bool, error) {
 	if len(args) == 0 {
 		return helpRequest{}, true, nil
 	}
-	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
-		return helpRequest{}, true, nil
+	if args[0] == "-h" || args[0] == "--help" {
+		if len(args) == 1 {
+			return helpRequest{}, true, nil
+		}
+		return helpRequest{}, true, core.Errorf(core.CategoryInvocation, "global help accepts no additional arguments")
 	}
 	if args[0] == "help" {
 		return parseExplicitHelpRequest(args[1:])

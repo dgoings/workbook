@@ -68,6 +68,8 @@ func TestRunMalformedHelpIsAnInvocationErrorWithoutJSONOrInitialization(t *testi
 		args []string
 	}{
 		{name: "help command rejects JSON", args: []string{"help", "create", "--json"}},
+		{name: "short global flag rejects JSON", args: []string{"-h", "--json"}},
+		{name: "long global flag rejects JSON", args: []string{"--help", "--json"}},
 		{name: "unknown explicit target", args: []string{"help", "unknown"}},
 		{name: "unknown hooks target", args: []string{"help", "hooks", "unknown"}},
 		{name: "local help rejects trailing positional", args: []string{"create", "--help", "title"}},
