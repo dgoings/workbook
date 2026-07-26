@@ -33,6 +33,64 @@ Commands:
   serve [--addr 127.0.0.1:7331]
 `
 
+func renderGlobalHelp(output io.Writer) {
+	fmt.Fprintln(output, "Usage: workbook <command> [arguments]")
+	fmt.Fprintln(output)
+	fmt.Fprintln(output, "Commands:")
+	for _, name := range commandOrder {
+		metadata := commandSchemas[name]
+		fmt.Fprintf(output, "  %-8s %s\n", name, strings.TrimPrefix(metadata.Synopsis, "workbook "+name+" "))
+	}
+	fmt.Fprintln(output, "  help [command]")
+}
+
+func renderCommandHelp(output io.Writer, helpTarget []string) error {
+	if len(helpTarget) == 0 {
+		renderGlobalHelp(output)
+		return nil
+	}
+
+	metadata, exists := commandSchemas[helpTarget[0]]
+	if !exists {
+		return core.Errorf(core.CategoryInvocation, "unknown command %q", helpTarget[0])
+	}
+	if len(helpTarget) > 2 {
+		return core.Errorf(core.CategoryInvocation, "unknown %s command %q", metadata.Name, helpTarget[2])
+	}
+	if len(helpTarget) == 2 {
+		var subcommandExists bool
+		metadata, subcommandExists = metadata.Subcommands[helpTarget[1]]
+		if !subcommandExists {
+			return core.Errorf(core.CategoryInvocation, "unknown %s command %q", helpTarget[0], helpTarget[1])
+		}
+	}
+
+	fmt.Fprintf(output, "Usage: %s\n", metadata.Synopsis)
+	if metadata.Description != "" {
+		fmt.Fprintf(output, "\n%s\n", metadata.Description)
+	}
+	if len(metadata.Subcommands) > 0 {
+		fmt.Fprintln(output, "\nCommands:")
+		for _, name := range []string{"install"} {
+			subcommand, exists := metadata.Subcommands[name]
+			if exists {
+				fmt.Fprintf(output, "  %-8s %s\n", name, subcommand.Description)
+			}
+		}
+	}
+	if len(metadata.Options) > 0 {
+		fmt.Fprintln(output, "\nOptions:")
+		for _, option := range metadata.Options {
+			name := "--" + option.Name
+			if option.Value != "" {
+				name += " " + option.Value
+			}
+			fmt.Fprintf(output, "  %-24s %s\n", name, option.Description)
+		}
+	}
+	return nil
+}
+
 type ResultEnvelope struct {
 	Format  string `json:"format"`
 	Version int    `json:"version"`
