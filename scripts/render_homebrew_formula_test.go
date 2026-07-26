@@ -1,6 +1,8 @@
 package scripts_test
 
 import (
+	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -88,18 +90,15 @@ func TestReleaseWorkflowIsTagOnlyAndPublishesFormula(t *testing.T) {
 			t.Errorf("workflow missing %q:\n%s", want, contents)
 		}
 	}
-	var document struct {
-		On map[string]struct {
-			Tags []string `yaml:"tags"`
-		} `yaml:"on"`
+	if err := validateTagOnlyPushTrigger(workflow); err != nil {
+		t.Errorf("workflow trigger: %v", err)
 	}
-	if err := yaml.Unmarshal(workflow, &document); err != nil {
-		t.Fatalf("parse release workflow YAML: %v", err)
+	mutatedWorkflow := bytes.Replace(workflow, []byte(`tags: ["v*"]`), []byte("tags: [\"v*\"]\n    branches: [main]"), 1)
+	if bytes.Equal(mutatedWorkflow, workflow) {
+		t.Fatal("could not add a branches trigger to workflow fixture")
 	}
-	if len(document.On) != 1 {
-		t.Errorf("workflow triggers = %#v, want only push.tags [v*]", document.On)
-	} else if push, ok := document.On["push"]; !ok || len(push.Tags) != 1 || push.Tags[0] != "v*" {
-		t.Errorf("workflow triggers = %#v, want only push.tags [v*]", document.On)
+	if err := validateTagOnlyPushTrigger(mutatedWorkflow); err == nil {
+		t.Error("tag-only trigger validation accepted push.branches alongside push.tags")
 	}
 	if strings.Count(contents, "secrets.HOMEBREW_TAP_TOKEN") != 1 || !strings.Contains(contents, "repository: dgoings/homebrew-tap\n          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}") {
 		t.Errorf("tap credential is not scoped to the tap update:\n%s", contents)
@@ -115,6 +114,41 @@ func TestTrackedFormulaDeclaresMacOSDependency(t *testing.T) {
 	if !strings.Contains(string(formula), "\n  depends_on :macos\n\n  on_macos do") {
 		t.Errorf("tracked formula missing top-level macOS dependency:\n%s", formula)
 	}
+}
+
+func validateTagOnlyPushTrigger(workflow []byte) error {
+	var document struct {
+		On map[string]yaml.Node `yaml:"on"`
+	}
+	if err := yaml.Unmarshal(workflow, &document); err != nil {
+		return fmt.Errorf("parse YAML: %w", err)
+	}
+	if len(document.On) != 1 {
+		return fmt.Errorf("triggers = %#v, want only push.tags [v*]", document.On)
+	}
+	push, ok := document.On["push"]
+	if !ok {
+		return fmt.Errorf("triggers = %#v, want push.tags [v*]", document.On)
+	}
+	var pushFields map[string]yaml.Node
+	if err := push.Decode(&pushFields); err != nil {
+		return fmt.Errorf("decode push trigger: %w", err)
+	}
+	if len(pushFields) != 1 {
+		return fmt.Errorf("push fields = %#v, want only tags [v*]", pushFields)
+	}
+	tags, ok := pushFields["tags"]
+	if !ok {
+		return fmt.Errorf("push fields = %#v, want tags [v*]", pushFields)
+	}
+	var patterns []string
+	if err := tags.Decode(&patterns); err != nil {
+		return fmt.Errorf("decode push.tags: %w", err)
+	}
+	if len(patterns) != 1 || patterns[0] != "v*" {
+		return fmt.Errorf("push.tags = %#v, want [v*]", patterns)
+	}
+	return nil
 }
 
 func assertArchitectureFormulaBlock(t *testing.T, formula, start, end, wantArchive, wantChecksum, wrongArchive, wrongChecksum string) {
