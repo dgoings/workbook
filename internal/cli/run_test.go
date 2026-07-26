@@ -231,6 +231,29 @@ func TestRunJSONIntentAccountsForStringFlagValuesAndParserStops(t *testing.T) {
 	})
 }
 
+func TestRunHooksInvocationErrorsRetainJSONIntent(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args []string
+	}{
+		{name: "missing subcommand", args: []string{"hooks", "--json"}},
+		{name: "unknown subcommand", args: []string{"hooks", "unknown", "--json"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repository := testrepo.New(t)
+			code, stdout, stderr := run(t, repository, test.args...)
+			if code != 2 {
+				t.Fatalf("Run(%q) code = %d, want 2; stderr = %q", test.args, code, stderr)
+			}
+			if stdout != "" {
+				t.Fatalf("Run(%q) stdout = %q, want empty", test.args, stdout)
+			}
+			assertJSONError(t, stderr, core.CategoryInvocation, "")
+			assertNoWorkbookDirectory(t, repository)
+		})
+	}
+}
+
 func TestRunJSONIntentMatchesGoBooleanFlagSyntax(t *testing.T) {
 	repository := initializedRepository(t)
 
@@ -666,6 +689,7 @@ func TestREADMEImplementedCommands(t *testing.T) {
 		"workbook sync [--json]",
 		"workbook hooks install [--json]",
 		"workbook serve [--addr 127.0.0.1:7331]",
+		"workbook help [command]",
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("implemented commands = %q, want exactly %q", got, want)
@@ -771,7 +795,7 @@ func readmeCommandPolicyViolations(readme string) []string {
 		"init": true, "create": true, "list": true, "board": true,
 		"show": true, "update": true, "delete": true, "fetch": true,
 		"push": true, "sync": true, "hooks": true, "serve": true, "move": true,
-		"depend": true, "free": true, "next": true,
+		"depend": true, "free": true, "next": true, "help": true,
 	}
 	commandPattern := regexp.MustCompile(`\bworkbook ([a-z][a-z0-9-]*)\b`)
 	var h2, h3 string

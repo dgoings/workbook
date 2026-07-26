@@ -120,7 +120,38 @@ func parseHelpRequest(args []string) (helpRequest, bool, error) {
 		}
 		return helpRequest{Target: args[:2]}, true, nil
 	}
+	if hasLocalHelpAlias(args) {
+		return helpRequest{}, true, core.Errorf(core.CategoryInvocation, "%s help accepts no additional arguments", args[0])
+	}
 	return helpRequest{}, false, nil
+}
+
+func hasLocalHelpAlias(args []string) bool {
+	metadata, optionArgs, exists := commandInvocationMetadata(args)
+	if !exists {
+		return false
+	}
+	for index := 0; index < len(optionArgs); index++ {
+		argument := optionArgs[index]
+		if argument == "--" {
+			return false
+		}
+		name, _, hasValue, isFlag := splitFlag(argument)
+		if !isFlag {
+			return false
+		}
+		if name == "h" || name == "help" {
+			return true
+		}
+		kind, known := metadata.optionKind(name)
+		if !known {
+			return false
+		}
+		if kind == stringFlag && !hasValue {
+			index++
+		}
+	}
+	return false
 }
 
 func parseExplicitHelpRequest(args []string) (helpRequest, bool, error) {

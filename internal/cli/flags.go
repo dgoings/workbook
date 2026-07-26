@@ -63,6 +63,30 @@ func commandMetadataFor(target []string) (commandMetadata, bool) {
 	return metadata, true
 }
 
+func commandInvocationMetadata(args []string) (commandMetadata, []string, bool) {
+	if len(args) == 0 {
+		return commandMetadata{}, nil, false
+	}
+	root, exists := commandMetadataFor(args[:1])
+	if !exists {
+		return commandMetadata{}, nil, false
+	}
+
+	optionArgs := args[1:]
+	for range root.Positionals {
+		if len(optionArgs) == 0 || !isRequiredFirstArgument(optionArgs[0]) {
+			break
+		}
+		optionArgs = optionArgs[1:]
+	}
+
+	if root.Name != "hooks" {
+		return root, optionArgs, true
+	}
+	metadata, exists := commandMetadataFor([]string{"hooks", "install"})
+	return metadata, optionArgs, exists
+}
+
 var commandSchemas = map[string]commandMetadata{
 	"init": {
 		Name:        "init",
@@ -308,22 +332,12 @@ func requestedJSON(args []string) bool {
 		return false
 	}
 
-	schema, exists := commandMetadataFor(args[:1])
+	schema, optionArgs, exists := commandInvocationMetadata(args)
 	if !exists {
 		schema = commandMetadata{Options: []optionMetadata{{Name: "json", Kind: boolFlag}}}
+		optionArgs = args[1:]
 	}
-	target := args[:1]
-	args = args[1:]
-	for range schema.Positionals {
-		if len(args) == 0 || !isRequiredFirstArgument(args[0]) {
-			break
-		}
-		target = append(target, args[0])
-		args = args[1:]
-	}
-	if resolved, exists := commandMetadataFor(target); exists {
-		schema = resolved
-	}
+	args = optionArgs
 
 	jsonMode := false
 	for index := 0; index < len(args); index++ {

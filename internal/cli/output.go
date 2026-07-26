@@ -78,16 +78,15 @@ func renderCommandHelp(output io.Writer, helpTarget []string) error {
 			}
 		}
 	}
-	if len(metadata.Options) > 0 {
-		fmt.Fprintln(output, "\nOptions:")
-		for _, option := range metadata.Options {
-			name := "--" + option.Name
-			if option.Value != "" {
-				name += " " + option.Value
-			}
-			fmt.Fprintf(output, "  %-24s %s\n", name, option.Description)
+	fmt.Fprintln(output, "\nOptions:")
+	for _, option := range metadata.Options {
+		name := "--" + option.Name
+		if option.Value != "" {
+			name += " " + option.Value
 		}
+		fmt.Fprintf(output, "  %-24s %s\n", name, option.Description)
 	}
+	fmt.Fprintf(output, "  %-24s %s\n", "-h, --help", "show help")
 	return nil
 }
 

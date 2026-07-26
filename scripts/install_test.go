@@ -42,15 +42,11 @@ func TestInstallBuildsRunnableWorkbookInDestination(t *testing.T) {
 
 	run := exec.Command(binary)
 	stdout, err := run.Output()
-	var exitError *exec.ExitError
-	if !errors.As(err, &exitError) || exitError.ExitCode() != 2 {
-		t.Fatalf("workbook exit error = %v, want exit 2", err)
+	if err != nil {
+		t.Fatalf("workbook exit error = %v, want success", err)
 	}
-	if len(stdout) != 0 {
-		t.Fatalf("workbook stdout = %q, want empty", stdout)
-	}
-	if !strings.Contains(string(exitError.Stderr), "Usage: workbook <command>") {
-		t.Fatalf("workbook stderr = %q, want usage", exitError.Stderr)
+	if !strings.Contains(string(stdout), "Usage: workbook <command>") {
+		t.Fatalf("workbook stdout = %q, want global help", stdout)
 	}
 
 	if _, err := os.Stat(filepath.Join(root, "workbook")); !errors.Is(err, os.ErrNotExist) {

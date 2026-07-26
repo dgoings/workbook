@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/testrepo"
 )
 
@@ -39,7 +40,10 @@ func TestRunHelpAliasesForEveryTopLevelCommand(t *testing.T) {
 			{name: "long local flag", args: []string{command, "--help"}},
 		} {
 			t.Run(command+"/"+test.name, func(t *testing.T) {
-				assertHelpOutput(t, test.args, "Usage: workbook "+command)
+				output := assertHelpOutput(t, test.args, "Usage: workbook "+command)
+				if !strings.Contains(output, "-h, --help") {
+					t.Fatalf("Run(%q) stdout = %q, want both command help aliases", test.args, output)
+				}
 			})
 		}
 	}
@@ -57,9 +61,70 @@ func TestRunHelpHandlesHooksAndInstall(t *testing.T) {
 		{name: "hooks install long local flag", args: []string{"hooks", "install", "--help"}, want: "Usage: workbook hooks install [options]"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			assertHelpOutput(t, test.args, test.want)
+			output := assertHelpOutput(t, test.args, test.want)
+			if !strings.Contains(output, "-h, --help") {
+				t.Fatalf("Run(%q) stdout = %q, want both command help aliases", test.args, output)
+			}
 		})
 	}
+}
+
+func TestRunMalformedLocalHelpAfterJSONIsPlainText(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args []string
+	}{
+		{name: "option-only command short help", args: []string{"init", "--json", "-h"}},
+		{name: "option-only command long help", args: []string{"init", "--json", "--help"}},
+		{name: "positional command", args: []string{"create", "Title", "--json", "--help"}},
+		{name: "hooks install", args: []string{"hooks", "install", "--json", "--help"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repository := testrepo.New(t)
+			code, stdout, stderr := run(t, repository, test.args...)
+			if code != 2 {
+				t.Fatalf("Run(%q) code = %d, want 2; stderr = %q", test.args, code, stderr)
+			}
+			if stdout != "" {
+				t.Fatalf("Run(%q) stdout = %q, want empty", test.args, stdout)
+			}
+			if !strings.Contains(stderr, "Usage: workbook <command> [arguments]") {
+				t.Fatalf("Run(%q) stderr = %q, want global usage", test.args, stderr)
+			}
+			if strings.Contains(stderr, "workbook.error") {
+				t.Fatalf("Run(%q) stderr = %q, want plain-text error", test.args, stderr)
+			}
+			assertNoWorkbookDirectory(t, repository)
+		})
+	}
+}
+
+func TestRunLocalHelpRecognitionRespectsStringValuesAndTerminator(t *testing.T) {
+	t.Run("help-looking string flag value remains normal JSON invocation", func(t *testing.T) {
+		repository := testrepo.New(t)
+		code, stdout, stderr := run(t, repository, "init", "--json", "--key", "--help")
+		if code != 5 {
+			t.Fatalf("Run() code = %d, want 5; stderr = %q", code, stderr)
+		}
+		if stdout != "" {
+			t.Fatalf("Run() stdout = %q, want empty", stdout)
+		}
+		assertJSONError(t, stderr, core.CategoryValidation, "")
+		assertNoWorkbookDirectory(t, repository)
+	})
+
+	t.Run("help after terminator remains positional input", func(t *testing.T) {
+		repository := testrepo.New(t)
+		code, stdout, stderr := run(t, repository, "init", "--json", "--", "--help")
+		if code != 2 {
+			t.Fatalf("Run() code = %d, want 2; stderr = %q", code, stderr)
+		}
+		if stdout != "" {
+			t.Fatalf("Run() stdout = %q, want empty", stdout)
+		}
+		assertJSONError(t, stderr, core.CategoryInvocation, "init accepts no additional positional arguments")
+		assertNoWorkbookDirectory(t, repository)
+	})
 }
 
 func TestRunMalformedHelpIsAnInvocationErrorWithoutJSONOrInitialization(t *testing.T) {
@@ -94,7 +159,7 @@ func TestRunMalformedHelpIsAnInvocationErrorWithoutJSONOrInitialization(t *testi
 	}
 }
 
-func assertHelpOutput(t *testing.T, args []string, want string) {
+func assertHelpOutput(t *testing.T, args []string, want string) string {
 	t.Helper()
 	repository := testrepo.New(t)
 	code, stdout, stderr := run(t, repository, args...)
@@ -108,6 +173,7 @@ func assertHelpOutput(t *testing.T, args []string, want string) {
 		t.Fatalf("Run(%q) stderr = %q, want empty", args, stderr)
 	}
 	assertNoWorkbookDirectory(t, repository)
+	return stdout
 }
 
 func assertNoWorkbookDirectory(t *testing.T, repository string) {
