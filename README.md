@@ -86,6 +86,16 @@ The script accepts an optional destination directory, defaults to
 `workbook` executable there. It prints the installed path and, when necessary,
 the `PATH` export needed to run it.
 
+Use help to discover commands and their options:
+
+```text
+workbook --help
+workbook create --help
+workbook help create
+```
+
+Help output is human-readable. Help itself has no JSON form.
+
 ## Implemented POC commands
 
 The current CLI implements these local commands. Commands marked `--json` support
@@ -108,6 +118,7 @@ workbook push [--json]
 workbook sync [--json]
 workbook hooks install [--json]
 workbook serve [--addr 127.0.0.1:7331]
+workbook help [command]
 ```
 
 `workbook init` creates a tracked `.workbook/config.json` with the project ID and
