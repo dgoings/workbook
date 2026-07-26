@@ -40,16 +40,16 @@ type errorDocument struct {
 func TestRunInvalidInvocationAndEarlyJSONErrors(t *testing.T) {
 	repository := testrepo.New(t)
 
-	t.Run("no command", func(t *testing.T) {
+	t.Run("no command renders global help", func(t *testing.T) {
 		code, stdout, stderr := run(t, repository)
-		if code != 2 {
-			t.Fatalf("Run() code = %d, want 2; stderr = %q", code, stderr)
+		if code != 0 {
+			t.Fatalf("Run() code = %d, want 0; stderr = %q", code, stderr)
 		}
-		if stdout != "" {
-			t.Fatalf("Run() stdout = %q, want empty", stdout)
+		if !strings.Contains(stdout, "Usage: workbook <command> [arguments]") {
+			t.Fatalf("Run() stdout = %q, want global help", stdout)
 		}
-		if !strings.Contains(stderr, "Usage: workbook <command>") {
-			t.Fatalf("Run() stderr = %q, want usage", stderr)
+		if stderr != "" {
+			t.Fatalf("Run() stderr = %q, want empty", stderr)
 		}
 	})
 
