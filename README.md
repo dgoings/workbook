@@ -135,8 +135,8 @@ edge and rejects cycles; `free` removes one prerequisite edge and is idempotent.
 sorting by priority, rank, and task ID; it reports no eligible task when none
 qualify. `board` uses the same core task order and presents an actionable,
 unambiguous task-ID prefix with each card's priority, title, and labels. Its JSON
-output retains full task IDs, descriptions, and the rest of the task data. The
-Normal `list`, `show`, `board`, and `next` reads use the local SQLite projection;
+output retains full task IDs, descriptions, and the rest of the task data. Normal
+`list`, `show`, `board`, and `next` reads use the local SQLite projection;
 task mutations continue to write immutable operations directly to Git. `rebuild`
 recreates the disposable cache and reports its task count and path. Claims and
 implementation links remain future work.
