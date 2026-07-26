@@ -10,8 +10,9 @@ SQLite materialized view accelerates normal task reads while Git remains canonic
 > **Status:** initial collaborative POC. Repository initialization, local task
 > CRUD, task ordering and dependencies, terminal and web boards, web
 > drag-and-drop status changes, explicit origin-only task fetch/push/sync, and a
-> disposable SQLite task projection are implemented. Conflict reconciliation and
-> packaged distribution remain proposed.
+> disposable SQLite task projection are implemented. Conflict reconciliation
+> remains proposed. Release artifact tooling exists, but no public package has
+> been published yet.
 
 ## Why Workbook?
 
@@ -93,6 +94,7 @@ Use help to discover commands and their options:
 workbook --help
 workbook create --help
 workbook help create
+workbook version
 ```
 
 Help output is human-readable. Help itself has no JSON form.
@@ -115,6 +117,7 @@ workbook depend <task> <dependency> [--json]
 workbook free <task> <dependency> [--json]
 workbook next [--json]
 workbook rebuild [--json]
+workbook version [--json]
 workbook fetch [--json]
 workbook push [--json]
 workbook sync [--json]
@@ -140,6 +143,28 @@ output retains full task IDs, descriptions, and the rest of the task data. Norma
 task mutations continue to write immutable operations directly to Git. `rebuild`
 recreates the disposable cache and reports its task count and path. Claims and
 implementation links remain future work.
+
+### Release artifacts
+
+`scripts/release.sh <version> <output-dir>` creates macOS Apple Silicon and
+Intel archives plus a sorted `checksums.txt` file. Each archive contains only
+the `workbook` executable. The script cross-compiles with the requested version
+and the current Git commit injected into `workbook version`; source builds
+report `dev` and `unknown` instead. Release versions must use the exact
+`MAJOR.MINOR.PATCH` form without leading zeroes.
+
+Pushing a version tag such as `v0.1.0` runs the release workflow. It tests the
+strict SemVer tag, publishes the two archives and checksums to GitHub Releases,
+and updates the `dgoings/homebrew-tap` formula from those generated checksums.
+The protected release environment exposes a credential scoped only to that tap
+repository after validation. New assets are staged in a draft, the tap update is
+pushed first, and the draft is published last. A rerun verifies existing assets
+byte-for-byte and never overwrites them; a failed final publication reverts the
+tap update and removes only a draft created by that run.
+
+This source repository intentionally does not track an installable
+`Formula/workbook.rb` with placeholder checksums. The workflow renders the real
+formula directly into the tap from the built artifacts.
 
 ### Explicit task sharing
 
@@ -255,8 +280,8 @@ workbook claim TASK-123 --remote-required --json
 
 Remote compare-and-swap claims, automatic conflict reconciliation, multiple
 remote selection, and a combined `workbook finish --commit HEAD --push` flow
-remain design proposals. A future packaged distribution might also support a
-Homebrew installation such as the following; no tap or formula is published yet:
+remain design proposals. After the first public release has been published,
+Workbook can be installed on macOS with Homebrew:
 
 ```sh
 brew install dgoings/tap/workbook

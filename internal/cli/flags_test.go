@@ -22,7 +22,7 @@ func TestGlobalHelpListsHelpAndTopLevelCommands(t *testing.T) {
 	}
 	assertInOrder(t, output.String(), []string{
 		"  init", "  create", "  list", "  board", "  show", "  update", "  delete", "  move",
-		"  depend", "  free", "  next", "  rebuild", "  fetch", "  push", "  sync", "  hooks", "  serve", "  help [command]",
+		"  depend", "  free", "  next", "  rebuild", "  version", "  fetch", "  push", "  sync", "  hooks", "  serve", "  help [command]",
 	})
 }
 
@@ -134,6 +134,7 @@ func TestHelpMetadataMatchesSchemas(t *testing.T) {
 		"free":    {"json": boolFlag},
 		"next":    {"json": boolFlag},
 		"rebuild": {"json": boolFlag},
+		"version": {"json": boolFlag},
 	}
 
 	install := commandSchemas["hooks"].Subcommands["install"]

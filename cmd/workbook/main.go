@@ -9,6 +9,7 @@ import (
 )
 
 func main() {
+	configureReleaseMetadata()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	os.Exit(cli.Run(ctx, os.Args[1:], ".", os.Stdout, os.Stderr))
