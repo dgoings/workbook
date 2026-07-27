@@ -70,6 +70,8 @@ func Run(ctx context.Context, args []string, cwd string, stdout, stderr io.Write
 		err = runUpdate(ctx, commandArgs, cwd, stdout)
 	case "delete":
 		err = runDelete(ctx, commandArgs, cwd, stdout)
+	case "restore":
+		err = runRestore(ctx, commandArgs, cwd, stdout)
 	case "move":
 		err = runMove(ctx, commandArgs, cwd, stdout)
 	case "depend":
@@ -514,6 +516,33 @@ func runDelete(ctx context.Context, args []string, cwd string, stdout io.Writer)
 	return nil
 }
 
+func runRestore(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+	id, args, err := requiredFirstArgument("restore", "task ID", args)
+	if err != nil {
+		return err
+	}
+	flags := newFlagSet("restore")
+	jsonMode := flags.Bool("json", false, "emit JSON")
+	if err := parseFlags(flags, args); err != nil {
+		return err
+	}
+
+	service, err := openService(ctx, cwd)
+	if err != nil {
+		return err
+	}
+	task, err := service.Restore(ctx, id)
+	if err != nil {
+		return err
+	}
+	if *jsonMode {
+		writeResult(stdout, "restore", task)
+	} else {
+		writeMutation(stdout, task)
+	}
+	return nil
+}
+
 func runMove(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
 	id, args, err := requiredFirstArgument("move", "task ID", args)
 	if err != nil {
@@ -650,9 +679,9 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 	if err != nil {
 		return err
 	}
-	handler := webui.NewHandler(
+	handler := webui.NewHandlerWithTaskMutations(
 		func(requestContext context.Context) ([]core.Task, error) {
-			return readService.List(requestContext, core.ListFilter{})
+			return readService.List(requestContext, core.ListFilter{All: true})
 		},
 		func(requestContext context.Context, input core.CreateInput) (core.Task, error) {
 			return service.Create(requestContext, input)
@@ -662,6 +691,12 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 		},
 		func(requestContext context.Context, id string, status core.Status) (core.Task, error) {
 			return service.Update(requestContext, id, core.UpdateInput{Status: &status})
+		},
+		func(requestContext context.Context, id string) (core.Task, error) {
+			return service.Delete(requestContext, id)
+		},
+		func(requestContext context.Context, id string) (core.Task, error) {
+			return service.Restore(requestContext, id)
 		},
 	)
 	listener, err := net.Listen("tcp", *addr)

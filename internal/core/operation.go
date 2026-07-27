@@ -26,6 +26,7 @@ const (
 	OperationSetAdd        OperationType = "set.add"
 	OperationSetRemove     OperationType = "set.remove"
 	OperationTaskTombstone OperationType = "task.tombstone"
+	OperationTaskRestore   OperationType = "task.restore"
 )
 
 type Operation struct {
@@ -89,12 +90,20 @@ func Apply(parent *StateDocument, pack OperationPack, projectKey string) (StateD
 		return StateDocument{}, corrupt("operation pack logical clock must advance parent by one")
 	}
 	if parent.Task.Deleted {
-		return StateDocument{}, corrupt("cannot mutate a tombstoned task")
+		if len(pack.Operations) != 1 || pack.Operations[0].Type != OperationTaskRestore {
+			return StateDocument{}, corrupt("cannot mutate a tombstoned task")
+		}
+	} else {
+		for _, operation := range pack.Operations {
+			if operation.Type == OperationTaskRestore {
+				return StateDocument{}, corrupt("task.restore requires a tombstoned task")
+			}
+		}
 	}
 
 	task := copyTaskData(parent.Task)
 	for _, operation := range pack.Operations {
-		if task.Deleted {
+		if task.Deleted && operation.Type != OperationTaskRestore {
 			return StateDocument{}, corrupt("cannot mutate a tombstoned task")
 		}
 		if operation.Type == OperationTaskCreate {
@@ -184,6 +193,9 @@ func applyOperation(task *TaskData, operation Operation, projectKey string) erro
 		return applySetRemove(task, operation, projectKey)
 	case OperationTaskTombstone:
 		task.Deleted = true
+		return nil
+	case OperationTaskRestore:
+		task.Deleted = false
 		return nil
 	default:
 		return corrupt("unsupported operation type %q", operation.Type)
@@ -332,9 +344,9 @@ func validateOperation(operation Operation) error {
 		if operation.Task != nil {
 			return corrupt("%s must not contain task data", operation.Type)
 		}
-	case OperationTaskTombstone:
+	case OperationTaskTombstone, OperationTaskRestore:
 		if operation.Task != nil || operation.Field != "" || operation.Value != "" {
-			return corrupt("task.tombstone must not contain a payload")
+			return corrupt("%s must not contain a payload", operation.Type)
 		}
 	default:
 		return corrupt("unsupported operation type %q", operation.Type)
@@ -373,6 +385,11 @@ func validateOperationDocument(operation Operation, projectKey string) error {
 	case OperationTaskTombstone:
 		if operation.Task != nil || operation.Field != "" || operation.Value != "" {
 			return corrupt("task.tombstone must not contain a payload")
+		}
+		return nil
+	case OperationTaskRestore:
+		if operation.Task != nil || operation.Field != "" || operation.Value != "" {
+			return corrupt("task.restore must not contain a payload")
 		}
 		return nil
 	default:

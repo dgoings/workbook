@@ -161,6 +161,13 @@ var commandSchemas = map[string]commandMetadata{
 		Positionals: []string{"<id-or-prefix>"},
 		Options:     []optionMetadata{{Name: "json", Kind: boolFlag, Description: "emit JSON"}},
 	},
+	"restore": {
+		Name:        "restore",
+		Synopsis:    "workbook restore <id-or-prefix> [--json]",
+		Description: "Restore a tombstoned task.",
+		Positionals: []string{"<id-or-prefix>"},
+		Options:     []optionMetadata{{Name: "json", Kind: boolFlag, Description: "emit JSON"}},
+	},
 	"serve": {
 		Name:        "serve",
 		Synopsis:    "workbook serve [--addr <address>]",
@@ -245,7 +252,7 @@ var commandSchemas = map[string]commandMetadata{
 }
 
 var commandOrder = []string{
-	"init", "create", "list", "board", "show", "update", "delete", "move", "depend", "free", "next", "rebuild", "version", "fetch", "push", "sync", "hooks", "serve",
+	"init", "create", "list", "board", "show", "update", "delete", "restore", "move", "depend", "free", "next", "rebuild", "version", "fetch", "push", "sync", "hooks", "serve",
 }
 
 type commandFlagSet struct {
