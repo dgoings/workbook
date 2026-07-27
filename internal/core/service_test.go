@@ -329,10 +329,10 @@ func TestServiceUpdateRejectsNormalizedNoopWithoutWriting(t *testing.T) {
 	}
 }
 
-func TestServiceDeleteTombstonesTaskAndRejectsFurtherMutations(t *testing.T) {
+func TestServiceDeleteTombstonesTaskAndRestoreIsTheOnlyAllowedMutation(t *testing.T) {
 	snapshot := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", TaskData{Title: "Delete me", Status: StatusBacklog, Priority: PriorityMedium, Rank: "1/1"})
 	store := newMemoryTaskStore(snapshot)
-	service := serviceUnderTest(store, &sequenceIDSource{values: []string{"01K0M6B8A4FTT8C39MXXYTW7D2"}})
+	service := serviceUnderTest(store, &sequenceIDSource{values: []string{"01K0M6B8A4FTT8C39MXXYTW7D2", "01K0M6B8A4FTT8C39MXXYTW7D3"}})
 
 	task, err := service.Delete(context.Background(), snapshot.State.TaskID)
 	if err != nil {
@@ -354,6 +354,23 @@ func TestServiceDeleteTombstonesTaskAndRejectsFurtherMutations(t *testing.T) {
 	}
 	if got, want := len(store.writes), 1; got != want {
 		t.Fatalf("Write() calls after tombstone = %d, want %d", got, want)
+	}
+
+	task, err = service.Restore(context.Background(), snapshot.State.TaskID)
+	if err != nil {
+		t.Fatalf("Restore() error = %v", err)
+	}
+	if task.Deleted {
+		t.Fatal("Restore() task is still tombstoned")
+	}
+	assertOperations(t, store.writes[1].pack.Operations, []Operation{{ID: "01K0M6B8A4FTT8C39MXXYTW7D3", Type: OperationTaskRestore}})
+
+	_, err = service.Restore(context.Background(), snapshot.State.TaskID)
+	if got, want := CategoryOf(err), CategoryValidation; got != want {
+		t.Fatalf("Restore(active) error category = %q, want %q (error: %v)", got, want, err)
+	}
+	if got, want := len(store.writes), 2; got != want {
+		t.Fatalf("Write() calls after active restore = %d, want %d", got, want)
 	}
 }
 

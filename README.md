@@ -112,6 +112,7 @@ workbook board [--wide | --narrow] [--json]
 workbook show
 workbook update
 workbook delete
+workbook restore
 workbook move <task> (--before <task> | --after <task>) [--json]
 workbook depend <task> <dependency> [--json]
 workbook free <task> <dependency> [--json]
@@ -127,8 +128,10 @@ workbook help [command]
 ```
 
 `workbook init` creates a tracked `.workbook/config.json` with the project ID and
-key. Create, update, and delete append immutable task commits under
+key. Create, update, delete, and restore append immutable task commits under
 `refs/workbook/tasks/`; delete records a tombstone instead of removing the ref.
+Tombstoned tasks reject every mutation except `workbook restore`, which records
+an explicit append-only restore operation.
 List and show read the current task checkpoint from each task ref's tip. Task
 statuses follow this canonical order: Backlog, Ready, Blocked, In Progress, In
 Review, and Done. `move` orders a task inside its status-and-priority bucket with
@@ -227,10 +230,13 @@ The embedded page and its API expose these routes:
 GET /                         board HTML
 GET /tasks/new                new-task shell; client-rendered form
 GET /tasks/<id>               linkable task-detail shell; client-rendered form
+GET /deleted                  deleted-task shell; client-rendered list
 GET /api/tasks                versioned task JSON
 POST /api/tasks               create a task
 PATCH /api/tasks/<id>         update task fields
 PATCH /api/tasks/<id>/status  drag-and-drop status changes
+DELETE /api/tasks/<id>        tombstone a task
+POST /api/tasks/<id>/restore  restore a tombstoned task
 GET /healthz                  versioned health JSON
 ```
 
@@ -247,6 +253,9 @@ The shared new-task and detail form creates or edits title, description, status,
 priority, and labels through the versioned APIs. Saving returns to the board and
 refreshes it. A failed save leaves the entered values in place and shows the
 server error in the form; Back returns to the board without mutating a task.
+Active task details also provide Delete; successful deletion opens `/deleted`.
+That route lists tombstoned tasks and restores a selected task through the
+explicit restore operation.
 
 The web experience is still local-first and intentionally narrow in scope.
 Authentication, hosted deployment, browser deletion, draft persistence, and

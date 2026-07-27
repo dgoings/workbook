@@ -620,6 +620,31 @@ func TestRunCRUDLifecycleAndOutputContracts(t *testing.T) {
 	if len(all) != 1 || !all[0].Deleted {
 		t.Fatalf("all list = %#v, want one tombstoned task", all)
 	}
+
+	code, stdout, stderr = run(t, repository, "restore", prefix, "--json")
+	if code != 0 {
+		t.Fatalf("restore code = %d, want 0; stderr = %q", code, stderr)
+	}
+	result = assertJSONResult(t, stdout, "restore")
+	var restored core.Task
+	if err := json.Unmarshal(result.Data, &restored); err != nil {
+		t.Fatalf("decode restored task: %v", err)
+	}
+	if restored.Deleted {
+		t.Fatal("restored task Deleted = true, want false")
+	}
+
+	code, stdout, stderr = run(t, repository, "list", "--json")
+	if code != 0 {
+		t.Fatalf("list after restore code = %d, want 0; stderr = %q", code, stderr)
+	}
+	result = assertJSONResult(t, stdout, "list")
+	if err := json.Unmarshal(result.Data, &active); err != nil {
+		t.Fatalf("decode restored active list: %v", err)
+	}
+	if len(active) != 1 || active[0].ID != restored.ID {
+		t.Fatalf("active list after restore = %#v, want restored task", active)
+	}
 }
 
 func TestCLIInReviewStatus(t *testing.T) {

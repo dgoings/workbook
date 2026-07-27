@@ -99,6 +99,44 @@ func TestHandlerRendersInReviewTasks(t *testing.T) {
 	}
 }
 
+func TestHandlerDeletesRestoresAndListsTombstonedTasks(t *testing.T) {
+	active := boardTasks()[0]
+	deleted := boardTasks()[1]
+	deleted.Deleted = true
+	var deletedID, restoredID string
+	handler := NewHandlerWithTaskMutations(
+		func(context.Context) ([]core.Task, error) { return []core.Task{active, deleted}, nil },
+		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
+		func(_ context.Context, id string) (core.Task, error) { deletedID = id; return deleted, nil },
+		func(_ context.Context, id string) (core.Task, error) {
+			restoredID = id
+			deleted.Deleted = false
+			return deleted, nil
+		},
+	)
+
+	deletedResponse := request(t, handler, http.MethodGet, "/api/tasks?deleted=true")
+	if deletedResponse.Code != http.StatusOK {
+		t.Fatalf("GET deleted tasks status = %d, want %d", deletedResponse.Code, http.StatusOK)
+	}
+	var listed TasksDocument
+	if err := json.Unmarshal(deletedResponse.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("decode deleted tasks: %v", err)
+	}
+	if got, want := listed.Tasks, []core.Task{deleted}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("deleted tasks = %#v, want %#v", got, want)
+	}
+
+	deleteResponse := request(t, handler, http.MethodDelete, "/api/tasks/"+active.ID)
+	if deleteResponse.Code != http.StatusOK || deletedID != active.ID {
+		t.Fatalf("DELETE task status/id = %d/%q, want %d/%q", deleteResponse.Code, deletedID, http.StatusOK, active.ID)
+	}
+	restoreResponse := request(t, handler, http.MethodPost, "/api/tasks/"+deleted.ID+"/restore")
+	if restoreResponse.Code != http.StatusOK || restoredID != deleted.ID {
+		t.Fatalf("POST restore status/id = %d/%q, want %d/%q", restoreResponse.Code, restoredID, http.StatusOK, deleted.ID)
+	}
+}
+
 func TestHandlerServesTaskRouteShell(t *testing.T) {
 	tasks := boardTasks()
 	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
@@ -126,6 +164,22 @@ func TestHandlerServesTaskRouteShell(t *testing.T) {
 		}
 		if got := wrongMethod.Header().Get("Allow"); got != http.MethodGet {
 			t.Errorf("POST %s Allow = %q, want %q", path, got, http.MethodGet)
+		}
+	}
+}
+
+func TestHandlerServesDeletedRouteAndHeaderNavigation(t *testing.T) {
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return boardTasks(), nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	for _, path := range []string{"/", "/deleted"} {
+		response := request(t, handler, http.MethodGet, path)
+		if response.Code != http.StatusOK {
+			t.Fatalf("GET %s status = %d, want %d", path, response.Code, http.StatusOK)
+		}
+		if !strings.Contains(response.Body.String(), `href="/deleted"`) {
+			t.Fatalf("GET %s does not provide header navigation to deleted tasks", path)
+		}
+		if !strings.Contains(response.Body.String(), `href="/"`) {
+			t.Fatalf("GET %s does not provide header navigation to the board", path)
 		}
 	}
 }
@@ -646,7 +700,7 @@ func TestHandlerRejectsWrongMethods(t *testing.T) {
 		path      string
 		wantAllow string
 	}{
-		{method: http.MethodGet, path: "/api/tasks/WB-01J00000000000000000000001", wantAllow: http.MethodPatch},
+		{method: http.MethodGet, path: "/api/tasks/WB-01J00000000000000000000001", wantAllow: http.MethodPatch + ", " + http.MethodDelete},
 		{method: http.MethodPut, path: "/api/tasks", wantAllow: http.MethodGet + ", " + http.MethodPost},
 	} {
 		response := request(t, handler, test.method, test.path)

@@ -27,6 +27,10 @@ type TaskCreator func(context.Context, core.CreateInput) (core.Task, error)
 
 type TaskUpdater func(context.Context, string, core.UpdateInput) (core.Task, error)
 
+type TaskDeleter func(context.Context, string) (core.Task, error)
+
+type TaskRestorer func(context.Context, string) (core.Task, error)
+
 type TasksDocument struct {
 	Format       string             `json:"format"`
 	Version      int                `json:"version"`
@@ -67,6 +71,8 @@ type handler struct {
 	create       TaskCreator
 	update       TaskUpdater
 	updateStatus TaskStatusUpdater
+	delete       TaskDeleter
+	restore      TaskRestorer
 	page         *template.Template
 	mux          *http.ServeMux
 }
@@ -96,15 +102,26 @@ type updateTaskRequest struct {
 }
 
 func NewHandler(list TaskLister, create TaskCreator, update TaskUpdater, updateStatus TaskStatusUpdater) http.Handler {
+	return newHandler(list, create, update, updateStatus, nil, nil)
+}
+
+func NewHandlerWithTaskMutations(list TaskLister, create TaskCreator, update TaskUpdater, updateStatus TaskStatusUpdater, delete TaskDeleter, restore TaskRestorer) http.Handler {
+	return newHandler(list, create, update, updateStatus, delete, restore)
+}
+
+func newHandler(list TaskLister, create TaskCreator, update TaskUpdater, updateStatus TaskStatusUpdater, delete TaskDeleter, restore TaskRestorer) http.Handler {
 	page := template.Must(template.New("index.html").ParseFS(assets, "assets/index.html"))
-	handler := &handler{list: list, create: create, update: update, updateStatus: updateStatus, page: page, mux: http.NewServeMux()}
+	handler := &handler{list: list, create: create, update: update, updateStatus: updateStatus, delete: delete, restore: restore, page: page, mux: http.NewServeMux()}
 	handler.mux.HandleFunc("GET /{$}", handler.serveBoard)
+	handler.mux.HandleFunc("GET /deleted", handler.serveBoard)
 	handler.mux.HandleFunc("GET /tasks/new", handler.serveBoard)
 	handler.mux.HandleFunc("GET /tasks/{id}", handler.serveBoard)
 	handler.mux.HandleFunc("GET /api/tasks", handler.serveTasks)
 	handler.mux.HandleFunc("POST /api/tasks", handler.createTask)
 	handler.mux.HandleFunc("PATCH /api/tasks/{id}", handler.updateTask)
 	handler.mux.HandleFunc("PATCH /api/tasks/{id}/status", handler.updateTaskStatus)
+	handler.mux.HandleFunc("DELETE /api/tasks/{id}", handler.deleteTask)
+	handler.mux.HandleFunc("POST /api/tasks/{id}/restore", handler.restoreTask)
 	handler.mux.HandleFunc("GET /healthz", handler.serveHealth)
 	return http.HandlerFunc(handler.serveHTTP)
 }
@@ -131,7 +148,7 @@ func methodAllowed(requestMethod, allowed string) bool {
 
 func allowedMethod(path string) (string, bool) {
 	switch path {
-	case "/", "/healthz", "/tasks/new":
+	case "/", "/deleted", "/healthz", "/tasks/new":
 		return http.MethodGet, true
 	case "/api/tasks":
 		return http.MethodGet + ", " + http.MethodPost, true
@@ -139,8 +156,11 @@ func allowedMethod(path string) (string, bool) {
 		if taskStatusPathID(path) != "" {
 			return http.MethodPatch, true
 		}
+		if taskRestorePathID(path) != "" {
+			return http.MethodPost, true
+		}
 		if taskPathID(path) != "" {
-			return http.MethodPatch, true
+			return http.MethodPatch + ", " + http.MethodDelete, true
 		}
 		if taskPagePathID(path) != "" {
 			return http.MethodGet, true
@@ -186,6 +206,19 @@ func taskStatusPathID(path string) string {
 	return id
 }
 
+func taskRestorePathID(path string) string {
+	const prefix = "/api/tasks/"
+	const suffix = "/restore"
+	if !strings.HasPrefix(path, prefix) || !strings.HasSuffix(path, suffix) {
+		return ""
+	}
+	id := strings.TrimSuffix(strings.TrimPrefix(path, prefix), suffix)
+	if id == "" || strings.Contains(id, "/") {
+		return ""
+	}
+	return id
+}
+
 func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Request) {
 	tasks, err := handler.list(request.Context())
 	if err != nil {
@@ -193,7 +226,7 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := handler.page.Execute(writer, pageData{Board: presentation.NewBoard(tasks)}); err != nil {
+	if err := handler.page.Execute(writer, pageData{Board: presentation.NewBoard(activeTasks(tasks))}); err != nil {
 		return
 	}
 }
@@ -204,12 +237,37 @@ func (handler *handler) serveTasks(writer http.ResponseWriter, request *http.Req
 		handler.writeError(writer, err)
 		return
 	}
+	if request.URL.Query().Get("deleted") == "true" {
+		tasks = deletedTasks(tasks)
+	} else {
+		tasks = activeTasks(tasks)
+	}
 	writeJSON(writer, http.StatusOK, TasksDocument{
 		Format:       "workbook.tasks",
 		Version:      1,
 		Tasks:        tasks,
 		Presentation: taskPresentation(tasks),
 	})
+}
+
+func activeTasks(tasks []core.Task) []core.Task {
+	active := make([]core.Task, 0, len(tasks))
+	for _, task := range tasks {
+		if !task.Deleted {
+			active = append(active, task)
+		}
+	}
+	return active
+}
+
+func deletedTasks(tasks []core.Task) []core.Task {
+	deleted := make([]core.Task, 0, len(tasks))
+	for _, task := range tasks {
+		if task.Deleted {
+			deleted = append(deleted, task)
+		}
+	}
+	return deleted
 }
 
 func (handler *handler) updateTaskStatus(writer http.ResponseWriter, request *http.Request) {
@@ -263,6 +321,32 @@ func (handler *handler) updateTask(writer http.ResponseWriter, request *http.Req
 		id = taskPathID(request.URL.Path)
 	}
 	task, err := handler.update(request.Context(), id, core.UpdateInput(body))
+	if err != nil {
+		handler.writeError(writer, err)
+		return
+	}
+	handler.writeTaskMutation(writer, task)
+}
+
+func (handler *handler) deleteTask(writer http.ResponseWriter, request *http.Request) {
+	if handler.delete == nil {
+		handler.writeError(writer, core.Errorf(core.CategoryOperational, "task deletion is not configured"))
+		return
+	}
+	task, err := handler.delete(request.Context(), request.PathValue("id"))
+	if err != nil {
+		handler.writeError(writer, err)
+		return
+	}
+	handler.writeTaskMutation(writer, task)
+}
+
+func (handler *handler) restoreTask(writer http.ResponseWriter, request *http.Request) {
+	if handler.restore == nil {
+		handler.writeError(writer, core.Errorf(core.CategoryOperational, "task restoration is not configured"))
+		return
+	}
+	task, err := handler.restore(request.Context(), request.PathValue("id"))
 	if err != nil {
 		handler.writeError(writer, err)
 		return

@@ -85,6 +85,7 @@ func TestApplyCreateUpdateAndTombstone(t *testing.T) {
 	tombstone.LogicalClock = 3
 	tombstone.WallTime = updatedAt.Add(time.Minute)
 	tombstone.Operations = []Operation{{ID: "01K0M6B8A4FTT8C39MXXYTW7C7", Type: OperationTaskTombstone}}
+	beforeTombstone := copyTaskData(state.Task)
 	state, err = Apply(&state, tombstone, "WB")
 	if err != nil {
 		t.Fatalf("Apply(tombstone) error = %v", err)
@@ -100,6 +101,41 @@ func TestApplyCreateUpdateAndTombstone(t *testing.T) {
 	mutation.LogicalClock = 4
 	mutation.Operations = []Operation{{ID: "01K0M6B8A4FTT8C39MXXYTW7C8", Type: OperationFieldSet, Field: "title", Value: "Revive task"}}
 	assertCorrupt(t, applyError(&state, mutation, "WB"))
+
+	restore := tombstone
+	restore.LogicalClock = 4
+	restore.WallTime = tombstone.WallTime.Add(time.Minute)
+	restore.Operations = []Operation{{ID: "01K0M6B8A4FTT8C39MXXYTW7C9", Type: OperationTaskRestore}}
+	state, err = Apply(&state, restore, "WB")
+	if err != nil {
+		t.Fatalf("Apply(restore) error = %v", err)
+	}
+	beforeTombstone.UpdatedAt = restore.WallTime
+	beforeTombstone.Dependencies = []string{}
+	if got, want := state.Task, beforeTombstone; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Apply(restore) task = %#v, want %#v", got, want)
+	}
+}
+
+func TestApplyRejectsRestoreForActiveTaskAndPayloadBearingRestore(t *testing.T) {
+	created, err := Apply(nil, createPack(), "WB")
+	if err != nil {
+		t.Fatalf("Apply(create) error = %v", err)
+	}
+
+	restore := updatePack(2)
+	restore.Operations = []Operation{{ID: operationID2, Type: OperationTaskRestore}}
+	assertCorrupt(t, applyError(&created, restore, "WB"))
+
+	tombstone := updatePack(2)
+	tombstone.Operations = []Operation{{ID: operationID2, Type: OperationTaskTombstone}}
+	deleted, err := Apply(&created, tombstone, "WB")
+	if err != nil {
+		t.Fatalf("Apply(tombstone) error = %v", err)
+	}
+	restore = updatePack(3)
+	restore.Operations = []Operation{{ID: operationID3, Type: OperationTaskRestore, Field: "title", Value: "must be ignored"}}
+	assertCorrupt(t, applyError(&deleted, restore, "WB"))
 }
 
 func TestApplyRejectsInvalidHistoryAndIdentity(t *testing.T) {
