@@ -101,7 +101,11 @@ func (r *Repository) Write(
 	if parent != nil {
 		expected = parent.Head
 	}
-	if _, err := r.Git(ctx, nil, "update-ref", "--no-deref", "--create-reflog", "-m", "workbook: "+reason, ref, head, expected); err != nil {
+	reflogReason := reason
+	if !strings.HasPrefix(reflogReason, "workbook:") {
+		reflogReason = "workbook: " + reflogReason
+	}
+	if _, err := r.Git(ctx, nil, "update-ref", "--no-deref", "--create-reflog", "-m", reflogReason, ref, head, expected); err != nil {
 		if symbolicErr := r.rejectSymbolicTaskRef(ctx, ref); symbolicErr != nil {
 			return core.Snapshot{}, symbolicErr
 		}

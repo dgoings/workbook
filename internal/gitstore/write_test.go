@@ -49,8 +49,8 @@ func TestWriteCreatesRootCommitAndTaskRef(t *testing.T) {
 	if got, want := gitOutput(t, repo, "show", "-s", "--format=%s", snapshot.Head), "workbook: create WB-01K0M6B8 Create task"; got != want {
 		t.Fatalf("commit subject = %q, want %q", got, want)
 	}
-	if got := gitOutput(t, repo, "reflog", "show", "--format=%gs", "-n", "1", ref); !strings.HasPrefix(got, "workbook:") {
-		t.Fatalf("reflog message = %q, want workbook prefix", got)
+	if got, want := gitOutput(t, repo, "reflog", "show", "--format=%gs", "-n", "1", ref), "workbook: create WB-01K0M6B8 Create task"; got != want {
+		t.Fatalf("reflog message = %q, want %q", got, want)
 	}
 }
 
@@ -59,8 +59,9 @@ func TestWriteAppendsCommitToCurrentHead(t *testing.T) {
 	created, createPack, createState := writeRoot(t, repo, config)
 	pack := writeUpdatePack(2, "01K0M6B8A4FTT8C39MXXYTW7C5", "ready")
 	state := writeState(t, &createState, pack)
+	reason := "workbook: update WB-01K0M6B8 status backlog → ready"
 
-	snapshot, err := repo.Write(context.Background(), config, &created, pack, state, "mark ready")
+	snapshot, err := repo.Write(context.Background(), config, &created, pack, state, reason)
 	if err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
@@ -70,6 +71,79 @@ func TestWriteAppendsCommitToCurrentHead(t *testing.T) {
 	assertTaskTree(t, repo, snapshot.Head, pack, state)
 	if got := gitOutput(t, repo, "rev-parse", taskRef(createPack.TaskID)); got != snapshot.Head {
 		t.Fatalf("task ref = %q, want %q", got, snapshot.Head)
+	}
+	if got := gitOutput(t, repo, "show", "-s", "--format=%s", snapshot.Head); got != reason {
+		t.Fatalf("commit subject = %q, want %q", got, reason)
+	}
+	if got := gitOutput(t, repo, "reflog", "show", "--format=%gs", "-n", "1", taskRef(createPack.TaskID)); got != reason {
+		t.Fatalf("reflog message = %q, want %q", got, reason)
+	}
+}
+
+func TestWriteRetainsLegacyReflogPrefix(t *testing.T) {
+	repo, config := writeRepository(t)
+	created, createPack, createState := writeRoot(t, repo, config)
+	pack := writeUpdatePack(2, "01K0M6B8A4FTT8C39MXXYTW7C5", "ready")
+	pack.Operations = []core.Operation{{ID: "01K0M6B8A4FTT8C39MXXYTW7C5", Type: core.OperationTaskTombstone}}
+	state := writeState(t, &createState, pack)
+
+	deleted, err := repo.Write(context.Background(), config, &created, pack, state, "delete task")
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if got, want := gitOutput(t, repo, "reflog", "show", "--format=%gs", "-n", "1", taskRef(createPack.TaskID)), "workbook: delete task"; got != want {
+		t.Fatalf("reflog message = %q, want %q", got, want)
+	}
+	if got, want := gitOutput(t, repo, "show", "-s", "--format=%s", deleted.Head), "delete task"; got != want {
+		t.Fatalf("commit subject = %q, want %q", got, want)
+	}
+}
+
+func TestServicePersistsGitSafeCreateSubjectFromControlCharacters(t *testing.T) {
+	repo, config := writeRepository(t)
+	service := testService(repo, config)
+	title := "Plan\x00phase\none"
+
+	task, err := service.Create(context.Background(), core.CreateInput{Title: title})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if task.Title != title {
+		t.Fatalf("Create() title = %q, want canonical title unchanged %q", task.Title, title)
+	}
+
+	want := "workbook: create WB-01K0M6B8 Plan phase one"
+	if got := gitOutput(t, repo, "show", "-s", "--format=%s", task.Head); got != want {
+		t.Fatalf("commit subject = %q, want %q", got, want)
+	}
+	if got := gitOutput(t, repo, "reflog", "show", "--format=%gs", "-n", "1", taskRef(task.ID)); got != want {
+		t.Fatalf("reflog message = %q, want %q", got, want)
+	}
+}
+
+func TestServicePersistsGitSafeUpdateSubjectFromControlCharacters(t *testing.T) {
+	repo, config := writeRepository(t)
+	service := testService(repo, config)
+	task, err := service.Create(context.Background(), core.CreateInput{Title: "Control labels"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	labels := []string{"alpha\x00beta", "line\nbreak"}
+
+	updated, err := service.Update(context.Background(), task.ID, core.UpdateInput{Labels: &labels})
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if !reflect.DeepEqual(updated.Labels, labels) {
+		t.Fatalf("Update() labels = %#v, want canonical labels unchanged %#v", updated.Labels, labels)
+	}
+
+	want := "workbook: update WB-01K0M6B8 labels +alpha beta,line break"
+	if got := gitOutput(t, repo, "show", "-s", "--format=%s", updated.Head); got != want {
+		t.Fatalf("commit subject = %q, want %q", got, want)
+	}
+	if got := gitOutput(t, repo, "reflog", "show", "--format=%gs", "-n", "1", taskRef(task.ID)); got != want {
+		t.Fatalf("reflog message = %q, want %q", got, want)
 	}
 }
 
@@ -614,6 +688,8 @@ func testService(repo *Repository, config core.ProjectConfig) core.Service {
 		"01K0M6B8A4FTT8C39MXXYTW7D1",
 		"01K0M6B8A4FTT8C39MXXYTW7D2",
 		"01K0M6B8A4FTT8C39MXXYTW7D3",
+		"01K0M6B8A4FTT8C39MXXYTW7D4",
+		"01K0M6B8A4FTT8C39MXXYTW7D5",
 	}
 	index := 0
 	return core.Service{

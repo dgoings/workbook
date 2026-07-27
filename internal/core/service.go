@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/oklog/ulid/v2"
 )
@@ -451,10 +452,10 @@ func updateCommitSubject(taskID string, before, after TaskData) string {
 		changes = append(changes, "priority "+string(before.Priority)+" → "+string(after.Priority))
 	}
 	if removed := setDifference(before.Labels, after.Labels); len(removed) > 0 {
-		changes = append(changes, "labels -"+strings.Join(removed, ","))
+		changes = append(changes, "labels -"+strings.Join(formatCommitLabels(removed), ","))
 	}
 	if added := setDifference(after.Labels, before.Labels); len(added) > 0 {
-		changes = append(changes, "labels +"+strings.Join(added, ","))
+		changes = append(changes, "labels +"+strings.Join(formatCommitLabels(added), ","))
 	}
 	return "workbook: update " + taskCommitShortID(taskID) + " " + strings.Join(changes, "; ")
 }
@@ -465,12 +466,30 @@ func taskCommitShortID(taskID string) string {
 }
 
 func formatCommitTitle(title string) string {
-	title = strings.Join(strings.Fields(title), " ")
+	title = formatCommitFragment(title)
 	runes := []rune(title)
 	if len(runes) > 72 {
 		return string(runes[:71]) + "…"
 	}
 	return title
+}
+
+func formatCommitLabels(labels []string) []string {
+	formatted := make([]string, len(labels))
+	for i, label := range labels {
+		formatted[i] = formatCommitFragment(label)
+	}
+	return formatted
+}
+
+func formatCommitFragment(value string) string {
+	value = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, value)
+	return strings.Join(strings.Fields(value), " ")
 }
 
 func (s Service) newID() (string, error) {
