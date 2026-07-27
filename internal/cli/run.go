@@ -70,6 +70,8 @@ func Run(ctx context.Context, args []string, cwd string, stdout, stderr io.Write
 		err = runUpdate(ctx, commandArgs, cwd, stdout)
 	case "delete":
 		err = runDelete(ctx, commandArgs, cwd, stdout)
+	case "restore":
+		err = runRestore(ctx, commandArgs, cwd, stdout)
 	case "move":
 		err = runMove(ctx, commandArgs, cwd, stdout)
 	case "depend":
@@ -508,6 +510,33 @@ func runDelete(ctx context.Context, args []string, cwd string, stdout io.Writer)
 	}
 	if *jsonMode {
 		writeResult(stdout, "delete", task)
+	} else {
+		writeMutation(stdout, task)
+	}
+	return nil
+}
+
+func runRestore(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+	id, args, err := requiredFirstArgument("restore", "task ID", args)
+	if err != nil {
+		return err
+	}
+	flags := newFlagSet("restore")
+	jsonMode := flags.Bool("json", false, "emit JSON")
+	if err := parseFlags(flags, args); err != nil {
+		return err
+	}
+
+	service, err := openService(ctx, cwd)
+	if err != nil {
+		return err
+	}
+	task, err := service.Restore(ctx, id)
+	if err != nil {
+		return err
+	}
+	if *jsonMode {
+		writeResult(stdout, "restore", task)
 	} else {
 		writeMutation(stdout, task)
 	}
