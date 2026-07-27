@@ -130,6 +130,9 @@ workbook help [command]
 `workbook init` creates a tracked `.workbook/config.json` with the project ID and
 key. Create, update, delete, and restore append immutable task commits under
 `refs/workbook/tasks/`; delete records a tombstone instead of removing the ref.
+Creation and ordinary updates write descriptive task-operation commit subjects
+suitable for `git log`, while canonical data remains in the operation and state
+blobs.
 Tombstoned tasks reject every mutation except `workbook restore`, which records
 an explicit append-only restore operation.
 List and show read the current task checkpoint from each task ref's tip. Task

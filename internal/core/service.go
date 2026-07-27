@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/oklog/ulid/v2"
 )
@@ -103,7 +104,7 @@ func (s Service) Create(ctx context.Context, input CreateInput) (Task, error) {
 	if err != nil {
 		return Task{}, err
 	}
-	written, err := s.Store.Write(ctx, s.Config, nil, pack, state, "create task")
+	written, err := s.Store.Write(ctx, s.Config, nil, pack, state, createCommitSubject(taskID, taskData))
 	if err != nil {
 		return Task{}, err
 	}
@@ -227,7 +228,7 @@ func (s Service) Update(ctx context.Context, idOrPrefix string, input UpdateInpu
 	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
 		return Task{}, err
 	}
-	return s.writeMutation(ctx, &parent, operations, "update task")
+	return s.writeMutation(ctx, &parent, operations, updateCommitSubject(parent.State.TaskID, parent.State.Task, next))
 }
 
 func (s Service) Delete(ctx context.Context, idOrPrefix string) (Task, error) {
@@ -445,6 +446,65 @@ func validateGeneratedULID(id string) error {
 
 func taskULIDSuffix(taskID, projectKey string) string {
 	return strings.TrimPrefix(taskID, projectKey+"-")
+}
+
+func createCommitSubject(taskID string, task TaskData) string {
+	return "workbook: create " + taskCommitShortID(taskID) + " " + formatCommitTitle(task.Title)
+}
+
+func updateCommitSubject(taskID string, before, after TaskData) string {
+	changes := make([]string, 0, 6)
+	if before.Title != after.Title {
+		changes = append(changes, "title "+formatCommitTitle(after.Title))
+	}
+	if before.Description != after.Description {
+		changes = append(changes, "description updated")
+	}
+	if before.Status != after.Status {
+		changes = append(changes, "status "+string(before.Status)+" → "+string(after.Status))
+	}
+	if before.Priority != after.Priority {
+		changes = append(changes, "priority "+string(before.Priority)+" → "+string(after.Priority))
+	}
+	if removed := setDifference(before.Labels, after.Labels); len(removed) > 0 {
+		changes = append(changes, "labels -"+strings.Join(formatCommitLabels(removed), ","))
+	}
+	if added := setDifference(after.Labels, before.Labels); len(added) > 0 {
+		changes = append(changes, "labels +"+strings.Join(formatCommitLabels(added), ","))
+	}
+	return "workbook: update " + taskCommitShortID(taskID) + " " + strings.Join(changes, "; ")
+}
+
+func taskCommitShortID(taskID string) string {
+	projectKey, _, _ := strings.Cut(taskID, "-")
+	return projectKey + "-" + taskULIDSuffix(taskID, projectKey)[:8]
+}
+
+func formatCommitTitle(title string) string {
+	title = formatCommitFragment(title)
+	runes := []rune(title)
+	if len(runes) > 72 {
+		return string(runes[:71]) + "…"
+	}
+	return title
+}
+
+func formatCommitLabels(labels []string) []string {
+	formatted := make([]string, len(labels))
+	for i, label := range labels {
+		formatted[i] = formatCommitFragment(label)
+	}
+	return formatted
+}
+
+func formatCommitFragment(value string) string {
+	value = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, value)
+	return strings.Join(strings.Fields(value), " ")
 }
 
 func (s Service) newID() (string, error) {
