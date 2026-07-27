@@ -679,9 +679,9 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 	if err != nil {
 		return err
 	}
-	handler := webui.NewHandler(
+	handler := webui.NewHandlerWithTaskMutations(
 		func(requestContext context.Context) ([]core.Task, error) {
-			return readService.List(requestContext, core.ListFilter{})
+			return readService.List(requestContext, core.ListFilter{All: true})
 		},
 		func(requestContext context.Context, input core.CreateInput) (core.Task, error) {
 			return service.Create(requestContext, input)
@@ -691,6 +691,12 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 		},
 		func(requestContext context.Context, id string, status core.Status) (core.Task, error) {
 			return service.Update(requestContext, id, core.UpdateInput{Status: &status})
+		},
+		func(requestContext context.Context, id string) (core.Task, error) {
+			return service.Delete(requestContext, id)
+		},
+		func(requestContext context.Context, id string) (core.Task, error) {
+			return service.Restore(requestContext, id)
 		},
 	)
 	listener, err := net.Listen("tcp", *addr)

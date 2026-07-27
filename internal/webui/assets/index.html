@@ -140,6 +140,7 @@
       }
       function route(url = new URL(window.location.href)) {
         if (url.pathname === "/") return { view: "board" };
+		if (url.pathname === "/deleted") return { view: "deleted" };
         if (url.pathname === "/tasks/new") {
           const requestedStatus = url.searchParams.get("status");
           return { view: "new", status: statuses.has(requestedStatus) ? requestedStatus : "backlog" };
@@ -189,6 +190,16 @@
         const save = document.createElement("button"); save.className = "save-button"; save.type = "submit"; text(save, "Save");
         const back = document.createElement("a"); back.className = "board-link"; back.href = "/"; text(back, "Back");
         actions.append(save, back);
+		if (!isNew) {
+		  const remove = document.createElement("button"); remove.className = "board-link"; remove.type = "button"; text(remove, "Delete");
+		  remove.addEventListener("click", async () => {
+		    remove.disabled = true; text(result, "");
+		    try { await mutateTask("DELETE", "/api/tasks/" + encodeURIComponent(task.id)); navigate("/deleted"); }
+		    catch (error) { text(result, error instanceof Error ? error.message : "Task deletion failed."); }
+		    finally { remove.disabled = false; }
+		  });
+		  actions.append(remove);
+		}
         form.append(field("Title", title, true), field("Description", description, true), field("Status", status), field("Priority", priority), field("Labels", labels, true), result, actions);
 
         form.addEventListener("submit", async (event) => {
@@ -242,6 +253,24 @@
         body.append(back); section.append(header, body);
         return section;
       }
+	  function deletedView() {
+		const section = document.createElement("section"); section.className = "task-route";
+		const header = document.createElement("header"); header.className = "task-route__header";
+		const heading = document.createElement("h2"); text(heading, "Deleted tasks"); header.append(heading);
+		const body = document.createElement("div"); body.className = "route-message";
+		const back = document.createElement("a"); back.className = "board-link"; back.href = "/"; text(back, "Board"); body.append(back); section.append(header, body);
+		fetch("/api/tasks?deleted=true", { cache: "no-store" }).then((response) => response.json().then((data) => ({ response, data }))).then(({ response, data }) => {
+		  if (!response.ok || data.format !== "workbook.tasks" || data.version !== 1 || !Array.isArray(data.tasks)) throw new Error(data.error && data.error.message || "Deleted tasks could not be loaded.");
+		  if (data.tasks.length === 0) { const empty = document.createElement("p"); text(empty, "No deleted tasks."); body.prepend(empty); return; }
+		  data.tasks.forEach((task) => {
+		    const row = document.createElement("p"); const title = document.createElement("strong"); text(title, task.title);
+		    const restore = document.createElement("button"); restore.className = "save-button"; restore.type = "button"; text(restore, "Restore");
+		    restore.addEventListener("click", async () => { restore.disabled = true; try { await mutateTask("POST", "/api/tasks/" + encodeURIComponent(task.id) + "/restore"); navigate("/tasks/" + encodeURIComponent(task.id)); } catch (error) { text(row, error instanceof Error ? error.message : "Task restoration failed."); } finally { restore.disabled = false; } });
+		    row.append(title, document.createTextNode(" "), restore); body.prepend(row);
+		  });
+		}).catch((error) => { const failed = document.createElement("p"); text(failed, error instanceof Error ? error.message : "Deleted tasks could not be loaded."); body.prepend(failed); });
+		return section;
+	  }
       function renderRoute() {
         const current = route();
         if (current.view === "board") {
@@ -254,6 +283,11 @@
           main.replaceChildren(routeMessage("Page not found", "This Workbook route does not exist."));
           return;
         }
+		if (current.view === "deleted") {
+		  document.title = "Deleted tasks · Workbook";
+		  main.replaceChildren(deletedView());
+		  return;
+		}
         if (!tasksLoaded) {
           if (taskLoadFailed) {
             document.title = "Unable to load task · Workbook";
