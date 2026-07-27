@@ -245,6 +245,21 @@ func (s Service) Delete(ctx context.Context, idOrPrefix string) (Task, error) {
 	return s.writeMutation(ctx, &parent, operations, "delete task")
 }
 
+func (s Service) Restore(ctx context.Context, idOrPrefix string) (Task, error) {
+	parent, err := s.resolveSnapshot(ctx, idOrPrefix)
+	if err != nil {
+		return Task{}, err
+	}
+	if !parent.State.Task.Deleted {
+		return Task{}, Errorf(CategoryValidation, "cannot restore an active task")
+	}
+	operations := []Operation{{Type: OperationTaskRestore}}
+	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
+		return Task{}, err
+	}
+	return s.writeMutation(ctx, &parent, operations, "restore task")
+}
+
 func (s Service) Move(ctx context.Context, idOrPrefix string, input MoveInput) (Task, error) {
 	if (input.Before == "") == (input.After == "") {
 		return Task{}, Errorf(CategoryValidation, "move requires exactly one anchor direction")
