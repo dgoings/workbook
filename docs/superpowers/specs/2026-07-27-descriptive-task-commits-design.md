@@ -26,7 +26,7 @@ workbook: update WB-01KYDDPP status ready → in progress; priority medium → h
 
 Creation includes the task title. Updates list each changed mutable field in
 the command's canonical field order: title, description, status, priority, and
-labels. A title change displays its new title. A description change is reported
+labels. A title change is rendered as `title <new title>`. A description change is reported
 as `description updated` rather than embedding arbitrary long or multiline
 text. Status and priority changes show the prior and new values. Labels report
 the sorted normalized additions as `labels +one,+two` and removals as
