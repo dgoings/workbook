@@ -24,7 +24,7 @@ func TestWriteCreatesRootCommitAndTaskRef(t *testing.T) {
 	pack := writeCreatePack()
 	state := writeState(t, nil, pack)
 
-	snapshot, err := repo.Write(context.Background(), config, nil, pack, state, "create task")
+	snapshot, err := repo.Write(context.Background(), config, nil, pack, state, "workbook: create WB-01K0M6B8 Create task")
 	if err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
@@ -46,6 +46,9 @@ func TestWriteCreatesRootCommitAndTaskRef(t *testing.T) {
 		t.Fatalf("root commit parents = %q, want only %q", got, snapshot.Head)
 	}
 	assertTaskTree(t, repo, snapshot.Head, pack, state)
+	if got, want := gitOutput(t, repo, "show", "-s", "--format=%s", snapshot.Head), "workbook: create WB-01K0M6B8 Create task"; got != want {
+		t.Fatalf("commit subject = %q, want %q", got, want)
+	}
 	if got := gitOutput(t, repo, "reflog", "show", "--format=%gs", "-n", "1", ref); !strings.HasPrefix(got, "workbook:") {
 		t.Fatalf("reflog message = %q, want workbook prefix", got)
 	}

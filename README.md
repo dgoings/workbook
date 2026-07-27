@@ -129,6 +129,9 @@ workbook help [command]
 `workbook init` creates a tracked `.workbook/config.json` with the project ID and
 key. Create, update, and delete append immutable task commits under
 `refs/workbook/tasks/`; delete records a tombstone instead of removing the ref.
+Creation and ordinary updates write descriptive task-operation commit subjects
+suitable for `git log`, while canonical data remains in the operation and state
+blobs.
 List and show read the current task checkpoint from each task ref's tip. Task
 statuses follow this canonical order: Backlog, Ready, Blocked, In Progress, In
 Review, and Done. `move` orders a task inside its status-and-priority bucket with
