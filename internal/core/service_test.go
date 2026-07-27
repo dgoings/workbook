@@ -59,6 +59,9 @@ func TestServiceCreateBuildsOneRootPackWithSeparateIDsAndBucketRank(t *testing.T
 	if write.parent != nil {
 		t.Fatalf("Create() Write() parent = %#v, want nil", write.parent)
 	}
+	if got, want := write.reason, "workbook: create WB-01K0M6B8 Build service"; got != want {
+		t.Fatalf("Create() write reason = %q, want %q", got, want)
+	}
 	if got, want := write.pack.LogicalClock, uint64(1); got != want {
 		t.Fatalf("Create() logical clock = %d, want %d", got, want)
 	}
@@ -297,6 +300,9 @@ func TestServiceUpdateBuildsOneDeterministicPackFromNormalizedValues(t *testing.
 	if got, want := write.pack.LogicalClock, uint64(2); got != want {
 		t.Fatalf("Update() logical clock = %d, want %d", got, want)
 	}
+	if got, want := write.reason, "workbook: update WB-01K0M6B8 title New title; description updated; status backlog → ready; priority medium → high; labels -zeta; labels +beta"; got != want {
+		t.Fatalf("Update() write reason = %q, want %q", got, want)
+	}
 	assertOperations(t, write.pack.Operations, []Operation{
 		{ID: "01K0M6B8A4FTT8C39MXXYTW7D2", Type: OperationFieldSet, Field: "description", Value: "new"},
 		{ID: "01K0M6B8A4FTT8C39MXXYTW7D3", Type: OperationFieldSet, Field: "priority", Value: "high"},
@@ -305,6 +311,43 @@ func TestServiceUpdateBuildsOneDeterministicPackFromNormalizedValues(t *testing.
 		{ID: "01K0M6B8A4FTT8C39MXXYTW7D6", Type: OperationSetRemove, Field: "labels", Value: "zeta"},
 		{ID: "01K0M6B8A4FTT8C39MXXYTW7D7", Type: OperationSetAdd, Field: "labels", Value: "beta"},
 	})
+}
+
+func TestServiceUpdateCommitSubjectNormalizesAndTruncatesTitles(t *testing.T) {
+	tests := []struct {
+		name  string
+		title string
+		want  string
+	}{
+		{
+			name:  "collapses whitespace",
+			title: "  New\t title\nwith  spacing ",
+			want:  "workbook: update WB-01K0M6B8 title New title with spacing",
+		},
+		{
+			name:  "truncates titles by runes",
+			title: strings.Repeat("界", 73),
+			want:  "workbook: update WB-01K0M6B8 title " + strings.Repeat("界", 71) + "…",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", TaskData{
+				Title: "Old", Status: StatusBacklog, Priority: PriorityMedium, Rank: "1/1",
+			})
+			store := newMemoryTaskStore(snapshot)
+			service := serviceUnderTest(store, &sequenceIDSource{values: []string{"01K0M6B8A4FTT8C39MXXYTW7D2"}})
+
+			_, err := service.Update(context.Background(), snapshot.State.TaskID, UpdateInput{Title: &test.title})
+			if err != nil {
+				t.Fatalf("Update() error = %v", err)
+			}
+			if got := store.writes[0].reason; got != test.want {
+				t.Fatalf("Update() write reason = %q, want %q", got, test.want)
+			}
+		})
+	}
 }
 
 func TestServiceUpdateRejectsNormalizedNoopWithoutWriting(t *testing.T) {
@@ -724,6 +767,7 @@ type memoryWrite struct {
 	parent *Snapshot
 	pack   OperationPack
 	state  StateDocument
+	reason string
 }
 
 func newMemoryTaskStore(snapshots ...Snapshot) *memoryTaskStore {
@@ -778,8 +822,8 @@ func (s *memoryTaskStore) Resolve(ctx context.Context, config ProjectConfig, pre
 	}
 }
 
-func (s *memoryTaskStore) Write(_ context.Context, _ ProjectConfig, parent *Snapshot, pack OperationPack, state StateDocument, _ string) (Snapshot, error) {
-	s.writes = append(s.writes, memoryWrite{parent: parent, pack: pack, state: state})
+func (s *memoryTaskStore) Write(_ context.Context, _ ProjectConfig, parent *Snapshot, pack OperationPack, state StateDocument, reason string) (Snapshot, error) {
+	s.writes = append(s.writes, memoryWrite{parent: parent, pack: pack, state: state, reason: reason})
 	if s.writeErr != nil {
 		return Snapshot{}, s.writeErr
 	}
