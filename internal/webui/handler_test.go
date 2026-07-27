@@ -168,6 +168,22 @@ func TestHandlerServesTaskRouteShell(t *testing.T) {
 	}
 }
 
+func TestHandlerServesDeletedRouteAndHeaderNavigation(t *testing.T) {
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return boardTasks(), nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	for _, path := range []string{"/", "/deleted"} {
+		response := request(t, handler, http.MethodGet, path)
+		if response.Code != http.StatusOK {
+			t.Fatalf("GET %s status = %d, want %d", path, response.Code, http.StatusOK)
+		}
+		if !strings.Contains(response.Body.String(), `href="/deleted"`) {
+			t.Fatalf("GET %s does not provide header navigation to deleted tasks", path)
+		}
+		if !strings.Contains(response.Body.String(), `href="/"`) {
+			t.Fatalf("GET %s does not provide header navigation to the board", path)
+		}
+	}
+}
+
 func TestHandlerRendersTaskAndNewTaskLinks(t *testing.T) {
 	tasks := boardTasks()
 	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))

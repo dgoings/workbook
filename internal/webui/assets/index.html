@@ -23,6 +23,8 @@
     .eyebrow { margin: 0 0 .2rem; color: #2457d6; font-size: .7rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
     h1 { margin: 0; font-size: clamp(1.25rem, 2vw, 1.65rem); letter-spacing: -.03em; }
     .updated { margin: 0; color: #56647a; font-size: .75rem; text-align: right; }
+    .header-links { display: flex; align-items: center; gap: .8rem; }
+    .header-link { color: #34425a; font-size: .82rem; font-weight: 750; text-underline-offset: .18em; }
     main { padding: 1.25rem max(1.25rem, calc((100vw - 92rem) / 2)) 2rem; }
     .stale { display: none; margin: 0 0 1rem; padding: .55rem .7rem; border-left: 3px solid #b45309; background: #fff6e8; color: #7c3b08; font-size: .875rem; }
     .stale[data-visible="true"] { display: block; }
@@ -67,13 +69,22 @@
     .field input:focus, .field textarea:focus, .field select:focus { border-color: #2457d6; outline: 3px solid rgba(36,87,214,.18); }
     .form-status { grid-column: 1 / -1; min-height: 1.35rem; margin: 0; color: #9c2f25; font-size: .82rem; }
     .form-actions { display: flex; align-items: center; gap: .85rem; grid-column: 1 / -1; padding-top: .1rem; }
+    .form-danger { margin-left: auto; }
     .save-button { border: 1px solid #173f9e; border-radius: 4px; background: #2457d6; color: #fff; cursor: pointer; font: inherit; font-size: .86rem; font-weight: 750; padding: .62rem .95rem; }
     .save-button:hover { background: #1d49b7; }
     .save-button:focus-visible { outline: 3px solid rgba(36,87,214,.28); outline-offset: 2px; }
     .save-button:disabled { cursor: wait; opacity: .62; }
+    .delete-button { border: 1px solid #8f1d1d; border-radius: 4px; background: #b42318; color: #fff; cursor: pointer; font: inherit; font-size: .86rem; font-weight: 750; padding: .62rem .95rem; }
+    .delete-button:hover { background: #8f1d1d; }
+    .delete-button:focus-visible { outline: 3px solid rgba(180,35,24,.28); outline-offset: 2px; }
+    .delete-button:disabled { cursor: wait; opacity: .62; }
     .board-link { color: #34425a; font-size: .84rem; font-weight: 700; text-underline-offset: .18em; }
     .route-message { padding: 1.15rem; color: #56647a; }
     .route-message p { margin: 0 0 1rem; }
+    .deleted-list { display: grid; gap: .7rem; padding: 1.15rem; }
+    .deleted-card { border: 1px solid #b9c6d8; border-radius: 4px; background: #fff; padding: .8rem; }
+    .deleted-card__meta { display: flex; align-items: center; justify-content: space-between; gap: .5rem; color: #526075; font-size: .7rem; }
+    .deleted-card__description { display: -webkit-box; overflow: hidden; margin: .5rem 0 .75rem; color: #56647a; font-size: .82rem; line-height: 1.36; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
     @media (prefers-reduced-motion: no-preference) { .task-list { transition: opacity 120ms ease; } }
     @media (max-width: 900px) { .app-header { align-items: start; flex-direction: column; } .updated { text-align: left; } .board { grid-template-columns: 1fr; overflow: visible; } .column { min-width: 0; } }
     @media (max-width: 560px) { .task-form { grid-template-columns: 1fr; } .field--wide { grid-column: auto; } }
@@ -83,7 +94,7 @@
   <a class="skip-link" href="#board">Skip to task board</a>
   <header class="app-header">
     <div><p class="eyebrow">Repository workbench</p><h1>Workbook board</h1></div>
-    <p class="updated" data-updated>Loaded from this checkout</p>
+    <div class="header-links"><a class="header-link" href="/">Board</a><a class="header-link" href="/deleted">Deleted tasks</a><p class="updated" data-updated>Loaded from this checkout</p></div>
   </header>
   <main id="board" tabindex="-1">
     <div class="board-view" data-board-view>
@@ -191,14 +202,15 @@
         const back = document.createElement("a"); back.className = "board-link"; back.href = "/"; text(back, "Back");
         actions.append(save, back);
 		if (!isNew) {
-		  const remove = document.createElement("button"); remove.className = "board-link"; remove.type = "button"; text(remove, "Delete");
+		  const danger = document.createElement("div"); danger.className = "form-danger";
+		  const remove = document.createElement("button"); remove.className = "delete-button"; remove.type = "button"; text(remove, "Delete");
 		  remove.addEventListener("click", async () => {
 		    remove.disabled = true; text(result, "");
 		    try { await mutateTask("DELETE", "/api/tasks/" + encodeURIComponent(task.id)); navigate("/deleted"); }
 		    catch (error) { text(result, error instanceof Error ? error.message : "Task deletion failed."); }
 		    finally { remove.disabled = false; }
 		  });
-		  actions.append(remove);
+		  danger.append(remove); actions.append(danger);
 		}
         form.append(field("Title", title, true), field("Description", description, true), field("Status", status), field("Priority", priority), field("Labels", labels, true), result, actions);
 
@@ -257,16 +269,19 @@
 		const section = document.createElement("section"); section.className = "task-route";
 		const header = document.createElement("header"); header.className = "task-route__header";
 		const heading = document.createElement("h2"); text(heading, "Deleted tasks"); header.append(heading);
-		const body = document.createElement("div"); body.className = "route-message";
-		const back = document.createElement("a"); back.className = "board-link"; back.href = "/"; text(back, "Board"); body.append(back); section.append(header, body);
+			const body = document.createElement("div"); body.className = "deleted-list"; section.append(header, body);
 		fetch("/api/tasks?deleted=true", { cache: "no-store" }).then((response) => response.json().then((data) => ({ response, data }))).then(({ response, data }) => {
 		  if (!response.ok || data.format !== "workbook.tasks" || data.version !== 1 || !Array.isArray(data.tasks)) throw new Error(data.error && data.error.message || "Deleted tasks could not be loaded.");
-		  if (data.tasks.length === 0) { const empty = document.createElement("p"); text(empty, "No deleted tasks."); body.prepend(empty); return; }
+		  if (data.tasks.length === 0) { const empty = document.createElement("p"); text(empty, "No deleted tasks."); body.append(empty); return; }
 		  data.tasks.forEach((task) => {
-		    const row = document.createElement("p"); const title = document.createElement("strong"); text(title, task.title);
+		    const row = document.createElement("article"); row.className = "deleted-card";
+		    const meta = document.createElement("div"); meta.className = "deleted-card__meta";
+		    const id = document.createElement("code"); text(id, task.id.slice(0, 12)); const status = document.createElement("span"); text(status, task.status); meta.append(id, status);
+		    const title = document.createElement("h3"); text(title, task.title);
+		    const description = document.createElement("p"); description.className = "deleted-card__description"; text(description, task.description || "No description.");
 		    const restore = document.createElement("button"); restore.className = "save-button"; restore.type = "button"; text(restore, "Restore");
-		    restore.addEventListener("click", async () => { restore.disabled = true; try { await mutateTask("POST", "/api/tasks/" + encodeURIComponent(task.id) + "/restore"); navigate("/tasks/" + encodeURIComponent(task.id)); } catch (error) { text(row, error instanceof Error ? error.message : "Task restoration failed."); } finally { restore.disabled = false; } });
-		    row.append(title, document.createTextNode(" "), restore); body.prepend(row);
+		    restore.addEventListener("click", async () => { restore.disabled = true; try { await mutateTask("POST", "/api/tasks/" + encodeURIComponent(task.id) + "/restore"); await refresh(); navigate("/tasks/" + encodeURIComponent(task.id)); } catch (error) { text(description, error instanceof Error ? error.message : "Task restoration failed."); } finally { restore.disabled = false; } });
+		    row.append(meta, title, description, restore); body.append(row);
 		  });
 		}).catch((error) => { const failed = document.createElement("p"); text(failed, error instanceof Error ? error.message : "Deleted tasks could not be loaded."); body.prepend(failed); });
 		return section;
