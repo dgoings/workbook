@@ -41,7 +41,7 @@ func TestRunColdCLIIsolatesScenarioSamplesAndRunsTenCommandBursts(t *testing.T) 
 	spec := RunSpec{
 		WorkbookBinary: "workbook",
 		Fixture: FixtureSpec{
-			ActiveTasks:       40,
+			ActiveTasks:       10,
 			OperationsPerTask: 4,
 			ObjectFormat:      "sha1",
 		},
@@ -108,6 +108,59 @@ func TestRunColdCLIIsolatesScenarioSamplesAndRunsTenCommandBursts(t *testing.T) 
 			if got, want := len(targets), 1; got != want {
 				t.Errorf("%s distinct targets = %d, want %d", directory, got, want)
 			}
+		}
+	}
+}
+
+func TestScenarioTaskAllocationUsesTenTaskFixture(t *testing.T) {
+	taskIDs := []string{
+		"WB-00", "WB-01", "WB-02", "WB-03", "WB-04",
+		"WB-05", "WB-06", "WB-07", "WB-08", "WB-09",
+	}
+
+	cold, err := allocateColdCLITasks(taskIDs)
+	if err != nil {
+		t.Fatalf("allocate cold CLI tasks: %v", err)
+	}
+	if !reflect.DeepEqual(cold.independent, taskIDs) {
+		t.Errorf("cold independent tasks = %#v, want all ten fixture tasks", cold.independent)
+	}
+
+	warm, err := allocateWarmHTTPTasks(taskIDs)
+	if err != nil {
+		t.Fatalf("allocate warm HTTP tasks: %v", err)
+	}
+	if !reflect.DeepEqual(warm.independent, taskIDs) {
+		t.Errorf("warm independent tasks = %#v, want all ten fixture tasks", warm.independent)
+	}
+}
+
+func TestWarmSamplePlanAvoidsNoOpMutationsWhenRolesShareTenTasks(t *testing.T) {
+	current := make([]string, 10)
+	for index := range current {
+		current[index] = "in-progress"
+	}
+
+	for sample := range 4 {
+		plan := planWarmSample(sample)
+		for index := range current {
+			if current[index] == plan.independentStatus {
+				t.Fatalf("sample %d independent task %d already has status %q", sample+1, index+1, plan.independentStatus)
+			}
+			current[index] = plan.independentStatus
+		}
+
+		if current[0] == plan.updateStatus {
+			t.Fatalf("sample %d update task already has status %q", sample+1, plan.updateStatus)
+		}
+		current[0] = plan.updateStatus
+
+		for command := range 10 {
+			status := alternatingStatus(command + plan.sameTaskOffset)
+			if current[1] == status {
+				t.Fatalf("sample %d same-task command %d already has status %q", sample+1, command+1, status)
+			}
+			current[1] = status
 		}
 	}
 }
@@ -370,7 +423,7 @@ func TestWarmSameTaskBurstIssuesTenSequentialAlternatingRequests(t *testing.T) {
 		tracePath: tracePath,
 		client:    httpServer.Client(),
 	}
-	sample, err := server.measureSameTaskBurst(context.Background(), "WB-same", time.Second)
+	sample, err := server.measureSameTaskBurst(context.Background(), "WB-same", 0, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}

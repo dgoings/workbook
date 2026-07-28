@@ -21,8 +21,8 @@ import (
 )
 
 const (
-	coldCLITasksPerFixture  = 17
-	warmHTTPTasksPerFixture = 12
+	coldCLITasksPerFixture  = 10
+	warmHTTPTasksPerFixture = 10
 	warmServerPrefix        = "Workbook board: http://"
 )
 
@@ -66,6 +66,12 @@ type warmHTTPTasks struct {
 	update      string
 	sameBurst   string
 	independent []string
+}
+
+type warmSamplePlan struct {
+	independentStatus string
+	updateStatus      string
+	sameTaskOffset    int
 }
 
 type warmHTTPServer struct {
@@ -214,21 +220,21 @@ func RunWarmHTTP(ctx context.Context, spec RunSpec, fixtureRoot string) (results
 
 	results = warmHTTPResults(spec.Samples)
 	for sample := range spec.Samples {
-		status := alternatingStatus(sample)
-		results[0].Samples[sample], err = server.measureStatus(ctx, tasks.update, status, spec.CommandTimeout)
-		if err != nil {
-			return nil, fmt.Errorf("measure api-update sample %d: %w", sample+1, err)
-		}
-
+		plan := planWarmSample(sample)
 		results[1].Samples[sample], err = server.measureIndependentBurst(
-			ctx, tasks.independent, status, spec.CommandTimeout,
+			ctx, tasks.independent, plan.independentStatus, spec.CommandTimeout,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("measure api-burst-independent-10 sample %d: %w", sample+1, err)
 		}
 
+		results[0].Samples[sample], err = server.measureStatus(ctx, tasks.update, plan.updateStatus, spec.CommandTimeout)
+		if err != nil {
+			return nil, fmt.Errorf("measure api-update sample %d: %w", sample+1, err)
+		}
+
 		results[2].Samples[sample], err = server.measureSameTaskBurst(
-			ctx, tasks.sameBurst, spec.CommandTimeout,
+			ctx, tasks.sameBurst, plan.sameTaskOffset, spec.CommandTimeout,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("measure api-burst-same-task-10 sample %d: %w", sample+1, err)
@@ -498,7 +504,7 @@ func allocateColdCLITasks(taskIDs []string) (coldCLITasks, error) {
 		dependent:   taskIDs[4],
 		dependency:  taskIDs[5],
 		sameBurst:   taskIDs[6],
-		independent: append([]string(nil), taskIDs[7:17]...),
+		independent: append([]string(nil), taskIDs[:10]...),
 	}, nil
 }
 
@@ -509,7 +515,7 @@ func allocateWarmHTTPTasks(taskIDs []string) (warmHTTPTasks, error) {
 	return warmHTTPTasks{
 		update:      taskIDs[0],
 		sameBurst:   taskIDs[1],
-		independent: append([]string(nil), taskIDs[2:12]...),
+		independent: append([]string(nil), taskIDs[:10]...),
 	}, nil
 }
 
@@ -792,17 +798,25 @@ func (server *warmHTTPServer) performStatus(ctx context.Context, taskID, status 
 	}, nil
 }
 
-func (server *warmHTTPServer) measureSameTaskBurst(ctx context.Context, taskID string, timeout time.Duration) (Sample, error) {
+func (server *warmHTTPServer) measureSameTaskBurst(ctx context.Context, taskID string, statusOffset int, timeout time.Duration) (Sample, error) {
 	startedAt := time.Now()
 	members := make([]Sample, 10)
 	for command := range members {
-		sample, err := server.measureStatus(ctx, taskID, alternatingStatus(command), timeout)
+		sample, err := server.measureStatus(ctx, taskID, alternatingStatus(command+statusOffset), timeout)
 		if err != nil {
 			return Sample{}, fmt.Errorf("request %d: %w", command+1, err)
 		}
 		members[command] = sample
 	}
 	return aggregateBurst(time.Since(startedAt), members), nil
+}
+
+func planWarmSample(sample int) warmSamplePlan {
+	return warmSamplePlan{
+		independentStatus: alternatingStatus(sample),
+		updateStatus:      "backlog",
+		sameTaskOffset:    sample + 1,
+	}
 }
 
 func (server *warmHTTPServer) measureIndependentBurst(ctx context.Context, taskIDs []string, status string, timeout time.Duration) (Sample, error) {
