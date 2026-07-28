@@ -10,11 +10,11 @@
 
 ## Global Constraints
 
-- The acceptance fixture has exactly 500 active tasks and exactly 20 operation commits per task, including the root create operation.
+- The acceptance fixture has at least 500 active tasks and at least 20 operation commits per task, including the root create operation.
 - Warm web/API Git-durable mutation target is p95 at or below 100 milliseconds.
 - Cold CLI Git-durable mutation target is p95 at or below 200 milliseconds.
 - Ten sequential same-task mutations and ten independent-task mutations must each complete in less than one second.
-- Counts above 500 active tasks are diagnostic only.
+- Runs below either acceptance minimum are diagnostic only; larger fixtures remain valid acceptance runs.
 - The baseline uses bounded timeouts and records misses or timeouts; it does not tune the implementation.
 - SQLite remains disposable and Git remains the only durable source of truth.
 - The harness never reads `.git/refs` directly and never assumes a Git object ID length or hash algorithm.
