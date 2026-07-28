@@ -107,6 +107,30 @@ func TestRunColdCLIIsolatesScenarioSamplesAndRunsTenCommandBursts(t *testing.T) 
 	}
 }
 
+func TestColdCLISampleFailureAllowsTimeoutsAndRejectsOtherFailures(t *testing.T) {
+	tests := []struct {
+		name   string
+		sample Sample
+		want   bool
+	}{
+		{name: "success", sample: Sample{ExitCode: 0}, want: false},
+		{name: "timeout", sample: Sample{ExitCode: -1, TimedOut: true, Error: "signal: killed"}, want: false},
+		{name: "nonzero exit", sample: Sample{ExitCode: 2, Error: "invalid invocation"}, want: true},
+		{name: "immediate error", sample: Sample{ExitCode: 0, Error: "exec format error"}, want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := coldCLISampleFailed(test.sample); got != test.want {
+				t.Fatalf("coldCLISampleFailed(%#v) = %t, want %t", test.sample, got, test.want)
+			}
+		})
+	}
+}
+
+func coldCLISampleFailed(sample Sample) bool {
+	return !sample.TimedOut && (sample.ExitCode != 0 || sample.Error != "")
+}
+
 func TestRunColdCLI(t *testing.T) {
 	binary := buildWorkbookBinary(t)
 	spec := RunSpec{
@@ -147,8 +171,11 @@ func TestRunColdCLI(t *testing.T) {
 			continue
 		}
 		sample := result.Samples[0]
-		successful := sample.ExitCode == 0 && !sample.TimedOut && sample.Error == ""
-		if successful && sample.GitProcesses < 1 {
+		if coldCLISampleFailed(sample) {
+			t.Errorf("%s sample = %#v, want success or timeout", result.Name, sample)
+			continue
+		}
+		if !sample.TimedOut && sample.GitProcesses < 1 {
 			t.Errorf("%s Git processes = %d, want at least 1", result.Name, sample.GitProcesses)
 		}
 	}
