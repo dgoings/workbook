@@ -184,6 +184,139 @@ func TestRunColdCLI(t *testing.T) {
 	}
 }
 
+func TestRunWarmHTTP(t *testing.T) {
+	binary := buildWorkbookBinary(t)
+	spec := RunSpec{
+		WorkbookBinary: binary,
+		Fixture: FixtureSpec{
+			ActiveTasks:       40,
+			OperationsPerTask: 4,
+			ObjectFormat:      "sha1",
+		},
+		Samples:        1,
+		CommandTimeout: 60 * time.Second,
+	}
+
+	results, err := RunWarmHTTP(context.Background(), spec, filepath.Join(t.TempDir(), "fixture"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{
+		"api-update",
+		"api-burst-independent-10",
+		"api-burst-same-task-10",
+	}
+	got := make([]string, len(results))
+	for i, result := range results {
+		got[i] = result.Name
+		if result.Surface != "warm-http" {
+			t.Errorf("%s surface = %q, want warm-http", result.Name, result.Surface)
+		}
+		if len(result.Samples) != 1 {
+			t.Errorf("%s samples = %d, want 1", result.Name, len(result.Samples))
+			continue
+		}
+		sample := result.Samples[0]
+		if sample.ExitCode != 0 || sample.TimedOut || sample.Error != "" {
+			t.Errorf("%s sample = %#v, want success", result.Name, sample)
+			continue
+		}
+		if sample.GitProcesses < 1 {
+			t.Errorf("%s Git processes = %d, want at least 1", result.Name, sample.GitProcesses)
+		}
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("scenario names = %#v, want %#v", got, want)
+	}
+}
+
+func TestMeasureRepository(t *testing.T) {
+	binary := buildWorkbookBinary(t)
+	fixture, err := BuildFixture(context.Background(), filepath.Join(t.TempDir(), "fixture"), FixtureSpec{
+		ActiveTasks:       40,
+		OperationsPerTask: 4,
+		ObjectFormat:      "sha1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	metrics, results, err := MeasureRepository(context.Background(), binary, fixture.Root, 60*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{
+		"projection-rebuild",
+		"projection-refresh-unchanged",
+		"projection-refresh-one-changed",
+		"sync-initial-local-bare",
+		"sync-unchanged-local-bare",
+	}
+	got := make([]string, len(results))
+	for i, result := range results {
+		got[i] = result.Name
+		if result.Surface != "repository" {
+			t.Errorf("%s surface = %q, want repository", result.Name, result.Surface)
+		}
+		if len(result.Samples) != 1 {
+			t.Errorf("%s samples = %d, want 1", result.Name, len(result.Samples))
+			continue
+		}
+		sample := result.Samples[0]
+		if sample.TimedOut && i >= 3 {
+			continue
+		}
+		if sample.ExitCode != 0 || sample.TimedOut || sample.Error != "" {
+			t.Errorf("%s sample = %#v, want success", result.Name, sample)
+		}
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("scenario names = %#v, want %#v", got, want)
+	}
+
+	if metrics.LooseRefEnumerationMilliseconds <= 0 {
+		t.Errorf("loose ref enumeration = %f ms, want positive", metrics.LooseRefEnumerationMilliseconds)
+	}
+	if metrics.PackedRefEnumerationMilliseconds <= 0 {
+		t.Errorf("packed ref enumeration = %f ms, want positive", metrics.PackedRefEnumerationMilliseconds)
+	}
+	if metrics.LooseObjects <= 0 {
+		t.Errorf("loose objects = %d, want positive", metrics.LooseObjects)
+	}
+	if metrics.LooseObjectBytes <= 0 {
+		t.Errorf("loose object bytes = %d, want positive", metrics.LooseObjectBytes)
+	}
+	if metrics.PackedObjects <= 0 {
+		t.Errorf("packed objects = %d, want positive", metrics.PackedObjects)
+	}
+	if metrics.PackBytes <= 0 {
+		t.Errorf("pack bytes = %d, want positive", metrics.PackBytes)
+	}
+}
+
+func TestMeasureRepositoryParsesObjectCountsAndConvertsKiBToBytes(t *testing.T) {
+	before := []byte("count: 7\nsize: 3\nin-pack: 2\nsize-pack: 1\n")
+	after := []byte("count: 0\nsize: 0\nin-pack: 11\nsize-pack: 5\n")
+
+	got, err := repositoryMetricsFromCounts(time.Millisecond, 2*time.Millisecond, before, after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := RepositoryMetrics{
+		LooseRefEnumerationMilliseconds:  1,
+		PackedRefEnumerationMilliseconds: 2,
+		LooseObjects:                     7,
+		LooseObjectBytes:                 3 * 1024,
+		PackedObjects:                    11,
+		PackBytes:                        5 * 1024,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("repository metrics = %#v, want %#v", got, want)
+	}
+}
+
 func buildWorkbookBinary(t *testing.T) string {
 	t.Helper()
 	root := filepath.Clean(filepath.Join("..", ".."))

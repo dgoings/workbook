@@ -1,16 +1,30 @@
 package perf
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
-const coldCLITasksPerFixture = 17
+const (
+	coldCLITasksPerFixture  = 17
+	warmHTTPTasksPerFixture = 12
+	warmServerPrefix        = "Workbook board: http://"
+)
 
 const (
 	coldCreate = iota
@@ -46,6 +60,27 @@ type coldCLITasks struct {
 type scenarioDependencies struct {
 	buildFixture   func(context.Context, string, FixtureSpec) (Fixture, error)
 	measureCommand func(context.Context, CommandSpec) Sample
+}
+
+type warmHTTPTasks struct {
+	update      string
+	sameBurst   string
+	independent []string
+}
+
+type warmHTTPServer struct {
+	baseURL   string
+	tracePath string
+	command   *exec.Cmd
+	wait      <-chan error
+	client    *http.Client
+}
+
+type countObjectsMetrics struct {
+	count    int64
+	size     int64
+	inPack   int64
+	sizePack int64
 }
 
 // RunColdCLI builds deterministic fixtures and measures cold CLI mutations
@@ -144,6 +179,197 @@ func runColdCLI(ctx context.Context, spec RunSpec, fixtureRoot string, dependenc
 	return results, nil
 }
 
+// RunWarmHTTP starts one real Workbook server and measures status mutations
+// over its long-lived HTTP API.
+func RunWarmHTTP(ctx context.Context, spec RunSpec, fixtureRoot string) (results []ScenarioResult, err error) {
+	if spec.Samples < 1 {
+		return nil, fmt.Errorf("samples must be positive")
+	}
+	if spec.CommandTimeout <= 0 {
+		return nil, fmt.Errorf("command timeout must be positive")
+	}
+	if fixtureRoot == "" {
+		return nil, fmt.Errorf("fixture root is required")
+	}
+
+	fixture, err := BuildFixture(ctx, fixtureRoot, spec.Fixture)
+	if err != nil {
+		return nil, fmt.Errorf("build warm HTTP fixture: %w", err)
+	}
+	tasks, err := allocateWarmHTTPTasks(fixture.TaskIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	server, err := startWarmHTTPServer(ctx, spec.WorkbookBinary, fixture.Root, spec.CommandTimeout)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := server.close(spec.CommandTimeout); closeErr != nil && err == nil {
+			results = nil
+			err = closeErr
+		}
+	}()
+
+	results = warmHTTPResults(spec.Samples)
+	for sample := range spec.Samples {
+		status := alternatingStatus(sample)
+		results[0].Samples[sample], err = server.measureStatus(ctx, tasks.update, status, spec.CommandTimeout)
+		if err != nil {
+			return nil, fmt.Errorf("measure api-update sample %d: %w", sample+1, err)
+		}
+
+		results[1].Samples[sample], err = server.measureIndependentBurst(
+			ctx, tasks.independent, status, spec.CommandTimeout,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("measure api-burst-independent-10 sample %d: %w", sample+1, err)
+		}
+
+		results[2].Samples[sample], err = server.measureSameTaskBurst(
+			ctx, tasks.sameBurst, spec.CommandTimeout,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("measure api-burst-same-task-10 sample %d: %w", sample+1, err)
+		}
+	}
+	for index := range results {
+		results[index].Summary = Summarize(results[index].Samples)
+	}
+	return results, nil
+}
+
+// MeasureRepository records projection, ref, object, and local-bare-remote
+// measurements against an existing Workbook fixture.
+func MeasureRepository(ctx context.Context, workbookBinary, fixtureRoot string, commandTimeout time.Duration) (RepositoryMetrics, []ScenarioResult, error) {
+	if workbookBinary == "" {
+		return RepositoryMetrics{}, nil, fmt.Errorf("workbook binary is required")
+	}
+	if fixtureRoot == "" {
+		return RepositoryMetrics{}, nil, fmt.Errorf("fixture root is required")
+	}
+	if commandTimeout <= 0 {
+		return RepositoryMetrics{}, nil, fmt.Errorf("command timeout must be positive")
+	}
+
+	results := repositoryResults()
+	projectionCommands := [][]string{
+		{"rebuild", "--json"},
+		{"list", "--json"},
+	}
+	for index, args := range projectionCommands {
+		sample := MeasureCommand(ctx, CommandSpec{
+			Binary:    workbookBinary,
+			Args:      args,
+			Directory: fixtureRoot,
+			Timeout:   commandTimeout,
+		})
+		if err := requireSuccessfulSample(results[index].Name, sample); err != nil {
+			return RepositoryMetrics{}, nil, err
+		}
+		results[index].Samples[0] = sample
+	}
+
+	taskRefs, _, err := enumerateTaskRefs(ctx, fixtureRoot)
+	if err != nil {
+		return RepositoryMetrics{}, nil, err
+	}
+	taskID, err := firstTaskID(taskRefs)
+	if err != nil {
+		return RepositoryMetrics{}, nil, err
+	}
+
+	updateSample := MeasureCommand(ctx, CommandSpec{
+		Binary:    workbookBinary,
+		Args:      []string{"update", taskID, "--status", "ready", "--json"},
+		Directory: fixtureRoot,
+		Timeout:   commandTimeout,
+	})
+	if err := requireSuccessfulSample("prepare projection-refresh-one-changed", updateSample); err != nil {
+		return RepositoryMetrics{}, nil, err
+	}
+	results[2].Samples[0] = MeasureCommand(ctx, CommandSpec{
+		Binary:    workbookBinary,
+		Args:      []string{"list", "--json"},
+		Directory: fixtureRoot,
+		Timeout:   commandTimeout,
+	})
+	if err := requireSuccessfulSample(results[2].Name, results[2].Samples[0]); err != nil {
+		return RepositoryMetrics{}, nil, err
+	}
+
+	looseRefs, looseRefDuration, err := enumerateTaskRefs(ctx, fixtureRoot)
+	if err != nil {
+		return RepositoryMetrics{}, nil, err
+	}
+	beforeObjectsOutput, _, err := runRepositoryGit(ctx, fixtureRoot, "count-objects", "-v")
+	if err != nil {
+		return RepositoryMetrics{}, nil, err
+	}
+
+	if _, _, err := runRepositoryGit(ctx, fixtureRoot, "pack-refs", "--all"); err != nil {
+		return RepositoryMetrics{}, nil, err
+	}
+	packedRefs, packedRefDuration, err := enumerateTaskRefs(ctx, fixtureRoot)
+	if err != nil {
+		return RepositoryMetrics{}, nil, err
+	}
+	if !bytes.Equal(looseRefs, packedRefs) {
+		return RepositoryMetrics{}, nil, fmt.Errorf("task ref enumeration changed after packing refs")
+	}
+
+	if _, _, err := runRepositoryGit(ctx, fixtureRoot, "gc"); err != nil {
+		return RepositoryMetrics{}, nil, err
+	}
+	afterObjectsOutput, _, err := runRepositoryGit(ctx, fixtureRoot, "count-objects", "-v")
+	if err != nil {
+		return RepositoryMetrics{}, nil, err
+	}
+	metrics, err := repositoryMetricsFromCounts(
+		looseRefDuration,
+		packedRefDuration,
+		beforeObjectsOutput,
+		afterObjectsOutput,
+	)
+	if err != nil {
+		return RepositoryMetrics{}, nil, err
+	}
+
+	originRoot, err := os.MkdirTemp("", "workbook-benchmark-origin-")
+	if err != nil {
+		return RepositoryMetrics{}, nil, fmt.Errorf("create local bare remote root: %w", err)
+	}
+	defer os.RemoveAll(originRoot)
+	origin := filepath.Join(originRoot, "origin.git")
+	if _, _, err := runRepositoryGit(ctx, "", "init", "--bare", "--quiet", origin); err != nil {
+		return RepositoryMetrics{}, nil, err
+	}
+	if _, _, err := runRepositoryGit(ctx, fixtureRoot, "remote", "add", "origin", origin); err != nil {
+		return RepositoryMetrics{}, nil, err
+	}
+
+	for index := 3; index < len(results); index++ {
+		sample := MeasureCommand(ctx, CommandSpec{
+			Binary:    workbookBinary,
+			Args:      []string{"sync", "--json"},
+			Directory: fixtureRoot,
+			Timeout:   commandTimeout,
+		})
+		if !sample.TimedOut {
+			if err := requireSuccessfulSample(results[index].Name, sample); err != nil {
+				return RepositoryMetrics{}, nil, err
+			}
+		}
+		results[index].Samples[0] = sample
+	}
+
+	for index := range results {
+		results[index].Summary = Summarize(results[index].Samples)
+	}
+	return metrics, results, nil
+}
+
 func coldCLIResults(samples int) []ScenarioResult {
 	names := []string{
 		"cli-create",
@@ -162,6 +388,42 @@ func coldCLIResults(samples int) []ScenarioResult {
 			Name:    name,
 			Surface: "cold-cli",
 			Samples: make([]Sample, samples),
+		}
+	}
+	return results
+}
+
+func warmHTTPResults(samples int) []ScenarioResult {
+	names := []string{
+		"api-update",
+		"api-burst-independent-10",
+		"api-burst-same-task-10",
+	}
+	results := make([]ScenarioResult, len(names))
+	for index, name := range names {
+		results[index] = ScenarioResult{
+			Name:    name,
+			Surface: "warm-http",
+			Samples: make([]Sample, samples),
+		}
+	}
+	return results
+}
+
+func repositoryResults() []ScenarioResult {
+	names := []string{
+		"projection-rebuild",
+		"projection-refresh-unchanged",
+		"projection-refresh-one-changed",
+		"sync-initial-local-bare",
+		"sync-unchanged-local-bare",
+	}
+	results := make([]ScenarioResult, len(names))
+	for index, name := range names {
+		results[index] = ScenarioResult{
+			Name:    name,
+			Surface: "repository",
+			Samples: make([]Sample, 1),
 		}
 	}
 	return results
@@ -199,6 +461,17 @@ func allocateColdCLITasks(taskIDs []string) (coldCLITasks, error) {
 		dependency:  taskIDs[5],
 		sameBurst:   taskIDs[6],
 		independent: append([]string(nil), taskIDs[7:17]...),
+	}, nil
+}
+
+func allocateWarmHTTPTasks(taskIDs []string) (warmHTTPTasks, error) {
+	if len(taskIDs) < warmHTTPTasksPerFixture {
+		return warmHTTPTasks{}, fmt.Errorf("fixture has %d tasks, need %d for warm HTTP scenarios", len(taskIDs), warmHTTPTasksPerFixture)
+	}
+	return warmHTTPTasks{
+		update:      taskIDs[0],
+		sameBurst:   taskIDs[1],
+		independent: append([]string(nil), taskIDs[2:12]...),
 	}, nil
 }
 
@@ -266,6 +539,398 @@ func measureIndependentBurst(
 	close(start)
 	done.Wait()
 	return aggregateBurst(time.Since(startedAt), members)
+}
+
+func startWarmHTTPServer(ctx context.Context, binary, directory string, timeout time.Duration) (*warmHTTPServer, error) {
+	traceFile, err := os.CreateTemp("", "workbook-server-git-trace-*.json")
+	if err != nil {
+		return nil, fmt.Errorf("create server Trace2 event file: %w", err)
+	}
+	tracePath := traceFile.Name()
+	if err := traceFile.Close(); err != nil {
+		os.Remove(tracePath)
+		return nil, fmt.Errorf("close server Trace2 event file: %w", err)
+	}
+
+	command := exec.Command(binary, "serve", "--addr", "127.0.0.1:0")
+	command.Dir = directory
+	command.Env = append(os.Environ(), "GIT_TRACE2_EVENT="+tracePath)
+	command.Stdout = io.Discard
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	stderr, err := command.StderrPipe()
+	if err != nil {
+		os.Remove(tracePath)
+		return nil, fmt.Errorf("open server stderr: %w", err)
+	}
+	if err := command.Start(); err != nil {
+		os.Remove(tracePath)
+		return nil, fmt.Errorf("start warm HTTP server: %w", err)
+	}
+
+	ready := make(chan string, 1)
+	scanDone := make(chan error, 1)
+	go func() {
+		scanner := bufio.NewScanner(stderr)
+		reported := false
+		for scanner.Scan() {
+			line := scanner.Text()
+			if !reported && strings.HasPrefix(line, warmServerPrefix) {
+				ready <- strings.TrimSpace(strings.TrimPrefix(line, warmServerPrefix))
+				reported = true
+			}
+		}
+		scanDone <- scanner.Err()
+	}()
+	wait := make(chan error, 1)
+	go func() {
+		wait <- command.Wait()
+	}()
+
+	startupTimer := time.NewTimer(timeout)
+	defer startupTimer.Stop()
+	var address string
+	select {
+	case address = <-ready:
+	case err := <-scanDone:
+		terminateWarmServer(command)
+		<-wait
+		os.Remove(tracePath)
+		if err != nil {
+			return nil, fmt.Errorf("read warm HTTP server stderr: %w", err)
+		}
+		return nil, fmt.Errorf("warm HTTP server stderr closed before %q", warmServerPrefix)
+	case err := <-wait:
+		os.Remove(tracePath)
+		if err == nil {
+			return nil, fmt.Errorf("warm HTTP server exited before readiness")
+		}
+		return nil, fmt.Errorf("warm HTTP server exited before readiness: %w", err)
+	case <-ctx.Done():
+		terminateWarmServer(command)
+		<-wait
+		os.Remove(tracePath)
+		return nil, ctx.Err()
+	case <-startupTimer.C:
+		terminateWarmServer(command)
+		<-wait
+		os.Remove(tracePath)
+		return nil, fmt.Errorf("warm HTTP server did not report readiness within %s", timeout)
+	}
+
+	baseURL := "http://" + address
+	client := &http.Client{}
+	if err := waitForWarmHealth(ctx, client, baseURL, timeout); err != nil {
+		terminateWarmServer(command)
+		<-wait
+		os.Remove(tracePath)
+		return nil, err
+	}
+	return &warmHTTPServer{
+		baseURL:   baseURL,
+		tracePath: tracePath,
+		command:   command,
+		wait:      wait,
+		client:    client,
+	}, nil
+}
+
+func waitForWarmHealth(ctx context.Context, client *http.Client, baseURL string, timeout time.Duration) error {
+	healthContext, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	for {
+		request, err := http.NewRequestWithContext(healthContext, http.MethodGet, baseURL+"/healthz", nil)
+		if err != nil {
+			return fmt.Errorf("build warm HTTP health request: %w", err)
+		}
+		response, requestErr := client.Do(request)
+		if requestErr == nil {
+			_, readErr := io.Copy(io.Discard, response.Body)
+			closeErr := response.Body.Close()
+			if readErr != nil {
+				return fmt.Errorf("read warm HTTP health response: %w", readErr)
+			}
+			if closeErr != nil {
+				return fmt.Errorf("close warm HTTP health response: %w", closeErr)
+			}
+			if response.StatusCode == http.StatusOK {
+				return nil
+			}
+		}
+
+		select {
+		case <-healthContext.Done():
+			return fmt.Errorf("warm HTTP health check: %w", healthContext.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func (server *warmHTTPServer) measureStatus(ctx context.Context, taskID, status string, timeout time.Duration) (Sample, error) {
+	cursor, err := OpenTraceCursor(server.tracePath)
+	if err != nil {
+		return Sample{}, err
+	}
+	requestContext, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(
+		requestContext,
+		http.MethodPatch,
+		server.baseURL+"/api/tasks/"+url.PathEscape(taskID)+"/status",
+		strings.NewReader(`{"status":"`+status+`"}`),
+	)
+	if err != nil {
+		return Sample{}, fmt.Errorf("build status request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+
+	startedAt := time.Now()
+	response, err := server.client.Do(request)
+	if err != nil {
+		return Sample{}, fmt.Errorf("send status request: %w", err)
+	}
+	body, readErr := io.ReadAll(response.Body)
+	closeErr := response.Body.Close()
+	duration := time.Since(startedAt)
+	if readErr != nil {
+		return Sample{}, fmt.Errorf("read status response: %w", readErr)
+	}
+	if closeErr != nil {
+		return Sample{}, fmt.Errorf("close status response: %w", closeErr)
+	}
+	if response.StatusCode != http.StatusOK {
+		return Sample{}, fmt.Errorf("status response = %d, want %d; body = %s", response.StatusCode, http.StatusOK, body)
+	}
+	var document struct {
+		Format  string `json:"format"`
+		Version int    `json:"version"`
+		Task    struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"task"`
+	}
+	if err := json.Unmarshal(body, &document); err != nil {
+		return Sample{}, fmt.Errorf("decode status response: %w", err)
+	}
+	if document.Format != "workbook.task-mutation" || document.Version != 1 ||
+		document.Task.ID != taskID || document.Task.Status != status {
+		return Sample{}, fmt.Errorf(
+			"status response = %q v%d task %q status %q, want workbook.task-mutation v1 task %q status %q",
+			document.Format, document.Version, document.Task.ID, document.Task.Status, taskID, status,
+		)
+	}
+
+	gitProcesses, err := cursor.CountNewGitProcesses()
+	if err != nil {
+		return Sample{}, err
+	}
+	return Sample{
+		Duration:     duration,
+		GitProcesses: gitProcesses,
+		ExitCode:     0,
+	}, nil
+}
+
+func (server *warmHTTPServer) measureSameTaskBurst(ctx context.Context, taskID string, timeout time.Duration) (Sample, error) {
+	startedAt := time.Now()
+	members := make([]Sample, 10)
+	for command := range members {
+		sample, err := server.measureStatus(ctx, taskID, alternatingStatus(command), timeout)
+		if err != nil {
+			return Sample{}, fmt.Errorf("request %d: %w", command+1, err)
+		}
+		members[command] = sample
+	}
+	return aggregateBurst(time.Since(startedAt), members), nil
+}
+
+func (server *warmHTTPServer) measureIndependentBurst(ctx context.Context, taskIDs []string, status string, timeout time.Duration) (Sample, error) {
+	start := make(chan struct{})
+	var ready sync.WaitGroup
+	var done sync.WaitGroup
+	ready.Add(len(taskIDs))
+	done.Add(len(taskIDs))
+	members := make([]Sample, len(taskIDs))
+	errorsByRequest := make([]error, len(taskIDs))
+	for index, taskID := range taskIDs {
+		go func() {
+			defer done.Done()
+			ready.Done()
+			<-start
+			members[index], errorsByRequest[index] = server.measureStatus(ctx, taskID, status, timeout)
+		}()
+	}
+	ready.Wait()
+	startedAt := time.Now()
+	close(start)
+	done.Wait()
+	for index, err := range errorsByRequest {
+		if err != nil {
+			return Sample{}, fmt.Errorf("request %d: %w", index+1, err)
+		}
+	}
+	return aggregateBurst(time.Since(startedAt), members), nil
+}
+
+func (server *warmHTTPServer) close(timeout time.Duration) error {
+	if err := interruptWarmServer(server.command); err != nil {
+		return fmt.Errorf("interrupt warm HTTP server: %w", err)
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case err := <-server.wait:
+		os.Remove(server.tracePath)
+		if err != nil {
+			return fmt.Errorf("warm HTTP server did not exit cleanly: %w", err)
+		}
+		return nil
+	case <-timer.C:
+		terminateWarmServer(server.command)
+		<-server.wait
+		os.Remove(server.tracePath)
+		return fmt.Errorf("warm HTTP server did not exit within %s", timeout)
+	}
+}
+
+func alternatingStatus(index int) string {
+	if index%2 == 0 {
+		return "ready"
+	}
+	return "in-progress"
+}
+
+func terminateWarmServer(command *exec.Cmd) {
+	_ = signalWarmServer(command, syscall.SIGKILL)
+}
+
+func interruptWarmServer(command *exec.Cmd) error {
+	if command.Process == nil {
+		return nil
+	}
+	err := command.Process.Signal(os.Interrupt)
+	if errors.Is(err, os.ErrProcessDone) {
+		return nil
+	}
+	return err
+}
+
+func signalWarmServer(command *exec.Cmd, signal syscall.Signal) error {
+	if command.Process == nil {
+		return nil
+	}
+	err := syscall.Kill(-command.Process.Pid, signal)
+	if errors.Is(err, syscall.ESRCH) {
+		return nil
+	}
+	return err
+}
+
+func enumerateTaskRefs(ctx context.Context, directory string) ([]byte, time.Duration, error) {
+	return runRepositoryGit(ctx, directory, "for-each-ref", "--format=%(refname)%00%(objectname)", "refs/workbook/tasks/")
+}
+
+func runRepositoryGit(ctx context.Context, directory string, args ...string) ([]byte, time.Duration, error) {
+	commandArgs := append([]string(nil), args...)
+	if directory != "" {
+		commandArgs = append([]string{"-C", directory}, commandArgs...)
+	}
+	command := exec.CommandContext(ctx, "git", commandArgs...)
+	startedAt := time.Now()
+	output, err := command.CombinedOutput()
+	duration := time.Since(startedAt)
+	if err != nil {
+		return nil, duration, fmt.Errorf("git %s: %w: %s", strings.Join(commandArgs, " "), err, strings.TrimSpace(string(output)))
+	}
+	return output, duration, nil
+}
+
+func firstTaskID(refs []byte) (string, error) {
+	firstLine, _, _ := bytes.Cut(refs, []byte{'\n'})
+	ref, _, found := bytes.Cut(firstLine, []byte{0})
+	if !found {
+		return "", fmt.Errorf("task ref enumeration did not include an object name")
+	}
+	taskID := strings.TrimPrefix(string(ref), "refs/workbook/tasks/")
+	if taskID == "" || taskID == string(ref) {
+		return "", fmt.Errorf("task ref enumeration did not include a task ref")
+	}
+	return taskID, nil
+}
+
+func parseCountObjects(output []byte) (countObjectsMetrics, error) {
+	values := make(map[string]int64)
+	scanner := bufio.NewScanner(bytes.NewReader(output))
+	for scanner.Scan() {
+		key, value, found := strings.Cut(scanner.Text(), ":")
+		if !found {
+			return countObjectsMetrics{}, fmt.Errorf("invalid count-objects line %q", scanner.Text())
+		}
+		parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		if err != nil || parsed < 0 {
+			return countObjectsMetrics{}, fmt.Errorf("invalid count-objects %s value %q", key, strings.TrimSpace(value))
+		}
+		values[key] = parsed
+	}
+	if err := scanner.Err(); err != nil {
+		return countObjectsMetrics{}, err
+	}
+	required := []string{"count", "size", "in-pack", "size-pack"}
+	for _, key := range required {
+		if _, found := values[key]; !found {
+			return countObjectsMetrics{}, fmt.Errorf("count-objects output missing %q", key)
+		}
+	}
+	const maxInt64 = int64(^uint64(0) >> 1)
+	if values["size"] > maxInt64/1024 || values["size-pack"] > maxInt64/1024 {
+		return countObjectsMetrics{}, fmt.Errorf("count-objects KiB value overflows bytes")
+	}
+	return countObjectsMetrics{
+		count:    values["count"],
+		size:     values["size"],
+		inPack:   values["in-pack"],
+		sizePack: values["size-pack"],
+	}, nil
+}
+
+func repositoryMetricsFromCounts(
+	looseRefDuration time.Duration,
+	packedRefDuration time.Duration,
+	beforeOutput []byte,
+	afterOutput []byte,
+) (RepositoryMetrics, error) {
+	before, err := parseCountObjects(beforeOutput)
+	if err != nil {
+		return RepositoryMetrics{}, fmt.Errorf("parse loose object metrics: %w", err)
+	}
+	after, err := parseCountObjects(afterOutput)
+	if err != nil {
+		return RepositoryMetrics{}, fmt.Errorf("parse packed object metrics: %w", err)
+	}
+	return RepositoryMetrics{
+		LooseRefEnumerationMilliseconds:  durationAsMilliseconds(looseRefDuration),
+		PackedRefEnumerationMilliseconds: durationAsMilliseconds(packedRefDuration),
+		LooseObjects:                     before.count,
+		LooseObjectBytes:                 before.size * 1024,
+		PackedObjects:                    after.inPack,
+		PackBytes:                        after.sizePack * 1024,
+	}, nil
+}
+
+func requireSuccessfulSample(name string, sample Sample) error {
+	if sample.ExitCode == 0 && !sample.TimedOut && sample.Error == "" {
+		return nil
+	}
+	if sample.TimedOut {
+		return fmt.Errorf("%s timed out: %s", name, sample.Error)
+	}
+	if sample.Error != "" {
+		return fmt.Errorf("%s failed with exit code %d: %s", name, sample.ExitCode, sample.Error)
+	}
+	return fmt.Errorf("%s failed with exit code %d", name, sample.ExitCode)
+}
+
+func durationAsMilliseconds(duration time.Duration) float64 {
+	return float64(duration) / float64(time.Millisecond)
 }
 
 func aggregateBurst(duration time.Duration, members []Sample) Sample {
