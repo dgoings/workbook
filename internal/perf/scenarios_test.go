@@ -2,10 +2,15 @@ package perf
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -231,6 +236,166 @@ func TestRunWarmHTTP(t *testing.T) {
 	}
 }
 
+func TestWarmStatusDeadlineReturnsTimedOutSample(t *testing.T) {
+	release := make(chan struct{})
+	httpServer := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		<-release
+	}))
+	defer httpServer.Close()
+	defer close(release)
+
+	server := warmHTTPServer{
+		baseURL:   httpServer.URL,
+		tracePath: emptyTraceFile(t),
+		client:    httpServer.Client(),
+	}
+	sample, err := server.measureStatus(context.Background(), "WB-timeout", "ready", 20*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sample.TimedOut || sample.ExitCode != -1 || !strings.Contains(sample.Error, context.DeadlineExceeded.Error()) {
+		t.Fatalf("deadline sample = %#v, want retained timeout", sample)
+	}
+}
+
+func TestWarmIndependentBurstIssuesTenDistinctRequestsAndCountsTraceOnce(t *testing.T) {
+	tracePath := emptyTraceFile(t)
+	var mutex sync.Mutex
+	var requests []recordedStatusRequest
+	allArrived := make(chan struct{})
+	release := make(chan struct{})
+	httpServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		recorded, err := readRecordedStatusRequest(request)
+		if err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		mutex.Lock()
+		requests = append(requests, recorded)
+		if len(requests) == 10 {
+			if err := appendTraceStarts(tracePath, 10); err != nil {
+				mutex.Unlock()
+				http.Error(writer, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			close(allArrived)
+		}
+		mutex.Unlock()
+
+		select {
+		case <-allArrived:
+			writeRecordedStatusResponse(writer, recorded)
+		case <-release:
+		case <-request.Context().Done():
+		}
+	}))
+	defer httpServer.Close()
+	defer close(release)
+
+	server := warmHTTPServer{
+		baseURL:   httpServer.URL,
+		tracePath: tracePath,
+		client:    httpServer.Client(),
+	}
+	taskIDs := make([]string, 10)
+	for index := range taskIDs {
+		taskIDs[index] = fmt.Sprintf("WB-independent-%02d", index+1)
+	}
+	sample, err := server.measureIndependentBurst(context.Background(), taskIDs, "ready", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sample.ExitCode != 0 || sample.TimedOut || sample.Error != "" {
+		t.Fatalf("independent burst sample = %#v, want success", sample)
+	}
+	if sample.GitProcesses != 10 {
+		t.Fatalf("independent burst Git processes = %d, want 10 unique Trace2 starts", sample.GitProcesses)
+	}
+
+	mutex.Lock()
+	defer mutex.Unlock()
+	if len(requests) != 10 {
+		t.Fatalf("independent requests = %d, want 10", len(requests))
+	}
+	targets := make(map[string]struct{}, len(requests))
+	for _, request := range requests {
+		targets[request.taskID] = struct{}{}
+		if request.status != "ready" {
+			t.Errorf("%s status = %q, want ready", request.taskID, request.status)
+		}
+	}
+	if len(targets) != 10 {
+		t.Fatalf("independent targets = %d, want 10", len(targets))
+	}
+}
+
+func TestWarmSameTaskBurstIssuesTenSequentialAlternatingRequests(t *testing.T) {
+	tracePath := emptyTraceFile(t)
+	var mutex sync.Mutex
+	var requests []recordedStatusRequest
+	active := 0
+	maxActive := 0
+	httpServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		recorded, err := readRecordedStatusRequest(request)
+		if err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		mutex.Lock()
+		active++
+		if active > maxActive {
+			maxActive = active
+		}
+		requests = append(requests, recorded)
+		traceErr := appendTraceStarts(tracePath, 1)
+		mutex.Unlock()
+		if traceErr != nil {
+			mutex.Lock()
+			active--
+			mutex.Unlock()
+			http.Error(writer, traceErr.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeRecordedStatusResponse(writer, recorded)
+		mutex.Lock()
+		active--
+		mutex.Unlock()
+	}))
+	defer httpServer.Close()
+
+	server := warmHTTPServer{
+		baseURL:   httpServer.URL,
+		tracePath: tracePath,
+		client:    httpServer.Client(),
+	}
+	sample, err := server.measureSameTaskBurst(context.Background(), "WB-same", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sample.ExitCode != 0 || sample.TimedOut || sample.Error != "" || sample.GitProcesses != 10 {
+		t.Fatalf("same-task burst sample = %#v, want ten successful traced requests", sample)
+	}
+
+	mutex.Lock()
+	defer mutex.Unlock()
+	if len(requests) != 10 {
+		t.Fatalf("same-task requests = %d, want 10", len(requests))
+	}
+	if maxActive != 1 {
+		t.Fatalf("maximum concurrent same-task requests = %d, want 1", maxActive)
+	}
+	for index, request := range requests {
+		if request.taskID != "WB-same" {
+			t.Errorf("request %d task = %q, want WB-same", index+1, request.taskID)
+		}
+		if want := alternatingStatus(index); request.status != want {
+			t.Errorf("request %d status = %q, want %q", index+1, request.status, want)
+		}
+	}
+}
+
 func TestMeasureRepository(t *testing.T) {
 	binary := buildWorkbookBinary(t)
 	fixture, err := BuildFixture(context.Background(), filepath.Join(t.TempDir(), "fixture"), FixtureSpec{
@@ -268,6 +433,10 @@ func TestMeasureRepository(t *testing.T) {
 		if sample.TimedOut && i >= 3 {
 			continue
 		}
+		if i == 4 && results[3].Samples[0].TimedOut &&
+			sample.Error == "not measured: initial sync timed out before remote completion" {
+			continue
+		}
 		if sample.ExitCode != 0 || sample.TimedOut || sample.Error != "" {
 			t.Errorf("%s sample = %#v, want success", result.Name, sample)
 		}
@@ -296,6 +465,73 @@ func TestMeasureRepository(t *testing.T) {
 	}
 }
 
+func TestMeasureRepositoryRunsUnchangedSyncOnlyAfterInitialCompletes(t *testing.T) {
+	t.Run("initial timeout", func(t *testing.T) {
+		calls := 0
+		repository := t.TempDir()
+		results, err := measureLocalBareSync(
+			context.Background(),
+			"workbook",
+			repository,
+			time.Second,
+			func(_ context.Context, spec CommandSpec) Sample {
+				calls++
+				assertSyncCommandSpec(t, spec, repository)
+				return Sample{ExitCode: -1, TimedOut: true, Error: "timed out"}
+			},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if calls != 1 {
+			t.Fatalf("sync calls = %d, want 1 after initial timeout", calls)
+		}
+		got := make([]string, len(results))
+		for index := range results {
+			got[index] = results[index].Name
+		}
+		want := []string{"sync-initial-local-bare", "sync-unchanged-local-bare"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("sync scenarios = %#v, want complete scenario set %#v", got, want)
+		}
+		if !results[0].Samples[0].TimedOut || results[0].Summary.TimedOut != 1 {
+			t.Fatalf("initial timeout result = %#v, want retained timeout", results[0])
+		}
+		unavailable := results[1].Samples[0]
+		if unavailable.ExitCode != -1 || unavailable.TimedOut ||
+			unavailable.Error != "not measured: initial sync timed out before remote completion" {
+			t.Fatalf("unchanged sync result = %#v, want explicit unavailability", unavailable)
+		}
+	})
+
+	t.Run("initial completion", func(t *testing.T) {
+		calls := 0
+		repository := t.TempDir()
+		results, err := measureLocalBareSync(
+			context.Background(),
+			"workbook",
+			repository,
+			time.Second,
+			func(_ context.Context, spec CommandSpec) Sample {
+				calls++
+				assertSyncCommandSpec(t, spec, repository)
+				return Sample{ExitCode: 0}
+			},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if calls != 2 {
+			t.Fatalf("sync calls = %d, want initial and unchanged", calls)
+		}
+		got := []string{results[0].Name, results[1].Name}
+		want := []string{"sync-initial-local-bare", "sync-unchanged-local-bare"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("sync scenarios = %#v, want %#v", got, want)
+		}
+	})
+}
+
 func TestMeasureRepositoryParsesObjectCountsAndConvertsKiBToBytes(t *testing.T) {
 	before := []byte("count: 7\nsize: 3\nin-pack: 2\nsize-pack: 1\n")
 	after := []byte("count: 0\nsize: 0\nin-pack: 11\nsize-pack: 5\n")
@@ -314,6 +550,70 @@ func TestMeasureRepositoryParsesObjectCountsAndConvertsKiBToBytes(t *testing.T) 
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("repository metrics = %#v, want %#v", got, want)
+	}
+}
+
+type recordedStatusRequest struct {
+	taskID string
+	status string
+}
+
+func emptyTraceFile(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "trace.json")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func appendTraceStarts(path string, count int) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	for range count {
+		if _, err := fmt.Fprintln(file, `{"event":"start","argv":["git","status"]}`); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func readRecordedStatusRequest(request *http.Request) (recordedStatusRequest, error) {
+	var body struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+		return recordedStatusRequest{}, err
+	}
+	const prefix = "/api/tasks/"
+	const suffix = "/status"
+	taskID := strings.TrimSuffix(strings.TrimPrefix(request.URL.Path, prefix), suffix)
+	if taskID == request.URL.Path || taskID == "" {
+		return recordedStatusRequest{}, fmt.Errorf("invalid status path %q", request.URL.Path)
+	}
+	return recordedStatusRequest{taskID: taskID, status: body.Status}, nil
+}
+
+func writeRecordedStatusResponse(writer http.ResponseWriter, request recordedStatusRequest) {
+	writer.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(writer).Encode(map[string]any{
+		"format":  "workbook.task-mutation",
+		"version": 1,
+		"task": map[string]string{
+			"id":     request.taskID,
+			"status": request.status,
+		},
+	})
+}
+
+func assertSyncCommandSpec(t *testing.T, got CommandSpec, repository string) {
+	t.Helper()
+	if got.Binary != "workbook" || got.Directory != repository || got.Timeout != time.Second ||
+		!reflect.DeepEqual(got.Args, []string{"sync", "--json"}) {
+		t.Fatalf("sync command = %#v, want workbook sync --json in %q with 1s timeout", got, repository)
 	}
 }
 

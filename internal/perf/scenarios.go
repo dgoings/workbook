@@ -349,25 +349,63 @@ func MeasureRepository(ctx context.Context, workbookBinary, fixtureRoot string, 
 		return RepositoryMetrics{}, nil, err
 	}
 
-	for index := 3; index < len(results); index++ {
-		sample := MeasureCommand(ctx, CommandSpec{
-			Binary:    workbookBinary,
-			Args:      []string{"sync", "--json"},
-			Directory: fixtureRoot,
-			Timeout:   commandTimeout,
-		})
-		if !sample.TimedOut {
-			if err := requireSuccessfulSample(results[index].Name, sample); err != nil {
-				return RepositoryMetrics{}, nil, err
-			}
-		}
-		results[index].Samples[0] = sample
+	syncResults, err := measureLocalBareSync(
+		ctx,
+		workbookBinary,
+		fixtureRoot,
+		commandTimeout,
+		MeasureCommand,
+	)
+	if err != nil {
+		return RepositoryMetrics{}, nil, err
 	}
+	results = append(results[:3:3], syncResults...)
 
 	for index := range results {
 		results[index].Summary = Summarize(results[index].Samples)
 	}
 	return metrics, results, nil
+}
+
+func measureLocalBareSync(
+	ctx context.Context,
+	workbookBinary string,
+	fixtureRoot string,
+	commandTimeout time.Duration,
+	measureCommand func(context.Context, CommandSpec) Sample,
+) ([]ScenarioResult, error) {
+	results := repositoryResults()[3:]
+	command := CommandSpec{
+		Binary:    workbookBinary,
+		Args:      []string{"sync", "--json"},
+		Directory: fixtureRoot,
+		Timeout:   commandTimeout,
+	}
+	results[0].Samples[0] = measureCommand(ctx, command)
+	if results[0].Samples[0].TimedOut {
+		results[1].Samples[0] = Sample{
+			ExitCode: -1,
+			Error:    "not measured: initial sync timed out before remote completion",
+		}
+		for index := range results {
+			results[index].Summary = Summarize(results[index].Samples)
+		}
+		return results, nil
+	}
+	if err := requireSuccessfulSample(results[0].Name, results[0].Samples[0]); err != nil {
+		return nil, err
+	}
+
+	results[1].Samples[0] = measureCommand(ctx, command)
+	if !results[1].Samples[0].TimedOut {
+		if err := requireSuccessfulSample(results[1].Name, results[1].Samples[0]); err != nil {
+			return nil, err
+		}
+	}
+	for index := range results {
+		results[index].Summary = Summarize(results[index].Samples)
+	}
+	return results, nil
 }
 
 func coldCLIResults(samples int) []ScenarioResult {
@@ -670,6 +708,19 @@ func (server *warmHTTPServer) measureStatus(ctx context.Context, taskID, status 
 	if err != nil {
 		return Sample{}, err
 	}
+	sample, err := server.performStatus(ctx, taskID, status, timeout)
+	if err != nil {
+		return Sample{}, err
+	}
+	gitProcesses, err := cursor.CountNewGitProcesses()
+	if err != nil {
+		return Sample{}, err
+	}
+	sample.GitProcesses = gitProcesses
+	return sample, nil
+}
+
+func (server *warmHTTPServer) performStatus(ctx context.Context, taskID, status string, timeout time.Duration) (Sample, error) {
 	requestContext, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	request, err := http.NewRequestWithContext(
@@ -686,12 +737,29 @@ func (server *warmHTTPServer) measureStatus(ctx context.Context, taskID, status 
 	startedAt := time.Now()
 	response, err := server.client.Do(request)
 	if err != nil {
+		duration := time.Since(startedAt)
+		if ctx.Err() == nil && errors.Is(requestContext.Err(), context.DeadlineExceeded) {
+			return Sample{
+				Duration: duration,
+				ExitCode: -1,
+				TimedOut: true,
+				Error:    fmt.Sprintf("send status request: %v", err),
+			}, nil
+		}
 		return Sample{}, fmt.Errorf("send status request: %w", err)
 	}
 	body, readErr := io.ReadAll(response.Body)
 	closeErr := response.Body.Close()
 	duration := time.Since(startedAt)
 	if readErr != nil {
+		if ctx.Err() == nil && errors.Is(requestContext.Err(), context.DeadlineExceeded) {
+			return Sample{
+				Duration: duration,
+				ExitCode: -1,
+				TimedOut: true,
+				Error:    fmt.Sprintf("read status response: %v", readErr),
+			}, nil
+		}
 		return Sample{}, fmt.Errorf("read status response: %w", readErr)
 	}
 	if closeErr != nil {
@@ -718,15 +786,9 @@ func (server *warmHTTPServer) measureStatus(ctx context.Context, taskID, status 
 			document.Format, document.Version, document.Task.ID, document.Task.Status, taskID, status,
 		)
 	}
-
-	gitProcesses, err := cursor.CountNewGitProcesses()
-	if err != nil {
-		return Sample{}, err
-	}
 	return Sample{
-		Duration:     duration,
-		GitProcesses: gitProcesses,
-		ExitCode:     0,
+		Duration: duration,
+		ExitCode: 0,
 	}, nil
 }
 
@@ -756,10 +818,14 @@ func (server *warmHTTPServer) measureIndependentBurst(ctx context.Context, taskI
 			defer done.Done()
 			ready.Done()
 			<-start
-			members[index], errorsByRequest[index] = server.measureStatus(ctx, taskID, status, timeout)
+			members[index], errorsByRequest[index] = server.performStatus(ctx, taskID, status, timeout)
 		}()
 	}
 	ready.Wait()
+	cursor, err := OpenTraceCursor(server.tracePath)
+	if err != nil {
+		return Sample{}, err
+	}
 	startedAt := time.Now()
 	close(start)
 	done.Wait()
@@ -768,7 +834,13 @@ func (server *warmHTTPServer) measureIndependentBurst(ctx context.Context, taskI
 			return Sample{}, fmt.Errorf("request %d: %w", index+1, err)
 		}
 	}
-	return aggregateBurst(time.Since(startedAt), members), nil
+	gitProcesses, err := cursor.CountNewGitProcesses()
+	if err != nil {
+		return Sample{}, err
+	}
+	aggregate := aggregateBurst(time.Since(startedAt), members)
+	aggregate.GitProcesses = gitProcesses
+	return aggregate, nil
 }
 
 func (server *warmHTTPServer) close(timeout time.Duration) error {
