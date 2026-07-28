@@ -476,8 +476,12 @@ func (s Service) persistMutation(
 	if parent != nil {
 		expectedParent = parent.Head
 	}
-	if _, err := s.Projection.Advance(ctx, s.Config, expectedParent, written); err != nil {
-		message := "Git mutation succeeded, but the SQLite cache could not be updated; run `workbook rebuild` if the warning persists: " + err.Error()
+	advanced, advanceErr := s.Projection.Advance(ctx, s.Config, expectedParent, written)
+	if advanceErr != nil || !advanced {
+		message := "Git mutation succeeded, but the SQLite cache declined the conditional update because its task row no longer matched the observed parent; run `workbook rebuild` if the warning persists"
+		if advanceErr != nil {
+			message = "Git mutation succeeded, but the SQLite cache could not be updated; run `workbook rebuild` if the warning persists: " + advanceErr.Error()
+		}
 		if invalidateErr := s.Projection.Invalidate(ctx, s.Config, written.State.TaskID, expectedParent, written.Head); invalidateErr != nil {
 			message += "; cache invalidation also failed: " + invalidateErr.Error()
 		}

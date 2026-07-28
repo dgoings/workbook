@@ -929,6 +929,45 @@ func TestServiceProjectionFailureReturnsDurableMutationWarning(t *testing.T) {
 	}
 }
 
+func TestServiceProjectionFailureInvalidatesWhenConditionalAdvanceIsDeclined(t *testing.T) {
+	parent := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", TaskData{
+		Title: "Old title", Status: StatusBacklog, Priority: PriorityMedium, Rank: "1/1",
+	})
+	title := "New title"
+	written := parent
+	written.Head = "durable-written-head"
+	written.State.Task.Title = title
+	written.State.LogicalClock = 2
+	advanced := false
+	projection := &projectionUpdaterSpy{advanceResult: &advanced}
+	service := splitServiceUnderTest(newTaskReaderSpy(parent), &canonicalWriterSpy{written: written}, projection, &sequenceIDSource{
+		values: []string{"01K0M6B8A4FTT8C39MXXYTW7D2"},
+	})
+
+	result, err := service.UpdateMutation(context.Background(), parent.State.TaskID, UpdateInput{Title: &title})
+	if err != nil {
+		t.Fatalf("UpdateMutation() error = %v", err)
+	}
+	if got, want := result.Task.Head, written.Head; got != want {
+		t.Fatalf("task head = %q, want durable Git head %q", got, want)
+	}
+	if len(result.Warnings) != 1 || result.Warnings[0].Code != WarningProjectionUpdate {
+		t.Fatalf("warnings = %#v", result.Warnings)
+	}
+	if got := result.Warnings[0].Message; !strings.Contains(got, "run `workbook rebuild`") {
+		t.Fatalf("warning message = %q, want actionable rebuild guidance", got)
+	}
+	if got, want := len(projection.invalidateCalls), 1; got != want {
+		t.Fatalf("Invalidate() calls = %d, want %d", got, want)
+	}
+	invalidation := projection.invalidateCalls[0]
+	if invalidation.taskID != parent.State.TaskID ||
+		invalidation.expectedParent != parent.Head ||
+		invalidation.writtenHead != written.Head {
+		t.Fatalf("invalidation = %#v", invalidation)
+	}
+}
+
 func TestServiceProjectionFailureAppendsInvalidationFailureToOneWarning(t *testing.T) {
 	parent := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", TaskData{
 		Title: "Old title", Status: StatusBacklog, Priority: PriorityMedium, Rank: "1/1",
@@ -1133,12 +1172,16 @@ type projectionInvalidateCall struct {
 type projectionUpdaterSpy struct {
 	advanceCalls    []projectionAdvanceCall
 	invalidateCalls []projectionInvalidateCall
+	advanceResult   *bool
 	advanceErr      error
 	invalidateErr   error
 }
 
 func (s *projectionUpdaterSpy) Advance(_ context.Context, _ ProjectConfig, expectedParent string, snapshot Snapshot) (bool, error) {
 	s.advanceCalls = append(s.advanceCalls, projectionAdvanceCall{expectedParent: expectedParent, snapshot: snapshot})
+	if s.advanceResult != nil {
+		return *s.advanceResult, s.advanceErr
+	}
 	return s.advanceErr == nil, s.advanceErr
 }
 
