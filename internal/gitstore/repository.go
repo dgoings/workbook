@@ -73,20 +73,11 @@ func (r *Repository) verifyIdentity(ctx context.Context) error {
 		return nil
 	}
 
-	gitPath := r.gitPath
-	if gitPath == "" {
-		var err error
-		gitPath, err = exec.LookPath("git")
-		if err != nil {
-			return core.Wrap(core.CategoryOperational, "cannot find git executable", err)
-		}
-	}
-
-	root, err := runGit(ctx, gitPath, r.Root, nil, "rev-parse", "--show-toplevel")
+	root, err := r.Git(ctx, nil, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return core.Wrap(core.CategoryNotInitialized, "cannot verify Git repository", err)
 	}
-	commonGitDir, err := runGit(ctx, gitPath, r.Root, nil, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	commonGitDir, err := r.Git(ctx, nil, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	if err != nil {
 		return core.Wrap(core.CategoryNotInitialized, "cannot verify Git common directory", err)
 	}

@@ -132,6 +132,46 @@ func TestRepositoryCachesProcessStableActor(t *testing.T) {
 	}
 }
 
+func TestOpenRepositorySkipsRepeatedIdentityDiscovery(t *testing.T) {
+	opened, err := Open(context.Background(), testrepo.New(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var openedCommands [][]string
+	opened.commandObserver = func(args []string) {
+		openedCommands = append(openedCommands, append([]string(nil), args...))
+	}
+
+	if _, _, err := opened.Init(context.Background(), "WB", fixedIDs()); err != nil {
+		t.Fatal(err)
+	}
+	if got := countCommand(openedCommands, "rev-parse", "--show-toplevel"); got != 0 {
+		t.Fatalf("opened repository root discovery commands = %d, want 0", got)
+	}
+	if got := countCommand(openedCommands, "rev-parse", "--path-format=absolute", "--git-common-dir"); got != 0 {
+		t.Fatalf("opened repository common-directory discovery commands = %d, want 0", got)
+	}
+
+	constructed := &Repository{
+		Root:         opened.Root,
+		CommonGitDir: opened.CommonGitDir,
+		gitPath:      opened.gitPath,
+	}
+	var constructedCommands [][]string
+	constructed.commandObserver = func(args []string) {
+		constructedCommands = append(constructedCommands, append([]string(nil), args...))
+	}
+	if _, _, err := constructed.Init(context.Background(), "WB", fixedIDs()); err != nil {
+		t.Fatal(err)
+	}
+	if got := countCommand(constructedCommands, "rev-parse", "--show-toplevel"); got != 1 {
+		t.Fatalf("constructed repository root discovery commands = %d, want 1", got)
+	}
+	if got := countCommand(constructedCommands, "rev-parse", "--path-format=absolute", "--git-common-dir"); got != 1 {
+		t.Fatalf("constructed repository common-directory discovery commands = %d, want 1", got)
+	}
+}
+
 func TestGitUsesResolvedPathForValidConstructedRepository(t *testing.T) {
 	opened, err := Open(context.Background(), testrepo.New(t))
 	if err != nil {
