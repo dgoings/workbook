@@ -9,9 +9,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/dgoings/workbook/internal/core"
 )
+
+type gitCommandObserver func([]string)
 
 // Repository identifies a working tree and the Git directory shared by its
 // worktrees.
@@ -19,6 +22,15 @@ type Repository struct {
 	Root         string
 	CommonGitDir string
 	gitPath      string
+
+	metadataMu       sync.RWMutex
+	identityVerified bool
+	configLoaded     bool
+	config           core.ProjectConfig
+	actorOnce        sync.Once
+	actor            string
+	actorErr         error
+	commandObserver  gitCommandObserver
 }
 
 // Open discovers the repository containing startDir without changing the
@@ -47,13 +59,20 @@ func Open(ctx context.Context, startDir string) (*Repository, error) {
 	}
 
 	return &Repository{
-		Root:         filepath.Clean(rootPath),
-		CommonGitDir: filepath.Clean(commonGitPath),
-		gitPath:      gitPath,
+		Root:             filepath.Clean(rootPath),
+		CommonGitDir:     filepath.Clean(commonGitPath),
+		gitPath:          gitPath,
+		identityVerified: true,
 	}, nil
 }
 
 func (r *Repository) verifyIdentity(ctx context.Context) error {
+	r.metadataMu.Lock()
+	defer r.metadataMu.Unlock()
+	if r.identityVerified {
+		return nil
+	}
+
 	gitPath := r.gitPath
 	if gitPath == "" {
 		var err error
@@ -83,6 +102,7 @@ func (r *Repository) verifyIdentity(ctx context.Context) error {
 		filepath.Clean(commonGitPath) != filepath.Clean(r.CommonGitDir) {
 		return core.Errorf(core.CategoryNotInitialized, "repository paths do not match Git metadata")
 	}
+	r.identityVerified = true
 	return nil
 }
 
@@ -100,6 +120,7 @@ func (r *Repository) gitWithEnv(ctx context.Context, extraEnv []string, stdin []
 			return nil, core.Wrap(core.CategoryOperational, "cannot find git executable", err)
 		}
 	}
+	r.observeGitCommand(args)
 	output, err := runGitWithEnv(ctx, gitPath, r.Root, extraEnv, stdin, args...)
 	if err != nil {
 		return nil, core.Wrap(core.CategoryOperational, fmt.Sprintf("git %s failed", strings.Join(args, " ")), err)
@@ -107,17 +128,26 @@ func (r *Repository) gitWithEnv(ctx context.Context, extraEnv []string, stdin []
 	return output, nil
 }
 
+func (r *Repository) observeGitCommand(args []string) {
+	if r.commandObserver != nil {
+		r.commandObserver(append([]string(nil), args...))
+	}
+}
+
 // Actor returns the author email configured for this repository.
 func (r *Repository) Actor(ctx context.Context) (string, error) {
-	output, err := r.Git(ctx, nil, "config", "--get", "user.email")
-	if err != nil {
-		return "", err
-	}
-	actor, err := gitSingleLine(output)
-	if err != nil {
-		return "", core.Wrap(core.CategoryOperational, "Git returned an invalid actor email", err)
-	}
-	return actor, nil
+	r.actorOnce.Do(func() {
+		output, err := r.Git(ctx, nil, "config", "--get", "user.email")
+		if err != nil {
+			r.actorErr = err
+			return
+		}
+		r.actor, r.actorErr = gitSingleLine(output)
+		if r.actorErr != nil {
+			r.actorErr = core.Wrap(core.CategoryOperational, "Git returned an invalid actor email", r.actorErr)
+		}
+	})
+	return r.actor, r.actorErr
 }
 
 func runGit(ctx context.Context, gitPath, directory string, stdin []byte, args ...string) ([]byte, error) {

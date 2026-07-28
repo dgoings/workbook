@@ -299,6 +299,37 @@ func TestLoadConfigReturnsExistingConfig(t *testing.T) {
 	}
 }
 
+func TestLoadConfigCachesFirstValidatedConfiguration(t *testing.T) {
+	repo, err := Open(context.Background(), testrepo.New(t))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	first := core.ProjectConfig{
+		Format: projectFormat, Version: projectVersion, ProjectID: fixedProjectID, Key: "WB",
+	}
+	writeProjectConfigFile(t, filepath.Join(repo.Root, configPath), first)
+	writeProjectConfigFile(t, filepath.Join(repo.CommonGitDir, "workbook", projectGuard), first)
+
+	got, err := repo.LoadConfig()
+	if err != nil {
+		t.Fatalf("first LoadConfig() error = %v", err)
+	}
+	if got != first {
+		t.Fatalf("first LoadConfig() = %#v, want %#v", got, first)
+	}
+	changed := first
+	changed.ProjectID = "01K0M65GBZ8F5ZQX0VC1J8H3TQ"
+	writeProjectConfigFile(t, filepath.Join(repo.Root, configPath), changed)
+
+	got, err = repo.LoadConfig()
+	if err != nil {
+		t.Fatalf("second LoadConfig() error = %v", err)
+	}
+	if got != first {
+		t.Fatalf("second LoadConfig() = %#v, want cached %#v", got, first)
+	}
+}
+
 func TestLoadConfigPublishesTrackedIdentityAsMissingCommonGuard(t *testing.T) {
 	repo, err := Open(context.Background(), testrepo.New(t))
 	if err != nil {

@@ -50,7 +50,7 @@ func (r *Repository) Init(ctx context.Context, key string, ids core.IDSource) (c
 		if err := validateRequestedProjectKey(key, tracked); err != nil {
 			return core.ProjectConfig{}, false, err
 		}
-		return tracked, false, nil
+		return r.rememberConfig(tracked), false, nil
 	case trackedExists:
 		if err := validateRequestedProjectKey(key, tracked); err != nil {
 			return core.ProjectConfig{}, false, err
@@ -62,7 +62,7 @@ func (r *Repository) Init(ctx context.Context, key string, ids core.IDSource) (c
 		if persisted != tracked {
 			return core.ProjectConfig{}, false, core.Errorf(core.CategoryCorruptData, "tracked Workbook configuration does not match concurrently published project guard")
 		}
-		return tracked, false, nil
+		return r.rememberConfig(tracked), false, nil
 	case guardExists:
 		if err := validateRequestedProjectKey(key, guard); err != nil {
 			return core.ProjectConfig{}, false, err
@@ -70,7 +70,7 @@ func (r *Repository) Init(ctx context.Context, key string, ids core.IDSource) (c
 		if err := r.writeConfig(guard); err != nil {
 			return core.ProjectConfig{}, false, err
 		}
-		return guard, false, nil
+		return r.rememberConfig(guard), false, nil
 	}
 
 	if ids == nil {
@@ -99,11 +99,17 @@ func (r *Repository) Init(ctx context.Context, key string, ids core.IDSource) (c
 	if err := validateRequestedProjectKey(key, persisted); err != nil {
 		return core.ProjectConfig{}, false, err
 	}
-	return persisted, published, nil
+	return r.rememberConfig(persisted), published, nil
 }
 
 // LoadConfig returns the repository's validated Workbook configuration.
 func (r *Repository) LoadConfig() (core.ProjectConfig, error) {
+	r.metadataMu.Lock()
+	defer r.metadataMu.Unlock()
+	if r.configLoaded {
+		return r.config, nil
+	}
+
 	tracked, exists, err := r.readConfig()
 	if err != nil {
 		return core.ProjectConfig{}, err
@@ -119,7 +125,9 @@ func (r *Repository) LoadConfig() (core.ProjectConfig, error) {
 		if tracked != guard {
 			return core.ProjectConfig{}, core.Errorf(core.CategoryCorruptData, "tracked Workbook configuration does not match common project guard")
 		}
-		return tracked, nil
+		r.config = tracked
+		r.configLoaded = true
+		return r.config, nil
 	}
 	if err := r.ensurePrivateCache(); err != nil {
 		return core.ProjectConfig{}, err
@@ -131,7 +139,19 @@ func (r *Repository) LoadConfig() (core.ProjectConfig, error) {
 	if persisted != tracked {
 		return core.ProjectConfig{}, core.Errorf(core.CategoryCorruptData, "tracked Workbook configuration does not match concurrently published project guard")
 	}
-	return tracked, nil
+	r.config = tracked
+	r.configLoaded = true
+	return r.config, nil
+}
+
+func (r *Repository) rememberConfig(config core.ProjectConfig) core.ProjectConfig {
+	r.metadataMu.Lock()
+	defer r.metadataMu.Unlock()
+	if !r.configLoaded {
+		r.config = config
+		r.configLoaded = true
+	}
+	return r.config
 }
 
 func (r *Repository) readConfig() (core.ProjectConfig, bool, error) {

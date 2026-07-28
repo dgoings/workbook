@@ -103,6 +103,35 @@ func TestActorReturnsRepositoryEmail(t *testing.T) {
 	}
 }
 
+func TestRepositoryCachesProcessStableActor(t *testing.T) {
+	repo, err := Open(context.Background(), testrepo.New(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var commands [][]string
+	repo.commandObserver = func(args []string) {
+		commands = append(commands, append([]string(nil), args...))
+	}
+
+	first, err := repo.Actor(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Git(context.Background(), nil, "config", "user.email", "changed@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	second, err := repo.Actor(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != "workbook@example.test" || second != first {
+		t.Fatalf("actors = %q, %q", first, second)
+	}
+	if got := countCommand(commands, "config", "--get", "user.email"); got != 1 {
+		t.Fatalf("actor config commands = %d, want 1", got)
+	}
+}
+
 func TestGitUsesResolvedPathForValidConstructedRepository(t *testing.T) {
 	opened, err := Open(context.Background(), testrepo.New(t))
 	if err != nil {
@@ -189,4 +218,24 @@ func gitReportedPath(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %v output has no trailing newline: %q", args, output)
 	}
 	return filepath.Clean(line)
+}
+
+func countCommand(commands [][]string, want ...string) int {
+	count := 0
+	for _, got := range commands {
+		if len(got) != len(want) {
+			continue
+		}
+		matched := true
+		for i := range got {
+			if got[i] != want[i] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			count++
+		}
+	}
+	return count
 }
