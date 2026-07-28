@@ -2,9 +2,13 @@ package perf
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -53,13 +57,30 @@ func TestMeasureCommandPassesCallerEnvironment(t *testing.T) {
 	}
 }
 
-func TestMeasureCommandBoundsDescendantHoldingStderr(t *testing.T) {
+func TestMeasureCommandTerminatesTimedOutDescendant(t *testing.T) {
+	childPIDPath := filepath.Join(t.TempDir(), "child.pid")
 	sample := MeasureCommand(context.Background(), CommandSpec{
-		Binary: "/bin/sh", Args: []string{"-c", "sleep 1 >&2 & while :; do :; done"},
-		Directory: t.TempDir(), Timeout: 20 * time.Millisecond,
+		Binary: "/bin/sh", Args: []string{
+			"-c",
+			"sh -c 'echo $$ > \"$1\"; while :; do :; done' sh \"$1\" & while [ ! -s \"$1\" ]; do :; done; while :; do :; done",
+			"sh",
+			childPIDPath,
+		},
+		Directory: t.TempDir(), Timeout: 100 * time.Millisecond,
 	})
-	if !sample.TimedOut || sample.Duration >= 500*time.Millisecond {
+	if !sample.TimedOut {
 		t.Fatalf("sample = %#v", sample)
+	}
+	pidText, err := os.ReadFile(childPIDPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(pidText)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("descendant process %d still exists: %v", pid, err)
 	}
 }
 

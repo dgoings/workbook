@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -127,6 +128,17 @@ func MeasureCommand(ctx context.Context, spec CommandSpec) Sample {
 	command := exec.CommandContext(commandContext, spec.Binary, spec.Args...)
 	command.Dir = spec.Directory
 	command.Env = append(append(os.Environ(), spec.Environment...), "GIT_TRACE2_EVENT="+absTracePath)
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	command.Cancel = func() error {
+		if command.Process == nil {
+			return nil
+		}
+		err := syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
+		if errors.Is(err, syscall.ESRCH) {
+			return nil
+		}
+		return err
+	}
 	command.WaitDelay = commandWaitDelay
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
