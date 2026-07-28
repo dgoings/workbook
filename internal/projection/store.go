@@ -520,11 +520,16 @@ func (s *Store) advanceActive(ctx context.Context, expectedParent string, snapsh
 	}
 	defer transaction.Rollback()
 
-	var actualHead string
-	err = transaction.QueryRowContext(ctx, `SELECT head FROM tasks WHERE task_id = ?`, snapshot.State.TaskID).Scan(&actualHead)
+	var actualHead, actualHistoryGeneration string
+	err = transaction.QueryRowContext(
+		ctx,
+		`SELECT head, history_generation FROM tasks WHERE task_id = ?`,
+		snapshot.State.TaskID,
+	).Scan(&actualHead, &actualHistoryGeneration)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		actualHead = ""
+		actualHistoryGeneration = ""
 	case err != nil:
 		return false, s.databaseError("read conditional projected task head", err)
 	}
@@ -535,6 +540,12 @@ func (s *Store) advanceActive(ctx context.Context, expectedParent string, snapsh
 		return true, nil
 	}
 	if actualHead != expectedParent {
+		if err := transaction.Commit(); err != nil {
+			return false, s.databaseError("commit conditional projection advancement", err)
+		}
+		return false, nil
+	}
+	if actualHead != "" && actualHistoryGeneration != snapshot.State.History.Generation {
 		if err := transaction.Commit(); err != nil {
 			return false, s.databaseError("commit conditional projection advancement", err)
 		}
@@ -847,10 +858,19 @@ func scanSnapshotScalars(scanner rowScanner) (core.Snapshot, error) {
 }
 
 func (s *Store) querySnapshot(ctx context.Context, taskID string) (core.Snapshot, bool, error) {
-	snapshot, err := scanSnapshotScalars(s.db.QueryRowContext(ctx, `
-		SELECT task_id, head, project_id, history_generation, logical_clock, title, description, status, priority, rank, created_at, updated_at, deleted
-		FROM tasks WHERE task_id = ?`, taskID))
+	transaction, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return core.Snapshot{}, false, s.databaseError("begin projected task query", err)
+	}
+	defer transaction.Rollback()
+
+	snapshot, err := scanSnapshotScalars(transaction.QueryRowContext(ctx, `
+			SELECT task_id, head, project_id, history_generation, logical_clock, title, description, status, priority, rank, created_at, updated_at, deleted
+			FROM tasks WHERE task_id = ?`, taskID))
 	if errors.Is(err, sql.ErrNoRows) {
+		if err := transaction.Commit(); err != nil {
+			return core.Snapshot{}, false, s.databaseError("commit projected task query", err)
+		}
 		return core.Snapshot{}, false, nil
 	}
 	if err != nil {
@@ -859,21 +879,24 @@ func (s *Store) querySnapshot(ctx context.Context, taskID string) (core.Snapshot
 		}
 		return core.Snapshot{}, false, s.databaseError("query projected task", err)
 	}
-	labels, err := s.queryStrings(ctx, `SELECT label FROM task_labels WHERE task_id = ? ORDER BY label`, taskID)
+	labels, err := s.queryStrings(ctx, transaction, `SELECT label FROM task_labels WHERE task_id = ? ORDER BY label`, taskID)
 	if err != nil {
 		return core.Snapshot{}, false, err
 	}
-	dependencies, err := s.queryStrings(ctx, `SELECT dependency_id FROM task_dependencies WHERE task_id = ? ORDER BY dependency_id`, taskID)
+	dependencies, err := s.queryStrings(ctx, transaction, `SELECT dependency_id FROM task_dependencies WHERE task_id = ? ORDER BY dependency_id`, taskID)
 	if err != nil {
 		return core.Snapshot{}, false, err
 	}
 	snapshot.State.Task.Labels = labels
 	snapshot.State.Task.Dependencies = dependencies
+	if err := transaction.Commit(); err != nil {
+		return core.Snapshot{}, false, s.databaseError("commit projected task query", err)
+	}
 	return snapshot, true, nil
 }
 
-func (s *Store) queryStrings(ctx context.Context, query, taskID string) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, query, taskID)
+func (s *Store) queryStrings(ctx context.Context, transaction *sql.Tx, query, taskID string) ([]string, error) {
+	rows, err := transaction.QueryContext(ctx, query, taskID)
 	if err != nil {
 		return nil, s.databaseError("query projected task collection", err)
 	}

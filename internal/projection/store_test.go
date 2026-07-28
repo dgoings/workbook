@@ -384,6 +384,39 @@ func TestStoreAdvanceConditionallyUpdatesSnapshot(t *testing.T) {
 	}
 }
 
+func TestStoreAdvanceRejectsChangedHistoryGeneration(t *testing.T) {
+	ctx := context.Background()
+	config := testConfig()
+	previous := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "Previous")
+	changed := testSnapshot(previous.State.TaskID, "head-2", "Changed generation")
+	changed.State.History.Generation = "01K0M6B8A4FTT8C39MXXYTW7DA"
+	source := &countingHeadSource{
+		heads:     []gitstore.TaskHead{{TaskID: previous.State.TaskID, ObjectID: previous.Head}},
+		snapshots: map[string]core.Snapshot{previous.Head: previous},
+	}
+	store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	if err != nil {
+		t.Fatalf("openStore() error = %v", err)
+	}
+	if _, err := store.Rebuild(ctx); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+
+	applied, err := store.Advance(ctx, config, previous.Head, changed)
+	if err != nil || applied {
+		t.Fatalf("Advance(changed generation) = %t, %v, want false, nil", applied, err)
+	}
+	cached, found, err := store.querySnapshot(ctx, previous.State.TaskID)
+	if err != nil {
+		t.Fatalf("querySnapshot() error = %v", err)
+	}
+	if !found || cached.Head != previous.Head ||
+		cached.State.History.Generation != previous.State.History.Generation ||
+		cached.State.Task.Title != "Previous" {
+		t.Fatalf("cached snapshot = %#v, found %t, want unchanged previous snapshot", cached, found)
+	}
+}
+
 func TestStoreAdvanceAcceptsAlreadyAdvancedSnapshot(t *testing.T) {
 	ctx := context.Background()
 	config := testConfig()
@@ -490,6 +523,96 @@ func TestStoreInvalidateOnlyDeletesExpectedOrWrittenHead(t *testing.T) {
 			got, err := store.Get(ctx, config, newer.State.TaskID)
 			if err != nil || got.Head != newer.Head || got.State.Task.Title != "Newer" {
 				t.Fatalf("Get() = %#v, %v, want preserved newer snapshot", got, err)
+			}
+		})
+	}
+}
+
+func TestQuerySnapshotRemainsConsistentAcrossConcurrentMutation(t *testing.T) {
+	ctx := context.Background()
+	config := testConfig()
+	previous := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "Previous")
+	previous.State.Task.Labels = []string{"old-label"}
+	previous.State.Task.Dependencies = []string{"WB-01K0M6B8A4FTT8C39MXXYTW7D9"}
+	updated := testSnapshot(previous.State.TaskID, "head-2", "Updated")
+	updated.State.Task.Labels = []string{"new-label"}
+	updated.State.Task.Dependencies = []string{"WB-01K0M6B8A4FTT8C39MXXYTW7DA"}
+
+	for _, test := range []struct {
+		name   string
+		read   func(*Store) (core.Snapshot, bool, error)
+		mutate func(*Store) error
+	}{
+		{
+			name: "conditional advance",
+			read: func(store *Store) (core.Snapshot, bool, error) {
+				return store.querySnapshot(ctx, previous.State.TaskID)
+			},
+			mutate: func(store *Store) error {
+				applied, err := store.Advance(ctx, config, previous.Head, updated)
+				if err == nil && !applied {
+					return errors.New("Advance() was not applied")
+				}
+				return err
+			},
+		},
+		{
+			name: "conditional invalidation through Get",
+			read: func(store *Store) (core.Snapshot, bool, error) {
+				snapshot, err := store.Get(ctx, config, previous.State.TaskID)
+				return snapshot, err == nil, err
+			},
+			mutate: func(store *Store) error {
+				return store.Invalidate(ctx, config, previous.State.TaskID, previous.Head, updated.Head)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source := &countingHeadSource{
+				heads:     []gitstore.TaskHead{{TaskID: previous.State.TaskID, ObjectID: previous.Head}},
+				snapshots: map[string]core.Snapshot{previous.Head: previous},
+			}
+			store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+			if err != nil {
+				t.Fatalf("openStore() error = %v", err)
+			}
+			if _, err := store.Rebuild(ctx); err != nil {
+				t.Fatalf("Rebuild() error = %v", err)
+			}
+			blocker := installSnapshotCollectionBlocker(t, store)
+
+			result := make(chan struct {
+				snapshot core.Snapshot
+				found    bool
+				err      error
+			}, 1)
+			go func() {
+				snapshot, found, err := test.read(store)
+				result <- struct {
+					snapshot core.Snapshot
+					found    bool
+					err      error
+				}{snapshot: snapshot, found: found, err: err}
+			}()
+			<-blocker.collectionReadStarted
+
+			if err := test.mutate(store); err != nil {
+				t.Fatalf("concurrent mutation error = %v", err)
+			}
+			blocker.release()
+
+			got := <-result
+			if got.err != nil {
+				t.Fatalf("snapshot read error = %v", got.err)
+			}
+			if !got.found {
+				t.Fatal("snapshot read found = false, want the coherent pre-mutation snapshot")
+			}
+			if got.snapshot.Head != previous.Head ||
+				got.snapshot.State.Task.Title != "Previous" ||
+				!reflect.DeepEqual(got.snapshot.State.Task.Labels, []string{"old-label"}) ||
+				!reflect.DeepEqual(got.snapshot.State.Task.Dependencies, []string{"WB-01K0M6B8A4FTT8C39MXXYTW7D9"}) {
+				t.Fatalf("snapshot read = %#v, want complete pre-mutation snapshot", got.snapshot)
 			}
 		})
 	}
@@ -1039,6 +1162,23 @@ type queryCountingConn struct {
 	queries *atomic.Int64
 }
 
+type snapshotCollectionBlocker struct {
+	collectionReadStarted chan struct{}
+	releaseCollectionRead chan struct{}
+	startOnce             sync.Once
+	releaseOnce           sync.Once
+}
+
+type snapshotBlockingDriver struct {
+	inner   driver.Driver
+	blocker *snapshotCollectionBlocker
+}
+
+type snapshotBlockingConn struct {
+	driver.Conn
+	blocker *snapshotCollectionBlocker
+}
+
 var countingDriverSequence atomic.Int64
 
 func newConcurrentRefreshSource(second, third core.Snapshot) *concurrentRefreshSource {
@@ -1057,6 +1197,45 @@ func newExactRefreshRaceSource(changed, newer core.Snapshot) *exactRefreshRaceSo
 		changedReadStarted: make(chan struct{}),
 		releaseChangedRead: make(chan struct{}),
 	}
+}
+
+func installSnapshotCollectionBlocker(t *testing.T, store *Store) *snapshotCollectionBlocker {
+	t.Helper()
+	if _, err := store.db.Exec(`PRAGMA journal_mode = WAL`); err != nil {
+		t.Fatalf("enable WAL mode error = %v", err)
+	}
+	if err := store.db.Close(); err != nil {
+		t.Fatalf("close projection database error = %v", err)
+	}
+
+	blocker := &snapshotCollectionBlocker{
+		collectionReadStarted: make(chan struct{}),
+		releaseCollectionRead: make(chan struct{}),
+	}
+	driverName := fmt.Sprintf("workbook-snapshot-blocking-sqlite-%d", countingDriverSequence.Add(1))
+	sql.Register(driverName, &snapshotBlockingDriver{inner: &sqlite.Driver{}, blocker: blocker})
+	var err error
+	store.db, err = sql.Open(
+		driverName,
+		store.cachePath+"?_pragma=busy_timeout%285000%29&_txlock=immediate",
+	)
+	if err != nil {
+		t.Fatalf("open synchronized projection database error = %v", err)
+	}
+	if err := store.db.Ping(); err != nil {
+		t.Fatalf("ping synchronized projection database error = %v", err)
+	}
+	t.Cleanup(func() {
+		blocker.release()
+		_ = store.db.Close()
+	})
+	return blocker
+}
+
+func (b *snapshotCollectionBlocker) release() {
+	b.releaseOnce.Do(func() {
+		close(b.releaseCollectionRead)
+	})
 }
 
 func (s *exactRefreshRaceSource) ListTaskHeads(_ context.Context, _ core.ProjectConfig) ([]gitstore.TaskHead, error) {
@@ -1176,6 +1355,32 @@ func (c *queryCountingConn) QueryContext(ctx context.Context, query string, args
 }
 
 func (c *queryCountingConn) BeginTx(ctx context.Context, options driver.TxOptions) (driver.Tx, error) {
+	return c.Conn.(driver.ConnBeginTx).BeginTx(ctx, options)
+}
+
+func (d *snapshotBlockingDriver) Open(name string) (driver.Conn, error) {
+	connection, err := d.inner.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	return &snapshotBlockingConn{Conn: connection, blocker: d.blocker}, nil
+}
+
+func (c *snapshotBlockingConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	if strings.Contains(query, "SELECT label FROM task_labels WHERE task_id") {
+		c.blocker.startOnce.Do(func() {
+			close(c.blocker.collectionReadStarted)
+		})
+		select {
+		case <-c.blocker.releaseCollectionRead:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return c.Conn.(driver.QueryerContext).QueryContext(ctx, query, args)
+}
+
+func (c *snapshotBlockingConn) BeginTx(ctx context.Context, options driver.TxOptions) (driver.Tx, error) {
 	return c.Conn.(driver.ConnBeginTx).BeginTx(ctx, options)
 }
 
