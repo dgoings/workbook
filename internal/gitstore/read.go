@@ -17,6 +17,8 @@ type TaskHead struct {
 	ObjectID string
 }
 
+const taskRefFormat = "%(refname)%00%(objectname)%00%(symref)"
+
 // ListTaskHeads returns every Workbook task ref tip, ordered by task ID. It
 // uses Git's ref enumeration so packed and loose refs behave the same way.
 func (r *Repository) ListTaskHeads(ctx context.Context, config core.ProjectConfig) ([]TaskHead, error) {
@@ -35,20 +37,48 @@ func (r *Repository) ListTaskHeads(ctx context.Context, config core.ProjectConfi
 
 	heads := make([]TaskHead, 0, len(refs))
 	for _, ref := range refs {
+		if err := core.ValidateTaskID(config.Key, ref.taskID); err != nil {
+			return nil, core.Wrap(core.CategoryCorruptData, "task ref ID is invalid", err)
+		}
 		heads = append(heads, TaskHead{TaskID: ref.taskID, ObjectID: ref.objectID})
 	}
 	return heads, nil
 }
 
-// ReadTaskHead returns the validated snapshot stored at head.
-func (r *Repository) ReadTaskHead(ctx context.Context, config core.ProjectConfig, head TaskHead) (core.Snapshot, error) {
+// InspectTaskHead returns the exact canonical task ref without reading its
+// target object. Prefix resolution is intentionally not performed here.
+func (r *Repository) InspectTaskHead(
+	ctx context.Context,
+	config core.ProjectConfig,
+	taskID string,
+) (TaskHead, bool, error) {
+	if err := core.ValidateTaskID(config.Key, taskID); err != nil {
+		return TaskHead{}, false, core.Wrap(core.CategoryValidation, "task ID is invalid", err)
+	}
 	if err := r.verifyIdentity(ctx); err != nil {
-		return core.Snapshot{}, err
+		return TaskHead{}, false, err
 	}
 	if err := r.validateRepositoryConfig(config); err != nil {
+		return TaskHead{}, false, err
+	}
+
+	ref, found, err := r.taskRef(ctx, taskID)
+	if err != nil {
+		return TaskHead{}, false, err
+	}
+	if !found {
+		return TaskHead{}, false, nil
+	}
+	return TaskHead{TaskID: ref.taskID, ObjectID: ref.objectID}, true, nil
+}
+
+// ReadTaskHead returns the validated snapshot stored at head.
+func (r *Repository) ReadTaskHead(ctx context.Context, config core.ProjectConfig, head TaskHead) (core.Snapshot, error) {
+	snapshots, err := r.ReadTaskHeads(ctx, config, []TaskHead{head})
+	if err != nil {
 		return core.Snapshot{}, err
 	}
-	return r.readTip(ctx, config, head.TaskID, head.ObjectID)
+	return snapshots[0], nil
 }
 
 // List returns every validated Workbook task snapshot, ordered by canonical
@@ -59,40 +89,21 @@ func (r *Repository) List(ctx context.Context, config core.ProjectConfig) ([]cor
 	if err != nil {
 		return nil, err
 	}
-
-	snapshots := make([]core.Snapshot, 0, len(heads))
-	for _, head := range heads {
-		snapshot, err := r.ReadTaskHead(ctx, config, head)
-		if err != nil {
-			return nil, err
-		}
-		snapshots = append(snapshots, snapshot)
-	}
-	return snapshots, nil
+	return r.ReadTaskHeads(ctx, config, heads)
 }
 
 // Get returns the validated current snapshot stored at taskID's ref. It reads
 // only the tip commit's two documents; replaying task history is a separate
 // projection concern.
 func (r *Repository) Get(ctx context.Context, config core.ProjectConfig, taskID string) (core.Snapshot, error) {
-	if err := r.verifyIdentity(ctx); err != nil {
-		return core.Snapshot{}, err
-	}
-	if err := r.validateRepositoryConfig(config); err != nil {
-		return core.Snapshot{}, err
-	}
-	if err := core.ValidateTaskID(config.Key, taskID); err != nil {
-		return core.Snapshot{}, core.Wrap(core.CategoryValidation, "task ID is invalid", err)
-	}
-
-	ref, found, err := r.taskRef(ctx, taskID)
+	head, found, err := r.InspectTaskHead(ctx, config, taskID)
 	if err != nil {
 		return core.Snapshot{}, err
 	}
 	if !found {
 		return core.Snapshot{}, core.Errorf(core.CategoryNotFound, "task %q was not found", taskID)
 	}
-	return r.readTip(ctx, config, ref.taskID, ref.objectID)
+	return r.ReadTaskHead(ctx, config, head)
 }
 
 // Resolve returns a canonical full task ID for an unambiguous case-insensitive
@@ -131,10 +142,33 @@ type taskRefRecord struct {
 }
 
 func (r *Repository) listTaskRefs(ctx context.Context) ([]taskRefRecord, error) {
-	contents, err := r.Git(ctx, nil, "for-each-ref", "--format=%(refname)%00%(objectname)", taskRefPrefix)
+	contents, err := r.Git(ctx, nil, "for-each-ref", "--format="+taskRefFormat, taskRefPrefix)
 	if err != nil {
 		return nil, err
 	}
+	return parseTaskRefRecords(contents, "")
+}
+
+func (r *Repository) taskRef(ctx context.Context, taskID string) (taskRefRecord, bool, error) {
+	contents, err := r.Git(ctx, nil, "for-each-ref", "--format="+taskRefFormat, taskRefPrefix+taskID)
+	if err != nil {
+		return taskRefRecord{}, false, err
+	}
+	refs, err := parseTaskRefRecords(contents, taskID)
+	if err != nil {
+		return taskRefRecord{}, false, err
+	}
+	switch len(refs) {
+	case 0:
+		return taskRefRecord{}, false, nil
+	case 1:
+		return refs[0], true, nil
+	default:
+		return taskRefRecord{}, false, core.Errorf(core.CategoryCorruptData, "task ref %q has nested entries", taskRefPrefix+taskID)
+	}
+}
+
+func parseTaskRefRecords(contents []byte, expectedTaskID string) ([]taskRefRecord, error) {
 	if len(contents) == 0 {
 		return nil, nil
 	}
@@ -144,12 +178,13 @@ func (r *Repository) listTaskRefs(ctx context.Context) ([]taskRefRecord, error) 
 
 	lines := bytes.Split(contents[:len(contents)-1], []byte{'\n'})
 	refs := make([]taskRefRecord, 0, len(lines))
+	seen := make(map[string]struct{}, len(lines))
 	for _, line := range lines {
 		parts := bytes.Split(line, []byte{0})
-		if len(parts) != 2 || len(parts[0]) == 0 || len(parts[1]) == 0 {
+		if len(parts) != 3 || len(parts[0]) == 0 || len(parts[1]) == 0 {
 			return nil, core.Errorf(core.CategoryCorruptData, "Git returned an invalid task ref record")
 		}
-		refName, objectID := string(parts[0]), string(parts[1])
+		refName, objectID, symbolicTarget := string(parts[0]), string(parts[1]), string(parts[2])
 		if !strings.HasPrefix(refName, taskRefPrefix) {
 			return nil, core.Errorf(core.CategoryCorruptData, "Git returned a ref outside the task namespace")
 		}
@@ -157,35 +192,23 @@ func (r *Repository) listTaskRefs(ctx context.Context) ([]taskRefRecord, error) 
 		if taskID == "" || strings.Contains(taskID, "/") {
 			return nil, core.Errorf(core.CategoryCorruptData, "task ref %q does not name one task", refName)
 		}
+		if expectedTaskID != "" && taskID != expectedTaskID {
+			return nil, core.Errorf(core.CategoryCorruptData, "task ref %q has nested entries", taskRefPrefix+expectedTaskID)
+		}
+		if symbolicTarget != "" {
+			return nil, core.Errorf(core.CategoryCorruptData, "task ref %q must not be symbolic", refName)
+		}
+		if _, duplicate := seen[taskID]; duplicate {
+			return nil, core.Errorf(core.CategoryCorruptData, "task ref %q was returned more than once", refName)
+		}
+		seen[taskID] = struct{}{}
 		refs = append(refs, taskRefRecord{taskID: taskID, objectID: objectID})
 	}
 	return refs, nil
 }
 
-func (r *Repository) taskRef(ctx context.Context, taskID string) (taskRefRecord, bool, error) {
-	contents, err := r.Git(ctx, nil, "for-each-ref", "--format=%(refname)%00%(objectname)", taskRefPrefix+taskID)
-	if err != nil {
-		return taskRefRecord{}, false, err
-	}
-	if len(contents) == 0 {
-		return taskRefRecord{}, false, nil
-	}
-	if contents[len(contents)-1] != '\n' {
-		return taskRefRecord{}, false, core.Errorf(core.CategoryCorruptData, "Git returned an unterminated task ref record")
-	}
-	lines := bytes.Split(contents[:len(contents)-1], []byte{'\n'})
-	if len(lines) != 1 {
-		return taskRefRecord{}, false, core.Errorf(core.CategoryCorruptData, "task ref %q has nested entries", taskRefPrefix+taskID)
-	}
-	parts := bytes.Split(lines[0], []byte{0})
-	if len(parts) != 2 || string(parts[0]) != taskRefPrefix+taskID || len(parts[1]) == 0 {
-		return taskRefRecord{}, false, core.Errorf(core.CategoryCorruptData, "Git returned an invalid task ref record")
-	}
-	return taskRefRecord{taskID: taskID, objectID: string(parts[1])}, true, nil
-}
-
 func (r *Repository) readTip(ctx context.Context, config core.ProjectConfig, taskID, objectID string) (core.Snapshot, error) {
-	return r.readTipAtRef(ctx, config, taskID, objectID, taskRefPrefix+taskID)
+	return r.ReadTaskHead(ctx, config, TaskHead{TaskID: taskID, ObjectID: objectID})
 }
 
 func (r *Repository) readTipAtRef(
@@ -252,6 +275,10 @@ func (r *Repository) validateTipTopology(ctx context.Context, objectID string, p
 	if err != nil {
 		return core.Wrap(core.CategoryCorruptData, "cannot read raw task commit", err)
 	}
+	return validateTipTopologyBytes(contents, pack)
+}
+
+func validateTipTopologyBytes(contents []byte, pack core.OperationPack) error {
 	headerEnd := bytes.Index(contents, []byte("\n\n"))
 	if headerEnd < 0 {
 		return core.Errorf(core.CategoryCorruptData, "task commit has no header terminator")

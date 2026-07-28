@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os/exec"
 	"reflect"
 	"strings"
 	"testing"
@@ -11,6 +12,316 @@ import (
 
 	"github.com/dgoings/workbook/internal/core"
 )
+
+func TestReadTaskHeadsBatchesCurrentTips(t *testing.T) {
+	repository, config := writeRepository(t)
+	first, _, _ := writeRoot(t, repository, config)
+	second := writeIndependentRoot(
+		t,
+		repository,
+		config,
+		"WB-01K0M6B8A4FTT8C39MXXYTW7C6",
+		"01K0M6B8A4FTT8C39MXXYTW7C7",
+		"01K0M6B8A4FTT8C39MXXYTW7C8",
+		"Second task",
+	)
+
+	var commands [][]string
+	repository.commandObserver = func(args []string) {
+		commands = append(commands, append([]string(nil), args...))
+	}
+	heads, err := repository.ListTaskHeads(context.Background(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshots, err := repository.ReadTaskHeads(context.Background(), config, heads)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshots) != 2 {
+		t.Fatalf("snapshots = %d, want 2", len(snapshots))
+	}
+	if !reflect.DeepEqual(snapshots, []core.Snapshot{first, second}) {
+		t.Fatalf("snapshots = %#v, want first and second task snapshots", snapshots)
+	}
+	if got := countCommand(commands, "for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)", "refs/workbook/tasks/"); got != 1 {
+		t.Fatalf("for-each-ref commands = %d, want 1; commands = %v", got, commands)
+	}
+	if got := countCommand(commands, "cat-file", "--batch"); got != 1 {
+		t.Fatalf("cat-file --batch commands = %d, want 1; commands = %v", got, commands)
+	}
+}
+
+func TestInspectTaskHeadRejectsSymbolicExactRef(t *testing.T) {
+	repository, config := writeRepository(t)
+	snapshot, pack, _ := writeRoot(t, repository, config)
+	gitOutput(t, repository, "update-ref", "refs/workbook/symbolic-target", snapshot.Head)
+	gitOutput(t, repository, "update-ref", "-d", taskRef(pack.TaskID))
+	gitOutput(t, repository, "symbolic-ref", taskRef(pack.TaskID), "refs/workbook/symbolic-target")
+
+	_, _, err := repository.InspectTaskHead(context.Background(), config, pack.TaskID)
+	if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
+		t.Fatalf("InspectTaskHead() category = %q, want %q; error = %v", got, want, err)
+	}
+}
+
+func TestInspectTaskHeadRejectsNestedEntriesUnderExactName(t *testing.T) {
+	repository, config := writeRepository(t)
+	snapshot, pack, _ := writeRoot(t, repository, config)
+	gitOutput(t, repository, "update-ref", "-d", taskRef(pack.TaskID))
+	gitOutput(t, repository, "update-ref", taskRef(pack.TaskID)+"/nested", snapshot.Head)
+
+	_, _, err := repository.InspectTaskHead(context.Background(), config, pack.TaskID)
+	if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
+		t.Fatalf("InspectTaskHead() category = %q, want %q; error = %v", got, want, err)
+	}
+}
+
+func TestInspectTaskHeadReturnsAbsentValidTaskID(t *testing.T) {
+	repository, config := writeRepository(t)
+	var commands [][]string
+	repository.commandObserver = func(args []string) {
+		commands = append(commands, append([]string(nil), args...))
+	}
+
+	head, found, err := repository.InspectTaskHead(
+		context.Background(),
+		config,
+		"WB-01K0M6B8A4FTT8C39MXXYTW7D0",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found || head != (TaskHead{}) {
+		t.Fatalf("InspectTaskHead() = (%#v, %t), want zero head and false", head, found)
+	}
+	if got := countCommand(commands, "for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)", "refs/workbook/tasks/WB-01K0M6B8A4FTT8C39MXXYTW7D0"); got != 1 {
+		t.Fatalf("exact for-each-ref commands = %d, want 1; commands = %v", got, commands)
+	}
+}
+
+func TestInspectTaskHeadRejectsInvalidFullIDBeforeRunningGit(t *testing.T) {
+	opened, config := writeRepository(t)
+	repository := &Repository{
+		Root:         opened.Root,
+		CommonGitDir: opened.CommonGitDir,
+		gitPath:      opened.gitPath,
+	}
+	var commands [][]string
+	repository.commandObserver = func(args []string) {
+		commands = append(commands, append([]string(nil), args...))
+	}
+
+	_, _, err := repository.InspectTaskHead(context.Background(), config, "WB-01K0")
+	if got, want := core.CategoryOf(err), core.CategoryValidation; got != want {
+		t.Fatalf("InspectTaskHead() category = %q, want %q; error = %v", got, want, err)
+	}
+	if len(commands) != 0 {
+		t.Fatalf("InspectTaskHead() commands = %v, want none for invalid full ID", commands)
+	}
+}
+
+func TestInspectTaskHeadDoesNotEnumerateOrReadUnrelatedTaskObjects(t *testing.T) {
+	repository, config := writeRepository(t)
+	snapshot, pack, _ := writeRoot(t, repository, config)
+	unrelatedBlob := gitOutputWithInput(t, repository, []byte("not a task"), "hash-object", "-w", "--stdin")
+	gitOutput(t, repository, "update-ref", "refs/workbook/tasks/WB-01K0M6B8A4FTT8C39MXXYTW7D1", unrelatedBlob)
+	var commands [][]string
+	repository.commandObserver = func(args []string) {
+		commands = append(commands, append([]string(nil), args...))
+	}
+
+	head, found, err := repository.InspectTaskHead(context.Background(), config, pack.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || head != (TaskHead{TaskID: pack.TaskID, ObjectID: snapshot.Head}) {
+		t.Fatalf("InspectTaskHead() = (%#v, %t), want exact task head", head, found)
+	}
+	if got := countCommand(commands, "for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)", "refs/workbook/tasks/"+pack.TaskID); got != 1 {
+		t.Fatalf("exact for-each-ref commands = %d, want 1; commands = %v", got, commands)
+	}
+	for _, command := range commands {
+		if len(command) > 0 && command[0] == "cat-file" {
+			t.Fatalf("InspectTaskHead() read an object with command %v", command)
+		}
+	}
+}
+
+func TestReadTaskHeadsSupportsRepositoryObjectFormats(t *testing.T) {
+	for _, objectFormat := range []string{"sha1", "sha256"} {
+		t.Run(objectFormat, func(t *testing.T) {
+			repository, config := writeRepositoryWithObjectFormat(t, objectFormat)
+			snapshot, _, _ := writeRoot(t, repository, config)
+
+			got, err := repository.ReadTaskHeads(
+				context.Background(),
+				config,
+				[]TaskHead{{TaskID: snapshot.Operation.TaskID, ObjectID: snapshot.Head}},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, []core.Snapshot{snapshot}) {
+				t.Fatalf("ReadTaskHeads() = %#v, want %#v", got, []core.Snapshot{snapshot})
+			}
+		})
+	}
+}
+
+func TestValidateTaskHeadAdvancesBatchesIndependentHistories(t *testing.T) {
+	repository, config := writeRepository(t)
+	firstPrevious, _, firstState := writeRoot(t, repository, config)
+	secondPrevious := writeIndependentRoot(
+		t,
+		repository,
+		config,
+		"WB-01K0M6B8A4FTT8C39MXXYTW7C6",
+		"01K0M6B8A4FTT8C39MXXYTW7C7",
+		"01K0M6B8A4FTT8C39MXXYTW7C8",
+		"Second task",
+	)
+
+	firstPack := writeUpdatePack(2, "01K0M6B8A4FTT8C39MXXYTW7D1", string(core.StatusReady))
+	firstCurrent, err := repository.Write(
+		context.Background(),
+		config,
+		&firstPrevious,
+		firstPack,
+		writeState(t, &firstState, firstPack),
+		"advance first",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPack := writeUpdatePack(2, "01K0M6B8A4FTT8C39MXXYTW7D2", string(core.StatusReady))
+	secondPack.TaskID = secondPrevious.Operation.TaskID
+	secondPack.HistoryGeneration = secondPrevious.Operation.HistoryGeneration
+	secondCurrent, err := repository.Write(
+		context.Background(),
+		config,
+		&secondPrevious,
+		secondPack,
+		writeState(t, &secondPrevious.State, secondPack),
+		"advance second",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var commands [][]string
+	repository.commandObserver = func(args []string) {
+		commands = append(commands, append([]string(nil), args...))
+	}
+	err = repository.ValidateTaskHeadAdvances(context.Background(), config, []HeadAdvance{
+		{Previous: firstPrevious, Current: TaskHead{TaskID: firstCurrent.Operation.TaskID, ObjectID: firstCurrent.Head}},
+		{Previous: secondPrevious, Current: TaskHead{TaskID: secondCurrent.Operation.TaskID, ObjectID: secondCurrent.Head}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := countCommand(commands, "rev-list", "--parents", "--stdin"); got != 1 {
+		t.Fatalf("rev-list --parents --stdin commands = %d, want 1; commands = %v", got, commands)
+	}
+	for _, command := range commands {
+		if len(command) > 0 && command[0] == "merge-base" {
+			t.Fatalf("ValidateTaskHeadAdvances() ran per-task merge-base command %v", command)
+		}
+	}
+}
+
+func TestValidateTaskHeadAdvancesRejectsBackwardAndSidewaysMovement(t *testing.T) {
+	tests := []struct {
+		name    string
+		current func(t *testing.T, repository *Repository, previous, root core.Snapshot) TaskHead
+	}{
+		{
+			name: "backward",
+			current: func(_ *testing.T, _ *Repository, _, root core.Snapshot) TaskHead {
+				return TaskHead{TaskID: root.Operation.TaskID, ObjectID: root.Head}
+			},
+		},
+		{
+			name: "sideways",
+			current: func(t *testing.T, repository *Repository, previous, root core.Snapshot) TaskHead {
+				tree := gitOutput(t, repository, "rev-parse", previous.Head+"^{tree}")
+				sibling := gitOutput(t, repository, "commit-tree", tree, "-p", root.Head, "-m", "sideways update")
+				return TaskHead{TaskID: root.Operation.TaskID, ObjectID: sibling}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repository, config := writeRepository(t)
+			root, _, rootState := writeRoot(t, repository, config)
+			pack := writeUpdatePack(2, "01K0M6B8A4FTT8C39MXXYTW7D1", string(core.StatusReady))
+			previous, err := repository.Write(
+				context.Background(),
+				config,
+				&root,
+				pack,
+				writeState(t, &rootState, pack),
+				"advance",
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			err = repository.ValidateTaskHeadAdvances(context.Background(), config, []HeadAdvance{{
+				Previous: previous,
+				Current:  test.current(t, repository, previous, root),
+			}})
+			if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
+				t.Fatalf("ValidateTaskHeadAdvances() category = %q, want %q; error = %v", got, want, err)
+			}
+		})
+	}
+}
+
+func TestValidateTaskHeadAdvancesRejectsInvalidPairsBeforeWalkingHistory(t *testing.T) {
+	repository, config := writeRepository(t)
+	previous, _, _ := writeRoot(t, repository, config)
+	valid := HeadAdvance{
+		Previous: previous,
+		Current:  TaskHead{TaskID: previous.Operation.TaskID, ObjectID: previous.Head},
+	}
+	tests := []struct {
+		name     string
+		advances []HeadAdvance
+	}{
+		{
+			name:     "duplicate task ID",
+			advances: []HeadAdvance{valid, valid},
+		},
+		{
+			name: "mismatched task ID",
+			advances: []HeadAdvance{{
+				Previous: previous,
+				Current: TaskHead{
+					TaskID:   "WB-01K0M6B8A4FTT8C39MXXYTW7D1",
+					ObjectID: previous.Head,
+				},
+			}},
+		},
+		{
+			name: "missing current head",
+			advances: []HeadAdvance{{
+				Previous: previous,
+				Current:  TaskHead{TaskID: previous.Operation.TaskID},
+			}},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := repository.ValidateTaskHeadAdvances(context.Background(), config, test.advances)
+			if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
+				t.Fatalf("ValidateTaskHeadAdvances() category = %q, want %q; error = %v", got, want, err)
+			}
+		})
+	}
+}
 
 func TestListTaskHeadsAndReadTaskHead(t *testing.T) {
 	repository, config := writeRepository(t)
@@ -543,6 +854,67 @@ func gitOutputWithInput(t *testing.T, repo *Repository, input []byte, args ...st
 		t.Fatalf("Git(%v) error = %v", args, err)
 	}
 	return strings.TrimSuffix(string(output), "\n")
+}
+
+func writeIndependentRoot(
+	t *testing.T,
+	repository *Repository,
+	config core.ProjectConfig,
+	taskID string,
+	generationID string,
+	operationID string,
+	title string,
+) core.Snapshot {
+	t.Helper()
+	pack := writeCreatePack()
+	pack.TaskID = taskID
+	pack.HistoryGeneration = generationID
+	pack.Operations[0].ID = operationID
+	pack.Operations[0].Task.Title = title
+	state := writeState(t, nil, pack)
+	snapshot, err := repository.Write(context.Background(), config, nil, pack, state, "create "+title)
+	if err != nil {
+		t.Fatalf("Write(%s) error = %v", taskID, err)
+	}
+	return snapshot
+}
+
+func writeRepositoryWithObjectFormat(t *testing.T, objectFormat string) (*Repository, core.ProjectConfig) {
+	t.Helper()
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repositoryRoot := t.TempDir()
+	if _, err := runGit(
+		context.Background(),
+		gitPath,
+		repositoryRoot,
+		nil,
+		"init",
+		"--quiet",
+		"--object-format="+objectFormat,
+	); err != nil {
+		if objectFormat == "sha256" {
+			t.Skipf("Git does not support SHA-256 repositories: %v", err)
+		}
+		t.Fatalf("git init --object-format=%s: %v", objectFormat, err)
+	}
+	if _, err := runGit(context.Background(), gitPath, repositoryRoot, nil, "config", "user.name", "Workbook Test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runGit(context.Background(), gitPath, repositoryRoot, nil, "config", "user.email", "workbook@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	repository, err := Open(context.Background(), repositoryRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, _, err := repository.Init(context.Background(), "WB", idsFor(writeProjectID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return repository, config
 }
 
 func TestGetRejectsNonCanonicalStateBytes(t *testing.T) {
