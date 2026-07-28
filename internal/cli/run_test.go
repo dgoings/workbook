@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/gitstore"
 	"github.com/dgoings/workbook/internal/projection"
 	"github.com/dgoings/workbook/internal/testrepo"
 )
@@ -478,6 +479,61 @@ func TestRunRebuildProducesVersionedResult(t *testing.T) {
 	if data.TaskCount != 1 || data.CachePath == "" {
 		t.Fatalf("rebuild data = %#v, want one task and a cache path", data)
 	}
+}
+
+func TestOpenServiceUsesSplitMutationStores(t *testing.T) {
+	repository := initializedRepository(t)
+
+	service, err := openService(context.Background(), repository)
+	if err != nil {
+		t.Fatalf("openService() error = %v", err)
+	}
+	reader, ok := service.Reader.(*projection.Store)
+	if !ok {
+		t.Fatalf("Reader = %T, want *projection.Store", service.Reader)
+	}
+	if _, ok := service.Writer.(*gitstore.Repository); !ok {
+		t.Fatalf("Writer = %T, want *gitstore.Repository", service.Writer)
+	}
+	projectionStore, ok := service.Projection.(*projection.Store)
+	if !ok {
+		t.Fatalf("Projection = %T, want *projection.Store", service.Projection)
+	}
+	if projectionStore != reader {
+		t.Fatalf("Projection = %T, want the opened reader instance", service.Projection)
+	}
+}
+
+func TestRunExactMutationPathAdvancesCanonicalRefOnce(t *testing.T) {
+	repository := initializedRepository(t)
+
+	code, stdout, stderr := run(t, repository, "create", "Created", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("create = (%d, %q, %q), want success", code, stdout, stderr)
+	}
+	created := decodeMutationTask(t, stdout, "create")
+	createHead := assertCanonicalMutationHead(t, repository, created, "")
+
+	code, stdout, stderr = run(t, repository, "update", created.ID, "--title", "Updated", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("update = (%d, %q, %q), want success", code, stdout, stderr)
+	}
+	updated := decodeMutationTask(t, stdout, "update")
+	updateHead := assertCanonicalMutationHead(t, repository, updated, createHead)
+
+	code, stdout, stderr = run(t, repository, "delete", created.ID, "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("delete = (%d, %q, %q), want success", code, stdout, stderr)
+	}
+	deleted := decodeMutationTask(t, stdout, "delete")
+	deleteHead := assertCanonicalMutationHead(t, repository, deleted, updateHead)
+
+	code, stdout, stderr = run(t, repository, "restore", created.ID, "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("restore = (%d, %q, %q), want success", code, stdout, stderr)
+	}
+	restored := decodeMutationTask(t, stdout, "restore")
+	assertCanonicalMutationHead(t, repository, restored, deleteHead)
 }
 
 func TestReadCommandsRefreshCachedProjectionAfterGitTipAdvances(t *testing.T) {
@@ -1335,6 +1391,49 @@ func run(t *testing.T, cwd string, args ...string) (int, string, string) {
 	var stderr bytes.Buffer
 	code := Run(context.Background(), args, cwd, &stdout, &stderr)
 	return code, stdout.String(), stderr.String()
+}
+
+func decodeMutationTask(t *testing.T, output, command string) core.Task {
+	t.Helper()
+	var task core.Task
+	if err := json.Unmarshal(assertJSONResult(t, output, command).Data, &task); err != nil {
+		t.Fatalf("decode %s task: %v", command, err)
+	}
+	return task
+}
+
+func assertCanonicalMutationHead(t *testing.T, repository string, task core.Task, previousHead string) string {
+	t.Helper()
+	ref := "refs/workbook/tasks/" + task.ID
+	head := gitOutput(t, repository, "rev-parse", "--verify", ref)
+	if task.Head != head {
+		t.Fatalf("%s head = %q, Git ref = %q", task.ID, task.Head, head)
+	}
+	if head == previousHead {
+		t.Fatalf("%s head did not advance from %q", task.ID, previousHead)
+	}
+
+	fields := strings.Fields(gitOutput(t, repository, "rev-list", "--parents", "--max-count=1", head))
+	if previousHead == "" {
+		if len(fields) != 1 || fields[0] != head {
+			t.Fatalf("create commit topology = %q, want parentless head %q", fields, head)
+		}
+		return head
+	}
+	if len(fields) != 2 || fields[0] != head || fields[1] != previousHead {
+		t.Fatalf("mutation commit topology = %q, want head %q with sole parent %q", fields, head, previousHead)
+	}
+	return head
+}
+
+func gitOutput(t *testing.T, repository string, args ...string) string {
+	t.Helper()
+	commandArgs := append([]string{"-C", repository}, args...)
+	output, err := exec.Command("git", commandArgs...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+	}
+	return strings.TrimSpace(string(output))
 }
 
 func assertJSONResult(t *testing.T, output, command string) resultDocument {

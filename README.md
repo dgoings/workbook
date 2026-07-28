@@ -145,10 +145,31 @@ sorting by priority, rank, and task ID; it reports no eligible task when none
 qualify. `board` uses the same core task order and presents an actionable,
 unambiguous task-ID prefix with each card's priority, title, and labels. Its JSON
 output retains full task IDs, descriptions, and the rest of the task data. Normal
-`list`, `show`, `board`, and `next` reads use the local SQLite projection;
-task mutations continue to write immutable operations directly to Git. `rebuild`
-recreates the disposable cache and reports its task count and path. Claims and
-implementation links remain future work.
+`list`, `show`, `board`, and `next` reads use the local SQLite projection.
+Claims and implementation links remain future work.
+
+### Local mutation durability
+
+Existing-task mutations plan from the validated current state in the SQLite
+projection. With a full task ID, Workbook inspects that task's exact Git ref
+before planning; when the ref has advanced, Workbook validates and refreshes
+that projected task from its current Git tip. Operations that need cross-task
+information, such as prefix resolution, task ordering, or dependency checks,
+refresh the relevant global projection first.
+
+After planning, Workbook writes the immutable operation and complete current
+state as Git objects, then synchronously compare-and-swaps the canonical
+`refs/workbook/tasks/<task-id>` ref. The CLI or HTTP mutation is successful only
+after that Git ref advances. Workbook then conditionally advances SQLite from
+the parent it observed to the new Git head, so an older request cannot overwrite
+a newer projection row.
+
+SQLite remains a disposable read projection, not a second durability boundary.
+If a successful mutation includes a `projection-update-failed` warning, the Git
+mutation succeeded but the local projection could not be advanced. Subsequent
+reads may repair the affected row; `workbook rebuild` recreates the projection
+from the canonical Git refs when recovery is needed and reports its task count
+and cache path.
 
 ### Release artifacts
 
