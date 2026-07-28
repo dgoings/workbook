@@ -10,10 +10,40 @@ type Snapshot struct {
 	State     StateDocument
 }
 
-// TaskStore persists and retrieves immutable task operation snapshots.
-type TaskStore interface {
+// TaskReader retrieves task snapshots from a selected read model.
+type TaskReader interface {
 	List(context.Context, ProjectConfig) ([]Snapshot, error)
 	Get(context.Context, ProjectConfig, string) (Snapshot, error)
 	Resolve(context.Context, ProjectConfig, string) (string, error)
+}
+
+// CanonicalTaskWriter durably appends a mutation whose parent was already
+// observed and validated through the canonical repository read path.
+type CanonicalTaskWriter interface {
+	WriteValidated(context.Context, ProjectConfig, *Snapshot, OperationPack, StateDocument, string) (Snapshot, error)
+}
+
+// ProjectionUpdater conditionally advances or invalidates disposable task
+// projection rows after a canonical mutation succeeds.
+type ProjectionUpdater interface {
+	Advance(context.Context, ProjectConfig, string, Snapshot) (bool, error)
+	Invalidate(context.Context, ProjectConfig, string, string, string) error
+}
+
+const WarningProjectionUpdate = "projection-update-failed"
+
+type Warning struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+type MutationResult struct {
+	Task     Task      `json:"task"`
+	Warnings []Warning `json:"warnings,omitempty"`
+}
+
+// TaskStore persists and retrieves immutable task operation snapshots.
+type TaskStore interface {
+	TaskReader
 	Write(context.Context, ProjectConfig, *Snapshot, OperationPack, StateDocument, string) (Snapshot, error)
 }

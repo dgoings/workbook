@@ -735,8 +735,262 @@ func TestServiceDependRejectsExistingReachableCycleWithoutWriting(t *testing.T) 
 	}
 }
 
+func TestServiceFullIDUpdateReadsParentDirectlyAndAdvancesFromItsHead(t *testing.T) {
+	parent := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", TaskData{
+		Title: "Old title", Status: StatusBacklog, Priority: PriorityMedium, Rank: "1/1",
+	})
+	reader := newTaskReaderSpy(parent)
+	writer := &canonicalWriterSpy{}
+	projection := &projectionUpdaterSpy{}
+	service := splitServiceUnderTest(reader, writer, projection, &sequenceIDSource{
+		values: []string{"01K0M6B8A4FTT8C39MXXYTW7D2"},
+	})
+	title := "New title"
+
+	result, err := service.UpdateMutation(context.Background(), parent.State.TaskID, UpdateInput{Title: &title})
+	if err != nil {
+		t.Fatalf("UpdateMutation() error = %v", err)
+	}
+	if got, want := result.Task.Head, "written-head"; got != want {
+		t.Fatalf("UpdateMutation() head = %q, want %q", got, want)
+	}
+	if got := reader.resolveInputs; len(got) != 0 {
+		t.Fatalf("Resolve() inputs = %#v, want none for a full task ID", got)
+	}
+	if got, want := reader.getIDs, []string{parent.State.TaskID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Get() IDs = %#v, want %#v", got, want)
+	}
+	if got, want := len(writer.calls), 1; got != want {
+		t.Fatalf("WriteValidated() calls = %d, want %d", got, want)
+	}
+	if got, want := writer.calls[0].parent, &parent; !reflect.DeepEqual(got, want) {
+		t.Fatalf("WriteValidated() parent = %#v, want %#v", got, want)
+	}
+	if got, want := len(projection.advanceCalls), 1; got != want {
+		t.Fatalf("Advance() calls = %d, want %d", got, want)
+	}
+	if got, want := projection.advanceCalls[0].expectedParent, parent.Head; got != want {
+		t.Fatalf("Advance() expected parent = %q, want %q", got, want)
+	}
+	if got, want := projection.advanceCalls[0].snapshot.Head, "written-head"; got != want {
+		t.Fatalf("Advance() written head = %q, want %q", got, want)
+	}
+}
+
+func TestServicePrefixUpdateResolvesThenReadsCanonicalTask(t *testing.T) {
+	parent := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", TaskData{
+		Title: "Old title", Status: StatusBacklog, Priority: PriorityMedium, Rank: "1/1",
+	})
+	reader := newTaskReaderSpy(parent)
+	reader.resolveID = parent.State.TaskID
+	writer := &canonicalWriterSpy{}
+	service := splitServiceUnderTest(reader, writer, nil, &sequenceIDSource{
+		values: []string{"01K0M6B8A4FTT8C39MXXYTW7D2"},
+	})
+	prefix := parent.State.TaskID[:10]
+	title := "New title"
+
+	result, err := service.UpdateMutation(context.Background(), prefix, UpdateInput{Title: &title})
+	if err != nil {
+		t.Fatalf("UpdateMutation() error = %v", err)
+	}
+	if got, want := result.Task.ID, parent.State.TaskID; got != want {
+		t.Fatalf("UpdateMutation() task ID = %q, want %q", got, want)
+	}
+	if got, want := reader.resolveInputs, []string{prefix}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Resolve() inputs = %#v, want %#v", got, want)
+	}
+	if got, want := reader.getIDs, []string{parent.State.TaskID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Get() IDs = %#v, want %#v", got, want)
+	}
+}
+
+func TestServiceMutationBoundariesKeepRequiredGlobalListReads(t *testing.T) {
+	t.Run("create rank", func(t *testing.T) {
+		existing := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", TaskData{
+			Title: "Existing", Status: StatusBacklog, Priority: PriorityMedium, Rank: "7/1",
+		})
+		reader := newTaskReaderSpy(existing)
+		projection := &projectionUpdaterSpy{}
+		service := splitServiceUnderTest(reader, &canonicalWriterSpy{}, projection, &sequenceIDSource{values: []string{
+			"01K0M6B8A4FTT8C39MXXYTW7D2",
+			"01K0M6B8A4FTT8C39MXXYTW7D3",
+			"01K0M6B8A4FTT8C39MXXYTW7D4",
+		}})
+
+		result, err := service.CreateMutation(context.Background(), CreateInput{Title: "New task"})
+		if err != nil {
+			t.Fatalf("CreateMutation() error = %v", err)
+		}
+		if got, want := result.Task.Rank, "8/1"; got != want {
+			t.Fatalf("CreateMutation() rank = %q, want %q", got, want)
+		}
+		if got, want := reader.listCalls, 1; got != want {
+			t.Fatalf("CreateMutation() List() calls = %d, want %d", got, want)
+		}
+		if got, want := len(projection.advanceCalls), 1; got != want {
+			t.Fatalf("CreateMutation() Advance() calls = %d, want %d", got, want)
+		}
+		if got := projection.advanceCalls[0].expectedParent; got != "" {
+			t.Fatalf("CreateMutation() Advance() expected parent = %q, want empty root parent", got)
+		}
+	})
+
+	t.Run("move rank", func(t *testing.T) {
+		moved := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E1", TaskData{
+			Title: "Moved", Status: StatusReady, Priority: PriorityHigh, Rank: "9/1",
+		})
+		previous := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E2", TaskData{
+			Title: "Previous", Status: StatusReady, Priority: PriorityHigh, Rank: "2/1",
+		})
+		anchor := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E3", TaskData{
+			Title: "Anchor", Status: StatusReady, Priority: PriorityHigh, Rank: "4/1",
+		})
+		reader := newTaskReaderSpy(moved, previous, anchor)
+		service := splitServiceUnderTest(reader, &canonicalWriterSpy{}, nil, &sequenceIDSource{
+			values: []string{"01K0M6B8A4FTT8C39MXXYTW7E4"},
+		})
+
+		result, err := service.MoveMutation(context.Background(), moved.State.TaskID, MoveInput{Before: anchor.State.TaskID})
+		if err != nil {
+			t.Fatalf("MoveMutation() error = %v", err)
+		}
+		if got, want := result.Task.Rank, "3/1"; got != want {
+			t.Fatalf("MoveMutation() rank = %q, want %q", got, want)
+		}
+		if got, want := reader.listCalls, 1; got != want {
+			t.Fatalf("MoveMutation() List() calls = %d, want %d", got, want)
+		}
+	})
+
+	t.Run("dependency cycle", func(t *testing.T) {
+		dependent := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E1", TaskData{
+			Title: "Dependent", Status: StatusReady, Priority: PriorityHigh, Rank: "1/1",
+		})
+		dependency := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E2", TaskData{
+			Title: "Dependency", Status: StatusReady, Priority: PriorityHigh, Rank: "2/1",
+		})
+		reader := newTaskReaderSpy(dependent, dependency)
+		service := splitServiceUnderTest(reader, &canonicalWriterSpy{}, nil, &sequenceIDSource{
+			values: []string{"01K0M6B8A4FTT8C39MXXYTW7E3"},
+		})
+
+		result, err := service.DependMutation(context.Background(), dependent.State.TaskID, dependency.State.TaskID)
+		if err != nil {
+			t.Fatalf("DependMutation() error = %v", err)
+		}
+		if got, want := result.Task.Dependencies, []string{dependency.State.TaskID}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("DependMutation() dependencies = %#v, want %#v", got, want)
+		}
+		if got, want := reader.listCalls, 1; got != want {
+			t.Fatalf("DependMutation() List() calls = %d, want %d", got, want)
+		}
+	})
+}
+
+func TestServiceProjectionFailureReturnsDurableMutationWarning(t *testing.T) {
+	parent := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", TaskData{
+		Title: "Old title", Status: StatusBacklog, Priority: PriorityMedium, Rank: "1/1",
+	})
+	title := "New title"
+	written := parent
+	written.Head = "durable-written-head"
+	written.State.Task.Title = title
+	written.State.LogicalClock = 2
+	reader := newTaskReaderSpy(parent)
+	writer := &canonicalWriterSpy{written: written}
+	projection := &projectionUpdaterSpy{advanceErr: errors.New("disk full")}
+	service := splitServiceUnderTest(reader, writer, projection, &sequenceIDSource{
+		values: []string{"01K0M6B8A4FTT8C39MXXYTW7D2"},
+	})
+
+	result, err := service.UpdateMutation(context.Background(), parent.State.TaskID, UpdateInput{Title: &title})
+	if err != nil {
+		t.Fatalf("UpdateMutation() error = %v", err)
+	}
+	if got, want := result.Task.Head, written.Head; got != want {
+		t.Fatalf("task head = %q, want durable Git head %q", got, want)
+	}
+	if len(result.Warnings) != 1 || result.Warnings[0].Code != WarningProjectionUpdate {
+		t.Fatalf("warnings = %#v", result.Warnings)
+	}
+	if !strings.Contains(result.Warnings[0].Message, "run `workbook rebuild`") ||
+		!strings.Contains(result.Warnings[0].Message, "disk full") {
+		t.Fatalf("warning message = %q, want rebuild guidance and projection error", result.Warnings[0].Message)
+	}
+	if got, want := len(projection.invalidateCalls), 1; got != want {
+		t.Fatalf("Invalidate() calls = %d, want %d", got, want)
+	}
+	invalidation := projection.invalidateCalls[0]
+	if invalidation.taskID != parent.State.TaskID ||
+		invalidation.expectedParent != parent.Head ||
+		invalidation.writtenHead != written.Head {
+		t.Fatalf("invalidation = %#v", invalidation)
+	}
+}
+
+func TestServiceProjectionFailureAppendsInvalidationFailureToOneWarning(t *testing.T) {
+	parent := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", TaskData{
+		Title: "Old title", Status: StatusBacklog, Priority: PriorityMedium, Rank: "1/1",
+	})
+	title := "New title"
+	writer := &canonicalWriterSpy{}
+	projection := &projectionUpdaterSpy{
+		advanceErr:    errors.New("disk full"),
+		invalidateErr: errors.New("database locked"),
+	}
+	service := splitServiceUnderTest(newTaskReaderSpy(parent), writer, projection, &sequenceIDSource{
+		values: []string{"01K0M6B8A4FTT8C39MXXYTW7D2"},
+	})
+
+	result, err := service.UpdateMutation(context.Background(), parent.State.TaskID, UpdateInput{Title: &title})
+	if err != nil {
+		t.Fatalf("UpdateMutation() error = %v", err)
+	}
+	if got, want := len(result.Warnings), 1; got != want {
+		t.Fatalf("warnings = %#v, want %d", result.Warnings, want)
+	}
+	if got := result.Warnings[0].Message; !strings.Contains(got, "; cache invalidation also failed: database locked") {
+		t.Fatalf("warning message = %q, want invalidation failure detail", got)
+	}
+}
+
+func TestServiceProjectionFailureDoesNotAdvanceAfterGitWriteFailure(t *testing.T) {
+	parent := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", TaskData{
+		Title: "Old title", Status: StatusBacklog, Priority: PriorityMedium, Rank: "1/1",
+	})
+	title := "New title"
+	writeErr := errors.New("reference changed")
+	writer := &canonicalWriterSpy{err: writeErr}
+	projection := &projectionUpdaterSpy{}
+	service := splitServiceUnderTest(newTaskReaderSpy(parent), writer, projection, &sequenceIDSource{
+		values: []string{"01K0M6B8A4FTT8C39MXXYTW7D2"},
+	})
+
+	result, err := service.UpdateMutation(context.Background(), parent.State.TaskID, UpdateInput{Title: &title})
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("UpdateMutation() error = %v, want %v", err, writeErr)
+	}
+	if got, want := result, (MutationResult{}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("UpdateMutation() result = %#v, want %#v", got, want)
+	}
+	if got := len(projection.advanceCalls); got != 0 {
+		t.Fatalf("Advance() calls = %d, want none", got)
+	}
+	if got := len(projection.invalidateCalls); got != 0 {
+		t.Fatalf("Invalidate() calls = %d, want none", got)
+	}
+}
+
 func serviceUnderTest(store TaskStore, ids IDSource) Service {
 	return Service{Config: serviceTestConfig, Store: store, IDs: ids, Now: func() time.Time { return serviceTestNow }, Actor: "developer@example.com"}
+}
+
+func splitServiceUnderTest(reader TaskReader, writer CanonicalTaskWriter, projection ProjectionUpdater, ids IDSource) Service {
+	return Service{
+		Config: serviceTestConfig, Reader: reader, Writer: writer, Projection: projection,
+		IDs: ids, Now: func() time.Time { return serviceTestNow }, Actor: "developer@example.com",
+	}
 }
 
 func serviceSnapshot(id string, task TaskData) Snapshot {
@@ -785,6 +1039,114 @@ type memoryWrite struct {
 	pack   OperationPack
 	state  StateDocument
 	reason string
+}
+
+type taskReaderSpy struct {
+	snapshots     map[string]Snapshot
+	resolveID     string
+	listCalls     int
+	getIDs        []string
+	resolveInputs []string
+}
+
+func newTaskReaderSpy(snapshots ...Snapshot) *taskReaderSpy {
+	reader := &taskReaderSpy{snapshots: make(map[string]Snapshot, len(snapshots))}
+	for _, snapshot := range snapshots {
+		reader.snapshots[snapshot.State.TaskID] = snapshot
+	}
+	return reader
+}
+
+func (s *taskReaderSpy) List(_ context.Context, _ ProjectConfig) ([]Snapshot, error) {
+	s.listCalls++
+	ids := make([]string, 0, len(s.snapshots))
+	for id := range s.snapshots {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	snapshots := make([]Snapshot, 0, len(ids))
+	for _, id := range ids {
+		snapshots = append(snapshots, s.snapshots[id])
+	}
+	return snapshots, nil
+}
+
+func (s *taskReaderSpy) Get(_ context.Context, _ ProjectConfig, id string) (Snapshot, error) {
+	s.getIDs = append(s.getIDs, id)
+	snapshot, ok := s.snapshots[id]
+	if !ok {
+		return Snapshot{}, Errorf(CategoryNotFound, "task %q was not found", id)
+	}
+	return snapshot, nil
+}
+
+func (s *taskReaderSpy) Resolve(_ context.Context, _ ProjectConfig, input string) (string, error) {
+	s.resolveInputs = append(s.resolveInputs, input)
+	if s.resolveID == "" {
+		return "", Errorf(CategoryNotFound, "no task matches %q", input)
+	}
+	return s.resolveID, nil
+}
+
+type canonicalWrite struct {
+	parent *Snapshot
+	pack   OperationPack
+	state  StateDocument
+	reason string
+}
+
+type canonicalWriterSpy struct {
+	calls   []canonicalWrite
+	written Snapshot
+	err     error
+}
+
+func (s *canonicalWriterSpy) WriteValidated(
+	_ context.Context,
+	_ ProjectConfig,
+	parent *Snapshot,
+	pack OperationPack,
+	state StateDocument,
+	reason string,
+) (Snapshot, error) {
+	s.calls = append(s.calls, canonicalWrite{parent: parent, pack: pack, state: state, reason: reason})
+	if s.err != nil {
+		return Snapshot{}, s.err
+	}
+	if s.written.Head != "" {
+		return s.written, nil
+	}
+	return Snapshot{Head: "written-head", Operation: pack, State: state}, nil
+}
+
+type projectionAdvanceCall struct {
+	expectedParent string
+	snapshot       Snapshot
+}
+
+type projectionInvalidateCall struct {
+	taskID         string
+	expectedParent string
+	writtenHead    string
+}
+
+type projectionUpdaterSpy struct {
+	advanceCalls    []projectionAdvanceCall
+	invalidateCalls []projectionInvalidateCall
+	advanceErr      error
+	invalidateErr   error
+}
+
+func (s *projectionUpdaterSpy) Advance(_ context.Context, _ ProjectConfig, expectedParent string, snapshot Snapshot) (bool, error) {
+	s.advanceCalls = append(s.advanceCalls, projectionAdvanceCall{expectedParent: expectedParent, snapshot: snapshot})
+	return s.advanceErr == nil, s.advanceErr
+}
+
+func (s *projectionUpdaterSpy) Invalidate(_ context.Context, _ ProjectConfig, taskID, expectedParent, writtenHead string) error {
+	s.invalidateCalls = append(s.invalidateCalls, projectionInvalidateCall{
+		taskID: taskID, expectedParent: expectedParent, writtenHead: writtenHead,
+	})
+	return s.invalidateErr
 }
 
 func newMemoryTaskStore(snapshots ...Snapshot) *memoryTaskStore {
@@ -847,6 +1209,17 @@ func (s *memoryTaskStore) Write(_ context.Context, _ ProjectConfig, parent *Snap
 	snapshot := Snapshot{Head: fmt.Sprintf("head-%d", len(s.writes)), Operation: pack, State: state}
 	s.snapshots[state.TaskID] = snapshot
 	return snapshot, nil
+}
+
+func (s *memoryTaskStore) WriteValidated(
+	ctx context.Context,
+	config ProjectConfig,
+	parent *Snapshot,
+	pack OperationPack,
+	state StateDocument,
+	reason string,
+) (Snapshot, error) {
+	return s.Write(ctx, config, parent, pack, state, reason)
 }
 
 func assertTaskIDs(t *testing.T, tasks []Task, want []string) {

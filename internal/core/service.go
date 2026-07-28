@@ -12,11 +12,14 @@ import (
 )
 
 type Service struct {
-	Config ProjectConfig
-	Store  TaskStore
-	IDs    IDSource
-	Now    func() time.Time
-	Actor  string
+	Config     ProjectConfig
+	Reader     TaskReader
+	Writer     CanonicalTaskWriter
+	Projection ProjectionUpdater
+	Store      TaskStore
+	IDs        IDSource
+	Now        func() time.Time
+	Actor      string
 }
 
 type CreateInput struct {
@@ -48,6 +51,11 @@ type ListFilter struct {
 }
 
 func (s Service) Create(ctx context.Context, input CreateInput) (Task, error) {
+	result, err := s.CreateMutation(ctx, input)
+	return result.Task, err
+}
+
+func (s Service) CreateMutation(ctx context.Context, input CreateInput) (MutationResult, error) {
 	status := input.Status
 	if status == "" {
 		status = StatusBacklog
@@ -57,13 +65,13 @@ func (s Service) Create(ctx context.Context, input CreateInput) (Task, error) {
 		priority = PriorityMedium
 	}
 
-	snapshots, err := s.Store.List(ctx, s.Config)
+	snapshots, err := s.taskReader().List(ctx, s.Config)
 	if err != nil {
-		return Task{}, err
+		return MutationResult{}, err
 	}
 	rank, err := nextRank(snapshots, status, priority)
 	if err != nil {
-		return Task{}, err
+		return MutationResult{}, err
 	}
 	now := s.now()
 	taskData, err := normalizeCanonicalTask(s.Config.Key, TaskData{
@@ -78,12 +86,12 @@ func (s Service) Create(ctx context.Context, input CreateInput) (Task, error) {
 		UpdatedAt:    now,
 	})
 	if err != nil {
-		return Task{}, err
+		return MutationResult{}, err
 	}
 
 	ids, err := s.newMutationIDs(3)
 	if err != nil {
-		return Task{}, err
+		return MutationResult{}, err
 	}
 	taskULID, generation, operationID := ids[0], ids[1], ids[2]
 	taskID := s.Config.Key + "-" + taskULID
@@ -102,13 +110,9 @@ func (s Service) Create(ctx context.Context, input CreateInput) (Task, error) {
 	}
 	state, err := Apply(nil, pack, s.Config.Key)
 	if err != nil {
-		return Task{}, err
+		return MutationResult{}, err
 	}
-	written, err := s.Store.Write(ctx, s.Config, nil, pack, state, createCommitSubject(taskID, taskData))
-	if err != nil {
-		return Task{}, err
-	}
-	return Project(written), nil
+	return s.persistMutation(ctx, nil, pack, state, createCommitSubject(taskID, taskData))
 }
 
 func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
@@ -118,7 +122,7 @@ func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
 	if filter.Priority != nil && !isValidPriority(*filter.Priority) {
 		return nil, Errorf(CategoryValidation, "invalid task priority %q", *filter.Priority)
 	}
-	snapshots, err := s.Store.List(ctx, s.Config)
+	snapshots, err := s.taskReader().List(ctx, s.Config)
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +152,7 @@ func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
 // Next returns the highest-priority ready task whose dependencies are all
 // active done tasks. It returns nil when no task is eligible.
 func (s Service) Next(ctx context.Context) (*Task, error) {
-	snapshots, err := s.Store.List(ctx, s.Config)
+	snapshots, err := s.taskReader().List(ctx, s.Config)
 	if err != nil {
 		return nil, err
 	}
@@ -192,12 +196,17 @@ func (s Service) Show(ctx context.Context, idOrPrefix string) (Task, error) {
 }
 
 func (s Service) Update(ctx context.Context, idOrPrefix string, input UpdateInput) (Task, error) {
+	result, err := s.UpdateMutation(ctx, idOrPrefix, input)
+	return result.Task, err
+}
+
+func (s Service) UpdateMutation(ctx context.Context, idOrPrefix string, input UpdateInput) (MutationResult, error) {
 	parent, err := s.resolveSnapshot(ctx, idOrPrefix)
 	if err != nil {
-		return Task{}, err
+		return MutationResult{}, err
 	}
 	if parent.State.Task.Deleted {
-		return Task{}, Errorf(CategoryValidation, "cannot update a tombstoned task")
+		return MutationResult{}, Errorf(CategoryValidation, "cannot update a tombstoned task")
 	}
 
 	next := copyTaskData(parent.State.Task)
@@ -218,59 +227,74 @@ func (s Service) Update(ctx context.Context, idOrPrefix string, input UpdateInpu
 	}
 	next, err = normalizeCanonicalTask(s.Config.Key, next)
 	if err != nil {
-		return Task{}, err
+		return MutationResult{}, err
 	}
 
 	operations := changedOperations(parent.State.Task, next)
 	if len(operations) == 0 {
-		return Task{}, Errorf(CategoryValidation, "update does not change task")
+		return MutationResult{}, Errorf(CategoryValidation, "update does not change task")
 	}
 	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
-		return Task{}, err
+		return MutationResult{}, err
 	}
 	return s.writeMutation(ctx, &parent, operations, updateCommitSubject(parent.State.TaskID, parent.State.Task, next))
 }
 
 func (s Service) Delete(ctx context.Context, idOrPrefix string) (Task, error) {
+	result, err := s.DeleteMutation(ctx, idOrPrefix)
+	return result.Task, err
+}
+
+func (s Service) DeleteMutation(ctx context.Context, idOrPrefix string) (MutationResult, error) {
 	parent, err := s.resolveSnapshot(ctx, idOrPrefix)
 	if err != nil {
-		return Task{}, err
+		return MutationResult{}, err
 	}
 	if parent.State.Task.Deleted {
-		return Task{}, Errorf(CategoryValidation, "cannot delete a tombstoned task")
+		return MutationResult{}, Errorf(CategoryValidation, "cannot delete a tombstoned task")
 	}
 	operations := []Operation{{Type: OperationTaskTombstone}}
 	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
-		return Task{}, err
+		return MutationResult{}, err
 	}
 	return s.writeMutation(ctx, &parent, operations, "delete task")
 }
 
 func (s Service) Restore(ctx context.Context, idOrPrefix string) (Task, error) {
+	result, err := s.RestoreMutation(ctx, idOrPrefix)
+	return result.Task, err
+}
+
+func (s Service) RestoreMutation(ctx context.Context, idOrPrefix string) (MutationResult, error) {
 	parent, err := s.resolveSnapshot(ctx, idOrPrefix)
 	if err != nil {
-		return Task{}, err
+		return MutationResult{}, err
 	}
 	if !parent.State.Task.Deleted {
-		return Task{}, Errorf(CategoryValidation, "cannot restore an active task")
+		return MutationResult{}, Errorf(CategoryValidation, "cannot restore an active task")
 	}
 	operations := []Operation{{Type: OperationTaskRestore}}
 	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
-		return Task{}, err
+		return MutationResult{}, err
 	}
 	return s.writeMutation(ctx, &parent, operations, "restore task")
 }
 
 func (s Service) Move(ctx context.Context, idOrPrefix string, input MoveInput) (Task, error) {
+	result, err := s.MoveMutation(ctx, idOrPrefix, input)
+	return result.Task, err
+}
+
+func (s Service) MoveMutation(ctx context.Context, idOrPrefix string, input MoveInput) (MutationResult, error) {
 	if (input.Before == "") == (input.After == "") {
-		return Task{}, Errorf(CategoryValidation, "move requires exactly one anchor direction")
+		return MutationResult{}, Errorf(CategoryValidation, "move requires exactly one anchor direction")
 	}
 	parent, err := s.resolveSnapshot(ctx, idOrPrefix)
 	if err != nil {
-		return Task{}, err
+		return MutationResult{}, err
 	}
 	if parent.State.Task.Deleted {
-		return Task{}, Errorf(CategoryValidation, "cannot move a tombstoned task")
+		return MutationResult{}, Errorf(CategoryValidation, "cannot move a tombstoned task")
 	}
 	anchorInput := input.Before
 	if anchorInput == "" {
@@ -278,85 +302,95 @@ func (s Service) Move(ctx context.Context, idOrPrefix string, input MoveInput) (
 	}
 	anchor, err := s.resolveSnapshot(ctx, anchorInput)
 	if err != nil {
-		return Task{}, err
+		return MutationResult{}, err
 	}
 	if anchor.State.Task.Deleted {
-		return Task{}, Errorf(CategoryValidation, "cannot use a tombstoned task as an anchor")
+		return MutationResult{}, Errorf(CategoryValidation, "cannot use a tombstoned task as an anchor")
 	}
 	if anchor.State.TaskID == parent.State.TaskID {
-		return Task{}, Errorf(CategoryValidation, "cannot use a task as its own move anchor")
+		return MutationResult{}, Errorf(CategoryValidation, "cannot use a task as its own move anchor")
 	}
 	if anchor.State.Task.Status != parent.State.Task.Status || anchor.State.Task.Priority != parent.State.Task.Priority {
-		return Task{}, Errorf(CategoryValidation, "move anchor must be in the same status and priority bucket")
+		return MutationResult{}, Errorf(CategoryValidation, "move anchor must be in the same status and priority bucket")
 	}
-	snapshots, err := s.Store.List(ctx, s.Config)
+	snapshots, err := s.taskReader().List(ctx, s.Config)
 	if err != nil {
-		return Task{}, err
+		return MutationResult{}, err
 	}
 	rank, err := movedRank(snapshots, parent.State.TaskID, anchor.State.Task, input.Before != "")
 	if err != nil {
-		return Task{}, err
+		return MutationResult{}, err
 	}
 	if rank == parent.State.Task.Rank {
-		return Project(parent), nil
+		return MutationResult{Task: Project(parent)}, nil
 	}
 	operations := []Operation{{Type: OperationFieldSet, Field: "rank", Value: rank}}
 	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
-		return Task{}, err
+		return MutationResult{}, err
 	}
 	return s.writeMutation(ctx, &parent, operations, "move task")
 }
 
 func (s Service) Depend(ctx context.Context, idOrPrefix, dependencyOrPrefix string) (Task, error) {
+	result, err := s.DependMutation(ctx, idOrPrefix, dependencyOrPrefix)
+	return result.Task, err
+}
+
+func (s Service) DependMutation(ctx context.Context, idOrPrefix, dependencyOrPrefix string) (MutationResult, error) {
 	parent, err := s.resolveSnapshot(ctx, idOrPrefix)
 	if err != nil {
-		return Task{}, err
+		return MutationResult{}, err
 	}
 	dependency, err := s.resolveSnapshot(ctx, dependencyOrPrefix)
 	if err != nil {
-		return Task{}, err
+		return MutationResult{}, err
 	}
 	if parent.State.Task.Deleted || dependency.State.Task.Deleted {
-		return Task{}, Errorf(CategoryValidation, "cannot add a dependency involving a tombstoned task")
+		return MutationResult{}, Errorf(CategoryValidation, "cannot add a dependency involving a tombstoned task")
 	}
 	if parent.State.TaskID == dependency.State.TaskID {
-		return Task{}, Errorf(CategoryValidation, "a task cannot depend on itself")
+		return MutationResult{}, Errorf(CategoryValidation, "a task cannot depend on itself")
 	}
 	if hasDependency(parent.State.Task.Dependencies, dependency.State.TaskID) {
-		return Project(parent), nil
+		return MutationResult{Task: Project(parent)}, nil
 	}
-	snapshots, err := s.Store.List(ctx, s.Config)
+	snapshots, err := s.taskReader().List(ctx, s.Config)
 	if err != nil {
-		return Task{}, err
+		return MutationResult{}, err
 	}
 	if dependencyReaches(snapshots, dependency.State.TaskID, parent.State.TaskID) {
-		return Task{}, Errorf(CategoryValidation, "dependency would create a cycle")
+		return MutationResult{}, Errorf(CategoryValidation, "dependency would create a cycle")
 	}
 	operations := []Operation{{Type: OperationSetAdd, Field: "dependencies", Value: dependency.State.TaskID}}
 	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
-		return Task{}, err
+		return MutationResult{}, err
 	}
 	return s.writeMutation(ctx, &parent, operations, "add dependency")
 }
 
 func (s Service) Free(ctx context.Context, idOrPrefix, dependencyOrPrefix string) (Task, error) {
+	result, err := s.FreeMutation(ctx, idOrPrefix, dependencyOrPrefix)
+	return result.Task, err
+}
+
+func (s Service) FreeMutation(ctx context.Context, idOrPrefix, dependencyOrPrefix string) (MutationResult, error) {
 	parent, err := s.resolveSnapshot(ctx, idOrPrefix)
 	if err != nil {
-		return Task{}, err
+		return MutationResult{}, err
 	}
 	if parent.State.Task.Deleted {
-		return Task{}, Errorf(CategoryValidation, "cannot remove a dependency from a tombstoned task")
+		return MutationResult{}, Errorf(CategoryValidation, "cannot remove a dependency from a tombstoned task")
 	}
 	dependency, err := s.resolveSnapshot(ctx, dependencyOrPrefix)
 	if err != nil {
-		return Task{}, err
+		return MutationResult{}, err
 	}
 	if !hasDependency(parent.State.Task.Dependencies, dependency.State.TaskID) {
-		return Project(parent), nil
+		return MutationResult{Task: Project(parent)}, nil
 	}
 	operations := []Operation{{Type: OperationSetRemove, Field: "dependencies", Value: dependency.State.TaskID}}
 	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
-		return Task{}, err
+		return MutationResult{}, err
 	}
 	return s.writeMutation(ctx, &parent, operations, "remove dependency")
 }
@@ -371,15 +405,34 @@ func Project(snapshot Snapshot) Task {
 	}
 }
 
+func (s Service) taskReader() TaskReader {
+	if s.Reader != nil {
+		return s.Reader
+	}
+	return s.Store
+}
+
+func (s Service) canonicalWriter() CanonicalTaskWriter {
+	if s.Writer != nil {
+		return s.Writer
+	}
+	writer, _ := s.Store.(CanonicalTaskWriter)
+	return writer
+}
+
 func (s Service) resolveSnapshot(ctx context.Context, idOrPrefix string) (Snapshot, error) {
-	id, err := s.Store.Resolve(ctx, s.Config, idOrPrefix)
+	reader := s.taskReader()
+	if ValidateTaskID(s.Config.Key, idOrPrefix) == nil {
+		return reader.Get(ctx, s.Config, idOrPrefix)
+	}
+	id, err := reader.Resolve(ctx, s.Config, idOrPrefix)
 	if err != nil {
 		return Snapshot{}, err
 	}
-	return s.Store.Get(ctx, s.Config, id)
+	return reader.Get(ctx, s.Config, id)
 }
 
-func (s Service) writeMutation(ctx context.Context, parent *Snapshot, operations []Operation, reason string) (Task, error) {
+func (s Service) writeMutation(ctx context.Context, parent *Snapshot, operations []Operation, reason string) (MutationResult, error) {
 	pack := OperationPack{
 		Format:            operationPackFormat,
 		Version:           documentVersion,
@@ -393,13 +446,47 @@ func (s Service) writeMutation(ctx context.Context, parent *Snapshot, operations
 	}
 	state, err := Apply(&parent.State, pack, s.Config.Key)
 	if err != nil {
-		return Task{}, err
+		return MutationResult{}, err
 	}
-	written, err := s.Store.Write(ctx, s.Config, parent, pack, state, reason)
+	return s.persistMutation(ctx, parent, pack, state, reason)
+}
+
+func (s Service) persistMutation(
+	ctx context.Context,
+	parent *Snapshot,
+	pack OperationPack,
+	state StateDocument,
+	reason string,
+) (MutationResult, error) {
+	writer := s.canonicalWriter()
+	if writer == nil {
+		return MutationResult{}, Errorf(CategoryOperational, "canonical task writer is not configured")
+	}
+	written, err := writer.WriteValidated(ctx, s.Config, parent, pack, state, reason)
 	if err != nil {
-		return Task{}, err
+		return MutationResult{}, err
 	}
-	return Project(written), nil
+
+	result := MutationResult{Task: Project(written)}
+	if s.Projection == nil {
+		return result, nil
+	}
+
+	expectedParent := ""
+	if parent != nil {
+		expectedParent = parent.Head
+	}
+	if _, err := s.Projection.Advance(ctx, s.Config, expectedParent, written); err != nil {
+		message := "Git mutation succeeded, but the SQLite cache could not be updated; run `workbook rebuild` if the warning persists: " + err.Error()
+		if invalidateErr := s.Projection.Invalidate(ctx, s.Config, written.State.TaskID, expectedParent, written.Head); invalidateErr != nil {
+			message += "; cache invalidation also failed: " + invalidateErr.Error()
+		}
+		result.Warnings = []Warning{{
+			Code:    WarningProjectionUpdate,
+			Message: message,
+		}}
+	}
+	return result, nil
 }
 
 func (s Service) assignOperationIDs(operations []Operation, reserved ...string) error {
