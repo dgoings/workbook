@@ -1,9 +1,12 @@
 package perf
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -135,36 +138,6 @@ func TestScenarioTaskAllocationUsesTenTaskFixture(t *testing.T) {
 	}
 }
 
-func TestWarmSamplePlanAvoidsNoOpMutationsWhenRolesShareTenTasks(t *testing.T) {
-	current := make([]string, 10)
-	for index := range current {
-		current[index] = "in-progress"
-	}
-
-	for sample := range 4 {
-		plan := planWarmSample(sample)
-		for index := range current {
-			if current[index] == plan.independentStatus {
-				t.Fatalf("sample %d independent task %d already has status %q", sample+1, index+1, plan.independentStatus)
-			}
-			current[index] = plan.independentStatus
-		}
-
-		if current[0] == plan.updateStatus {
-			t.Fatalf("sample %d update task already has status %q", sample+1, plan.updateStatus)
-		}
-		current[0] = plan.updateStatus
-
-		for command := range 10 {
-			status := alternatingStatus(command + plan.sameTaskOffset)
-			if current[1] == status {
-				t.Fatalf("sample %d same-task command %d already has status %q", sample+1, command+1, status)
-			}
-			current[1] = status
-		}
-	}
-}
-
 func TestColdCLISampleFailureAllowsTimeoutsAndRejectsOtherFailures(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -289,6 +262,116 @@ func TestRunWarmHTTP(t *testing.T) {
 	}
 }
 
+func TestRunWarmHTTPIsolatesEveryScenarioSampleAndRetainsMeasuredMisses(t *testing.T) {
+	fixtureRoot := t.TempDir()
+	fixtureSpec := FixtureSpec{
+		ActiveTasks:       10,
+		OperationsPerTask: 2,
+		ObjectFormat:      "sha1",
+	}
+	spec := RunSpec{
+		WorkbookBinary: "workbook",
+		Fixture:        fixtureSpec,
+		Samples:        2,
+		CommandTimeout: time.Second,
+	}
+	var fixtureRoots []string
+	var serverRoots []string
+	closedServers := 0
+	dependencies := warmHTTPDependencies{
+		buildFixture: func(_ context.Context, root string, got FixtureSpec) (Fixture, error) {
+			if !reflect.DeepEqual(got, fixtureSpec) {
+				t.Fatalf("fixture spec = %#v, want exact requested spec %#v", got, fixtureSpec)
+			}
+			fixtureRoots = append(fixtureRoots, root)
+			taskIDs := make([]string, got.ActiveTasks)
+			for index := range taskIDs {
+				taskIDs[index] = fmt.Sprintf("WB-%02d", index)
+			}
+			return Fixture{Root: root, TaskIDs: taskIDs}, nil
+		},
+		startServer: func(_ context.Context, _ string, root string, timeout time.Duration) (warmScenarioServer, error) {
+			if timeout != time.Second {
+				t.Fatalf("server timeout = %s, want 1s", timeout)
+			}
+			serverRoots = append(serverRoots, root)
+			return &recordingWarmScenarioServer{
+				t:           t,
+				role:        filepath.Base(root),
+				sample:      filepath.Base(filepath.Dir(root)),
+				closedCount: &closedServers,
+			}, nil
+		},
+	}
+
+	results, err := runWarmHTTP(context.Background(), spec, fixtureRoot, dependencies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRoots := []string{
+		filepath.Join(fixtureRoot, "sample-001", "api-update"),
+		filepath.Join(fixtureRoot, "sample-001", "api-burst-independent-10"),
+		filepath.Join(fixtureRoot, "sample-001", "api-burst-same-task-10"),
+		filepath.Join(fixtureRoot, "sample-002", "api-update"),
+		filepath.Join(fixtureRoot, "sample-002", "api-burst-independent-10"),
+		filepath.Join(fixtureRoot, "sample-002", "api-burst-same-task-10"),
+	}
+	if !reflect.DeepEqual(fixtureRoots, wantRoots) {
+		t.Fatalf("fixture roots = %#v, want unique scenario/sample roots %#v", fixtureRoots, wantRoots)
+	}
+	if !reflect.DeepEqual(serverRoots, wantRoots) {
+		t.Fatalf("server roots = %#v, want one warmed server per fixture %#v", serverRoots, wantRoots)
+	}
+	if closedServers != 6 {
+		t.Fatalf("closed servers = %d, want 6", closedServers)
+	}
+
+	wantNames := []string{"api-update", "api-burst-independent-10", "api-burst-same-task-10"}
+	for index, result := range results {
+		if result.Name != wantNames[index] || len(result.Samples) != 2 {
+			t.Fatalf("result %d = %#v, want %q with two samples", index, result, wantNames[index])
+		}
+	}
+	if !results[1].Samples[0].TimedOut || results[1].Samples[0].ExitCode != -1 {
+		t.Fatalf("sample 1 independent outcome = %#v, want retained timeout", results[1].Samples[0])
+	}
+	if results[1].Samples[1].ExitCode != http.StatusConflict ||
+		!strings.Contains(results[1].Samples[1].Error, "task head changed") {
+		t.Fatalf("sample 2 independent outcome = %#v, want retained HTTP conflict", results[1].Samples[1])
+	}
+	for _, sample := range results[2].Samples {
+		if !sampleSucceeded(sample) {
+			t.Fatalf("isolated same-task sample = %#v, want success unaffected by independent ambiguity", sample)
+		}
+	}
+
+	var output bytes.Buffer
+	report := Report{
+		Format:    ReportFormat,
+		Version:   ReportVersion,
+		Phase:     "baseline",
+		Fixture:   fixtureSpec,
+		Scenarios: results,
+	}
+	if err := report.WriteJSON(&output); err != nil {
+		t.Fatal(err)
+	}
+	var written Report
+	if err := json.Unmarshal(output.Bytes(), &written); err != nil {
+		t.Fatal(err)
+	}
+	var writtenConflict Sample
+	for _, scenario := range written.Scenarios {
+		if scenario.Name == "api-burst-independent-10" {
+			writtenConflict = scenario.Samples[1]
+		}
+	}
+	if writtenConflict.ExitCode != http.StatusConflict ||
+		!strings.Contains(writtenConflict.Error, "task head changed") {
+		t.Fatalf("written report conflict = %#v, want measured product evidence preserved", writtenConflict)
+	}
+}
+
 func TestWarmStatusDeadlineReturnsTimedOutSample(t *testing.T) {
 	release := make(chan struct{})
 	httpServer := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
@@ -309,6 +392,104 @@ func TestWarmStatusDeadlineReturnsTimedOutSample(t *testing.T) {
 	if !sample.TimedOut || sample.ExitCode != -1 || !strings.Contains(sample.Error, context.DeadlineExceeded.Error()) {
 		t.Fatalf("deadline sample = %#v, want retained timeout", sample)
 	}
+}
+
+func TestWarmStatusNonOKResponseReturnsMeasuredSample(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{name: "bad request", status: http.StatusBadRequest, body: "update does not change task"},
+		{name: "conflict", status: http.StatusConflict, body: "task head changed"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			httpServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				http.Error(writer, test.body, test.status)
+			}))
+			defer httpServer.Close()
+
+			server := warmHTTPServer{
+				baseURL:   httpServer.URL,
+				tracePath: emptyTraceFile(t),
+				client:    httpServer.Client(),
+			}
+			sample, err := server.measureStatus(context.Background(), "WB-product-miss", "ready", time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if sample.ExitCode != test.status || sample.TimedOut || sample.Duration <= 0 {
+				t.Fatalf("HTTP %d sample = %#v, want retained nonzero measured outcome", test.status, sample)
+			}
+			if !strings.Contains(sample.Error, fmt.Sprintf("HTTP %d", test.status)) ||
+				!strings.Contains(sample.Error, test.body) {
+				t.Fatalf("HTTP %d sample error = %q, want status and body evidence", test.status, sample.Error)
+			}
+		})
+	}
+}
+
+func TestWarmStatusMalformedSuccessAndCallerCancellationRemainFatal(t *testing.T) {
+	t.Run("malformed HTTP 200", func(t *testing.T) {
+		httpServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			writer.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(writer, "{")
+		}))
+		defer httpServer.Close()
+
+		server := warmHTTPServer{
+			baseURL:   httpServer.URL,
+			tracePath: emptyTraceFile(t),
+			client:    httpServer.Client(),
+		}
+		_, err := server.measureStatus(context.Background(), "WB-malformed", "ready", time.Second)
+		if err == nil || !strings.Contains(err.Error(), "decode status response") {
+			t.Fatalf("malformed success error = %v, want fatal JSON decode error", err)
+		}
+	})
+
+	t.Run("wrong HTTP 200 envelope", func(t *testing.T) {
+		httpServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			writer.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(writer).Encode(map[string]any{
+				"format":  "workbook.task",
+				"version": 1,
+				"task": map[string]string{
+					"id":     "WB-wrong-envelope",
+					"status": "ready",
+				},
+			})
+		}))
+		defer httpServer.Close()
+
+		server := warmHTTPServer{
+			baseURL:   httpServer.URL,
+			tracePath: emptyTraceFile(t),
+			client:    httpServer.Client(),
+		}
+		_, err := server.measureStatus(context.Background(), "WB-wrong-envelope", "ready", time.Second)
+		if err == nil || !strings.Contains(err.Error(), "status response") {
+			t.Fatalf("wrong success envelope error = %v, want fatal protocol error", err)
+		}
+	})
+
+	t.Run("caller cancellation", func(t *testing.T) {
+		httpServer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+		defer httpServer.Close()
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		server := warmHTTPServer{
+			baseURL:   httpServer.URL,
+			tracePath: emptyTraceFile(t),
+			client:    httpServer.Client(),
+		}
+		_, err := server.measureStatus(ctx, "WB-canceled", "ready", time.Second)
+		if err == nil || !errors.Is(err, context.Canceled) {
+			t.Fatalf("caller cancellation error = %v, want fatal context cancellation", err)
+		}
+	})
 }
 
 func TestWarmIndependentBurstIssuesTenDistinctRequestsAndCountsTraceOnce(t *testing.T) {
@@ -380,6 +561,99 @@ func TestWarmIndependentBurstIssuesTenDistinctRequestsAndCountsTraceOnce(t *test
 	}
 	if len(targets) != 10 {
 		t.Fatalf("independent targets = %d, want 10", len(targets))
+	}
+}
+
+func TestWarmSameTaskBurstStopsAfterAmbiguousOutcome(t *testing.T) {
+	tests := []struct {
+		name         string
+		timeout      time.Duration
+		writeOutcome func(http.ResponseWriter, *http.Request)
+		wantExitCode int
+		wantTimedOut bool
+		wantEvidence string
+	}{
+		{
+			name:         "timeout",
+			timeout:      20 * time.Millisecond,
+			wantExitCode: -1,
+			wantTimedOut: true,
+			wantEvidence: "timed out",
+		},
+		{
+			name:    "HTTP non-success",
+			timeout: time.Second,
+			writeOutcome: func(writer http.ResponseWriter, _ *http.Request) {
+				http.Error(writer, "task head changed", http.StatusConflict)
+			},
+			wantExitCode: http.StatusConflict,
+			wantEvidence: "task head changed",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tracePath := emptyTraceFile(t)
+			var mutex sync.Mutex
+			requests := 0
+			release := make(chan struct{})
+			httpServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				mutex.Lock()
+				requests++
+				requestNumber := requests
+				mutex.Unlock()
+				if requestNumber == 1 {
+					if err := appendTraceStarts(tracePath, 1); err != nil {
+						http.Error(writer, err.Error(), http.StatusInternalServerError)
+						return
+					}
+					recorded, err := readRecordedStatusRequest(request)
+					if err != nil {
+						http.Error(writer, err.Error(), http.StatusBadRequest)
+						return
+					}
+					writeRecordedStatusResponse(writer, recorded)
+					return
+				}
+				if requestNumber == 2 {
+					if test.wantTimedOut {
+						select {
+						case <-request.Context().Done():
+						case <-release:
+						}
+						return
+					}
+					test.writeOutcome(writer, request)
+					return
+				}
+				http.Error(writer, "unexpected request after ambiguous outcome", http.StatusInternalServerError)
+			}))
+			defer httpServer.Close()
+			defer close(release)
+
+			server := warmHTTPServer{
+				baseURL:   httpServer.URL,
+				tracePath: tracePath,
+				client:    httpServer.Client(),
+			}
+			sample, err := server.measureSameTaskBurst(
+				context.Background(),
+				"WB-same",
+				0,
+				test.timeout,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if sample.ExitCode != test.wantExitCode || sample.TimedOut != test.wantTimedOut ||
+				!strings.Contains(sample.Error, "command 2") || !strings.Contains(sample.Error, test.wantEvidence) {
+				t.Fatalf("same-task aggregate = %#v, want retained second-command outcome", sample)
+			}
+			mutex.Lock()
+			defer mutex.Unlock()
+			if requests != 2 {
+				t.Fatalf("same-task requests = %d, want stop after ambiguous second outcome", requests)
+			}
+		})
 	}
 }
 
@@ -782,6 +1056,72 @@ func writeRecordedStatusResponse(writer http.ResponseWriter, request recordedSta
 			"status": request.status,
 		},
 	})
+}
+
+type recordingWarmScenarioServer struct {
+	t           *testing.T
+	role        string
+	sample      string
+	ambiguous   bool
+	closedCount *int
+}
+
+func (server *recordingWarmScenarioServer) measureStatus(
+	_ context.Context,
+	taskID string,
+	status string,
+	_ time.Duration,
+) (Sample, error) {
+	server.t.Helper()
+	if server.role != "api-update" || taskID != "WB-00" || status != "ready" {
+		server.t.Fatalf("update role = %q task = %q status = %q, want isolated api-update on WB-00 to ready", server.role, taskID, status)
+	}
+	return Sample{ExitCode: 0, GitProcesses: 1}, nil
+}
+
+func (server *recordingWarmScenarioServer) measureIndependentBurst(
+	_ context.Context,
+	taskIDs []string,
+	status string,
+	_ time.Duration,
+) (Sample, error) {
+	server.t.Helper()
+	if server.role != "api-burst-independent-10" || len(taskIDs) != 10 || status != "ready" {
+		server.t.Fatalf("independent role = %q tasks = %d status = %q, want ten ready requests", server.role, len(taskIDs), status)
+	}
+	targets := make(map[string]struct{}, len(taskIDs))
+	for _, taskID := range taskIDs {
+		targets[taskID] = struct{}{}
+	}
+	if len(targets) != 10 {
+		server.t.Fatalf("independent distinct task IDs = %d, want 10", len(targets))
+	}
+	server.ambiguous = true
+	if server.sample == "sample-001" {
+		return Sample{ExitCode: -1, TimedOut: true, Error: "request timed out"}, nil
+	}
+	return Sample{ExitCode: http.StatusConflict, Error: "HTTP 409 Conflict: task head changed"}, nil
+}
+
+func (server *recordingWarmScenarioServer) measureSameTaskBurst(
+	_ context.Context,
+	taskID string,
+	statusOffset int,
+	_ time.Duration,
+) (Sample, error) {
+	server.t.Helper()
+	if server.role != "api-burst-same-task-10" || taskID != "WB-01" || statusOffset != 0 {
+		server.t.Fatalf("same-task role = %q task = %q offset = %d, want isolated WB-01 starting at ready", server.role, taskID, statusOffset)
+	}
+	if server.ambiguous {
+		server.t.Fatal("same-task burst reused a server with ambiguous independent state")
+	}
+	return Sample{ExitCode: 0, GitProcesses: 10}, nil
+}
+
+func (server *recordingWarmScenarioServer) close(time.Duration) error {
+	(*server.closedCount)++
+	return nil
 }
 
 func assertSyncCommandSpec(t *testing.T, got CommandSpec, repository string) {

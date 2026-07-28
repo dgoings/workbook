@@ -68,10 +68,16 @@ type warmHTTPTasks struct {
 	independent []string
 }
 
-type warmSamplePlan struct {
-	independentStatus string
-	updateStatus      string
-	sameTaskOffset    int
+type warmScenarioServer interface {
+	measureStatus(context.Context, string, string, time.Duration) (Sample, error)
+	measureIndependentBurst(context.Context, []string, string, time.Duration) (Sample, error)
+	measureSameTaskBurst(context.Context, string, int, time.Duration) (Sample, error)
+	close(time.Duration) error
+}
+
+type warmHTTPDependencies struct {
+	buildFixture func(context.Context, string, FixtureSpec) (Fixture, error)
+	startServer  func(context.Context, string, string, time.Duration) (warmScenarioServer, error)
 }
 
 type warmHTTPServer struct {
@@ -193,9 +199,21 @@ func runColdCLI(ctx context.Context, spec RunSpec, fixtureRoot string, dependenc
 	return results, nil
 }
 
-// RunWarmHTTP starts one real Workbook server and measures status mutations
-// over its long-lived HTTP API.
-func RunWarmHTTP(ctx context.Context, spec RunSpec, fixtureRoot string) (results []ScenarioResult, err error) {
+// RunWarmHTTP measures status mutations against independently warmed Workbook
+// servers so each scenario sample starts from an exact-size fixture.
+func RunWarmHTTP(ctx context.Context, spec RunSpec, fixtureRoot string) ([]ScenarioResult, error) {
+	return runWarmHTTP(ctx, spec, fixtureRoot, warmHTTPDependencies{
+		buildFixture: func(ctx context.Context, root string, fixture FixtureSpec) (Fixture, error) {
+			return buildFixtureWithinTimeout(ctx, root, fixture, spec.CommandTimeout)
+		},
+		startServer: func(ctx context.Context, binary, root string, timeout time.Duration) (warmScenarioServer, error) {
+			server, err := startWarmHTTPServer(ctx, binary, root, timeout)
+			return server, err
+		},
+	})
+}
+
+func runWarmHTTP(ctx context.Context, spec RunSpec, fixtureRoot string, dependencies warmHTTPDependencies) ([]ScenarioResult, error) {
 	if spec.Samples < 1 {
 		return nil, fmt.Errorf("samples must be positive")
 	}
@@ -205,47 +223,46 @@ func RunWarmHTTP(ctx context.Context, spec RunSpec, fixtureRoot string) (results
 	if fixtureRoot == "" {
 		return nil, fmt.Errorf("fixture root is required")
 	}
-
-	fixture, err := buildFixtureWithinTimeout(ctx, fixtureRoot, spec.Fixture, spec.CommandTimeout)
-	if err != nil {
-		return nil, fmt.Errorf("build warm HTTP fixture: %w", err)
-	}
-	tasks, err := allocateWarmHTTPTasks(fixture.TaskIDs)
-	if err != nil {
-		return nil, err
+	if err := os.MkdirAll(fixtureRoot, 0o755); err != nil {
+		return nil, fmt.Errorf("create warm fixture root: %w", err)
 	}
 
-	server, err := startWarmHTTPServer(ctx, spec.WorkbookBinary, fixture.Root, spec.CommandTimeout)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if closeErr := server.close(spec.CommandTimeout); closeErr != nil && err == nil {
-			results = nil
-			err = closeErr
-		}
-	}()
-
-	results = warmHTTPResults(spec.Samples)
+	results := warmHTTPResults(spec.Samples)
 	for sample := range spec.Samples {
-		plan := planWarmSample(sample)
-		results[1].Samples[sample], err = server.measureIndependentBurst(
-			ctx, tasks.independent, plan.independentStatus, spec.CommandTimeout,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("measure api-burst-independent-10 sample %d: %w", sample+1, err)
-		}
+		sampleRoot := filepath.Join(fixtureRoot, fmt.Sprintf("sample-%03d", sample+1))
+		for scenario := range results {
+			name := results[scenario].Name
+			root := filepath.Join(sampleRoot, name)
+			fixture, err := dependencies.buildFixture(ctx, root, spec.Fixture)
+			if err != nil {
+				return nil, fmt.Errorf("build warm %s sample %d fixture: %w", name, sample+1, err)
+			}
+			tasks, err := allocateWarmHTTPTasks(fixture.TaskIDs)
+			if err != nil {
+				return nil, fmt.Errorf("allocate warm %s sample %d fixture: %w", name, sample+1, err)
+			}
+			server, err := dependencies.startServer(ctx, spec.WorkbookBinary, fixture.Root, spec.CommandTimeout)
+			if err != nil {
+				return nil, fmt.Errorf("start warm %s sample %d server: %w", name, sample+1, err)
+			}
 
-		results[0].Samples[sample], err = server.measureStatus(ctx, tasks.update, plan.updateStatus, spec.CommandTimeout)
-		if err != nil {
-			return nil, fmt.Errorf("measure api-update sample %d: %w", sample+1, err)
-		}
-
-		results[2].Samples[sample], err = server.measureSameTaskBurst(
-			ctx, tasks.sameBurst, plan.sameTaskOffset, spec.CommandTimeout,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("measure api-burst-same-task-10 sample %d: %w", sample+1, err)
+			var measured Sample
+			switch scenario {
+			case 0:
+				measured, err = server.measureStatus(ctx, tasks.update, "ready", spec.CommandTimeout)
+			case 1:
+				measured, err = server.measureIndependentBurst(ctx, tasks.independent, "ready", spec.CommandTimeout)
+			case 2:
+				measured, err = server.measureSameTaskBurst(ctx, tasks.sameBurst, 0, spec.CommandTimeout)
+			}
+			closeErr := server.close(spec.CommandTimeout)
+			if err != nil {
+				return nil, fmt.Errorf("measure %s sample %d: %w", name, sample+1, err)
+			}
+			if closeErr != nil {
+				return nil, fmt.Errorf("close warm %s sample %d server: %w", name, sample+1, closeErr)
+			}
+			results[scenario].Samples[sample] = measured
 		}
 	}
 	for index := range results {
@@ -801,7 +818,16 @@ func (server *warmHTTPServer) performStatus(ctx context.Context, taskID, status 
 		return Sample{}, fmt.Errorf("close status response: %w", closeErr)
 	}
 	if response.StatusCode != http.StatusOK {
-		return Sample{}, fmt.Errorf("status response = %d, want %d; body = %s", response.StatusCode, http.StatusOK, body)
+		evidence := conciseHTTPBody(body)
+		message := fmt.Sprintf("HTTP %d %s", response.StatusCode, http.StatusText(response.StatusCode))
+		if evidence != "" {
+			message += ": " + evidence
+		}
+		return Sample{
+			Duration: duration,
+			ExitCode: response.StatusCode,
+			Error:    message,
+		}, nil
 	}
 	var document struct {
 		Format  string `json:"format"`
@@ -829,23 +855,27 @@ func (server *warmHTTPServer) performStatus(ctx context.Context, taskID, status 
 
 func (server *warmHTTPServer) measureSameTaskBurst(ctx context.Context, taskID string, statusOffset int, timeout time.Duration) (Sample, error) {
 	startedAt := time.Now()
-	members := make([]Sample, 10)
-	for command := range members {
+	members := make([]Sample, 0, 10)
+	for command := range 10 {
 		sample, err := server.measureStatus(ctx, taskID, alternatingStatus(command+statusOffset), timeout)
 		if err != nil {
 			return Sample{}, fmt.Errorf("request %d: %w", command+1, err)
 		}
-		members[command] = sample
+		members = append(members, sample)
+		if !sampleSucceeded(sample) {
+			break
+		}
 	}
 	return aggregateBurst(time.Since(startedAt), members), nil
 }
 
-func planWarmSample(sample int) warmSamplePlan {
-	return warmSamplePlan{
-		independentStatus: alternatingStatus(sample),
-		updateStatus:      "backlog",
-		sameTaskOffset:    sample + 1,
+func conciseHTTPBody(body []byte) string {
+	const maxEvidenceRunes = 256
+	evidence := []rune(strings.Join(strings.Fields(string(body)), " "))
+	if len(evidence) <= maxEvidenceRunes {
+		return string(evidence)
 	}
+	return string(evidence[:maxEvidenceRunes]) + "..."
 }
 
 func (server *warmHTTPServer) measureIndependentBurst(ctx context.Context, taskIDs []string, status string, timeout time.Duration) (Sample, error) {
