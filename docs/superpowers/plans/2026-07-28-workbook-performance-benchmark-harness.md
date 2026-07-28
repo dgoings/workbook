@@ -597,7 +597,7 @@ Exercise a small fixture:
 ```go
 exitCode := run(context.Background(), []string{
 	"--workbook", workbookBinary,
-	"--tasks", "3",
+	"--tasks", "10",
 	"--operations", "4",
 	"--samples", "1",
 	"--timeout", "5s",
@@ -609,8 +609,9 @@ exitCode := run(context.Background(), []string{
 
 Require exit zero, both output files, report format/version, and the complete
 scenario set. Add invocation-error cases for missing Workbook binary, tasks
-below 3, operations below 2, samples below 1, nonpositive timeout, unsupported
-object-format text, and identical output paths.
+below 10, operations below 2, samples below 1, nonpositive timeout, unsupported
+object-format text, and identical output paths. Ten tasks is the minimum because
+the independent burst must exercise ten distinct task IDs.
 
 - [ ] **Step 2: Run command tests and confirm failure**
 
