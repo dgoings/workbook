@@ -53,6 +53,39 @@ func TestStoreRefreshUsesSQLiteUntilATaskHeadChanges(t *testing.T) {
 	}
 }
 
+func TestStoreBacksMutationReaderWithCanonicalEmptyCollections(t *testing.T) {
+	ctx := context.Background()
+	repository, config := initializeWorkbook(t, testrepo.New(t))
+	created := createTask(t, repository, config, "Initial title")
+	store, err := Open(ctx, repository, config)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	service := core.Service{
+		Config:     config,
+		Reader:     store,
+		Writer:     repository,
+		Projection: store,
+		Actor:      "test@example.test",
+		Now:        func() time.Time { return time.Date(2026, time.July, 26, 12, 1, 0, 0, time.UTC) },
+		IDs: core.IDSourceFunc(func() (string, error) {
+			return "01K0M6B8A4FTT8C39MXXYTW7D7", nil
+		}),
+	}
+	title := "Updated title"
+
+	result, err := service.UpdateMutation(ctx, created.ID, core.UpdateInput{Title: &title})
+	if err != nil {
+		t.Fatalf("UpdateMutation() error = %v", err)
+	}
+	if result.Task.Title != title {
+		t.Fatalf("UpdateMutation() title = %q, want %q", result.Task.Title, title)
+	}
+	if len(result.Warnings) != 0 {
+		t.Fatalf("UpdateMutation() warnings = %#v, want none", result.Warnings)
+	}
+}
+
 func TestStoreRefreshReadsOnlyAdvancedHeads(t *testing.T) {
 	ctx := context.Background()
 	config := testConfig()
@@ -1069,7 +1102,7 @@ func TestRebuildRetriesOnceWhenHeadsChangeDuringBuild(t *testing.T) {
 	}
 }
 
-func TestStoreQueriesAndRejectsWrites(t *testing.T) {
+func TestStoreQueries(t *testing.T) {
 	ctx := context.Background()
 	config := testConfig()
 	first := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "First")
@@ -1100,10 +1133,6 @@ func TestStoreQueriesAndRejectsWrites(t *testing.T) {
 	_, err = store.Get(ctx, config, "WB-01K0M6B8A4FTT8C39MXXYTW7D3")
 	if got := core.CategoryOf(err); got != core.CategoryNotFound {
 		t.Fatalf("Get(missing) category = %q, want not-found; error = %v", got, err)
-	}
-	_, err = store.Write(ctx, config, nil, core.OperationPack{}, core.StateDocument{}, "write")
-	if got := core.CategoryOf(err); got != core.CategoryOperational {
-		t.Fatalf("Write() category = %q, want operational; error = %v", got, err)
 	}
 }
 
@@ -1510,25 +1539,25 @@ func createTask(t *testing.T, repository *gitstore.Repository, config core.Proje
 	t.Helper()
 	ids := []string{"01K0M6B8A4FTT8C39MXXYTW7D1", "01K0M6B8A4FTT8C39MXXYTW7D9", "01K0M6B8A4FTT8C39MXXYTW7D8"}
 	index := 0
-	service := core.Service{Config: config, Store: repository, Actor: "test@example.test", Now: func() time.Time { return time.Date(2026, time.July, 26, 12, 0, 0, 0, time.UTC) }, IDs: core.IDSourceFunc(func() (string, error) {
+	service := core.Service{Config: config, Reader: repository, Writer: repository, Actor: "test@example.test", Now: func() time.Time { return time.Date(2026, time.July, 26, 12, 0, 0, 0, time.UTC) }, IDs: core.IDSourceFunc(func() (string, error) {
 		value := ids[index]
 		index++
 		return value, nil
 	})}
-	task, err := service.Create(context.Background(), core.CreateInput{Title: title})
+	result, err := service.CreateMutation(context.Background(), core.CreateInput{Title: title})
 	if err != nil {
-		t.Fatalf("Create() error = %v", err)
+		t.Fatalf("CreateMutation() error = %v", err)
 	}
-	return task
+	return result.Task
 }
 
 func updateTaskTitle(t *testing.T, repository *gitstore.Repository, config core.ProjectConfig, taskID, title string) {
 	t.Helper()
-	service := core.Service{Config: config, Store: repository, Actor: "test@example.test", Now: func() time.Time { return time.Date(2026, time.July, 26, 12, 1, 0, 0, time.UTC) }, IDs: core.IDSourceFunc(func() (string, error) {
+	service := core.Service{Config: config, Reader: repository, Writer: repository, Actor: "test@example.test", Now: func() time.Time { return time.Date(2026, time.July, 26, 12, 1, 0, 0, time.UTC) }, IDs: core.IDSourceFunc(func() (string, error) {
 		return "01K0M6B8A4FTT8C39MXXYTW7D7", nil
 	})}
-	if _, err := service.Update(context.Background(), taskID, core.UpdateInput{Title: &title}); err != nil {
-		t.Fatalf("Update() error = %v", err)
+	if _, err := service.UpdateMutation(context.Background(), taskID, core.UpdateInput{Title: &title}); err != nil {
+		t.Fatalf("UpdateMutation() error = %v", err)
 	}
 }
 

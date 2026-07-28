@@ -332,7 +332,8 @@ func TestListTaskHeadsAndReadTaskHead(t *testing.T) {
 	index := 0
 	service := core.Service{
 		Config: config,
-		Store:  repository,
+		Reader: repository,
+		Writer: repository,
 		IDs: core.IDSourceFunc(func() (string, error) {
 			if index == len(ids) {
 				return "", fmt.Errorf("test ID source exhausted")
@@ -344,14 +345,16 @@ func TestListTaskHeadsAndReadTaskHead(t *testing.T) {
 		Now:   func() time.Time { return writeCreatedAt },
 		Actor: "writer@example.test",
 	}
-	first, err := service.Create(context.Background(), core.CreateInput{Title: "First"})
+	firstResult, err := service.CreateMutation(context.Background(), core.CreateInput{Title: "First"})
 	if err != nil {
-		t.Fatalf("Create(first) error = %v", err)
+		t.Fatalf("CreateMutation(first) error = %v", err)
 	}
-	second, err := service.Create(context.Background(), core.CreateInput{Title: "Second"})
+	first := firstResult.Task
+	secondResult, err := service.CreateMutation(context.Background(), core.CreateInput{Title: "Second"})
 	if err != nil {
-		t.Fatalf("Create(second) error = %v", err)
+		t.Fatalf("CreateMutation(second) error = %v", err)
 	}
+	second := secondResult.Task
 
 	heads, err := repository.ListTaskHeads(context.Background(), config)
 	if err != nil {
@@ -492,7 +495,7 @@ func TestCRUDCannotExtendMalformedRootCheckpoint(t *testing.T) {
 
 	title := "Attempted extension"
 	service := testService(repo, config)
-	_, err := service.Update(context.Background(), pack.TaskID, core.UpdateInput{Title: &title})
+	_, err := service.UpdateMutation(context.Background(), pack.TaskID, core.UpdateInput{Title: &title})
 	if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
 		t.Fatalf("Update() category = %q, want %q; error = %v", got, want, err)
 	}

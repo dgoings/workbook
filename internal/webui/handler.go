@@ -21,15 +21,15 @@ var assets embed.FS
 
 type TaskLister func(context.Context) ([]core.Task, error)
 
-type TaskStatusUpdater func(context.Context, string, core.Status) (core.Task, error)
+type TaskStatusUpdater func(context.Context, string, core.Status) (core.MutationResult, error)
 
-type TaskCreator func(context.Context, core.CreateInput) (core.Task, error)
+type TaskCreator func(context.Context, core.CreateInput) (core.MutationResult, error)
 
-type TaskUpdater func(context.Context, string, core.UpdateInput) (core.Task, error)
+type TaskUpdater func(context.Context, string, core.UpdateInput) (core.MutationResult, error)
 
-type TaskDeleter func(context.Context, string) (core.Task, error)
+type TaskDeleter func(context.Context, string) (core.MutationResult, error)
 
-type TaskRestorer func(context.Context, string) (core.Task, error)
+type TaskRestorer func(context.Context, string) (core.MutationResult, error)
 
 type TasksDocument struct {
 	Format       string             `json:"format"`
@@ -39,9 +39,10 @@ type TasksDocument struct {
 }
 
 type TaskMutationDocument struct {
-	Format  string    `json:"format"`
-	Version int       `json:"version"`
-	Task    core.Task `json:"task"`
+	Format   string         `json:"format"`
+	Version  int            `json:"version"`
+	Task     core.Task      `json:"task"`
+	Warnings []core.Warning `json:"warnings,omitempty"`
 }
 
 type TaskPresentation struct {
@@ -280,12 +281,12 @@ func (handler *handler) updateTaskStatus(writer http.ResponseWriter, request *ht
 		handler.writeError(writer, core.Wrap(core.CategoryInvocation, "decode status update", err))
 		return
 	}
-	task, err := handler.updateStatus(request.Context(), id, input.Status)
+	result, err := handler.updateStatus(request.Context(), id, input.Status)
 	if err != nil {
 		handler.writeError(writer, err)
 		return
 	}
-	handler.writeTaskMutation(writer, task)
+	handler.writeTaskMutation(writer, result)
 }
 
 func (handler *handler) createTask(writer http.ResponseWriter, request *http.Request) {
@@ -298,12 +299,12 @@ func (handler *handler) createTask(writer http.ResponseWriter, request *http.Req
 		handler.writeError(writer, core.Errorf(core.CategoryOperational, "task creation is not configured"))
 		return
 	}
-	task, err := handler.create(request.Context(), core.CreateInput(body))
+	result, err := handler.create(request.Context(), core.CreateInput(body))
 	if err != nil {
 		handler.writeError(writer, err)
 		return
 	}
-	handler.writeTaskMutation(writer, task)
+	handler.writeTaskMutation(writer, result)
 }
 
 func (handler *handler) updateTask(writer http.ResponseWriter, request *http.Request) {
@@ -320,12 +321,12 @@ func (handler *handler) updateTask(writer http.ResponseWriter, request *http.Req
 	if id == "" {
 		id = taskPathID(request.URL.Path)
 	}
-	task, err := handler.update(request.Context(), id, core.UpdateInput(body))
+	result, err := handler.update(request.Context(), id, core.UpdateInput(body))
 	if err != nil {
 		handler.writeError(writer, err)
 		return
 	}
-	handler.writeTaskMutation(writer, task)
+	handler.writeTaskMutation(writer, result)
 }
 
 func (handler *handler) deleteTask(writer http.ResponseWriter, request *http.Request) {
@@ -333,12 +334,12 @@ func (handler *handler) deleteTask(writer http.ResponseWriter, request *http.Req
 		handler.writeError(writer, core.Errorf(core.CategoryOperational, "task deletion is not configured"))
 		return
 	}
-	task, err := handler.delete(request.Context(), request.PathValue("id"))
+	result, err := handler.delete(request.Context(), request.PathValue("id"))
 	if err != nil {
 		handler.writeError(writer, err)
 		return
 	}
-	handler.writeTaskMutation(writer, task)
+	handler.writeTaskMutation(writer, result)
 }
 
 func (handler *handler) restoreTask(writer http.ResponseWriter, request *http.Request) {
@@ -346,12 +347,12 @@ func (handler *handler) restoreTask(writer http.ResponseWriter, request *http.Re
 		handler.writeError(writer, core.Errorf(core.CategoryOperational, "task restoration is not configured"))
 		return
 	}
-	task, err := handler.restore(request.Context(), request.PathValue("id"))
+	result, err := handler.restore(request.Context(), request.PathValue("id"))
 	if err != nil {
 		handler.writeError(writer, err)
 		return
 	}
-	handler.writeTaskMutation(writer, task)
+	handler.writeTaskMutation(writer, result)
 }
 
 func decodeRequest(body io.Reader, value any) error {
@@ -369,11 +370,12 @@ func decodeRequest(body io.Reader, value any) error {
 	return nil
 }
 
-func (handler *handler) writeTaskMutation(writer http.ResponseWriter, task core.Task) {
+func (handler *handler) writeTaskMutation(writer http.ResponseWriter, result core.MutationResult) {
 	writeJSON(writer, http.StatusOK, TaskMutationDocument{
-		Format:  "workbook.task-mutation",
-		Version: 1,
-		Task:    task,
+		Format:   "workbook.task-mutation",
+		Version:  1,
+		Task:     result.Task,
+		Warnings: result.Warnings,
 	})
 }
 

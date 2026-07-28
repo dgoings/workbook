@@ -76,6 +76,54 @@ func TestHandlerServesBoardTasksAndHealth(t *testing.T) {
 	}
 }
 
+func TestHandlerReturnsMutationWarningAfterDurableWrite(t *testing.T) {
+	result := core.MutationResult{
+		Task: core.Task{
+			ID: "WB-01K0M6B8A4FTT8C39MXXYTW7D1",
+			TaskData: core.TaskData{
+				Title:    "Durable",
+				Status:   core.StatusReady,
+				Priority: core.PriorityHigh,
+			},
+		},
+		Warnings: []core.Warning{{
+			Code:    core.WarningProjectionUpdate,
+			Message: "cache update failed",
+		}},
+	}
+	handler := NewHandler(
+		func(context.Context) ([]core.Task, error) { return nil, nil },
+		func(context.Context, core.CreateInput) (core.MutationResult, error) {
+			return result, nil
+		},
+		unexpectedTaskUpdate(t),
+		unexpectedStatusUpdate(t),
+	)
+
+	response := requestJSON(t, handler, http.MethodPost, "/api/tasks", `{"title":"Durable","status":"ready","priority":"high"}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("POST /api/tasks status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	var document struct {
+		Format   string         `json:"format"`
+		Version  int            `json:"version"`
+		Task     core.Task      `json:"task"`
+		Warnings []core.Warning `json:"warnings"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+		t.Fatalf("decode mutation document: %v; body = %s", err, response.Body.String())
+	}
+	if document.Format != "workbook.task-mutation" || document.Version != 1 {
+		t.Fatalf("mutation envelope = %#v, want workbook.task-mutation v1", document)
+	}
+	if !reflect.DeepEqual(document.Task, result.Task) {
+		t.Fatalf("mutation task = %#v, want %#v", document.Task, result.Task)
+	}
+	if !reflect.DeepEqual(document.Warnings, result.Warnings) {
+		t.Fatalf("mutation warnings = %#v, want %#v", document.Warnings, result.Warnings)
+	}
+}
+
 func TestHandlerRendersInReviewTasks(t *testing.T) {
 	tasks := boardTasks()
 	tasks = append(tasks, core.Task{
@@ -107,11 +155,14 @@ func TestHandlerDeletesRestoresAndListsTombstonedTasks(t *testing.T) {
 	handler := NewHandlerWithTaskMutations(
 		func(context.Context) ([]core.Task, error) { return []core.Task{active, deleted}, nil },
 		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
-		func(_ context.Context, id string) (core.Task, error) { deletedID = id; return deleted, nil },
-		func(_ context.Context, id string) (core.Task, error) {
+		func(_ context.Context, id string) (core.MutationResult, error) {
+			deletedID = id
+			return core.MutationResult{Task: deleted}, nil
+		},
+		func(_ context.Context, id string) (core.MutationResult, error) {
 			restoredID = id
 			deleted.Deleted = false
-			return deleted, nil
+			return core.MutationResult{Task: deleted}, nil
 		},
 	)
 
@@ -538,10 +589,10 @@ func TestHandlerUpdatesTaskStatus(t *testing.T) {
 		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
 		unexpectedTaskCreate(t),
 		unexpectedTaskUpdate(t),
-		func(_ context.Context, id string, status core.Status) (core.Task, error) {
+		func(_ context.Context, id string, status core.Status) (core.MutationResult, error) {
 			gotID = id
 			gotStatus = status
-			return updated, nil
+			return core.MutationResult{Task: updated}, nil
 		},
 	)
 
@@ -578,11 +629,11 @@ func TestHandlerCreatesTask(t *testing.T) {
 	}
 	handler := NewHandler(
 		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
-		func(_ context.Context, input core.CreateInput) (core.Task, error) {
+		func(_ context.Context, input core.CreateInput) (core.MutationResult, error) {
 			if !reflect.DeepEqual(input, want) {
 				t.Fatalf("create input = %#v, want %#v", input, want)
 			}
-			return created, nil
+			return core.MutationResult{Task: created}, nil
 		},
 		unexpectedTaskUpdate(t),
 		unexpectedStatusUpdate(t),
@@ -612,14 +663,14 @@ func TestHandlerUpdatesAllTaskFields(t *testing.T) {
 	handler := NewHandler(
 		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
 		unexpectedTaskCreate(t),
-		func(_ context.Context, id string, input core.UpdateInput) (core.Task, error) {
+		func(_ context.Context, id string, input core.UpdateInput) (core.MutationResult, error) {
 			if id != "WB-01J00000000000000000000001" {
 				t.Fatalf("update id = %q", id)
 			}
 			if !reflect.DeepEqual(input, want) {
 				t.Fatalf("update input = %#v, want %#v", input, want)
 			}
-			return updated, nil
+			return core.MutationResult{Task: updated}, nil
 		},
 		unexpectedStatusUpdate(t),
 	)
@@ -673,9 +724,9 @@ func TestHandlerPreservesStatusMutationRoute(t *testing.T) {
 		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
 		unexpectedTaskCreate(t),
 		unexpectedTaskUpdate(t),
-		func(context.Context, string, core.Status) (core.Task, error) {
+		func(context.Context, string, core.Status) (core.MutationResult, error) {
 			called = true
-			return boardTasks()[0], nil
+			return core.MutationResult{Task: boardTasks()[0]}, nil
 		},
 	)
 
@@ -718,8 +769,8 @@ func TestHandlerMapsStatusUpdateErrorsToVersionedErrorDocuments(t *testing.T) {
 		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
 		unexpectedTaskCreate(t),
 		unexpectedTaskUpdate(t),
-		func(context.Context, string, core.Status) (core.Task, error) {
-			return core.Task{}, core.Errorf(core.CategoryValidation, "invalid task status")
+		func(context.Context, string, core.Status) (core.MutationResult, error) {
+			return core.MutationResult{}, core.Errorf(core.CategoryValidation, "invalid task status")
 		},
 	)
 
@@ -968,25 +1019,25 @@ func requestJSON(t *testing.T, handler http.Handler, method, target, body string
 
 func unexpectedStatusUpdate(t *testing.T) TaskStatusUpdater {
 	t.Helper()
-	return func(context.Context, string, core.Status) (core.Task, error) {
+	return func(context.Context, string, core.Status) (core.MutationResult, error) {
 		t.Fatal("unexpected status update")
-		return core.Task{}, nil
+		return core.MutationResult{}, nil
 	}
 }
 
 func unexpectedTaskCreate(t *testing.T) TaskCreator {
 	t.Helper()
-	return func(context.Context, core.CreateInput) (core.Task, error) {
+	return func(context.Context, core.CreateInput) (core.MutationResult, error) {
 		t.Fatal("unexpected task create")
-		return core.Task{}, nil
+		return core.MutationResult{}, nil
 	}
 }
 
 func unexpectedTaskUpdate(t *testing.T) TaskUpdater {
 	t.Helper()
-	return func(context.Context, string, core.UpdateInput) (core.Task, error) {
+	return func(context.Context, string, core.UpdateInput) (core.MutationResult, error) {
 		t.Fatal("unexpected task update")
-		return core.Task{}, nil
+		return core.MutationResult{}, nil
 	}
 }
 
@@ -998,6 +1049,13 @@ func assertTaskMutationDocument(t *testing.T, response *httptest.ResponseRecorde
 	}
 	if document.Format != "workbook.task-mutation" || document.Version != 1 || !reflect.DeepEqual(document.Task, want) {
 		t.Fatalf("mutation document = %#v, want workbook.task-mutation v1 with task %#v", document, want)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(response.Body.Bytes(), &fields); err != nil {
+		t.Fatalf("decode mutation document fields: %v; body = %s", err, response.Body.String())
+	}
+	if _, exists := fields["warnings"]; exists {
+		t.Fatalf("mutation document includes warnings without a warning: %s", response.Body.String())
 	}
 }
 

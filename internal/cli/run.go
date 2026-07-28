@@ -59,7 +59,7 @@ func Run(ctx context.Context, args []string, cwd string, stdout, stderr io.Write
 	case "init":
 		err = runInit(ctx, commandArgs, cwd, stdout)
 	case "create":
-		err = runCreate(ctx, commandArgs, cwd, stdout)
+		err = runCreate(ctx, commandArgs, cwd, stdout, stderr)
 	case "list":
 		err = runList(ctx, commandArgs, cwd, stdout)
 	case "board":
@@ -67,17 +67,17 @@ func Run(ctx context.Context, args []string, cwd string, stdout, stderr io.Write
 	case "show":
 		err = runShow(ctx, commandArgs, cwd, stdout)
 	case "update":
-		err = runUpdate(ctx, commandArgs, cwd, stdout)
+		err = runUpdate(ctx, commandArgs, cwd, stdout, stderr)
 	case "delete":
-		err = runDelete(ctx, commandArgs, cwd, stdout)
+		err = runDelete(ctx, commandArgs, cwd, stdout, stderr)
 	case "restore":
-		err = runRestore(ctx, commandArgs, cwd, stdout)
+		err = runRestore(ctx, commandArgs, cwd, stdout, stderr)
 	case "move":
-		err = runMove(ctx, commandArgs, cwd, stdout)
+		err = runMove(ctx, commandArgs, cwd, stdout, stderr)
 	case "depend":
-		err = runDepend(ctx, commandArgs, cwd, stdout)
+		err = runDepend(ctx, commandArgs, cwd, stdout, stderr)
 	case "free":
-		err = runFree(ctx, commandArgs, cwd, stdout)
+		err = runFree(ctx, commandArgs, cwd, stdout, stderr)
 	case "next":
 		err = runNext(ctx, commandArgs, cwd, stdout)
 	case "rebuild":
@@ -324,7 +324,7 @@ func runInit(ctx context.Context, args []string, cwd string, stdout io.Writer) e
 	return nil
 }
 
-func runCreate(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+func runCreate(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
 	title, args, err := requiredFirstArgument("create", "title", args)
 	if err != nil {
 		return err
@@ -347,7 +347,7 @@ func runCreate(ctx context.Context, args []string, cwd string, stdout io.Writer)
 	if strings.TrimSpace(title) == "" {
 		return core.Errorf(core.CategoryValidation, "title is required")
 	}
-	task, err := service.Create(ctx, core.CreateInput{
+	result, err := service.CreateMutation(ctx, core.CreateInput{
 		Title:       title,
 		Description: *description,
 		Status:      core.Status(*status),
@@ -357,11 +357,7 @@ func runCreate(ctx context.Context, args []string, cwd string, stdout io.Writer)
 	if err != nil {
 		return err
 	}
-	if *jsonMode {
-		writeResult(stdout, "create", task)
-	} else {
-		writeMutation(stdout, task)
-	}
+	writeMutationResult(stdout, stderr, "create", result, *jsonMode)
 	return nil
 }
 
@@ -430,7 +426,7 @@ func runShow(ctx context.Context, args []string, cwd string, stdout io.Writer) e
 	return nil
 }
 
-func runUpdate(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+func runUpdate(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
 	id, args, err := requiredFirstArgument("update", "task ID", args)
 	if err != nil {
 		return err
@@ -477,19 +473,15 @@ func runUpdate(ctx context.Context, args []string, cwd string, stdout io.Writer)
 	if err != nil {
 		return err
 	}
-	task, err := service.Update(ctx, id, input)
+	result, err := service.UpdateMutation(ctx, id, input)
 	if err != nil {
 		return err
 	}
-	if *jsonMode {
-		writeResult(stdout, "update", task)
-	} else {
-		writeMutation(stdout, task)
-	}
+	writeMutationResult(stdout, stderr, "update", result, *jsonMode)
 	return nil
 }
 
-func runDelete(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+func runDelete(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
 	id, args, err := requiredFirstArgument("delete", "task ID", args)
 	if err != nil {
 		return err
@@ -504,19 +496,15 @@ func runDelete(ctx context.Context, args []string, cwd string, stdout io.Writer)
 	if err != nil {
 		return err
 	}
-	task, err := service.Delete(ctx, id)
+	result, err := service.DeleteMutation(ctx, id)
 	if err != nil {
 		return err
 	}
-	if *jsonMode {
-		writeResult(stdout, "delete", task)
-	} else {
-		writeMutation(stdout, task)
-	}
+	writeMutationResult(stdout, stderr, "delete", result, *jsonMode)
 	return nil
 }
 
-func runRestore(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+func runRestore(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
 	id, args, err := requiredFirstArgument("restore", "task ID", args)
 	if err != nil {
 		return err
@@ -531,19 +519,15 @@ func runRestore(ctx context.Context, args []string, cwd string, stdout io.Writer
 	if err != nil {
 		return err
 	}
-	task, err := service.Restore(ctx, id)
+	result, err := service.RestoreMutation(ctx, id)
 	if err != nil {
 		return err
 	}
-	if *jsonMode {
-		writeResult(stdout, "restore", task)
-	} else {
-		writeMutation(stdout, task)
-	}
+	writeMutationResult(stdout, stderr, "restore", result, *jsonMode)
 	return nil
 }
 
-func runMove(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+func runMove(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
 	id, args, err := requiredFirstArgument("move", "task ID", args)
 	if err != nil {
 		return err
@@ -562,27 +546,23 @@ func runMove(ctx context.Context, args []string, cwd string, stdout io.Writer) e
 	if err != nil {
 		return err
 	}
-	task, err := service.Move(ctx, id, core.MoveInput{Before: *before, After: *after})
+	result, err := service.MoveMutation(ctx, id, core.MoveInput{Before: *before, After: *after})
 	if err != nil {
 		return err
 	}
-	if *jsonMode {
-		writeResult(stdout, "move", task)
-	} else {
-		writeMutation(stdout, task)
-	}
+	writeMutationResult(stdout, stderr, "move", result, *jsonMode)
 	return nil
 }
 
-func runDepend(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
-	return runDependencyMutation(ctx, "depend", args, cwd, stdout)
+func runDepend(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
+	return runDependencyMutation(ctx, "depend", args, cwd, stdout, stderr)
 }
 
-func runFree(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
-	return runDependencyMutation(ctx, "free", args, cwd, stdout)
+func runFree(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
+	return runDependencyMutation(ctx, "free", args, cwd, stdout, stderr)
 }
 
-func runDependencyMutation(ctx context.Context, command string, args []string, cwd string, stdout io.Writer) error {
+func runDependencyMutation(ctx context.Context, command string, args []string, cwd string, stdout, stderr io.Writer) error {
 	ids, args, err := requiredArguments(command, []string{"task ID", "dependency task ID"}, args)
 	if err != nil {
 		return err
@@ -596,20 +576,16 @@ func runDependencyMutation(ctx context.Context, command string, args []string, c
 	if err != nil {
 		return err
 	}
-	var task core.Task
+	var result core.MutationResult
 	if command == "depend" {
-		task, err = service.Depend(ctx, ids[0], ids[1])
+		result, err = service.DependMutation(ctx, ids[0], ids[1])
 	} else {
-		task, err = service.Free(ctx, ids[0], ids[1])
+		result, err = service.FreeMutation(ctx, ids[0], ids[1])
 	}
 	if err != nil {
 		return err
 	}
-	if *jsonMode {
-		writeResult(stdout, command, task)
-	} else {
-		writeMutation(stdout, task)
-	}
+	writeMutationResult(stdout, stderr, command, result, *jsonMode)
 	return nil
 }
 
@@ -671,32 +647,28 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 		return err
 	}
 
-	readService, err := openReadService(ctx, cwd)
-	if err != nil {
-		return err
-	}
 	service, err := openService(ctx, cwd)
 	if err != nil {
 		return err
 	}
 	handler := webui.NewHandlerWithTaskMutations(
 		func(requestContext context.Context) ([]core.Task, error) {
-			return readService.List(requestContext, core.ListFilter{All: true})
+			return service.List(requestContext, core.ListFilter{All: true})
 		},
-		func(requestContext context.Context, input core.CreateInput) (core.Task, error) {
-			return service.Create(requestContext, input)
+		func(requestContext context.Context, input core.CreateInput) (core.MutationResult, error) {
+			return service.CreateMutation(requestContext, input)
 		},
-		func(requestContext context.Context, id string, input core.UpdateInput) (core.Task, error) {
-			return service.Update(requestContext, id, input)
+		func(requestContext context.Context, id string, input core.UpdateInput) (core.MutationResult, error) {
+			return service.UpdateMutation(requestContext, id, input)
 		},
-		func(requestContext context.Context, id string, status core.Status) (core.Task, error) {
-			return service.Update(requestContext, id, core.UpdateInput{Status: &status})
+		func(requestContext context.Context, id string, status core.Status) (core.MutationResult, error) {
+			return service.UpdateMutation(requestContext, id, core.UpdateInput{Status: &status})
 		},
-		func(requestContext context.Context, id string) (core.Task, error) {
-			return service.Delete(requestContext, id)
+		func(requestContext context.Context, id string) (core.MutationResult, error) {
+			return service.DeleteMutation(requestContext, id)
 		},
-		func(requestContext context.Context, id string) (core.Task, error) {
-			return service.Restore(requestContext, id)
+		func(requestContext context.Context, id string) (core.MutationResult, error) {
+			return service.RestoreMutation(requestContext, id)
 		},
 	)
 	listener, err := net.Listen("tcp", *addr)
@@ -719,12 +691,18 @@ func openService(ctx context.Context, cwd string) (core.Service, error) {
 	if err != nil {
 		return core.Service{}, err
 	}
+	store, err := projection.Open(ctx, repository, config)
+	if err != nil {
+		return core.Service{}, err
+	}
 	return core.Service{
-		Config: config,
-		Store:  repository,
-		IDs:    core.CryptoULIDSource{},
-		Now:    time.Now,
-		Actor:  actor,
+		Config:     config,
+		Reader:     store,
+		Writer:     repository,
+		Projection: store,
+		IDs:        core.CryptoULIDSource{},
+		Now:        time.Now,
+		Actor:      actor,
 	}, nil
 }
 
@@ -737,7 +715,7 @@ func openReadService(ctx context.Context, cwd string) (core.Service, error) {
 	if err != nil {
 		return core.Service{}, err
 	}
-	return core.Service{Config: config, Store: store, IDs: core.CryptoULIDSource{}, Now: time.Now}, nil
+	return core.Service{Config: config, Reader: store, IDs: core.CryptoULIDSource{}, Now: time.Now}, nil
 }
 
 func openRepository(ctx context.Context, cwd string) (*gitstore.Repository, core.ProjectConfig, error) {

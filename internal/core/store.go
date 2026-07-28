@@ -41,9 +41,3 @@ type MutationResult struct {
 	Task     Task      `json:"task"`
 	Warnings []Warning `json:"warnings,omitempty"`
 }
-
-// TaskStore persists and retrieves immutable task operation snapshots.
-type TaskStore interface {
-	TaskReader
-	Write(context.Context, ProjectConfig, *Snapshot, OperationPack, StateDocument, string) (Snapshot, error)
-}

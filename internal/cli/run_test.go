@@ -23,10 +23,11 @@ import (
 )
 
 type resultDocument struct {
-	Format  string          `json:"format"`
-	Version int             `json:"version"`
-	Command string          `json:"command"`
-	Data    json.RawMessage `json:"data"`
+	Format   string          `json:"format"`
+	Version  int             `json:"version"`
+	Command  string          `json:"command"`
+	Data     json.RawMessage `json:"data"`
+	Warnings []core.Warning  `json:"warnings,omitempty"`
 }
 
 type errorDocument struct {
@@ -36,6 +37,57 @@ type errorDocument struct {
 		Category core.Category `json:"category"`
 		Message  string        `json:"message"`
 	} `json:"error"`
+}
+
+func TestWriteMutationResultRendersWarning(t *testing.T) {
+	result := core.MutationResult{
+		Task: core.Task{
+			ID: "WB-01K0M6B8A4FTT8C39MXXYTW7D1",
+			TaskData: core.TaskData{
+				Title:    "Durable",
+				Status:   core.StatusReady,
+				Priority: core.PriorityHigh,
+			},
+		},
+		Warnings: []core.Warning{{
+			Code:    core.WarningProjectionUpdate,
+			Message: "cache update failed",
+		}},
+	}
+
+	t.Run("human", func(t *testing.T) {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		writeMutationResult(&stdout, &stderr, "create", result, false)
+
+		if got, want := stdout.String(), "WB-01K0M6B8A4FTT8C39MXXYTW7D1\tready\thigh\tDurable\n"; got != want {
+			t.Fatalf("stdout = %q, want %q", got, want)
+		}
+		if got, want := stderr.String(), "workbook: warning: cache update failed\n"; got != want {
+			t.Fatalf("stderr = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("JSON", func(t *testing.T) {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		writeMutationResult(&stdout, &stderr, "create", result, true)
+
+		if stderr.Len() != 0 {
+			t.Fatalf("stderr = %q, want empty", stderr.String())
+		}
+		document := assertJSONResult(t, stdout.String(), "create")
+		var task core.Task
+		if err := json.Unmarshal(document.Data, &task); err != nil {
+			t.Fatalf("decode mutation task: %v; data = %s", err, document.Data)
+		}
+		if !reflect.DeepEqual(task, result.Task) {
+			t.Fatalf("data task = %#v, want %#v", task, result.Task)
+		}
+		if !reflect.DeepEqual(document.Warnings, result.Warnings) {
+			t.Fatalf("warnings = %#v, want %#v", document.Warnings, result.Warnings)
+		}
+	})
 }
 
 func TestRunInvalidInvocationAndEarlyJSONErrors(t *testing.T) {
@@ -447,8 +499,8 @@ func TestReadCommandsRefreshCachedProjectionAfterGitTipAdvances(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openReadService() error = %v", err)
 	}
-	if _, ok := readService.Store.(*projection.Store); !ok {
-		t.Fatalf("openReadService() store = %T, want *projection.Store", readService.Store)
+	if _, ok := readService.Reader.(*projection.Store); !ok {
+		t.Fatalf("openReadService() reader = %T, want *projection.Store", readService.Reader)
 	}
 
 	code, stdout, stderr = run(t, repository, "update", created.ID, "--title", "After advance", "--json")

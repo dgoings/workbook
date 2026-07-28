@@ -64,7 +64,8 @@ type Store struct {
 	rename    func(string, string) error
 }
 
-var _ core.TaskStore = (*Store)(nil)
+var _ core.TaskReader = (*Store)(nil)
+var _ core.ProjectionUpdater = (*Store)(nil)
 
 // Open opens the repository's shared projection cache. The first read creates
 // the cache from the current Git task heads when necessary.
@@ -229,11 +230,6 @@ func (s *Store) Resolve(ctx context.Context, config core.ProjectConfig, prefix s
 	default:
 		return "", core.Errorf(core.CategoryValidation, "task ID prefix %q is ambiguous", prefix)
 	}
-}
-
-// Write is unsupported because projected state is derived solely from Git.
-func (s *Store) Write(context.Context, core.ProjectConfig, *core.Snapshot, core.OperationPack, core.StateDocument, string) (core.Snapshot, error) {
-	return core.Snapshot{}, core.Errorf(core.CategoryOperational, "SQLite projection is read-only; write task operations to Git")
 }
 
 // Advance conditionally replaces one projected task checkpoint.
@@ -850,6 +846,8 @@ func scanSnapshotScalars(scanner rowScanner) (core.Snapshot, error) {
 	state.LogicalClock = uint64(clock)
 	state.Task.Status = core.Status(status)
 	state.Task.Priority = core.Priority(priority)
+	state.Task.Labels = []string{}
+	state.Task.Dependencies = []string{}
 	state.Task.CreatedAt = createdAt
 	state.Task.UpdatedAt = updatedAt
 	state.Task.Deleted = deleted == 1
@@ -901,7 +899,7 @@ func (s *Store) queryStrings(ctx context.Context, transaction *sql.Tx, query, ta
 		return nil, s.databaseError("query projected task collection", err)
 	}
 	defer rows.Close()
-	var values []string
+	values := []string{}
 	for rows.Next() {
 		var value string
 		if err := rows.Scan(&value); err != nil {

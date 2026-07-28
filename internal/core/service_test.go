@@ -31,10 +31,11 @@ func TestServiceCreateBuildsOneRootPackWithSeparateIDsAndBucketRank(t *testing.T
 	}}
 	service := serviceUnderTest(store, ids)
 
-	task, err := service.Create(context.Background(), CreateInput{Title: "  Build service  "})
+	result, err := service.CreateMutation(context.Background(), CreateInput{Title: "  Build service  "})
 	if err != nil {
-		t.Fatalf("Create() error = %v", err)
+		t.Fatalf("CreateMutation() error = %v", err)
 	}
+	task := result.Task
 
 	if got, want := task.ID, "WB-01K0M6B8A4FTT8C39MXXYTW7D2"; got != want {
 		t.Fatalf("Create() task ID = %q, want %q", got, want)
@@ -79,7 +80,7 @@ func TestServiceClassifiesIDGenerationFailureAsOperational(t *testing.T) {
 		return "", cause
 	}))
 
-	_, err := service.Create(context.Background(), CreateInput{Title: "Task"})
+	_, err := service.CreateMutation(context.Background(), CreateInput{Title: "Task"})
 	if got, want := CategoryOf(err), CategoryOperational; got != want {
 		t.Fatalf("Create() category = %q, want %q; error = %v", got, want, err)
 	}
@@ -281,12 +282,13 @@ func TestServiceUpdateBuildsOneDeterministicPackFromNormalizedValues(t *testing.
 	status, priority := StatusReady, PriorityHigh
 	labels := []string{"beta", "alpha", "beta"}
 
-	task, err := service.Update(context.Background(), snapshot.State.TaskID[:10], UpdateInput{
+	result, err := service.UpdateMutation(context.Background(), snapshot.State.TaskID[:10], UpdateInput{
 		Title: &title, Description: &description, Status: &status, Priority: &priority, Labels: &labels,
 	})
 	if err != nil {
-		t.Fatalf("Update() error = %v", err)
+		t.Fatalf("UpdateMutation() error = %v", err)
 	}
+	task := result.Task
 	if got, want := task.Head, "head-1"; got != want {
 		t.Fatalf("Update() head = %q, want %q", got, want)
 	}
@@ -339,7 +341,7 @@ func TestServiceUpdateCommitSubjectNormalizesAndTruncatesTitles(t *testing.T) {
 			store := newMemoryTaskStore(snapshot)
 			service := serviceUnderTest(store, &sequenceIDSource{values: []string{"01K0M6B8A4FTT8C39MXXYTW7D2"}})
 
-			_, err := service.Update(context.Background(), snapshot.State.TaskID, UpdateInput{Title: &test.title})
+			_, err := service.UpdateMutation(context.Background(), snapshot.State.TaskID, UpdateInput{Title: &test.title})
 			if err != nil {
 				t.Fatalf("Update() error = %v", err)
 			}
@@ -360,7 +362,7 @@ func TestServiceUpdateRejectsNormalizedNoopWithoutWriting(t *testing.T) {
 	title := "  Title  "
 	labels := []string{"beta", "alpha", "alpha"}
 
-	_, err := service.Update(context.Background(), snapshot.State.TaskID, UpdateInput{Title: &title, Labels: &labels})
+	_, err := service.UpdateMutation(context.Background(), snapshot.State.TaskID, UpdateInput{Title: &title, Labels: &labels})
 	if got, want := CategoryOf(err), CategoryValidation; got != want {
 		t.Fatalf("Update() error category = %q, want %q (error: %v)", got, want, err)
 	}
@@ -377,21 +379,22 @@ func TestServiceDeleteTombstonesTaskAndRestoreIsTheOnlyAllowedMutation(t *testin
 	store := newMemoryTaskStore(snapshot)
 	service := serviceUnderTest(store, &sequenceIDSource{values: []string{"01K0M6B8A4FTT8C39MXXYTW7D2", "01K0M6B8A4FTT8C39MXXYTW7D3"}})
 
-	task, err := service.Delete(context.Background(), snapshot.State.TaskID)
+	deleteResult, err := service.DeleteMutation(context.Background(), snapshot.State.TaskID)
 	if err != nil {
-		t.Fatalf("Delete() error = %v", err)
+		t.Fatalf("DeleteMutation() error = %v", err)
 	}
+	task := deleteResult.Task
 	if !task.Deleted {
 		t.Fatal("Delete() task is not tombstoned")
 	}
 	assertOperations(t, store.writes[0].pack.Operations, []Operation{{ID: "01K0M6B8A4FTT8C39MXXYTW7D2", Type: OperationTaskTombstone}})
 
 	title := "cannot update"
-	_, err = service.Update(context.Background(), snapshot.State.TaskID, UpdateInput{Title: &title})
+	_, err = service.UpdateMutation(context.Background(), snapshot.State.TaskID, UpdateInput{Title: &title})
 	if got, want := CategoryOf(err), CategoryValidation; got != want {
 		t.Fatalf("Update(tombstone) error category = %q, want %q (error: %v)", got, want, err)
 	}
-	_, err = service.Delete(context.Background(), snapshot.State.TaskID)
+	_, err = service.DeleteMutation(context.Background(), snapshot.State.TaskID)
 	if got, want := CategoryOf(err), CategoryValidation; got != want {
 		t.Fatalf("Delete(tombstone) error category = %q, want %q (error: %v)", got, want, err)
 	}
@@ -399,16 +402,17 @@ func TestServiceDeleteTombstonesTaskAndRestoreIsTheOnlyAllowedMutation(t *testin
 		t.Fatalf("Write() calls after tombstone = %d, want %d", got, want)
 	}
 
-	task, err = service.Restore(context.Background(), snapshot.State.TaskID)
+	restoreResult, err := service.RestoreMutation(context.Background(), snapshot.State.TaskID)
 	if err != nil {
-		t.Fatalf("Restore() error = %v", err)
+		t.Fatalf("RestoreMutation() error = %v", err)
 	}
+	task = restoreResult.Task
 	if task.Deleted {
 		t.Fatal("Restore() task is still tombstoned")
 	}
 	assertOperations(t, store.writes[1].pack.Operations, []Operation{{ID: "01K0M6B8A4FTT8C39MXXYTW7D3", Type: OperationTaskRestore}})
 
-	_, err = service.Restore(context.Background(), snapshot.State.TaskID)
+	_, err = service.RestoreMutation(context.Background(), snapshot.State.TaskID)
 	if got, want := CategoryOf(err), CategoryValidation; got != want {
 		t.Fatalf("Restore(active) error category = %q, want %q (error: %v)", got, want, err)
 	}
@@ -424,7 +428,7 @@ func TestServicePropagatesStaleWriteWithoutRetry(t *testing.T) {
 	service := serviceUnderTest(store, &sequenceIDSource{values: []string{"01K0M6B8A4FTT8C39MXXYTW7D2"}})
 	title := "Race resolved"
 
-	_, err := service.Update(context.Background(), snapshot.State.TaskID, UpdateInput{Title: &title})
+	_, err := service.UpdateMutation(context.Background(), snapshot.State.TaskID, UpdateInput{Title: &title})
 	if got, want := CategoryOf(err), CategoryStaleWrite; got != want {
 		t.Fatalf("Update() error category = %q, want %q (error: %v)", got, want, err)
 	}
@@ -457,7 +461,7 @@ func TestServiceCreateRejectsInvalidOrDuplicateGeneratedIDsBeforeWrite(t *testin
 			store := newMemoryTaskStore()
 			service := serviceUnderTest(store, &sequenceIDSource{values: test.ids})
 
-			_, err := service.Create(context.Background(), CreateInput{Title: "Reject invalid IDs"})
+			_, err := service.CreateMutation(context.Background(), CreateInput{Title: "Reject invalid IDs"})
 			if got, want := CategoryOf(err), CategoryValidation; got != want {
 				t.Fatalf("Create() error category = %q, want %q (error: %v)", got, want, err)
 			}
@@ -504,7 +508,7 @@ func TestServiceUpdateRejectsInvalidOrCollidingOperationIDsBeforeWrite(t *testin
 			service := serviceUnderTest(store, &sequenceIDSource{values: test.ids})
 			title, description := "New title", "new"
 
-			_, err := service.Update(context.Background(), snapshot.State.TaskID, UpdateInput{Title: &title, Description: &description})
+			_, err := service.UpdateMutation(context.Background(), snapshot.State.TaskID, UpdateInput{Title: &title, Description: &description})
 			if got, want := CategoryOf(err), CategoryValidation; got != want {
 				t.Fatalf("Update() error category = %q, want %q (error: %v)", got, want, err)
 			}
@@ -520,7 +524,7 @@ func TestServiceDeleteRejectsInvalidGeneratedIDBeforeWrite(t *testing.T) {
 	store := newMemoryTaskStore(snapshot)
 	service := serviceUnderTest(store, &sequenceIDSource{values: []string{"not-a-ulid"}})
 
-	_, err := service.Delete(context.Background(), snapshot.State.TaskID)
+	_, err := service.DeleteMutation(context.Background(), snapshot.State.TaskID)
 	if got, want := CategoryOf(err), CategoryValidation; got != want {
 		t.Fatalf("Delete() error category = %q, want %q (error: %v)", got, want, err)
 	}
@@ -536,10 +540,11 @@ func TestServiceMovePlacesTaskBetweenAnchorAndNeighborWithoutWritingAnotherTask(
 	store := newMemoryTaskStore(moved, previous, anchor)
 	service := serviceUnderTest(store, &sequenceIDSource{values: []string{"01K0M6B8A4FTT8C39MXXYTW7E4"}})
 
-	task, err := service.Move(context.Background(), moved.State.TaskID, MoveInput{Before: anchor.State.TaskID})
+	result, err := service.MoveMutation(context.Background(), moved.State.TaskID, MoveInput{Before: anchor.State.TaskID})
 	if err != nil {
-		t.Fatalf("Move() error = %v", err)
+		t.Fatalf("MoveMutation() error = %v", err)
 	}
+	task := result.Task
 	if got, want := task.Rank, "3/1"; got != want {
 		t.Fatalf("Move() rank = %q, want %q", got, want)
 	}
@@ -560,10 +565,11 @@ func TestServiceMoveReturnsExistingTaskWhenEquivalentPlacementKeepsRank(t *testi
 	ids := &sequenceIDSource{}
 	service := serviceUnderTest(store, ids)
 
-	task, err := service.Move(context.Background(), moved.State.TaskID, MoveInput{Before: anchor.State.TaskID})
+	result, err := service.MoveMutation(context.Background(), moved.State.TaskID, MoveInput{Before: anchor.State.TaskID})
 	if err != nil {
-		t.Fatalf("Move() error = %v", err)
+		t.Fatalf("MoveMutation() error = %v", err)
 	}
+	task := result.Task
 	if got, want := task, Project(moved); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Move() task = %#v, want existing %#v", got, want)
 	}
@@ -583,17 +589,19 @@ func TestServiceMovePlacesTaskAtBucketBoundaries(t *testing.T) {
 	store := newMemoryTaskStore(first, last, before, after)
 	service := serviceUnderTest(store, &sequenceIDSource{values: []string{"01K0M6B8A4FTT8C39MXXYTW7E5", "01K0M6B8A4FTT8C39MXXYTW7E6"}})
 
-	gotBefore, err := service.Move(context.Background(), before.State.TaskID, MoveInput{Before: first.State.TaskID})
+	beforeResult, err := service.MoveMutation(context.Background(), before.State.TaskID, MoveInput{Before: first.State.TaskID})
 	if err != nil {
-		t.Fatalf("Move(before boundary) error = %v", err)
+		t.Fatalf("MoveMutation(before boundary) error = %v", err)
 	}
+	gotBefore := beforeResult.Task
 	if got, want := gotBefore.Rank, "1/1"; got != want {
 		t.Fatalf("Move(before boundary) rank = %q, want %q", got, want)
 	}
-	gotAfter, err := service.Move(context.Background(), after.State.TaskID, MoveInput{After: last.State.TaskID})
+	afterResult, err := service.MoveMutation(context.Background(), after.State.TaskID, MoveInput{After: last.State.TaskID})
 	if err != nil {
-		t.Fatalf("Move(after boundary) error = %v", err)
+		t.Fatalf("MoveMutation(after boundary) error = %v", err)
 	}
+	gotAfter := afterResult.Task
 	if got, want := gotAfter.Rank, "5/1"; got != want {
 		t.Fatalf("Move(after boundary) rank = %q, want %q", got, want)
 	}
@@ -605,10 +613,11 @@ func TestServiceMovePlacesTaskAfterAnchorBeforeFollowingRank(t *testing.T) {
 	following := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E3", TaskData{Title: "following", Status: StatusReady, Priority: PriorityHigh, Rank: "4/1"})
 	service := serviceUnderTest(newMemoryTaskStore(moved, anchor, following), &sequenceIDSource{values: []string{"01K0M6B8A4FTT8C39MXXYTW7E4"}})
 
-	task, err := service.Move(context.Background(), moved.State.TaskID, MoveInput{After: anchor.State.TaskID})
+	result, err := service.MoveMutation(context.Background(), moved.State.TaskID, MoveInput{After: anchor.State.TaskID})
 	if err != nil {
-		t.Fatalf("Move() error = %v", err)
+		t.Fatalf("MoveMutation() error = %v", err)
 	}
+	task := result.Task
 	if got, want := task.Rank, "3/1"; got != want {
 		t.Fatalf("Move() rank = %q, want %q", got, want)
 	}
@@ -619,10 +628,11 @@ func TestServiceMoveAfterFractionalLastRankUsesNextInteger(t *testing.T) {
 	last := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E2", TaskData{Title: "last", Status: StatusReady, Priority: PriorityHigh, Rank: "3/2"})
 	service := serviceUnderTest(newMemoryTaskStore(moved, last), &sequenceIDSource{values: []string{"01K0M6B8A4FTT8C39MXXYTW7E3"}})
 
-	task, err := service.Move(context.Background(), moved.State.TaskID, MoveInput{After: last.State.TaskID})
+	result, err := service.MoveMutation(context.Background(), moved.State.TaskID, MoveInput{After: last.State.TaskID})
 	if err != nil {
-		t.Fatalf("Move() error = %v", err)
+		t.Fatalf("MoveMutation() error = %v", err)
 	}
+	task := result.Task
 	if got, want := task.Rank, "2/1"; got != want {
 		t.Fatalf("Move() rank = %q, want %q", got, want)
 	}
@@ -635,7 +645,7 @@ func TestServiceMoveRejectsSelfAndCrossBucketAnchorsWithoutWriting(t *testing.T)
 	service := serviceUnderTest(store, &sequenceIDSource{})
 
 	for _, input := range []MoveInput{{}, {Before: moved.State.TaskID}, {After: crossBucket.State.TaskID}, {Before: crossBucket.State.TaskID, After: moved.State.TaskID}} {
-		_, err := service.Move(context.Background(), moved.State.TaskID, input)
+		_, err := service.MoveMutation(context.Background(), moved.State.TaskID, input)
 		if got, want := CategoryOf(err), CategoryValidation; got != want {
 			t.Fatalf("Move(%#v) category = %q, want %q (error: %v)", input, got, want, err)
 		}
@@ -651,10 +661,11 @@ func TestServiceDependAddsEdgeToDependentTask(t *testing.T) {
 	store := newMemoryTaskStore(dependent, dependency)
 	service := serviceUnderTest(store, &sequenceIDSource{values: []string{"01K0M6B8A4FTT8C39MXXYTW7E3"}})
 
-	task, err := service.Depend(context.Background(), dependent.State.TaskID, dependency.State.TaskID)
+	result, err := service.DependMutation(context.Background(), dependent.State.TaskID, dependency.State.TaskID)
 	if err != nil {
-		t.Fatalf("Depend() error = %v", err)
+		t.Fatalf("DependMutation() error = %v", err)
 	}
+	task := result.Task
 	if got, want := task.Dependencies, []string{dependency.State.TaskID}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("Depend() dependencies = %#v, want %#v", got, want)
 	}
@@ -671,7 +682,7 @@ func TestServiceDependRejectsMissingTombstonedAndSelfEndpointsWithoutWriting(t *
 	service := serviceUnderTest(store, &sequenceIDSource{})
 
 	for _, dependency := range []string{"WB-01K0M6B8A4FTT8C39MXXYTW7E3", tombstoned.State.TaskID, active.State.TaskID} {
-		_, err := service.Depend(context.Background(), active.State.TaskID, dependency)
+		_, err := service.DependMutation(context.Background(), active.State.TaskID, dependency)
 		if got := CategoryOf(err); got != CategoryNotFound && got != CategoryValidation {
 			t.Fatalf("Depend(%q) category = %q, want not-found or validation (error: %v)", dependency, got, err)
 		}
@@ -687,14 +698,15 @@ func TestServiceFreeRemovesExistingDependencyAndIsIdempotentWhenAbsent(t *testin
 	store := newMemoryTaskStore(dependent, serviceSnapshot(dependency, TaskData{Title: "dependency", Status: StatusReady, Priority: PriorityHigh, Rank: "2/1", Deleted: true}))
 	service := serviceUnderTest(store, &sequenceIDSource{values: []string{"01K0M6B8A4FTT8C39MXXYTW7E3"}})
 
-	task, err := service.Free(context.Background(), dependent.State.TaskID, dependency)
+	result, err := service.FreeMutation(context.Background(), dependent.State.TaskID, dependency)
 	if err != nil {
-		t.Fatalf("Free() error = %v", err)
+		t.Fatalf("FreeMutation() error = %v", err)
 	}
+	task := result.Task
 	if got, want := task.Dependencies, []string{}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("Free() dependencies = %#v, want %#v", got, want)
 	}
-	_, err = service.Free(context.Background(), dependent.State.TaskID, dependency)
+	_, err = service.FreeMutation(context.Background(), dependent.State.TaskID, dependency)
 	if err != nil {
 		t.Fatalf("Free(absent) error = %v", err)
 	}
@@ -710,7 +722,7 @@ func TestServiceDependRejectsCycleInActiveGraphWithoutWriting(t *testing.T) {
 	store := newMemoryTaskStore(a, b, c)
 	service := serviceUnderTest(store, &sequenceIDSource{})
 
-	_, err := service.Depend(context.Background(), c.State.TaskID, a.State.TaskID)
+	_, err := service.DependMutation(context.Background(), c.State.TaskID, a.State.TaskID)
 	if got, want := CategoryOf(err), CategoryValidation; got != want {
 		t.Fatalf("Depend(cycle) category = %q, want %q (error: %v)", got, want, err)
 	}
@@ -726,7 +738,7 @@ func TestServiceDependRejectsExistingReachableCycleWithoutWriting(t *testing.T) 
 	store := newMemoryTaskStore(a, b, c)
 	service := serviceUnderTest(store, &sequenceIDSource{})
 
-	_, err := service.Depend(context.Background(), a.State.TaskID, b.State.TaskID)
+	_, err := service.DependMutation(context.Background(), a.State.TaskID, b.State.TaskID)
 	if got, want := CategoryOf(err), CategoryValidation; got != want {
 		t.Fatalf("Depend(existing cycle) category = %q, want %q (error: %v)", got, want, err)
 	}
@@ -1021,8 +1033,15 @@ func TestServiceProjectionFailureDoesNotAdvanceAfterGitWriteFailure(t *testing.T
 	}
 }
 
-func serviceUnderTest(store TaskStore, ids IDSource) Service {
-	return Service{Config: serviceTestConfig, Store: store, IDs: ids, Now: func() time.Time { return serviceTestNow }, Actor: "developer@example.com"}
+func serviceUnderTest(store *memoryTaskStore, ids IDSource) Service {
+	return Service{
+		Config: serviceTestConfig,
+		Reader: store,
+		Writer: store,
+		IDs:    ids,
+		Now:    func() time.Time { return serviceTestNow },
+		Actor:  "developer@example.com",
+	}
 }
 
 func splitServiceUnderTest(reader TaskReader, writer CanonicalTaskWriter, projection ProjectionUpdater, ids IDSource) Service {
@@ -1244,7 +1263,14 @@ func (s *memoryTaskStore) Resolve(ctx context.Context, config ProjectConfig, pre
 	}
 }
 
-func (s *memoryTaskStore) Write(_ context.Context, _ ProjectConfig, parent *Snapshot, pack OperationPack, state StateDocument, reason string) (Snapshot, error) {
+func (s *memoryTaskStore) WriteValidated(
+	_ context.Context,
+	_ ProjectConfig,
+	parent *Snapshot,
+	pack OperationPack,
+	state StateDocument,
+	reason string,
+) (Snapshot, error) {
 	s.writes = append(s.writes, memoryWrite{parent: parent, pack: pack, state: state, reason: reason})
 	if s.writeErr != nil {
 		return Snapshot{}, s.writeErr
@@ -1252,17 +1278,6 @@ func (s *memoryTaskStore) Write(_ context.Context, _ ProjectConfig, parent *Snap
 	snapshot := Snapshot{Head: fmt.Sprintf("head-%d", len(s.writes)), Operation: pack, State: state}
 	s.snapshots[state.TaskID] = snapshot
 	return snapshot, nil
-}
-
-func (s *memoryTaskStore) WriteValidated(
-	ctx context.Context,
-	config ProjectConfig,
-	parent *Snapshot,
-	pack OperationPack,
-	state StateDocument,
-	reason string,
-) (Snapshot, error) {
-	return s.Write(ctx, config, parent, pack, state, reason)
 }
 
 func assertTaskIDs(t *testing.T, tasks []Task, want []string) {

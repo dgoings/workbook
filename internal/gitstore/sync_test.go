@@ -413,17 +413,17 @@ func publishTaskRefs(t *testing.T, repo *Repository) {
 func createSyncTask(t *testing.T, repo *Repository, config core.ProjectConfig, title string) core.Task {
 	t.Helper()
 	service := syncService(repo, config)
-	task, err := service.Create(context.Background(), core.CreateInput{Title: title})
+	result, err := service.CreateMutation(context.Background(), core.CreateInput{Title: title})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return task
+	return result.Task
 }
 
 func updateSyncTask(t *testing.T, repo *Repository, config core.ProjectConfig, taskID, title string) {
 	t.Helper()
 	service := syncService(repo, config)
-	if _, err := service.Update(context.Background(), taskID, core.UpdateInput{Title: &title}); err != nil {
+	if _, err := service.UpdateMutation(context.Background(), taskID, core.UpdateInput{Title: &title}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -431,7 +431,8 @@ func updateSyncTask(t *testing.T, repo *Repository, config core.ProjectConfig, t
 func syncService(repo *Repository, config core.ProjectConfig) core.Service {
 	return core.Service{
 		Config: config,
-		Store:  repo,
+		Reader: repo,
+		Writer: repo,
 		IDs:    core.CryptoULIDSource{},
 		Now:    time.Now,
 		Actor:  "workbook@example.test",

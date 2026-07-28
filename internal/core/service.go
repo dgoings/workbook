@@ -16,7 +16,6 @@ type Service struct {
 	Reader     TaskReader
 	Writer     CanonicalTaskWriter
 	Projection ProjectionUpdater
-	Store      TaskStore
 	IDs        IDSource
 	Now        func() time.Time
 	Actor      string
@@ -50,11 +49,6 @@ type ListFilter struct {
 	All      bool
 }
 
-func (s Service) Create(ctx context.Context, input CreateInput) (Task, error) {
-	result, err := s.CreateMutation(ctx, input)
-	return result.Task, err
-}
-
 func (s Service) CreateMutation(ctx context.Context, input CreateInput) (MutationResult, error) {
 	status := input.Status
 	if status == "" {
@@ -65,7 +59,7 @@ func (s Service) CreateMutation(ctx context.Context, input CreateInput) (Mutatio
 		priority = PriorityMedium
 	}
 
-	snapshots, err := s.taskReader().List(ctx, s.Config)
+	snapshots, err := s.Reader.List(ctx, s.Config)
 	if err != nil {
 		return MutationResult{}, err
 	}
@@ -122,7 +116,7 @@ func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
 	if filter.Priority != nil && !isValidPriority(*filter.Priority) {
 		return nil, Errorf(CategoryValidation, "invalid task priority %q", *filter.Priority)
 	}
-	snapshots, err := s.taskReader().List(ctx, s.Config)
+	snapshots, err := s.Reader.List(ctx, s.Config)
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +146,7 @@ func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
 // Next returns the highest-priority ready task whose dependencies are all
 // active done tasks. It returns nil when no task is eligible.
 func (s Service) Next(ctx context.Context) (*Task, error) {
-	snapshots, err := s.taskReader().List(ctx, s.Config)
+	snapshots, err := s.Reader.List(ctx, s.Config)
 	if err != nil {
 		return nil, err
 	}
@@ -195,11 +189,6 @@ func (s Service) Show(ctx context.Context, idOrPrefix string) (Task, error) {
 	return Project(snapshot), nil
 }
 
-func (s Service) Update(ctx context.Context, idOrPrefix string, input UpdateInput) (Task, error) {
-	result, err := s.UpdateMutation(ctx, idOrPrefix, input)
-	return result.Task, err
-}
-
 func (s Service) UpdateMutation(ctx context.Context, idOrPrefix string, input UpdateInput) (MutationResult, error) {
 	parent, err := s.resolveSnapshot(ctx, idOrPrefix)
 	if err != nil {
@@ -240,11 +229,6 @@ func (s Service) UpdateMutation(ctx context.Context, idOrPrefix string, input Up
 	return s.writeMutation(ctx, &parent, operations, updateCommitSubject(parent.State.TaskID, parent.State.Task, next))
 }
 
-func (s Service) Delete(ctx context.Context, idOrPrefix string) (Task, error) {
-	result, err := s.DeleteMutation(ctx, idOrPrefix)
-	return result.Task, err
-}
-
 func (s Service) DeleteMutation(ctx context.Context, idOrPrefix string) (MutationResult, error) {
 	parent, err := s.resolveSnapshot(ctx, idOrPrefix)
 	if err != nil {
@@ -260,11 +244,6 @@ func (s Service) DeleteMutation(ctx context.Context, idOrPrefix string) (Mutatio
 	return s.writeMutation(ctx, &parent, operations, "delete task")
 }
 
-func (s Service) Restore(ctx context.Context, idOrPrefix string) (Task, error) {
-	result, err := s.RestoreMutation(ctx, idOrPrefix)
-	return result.Task, err
-}
-
 func (s Service) RestoreMutation(ctx context.Context, idOrPrefix string) (MutationResult, error) {
 	parent, err := s.resolveSnapshot(ctx, idOrPrefix)
 	if err != nil {
@@ -278,11 +257,6 @@ func (s Service) RestoreMutation(ctx context.Context, idOrPrefix string) (Mutati
 		return MutationResult{}, err
 	}
 	return s.writeMutation(ctx, &parent, operations, "restore task")
-}
-
-func (s Service) Move(ctx context.Context, idOrPrefix string, input MoveInput) (Task, error) {
-	result, err := s.MoveMutation(ctx, idOrPrefix, input)
-	return result.Task, err
 }
 
 func (s Service) MoveMutation(ctx context.Context, idOrPrefix string, input MoveInput) (MutationResult, error) {
@@ -313,7 +287,7 @@ func (s Service) MoveMutation(ctx context.Context, idOrPrefix string, input Move
 	if anchor.State.Task.Status != parent.State.Task.Status || anchor.State.Task.Priority != parent.State.Task.Priority {
 		return MutationResult{}, Errorf(CategoryValidation, "move anchor must be in the same status and priority bucket")
 	}
-	snapshots, err := s.taskReader().List(ctx, s.Config)
+	snapshots, err := s.Reader.List(ctx, s.Config)
 	if err != nil {
 		return MutationResult{}, err
 	}
@@ -329,11 +303,6 @@ func (s Service) MoveMutation(ctx context.Context, idOrPrefix string, input Move
 		return MutationResult{}, err
 	}
 	return s.writeMutation(ctx, &parent, operations, "move task")
-}
-
-func (s Service) Depend(ctx context.Context, idOrPrefix, dependencyOrPrefix string) (Task, error) {
-	result, err := s.DependMutation(ctx, idOrPrefix, dependencyOrPrefix)
-	return result.Task, err
 }
 
 func (s Service) DependMutation(ctx context.Context, idOrPrefix, dependencyOrPrefix string) (MutationResult, error) {
@@ -354,7 +323,7 @@ func (s Service) DependMutation(ctx context.Context, idOrPrefix, dependencyOrPre
 	if hasDependency(parent.State.Task.Dependencies, dependency.State.TaskID) {
 		return MutationResult{Task: Project(parent)}, nil
 	}
-	snapshots, err := s.taskReader().List(ctx, s.Config)
+	snapshots, err := s.Reader.List(ctx, s.Config)
 	if err != nil {
 		return MutationResult{}, err
 	}
@@ -366,11 +335,6 @@ func (s Service) DependMutation(ctx context.Context, idOrPrefix, dependencyOrPre
 		return MutationResult{}, err
 	}
 	return s.writeMutation(ctx, &parent, operations, "add dependency")
-}
-
-func (s Service) Free(ctx context.Context, idOrPrefix, dependencyOrPrefix string) (Task, error) {
-	result, err := s.FreeMutation(ctx, idOrPrefix, dependencyOrPrefix)
-	return result.Task, err
 }
 
 func (s Service) FreeMutation(ctx context.Context, idOrPrefix, dependencyOrPrefix string) (MutationResult, error) {
@@ -405,31 +369,15 @@ func Project(snapshot Snapshot) Task {
 	}
 }
 
-func (s Service) taskReader() TaskReader {
-	if s.Reader != nil {
-		return s.Reader
-	}
-	return s.Store
-}
-
-func (s Service) canonicalWriter() CanonicalTaskWriter {
-	if s.Writer != nil {
-		return s.Writer
-	}
-	writer, _ := s.Store.(CanonicalTaskWriter)
-	return writer
-}
-
 func (s Service) resolveSnapshot(ctx context.Context, idOrPrefix string) (Snapshot, error) {
-	reader := s.taskReader()
 	if ValidateTaskID(s.Config.Key, idOrPrefix) == nil {
-		return reader.Get(ctx, s.Config, idOrPrefix)
+		return s.Reader.Get(ctx, s.Config, idOrPrefix)
 	}
-	id, err := reader.Resolve(ctx, s.Config, idOrPrefix)
+	id, err := s.Reader.Resolve(ctx, s.Config, idOrPrefix)
 	if err != nil {
 		return Snapshot{}, err
 	}
-	return reader.Get(ctx, s.Config, id)
+	return s.Reader.Get(ctx, s.Config, id)
 }
 
 func (s Service) writeMutation(ctx context.Context, parent *Snapshot, operations []Operation, reason string) (MutationResult, error) {
@@ -458,11 +406,10 @@ func (s Service) persistMutation(
 	state StateDocument,
 	reason string,
 ) (MutationResult, error) {
-	writer := s.canonicalWriter()
-	if writer == nil {
+	if s.Writer == nil {
 		return MutationResult{}, Errorf(CategoryOperational, "canonical task writer is not configured")
 	}
-	written, err := writer.WriteValidated(ctx, s.Config, parent, pack, state, reason)
+	written, err := s.Writer.WriteValidated(ctx, s.Config, parent, pack, state, reason)
 	if err != nil {
 		return MutationResult{}, err
 	}

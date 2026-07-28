@@ -243,10 +243,11 @@ func TestServicePersistsGitSafeCreateSubjectFromControlCharacters(t *testing.T) 
 	service := testService(repo, config)
 	title := "Plan\x00phase\none"
 
-	task, err := service.Create(context.Background(), core.CreateInput{Title: title})
+	result, err := service.CreateMutation(context.Background(), core.CreateInput{Title: title})
 	if err != nil {
-		t.Fatalf("Create() error = %v", err)
+		t.Fatalf("CreateMutation() error = %v", err)
 	}
+	task := result.Task
 	if task.Title != title {
 		t.Fatalf("Create() title = %q, want canonical title unchanged %q", task.Title, title)
 	}
@@ -263,16 +264,18 @@ func TestServicePersistsGitSafeCreateSubjectFromControlCharacters(t *testing.T) 
 func TestServicePersistsGitSafeUpdateSubjectFromControlCharacters(t *testing.T) {
 	repo, config := writeRepository(t)
 	service := testService(repo, config)
-	task, err := service.Create(context.Background(), core.CreateInput{Title: "Control labels"})
+	createResult, err := service.CreateMutation(context.Background(), core.CreateInput{Title: "Control labels"})
 	if err != nil {
-		t.Fatalf("Create() error = %v", err)
+		t.Fatalf("CreateMutation() error = %v", err)
 	}
+	task := createResult.Task
 	labels := []string{"alpha\x00beta", "line\nbreak"}
 
-	updated, err := service.Update(context.Background(), task.ID, core.UpdateInput{Labels: &labels})
+	updateResult, err := service.UpdateMutation(context.Background(), task.ID, core.UpdateInput{Labels: &labels})
 	if err != nil {
-		t.Fatalf("Update() error = %v", err)
+		t.Fatalf("UpdateMutation() error = %v", err)
 	}
+	updated := updateResult.Task
 	if !reflect.DeepEqual(updated.Labels, labels) {
 		t.Fatalf("Update() labels = %#v, want canonical labels unchanged %#v", updated.Labels, labels)
 	}
@@ -385,7 +388,7 @@ func TestConflictingLinkedWorktreeConfigCannotAccessSharedTaskRefs(t *testing.T)
 			name: "CRUD create",
 			call: func(t *testing.T, repo *Repository, config core.ProjectConfig) error {
 				service := testService(repo, config)
-				_, err := service.Create(context.Background(), core.CreateInput{Title: "Foreign task"})
+				_, err := service.CreateMutation(context.Background(), core.CreateInput{Title: "Foreign task"})
 				return err
 			},
 		},
@@ -428,10 +431,11 @@ func TestConflictingLinkedWorktreeConfigCannotAccessSharedTaskRefs(t *testing.T)
 
 			if test.name == "CRUD create" {
 				service := testService(guarded, original)
-				task, err := service.Create(context.Background(), core.CreateInput{Title: "Guarded task"})
+				result, err := service.CreateMutation(context.Background(), core.CreateInput{Title: "Guarded task"})
 				if err != nil {
-					t.Fatalf("Create(original identity) error = %v", err)
+					t.Fatalf("CreateMutation(original identity) error = %v", err)
 				}
+				task := result.Task
 				listed, err := service.List(context.Background(), core.ListFilter{})
 				if err != nil {
 					t.Fatalf("List(original identity) error = %v", err)
@@ -853,7 +857,8 @@ func testService(repo *Repository, config core.ProjectConfig) core.Service {
 	index := 0
 	return core.Service{
 		Config: config,
-		Store:  repo,
+		Reader: repo,
+		Writer: repo,
 		IDs: core.IDSourceFunc(func() (string, error) {
 			id := ids[index]
 			index++

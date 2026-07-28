@@ -94,10 +94,11 @@ func renderCommandHelp(output io.Writer, helpTarget []string) error {
 }
 
 type ResultEnvelope struct {
-	Format  string `json:"format"`
-	Version int    `json:"version"`
-	Command string `json:"command"`
-	Data    any    `json:"data"`
+	Format   string         `json:"format"`
+	Version  int            `json:"version"`
+	Command  string         `json:"command"`
+	Data     any            `json:"data"`
+	Warnings []core.Warning `json:"warnings,omitempty"`
 }
 
 type ErrorBody struct {
@@ -118,6 +119,24 @@ func writeResult(output io.Writer, command string, data any) {
 		Command: command,
 		Data:    data,
 	})
+}
+
+func writeMutationResult(stdout, stderr io.Writer, command string, result core.MutationResult, jsonMode bool) {
+	if jsonMode {
+		_ = json.NewEncoder(stdout).Encode(ResultEnvelope{
+			Format:   "workbook.result",
+			Version:  1,
+			Command:  command,
+			Data:     result.Task,
+			Warnings: result.Warnings,
+		})
+		return
+	}
+
+	writeMutation(stdout, result.Task)
+	for _, warning := range result.Warnings {
+		fmt.Fprintf(stderr, "workbook: warning: %s\n", warning.Message)
+	}
 }
 
 func writeError(output io.Writer, err error, jsonMode bool) {
