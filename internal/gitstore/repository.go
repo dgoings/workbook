@@ -27,6 +27,7 @@ type Repository struct {
 	identityVerified bool
 	configLoaded     bool
 	config           core.ProjectConfig
+	objectIDBytes    int
 	actorOnce        sync.Once
 	actor            string
 	actorErr         error
@@ -94,6 +95,42 @@ func (r *Repository) verifyIdentity(ctx context.Context) error {
 		return core.Errorf(core.CategoryNotInitialized, "repository paths do not match Git metadata")
 	}
 	r.identityVerified = true
+	return nil
+}
+
+func (r *Repository) rememberGitObjectID(objectID string) error {
+	decoded, err := decodeObjectID(objectID)
+	if err != nil {
+		return err
+	}
+
+	r.metadataMu.Lock()
+	defer r.metadataMu.Unlock()
+	if r.objectIDBytes == 0 {
+		r.objectIDBytes = len(decoded)
+		return nil
+	}
+	if len(decoded) != r.objectIDBytes {
+		return fmt.Errorf("Git returned inconsistent object ID lengths")
+	}
+	return nil
+}
+
+func (r *Repository) validateFullObjectID(objectID string) error {
+	decoded, err := decodeObjectID(objectID)
+	if err != nil {
+		return err
+	}
+
+	r.metadataMu.RLock()
+	objectIDBytes := r.objectIDBytes
+	r.metadataMu.RUnlock()
+	if objectIDBytes == 0 {
+		return fmt.Errorf("repository object ID length has not been observed")
+	}
+	if len(decoded) != objectIDBytes {
+		return fmt.Errorf("object ID is abbreviated or has the wrong full length")
+	}
 	return nil
 }
 

@@ -70,6 +70,9 @@ func (r *Repository) ReadTaskHeads(
 		if err != nil {
 			return nil, err
 		}
+		if err := r.rememberGitObjectID(snapshot.Head); err != nil {
+			return nil, core.Wrap(core.CategoryCorruptData, "Git returned an invalid task object ID", err)
+		}
 		snapshots = append(snapshots, snapshot)
 	}
 	if _, err := reader.ReadByte(); !errors.Is(err, io.EOF) {

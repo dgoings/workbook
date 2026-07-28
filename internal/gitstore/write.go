@@ -96,7 +96,7 @@ func (r *Repository) WriteValidated(
 			return core.Snapshot{}, err
 		}
 	} else {
-		if _, err := decodeObjectID(parent.Head); err != nil {
+		if err := r.validateFullObjectID(parent.Head); err != nil {
 			return core.Snapshot{}, core.Wrap(core.CategoryValidation, "parent head must be a canonical object ID", err)
 		}
 		if err := core.ValidateCheckpoint(&parent.State, pack, state, config.Key); err != nil {

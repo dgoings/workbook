@@ -146,7 +146,16 @@ func (r *Repository) listTaskRefs(ctx context.Context) ([]taskRefRecord, error) 
 	if err != nil {
 		return nil, err
 	}
-	return parseTaskRefRecords(contents, "")
+	refs, err := parseTaskRefRecords(contents, "")
+	if err != nil {
+		return nil, err
+	}
+	for _, ref := range refs {
+		if err := r.rememberGitObjectID(ref.objectID); err != nil {
+			return nil, core.Wrap(core.CategoryCorruptData, "task ref object ID is invalid", err)
+		}
+	}
+	return refs, nil
 }
 
 func (r *Repository) taskRef(ctx context.Context, taskID string) (taskRefRecord, bool, error) {
@@ -162,6 +171,9 @@ func (r *Repository) taskRef(ctx context.Context, taskID string) (taskRefRecord,
 	case 0:
 		return taskRefRecord{}, false, nil
 	case 1:
+		if err := r.rememberGitObjectID(refs[0].objectID); err != nil {
+			return taskRefRecord{}, false, core.Wrap(core.CategoryCorruptData, "task ref object ID is invalid", err)
+		}
 		return refs[0], true, nil
 	default:
 		return taskRefRecord{}, false, core.Errorf(core.CategoryCorruptData, "task ref %q has nested entries", taskRefPrefix+taskID)

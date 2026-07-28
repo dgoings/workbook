@@ -142,6 +142,49 @@ func TestWriteValidatedUsesFiveGitCommandsToAppendCanonicalTaskCommit(t *testing
 	})
 }
 
+func TestWriteValidatedRejectsAbbreviatedObservedParentBeforeGit(t *testing.T) {
+	ctx := context.Background()
+	repo, config := writeRepository(t)
+	created, createPack, _ := writeRoot(t, repo, config)
+	head, found, err := repo.InspectTaskHead(ctx, config, createPack.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatalf("InspectTaskHead() found = false, want head %q", created.Head)
+	}
+	parent, err := repo.ReadTaskHead(ctx, config, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent.Head = parent.Head[:len(parent.Head)-2]
+	pack := writeUpdatePack(2, "01K0M6B8A4FTT8C39MXXYTW7C5", "ready")
+	state := writeState(t, &parent.State, pack)
+	refBefore := gitOutput(t, repo, "rev-parse", taskRef(createPack.TaskID))
+	objectsBefore := gitOutput(t, repo, "count-objects", "-v")
+
+	var commands [][]string
+	repo.commandObserver = func(args []string) {
+		commands = append(commands, append([]string(nil), args...))
+	}
+	_, err = repo.WriteValidated(ctx, config, &parent, pack, state, "update task")
+	writeCommands := append([][]string(nil), commands...)
+	repo.commandObserver = nil
+
+	if got, want := core.CategoryOf(err), core.CategoryValidation; got != want {
+		t.Fatalf("WriteValidated() category = %q, want %q; error = %v", got, want, err)
+	}
+	if len(writeCommands) != 0 {
+		t.Fatalf("WriteValidated() commands = %#v, want none for abbreviated parent", writeCommands)
+	}
+	if got := gitOutput(t, repo, "count-objects", "-v"); got != objectsBefore {
+		t.Fatalf("WriteValidated() created objects: before %q, after %q", objectsBefore, got)
+	}
+	if got := gitOutput(t, repo, "rev-parse", taskRef(createPack.TaskID)); got != refBefore {
+		t.Fatalf("task ref after abbreviated parent = %q, want unchanged %q", got, refBefore)
+	}
+}
+
 func TestWriteValidatedRejectsStaleCASWithoutReplacingConcurrentHead(t *testing.T) {
 	ctx := context.Background()
 	repo, config := writeRepository(t)
