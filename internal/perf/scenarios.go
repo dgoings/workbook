@@ -3,12 +3,26 @@ package perf
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 )
 
-const coldCLITasksPerSample = 17
+const coldCLITasksPerFixture = 17
+
+const (
+	coldCreate = iota
+	coldDelete
+	coldDepend
+	coldFree
+	coldMove
+	coldRestore
+	coldUpdate
+	coldBurstIndependent
+	coldBurstSameTask
+)
 
 // RunSpec configures one benchmark scenario run.
 type RunSpec struct {
@@ -29,9 +43,21 @@ type coldCLITasks struct {
 	independent []string
 }
 
-// RunColdCLI builds a deterministic fixture and measures cold CLI mutations
-// against disjoint fixture tasks.
+type scenarioDependencies struct {
+	buildFixture   func(context.Context, string, FixtureSpec) (Fixture, error)
+	measureCommand func(context.Context, CommandSpec) Sample
+}
+
+// RunColdCLI builds deterministic fixtures and measures cold CLI mutations
+// against an acceptance-sized baseline isolated by scenario and sample.
 func RunColdCLI(ctx context.Context, spec RunSpec, fixtureRoot string) ([]ScenarioResult, error) {
+	return runColdCLI(ctx, spec, fixtureRoot, scenarioDependencies{
+		buildFixture:   BuildFixture,
+		measureCommand: MeasureCommand,
+	})
+}
+
+func runColdCLI(ctx context.Context, spec RunSpec, fixtureRoot string, dependencies scenarioDependencies) ([]ScenarioResult, error) {
 	if spec.Samples < 1 {
 		return nil, fmt.Errorf("samples must be positive")
 	}
@@ -41,105 +67,163 @@ func RunColdCLI(ctx context.Context, spec RunSpec, fixtureRoot string) ([]Scenar
 	if fixtureRoot == "" {
 		return nil, fmt.Errorf("fixture root is required")
 	}
-
-	fixture, err := BuildFixture(ctx, fixtureRoot, spec.Fixture)
-	if err != nil {
-		return nil, fmt.Errorf("build fixture: %w", err)
-	}
-	tasks, err := allocateColdCLITasks(fixture.TaskIDs, spec.Samples)
-	if err != nil {
-		return nil, err
+	if err := os.MkdirAll(fixtureRoot, 0o755); err != nil {
+		return nil, fmt.Errorf("create fixture root: %w", err)
 	}
 
-	results := []ScenarioResult{
-		measureColdCLI(ctx, spec, fixture.Root, "cli-create", func(sample int) []string {
-			return []string{
-				"create", fmt.Sprintf("Benchmark created task %d", sample+1),
-				"--status", "ready", "--priority", "high", "--json",
-			}
-		}),
-		measureColdCLI(ctx, spec, fixture.Root, "cli-delete", func(sample int) []string {
-			return []string{"delete", tasks[sample].delete, "--json"}
-		}),
-		measureColdCLI(ctx, spec, fixture.Root, "cli-depend", func(sample int) []string {
-			return []string{"depend", tasks[sample].dependent, tasks[sample].dependency, "--json"}
-		}),
-		measureColdCLI(ctx, spec, fixture.Root, "cli-free", func(sample int) []string {
-			return []string{"free", tasks[sample].dependent, tasks[sample].dependency, "--json"}
-		}),
-		measureColdCLI(ctx, spec, fixture.Root, "cli-move", func(sample int) []string {
-			return []string{"move", tasks[sample].move, "--before", tasks[sample].moveAnchor, "--json"}
-		}),
-		measureColdCLI(ctx, spec, fixture.Root, "cli-restore", func(sample int) []string {
-			return []string{"restore", tasks[sample].delete, "--json"}
-		}),
-		measureColdCLI(ctx, spec, fixture.Root, "cli-update", func(sample int) []string {
-			return []string{"update", tasks[sample].update, "--status", "ready", "--json"}
-		}),
-		measureColdCLIBurst(spec, "cli-burst-independent-10", func(sample int) Sample {
-			return measureIndependentBurst(ctx, spec, fixture.Root, tasks[sample].independent)
-		}),
-		measureColdCLIBurst(spec, "cli-burst-same-task-10", func(sample int) Sample {
-			return measureSameTaskBurst(ctx, spec, fixture.Root, tasks[sample].sameBurst)
-		}),
+	results := coldCLIResults(spec.Samples)
+	for sample := range spec.Samples {
+		sampleRoot := filepath.Join(fixtureRoot, fmt.Sprintf("sample-%03d", sample+1))
+
+		createFixture, _, err := buildColdCLIFixture(ctx, dependencies, spec.Fixture, sampleRoot, "create")
+		if err != nil {
+			return nil, err
+		}
+		results[coldCreate].Samples[sample] = measureColdCLICommand(ctx, dependencies, spec, createFixture.Root, []string{
+			"create", fmt.Sprintf("Benchmark created task %d", sample+1),
+			"--status", "ready", "--priority", "high", "--json",
+		})
+
+		deleteFixture, deleteTasks, err := buildColdCLIFixture(ctx, dependencies, spec.Fixture, sampleRoot, "delete-restore")
+		if err != nil {
+			return nil, err
+		}
+		results[coldDelete].Samples[sample] = measureColdCLICommand(ctx, dependencies, spec, deleteFixture.Root, []string{
+			"delete", deleteTasks.delete, "--json",
+		})
+		results[coldRestore].Samples[sample] = measureColdCLICommand(ctx, dependencies, spec, deleteFixture.Root, []string{
+			"restore", deleteTasks.delete, "--json",
+		})
+
+		dependFixture, dependTasks, err := buildColdCLIFixture(ctx, dependencies, spec.Fixture, sampleRoot, "depend-free")
+		if err != nil {
+			return nil, err
+		}
+		results[coldDepend].Samples[sample] = measureColdCLICommand(ctx, dependencies, spec, dependFixture.Root, []string{
+			"depend", dependTasks.dependent, dependTasks.dependency, "--json",
+		})
+		results[coldFree].Samples[sample] = measureColdCLICommand(ctx, dependencies, spec, dependFixture.Root, []string{
+			"free", dependTasks.dependent, dependTasks.dependency, "--json",
+		})
+
+		moveFixture, moveTasks, err := buildColdCLIFixture(ctx, dependencies, spec.Fixture, sampleRoot, "move")
+		if err != nil {
+			return nil, err
+		}
+		results[coldMove].Samples[sample] = measureColdCLICommand(ctx, dependencies, spec, moveFixture.Root, []string{
+			"move", moveTasks.move, "--before", moveTasks.moveAnchor, "--json",
+		})
+
+		updateFixture, updateTasks, err := buildColdCLIFixture(ctx, dependencies, spec.Fixture, sampleRoot, "update")
+		if err != nil {
+			return nil, err
+		}
+		results[coldUpdate].Samples[sample] = measureColdCLICommand(ctx, dependencies, spec, updateFixture.Root, []string{
+			"update", updateTasks.update, "--status", "ready", "--json",
+		})
+
+		independentFixture, independentTasks, err := buildColdCLIFixture(ctx, dependencies, spec.Fixture, sampleRoot, "burst-independent")
+		if err != nil {
+			return nil, err
+		}
+		results[coldBurstIndependent].Samples[sample] = measureIndependentBurst(
+			ctx, dependencies, spec, independentFixture.Root, independentTasks.independent,
+		)
+
+		sameFixture, sameTasks, err := buildColdCLIFixture(ctx, dependencies, spec.Fixture, sampleRoot, "burst-same-task")
+		if err != nil {
+			return nil, err
+		}
+		results[coldBurstSameTask].Samples[sample] = measureSameTaskBurst(
+			ctx, dependencies, spec, sameFixture.Root, sameTasks.sameBurst,
+		)
+	}
+	for index := range results {
+		results[index].Summary = Summarize(results[index].Samples)
 	}
 	return results, nil
 }
 
-func allocateColdCLITasks(taskIDs []string, samples int) ([]coldCLITasks, error) {
-	required := samples * coldCLITasksPerSample
-	if len(taskIDs) < required {
-		return nil, fmt.Errorf("fixture has %d tasks, need %d for %d cold CLI samples", len(taskIDs), required, samples)
+func coldCLIResults(samples int) []ScenarioResult {
+	names := []string{
+		"cli-create",
+		"cli-delete",
+		"cli-depend",
+		"cli-free",
+		"cli-move",
+		"cli-restore",
+		"cli-update",
+		"cli-burst-independent-10",
+		"cli-burst-same-task-10",
 	}
-
-	allocations := make([]coldCLITasks, samples)
-	next := 0
-	for sample := range samples {
-		allocation := &allocations[sample]
-		allocation.update = taskIDs[next]
-		next++
-		allocation.delete = taskIDs[next]
-		next++
-		allocation.moveAnchor = taskIDs[next]
-		next++
-		allocation.move = taskIDs[next]
-		next++
-		allocation.dependent = taskIDs[next]
-		next++
-		allocation.dependency = taskIDs[next]
-		next++
-		allocation.sameBurst = taskIDs[next]
-		next++
-		allocation.independent = append([]string(nil), taskIDs[next:next+10]...)
-		next += 10
+	results := make([]ScenarioResult, len(names))
+	for index, name := range names {
+		results[index] = ScenarioResult{
+			Name:    name,
+			Surface: "cold-cli",
+			Samples: make([]Sample, samples),
+		}
 	}
-	return allocations, nil
+	return results
 }
 
-func measureColdCLI(ctx context.Context, spec RunSpec, directory, name string, args func(int) []string) ScenarioResult {
-	result := ScenarioResult{Name: name, Surface: "cold-cli", Samples: make([]Sample, spec.Samples)}
-	for sample := range spec.Samples {
-		result.Samples[sample] = MeasureCommand(ctx, CommandSpec{
-			Binary:    spec.WorkbookBinary,
-			Args:      args(sample),
-			Directory: directory,
-			Timeout:   spec.CommandTimeout,
-		})
+func buildColdCLIFixture(
+	ctx context.Context,
+	dependencies scenarioDependencies,
+	spec FixtureSpec,
+	sampleRoot string,
+	group string,
+) (Fixture, coldCLITasks, error) {
+	root := filepath.Join(sampleRoot, group)
+	fixture, err := dependencies.buildFixture(ctx, root, spec)
+	if err != nil {
+		return Fixture{}, coldCLITasks{}, fmt.Errorf("build %s fixture: %w", group, err)
 	}
-	result.Summary = Summarize(result.Samples)
-	return result
+	tasks, err := allocateColdCLITasks(fixture.TaskIDs)
+	if err != nil {
+		return Fixture{}, coldCLITasks{}, fmt.Errorf("allocate %s fixture: %w", group, err)
+	}
+	return fixture, tasks, nil
 }
 
-func measureColdCLIBurst(spec RunSpec, name string, measure func(int) Sample) ScenarioResult {
-	result := ScenarioResult{Name: name, Surface: "cold-cli", Samples: make([]Sample, spec.Samples)}
-	for sample := range spec.Samples {
-		result.Samples[sample] = measure(sample)
+func allocateColdCLITasks(taskIDs []string) (coldCLITasks, error) {
+	if len(taskIDs) < coldCLITasksPerFixture {
+		return coldCLITasks{}, fmt.Errorf("fixture has %d tasks, need %d for cold CLI scenarios", len(taskIDs), coldCLITasksPerFixture)
 	}
-	result.Summary = Summarize(result.Samples)
-	return result
+	return coldCLITasks{
+		update:      taskIDs[0],
+		delete:      taskIDs[1],
+		moveAnchor:  taskIDs[2],
+		move:        taskIDs[3],
+		dependent:   taskIDs[4],
+		dependency:  taskIDs[5],
+		sameBurst:   taskIDs[6],
+		independent: append([]string(nil), taskIDs[7:17]...),
+	}, nil
 }
 
-func measureSameTaskBurst(ctx context.Context, spec RunSpec, directory, taskID string) Sample {
+func measureColdCLICommand(
+	ctx context.Context,
+	dependencies scenarioDependencies,
+	spec RunSpec,
+	directory string,
+	args []string,
+) Sample {
+	return dependencies.measureCommand(ctx, CommandSpec{
+		Binary:    spec.WorkbookBinary,
+		Args:      args,
+		Directory: directory,
+		Timeout:   spec.CommandTimeout,
+	})
+}
+
+func measureSameTaskBurst(
+	ctx context.Context,
+	dependencies scenarioDependencies,
+	spec RunSpec,
+	directory string,
+	taskID string,
+) Sample {
 	startedAt := time.Now()
 	members := make([]Sample, 10)
 	for command := range members {
@@ -147,17 +231,20 @@ func measureSameTaskBurst(ctx context.Context, spec RunSpec, directory, taskID s
 		if command%2 == 1 {
 			status = "in-progress"
 		}
-		members[command] = MeasureCommand(ctx, CommandSpec{
-			Binary:    spec.WorkbookBinary,
-			Args:      []string{"update", taskID, "--status", status, "--json"},
-			Directory: directory,
-			Timeout:   spec.CommandTimeout,
+		members[command] = measureColdCLICommand(ctx, dependencies, spec, directory, []string{
+			"update", taskID, "--status", status, "--json",
 		})
 	}
 	return aggregateBurst(time.Since(startedAt), members)
 }
 
-func measureIndependentBurst(ctx context.Context, spec RunSpec, directory string, taskIDs []string) Sample {
+func measureIndependentBurst(
+	ctx context.Context,
+	dependencies scenarioDependencies,
+	spec RunSpec,
+	directory string,
+	taskIDs []string,
+) Sample {
 	start := make(chan struct{})
 	var ready sync.WaitGroup
 	var done sync.WaitGroup
@@ -169,11 +256,8 @@ func measureIndependentBurst(ctx context.Context, spec RunSpec, directory string
 			defer done.Done()
 			ready.Done()
 			<-start
-			members[index] = MeasureCommand(ctx, CommandSpec{
-				Binary:    spec.WorkbookBinary,
-				Args:      []string{"update", taskID, "--status", "ready", "--json"},
-				Directory: directory,
-				Timeout:   spec.CommandTimeout,
+			members[index] = measureColdCLICommand(ctx, dependencies, spec, directory, []string{
+				"update", taskID, "--status", "ready", "--json",
 			})
 		}()
 	}
