@@ -17,6 +17,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/dgoings/workbook/internal/gitstore"
 )
 
 func TestRunColdCLIIsolatesScenarioSamplesAndRunsTenCommandBursts(t *testing.T) {
@@ -720,6 +722,86 @@ func TestWarmSameTaskBurstIssuesTenSequentialAlternatingRequests(t *testing.T) {
 		if want := alternatingStatus(index); request.status != want {
 			t.Errorf("request %d status = %q, want %q", index+1, request.status, want)
 		}
+	}
+}
+
+func TestWarmSameTaskBurstStartsWithLiteralStatusSafeForGeneratedFixtures(t *testing.T) {
+	tests := []struct {
+		name              string
+		operationsPerTask int
+		wantInitialStatus string
+	}{
+		{name: "two operations remain backlog", operationsPerTask: 2, wantInitialStatus: "backlog"},
+		{name: "status operation sets in-progress", operationsPerTask: 3, wantInitialStatus: "in-progress"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture, err := BuildFixture(context.Background(), filepath.Join(t.TempDir(), "fixture"), FixtureSpec{
+				ActiveTasks:       10,
+				OperationsPerTask: test.operationsPerTask,
+				ObjectFormat:      "sha1",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			repository, err := gitstore.Open(context.Background(), fixture.Root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			taskID := fixture.TaskIDs[1]
+			snapshot, err := repository.Get(context.Background(), fixture.Config, taskID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			initialStatus := string(snapshot.State.Task.Status)
+			if initialStatus != test.wantInitialStatus {
+				t.Fatalf("generated fixture status = %q, want literal %q", initialStatus, test.wantInitialStatus)
+			}
+
+			tracePath := emptyTraceFile(t)
+			var mutex sync.Mutex
+			var firstRequestedStatus string
+			httpServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				recorded, err := readRecordedStatusRequest(request)
+				if err != nil {
+					http.Error(writer, err.Error(), http.StatusBadRequest)
+					return
+				}
+				mutex.Lock()
+				if firstRequestedStatus == "" {
+					firstRequestedStatus = recorded.status
+				}
+				mutex.Unlock()
+				if err := appendTraceStarts(tracePath, 1); err != nil {
+					http.Error(writer, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				writeRecordedStatusResponse(writer, recorded)
+			}))
+			defer httpServer.Close()
+
+			server := warmHTTPServer{
+				baseURL:   httpServer.URL,
+				tracePath: tracePath,
+				client:    httpServer.Client(),
+			}
+			sample, err := server.measureSameTaskBurst(context.Background(), taskID, 0, time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !sampleSucceeded(sample) {
+				t.Fatalf("same-task burst sample = %#v, want success", sample)
+			}
+
+			mutex.Lock()
+			defer mutex.Unlock()
+			if firstRequestedStatus != "ready" {
+				t.Fatalf("first same-task status = %q, want literal safe status %q", firstRequestedStatus, "ready")
+			}
+			if firstRequestedStatus == initialStatus {
+				t.Fatalf("first same-task status %q matches generated fixture status", firstRequestedStatus)
+			}
+		})
 	}
 }
 
