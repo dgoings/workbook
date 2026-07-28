@@ -157,12 +157,18 @@ that projected task from its current Git tip. Operations that need cross-task
 information, such as prefix resolution, task ordering, or dependency checks,
 refresh the relevant global projection first.
 
-After planning, Workbook writes the immutable operation and complete current
-state as Git objects, then synchronously compare-and-swaps the canonical
-`refs/workbook/tasks/<task-id>` ref. The CLI or HTTP mutation is successful only
-after that Git ref advances. Workbook then conditionally advances SQLite from
-the parent it observed to the new Git head, so an older request cannot overwrite
-a newer projection row.
+After planning, a state-changing mutation writes the immutable operation and
+complete current state as Git objects, then synchronously compare-and-swaps the
+canonical `refs/workbook/tasks/<task-id>` ref. The CLI or HTTP response reports
+that state change as successful only after the Git ref advances. Workbook then
+conditionally advances SQLite from the parent it observed to the new Git head,
+so an older request cannot overwrite a newer projection row.
+
+Idempotent no-ops can also return successfully without advancing Git or SQLite:
+for example, removing a dependency that is already absent, adding a dependency
+that is already present, or moving a task when its calculated rank is unchanged.
+These responses return the already-observed task state rather than recording a
+new operation.
 
 SQLite remains a disposable read projection, not a second durability boundary.
 If a successful mutation includes a `projection-update-failed` warning, the Git
