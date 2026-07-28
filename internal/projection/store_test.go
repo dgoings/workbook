@@ -349,6 +349,78 @@ func TestStoreRefreshBatchesChangedHeads(t *testing.T) {
 	}
 }
 
+func TestStoreRefreshPreservesConcurrentCreateAdvancedAfterGitEnumeration(t *testing.T) {
+	ctx := context.Background()
+	repository, config := initializeWorkbook(t, testrepo.New(t))
+	store, err := Open(ctx, repository, config)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if _, err := store.Rebuild(ctx); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+
+	source := newGitListBarrierSource(repository)
+	t.Cleanup(source.release)
+	store.source = source
+	refreshDone := make(chan error, 1)
+	go func() {
+		refreshDone <- store.Refresh(ctx)
+	}()
+	<-source.listed
+
+	created := createTask(t, repository, config, "Concurrent create")
+	written, err := repository.Get(ctx, config, created.ID)
+	if err != nil {
+		t.Fatalf("Get(canonical create) error = %v", err)
+	}
+	applied, err := store.Advance(ctx, config, "", written)
+	if err != nil || !applied {
+		t.Fatalf("Advance(concurrent create) = %t, %v, want true, nil", applied, err)
+	}
+	source.release()
+
+	if err := <-refreshDone; err != nil {
+		t.Fatalf("Refresh() error = %v", err)
+	}
+	cached, found, err := store.querySnapshot(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("querySnapshot() error = %v", err)
+	}
+	if !found || cached.Head != written.Head || cached.State.Task.Title != "Concurrent create" {
+		t.Fatalf("cached snapshot = %#v, found %t, want concurrently created head %q", cached, found, written.Head)
+	}
+}
+
+func TestStoreRefreshRejectsDisappearedCanonicalRefAndPreservesCache(t *testing.T) {
+	ctx := context.Background()
+	repository, config := initializeWorkbook(t, testrepo.New(t))
+	created := createTask(t, repository, config, "Disappeared ref")
+	store, err := Open(ctx, repository, config)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if _, err := store.Rebuild(ctx); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+
+	ref := "refs/workbook/tasks/" + created.ID
+	if _, err := repository.Git(ctx, nil, "update-ref", "-d", ref, created.Head); err != nil {
+		t.Fatalf("delete canonical task ref error = %v", err)
+	}
+	err = store.Refresh(ctx)
+	if got := core.CategoryOf(err); got != core.CategoryCorruptData {
+		t.Fatalf("Refresh(disappeared ref) category = %q, want corrupt-data; error = %v", got, err)
+	}
+	cached, found, queryErr := store.querySnapshot(ctx, created.ID)
+	if queryErr != nil {
+		t.Fatalf("querySnapshot() error = %v", queryErr)
+	}
+	if !found || cached.Head != created.Head || cached.State.Task.Title != "Disappeared ref" {
+		t.Fatalf("cached snapshot = %#v, found %t, want preserved head %q", cached, found, created.Head)
+	}
+}
+
 func TestStoreRefreshRejectsChangedHistoryGeneration(t *testing.T) {
 	ctx := context.Background()
 	config := testConfig()
@@ -1175,6 +1247,14 @@ type exactRefreshRaceSource struct {
 	releaseChangedRead chan struct{}
 }
 
+type gitListBarrierSource struct {
+	repository  *gitstore.Repository
+	listed      chan struct{}
+	releaseList chan struct{}
+	listOnce    sync.Once
+	releaseOnce sync.Once
+}
+
 type staticHeadSource struct {
 	heads     []gitstore.TaskHead
 	snapshots map[string]core.Snapshot
@@ -1226,6 +1306,41 @@ func newExactRefreshRaceSource(changed, newer core.Snapshot) *exactRefreshRaceSo
 		changedReadStarted: make(chan struct{}),
 		releaseChangedRead: make(chan struct{}),
 	}
+}
+
+func newGitListBarrierSource(repository *gitstore.Repository) *gitListBarrierSource {
+	return &gitListBarrierSource{
+		repository:  repository,
+		listed:      make(chan struct{}),
+		releaseList: make(chan struct{}),
+	}
+}
+
+func (s *gitListBarrierSource) release() {
+	s.releaseOnce.Do(func() {
+		close(s.releaseList)
+	})
+}
+
+func (s *gitListBarrierSource) ListTaskHeads(ctx context.Context, config core.ProjectConfig) ([]gitstore.TaskHead, error) {
+	heads, err := s.repository.ListTaskHeads(ctx, config)
+	s.listOnce.Do(func() {
+		close(s.listed)
+		<-s.releaseList
+	})
+	return heads, err
+}
+
+func (s *gitListBarrierSource) InspectTaskHead(ctx context.Context, config core.ProjectConfig, taskID string) (gitstore.TaskHead, bool, error) {
+	return s.repository.InspectTaskHead(ctx, config, taskID)
+}
+
+func (s *gitListBarrierSource) ReadTaskHeads(ctx context.Context, config core.ProjectConfig, heads []gitstore.TaskHead) ([]core.Snapshot, error) {
+	return s.repository.ReadTaskHeads(ctx, config, heads)
+}
+
+func (s *gitListBarrierSource) ValidateTaskHeadAdvances(ctx context.Context, config core.ProjectConfig, advances []gitstore.HeadAdvance) error {
+	return s.repository.ValidateTaskHeadAdvances(ctx, config, advances)
 }
 
 func installSnapshotCollectionBlocker(t *testing.T, store *Store) *snapshotCollectionBlocker {

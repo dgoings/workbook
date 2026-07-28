@@ -110,11 +110,15 @@ func (s *Store) Refresh(ctx context.Context) error {
 
 func (s *Store) refreshActive(ctx context.Context) error {
 	for attempt := 0; attempt < 2; attempt++ {
+		cached, err := s.cachedTaskHeads(ctx)
+		if err != nil {
+			return err
+		}
 		heads, err := s.source.ListTaskHeads(ctx, s.config)
 		if err != nil {
 			return err
 		}
-		err = s.refreshChangedHeads(ctx, heads)
+		err = s.refreshChangedHeads(ctx, cached, heads)
 		if !errors.Is(err, errStaleProjectionRefresh) {
 			return err
 		}
@@ -393,11 +397,7 @@ func (s *Store) getExactActive(ctx context.Context, taskID string) (core.Snapsho
 	return core.Snapshot{}, cacheError("refresh exact projected task after a concurrent update", errStaleProjectionRefresh)
 }
 
-func (s *Store) refreshChangedHeads(ctx context.Context, heads []gitstore.TaskHead) error {
-	cached, err := s.cachedTaskHeads(ctx)
-	if err != nil {
-		return err
-	}
+func (s *Store) refreshChangedHeads(ctx context.Context, cached map[string]cachedTaskHead, heads []gitstore.TaskHead) error {
 	expectedHeads := make(map[string]string, len(cached))
 	for taskID, previous := range cached {
 		expectedHeads[taskID] = previous.head
@@ -415,13 +415,17 @@ func (s *Store) refreshChangedHeads(ctx context.Context, heads []gitstore.TaskHe
 			advances = append(advances, projectedHeadAdvance(head.TaskID, previous, head))
 		}
 	}
-	removed := make([]string, 0)
+	missing := make([]string, 0)
 	for taskID := range cached {
 		if _, found := current[taskID]; !found {
-			removed = append(removed, taskID)
+			missing = append(missing, taskID)
 		}
 	}
-	if len(changed) == 0 && len(removed) == 0 {
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return core.Errorf(core.CategoryCorruptData, "task %q ref disappeared after it was projected", missing[0])
+	}
+	if len(changed) == 0 {
 		return nil
 	}
 
@@ -430,27 +434,24 @@ func (s *Store) refreshChangedHeads(ctx context.Context, heads []gitstore.TaskHe
 			return err
 		}
 	}
-	var snapshots []core.Snapshot
-	if len(changed) > 0 {
-		snapshots, err = s.source.ReadTaskHeads(ctx, s.config, changed)
-		if err != nil {
+	snapshots, err := s.source.ReadTaskHeads(ctx, s.config, changed)
+	if err != nil {
+		return err
+	}
+	if len(snapshots) != len(changed) {
+		return core.Errorf(core.CategoryCorruptData, "task head batch returned %d snapshots, want %d", len(snapshots), len(changed))
+	}
+	for i, snapshot := range snapshots {
+		head := changed[i]
+		if err := validateReadSnapshot(head, snapshot); err != nil {
 			return err
 		}
-		if len(snapshots) != len(changed) {
-			return core.Errorf(core.CategoryCorruptData, "task head batch returned %d snapshots, want %d", len(snapshots), len(changed))
-		}
-		for i, snapshot := range snapshots {
-			head := changed[i]
-			if err := validateReadSnapshot(head, snapshot); err != nil {
-				return err
-			}
-			if previous, found := cached[head.TaskID]; found &&
-				snapshot.State.History.Generation != previous.historyGeneration {
-				return historyGenerationChanged(head.TaskID)
-			}
+		if previous, found := cached[head.TaskID]; found &&
+			snapshot.State.History.Generation != previous.historyGeneration {
+			return historyGenerationChanged(head.TaskID)
 		}
 	}
-	return s.applyChanges(ctx, expectedHeads, snapshots, removed)
+	return s.applyChanges(ctx, expectedHeads, snapshots)
 }
 
 type cachedTaskHead struct {
@@ -617,21 +618,12 @@ func replaceSnapshots(ctx context.Context, db *sql.DB, snapshots []core.Snapshot
 	return nil
 }
 
-func (s *Store) applyChanges(ctx context.Context, expectedHeads map[string]string, snapshots []core.Snapshot, removed []string) error {
+func (s *Store) applyChanges(ctx context.Context, expectedHeads map[string]string, snapshots []core.Snapshot) error {
 	transaction, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return s.databaseError("begin projection refresh", err)
 	}
 	defer transaction.Rollback()
-	for _, taskID := range removed {
-		matches, err := cachedHeadMatches(ctx, transaction, taskID, expectedHeads[taskID])
-		if err != nil {
-			return err
-		}
-		if !matches {
-			return errStaleProjectionRefresh
-		}
-	}
 	for _, snapshot := range snapshots {
 		matches, err := cachedHeadMatches(ctx, transaction, snapshot.State.TaskID, expectedHeads[snapshot.State.TaskID])
 		if err != nil {
@@ -639,11 +631,6 @@ func (s *Store) applyChanges(ctx context.Context, expectedHeads map[string]strin
 		}
 		if !matches {
 			return errStaleProjectionRefresh
-		}
-	}
-	for _, taskID := range removed {
-		if err := deleteTask(ctx, transaction, taskID); err != nil {
-			return err
 		}
 	}
 	for _, snapshot := range snapshots {

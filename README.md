@@ -305,9 +305,11 @@ coordination metadata shared by every worktree attached to the same common Git
 directory; it does not replace the tracked configuration or travel with a clone.
 
 The current POC permits one Workbook project per common Git repository, including
-all linked worktrees. Every configuration load compares the portable configuration
-with the common guard, and Workbook rejects repository use when the tracked and
-common identities do not match. For repositories initialized before the guard was
+all linked worktrees. The first successful configuration load for each opened
+repository compares the portable configuration with the common guard, then caches
+that validated configuration for the repository session. Reopening the repository
+observes later tracked or guard changes and rejects use when the tracked and common
+identities do not match. For repositories initialized before the guard was
 introduced, the first configuration load or repeated `workbook init` atomically
 backfills the missing guard from `.workbook/config.json`. Concurrent first users
 must either publish that same identity or observe and validate the identity another
