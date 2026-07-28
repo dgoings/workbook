@@ -265,6 +265,10 @@ Authentication, hosted deployment, browser deletion, draft persistence, and
 broader collaboration remain future work. A request using the wrong method for
 a known route receives `405` with the route's allowed method.
 
+Development performance is measured with the reproducible, bounded harness
+documented in [`docs/performance/README.md`](docs/performance/README.md);
+baseline budgets are evidence and reference targets, not achieved guarantees.
+
 ### Project identity across worktrees
 
 `.workbook/config.json` remains the portable tracked configuration that carries a
