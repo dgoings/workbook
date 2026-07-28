@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/dgoings/workbook/internal/perf"
@@ -21,6 +22,7 @@ import (
 const (
 	invocationExitCode = 2
 	failureExitCode    = 1
+	commandWaitDelay   = 100 * time.Millisecond
 )
 
 type options struct {
@@ -101,6 +103,15 @@ func validateOptions(flags *flag.FlagSet, options *options) error {
 	if options.workbookBinary == "" {
 		return fmt.Errorf("--workbook is required")
 	}
+	workbookPath, err := exec.LookPath(options.workbookBinary)
+	if err != nil {
+		return fmt.Errorf("resolve --workbook: %w", err)
+	}
+	workbookPath, err = filepath.Abs(workbookPath)
+	if err != nil {
+		return fmt.Errorf("resolve --workbook: %w", err)
+	}
+	options.workbookBinary = workbookPath
 	if options.tasks < 10 {
 		return fmt.Errorf("--tasks must be at least 10")
 	}
@@ -125,6 +136,9 @@ func validateOptions(flags *flag.FlagSet, options *options) error {
 	if options.phase != "baseline" && options.phase != "acceptance" {
 		return fmt.Errorf("--phase must be baseline or acceptance")
 	}
+	if options.phase == "acceptance" && (options.tasks < 500 || options.operations < 20) {
+		return fmt.Errorf("acceptance requires at least 500 tasks and 20 operations per task")
+	}
 
 	jsonPath, err := filepath.Abs(options.outputJSON)
 	if err != nil {
@@ -143,7 +157,7 @@ func validateOptions(flags *flag.FlagSet, options *options) error {
 }
 
 func runBenchmark(ctx context.Context, options options) (perf.Report, error) {
-	environment, err := benchmarkEnvironment(ctx, options.workbookBinary)
+	environment, err := benchmarkEnvironment(ctx, options.workbookBinary, options.timeout)
 	if err != nil {
 		return perf.Report{}, err
 	}
@@ -175,7 +189,9 @@ func runBenchmark(ctx context.Context, options options) (perf.Report, error) {
 		return perf.Report{}, fmt.Errorf("run warm HTTP scenarios: %w", err)
 	}
 
-	repositoryFixture, err := perf.BuildFixture(ctx, filepath.Join(fixtureRoot, "repository"), fixtureSpec)
+	fixtureContext, cancelFixture := context.WithTimeout(ctx, options.timeout)
+	repositoryFixture, err := perf.BuildFixture(fixtureContext, filepath.Join(fixtureRoot, "repository"), fixtureSpec)
+	cancelFixture()
 	if err != nil {
 		return perf.Report{}, fmt.Errorf("build repository fixture: %w", err)
 	}
@@ -210,16 +226,16 @@ func runBenchmark(ctx context.Context, options options) (perf.Report, error) {
 	}, nil
 }
 
-func benchmarkEnvironment(ctx context.Context, workbookBinary string) (perf.Environment, error) {
-	gitVersion, err := commandOutput(ctx, "git", "--version")
+func benchmarkEnvironment(ctx context.Context, workbookBinary string, commandTimeout time.Duration) (perf.Environment, error) {
+	gitVersion, err := commandOutput(ctx, commandTimeout, "git", "--version")
 	if err != nil {
 		return perf.Environment{}, fmt.Errorf("read Git version: %w", err)
 	}
-	goVersion, err := commandOutput(ctx, "go", "version")
+	goVersion, err := commandOutput(ctx, commandTimeout, "go", "version")
 	if err != nil {
 		return perf.Environment{}, fmt.Errorf("read Go version: %w", err)
 	}
-	versionOutput, err := commandOutput(ctx, workbookBinary, "version", "--json")
+	versionOutput, err := commandOutput(ctx, commandTimeout, workbookBinary, "version", "--json")
 	if err != nil {
 		return perf.Environment{}, fmt.Errorf("read Workbook version: %w", err)
 	}
@@ -241,9 +257,26 @@ func benchmarkEnvironment(ctx context.Context, workbookBinary string) (perf.Envi
 	}, nil
 }
 
-func commandOutput(ctx context.Context, binary string, args ...string) (string, error) {
-	command := exec.CommandContext(ctx, binary, args...)
+func commandOutput(ctx context.Context, timeout time.Duration, binary string, args ...string) (string, error) {
+	commandContext, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	command := exec.CommandContext(commandContext, binary, args...)
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	command.Cancel = func() error {
+		if command.Process == nil {
+			return nil
+		}
+		err := syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
+		if errors.Is(err, syscall.ESRCH) {
+			return nil
+		}
+		return err
+	}
+	command.WaitDelay = commandWaitDelay
 	output, err := command.CombinedOutput()
+	if commandContext.Err() == context.DeadlineExceeded {
+		return "", fmt.Errorf("%s %s timed out after %s", binary, strings.Join(args, " "), timeout)
+	}
 	if err != nil {
 		return "", fmt.Errorf("%s %s: %w: %s", binary, strings.Join(args, " "), err, strings.TrimSpace(string(output)))
 	}

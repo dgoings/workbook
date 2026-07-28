@@ -518,6 +518,78 @@ func TestMeasureRepository(t *testing.T) {
 	}
 }
 
+func TestMeasureProjectionScenariosRetainMeasuredProductMisses(t *testing.T) {
+	repository := t.TempDir()
+	samples := []Sample{
+		{ExitCode: -1, TimedOut: true, Error: "rebuild timed out"},
+		{ExitCode: 2, Error: "list failed"},
+		{ExitCode: 0},
+		{ExitCode: 3, Error: "changed list failed"},
+	}
+	wantArgs := [][]string{
+		{"rebuild", "--json"},
+		{"list", "--json"},
+		{"update", "WB-task", "--status", "ready", "--json"},
+		{"list", "--json"},
+	}
+	call := 0
+	results, err := measureProjectionScenarios(
+		context.Background(),
+		"workbook",
+		repository,
+		"WB-task",
+		time.Second,
+		func(_ context.Context, spec CommandSpec) Sample {
+			if call >= len(wantArgs) {
+				t.Fatalf("unexpected command %d: %#v", call+1, spec)
+			}
+			if spec.Binary != "workbook" || spec.Directory != repository || spec.Timeout != time.Second ||
+				!reflect.DeepEqual(spec.Args, wantArgs[call]) {
+				t.Fatalf("command %d = %#v, want args %#v in %q with 1s timeout", call+1, spec, wantArgs[call], repository)
+			}
+			sample := samples[call]
+			call++
+			return sample
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call != 4 {
+		t.Fatalf("measurement calls = %d, want 4", call)
+	}
+	if got, want := len(results), 3; got != want {
+		t.Fatalf("projection scenarios = %d, want %d", got, want)
+	}
+	wantSamples := []Sample{samples[0], samples[1], samples[3]}
+	for index := range results {
+		if !reflect.DeepEqual(results[index].Samples, []Sample{wantSamples[index]}) {
+			t.Errorf("%s samples = %#v, want retained sample %#v", results[index].Name, results[index].Samples, wantSamples[index])
+		}
+	}
+}
+
+func TestMeasureProjectionScenariosRejectSetupMutationFailure(t *testing.T) {
+	call := 0
+	_, err := measureProjectionScenarios(
+		context.Background(),
+		"workbook",
+		t.TempDir(),
+		"WB-task",
+		time.Second,
+		func(_ context.Context, _ CommandSpec) Sample {
+			call++
+			if call == 3 {
+				return Sample{ExitCode: 2, Error: "setup update failed"}
+			}
+			return Sample{ExitCode: 0}
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "prepare projection-refresh-one-changed") {
+		t.Fatalf("setup mutation error = %v, want harness failure", err)
+	}
+}
+
 func TestMeasureRepositoryRunsUnchangedSyncOnlyAfterInitialCompletes(t *testing.T) {
 	t.Run("initial timeout", func(t *testing.T) {
 		calls := 0
@@ -553,6 +625,37 @@ func TestMeasureRepositoryRunsUnchangedSyncOnlyAfterInitialCompletes(t *testing.
 		unavailable := results[1].Samples[0]
 		if unavailable.ExitCode != -1 || unavailable.TimedOut ||
 			unavailable.Error != "not measured: initial sync timed out before remote completion" {
+			t.Fatalf("unchanged sync result = %#v, want explicit unavailability", unavailable)
+		}
+	})
+
+	t.Run("initial product failure", func(t *testing.T) {
+		calls := 0
+		repository := t.TempDir()
+		results, err := measureLocalBareSync(
+			context.Background(),
+			"workbook",
+			repository,
+			time.Second,
+			func(_ context.Context, spec CommandSpec) Sample {
+				calls++
+				assertSyncCommandSpec(t, spec, repository)
+				return Sample{ExitCode: 2, Error: "remote rejected update"}
+			},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if calls != 1 {
+			t.Fatalf("sync calls = %d, want 1 after initial product failure", calls)
+		}
+		failed := results[0].Samples[0]
+		if failed.ExitCode != 2 || failed.TimedOut || failed.Error != "remote rejected update" {
+			t.Fatalf("initial product failure = %#v, want retained nonzero sample", failed)
+		}
+		unavailable := results[1].Samples[0]
+		if unavailable.ExitCode != -1 || unavailable.TimedOut ||
+			unavailable.Error != "not measured: initial sync failed before remote completion" {
 			t.Fatalf("unchanged sync result = %#v, want explicit unavailability", unavailable)
 		}
 	})
@@ -603,6 +706,25 @@ func TestMeasureRepositoryParsesObjectCountsAndConvertsKiBToBytes(t *testing.T) 
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("repository metrics = %#v, want %#v", got, want)
+	}
+}
+
+func TestRunRepositoryGitBoundsCommandAndDescendants(t *testing.T) {
+	binaryDirectory := t.TempDir()
+	gitPath := filepath.Join(binaryDirectory, "git")
+	if err := os.WriteFile(gitPath, []byte("#!/bin/sh\n/bin/sleep 5\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binaryDirectory)
+
+	startedAt := time.Now()
+	_, _, err := runRepositoryGit(context.Background(), 20*time.Millisecond, "", "--version")
+	elapsed := time.Since(startedAt)
+	if err == nil || !strings.Contains(err.Error(), "timed out after 20ms") {
+		t.Fatalf("runRepositoryGit error = %v, want bounded timeout", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("runRepositoryGit returned after %s, want bounded descendant termination", elapsed)
 	}
 }
 

@@ -9,13 +9,25 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/dgoings/workbook/internal/perf"
 )
 
-func TestRunWritesCompletePerformanceReport(t *testing.T) {
-	workbookBinary := buildWorkbookBinary(t)
+func TestRunResolvesRelativeWorkbookBinaryAndWritesCompletePerformanceReport(t *testing.T) {
+	binaryDirectory, err := os.MkdirTemp(".", ".workbook-bench-relative-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(binaryDirectory) })
+	workbookBinary, err := filepath.Abs(filepath.Join(binaryDirectory, "workbook"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	buildWorkbookBinaryAt(t, workbookBinary)
+	workbookArgument := filepath.Join(".", filepath.Base(binaryDirectory), "workbook")
 	outputRoot := t.TempDir()
 	jsonPath := filepath.Join(outputRoot, "report.json")
 	markdownPath := filepath.Join(outputRoot, "report.md")
@@ -23,7 +35,7 @@ func TestRunWritesCompletePerformanceReport(t *testing.T) {
 	var stderr bytes.Buffer
 
 	exitCode := run(context.Background(), []string{
-		"--workbook", workbookBinary,
+		"--workbook", workbookArgument,
 		"--tasks", "10",
 		"--operations", "4",
 		"--samples", "1",
@@ -92,6 +104,7 @@ func TestRunWritesCompletePerformanceReport(t *testing.T) {
 }
 
 func TestRunRejectsInvalidInvocation(t *testing.T) {
+	workbookBinary := buildWorkbookBinary(t)
 	tests := []struct {
 		name   string
 		change func([]string) []string
@@ -144,7 +157,7 @@ func TestRunRejectsInvalidInvocation(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			outputRoot := t.TempDir()
 			args := []string{
-				"--workbook", filepath.Join(outputRoot, "workbook"),
+				"--workbook", workbookBinary,
 				"--tasks", "10",
 				"--operations", "4",
 				"--samples", "1",
@@ -167,16 +180,116 @@ func TestRunRejectsInvalidInvocation(t *testing.T) {
 	}
 }
 
+func TestValidateOptionsEnforcesAcceptanceMinimum(t *testing.T) {
+	workbookBinary := buildWorkbookBinary(t)
+	rejected := []struct {
+		name       string
+		tasks      string
+		operations string
+	}{
+		{name: "diagnostic task count", tasks: "499", operations: "20"},
+		{name: "short history", tasks: "500", operations: "19"},
+	}
+	for _, test := range rejected {
+		t.Run(test.name, func(t *testing.T) {
+			outputRoot := t.TempDir()
+			var stderr bytes.Buffer
+			flags, options := newFlagSet(&stderr)
+			err := flags.Parse([]string{
+				"--workbook", workbookBinary,
+				"--tasks", test.tasks,
+				"--operations", test.operations,
+				"--phase", "acceptance",
+				"--output-json", filepath.Join(outputRoot, "report.json"),
+				"--output-markdown", filepath.Join(outputRoot, "report.md"),
+			})
+			if err != nil {
+				t.Fatalf("parse flags: %v", err)
+			}
+			err = validateOptions(flags, options)
+			if err == nil || !strings.Contains(err.Error(), "acceptance requires at least 500 tasks and 20 operations per task") {
+				t.Fatalf("validateOptions error = %v, want acceptance minimum guidance", err)
+			}
+		})
+	}
+
+	t.Run("larger future workload", func(t *testing.T) {
+		outputRoot := t.TempDir()
+		var stderr bytes.Buffer
+		flags, options := newFlagSet(&stderr)
+		err := flags.Parse([]string{
+			"--workbook", workbookBinary,
+			"--tasks", "501",
+			"--operations", "21",
+			"--phase", "acceptance",
+			"--output-json", filepath.Join(outputRoot, "report.json"),
+			"--output-markdown", filepath.Join(outputRoot, "report.md"),
+		})
+		if err != nil {
+			t.Fatalf("parse flags: %v", err)
+		}
+		if err := validateOptions(flags, options); err != nil {
+			t.Fatalf("validateOptions rejected larger acceptance workload: %v", err)
+		}
+	})
+}
+
+func TestBenchmarkEnvironmentBoundsEveryMetadataCommand(t *testing.T) {
+	tests := []string{"git", "go", "workbook"}
+	for _, hungCommand := range tests {
+		t.Run(hungCommand, func(t *testing.T) {
+			binaryDirectory := t.TempDir()
+			gitPath := filepath.Join(binaryDirectory, "git")
+			goPath := filepath.Join(binaryDirectory, "go")
+			workbookPath := filepath.Join(binaryDirectory, "workbook")
+			writeExecutableScript(t, gitPath, "printf 'git version test\\n'")
+			writeExecutableScript(t, goPath, "printf 'go version test\\n'")
+			writeExecutableScript(t, workbookPath, `printf '%s\n' '{"format":"workbook.result","version":1,"command":"version","data":{"version":"dev","commit":"test"}}'`)
+			switch hungCommand {
+			case "git":
+				writeExecutableScript(t, gitPath, "/bin/sleep 5")
+			case "go":
+				writeExecutableScript(t, goPath, "/bin/sleep 5")
+			case "workbook":
+				writeExecutableScript(t, workbookPath, "/bin/sleep 5")
+			}
+			t.Setenv("PATH", binaryDirectory)
+
+			startedAt := time.Now()
+			_, err := benchmarkEnvironment(context.Background(), workbookPath, 20*time.Millisecond)
+			elapsed := time.Since(startedAt)
+			if err == nil || !strings.Contains(err.Error(), "timed out after 20ms") {
+				t.Fatalf("benchmarkEnvironment error = %v, want %s timeout", err, hungCommand)
+			}
+			if elapsed > 2*time.Second {
+				t.Fatalf("benchmarkEnvironment returned after %s, want bounded descendant termination", elapsed)
+			}
+		})
+	}
+}
+
 func buildWorkbookBinary(t *testing.T) string {
 	t.Helper()
-	root := filepath.Clean(filepath.Join("..", ".."))
 	binary := filepath.Join(t.TempDir(), "workbook")
+	buildWorkbookBinaryAt(t, binary)
+	return binary
+}
+
+func buildWorkbookBinaryAt(t *testing.T, binary string) {
+	t.Helper()
+	root := filepath.Clean(filepath.Join("..", ".."))
 	command := exec.Command("go", "build", "-buildvcs=false", "-o", binary, "./cmd/workbook")
 	command.Dir = root
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build workbook: %v\n%s", err, output)
 	}
-	return binary
+}
+
+func writeExecutableScript(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func removeFlag(args []string, name string) []string {

@@ -93,9 +93,17 @@ type countObjectsMetrics struct {
 // against an acceptance-sized baseline isolated by scenario and sample.
 func RunColdCLI(ctx context.Context, spec RunSpec, fixtureRoot string) ([]ScenarioResult, error) {
 	return runColdCLI(ctx, spec, fixtureRoot, scenarioDependencies{
-		buildFixture:   BuildFixture,
+		buildFixture: func(ctx context.Context, root string, fixture FixtureSpec) (Fixture, error) {
+			return buildFixtureWithinTimeout(ctx, root, fixture, spec.CommandTimeout)
+		},
 		measureCommand: MeasureCommand,
 	})
+}
+
+func buildFixtureWithinTimeout(ctx context.Context, root string, spec FixtureSpec, timeout time.Duration) (Fixture, error) {
+	fixtureContext, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return BuildFixture(fixtureContext, root, spec)
 }
 
 func runColdCLI(ctx context.Context, spec RunSpec, fixtureRoot string, dependencies scenarioDependencies) ([]ScenarioResult, error) {
@@ -198,7 +206,7 @@ func RunWarmHTTP(ctx context.Context, spec RunSpec, fixtureRoot string) (results
 		return nil, fmt.Errorf("fixture root is required")
 	}
 
-	fixture, err := BuildFixture(ctx, fixtureRoot, spec.Fixture)
+	fixture, err := buildFixtureWithinTimeout(ctx, fixtureRoot, spec.Fixture, spec.CommandTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("build warm HTTP fixture: %w", err)
 	}
@@ -259,25 +267,7 @@ func MeasureRepository(ctx context.Context, workbookBinary, fixtureRoot string, 
 		return RepositoryMetrics{}, nil, fmt.Errorf("command timeout must be positive")
 	}
 
-	results := repositoryResults()
-	projectionCommands := [][]string{
-		{"rebuild", "--json"},
-		{"list", "--json"},
-	}
-	for index, args := range projectionCommands {
-		sample := MeasureCommand(ctx, CommandSpec{
-			Binary:    workbookBinary,
-			Args:      args,
-			Directory: fixtureRoot,
-			Timeout:   commandTimeout,
-		})
-		if err := requireSuccessfulSample(results[index].Name, sample); err != nil {
-			return RepositoryMetrics{}, nil, err
-		}
-		results[index].Samples[0] = sample
-	}
-
-	taskRefs, _, err := enumerateTaskRefs(ctx, fixtureRoot)
+	taskRefs, _, err := enumerateTaskRefs(ctx, commandTimeout, fixtureRoot)
 	if err != nil {
 		return RepositoryMetrics{}, nil, err
 	}
@@ -286,38 +276,31 @@ func MeasureRepository(ctx context.Context, workbookBinary, fixtureRoot string, 
 		return RepositoryMetrics{}, nil, err
 	}
 
-	updateSample := MeasureCommand(ctx, CommandSpec{
-		Binary:    workbookBinary,
-		Args:      []string{"update", taskID, "--status", "ready", "--json"},
-		Directory: fixtureRoot,
-		Timeout:   commandTimeout,
-	})
-	if err := requireSuccessfulSample("prepare projection-refresh-one-changed", updateSample); err != nil {
-		return RepositoryMetrics{}, nil, err
-	}
-	results[2].Samples[0] = MeasureCommand(ctx, CommandSpec{
-		Binary:    workbookBinary,
-		Args:      []string{"list", "--json"},
-		Directory: fixtureRoot,
-		Timeout:   commandTimeout,
-	})
-	if err := requireSuccessfulSample(results[2].Name, results[2].Samples[0]); err != nil {
-		return RepositoryMetrics{}, nil, err
-	}
-
-	looseRefs, looseRefDuration, err := enumerateTaskRefs(ctx, fixtureRoot)
-	if err != nil {
-		return RepositoryMetrics{}, nil, err
-	}
-	beforeObjectsOutput, _, err := runRepositoryGit(ctx, fixtureRoot, "count-objects", "-v")
+	results, err := measureProjectionScenarios(
+		ctx,
+		workbookBinary,
+		fixtureRoot,
+		taskID,
+		commandTimeout,
+		MeasureCommand,
+	)
 	if err != nil {
 		return RepositoryMetrics{}, nil, err
 	}
 
-	if _, _, err := runRepositoryGit(ctx, fixtureRoot, "pack-refs", "--all"); err != nil {
+	looseRefs, looseRefDuration, err := enumerateTaskRefs(ctx, commandTimeout, fixtureRoot)
+	if err != nil {
 		return RepositoryMetrics{}, nil, err
 	}
-	packedRefs, packedRefDuration, err := enumerateTaskRefs(ctx, fixtureRoot)
+	beforeObjectsOutput, _, err := runRepositoryGit(ctx, commandTimeout, fixtureRoot, "count-objects", "-v")
+	if err != nil {
+		return RepositoryMetrics{}, nil, err
+	}
+
+	if _, _, err := runRepositoryGit(ctx, commandTimeout, fixtureRoot, "pack-refs", "--all"); err != nil {
+		return RepositoryMetrics{}, nil, err
+	}
+	packedRefs, packedRefDuration, err := enumerateTaskRefs(ctx, commandTimeout, fixtureRoot)
 	if err != nil {
 		return RepositoryMetrics{}, nil, err
 	}
@@ -325,10 +308,10 @@ func MeasureRepository(ctx context.Context, workbookBinary, fixtureRoot string, 
 		return RepositoryMetrics{}, nil, fmt.Errorf("task ref enumeration changed after packing refs")
 	}
 
-	if _, _, err := runRepositoryGit(ctx, fixtureRoot, "gc"); err != nil {
+	if _, _, err := runRepositoryGit(ctx, commandTimeout, fixtureRoot, "gc"); err != nil {
 		return RepositoryMetrics{}, nil, err
 	}
-	afterObjectsOutput, _, err := runRepositoryGit(ctx, fixtureRoot, "count-objects", "-v")
+	afterObjectsOutput, _, err := runRepositoryGit(ctx, commandTimeout, fixtureRoot, "count-objects", "-v")
 	if err != nil {
 		return RepositoryMetrics{}, nil, err
 	}
@@ -348,10 +331,10 @@ func MeasureRepository(ctx context.Context, workbookBinary, fixtureRoot string, 
 	}
 	defer os.RemoveAll(originRoot)
 	origin := filepath.Join(originRoot, "origin.git")
-	if _, _, err := runRepositoryGit(ctx, "", "init", "--bare", "--quiet", origin); err != nil {
+	if _, _, err := runRepositoryGit(ctx, commandTimeout, "", "init", "--bare", "--quiet", origin); err != nil {
 		return RepositoryMetrics{}, nil, err
 	}
-	if _, _, err := runRepositoryGit(ctx, fixtureRoot, "remote", "add", "origin", origin); err != nil {
+	if _, _, err := runRepositoryGit(ctx, commandTimeout, fixtureRoot, "remote", "add", "origin", origin); err != nil {
 		return RepositoryMetrics{}, nil, err
 	}
 
@@ -371,6 +354,50 @@ func MeasureRepository(ctx context.Context, workbookBinary, fixtureRoot string, 
 		results[index].Summary = Summarize(results[index].Samples)
 	}
 	return metrics, results, nil
+}
+
+func measureProjectionScenarios(
+	ctx context.Context,
+	workbookBinary string,
+	fixtureRoot string,
+	taskID string,
+	commandTimeout time.Duration,
+	measureCommand func(context.Context, CommandSpec) Sample,
+) ([]ScenarioResult, error) {
+	results := repositoryResults()[:3]
+	results[0].Samples[0] = measureCommand(ctx, CommandSpec{
+		Binary:    workbookBinary,
+		Args:      []string{"rebuild", "--json"},
+		Directory: fixtureRoot,
+		Timeout:   commandTimeout,
+	})
+	results[1].Samples[0] = measureCommand(ctx, CommandSpec{
+		Binary:    workbookBinary,
+		Args:      []string{"list", "--json"},
+		Directory: fixtureRoot,
+		Timeout:   commandTimeout,
+	})
+
+	updateSample := measureCommand(ctx, CommandSpec{
+		Binary:    workbookBinary,
+		Args:      []string{"update", taskID, "--status", "ready", "--json"},
+		Directory: fixtureRoot,
+		Timeout:   commandTimeout,
+	})
+	if err := requireSuccessfulSample("prepare projection-refresh-one-changed", updateSample); err != nil {
+		return nil, err
+	}
+	results[2].Samples[0] = measureCommand(ctx, CommandSpec{
+		Binary:    workbookBinary,
+		Args:      []string{"list", "--json"},
+		Directory: fixtureRoot,
+		Timeout:   commandTimeout,
+	})
+
+	for index := range results {
+		results[index].Summary = Summarize(results[index].Samples)
+	}
+	return results, nil
 }
 
 func measureLocalBareSync(
@@ -398,16 +425,18 @@ func measureLocalBareSync(
 		}
 		return results, nil
 	}
-	if err := requireSuccessfulSample(results[0].Name, results[0].Samples[0]); err != nil {
-		return nil, err
+	if !sampleSucceeded(results[0].Samples[0]) {
+		results[1].Samples[0] = Sample{
+			ExitCode: -1,
+			Error:    "not measured: initial sync failed before remote completion",
+		}
+		for index := range results {
+			results[index].Summary = Summarize(results[index].Samples)
+		}
+		return results, nil
 	}
 
 	results[1].Samples[0] = measureCommand(ctx, command)
-	if !results[1].Samples[0].TimedOut {
-		if err := requireSuccessfulSample(results[1].Name, results[1].Samples[0]); err != nil {
-			return nil, err
-		}
-	}
 	for index := range results {
 		results[index].Summary = Summarize(results[index].Samples)
 	}
@@ -911,19 +940,36 @@ func signalWarmServer(command *exec.Cmd, signal syscall.Signal) error {
 	return err
 }
 
-func enumerateTaskRefs(ctx context.Context, directory string) ([]byte, time.Duration, error) {
-	return runRepositoryGit(ctx, directory, "for-each-ref", "--format=%(refname)%00%(objectname)", "refs/workbook/tasks/")
+func enumerateTaskRefs(ctx context.Context, timeout time.Duration, directory string) ([]byte, time.Duration, error) {
+	return runRepositoryGit(ctx, timeout, directory, "for-each-ref", "--format=%(refname)%00%(objectname)", "refs/workbook/tasks/")
 }
 
-func runRepositoryGit(ctx context.Context, directory string, args ...string) ([]byte, time.Duration, error) {
+func runRepositoryGit(ctx context.Context, timeout time.Duration, directory string, args ...string) ([]byte, time.Duration, error) {
 	commandArgs := append([]string(nil), args...)
 	if directory != "" {
 		commandArgs = append([]string{"-C", directory}, commandArgs...)
 	}
-	command := exec.CommandContext(ctx, "git", commandArgs...)
+	commandContext, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	command := exec.CommandContext(commandContext, "git", commandArgs...)
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	command.Cancel = func() error {
+		if command.Process == nil {
+			return nil
+		}
+		err := syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
+		if errors.Is(err, syscall.ESRCH) {
+			return nil
+		}
+		return err
+	}
+	command.WaitDelay = commandWaitDelay
 	startedAt := time.Now()
 	output, err := command.CombinedOutput()
 	duration := time.Since(startedAt)
+	if commandContext.Err() == context.DeadlineExceeded {
+		return nil, duration, fmt.Errorf("git %s timed out after %s", strings.Join(commandArgs, " "), timeout)
+	}
 	if err != nil {
 		return nil, duration, fmt.Errorf("git %s: %w: %s", strings.Join(commandArgs, " "), err, strings.TrimSpace(string(output)))
 	}
@@ -1003,7 +1049,7 @@ func repositoryMetricsFromCounts(
 }
 
 func requireSuccessfulSample(name string, sample Sample) error {
-	if sample.ExitCode == 0 && !sample.TimedOut && sample.Error == "" {
+	if sampleSucceeded(sample) {
 		return nil
 	}
 	if sample.TimedOut {
@@ -1013,6 +1059,10 @@ func requireSuccessfulSample(name string, sample Sample) error {
 		return fmt.Errorf("%s failed with exit code %d: %s", name, sample.ExitCode, sample.Error)
 	}
 	return fmt.Errorf("%s failed with exit code %d", name, sample.ExitCode)
+}
+
+func sampleSucceeded(sample Sample) bool {
+	return sample.ExitCode == 0 && !sample.TimedOut && sample.Error == ""
 }
 
 func durationAsMilliseconds(duration time.Duration) float64 {
