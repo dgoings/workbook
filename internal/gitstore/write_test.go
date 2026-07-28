@@ -80,6 +80,102 @@ func TestWriteAppendsCommitToCurrentHead(t *testing.T) {
 	}
 }
 
+func TestWriteValidatedUsesFiveGitCommandsToAppendCanonicalTaskCommit(t *testing.T) {
+	ctx := context.Background()
+	repo, config := writeRepository(t)
+	created, createPack, createState := writeRoot(t, repo, config)
+	head, found, err := repo.InspectTaskHead(ctx, config, createPack.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatalf("InspectTaskHead() found = false, want head %q", created.Head)
+	}
+	parent, err := repo.ReadTaskHead(ctx, config, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pack := writeUpdatePack(2, "01K0M6B8A4FTT8C39MXXYTW7C5", "ready")
+	state := writeState(t, &createState, pack)
+
+	var commands [][]string
+	repo.commandObserver = func(args []string) {
+		commands = append(commands, append([]string(nil), args...))
+	}
+	written, err := repo.WriteValidated(ctx, config, &parent, pack, state, "update task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeCommands := append([][]string(nil), commands...)
+
+	if written.Head == parent.Head {
+		t.Fatal("validated write did not advance the task")
+	}
+	if !reflect.DeepEqual(written.Operation, pack) {
+		t.Fatalf("WriteValidated() operation = %#v, want %#v", written.Operation, pack)
+	}
+	if !reflect.DeepEqual(written.State, state) {
+		t.Fatalf("WriteValidated() state = %#v, want %#v", written.State, state)
+	}
+	if got := gitOutput(t, repo, "rev-parse", taskRef(createPack.TaskID)); got != written.Head {
+		t.Fatalf("task ref = %q, want %q", got, written.Head)
+	}
+	if got, want := gitOutput(t, repo, "rev-list", "--parents", "-n", "1", written.Head), written.Head+" "+parent.Head; got != want {
+		t.Fatalf("validated commit parents = %q, want %q", got, want)
+	}
+	assertTaskTree(t, repo, written.Head, pack, state)
+	if got, want := gitOutput(t, repo, "show", "-s", "--format=%s", written.Head), "update task"; got != want {
+		t.Fatalf("commit subject = %q, want %q", got, want)
+	}
+	if got, want := gitOutput(t, repo, "reflog", "show", "--format=%gs", "-n", "1", taskRef(createPack.TaskID)), "workbook: update task"; got != want {
+		t.Fatalf("reflog message = %q, want %q", got, want)
+	}
+	if got := len(writeCommands); got != 5 {
+		t.Fatalf("Git commands = %d, want 5: %#v", got, writeCommands)
+	}
+	assertCommandSequence(t, writeCommands, []string{
+		"hash-object -w --stdin",
+		"hash-object -w --stdin",
+		"mktree",
+		"commit-tree",
+		"update-ref",
+	})
+}
+
+func TestWriteValidatedRejectsStaleCASWithoutReplacingConcurrentHead(t *testing.T) {
+	ctx := context.Background()
+	repo, config := writeRepository(t)
+	_, createPack, _ := writeRoot(t, repo, config)
+	head, found, err := repo.InspectTaskHead(ctx, config, createPack.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatal("InspectTaskHead() found = false, want current task head")
+	}
+	parent, err := repo.ReadTaskHead(ctx, config, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	concurrentPack := writeUpdatePack(2, "01K0M6B8A4FTT8C39MXXYTW7C5", "ready")
+	concurrentState := writeState(t, &parent.State, concurrentPack)
+	concurrent, err := repo.Write(ctx, config, &parent, concurrentPack, concurrentState, "concurrent update")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stalePack := writeUpdatePack(2, "01K0M6B8A4FTT8C39MXXYTW7C6", "blocked")
+	staleState := writeState(t, &parent.State, stalePack)
+	_, err = repo.WriteValidated(ctx, config, &parent, stalePack, staleState, "stale update")
+	if got, want := core.CategoryOf(err), core.CategoryStaleWrite; got != want {
+		t.Fatalf("WriteValidated() category = %q, want %q; error = %v", got, want, err)
+	}
+	if got := gitOutput(t, repo, "rev-parse", taskRef(createPack.TaskID)); got != concurrent.Head {
+		t.Fatalf("task ref after stale validated write = %q, want concurrent head %q", got, concurrent.Head)
+	}
+}
+
 func TestWriteRetainsLegacyReflogPrefix(t *testing.T) {
 	repo, config := writeRepository(t)
 	created, createPack, createState := writeRoot(t, repo, config)
@@ -654,6 +750,26 @@ func gitOutput(t *testing.T, repo *Repository, args ...string) string {
 		t.Fatalf("Git(%v) error = %v", args, err)
 	}
 	return strings.TrimSuffix(string(output), "\n")
+}
+
+func assertCommandSequence(t *testing.T, commands [][]string, want []string) {
+	t.Helper()
+	got := make([]string, len(commands))
+	for i, command := range commands {
+		if len(command) == 0 {
+			got[i] = ""
+			continue
+		}
+		switch command[0] {
+		case "hash-object":
+			got[i] = strings.Join(command, " ")
+		default:
+			got[i] = command[0]
+		}
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Git command sequence = %#v, want %#v; commands = %#v", got, want, commands)
+	}
 }
 
 func assertNoTaskRefs(t *testing.T, repo *Repository) {

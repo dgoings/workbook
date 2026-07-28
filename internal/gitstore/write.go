@@ -44,9 +44,6 @@ func (r *Repository) Write(
 			return core.Snapshot{}, err
 		}
 	} else {
-		if strings.TrimSpace(parent.Head) == "" {
-			return core.Snapshot{}, core.Errorf(core.CategoryValidation, "parent head must not be blank")
-		}
 		if err := r.validateParentHead(ctx, parent.Head); err != nil {
 			return core.Snapshot{}, err
 		}
@@ -72,6 +69,52 @@ func (r *Repository) Write(
 		}
 	}
 
+	return r.writeCanonical(ctx, ref, parent, pack, state, reason)
+}
+
+// WriteValidated persists one task operation pack after its parent snapshot
+// has already been observed and validated through the repository read path.
+// The task ref compare-and-swap remains the authority for concurrent changes.
+func (r *Repository) WriteValidated(
+	ctx context.Context,
+	config core.ProjectConfig,
+	parent *core.Snapshot,
+	pack core.OperationPack,
+	state core.StateDocument,
+	reason string,
+) (core.Snapshot, error) {
+	if err := r.validateRepositoryConfig(config); err != nil {
+		return core.Snapshot{}, err
+	}
+	if err := validateWriteIdentity(config, pack, state); err != nil {
+		return core.Snapshot{}, err
+	}
+
+	ref := taskRefPrefix + pack.TaskID
+	if parent == nil {
+		if err := core.ValidateCheckpoint(nil, pack, state, config.Key); err != nil {
+			return core.Snapshot{}, err
+		}
+	} else {
+		if _, err := decodeObjectID(parent.Head); err != nil {
+			return core.Snapshot{}, core.Wrap(core.CategoryValidation, "parent head must be a canonical object ID", err)
+		}
+		if err := core.ValidateCheckpoint(&parent.State, pack, state, config.Key); err != nil {
+			return core.Snapshot{}, err
+		}
+	}
+
+	return r.writeCanonical(ctx, ref, parent, pack, state, reason)
+}
+
+func (r *Repository) writeCanonical(
+	ctx context.Context,
+	ref string,
+	parent *core.Snapshot,
+	pack core.OperationPack,
+	state core.StateDocument,
+	reason string,
+) (core.Snapshot, error) {
 	packBytes, err := core.EncodeDocument(pack)
 	if err != nil {
 		return core.Snapshot{}, err
@@ -119,6 +162,9 @@ func (r *Repository) Write(
 }
 
 func (r *Repository) validateParentHead(ctx context.Context, head string) error {
+	if strings.TrimSpace(head) == "" {
+		return core.Errorf(core.CategoryValidation, "parent head must not be blank")
+	}
 	resolved, err := r.Git(ctx, nil, "rev-parse", "--verify", head+"^{commit}")
 	if err != nil {
 		return core.Wrap(core.CategoryValidation, "parent head must be a commit object ID", err)
