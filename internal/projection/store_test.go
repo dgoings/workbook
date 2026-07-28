@@ -71,16 +71,19 @@ func TestStoreRefreshReadsOnlyAdvancedHeads(t *testing.T) {
 	if err := store.Refresh(ctx); err != nil {
 		t.Fatalf("Refresh(initial) error = %v", err)
 	}
-	if got, want := source.reads, 2; got != want {
-		t.Fatalf("initial ReadTaskHead calls = %d, want %d", got, want)
+	if got, want := source.batchReadCalls, 1; got != want {
+		t.Fatalf("initial ReadTaskHeads calls = %d, want %d", got, want)
+	}
+	if got, want := len(source.readBatches[0]), 2; got != want {
+		t.Fatalf("initial ReadTaskHeads batch size = %d, want %d", got, want)
 	}
 
-	source.reads = 0
+	source.batchReadCalls = 0
 	if err := store.Refresh(ctx); err != nil {
 		t.Fatalf("Refresh(unchanged) error = %v", err)
 	}
-	if got := source.reads; got != 0 {
-		t.Fatalf("unchanged ReadTaskHead calls = %d, want 0", got)
+	if got := source.batchReadCalls; got != 0 {
+		t.Fatalf("unchanged ReadTaskHeads calls = %d, want 0", got)
 	}
 
 	advanced := second
@@ -91,8 +94,8 @@ func TestStoreRefreshReadsOnlyAdvancedHeads(t *testing.T) {
 	if err := store.Refresh(ctx); err != nil {
 		t.Fatalf("Refresh(advanced) error = %v", err)
 	}
-	if got, want := source.reads, 1; got != want {
-		t.Fatalf("advanced ReadTaskHead calls = %d, want %d", got, want)
+	if got, want := source.batchReadCalls, 1; got != want {
+		t.Fatalf("advanced ReadTaskHeads calls = %d, want %d", got, want)
 	}
 	snapshots, err := store.List(ctx, config)
 	if err != nil {
@@ -100,6 +103,455 @@ func TestStoreRefreshReadsOnlyAdvancedHeads(t *testing.T) {
 	}
 	if got, want := snapshots[1].State.Task.Title, "Second, changed"; got != want {
 		t.Fatalf("changed title = %q, want %q", got, want)
+	}
+}
+
+func TestStoreGetInspectsOnlyExactWarmHead(t *testing.T) {
+	ctx := context.Background()
+	config := testConfig()
+	expected := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "Warm")
+	source := &countingHeadSource{
+		heads:     []gitstore.TaskHead{{TaskID: expected.State.TaskID, ObjectID: expected.Head}},
+		snapshots: map[string]core.Snapshot{expected.Head: expected},
+	}
+	store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	if err != nil {
+		t.Fatalf("openStore() error = %v", err)
+	}
+	if _, err := store.Rebuild(ctx); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+	resetSourceCalls(source)
+
+	snapshot, err := store.Get(ctx, config, expected.State.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Head != expected.Head {
+		t.Fatalf("head = %q, want %q", snapshot.Head, expected.Head)
+	}
+	if source.listCalls != 0 || source.inspectCalls != 1 || source.batchReadCalls != 0 {
+		t.Fatalf("source calls = list %d inspect %d batch %d", source.listCalls, source.inspectCalls, source.batchReadCalls)
+	}
+}
+
+func TestStoreGetRefreshesOnlyChangedExactHead(t *testing.T) {
+	ctx := context.Background()
+	config := testConfig()
+	previous := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "Previous")
+	expected := testSnapshot(previous.State.TaskID, "head-2", "Expected")
+	source := &countingHeadSource{
+		heads:     []gitstore.TaskHead{{TaskID: previous.State.TaskID, ObjectID: previous.Head}},
+		snapshots: map[string]core.Snapshot{previous.Head: previous, expected.Head: expected},
+	}
+	store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	if err != nil {
+		t.Fatalf("openStore() error = %v", err)
+	}
+	if _, err := store.Rebuild(ctx); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+	source.heads[0].ObjectID = expected.Head
+	resetSourceCalls(source)
+
+	snapshot, err := store.Get(ctx, config, previous.State.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Head != expected.Head || snapshot.State.Task.Title != "Expected" {
+		t.Fatalf("snapshot = %#v, want changed head %q", snapshot, expected.Head)
+	}
+	if source.listCalls != 0 || source.inspectCalls != 1 || source.batchReadCalls != 1 || source.validationCalls != 1 {
+		t.Fatalf(
+			"source calls = list %d inspect %d batch %d validate %d",
+			source.listCalls,
+			source.inspectCalls,
+			source.batchReadCalls,
+			source.validationCalls,
+		)
+	}
+	if got := source.readBatches[0]; !reflect.DeepEqual(got, source.heads) {
+		t.Fatalf("batch heads = %#v, want %#v", got, source.heads)
+	}
+	advance := source.validatedAdvances[0][0]
+	if advance.Previous.Head != previous.Head || advance.Current.ObjectID != expected.Head {
+		t.Fatalf("validated advance = %#v, want %q -> %q", advance, previous.Head, expected.Head)
+	}
+}
+
+func TestStoreGetRejectsDisappearedExactHead(t *testing.T) {
+	ctx := context.Background()
+	config := testConfig()
+	cached := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "Cached")
+	source := &countingHeadSource{
+		heads:     []gitstore.TaskHead{{TaskID: cached.State.TaskID, ObjectID: cached.Head}},
+		snapshots: map[string]core.Snapshot{cached.Head: cached},
+	}
+	store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	if err != nil {
+		t.Fatalf("openStore() error = %v", err)
+	}
+	if _, err := store.Rebuild(ctx); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+	source.heads = nil
+	resetSourceCalls(source)
+
+	_, err = store.Get(ctx, config, cached.State.TaskID)
+	if got := core.CategoryOf(err); got != core.CategoryCorruptData {
+		t.Fatalf("Get(disappeared) category = %q, want corrupt-data; error = %v", got, err)
+	}
+	if source.listCalls != 0 || source.inspectCalls != 1 || source.batchReadCalls != 0 {
+		t.Fatalf("source calls = list %d inspect %d batch %d", source.listCalls, source.inspectCalls, source.batchReadCalls)
+	}
+}
+
+func TestStoreGetRetriesWhenConditionalRefreshLosesRace(t *testing.T) {
+	ctx := context.Background()
+	config := testConfig()
+	previous := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "Previous")
+	changed := testSnapshot(previous.State.TaskID, "head-2", "Changed")
+	newer := testSnapshot(previous.State.TaskID, "head-3", "Newer")
+	initialSource := &countingHeadSource{
+		heads:     []gitstore.TaskHead{{TaskID: previous.State.TaskID, ObjectID: previous.Head}},
+		snapshots: map[string]core.Snapshot{previous.Head: previous},
+	}
+	store, err := openStore(ctx, initialSource, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	if err != nil {
+		t.Fatalf("openStore() error = %v", err)
+	}
+	if _, err := store.Rebuild(ctx); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+
+	source := newExactRefreshRaceSource(changed, newer)
+	store.source = source
+	result := make(chan struct {
+		snapshot core.Snapshot
+		err      error
+	}, 1)
+	go func() {
+		snapshot, err := store.Get(ctx, config, previous.State.TaskID)
+		result <- struct {
+			snapshot core.Snapshot
+			err      error
+		}{snapshot: snapshot, err: err}
+	}()
+	<-source.changedReadStarted
+
+	applied, err := store.Advance(ctx, config, previous.Head, newer)
+	if err != nil || !applied {
+		t.Fatalf("Advance(newer) = %t, %v, want true, nil", applied, err)
+	}
+	close(source.releaseChangedRead)
+
+	got := <-result
+	if got.err != nil {
+		t.Fatalf("Get() error = %v", got.err)
+	}
+	if got.snapshot.Head != newer.Head || got.snapshot.State.Task.Title != "Newer" {
+		t.Fatalf("Get() = %#v, want concurrently advanced snapshot", got.snapshot)
+	}
+	if source.inspectCalls != 2 || source.batchReadCalls != 1 {
+		t.Fatalf("source calls = inspect %d batch %d, want inspect 2 batch 1", source.inspectCalls, source.batchReadCalls)
+	}
+}
+
+func TestStoreRefreshBatchesChangedHeads(t *testing.T) {
+	ctx := context.Background()
+	config := testConfig()
+	first := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "First")
+	second := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D2", "head-2", "Second")
+	third := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D3", "head-3", "Third")
+	source := &countingHeadSource{
+		heads: []gitstore.TaskHead{
+			{TaskID: first.State.TaskID, ObjectID: first.Head},
+			{TaskID: second.State.TaskID, ObjectID: second.Head},
+			{TaskID: third.State.TaskID, ObjectID: third.Head},
+		},
+		snapshots: map[string]core.Snapshot{first.Head: first, second.Head: second, third.Head: third},
+	}
+	store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	if err != nil {
+		t.Fatalf("openStore() error = %v", err)
+	}
+	if _, err := store.Rebuild(ctx); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+
+	changedFirst := testSnapshot(first.State.TaskID, "head-4", "First changed")
+	changedThird := testSnapshot(third.State.TaskID, "head-5", "Third changed")
+	source.heads[0].ObjectID = changedFirst.Head
+	source.heads[2].ObjectID = changedThird.Head
+	source.snapshots[changedFirst.Head] = changedFirst
+	source.snapshots[changedThird.Head] = changedThird
+	resetSourceCalls(source)
+
+	if err := store.Refresh(ctx); err != nil {
+		t.Fatalf("Refresh() error = %v", err)
+	}
+	if source.listCalls != 1 || source.inspectCalls != 0 || source.batchReadCalls != 1 || source.validationCalls != 1 {
+		t.Fatalf(
+			"source calls = list %d inspect %d batch %d validate %d",
+			source.listCalls,
+			source.inspectCalls,
+			source.batchReadCalls,
+			source.validationCalls,
+		)
+	}
+	wantBatch := []gitstore.TaskHead{source.heads[0], source.heads[2]}
+	if got := source.readBatches[0]; !reflect.DeepEqual(got, wantBatch) {
+		t.Fatalf("batch heads = %#v, want %#v", got, wantBatch)
+	}
+	if got := len(source.validatedAdvances[0]); got != 2 {
+		t.Fatalf("validated advances = %d, want 2", got)
+	}
+
+	snapshots, err := store.List(ctx, config)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if got := []string{snapshots[0].State.Task.Title, snapshots[1].State.Task.Title, snapshots[2].State.Task.Title}; !reflect.DeepEqual(got, []string{"First changed", "Second", "Third changed"}) {
+		t.Fatalf("titles = %v, want changed consumer snapshots", got)
+	}
+}
+
+func TestStoreRefreshRejectsChangedHistoryGeneration(t *testing.T) {
+	ctx := context.Background()
+	config := testConfig()
+	previous := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "Previous")
+	changed := testSnapshot(previous.State.TaskID, "head-2", "Changed generation")
+	changed.State.History.Generation = "01K0M6B8A4FTT8C39MXXYTW7DA"
+	source := &countingHeadSource{
+		heads:     []gitstore.TaskHead{{TaskID: previous.State.TaskID, ObjectID: previous.Head}},
+		snapshots: map[string]core.Snapshot{previous.Head: previous, changed.Head: changed},
+	}
+	store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	if err != nil {
+		t.Fatalf("openStore() error = %v", err)
+	}
+	if _, err := store.Rebuild(ctx); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+	source.heads[0].ObjectID = changed.Head
+	resetSourceCalls(source)
+
+	err = store.Refresh(ctx)
+	if got := core.CategoryOf(err); got != core.CategoryCorruptData {
+		t.Fatalf("Refresh() category = %q, want corrupt-data; error = %v", got, err)
+	}
+	if source.validationCalls != 1 || source.batchReadCalls != 1 {
+		t.Fatalf("source calls = validate %d batch %d, want 1 each", source.validationCalls, source.batchReadCalls)
+	}
+	cached, found, err := store.querySnapshot(ctx, previous.State.TaskID)
+	if err != nil {
+		t.Fatalf("querySnapshot() error = %v", err)
+	}
+	if !found || cached.Head != previous.Head || cached.State.Task.Title != "Previous" {
+		t.Fatalf("cached snapshot = %#v, found %t, want unchanged previous snapshot", cached, found)
+	}
+}
+
+func TestStoreAdvanceConditionallyUpdatesSnapshot(t *testing.T) {
+	ctx := context.Background()
+	config := testConfig()
+	previous := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "Previous")
+	expected := testSnapshot(previous.State.TaskID, "head-2", "Expected")
+	source := &countingHeadSource{
+		heads:     []gitstore.TaskHead{{TaskID: previous.State.TaskID, ObjectID: previous.Head}},
+		snapshots: map[string]core.Snapshot{previous.Head: previous, expected.Head: expected},
+	}
+	store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	if err != nil {
+		t.Fatalf("openStore() error = %v", err)
+	}
+	if _, err := store.Rebuild(ctx); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+
+	applied, err := store.Advance(ctx, config, previous.Head, expected)
+	if err != nil || !applied {
+		t.Fatalf("Advance() = %t, %v, want true, nil", applied, err)
+	}
+	source.heads[0].ObjectID = expected.Head
+	resetSourceCalls(source)
+	got, err := store.Get(ctx, config, previous.State.TaskID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got.Head != expected.Head || got.State.Task.Title != "Expected" {
+		t.Fatalf("Get() = %#v, want advanced snapshot", got)
+	}
+}
+
+func TestStoreAdvanceAcceptsAlreadyAdvancedSnapshot(t *testing.T) {
+	ctx := context.Background()
+	config := testConfig()
+	previous := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "Previous")
+	expected := testSnapshot(previous.State.TaskID, "head-2", "Expected")
+	source := &countingHeadSource{
+		heads:     []gitstore.TaskHead{{TaskID: expected.State.TaskID, ObjectID: expected.Head}},
+		snapshots: map[string]core.Snapshot{expected.Head: expected},
+	}
+	store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	if err != nil {
+		t.Fatalf("openStore() error = %v", err)
+	}
+	if _, err := store.Rebuild(ctx); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+
+	applied, err := store.Advance(ctx, config, previous.Head, expected)
+	if err != nil || !applied {
+		t.Fatalf("Advance(already advanced) = %t, %v, want true, nil", applied, err)
+	}
+	got, err := store.Get(ctx, config, expected.State.TaskID)
+	if err != nil || got.Head != expected.Head {
+		t.Fatalf("Get() = %#v, %v, want head %q", got, err, expected.Head)
+	}
+}
+
+func TestStoreAdvanceDoesNotRegressNewerSnapshot(t *testing.T) {
+	ctx := context.Background()
+	config := testConfig()
+	previous := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "Previous")
+	stale := testSnapshot(previous.State.TaskID, "head-2", "Stale")
+	newer := testSnapshot(previous.State.TaskID, "head-3", "Newer")
+	source := &countingHeadSource{
+		heads:     []gitstore.TaskHead{{TaskID: newer.State.TaskID, ObjectID: newer.Head}},
+		snapshots: map[string]core.Snapshot{newer.Head: newer},
+	}
+	store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	if err != nil {
+		t.Fatalf("openStore() error = %v", err)
+	}
+	if _, err := store.Rebuild(ctx); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+
+	applied, err := store.Advance(ctx, config, previous.Head, stale)
+	if err != nil || applied {
+		t.Fatalf("Advance(stale) = %t, %v, want false, nil", applied, err)
+	}
+	got, err := store.Get(ctx, config, newer.State.TaskID)
+	if err != nil || got.Head != newer.Head || got.State.Task.Title != "Newer" {
+		t.Fatalf("Get() = %#v, %v, want newer snapshot", got, err)
+	}
+}
+
+func TestStoreInvalidateOnlyDeletesExpectedOrWrittenHead(t *testing.T) {
+	ctx := context.Background()
+	config := testConfig()
+	previous := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "Previous")
+	previous.State.Task.Labels = []string{"cache"}
+	previous.State.Task.Dependencies = []string{"WB-01K0M6B8A4FTT8C39MXXYTW7D9"}
+	written := testSnapshot(previous.State.TaskID, "head-2", "Written")
+	newer := testSnapshot(previous.State.TaskID, "head-3", "Newer")
+
+	for _, test := range []struct {
+		name       string
+		cached     core.Snapshot
+		wantAbsent bool
+	}{
+		{name: "expected parent", cached: previous, wantAbsent: true},
+		{name: "written head", cached: written, wantAbsent: true},
+		{name: "newer head", cached: newer, wantAbsent: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source := &countingHeadSource{
+				heads:     []gitstore.TaskHead{{TaskID: test.cached.State.TaskID, ObjectID: test.cached.Head}},
+				snapshots: map[string]core.Snapshot{test.cached.Head: test.cached},
+			}
+			store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+			if err != nil {
+				t.Fatalf("openStore() error = %v", err)
+			}
+			if _, err := store.Rebuild(ctx); err != nil {
+				t.Fatalf("Rebuild() error = %v", err)
+			}
+
+			if err := store.Invalidate(ctx, config, previous.State.TaskID, previous.Head, written.Head); err != nil {
+				t.Fatalf("Invalidate() error = %v", err)
+			}
+			if test.wantAbsent {
+				source.heads = nil
+				_, err := store.Get(ctx, config, previous.State.TaskID)
+				if got := core.CategoryOf(err); got != core.CategoryNotFound {
+					t.Fatalf("Get() category = %q, want not-found; error = %v", got, err)
+				}
+				source.heads = []gitstore.TaskHead{{TaskID: written.State.TaskID, ObjectID: written.Head}}
+				source.snapshots[written.Head] = written
+				got, err := store.Get(ctx, config, written.State.TaskID)
+				if err != nil || got.Head != written.Head {
+					t.Fatalf("Get(recreated) = %#v, %v, want written snapshot", got, err)
+				}
+				return
+			}
+			got, err := store.Get(ctx, config, newer.State.TaskID)
+			if err != nil || got.Head != newer.Head || got.State.Task.Title != "Newer" {
+				t.Fatalf("Get() = %#v, %v, want preserved newer snapshot", got, err)
+			}
+		})
+	}
+}
+
+func TestConcurrentIndependentTaskAdvancement(t *testing.T) {
+	ctx := context.Background()
+	config := testConfig()
+	first := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "First")
+	second := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D2", "head-2", "Second")
+	advancedFirst := testSnapshot(first.State.TaskID, "head-3", "First advanced")
+	advancedSecond := testSnapshot(second.State.TaskID, "head-4", "Second advanced")
+	source := &countingHeadSource{
+		heads: []gitstore.TaskHead{
+			{TaskID: first.State.TaskID, ObjectID: first.Head},
+			{TaskID: second.State.TaskID, ObjectID: second.Head},
+		},
+		snapshots: map[string]core.Snapshot{first.Head: first, second.Head: second},
+	}
+	store, err := openStore(ctx, source, config, filepath.Join(t.TempDir(), "cache.sqlite"))
+	if err != nil {
+		t.Fatalf("openStore() error = %v", err)
+	}
+	if _, err := store.Rebuild(ctx); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for _, update := range []struct {
+		parent   string
+		snapshot core.Snapshot
+	}{
+		{parent: first.Head, snapshot: advancedFirst},
+		{parent: second.Head, snapshot: advancedSecond},
+	} {
+		update := update
+		go func() {
+			<-start
+			applied, err := store.Advance(ctx, config, update.parent, update.snapshot)
+			if err == nil && !applied {
+				err = fmt.Errorf("Advance(%s) was not applied", update.snapshot.State.TaskID)
+			}
+			results <- err
+		}()
+	}
+	close(start)
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	source.heads[0].ObjectID = advancedFirst.Head
+	source.heads[1].ObjectID = advancedSecond.Head
+	source.snapshots[advancedFirst.Head] = advancedFirst
+	source.snapshots[advancedSecond.Head] = advancedSecond
+	for _, expected := range []core.Snapshot{advancedFirst, advancedSecond} {
+		got, err := store.Get(ctx, config, expected.State.TaskID)
+		if err != nil || got.Head != expected.Head || got.State.Task.Title != expected.State.Task.Title {
+			t.Fatalf("Get(%s) = %#v, %v, want %#v", expected.State.TaskID, got, err, expected)
+		}
 	}
 }
 
@@ -533,10 +985,17 @@ func TestStoreQueriesAndRejectsWrites(t *testing.T) {
 }
 
 type countingHeadSource struct {
-	heads     []gitstore.TaskHead
-	snapshots map[string]core.Snapshot
-	reads     int
-	err       error
+	heads             []gitstore.TaskHead
+	snapshots         map[string]core.Snapshot
+	listCalls         int
+	inspectCalls      int
+	batchReadCalls    int
+	validationCalls   int
+	readBatches       [][]gitstore.TaskHead
+	validatedAdvances [][]gitstore.HeadAdvance
+	err               error
+	readErr           error
+	validationErr     error
 }
 
 type headSequenceSource struct {
@@ -552,6 +1011,16 @@ type concurrentRefreshSource struct {
 	secondReadStarted chan struct{}
 	releaseSecondRead chan struct{}
 	thirdHeadListed   chan struct{}
+}
+
+type exactRefreshRaceSource struct {
+	mu                 sync.Mutex
+	changed            core.Snapshot
+	newer              core.Snapshot
+	inspectCalls       int
+	batchReadCalls     int
+	changedReadStarted chan struct{}
+	releaseChangedRead chan struct{}
 }
 
 type staticHeadSource struct {
@@ -581,6 +1050,46 @@ func newConcurrentRefreshSource(second, third core.Snapshot) *concurrentRefreshS
 	}
 }
 
+func newExactRefreshRaceSource(changed, newer core.Snapshot) *exactRefreshRaceSource {
+	return &exactRefreshRaceSource{
+		changed:            changed,
+		newer:              newer,
+		changedReadStarted: make(chan struct{}),
+		releaseChangedRead: make(chan struct{}),
+	}
+}
+
+func (s *exactRefreshRaceSource) ListTaskHeads(_ context.Context, _ core.ProjectConfig) ([]gitstore.TaskHead, error) {
+	return nil, errors.New("unexpected global task-head listing")
+}
+
+func (s *exactRefreshRaceSource) InspectTaskHead(_ context.Context, _ core.ProjectConfig, taskID string) (gitstore.TaskHead, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.inspectCalls++
+	snapshot := s.changed
+	if s.inspectCalls > 1 {
+		snapshot = s.newer
+	}
+	return gitstore.TaskHead{TaskID: taskID, ObjectID: snapshot.Head}, true, nil
+}
+
+func (s *exactRefreshRaceSource) ReadTaskHeads(_ context.Context, _ core.ProjectConfig, heads []gitstore.TaskHead) ([]core.Snapshot, error) {
+	s.mu.Lock()
+	s.batchReadCalls++
+	s.mu.Unlock()
+	if len(heads) != 1 || heads[0].ObjectID != s.changed.Head {
+		return nil, fmt.Errorf("unexpected exact read batch %#v", heads)
+	}
+	close(s.changedReadStarted)
+	<-s.releaseChangedRead
+	return []core.Snapshot{s.changed}, nil
+}
+
+func (s *exactRefreshRaceSource) ValidateTaskHeadAdvances(_ context.Context, _ core.ProjectConfig, _ []gitstore.HeadAdvance) error {
+	return nil
+}
+
 func (s *concurrentRefreshSource) ListTaskHeads(_ context.Context, _ core.ProjectConfig) ([]gitstore.TaskHead, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -595,27 +1104,62 @@ func (s *concurrentRefreshSource) ListTaskHeads(_ context.Context, _ core.Projec
 	return []gitstore.TaskHead{{TaskID: head.State.TaskID, ObjectID: head.Head}}, nil
 }
 
-func (s *concurrentRefreshSource) ReadTaskHead(_ context.Context, _ core.ProjectConfig, head gitstore.TaskHead) (core.Snapshot, error) {
-	if head.ObjectID == "head-2" {
-		close(s.secondReadStarted)
-		<-s.releaseSecondRead
+func (s *concurrentRefreshSource) InspectTaskHead(_ context.Context, _ core.ProjectConfig, taskID string) (gitstore.TaskHead, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	head := s.snapshots["head-3"]
+	if head.State.TaskID != taskID {
+		return gitstore.TaskHead{}, false, nil
 	}
-	return s.snapshots[head.ObjectID], nil
+	return gitstore.TaskHead{TaskID: taskID, ObjectID: head.Head}, true, nil
+}
+
+func (s *concurrentRefreshSource) ReadTaskHeads(_ context.Context, _ core.ProjectConfig, heads []gitstore.TaskHead) ([]core.Snapshot, error) {
+	snapshots := make([]core.Snapshot, 0, len(heads))
+	for _, head := range heads {
+		if head.ObjectID == "head-2" {
+			close(s.secondReadStarted)
+			<-s.releaseSecondRead
+		}
+		snapshots = append(snapshots, s.snapshots[head.ObjectID])
+	}
+	return snapshots, nil
+}
+
+func (s *concurrentRefreshSource) ValidateTaskHeadAdvances(_ context.Context, _ core.ProjectConfig, _ []gitstore.HeadAdvance) error {
+	return nil
 }
 
 func (s *staticHeadSource) ListTaskHeads(_ context.Context, _ core.ProjectConfig) ([]gitstore.TaskHead, error) {
 	return append([]gitstore.TaskHead(nil), s.heads...), nil
 }
 
-func (s *staticHeadSource) ReadTaskHead(_ context.Context, _ core.ProjectConfig, head gitstore.TaskHead) (core.Snapshot, error) {
+func (s *staticHeadSource) InspectTaskHead(_ context.Context, _ core.ProjectConfig, taskID string) (gitstore.TaskHead, bool, error) {
+	for _, head := range s.heads {
+		if head.TaskID == taskID {
+			return head, true, nil
+		}
+	}
+	return gitstore.TaskHead{}, false, nil
+}
+
+func (s *staticHeadSource) ReadTaskHeads(_ context.Context, _ core.ProjectConfig, heads []gitstore.TaskHead) ([]core.Snapshot, error) {
 	if s.readErr != nil {
-		return core.Snapshot{}, s.readErr
+		return nil, s.readErr
 	}
-	snapshot, found := s.snapshots[head.ObjectID]
-	if !found {
-		return core.Snapshot{}, errors.New("missing test snapshot")
+	snapshots := make([]core.Snapshot, 0, len(heads))
+	for _, head := range heads {
+		snapshot, found := s.snapshots[head.ObjectID]
+		if !found {
+			return nil, errors.New("missing test snapshot")
+		}
+		snapshots = append(snapshots, snapshot)
 	}
-	return snapshot, nil
+	return snapshots, nil
+}
+
+func (s *staticHeadSource) ValidateTaskHeadAdvances(_ context.Context, _ core.ProjectConfig, _ []gitstore.HeadAdvance) error {
+	return nil
 }
 
 func (d *queryCountingDriver) Open(name string) (driver.Conn, error) {
@@ -647,25 +1191,83 @@ func (s *headSequenceSource) ListTaskHeads(_ context.Context, _ core.ProjectConf
 	return append([]gitstore.TaskHead(nil), s.headSets[index]...), nil
 }
 
-func (s *headSequenceSource) ReadTaskHead(_ context.Context, _ core.ProjectConfig, head gitstore.TaskHead) (core.Snapshot, error) {
-	snapshot, found := s.snapshots[head.ObjectID]
-	if !found {
-		return core.Snapshot{}, errors.New("missing test snapshot")
+func (s *headSequenceSource) InspectTaskHead(_ context.Context, _ core.ProjectConfig, taskID string) (gitstore.TaskHead, bool, error) {
+	if len(s.headSets) == 0 {
+		return gitstore.TaskHead{}, false, nil
 	}
-	return snapshot, nil
+	index := s.index
+	if index >= len(s.headSets) {
+		index = len(s.headSets) - 1
+	}
+	for _, head := range s.headSets[index] {
+		if head.TaskID == taskID {
+			return head, true, nil
+		}
+	}
+	return gitstore.TaskHead{}, false, nil
+}
+
+func (s *headSequenceSource) ReadTaskHeads(_ context.Context, _ core.ProjectConfig, heads []gitstore.TaskHead) ([]core.Snapshot, error) {
+	snapshots := make([]core.Snapshot, 0, len(heads))
+	for _, head := range heads {
+		snapshot, found := s.snapshots[head.ObjectID]
+		if !found {
+			return nil, errors.New("missing test snapshot")
+		}
+		snapshots = append(snapshots, snapshot)
+	}
+	return snapshots, nil
+}
+
+func (s *headSequenceSource) ValidateTaskHeadAdvances(_ context.Context, _ core.ProjectConfig, _ []gitstore.HeadAdvance) error {
+	return nil
 }
 
 func (s *countingHeadSource) ListTaskHeads(_ context.Context, _ core.ProjectConfig) ([]gitstore.TaskHead, error) {
+	s.listCalls++
 	return append([]gitstore.TaskHead(nil), s.heads...), s.err
 }
 
-func (s *countingHeadSource) ReadTaskHead(_ context.Context, _ core.ProjectConfig, head gitstore.TaskHead) (core.Snapshot, error) {
-	s.reads++
-	snapshot, found := s.snapshots[head.ObjectID]
-	if !found {
-		return core.Snapshot{}, errors.New("missing test snapshot")
+func (s *countingHeadSource) InspectTaskHead(_ context.Context, _ core.ProjectConfig, taskID string) (gitstore.TaskHead, bool, error) {
+	s.inspectCalls++
+	for _, head := range s.heads {
+		if head.TaskID == taskID {
+			return head, true, nil
+		}
 	}
-	return snapshot, nil
+	return gitstore.TaskHead{}, false, nil
+}
+
+func (s *countingHeadSource) ReadTaskHeads(_ context.Context, _ core.ProjectConfig, heads []gitstore.TaskHead) ([]core.Snapshot, error) {
+	s.batchReadCalls++
+	s.readBatches = append(s.readBatches, append([]gitstore.TaskHead(nil), heads...))
+	if s.readErr != nil {
+		return nil, s.readErr
+	}
+	snapshots := make([]core.Snapshot, 0, len(heads))
+	for _, head := range heads {
+		snapshot, found := s.snapshots[head.ObjectID]
+		if !found {
+			return nil, errors.New("missing test snapshot")
+		}
+		snapshots = append(snapshots, snapshot)
+	}
+	return snapshots, nil
+}
+
+func (s *countingHeadSource) ValidateTaskHeadAdvances(_ context.Context, _ core.ProjectConfig, advances []gitstore.HeadAdvance) error {
+	s.validationCalls++
+	s.validatedAdvances = append(s.validatedAdvances, append([]gitstore.HeadAdvance(nil), advances...))
+	return s.validationErr
+}
+
+func resetSourceCalls(source *countingHeadSource) {
+	source.listCalls = 0
+	source.inspectCalls = 0
+	source.batchReadCalls = 0
+	source.validationCalls = 0
+	source.readBatches = nil
+	source.validatedAdvances = nil
 }
 
 func testConfig() core.ProjectConfig {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -28,7 +29,9 @@ var errStaleProjectionRefresh = errors.New("projection cache changed during refr
 
 type taskHeadSource interface {
 	ListTaskHeads(context.Context, core.ProjectConfig) ([]gitstore.TaskHead, error)
-	ReadTaskHead(context.Context, core.ProjectConfig, gitstore.TaskHead) (core.Snapshot, error)
+	InspectTaskHead(context.Context, core.ProjectConfig, string) (gitstore.TaskHead, bool, error)
+	ReadTaskHeads(context.Context, core.ProjectConfig, []gitstore.TaskHead) ([]core.Snapshot, error)
+	ValidateTaskHeadAdvances(context.Context, core.ProjectConfig, []gitstore.HeadAdvance) error
 }
 
 type repositorySource struct {
@@ -39,13 +42,21 @@ func (s repositorySource) ListTaskHeads(ctx context.Context, config core.Project
 	return s.repository.ListTaskHeads(ctx, config)
 }
 
-func (s repositorySource) ReadTaskHead(ctx context.Context, config core.ProjectConfig, head gitstore.TaskHead) (core.Snapshot, error) {
-	return s.repository.ReadTaskHead(ctx, config, head)
+func (s repositorySource) InspectTaskHead(ctx context.Context, config core.ProjectConfig, taskID string) (gitstore.TaskHead, bool, error) {
+	return s.repository.InspectTaskHead(ctx, config, taskID)
+}
+
+func (s repositorySource) ReadTaskHeads(ctx context.Context, config core.ProjectConfig, heads []gitstore.TaskHead) ([]core.Snapshot, error) {
+	return s.repository.ReadTaskHeads(ctx, config, heads)
+}
+
+func (s repositorySource) ValidateTaskHeadAdvances(ctx context.Context, config core.ProjectConfig, advances []gitstore.HeadAdvance) error {
+	return s.repository.ValidateTaskHeadAdvances(ctx, config, advances)
 }
 
 // Store is a read-only task store backed by a disposable SQLite projection.
 type Store struct {
-	mu        sync.Mutex
+	rebuildMu sync.RWMutex
 	source    taskHeadSource
 	config    core.ProjectConfig
 	cachePath string
@@ -89,19 +100,17 @@ func (s *Store) CachePath() string {
 // Refresh validates task-ref tips, applying only changed tip checkpoints to
 // the cache. Git remains the canonical source for every changed task.
 func (s *Store) Refresh(ctx context.Context) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.refreshLocked(ctx)
+	if err := s.lockActiveDatabase(ctx); err != nil {
+		return err
+	}
+	defer s.rebuildMu.RUnlock()
+	return s.refreshActive(ctx)
 }
 
-func (s *Store) refreshLocked(ctx context.Context) error {
+func (s *Store) refreshActive(ctx context.Context) error {
 	for attempt := 0; attempt < 2; attempt++ {
 		heads, err := s.source.ListTaskHeads(ctx, s.config)
 		if err != nil {
-			return err
-		}
-		if !s.cacheExists() || !s.metaMatches(ctx) {
-			_, err := s.rebuildLocked(ctx)
 			return err
 		}
 		err = s.refreshChangedHeads(ctx, heads)
@@ -115,8 +124,8 @@ func (s *Store) refreshLocked(ctx context.Context) error {
 // Rebuild recreates the projection from all currently visible Git task heads.
 // It is intentionally a cache-only operation: no Git refs or objects change.
 func (s *Store) Rebuild(ctx context.Context) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.rebuildMu.Lock()
+	defer s.rebuildMu.Unlock()
 	return s.rebuildLocked(ctx)
 }
 
@@ -152,15 +161,17 @@ func (s *Store) List(ctx context.Context, config core.ProjectConfig) ([]core.Sna
 	if err := s.validateConfig(config); err != nil {
 		return nil, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.refreshLocked(ctx); err != nil {
+	if err := s.lockActiveDatabase(ctx); err != nil {
+		return nil, err
+	}
+	defer s.rebuildMu.RUnlock()
+	if err := s.refreshActive(ctx); err != nil {
 		return nil, err
 	}
 	return s.querySnapshots(ctx)
 }
 
-// Get returns one SQLite-projected checkpoint after refreshing against Git ref tips.
+// Get returns one SQLite-projected checkpoint after inspecting its exact Git ref.
 func (s *Store) Get(ctx context.Context, config core.ProjectConfig, taskID string) (core.Snapshot, error) {
 	if err := s.validateConfig(config); err != nil {
 		return core.Snapshot{}, err
@@ -168,19 +179,11 @@ func (s *Store) Get(ctx context.Context, config core.ProjectConfig, taskID strin
 	if err := core.ValidateTaskID(config.Key, taskID); err != nil {
 		return core.Snapshot{}, core.Wrap(core.CategoryValidation, "task ID is invalid", err)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.refreshLocked(ctx); err != nil {
+	if err := s.lockActiveDatabase(ctx); err != nil {
 		return core.Snapshot{}, err
 	}
-	snapshot, found, err := s.querySnapshot(ctx, taskID)
-	if err != nil {
-		return core.Snapshot{}, err
-	}
-	if !found {
-		return core.Snapshot{}, core.Errorf(core.CategoryNotFound, "task %q was not found", taskID)
-	}
-	return snapshot, nil
+	defer s.rebuildMu.RUnlock()
+	return s.getExactActive(ctx, taskID)
 }
 
 // Resolve returns a canonical full task ID for an unambiguous case-insensitive prefix.
@@ -191,9 +194,11 @@ func (s *Store) Resolve(ctx context.Context, config core.ProjectConfig, prefix s
 	if strings.TrimSpace(prefix) == "" {
 		return "", core.Errorf(core.CategoryValidation, "task ID prefix must not be blank")
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.refreshLocked(ctx); err != nil {
+	if err := s.lockActiveDatabase(ctx); err != nil {
+		return "", err
+	}
+	defer s.rebuildMu.RUnlock()
+	if err := s.refreshActive(ctx); err != nil {
 		return "", err
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT task_id FROM tasks ORDER BY task_id`)
@@ -231,11 +236,66 @@ func (s *Store) Write(context.Context, core.ProjectConfig, *core.Snapshot, core.
 	return core.Snapshot{}, core.Errorf(core.CategoryOperational, "SQLite projection is read-only; write task operations to Git")
 }
 
+// Advance conditionally replaces one projected task checkpoint.
+func (s *Store) Advance(ctx context.Context, config core.ProjectConfig, expectedParent string, snapshot core.Snapshot) (bool, error) {
+	if err := s.validateConfig(config); err != nil {
+		return false, err
+	}
+	if err := s.lockActiveDatabase(ctx); err != nil {
+		return false, err
+	}
+	defer s.rebuildMu.RUnlock()
+	return s.advanceActive(ctx, expectedParent, snapshot)
+}
+
+// Invalidate removes one projected task only when it still names an expected head.
+func (s *Store) Invalidate(ctx context.Context, config core.ProjectConfig, taskID, expectedParent, writtenHead string) error {
+	if err := s.validateConfig(config); err != nil {
+		return err
+	}
+	if err := s.lockActiveDatabase(ctx); err != nil {
+		return err
+	}
+	defer s.rebuildMu.RUnlock()
+	return s.invalidateActive(ctx, taskID, expectedParent, writtenHead)
+}
+
 func (s *Store) validateConfig(config core.ProjectConfig) error {
 	if config != s.config {
 		return core.Errorf(core.CategoryValidation, "Workbook configuration does not match projection cache")
 	}
 	return nil
+}
+
+// lockActiveDatabase returns with rebuildMu held for reading. If the active
+// database is missing or incompatible, it drops the read lock before taking
+// the exclusive rebuild lock and rechecks the cache there.
+func (s *Store) lockActiveDatabase(ctx context.Context) error {
+	s.rebuildMu.RLock()
+	if s.cacheUsable(ctx) {
+		return nil
+	}
+	s.rebuildMu.RUnlock()
+
+	s.rebuildMu.Lock()
+	if !s.cacheUsable(ctx) {
+		if _, err := s.rebuildLocked(ctx); err != nil {
+			s.rebuildMu.Unlock()
+			return err
+		}
+	}
+	s.rebuildMu.Unlock()
+
+	s.rebuildMu.RLock()
+	if s.cacheUsable(ctx) {
+		return nil
+	}
+	s.rebuildMu.RUnlock()
+	return cacheError("activate projection cache after rebuild", errors.New("projection cache is unavailable"))
+}
+
+func (s *Store) cacheUsable(ctx context.Context) bool {
+	return s.cacheExists() && s.metaMatches(ctx)
 }
 
 func (s *Store) cacheExists() bool {
@@ -281,17 +341,82 @@ func (s *Store) requiredSchemaExists(ctx context.Context) bool {
 	return true
 }
 
+func (s *Store) getExactActive(ctx context.Context, taskID string) (core.Snapshot, error) {
+	for attempt := 0; attempt < 2; attempt++ {
+		cached, cachedFound, err := s.querySnapshot(ctx, taskID)
+		if err != nil {
+			return core.Snapshot{}, err
+		}
+		head, headFound, err := s.source.InspectTaskHead(ctx, s.config, taskID)
+		if err != nil {
+			return core.Snapshot{}, err
+		}
+		if !headFound {
+			if !cachedFound {
+				return core.Snapshot{}, core.Errorf(core.CategoryNotFound, "task %q was not found", taskID)
+			}
+			return core.Snapshot{}, core.Errorf(core.CategoryCorruptData, "task %q ref disappeared after it was projected", taskID)
+		}
+		if cachedFound && cached.Head == head.ObjectID {
+			return cached, nil
+		}
+
+		if cachedFound {
+			if err := s.source.ValidateTaskHeadAdvances(ctx, s.config, []gitstore.HeadAdvance{
+				headAdvance(cached, head),
+			}); err != nil {
+				return core.Snapshot{}, err
+			}
+		}
+		snapshots, err := s.source.ReadTaskHeads(ctx, s.config, []gitstore.TaskHead{head})
+		if err != nil {
+			return core.Snapshot{}, err
+		}
+		if len(snapshots) != 1 {
+			return core.Snapshot{}, core.Errorf(core.CategoryCorruptData, "exact task read returned %d snapshots, want 1", len(snapshots))
+		}
+		snapshot := snapshots[0]
+		if err := validateReadSnapshot(head, snapshot); err != nil {
+			return core.Snapshot{}, err
+		}
+		if cachedFound && snapshot.State.History.Generation != cached.State.History.Generation {
+			return core.Snapshot{}, historyGenerationChanged(taskID)
+		}
+		expectedParent := ""
+		if cachedFound {
+			expectedParent = cached.Head
+		}
+		applied, err := s.advanceActive(ctx, expectedParent, snapshot)
+		if err != nil {
+			return core.Snapshot{}, err
+		}
+		if applied {
+			return snapshot, nil
+		}
+	}
+	return core.Snapshot{}, cacheError("refresh exact projected task after a concurrent update", errStaleProjectionRefresh)
+}
+
 func (s *Store) refreshChangedHeads(ctx context.Context, heads []gitstore.TaskHead) error {
-	cached, err := s.cachedHeads(ctx)
+	cached, err := s.cachedTaskHeads(ctx)
 	if err != nil {
 		return err
 	}
+	expectedHeads := make(map[string]string, len(cached))
+	for taskID, previous := range cached {
+		expectedHeads[taskID] = previous.head
+	}
 	current := make(map[string]string, len(heads))
 	changed := make([]gitstore.TaskHead, 0)
+	advances := make([]gitstore.HeadAdvance, 0)
 	for _, head := range heads {
 		current[head.TaskID] = head.ObjectID
-		if cached[head.TaskID] != head.ObjectID {
+		previous, found := cached[head.TaskID]
+		if !found || previous.head != head.ObjectID {
 			changed = append(changed, head)
+		}
+		if found && previous.head != head.ObjectID {
+			advances = append(advances, projectedHeadAdvance(head.TaskID, previous, head))
 		}
 	}
 	removed := make([]string, 0)
@@ -304,27 +429,50 @@ func (s *Store) refreshChangedHeads(ctx context.Context, heads []gitstore.TaskHe
 		return nil
 	}
 
-	snapshots := make([]core.Snapshot, 0, len(changed))
-	for _, head := range changed {
-		snapshot, err := s.source.ReadTaskHead(ctx, s.config, head)
+	if len(advances) > 0 {
+		if err := s.source.ValidateTaskHeadAdvances(ctx, s.config, advances); err != nil {
+			return err
+		}
+	}
+	var snapshots []core.Snapshot
+	if len(changed) > 0 {
+		snapshots, err = s.source.ReadTaskHeads(ctx, s.config, changed)
 		if err != nil {
 			return err
 		}
-		snapshots = append(snapshots, snapshot)
+		if len(snapshots) != len(changed) {
+			return core.Errorf(core.CategoryCorruptData, "task head batch returned %d snapshots, want %d", len(snapshots), len(changed))
+		}
+		for i, snapshot := range snapshots {
+			head := changed[i]
+			if err := validateReadSnapshot(head, snapshot); err != nil {
+				return err
+			}
+			if previous, found := cached[head.TaskID]; found &&
+				snapshot.State.History.Generation != previous.historyGeneration {
+				return historyGenerationChanged(head.TaskID)
+			}
+		}
 	}
-	return s.applyChanges(ctx, cached, snapshots, removed)
+	return s.applyChanges(ctx, expectedHeads, snapshots, removed)
 }
 
-func (s *Store) cachedHeads(ctx context.Context) (map[string]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT task_id, head FROM tasks`)
+type cachedTaskHead struct {
+	head              string
+	historyGeneration string
+}
+
+func (s *Store) cachedTaskHeads(ctx context.Context) (map[string]cachedTaskHead, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT task_id, head, history_generation FROM tasks`)
 	if err != nil {
 		return nil, s.databaseError("query projected task heads", err)
 	}
 	defer rows.Close()
-	heads := make(map[string]string)
+	heads := make(map[string]cachedTaskHead)
 	for rows.Next() {
-		var taskID, head string
-		if err := rows.Scan(&taskID, &head); err != nil {
+		var taskID string
+		var head cachedTaskHead
+		if err := rows.Scan(&taskID, &head.head, &head.historyGeneration); err != nil {
 			return nil, s.databaseError("read projected task head", err)
 		}
 		heads[taskID] = head
@@ -333,6 +481,113 @@ func (s *Store) cachedHeads(ctx context.Context) (map[string]string, error) {
 		return nil, s.databaseError("read projected task heads", err)
 	}
 	return heads, nil
+}
+
+func headAdvance(previous core.Snapshot, current gitstore.TaskHead) gitstore.HeadAdvance {
+	previous.Operation.TaskID = previous.State.TaskID
+	return gitstore.HeadAdvance{Previous: previous, Current: current}
+}
+
+func projectedHeadAdvance(taskID string, previous cachedTaskHead, current gitstore.TaskHead) gitstore.HeadAdvance {
+	return gitstore.HeadAdvance{
+		Previous: core.Snapshot{
+			Head:      previous.head,
+			Operation: core.OperationPack{TaskID: taskID},
+			State: core.StateDocument{
+				TaskID:  taskID,
+				History: core.History{Generation: previous.historyGeneration},
+			},
+		},
+		Current: current,
+	}
+}
+
+func validateReadSnapshot(head gitstore.TaskHead, snapshot core.Snapshot) error {
+	if snapshot.Head != head.ObjectID || snapshot.State.TaskID != head.TaskID {
+		return core.Errorf(core.CategoryCorruptData, "task head batch returned a snapshot for the wrong task or object")
+	}
+	return nil
+}
+
+func historyGenerationChanged(taskID string) error {
+	return core.Errorf(core.CategoryCorruptData, "task %q history generation changed across a projected head advance", taskID)
+}
+
+func (s *Store) advanceActive(ctx context.Context, expectedParent string, snapshot core.Snapshot) (bool, error) {
+	transaction, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, s.databaseError("begin conditional projection advancement", err)
+	}
+	defer transaction.Rollback()
+
+	var actualHead string
+	err = transaction.QueryRowContext(ctx, `SELECT head FROM tasks WHERE task_id = ?`, snapshot.State.TaskID).Scan(&actualHead)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		actualHead = ""
+	case err != nil:
+		return false, s.databaseError("read conditional projected task head", err)
+	}
+	if actualHead == snapshot.Head {
+		if err := transaction.Commit(); err != nil {
+			return false, s.databaseError("commit conditional projection advancement", err)
+		}
+		return true, nil
+	}
+	if actualHead != expectedParent {
+		if err := transaction.Commit(); err != nil {
+			return false, s.databaseError("commit conditional projection advancement", err)
+		}
+		return false, nil
+	}
+	if actualHead != "" {
+		if err := deleteTask(ctx, transaction, snapshot.State.TaskID); err != nil {
+			return false, err
+		}
+	}
+	if err := upsertSnapshot(ctx, transaction, snapshot); err != nil {
+		return false, err
+	}
+	if err := transaction.Commit(); err != nil {
+		return false, s.databaseError("commit conditional projection advancement", err)
+	}
+	return true, nil
+}
+
+func (s *Store) invalidateActive(ctx context.Context, taskID, expectedParent, writtenHead string) error {
+	transaction, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return s.databaseError("begin conditional projection invalidation", err)
+	}
+	defer transaction.Rollback()
+
+	for _, table := range []string{"task_labels", "task_dependencies"} {
+		if _, err := transaction.ExecContext(
+			ctx,
+			`DELETE FROM `+table+` WHERE task_id = ? AND EXISTS (
+				SELECT 1 FROM tasks WHERE task_id = ? AND head IN (?, ?)
+			)`,
+			taskID,
+			taskID,
+			expectedParent,
+			writtenHead,
+		); err != nil {
+			return s.databaseError("invalidate projected task collection", err)
+		}
+	}
+	if _, err := transaction.ExecContext(
+		ctx,
+		`DELETE FROM tasks WHERE task_id = ? AND head IN (?, ?)`,
+		taskID,
+		expectedParent,
+		writtenHead,
+	); err != nil {
+		return s.databaseError("invalidate projected task", err)
+	}
+	if err := transaction.Commit(); err != nil {
+		return s.databaseError("commit conditional projection invalidation", err)
+	}
+	return nil
 }
 
 func replaceSnapshots(ctx context.Context, db *sql.DB, snapshots []core.Snapshot) error {
@@ -664,14 +919,23 @@ func (s *Store) buildTemporaryDatabase(ctx context.Context, heads []gitstore.Tas
 		_ = os.Remove(temporaryPath)
 		return "", cacheError("initialize temporary projection metadata", err)
 	}
-	snapshots := make([]core.Snapshot, 0, len(heads))
-	for _, head := range heads {
-		snapshot, err := s.source.ReadTaskHead(ctx, s.config, head)
+	var snapshots []core.Snapshot
+	if len(heads) > 0 {
+		snapshots, err = s.source.ReadTaskHeads(ctx, s.config, heads)
 		if err != nil {
 			_ = os.Remove(temporaryPath)
 			return "", err
 		}
-		snapshots = append(snapshots, snapshot)
+		if len(snapshots) != len(heads) {
+			_ = os.Remove(temporaryPath)
+			return "", core.Errorf(core.CategoryCorruptData, "projection rebuild batch returned %d snapshots, want %d", len(snapshots), len(heads))
+		}
+		for i, snapshot := range snapshots {
+			if err := validateReadSnapshot(heads[i], snapshot); err != nil {
+				_ = os.Remove(temporaryPath)
+				return "", err
+			}
+		}
 	}
 	if err := replaceSnapshots(ctx, db, snapshots); err != nil {
 		_ = os.Remove(temporaryPath)
@@ -726,7 +990,12 @@ func equalHeads(left, right []gitstore.TaskHead) bool {
 }
 
 func openDatabase(_ context.Context, path string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", path)
+	dsn := &url.URL{Scheme: "file", Path: path}
+	query := dsn.Query()
+	query.Set("_pragma", "busy_timeout(5000)")
+	query.Set("_txlock", "immediate")
+	dsn.RawQuery = query.Encode()
+	db, err := sql.Open("sqlite", dsn.String())
 	if err != nil {
 		return nil, cacheError("open projection cache", err)
 	}
