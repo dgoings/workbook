@@ -238,7 +238,13 @@ func runBenchmark(ctx context.Context, options options) (perf.Report, error) {
 		scenarios = append(scenarios, selectedScenarioResults(repositoryScenarios, options.scenarios)...)
 	}
 	remoteScenarios := selectedRemoteScenarioNames(options.scenarios)
-	scenarios = append(scenarios, pendingRemoteScenarioResults(remoteScenarios)...)
+	if len(remoteScenarios) != 0 {
+		remote, err := perf.RunRemoteScenarios(ctx, runSpec, filepath.Join(fixtureRoot, "remote"), remoteScenarios)
+		if err != nil {
+			return perf.Report{}, fmt.Errorf("run remote sync scenarios: %w", err)
+		}
+		scenarios = append(scenarios, remote...)
+	}
 	return perf.Report{
 		Format:      perf.ReportFormat,
 		Version:     perf.ReportVersion,
@@ -301,12 +307,6 @@ func selectedRemoteScenarioNames(scenarios []string) []string {
 		}
 	}
 	return remote
-}
-
-// pendingRemoteScenarioResults deliberately emits no placeholder measurement.
-// Task 4 replaces this seam with the remote topology runner.
-func pendingRemoteScenarioResults(_ []string) []perf.ScenarioResult {
-	return nil
 }
 
 func benchmarkEnvironment(ctx context.Context, workbookBinary string, commandTimeout time.Duration) (perf.Environment, error) {

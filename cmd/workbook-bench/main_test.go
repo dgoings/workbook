@@ -102,6 +102,28 @@ func TestScenarioFlagParsesRepeatedSelectors(t *testing.T) {
 	}
 }
 
+func TestRunBenchmarkRunsOnlySelectedRemoteScenario(t *testing.T) {
+	report, err := runBenchmark(context.Background(), options{
+		workbookBinary: buildWorkbookBinary(t),
+		tasks:          10,
+		operations:     4,
+		samples:        1,
+		timeout:        5 * time.Second,
+		objectFormat:   "sha1",
+		phase:          "baseline",
+		scenarios:      []string{"sync-fresh-checkout"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Scenarios) != 1 || report.Scenarios[0].Name != "sync-fresh-checkout" {
+		t.Fatalf("remote-only scenarios = %#v, want fresh checkout only", report.Scenarios)
+	}
+	if report.Scenarios[0].Target == nil || len(report.Scenarios[0].Samples) != 1 {
+		t.Fatalf("remote scenario evidence = %#v, want target and sample", report.Scenarios[0])
+	}
+}
+
 func TestValidateOptionsRejectsInvalidScenarioSelectors(t *testing.T) {
 	workbookBinary := buildWorkbookBinary(t)
 	tests := []struct {
