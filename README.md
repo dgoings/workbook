@@ -37,9 +37,10 @@ A developer keeps task state in the repository's Git object database and queries
 ### Small-team workflow
 
 Team members explicitly share task refs through the repository's `origin` remote.
-Workbook fetches only its private task namespace, validates fetched task
-histories and checkpoints in isolated tracking refs, and leaves the checked-out
-code branch untouched.
+Workbook fetches only its private task namespace, validates current task tips
+and their safe ancestry relationships in isolated tracking refs, and leaves the
+checked-out code branch untouched. Exhaustive checkpoint replay belongs to the
+separate validation audit rather than ordinary synchronization.
 
 After cloning the repository and installing Workbook, fetch the shared tasks:
 

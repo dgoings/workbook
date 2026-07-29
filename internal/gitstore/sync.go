@@ -342,6 +342,16 @@ func (r *Repository) fetch(ctx context.Context, config core.ProjectConfig) (fetc
 			continue
 		}
 		if local, found := state.Canonical[ref.taskID]; found {
+			if local.Operation.HistoryGeneration != remote.Operation.HistoryGeneration {
+				invalidTracking++
+				state.Outcomes[ref.taskID] = SyncTaskResult{
+					TaskID: ref.taskID,
+					Status: SyncInvalid,
+					Detail: "tracking and canonical tips use different history generations",
+				}
+				delete(state.Tracking, ref.taskID)
+				continue
+			}
 			pairs = append(pairs, taskHeadPair{TaskID: ref.taskID, Local: local, Remote: remote})
 		}
 	}

@@ -144,6 +144,53 @@ func TestFetchReconcilesValidRemoteTipWhenAnotherCanonicalTipIsInvalid(t *testin
 	}
 }
 
+func TestFetchIsolatesGenerationMismatchAndReconcilesUnrelatedRemoteTip(t *testing.T) {
+	first, second, config := syncRepositories(t)
+	generationTask := createSyncTask(t, first, config, "Original generation")
+	publishTaskRefs(t, first)
+	if _, err := second.Fetch(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+	localHead := refValue(t, second, taskRefPrefix+generationTask.ID)
+
+	updateSyncTask(t, first, config, generationTask.ID, "Changed generation")
+	updated, err := first.Get(context.Background(), config, generationTask.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pack := updated.Operation
+	state := updated.State
+	pack.HistoryGeneration = "01K0M6B8A4FTT8C39MXXYTW7D9"
+	state.History.Generation = pack.HistoryGeneration
+	tree := syncGitInput(
+		t,
+		first.Root,
+		[]byte(
+			"100644 blob "+writeDocumentBlob(t, first, pack)+"\toperation.json\n"+
+				"100644 blob "+writeDocumentBlob(t, first, state)+"\tstate.json\n",
+		),
+		"mktree",
+	)
+	parent := syncGit(t, first.Root, "rev-parse", updated.Head+"^")
+	mismatched := syncGit(t, first.Root, "commit-tree", tree, "-p", parent, "-m", "change generation")
+	syncGit(t, first.Root, "update-ref", taskRefPrefix+generationTask.ID, mismatched, updated.Head)
+
+	validRemote := createSyncTask(t, first, config, "Unrelated valid task")
+	publishTaskRefs(t, first)
+	result, err := second.Fetch(context.Background(), config)
+	if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
+		t.Fatalf("Fetch(generation mismatch) category = %q, want %q; result = %#v; error = %v", got, want, result, err)
+	}
+	assertSyncOutcome(t, result, generationTask.ID, SyncInvalid)
+	assertSyncOutcome(t, result, validRemote.ID, SyncCreated)
+	if got := refValue(t, second, taskRefPrefix+generationTask.ID); got != localHead {
+		t.Fatalf("generation-mismatched canonical tip = %q, want unchanged %q", got, localHead)
+	}
+	if got, want := refValue(t, second, taskRefPrefix+validRemote.ID), refValue(t, first, taskRefPrefix+validRemote.ID); got != want {
+		t.Fatalf("unrelated canonical tip = %q, want %q", got, want)
+	}
+}
+
 func TestFetchFreshCheckoutUsesCompleteTwentyOperationTip(t *testing.T) {
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Revision 01")
