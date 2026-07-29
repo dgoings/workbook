@@ -55,6 +55,11 @@ the order of the flags.
 Every remote scenario requires at least 500 active tasks and 20 operations per
 task, even for a baseline run. The seven remote selectors are:
 
+Synchronization measurements exercise the bounded default path: one isolated
+tracking fetch, current-tip validation, ancestry classification, and ref
+publication. They deliberately do not include a replay of every buried
+checkpoint; the planned explicit validation audit is a separate future path.
+
 | Selector | Workbook command and topology | Reference target |
 | --- | --- | --- |
 | `sync-fresh-checkout` | `fetch` from 500 populated remote task refs into a fresh checkout | at most 5 seconds; fewer than 20 Git processes |
@@ -129,6 +134,31 @@ go run ./cmd/workbook-bench \
   --output-json docs/performance/2026-07-28-sync-baseline-sha256.json \
   --output-markdown docs/performance/2026-07-28-sync-baseline-sha256.md
 ```
+
+### 2026-07-29 tip-focused evidence
+
+The tip-focused implementation was exercised once per supported object format
+with the same 500-by-20 fixture, one sample, and 60-second timeout:
+
+| Format | Evidence | Result |
+| --- | --- | --- |
+| SHA-1 | [attempt record](2026-07-29-sync-tip-focused-sha1-attempt.md) | The fail-fast harness found an incorrect changed-set oracle before report assembly; no rerun or substitute report was made. |
+| SHA-256 | [JSON](2026-07-29-sync-tip-focused-sha256.json), [Markdown](2026-07-29-sync-tip-focused-sha256.md) | All seven topology contracts verified. Four success scenarios completed in 313.51–1047.08 ms; three expected product-error scenarios completed in 226.62–322.68 ms. |
+
+Compared with the [SHA-1 baseline](2026-07-28-sync-baseline-sha1.md) and
+[SHA-256 baseline](2026-07-28-sync-baseline-sha256.md), which timed out with
+3,997–4,082 Git processes per topology, the SHA-256 tip-focused run used 8–20
+Git processes and did not time out. Fresh checkout and initial publication met
+both targets. Synchronized and small-changed-set timing met their budgets, but
+their observed process counts of 11 and 20 missed the exclusive `<10` and `<20`
+limits.
+
+The evidence was not replaced after those misses. A subsequent bounded-shape
+test, using 10 tasks by 4 operations and the same Trace2 counter, verifies the
+two affected product paths at 9 and 18 Git processes after removing a redundant
+object-width probe and fetch auto-maintenance. That test demonstrates the
+constant process shape now meets the approved exclusive limits; it is not a
+replacement 500-by-20 acceptance sample.
 
 ## Reading the reports
 

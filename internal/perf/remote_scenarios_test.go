@@ -179,6 +179,40 @@ func TestRemoteScenarioProcessCountDoesNotScaleWithFixtureSize(t *testing.T) {
 	}
 }
 
+func TestRemoteSyncProductsStayUnderExclusiveProcessTargets(t *testing.T) {
+	workbook := buildRemoteScenarioWorkbook(t)
+	results, err := runRemoteScenarios(context.Background(), RunSpec{
+		WorkbookBinary: workbook,
+		Fixture:        FixtureSpec{ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
+		Samples:        1,
+		CommandTimeout: 20 * time.Second,
+	}, filepath.Join(t.TempDir(), "scenarios"), []string{
+		"sync-already-synchronized",
+		"sync-small-changed-ref-set",
+	}, remoteScenarioDependencies{
+		buildFixture:   buildRemoteFixtureWithinTimeout,
+		measureCommand: MeasureCommandOutput,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, result := range results {
+		if result.Target == nil {
+			t.Fatalf("%s target = nil", result.Name)
+		}
+		got := result.Samples[0].GitProcesses
+		t.Logf("%s Git processes = %d", result.Name, got)
+		if got >= result.Target.MaxGitProcesses {
+			t.Fatalf(
+				"%s Git processes = %d, want fewer than %d",
+				result.Name,
+				got,
+				result.Target.MaxGitProcesses,
+			)
+		}
+	}
+}
+
 func buildRemoteScenarioWorkbook(t *testing.T) string {
 	t.Helper()
 	binary := filepath.Join(t.TempDir(), "workbook")
@@ -343,6 +377,35 @@ func TestSmallChangedRefSetKeepsTrackingAtPrePushRemoteTip(t *testing.T) {
 		before := fixture.Expected[taskID]
 		if canonical[taskID] != before.Canonical || remote[taskID] != before.Canonical || tracking[taskID] != before.Tracking {
 			t.Fatalf("%s refs after sync = canonical %q tracking %q remote %q; want local tip %q, pre-push tracking %q", taskID, canonical[taskID], tracking[taskID], remote[taskID], before.Canonical, before.Tracking)
+		}
+	}
+}
+
+func TestSmallChangedRefSetExpectedResultsChangeOnlyTenTasks(t *testing.T) {
+	taskIDs := make([]string, 12)
+	for index := range taskIDs {
+		taskIDs[index] = fmt.Sprintf("WB-%02d", index)
+	}
+	fetch, push := expectedRemoteTaskResults(RemoteSmallChangedRefSet, taskIDs)
+	for index := range taskIDs {
+		wantFetch := gitstore.SyncUnchanged
+		wantPush := gitstore.SyncUpToDate
+		switch {
+		case index < 5:
+			wantFetch = gitstore.SyncLocalAhead
+			wantPush = gitstore.SyncPublished
+		case index < 10:
+			wantFetch = gitstore.SyncFastForwarded
+		}
+		if fetch[index].Status != wantFetch || push[index].Status != wantPush {
+			t.Fatalf(
+				"task %d results = fetch %q push %q, want fetch %q push %q",
+				index,
+				fetch[index].Status,
+				push[index].Status,
+				wantFetch,
+				wantPush,
+			)
 		}
 	}
 }

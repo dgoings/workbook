@@ -21,6 +21,12 @@ type HeadAdvance struct {
 	Current  TaskHead
 }
 
+type tipReadResult struct {
+	Head     TaskHead
+	Snapshot core.Snapshot
+	Err      error
+}
+
 // ReadTaskHeads returns validated tip snapshots in the same order as heads,
 // using one Git batch process for every requested object.
 func (r *Repository) ReadTaskHeads(
@@ -28,6 +34,28 @@ func (r *Repository) ReadTaskHeads(
 	config core.ProjectConfig,
 	heads []TaskHead,
 ) ([]core.Snapshot, error) {
+	results, err := r.readTaskHeadsPartial(ctx, config, heads)
+	if err != nil {
+		return nil, err
+	}
+	snapshots := make([]core.Snapshot, 0, len(results))
+	for _, result := range results {
+		if result.Err != nil {
+			return nil, result.Err
+		}
+		snapshots = append(snapshots, result.Snapshot)
+	}
+	return snapshots, nil
+}
+
+// readTaskHeadsPartial reads every valid requested tip through one batch
+// process. Object and Workbook-document failures remain attributed to one head;
+// malformed batch framing is fatal because later records cannot be trusted.
+func (r *Repository) readTaskHeadsPartial(
+	ctx context.Context,
+	config core.ProjectConfig,
+	heads []TaskHead,
+) ([]tipReadResult, error) {
 	if err := r.verifyIdentity(ctx); err != nil {
 		return nil, err
 	}
@@ -35,20 +63,29 @@ func (r *Repository) ReadTaskHeads(
 		return nil, err
 	}
 	if len(heads) == 0 {
-		return []core.Snapshot{}, nil
+		return []tipReadResult{}, nil
 	}
 
+	results := make([]tipReadResult, len(heads))
 	var input bytes.Buffer
-	objectIDBytes := make([]int, len(heads))
+	type batchHead struct {
+		index         int
+		head          TaskHead
+		objectIDBytes int
+	}
+	validHeads := make([]batchHead, 0, len(heads))
 	for i, head := range heads {
+		results[i].Head = head
 		if err := core.ValidateTaskID(config.Key, head.TaskID); err != nil {
-			return nil, core.Wrap(core.CategoryCorruptData, "task head ID is invalid", err)
+			results[i].Err = core.Wrap(core.CategoryCorruptData, "task head ID is invalid", err)
+			continue
 		}
 		decoded, err := decodeObjectID(head.ObjectID)
 		if err != nil {
-			return nil, core.Wrap(core.CategoryCorruptData, "task head object ID is invalid", err)
+			results[i].Err = core.Wrap(core.CategoryCorruptData, "task head object ID is invalid", err)
+			continue
 		}
-		objectIDBytes[i] = len(decoded)
+		validHeads = append(validHeads, batchHead{index: i, head: head, objectIDBytes: len(decoded)})
 		fmt.Fprintf(
 			&input,
 			"%s\n%s^{tree}\n%s:operation.json\n%s:state.json\n",
@@ -58,22 +95,30 @@ func (r *Repository) ReadTaskHeads(
 			head.ObjectID,
 		)
 	}
+	if len(validHeads) == 0 {
+		return results, nil
+	}
 
 	output, err := r.Git(ctx, input.Bytes(), "cat-file", "--batch")
 	if err != nil {
 		return nil, core.Wrap(core.CategoryCorruptData, "cannot read task tips", err)
 	}
 	reader := bufio.NewReader(bytes.NewReader(output))
-	snapshots := make([]core.Snapshot, 0, len(heads))
-	for i, head := range heads {
-		snapshot, err := readBatchSnapshot(reader, config, head, objectIDBytes[i])
+	for _, batch := range validHeads {
+		objects, err := readBatchObjects(reader)
 		if err != nil {
-			return nil, err
+			return nil, core.Wrap(core.CategoryCorruptData, "cannot read task objects from Git batch", err)
+		}
+		snapshot, err := validateBatchSnapshot(objects, config, batch.head, batch.objectIDBytes)
+		if err != nil {
+			results[batch.index].Err = err
+			continue
 		}
 		if err := r.rememberGitObjectID(snapshot.Head); err != nil {
-			return nil, core.Wrap(core.CategoryCorruptData, "Git returned an invalid task object ID", err)
+			results[batch.index].Err = core.Wrap(core.CategoryCorruptData, "Git returned an invalid task object ID", err)
+			continue
 		}
-		snapshots = append(snapshots, snapshot)
+		results[batch.index].Snapshot = snapshot
 	}
 	if _, err := reader.ReadByte(); !errors.Is(err, io.EOF) {
 		if err != nil {
@@ -81,36 +126,39 @@ func (r *Repository) ReadTaskHeads(
 		}
 		return nil, core.Errorf(core.CategoryCorruptData, "Git returned unexpected trailing batch data")
 	}
-	return snapshots, nil
+	return results, nil
 }
 
 type batchObject struct {
 	objectID string
 	kind     string
 	contents []byte
+	missing  bool
 }
 
-func readBatchSnapshot(
-	reader *bufio.Reader,
+func readBatchObjects(reader *bufio.Reader) ([4]batchObject, error) {
+	var objects [4]batchObject
+	for i := range objects {
+		object, err := readBatchObject(reader)
+		if err != nil {
+			return [4]batchObject{}, err
+		}
+		objects[i] = object
+	}
+	return objects, nil
+}
+
+func validateBatchSnapshot(
+	objects [4]batchObject,
 	config core.ProjectConfig,
 	head TaskHead,
 	objectIDBytes int,
 ) (core.Snapshot, error) {
-	commit, err := readBatchObject(reader)
-	if err != nil {
-		return core.Snapshot{}, core.Wrap(core.CategoryCorruptData, "cannot read task commit from Git batch", err)
-	}
-	tree, err := readBatchObject(reader)
-	if err != nil {
-		return core.Snapshot{}, core.Wrap(core.CategoryCorruptData, "cannot read task tree from Git batch", err)
-	}
-	operationBlob, err := readBatchObject(reader)
-	if err != nil {
-		return core.Snapshot{}, core.Wrap(core.CategoryCorruptData, "cannot read task operation from Git batch", err)
-	}
-	stateBlob, err := readBatchObject(reader)
-	if err != nil {
-		return core.Snapshot{}, core.Wrap(core.CategoryCorruptData, "cannot read task state from Git batch", err)
+	commit, tree, operationBlob, stateBlob := objects[0], objects[1], objects[2], objects[3]
+	for _, object := range objects {
+		if object.missing {
+			return core.Snapshot{}, core.Errorf(core.CategoryCorruptData, "requested task object %q is missing", object.objectID)
+		}
 	}
 
 	if commit.objectID != head.ObjectID || commit.kind != "commit" {
@@ -168,7 +216,7 @@ func readBatchObject(reader *bufio.Reader) (batchObject, error) {
 	}
 	fields := strings.Fields(strings.TrimSuffix(header, "\n"))
 	if len(fields) == 2 && fields[1] == "missing" {
-		return batchObject{}, fmt.Errorf("requested object %q is missing", fields[0])
+		return batchObject{objectID: fields[0], missing: true}, nil
 	}
 	if len(fields) != 3 {
 		return batchObject{}, fmt.Errorf("invalid Git batch object header")
