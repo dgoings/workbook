@@ -833,7 +833,7 @@ GOCACHE=/private/tmp/workbook-gocache go test ./internal/core ./internal/webui .
 
 Expected: formatting changes no semantics and all focused packages pass.
 
-- [x] **Step 5: Run complete verification**
+- [x] **Step 5: Run complete automated verification**
 
 Run each command and inspect its exit status:
 
@@ -845,22 +845,24 @@ git diff --check
 git status --short
 ```
 
-Then start `/private/tmp/workbook-web-drag serve` against a temporary repository
-and verify in a browser at narrow and wide viewport sizes:
+- [ ] **Step 6: Perform manual browser verification**
+
+Start `/private/tmp/workbook-web-drag serve` against a temporary repository and
+verify in a browser at narrow and wide viewport sizes:
 
 - same-column movement renders and follows the insertion marker;
 - top and bottom drops clamp to the dragged task's priority group;
 - cross-column movement changes status and placement together; and
 - a rejected placement refreshes the board and shows the visible error state.
 
-- [x] **Step 6: Mark plan steps complete and commit integration and docs**
+- [x] **Step 7: Mark completed plan steps and commit integration and docs**
 
 ```sh
 git add internal/cli/run_test.go README.md docs/superpowers/plans/2026-07-29-web-drag-reordering.md
 git commit -m "test: verify durable web placement"
 ```
 
-- [x] **Step 7: Review the complete branch before publication**
+- [x] **Step 8: Review the complete branch before publication**
 
 Run:
 
