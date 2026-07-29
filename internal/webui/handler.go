@@ -23,6 +23,8 @@ type TaskLister func(context.Context) ([]core.Task, error)
 
 type TaskStatusUpdater func(context.Context, string, core.Status) (core.MutationResult, error)
 
+type TaskPositionUpdater func(context.Context, string, core.PlaceInput) (core.MutationResult, error)
+
 type TaskCreator func(context.Context, core.CreateInput) (core.MutationResult, error)
 
 type TaskUpdater func(context.Context, string, core.UpdateInput) (core.MutationResult, error)
@@ -72,6 +74,7 @@ type handler struct {
 	create       TaskCreator
 	update       TaskUpdater
 	updateStatus TaskStatusUpdater
+	position     TaskPositionUpdater
 	delete       TaskDeleter
 	restore      TaskRestorer
 	page         *template.Template
@@ -84,6 +87,12 @@ type pageData struct {
 
 type updateStatusRequest struct {
 	Status core.Status `json:"status"`
+}
+
+type positionTaskRequest struct {
+	Status core.Status `json:"status"`
+	Before string      `json:"before"`
+	After  string      `json:"after"`
 }
 
 type createTaskRequest struct {
@@ -103,16 +112,16 @@ type updateTaskRequest struct {
 }
 
 func NewHandler(list TaskLister, create TaskCreator, update TaskUpdater, updateStatus TaskStatusUpdater) http.Handler {
-	return newHandler(list, create, update, updateStatus, nil, nil)
+	return newHandler(list, create, update, updateStatus, nil, nil, nil)
 }
 
-func NewHandlerWithTaskMutations(list TaskLister, create TaskCreator, update TaskUpdater, updateStatus TaskStatusUpdater, delete TaskDeleter, restore TaskRestorer) http.Handler {
-	return newHandler(list, create, update, updateStatus, delete, restore)
+func NewHandlerWithTaskMutations(list TaskLister, create TaskCreator, update TaskUpdater, updateStatus TaskStatusUpdater, position TaskPositionUpdater, delete TaskDeleter, restore TaskRestorer) http.Handler {
+	return newHandler(list, create, update, updateStatus, position, delete, restore)
 }
 
-func newHandler(list TaskLister, create TaskCreator, update TaskUpdater, updateStatus TaskStatusUpdater, delete TaskDeleter, restore TaskRestorer) http.Handler {
+func newHandler(list TaskLister, create TaskCreator, update TaskUpdater, updateStatus TaskStatusUpdater, position TaskPositionUpdater, delete TaskDeleter, restore TaskRestorer) http.Handler {
 	page := template.Must(template.New("index.html").ParseFS(assets, "assets/index.html"))
-	handler := &handler{list: list, create: create, update: update, updateStatus: updateStatus, delete: delete, restore: restore, page: page, mux: http.NewServeMux()}
+	handler := &handler{list: list, create: create, update: update, updateStatus: updateStatus, position: position, delete: delete, restore: restore, page: page, mux: http.NewServeMux()}
 	handler.mux.HandleFunc("GET /{$}", handler.serveBoard)
 	handler.mux.HandleFunc("GET /deleted", handler.serveBoard)
 	handler.mux.HandleFunc("GET /tasks/new", handler.serveBoard)
@@ -121,6 +130,7 @@ func newHandler(list TaskLister, create TaskCreator, update TaskUpdater, updateS
 	handler.mux.HandleFunc("POST /api/tasks", handler.createTask)
 	handler.mux.HandleFunc("PATCH /api/tasks/{id}", handler.updateTask)
 	handler.mux.HandleFunc("PATCH /api/tasks/{id}/status", handler.updateTaskStatus)
+	handler.mux.HandleFunc("PATCH /api/tasks/{id}/position", handler.positionTask)
 	handler.mux.HandleFunc("DELETE /api/tasks/{id}", handler.deleteTask)
 	handler.mux.HandleFunc("POST /api/tasks/{id}/restore", handler.restoreTask)
 	handler.mux.HandleFunc("GET /healthz", handler.serveHealth)
@@ -154,6 +164,9 @@ func allowedMethod(path string) (string, bool) {
 	case "/api/tasks":
 		return http.MethodGet + ", " + http.MethodPost, true
 	default:
+		if taskPositionPathID(path) != "" {
+			return http.MethodPatch, true
+		}
 		if taskStatusPathID(path) != "" {
 			return http.MethodPatch, true
 		}
@@ -197,6 +210,19 @@ func taskPathID(path string) string {
 func taskStatusPathID(path string) string {
 	const prefix = "/api/tasks/"
 	const suffix = "/status"
+	if !strings.HasPrefix(path, prefix) || !strings.HasSuffix(path, suffix) {
+		return ""
+	}
+	id := strings.TrimSuffix(strings.TrimPrefix(path, prefix), suffix)
+	if id == "" || strings.Contains(id, "/") {
+		return ""
+	}
+	return id
+}
+
+func taskPositionPathID(path string) string {
+	const prefix = "/api/tasks/"
+	const suffix = "/position"
 	if !strings.HasPrefix(path, prefix) || !strings.HasSuffix(path, suffix) {
 		return ""
 	}
@@ -282,6 +308,28 @@ func (handler *handler) updateTaskStatus(writer http.ResponseWriter, request *ht
 		return
 	}
 	result, err := handler.updateStatus(request.Context(), id, input.Status)
+	if err != nil {
+		handler.writeError(writer, err)
+		return
+	}
+	handler.writeTaskMutation(writer, result)
+}
+
+func (handler *handler) positionTask(writer http.ResponseWriter, request *http.Request) {
+	if handler.position == nil {
+		handler.writeError(writer, core.Errorf(core.CategoryOperational, "task positioning is not configured"))
+		return
+	}
+	var body positionTaskRequest
+	if err := decodeRequest(request.Body, &body); err != nil {
+		handler.writeError(writer, core.Wrap(core.CategoryInvocation, "decode task position", err))
+		return
+	}
+	result, err := handler.position(
+		request.Context(),
+		request.PathValue("id"),
+		core.PlaceInput{Status: body.Status, Before: body.Before, After: body.After},
+	)
 	if err != nil {
 		handler.writeError(writer, err)
 		return

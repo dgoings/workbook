@@ -700,6 +700,9 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 		func(requestContext context.Context, id string, status core.Status) (core.MutationResult, error) {
 			return service.UpdateMutation(requestContext, id, core.UpdateInput{Status: &status})
 		},
+		func(requestContext context.Context, id string, input core.PlaceInput) (core.MutationResult, error) {
+			return service.PlaceMutation(requestContext, id, input)
+		},
 		func(requestContext context.Context, id string) (core.MutationResult, error) {
 			return service.DeleteMutation(requestContext, id)
 		},
