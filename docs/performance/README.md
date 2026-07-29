@@ -55,6 +55,11 @@ the order of the flags.
 Every remote scenario requires at least 500 active tasks and 20 operations per
 task, even for a baseline run. The seven remote selectors are:
 
+Synchronization measurements exercise the bounded default path: one isolated
+tracking fetch, current-tip validation, ancestry classification, and ref
+publication. They deliberately do not include a replay of every buried
+checkpoint; the planned explicit validation audit is a separate future path.
+
 | Selector | Workbook command and topology | Reference target |
 | --- | --- | --- |
 | `sync-fresh-checkout` | `fetch` from 500 populated remote task refs into a fresh checkout | at most 5 seconds; fewer than 20 Git processes |

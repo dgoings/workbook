@@ -202,17 +202,21 @@ formula directly into the tap from the built artifacts.
 ### Explicit task sharing
 
 `workbook fetch` downloads only `refs/workbook/tasks/*` from `origin` into
-`refs/workbook/remotes/origin/tasks/*`. Workbook validates each fetched operation
-history and its state checkpoints before touching the corresponding local task
-ref. A missing local task is created, and a behind local task is fast-forwarded.
-Local-ahead tasks are left alone; divergent task histories remain on their
-separate local and tracking refs and are reported for later resolution. Invalid
-fetched data remains isolated and causes a nonzero exit.
+`refs/workbook/remotes/origin/tasks/*`. It validates the current tracking and
+canonical tips' IDs, documents, and safe ancestry relationship before touching
+the corresponding local task ref. A missing local task is created, and a behind
+local task is fast-forwarded in one compare-and-swap transaction. Local-ahead
+tasks are left alone; divergent task histories remain on their separate local
+and tracking refs and are reported for later resolution. Invalid fetched data
+remains isolated and causes a nonzero exit; valid unrelated tracking refs can
+still reconcile in that run.
 
-`workbook push` publishes every local `refs/workbook/tasks/*` ref to `origin`
-without force or deletion. Each task is pushed independently, so an unrelated
-task can publish even when another task is rejected as non-fast-forward. The
-command reports every outcome and exits nonzero if any ref is rejected.
+`workbook push` publishes validated local `refs/workbook/tasks/*` refs to
+`origin` without force or deletion. One bounded, non-atomic publication retains
+per-ref outcomes, so an unrelated task can publish even when another task is
+rejected as non-fast-forward. Invalid local tips are omitted. The command
+reports every outcome and exits nonzero if any ref is invalid, rejected, or
+changes during publication.
 
 `workbook hooks install` opts the clone into automatic task publication during
 an ordinary `git push origin`. The managed pre-push hook is recursion-safe and
@@ -228,8 +232,10 @@ future work.
 `workbook sync` runs the POC-safe sequence against `origin`: fetch Workbook task
 refs into the isolated tracking namespace, validate and fast-forward/create
 compatible local task refs, stop before pushing if any task history diverged or
-failed validation, then push every local task ref. The command never fetches or
-pushes code branches and does not create a hidden tasks branch.
+failed validation, then publish the already validated local tips. The command
+does not replay every buried checkpoint during ordinary synchronization; that
+is reserved for a planned explicit validation audit. The command never fetches
+or pushes code branches and does not create a hidden tasks branch.
 
 ### Terminal board
 
@@ -390,12 +396,14 @@ ref
 - Every current POC commit tree contains exactly the edit's versioned operation
   pack in `operation.json` and a deterministic, durable task materialization in
   `state.json`.
-- Each `state.json` checkpoint must match the result of applying that commit's
-  operation pack to its parent state, or to no parent state for a root commit.
-- Ordinary `list` and `show` reads validate and use the tip checkpoint without
-  replaying the complete history. This read optimization does not change the
-  authority of the immutable operations or their Git ancestry.
-- History replay and checkpoint reconstruction are reserved for later POC work.
+- The durable model requires each `state.json` checkpoint to match the result of
+  applying that commit's operation pack to its parent state, or to no parent
+  state for a root commit.
+- Ordinary `list`, `show`, `fetch`, and `sync` validate and use current tip
+  checkpoints without replaying the complete history. This bounded default does
+  not change the authority of immutable operations or Git ancestry.
+- A planned explicit validation audit will replay history and reconstruct
+  checkpoints; it is not part of the current POC command surface.
 
 Using one ref per task avoids a single global state-branch bottleneck: local
 commands working on different tasks update different refs. Future concurrent edits

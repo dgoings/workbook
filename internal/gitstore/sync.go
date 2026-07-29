@@ -1,13 +1,9 @@
 package gitstore
 
 import (
-	"bytes"
 	"context"
-	"errors"
 	"fmt"
-	"os/exec"
 	"sort"
-	"strings"
 
 	"github.com/dgoings/workbook/internal/core"
 )
@@ -46,6 +42,15 @@ type SyncRunResult struct {
 	Remote string     `json:"remote"`
 	Fetch  SyncResult `json:"fetch"`
 	Push   SyncResult `json:"push"`
+}
+
+// fetchState is the single validated view that Fetch produces for Sync. It is
+// deliberately private: callers receive the stable SyncResult while Sync can
+// reuse the canonical and tracking tips without inspecting them again.
+type fetchState struct {
+	Canonical map[string]core.Snapshot
+	Tracking  map[string]core.Snapshot
+	Outcomes  map[string]SyncTaskResult
 }
 
 // Push publishes validated local Workbook task refs to origin without force or
@@ -189,28 +194,6 @@ func failedPushTransport(
 	return result, err
 }
 
-func (r *Repository) remoteRefHead(ctx context.Context, ref string) (string, error) {
-	output, err := r.Git(ctx, nil, "ls-remote", "--refs", "origin", ref)
-	if err != nil {
-		return "", err
-	}
-	if len(output) == 0 {
-		return "", nil
-	}
-	if output[len(output)-1] != '\n' {
-		return "", core.Errorf(core.CategoryOperational, "Git returned an unterminated remote ref record")
-	}
-	lines := bytes.Split(output[:len(output)-1], []byte{'\n'})
-	if len(lines) != 1 {
-		return "", core.Errorf(core.CategoryOperational, "Git returned multiple records for remote ref %q", ref)
-	}
-	fields := bytes.Fields(lines[0])
-	if len(fields) != 2 || string(fields[1]) != ref {
-		return "", core.Errorf(core.CategoryOperational, "Git returned an invalid remote ref record")
-	}
-	return string(fields[0]), nil
-}
-
 type SyncResult struct {
 	Remote string           `json:"remote"`
 	Status SyncPhaseStatus  `json:"status,omitempty"`
@@ -228,7 +211,7 @@ func (r *Repository) Sync(ctx context.Context, config core.ProjectConfig) (SyncR
 		Push:   skippedSyncPhase("push not run"),
 	}
 
-	fetched, fetchErr := r.Fetch(ctx, config)
+	state, fetched, fetchErr := r.fetch(ctx, config)
 	result.Fetch = fetched
 	if fetchErr != nil {
 		result.Push = skippedSyncPhase("push skipped because fetch failed")
@@ -241,7 +224,7 @@ func (r *Repository) Sync(ctx context.Context, config core.ProjectConfig) (SyncR
 		return result, core.Errorf(core.CategoryStaleWrite, "%s", message)
 	}
 
-	pushed, pushErr := r.Push(ctx, config)
+	pushed, pushErr := r.publishFetched(ctx, config, state)
 	result.Push = pushed
 	if pushErr != nil {
 		return result, pushErr
@@ -274,198 +257,247 @@ func countSyncStatus(result SyncResult, status SyncStatus) int {
 }
 
 // Fetch downloads origin's Workbook task refs into an isolated tracking
-// namespace, validates every tip, then creates or fast-forwards compatible
-// canonical refs with compare-and-swap updates.
+// namespace, validates their current tips, then creates or fast-forwards
+// compatible canonical refs with one compare-and-swap transaction.
 func (r *Repository) Fetch(ctx context.Context, config core.ProjectConfig) (SyncResult, error) {
+	_, result, err := r.fetch(ctx, config)
+	return result, err
+}
+
+func (r *Repository) fetch(ctx context.Context, config core.ProjectConfig) (fetchState, SyncResult, error) {
+	state := fetchState{
+		Canonical: make(map[string]core.Snapshot),
+		Tracking:  make(map[string]core.Snapshot),
+		Outcomes:  make(map[string]SyncTaskResult),
+	}
 	result := SyncResult{Remote: "origin", Tasks: []SyncTaskResult{}}
 	if err := r.verifyIdentity(ctx); err != nil {
-		return failedSyncPhase(result, "fetch failed before completion", err)
+		result, err = failedSyncPhase(result, "fetch failed before completion", err)
+		return state, result, err
 	}
 	if err := r.validateRepositoryConfig(config); err != nil {
-		return failedSyncPhase(result, "fetch failed before completion", err)
+		result, err = failedSyncPhase(result, "fetch failed before completion", err)
+		return state, result, err
 	}
 
 	refspec := "+" + taskRefPrefix + "*:" + remoteTaskRefPrefix + "*"
 	if _, err := r.Git(ctx, nil, "fetch", "--no-tags", "origin", refspec); err != nil {
-		return failedSyncPhase(result, "fetch failed before completion", err)
+		result, err = failedSyncPhase(result, "fetch failed before completion", err)
+		return state, result, err
 	}
 
-	refs, err := r.listRefs(ctx, remoteTaskRefPrefix)
+	canonicalRefs, err := r.listOwnedTaskRefs(ctx, config, taskRefPrefix)
 	if err != nil {
-		return failedSyncPhase(result, "fetch failed before completion", err)
+		result, err = failedSyncPhase(result, "fetch failed before completion", err)
+		return state, result, err
 	}
-	invalid := 0
-	for _, remote := range refs {
-		item := SyncTaskResult{TaskID: remote.taskID}
-		if err := r.validateFetchedHistory(ctx, config, remote); err != nil {
-			item.Status = SyncInvalid
-			item.Detail = err.Error()
-			result.Tasks = append(result.Tasks, item)
-			invalid++
-			continue
-		}
+	trackingRefs, err := r.listOwnedTaskRefs(ctx, config, remoteTaskRefPrefix)
+	if err != nil {
+		result, err = failedSyncPhase(result, "fetch failed before completion", err)
+		return state, result, err
+	}
 
-		local, found, err := r.taskRef(ctx, remote.taskID)
-		if err != nil {
-			return failedSyncPhase(result, "fetch failed before completion", err)
-		}
-		if !found {
-			if err := r.updateCanonicalRef(ctx, remote.taskID, remote.objectID, ""); err != nil {
-				return failedSyncPhase(result, "fetch failed before completion", err)
+	heads := make([]TaskHead, 0, len(canonicalRefs)+len(trackingRefs))
+	for _, ref := range canonicalRefs {
+		heads = append(heads, TaskHead{TaskID: ref.taskID, ObjectID: ref.objectID})
+	}
+	for _, ref := range trackingRefs {
+		heads = append(heads, TaskHead{TaskID: ref.taskID, ObjectID: ref.objectID})
+	}
+	partial, err := r.readTaskHeadsPartial(ctx, config, heads)
+	if err != nil {
+		result, err = failedSyncPhase(result, "fetch failed before completion", err)
+		return state, result, err
+	}
+
+	invalidCanonical := 0
+	invalidTracking := 0
+	invalidCanonicalTasks := make(map[string]struct{})
+	for index, tip := range partial {
+		if index < len(canonicalRefs) {
+			if tip.Err != nil {
+				invalidCanonical++
+				invalidCanonicalTasks[tip.Head.TaskID] = struct{}{}
+				state.Outcomes[tip.Head.TaskID] = SyncTaskResult{TaskID: tip.Head.TaskID, Status: SyncInvalid, Detail: tip.Err.Error()}
+				continue
 			}
-			item.Status = SyncCreated
-			result.Tasks = append(result.Tasks, item)
+			state.Canonical[tip.Head.TaskID] = tip.Snapshot
 			continue
 		}
-		if _, err := r.readTip(ctx, config, local.taskID, local.objectID); err != nil {
-			return failedSyncPhase(result, "fetch failed before completion", err)
+		if tip.Err != nil {
+			invalidTracking++
+			state.Outcomes[tip.Head.TaskID] = SyncTaskResult{TaskID: tip.Head.TaskID, Status: SyncInvalid, Detail: tip.Err.Error()}
+			continue
 		}
-		if local.objectID == remote.objectID {
-			item.Status = SyncUnchanged
-		} else {
-			localBeforeRemote, err := r.isAncestor(ctx, local.objectID, remote.objectID)
-			if err != nil {
-				return failedSyncPhase(result, "fetch failed before completion", err)
+		state.Tracking[tip.Head.TaskID] = tip.Snapshot
+	}
+
+	pairs := make([]taskHeadPair, 0, len(state.Tracking))
+	for _, ref := range trackingRefs {
+		remote, valid := state.Tracking[ref.taskID]
+		if !valid {
+			continue
+		}
+		if _, invalid := invalidCanonicalTasks[ref.taskID]; invalid {
+			continue
+		}
+		if local, found := state.Canonical[ref.taskID]; found {
+			pairs = append(pairs, taskHeadPair{TaskID: ref.taskID, Local: local, Remote: remote})
+		}
+	}
+	relationships, err := r.classifyTaskHeadRelationships(ctx, config, pairs)
+	if err != nil {
+		result.Tasks = sortedSyncOutcomes(state.Outcomes)
+		result, err = failedSyncPhase(result, "fetch failed before completion", err)
+		return state, result, err
+	}
+
+	updates := make([]canonicalRefUpdate, 0, len(state.Tracking))
+	plannedOutcomes := make(map[string]SyncTaskResult)
+	for _, ref := range trackingRefs {
+		remote, valid := state.Tracking[ref.taskID]
+		if !valid {
+			continue
+		}
+		if _, invalid := invalidCanonicalTasks[ref.taskID]; invalid {
+			continue
+		}
+		local, found := state.Canonical[ref.taskID]
+		if !found {
+			updates = append(updates, canonicalRefUpdate{TaskID: ref.taskID, Next: remote.Head})
+			plannedOutcomes[ref.taskID] = SyncTaskResult{TaskID: ref.taskID, Status: SyncCreated}
+			continue
+		}
+		for _, relationship := range relationships {
+			if relationship.TaskID != ref.taskID {
+				continue
 			}
-			switch {
-			case localBeforeRemote:
-				if err := r.updateCanonicalRef(ctx, remote.taskID, remote.objectID, local.objectID); err != nil {
-					return failedSyncPhase(result, "fetch failed before completion", err)
-				}
-				item.Status = SyncFastForwarded
-			default:
-				remoteBeforeLocal, err := r.isAncestor(ctx, remote.objectID, local.objectID)
-				if err != nil {
-					return failedSyncPhase(result, "fetch failed before completion", err)
-				}
-				if remoteBeforeLocal {
-					item.Status = SyncLocalAhead
-				} else {
-					item.Status = SyncDiverged
-				}
+			switch relationship.Relationship {
+			case taskHeadsEqual:
+				state.Outcomes[ref.taskID] = SyncTaskResult{TaskID: ref.taskID, Status: SyncUnchanged}
+			case taskHeadsRemoteAhead:
+				updates = append(updates, canonicalRefUpdate{TaskID: ref.taskID, Next: remote.Head, Expected: local.Head})
+				plannedOutcomes[ref.taskID] = SyncTaskResult{TaskID: ref.taskID, Status: SyncFastForwarded}
+			case taskHeadsLocalAhead:
+				state.Outcomes[ref.taskID] = SyncTaskResult{TaskID: ref.taskID, Status: SyncLocalAhead}
+			case taskHeadsDiverged:
+				state.Outcomes[ref.taskID] = SyncTaskResult{TaskID: ref.taskID, Status: SyncDiverged}
+			}
+			break
+		}
+	}
+	if err := r.updateCanonicalRefsFromValidated(ctx, config, canonicalRefs, updates); err != nil {
+		result.Tasks = sortedSyncOutcomes(state.Outcomes)
+		result, err = failedSyncPhase(result, "fetch failed before completion", err)
+		return state, result, err
+	}
+	for _, update := range updates {
+		state.Canonical[update.TaskID] = state.Tracking[update.TaskID]
+	}
+	for taskID, outcome := range plannedOutcomes {
+		state.Outcomes[taskID] = outcome
+	}
+	result.Tasks = sortedSyncOutcomes(state.Outcomes)
+	result.Status = SyncPhaseCompleted
+	if invalidCanonical > 0 {
+		return state, result, core.Errorf(core.CategoryCorruptData, "%d local task ref(s) failed validation", invalidCanonical)
+	}
+	if invalidTracking > 0 {
+		return state, result, core.Errorf(core.CategoryCorruptData, "%d fetched task ref(s) failed validation", invalidTracking)
+	}
+	return state, result, nil
+}
+
+func sortedSyncOutcomes(outcomes map[string]SyncTaskResult) []SyncTaskResult {
+	taskIDs := make([]string, 0, len(outcomes))
+	for taskID := range outcomes {
+		taskIDs = append(taskIDs, taskID)
+	}
+	sort.Strings(taskIDs)
+	items := make([]SyncTaskResult, 0, len(taskIDs))
+	for _, taskID := range taskIDs {
+		items = append(items, outcomes[taskID])
+	}
+	return items
+}
+
+// publishFetched publishes only the tips already inspected by fetch. Git's
+// normal non-fast-forward rule remains the remote race guard; a second remote
+// listing would both duplicate work and observe a different synchronization
+// boundary.
+func (r *Repository) publishFetched(ctx context.Context, config core.ProjectConfig, state fetchState) (SyncResult, error) {
+	result := SyncResult{Remote: "origin", Tasks: []SyncTaskResult{}}
+	if err := r.verifyIdentity(ctx); err != nil {
+		return failedSyncPhase(result, "push failed before completion", err)
+	}
+	if err := r.validateRepositoryConfig(config); err != nil {
+		return failedSyncPhase(result, "push failed before completion", err)
+	}
+
+	taskIDs := make([]string, 0, len(state.Canonical))
+	for taskID := range state.Canonical {
+		taskIDs = append(taskIDs, taskID)
+	}
+	sort.Strings(taskIDs)
+	items := make(map[string]SyncTaskResult, len(taskIDs))
+	observed := make(map[string]string, len(taskIDs))
+	expected := make(map[string]string, len(taskIDs))
+	for _, taskID := range taskIDs {
+		snapshot := state.Canonical[taskID]
+		observed[taskID] = snapshot.Head
+		tracking, tracked := state.Tracking[taskID]
+		if !tracked || tracking.Head != snapshot.Head {
+			expected[taskRefPrefix+taskID] = taskID
+			continue
+		}
+		items[taskID] = SyncTaskResult{TaskID: taskID, Status: SyncUpToDate}
+	}
+	if len(expected) != 0 {
+		args := []string{"push", "--porcelain", "origin"}
+		for _, taskID := range taskIDs {
+			refName := taskRefPrefix + taskID
+			if _, candidate := expected[refName]; candidate {
+				args = append(args, observed[taskID]+":"+refName)
 			}
 		}
-		result.Tasks = append(result.Tasks, item)
+		push := r.gitWithEnvResult(ctx, []string{"WORKBOOK_PRE_PUSH_ACTIVE=1"}, nil, args...)
+		pushed, err := parsePushPorcelain(push.stdout, expected, push.err)
+		if err != nil {
+			return failedSyncPhase(result, "push failed before completion", err)
+		}
+		for taskID, item := range pushed {
+			items[taskID] = item
+		}
+	}
+
+	finalRefs, err := r.listOwnedTaskRefs(ctx, config, taskRefPrefix)
+	if err != nil {
+		return failedSyncPhase(result, "push failed before completion", err)
+	}
+	final := make(map[string]string, len(finalRefs))
+	for _, ref := range finalRefs {
+		final[ref.taskID] = ref.objectID
+	}
+	rejected := 0
+	changed := 0
+	for _, taskID := range taskIDs {
+		item := items[taskID]
+		if item.Status == SyncRejected {
+			rejected++
+		} else if (item.Status == SyncPublished || item.Status == SyncUpToDate) && final[taskID] != observed[taskID] {
+			item.Status = SyncLocalChanged
+			item.Detail = "validated task head was published, but the local ref advanced during push; run workbook push again"
+			items[taskID] = item
+			changed++
+		}
+		result.Tasks = append(result.Tasks, items[taskID])
 	}
 	result.Status = SyncPhaseCompleted
-	if invalid > 0 {
-		return result, core.Errorf(core.CategoryCorruptData, "%d fetched task ref(s) failed validation", invalid)
+	if rejected > 0 {
+		return result, core.Errorf(core.CategoryOperational, "%d task ref(s) were rejected by origin", rejected)
+	}
+	if changed > 0 {
+		return result, core.Errorf(core.CategoryStaleWrite, "%d local task ref(s) changed during push", changed)
 	}
 	return result, nil
-}
-
-func (r *Repository) validateFetchedHistory(
-	ctx context.Context,
-	config core.ProjectConfig,
-	remote taskRefRecord,
-) error {
-	return r.validateHistory(ctx, config, remote, remoteTaskRefPrefix+remote.taskID)
-}
-
-func (r *Repository) validateHistory(
-	ctx context.Context,
-	config core.ProjectConfig,
-	record taskRefRecord,
-	refName string,
-) error {
-	output, err := r.Git(ctx, nil, "rev-list", "--reverse", record.objectID)
-	if err != nil {
-		return core.Wrap(core.CategoryCorruptData, "cannot enumerate task history", err)
-	}
-	if len(output) == 0 || output[len(output)-1] != '\n' {
-		return core.Errorf(core.CategoryCorruptData, "Git returned an invalid task history")
-	}
-	commits := strings.Fields(string(output))
-	if len(commits) == 0 || commits[len(commits)-1] != record.objectID {
-		return core.Errorf(core.CategoryCorruptData, "task history does not end at its ref")
-	}
-
-	var parent *core.StateDocument
-	for _, commit := range commits {
-		snapshot, err := r.readTipAtRef(ctx, config, record.taskID, commit, refName)
-		if err != nil {
-			return err
-		}
-		if err := core.ValidateCheckpoint(parent, snapshot.Operation, snapshot.State, config.Key); err != nil {
-			return err
-		}
-		state := snapshot.State
-		parent = &state
-	}
-	return nil
-}
-
-func (r *Repository) refStillAt(ctx context.Context, taskID, expected string) bool {
-	current, found, err := r.taskRef(ctx, taskID)
-	return err == nil && found && current.objectID == expected
-}
-
-func (r *Repository) listRefs(ctx context.Context, prefix string) ([]taskRefRecord, error) {
-	contents, err := r.Git(ctx, nil, "for-each-ref", "--format=%(refname)%00%(objectname)", prefix)
-	if err != nil {
-		return nil, err
-	}
-	if len(contents) == 0 {
-		return nil, nil
-	}
-	if contents[len(contents)-1] != '\n' {
-		return nil, core.Errorf(core.CategoryCorruptData, "Git returned an unterminated ref record")
-	}
-
-	lines := bytes.Split(contents[:len(contents)-1], []byte{'\n'})
-	refs := make([]taskRefRecord, 0, len(lines))
-	for _, line := range lines {
-		parts := bytes.Split(line, []byte{0})
-		if len(parts) != 2 || len(parts[0]) == 0 || len(parts[1]) == 0 {
-			return nil, core.Errorf(core.CategoryCorruptData, "Git returned an invalid ref record")
-		}
-		refName := string(parts[0])
-		if !strings.HasPrefix(refName, prefix) {
-			return nil, core.Errorf(core.CategoryCorruptData, "Git returned a ref outside %q", prefix)
-		}
-		taskID := strings.TrimPrefix(refName, prefix)
-		if taskID == "" || strings.Contains(taskID, "/") {
-			return nil, core.Errorf(core.CategoryCorruptData, "ref %q does not name one task", refName)
-		}
-		refs = append(refs, taskRefRecord{taskID: taskID, objectID: string(parts[1])})
-	}
-	sort.Slice(refs, func(i, j int) bool { return refs[i].taskID < refs[j].taskID })
-	return refs, nil
-}
-
-func (r *Repository) isAncestor(ctx context.Context, ancestor, descendant string) (bool, error) {
-	_, err := r.Git(ctx, nil, "merge-base", "--is-ancestor", ancestor, descendant)
-	if err == nil {
-		return true, nil
-	}
-	var exitError *exec.ExitError
-	if errors.As(err, &exitError) && exitError.ExitCode() == 1 {
-		return false, nil
-	}
-	return false, err
-}
-
-func (r *Repository) updateCanonicalRef(ctx context.Context, taskID, next, expected string) error {
-	ref := taskRefPrefix + taskID
-	if _, err := r.Git(ctx, nil, "check-ref-format", ref); err != nil {
-		return core.Wrap(core.CategoryCorruptData, "fetched task ref is invalid", err)
-	}
-	if err := r.rejectSymbolicTaskRef(ctx, ref); err != nil {
-		return err
-	}
-	if _, err := r.Git(
-		ctx,
-		nil,
-		"update-ref",
-		"--no-deref",
-		"--create-reflog",
-		"-m",
-		"workbook: fetch origin",
-		ref,
-		next,
-		expected,
-	); err != nil {
-		return core.Wrap(core.CategoryStaleWrite, "task ref changed during fetch", err)
-	}
-	return nil
 }

@@ -97,7 +97,123 @@ func TestFetchKeepsInvalidRemoteTipIsolated(t *testing.T) {
 	}
 }
 
-func TestFetchRejectsUpdateWhoseCheckpointDoesNotMatchItsOperation(t *testing.T) {
+func TestFetchReconcilesValidRemoteTipWhenAnotherTrackingTipIsInvalid(t *testing.T) {
+	first, second, config := syncRepositories(t)
+	valid := createSyncTask(t, first, config, "Valid task")
+	invalid := createSyncTask(t, first, config, "Invalid task")
+	publishTaskRefs(t, first)
+
+	badTree := syncGit(t, first.Root, "mktree")
+	badCommit := syncGit(t, first.Root, "commit-tree", badTree, "-m", "invalid Workbook task")
+	syncGit(t, first.Root, "push", "--force", "origin", badCommit+":"+taskRefPrefix+invalid.ID)
+
+	result, err := second.Fetch(context.Background(), config)
+	if err == nil {
+		t.Fatalf("Fetch(mixed validity) error = nil; result = %#v", result)
+	}
+	assertSyncOutcome(t, result, invalid.ID, SyncInvalid)
+	assertSyncOutcome(t, result, valid.ID, SyncCreated)
+	if got, want := refValue(t, second, taskRefPrefix+valid.ID), refValue(t, first, taskRefPrefix+valid.ID); got != want {
+		t.Fatalf("valid canonical tip = %q, want %q", got, want)
+	}
+	if refExists(t, second, taskRefPrefix+invalid.ID) {
+		t.Fatalf("invalid remote task reached canonical ref %s", taskRefPrefix+invalid.ID)
+	}
+}
+
+func TestFetchReconcilesValidRemoteTipWhenAnotherCanonicalTipIsInvalid(t *testing.T) {
+	first, second, config := syncRepositories(t)
+	invalidLocal := createSyncTask(t, second, config, "Invalid local task")
+	invalidHead := refValue(t, second, taskRefPrefix+invalidLocal.ID)
+	blob := syncGitInput(t, second.Root, []byte("not a task commit"), "hash-object", "-w", "--stdin")
+	syncGit(t, second.Root, "update-ref", taskRefPrefix+invalidLocal.ID, blob, invalidHead)
+
+	validRemote := createSyncTask(t, first, config, "Valid remote task")
+	publishTaskRefs(t, first)
+	result, err := second.Fetch(context.Background(), config)
+	if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
+		t.Fatalf("Fetch(mixed local validity) category = %q, want %q; result = %#v; error = %v", got, want, result, err)
+	}
+	assertSyncOutcome(t, result, invalidLocal.ID, SyncInvalid)
+	assertSyncOutcome(t, result, validRemote.ID, SyncCreated)
+	if got, want := refValue(t, second, taskRefPrefix+validRemote.ID), refValue(t, first, taskRefPrefix+validRemote.ID); got != want {
+		t.Fatalf("valid canonical tip = %q, want %q", got, want)
+	}
+	if got := refValue(t, second, taskRefPrefix+invalidLocal.ID); got != blob {
+		t.Fatalf("invalid canonical tip = %q, want unchanged %q", got, blob)
+	}
+}
+
+func TestFetchFreshCheckoutUsesCompleteTwentyOperationTip(t *testing.T) {
+	first, second, config := syncRepositories(t)
+	task := createSyncTask(t, first, config, "Revision 01")
+	for revision := 2; revision <= 20; revision++ {
+		updateSyncTask(t, first, config, task.ID, fmt.Sprintf("Revision %02d", revision))
+	}
+	want, err := first.Get(context.Background(), config, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want.State.LogicalClock != 20 {
+		t.Fatalf("source logical clock = %d, want 20", want.State.LogicalClock)
+	}
+	publishTaskRefs(t, first)
+
+	result, err := second.Fetch(context.Background(), config)
+	if err != nil {
+		t.Fatalf("Fetch(fresh 20-operation tip) error = %v; result = %#v", err, result)
+	}
+	assertSyncOutcome(t, result, task.ID, SyncCreated)
+	got, err := second.Get(context.Background(), config, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Head != want.Head || got.State.LogicalClock != 20 || got.State.Task.Title != "Revision 20" {
+		t.Fatalf("fresh fetched tip = %#v, want head %q at revision 20", got, want.Head)
+	}
+}
+
+func TestFetchLeavesCanonicalRefsUnchangedWhenTransactionLosesCASRace(t *testing.T) {
+	first, second, config := syncRepositories(t)
+	task := createSyncTask(t, first, config, "Shared task")
+	publishTaskRefs(t, first)
+	if _, err := second.Fetch(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+
+	updateSyncTask(t, first, config, task.ID, "Remote update")
+	publishTaskRefs(t, first)
+	advanced := false
+	second.commandObserver = func(args []string) {
+		if advanced || !commandHasPrefix(args, "update-ref", "--no-deref", "--create-reflog", "-m", "workbook: fetch origin", "--stdin") {
+			return
+		}
+		advanced = true
+		updateSyncTask(t, second, config, task.ID, "Concurrent local update")
+	}
+
+	result, err := second.Fetch(context.Background(), config)
+	if got, want := core.CategoryOf(err), core.CategoryStaleWrite; got != want {
+		t.Fatalf("Fetch(CAS race) category = %q, want %q; result = %#v; error = %v", got, want, result, err)
+	}
+	if result.Status != SyncPhaseFailed {
+		t.Fatalf("Fetch(CAS race) status = %q, want failed", result.Status)
+	}
+	if !advanced {
+		t.Fatal("Fetch() did not attempt the canonical transaction")
+	}
+	for _, outcome := range result.Tasks {
+		if outcome.TaskID == task.ID &&
+			(outcome.Status == SyncCreated || outcome.Status == SyncFastForwarded) {
+			t.Fatalf("Fetch(CAS race) reported unapplied success outcome %#v", outcome)
+		}
+	}
+	if got := refValue(t, second, taskRefPrefix+task.ID); got == refValue(t, first, taskRefPrefix+task.ID) {
+		t.Fatalf("CAS-raced canonical ref adopted remote tip %q", got)
+	}
+}
+
+func TestFetchAcceptsUpdateWhoseCheckpointDoesNotMatchItsOperation(t *testing.T) {
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Original title")
 	publishTaskRefs(t, first)
@@ -122,12 +238,16 @@ func TestFetchRejectsUpdateWhoseCheckpointDoesNotMatchItsOperation(t *testing.T)
 	syncGit(t, first.Root, "push", "--force", "origin", invalid+":"+taskRefPrefix+task.ID)
 
 	result, err := second.Fetch(context.Background(), config)
-	if err == nil {
-		t.Fatalf("Fetch(mismatched checkpoint) error = nil; result = %#v", result)
+	if err != nil {
+		t.Fatalf("Fetch(mismatched checkpoint) error = %v; result = %#v", err, result)
 	}
-	assertSyncOutcome(t, result, task.ID, SyncInvalid)
-	if refExists(t, second, taskRefPrefix+task.ID) {
-		t.Fatal("mismatched update checkpoint reached canonical task ref")
+	assertSyncOutcome(t, result, task.ID, SyncCreated)
+	got, err := second.Get(context.Background(), config, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Head != invalid || got.State.Task.Title != state.Task.Title {
+		t.Fatalf("Fetch() snapshot = %#v, want mismatched tip %q", got, invalid)
 	}
 }
 
@@ -340,6 +460,132 @@ func TestPushReportsLocalChangedWhenHeadAdvancesDuringPublication(t *testing.T) 
 		t.Fatalf("Push() category = %q, want %q; result = %#v; error = %v", got, want, result, err)
 	}
 	assertSyncOutcome(t, result, task.ID, SyncLocalChanged)
+}
+
+func TestSyncReusesFetchedTipsWithoutRepeatedInspection(t *testing.T) {
+	commandCount := 0
+	synchronizedCommandCount := 0
+	for _, fixture := range []struct {
+		tasks      int
+		operations int
+	}{{tasks: 10, operations: 4}, {tasks: 25, operations: 7}} {
+		t.Run(fmt.Sprintf("%d tasks x %d operations", fixture.tasks, fixture.operations), func(t *testing.T) {
+			repository, _, config := syncRepositories(t)
+			for i := 0; i < fixture.tasks; i++ {
+				task := createSyncTask(t, repository, config, fmt.Sprintf("Task %02d", i))
+				for operation := 1; operation < fixture.operations; operation++ {
+					updateSyncTask(t, repository, config, task.ID, fmt.Sprintf("Task %02d revision %02d", i, operation))
+				}
+			}
+
+			var commands [][]string
+			repository.commandObserver = func(args []string) {
+				commands = append(commands, append([]string(nil), args...))
+			}
+			result, err := repository.Sync(context.Background(), config)
+			if err != nil {
+				t.Fatalf("Sync() error = %v; result = %#v", err, result)
+			}
+			if got := countCommand(commands, "fetch", "--no-tags", "origin", "+"+taskRefPrefix+"*:"+remoteTaskRefPrefix+"*"); got != 1 {
+				t.Fatalf("fetch commands = %d, want 1; commands = %v", got, commands)
+			}
+			if got := countCommand(commands, "cat-file", "--batch"); got != 1 {
+				t.Fatalf("tip batches = %d, want 1; commands = %v", got, commands)
+			}
+			if got := countCommand(commands, "for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)", taskRefPrefix); got != 2 {
+				t.Fatalf("canonical ref enumerations = %d, want fetch planning plus final snapshot; commands = %v", got, commands)
+			}
+			if got := countCommand(commands, "for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)", remoteTaskRefPrefix); got != 1 {
+				t.Fatalf("tracking ref enumerations = %d, want 1; commands = %v", got, commands)
+			}
+			if got := countCommand(commands, "ls-remote", "--refs", "origin", taskRefPrefix+"*"); got != 0 {
+				t.Fatalf("ls-remote commands = %d, want none when Sync reuses fetched tracking heads; commands = %v", got, commands)
+			}
+			if got := countCommand(commands, "merge-base", "--is-ancestor"); got != 0 {
+				t.Fatalf("merge-base commands = %d, want none; commands = %v", got, commands)
+			}
+			if got := countCommandPrefix(commands, "push", "--porcelain", "origin"); got != 1 {
+				t.Fatalf("push commands = %d, want one; commands = %v", got, commands)
+			}
+			if got := countCommand(commands, "rev-list", "--parents", "--stdin"); got > 1 {
+				t.Fatalf("graph classifications = %d, want at most 1; commands = %v", got, commands)
+			}
+			if got := countCommandPrefix(commands, "update-ref", "--no-deref", "--create-reflog", "-m", "workbook: fetch origin", "--stdin"); got > 1 {
+				t.Fatalf("canonical transactions = %d, want at most 1; commands = %v", got, commands)
+			}
+			if commandCount == 0 {
+				commandCount = len(commands)
+			} else if len(commands) != commandCount {
+				t.Fatalf("initial sync command count = %d, want invariant %d; commands = %v", len(commands), commandCount, commands)
+			}
+
+			commands = nil
+			result, err = repository.Sync(context.Background(), config)
+			if err != nil {
+				t.Fatalf("Sync(already synchronized) error = %v; result = %#v", err, result)
+			}
+			if result.Push.Status != SyncPhaseCompleted {
+				t.Fatalf("synchronized Push status = %q, want completed; result = %#v", result.Push.Status, result)
+			}
+			if got := countCommandPrefix(commands, "push", "--porcelain", "origin"); got != 0 {
+				t.Fatalf("synchronized push commands = %d, want none; commands = %v", got, commands)
+			}
+			for _, command := range commands {
+				if commandHasPrefix(command, "merge-base", "--is-ancestor") ||
+					commandHasPrefix(command, "rev-list", "--reverse") ||
+					commandHasPrefix(command, "cat-file", "-t") ||
+					(len(command) > 0 && command[0] == "show") {
+					t.Fatalf("synchronized Sync used per-task inspection command %v", command)
+				}
+				if len(command) > 0 && command[0] == "update-ref" &&
+					!commandHasPrefix(command, "update-ref", "--no-deref", "--create-reflog", "-m", "workbook: fetch origin", "--stdin") {
+					t.Fatalf("synchronized Sync used per-task update command %v", command)
+				}
+			}
+			if synchronizedCommandCount == 0 {
+				synchronizedCommandCount = len(commands)
+			} else if len(commands) != synchronizedCommandCount {
+				t.Fatalf("synchronized command count = %d, want invariant %d; commands = %v", len(commands), synchronizedCommandCount, commands)
+			}
+			for _, task := range result.Push.Tasks {
+				if task.Status != SyncUpToDate {
+					t.Fatalf("synchronized task outcome = %#v, want up-to-date", task)
+				}
+			}
+		})
+	}
+}
+
+func countCommandPrefix(commands [][]string, want ...string) int {
+	count := 0
+	for _, got := range commands {
+		if len(got) < len(want) {
+			continue
+		}
+		matched := true
+		for index := range want {
+			if got[index] != want[index] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			count++
+		}
+	}
+	return count
+}
+
+func commandHasPrefix(got []string, want ...string) bool {
+	if len(got) < len(want) {
+		return false
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestSyncFetchesThenPushesWorkbookTaskRefs(t *testing.T) {
