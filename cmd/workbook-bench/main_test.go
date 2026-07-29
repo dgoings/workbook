@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -63,7 +65,7 @@ func TestRunResolvesRelativeWorkbookBinaryAndWritesCompletePerformanceReport(t *
 	if report.Phase != "baseline" {
 		t.Errorf("report phase = %q, want baseline", report.Phase)
 	}
-	if report.Fixture != (perf.FixtureSpec{TotalTasks: 10, ActiveTasks: 10, TombstonedTasks: 0, OperationsPerTask: 4, ObjectFormat: "sha1"}) {
+	if report.Fixture != (perf.FixtureSpec{TotalTasks: 10, ActiveTasks: 9, TombstonedTasks: 1, OperationsPerTask: 4, ObjectFormat: "sha1"}) {
 		t.Errorf("report fixture = %#v, want ten tasks and four operations using SHA-1", report.Fixture)
 	}
 
@@ -358,9 +360,10 @@ func TestValidateOptionsEnforcesAcceptanceMinimum(t *testing.T) {
 		name       string
 		tasks      string
 		operations string
+		want       string
 	}{
-		{name: "diagnostic task count", tasks: "499", operations: "20"},
-		{name: "short history", tasks: "500", operations: "19"},
+		{name: "diagnostic task count", tasks: "499", operations: "20", want: "acceptance requires at least 500 total tasks"},
+		{name: "short history", tasks: "500", operations: "19", want: "acceptance requires at least 20 operations per task"},
 	}
 	for _, test := range rejected {
 		t.Run(test.name, func(t *testing.T) {
@@ -379,7 +382,7 @@ func TestValidateOptionsEnforcesAcceptanceMinimum(t *testing.T) {
 				t.Fatalf("parse flags: %v", err)
 			}
 			err = validateOptions(flags, options)
-			if err == nil || !strings.Contains(err.Error(), "acceptance requires at least 500 tasks and 20 operations per task") {
+			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("validateOptions error = %v, want acceptance minimum guidance", err)
 			}
 		})
@@ -404,6 +407,141 @@ func TestValidateOptionsEnforcesAcceptanceMinimum(t *testing.T) {
 			t.Fatalf("validateOptions rejected larger acceptance workload: %v", err)
 		}
 	})
+}
+
+func TestValidateOptionsNormalizesTombstonePopulation(t *testing.T) {
+	workbookBinary := buildWorkbookBinary(t)
+	tests := []struct {
+		name           string
+		tasks          string
+		tombstones     string
+		phase          string
+		wantActive     int
+		wantTombstones int
+		wantError      string
+	}{
+		{name: "default acceptance-sized fixture", tasks: "500", wantActive: 475, wantTombstones: 25},
+		{name: "default diagnostic fixture", tasks: "10", wantActive: 9, wantTombstones: 1},
+		{name: "explicit diagnostic zero", tasks: "10", tombstones: "0", wantActive: 10, wantTombstones: 0},
+		{name: "acceptance requires tombstones", tasks: "500", tombstones: "0", phase: "acceptance", wantError: "acceptance requires at least 25 tombstoned tasks"},
+		{name: "cannot exceed total", tasks: "10", tombstones: "11", wantError: "--tombstones must not exceed --tasks"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			outputRoot := t.TempDir()
+			args := []string{
+				"--workbook", workbookBinary,
+				"--tasks", test.tasks,
+				"--operations", "20",
+				"--scenario", "cli-create",
+				"--output-json", filepath.Join(outputRoot, "report.json"),
+				"--output-markdown", filepath.Join(outputRoot, "report.md"),
+			}
+			if test.tombstones != "" {
+				args = append(args, "--tombstones", test.tombstones)
+			}
+			if test.phase != "" {
+				args = append(args, "--phase", test.phase)
+			}
+			var stderr bytes.Buffer
+			flags, options := newFlagSet(&stderr)
+			if err := flags.Parse(args); err != nil {
+				t.Fatal(err)
+			}
+			err := validateOptions(flags, options)
+			if test.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantError) {
+					t.Fatalf("validateOptions error = %v, want %q", err, test.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if options.tasks-options.tombstones != test.wantActive || options.tombstones != test.wantTombstones {
+				t.Fatalf("normalized fixture = total %d active %d tombstoned %d, want total %d active %d tombstoned %d", options.tasks, options.tasks-options.tombstones, options.tombstones, test.wantActive+test.wantTombstones, test.wantActive, test.wantTombstones)
+			}
+		})
+	}
+}
+
+func TestValidateOptionsRejectsEveryAcceptanceFixtureShortfall(t *testing.T) {
+	workbookBinary := buildWorkbookBinary(t)
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "499 total tasks", args: []string{"--tasks", "499", "--tombstones", "25", "--operations", "20"}, want: "acceptance requires at least 500 total tasks"},
+		{name: "24 tombstones", args: []string{"--tasks", "500", "--tombstones", "24", "--operations", "20"}, want: "acceptance requires at least 25 tombstoned tasks"},
+		{name: "19 operations", args: []string{"--tasks", "500", "--tombstones", "25", "--operations", "19"}, want: "acceptance requires at least 20 operations per task"},
+		{name: "nine active tasks", args: []string{"--tasks", "500", "--tombstones", "491", "--operations", "20"}, want: "acceptance requires at least 10 active tasks"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			outputRoot := t.TempDir()
+			args := append([]string{
+				"--workbook", workbookBinary,
+				"--phase", "acceptance",
+				"--output-json", filepath.Join(outputRoot, "report.json"),
+				"--output-markdown", filepath.Join(outputRoot, "report.md"),
+			}, test.args...)
+			var stderr bytes.Buffer
+			flags, options := newFlagSet(&stderr)
+			if err := flags.Parse(args); err != nil {
+				t.Fatal(err)
+			}
+			if err := validateOptions(flags, options); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("validateOptions error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestBenchmarkEnvironmentRecordsMeasuredBinarySHA256(t *testing.T) {
+	binaryDirectory := t.TempDir()
+	gitPath := filepath.Join(binaryDirectory, "git")
+	goPath := filepath.Join(binaryDirectory, "go")
+	workbookPath := filepath.Join(binaryDirectory, "workbook")
+	writeExecutableScript(t, gitPath, "printf 'git version test\\n'")
+	writeExecutableScript(t, goPath, "printf 'go version test\\n'")
+	writeExecutableScript(t, workbookPath, `printf '%s\n' '{"format":"workbook.result","version":1,"command":"version","data":{"version":"dev","commit":"test"}}'`)
+	t.Setenv("PATH", binaryDirectory)
+
+	want := fmt.Sprintf("%x", sha256.Sum256([]byte("#!/bin/sh\nprintf '%s\\n' '{\"format\":\"workbook.result\",\"version\":1,\"command\":\"version\",\"data\":{\"version\":\"dev\",\"commit\":\"test\"}}'\n")))
+	environment, err := benchmarkEnvironment(context.Background(), workbookPath, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if environment.WorkbookBinarySHA256 != want {
+		t.Fatalf("Workbook binary SHA-256 = %q, want %q", environment.WorkbookBinarySHA256, want)
+	}
+}
+
+func TestRunBenchmarkRejectsUnknownAcceptanceCommitBeforeFixtureConstruction(t *testing.T) {
+	binaryDirectory := t.TempDir()
+	gitPath := filepath.Join(binaryDirectory, "git")
+	goPath := filepath.Join(binaryDirectory, "go")
+	workbookPath := filepath.Join(binaryDirectory, "workbook")
+	writeExecutableScript(t, gitPath, "printf 'git version test\\n'")
+	writeExecutableScript(t, goPath, "printf 'go version test\\n'")
+	writeExecutableScript(t, workbookPath, `printf '%s\n' '{"format":"workbook.result","version":1,"command":"version","data":{"version":"dev","commit":"unknown"}}'`)
+	t.Setenv("PATH", binaryDirectory)
+
+	_, err := runBenchmark(context.Background(), options{
+		workbookBinary: workbookPath,
+		tasks:          500,
+		tombstones:     25,
+		operations:     20,
+		samples:        1,
+		timeout:        time.Second,
+		objectFormat:   "sha1",
+		phase:          "acceptance",
+		scenarios:      []string{"cli-create"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "acceptance requires a measured Workbook commit") {
+		t.Fatalf("runBenchmark error = %v, want unknown measured commit rejection", err)
+	}
 }
 
 func TestBenchmarkEnvironmentBoundsEveryMetadataCommand(t *testing.T) {

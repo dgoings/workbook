@@ -48,9 +48,10 @@ func TestSummarizeRetainsGitProcessCountsFromTimedOutAndFailedSamples(t *testing
 func TestReportWritesVersionedJSONAndMarkdown(t *testing.T) {
 	report := Report{
 		Format: "workbook.performance-report", Version: 2, Phase: "baseline",
-		Fixture:   FixtureSpec{TotalTasks: 500, ActiveTasks: 500, OperationsPerTask: 20, ObjectFormat: "sha1"},
-		Targets:   Targets{WarmP95Milliseconds: 100, ColdP95Milliseconds: 200, BurstMilliseconds: 1000},
-		Scenarios: []ScenarioResult{{Name: "cli-update", Surface: "cold-cli", Samples: []Sample{{Duration: 25 * time.Millisecond}}}},
+		Environment: Environment{WorkbookBinarySHA256: "abc123"},
+		Fixture:     FixtureSpec{TotalTasks: 500, ActiveTasks: 500, OperationsPerTask: 20, ObjectFormat: "sha1"},
+		Targets:     Targets{WarmP95Milliseconds: 100, ColdP95Milliseconds: 200, BurstMilliseconds: 1000},
+		Scenarios:   []ScenarioResult{{Name: "cli-update", Surface: "cold-cli", Samples: []Sample{{Duration: 25 * time.Millisecond}}}},
 	}
 	var jsonOutput, markdownOutput bytes.Buffer
 	if err := report.WriteJSON(&jsonOutput); err != nil {
@@ -61,6 +62,9 @@ func TestReportWritesVersionedJSONAndMarkdown(t *testing.T) {
 	}
 	if !bytes.Contains(jsonOutput.Bytes(), []byte(`"format":"workbook.performance-report"`)) {
 		t.Fatalf("JSON = %s", jsonOutput.Bytes())
+	}
+	if !bytes.Contains(jsonOutput.Bytes(), []byte(`"workbookBinarySha256":"abc123"`)) {
+		t.Fatalf("JSON = %s, want measured binary SHA-256", jsonOutput.Bytes())
 	}
 	if !strings.Contains(markdownOutput.String(), "| cli-update | cold-cli |") {
 		t.Fatalf("Markdown = %s", markdownOutput.String())

@@ -89,12 +89,13 @@ type RepositoryMetrics struct {
 }
 
 type Environment struct {
-	OS              string `json:"os"`
-	Arch            string `json:"arch"`
-	GitVersion      string `json:"gitVersion"`
-	GoVersion       string `json:"goVersion"`
-	WorkbookVersion string `json:"workbookVersion"`
-	WorkbookCommit  string `json:"workbookCommit"`
+	OS                   string `json:"os"`
+	Arch                 string `json:"arch"`
+	GitVersion           string `json:"gitVersion"`
+	GoVersion            string `json:"goVersion"`
+	WorkbookVersion      string `json:"workbookVersion"`
+	WorkbookCommit       string `json:"workbookCommit"`
+	WorkbookBinarySHA256 string `json:"workbookBinarySha256"`
 }
 
 type Report struct {
