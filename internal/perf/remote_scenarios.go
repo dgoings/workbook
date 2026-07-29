@@ -150,7 +150,7 @@ func runRemoteScenarios(ctx context.Context, spec RunSpec, fixtureRoot string, s
 				Timeout:   spec.CommandTimeout,
 			})
 			if !measurement.Sample.TimedOut {
-				if err := verifyRemoteScenarioMeasurement(definition, fixture, measurement, dependencies); err != nil {
+				if err := verifyRemoteScenarioMeasurement(ctx, definition, fixture, measurement, dependencies); err != nil {
 					return nil, fmt.Errorf("verify %s sample %d: %w", definition.name, sample+1, err)
 				}
 			}
@@ -189,7 +189,7 @@ func selectRemoteScenarioDefinitions(selected []string) ([]remoteScenarioDefinit
 	return definitions, nil
 }
 
-func verifyRemoteScenarioMeasurement(definition remoteScenarioDefinition, fixture RemoteFixture, measurement CommandMeasurement, dependencies remoteScenarioDependencies) error {
+func verifyRemoteScenarioMeasurement(ctx context.Context, definition remoteScenarioDefinition, fixture RemoteFixture, measurement CommandMeasurement, dependencies remoteScenarioDependencies) error {
 	if measurement.Sample.ExitCode < 0 {
 		return fmt.Errorf("command did not produce an exit code: %s", measurement.Sample.Error)
 	}
@@ -212,7 +212,7 @@ func verifyRemoteScenarioMeasurement(definition remoteScenarioDefinition, fixtur
 	if err := requireRemoteTaskResults("push", result.Push.Tasks, push); err != nil {
 		return err
 	}
-	return requireRemoteScenarioRefs(definition.topology, fixture, dependencies)
+	return requireRemoteScenarioRefs(ctx, definition.topology, fixture, dependencies)
 }
 
 func remoteScenarioContractFor(definition remoteScenarioDefinition) remoteScenarioContract {
@@ -283,20 +283,20 @@ func expectedRemoteTaskResults(topology RemoteTopology, taskIDs []string) ([]git
 	}
 }
 
-func requireRemoteScenarioRefs(topology RemoteTopology, fixture RemoteFixture, dependencies remoteScenarioDependencies) error {
+func requireRemoteScenarioRefs(ctx context.Context, topology RemoteTopology, fixture RemoteFixture, dependencies remoteScenarioDependencies) error {
 	want, err := expectedRemoteScenarioRefs(topology, fixture)
 	if err != nil {
 		return err
 	}
-	canonical, err := dependencies.readCanonicalRefs(context.Background(), fixture.LocalRoot)
+	canonical, err := dependencies.readCanonicalRefs(ctx, fixture.LocalRoot)
 	if err != nil {
 		return fmt.Errorf("read post-command refs: %w", err)
 	}
-	tracking, err := dependencies.readTrackingRefs(context.Background(), fixture.LocalRoot)
+	tracking, err := dependencies.readTrackingRefs(ctx, fixture.LocalRoot)
 	if err != nil {
 		return fmt.Errorf("read post-command tracking refs: %w", err)
 	}
-	remote, err := dependencies.readRemoteRefs(context.Background(), fixture.OriginRoot)
+	remote, err := dependencies.readRemoteRefs(ctx, fixture.OriginRoot)
 	if err != nil {
 		return fmt.Errorf("read post-command remote refs: %w", err)
 	}

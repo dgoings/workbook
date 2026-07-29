@@ -58,13 +58,7 @@ func BuildFixture(ctx context.Context, root string, spec FixtureSpec) (Fixture, 
 	if err := runFixtureGit(ctx, "init", "--quiet", "--object-format="+spec.ObjectFormat, absRoot); err != nil {
 		return Fixture{}, err
 	}
-	if err := runFixtureGit(ctx, "-C", absRoot, "config", "user.name", "Workbook Benchmark"); err != nil {
-		return Fixture{}, err
-	}
-	if err := runFixtureGit(ctx, "-C", absRoot, "config", "user.email", benchmarkActorID); err != nil {
-		return Fixture{}, err
-	}
-	if err := runFixtureGit(ctx, "-C", absRoot, "config", "core.logAllRefUpdates", "always"); err != nil {
+	if err := configureFixtureRepository(ctx, absRoot); err != nil {
 		return Fixture{}, err
 	}
 
@@ -298,7 +292,9 @@ func runFixtureGitOutput(ctx context.Context, root string, input []byte, args ..
 }
 
 func runFixtureGitOutputWithEnv(ctx context.Context, root string, input []byte, extraEnv []string, args ...string) ([]byte, error) {
-	command := exec.CommandContext(ctx, "git", append([]string{"-C", root}, args...)...)
+	commandArgs := append(fixtureGitConfig(root), "-C", root)
+	commandArgs = append(commandArgs, args...)
+	command := exec.CommandContext(ctx, "git", commandArgs...)
 	command.Stdin = bytes.NewReader(input)
 	command.Env = fixtureGitEnvironment(extraEnv)
 	var stdout bytes.Buffer
@@ -340,6 +336,44 @@ func fixtureGitEnvironment(extra []string) []string {
 		environment = append(environment, entry)
 	}
 	return append(environment, extra...)
+}
+
+func fixtureGitConfig(root string) []string {
+	hooksPath := fixtureDisabledHooksPath(root)
+	return []string{
+		"-c", "commit.gpgSign=false",
+		"-c", "tag.gpgSign=false",
+		"-c", "push.gpgSign=false",
+		"-c", "core.hooksPath=" + hooksPath,
+	}
+}
+
+func fixtureDisabledHooksPath(root string) string {
+	if root == "" {
+		return filepath.Join(os.TempDir(), "workbook-fixture-hooks-disabled")
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return filepath.Join(root, "workbook-fixture-hooks-disabled")
+	}
+	return filepath.Join(absRoot, "workbook-fixture-hooks-disabled")
+}
+
+func configureFixtureRepository(ctx context.Context, root string) error {
+	for _, setting := range [][2]string{
+		{"user.name", "Workbook Benchmark"},
+		{"user.email", benchmarkActorID},
+		{"commit.gpgSign", "false"},
+		{"tag.gpgSign", "false"},
+		{"push.gpgSign", "false"},
+		{"core.hooksPath", fixtureDisabledHooksPath(root)},
+		{"core.logAllRefUpdates", "always"},
+	} {
+		if err := runFixtureGitInRoot(ctx, root, "-C", root, "config", "--local", setting[0], setting[1]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func fixtureSingleLine(output []byte) (string, error) {
@@ -451,11 +485,26 @@ func writeImportedCommit(
 }
 
 func runFixtureGit(ctx context.Context, args ...string) error {
-	command := exec.CommandContext(ctx, "git", args...)
+	return runFixtureGitInRoot(ctx, fixtureGitRoot(args), args...)
+}
+
+func runFixtureGitInRoot(ctx context.Context, root string, args ...string) error {
+	commandArgs := append(fixtureGitConfig(root), args...)
+	command := exec.CommandContext(ctx, "git", commandArgs...)
+	command.Env = fixtureGitEnvironment(nil)
 	if output, err := command.CombinedOutput(); err != nil {
 		return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
 	}
 	return nil
+}
+
+func fixtureGitRoot(args []string) string {
+	for index := 0; index+1 < len(args); index++ {
+		if args[index] == "-C" {
+			return args[index+1]
+		}
+	}
+	return ""
 }
 
 func countRefLines(refs []byte) int {

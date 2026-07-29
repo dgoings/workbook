@@ -95,6 +95,7 @@ func Summarize(samples []Sample) Summary {
 	var milliseconds []float64
 	var gitProcesses []int
 	for _, sample := range samples {
+		gitProcesses = append(gitProcesses, sample.GitProcesses)
 		if sample.TimedOut {
 			summary.TimedOut++
 			continue
@@ -104,19 +105,20 @@ func Summarize(samples []Sample) Summary {
 		}
 		summary.Completed++
 		milliseconds = append(milliseconds, durationMilliseconds(sample))
-		gitProcesses = append(gitProcesses, sample.GitProcesses)
+	}
+	sort.Ints(gitProcesses)
+	if len(gitProcesses) != 0 {
+		summary.P95GitProcesses = gitProcesses[nearestRankIndex(len(gitProcesses), 0.95)]
 	}
 	if len(milliseconds) == 0 {
 		return summary
 	}
 
 	sort.Float64s(milliseconds)
-	sort.Ints(gitProcesses)
 	summary.MinMilliseconds = milliseconds[0]
 	summary.MedianMilliseconds = median(milliseconds)
 	p95Index := nearestRankIndex(len(milliseconds), 0.95)
 	summary.P95Milliseconds = milliseconds[p95Index]
-	summary.P95GitProcesses = gitProcesses[p95Index]
 	return summary
 }
 

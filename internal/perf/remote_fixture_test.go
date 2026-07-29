@@ -2,6 +2,8 @@ package perf
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -116,6 +118,68 @@ func TestBuildRemoteFixtureUsesDeterministicSyntheticCommitIDs(t *testing.T) {
 				t.Fatalf("fixture IDs/refs differ:\nfirst=%#v\nsecond=%#v", first, second)
 			}
 		})
+	}
+}
+
+func TestBuildRemoteFixtureIgnoresHostileGlobalSigningAndHooks(t *testing.T) {
+	hostileRoot := t.TempDir()
+	hooksRoot := filepath.Join(hostileRoot, "hooks")
+	if err := os.Mkdir(hooksRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(hostileRoot, "hook-ran")
+	hook := []byte("#!/bin/sh\nprintf hook-ran > '" + marker + "'\nexit 1\n")
+	for _, name := range []string{"post-checkout", "pre-commit", "pre-push", "pre-receive"} {
+		if err := os.WriteFile(filepath.Join(hooksRoot, name), hook, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	globalConfig := filepath.Join(hostileRoot, "gitconfig")
+	if err := os.WriteFile(globalConfig, []byte(fmt.Sprintf("[commit]\n\tgpgSign = true\n[tag]\n\tgpgSign = true\n[push]\n\tgpgSign = true\n[core]\n\thooksPath = %s\n", hooksRoot)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
+
+	fixtureRoot := filepath.Join(t.TempDir(), "fixture")
+	fixture, err := BuildRemoteFixture(context.Background(), fixtureRoot, FixtureSpec{
+		ActiveTasks:       10,
+		OperationsPerTask: 4,
+		ObjectFormat:      "sha1",
+	}, RemoteAlreadySynchronized)
+	if err != nil {
+		t.Fatalf("BuildRemoteFixture with hostile global Git configuration: %v", err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("hostile Git hook ran: %v", err)
+	}
+
+	for _, root := range []string{filepath.Join(fixtureRoot, "source"), fixture.LocalRoot, fixture.PeerRoot, fixture.OriginRoot} {
+		assertFixtureIsolationConfig(t, root)
+	}
+	identity := strings.TrimSpace(runGit(t, filepath.Join(fixtureRoot, "source"), "show", "-s", "--format=%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI", "workbook-benchmark"))
+	wantIdentity := "Workbook Benchmark\x00" + benchmarkActorID + "\x002024-01-01T00:00:00Z\x00Workbook Benchmark\x00" + benchmarkActorID + "\x002024-01-01T00:00:00Z"
+	if identity != wantIdentity {
+		t.Fatalf("fixture code commit identity = %q, want %q", identity, wantIdentity)
+	}
+}
+
+func assertFixtureIsolationConfig(t *testing.T, root string) {
+	t.Helper()
+	for key, want := range map[string]string{
+		"commit.gpgSign": "false",
+		"tag.gpgSign":    "false",
+		"push.gpgSign":   "false",
+	} {
+		if got := strings.TrimSpace(runGit(t, root, "config", "--local", "--get", key)); got != want {
+			t.Fatalf("%s local %s = %q, want %q", root, key, got, want)
+		}
+	}
+	hooksPath := strings.TrimSpace(runGit(t, root, "config", "--local", "--get", "core.hooksPath"))
+	if hooksPath == "" {
+		t.Fatalf("%s local core.hooksPath is empty", root)
+	}
+	if _, err := os.Stat(hooksPath); !os.IsNotExist(err) {
+		t.Fatalf("%s local core.hooksPath = %q must not exist: %v", root, hooksPath, err)
 	}
 }
 

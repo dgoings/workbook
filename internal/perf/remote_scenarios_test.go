@@ -3,6 +3,7 @@ package perf
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -408,5 +409,34 @@ func TestRemoteScenarioVerificationGitCallsDoNotScaleWithFixture(t *testing.T) {
 	sort.Ints(counts)
 	if !reflect.DeepEqual(counts, []int{3, 3}) {
 		t.Fatalf("verification Git calls = %v, want constant canonical/tracking/remote count", counts)
+	}
+}
+
+func TestRequireRemoteScenarioRefsPassesCallerCancellationToReader(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	reads := 0
+	err := requireRemoteScenarioRefs(ctx, RemoteFreshCheckout, RemoteFixture{
+		LocalRoot:  "local",
+		OriginRoot: "origin",
+		TaskIDs:    []string{"task-a"},
+		Expected:   map[string]ExpectedRefs{"task-a": {Remote: "remote-tip"}},
+	}, remoteScenarioDependencies{
+		readCanonicalRefs: func(got context.Context, root string) (map[string]string, error) {
+			reads++
+			if root != "local" {
+				t.Fatalf("reader root = %q, want local", root)
+			}
+			if !errors.Is(got.Err(), context.Canceled) {
+				t.Fatalf("reader context error = %v, want context canceled", got.Err())
+			}
+			return nil, got.Err()
+		},
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("verification error = %v, want context canceled", err)
+	}
+	if reads != 1 {
+		t.Fatalf("ref readers called %d times, want canonical reader only", reads)
 	}
 }

@@ -25,6 +25,26 @@ func TestSummarizeUsesNearestRankP95AndRetainsTimeouts(t *testing.T) {
 	}
 }
 
+func TestSummarizeRetainsGitProcessCountsFromTimedOutAndFailedSamples(t *testing.T) {
+	samples := []Sample{
+		{Duration: 10 * time.Millisecond, GitProcesses: 2},
+		{Duration: 20 * time.Millisecond, GitProcesses: 3},
+		{Duration: 30 * time.Millisecond, GitProcesses: 77, ExitCode: 1, Error: "product failed"},
+		{Duration: time.Second, GitProcesses: 99, TimedOut: true, Error: "timed out"},
+	}
+
+	got := Summarize(samples)
+	if got.Completed != 2 || got.TimedOut != 1 {
+		t.Fatalf("summary counts = %#v", got)
+	}
+	if got.MinMilliseconds != 10 || got.MedianMilliseconds != 15 || got.P95Milliseconds != 20 {
+		t.Fatalf("completed latency summary = %#v", got)
+	}
+	if got.P95GitProcesses != 99 {
+		t.Fatalf("P95 Git processes = %d, want 99 from all observed samples", got.P95GitProcesses)
+	}
+}
+
 func TestReportWritesVersionedJSONAndMarkdown(t *testing.T) {
 	report := Report{
 		Format: "workbook.performance-report", Version: 1, Phase: "baseline",

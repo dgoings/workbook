@@ -66,7 +66,10 @@ func BuildRemoteFixture(ctx context.Context, root string, spec FixtureSpec, topo
 	sort.Strings(taskIDs)
 
 	originRoot := filepath.Join(root, "origin.git")
-	if err := runFixtureGit(ctx, "init", "--bare", "--quiet", "--object-format="+spec.ObjectFormat, originRoot); err != nil {
+	if err := runFixtureGitInRoot(ctx, originRoot, "init", "--bare", "--quiet", "--object-format="+spec.ObjectFormat, originRoot); err != nil {
+		return RemoteFixture{}, err
+	}
+	if err := configureFixtureRepository(ctx, originRoot); err != nil {
 		return RemoteFixture{}, err
 	}
 	localRoot, err := cloneFixtureRepository(ctx, source.Root, filepath.Join(root, "local"), originRoot)
@@ -111,11 +114,12 @@ func prepareFixtureCodeBranch(ctx context.Context, root string) error {
 	if err := runFixtureGit(ctx, "-C", root, "add", ".workbook/config.json"); err != nil {
 		return err
 	}
-	return runFixtureGit(ctx, "-C", root, "commit", "--quiet", "-m", "workbook: benchmark fixture configuration")
+	_, err := runFixtureGitOutputWithEnv(ctx, root, nil, fixtureCommitEnvironment(benchmarkOrigin), "commit", "--quiet", "-m", "workbook: benchmark fixture configuration")
+	return err
 }
 
 func cloneFixtureRepository(ctx context.Context, sourceRoot, destination, originRoot string) (string, error) {
-	if err := runFixtureGit(ctx, "clone", "--quiet", "--origin", "seed", sourceRoot, destination); err != nil {
+	if err := runFixtureGitInRoot(ctx, destination, "clone", "--quiet", "--origin", "seed", sourceRoot, destination); err != nil {
 		return "", err
 	}
 	absDestination, err := filepath.Abs(destination)
@@ -125,10 +129,7 @@ func cloneFixtureRepository(ctx context.Context, sourceRoot, destination, origin
 	if err := runFixtureGit(ctx, "-C", absDestination, "remote", "add", "origin", originRoot); err != nil {
 		return "", err
 	}
-	if err := runFixtureGit(ctx, "-C", absDestination, "config", "user.name", "Workbook Benchmark"); err != nil {
-		return "", err
-	}
-	if err := runFixtureGit(ctx, "-C", absDestination, "config", "user.email", benchmarkActorID); err != nil {
+	if err := configureFixtureRepository(ctx, absDestination); err != nil {
 		return "", err
 	}
 	return absDestination, nil
