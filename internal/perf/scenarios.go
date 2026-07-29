@@ -460,6 +460,24 @@ func measureLocalBareSync(
 	return results, nil
 }
 
+var coldSingleTarget = ScenarioTarget{
+	DurationStatistic:  DurationP95,
+	DurationComparison: DurationAtMost,
+	MaxMilliseconds:    200,
+}
+
+var warmUpdateTarget = ScenarioTarget{
+	DurationStatistic:  DurationP95,
+	DurationComparison: DurationAtMost,
+	MaxMilliseconds:    100,
+}
+
+var burstTarget = ScenarioTarget{
+	DurationStatistic:  DurationEverySample,
+	DurationComparison: DurationLessThan,
+	MaxMilliseconds:    1000,
+}
+
 func coldCLIResults(samples int) []ScenarioResult {
 	names := []string{
 		"cli-create",
@@ -474,9 +492,14 @@ func coldCLIResults(samples int) []ScenarioResult {
 	}
 	results := make([]ScenarioResult, len(names))
 	for index, name := range names {
+		target := &coldSingleTarget
+		if name == "cli-burst-independent-10" || name == "cli-burst-same-task-10" {
+			target = &burstTarget
+		}
 		results[index] = ScenarioResult{
 			Name:    name,
 			Surface: "cold-cli",
+			Target:  target,
 			Samples: make([]Sample, samples),
 		}
 	}
@@ -491,9 +514,14 @@ func warmHTTPResults(samples int) []ScenarioResult {
 	}
 	results := make([]ScenarioResult, len(names))
 	for index, name := range names {
+		target := &warmUpdateTarget
+		if name == "api-burst-independent-10" || name == "api-burst-same-task-10" {
+			target = &burstTarget
+		}
 		results[index] = ScenarioResult{
 			Name:    name,
 			Surface: "warm-http",
+			Target:  target,
 			Samples: make([]Sample, samples),
 		}
 	}

@@ -149,9 +149,9 @@ func TestValidationScenarioOracleRejectsWrongCounts(t *testing.T) {
 // process samples as passing despite the approved fewer-than-twelve contract.
 func TestValidationScenarioTargetsUseExclusiveProcessLimit(t *testing.T) {
 	want := map[string]ScenarioTarget{
-		"validate-full-history":     {MaxMilliseconds: 10000, MaxGitProcesses: 12},
-		"validate-cached-unchanged": {MaxMilliseconds: 500, MaxGitProcesses: 12},
-		"validate-five-changed":     {MaxMilliseconds: 1000, MaxGitProcesses: 12},
+		"validate-full-history":     {DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 10000, MaxGitProcesses: 12},
+		"validate-cached-unchanged": {DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 500, MaxGitProcesses: 12},
+		"validate-five-changed":     {DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 1000, MaxGitProcesses: 12},
 	}
 	for _, definition := range validationScenarioDefinitions {
 		if got, expected := definition.target, want[definition.name]; got != expected {

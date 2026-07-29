@@ -152,6 +152,17 @@ func TestRunRemoteScenariosBuildsOnlySelectedTopology(t *testing.T) {
 	}
 }
 
+// Mutation witness: leaving a remote target at a local p95 policy could allow
+// one slow completed remote sample to satisfy a target that applies to every
+// completed sample.
+func TestRemoteScenarioTargetsUseEverySampleInclusiveDurationLimits(t *testing.T) {
+	for _, definition := range remoteScenarioDefinitions {
+		if definition.target.DurationStatistic != DurationEverySample || definition.target.DurationComparison != DurationAtMost {
+			t.Fatalf("%s duration policy = %q/%q, want every-sample/at-most", definition.name, definition.target.DurationStatistic, definition.target.DurationComparison)
+		}
+	}
+}
+
 func TestRemoteScenarioProcessCountDoesNotScaleWithFixtureSize(t *testing.T) {
 	workbook := buildRemoteScenarioWorkbook(t)
 	counts := make([]int, 0, 2)

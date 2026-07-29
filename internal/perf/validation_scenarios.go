@@ -29,9 +29,9 @@ type validationScenarioDefinition struct {
 }
 
 var validationScenarioDefinitions = []validationScenarioDefinition{
-	{name: "validate-full-history", args: []string{"validate", "--full", "--json"}, target: ScenarioTarget{MaxMilliseconds: 10000, MaxGitProcesses: 12}},
-	{name: "validate-cached-unchanged", args: []string{"validate", "--json"}, target: ScenarioTarget{MaxMilliseconds: 500, MaxGitProcesses: 12}},
-	{name: "validate-five-changed", args: []string{"validate", "--json"}, target: ScenarioTarget{MaxMilliseconds: 1000, MaxGitProcesses: 12}},
+	{name: "validate-full-history", args: []string{"validate", "--full", "--json"}, target: ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 10000, MaxGitProcesses: 12}},
+	{name: "validate-cached-unchanged", args: []string{"validate", "--json"}, target: ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 500, MaxGitProcesses: 12}},
+	{name: "validate-five-changed", args: []string{"validate", "--json"}, target: ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 1000, MaxGitProcesses: 12}},
 }
 
 type validationScenarioDependencies struct {
