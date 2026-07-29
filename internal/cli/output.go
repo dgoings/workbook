@@ -28,6 +28,7 @@ Commands:
   free <id-or-prefix> <dependency-id-or-prefix> [--json]
   next [--json]
   rebuild [--json]
+  validate [--full] [--json]
   version [--json]
   fetch [--json]
   push [--json]

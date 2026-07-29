@@ -48,13 +48,26 @@ func (r *Repository) ReadTaskHeads(
 	return snapshots, nil
 }
 
-// readTaskHeadsPartial reads every valid requested tip through one batch
-// process. Object and Workbook-document failures remain attributed to one head;
-// malformed batch framing is fatal because later records cannot be trusted.
+// readTaskHeadsPartial reads every valid requested commit through one batch
+// process. Requests may repeat a task ID so callers can flatten histories into
+// one batch. Object and Workbook-document failures remain attributed to one
+// request; malformed batch framing is fatal because later records cannot be
+// trusted.
 func (r *Repository) readTaskHeadsPartial(
 	ctx context.Context,
 	config core.ProjectConfig,
 	heads []TaskHead,
+) ([]tipReadResult, error) {
+	return r.readTaskHeadsPartialBatch(ctx, config, heads, false)
+}
+
+// readTaskHeadsPartialBatch optionally runs an empty batch so fixed-shape
+// callers retain the same framing and command-failure boundary with no objects.
+func (r *Repository) readTaskHeadsPartialBatch(
+	ctx context.Context,
+	config core.ProjectConfig,
+	heads []TaskHead,
+	runEmpty bool,
 ) ([]tipReadResult, error) {
 	if err := r.verifyIdentity(ctx); err != nil {
 		return nil, err
@@ -62,18 +75,18 @@ func (r *Repository) readTaskHeadsPartial(
 	if err := r.validateRepositoryConfig(config); err != nil {
 		return nil, err
 	}
-	if len(heads) == 0 {
+	if len(heads) == 0 && !runEmpty {
 		return []tipReadResult{}, nil
 	}
 
 	results := make([]tipReadResult, len(heads))
 	var input bytes.Buffer
-	type batchHead struct {
+	type batchRequest struct {
 		index         int
 		head          TaskHead
 		objectIDBytes int
 	}
-	validHeads := make([]batchHead, 0, len(heads))
+	validRequests := make([]batchRequest, 0, len(heads))
 	for i, head := range heads {
 		results[i].Head = head
 		if err := core.ValidateTaskID(config.Key, head.TaskID); err != nil {
@@ -85,7 +98,7 @@ func (r *Repository) readTaskHeadsPartial(
 			results[i].Err = core.Wrap(core.CategoryCorruptData, "task head object ID is invalid", err)
 			continue
 		}
-		validHeads = append(validHeads, batchHead{index: i, head: head, objectIDBytes: len(decoded)})
+		validRequests = append(validRequests, batchRequest{index: i, head: head, objectIDBytes: len(decoded)})
 		fmt.Fprintf(
 			&input,
 			"%s\n%s^{tree}\n%s:operation.json\n%s:state.json\n",
@@ -95,7 +108,7 @@ func (r *Repository) readTaskHeadsPartial(
 			head.ObjectID,
 		)
 	}
-	if len(validHeads) == 0 {
+	if len(validRequests) == 0 && !runEmpty {
 		return results, nil
 	}
 
@@ -104,7 +117,7 @@ func (r *Repository) readTaskHeadsPartial(
 		return nil, core.Wrap(core.CategoryCorruptData, "cannot read task tips", err)
 	}
 	reader := bufio.NewReader(bytes.NewReader(output))
-	for _, batch := range validHeads {
+	for _, batch := range validRequests {
 		objects, err := readBatchObjects(reader)
 		if err != nil {
 			return nil, core.Wrap(core.CategoryCorruptData, "cannot read task objects from Git batch", err)

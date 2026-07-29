@@ -243,6 +243,15 @@ var commandSchemas = map[string]commandMetadata{
 		Description: "Rebuild the local SQLite task projection.",
 		Options:     []optionMetadata{{Name: "json", Kind: boolFlag, Description: "emit JSON"}},
 	},
+	"validate": {
+		Name:        "validate",
+		Synopsis:    "workbook validate [--full] [--json]",
+		Description: "Validate complete task histories and stored checkpoints.",
+		Options: []optionMetadata{
+			{Name: "full", Kind: boolFlag, Description: "bypass cached validation results"},
+			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+		},
+	},
 	"version": {
 		Name:        "version",
 		Synopsis:    "workbook version [--json]",
@@ -252,7 +261,7 @@ var commandSchemas = map[string]commandMetadata{
 }
 
 var commandOrder = []string{
-	"init", "create", "list", "board", "show", "update", "delete", "restore", "move", "depend", "free", "next", "rebuild", "version", "fetch", "push", "sync", "hooks", "serve",
+	"init", "create", "list", "board", "show", "update", "delete", "restore", "move", "depend", "free", "next", "rebuild", "validate", "version", "fetch", "push", "sync", "hooks", "serve",
 }
 
 type commandFlagSet struct {

@@ -124,6 +124,71 @@ func TestRunBenchmarkRunsOnlySelectedRemoteScenario(t *testing.T) {
 	}
 }
 
+// Mutation witness: dispatching every scenario family after selector
+// resolution would construct unrelated cold, warm, or remote fixtures.
+func TestBenchmarkMainRunsOnlySelectedValidationScenarios(t *testing.T) {
+	workbook := buildWorkbookBinary(t)
+	for _, test := range []struct {
+		name       string
+		tasks      string
+		operations string
+		wantErr    bool
+	}{
+		{name: "task count below minimum", tasks: "499", operations: "20", wantErr: true},
+		{name: "history depth below minimum", tasks: "500", operations: "19", wantErr: true},
+		{name: "exact baseline minimum", tasks: "500", operations: "20"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			outputRoot := t.TempDir()
+			var stderr bytes.Buffer
+			flags, options := newFlagSet(&stderr)
+			if err := flags.Parse([]string{
+				"--workbook", workbook,
+				"--tasks", test.tasks,
+				"--operations", test.operations,
+				"--phase", "baseline",
+				"--scenario", "validate-cached-unchanged",
+				"--output-json", filepath.Join(outputRoot, "report.json"),
+				"--output-markdown", filepath.Join(outputRoot, "report.md"),
+			}); err != nil {
+				t.Fatal(err)
+			}
+			err := validateOptions(flags, options)
+			if test.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "validation scenarios require at least 500 tasks and 20 operations per task") {
+					t.Fatalf("validation minimum error = %v, want exact minimum guidance", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validate exact baseline minimum: %v", err)
+			}
+			if !reflect.DeepEqual(options.scenarios, []string{"validate-cached-unchanged"}) {
+				t.Fatalf("selected baseline scenarios = %v, want cached validation only", options.scenarios)
+			}
+		})
+	}
+
+	// The lower-dimensional direct runner is the separate regular diagnostic
+	// witness. It must still dispatch only the selected validation path.
+	report, err := runBenchmark(context.Background(), options{
+		workbookBinary: workbook,
+		tasks:          10,
+		operations:     4,
+		samples:        1,
+		timeout:        20 * time.Second,
+		objectFormat:   "sha1",
+		phase:          "baseline",
+		scenarios:      []string{"validate-cached-unchanged"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Scenarios) != 1 || report.Scenarios[0].Name != "validate-cached-unchanged" {
+		t.Fatalf("validation-only scenarios = %#v, want cached validation only", report.Scenarios)
+	}
+}
+
 func TestValidateOptionsRejectsInvalidScenarioSelectors(t *testing.T) {
 	workbookBinary := buildWorkbookBinary(t)
 	tests := []struct {

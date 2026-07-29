@@ -160,6 +160,9 @@ func validateOptions(flags *flag.FlagSet, options *options) error {
 	if containsRemoteScenario(scenarios) && (options.tasks < 500 || options.operations < 20) {
 		return fmt.Errorf("remote scenarios require at least 500 tasks and 20 operations per task")
 	}
+	if containsValidationScenario(scenarios) && (options.tasks < 500 || options.operations < 20) {
+		return fmt.Errorf("validation scenarios require at least 500 tasks and 20 operations per task")
+	}
 	options.scenarios = scenarios
 
 	jsonPath, err := filepath.Abs(options.outputJSON)
@@ -245,6 +248,14 @@ func runBenchmark(ctx context.Context, options options) (perf.Report, error) {
 		}
 		scenarios = append(scenarios, remote...)
 	}
+	validationScenarios := selectedValidationScenarioNames(options.scenarios)
+	if len(validationScenarios) != 0 {
+		validation, err := perf.RunValidationScenarios(ctx, runSpec, filepath.Join(fixtureRoot, "validation"), validationScenarios)
+		if err != nil {
+			return perf.Report{}, fmt.Errorf("run validation scenarios: %w", err)
+		}
+		scenarios = append(scenarios, validation...)
+	}
 	return perf.Report{
 		Format:      perf.ReportFormat,
 		Version:     perf.ReportVersion,
@@ -296,6 +307,21 @@ func selectedScenarioResults(results []perf.ScenarioResult, selected []string) [
 
 func containsRemoteScenario(scenarios []string) bool {
 	return len(selectedRemoteScenarioNames(scenarios)) != 0
+}
+
+func containsValidationScenario(scenarios []string) bool {
+	return len(selectedValidationScenarioNames(scenarios)) != 0
+}
+
+func selectedValidationScenarioNames(scenarios []string) []string {
+	validation := make([]string, 0, len(scenarios))
+	for _, scenario := range scenarios {
+		switch scenario {
+		case "validate-full-history", "validate-cached-unchanged", "validate-five-changed":
+			validation = append(validation, scenario)
+		}
+	}
+	return validation
 }
 
 func selectedRemoteScenarioNames(scenarios []string) []string {

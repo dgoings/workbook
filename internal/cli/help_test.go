@@ -49,6 +49,23 @@ func TestRunHelpAliasesForEveryTopLevelCommand(t *testing.T) {
 	}
 }
 
+func TestValidateHelpDocumentsFullAndJSON(t *testing.T) {
+	// Production mutation: omitting validate from command metadata makes its help
+	// unavailable or hides the cache-bypass flag users need for a full audit.
+	output := assertHelpOutput(t, []string{"help", "validate"}, "Usage: workbook validate [--full] [--json]")
+	for _, want := range []string{
+		"Validate complete task histories and stored checkpoints.",
+		"--full",
+		"bypass cached validation results",
+		"--json",
+		"emit JSON",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("validate help = %q, want %q", output, want)
+		}
+	}
+}
+
 func TestRunHelpHandlesHooksAndInstall(t *testing.T) {
 	for _, test := range []struct {
 		name string
