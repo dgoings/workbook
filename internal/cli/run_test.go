@@ -889,6 +889,7 @@ func TestREADMEImplementedCommands(t *testing.T) {
 		"workbook free <task> <dependency> [--json]",
 		"workbook next [--json]",
 		"workbook rebuild [--json]",
+		"workbook validate [--full] [--json]",
 		"workbook version [--json]",
 		"workbook fetch [--json]",
 		"workbook push [--json]",
@@ -1001,7 +1002,7 @@ func readmeCommandPolicyViolations(readme string) []string {
 		"init": true, "create": true, "list": true, "board": true,
 		"show": true, "update": true, "delete": true, "restore": true, "fetch": true,
 		"push": true, "sync": true, "hooks": true, "serve": true, "move": true,
-		"depend": true, "free": true, "next": true, "rebuild": true, "version": true,
+		"depend": true, "free": true, "next": true, "rebuild": true, "validate": true, "version": true,
 		"help": true,
 	}
 	commandPattern := regexp.MustCompile(`\bworkbook ([a-z][a-z0-9-]*)\b`)

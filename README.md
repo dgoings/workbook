@@ -119,6 +119,7 @@ workbook depend <task> <dependency> [--json]
 workbook free <task> <dependency> [--json]
 workbook next [--json]
 workbook rebuild [--json]
+workbook validate [--full] [--json]
 workbook version [--json]
 workbook fetch [--json]
 workbook push [--json]
@@ -237,8 +238,45 @@ refs into the isolated tracking namespace, validate and fast-forward/create
 compatible local task refs, stop before pushing if any task history diverged or
 failed validation, then publish the already validated local tips. The command
 does not replay every buried checkpoint during ordinary synchronization; that
-is reserved for a planned explicit validation audit. The command never fetches
+is reserved for the explicit `workbook validate` audit. The command never fetches
 or pushes code branches and does not create a hidden tasks branch.
+
+### Semantic history validation
+
+Normal `list`, `show`, `fetch`, `push`, and `sync` use bounded current-tip
+checks. To audit semantic history, run the foreground command:
+
+```sh
+workbook validate [--full] [--json]
+```
+
+`validate` reads canonical task histories and verifies every stored checkpoint
+against the operation sequence that produced it. It stores resumable,
+non-authoritative progress in the disposable shared cache at
+`<git-common-dir>/workbook/validation.sqlite`; linked worktrees therefore share
+the same audit cache. Validator version `1` records each observed head as
+`pending`, `valid`, or `invalid`. Deleting this cache is safe: a later validation
+recreates it from canonical Git data.
+
+For an unchanged task head, normal validation reuses its cached valid or invalid
+result without rereading that history. When a head changes, it validates only
+unseen descendants after the last reachable cached valid checkpoint; if that
+boundary is no longer reachable, validation restarts at the root. `--full`
+bypasses cached results and semantic boundaries for every current head.
+
+Validation records completed task results independently, so an interrupted run
+leaves unfinished tasks pending and the next invocation resumes them. It reports
+the exact task ID, full commit ID, category, and message for every invalid task.
+An invalid result exits nonzero even when served from an unchanged cache. If
+canonical heads change before the final inventory check, affected results remain
+pending and the command exits nonzero. Validation never mutates canonical or
+tracking Git refs.
+
+The following acceptance scenarios are **planned targets**, not recorded
+performance evidence: with 500 active tasks and 20 operations per task, a full
+audit targets at most 10 seconds; an unchanged cached audit targets at most 500
+milliseconds; and five one-operation changes target at most 1 second. Each
+scenario also targets fewer than 12 Git processes.
 
 ### Terminal board
 
@@ -405,8 +443,8 @@ ref
 - Ordinary `list`, `show`, `fetch`, and `sync` validate and use current tip
   checkpoints without replaying the complete history. This bounded default does
   not change the authority of immutable operations or Git ancestry.
-- A planned explicit validation audit will replay history and reconstruct
-  checkpoints; it is not part of the current POC command surface.
+- `workbook validate` explicitly replays history and reconstructs checkpoints;
+  it is not part of ordinary current-tip reads or synchronization.
 
 Using one ref per task avoids a single global state-branch bottleneck: local
 commands working on different tasks update different refs. Future concurrent edits

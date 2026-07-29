@@ -11,6 +11,7 @@ import (
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
+	"github.com/dgoings/workbook/internal/historyvalidation"
 	"github.com/dgoings/workbook/internal/projection"
 	"github.com/dgoings/workbook/internal/release"
 	"github.com/dgoings/workbook/internal/webui"
@@ -82,6 +83,8 @@ func Run(ctx context.Context, args []string, cwd string, stdout, stderr io.Write
 		err = runNext(ctx, commandArgs, cwd, stdout)
 	case "rebuild":
 		err = runRebuild(ctx, commandArgs, cwd, stdout)
+	case "validate":
+		err = runValidate(ctx, commandArgs, cwd, stdout)
 	case "version":
 		err = runVersion(commandArgs, stdout)
 	case "fetch":
@@ -638,6 +641,39 @@ func runRebuild(ctx context.Context, args []string, cwd string, stdout io.Writer
 		fmt.Fprintf(stdout, "Rebuilt %d task(s) at %s.\n", result.TaskCount, result.CachePath)
 	}
 	return nil
+}
+
+func runValidate(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+	flags := newFlagSet("validate")
+	full := flags.Bool("full", false, "bypass cached validation results")
+	jsonMode := flags.Bool("json", false, "emit JSON")
+	if err := parseFlags(flags, args); err != nil {
+		return err
+	}
+	repository, config, err := openRepository(ctx, cwd)
+	if err != nil {
+		return err
+	}
+	validator, err := historyvalidation.Open(ctx, repository, config)
+	if err != nil {
+		return err
+	}
+	defer validator.Close()
+	result, validateErr := validator.Validate(ctx, *full)
+	if *jsonMode {
+		writeResult(stdout, "validate", result)
+	} else {
+		writeValidationResult(stdout, result)
+	}
+	return validateErr
+}
+
+func writeValidationResult(output io.Writer, result historyvalidation.Result) {
+	fmt.Fprintf(output, "Validated %d task(s): %d commit(s) checked, %d cache hit(s); %d valid, %d invalid, %d pending.\n",
+		result.TaskCount, result.CommitsChecked, result.CacheHits, result.Valid, result.Invalid, result.Pending)
+	for _, failure := range result.Failures {
+		fmt.Fprintf(output, "Invalid %s at %s [%s]: %s\n", failure.TaskID, failure.Commit, failure.Category, failure.Message)
+	}
 }
 
 func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, stderr io.Writer) error {
