@@ -533,6 +533,181 @@ func TestServiceDeleteRejectsInvalidGeneratedIDBeforeWrite(t *testing.T) {
 	}
 }
 
+func TestServicePlaceMovesAcrossStatusAndRankInOneWrite(t *testing.T) {
+	moved := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E1", TaskData{
+		Title: "moved", Status: StatusReady, Priority: PriorityMedium, Rank: "9/1",
+	})
+	previous := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E2", TaskData{
+		Title: "previous", Status: StatusInProgress, Priority: PriorityMedium, Rank: "2/1",
+	})
+	anchor := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E3", TaskData{
+		Title: "anchor", Status: StatusInProgress, Priority: PriorityMedium, Rank: "4/1",
+	})
+	store := newMemoryTaskStore(moved, previous, anchor)
+	service := serviceUnderTest(store, &sequenceIDSource{values: []string{
+		"01K0M6B8A4FTT8C39MXXYTW7E4",
+		"01K0M6B8A4FTT8C39MXXYTW7E5",
+	}})
+
+	result, err := service.PlaceMutation(context.Background(), moved.State.TaskID, PlaceInput{
+		Status: StatusInProgress,
+		Before: anchor.State.TaskID,
+	})
+	if err != nil {
+		t.Fatalf("PlaceMutation() error = %v", err)
+	}
+	if got, want := result.Task.Status, StatusInProgress; got != want {
+		t.Fatalf("PlaceMutation() status = %q, want %q", got, want)
+	}
+	if got, want := result.Task.Rank, "3/1"; got != want {
+		t.Fatalf("PlaceMutation() rank = %q, want %q", got, want)
+	}
+	if got, want := len(store.writes), 1; got != want {
+		t.Fatalf("PlaceMutation() writes = %d, want %d", got, want)
+	}
+	if got, want := store.writes[0].parent.State.TaskID, moved.State.TaskID; got != want {
+		t.Fatalf("PlaceMutation() wrote task %q, want %q", got, want)
+	}
+	assertOperations(t, store.writes[0].pack.Operations, []Operation{
+		{ID: "01K0M6B8A4FTT8C39MXXYTW7E4", Type: OperationFieldSet, Field: "status", Value: "in-progress"},
+		{ID: "01K0M6B8A4FTT8C39MXXYTW7E5", Type: OperationFieldSet, Field: "rank", Value: "3/1"},
+	})
+}
+
+func TestServicePlaceWithoutAnchorMovesIntoEmptyPriorityBucket(t *testing.T) {
+	moved := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F1", TaskData{
+		Title: "moved", Status: StatusReady, Priority: PriorityMedium, Rank: "7/1",
+	})
+	otherPriority := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F2", TaskData{
+		Title: "high", Status: StatusDone, Priority: PriorityHigh, Rank: "1/1",
+	})
+	store := newMemoryTaskStore(moved, otherPriority)
+	service := serviceUnderTest(store, &sequenceIDSource{values: []string{
+		"01K0M6B8A4FTT8C39MXXYTW7F3",
+	}})
+
+	result, err := service.PlaceMutation(context.Background(), moved.State.TaskID, PlaceInput{Status: StatusDone})
+	if err != nil {
+		t.Fatalf("PlaceMutation() error = %v", err)
+	}
+	if result.Task.Status != StatusDone || result.Task.Rank != "7/1" {
+		t.Fatalf("PlaceMutation() task = %#v, want done with unchanged rank", result.Task)
+	}
+	assertOperations(t, store.writes[0].pack.Operations, []Operation{{
+		ID: "01K0M6B8A4FTT8C39MXXYTW7F3", Type: OperationFieldSet, Field: "status", Value: "done",
+	}})
+}
+
+func TestServicePlacePlacesSameStatusTaskAtBucketBoundaries(t *testing.T) {
+	first := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F1", TaskData{
+		Title: "first", Status: StatusReady, Priority: PriorityHigh, Rank: "2/1",
+	})
+	last := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F2", TaskData{
+		Title: "last", Status: StatusReady, Priority: PriorityHigh, Rank: "4/1",
+	})
+	before := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F3", TaskData{
+		Title: "before", Status: StatusReady, Priority: PriorityHigh, Rank: "9/1",
+	})
+	after := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F4", TaskData{
+		Title: "after", Status: StatusReady, Priority: PriorityHigh, Rank: "10/1",
+	})
+	store := newMemoryTaskStore(first, last, before, after)
+	service := serviceUnderTest(store, &sequenceIDSource{values: []string{
+		"01K0M6B8A4FTT8C39MXXYTW7F5",
+		"01K0M6B8A4FTT8C39MXXYTW7F6",
+	}})
+
+	beforeResult, err := service.PlaceMutation(context.Background(), before.State.TaskID, PlaceInput{
+		Status: StatusReady,
+		Before: first.State.TaskID,
+	})
+	if err != nil {
+		t.Fatalf("PlaceMutation(before boundary) error = %v", err)
+	}
+	if got, want := beforeResult.Task.Rank, "1/1"; got != want {
+		t.Fatalf("PlaceMutation(before boundary) rank = %q, want %q", got, want)
+	}
+
+	afterResult, err := service.PlaceMutation(context.Background(), after.State.TaskID, PlaceInput{
+		Status: StatusReady,
+		After:  last.State.TaskID,
+	})
+	if err != nil {
+		t.Fatalf("PlaceMutation(after boundary) error = %v", err)
+	}
+	if got, want := afterResult.Task.Rank, "5/1"; got != want {
+		t.Fatalf("PlaceMutation(after boundary) rank = %q, want %q", got, want)
+	}
+}
+
+func TestServicePlaceWithoutAnchorReturnsExistingSoleBucketTask(t *testing.T) {
+	moved := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F1", TaskData{
+		Title: "moved", Status: StatusReady, Priority: PriorityMedium, Rank: "7/1",
+	})
+	store := newMemoryTaskStore(moved)
+	ids := &sequenceIDSource{}
+	service := serviceUnderTest(store, ids)
+
+	result, err := service.PlaceMutation(context.Background(), moved.State.TaskID, PlaceInput{Status: StatusReady})
+	if err != nil {
+		t.Fatalf("PlaceMutation() error = %v", err)
+	}
+	if got, want := result.Task, Project(moved); !reflect.DeepEqual(got, want) {
+		t.Fatalf("PlaceMutation() task = %#v, want existing %#v", got, want)
+	}
+	if got, want := ids.calls, 0; got != want {
+		t.Fatalf("PlaceMutation() ID requests = %d, want %d", got, want)
+	}
+	if got, want := len(store.writes), 0; got != want {
+		t.Fatalf("PlaceMutation() writes = %d, want %d", got, want)
+	}
+}
+
+func TestServicePlaceRejectsBothAnchorDirectionsWithoutWriting(t *testing.T) {
+	moved := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F1", TaskData{
+		Title: "moved", Status: StatusReady, Priority: PriorityMedium, Rank: "1/1",
+	})
+	anchor := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F2", TaskData{
+		Title: "anchor", Status: StatusReady, Priority: PriorityMedium, Rank: "2/1",
+	})
+	store := newMemoryTaskStore(moved, anchor)
+	service := serviceUnderTest(store, &sequenceIDSource{})
+
+	_, err := service.PlaceMutation(context.Background(), moved.State.TaskID, PlaceInput{
+		Status: StatusReady,
+		Before: anchor.State.TaskID,
+		After:  anchor.State.TaskID,
+	})
+	if got, want := CategoryOf(err), CategoryValidation; got != want {
+		t.Fatalf("PlaceMutation() error category = %q, want %q (error: %v)", got, want, err)
+	}
+	if got, want := len(store.writes), 0; got != want {
+		t.Fatalf("PlaceMutation() writes = %d, want %d", got, want)
+	}
+}
+
+func TestServicePlaceRejectsAnchorWithDifferentPriorityWithoutWriting(t *testing.T) {
+	moved := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F1", TaskData{
+		Title: "moved", Status: StatusReady, Priority: PriorityMedium, Rank: "1/1",
+	})
+	anchor := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F2", TaskData{
+		Title: "anchor", Status: StatusReady, Priority: PriorityHigh, Rank: "2/1",
+	})
+	store := newMemoryTaskStore(moved, anchor)
+	service := serviceUnderTest(store, &sequenceIDSource{})
+
+	_, err := service.PlaceMutation(context.Background(), moved.State.TaskID, PlaceInput{
+		Status: StatusReady,
+		Before: anchor.State.TaskID,
+	})
+	if got, want := CategoryOf(err), CategoryValidation; got != want {
+		t.Fatalf("PlaceMutation() error category = %q, want %q (error: %v)", got, want, err)
+	}
+	if got, want := len(store.writes), 0; got != want {
+		t.Fatalf("PlaceMutation() writes = %d, want %d", got, want)
+	}
+}
+
 func TestServiceMovePlacesTaskBetweenAnchorAndNeighborWithoutWritingAnotherTask(t *testing.T) {
 	moved := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E1", TaskData{Title: "moved", Status: StatusReady, Priority: PriorityHigh, Rank: "9/1"})
 	previous := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E2", TaskData{Title: "previous", Status: StatusReady, Priority: PriorityHigh, Rank: "2/1"})
