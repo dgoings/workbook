@@ -89,11 +89,11 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 
 	remoteOutput, err := r.Git(ctx, nil, "ls-remote", "--refs", "origin", taskRefPrefix+"*")
 	if err != nil {
-		return failedSyncPhase(result, "push failed before completion", err)
+		return failedPushTransport(result, refs, items, invalid, "push failed before completion", err)
 	}
 	remoteHeads, err := r.parseRemoteTaskHeads(config, remoteOutput)
 	if err != nil {
-		return failedSyncPhase(result, "push failed before completion", err)
+		return failedPushTransport(result, refs, items, invalid, "push failed before completion", err)
 	}
 	expected := make(map[string]string, len(valid))
 	for _, ref := range refs {
@@ -118,7 +118,7 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 		push := r.gitWithEnvResult(ctx, []string{"WORKBOOK_PRE_PUSH_ACTIVE=1"}, nil, args...)
 		pushed, err := parsePushPorcelain(push.stdout, expected, push.err)
 		if err != nil {
-			return failedSyncPhase(result, "push failed before completion", err)
+			return failedPushTransport(result, refs, items, invalid, "push failed before completion", err)
 		}
 		for taskID, item := range pushed {
 			items[taskID] = item
@@ -127,7 +127,7 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 
 	finalRefs, err := r.listTaskRefs(ctx)
 	if err != nil {
-		return failedSyncPhase(result, "push failed before completion", err)
+		return failedPushTransport(result, refs, items, invalid, "push failed before completion", err)
 	}
 	final := make(map[string]string, len(finalRefs))
 	for _, ref := range finalRefs {
@@ -158,6 +158,35 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 		return result, core.Errorf(core.CategoryStaleWrite, "%d local task ref(s) changed during push", changed)
 	}
 	return result, nil
+}
+
+func failedPushTransport(
+	result SyncResult,
+	refs []taskRefRecord,
+	items map[string]SyncTaskResult,
+	invalid int,
+	detail string,
+	err error,
+) (SyncResult, error) {
+	result.Status = SyncPhaseFailed
+	result.Detail = detail
+	if err != nil {
+		result.Detail += ": " + err.Error()
+	}
+	for _, ref := range refs {
+		item, found := items[ref.taskID]
+		if found && item.Status != "" {
+			result.Tasks = append(result.Tasks, item)
+		}
+	}
+	if invalid > 0 {
+		return result, core.Wrap(
+			core.CategoryCorruptData,
+			fmt.Sprintf("%d local task ref(s) failed validation before transport completed", invalid),
+			err,
+		)
+	}
+	return result, err
 }
 
 func (r *Repository) remoteRefHead(ctx context.Context, ref string) (string, error) {

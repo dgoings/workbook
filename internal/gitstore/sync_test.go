@@ -305,6 +305,24 @@ func TestPushOmitsInvalidTaskButPublishesIndependentValidTask(t *testing.T) {
 	}
 }
 
+func TestPushLocalCorruptionPrecedesRemoteTransportFailure(t *testing.T) {
+	repository, _, config := syncRepositories(t)
+	task := createSyncTask(t, repository, config, "Invalid before transport")
+	validHead := refValue(t, repository, taskRefPrefix+task.ID)
+	blob := syncGitInput(t, repository.Root, []byte("not a task commit"), "hash-object", "-w", "--stdin")
+	syncGit(t, repository.Root, "update-ref", taskRefPrefix+task.ID, blob, validHead)
+	syncGit(t, repository.Root, "remote", "remove", "origin")
+
+	result, err := repository.Push(context.Background(), config)
+	if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
+		t.Fatalf("Push() category = %q, want %q; result = %#v; error = %v", got, want, result, err)
+	}
+	if result.Status != SyncPhaseFailed {
+		t.Fatalf("Push() status = %q, want %q", result.Status, SyncPhaseFailed)
+	}
+	assertSyncOutcome(t, result, task.ID, SyncInvalid)
+}
+
 func TestPushReportsLocalChangedWhenHeadAdvancesDuringPublication(t *testing.T) {
 	repository, _, config := syncRepositories(t)
 	task := createSyncTask(t, repository, config, "Race task")
