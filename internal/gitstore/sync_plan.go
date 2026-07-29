@@ -109,6 +109,9 @@ func (r *Repository) classifyTaskHeadRelationships(
 			}
 		}
 	}
+	if err := validateCompleteParentGraph(graph); err != nil {
+		return nil, err
+	}
 
 	for i, pair := range pairs {
 		if results[i].Relationship == taskHeadsEqual {
@@ -132,6 +135,21 @@ func (r *Repository) classifyTaskHeadRelationships(
 	return results, nil
 }
 
+func validateCompleteParentGraph(graph map[string][]string) error {
+	for _, parents := range graph {
+		for _, parent := range parents {
+			if _, found := graph[parent]; !found {
+				return core.Errorf(
+					core.CategoryCorruptData,
+					"Git parent graph omitted referenced commit %q",
+					parent,
+				)
+			}
+		}
+	}
+	return nil
+}
+
 func (r *Repository) validateClassifiableTaskHead(config core.ProjectConfig, taskID string, snapshot core.Snapshot) error {
 	if err := core.ValidateTaskID(config.Key, taskID); err != nil {
 		return core.Wrap(core.CategoryCorruptData, "task head ID is invalid", err)
@@ -152,6 +170,25 @@ func (r *Repository) updateCanonicalRefs(
 	config core.ProjectConfig,
 	updates []canonicalRefUpdate,
 ) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	refs, err := r.listOwnedTaskRefs(ctx, config, taskRefPrefix)
+	if err != nil {
+		return err
+	}
+	return r.updateCanonicalRefsFromValidated(ctx, config, refs, updates)
+}
+
+// updateCanonicalRefsFromValidated applies updates planned from one owned-ref
+// enumeration. Its refs argument must come from listOwnedTaskRefs, which
+// rejects symbolic canonical refs before this transaction is constructed.
+func (r *Repository) updateCanonicalRefsFromValidated(
+	ctx context.Context,
+	config core.ProjectConfig,
+	refs []taskRefRecord,
+	updates []canonicalRefUpdate,
+) error {
 	if err := r.verifyIdentity(ctx); err != nil {
 		return err
 	}
@@ -163,6 +200,20 @@ func (r *Repository) updateCanonicalRefs(
 	}
 	if err := r.ensureGitObjectIDWidth(ctx); err != nil {
 		return err
+	}
+
+	observed := make(map[string]string, len(refs))
+	for _, ref := range refs {
+		if _, duplicate := observed[ref.taskID]; duplicate {
+			return core.Errorf(core.CategoryCorruptData, "validated canonical refs contain duplicate task ID %q", ref.taskID)
+		}
+		if err := core.ValidateTaskID(config.Key, ref.taskID); err != nil {
+			return core.Wrap(core.CategoryCorruptData, "validated canonical task ref ID is invalid", err)
+		}
+		if err := r.validateFullObjectID(ref.objectID); err != nil {
+			return core.Wrap(core.CategoryCorruptData, "validated canonical task ref target is invalid", err)
+		}
+		observed[ref.taskID] = ref.objectID
 	}
 
 	seenTaskIDs := make(map[string]struct{}, len(updates))
@@ -181,6 +232,13 @@ func (r *Repository) updateCanonicalRefs(
 			if err := r.validateFullObjectID(update.Expected); err != nil {
 				return core.Wrap(core.CategoryCorruptData, "canonical task ref expected target is invalid", err)
 			}
+		}
+		current, found := observed[update.TaskID]
+		switch {
+		case update.Expected == "" && found:
+			return core.Errorf(core.CategoryStaleWrite, "canonical task ref %q appeared after planning", taskRefPrefix+update.TaskID)
+		case update.Expected != "" && (!found || current != update.Expected):
+			return core.Errorf(core.CategoryStaleWrite, "canonical task ref %q changed after planning", taskRefPrefix+update.TaskID)
 		}
 	}
 

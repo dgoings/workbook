@@ -173,6 +173,17 @@ func TestClassifyTaskHeadsRejectsInvalidPairsBeforeGraph(t *testing.T) {
 	}
 }
 
+func TestCompleteParentGraphRejectsMissingReferencedCommit(t *testing.T) {
+	head := strings.Repeat("a", 40)
+	missingParent := strings.Repeat("b", 40)
+	err := validateCompleteParentGraph(map[string][]string{
+		head: {missingParent},
+	})
+	if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
+		t.Fatalf("validateCompleteParentGraph() category = %q, want %q; error = %v", got, want, err)
+	}
+}
+
 func TestUpdateCanonicalRefsUsesOneCompareAndSwapTransaction(t *testing.T) {
 	repository, config := writeRepository(t)
 	current, currentPack, currentState := writeRoot(t, repository, config)
@@ -241,9 +252,18 @@ func TestUpdateCanonicalRefsAbortsEntireTransactionOnStaleRef(t *testing.T) {
 		"Must not be created",
 	)
 	gitOutput(t, repository, "update-ref", "-d", taskRef(createdPack.TaskID))
+	syncGit(t, repository.Root, "update-ref", taskRef(currentPack.TaskID), current.Head, advanced.Head)
 
+	raced := false
+	repository.commandObserver = func(args []string) {
+		if raced || len(args) == 0 || args[0] != "update-ref" || args[len(args)-1] != "--stdin" {
+			return
+		}
+		raced = true
+		syncGit(t, repository.Root, "update-ref", taskRef(currentPack.TaskID), advanced.Head, current.Head)
+	}
 	err = repository.updateCanonicalRefs(context.Background(), config, []canonicalRefUpdate{
-		{TaskID: currentPack.TaskID, Next: current.Head, Expected: current.Head},
+		{TaskID: currentPack.TaskID, Next: advanced.Head, Expected: current.Head},
 		{TaskID: createdPack.TaskID, Next: created.Head},
 	})
 	if got, want := core.CategoryOf(err), core.CategoryStaleWrite; got != want {
@@ -254,6 +274,41 @@ func TestUpdateCanonicalRefsAbortsEntireTransactionOnStaleRef(t *testing.T) {
 	}
 	if _, err := repository.Git(context.Background(), nil, "rev-parse", "--verify", taskRef(createdPack.TaskID)); err == nil {
 		t.Fatalf("create ref %q exists after aborted transaction", taskRef(createdPack.TaskID))
+	}
+}
+
+func TestUpdateCanonicalRefsRejectsExistingSymbolicCanonicalRef(t *testing.T) {
+	repository, config := writeRepository(t)
+	current, pack, state := writeRoot(t, repository, config)
+	updatePack := writeUpdatePack(2, "01K0M6B8A4FTT8C39MXXYTW7C5", string(core.StatusReady))
+	updated, err := repository.Write(
+		context.Background(),
+		config,
+		&current,
+		updatePack,
+		writeState(t, &state, updatePack),
+		"advance",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	codeRef := "refs/heads/symbolic-target"
+	syncGit(t, repository.Root, "update-ref", codeRef, current.Head)
+	syncGit(t, repository.Root, "symbolic-ref", taskRef(pack.TaskID), codeRef)
+
+	err = repository.updateCanonicalRefs(context.Background(), config, []canonicalRefUpdate{{
+		TaskID:   pack.TaskID,
+		Next:     updated.Head,
+		Expected: current.Head,
+	}})
+	if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
+		t.Fatalf("updateCanonicalRefs() category = %q, want %q; error = %v", got, want, err)
+	}
+	if got := gitOutput(t, repository, "rev-parse", codeRef); got != current.Head {
+		t.Fatalf("code ref = %q, want unchanged %q", got, current.Head)
+	}
+	if got := gitOutput(t, repository, "symbolic-ref", taskRef(pack.TaskID)); got != codeRef {
+		t.Fatalf("canonical symref target = %q, want unchanged %q", got, codeRef)
 	}
 }
 
