@@ -38,6 +38,7 @@ type scenarioDependencies struct {
 	buildFixture      func(context.Context, string, FixtureSpec) (Fixture, error)
 	prepareProjection func(context.Context, CommandSpec, int) error
 	measureCommand    func(context.Context, CommandSpec) Sample
+	cleanupFixture    func(string) error
 }
 
 type warmHTTPTasks struct {
@@ -55,8 +56,9 @@ type warmScenarioServer interface {
 }
 
 type warmHTTPDependencies struct {
-	buildFixture func(context.Context, string, FixtureSpec) (Fixture, error)
-	startServer  func(context.Context, string, string, time.Duration) (warmScenarioServer, error)
+	buildFixture   func(context.Context, string, FixtureSpec) (Fixture, error)
+	startServer    func(context.Context, string, string, time.Duration) (warmScenarioServer, error)
+	cleanupFixture func(string) error
 }
 
 type warmHTTPServer struct {
@@ -83,6 +85,7 @@ func RunColdCLI(ctx context.Context, spec RunSpec, fixtureRoot string, selected 
 		},
 		prepareProjection: prepareProjection,
 		measureCommand:    MeasureCommand,
+		cleanupFixture:    os.RemoveAll,
 	})
 }
 
@@ -105,6 +108,10 @@ func runColdCLI(ctx context.Context, spec RunSpec, fixtureRoot string, selected 
 	if dependencies.buildFixture == nil || dependencies.prepareProjection == nil || dependencies.measureCommand == nil {
 		return nil, fmt.Errorf("cold CLI scenario dependencies are required")
 	}
+	cleanupFixture := dependencies.cleanupFixture
+	if cleanupFixture == nil {
+		cleanupFixture = os.RemoveAll
+	}
 	if err := os.MkdirAll(fixtureRoot, 0o755); err != nil {
 		return nil, fmt.Errorf("create fixture root: %w", err)
 	}
@@ -123,16 +130,23 @@ func runColdCLI(ctx context.Context, spec RunSpec, fixtureRoot string, selected 
 			root := filepath.Join(sampleRoot, definition.name)
 			fixture, err := dependencies.buildFixture(ctx, root, spec.Fixture)
 			if err != nil {
-				return nil, fmt.Errorf("build %s fixture: %w", definition.name, err)
+				primaryErr := fmt.Errorf("build %s fixture: %w", definition.name, err)
+				return nil, withFixtureCleanupError(primaryErr, cleanupFixture(root), definition.name)
 			}
 			if err := dependencies.prepareProjection(ctx, CommandSpec{
 				Binary: spec.WorkbookBinary, Args: []string{"rebuild", "--json"}, Directory: fixture.Root, Timeout: spec.CommandTimeout,
 			}, spec.Fixture.TotalTasks); err != nil {
-				return nil, fmt.Errorf("prepare %s projection: %w", definition.name, err)
+				primaryErr := fmt.Errorf("prepare %s projection: %w", definition.name, err)
+				return nil, withFixtureCleanupError(primaryErr, cleanupFixture(root), definition.name)
 			}
 			measured, err := definition.measure(ctx, dependencies, spec, fixture, sample)
+			cleanupErr := cleanupFixture(root)
 			if err != nil {
-				return nil, fmt.Errorf("measure %s: %w", definition.name, err)
+				primaryErr := fmt.Errorf("measure %s: %w", definition.name, err)
+				return nil, withFixtureCleanupError(primaryErr, cleanupErr, definition.name)
+			}
+			if cleanupErr != nil {
+				return nil, withFixtureCleanupError(nil, cleanupErr, definition.name)
 			}
 			results[index].Samples[sample] = measured
 		}
@@ -277,6 +291,7 @@ func RunWarmHTTP(ctx context.Context, spec RunSpec, fixtureRoot string, selected
 			server, err := startWarmHTTPServer(ctx, binary, root, timeout)
 			return server, err
 		},
+		cleanupFixture: os.RemoveAll,
 	})
 }
 
@@ -292,6 +307,10 @@ func runWarmHTTP(ctx context.Context, spec RunSpec, fixtureRoot string, selected
 	}
 	if dependencies.buildFixture == nil || dependencies.startServer == nil {
 		return nil, fmt.Errorf("warm HTTP scenario dependencies are required")
+	}
+	cleanupFixture := dependencies.cleanupFixture
+	if cleanupFixture == nil {
+		cleanupFixture = os.RemoveAll
 	}
 	if err := os.MkdirAll(fixtureRoot, 0o755); err != nil {
 		return nil, fmt.Errorf("create warm fixture root: %w", err)
@@ -312,29 +331,39 @@ func runWarmHTTP(ctx context.Context, spec RunSpec, fixtureRoot string, selected
 			root := filepath.Join(sampleRoot, name)
 			fixture, err := dependencies.buildFixture(ctx, root, spec.Fixture)
 			if err != nil {
-				return nil, fmt.Errorf("build warm %s sample %d fixture: %w", name, sample+1, err)
+				primaryErr := fmt.Errorf("build warm %s sample %d fixture: %w", name, sample+1, err)
+				return nil, withFixtureCleanupError(primaryErr, cleanupFixture(root), name)
 			}
 			server, err := dependencies.startServer(ctx, spec.WorkbookBinary, fixture.Root, spec.CommandTimeout)
 			if err != nil {
-				return nil, fmt.Errorf("start warm %s sample %d server: %w", name, sample+1, err)
+				primaryErr := fmt.Errorf("start warm %s sample %d server: %w", name, sample+1, err)
+				return nil, withFixtureCleanupError(primaryErr, cleanupFixture(root), name)
 			}
 			if err := server.prepareProjection(ctx, spec.Fixture.ActiveTasks, spec.CommandTimeout); err != nil {
 				closeErr := server.close(spec.CommandTimeout)
+				cleanupErr := cleanupFixture(root)
+				primaryErr := fmt.Errorf("prepare %s sample %d: %w", name, sample+1, err)
 				if closeErr != nil {
-					return nil, fmt.Errorf("prepare %s sample %d: %w (close warm server: %v)", name, sample+1, err, closeErr)
+					primaryErr = fmt.Errorf("%w (close warm server: %v)", primaryErr, closeErr)
 				}
-				return nil, fmt.Errorf("prepare %s sample %d: %w", name, sample+1, err)
+				return nil, withFixtureCleanupError(primaryErr, cleanupErr, name)
 			}
 			measured, measureErr := definition.measure(ctx, server, fixture, spec.CommandTimeout)
 			closeErr := server.close(spec.CommandTimeout)
+			cleanupErr := cleanupFixture(root)
 			if measureErr != nil {
+				primaryErr := fmt.Errorf("measure %s sample %d: %w", name, sample+1, measureErr)
 				if closeErr != nil {
-					return nil, fmt.Errorf("measure %s sample %d: %w (close warm server: %v)", name, sample+1, measureErr, closeErr)
+					primaryErr = fmt.Errorf("%w (close warm server: %v)", primaryErr, closeErr)
 				}
-				return nil, fmt.Errorf("measure %s sample %d: %w", name, sample+1, measureErr)
+				return nil, withFixtureCleanupError(primaryErr, cleanupErr, name)
 			}
 			if closeErr != nil {
-				return nil, fmt.Errorf("close warm %s sample %d server: %w", name, sample+1, closeErr)
+				primaryErr := fmt.Errorf("close warm %s sample %d server: %w", name, sample+1, closeErr)
+				return nil, withFixtureCleanupError(primaryErr, cleanupErr, name)
+			}
+			if cleanupErr != nil {
+				return nil, withFixtureCleanupError(nil, cleanupErr, name)
 			}
 			results[index].Samples[sample] = measured
 		}
@@ -343,6 +372,16 @@ func runWarmHTTP(ctx context.Context, spec RunSpec, fixtureRoot string, selected
 		results[index].Summary = Summarize(results[index].Samples)
 	}
 	return results, nil
+}
+
+func withFixtureCleanupError(primaryErr, cleanupErr error, scenario string) error {
+	if cleanupErr == nil {
+		return primaryErr
+	}
+	if primaryErr == nil {
+		return fmt.Errorf("cleanup %s fixture: %w", scenario, cleanupErr)
+	}
+	return fmt.Errorf("%w (cleanup %s fixture: %v)", primaryErr, scenario, cleanupErr)
 }
 
 type warmHTTPScenarioDefinition struct {

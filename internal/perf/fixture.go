@@ -189,32 +189,38 @@ func newFixtureTaskPlans(config core.ProjectConfig, spec FixtureSpec, ids *fixtu
 		plans[taskIndex].Tombstoned = taskIndex >= spec.ActiveTasks
 	}
 
-	labels := []string{"benchmark", "git", "projection", "workflow"}
-	ranks := []string{"1/2", "3/2"}
 	for taskIndex := range plans {
-		dependencies := []string{}
-		if taskIndex > 0 && taskIndex < spec.ActiveTasks {
-			dependencies = append(dependencies, plans[taskIndex-1].TaskID)
-		}
-		rank := fmt.Sprintf("%d/1", taskIndex+1)
-		if taskIndex < len(ranks) {
-			rank = ranks[taskIndex]
+		dependency := ""
+		if taskIndex > 0 && spec.ActiveTasks > 0 {
+			dependency = plans[(taskIndex-1)%spec.ActiveTasks].TaskID
 		}
 		plans[taskIndex].Initial = core.TaskData{
 			Title:        fmt.Sprintf("Benchmark task %04d", taskIndex),
 			Description:  fmt.Sprintf("Representative benchmark task %04d", taskIndex),
 			Status:       core.StatusBacklog,
 			Priority:     core.PriorityMedium,
-			Labels:       []string{labels[taskIndex%len(labels)]},
-			Rank:         rank,
-			Dependencies: dependencies,
+			Labels:       []string{},
+			Rank:         fmt.Sprintf("%d/1", taskIndex+1),
+			Dependencies: fixtureInitialDependencies(dependency),
 		}
-		plans[taskIndex].Operations = fixturePlanOperations(spec.OperationsPerTask, plans[taskIndex].Tombstoned, taskIndex)
+		plans[taskIndex].Operations = fixturePlanOperations(
+			spec.OperationsPerTask,
+			plans[taskIndex].Tombstoned,
+			taskIndex,
+			dependency,
+		)
 	}
 	return plans, nil
 }
 
-func fixturePlanOperations(count int, tombstoned bool, taskIndex int) []core.Operation {
+func fixtureInitialDependencies(dependency string) []string {
+	if dependency == "" {
+		return []string{}
+	}
+	return []string{dependency}
+}
+
+func fixturePlanOperations(count int, tombstoned bool, taskIndex int, dependency string) []core.Operation {
 	operations := make([]core.Operation, count)
 	operations[0] = core.Operation{Type: core.OperationTaskCreate}
 	for index := 1; index < count; index++ {
@@ -223,9 +229,153 @@ func fixturePlanOperations(count int, tombstoned bool, taskIndex int) []core.Ope
 			operations[index] = core.Operation{Type: core.OperationTaskTombstone}
 			continue
 		}
-		operations[index] = fixtureFieldSetOperation(taskIndex, logicalClock)
+		operations[index] = fixtureRepresentativeOperation(taskIndex, logicalClock, dependency)
 	}
 	return operations
+}
+
+func fixtureRepresentativeOperation(taskIndex, logicalClock int, dependency string) core.Operation {
+	labels := []string{"benchmark", "git", "projection", "workflow"}
+	if logicalClock > 19 {
+		return core.Operation{
+			Type:  core.OperationFieldSet,
+			Field: "description",
+			Value: fmt.Sprintf("Benchmark task %04d update %02d", taskIndex, logicalClock),
+		}
+	}
+
+	switch logicalClock {
+	case 2:
+		return core.Operation{
+			Type:  core.OperationFieldSet,
+			Field: "description",
+			Value: fmt.Sprintf("Benchmark task %04d update %02d", taskIndex, logicalClock),
+		}
+	case 3, 9, 15:
+		statuses := []core.Status{
+			core.StatusInProgress,
+			core.StatusBlocked,
+			core.StatusInReview,
+			core.StatusDone,
+		}
+		phase := (logicalClock - 3) / 6
+		return core.Operation{
+			Type:  core.OperationFieldSet,
+			Field: "status",
+			Value: string(statuses[(taskIndex/2+phase)%len(statuses)]),
+		}
+	case 4, 10, 16:
+		priorities := []core.Priority{core.PriorityLow, core.PriorityHigh}
+		phase := (logicalClock - 4) / 6
+		return core.Operation{
+			Type:  core.OperationFieldSet,
+			Field: "priority",
+			Value: string(priorities[(taskIndex/2+phase)%len(priorities)]),
+		}
+	case 5:
+		return core.Operation{
+			Type:  core.OperationSetAdd,
+			Field: "labels",
+			Value: labels[taskIndex%len(labels)],
+		}
+	case 6:
+		if dependency != "" {
+			return core.Operation{
+				Type:  core.OperationSetRemove,
+				Field: "dependencies",
+				Value: dependency,
+			}
+		}
+		return core.Operation{
+			Type:  core.OperationSetAdd,
+			Field: "labels",
+			Value: labels[(taskIndex+2)%len(labels)],
+		}
+	case 7:
+		if dependency != "" {
+			return core.Operation{
+				Type:  core.OperationSetAdd,
+				Field: "dependencies",
+				Value: dependency,
+			}
+		}
+		return fixtureRankOperation(taskIndex, 0)
+	case 8:
+		if dependency != "" {
+			return fixtureRankOperation(taskIndex, 0)
+		}
+		return core.Operation{
+			Type:  core.OperationFieldSet,
+			Field: "description",
+			Value: fmt.Sprintf("Benchmark task %04d update %02d", taskIndex, logicalClock),
+		}
+	case 13:
+		if dependency != "" {
+			return core.Operation{
+				Type:  core.OperationSetAdd,
+				Field: "dependencies",
+				Value: dependency,
+			}
+		}
+		return fixtureRankOperation(taskIndex, 1)
+	case 14:
+		if dependency != "" {
+			return fixtureRankOperation(taskIndex, 1)
+		}
+		return core.Operation{
+			Type:  core.OperationFieldSet,
+			Field: "description",
+			Value: fmt.Sprintf("Benchmark task %04d update %02d", taskIndex, logicalClock),
+		}
+	case 19:
+		phase := (logicalClock - 7) / 6
+		return fixtureRankOperation(taskIndex, phase)
+	case 11:
+		return core.Operation{
+			Type:  core.OperationSetRemove,
+			Field: "labels",
+			Value: labels[taskIndex%len(labels)],
+		}
+	case 12:
+		if dependency != "" {
+			return core.Operation{
+				Type:  core.OperationSetRemove,
+				Field: "dependencies",
+				Value: dependency,
+			}
+		}
+		return core.Operation{
+			Type:  core.OperationSetRemove,
+			Field: "labels",
+			Value: labels[(taskIndex+2)%len(labels)],
+		}
+	case 17:
+		return core.Operation{
+			Type:  core.OperationSetAdd,
+			Field: "labels",
+			Value: labels[(taskIndex+1)%len(labels)],
+		}
+	case 18:
+		return core.Operation{
+			Type:  core.OperationSetAdd,
+			Field: "labels",
+			Value: labels[(taskIndex+3)%len(labels)],
+		}
+	default:
+		return core.Operation{
+			Type:  core.OperationFieldSet,
+			Field: "description",
+			Value: fmt.Sprintf("Benchmark task %04d update %02d", taskIndex, logicalClock),
+		}
+	}
+}
+
+func fixtureRankOperation(taskIndex, phase int) core.Operation {
+	return core.Operation{
+		Type:  core.OperationFieldSet,
+		Field: "rank",
+		Value: fmt.Sprintf("%d/2", 2*(taskIndex%4)+1+2*phase),
+	}
 }
 
 func writeFixtureHistory(w io.Writer, config core.ProjectConfig, plans []fixtureTaskPlan, ids *fixtureIDs) (Fixture, error) {

@@ -88,6 +88,106 @@ func TestRunResolvesRelativeWorkbookBinaryAndWritesCompletePerformanceReport(t *
 	}
 }
 
+// Mutation witness: returning success unconditionally after writing the report
+// would make timeout, product-failure, and harness-error evidence look like a
+// valid completed invocation. A target miss remains valid acceptance evidence.
+func TestRunRetainsLocalMeasurementOutcomesAndReturnsExecutionStatus(t *testing.T) {
+	tests := []struct {
+		name         string
+		measuredBody string
+		timeout      string
+		wantExitCode int
+		wantOutcome  string
+	}{
+		{
+			name:         "timeout exits one",
+			measuredBody: "/bin/sleep 2",
+			timeout:      "1s",
+			wantExitCode: failureExitCode,
+			wantOutcome:  "timeout",
+		},
+		{
+			name:         "nonzero exit exits one",
+			measuredBody: "echo 'measured product failure' >&2\nexit 7",
+			timeout:      "1s",
+			wantExitCode: failureExitCode,
+			wantOutcome:  "failed",
+		},
+		{
+			name:         "measurement start error exits one",
+			measuredBody: ":",
+			timeout:      "1s",
+			wantExitCode: failureExitCode,
+			wantOutcome:  "failed",
+		},
+		{
+			name:         "valid target miss exits zero",
+			measuredBody: "/bin/sleep 0.25",
+			timeout:      "1s",
+			wantExitCode: 0,
+			wantOutcome:  "miss",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			outputRoot := t.TempDir()
+			workbookPath := filepath.Join(outputRoot, "workbook")
+			removeAfterRebuild := ""
+			if test.name == "measurement start error exits one" {
+				removeAfterRebuild = `/bin/rm "$0"`
+			}
+			writeExecutableScript(t, workbookPath, fmt.Sprintf(`
+case "$1" in
+version)
+	printf '%%s\n' '{"format":"workbook.result","version":1,"command":"version","data":{"version":"dev","commit":"test"}}'
+	;;
+rebuild)
+	printf '%%s\n' '{"format":"workbook.result","version":1,"command":"rebuild","data":{"taskCount":10,"cachePath":"test"}}'
+	%s
+	;;
+update)
+	%s
+	;;
+esac`, removeAfterRebuild, test.measuredBody))
+
+			jsonPath := filepath.Join(outputRoot, "report.json")
+			markdownPath := filepath.Join(outputRoot, "report.md")
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			exitCode := run(context.Background(), []string{
+				"--workbook", workbookPath,
+				"--tasks", "10",
+				"--tombstones", "0",
+				"--operations", "2",
+				"--samples", "1",
+				"--timeout", test.timeout,
+				"--scenario", "cli-update",
+				"--output-json", jsonPath,
+				"--output-markdown", markdownPath,
+			}, &stdout, &stderr)
+
+			if exitCode != test.wantExitCode {
+				t.Fatalf("exit code = %d, want %d; stdout = %q; stderr = %q", exitCode, test.wantExitCode, stdout.String(), stderr.String())
+			}
+			jsonReport, err := os.ReadFile(jsonPath)
+			if err != nil {
+				t.Fatalf("read retained JSON report: %v", err)
+			}
+			markdownReport, err := os.ReadFile(markdownPath)
+			if err != nil {
+				t.Fatalf("read retained Markdown report: %v", err)
+			}
+			if !bytes.Contains(jsonReport, []byte(`"outcome":"`+test.wantOutcome+`"`)) {
+				t.Fatalf("JSON report does not retain %q outcome:\n%s", test.wantOutcome, jsonReport)
+			}
+			if !bytes.Contains(markdownReport, []byte("| "+test.wantOutcome+" |")) {
+				t.Fatalf("Markdown report does not retain %q outcome:\n%s", test.wantOutcome, markdownReport)
+			}
+		})
+	}
+}
+
 func TestScenarioFlagParsesRepeatedSelectors(t *testing.T) {
 	workbookBinary := buildWorkbookBinary(t)
 	outputRoot := t.TempDir()
@@ -396,6 +496,7 @@ func TestValidateOptionsEnforcesAcceptanceMinimum(t *testing.T) {
 			"--workbook", workbookBinary,
 			"--tasks", "501",
 			"--operations", "21",
+			"--samples", "20",
 			"--phase", "acceptance",
 			"--output-json", filepath.Join(outputRoot, "report.json"),
 			"--output-markdown", filepath.Join(outputRoot, "report.md"),
@@ -493,6 +594,78 @@ func TestValidateOptionsRejectsEveryAcceptanceFixtureShortfall(t *testing.T) {
 			}
 			if err := validateOptions(flags, options); err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("validateOptions error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+// Mutation witness: applying the minimum to every acceptance invocation would
+// break historical non-local scenarios, while accepting 19 local samples would
+// make nearest-rank p95 evidence too weak at the required boundary.
+func TestValidateOptionsRequiresTwentySamplesForLocalAcceptance(t *testing.T) {
+	workbookBinary := buildWorkbookBinary(t)
+	tests := []struct {
+		name     string
+		phase    string
+		scenario string
+		samples  string
+		wantErr  string
+	}{
+		{
+			name:     "nineteen local acceptance samples",
+			phase:    "acceptance",
+			scenario: "cli-update",
+			samples:  "19",
+			wantErr:  "local acceptance requires at least 20 samples",
+		},
+		{
+			name:     "twenty local acceptance samples",
+			phase:    "acceptance",
+			scenario: "api-update",
+			samples:  "20",
+		},
+		{
+			name:     "baseline local diagnostic",
+			phase:    "baseline",
+			scenario: "cli-update",
+			samples:  "1",
+		},
+		{
+			name:     "non-local acceptance compatibility",
+			phase:    "acceptance",
+			scenario: "sync-fresh-checkout",
+			samples:  "19",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			outputRoot := t.TempDir()
+			var stderr bytes.Buffer
+			flags, options := newFlagSet(&stderr)
+			if err := flags.Parse([]string{
+				"--workbook", workbookBinary,
+				"--tasks", "500",
+				"--tombstones", "25",
+				"--operations", "20",
+				"--samples", test.samples,
+				"--phase", test.phase,
+				"--scenario", test.scenario,
+				"--output-json", filepath.Join(outputRoot, "report.json"),
+				"--output-markdown", filepath.Join(outputRoot, "report.md"),
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			err := validateOptions(flags, options)
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("validateOptions error = %v, want %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validateOptions rejected valid boundary: %v", err)
 			}
 		})
 	}

@@ -94,7 +94,25 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 
 	fmt.Fprintf(stdout, "wrote %s and %s\n", options.outputJSON, options.outputMarkdown)
+	if hasFailedLocalMeasurement(report) {
+		fmt.Fprintln(stderr, "workbook-bench: local measurement failed; see retained reports")
+		return failureExitCode
+	}
 	return 0
+}
+
+func hasFailedLocalMeasurement(report perf.Report) bool {
+	for _, scenario := range report.Scenarios {
+		if !strings.HasPrefix(scenario.Name, "cli-") && !strings.HasPrefix(scenario.Name, "api-") {
+			continue
+		}
+		for _, sample := range scenario.Samples {
+			if sample.TimedOut || sample.ExitCode != 0 || sample.Error != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func newFlagSet(stderr io.Writer) (*flag.FlagSet, *options) {
@@ -189,6 +207,11 @@ func validateOptions(flags *flag.FlagSet, options *options) error {
 	scenarios, err := perf.ResolveScenarios(options.scenarioFlags)
 	if err != nil {
 		return err
+	}
+	if options.phase == "acceptance" &&
+		(hasScenarioWithPrefix(scenarios, "cli-") || hasScenarioWithPrefix(scenarios, "api-")) &&
+		options.samples < 20 {
+		return fmt.Errorf("local acceptance requires at least 20 samples")
 	}
 	if containsRemoteScenario(scenarios) && (options.tasks < 500 || options.operations < 20) {
 		return fmt.Errorf("remote scenarios require at least 500 tasks and 20 operations per task")

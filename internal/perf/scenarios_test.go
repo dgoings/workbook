@@ -32,6 +32,12 @@ func TestRunColdCLIIsolatesSelectedScenarioSamplesAndPreparesProjection(t *testi
 			fixtureRoots = append(fixtureRoots, root)
 			events = append(events, "build "+filepath.Base(root))
 			mutex.Unlock()
+			if err := os.MkdirAll(root, 0o755); err != nil {
+				return Fixture{}, err
+			}
+			if err := os.WriteFile(filepath.Join(root, "fixture-sentinel"), []byte("fixture"), 0o644); err != nil {
+				return Fixture{}, err
+			}
 			fixture.Root = root
 			return fixture, nil
 		},
@@ -52,6 +58,12 @@ func TestRunColdCLIIsolatesSelectedScenarioSamplesAndPreparesProjection(t *testi
 			events = append(events, "measure "+filepath.Base(spec.Directory))
 			mutex.Unlock()
 			return Sample{ExitCode: 0, GitProcesses: 1}
+		},
+		cleanupFixture: func(root string) error {
+			mutex.Lock()
+			events = append(events, "cleanup "+filepath.Base(root))
+			mutex.Unlock()
+			return os.RemoveAll(root)
 		},
 	}
 	spec := RunSpec{
@@ -86,14 +98,93 @@ func TestRunColdCLIIsolatesSelectedScenarioSamplesAndPreparesProjection(t *testi
 	if got, want := len(uniqueRoots), 4; got != want {
 		t.Fatalf("unique fixture roots = %d, want %d", got, want)
 	}
+	for _, root := range fixtureRoots {
+		if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("fixture root %q still exists after sample cleanup: %v", root, err)
+		}
+	}
 	want := []string{
-		"build cli-delete", "prepare cli-delete", "measure cli-delete",
-		"build cli-restore", "prepare cli-restore", "measure cli-restore",
-		"build cli-delete", "prepare cli-delete", "measure cli-delete",
-		"build cli-restore", "prepare cli-restore", "measure cli-restore",
+		"build cli-delete", "prepare cli-delete", "measure cli-delete", "cleanup cli-delete",
+		"build cli-restore", "prepare cli-restore", "measure cli-restore", "cleanup cli-restore",
+		"build cli-delete", "prepare cli-delete", "measure cli-delete", "cleanup cli-delete",
+		"build cli-restore", "prepare cli-restore", "measure cli-restore", "cleanup cli-restore",
 	}
 	if !reflect.DeepEqual(events, want) {
 		t.Fatalf("lifecycle events = %#v, want %#v", events, want)
+	}
+}
+
+func TestRunColdCLICleansFixtureOnSetupAndMeasurementErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		buildErr   error
+		prepareErr error
+		activeIDs  []string
+		wantEvents []string
+		wantErr    string
+	}{
+		{
+			name:       "build failure",
+			buildErr:   errors.New("fixture import failed"),
+			wantEvents: []string{"build", "cleanup"},
+			wantErr:    "fixture import failed",
+		},
+		{
+			name:       "projection preparation failure",
+			prepareErr: errors.New("rebuild failed"),
+			activeIDs:  []string{"WB-00"},
+			wantEvents: []string{"build", "prepare", "cleanup"},
+			wantErr:    "rebuild failed",
+		},
+		{
+			name:       "measurement allocation failure",
+			activeIDs:  []string{},
+			wantEvents: []string{"build", "prepare", "cleanup"},
+			wantErr:    "fixture has 0 active tasks",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var events []string
+			cleanupErr := errors.New("cleanup failed")
+			dependencies := scenarioDependencies{
+				buildFixture: func(_ context.Context, root string, _ FixtureSpec) (Fixture, error) {
+					events = append(events, "build")
+					return Fixture{Root: root, ActiveTaskIDs: test.activeIDs}, test.buildErr
+				},
+				prepareProjection: func(context.Context, CommandSpec, int) error {
+					events = append(events, "prepare")
+					return test.prepareErr
+				},
+				measureCommand: func(context.Context, CommandSpec) Sample {
+					events = append(events, "measure")
+					return Sample{ExitCode: 0}
+				},
+				cleanupFixture: func(string) error {
+					events = append(events, "cleanup")
+					return cleanupErr
+				},
+			}
+			spec := RunSpec{
+				WorkbookBinary: "workbook",
+				Fixture: FixtureSpec{
+					TotalTasks: 1, ActiveTasks: 1,
+					OperationsPerTask: 2,
+					ObjectFormat:      "sha1",
+				},
+				Samples:        1,
+				CommandTimeout: time.Second,
+			}
+
+			_, err := runColdCLI(context.Background(), spec, t.TempDir(), []string{"cli-update"}, dependencies)
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) || !strings.Contains(err.Error(), cleanupErr.Error()) {
+				t.Fatalf("runColdCLI error = %v, want primary %q plus cleanup error", err, test.wantErr)
+			}
+			if !reflect.DeepEqual(events, test.wantEvents) {
+				t.Fatalf("cold error lifecycle = %#v, want %#v", events, test.wantEvents)
+			}
+		})
 	}
 }
 
@@ -471,6 +562,12 @@ func TestRunWarmHTTPSelectsAndPreparesBeforeEveryMeasurement(t *testing.T) {
 		buildFixture: func(_ context.Context, root string, _ FixtureSpec) (Fixture, error) {
 			events = append(events, "build "+filepath.Base(root))
 			roots = append(roots, root)
+			if err := os.MkdirAll(root, 0o755); err != nil {
+				return Fixture{}, err
+			}
+			if err := os.WriteFile(filepath.Join(root, "fixture-sentinel"), []byte("fixture"), 0o644); err != nil {
+				return Fixture{}, err
+			}
 			return Fixture{
 				Root: root,
 				ActiveTaskIDs: []string{
@@ -489,6 +586,10 @@ func TestRunWarmHTTPSelectsAndPreparesBeforeEveryMeasurement(t *testing.T) {
 				closedCount: &closedServers,
 			}, nil
 		},
+		cleanupFixture: func(root string) error {
+			events = append(events, "cleanup "+filepath.Base(root))
+			return os.RemoveAll(root)
+		},
 	}
 
 	results, err := runWarmHTTP(context.Background(), spec, fixtureRoot, []string{"api-update"}, dependencies)
@@ -505,15 +606,114 @@ func TestRunWarmHTTPSelectsAndPreparesBeforeEveryMeasurement(t *testing.T) {
 	if !reflect.DeepEqual(roots, wantRoots) {
 		t.Fatalf("warm fixture roots = %#v, want %#v", roots, wantRoots)
 	}
+	for _, root := range roots {
+		if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("warm fixture root %q still exists after sample cleanup: %v", root, err)
+		}
+	}
 	if closedServers != 2 {
 		t.Fatalf("closed servers = %d, want 2", closedServers)
 	}
 	wantEvents := []string{
-		"build api-update", "start api-update", "prepare api-update", "measure api-update", "close api-update",
-		"build api-update", "start api-update", "prepare api-update", "measure api-update", "close api-update",
+		"build api-update", "start api-update", "prepare api-update", "measure api-update", "close api-update", "cleanup api-update",
+		"build api-update", "start api-update", "prepare api-update", "measure api-update", "close api-update", "cleanup api-update",
 	}
 	if !reflect.DeepEqual(events, wantEvents) {
 		t.Fatalf("warm lifecycle events = %#v, want %#v", events, wantEvents)
+	}
+}
+
+func TestRunWarmHTTPCleansFixtureOnErrorPathsWithoutHidingPrimary(t *testing.T) {
+	tests := []struct {
+		name       string
+		startErr   error
+		prepareErr error
+		measureErr error
+		closeErr   error
+		wantEvents []string
+		wantErr    string
+	}{
+		{
+			name:       "start failure",
+			startErr:   errors.New("server start failed"),
+			wantEvents: []string{"build", "start", "cleanup"},
+			wantErr:    "server start failed",
+		},
+		{
+			name:       "prepare failure",
+			prepareErr: errors.New("task projection unavailable"),
+			wantEvents: []string{"build", "start", "prepare api-update", "close api-update", "cleanup"},
+			wantErr:    "task projection unavailable",
+		},
+		{
+			name:       "measurement failure",
+			measureErr: errors.New("malformed success response"),
+			wantEvents: []string{"build", "start", "prepare api-update", "measure api-update", "close api-update", "cleanup"},
+			wantErr:    "malformed success response",
+		},
+		{
+			name:       "close failure",
+			closeErr:   errors.New("server did not stop"),
+			wantEvents: []string{"build", "start", "prepare api-update", "measure api-update", "close api-update", "cleanup"},
+			wantErr:    "server did not stop",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var events []string
+			closedServers := 0
+			cleanupErr := errors.New("cleanup failed")
+			dependencies := warmHTTPDependencies{
+				buildFixture: func(_ context.Context, root string, _ FixtureSpec) (Fixture, error) {
+					events = append(events, "build")
+					return Fixture{
+						Root: root,
+						ActiveTaskIDs: []string{
+							"WB-00", "WB-01", "WB-02", "WB-03", "WB-04",
+							"WB-05", "WB-06", "WB-07", "WB-08", "WB-09",
+						},
+					}, nil
+				},
+				startServer: func(context.Context, string, string, time.Duration) (warmScenarioServer, error) {
+					events = append(events, "start")
+					if test.startErr != nil {
+						return nil, test.startErr
+					}
+					return &recordingWarmScenarioServer{
+						t:           t,
+						role:        "api-update",
+						events:      &events,
+						prepareErr:  test.prepareErr,
+						measureErr:  test.measureErr,
+						closeErr:    test.closeErr,
+						closedCount: &closedServers,
+					}, nil
+				},
+				cleanupFixture: func(string) error {
+					events = append(events, "cleanup")
+					return cleanupErr
+				},
+			}
+			spec := RunSpec{
+				WorkbookBinary: "workbook",
+				Fixture: FixtureSpec{
+					TotalTasks: 10, ActiveTasks: 10,
+					OperationsPerTask: 2,
+					ObjectFormat:      "sha1",
+				},
+				Samples:        1,
+				CommandTimeout: time.Second,
+			}
+
+			_, err := runWarmHTTP(context.Background(), spec, t.TempDir(), []string{"api-update"}, dependencies)
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) || !strings.Contains(err.Error(), cleanupErr.Error()) {
+				t.Fatalf("runWarmHTTP error = %v, want primary %q plus cleanup error", err, test.wantErr)
+			}
+			if !reflect.DeepEqual(events, test.wantEvents) {
+				t.Fatalf("warm error lifecycle = %#v, want %#v", events, test.wantEvents)
+			}
+		})
 	}
 }
 
@@ -1395,6 +1595,8 @@ type recordingWarmScenarioServer struct {
 	ambiguous   bool
 	events      *[]string
 	prepareErr  error
+	measureErr  error
+	closeErr    error
 	closedCount *int
 }
 
@@ -1421,6 +1623,9 @@ func (server *recordingWarmScenarioServer) measureStatus(
 	}
 	if server.events != nil {
 		*server.events = append(*server.events, "measure "+server.role)
+	}
+	if server.measureErr != nil {
+		return Sample{}, server.measureErr
 	}
 	return Sample{ExitCode: 0, GitProcesses: 1}, nil
 }
@@ -1470,7 +1675,7 @@ func (server *recordingWarmScenarioServer) close(time.Duration) error {
 		*server.events = append(*server.events, "close "+server.role)
 	}
 	(*server.closedCount)++
-	return nil
+	return server.closeErr
 }
 
 func assertSyncCommandSpec(t *testing.T, got CommandSpec, repository string) {
