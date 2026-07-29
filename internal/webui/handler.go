@@ -48,8 +48,11 @@ type TaskMutationDocument struct {
 }
 
 type TaskPresentation struct {
-	TaskID   string `json:"taskId"`
-	IDPrefix string `json:"idPrefix"`
+	TaskID                string `json:"taskId"`
+	IDPrefix              string `json:"idPrefix"`
+	DependenciesComplete  int    `json:"dependenciesComplete"`
+	DependenciesTotal     int    `json:"dependenciesTotal"`
+	WaitingOnDependencies bool   `json:"waitingOnDependencies"`
 }
 
 type HealthDocument struct {
@@ -431,7 +434,13 @@ func taskPresentation(tasks []core.Task) []TaskPresentation {
 	views := presentation.TaskViews(tasks)
 	result := make([]TaskPresentation, len(views))
 	for index, view := range views {
-		result[index] = TaskPresentation{TaskID: view.Task.ID, IDPrefix: view.IDPrefix}
+		result[index] = TaskPresentation{
+			TaskID:                view.Task.ID,
+			IDPrefix:              view.IDPrefix,
+			DependenciesComplete:  view.DependenciesComplete,
+			DependenciesTotal:     view.DependenciesTotal,
+			WaitingOnDependencies: view.WaitingOnDependencies,
+		}
 	}
 	return result
 }

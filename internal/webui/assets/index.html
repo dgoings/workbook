@@ -4,6 +4,12 @@
   <h3><a href="/tasks/{{ .Task.ID }}">{{ .Task.Title }}</a></h3>
   {{ if .Task.Description }}<p>{{ .Task.Description }}</p>{{ end }}
   {{ if .Task.Labels }}<div class="labels">{{ range .Task.Labels }}<span class="label">{{ . }}</span>{{ end }}</div>{{ end }}
+  {{ if .DependenciesTotal }}
+  <div class="dependency-progress" data-dependency-progress>
+    <span>{{ .DependenciesComplete }} of {{ .DependenciesTotal }} prerequisites complete</span>
+    {{ if .WaitingOnDependencies }}<strong>Waiting on dependencies</strong>{{ end }}
+  </div>
+  {{ end }}
 </article>
 {{ end }}
 <!doctype html>
@@ -54,6 +60,8 @@
     .task-card p { display: -webkit-box; max-height: calc(1.36em * 6); overflow: hidden; margin: 0; color: #56647a; font-size: .8rem; line-height: 1.36; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 6; }
     .labels { display: flex; flex-wrap: wrap; gap: .25rem; margin-top: .65rem; }
     .label { max-width: 100%; overflow: hidden; padding: .14rem .28rem; border: 1px solid #d5deea; border-radius: 3px; color: #4e5d73; font-size: .64rem; text-overflow: ellipsis; white-space: nowrap; }
+    .dependency-progress { display: grid; gap: .18rem; margin-top: .65rem; color: #4e5d73; font-size: .72rem; }
+    .dependency-progress strong { color: #9c2f25; font-size: .72rem; }
     .drop-marker { height: 0; margin: -.1rem 0; border-top: 3px solid #2457d6; border-radius: 3px; pointer-events: none; }
     .task-route { max-width: 48rem; margin: 0 auto; border: 1px solid #b9c6d8; background: #fff; box-shadow: 0 12px 32px rgba(23,32,51,.08); }
     .task-route__header { padding: 1rem 1.15rem; border-top: 3px solid #2457d6; border-bottom: 1px solid #d5deea; background: #f8faff; }
@@ -135,10 +143,10 @@
       let taskLoadFailed = false;
 
       function text(element, value) { element.textContent = value || ""; return element; }
-      function card(task, idPrefix) {
-        const article = document.createElement("article"); article.className = "task-card"; article.tabIndex = 0; article.dataset.taskId = task.id; article.dataset.priority = task.priority; article.dataset.idPrefix = idPrefix; article.draggable = true; article.setAttribute("aria-label", "Move task " + task.title + " from " + task.status);
+      function card(task, view) {
+        const article = document.createElement("article"); article.className = "task-card"; article.tabIndex = 0; article.dataset.taskId = task.id; article.dataset.priority = task.priority; article.dataset.idPrefix = view.idPrefix; article.draggable = true; article.setAttribute("aria-label", "Move task " + task.title + " from " + task.status);
         const meta = document.createElement("div"); meta.className = "task-card__meta";
-        const id = document.createElement("code"); text(id, idPrefix);
+        const id = document.createElement("code"); text(id, view.idPrefix);
         const priority = document.createElement("span"); priority.className = "priority priority--" + task.priority; text(priority, task.priority);
         meta.append(id, priority); article.append(meta);
         const title = document.createElement("h3");
@@ -146,6 +154,20 @@
         title.append(link); article.append(title);
         if (task.description) { const description = document.createElement("p"); text(description, task.description); article.append(description); }
         if (task.labels && task.labels.length) { const labels = document.createElement("div"); labels.className = "labels"; task.labels.forEach((label) => { const item = document.createElement("span"); item.className = "label"; text(item, label); labels.append(item); }); article.append(labels); }
+        if (view.dependenciesTotal > 0) {
+          const progress = document.createElement("div");
+          progress.className = "dependency-progress";
+          progress.dataset.dependencyProgress = "";
+          const count = document.createElement("span");
+          text(count, view.dependenciesComplete + " of " + view.dependenciesTotal + " prerequisites " + "complete");
+          progress.append(count);
+          if (view.waitingOnDependencies) {
+            const waiting = document.createElement("strong");
+            text(waiting, "Waiting on dependencies");
+            progress.append(waiting);
+          }
+          article.append(progress);
+        }
         return article;
       }
       function route(url = new URL(window.location.href)) {
@@ -396,7 +418,7 @@
           const response = await fetch("/api/tasks", { cache: "no-store" });
           const document = await response.json();
           if (!response.ok || document.format !== "workbook.tasks" || document.version !== 1 || !Array.isArray(document.tasks) || !Array.isArray(document.presentation)) throw new Error("invalid task document");
-          const presentation = new Map(document.presentation.map((view) => [view.taskId, view.idPrefix]));
+          const presentation = new Map(document.presentation.map((view) => [view.taskId, view]));
           if (presentation.size !== document.tasks.length || document.tasks.some((task) => !presentation.has(task.id))) throw new Error("invalid task presentation");
           latestTasks = document.tasks;
           tasksLoaded = true;

@@ -39,6 +39,8 @@ func TestHandlerServesBoardTasksAndHealth(t *testing.T) {
 		`data-status="done"`,
 		"Ready task",
 		"Task refresh failed",
+		"0 of 1 prerequisites complete",
+		"Waiting on dependencies",
 	} {
 		if !strings.Contains(board.Body.String(), fragment) {
 			t.Errorf("GET / body does not contain %q", fragment)
@@ -71,6 +73,13 @@ func TestHandlerServesBoardTasksAndHealth(t *testing.T) {
 	}
 	if !reflect.DeepEqual(document.Tasks, tasks) {
 		t.Fatalf("task document tasks = %#v, want %#v", document.Tasks, tasks)
+	}
+	if got := document.Presentation[0]; got.DependenciesComplete != 0 ||
+		got.DependenciesTotal != 1 || !got.WaitingOnDependencies {
+		t.Fatalf("task presentation = %#v, want 0/1 waiting", got)
+	}
+	if strings.Count(board.Body.String(), "prerequisites complete") != 1 {
+		t.Fatal("dependency-free cards changed their rendered content")
 	}
 
 	health := request(t, handler, http.MethodGet, "/healthz")
@@ -448,22 +457,35 @@ func TestHandlerClientBoardIgnoresUnknownStatuses(t *testing.T) {
 		t.Fatalf("GET / status = %d, want %d", response.Code, http.StatusOK)
 	}
 	script := renderedClientScript(t, response.Body.String())
-	document, err := json.Marshal(TasksDocument{
+	document := TasksDocument{
 		Format:       "workbook.tasks",
 		Version:      1,
 		Tasks:        tasks,
 		Presentation: presentationForTasks(tasks),
-	})
+	}
+	document.Presentation[0].DependenciesTotal = 1
+	document.Presentation[0].WaitingOnDependencies = true
+	documentJSON, err := json.Marshal(document)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	program := clientDOMHarness("/", string(document)) + script + `
+	program := clientDOMHarness("/", string(documentJSON)) + script + `
 setTimeout(() => {
   const ready = boardLists.find((list) => list.dataset.status === "ready");
   const card = findElement(ready, (element) => element.dataset.taskId === ` + strconv.Quote(tasks[0].ID) + `);
   const unknownCard = boardLists.map((list) => findElement(list, (element) => element.dataset.taskId === ` + strconv.Quote(tasks[2].ID) + `)).find(Boolean);
   if (!card) throw new Error("canonical task did not render when an unknown-status task was present");
+  const progress = findElement(card, (element) => Object.hasOwn(element.dataset, "dependencyProgress"));
+  const count = progress && findElement(progress, (element) => element.tagName === "SPAN" && element.textContent === "0 of 1 prerequisites complete");
+  const waiting = progress && findElement(progress, (element) => element.tagName === "STRONG" && element.textContent === "Waiting on dependencies");
+  if (!count || !waiting) {
+    throw new Error("refreshed Ready card did not render dependency progress");
+  }
+  const dependencyFree = boardLists.map((list) => findElement(list, (element) => element.dataset.taskId === ` + strconv.Quote(tasks[1].ID) + `)).find(Boolean);
+  if (!dependencyFree || findElement(dependencyFree, (element) => Object.hasOwn(element.dataset, "dependencyProgress"))) {
+    throw new Error("dependency-free refreshed card rendered dependency progress");
+  }
   if (unknownCard) throw new Error("unknown-status task rendered in a canonical list");
   if (stale.dataset.visible !== "false") throw new Error("unknown-status task triggered the stale state");
 }, 0);
@@ -1265,7 +1287,7 @@ func TestHandlerProvidesActionablePrefixesForRefresh(t *testing.T) {
 	if !strings.Contains(body, "document.presentation") {
 		t.Error("embedded refresh script does not read server presentation data")
 	}
-	if !strings.Contains(body, "text(id, idPrefix)") {
+	if !strings.Contains(body, "text(id, view.idPrefix)") {
 		t.Error("embedded refresh script does not render the server-provided ID prefix")
 	}
 	if strings.Contains(body, "text(id, task.id)") {

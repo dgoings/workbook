@@ -99,6 +99,49 @@ func TestTaskViewsUseShortestActionableUniquePrefixes(t *testing.T) {
 	}
 }
 
+func TestTaskViewsSummarizeDependencyReadiness(t *testing.T) {
+	done := core.Task{
+		ID:       "WB-01ARZ3NDEKTSV4RRFFQ69G5FAV",
+		TaskData: core.TaskData{Status: core.StatusDone},
+	}
+	active := core.Task{
+		ID:       "WB-01BRZ3NDEKTSV4RRFFQ69G5FAW",
+		TaskData: core.TaskData{Status: core.StatusInProgress},
+	}
+	ready := core.Task{
+		ID: "WB-01CRZ3NDEKTSV4RRFFQ69G5FAX",
+		TaskData: core.TaskData{
+			Status: core.StatusReady,
+			Dependencies: []string{
+				done.ID,
+				active.ID,
+				"WB-01DRZ3NDEKTSV4RRFFQ69G5FAY",
+			},
+		},
+	}
+	inReview := ready
+	inReview.ID = "WB-01ERZ3NDEKTSV4RRFFQ69G5FAZ"
+	inReview.Status = core.StatusInReview
+	withoutDependencies := core.Task{
+		ID:       "WB-01FRZ3NDEKTSV4RRFFQ69G5FA0",
+		TaskData: core.TaskData{Status: core.StatusReady},
+	}
+
+	views := TaskViews([]core.Task{done, active, ready, inReview, withoutDependencies})
+	if got := views[2]; got.DependenciesComplete != 1 ||
+		got.DependenciesTotal != 3 || !got.WaitingOnDependencies {
+		t.Fatalf("ready dependency summary = %#v, want 1/3 waiting", got)
+	}
+	if got := views[3]; got.DependenciesComplete != 1 ||
+		got.DependenciesTotal != 3 || got.WaitingOnDependencies {
+		t.Fatalf("in-review dependency summary = %#v, want 1/3 not waiting", got)
+	}
+	if got := views[4]; got.DependenciesComplete != 0 ||
+		got.DependenciesTotal != 0 || got.WaitingOnDependencies {
+		t.Fatalf("dependency-free summary = %#v, want zero values", got)
+	}
+}
+
 func TestNewBoardPreservesInputOrderAndIncludesEmptyColumns(t *testing.T) {
 	tasks := []core.Task{
 		{ID: "WB-01ARZ3NDEKTSV4RRFFQ69G5FAV", TaskData: core.TaskData{Status: core.StatusDone}},
