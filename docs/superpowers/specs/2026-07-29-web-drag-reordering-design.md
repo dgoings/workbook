@@ -145,8 +145,8 @@ Core tests cover:
 - top and bottom boundary ranks;
 - anchorless placement into an empty destination bucket;
 - no-op placement;
-- tombstoned, self, cross-priority, cross-status, and ambiguous-direction
-  anchors; and
+- rejection of a request with both anchor directions and one representative
+  stale or mismatched anchor; and
 - compare-and-swap and projection warning behavior through the existing write
   path.
 
