@@ -461,7 +461,9 @@ func TestHandlerClientBoardIgnoresUnknownStatuses(t *testing.T) {
 setTimeout(() => {
   const ready = boardLists.find((list) => list.dataset.status === "ready");
   const card = findElement(ready, (element) => element.dataset.taskId === ` + strconv.Quote(tasks[0].ID) + `);
+  const unknownCard = boardLists.map((list) => findElement(list, (element) => element.dataset.taskId === ` + strconv.Quote(tasks[2].ID) + `)).find(Boolean);
   if (!card) throw new Error("canonical task did not render when an unknown-status task was present");
+  if (unknownCard) throw new Error("unknown-status task rendered in a canonical list");
   if (stale.dataset.visible !== "false") throw new Error("unknown-status task triggered the stale state");
 }, 0);
 `
