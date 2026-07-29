@@ -119,6 +119,66 @@ func TestValidateChangedHeadUsesReachableBoundaryAndChecksOnlyDescendants(t *tes
 	}
 }
 
+func TestValidateValidatorVersionMismatchReplaysCompleteHistory(t *testing.T) {
+	// Production mutation: retaining an older validator's boundary lets an unchanged head validate zero commits under new rules.
+	ctx := context.Background()
+	cache := openTestCache(t, ctx, testConfig())
+	history := validationHistory(t, taskID(1), generationID(1), 85, 3)
+	head := gitstore.TaskHead{TaskID: taskID(1), ObjectID: history[2].ObjectID}
+	if _, err := cache.Prepare(ctx, []gitstore.TaskHead{head}, false); err != nil {
+		t.Fatal(err)
+	}
+	lastState, err := core.EncodeDocument(history[2].State)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.Record(ctx, Completion{
+		TaskID:               head.TaskID,
+		ObservedHead:         head.ObjectID,
+		Status:               StatusValid,
+		LastValidCommit:      head.ObjectID,
+		LastValidGeneration:  generationID(1),
+		LastValidState:       lastState,
+		ValidatedCommitIDs:   []string{history[0].ObjectID, history[1].ObjectID, history[2].ObjectID},
+		ValidatedCommitCount: 3,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cache.db.ExecContext(ctx, `UPDATE task_validation SET validator_version = ? WHERE task_id = ?`, ValidatorVersion-1, head.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cache.db.ExecContext(ctx, `UPDATE validated_commits SET validator_version = ? WHERE task_id = ?`, ValidatorVersion-1, head.TaskID); err != nil {
+		t.Fatal(err)
+	}
+
+	source := &validatorSource{
+		heads: []gitstore.TaskHead{head},
+		historyForRequest: func(request gitstore.TaskHistoryRequest) gitstore.TaskHistoryResult {
+			if request.StopAt == head.ObjectID {
+				return historyResult(head.TaskID, head.ObjectID, true, nil)
+			}
+			return historyResult(head.TaskID, head.ObjectID, false, history)
+		},
+	}
+	got, err := (&Validator{source: source, cache: cache, config: testConfig()}).Validate(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.TasksChecked != 1 || got.CommitsChecked != 3 || got.CacheHits != 0 || got.Valid != 1 || got.Pending != 0 {
+		t.Fatalf("version-mismatch result = %#v, want complete three-commit replay", got)
+	}
+	if len(source.lastRequests) != 1 || source.lastRequests[0].StopAt != "" {
+		t.Fatalf("version-mismatch requests = %#v, want empty StopAt", source.lastRequests)
+	}
+	snapshot, err := cache.Snapshot(ctx, []string{head.TaskID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot) != 1 || snapshot[0].ValidatorVersion != ValidatorVersion || snapshot[0].Status != StatusValid || snapshot[0].ValidatedCommitCount != 3 || snapshot[0].LastValidCommit != head.ObjectID {
+		t.Fatalf("current-version completion = %#v, want replayed current result", snapshot)
+	}
+}
+
 func TestValidateUnreachableBoundaryRestartsAtRoot(t *testing.T) {
 	// Production mutation: trusting an unreachable cached state validates a suffix against the wrong parent.
 	ctx := context.Background()
@@ -367,15 +427,16 @@ func TestValidateNeverMutatesCanonicalRefs(t *testing.T) {
 }
 
 type validatorSource struct {
-	heads            []gitstore.TaskHead
-	headLists        [][]gitstore.TaskHead
-	historyIndex     int
-	histories        map[string]gitstore.TaskHistoryResult
-	lastRequests     []gitstore.TaskHistoryRequest
-	reads            int
-	cancelOnRead     context.CancelFunc
-	cancelOnListCall int
-	cancel           context.CancelFunc
+	heads             []gitstore.TaskHead
+	headLists         [][]gitstore.TaskHead
+	historyIndex      int
+	histories         map[string]gitstore.TaskHistoryResult
+	lastRequests      []gitstore.TaskHistoryRequest
+	reads             int
+	cancelOnRead      context.CancelFunc
+	cancelOnListCall  int
+	cancel            context.CancelFunc
+	historyForRequest func(gitstore.TaskHistoryRequest) gitstore.TaskHistoryResult
 }
 
 func (s *validatorSource) ListTaskHeads(_ context.Context, _ core.ProjectConfig) ([]gitstore.TaskHead, error) {
@@ -403,6 +464,10 @@ func (s *validatorSource) ReadTaskHistories(_ context.Context, _ core.ProjectCon
 	s.lastRequests = append([]gitstore.TaskHistoryRequest(nil), requests...)
 	results := make([]gitstore.TaskHistoryResult, 0, len(requests))
 	for _, request := range requests {
+		if s.historyForRequest != nil {
+			results = append(results, s.historyForRequest(request))
+			continue
+		}
 		results = append(results, s.histories[request.Head.TaskID])
 	}
 	if s.cancelOnRead != nil {

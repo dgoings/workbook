@@ -195,6 +195,25 @@ func (c *Cache) Prepare(
 			cached.ValidatorVersion == ValidatorVersion {
 			continue
 		}
+		if cached.ValidatorVersion != ValidatorVersion {
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE task_validation
+				SET observed_head = ?,
+				    validator_version = ?,
+				    status = ?,
+				    last_valid_commit = '',
+				    last_valid_generation = '',
+				    last_valid_state = x'',
+				    validated_commit_count = 0,
+				    failure_commit = '',
+				    failure_category = '',
+				    failure_message = ''
+				WHERE task_id = ?
+			`, head.ObjectID, ValidatorVersion, StatusPending, head.TaskID); err != nil {
+				return nil, cacheError("invalidate prior-version validation task", err)
+			}
+			continue
+		}
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE task_validation
 			SET observed_head = ?,

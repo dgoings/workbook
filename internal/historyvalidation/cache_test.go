@@ -83,6 +83,10 @@ func TestPrepareMarksNewChangedAndVersionMismatchedHeadsPending(t *testing.T) {
 	if versionMismatch.Status != StatusPending || versionMismatch.ValidatorVersion != ValidatorVersion {
 		t.Fatalf("version-mismatched row = %#v, want current-version pending", versionMismatch)
 	}
+	if versionMismatch.LastValidCommit != "" || versionMismatch.LastValidGeneration != "" ||
+		len(versionMismatch.LastValidState) != 0 || versionMismatch.ValidatedCommitCount != 0 {
+		t.Fatalf("version-mismatched row boundary = %#v, want invalidated boundary", versionMismatch)
+	}
 	added := prepared[taskID(5)]
 	if added.Status != StatusPending || added.ObservedHead != "head-new" ||
 		added.LastValidCommit != "" || added.LastValidGeneration != "" ||
