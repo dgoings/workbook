@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -1151,6 +1152,114 @@ func TestRunServeUpdatesTaskStatusThroughWebRoute(t *testing.T) {
 	}
 	if updated.Status != core.StatusInProgress {
 		t.Fatalf("shown task status = %q, want %q", updated.Status, core.StatusInProgress)
+	}
+	if serveStdout.Len() != 0 {
+		t.Fatalf("serve stdout = %q, want empty", serveStdout.String())
+	}
+}
+
+func TestRunServePositionsTaskThroughWebRoute(t *testing.T) {
+	repository := initializedRepository(t)
+	code, stdout, stderr := run(t, repository, "create", "Moved through web position", "--status", "ready", "--priority", "medium", "--json")
+	if code != 0 {
+		t.Fatalf("create moved task code = %d, want 0; stderr = %q", code, stderr)
+	}
+	moved := decodeMutationTask(t, stdout, "create")
+
+	code, stdout, stderr = run(t, repository, "create", "Position anchor", "--status", "in-progress", "--priority", "medium", "--json")
+	if code != 0 {
+		t.Fatalf("create anchor task code = %d, want 0; stderr = %q", code, stderr)
+	}
+	anchor := decodeMutationTask(t, stdout, "create")
+
+	movedHeadBefore := gitOutput(t, repository, "rev-parse", "--verify", "refs/workbook/tasks/"+moved.ID)
+	anchorHeadBefore := gitOutput(t, repository, "rev-parse", "--verify", "refs/workbook/tasks/"+anchor.ID)
+
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := probe.Addr().String()
+	if err := probe.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result := make(chan error, 1)
+	var serveStdout, serveStderr bytes.Buffer
+	go func() {
+		result <- runServe(ctx, []string{"--addr", addr}, repository, &serveStdout, &serveStderr)
+	}()
+	waitForHTTP(t, "http://"+addr+"/healthz")
+
+	request, err := http.NewRequest(
+		http.MethodPatch,
+		"http://"+addr+"/api/tasks/"+moved.ID+"/position",
+		strings.NewReader(`{"status":"in-progress","before":"`+anchor.ID+`"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("PATCH position: %v", err)
+	}
+	body, readErr := io.ReadAll(response.Body)
+	response.Body.Close()
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("PATCH position = %d, want %d; body = %s", response.StatusCode, http.StatusOK, body)
+	}
+	var mutation struct {
+		Task core.Task `json:"task"`
+	}
+	if err := json.Unmarshal(body, &mutation); err != nil {
+		t.Fatalf("decode placement mutation task: %v; body = %s", err, body)
+	}
+	if mutation.Task.Status != core.StatusInProgress {
+		t.Fatalf("placement mutation status = %q, want %q", mutation.Task.Status, core.StatusInProgress)
+	}
+	movedRank, ok := new(big.Rat).SetString(mutation.Task.Rank)
+	if !ok {
+		t.Fatalf("parse moved rank %q", mutation.Task.Rank)
+	}
+	anchorRank, ok := new(big.Rat).SetString(anchor.Rank)
+	if !ok {
+		t.Fatalf("parse anchor rank %q", anchor.Rank)
+	}
+	if movedRank.Cmp(anchorRank) >= 0 {
+		t.Fatalf("placement mutation rank = %q, want before anchor rank %q", mutation.Task.Rank, anchor.Rank)
+	}
+
+	cancel()
+	if err := <-result; err != nil {
+		t.Fatalf("runServe() error = %v; stderr = %q", err, serveStderr.String())
+	}
+
+	movedHeadAfter := gitOutput(t, repository, "rev-parse", "--verify", "refs/workbook/tasks/"+moved.ID)
+	anchorHeadAfter := gitOutput(t, repository, "rev-parse", "--verify", "refs/workbook/tasks/"+anchor.ID)
+	if movedHeadAfter == movedHeadBefore {
+		t.Fatal("position did not advance the moved task ref")
+	}
+	if anchorHeadAfter != anchorHeadBefore {
+		t.Fatal("position advanced the anchor task ref")
+	}
+	parents := strings.Fields(gitOutput(t, repository, "rev-list", "--parents", "--max-count=1", movedHeadAfter))
+	if len(parents) != 2 || parents[1] != movedHeadBefore {
+		t.Fatalf("position commit parents = %#v, want sole parent %q", parents, movedHeadBefore)
+	}
+	var pack core.OperationPack
+	if err := json.Unmarshal([]byte(gitOutput(t, repository, "show", movedHeadAfter+":operation.json")), &pack); err != nil {
+		t.Fatalf("decode placement operation pack: %v", err)
+	}
+	if len(pack.Operations) != 2 ||
+		pack.Operations[0].Field != "status" || pack.Operations[0].Value != "in-progress" ||
+		pack.Operations[1].Field != "rank" {
+		t.Fatalf("placement operations = %#v", pack.Operations)
 	}
 	if serveStdout.Len() != 0 {
 		t.Fatalf("serve stdout = %q, want empty", serveStdout.String())

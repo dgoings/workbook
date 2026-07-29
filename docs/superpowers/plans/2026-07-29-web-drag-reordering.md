@@ -33,7 +33,7 @@
 - Produces: `PlaceInput{Status Status, Before string, After string}`.
 - Produces: `Service.PlaceMutation(context.Context, string, PlaceInput) (MutationResult, error)`.
 
-- [ ] **Step 1: Write the failing atomic cross-status placement test**
+- [x] **Step 1: Write the failing atomic cross-status placement test**
 
 Add a service test that proves status and rank are written together and only the
 moved task is the parent of the write:
@@ -81,7 +81,7 @@ func TestServicePlaceMovesAcrossStatusAndRankInOneWrite(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the focused test and verify the missing API failure**
+- [x] **Step 2: Run the focused test and verify the missing API failure**
 
 Run:
 
@@ -92,7 +92,7 @@ GOCACHE=/private/tmp/workbook-gocache go test ./internal/core -run TestServicePl
 Expected: compilation fails because `PlaceInput` and `PlaceMutation` do not
 exist.
 
-- [ ] **Step 3: Add boundary, empty-bucket, no-op, and representative validation tests**
+- [x] **Step 3: Add boundary, empty-bucket, no-op, and representative validation tests**
 
 Add focused tests with these exact assertions:
 
@@ -138,7 +138,7 @@ permutations for placement. The atomic test above proves placement enters the
 shared `writeMutation` path; the existing write-path tests remain the oracle for
 those generic behaviors.
 
-- [ ] **Step 4: Implement `PlaceInput` and `PlaceMutation`**
+- [x] **Step 4: Implement `PlaceInput` and `PlaceMutation`**
 
 Add the input beside `MoveInput`:
 
@@ -223,7 +223,7 @@ func (s Service) PlaceMutation(ctx context.Context, idOrPrefix string, input Pla
 }
 ```
 
-- [ ] **Step 5: Run focused and complete core tests**
+- [x] **Step 5: Run focused and complete core tests**
 
 Run:
 
@@ -234,7 +234,7 @@ GOCACHE=/private/tmp/workbook-gocache go test ./internal/core -count=1
 
 Expected: both commands pass.
 
-- [ ] **Step 6: Commit the core placement increment**
+- [x] **Step 6: Commit the core placement increment**
 
 ```sh
 git add internal/core/service.go internal/core/service_test.go
@@ -256,7 +256,7 @@ git commit -m "feat: add atomic task placement"
 - Produces: `PATCH /api/tasks/{id}/position` with required `status` and optional `before` or `after`.
 - Preserves: `PATCH /api/tasks/{id}/status`.
 
-- [ ] **Step 1: Write the failing handler routing and callback test**
+- [x] **Step 1: Write the failing handler routing and callback test**
 
 Add a handler test that captures the exact placement input:
 
@@ -299,7 +299,7 @@ func TestHandlerPositionsTask(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the handler test and verify the missing route failure**
+- [x] **Step 2: Run the handler test and verify the missing route failure**
 
 Run:
 
@@ -310,7 +310,7 @@ GOCACHE=/private/tmp/workbook-gocache go test ./internal/webui -run TestHandlerP
 Expected: compilation fails because the handler constructor and position
 callback do not exist.
 
-- [ ] **Step 3: Add strict request, method, and error-document coverage**
+- [x] **Step 3: Add strict request, method, and error-document coverage**
 
 Extend handler tests to prove:
 
@@ -347,7 +347,7 @@ if document.Error.Category != core.CategoryInvocation {
 }
 ```
 
-- [ ] **Step 4: Implement the position handler and route**
+- [x] **Step 4: Implement the position handler and route**
 
 Add:
 
@@ -398,7 +398,7 @@ func (handler *handler) positionTask(writer http.ResponseWriter, request *http.R
 }
 ```
 
-- [ ] **Step 5: Wire `workbook serve` directly to core placement**
+- [x] **Step 5: Wire `workbook serve` directly to core placement**
 
 Update the `NewHandlerWithTaskMutations` call in `runServe` with:
 
@@ -421,7 +421,7 @@ func unexpectedTaskPosition(t *testing.T) TaskPositionUpdater {
 }
 ```
 
-- [ ] **Step 6: Run focused handler and CLI compilation tests**
+- [x] **Step 6: Run focused handler and CLI compilation tests**
 
 Run:
 
@@ -432,7 +432,7 @@ GOCACHE=/private/tmp/workbook-gocache go test ./internal/cli -run TestRunServe -
 
 Expected: both commands pass.
 
-- [ ] **Step 7: Commit the web API increment**
+- [x] **Step 7: Commit the web API increment**
 
 ```sh
 git add internal/webui/handler.go internal/webui/handler_test.go internal/cli/run.go
@@ -452,7 +452,7 @@ git commit -m "feat: expose atomic web placement"
 - Produces: `{status, before}` or `{status, after}` placement requests.
 - Produces: an anchorless `{status}` request when the destination has no same-priority peer.
 
-- [ ] **Step 1: Extend the executable DOM harness for placement behavior**
+- [x] **Step 1: Extend the executable DOM harness for placement behavior**
 
 Enhance `TestElement` with DOM operations used by the insertion marker:
 
@@ -507,7 +507,7 @@ globalThis.fetch = async (url, options = {}) => {
 };
 ```
 
-- [ ] **Step 2: Write the failing same-column clamping test**
+- [x] **Step 2: Write the failing same-column clamping test**
 
 Create an executable client test with one ready column containing high,
 medium, medium, and low tasks. After initial refresh:
@@ -541,7 +541,7 @@ Repeat the dragover at the low-priority card's bottom edge and assert the marker
 is immediately after the last medium-priority peer and before the low-priority
 card.
 
-- [ ] **Step 3: Write the failing atomic cross-status request test**
+- [x] **Step 3: Write the failing atomic cross-status request test**
 
 Use the executable harness to drag a medium Ready task above a high-priority
 In Progress card when that column also has a medium task. Drop and assert:
@@ -564,7 +564,7 @@ marker appears between those priority groups and its request body is exactly:
 {"status":"done"}
 ```
 
-- [ ] **Step 4: Add task priority data and insertion-marker styling**
+- [x] **Step 4: Add task priority data and insertion-marker styling**
 
 Render priority on both server and client cards:
 
@@ -588,7 +588,7 @@ Replace the whole-list allowed/disallowed outlines with:
 }
 ```
 
-- [ ] **Step 5: Implement priority-clamped placement calculation**
+- [x] **Step 5: Implement priority-clamped placement calculation**
 
 Add:
 
@@ -659,7 +659,7 @@ activeDrag = {
 };
 ```
 
-- [ ] **Step 6: Replace status-only drop behavior with placement requests**
+- [x] **Step 6: Replace status-only drop behavior with placement requests**
 
 Allow same-column dragover, compute and display placement, and use:
 
@@ -700,7 +700,7 @@ document.addEventListener("drop", async (event) => {
 Update `dragend` and `dragleave` to clear the marker. Remove `canDropOn`,
 `setDropState`, and the `can-drop`/`cannot-drop` classes.
 
-- [ ] **Step 7: Run the focused executable client and web suite**
+- [x] **Step 7: Run the focused executable client and web suite**
 
 Run:
 
@@ -712,7 +712,7 @@ GOCACHE=/private/tmp/workbook-gocache go test ./internal/webui -count=1
 Expected: both commands pass with Node available; the tests skip only when Node
 is genuinely absent.
 
-- [ ] **Step 8: Commit the client placement increment**
+- [x] **Step 8: Commit the client placement increment**
 
 ```sh
 git add internal/webui/assets/index.html internal/webui/handler_test.go
@@ -733,7 +733,7 @@ git commit -m "feat: reorder web tasks by drag position"
 - Produces: real-repository evidence that one placement commit changes only the moved task ref.
 - Produces: current route and drag behavior documentation.
 
-- [ ] **Step 1: Write the failing real-repository server test**
+- [x] **Step 1: Write the failing real-repository server test**
 
 Create two medium-priority tasks through the CLI: one Ready task to move and one
 In Progress anchor. Capture both heads, start `runServe`, and send:
@@ -791,7 +791,7 @@ if len(pack.Operations) != 2 ||
 Also decode the returned mutation task and assert its status is In Progress and
 its rank sorts before the anchor's rank.
 
-- [ ] **Step 2: Run the focused server integration test**
+- [x] **Step 2: Run the focused server integration test**
 
 Run:
 
@@ -802,7 +802,7 @@ GOCACHE=/private/tmp/workbook-gocache go test ./internal/cli -run TestRunServePo
 Expected before production wiring is complete: the position route is missing or
 does not persist both fields. Expected after Tasks 1-3: pass.
 
-- [ ] **Step 3: Update README routes and drag behavior**
+- [x] **Step 3: Update README routes and drag behavior**
 
 Add the position route:
 
@@ -822,7 +822,7 @@ returns a versioned JSON task-mutation document. The older status-only endpoint
 remains available for compatible clients.
 ```
 
-- [ ] **Step 4: Run formatting and focused package verification**
+- [x] **Step 4: Run formatting and focused package verification**
 
 Run:
 
@@ -833,7 +833,7 @@ GOCACHE=/private/tmp/workbook-gocache go test ./internal/core ./internal/webui .
 
 Expected: formatting changes no semantics and all focused packages pass.
 
-- [ ] **Step 5: Run complete verification**
+- [x] **Step 5: Run complete verification**
 
 Run each command and inspect its exit status:
 
@@ -853,14 +853,14 @@ and verify in a browser at narrow and wide viewport sizes:
 - cross-column movement changes status and placement together; and
 - a rejected placement refreshes the board and shows the visible error state.
 
-- [ ] **Step 6: Mark plan steps complete and commit integration and docs**
+- [x] **Step 6: Mark plan steps complete and commit integration and docs**
 
 ```sh
 git add internal/cli/run_test.go README.md docs/superpowers/plans/2026-07-29-web-drag-reordering.md
 git commit -m "test: verify durable web placement"
 ```
 
-- [ ] **Step 7: Review the complete branch before publication**
+- [x] **Step 7: Review the complete branch before publication**
 
 Run:
 

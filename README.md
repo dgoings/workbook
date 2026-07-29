@@ -312,15 +312,21 @@ GET /api/tasks                versioned task JSON
 POST /api/tasks               create a task
 PATCH /api/tasks/<id>         update task fields
 PATCH /api/tasks/<id>/status  drag-and-drop status changes
+PATCH /api/tasks/<id>/position  atomically change status and board position
 DELETE /api/tasks/<id>        tombstone a task
 POST /api/tasks/<id>/restore  restore a tombstoned task
 GET /healthz                  versioned health JSON
 ```
 
-Drag a task card to another canonical status column to update its status through
-the same core service path as `workbook update --status`. The mutation creates a
-normal Workbook operation commit and returns a versioned JSON task-mutation
-document. The executable embeds its HTML, CSS, and JavaScript, and the page polls
+Drag a task card within a column to reorder it or into another canonical status
+column to change status and position together. Workbook keeps the task's priority
+unchanged and clamps drops outside that priority group to the nearest group
+boundary, so dropping at the top or bottom of a column still has a clear result.
+The placement creates one normal Workbook operation commit on the moved task and
+returns a versioned JSON task-mutation document. The older status-only endpoint
+remains available for compatible clients.
+
+The executable embeds its HTML, CSS, and JavaScript, and the page polls
 `/api/tasks` every second. The six canonical columns share the available width
 on large screens, scroll horizontally on narrow screens, and keep dense task
 lists vertically scrollable within the viewport. Web cards show the actionable
