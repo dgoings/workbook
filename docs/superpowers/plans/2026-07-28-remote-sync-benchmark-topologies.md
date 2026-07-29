@@ -414,29 +414,13 @@ git commit -m "feat: benchmark remote sync topologies"
   lower-bound timeout interpretation
 - Records: one sample for every remote topology in each supported object format
 
-- [ ] **Step 1: Update documentation tests first**
-
-Extend existing README assertions to require `--scenario`,
-`sync-fresh-checkout`, the 500-by-20 remote minimum, and the statement that
-timeouts are lower-bound evidence.
-
-- [ ] **Step 2: Run documentation tests and verify failure**
-
-Run:
-
-```sh
-GOCACHE=/private/tmp/workbook-gocache go test ./cmd/workbook-bench ./internal/cli -run 'README|Help' -count=1
-```
-
-Expected: at least one new documentation assertion fails.
-
-- [ ] **Step 3: Update performance and repository documentation**
+- [ ] **Step 1: Update performance and repository documentation**
 
 Add exact commands for remote-only SHA-1 and SHA-256 baselines and explain
 per-scenario target outcomes. Keep the existing incomplete whole-harness
 baseline record intact.
 
-- [ ] **Step 4: Run documentation and full correctness checks**
+- [ ] **Step 2: Run full correctness checks**
 
 Run:
 
@@ -449,7 +433,7 @@ git diff --check
 
 Expected: every command succeeds.
 
-- [ ] **Step 5: Build the measured Workbook binary**
+- [ ] **Step 3: Build the measured Workbook binary**
 
 Run:
 
@@ -459,7 +443,7 @@ go build -buildvcs=false -o /private/tmp/workbook-sync-baseline ./cmd/workbook
 
 Expected: `/private/tmp/workbook-sync-baseline` is created successfully.
 
-- [ ] **Step 6: Run the one authorized SHA-1 baseline**
+- [ ] **Step 4: Run the one authorized SHA-1 baseline**
 
 Run one command selecting all seven remote scenarios with:
 
@@ -485,26 +469,26 @@ go run ./cmd/workbook-bench \
 
 Expected: a report is written even when product scenarios time out or miss.
 
-- [ ] **Step 7: Probe SHA-256 and run it once when supported**
+- [ ] **Step 5: Probe SHA-256 and run it once when supported**
 
 Use a temporary bare repository to probe `git init --object-format=sha256`.
 When supported, run the identical selector set with `--object-format sha256`
 and the SHA-256 output paths. Do not replace either measurement.
 
-- [ ] **Step 8: Verify generated report completeness**
+- [ ] **Step 6: Verify generated report completeness**
 
 Decode each JSON report, require seven exact scenario names, one sample per
 scenario, nonempty environment metadata, targets, outcomes, and matching
 Markdown scenario rows.
 
-- [ ] **Step 9: Commit documentation and baseline evidence**
+- [ ] **Step 7: Commit documentation and baseline evidence**
 
 ```sh
 git add README.md docs/performance
 git commit -m "docs: record remote sync baseline"
 ```
 
-- [ ] **Step 10: Run final branch verification**
+- [ ] **Step 8: Run final branch verification**
 
 Run:
 
