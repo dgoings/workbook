@@ -71,6 +71,26 @@ func TestReportNormalizesScenarioTargetOutcomes(t *testing.T) {
 			Samples: []Sample{{Duration: time.Second, ExitCode: 4, Error: "corrupt"}},
 		},
 		{
+			Name:    "later-timeout",
+			Target:  target,
+			Samples: []Sample{{Duration: time.Second, GitProcesses: 1}, {Duration: time.Second, TimedOut: true}, {Duration: time.Second, GitProcesses: 1}},
+		},
+		{
+			Name:    "later-failure",
+			Target:  target,
+			Samples: []Sample{{Duration: time.Second, GitProcesses: 1}, {Duration: time.Second, ExitCode: 4, Error: "corrupt"}, {Duration: time.Second, GitProcesses: 1}},
+		},
+		{
+			Name:    "later-miss",
+			Target:  target,
+			Samples: []Sample{{Duration: time.Second, GitProcesses: 1}, {Duration: time.Second, GitProcesses: 20}, {Duration: time.Second, GitProcesses: 1}},
+		},
+		{
+			Name:    "timeout-precedence-is-order-resistant",
+			Target:  target,
+			Samples: []Sample{{Duration: time.Second, ExitCode: 4, Error: "corrupt"}, {Duration: time.Second, TimedOut: true}, {Duration: 3 * time.Second, GitProcesses: 20}},
+		},
+		{
 			Name:    "local",
 			Samples: []Sample{{Duration: time.Millisecond}},
 		},
@@ -82,11 +102,15 @@ func TestReportNormalizesScenarioTargetOutcomes(t *testing.T) {
 		got[scenario.Name] = scenario.Outcome
 	}
 	want := map[string]string{
-		"pass":         "pass",
-		"process-miss": "miss",
-		"timeout":      "timeout",
-		"failed":       "failed",
-		"local":        "not-evaluated",
+		"pass":                                  "pass",
+		"process-miss":                          "miss",
+		"timeout":                               "timeout",
+		"failed":                                "failed",
+		"later-timeout":                         "timeout",
+		"later-failure":                         "failed",
+		"later-miss":                            "miss",
+		"timeout-precedence-is-order-resistant": "timeout",
+		"local":                                 "not-evaluated",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("outcomes = %#v, want %#v", got, want)

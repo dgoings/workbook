@@ -184,14 +184,24 @@ func scenarioOutcome(scenario ScenarioResult) string {
 	if len(scenario.Samples) == 0 {
 		return "failed"
 	}
-	sample := scenario.Samples[0]
-	if sample.TimedOut {
-		return "timeout"
+	failed := false
+	missed := false
+	for _, sample := range scenario.Samples {
+		if sample.TimedOut {
+			return "timeout"
+		}
+		if sample.ExitCode != 0 || sample.Error != "" {
+			failed = true
+			continue
+		}
+		if durationMilliseconds(sample) > scenario.Target.MaxMilliseconds || sample.GitProcesses >= scenario.Target.MaxGitProcesses {
+			missed = true
+		}
 	}
-	if sample.ExitCode != 0 || sample.Error != "" {
+	if failed {
 		return "failed"
 	}
-	if durationMilliseconds(sample) > scenario.Target.MaxMilliseconds || sample.GitProcesses >= scenario.Target.MaxGitProcesses {
+	if missed {
 		return "miss"
 	}
 	return "pass"
