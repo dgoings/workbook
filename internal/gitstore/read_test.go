@@ -169,6 +169,97 @@ func TestReadTaskHeadsSupportsRepositoryObjectFormats(t *testing.T) {
 	}
 }
 
+func TestTipReadAcceptsInternallyValidNonRootCheckpointMismatch(t *testing.T) {
+	repository, config := writeRepository(t)
+	created, pack, state := writeRoot(t, repository, config)
+	update := writeUpdatePack(2, "01K0M6B8A4FTT8C39MXXYTW7C5", string(core.StatusReady))
+	updatedState := writeState(t, &state, update)
+	updated, err := repository.Write(context.Background(), config, &created, update, updatedState, "mark ready")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	checkpoint := updated.State
+	checkpoint.Task.Title = "Structurally valid, semantically mismatched"
+	tree := gitOutputWithInput(t, repository, []byte(fmt.Sprintf(
+		"100644 blob %s\toperation.json\n100644 blob %s\tstate.json\n",
+		gitOutput(t, repository, "rev-parse", updated.Head+":operation.json"),
+		writeDocumentBlob(t, repository, checkpoint),
+	)), "mktree")
+	tip := gitOutput(t, repository, "commit-tree", tree, "-p", created.Head, "-m", "mismatched checkpoint")
+
+	got, err := repository.ReadTaskHeads(context.Background(), config, []TaskHead{{TaskID: pack.TaskID, ObjectID: tip}})
+	if err != nil {
+		t.Fatalf("ReadTaskHeads() error = %v", err)
+	}
+	if len(got) != 1 || got[0].Head != tip || !reflect.DeepEqual(got[0].State, checkpoint) {
+		t.Fatalf("ReadTaskHeads() = %#v, want the unchecked non-root checkpoint", got)
+	}
+}
+
+func TestOwnedRefsValidateCanonicalAndTrackingNamespaces(t *testing.T) {
+	repository, config := writeRepository(t)
+	snapshot, pack, _ := writeRoot(t, repository, config)
+	validRecord := func(prefix string) []byte {
+		return []byte(prefix + pack.TaskID + "\x00" + snapshot.Head + "\x00\n")
+	}
+
+	for _, prefix := range []string{taskRefPrefix, trackingTaskRefPrefix} {
+		t.Run(prefix, func(t *testing.T) {
+			refs, err := repository.parseOwnedRefRecords(config, prefix, validRecord(prefix), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(refs, []taskRefRecord{{taskID: pack.TaskID, objectID: snapshot.Head}}) {
+				t.Fatalf("refs = %#v, want one validated record", refs)
+			}
+		})
+	}
+
+	for _, test := range []struct {
+		name     string
+		contents []byte
+	}{
+		{name: "symbolic", contents: []byte(taskRefPrefix + pack.TaskID + "\x00" + snapshot.Head + "\x00refs/heads/main\n")},
+		{name: "nested", contents: []byte(taskRefPrefix + pack.TaskID + "/nested\x00" + snapshot.Head + "\x00\n")},
+		{name: "duplicate", contents: append(validRecord(taskRefPrefix), validRecord(taskRefPrefix)...)},
+		{name: "wrong prefix", contents: []byte("refs/heads/main\x00" + snapshot.Head + "\x00\n")},
+		{name: "invalid task ID", contents: []byte(taskRefPrefix + "not-a-task\x00" + snapshot.Head + "\x00\n")},
+		{name: "abbreviated object ID", contents: []byte(taskRefPrefix + pack.TaskID + "\x00" + snapshot.Head[:len(snapshot.Head)-1] + "\x00\n")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := repository.parseOwnedRefRecords(config, taskRefPrefix, test.contents, "")
+			if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
+				t.Fatalf("parseOwnedRefRecords() category = %q, want %q; error = %v", got, want, err)
+			}
+		})
+	}
+}
+
+func TestOwnedRefsUseOneEnumerationForCanonicalAndTrackingRefs(t *testing.T) {
+	repository, config := writeRepository(t)
+	snapshot, pack, _ := writeRoot(t, repository, config)
+	gitOutput(t, repository, "update-ref", trackingTaskRefPrefix+pack.TaskID, snapshot.Head)
+	gitOutput(t, repository, "pack-refs", "--all")
+
+	var commands [][]string
+	repository.commandObserver = func(args []string) {
+		commands = append(commands, append([]string(nil), args...))
+	}
+	for _, prefix := range []string{taskRefPrefix, trackingTaskRefPrefix} {
+		refs, err := repository.listOwnedTaskRefs(context.Background(), config, prefix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(refs, []taskRefRecord{{taskID: pack.TaskID, objectID: snapshot.Head}}) {
+			t.Fatalf("%s refs = %#v, want one task ref", prefix, refs)
+		}
+		if got := countCommand(commands, "for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)", prefix); got != 1 {
+			t.Fatalf("%s for-each-ref commands = %d, want 1; commands = %v", prefix, got, commands)
+		}
+	}
+}
+
 func TestValidateTaskHeadAdvancesBatchesIndependentHistories(t *testing.T) {
 	repository, config := writeRepository(t)
 	firstPrevious, _, firstState := writeRoot(t, repository, config)
