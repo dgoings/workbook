@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
 )
 
@@ -24,26 +25,30 @@ type remoteResultEnvelope struct {
 	Version  int             `json:"version"`
 	Command  string          `json:"command"`
 	Data     json.RawMessage `json:"data"`
-	Warnings json.RawMessage `json:"warnings,omitempty"`
+	Warnings []core.Warning  `json:"warnings,omitempty"`
 }
 
 type remoteErrorEnvelope struct {
 	Format  string `json:"format"`
 	Version int    `json:"version"`
 	Error   struct {
-		Category string `json:"category"`
-		Message  string `json:"message"`
+		Category core.Category `json:"category"`
+		Message  string        `json:"message"`
 	} `json:"error"`
 }
 
 type remoteScenarioResult struct {
-	Fetch gitstore.SyncResult
-	Push  gitstore.SyncResult
+	Remote string
+	Fetch  gitstore.SyncResult
+	Push   gitstore.SyncResult
 }
 
 type remoteScenarioDependencies struct {
-	buildFixture   func(context.Context, string, FixtureSpec, RemoteTopology) (RemoteFixture, error)
-	measureCommand func(context.Context, CommandSpec) CommandMeasurement
+	buildFixture      func(context.Context, string, FixtureSpec, RemoteTopology) (RemoteFixture, error)
+	measureCommand    func(context.Context, CommandSpec) CommandMeasurement
+	readCanonicalRefs func(context.Context, string) (map[string]string, error)
+	readTrackingRefs  func(context.Context, string) (map[string]string, error)
+	readRemoteRefs    func(context.Context, string) (map[string]string, error)
 }
 
 type remoteScenarioDefinition struct {
@@ -52,6 +57,14 @@ type remoteScenarioDefinition struct {
 	command       string
 	expectFailure bool
 	target        ScenarioTarget
+}
+
+type remoteScenarioContract struct {
+	command       string
+	fetchStatus   gitstore.SyncPhaseStatus
+	pushStatus    gitstore.SyncPhaseStatus
+	expectFailure bool
+	errorCategory core.Category
 }
 
 var remoteScenarioDefinitions = []remoteScenarioDefinition{
@@ -68,8 +81,11 @@ var remoteScenarioDefinitions = []remoteScenarioDefinition{
 // topologies and verifies their Workbook output and resulting refs.
 func RunRemoteScenarios(ctx context.Context, spec RunSpec, fixtureRoot string, selected []string) ([]ScenarioResult, error) {
 	return runRemoteScenarios(ctx, spec, fixtureRoot, selected, remoteScenarioDependencies{
-		buildFixture:   buildRemoteFixtureWithinTimeout,
-		measureCommand: MeasureCommandOutput,
+		buildFixture:      buildRemoteFixtureWithinTimeout,
+		measureCommand:    MeasureCommandOutput,
+		readCanonicalRefs: readRemoteCanonicalRefs,
+		readTrackingRefs:  readRemoteTrackingRefs,
+		readRemoteRefs:    readRemoteOriginRefs,
 	})
 }
 
@@ -81,11 +97,23 @@ func runRemoteScenarios(ctx context.Context, spec RunSpec, fixtureRoot string, s
 	if spec.WorkbookBinary == "" {
 		return nil, fmt.Errorf("workbook binary is required")
 	}
+	if spec.Samples < 1 {
+		return nil, fmt.Errorf("samples must be positive")
+	}
 	if spec.CommandTimeout <= 0 {
 		return nil, fmt.Errorf("command timeout must be positive")
 	}
 	if fixtureRoot == "" {
 		return nil, fmt.Errorf("fixture root is required")
+	}
+	if dependencies.readCanonicalRefs == nil {
+		dependencies.readCanonicalRefs = readRemoteCanonicalRefs
+	}
+	if dependencies.readTrackingRefs == nil {
+		dependencies.readTrackingRefs = readRemoteTrackingRefs
+	}
+	if dependencies.readRemoteRefs == nil {
+		dependencies.readRemoteRefs = readRemoteOriginRefs
 	}
 	if dependencies.buildFixture == nil || dependencies.measureCommand == nil {
 		return nil, fmt.Errorf("remote scenario dependencies are required")
@@ -100,31 +128,35 @@ func runRemoteScenarios(ctx context.Context, spec RunSpec, fixtureRoot string, s
 
 	results := make([]ScenarioResult, 0, len(definitions))
 	for _, definition := range definitions {
-		fixtureContext, cancel := context.WithTimeout(ctx, spec.CommandTimeout)
-		fixture, err := dependencies.buildFixture(fixtureContext, filepath.Join(fixtureRoot, definition.name), spec.Fixture, definition.topology)
-		cancel()
-		if err != nil {
-			return nil, fmt.Errorf("build %s fixture: %w", definition.name, err)
-		}
-
-		measurement := dependencies.measureCommand(ctx, CommandSpec{
-			Binary:    spec.WorkbookBinary,
-			Args:      []string{definition.command, "--json"},
-			Directory: fixture.LocalRoot,
-			Timeout:   spec.CommandTimeout,
-		})
-		if !measurement.Sample.TimedOut {
-			if err := verifyRemoteScenarioMeasurement(definition, fixture, measurement); err != nil {
-				return nil, fmt.Errorf("verify %s: %w", definition.name, err)
-			}
-		}
 		target := definition.target
-		results = append(results, ScenarioResult{
+		result := ScenarioResult{
 			Name:    definition.name,
 			Surface: "remote-sync",
 			Target:  &target,
-			Samples: []Sample{measurement.Sample},
-		})
+			Samples: make([]Sample, spec.Samples),
+		}
+		for sample := range spec.Samples {
+			fixtureContext, cancel := context.WithTimeout(ctx, spec.CommandTimeout)
+			fixture, err := dependencies.buildFixture(fixtureContext, filepath.Join(fixtureRoot, definition.name, fmt.Sprintf("sample-%03d", sample+1)), spec.Fixture, definition.topology)
+			cancel()
+			if err != nil {
+				return nil, fmt.Errorf("build %s sample %d fixture: %w", definition.name, sample+1, err)
+			}
+
+			measurement := dependencies.measureCommand(ctx, CommandSpec{
+				Binary:    spec.WorkbookBinary,
+				Args:      []string{definition.command, "--json"},
+				Directory: fixture.LocalRoot,
+				Timeout:   spec.CommandTimeout,
+			})
+			if !measurement.Sample.TimedOut {
+				if err := verifyRemoteScenarioMeasurement(definition, fixture, measurement, dependencies); err != nil {
+					return nil, fmt.Errorf("verify %s sample %d: %w", definition.name, sample+1, err)
+				}
+			}
+			result.Samples[sample] = measurement.Sample
+		}
+		results = append(results, result)
 	}
 	for index := range results {
 		results[index].Summary = Summarize(results[index].Samples)
@@ -157,7 +189,7 @@ func selectRemoteScenarioDefinitions(selected []string) ([]remoteScenarioDefinit
 	return definitions, nil
 }
 
-func verifyRemoteScenarioMeasurement(definition remoteScenarioDefinition, fixture RemoteFixture, measurement CommandMeasurement) error {
+func verifyRemoteScenarioMeasurement(definition remoteScenarioDefinition, fixture RemoteFixture, measurement CommandMeasurement, dependencies remoteScenarioDependencies) error {
 	if measurement.Sample.ExitCode < 0 {
 		return fmt.Errorf("command did not produce an exit code: %s", measurement.Sample.Error)
 	}
@@ -169,7 +201,7 @@ func verifyRemoteScenarioMeasurement(definition remoteScenarioDefinition, fixtur
 		return fmt.Errorf("command exit code = %d: %s", measurement.Sample.ExitCode, measurement.Sample.Error)
 	}
 
-	result, err := decodeRemoteScenarioResult(measurement.Stdout, measurement.Stderr, definition.command, definition.expectFailure)
+	result, err := decodeRemoteScenarioResultWithContract(measurement.Stdout, measurement.Stderr, remoteScenarioContractFor(definition))
 	if err != nil {
 		return err
 	}
@@ -180,7 +212,30 @@ func verifyRemoteScenarioMeasurement(definition remoteScenarioDefinition, fixtur
 	if err := requireRemoteTaskResults("push", result.Push.Tasks, push); err != nil {
 		return err
 	}
-	return requireRemoteScenarioRefs(definition.topology, fixture)
+	return requireRemoteScenarioRefs(definition.topology, fixture, dependencies)
+}
+
+func remoteScenarioContractFor(definition remoteScenarioDefinition) remoteScenarioContract {
+	contract := remoteScenarioContract{
+		command:       definition.command,
+		fetchStatus:   gitstore.SyncPhaseCompleted,
+		pushStatus:    gitstore.SyncPhaseCompleted,
+		expectFailure: definition.expectFailure,
+	}
+	if definition.command == "fetch" {
+		contract.pushStatus = ""
+	}
+	if definition.command == "push" {
+		contract.fetchStatus = ""
+	}
+	if definition.topology == RemoteDivergentTips {
+		contract.pushStatus = gitstore.SyncPhaseSkipped
+		contract.errorCategory = core.CategoryStaleWrite
+	}
+	if definition.topology == RemoteMalformedLocalTip || definition.topology == RemoteMalformedRemoteTip {
+		contract.errorCategory = core.CategoryCorruptData
+	}
+	return contract
 }
 
 func expectedRemoteTaskResults(topology RemoteTopology, taskIDs []string) ([]gitstore.SyncTaskResult, []gitstore.SyncTaskResult) {
@@ -228,20 +283,20 @@ func expectedRemoteTaskResults(topology RemoteTopology, taskIDs []string) ([]git
 	}
 }
 
-func requireRemoteScenarioRefs(topology RemoteTopology, fixture RemoteFixture) error {
+func requireRemoteScenarioRefs(topology RemoteTopology, fixture RemoteFixture, dependencies remoteScenarioDependencies) error {
 	want, err := expectedRemoteScenarioRefs(topology, fixture)
 	if err != nil {
 		return err
 	}
-	canonical, err := fixtureRefMapForRoot(context.Background(), fixture.LocalRoot, "refs/workbook/tasks/")
+	canonical, err := dependencies.readCanonicalRefs(context.Background(), fixture.LocalRoot)
 	if err != nil {
 		return fmt.Errorf("read post-command refs: %w", err)
 	}
-	tracking, err := fixtureRefMapForRoot(context.Background(), fixture.LocalRoot, "refs/workbook/remotes/origin/tasks/")
+	tracking, err := dependencies.readTrackingRefs(context.Background(), fixture.LocalRoot)
 	if err != nil {
 		return fmt.Errorf("read post-command tracking refs: %w", err)
 	}
-	remote, err := fixtureRemoteRefMapForRoot(context.Background(), fixture.OriginRoot)
+	remote, err := dependencies.readRemoteRefs(context.Background(), fixture.OriginRoot)
 	if err != nil {
 		return fmt.Errorf("read post-command remote refs: %w", err)
 	}
@@ -255,6 +310,18 @@ func requireRemoteScenarioRefs(topology RemoteTopology, fixture RemoteFixture) e
 		return err
 	}
 	return nil
+}
+
+func readRemoteCanonicalRefs(ctx context.Context, root string) (map[string]string, error) {
+	return fixtureRefMapForRoot(ctx, root, "refs/workbook/tasks/")
+}
+
+func readRemoteTrackingRefs(ctx context.Context, root string) (map[string]string, error) {
+	return fixtureRefMapForRoot(ctx, root, "refs/workbook/remotes/origin/tasks/")
+}
+
+func readRemoteOriginRefs(ctx context.Context, root string) (map[string]string, error) {
+	return fixtureRemoteRefMapForRoot(ctx, root)
 }
 
 func requireExactRemoteRefNamespace(name string, got map[string]string, want map[string]ExpectedRefs, selectRef func(ExpectedRefs) string) error {
@@ -295,13 +362,21 @@ func expectedRemoteScenarioRefs(topology RemoteTopology, fixture RemoteFixture) 
 			refs.Remote = refs.Canonical
 			want[taskID] = refs
 		}
-	case RemoteAlreadySynchronized, RemoteSmallChangedRefSet:
+	case RemoteAlreadySynchronized:
+		for _, taskID := range fixture.TaskIDs {
+			refs := want[taskID]
+			refs.Canonical, refs.Tracking = refs.Remote, refs.Remote
+			want[taskID] = refs
+		}
+	case RemoteSmallChangedRefSet:
 		for index, taskID := range fixture.TaskIDs {
 			refs := want[taskID]
-			if topology == RemoteSmallChangedRefSet && index < 5 {
+			if index < 5 {
 				refs.Remote = refs.Canonical
+				refs.Canonical = refs.Remote
+			} else {
+				refs.Canonical, refs.Tracking = refs.Remote, refs.Remote
 			}
-			refs.Canonical, refs.Tracking = refs.Remote, refs.Remote
 			want[taskID] = refs
 		}
 	case RemoteDivergentTips, RemoteMalformedLocalTip, RemoteMalformedRemoteTip:
@@ -314,8 +389,24 @@ func expectedRemoteScenarioRefs(topology RemoteTopology, fixture RemoteFixture) 
 // decodeRemoteScenarioResult validates Workbook's versioned output envelopes
 // and decodes the command-specific synchronization result.
 func decodeRemoteScenarioResult(stdout, stderr []byte, command string, expectFailure bool) (remoteScenarioResult, error) {
-	if command != "fetch" && command != "push" && command != "sync" {
-		return remoteScenarioResult{}, fmt.Errorf("unsupported remote scenario command %q", command)
+	contract := remoteScenarioContract{
+		command:       command,
+		fetchStatus:   gitstore.SyncPhaseCompleted,
+		pushStatus:    gitstore.SyncPhaseCompleted,
+		expectFailure: expectFailure,
+	}
+	if command == "fetch" {
+		contract.pushStatus = ""
+	}
+	if command == "push" {
+		contract.fetchStatus = ""
+	}
+	return decodeRemoteScenarioResultWithContract(stdout, stderr, contract)
+}
+
+func decodeRemoteScenarioResultWithContract(stdout, stderr []byte, contract remoteScenarioContract) (remoteScenarioResult, error) {
+	if contract.command != "fetch" && contract.command != "push" && contract.command != "sync" {
+		return remoteScenarioResult{}, fmt.Errorf("unsupported remote scenario command %q", contract.command)
 	}
 	var envelope remoteResultEnvelope
 	if err := decodeRemoteJSON(stdout, &envelope); err != nil {
@@ -327,27 +418,44 @@ func decodeRemoteScenarioResult(stdout, stderr []byte, command string, expectFai
 	if envelope.Version != workbookJSONVersion {
 		return remoteScenarioResult{}, fmt.Errorf("result version = %d, want %d", envelope.Version, workbookJSONVersion)
 	}
-	if envelope.Command != command {
-		return remoteScenarioResult{}, fmt.Errorf("result command = %q, want %q", envelope.Command, command)
+	if envelope.Command != contract.command {
+		return remoteScenarioResult{}, fmt.Errorf("result command = %q, want %q", envelope.Command, contract.command)
+	}
+	for index, warning := range envelope.Warnings {
+		if warning.Code == "" || warning.Message == "" {
+			return remoteScenarioResult{}, fmt.Errorf("warning %d is missing code or message", index)
+		}
 	}
 
 	var result remoteScenarioResult
-	switch command {
+	switch contract.command {
 	case "fetch":
 		if err := decodeRemoteJSON(envelope.Data, &result.Fetch); err != nil {
 			return remoteScenarioResult{}, fmt.Errorf("decode fetch result: %w", err)
 		}
+		result.Remote = result.Fetch.Remote
 	case "push":
 		if err := decodeRemoteJSON(envelope.Data, &result.Push); err != nil {
 			return remoteScenarioResult{}, fmt.Errorf("decode push result: %w", err)
 		}
+		result.Remote = result.Push.Remote
 	case "sync":
 		var run gitstore.SyncRunResult
 		if err := decodeRemoteJSON(envelope.Data, &run); err != nil {
 			return remoteScenarioResult{}, fmt.Errorf("decode sync result: %w", err)
 		}
+		result.Remote = run.Remote
 		result.Fetch = run.Fetch
 		result.Push = run.Push
+	}
+	if result.Remote != "origin" {
+		return remoteScenarioResult{}, fmt.Errorf("%s remote = %q, want origin", contract.command, result.Remote)
+	}
+	if err := requireRemoteSyncContract("fetch", result.Fetch, contract.fetchStatus); err != nil {
+		return remoteScenarioResult{}, err
+	}
+	if err := requireRemoteSyncContract("push", result.Push, contract.pushStatus); err != nil {
+		return remoteScenarioResult{}, err
 	}
 	if _, err := sortedRemoteTaskPairs(result.Fetch.Tasks); err != nil {
 		return remoteScenarioResult{}, fmt.Errorf("fetch results: %w", err)
@@ -356,7 +464,7 @@ func decodeRemoteScenarioResult(stdout, stderr []byte, command string, expectFai
 		return remoteScenarioResult{}, fmt.Errorf("push results: %w", err)
 	}
 
-	if expectFailure {
+	if contract.expectFailure {
 		var errorEnvelope remoteErrorEnvelope
 		if err := decodeRemoteJSON(stderr, &errorEnvelope); err != nil {
 			return remoteScenarioResult{}, fmt.Errorf("decode error envelope: %w", err)
@@ -370,10 +478,26 @@ func decodeRemoteScenarioResult(stdout, stderr []byte, command string, expectFai
 		if errorEnvelope.Error.Category == "" || errorEnvelope.Error.Message == "" {
 			return remoteScenarioResult{}, fmt.Errorf("error envelope is missing category or message")
 		}
+		if contract.errorCategory != "" && errorEnvelope.Error.Category != contract.errorCategory {
+			return remoteScenarioResult{}, fmt.Errorf("error category = %q, want %q", errorEnvelope.Error.Category, contract.errorCategory)
+		}
 	} else if len(bytes.TrimSpace(stderr)) != 0 {
 		return remoteScenarioResult{}, fmt.Errorf("successful command wrote unexpected stderr")
 	}
 	return result, nil
+}
+
+func requireRemoteSyncContract(phase string, result gitstore.SyncResult, wantStatus gitstore.SyncPhaseStatus) error {
+	if wantStatus == "" {
+		return nil
+	}
+	if result.Remote != "origin" {
+		return fmt.Errorf("%s remote = %q, want origin", phase, result.Remote)
+	}
+	if result.Status != wantStatus {
+		return fmt.Errorf("%s status = %q, want %q", phase, result.Status, wantStatus)
+	}
+	return nil
 }
 
 func decodeRemoteJSON(data []byte, destination any) error {

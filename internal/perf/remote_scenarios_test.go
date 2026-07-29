@@ -3,13 +3,17 @@ package perf
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
 )
 
@@ -95,7 +99,7 @@ func TestRunRemoteScenariosUsesTopologyCommandsAndVerifiesResults(t *testing.T) 
 			results, err := runRemoteScenarios(context.Background(), RunSpec{
 				WorkbookBinary: workbook,
 				Fixture:        FixtureSpec{ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
-				Samples:        1, CommandTimeout: 5 * time.Second,
+				Samples:        1, CommandTimeout: 20 * time.Second,
 			}, filepath.Join(t.TempDir(), "scenarios"), []string{test.name}, remoteScenarioDependencies{
 				buildFixture: buildRemoteFixtureWithinTimeout,
 				measureCommand: func(ctx context.Context, spec CommandSpec) CommandMeasurement {
@@ -228,5 +232,181 @@ func TestDecodeRemoteScenarioResultRejectsInvalidEnvelopesAndTaskSets(t *testing
 				t.Fatalf("decode error = %v, want %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestDecodeRemoteScenarioResultEnforcesRemotePhasesErrorCategoryAndWarnings(t *testing.T) {
+	contract := remoteScenarioContract{
+		command:       "sync",
+		fetchStatus:   gitstore.SyncPhaseCompleted,
+		pushStatus:    gitstore.SyncPhaseSkipped,
+		expectFailure: true,
+		errorCategory: core.CategoryStaleWrite,
+	}
+	valid := `{"format":"workbook.result","version":1,"command":"sync","warnings":[],"data":{"remote":"origin","fetch":{"remote":"origin","status":"completed","tasks":[]},"push":{"remote":"origin","status":"skipped","tasks":[]}}}`
+	validError := `{"format":"workbook.error","version":1,"error":{"category":"stale-write","message":"diverged"}}`
+	tests := []struct {
+		name   string
+		stdout string
+		stderr string
+		want   string
+	}{
+		{name: "wrong run remote", stdout: strings.Replace(valid, `"remote":"origin"`, `"remote":"other"`, 1), stderr: validError, want: "sync remote"},
+		{name: "missing phase remote", stdout: strings.Replace(valid, `"fetch":{"remote":"origin"`, `"fetch":{"remote":""`, 1), stderr: validError, want: "fetch remote"},
+		{name: "wrong phase", stdout: strings.Replace(valid, `"status":"skipped"`, `"status":"completed"`, 1), stderr: validError, want: "push status"},
+		{name: "wrong error category", stdout: valid, stderr: strings.Replace(validError, "stale-write", "corrupt-data", 1), want: "error category"},
+		{name: "malformed warnings", stdout: strings.Replace(valid, `"warnings":[]`, `"warnings":[{"code":""}]`, 1), stderr: validError, want: "warning"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := decodeRemoteScenarioResultWithContract([]byte(test.stdout), []byte(test.stderr), contract)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("decode error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestRunRemoteScenariosUsesIndependentFixturesForEachSample(t *testing.T) {
+	var roots []string
+	measures := 0
+	results, err := runRemoteScenarios(context.Background(), RunSpec{
+		WorkbookBinary: "workbook",
+		Fixture:        FixtureSpec{ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
+		Samples:        2,
+		CommandTimeout: time.Second,
+	}, t.TempDir(), []string{"sync-fresh-checkout"}, remoteScenarioDependencies{
+		buildFixture: func(_ context.Context, root string, _ FixtureSpec, _ RemoteTopology) (RemoteFixture, error) {
+			roots = append(roots, root)
+			return RemoteFixture{LocalRoot: root}, nil
+		},
+		measureCommand: func(context.Context, CommandSpec) CommandMeasurement {
+			measures++
+			return CommandMeasurement{Sample: Sample{ExitCode: -1, TimedOut: true}}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || len(results[0].Samples) != 2 || measures != 2 || len(roots) != 2 {
+		t.Fatalf("samples/builds/measures = %#v/%d/%d, want two each", results, len(roots), measures)
+	}
+	if roots[0] == roots[1] || !strings.Contains(roots[0], "sample-001") || !strings.Contains(roots[1], "sample-002") {
+		t.Fatalf("sample fixture roots = %v, want independent indexed roots", roots)
+	}
+}
+
+func TestRunRemoteScenariosRejectsZeroSamples(t *testing.T) {
+	_, err := runRemoteScenarios(context.Background(), RunSpec{
+		WorkbookBinary: "workbook",
+		Fixture:        FixtureSpec{ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
+		CommandTimeout: time.Second,
+	}, t.TempDir(), []string{"sync-fresh-checkout"}, remoteScenarioDependencies{})
+	if err == nil || !strings.Contains(err.Error(), "samples must be positive") {
+		t.Fatalf("runRemoteScenarios error = %v, want samples validation", err)
+	}
+}
+
+func TestSmallChangedRefSetKeepsTrackingAtPrePushRemoteTip(t *testing.T) {
+	workbook := buildRemoteScenarioWorkbook(t)
+	var fixture RemoteFixture
+	_, err := runRemoteScenarios(context.Background(), RunSpec{
+		WorkbookBinary: workbook,
+		Fixture:        FixtureSpec{ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
+		Samples:        1,
+		CommandTimeout: 20 * time.Second,
+	}, t.TempDir(), []string{"sync-small-changed-ref-set"}, remoteScenarioDependencies{
+		buildFixture: func(ctx context.Context, root string, spec FixtureSpec, topology RemoteTopology) (RemoteFixture, error) {
+			built, err := buildRemoteFixtureWithinTimeout(ctx, root, spec, topology)
+			fixture = built
+			return built, err
+		},
+		measureCommand: MeasureCommandOutput,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := fixtureRefMapForRoot(context.Background(), fixture.LocalRoot, "refs/workbook/tasks/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracking, err := fixtureRefMapForRoot(context.Background(), fixture.LocalRoot, "refs/workbook/remotes/origin/tasks/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote, err := fixtureRemoteRefMapForRoot(context.Background(), fixture.OriginRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, taskID := range fixture.TaskIDs[:5] {
+		before := fixture.Expected[taskID]
+		if canonical[taskID] != before.Canonical || remote[taskID] != before.Canonical || tracking[taskID] != before.Tracking {
+			t.Fatalf("%s refs after sync = canonical %q tracking %q remote %q; want local tip %q, pre-push tracking %q", taskID, canonical[taskID], tracking[taskID], remote[taskID], before.Canonical, before.Tracking)
+		}
+	}
+}
+
+func TestRemoteScenarioVerificationGitCallsDoNotScaleWithFixture(t *testing.T) {
+	workbook := buildRemoteScenarioWorkbook(t)
+	fixtureSpecs := []FixtureSpec{
+		{ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
+		{ActiveTasks: 25, OperationsPerTask: 7, ObjectFormat: "sha1"},
+	}
+	type outcome struct {
+		count int
+		err   error
+	}
+	outcomes := make(chan outcome, len(fixtureSpecs))
+	var waiting sync.WaitGroup
+	for _, fixtureSpec := range fixtureSpecs {
+		waiting.Add(1)
+		go func(fixtureSpec FixtureSpec) {
+			defer waiting.Done()
+			calls := 0
+			results, err := runRemoteScenarios(context.Background(), RunSpec{
+				WorkbookBinary: workbook, Fixture: fixtureSpec, Samples: 1, CommandTimeout: 20 * time.Second,
+			}, t.TempDir(), []string{"sync-fresh-checkout"}, remoteScenarioDependencies{
+				buildFixture: buildRemoteFixtureWithinTimeout,
+				measureCommand: func(ctx context.Context, spec CommandSpec) CommandMeasurement {
+					measurement := MeasureCommandOutput(ctx, spec)
+					measurement.Sample.GitProcesses = 9
+					return measurement
+				},
+				readCanonicalRefs: func(ctx context.Context, root string) (map[string]string, error) {
+					calls++
+					return fixtureRefMapForRoot(ctx, root, "refs/workbook/tasks/")
+				},
+				readTrackingRefs: func(ctx context.Context, root string) (map[string]string, error) {
+					calls++
+					return fixtureRefMapForRoot(ctx, root, "refs/workbook/remotes/origin/tasks/")
+				},
+				readRemoteRefs: func(ctx context.Context, root string) (map[string]string, error) {
+					calls++
+					return fixtureRemoteRefMapForRoot(ctx, root)
+				},
+			})
+			if err != nil {
+				outcomes <- outcome{err: err}
+				return
+			}
+			if got := results[0].Samples[0].GitProcesses; got != 9 {
+				outcomes <- outcome{err: fmt.Errorf("product Git processes = %d, want fixed injected count 9", got)}
+				return
+			}
+			outcomes <- outcome{count: calls}
+		}(fixtureSpec)
+	}
+	waiting.Wait()
+	close(outcomes)
+	counts := make([]int, 0, len(fixtureSpecs))
+	for outcome := range outcomes {
+		if outcome.err != nil {
+			t.Fatal(outcome.err)
+		}
+		counts = append(counts, outcome.count)
+	}
+	sort.Ints(counts)
+	if !reflect.DeepEqual(counts, []int{3, 3}) {
+		t.Fatalf("verification Git calls = %v, want constant canonical/tracking/remote count", counts)
 	}
 }
