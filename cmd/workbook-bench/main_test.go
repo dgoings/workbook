@@ -124,6 +124,43 @@ func TestRunBenchmarkRunsOnlySelectedRemoteScenario(t *testing.T) {
 	}
 }
 
+// Mutation witness: dispatching every scenario family after selector
+// resolution would construct unrelated cold, warm, or remote fixtures.
+func TestBenchmarkMainRunsOnlySelectedValidationScenarios(t *testing.T) {
+	workbook := buildWorkbookBinary(t)
+	outputRoot := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	if exitCode := run(context.Background(), []string{
+		"--workbook", workbook,
+		"--tasks", "10",
+		"--operations", "4",
+		"--scenario", "validate-cached-unchanged",
+		"--output-json", filepath.Join(outputRoot, "report.json"),
+		"--output-markdown", filepath.Join(outputRoot, "report.md"),
+	}, &stdout, &stderr); exitCode != invocationExitCode || !strings.Contains(stderr.String(), "validation scenarios require at least 500 tasks and 20 operations per task") {
+		t.Fatalf("validation workload validation = exit %d stderr %q, want minimum guidance", exitCode, stderr.String())
+	}
+
+	// The lower-dimensional direct runner is the separate regular diagnostic
+	// witness. It must still dispatch only the selected validation path.
+	report, err := runBenchmark(context.Background(), options{
+		workbookBinary: workbook,
+		tasks:          10,
+		operations:     4,
+		samples:        1,
+		timeout:        20 * time.Second,
+		objectFormat:   "sha1",
+		phase:          "baseline",
+		scenarios:      []string{"validate-cached-unchanged"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Scenarios) != 1 || report.Scenarios[0].Name != "validate-cached-unchanged" {
+		t.Fatalf("validation-only scenarios = %#v, want cached validation only", report.Scenarios)
+	}
+}
+
 func TestValidateOptionsRejectsInvalidScenarioSelectors(t *testing.T) {
 	workbookBinary := buildWorkbookBinary(t)
 	tests := []struct {

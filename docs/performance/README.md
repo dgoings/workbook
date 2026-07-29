@@ -86,6 +86,22 @@ These targets are reference budgets, not achieved-performance guarantees. A
 timeout, product failure, or target miss is evidence to record, not a reason to
 tune or replace the one-shot baseline.
 
+## Semantic history validation topologies
+
+The validation selectors each create an independent fixture, and all cache
+seeding and five-task updates occur before the measured command. They require
+at least 500 active tasks and 20 operations per task, including baseline mode.
+
+| Selector | Measured command | Reference target |
+| --- | --- | --- |
+| `validate-full-history` | `validate --full --json` | at most 10 seconds; fewer than 12 Git processes |
+| `validate-cached-unchanged` | `validate --json` after a successful cache seed | at most 500 milliseconds; fewer than 12 Git processes |
+| `validate-five-changed` | `validate --json` after a cache seed and five one-operation updates | at most 1 second; fewer than 12 Git processes |
+
+Each measured result must exactly report valid task and empty-failure totals,
+with full, cached, and five-changed counts respectively. The Git-process limit
+is exclusive: twelve processes is a miss.
+
 Build the measured binary once, then run each object format at most once. These
 commands select only the seven remote scenarios and write separate reports;
 they do not replace the incomplete whole-harness record above.

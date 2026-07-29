@@ -30,6 +30,9 @@ var scenarioRegistry = []string{
 	"sync-divergent-tips",
 	"sync-malformed-local-tip",
 	"sync-malformed-remote-tip",
+	"validate-full-history",
+	"validate-cached-unchanged",
+	"validate-five-changed",
 }
 
 // ScenarioNames returns the complete ordered benchmark scenario registry.
