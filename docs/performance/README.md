@@ -135,6 +135,31 @@ go run ./cmd/workbook-bench \
   --output-markdown docs/performance/2026-07-28-sync-baseline-sha256.md
 ```
 
+### 2026-07-29 tip-focused evidence
+
+The tip-focused implementation was exercised once per supported object format
+with the same 500-by-20 fixture, one sample, and 60-second timeout:
+
+| Format | Evidence | Result |
+| --- | --- | --- |
+| SHA-1 | [attempt record](2026-07-29-sync-tip-focused-sha1-attempt.md) | The fail-fast harness found an incorrect changed-set oracle before report assembly; no rerun or substitute report was made. |
+| SHA-256 | [JSON](2026-07-29-sync-tip-focused-sha256.json), [Markdown](2026-07-29-sync-tip-focused-sha256.md) | All seven topology contracts verified. Four success scenarios completed in 313.51–1047.08 ms; three expected product-error scenarios completed in 226.62–322.68 ms. |
+
+Compared with the [SHA-1 baseline](2026-07-28-sync-baseline-sha1.md) and
+[SHA-256 baseline](2026-07-28-sync-baseline-sha256.md), which timed out with
+3,997–4,082 Git processes per topology, the SHA-256 tip-focused run used 8–20
+Git processes and did not time out. Fresh checkout and initial publication met
+both targets. Synchronized and small-changed-set timing met their budgets, but
+their observed process counts of 11 and 20 missed the exclusive `<10` and `<20`
+limits.
+
+The evidence was not replaced after those misses. A subsequent bounded-shape
+test, using 10 tasks by 4 operations and the same Trace2 counter, verifies the
+two affected product paths at 9 and 18 Git processes after removing a redundant
+object-width probe and fetch auto-maintenance. That test demonstrates the
+constant process shape now meets the approved exclusive limits; it is not a
+replacement 500-by-20 acceptance sample.
+
 ## Reading the reports
 
 A completed harness run produces a versioned, machine-readable JSON report and a
