@@ -162,6 +162,7 @@ func TestHandlerDeletesRestoresAndListsTombstonedTasks(t *testing.T) {
 	handler := NewHandlerWithTaskMutations(
 		func(context.Context) ([]core.Task, error) { return []core.Task{active, deleted}, nil },
 		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
+		unexpectedTaskPosition(t),
 		func(_ context.Context, id string) (core.MutationResult, error) {
 			deletedID = id
 			return core.MutationResult{Task: deleted}, nil
@@ -761,6 +762,92 @@ func TestHandlerUpdatesAllTaskFields(t *testing.T) {
 	assertTaskMutationDocument(t, response, updated)
 }
 
+func TestHandlerPositionsTask(t *testing.T) {
+	want := boardTasks()[0]
+	want.Status = core.StatusInProgress
+	want.Rank = "3/1"
+	var gotID string
+	var gotInput core.PlaceInput
+	handler := NewHandlerWithTaskMutations(
+		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		unexpectedTaskCreate(t),
+		unexpectedTaskUpdate(t),
+		unexpectedStatusUpdate(t),
+		func(_ context.Context, id string, input core.PlaceInput) (core.MutationResult, error) {
+			gotID = id
+			gotInput = input
+			return core.MutationResult{Task: want}, nil
+		},
+		nil,
+		nil,
+	)
+
+	response := requestJSON(
+		t,
+		handler,
+		http.MethodPatch,
+		"/api/tasks/"+want.ID+"/position",
+		`{"status":"in-progress","before":"WB-01J00000000000000000000002"}`,
+	)
+	if response.Code != http.StatusOK {
+		t.Fatalf("PATCH position status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if gotID != want.ID || gotInput.Status != core.StatusInProgress ||
+		gotInput.Before != "WB-01J00000000000000000000002" || gotInput.After != "" {
+		t.Fatalf("position callback = %q/%#v", gotID, gotInput)
+	}
+	assertTaskMutationDocument(t, response, want)
+}
+
+func TestHandlerValidatesPositionRequests(t *testing.T) {
+	const taskID = "WB-01J00000000000000000000001"
+	handler := NewHandlerWithTaskMutations(
+		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		unexpectedTaskCreate(t),
+		unexpectedTaskUpdate(t),
+		unexpectedStatusUpdate(t),
+		func(context.Context, string, core.PlaceInput) (core.MutationResult, error) {
+			return core.MutationResult{}, core.Errorf(core.CategoryValidation, "placement accepts at most one anchor direction")
+		},
+		nil,
+		nil,
+	)
+
+	response := requestJSON(t, handler, http.MethodPatch, "/api/tasks/"+taskID+"/position",
+		`{"status":"ready","before":"WB-A","after":"WB-B"}`)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("ambiguous position status = %d, want %d", response.Code, http.StatusBadRequest)
+	}
+	var document ErrorDocument
+	if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+		t.Fatalf("decode ambiguous position error: %v", err)
+	}
+	if document.Format != "workbook.error" || document.Version != 1 || document.Error.Category != core.CategoryValidation {
+		t.Fatalf("ambiguous position error document = %#v, want workbook.error v1 validation", document)
+	}
+
+	handler = NewHandlerWithTaskMutations(
+		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		unexpectedTaskCreate(t),
+		unexpectedTaskUpdate(t),
+		unexpectedStatusUpdate(t),
+		unexpectedTaskPosition(t),
+		nil,
+		nil,
+	)
+	response = requestJSON(t, handler, http.MethodPatch, "/api/tasks/"+taskID+"/position",
+		`{"status":"ready","rank":"1/1"}`)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("unknown position field status = %d, want %d", response.Code, http.StatusBadRequest)
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+		t.Fatalf("decode position error: %v", err)
+	}
+	if document.Error.Category != core.CategoryInvocation {
+		t.Fatalf("unknown position field category = %q, want %q", document.Error.Category, core.CategoryInvocation)
+	}
+}
+
 func TestHandlerRejectsInvalidTaskMutationRequests(t *testing.T) {
 	handler := NewHandler(
 		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
@@ -831,6 +918,7 @@ func TestHandlerRejectsWrongMethods(t *testing.T) {
 		wantAllow string
 	}{
 		{method: http.MethodGet, path: "/api/tasks/WB-01J00000000000000000000001", wantAllow: http.MethodPatch + ", " + http.MethodDelete},
+		{method: http.MethodGet, path: "/api/tasks/WB-01J00000000000000000000001/position", wantAllow: http.MethodPatch},
 		{method: http.MethodPut, path: "/api/tasks", wantAllow: http.MethodGet + ", " + http.MethodPost},
 	} {
 		response := request(t, handler, test.method, test.path)
@@ -1103,6 +1191,14 @@ func unexpectedStatusUpdate(t *testing.T) TaskStatusUpdater {
 	t.Helper()
 	return func(context.Context, string, core.Status) (core.MutationResult, error) {
 		t.Fatal("unexpected status update")
+		return core.MutationResult{}, nil
+	}
+}
+
+func unexpectedTaskPosition(t *testing.T) TaskPositionUpdater {
+	t.Helper()
+	return func(context.Context, string, core.PlaceInput) (core.MutationResult, error) {
+		t.Fatal("unexpected task position")
 		return core.MutationResult{}, nil
 	}
 }
