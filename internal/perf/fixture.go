@@ -1,6 +1,7 @@
 package perf
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -28,6 +29,12 @@ type Fixture struct {
 	Root    string
 	Config  core.ProjectConfig
 	TaskIDs []string
+}
+
+type fixtureCommit struct {
+	Head  string
+	Pack  core.OperationPack
+	State core.StateDocument
 }
 
 // BuildFixture creates a Git-backed Workbook fixture without replaying each
@@ -177,6 +184,128 @@ func writeFixtureHistory(w io.Writer, config core.ProjectConfig, spec FixtureSpe
 		}
 	}
 	return taskIDs, nil
+}
+
+// readFixtureCommit reads a fixture commit's independently valid durable
+// documents. Callers that need semantic validation must use
+// core.ValidateCheckpoint with the commit's parent state.
+func readFixtureCommit(ctx context.Context, root, head string) (fixtureCommit, error) {
+	operationBytes, err := runFixtureGitOutput(ctx, root, nil, "show", head+":operation.json")
+	if err != nil {
+		return fixtureCommit{}, fmt.Errorf("read fixture operation %q: %w", head, err)
+	}
+	pack, err := core.DecodeOperationPack(operationBytes)
+	if err != nil {
+		return fixtureCommit{}, fmt.Errorf("decode fixture operation %q: %w", head, err)
+	}
+	stateBytes, err := runFixtureGitOutput(ctx, root, nil, "show", head+":state.json")
+	if err != nil {
+		return fixtureCommit{}, fmt.Errorf("read fixture state %q: %w", head, err)
+	}
+	state, err := core.DecodeStateDocument(stateBytes)
+	if err != nil {
+		return fixtureCommit{}, fmt.Errorf("decode fixture state %q: %w", head, err)
+	}
+	return fixtureCommit{Head: head, Pack: pack, State: state}, nil
+}
+
+// appendFixtureOperation appends one deterministic, valid task operation to an
+// explicit parent fixture commit.
+func appendFixtureOperation(
+	ctx context.Context,
+	root string,
+	config core.ProjectConfig,
+	parent fixtureCommit,
+	taskID string,
+	generation string,
+	taskIndex, logicalClock int,
+	ids *fixtureIDs,
+) (fixtureCommit, error) {
+	operationID, err := ids.next()
+	if err != nil {
+		return fixtureCommit{}, fmt.Errorf("generate fixture operation ID: %w", err)
+	}
+	pack := fixtureOperationPack(config, taskID, generation, taskIndex, logicalClock, operationID, ids.timestamp())
+	state, err := core.Apply(&parent.State, pack, config.Key)
+	if err != nil {
+		return fixtureCommit{}, fmt.Errorf("apply fixture operation: %w", err)
+	}
+	return writeFixtureCommit(ctx, root, parent.Head, pack, state, "workbook: benchmark fixture append")
+}
+
+// writeFixtureCommit writes a task-shaped commit from the supplied documents.
+// It intentionally does not validate the checkpoint relationship so remote
+// fixture tests can construct isolated corrupt histories without relaxing
+// production validation.
+func writeFixtureCommit(
+	ctx context.Context,
+	root, parent string,
+	pack core.OperationPack,
+	state core.StateDocument,
+	message string,
+) (fixtureCommit, error) {
+	operation, err := core.EncodeDocument(pack)
+	if err != nil {
+		return fixtureCommit{}, fmt.Errorf("encode fixture operation: %w", err)
+	}
+	checkpoint, err := core.EncodeDocument(state)
+	if err != nil {
+		return fixtureCommit{}, fmt.Errorf("encode fixture state: %w", err)
+	}
+	operationBlob, err := fixtureObjectID(ctx, root, operation, "hash-object", "-w", "--stdin")
+	if err != nil {
+		return fixtureCommit{}, fmt.Errorf("write fixture operation blob: %w", err)
+	}
+	stateBlob, err := fixtureObjectID(ctx, root, checkpoint, "hash-object", "-w", "--stdin")
+	if err != nil {
+		return fixtureCommit{}, fmt.Errorf("write fixture state blob: %w", err)
+	}
+	tree, err := fixtureObjectID(ctx, root, []byte(fmt.Sprintf("100644 blob %s\toperation.json\n100644 blob %s\tstate.json\n", operationBlob, stateBlob)), "mktree")
+	if err != nil {
+		return fixtureCommit{}, fmt.Errorf("write fixture task tree: %w", err)
+	}
+	args := []string{"commit-tree", tree}
+	if parent != "" {
+		args = append(args, "-p", parent)
+	}
+	args = append(args, "-m", message)
+	head, err := fixtureObjectID(ctx, root, nil, args...)
+	if err != nil {
+		return fixtureCommit{}, fmt.Errorf("write fixture commit: %w", err)
+	}
+	return fixtureCommit{Head: head, Pack: pack, State: state}, nil
+}
+
+func fixtureObjectID(ctx context.Context, root string, input []byte, args ...string) (string, error) {
+	output, err := runFixtureGitOutput(ctx, root, input, args...)
+	if err != nil {
+		return "", err
+	}
+	return fixtureSingleLine(output)
+}
+
+func runFixtureGitOutput(ctx context.Context, root string, input []byte, args ...string) ([]byte, error) {
+	command := exec.CommandContext(ctx, "git", append([]string{"-C", root}, args...)...)
+	command.Stdin = bytes.NewReader(input)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		return nil, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+	}
+	return stdout.Bytes(), nil
+}
+
+func fixtureSingleLine(output []byte) (string, error) {
+	if len(output) == 0 || output[len(output)-1] != '\n' {
+		return "", fmt.Errorf("expected one trailing newline")
+	}
+	line := strings.TrimSuffix(string(output), "\n")
+	if strings.ContainsAny(line, "\r\n") || line == "" {
+		return "", fmt.Errorf("expected one output line")
+	}
+	return line, nil
 }
 
 func fixtureOperationPack(config core.ProjectConfig, taskID, generation string, taskIndex, logicalClock int, operationID string, timestamp time.Time) core.OperationPack {
