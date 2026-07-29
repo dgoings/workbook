@@ -506,6 +506,191 @@ if (intervalDelay !== 1000) throw new Error("polling interval = " + intervalDela
 	}
 }
 
+func TestHandlerClientPlacementClampsSameColumnPointerGapsToSamePriorityPeers(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	high := clientPlacementTask("WB-01J00000000000000000000011", "High", core.StatusReady, core.PriorityHigh)
+	moved := clientPlacementTask("WB-01J00000000000000000000012", "Moved medium", core.StatusReady, core.PriorityMedium)
+	firstMedium := clientPlacementTask("WB-01J00000000000000000000013", "First medium", core.StatusReady, core.PriorityMedium)
+	low := clientPlacementTask("WB-01J00000000000000000000014", "Low", core.StatusReady, core.PriorityLow)
+	tasks := []core.Task{high, moved, firstMedium, low}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	document, err := json.Marshal(TasksDocument{
+		Format:       "workbook.tasks",
+		Version:      1,
+		Tasks:        tasks,
+		Presentation: presentationForTasks(tasks),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/", string(document)) + script + `
+setTimeout(() => {
+  const ready = boardLists.find((list) => list.dataset.status === "ready");
+  const cards = ready.querySelectorAll(".task-card");
+  cards.forEach((item, index) => { item.rect = { top: index * 100, bottom: index * 100 + 80 }; });
+  const moved = cards.find((item) => item.dataset.taskId === ` + strconv.Quote(moved.ID) + `);
+  const high = cards.find((item) => item.dataset.priority === "high");
+  const firstMedium = cards.find((item) => item.dataset.priority === "medium" && item !== moved);
+  const low = cards.find((item) => item.dataset.priority === "low");
+  const dataTransfer = { effectAllowed: "", dropEffect: "", setData() {} };
+  if (!moved || !high || !firstMedium || !low) {
+    throw new Error("client cards did not expose priority metadata required for clamped placement");
+  }
+
+  documentEventListeners.dragstart({ target: moved, dataTransfer });
+  let prevented = false;
+  documentEventListeners.dragover({
+    target: high,
+    clientY: 1,
+    dataTransfer,
+    preventDefault() { prevented = true; }
+  });
+
+  let markerIndex = ready.children.findIndex((item) => item.className === "drop-marker");
+  let firstMediumIndex = ready.children.indexOf(firstMedium);
+  if (!prevented || markerIndex !== firstMediumIndex - 1) {
+    throw new Error("top-column drop did not clamp before the first medium-priority peer");
+  }
+
+  prevented = false;
+  documentEventListeners.dragover({
+    target: low,
+    clientY: low.rect.bottom - 1,
+    dataTransfer,
+    preventDefault() { prevented = true; }
+  });
+  markerIndex = ready.children.findIndex((item) => item.className === "drop-marker");
+  const lastMediumIndex = ready.children.indexOf(firstMedium);
+  const lowIndex = ready.children.indexOf(low);
+  if (!prevented || markerIndex !== lastMediumIndex + 1 || markerIndex !== lowIndex - 1) {
+    throw new Error("bottom-column drop did not clamp after the last medium-priority peer");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute rendered same-column placement behavior: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerClientSendsAtomicClampedPlacementRequests(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	moved := clientPlacementTask("WB-01J00000000000000000000021", "Moved medium", core.StatusReady, core.PriorityMedium)
+	destinationHigh := clientPlacementTask("WB-01J00000000000000000000022", "In progress high", core.StatusInProgress, core.PriorityHigh)
+	destinationMedium := clientPlacementTask("WB-01J00000000000000000000023", "In progress medium", core.StatusInProgress, core.PriorityMedium)
+	doneHigh := clientPlacementTask("WB-01J00000000000000000000024", "Done high", core.StatusDone, core.PriorityHigh)
+	doneLow := clientPlacementTask("WB-01J00000000000000000000025", "Done low", core.StatusDone, core.PriorityLow)
+	tasks := []core.Task{moved, destinationHigh, destinationMedium, doneHigh, doneLow}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	document, err := json.Marshal(TasksDocument{
+		Format:       "workbook.tasks",
+		Version:      1,
+		Tasks:        tasks,
+		Presentation: presentationForTasks(tasks),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/", string(document)) + script + `
+setTimeout(async () => {
+  const ready = boardLists.find((list) => list.dataset.status === "ready");
+  const inProgress = boardLists.find((list) => list.dataset.status === "in-progress");
+  const moved = ready.querySelectorAll(".task-card").find((item) => item.dataset.taskId === ` + strconv.Quote(moved.ID) + `);
+  const destinationHigh = inProgress.querySelectorAll(".task-card").find((item) => item.dataset.taskId === ` + strconv.Quote(destinationHigh.ID) + `);
+  const destinationMedium = inProgress.querySelectorAll(".task-card").find((item) => item.dataset.taskId === ` + strconv.Quote(destinationMedium.ID) + `);
+  const dataTransfer = { effectAllowed: "", dropEffect: "", setData() {} };
+
+  moved.rect = { top: 0, bottom: 80 };
+  destinationHigh.rect = { top: 0, bottom: 80 };
+  destinationMedium.rect = { top: 100, bottom: 180 };
+  documentEventListeners.dragstart({ target: moved, dataTransfer });
+  let prevented = false;
+  documentEventListeners.dragover({
+    target: destinationHigh,
+    clientY: 1,
+    dataTransfer,
+    preventDefault() { prevented = true; }
+  });
+  const markerIndex = inProgress.children.findIndex((item) => item.className === "drop-marker");
+  const destinationMediumIndex = inProgress.children.indexOf(destinationMedium);
+  if (!prevented || markerIndex !== destinationMediumIndex - 1) {
+    throw new Error("cross-status drop did not show the clamped medium-priority marker");
+  }
+  await documentEventListeners.drop({
+    target: destinationHigh,
+    clientY: 1,
+    dataTransfer,
+    preventDefault() {}
+  });
+
+  const mutation = fetchCalls.find((call) => call.options.method === "PATCH");
+  if (!mutation || mutation.url !== "/api/tasks/" + encodeURIComponent(` + strconv.Quote(moved.ID) + `) + "/position") {
+    throw new Error("drop did not call the position endpoint");
+  }
+  const body = JSON.parse(mutation.options.body);
+  if (body.status !== "in-progress" || body.before !== ` + strconv.Quote(destinationMedium.ID) + ` || body.after) {
+    throw new Error("cross-status drop did not send the clamped medium-priority anchor");
+  }
+
+  const refreshedMoved = ready.querySelectorAll(".task-card").find((item) => item.dataset.taskId === ` + strconv.Quote(moved.ID) + `);
+  const done = boardLists.find((list) => list.dataset.status === "done");
+  const refreshedDoneHigh = done.querySelectorAll(".task-card").find((item) => item.dataset.taskId === ` + strconv.Quote(doneHigh.ID) + `);
+  const refreshedDoneLow = done.querySelectorAll(".task-card").find((item) => item.dataset.taskId === ` + strconv.Quote(doneLow.ID) + `);
+  refreshedDoneHigh.rect = { top: 0, bottom: 80 };
+  refreshedDoneLow.rect = { top: 100, bottom: 180 };
+  documentEventListeners.dragstart({ target: refreshedMoved, dataTransfer });
+  prevented = false;
+  documentEventListeners.dragover({
+    target: refreshedDoneHigh,
+    clientY: 1,
+    dataTransfer,
+    preventDefault() { prevented = true; }
+  });
+  const doneMarkerIndex = done.children.findIndex((item) => item.className === "drop-marker");
+  const doneHighIndex = done.children.indexOf(refreshedDoneHigh);
+  const doneLowIndex = done.children.indexOf(refreshedDoneLow);
+  if (!prevented || doneMarkerIndex !== doneHighIndex + 1 || doneMarkerIndex !== doneLowIndex - 1) {
+    throw new Error("empty-priority destination did not mark the canonical priority boundary");
+  }
+  await documentEventListeners.drop({
+    target: refreshedDoneHigh,
+    clientY: 1,
+    dataTransfer,
+    preventDefault() {}
+  });
+  const mutations = fetchCalls.filter((call) => call.options.method === "PATCH");
+  const noPeerMutation = mutations[1];
+  if (!noPeerMutation || JSON.stringify(JSON.parse(noPeerMutation.options.body)) !== '{"status":"done"}') {
+    throw new Error("empty-priority destination did not send an anchorless placement request");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute rendered atomic placement behavior: %v\n%s", err, output)
+	}
+}
+
 func TestHandlerRefreshesTasksOnEveryAPIRequest(t *testing.T) {
 	first := boardTasks()
 	second := append([]core.Task(nil), first...)
@@ -565,8 +750,35 @@ class TestElement {
     this.disabled = false;
     this.required = false;
   }
-  append(...children) { children.forEach((child) => { child.parentElement = this; this.children.push(child); }); }
-  replaceChildren(...children) { this.children = []; this.append(...children); }
+  append(...children) {
+    children.forEach((child) => {
+      if (child.tagName === "FRAGMENT") {
+        child.children.splice(0).forEach((fragmentChild) => { fragmentChild.parentElement = this; this.children.push(fragmentChild); });
+        return;
+      }
+      child.remove();
+      child.parentElement = this;
+      this.children.push(child);
+    });
+  }
+  replaceChildren(...children) {
+    this.children.forEach((child) => { child.parentElement = null; });
+    this.children = [];
+    this.append(...children);
+  }
+  insertBefore(child, reference) {
+    child.remove();
+    const index = reference ? this.children.indexOf(reference) : -1;
+    child.parentElement = this;
+    if (index < 0) this.children.push(child);
+    else this.children.splice(index, 0, child);
+  }
+  remove() {
+    if (!this.parentElement) return;
+    const index = this.parentElement.children.indexOf(this);
+    if (index >= 0) this.parentElement.children.splice(index, 1);
+    this.parentElement = null;
+  }
   setAttribute(name, value) { this.attributes[name] = String(value); }
   hasAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attributes, name); }
   addEventListener(name, listener) { this.eventListeners[name] = listener; }
@@ -589,7 +801,18 @@ class TestElement {
     if (selector === "[data-stale]") return stale;
     return null;
   }
-  querySelectorAll() { return []; }
+  querySelectorAll(selector) {
+    const matches = [];
+    const visit = (element) => {
+      for (const child of element.children || []) {
+        if (selector === ".task-card" && child.className === "task-card") matches.push(child);
+        visit(child);
+      }
+    };
+    visit(this);
+    return matches;
+  }
+  getBoundingClientRect() { return this.rect || { top: 0, bottom: 0 }; }
   get firstElementChild() { return this.children[0] || null; }
   get value() {
     if (this.tagName === "SELECT") {
@@ -648,7 +871,21 @@ globalThis.history = {
 globalThis.requestAnimationFrame = (callback) => callback();
 const taskDocument = ` + taskDocument + `;
 let taskResponse = taskDocument;
-globalThis.fetch = async () => ({ ok: true, json: async () => taskResponse });
+const fetchCalls = [];
+globalThis.fetch = async (url, options = {}) => {
+  fetchCalls.push({ url, options });
+  if ((options.method || "GET") !== "GET") {
+    return {
+      ok: true,
+      json: async () => ({
+        format: "workbook.task-mutation",
+        version: 1,
+        task: taskDocument.tasks[0]
+      })
+    };
+  }
+  return { ok: true, json: async () => taskResponse };
+};
 function findElement(root, predicate) {
   if (predicate(root)) return root;
   for (const child of root.children || []) {
@@ -1054,13 +1291,15 @@ func TestHandlerServesDragAndDropBoardControls(t *testing.T) {
 	for _, fragment := range []string{
 		`draggable="true"`,
 		`aria-label="Move task Ready task from ready"`,
+		`data-priority="high"`,
 		`data-drop-status="ready"`,
 		`PATCH`,
 		`/api/tasks/`,
+		`/position`,
 		`dragstart`,
 		`dragover`,
 		`drop`,
-		`setDropState`,
+		`drop-marker`,
 	} {
 		if !strings.Contains(body, fragment) {
 			t.Errorf("GET / body does not contain %q", fragment)
@@ -1072,7 +1311,7 @@ func TestHandlerServesDragAndDropBoardControls(t *testing.T) {
 }
 
 func initialCardPrefixes(body string) map[string]string {
-	pattern := regexp.MustCompile(`(?s)<article class="task-card" tabindex="0" data-task-id="([^"]+)" data-id-prefix="([^"]+)"[^>]*>\s*<div class="task-card__meta"><code>([^<]+)</code>`)
+	pattern := regexp.MustCompile(`(?s)<article class="task-card" tabindex="0" data-task-id="([^"]+)" data-priority="[^"]+" data-id-prefix="([^"]+)"[^>]*>\s*<div class="task-card__meta"><code>([^<]+)</code>`)
 	cards := make(map[string]string)
 	for _, match := range pattern.FindAllStringSubmatch(body, -1) {
 		if match[2] == match[3] {
@@ -1244,6 +1483,19 @@ func assertSecurityHeaders(t *testing.T, response *http.Response) {
 	}
 	if got := response.Header.Get("Content-Security-Policy"); got != contentSecurityPolicy {
 		t.Errorf("Content-Security-Policy = %q, want %q", got, contentSecurityPolicy)
+	}
+}
+
+func clientPlacementTask(id, title string, status core.Status, priority core.Priority) core.Task {
+	return core.Task{
+		ID: id,
+		TaskData: core.TaskData{
+			Title:    title,
+			Status:   status,
+			Priority: priority,
+			Rank:     "1/1",
+			Labels:   []string{},
+		},
 	}
 }
 

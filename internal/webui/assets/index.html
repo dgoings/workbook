@@ -1,5 +1,5 @@
 {{ define "task" }}
-<article class="task-card" tabindex="0" data-task-id="{{ .Task.ID }}" data-id-prefix="{{ .IDPrefix }}" draggable="true" aria-label="Move task {{ .Task.Title }} from {{ .Task.Status }}">
+<article class="task-card" tabindex="0" data-task-id="{{ .Task.ID }}" data-priority="{{ .Task.Priority }}" data-id-prefix="{{ .IDPrefix }}" draggable="true" aria-label="Move task {{ .Task.Title }} from {{ .Task.Status }}">
   <div class="task-card__meta"><code>{{ .IDPrefix }}</code><span class="priority priority--{{ .Task.Priority }}">{{ .Task.Priority }}</span></div>
   <h3><a href="/tasks/{{ .Task.ID }}">{{ .Task.Title }}</a></h3>
   {{ if .Task.Description }}<p>{{ .Task.Description }}</p>{{ end }}
@@ -54,8 +54,7 @@
     .task-card p { display: -webkit-box; max-height: calc(1.36em * 6); overflow: hidden; margin: 0; color: #56647a; font-size: .8rem; line-height: 1.36; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 6; }
     .labels { display: flex; flex-wrap: wrap; gap: .25rem; margin-top: .65rem; }
     .label { max-width: 100%; overflow: hidden; padding: .14rem .28rem; border: 1px solid #d5deea; border-radius: 3px; color: #4e5d73; font-size: .64rem; text-overflow: ellipsis; white-space: nowrap; }
-    .task-list.can-drop { outline: 2px dashed #2457d6; outline-offset: -4px; background: rgba(36,87,214,.08); }
-    .task-list.cannot-drop { outline: 2px dashed #b45309; outline-offset: -4px; background: rgba(180,83,9,.08); }
+    .drop-marker { height: 0; margin: -.1rem 0; border-top: 3px solid #2457d6; border-radius: 3px; pointer-events: none; }
     .task-route { max-width: 48rem; margin: 0 auto; border: 1px solid #b9c6d8; background: #fff; box-shadow: 0 12px 32px rgba(23,32,51,.08); }
     .task-route__header { padding: 1rem 1.15rem; border-top: 3px solid #2457d6; border-bottom: 1px solid #d5deea; background: #f8faff; }
     .task-route__header h2 { margin: .15rem 0 0; font-size: clamp(1.15rem, 3vw, 1.55rem); letter-spacing: -.025em; }
@@ -120,6 +119,10 @@
         ["done", "Done"]
       ];
       const statuses = new Set(statusDefinitions.map(([status]) => status));
+      const priorityOrder = new Map([["high", 0], ["medium", 1], ["low", 2]]);
+      const dropMarker = document.createElement("div");
+      dropMarker.className = "drop-marker";
+      dropMarker.setAttribute("aria-hidden", "true");
       const main = document.querySelector("main");
       const boardView = document.querySelector("[data-board-view]");
       const lists = new Map([...boardView.querySelectorAll("[data-status]")].map((element) => [element.dataset.status, element]));
@@ -133,7 +136,7 @@
 
       function text(element, value) { element.textContent = value || ""; return element; }
       function card(task, idPrefix) {
-        const article = document.createElement("article"); article.className = "task-card"; article.tabIndex = 0; article.dataset.taskId = task.id; article.dataset.idPrefix = idPrefix; article.draggable = true; article.setAttribute("aria-label", "Move task " + task.title + " from " + task.status);
+        const article = document.createElement("article"); article.className = "task-card"; article.tabIndex = 0; article.dataset.taskId = task.id; article.dataset.priority = task.priority; article.dataset.idPrefix = idPrefix; article.draggable = true; article.setAttribute("aria-label", "Move task " + task.title + " from " + task.status);
         const meta = document.createElement("div"); meta.className = "task-card__meta";
         const id = document.createElement("code"); text(id, idPrefix);
         const priority = document.createElement("span"); priority.className = "priority priority--" + task.priority; text(priority, task.priority);
@@ -323,19 +326,55 @@
         document.title = task.title + " · Workbook";
         main.replaceChildren(taskForm("detail", task));
       }
-      function clearDropStates() {
-        lists.forEach((list) => list.classList.remove("can-drop", "cannot-drop"));
-      }
-      function setDropState(list, allowed) {
-        clearDropStates();
-        list.classList.toggle("can-drop", allowed);
-        list.classList.toggle("cannot-drop", !allowed);
-      }
       function dropTarget(event) {
         return event.target.closest("[data-drop-status]");
       }
-      function canDropOn(list) {
-        return !!(activeDrag && list && statuses.has(list.dataset.dropStatus) && list.dataset.dropStatus !== activeDrag.sourceStatus);
+      function placementFor(list, clientY) {
+        const cards = [...list.querySelectorAll(".task-card")]
+          .filter((item) => item.dataset.taskId !== activeDrag.taskId);
+        let intended = cards.findIndex((item) => {
+          const bounds = item.getBoundingClientRect();
+          return clientY < (bounds.top + bounds.bottom) / 2;
+        });
+        if (intended < 0) intended = cards.length;
+
+        const peers = cards.filter((item) => item.dataset.priority === activeDrag.priority);
+        if (peers.length === 0) {
+          const draggedOrder = priorityOrder.get(activeDrag.priority);
+          let index = cards.findIndex((item) => priorityOrder.get(item.dataset.priority) > draggedOrder);
+          if (index < 0) index = cards.length;
+          return { status: list.dataset.dropStatus, reference: cards[index] || null };
+        }
+
+        const first = cards.indexOf(peers[0]);
+        const last = cards.indexOf(peers[peers.length - 1]);
+        const index = Math.max(first, Math.min(intended, last + 1));
+        if (index <= first) {
+          return {
+            status: list.dataset.dropStatus,
+            before: peers[0].dataset.taskId,
+            reference: peers[0]
+          };
+        }
+        if (index > last) {
+          return {
+            status: list.dataset.dropStatus,
+            after: peers[peers.length - 1].dataset.taskId,
+            reference: cards[index] || null
+          };
+        }
+        return {
+          status: list.dataset.dropStatus,
+          before: cards[index].dataset.taskId,
+          reference: cards[index]
+        };
+      }
+      function showPlacement(list, placement) {
+        dropMarker.remove();
+        list.insertBefore(dropMarker, placement.reference);
+      }
+      function clearPlacement() {
+        dropMarker.remove();
       }
       function render(tasks, presentation) {
         const grouped = new Map([...lists.keys()].map((status) => [status, []]));
@@ -386,7 +425,7 @@
         const item = event.target.closest(".task-card");
         const source = item && item.closest("[data-status]");
         if (!item || !source || !source.dataset.dropStatus) return;
-        activeDrag = { taskId: item.dataset.taskId, sourceStatus: source.dataset.status };
+        activeDrag = { taskId: item.dataset.taskId, priority: item.dataset.priority, sourceStatus: source.dataset.status };
         event.dataTransfer.effectAllowed = "move";
         event.dataTransfer.setData("text/plain", activeDrag.taskId);
         item.classList.add("is-dragging");
@@ -395,34 +434,39 @@
         const item = event.target.closest(".task-card");
         if (item) item.classList.remove("is-dragging");
         activeDrag = null;
-        clearDropStates();
+        clearPlacement();
       });
       document.addEventListener("dragover", (event) => {
         const target = dropTarget(event);
-        if (!target || !activeDrag) return;
-        const allowed = canDropOn(target);
-        setDropState(target, allowed);
-        if (allowed) {
-          event.preventDefault();
-          event.dataTransfer.dropEffect = "move";
-        }
+        if (!target || !activeDrag || !statuses.has(target.dataset.dropStatus)) return;
+        const placement = placementFor(target, event.clientY);
+        showPlacement(target, placement);
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
       });
       document.addEventListener("dragleave", (event) => {
         const target = dropTarget(event);
-        if (target && !target.contains(event.relatedTarget)) target.classList.remove("can-drop", "cannot-drop");
+        if (target && !target.contains(event.relatedTarget)) clearPlacement();
       });
       document.addEventListener("drop", async (event) => {
         const target = dropTarget(event);
-        if (!target || !canDropOn(target)) return;
+        if (!target || !activeDrag || !statuses.has(target.dataset.dropStatus)) return;
         event.preventDefault();
         const taskId = activeDrag.taskId;
-        const status = target.dataset.dropStatus;
-        clearDropStates();
+        const sourceStatus = activeDrag.sourceStatus;
+        const placement = placementFor(target, event.clientY);
+        clearPlacement();
+        if (placement.status === sourceStatus && !placement.before && !placement.after) return;
+
+        const body = { status: placement.status };
+        if (placement.before) body.before = placement.before;
+        if (placement.after) body.after = placement.after;
         try {
-          await mutateTask("PATCH", "/api/tasks/" + encodeURIComponent(taskId) + "/status", { status });
+          await mutateTask("PATCH", "/api/tasks/" + encodeURIComponent(taskId) + "/position", body);
           await refresh();
         } catch (_) {
-          text(stale, "Task update failed. Showing the last successful board.");
+          await refresh();
+          text(stale, "Task placement failed. Showing the latest board.");
           stale.dataset.visible = "true";
         }
       });
