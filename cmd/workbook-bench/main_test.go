@@ -124,6 +124,27 @@ func TestRunBenchmarkRunsOnlySelectedRemoteScenario(t *testing.T) {
 	}
 }
 
+// Mutation witness: filtering warm results after running the whole family
+// would attempt the ten-task bursts and reject this valid api-update-only run.
+func TestRunBenchmarkRunsOnlySelectedWarmScenario(t *testing.T) {
+	report, err := runBenchmark(context.Background(), options{
+		workbookBinary: buildWorkbookBinary(t),
+		tasks:          1,
+		operations:     2,
+		samples:        1,
+		timeout:        5 * time.Second,
+		objectFormat:   "sha1",
+		phase:          "baseline",
+		scenarios:      []string{"api-update"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Scenarios) != 1 || report.Scenarios[0].Name != "api-update" {
+		t.Fatalf("warm-only scenarios = %#v, want api-update only", report.Scenarios)
+	}
+}
+
 // Mutation witness: dispatching every scenario family after selector
 // resolution would construct unrelated cold, warm, or remote fixtures.
 func TestBenchmarkMainRunsOnlySelectedValidationScenarios(t *testing.T) {

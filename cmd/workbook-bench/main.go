@@ -217,12 +217,13 @@ func runBenchmark(ctx context.Context, options options) (perf.Report, error) {
 		}
 		scenarios = append(scenarios, cold...)
 	}
-	if hasScenarioWithPrefix(options.scenarios, "api-") {
-		warm, err := perf.RunWarmHTTP(ctx, runSpec, filepath.Join(fixtureRoot, "warm"))
+	warmScenarios := selectedWarmScenarioNames(options.scenarios)
+	if len(warmScenarios) != 0 {
+		warm, err := perf.RunWarmHTTP(ctx, runSpec, filepath.Join(fixtureRoot, "warm"), warmScenarios)
 		if err != nil {
 			return perf.Report{}, fmt.Errorf("run warm HTTP scenarios: %w", err)
 		}
-		scenarios = append(scenarios, selectedScenarioResults(warm, options.scenarios)...)
+		scenarios = append(scenarios, warm...)
 	}
 	if hasRepositoryScenario(options.scenarios) {
 		fixtureContext, cancelFixture := context.WithTimeout(ctx, options.timeout)
@@ -293,6 +294,16 @@ func selectedColdScenarioNames(scenarios []string) []string {
 		}
 	}
 	return cold
+}
+
+func selectedWarmScenarioNames(scenarios []string) []string {
+	warm := make([]string, 0, len(scenarios))
+	for _, scenario := range scenarios {
+		if strings.HasPrefix(scenario, "api-") {
+			warm = append(warm, scenario)
+		}
+	}
+	return warm
 }
 
 func hasRepositoryScenario(scenarios []string) bool {

@@ -302,7 +302,9 @@ func TestRunWarmHTTP(t *testing.T) {
 		CommandTimeout: 60 * time.Second,
 	}
 
-	results, err := RunWarmHTTP(context.Background(), spec, filepath.Join(t.TempDir(), "fixture"))
+	results, err := RunWarmHTTP(context.Background(), spec, filepath.Join(t.TempDir(), "fixture"), []string{
+		"api-update", "api-burst-independent-10", "api-burst-same-task-10",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,7 +380,9 @@ func TestRunWarmHTTPIsolatesEveryScenarioSampleAndRetainsMeasuredMisses(t *testi
 		},
 	}
 
-	results, err := runWarmHTTP(context.Background(), spec, fixtureRoot, dependencies)
+	results, err := runWarmHTTP(context.Background(), spec, fixtureRoot, []string{
+		"api-update", "api-burst-independent-10", "api-burst-same-task-10",
+	}, dependencies)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -443,6 +447,178 @@ func TestRunWarmHTTPIsolatesEveryScenarioSampleAndRetainsMeasuredMisses(t *testi
 	if writtenConflict.ExitCode != http.StatusConflict ||
 		!strings.Contains(writtenConflict.Error, "task head changed") {
 		t.Fatalf("written report conflict = %#v, want measured product evidence preserved", writtenConflict)
+	}
+}
+
+// Mutation witness: starting every API scenario and filtering results afterward
+// would create burst fixtures and servers even when only api-update is selected.
+func TestRunWarmHTTPSelectsAndPreparesBeforeEveryMeasurement(t *testing.T) {
+	fixtureRoot := t.TempDir()
+	spec := RunSpec{
+		WorkbookBinary: "workbook",
+		Fixture: FixtureSpec{
+			TotalTasks: 10, ActiveTasks: 10,
+			OperationsPerTask: 2,
+			ObjectFormat:      "sha1",
+		},
+		Samples:        2,
+		CommandTimeout: time.Second,
+	}
+	var events []string
+	var roots []string
+	closedServers := 0
+	dependencies := warmHTTPDependencies{
+		buildFixture: func(_ context.Context, root string, _ FixtureSpec) (Fixture, error) {
+			events = append(events, "build "+filepath.Base(root))
+			roots = append(roots, root)
+			return Fixture{
+				Root: root,
+				ActiveTaskIDs: []string{
+					"WB-00", "WB-01", "WB-02", "WB-03", "WB-04",
+					"WB-05", "WB-06", "WB-07", "WB-08", "WB-09",
+				},
+			}, nil
+		},
+		startServer: func(_ context.Context, _ string, root string, _ time.Duration) (warmScenarioServer, error) {
+			events = append(events, "start "+filepath.Base(root))
+			return &recordingWarmScenarioServer{
+				t:           t,
+				role:        filepath.Base(root),
+				sample:      filepath.Base(filepath.Dir(root)),
+				events:      &events,
+				closedCount: &closedServers,
+			}, nil
+		},
+	}
+
+	results, err := runWarmHTTP(context.Background(), spec, fixtureRoot, []string{"api-update"}, dependencies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Name != "api-update" || len(results[0].Samples) != 2 {
+		t.Fatalf("selected warm results = %#v, want only two api-update samples", results)
+	}
+	wantRoots := []string{
+		filepath.Join(fixtureRoot, "sample-001", "api-update"),
+		filepath.Join(fixtureRoot, "sample-002", "api-update"),
+	}
+	if !reflect.DeepEqual(roots, wantRoots) {
+		t.Fatalf("warm fixture roots = %#v, want %#v", roots, wantRoots)
+	}
+	if closedServers != 2 {
+		t.Fatalf("closed servers = %d, want 2", closedServers)
+	}
+	wantEvents := []string{
+		"build api-update", "start api-update", "prepare api-update", "measure api-update", "close api-update",
+		"build api-update", "start api-update", "prepare api-update", "measure api-update", "close api-update",
+	}
+	if !reflect.DeepEqual(events, wantEvents) {
+		t.Fatalf("warm lifecycle events = %#v, want %#v", events, wantEvents)
+	}
+}
+
+func TestRunWarmHTTPClosesServerWhenProjectionPreparationFails(t *testing.T) {
+	closedServers := 0
+	dependencies := warmHTTPDependencies{
+		buildFixture: func(_ context.Context, root string, _ FixtureSpec) (Fixture, error) {
+			return Fixture{Root: root, ActiveTaskIDs: []string{"WB-00"}}, nil
+		},
+		startServer: func(_ context.Context, _ string, _ string, _ time.Duration) (warmScenarioServer, error) {
+			return &recordingWarmScenarioServer{
+				t:           t,
+				role:        "api-update",
+				prepareErr:  errors.New("task projection unavailable"),
+				closedCount: &closedServers,
+			}, nil
+		},
+	}
+	spec := RunSpec{
+		WorkbookBinary: "workbook",
+		Fixture: FixtureSpec{
+			TotalTasks: 1, ActiveTasks: 1,
+			OperationsPerTask: 2,
+			ObjectFormat:      "sha1",
+		},
+		Samples:        1,
+		CommandTimeout: time.Second,
+	}
+
+	_, err := runWarmHTTP(context.Background(), spec, t.TempDir(), []string{"api-update"}, dependencies)
+	if err == nil || !strings.Contains(err.Error(), "prepare api-update") {
+		t.Fatalf("preparation failure = %v, want contextual error", err)
+	}
+	if closedServers != 1 {
+		t.Fatalf("closed servers = %d, want cleanup after failed preparation", closedServers)
+	}
+}
+
+func TestWarmHTTPServerPrepareProjection(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		body       string
+		wantErr    string
+	}{
+		{
+			name:       "correct task envelope and count",
+			statusCode: http.StatusOK,
+			body:       `{"format":"workbook.tasks","version":1,"tasks":[{"id":"WB-1"},{"id":"WB-2"}]}`,
+		},
+		{
+			name:       "wrong task count",
+			statusCode: http.StatusOK,
+			body:       `{"format":"workbook.tasks","version":1,"tasks":[{"id":"WB-1"}]}`,
+			wantErr:    "task count = 1, want 2",
+		},
+		{
+			name:       "malformed JSON",
+			statusCode: http.StatusOK,
+			body:       `{`,
+			wantErr:    "decode task list response",
+		},
+		{
+			name:       "wrong format",
+			statusCode: http.StatusOK,
+			body:       `{"format":"workbook.result","version":1,"tasks":[{"id":"WB-1"},{"id":"WB-2"}]}`,
+			wantErr:    "task list response = \"workbook.result\" v1",
+		},
+		{
+			name:       "wrong version",
+			statusCode: http.StatusOK,
+			body:       `{"format":"workbook.tasks","version":2,"tasks":[{"id":"WB-1"},{"id":"WB-2"}]}`,
+			wantErr:    "task list response = \"workbook.tasks\" v2",
+		},
+		{
+			name:       "non-OK response",
+			statusCode: http.StatusServiceUnavailable,
+			body:       `temporarily unavailable`,
+			wantErr:    "HTTP 503 Service Unavailable",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			httpServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				if request.Method != http.MethodGet || request.URL.Path != "/api/tasks" {
+					t.Fatalf("task preparation request = %s %s, want GET /api/tasks", request.Method, request.URL.Path)
+				}
+				writer.WriteHeader(test.statusCode)
+				_, _ = io.WriteString(writer, test.body)
+			}))
+			defer httpServer.Close()
+
+			server := warmHTTPServer{baseURL: httpServer.URL, client: httpServer.Client()}
+			err := server.prepareProjection(context.Background(), 2, time.Second)
+			if test.wantErr == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("preparation error = %v, want %q", err, test.wantErr)
+			}
+		})
 	}
 }
 
@@ -1217,7 +1393,20 @@ type recordingWarmScenarioServer struct {
 	role        string
 	sample      string
 	ambiguous   bool
+	events      *[]string
+	prepareErr  error
 	closedCount *int
+}
+
+func (server *recordingWarmScenarioServer) prepareProjection(_ context.Context, activeTasks int, _ time.Duration) error {
+	server.t.Helper()
+	if server.role == "api-update" && activeTasks != 10 && server.prepareErr == nil {
+		server.t.Fatalf("prepared active tasks = %d, want 10", activeTasks)
+	}
+	if server.events != nil {
+		*server.events = append(*server.events, "prepare "+server.role)
+	}
+	return server.prepareErr
 }
 
 func (server *recordingWarmScenarioServer) measureStatus(
@@ -1229,6 +1418,9 @@ func (server *recordingWarmScenarioServer) measureStatus(
 	server.t.Helper()
 	if server.role != "api-update" || taskID != "WB-00" || status != "ready" {
 		server.t.Fatalf("update role = %q task = %q status = %q, want isolated api-update on WB-00 to ready", server.role, taskID, status)
+	}
+	if server.events != nil {
+		*server.events = append(*server.events, "measure "+server.role)
 	}
 	return Sample{ExitCode: 0, GitProcesses: 1}, nil
 }
@@ -1274,6 +1466,9 @@ func (server *recordingWarmScenarioServer) measureSameTaskBurst(
 }
 
 func (server *recordingWarmScenarioServer) close(time.Duration) error {
+	if server.events != nil {
+		*server.events = append(*server.events, "close "+server.role)
+	}
 	(*server.closedCount)++
 	return nil
 }
