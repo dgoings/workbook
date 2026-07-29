@@ -293,8 +293,14 @@ broader collaboration remain future work. A request using the wrong method for
 a known route receives `405` with the route's allowed method.
 
 Development performance is measured with the reproducible, bounded harness
-documented in [`docs/performance/README.md`](docs/performance/README.md);
-baseline budgets are evidence and reference targets, not achieved guarantees.
+documented in [`docs/performance/README.md`](docs/performance/README.md).
+Remote synchronization benchmarks select one or more of seven named topologies
+with repeatable `--scenario` flags and always use at least 500 active tasks with
+20 operations per task. Their reports evaluate each topology as `pass`, `miss`,
+`timeout`, or `failed` against a time and Git-process reference budget;
+`not-evaluated` means that scenario has no target. Baseline budgets and outcomes
+are evidence, not achieved-performance guarantees; in particular, a timeout is
+only lower-bound elapsed-time evidence.
 
 ### Project identity across worktrees
 

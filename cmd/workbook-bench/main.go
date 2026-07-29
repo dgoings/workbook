@@ -35,6 +35,19 @@ type options struct {
 	outputJSON     string
 	outputMarkdown string
 	phase          string
+	scenarioFlags  stringListFlag
+	scenarios      []string
+}
+
+type stringListFlag []string
+
+func (values *stringListFlag) String() string {
+	return strings.Join(*values, ",")
+}
+
+func (values *stringListFlag) Set(value string) error {
+	*values = append(*values, value)
+	return nil
 }
 
 type workbookVersionResult struct {
@@ -93,6 +106,7 @@ func newFlagSet(stderr io.Writer) (*flag.FlagSet, *options) {
 	flags.StringVar(&options.outputJSON, "output-json", "", "JSON report path")
 	flags.StringVar(&options.outputMarkdown, "output-markdown", "", "Markdown report path")
 	flags.StringVar(&options.phase, "phase", "baseline", "report phase (baseline or acceptance)")
+	flags.Var(&options.scenarioFlags, "scenario", "benchmark scenario to run (repeatable)")
 	return flags, options
 }
 
@@ -139,6 +153,14 @@ func validateOptions(flags *flag.FlagSet, options *options) error {
 	if options.phase == "acceptance" && (options.tasks < 500 || options.operations < 20) {
 		return fmt.Errorf("acceptance requires at least 500 tasks and 20 operations per task")
 	}
+	scenarios, err := perf.ResolveScenarios(options.scenarioFlags)
+	if err != nil {
+		return err
+	}
+	if containsRemoteScenario(scenarios) && (options.tasks < 500 || options.operations < 20) {
+		return fmt.Errorf("remote scenarios require at least 500 tasks and 20 operations per task")
+	}
+	options.scenarios = scenarios
 
 	jsonPath, err := filepath.Abs(options.outputJSON)
 	if err != nil {
@@ -180,35 +202,49 @@ func runBenchmark(ctx context.Context, options options) (perf.Report, error) {
 		CommandTimeout: options.timeout,
 	}
 
-	cold, err := perf.RunColdCLI(ctx, runSpec, filepath.Join(fixtureRoot, "cold"))
-	if err != nil {
-		return perf.Report{}, fmt.Errorf("run cold CLI scenarios: %w", err)
+	var scenarios []perf.ScenarioResult
+	var repositoryMetrics perf.RepositoryMetrics
+	if hasScenarioWithPrefix(options.scenarios, "cli-") {
+		cold, err := perf.RunColdCLI(ctx, runSpec, filepath.Join(fixtureRoot, "cold"))
+		if err != nil {
+			return perf.Report{}, fmt.Errorf("run cold CLI scenarios: %w", err)
+		}
+		scenarios = append(scenarios, selectedScenarioResults(cold, options.scenarios)...)
 	}
-	warm, err := perf.RunWarmHTTP(ctx, runSpec, filepath.Join(fixtureRoot, "warm"))
-	if err != nil {
-		return perf.Report{}, fmt.Errorf("run warm HTTP scenarios: %w", err)
+	if hasScenarioWithPrefix(options.scenarios, "api-") {
+		warm, err := perf.RunWarmHTTP(ctx, runSpec, filepath.Join(fixtureRoot, "warm"))
+		if err != nil {
+			return perf.Report{}, fmt.Errorf("run warm HTTP scenarios: %w", err)
+		}
+		scenarios = append(scenarios, selectedScenarioResults(warm, options.scenarios)...)
 	}
-
-	fixtureContext, cancelFixture := context.WithTimeout(ctx, options.timeout)
-	repositoryFixture, err := perf.BuildFixture(fixtureContext, filepath.Join(fixtureRoot, "repository"), fixtureSpec)
-	cancelFixture()
-	if err != nil {
-		return perf.Report{}, fmt.Errorf("build repository fixture: %w", err)
+	if hasRepositoryScenario(options.scenarios) {
+		fixtureContext, cancelFixture := context.WithTimeout(ctx, options.timeout)
+		repositoryFixture, err := perf.BuildFixture(fixtureContext, filepath.Join(fixtureRoot, "repository"), fixtureSpec)
+		cancelFixture()
+		if err != nil {
+			return perf.Report{}, fmt.Errorf("build repository fixture: %w", err)
+		}
+		metrics, repositoryScenarios, err := perf.MeasureRepository(
+			ctx,
+			options.workbookBinary,
+			repositoryFixture.Root,
+			options.timeout,
+		)
+		if err != nil {
+			return perf.Report{}, fmt.Errorf("measure repository scenarios: %w", err)
+		}
+		repositoryMetrics = metrics
+		scenarios = append(scenarios, selectedScenarioResults(repositoryScenarios, options.scenarios)...)
 	}
-	repositoryMetrics, repositoryScenarios, err := perf.MeasureRepository(
-		ctx,
-		options.workbookBinary,
-		repositoryFixture.Root,
-		options.timeout,
-	)
-	if err != nil {
-		return perf.Report{}, fmt.Errorf("measure repository scenarios: %w", err)
+	remoteScenarios := selectedRemoteScenarioNames(options.scenarios)
+	if len(remoteScenarios) != 0 {
+		remote, err := perf.RunRemoteScenarios(ctx, runSpec, filepath.Join(fixtureRoot, "remote"), remoteScenarios)
+		if err != nil {
+			return perf.Report{}, fmt.Errorf("run remote sync scenarios: %w", err)
+		}
+		scenarios = append(scenarios, remote...)
 	}
-
-	scenarios := make([]perf.ScenarioResult, 0, len(cold)+len(warm)+len(repositoryScenarios))
-	scenarios = append(scenarios, cold...)
-	scenarios = append(scenarios, warm...)
-	scenarios = append(scenarios, repositoryScenarios...)
 	return perf.Report{
 		Format:      perf.ReportFormat,
 		Version:     perf.ReportVersion,
@@ -224,6 +260,53 @@ func runBenchmark(ctx context.Context, options options) (perf.Report, error) {
 		Scenarios:  scenarios,
 		Repository: repositoryMetrics,
 	}, nil
+}
+
+func hasScenarioWithPrefix(scenarios []string, prefix string) bool {
+	for _, scenario := range scenarios {
+		if strings.HasPrefix(scenario, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasRepositoryScenario(scenarios []string) bool {
+	for _, scenario := range scenarios {
+		if strings.HasPrefix(scenario, "projection-") || scenario == "sync-initial-local-bare" || scenario == "sync-unchanged-local-bare" {
+			return true
+		}
+	}
+	return false
+}
+
+func selectedScenarioResults(results []perf.ScenarioResult, selected []string) []perf.ScenarioResult {
+	wanted := make(map[string]struct{}, len(selected))
+	for _, name := range selected {
+		wanted[name] = struct{}{}
+	}
+	filtered := make([]perf.ScenarioResult, 0, len(results))
+	for _, result := range results {
+		if _, selected := wanted[result.Name]; selected {
+			filtered = append(filtered, result)
+		}
+	}
+	return filtered
+}
+
+func containsRemoteScenario(scenarios []string) bool {
+	return len(selectedRemoteScenarioNames(scenarios)) != 0
+}
+
+func selectedRemoteScenarioNames(scenarios []string) []string {
+	remote := make([]string, 0, len(scenarios))
+	for _, scenario := range scenarios {
+		switch scenario {
+		case "sync-fresh-checkout", "sync-initial-publication", "sync-already-synchronized", "sync-small-changed-ref-set", "sync-divergent-tips", "sync-malformed-local-tip", "sync-malformed-remote-tip":
+			remote = append(remote, scenario)
+		}
+	}
+	return remote
 }
 
 func benchmarkEnvironment(ctx context.Context, workbookBinary string, commandTimeout time.Duration) (perf.Environment, error) {

@@ -41,6 +41,7 @@ func TestRunResolvesRelativeWorkbookBinaryAndWritesCompletePerformanceReport(t *
 		"--samples", "1",
 		"--timeout", "5s",
 		"--object-format", "sha1",
+		"--scenario", "cli-create",
 		"--output-json", jsonPath,
 		"--output-markdown", markdownPath,
 	}, &stdout, &stderr)
@@ -71,25 +72,7 @@ func TestRunResolvesRelativeWorkbookBinaryAndWritesCompletePerformanceReport(t *
 		gotScenarios[index] = scenario.Name
 	}
 	sort.Strings(gotScenarios)
-	wantScenarios := []string{
-		"api-burst-independent-10",
-		"api-burst-same-task-10",
-		"api-update",
-		"cli-burst-independent-10",
-		"cli-burst-same-task-10",
-		"cli-create",
-		"cli-delete",
-		"cli-depend",
-		"cli-free",
-		"cli-move",
-		"cli-restore",
-		"cli-update",
-		"projection-rebuild",
-		"projection-refresh-one-changed",
-		"projection-refresh-unchanged",
-		"sync-initial-local-bare",
-		"sync-unchanged-local-bare",
-	}
+	wantScenarios := []string{"cli-create"}
 	if !reflect.DeepEqual(gotScenarios, wantScenarios) {
 		t.Fatalf("scenario names = %#v, want %#v", gotScenarios, wantScenarios)
 	}
@@ -100,6 +83,109 @@ func TestRunResolvesRelativeWorkbookBinaryAndWritesCompletePerformanceReport(t *
 	}
 	if len(markdown) == 0 {
 		t.Fatal("Markdown report is empty")
+	}
+}
+
+func TestScenarioFlagParsesRepeatedSelectors(t *testing.T) {
+	workbookBinary := buildWorkbookBinary(t)
+	outputRoot := t.TempDir()
+	var stderr bytes.Buffer
+	flags, _ := newFlagSet(&stderr)
+	if err := flags.Parse([]string{
+		"--workbook", workbookBinary,
+		"--scenario", "sync-fresh-checkout",
+		"--scenario", "cli-update",
+		"--output-json", filepath.Join(outputRoot, "report.json"),
+		"--output-markdown", filepath.Join(outputRoot, "report.md"),
+	}); err != nil {
+		t.Fatalf("parse repeated scenario flags: %v", err)
+	}
+}
+
+func TestRunBenchmarkRunsOnlySelectedRemoteScenario(t *testing.T) {
+	report, err := runBenchmark(context.Background(), options{
+		workbookBinary: buildWorkbookBinary(t),
+		tasks:          10,
+		operations:     4,
+		samples:        1,
+		timeout:        5 * time.Second,
+		objectFormat:   "sha1",
+		phase:          "baseline",
+		scenarios:      []string{"sync-fresh-checkout"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Scenarios) != 1 || report.Scenarios[0].Name != "sync-fresh-checkout" {
+		t.Fatalf("remote-only scenarios = %#v, want fresh checkout only", report.Scenarios)
+	}
+	if report.Scenarios[0].Target == nil || len(report.Scenarios[0].Samples) != 1 {
+		t.Fatalf("remote scenario evidence = %#v, want target and sample", report.Scenarios[0])
+	}
+}
+
+func TestValidateOptionsRejectsInvalidScenarioSelectors(t *testing.T) {
+	workbookBinary := buildWorkbookBinary(t)
+	tests := []struct {
+		name       string
+		selectors  []string
+		tasks      string
+		operations string
+		want       string
+	}{
+		{
+			name:       "duplicate",
+			selectors:  []string{"cli-update", "cli-update"},
+			tasks:      "10",
+			operations: "4",
+			want:       "duplicate scenario \"cli-update\"",
+		},
+		{
+			name:       "unknown",
+			selectors:  []string{"not-a-scenario"},
+			tasks:      "10",
+			operations: "4",
+			want:       "unknown scenario \"not-a-scenario\"",
+		},
+		{
+			name:       "remote workload below minimum",
+			selectors:  []string{"sync-fresh-checkout"},
+			tasks:      "499",
+			operations: "20",
+			want:       "remote scenarios require at least 500 tasks and 20 operations per task",
+		},
+		{
+			name:       "remote history below minimum",
+			selectors:  []string{"sync-fresh-checkout"},
+			tasks:      "500",
+			operations: "19",
+			want:       "remote scenarios require at least 500 tasks and 20 operations per task",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			outputRoot := t.TempDir()
+			var stderr bytes.Buffer
+			flags, options := newFlagSet(&stderr)
+			args := []string{
+				"--workbook", workbookBinary,
+				"--tasks", test.tasks,
+				"--operations", test.operations,
+				"--output-json", filepath.Join(outputRoot, "report.json"),
+				"--output-markdown", filepath.Join(outputRoot, "report.md"),
+			}
+			for _, selector := range test.selectors {
+				args = append(args, "--scenario", selector)
+			}
+			if err := flags.Parse(args); err != nil {
+				t.Fatalf("parse scenario flags: %v", err)
+			}
+			err := validateOptions(flags, options)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("validateOptions error = %v, want %q", err, test.want)
+			}
+		})
 	}
 }
 

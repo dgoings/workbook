@@ -26,6 +26,13 @@ type Targets struct {
 	BurstMilliseconds   float64 `json:"burstMilliseconds"`
 }
 
+// ScenarioTarget sets the maximum runtime and exclusive Git process limit for
+// one measured scenario.
+type ScenarioTarget struct {
+	MaxMilliseconds float64 `json:"maxMilliseconds"`
+	MaxGitProcesses int     `json:"maxGitProcesses"`
+}
+
 type Sample struct {
 	Duration     time.Duration `json:"-"`
 	Milliseconds float64       `json:"milliseconds"`
@@ -45,10 +52,12 @@ type Summary struct {
 }
 
 type ScenarioResult struct {
-	Name    string   `json:"name"`
-	Surface string   `json:"surface"`
-	Samples []Sample `json:"samples"`
-	Summary Summary  `json:"summary"`
+	Name    string          `json:"name"`
+	Surface string          `json:"surface"`
+	Target  *ScenarioTarget `json:"target,omitempty"`
+	Outcome string          `json:"outcome,omitempty"`
+	Samples []Sample        `json:"samples"`
+	Summary Summary         `json:"summary"`
 }
 
 type RepositoryMetrics struct {
@@ -86,6 +95,7 @@ func Summarize(samples []Sample) Summary {
 	var milliseconds []float64
 	var gitProcesses []int
 	for _, sample := range samples {
+		gitProcesses = append(gitProcesses, sample.GitProcesses)
 		if sample.TimedOut {
 			summary.TimedOut++
 			continue
@@ -95,19 +105,20 @@ func Summarize(samples []Sample) Summary {
 		}
 		summary.Completed++
 		milliseconds = append(milliseconds, durationMilliseconds(sample))
-		gitProcesses = append(gitProcesses, sample.GitProcesses)
+	}
+	sort.Ints(gitProcesses)
+	if len(gitProcesses) != 0 {
+		summary.P95GitProcesses = gitProcesses[nearestRankIndex(len(gitProcesses), 0.95)]
 	}
 	if len(milliseconds) == 0 {
 		return summary
 	}
 
 	sort.Float64s(milliseconds)
-	sort.Ints(gitProcesses)
 	summary.MinMilliseconds = milliseconds[0]
 	summary.MedianMilliseconds = median(milliseconds)
 	p95Index := nearestRankIndex(len(milliseconds), 0.95)
 	summary.P95Milliseconds = milliseconds[p95Index]
-	summary.P95GitProcesses = gitProcesses[p95Index]
 	return summary
 }
 
@@ -132,14 +143,19 @@ func (r Report) WriteMarkdown(w io.Writer) error {
 	if _, err := fmt.Fprintln(w, "\n## Scenarios"); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(w, "| Scenario | Surface | Completed | Timed out | Min (ms) | Median (ms) | P95 (ms) | P95 Git processes |"); err != nil {
+	if _, err := fmt.Fprintln(w, "| Scenario | Surface | Completed | Timed out | Min (ms) | Median (ms) | P95 (ms) | P95 Git processes | Target time (ms) | Target Git processes | Outcome |"); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(w, "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |"); err != nil {
+	if _, err := fmt.Fprintln(w, "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"); err != nil {
 		return err
 	}
 	for _, scenario := range r.Scenarios {
-		if _, err := fmt.Fprintf(w, "| %s | %s | %d | %d | %.2f | %.2f | %.2f | %d |\n", scenario.Name, scenario.Surface, scenario.Summary.Completed, scenario.Summary.TimedOut, scenario.Summary.MinMilliseconds, scenario.Summary.MedianMilliseconds, scenario.Summary.P95Milliseconds, scenario.Summary.P95GitProcesses); err != nil {
+		targetMilliseconds, targetGitProcesses := "-", "-"
+		if scenario.Target != nil {
+			targetMilliseconds = fmt.Sprintf("%.2f", scenario.Target.MaxMilliseconds)
+			targetGitProcesses = fmt.Sprintf("< %d", scenario.Target.MaxGitProcesses)
+		}
+		if _, err := fmt.Fprintf(w, "| %s | %s | %d | %d | %.2f | %.2f | %.2f | %d | %s | %s | %s |\n", scenario.Name, scenario.Surface, scenario.Summary.Completed, scenario.Summary.TimedOut, scenario.Summary.MinMilliseconds, scenario.Summary.MedianMilliseconds, scenario.Summary.P95Milliseconds, scenario.Summary.P95GitProcesses, targetMilliseconds, targetGitProcesses, scenario.Outcome); err != nil {
 			return err
 		}
 	}
@@ -155,11 +171,42 @@ func (r Report) normalized() Report {
 			scenario.Samples[j].Milliseconds = durationMilliseconds(scenario.Samples[j])
 		}
 		scenario.Summary = Summarize(scenario.Samples)
+		scenario.Outcome = scenarioOutcome(*scenario)
 	}
 	sort.SliceStable(r.Scenarios, func(i, j int) bool {
 		return r.Scenarios[i].Name < r.Scenarios[j].Name
 	})
 	return r
+}
+
+func scenarioOutcome(scenario ScenarioResult) string {
+	if scenario.Target == nil {
+		return "not-evaluated"
+	}
+	if len(scenario.Samples) == 0 {
+		return "failed"
+	}
+	failed := false
+	missed := false
+	for _, sample := range scenario.Samples {
+		if sample.TimedOut {
+			return "timeout"
+		}
+		if sample.ExitCode != 0 || sample.Error != "" {
+			failed = true
+			continue
+		}
+		if durationMilliseconds(sample) > scenario.Target.MaxMilliseconds || sample.GitProcesses >= scenario.Target.MaxGitProcesses {
+			missed = true
+		}
+	}
+	if failed {
+		return "failed"
+	}
+	if missed {
+		return "miss"
+	}
+	return "pass"
 }
 
 func durationMilliseconds(sample Sample) float64 {
