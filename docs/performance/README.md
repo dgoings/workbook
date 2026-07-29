@@ -102,6 +102,8 @@ Each measured result must exactly report valid task and empty-failure totals,
 with full, cached, and five-changed counts respectively. The Git-process limit
 is exclusive: twelve processes is a miss.
 
+### Remote synchronization commands and evidence
+
 Build the measured binary once, then run each object format at most once. These
 commands select only the seven remote scenarios and write separate reports;
 they do not replace the incomplete whole-harness record above.
@@ -175,6 +177,26 @@ two affected product paths at 9 and 18 Git processes after removing a redundant
 object-width probe and fetch auto-maintenance. That test demonstrates the
 constant process shape now meets the approved exclusive limits; it is not a
 replacement 500-by-20 acceptance sample.
+
+### 2026-07-29 semantic history validation evidence
+
+The measured product binary was built once. Each supported object format then
+received one acceptance invocation with 500 active tasks, exactly 20 operations
+per task, one sample, and a 60-second command timeout.
+
+| Format | Evidence | Outcome |
+| --- | --- | --- |
+| SHA-1 | [attempt record](2026-07-29-history-validation-sha1-attempt.md) | `go run` could not read the sandboxed default Go build cache, so the harness aborted before fixture construction or report assembly. No retry or replacement was made. |
+| SHA-256 | [JSON](2026-07-29-history-validation-sha256.json), [Markdown](2026-07-29-history-validation-sha256.md) | All three contracts passed: full 2,185.65 ms / 7 Git processes; cached unchanged 116.71 ms / 4; five changed 166.03 ms / 7. |
+
+The SHA-256 full audit met its inclusive 10-second time target and exclusive
+`<12` process target. Cached unchanged met 500 milliseconds and `<12`; five
+changed met 1 second and `<12`. None timed out or failed. The SHA-256 invocation
+used the same measured product binary as the SHA-1 attempt and set only the
+writable Go build-cache location for the harness compilation; setup and harness
+compilation are outside every measured sample.
+
+Neither acceptance invocation was retried, tuned, or replaced.
 
 ## Reading the reports
 
