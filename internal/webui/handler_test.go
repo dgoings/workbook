@@ -560,6 +560,15 @@ setTimeout(async () => {
   if (!detailStatus.textContent.includes("Could not copy task ID") || !detailStatus.textContent.includes(taskID) || clipboardWrites.length !== 2) {
     throw new Error("detail copy failure did not provide manual-copy feedback");
   }
+
+  const backLink = findElement(detailCopy.closest(".task-route"), (element) => element.tagName === "A" && element.href === "/");
+  await documentEventListeners.click(clickEvent(backLink));
+  windowTimeouts
+    .filter((timer) => !timer.canceled && timer.delay === 4000)
+    .forEach((timer) => { timer.canceled = true; timer.callback(); });
+  if (copyStatus.textContent || detailStatus.textContent) {
+    throw new Error("copy feedback remained stale after board-detail-board timer lifecycle");
+  }
 }, 0);
 `
 	command := exec.Command(node, "-e", program)

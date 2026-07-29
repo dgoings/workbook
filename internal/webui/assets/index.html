@@ -138,7 +138,7 @@
       const boardCopyStatus = boardView.querySelector("[data-copy-status]");
       const updated = document.querySelector("[data-updated]");
       let activeDrag = null;
-      let copyFeedbackTimer = null;
+      const copyFeedbackTimers = new WeakMap();
       let copySuppressionTimer = null;
       let copySuppressedTaskID = null;
       let latestTasks = [];
@@ -158,14 +158,16 @@
         return control;
       }
       function showCopyStatus(status, message, kind) {
-        if (copyFeedbackTimer !== null) window.clearTimeout(copyFeedbackTimer);
+        const activeTimer = copyFeedbackTimers.get(status);
+        if (activeTimer !== undefined) window.clearTimeout(activeTimer);
         status.dataset.kind = kind;
         text(status, message);
-        copyFeedbackTimer = window.setTimeout(() => {
+        const timer = window.setTimeout(() => {
           text(status, "");
           delete status.dataset.kind;
-          copyFeedbackTimer = null;
+          copyFeedbackTimers.delete(status);
         }, 4000);
+        copyFeedbackTimers.set(status, timer);
       }
       async function copyTaskID(taskID, status) {
         try {
