@@ -534,7 +534,7 @@ func TestHandlerClientPlacementClampsSameColumnPointerGapsToSamePriorityPeers(t 
 	}
 
 	program := clientDOMHarness("/", string(document)) + script + `
-setTimeout(() => {
+setTimeout(async () => {
   const ready = boardLists.find((list) => list.dataset.status === "ready");
   const cards = ready.querySelectorAll(".task-card");
   cards.forEach((item, index) => { item.rect = { top: index * 100, bottom: index * 100 + 80 }; });
@@ -574,6 +574,20 @@ setTimeout(() => {
   const lowIndex = ready.children.indexOf(low);
   if (!prevented || markerIndex !== lastMediumIndex + 1 || markerIndex !== lowIndex - 1) {
     throw new Error("bottom-column drop did not clamp after the last medium-priority peer");
+  }
+  await documentEventListeners.drop({
+    target: low,
+    clientY: low.rect.bottom - 1,
+    dataTransfer,
+    preventDefault() {}
+  });
+  const mutation = fetchCalls.find((call) => call.options.method === "PATCH");
+  if (!mutation || mutation.url !== "/api/tasks/" + encodeURIComponent(` + strconv.Quote(moved.ID) + `) + "/position") {
+    throw new Error("same-column lower-boundary drop did not call the position endpoint");
+  }
+  const body = JSON.parse(mutation.options.body);
+  if (body.status !== "ready" || body.after !== ` + strconv.Quote(firstMedium.ID) + ` || body.before) {
+    throw new Error("same-column lower-boundary drop did not send the last same-priority peer as after");
   }
 }, 0);
 `
@@ -1032,6 +1046,22 @@ func TestHandlerPositionsTask(t *testing.T) {
 	if gotID != want.ID || gotInput.Status != core.StatusInProgress ||
 		gotInput.Before != "WB-01J00000000000000000000002" || gotInput.After != "" {
 		t.Fatalf("position callback = %q/%#v", gotID, gotInput)
+	}
+	assertTaskMutationDocument(t, response, want)
+
+	response = requestJSON(
+		t,
+		handler,
+		http.MethodPatch,
+		"/api/tasks/"+want.ID+"/position",
+		`{"status":"ready","after":"WB-01J00000000000000000000003"}`,
+	)
+	if response.Code != http.StatusOK {
+		t.Fatalf("PATCH position after status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if gotID != want.ID || gotInput.Status != core.StatusReady ||
+		gotInput.Before != "" || gotInput.After != "WB-01J00000000000000000000003" {
+		t.Fatalf("position after callback = %q/%#v", gotID, gotInput)
 	}
 	assertTaskMutationDocument(t, response, want)
 }

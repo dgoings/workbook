@@ -708,6 +708,118 @@ func TestServicePlaceRejectsAnchorWithDifferentPriorityWithoutWriting(t *testing
 	}
 }
 
+func TestServicePlaceRejectsUnrepresentableTiedRankGapsWithoutWriting(t *testing.T) {
+	tests := []struct {
+		name  string
+		moved Snapshot
+		left  Snapshot
+		right Snapshot
+		input PlaceInput
+	}{
+		{
+			name: "before anchor",
+			moved: serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E4", TaskData{
+				Title: "moved", Status: StatusReady, Priority: PriorityHigh, Rank: "9/1",
+			}),
+			left: serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E2", TaskData{
+				Title: "left", Status: StatusInProgress, Priority: PriorityHigh, Rank: "2/1",
+			}),
+			right: serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E3", TaskData{
+				Title: "anchor", Status: StatusInProgress, Priority: PriorityHigh, Rank: "2/1",
+			}),
+			input: PlaceInput{Status: StatusInProgress, Before: "WB-01K0M6B8A4FTT8C39MXXYTW7E3"},
+		},
+		{
+			name: "after anchor",
+			moved: serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E1", TaskData{
+				Title: "moved", Status: StatusReady, Priority: PriorityHigh, Rank: "9/1",
+			}),
+			left: serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E2", TaskData{
+				Title: "anchor", Status: StatusInProgress, Priority: PriorityHigh, Rank: "2/1",
+			}),
+			right: serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E3", TaskData{
+				Title: "right", Status: StatusInProgress, Priority: PriorityHigh, Rank: "2/1",
+			}),
+			input: PlaceInput{Status: StatusInProgress, After: "WB-01K0M6B8A4FTT8C39MXXYTW7E2"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := newMemoryTaskStore(test.moved, test.left, test.right)
+			ids := &sequenceIDSource{values: []string{
+				"01K0M6B8A4FTT8C39MXXYTW7E5",
+				"01K0M6B8A4FTT8C39MXXYTW7E6",
+			}}
+			service := serviceUnderTest(store, ids)
+
+			_, err := service.PlaceMutation(context.Background(), test.moved.State.TaskID, test.input)
+			if got, want := CategoryOf(err), CategoryStaleWrite; got != want {
+				t.Errorf("PlaceMutation() error category = %q, want %q (error: %v)", got, want, err)
+			}
+			if got, want := len(store.writes), 0; got != want {
+				t.Errorf("PlaceMutation() writes = %d, want %d", got, want)
+			}
+			if got, want := ids.calls, 0; got != want {
+				t.Errorf("PlaceMutation() ID requests = %d, want %d", got, want)
+			}
+		})
+	}
+}
+
+func TestServicePlaceRepresentsTiedRankGapWhenMovedIDSortsBetweenAnchors(t *testing.T) {
+	tests := []struct {
+		name  string
+		input PlaceInput
+	}{
+		{
+			name:  "before anchor",
+			input: PlaceInput{Status: StatusInProgress, Before: "WB-01K0M6B8A4FTT8C39MXXYTW7E4"},
+		},
+		{
+			name:  "after anchor",
+			input: PlaceInput{Status: StatusInProgress, After: "WB-01K0M6B8A4FTT8C39MXXYTW7E2"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			moved := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E3", TaskData{
+				Title: "moved", Status: StatusReady, Priority: PriorityHigh, Rank: "9/1",
+			})
+			left := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E2", TaskData{
+				Title: "left", Status: StatusInProgress, Priority: PriorityHigh, Rank: "2/1",
+			})
+			right := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E4", TaskData{
+				Title: "right", Status: StatusInProgress, Priority: PriorityHigh, Rank: "2/1",
+			})
+			store := newMemoryTaskStore(moved, left, right)
+			service := serviceUnderTest(store, &sequenceIDSource{values: []string{
+				"01K0M6B8A4FTT8C39MXXYTW7E5",
+				"01K0M6B8A4FTT8C39MXXYTW7E6",
+			}})
+
+			result, err := service.PlaceMutation(context.Background(), moved.State.TaskID, test.input)
+			if err != nil {
+				t.Fatalf("PlaceMutation() error = %v", err)
+			}
+			if got, want := result.Task.Rank, "2/1"; got != want {
+				t.Fatalf("PlaceMutation() rank = %q, want %q", got, want)
+			}
+			if got, want := len(store.writes), 1; got != want {
+				t.Fatalf("PlaceMutation() writes = %d, want %d", got, want)
+			}
+			if got, want := store.writes[0].parent.State.TaskID, moved.State.TaskID; got != want {
+				t.Fatalf("PlaceMutation() wrote task %q, want %q", got, want)
+			}
+			assertOperations(t, store.writes[0].pack.Operations, []Operation{
+				{ID: "01K0M6B8A4FTT8C39MXXYTW7E5", Type: OperationFieldSet, Field: "status", Value: "in-progress"},
+				{ID: "01K0M6B8A4FTT8C39MXXYTW7E6", Type: OperationFieldSet, Field: "rank", Value: "2/1"},
+			})
+		})
+	}
+}
+
 func TestServiceMovePlacesTaskBetweenAnchorAndNeighborWithoutWritingAnotherTask(t *testing.T) {
 	moved := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E1", TaskData{Title: "moved", Status: StatusReady, Priority: PriorityHigh, Rank: "9/1"})
 	previous := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E2", TaskData{Title: "previous", Status: StatusReady, Priority: PriorityHigh, Rank: "2/1"})

@@ -297,7 +297,7 @@ func (s Service) MoveMutation(ctx context.Context, idOrPrefix string, input Move
 	if err != nil {
 		return MutationResult{}, err
 	}
-	rank, err := movedRank(snapshots, parent.State.TaskID, anchor.State.Task, input.Before != "")
+	rank, err := movedRank(snapshots, parent.State.TaskID, anchor.State.TaskID, anchor.State.Task, input.Before != "")
 	if err != nil {
 		return MutationResult{}, err
 	}
@@ -358,7 +358,7 @@ func (s Service) PlaceMutation(ctx context.Context, idOrPrefix string, input Pla
 			anchor.State.Task.Priority != parent.State.Task.Priority {
 			return MutationResult{}, Errorf(CategoryValidation, "placement anchor must be an active different task in the destination status and priority bucket")
 		}
-		rank, err = movedRank(snapshots, parent.State.TaskID, anchor.State.Task, input.Before != "")
+		rank, err = movedRank(snapshots, parent.State.TaskID, anchor.State.TaskID, anchor.State.Task, input.Before != "")
 		if err != nil {
 			return MutationResult{}, err
 		}
@@ -697,14 +697,15 @@ func nextRank(snapshots []Snapshot, status Status, priority Priority) (string, e
 	return formatRank(new(big.Rat).Add(maximum, big.NewRat(1, 1))), nil
 }
 
-func movedRank(snapshots []Snapshot, movedID string, anchor TaskData, before bool) (string, error) {
+func movedRank(snapshots []Snapshot, movedID, anchorID string, anchor TaskData, before bool) (string, error) {
 	anchorRank, err := parseRank(anchor.Rank)
 	if err != nil {
 		return "", Errorf(CategoryCorruptData, "anchor task has invalid rank %q", anchor.Rank)
 	}
 	var neighbor *big.Rat
+	var neighborID string
 	for _, snapshot := range snapshots {
-		if snapshot.State.TaskID == movedID {
+		if snapshot.State.TaskID == movedID || snapshot.State.TaskID == anchorID {
 			continue
 		}
 		task := snapshot.State.Task
@@ -715,12 +716,25 @@ func movedRank(snapshots []Snapshot, movedID string, anchor TaskData, before boo
 		if err != nil {
 			return "", Errorf(CategoryCorruptData, "task %q has invalid rank %q", snapshot.State.TaskID, task.Rank)
 		}
-		if before {
-			if rank.Cmp(anchorRank) < 0 && (neighbor == nil || rank.Cmp(neighbor) > 0) {
-				neighbor = rank
+		anchorComparison := rank.Cmp(anchorRank)
+		if anchorComparison == 0 {
+			anchorComparison = strings.Compare(snapshot.State.TaskID, anchorID)
+		}
+		neighborComparison := 0
+		if neighbor != nil {
+			neighborComparison = rank.Cmp(neighbor)
+			if neighborComparison == 0 {
+				neighborComparison = strings.Compare(snapshot.State.TaskID, neighborID)
 			}
-		} else if rank.Cmp(anchorRank) > 0 && (neighbor == nil || rank.Cmp(neighbor) < 0) {
+		}
+		if before {
+			if anchorComparison < 0 && (neighbor == nil || neighborComparison > 0) {
+				neighbor = rank
+				neighborID = snapshot.State.TaskID
+			}
+		} else if anchorComparison > 0 && (neighbor == nil || neighborComparison < 0) {
 			neighbor = rank
+			neighborID = snapshot.State.TaskID
 		}
 	}
 	if neighbor == nil {
@@ -730,6 +744,16 @@ func movedRank(snapshots []Snapshot, movedID string, anchor TaskData, before boo
 		nextInteger := new(big.Int).Quo(anchorRank.Num(), anchorRank.Denom())
 		nextInteger.Add(nextInteger, big.NewInt(1))
 		return formatRank(new(big.Rat).SetInt(nextInteger)), nil
+	}
+	if neighbor.Cmp(anchorRank) == 0 {
+		representable := strings.Compare(neighborID, movedID) < 0 && strings.Compare(movedID, anchorID) < 0
+		if !before {
+			representable = strings.Compare(anchorID, movedID) < 0 && strings.Compare(movedID, neighborID) < 0
+		}
+		if !representable {
+			return "", Errorf(CategoryStaleWrite, "cannot place task in an equal-rank gap without reordering another task")
+		}
+		return formatRank(anchorRank), nil
 	}
 	return formatRank(new(big.Rat).Quo(new(big.Rat).Add(anchorRank, neighbor), big.NewRat(2, 1))), nil
 }
