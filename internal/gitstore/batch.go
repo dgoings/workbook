@@ -58,13 +58,24 @@ func (r *Repository) readTaskHeadsPartial(
 	config core.ProjectConfig,
 	heads []TaskHead,
 ) ([]tipReadResult, error) {
+	return r.readTaskHeadsPartialBatch(ctx, config, heads, false)
+}
+
+// readTaskHeadsPartialBatch optionally runs an empty batch so fixed-shape
+// callers retain the same framing and command-failure boundary with no objects.
+func (r *Repository) readTaskHeadsPartialBatch(
+	ctx context.Context,
+	config core.ProjectConfig,
+	heads []TaskHead,
+	runEmpty bool,
+) ([]tipReadResult, error) {
 	if err := r.verifyIdentity(ctx); err != nil {
 		return nil, err
 	}
 	if err := r.validateRepositoryConfig(config); err != nil {
 		return nil, err
 	}
-	if len(heads) == 0 {
+	if len(heads) == 0 && !runEmpty {
 		return []tipReadResult{}, nil
 	}
 
@@ -97,7 +108,7 @@ func (r *Repository) readTaskHeadsPartial(
 			head.ObjectID,
 		)
 	}
-	if len(validRequests) == 0 {
+	if len(validRequests) == 0 && !runEmpty {
 		return results, nil
 	}
 

@@ -252,6 +252,73 @@ func TestReadTaskHistoriesUsesConstantBatchedGitCommands(t *testing.T) {
 	}
 }
 
+func TestReadTaskHistoriesUsesFixedTransportWhenAllTipsFail(t *testing.T) {
+	// Mutation caught: returning before the empty graph and candidate batch when every tip is invalid.
+	repository, config := writeRepository(t)
+	first := writeHistoryForTask(t, repository, config, 1800, 1)
+	second := writeHistoryForTask(t, repository, config, 1900, 1)
+	if _, err := repository.ListTaskHeads(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+	blob := gitOutputWithInput(t, repository, []byte("not a commit"), "hash-object", "-w", "--stdin")
+
+	var commands [][]string
+	repository.commandObserver = func(args []string) {
+		commands = append(commands, append([]string(nil), args...))
+	}
+	results, err := repository.ReadTaskHistories(context.Background(), config, []TaskHistoryRequest{
+		{Head: TaskHead{TaskID: first[0].Operation.TaskID, ObjectID: blob}},
+		{Head: TaskHead{TaskID: second[0].Operation.TaskID, ObjectID: blob}},
+	})
+	if err != nil {
+		t.Fatalf("ReadTaskHistories() error = %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("results = %d, want 2", len(results))
+	}
+	for i, result := range results {
+		if result.Failure == nil || result.CheckedCommits != 1 {
+			t.Fatalf("results[%d] = %#v, want one checked commit and an attributed failure", i, result)
+		}
+	}
+	assertFixedHistoryTransportCommands(t, commands)
+}
+
+func TestReadTaskHistoriesUsesFixedTransportWhenBoundariesEqualHeads(t *testing.T) {
+	// Mutation caught: skipping the empty candidate batch when every boundary equals its head.
+	repository, config := writeRepository(t)
+	first := writeHistoryForTask(t, repository, config, 2400, 2)
+	second := writeHistoryForTask(t, repository, config, 2500, 2)
+
+	var commands [][]string
+	repository.commandObserver = func(args []string) {
+		commands = append(commands, append([]string(nil), args...))
+	}
+	results, err := repository.ReadTaskHistories(context.Background(), config, []TaskHistoryRequest{
+		{
+			Head:   TaskHead{TaskID: first[1].Operation.TaskID, ObjectID: first[1].Head},
+			StopAt: first[1].Head,
+		},
+		{
+			Head:   TaskHead{TaskID: second[1].Operation.TaskID, ObjectID: second[1].Head},
+			StopAt: second[1].Head,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ReadTaskHistories() error = %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("results = %d, want 2", len(results))
+	}
+	for i, result := range results {
+		if !result.BoundaryReached || result.CheckedCommits != 0 ||
+			len(result.Commits) != 0 || result.Failure != nil {
+			t.Fatalf("results[%d] = %#v, want reached head boundary with no candidates", i, result)
+		}
+	}
+	assertFixedHistoryTransportCommands(t, commands)
+}
+
 func TestReadTaskHistoriesSupportsSHA256ObjectIDs(t *testing.T) {
 	// Mutation caught: assuming every full Git object ID is exactly 40 hexadecimal characters.
 	repository, config := writeRepositoryWithObjectFormat(t, "sha256")
@@ -333,6 +400,17 @@ func TestReadTaskHistoriesRejectsInvalidRequestsBeforeTransport(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func assertFixedHistoryTransportCommands(t *testing.T, commands [][]string) {
+	t.Helper()
+	if got := countCommand(commands, "cat-file", "--batch"); got != 2 {
+		t.Fatalf("cat-file --batch commands = %d, want 2; commands = %v", got, commands)
+	}
+	wantGraphCommand := []string{"rev-list", "--reverse", "--topo-order", "--parents", "--stdin"}
+	if got := countCommand(commands, wantGraphCommand...); got != 1 {
+		t.Fatalf("history graph commands = %d, want 1; commands = %v", got, commands)
 	}
 }
 

@@ -115,10 +115,6 @@ func (r *Repository) ReadTaskHistories(
 		}
 		graphIndexes = append(graphIndexes, i)
 	}
-	if len(graphIndexes) == 0 {
-		return results, nil
-	}
-
 	var input bytes.Buffer
 	for _, index := range graphIndexes {
 		fmt.Fprintln(&input, requests[index].Head.ObjectID)
@@ -228,11 +224,7 @@ func (r *Repository) ReadTaskHistories(
 			})
 		}
 	}
-	if len(candidateHeads) == 0 {
-		return results, nil
-	}
-
-	commitResults, err := r.readTaskHeadsPartial(ctx, config, candidateHeads)
+	commitResults, err := r.readTaskHeadsPartialBatch(ctx, config, candidateHeads, true)
 	if err != nil {
 		return nil, err
 	}
