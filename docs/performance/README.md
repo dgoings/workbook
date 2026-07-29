@@ -198,6 +198,11 @@ compilation are outside every measured sample.
 
 Neither acceptance invocation was retried, tuned, or replaced.
 
+After these invocations, commit `c26f9a4` fixed reuse of a cached boundary from
+an older validator version. That path is not exercised by the fresh,
+current-version acceptance fixtures above, and the measured binary was not
+rebuilt or the evidence rerun after the fix.
+
 ## Reading the reports
 
 A completed harness run produces a versioned, machine-readable JSON report and a
