@@ -266,6 +266,47 @@ func TestHandlerRendersTaskAndNewTaskLinks(t *testing.T) {
 	}
 }
 
+func TestHandlerRendersTextLikeCopyableTaskIDControls(t *testing.T) {
+	tasks := boardTasks()
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	body := response.Body.String()
+	if _, ok := initialCardPrefixes(body)[tasks[0].ID]; !ok {
+		t.Fatalf("GET / does not retain initial actionable prefix for %q", tasks[0].ID)
+	}
+	for _, fragment := range []string{
+		`type="button"`,
+		`class="task-id-copy"`,
+		`data-copy-task-id="` + tasks[0].ID + `"`,
+		`aria-label="Copy full task ID ` + tasks[0].ID + `"`,
+		`<code>` + presentationForTasks(tasks)[0].IDPrefix + `</code>`,
+		`data-copy-status`,
+		`role="status"`,
+		`aria-live="polite"`,
+	} {
+		if !strings.Contains(body, fragment) {
+			t.Errorf("GET / body does not contain %q", fragment)
+		}
+	}
+	for _, fragment := range []string{
+		`.task-id-copy {`,
+		`border: 0`,
+		`background: transparent`,
+		`cursor: pointer`,
+		`padding: 0`,
+		`.task-id-copy:hover { color: #2457d6; }`,
+		`.task-id-copy:focus-visible`,
+	} {
+		if !strings.Contains(body, fragment) {
+			t.Errorf("copy control styling does not contain %q", fragment)
+		}
+	}
+}
+
 func TestHandlerRequiresCanonicalStatusChoiceForUnknownTask(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -432,6 +473,99 @@ setTimeout(() => {
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("execute rendered client navigation behavior: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerClientCopiesFullTaskIDsAndSeparatesDrag(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	tasks := boardTasks()[:1]
+	task := tasks[0]
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	document, err := json.Marshal(TasksDocument{
+		Format:       "workbook.tasks",
+		Version:      1,
+		Tasks:        tasks,
+		Presentation: presentationForTasks(tasks),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/", string(document)) + script + `
+setTimeout(async () => {
+  const taskID = ` + strconv.Quote(task.ID) + `;
+  const visibleID = ` + strconv.Quote(presentationForTasks(tasks)[0].IDPrefix) + `;
+  const boardCopy = boardLists.map((list) => findElement(list, (element) => element.dataset.copyTaskId === taskID)).find(Boolean);
+  if (!boardCopy || boardCopy.tagName !== "BUTTON") throw new Error("board did not render a copy button for the task ID");
+  if (!boardCopy.firstElementChild || boardCopy.firstElementChild.tagName !== "CODE" || boardCopy.firstElementChild.textContent !== visibleID) {
+    throw new Error("board copy control did not render the actionable task ID prefix");
+  }
+  if (!boardCopy.attributes["aria-label"].includes(taskID)) throw new Error("board copy control lacks the full-ID accessible label");
+  const clickEvent = (target) => ({
+    target,
+    button: 0,
+    defaultPrevented: false,
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+    preventDefault() { this.defaultPrevented = true; }
+  });
+
+  await documentEventListeners.click(clickEvent(boardCopy));
+  if (JSON.stringify(clipboardWrites) !== JSON.stringify([taskID])) {
+    throw new Error("board ID did not copy the full task ID");
+  }
+  if (copyStatus.attributes.role !== "status" ||
+      copyStatus.attributes["aria-live"] !== "polite" ||
+      copyStatus.textContent !== "Copied task ID " + taskID + ".") {
+    throw new Error("board copy did not render accessible success feedback");
+  }
+
+  clipboardWrites.splice(0);
+  const dataTransfer = { effectAllowed: "", setData() {} };
+  documentEventListeners.dragstart({ target: boardCopy, dataTransfer });
+  documentEventListeners.dragend({ target: boardCopy });
+  await documentEventListeners.click(clickEvent(boardCopy));
+  if (clipboardWrites.length !== 0) throw new Error("post-drag click copied the task ID");
+  await documentEventListeners.click(clickEvent(boardCopy));
+  if (JSON.stringify(clipboardWrites) !== JSON.stringify([taskID])) {
+    throw new Error("later intentional activation did not copy the full task ID");
+  }
+
+  const titleLink = findElement(boardCopy.closest(".task-card"), (element) => element.tagName === "A");
+  await documentEventListeners.click(clickEvent(titleLink));
+  const detailCopy = findElement(main, (element) => element.dataset.copyTaskId === taskID);
+  const detailStatus = detailCopy && detailCopy.closest(".task-route").querySelector("[data-copy-status]");
+  if (!detailCopy || !detailStatus) throw new Error("task detail did not render an ID copy control and local feedback");
+  await documentEventListeners.click(clickEvent(detailCopy));
+  if (JSON.stringify(clipboardWrites) !== JSON.stringify([taskID, taskID])) {
+    throw new Error("detail ID did not copy the full task ID");
+  }
+  if (detailStatus.textContent !== "Copied task ID " + taskID + ".") {
+    throw new Error("detail copy did not render view-local success feedback");
+  }
+
+  clipboardError = new Error("denied");
+  await documentEventListeners.click(clickEvent(detailCopy));
+  if (!detailStatus.textContent.includes("Could not copy task ID") || !detailStatus.textContent.includes(taskID) || clipboardWrites.length !== 2) {
+    throw new Error("detail copy failure did not provide manual-copy feedback");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("execute rendered client copy behavior: %v\n%s", err, output)
 	}
 }
 
@@ -796,12 +930,14 @@ class TestElement {
   setAttribute(name, value) { this.attributes[name] = String(value); }
   hasAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attributes, name); }
   addEventListener(name, listener) { this.eventListeners[name] = listener; }
-  closest(selector) {
-    for (let element = this; element; element = element.parentElement) {
-      if (selector === "a[href]" && element.tagName === "A" && element.href) return element;
-      if (selector === ".task-card" && element.className === "task-card") return element;
-      if (selector === "[data-drop-status]" && element.dataset.dropStatus) return element;
-      if (selector === "[data-status]" && element.dataset.status) return element;
+	  closest(selector) {
+	    for (let element = this; element; element = element.parentElement) {
+	      if (selector === "a[href]" && element.tagName === "A" && element.href) return element;
+	      if (selector === ".task-card" && element.className === "task-card") return element;
+	      if (selector === ".task-route" && element.className === "task-route") return element;
+	      if (selector === "[data-copy-task-id]" && Object.prototype.hasOwnProperty.call(element.dataset, "copyTaskId")) return element;
+	      if (selector === "[data-drop-status]" && element.dataset.dropStatus) return element;
+	      if (selector === "[data-status]" && element.dataset.status) return element;
     }
     return null;
   }
@@ -811,9 +947,10 @@ class TestElement {
     }
     return false;
   }
-  querySelector(selector) {
-    if (selector === "[data-stale]") return stale;
-    return null;
+	  querySelector(selector) {
+	    if (selector === "[data-stale]") return stale;
+	    if (selector === "[data-copy-status]") return findElement(this, (element) => Object.prototype.hasOwnProperty.call(element.dataset, "copyStatus"));
+	    return null;
   }
   querySelectorAll(selector) {
     const matches = [];
@@ -838,17 +975,26 @@ class TestElement {
   set value(value) { this._value = String(value); }
 }
 const main = new TestElement("main");
-const boardView = new TestElement("div");
-const stale = new TestElement("p");
-const updated = new TestElement("p");
+	const boardView = new TestElement("div");
+	const stale = new TestElement("p");
+	const copyStatus = new TestElement("p");
+	copyStatus.dataset.copyStatus = "";
+	copyStatus.setAttribute("role", "status");
+	copyStatus.setAttribute("aria-live", "polite");
+	const updated = new TestElement("p");
 const boardStatuses = ["backlog", "ready", "blocked", "in-progress", "in-review", "done"];
 const boardLists = boardStatuses.map((status) => {
   const element = new TestElement("div");
   element.dataset.status = status;
   element.dataset.dropStatus = status;
   return element;
-});
-const boardCounts = boardStatuses.map((status) => {
+	});
+	boardView.querySelector = (selector) => {
+	  if (selector === "[data-stale]") return stale;
+	  if (selector === "[data-copy-status]") return copyStatus;
+	  return null;
+	};
+	const boardCounts = boardStatuses.map((status) => {
   const element = new TestElement("span");
   element.dataset.count = status;
   return element;
@@ -868,12 +1014,33 @@ globalThis.document = {
   createDocumentFragment() { return new TestElement("fragment"); },
   addEventListener(name, listener) { documentEventListeners[name] = listener; }
 };
-const initialURL = new URL("http://127.0.0.1` + path + `");
-let intervalDelay = null;
-globalThis.window = {
-  location: { href: initialURL.href, origin: initialURL.origin },
-  addEventListener() {},
-  setInterval(_callback, delay) { intervalDelay = delay; }
+	const initialURL = new URL("http://127.0.0.1` + path + `");
+	let intervalDelay = null;
+	const clipboardWrites = [];
+	let clipboardError = null;
+	Object.defineProperty(globalThis, "navigator", { value: {
+	  clipboard: {
+	    async writeText(value) {
+	      if (clipboardError) throw clipboardError;
+	      clipboardWrites.push(value);
+	    }
+	  }
+	}, configurable: true });
+	const windowTimeouts = [];
+	let nextWindowTimeoutID = 1;
+	globalThis.window = {
+	  location: { href: initialURL.href, origin: initialURL.origin },
+	  addEventListener() {},
+	  setInterval(_callback, delay) { intervalDelay = delay; },
+	  setTimeout(callback, delay) {
+	    const timer = { id: nextWindowTimeoutID++, callback, delay, canceled: false };
+	    windowTimeouts.push(timer);
+	    return timer.id;
+	  },
+	  clearTimeout(id) {
+	    const timer = windowTimeouts.find((candidate) => candidate.id === id);
+	    if (timer) timer.canceled = true;
+	  }
 };
 const historyPaths = [];
 globalThis.history = {
@@ -1265,11 +1432,8 @@ func TestHandlerProvidesActionablePrefixesForRefresh(t *testing.T) {
 	if !strings.Contains(body, "document.presentation") {
 		t.Error("embedded refresh script does not read server presentation data")
 	}
-	if !strings.Contains(body, "text(id, idPrefix)") {
+	if !strings.Contains(body, "taskIDCopyControl(task.id, idPrefix)") {
 		t.Error("embedded refresh script does not render the server-provided ID prefix")
-	}
-	if strings.Contains(body, "text(id, task.id)") {
-		t.Error("embedded refresh script renders full task IDs instead of server-provided prefixes")
 	}
 }
 
@@ -1341,10 +1505,10 @@ func TestHandlerServesDragAndDropBoardControls(t *testing.T) {
 }
 
 func initialCardPrefixes(body string) map[string]string {
-	pattern := regexp.MustCompile(`(?s)<article class="task-card" tabindex="0" data-task-id="([^"]+)" data-priority="[^"]+" data-id-prefix="([^"]+)"[^>]*>\s*<div class="task-card__meta"><code>([^<]+)</code>`)
+	pattern := regexp.MustCompile(`(?s)<article class="task-card" tabindex="0" data-task-id="([^"]+)" data-priority="[^"]+" data-id-prefix="([^"]+)"[^>]*>\s*<div class="task-card__meta"><button type="button" class="task-id-copy" data-copy-task-id="([^"]+)" aria-label="Copy full task ID [^"]+"><code>([^<]+)</code>`)
 	cards := make(map[string]string)
 	for _, match := range pattern.FindAllStringSubmatch(body, -1) {
-		if match[2] == match[3] {
+		if match[1] == match[3] && match[2] == match[4] {
 			cards[match[1]] = match[2]
 		}
 	}

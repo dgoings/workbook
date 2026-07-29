@@ -1,6 +1,6 @@
 {{ define "task" }}
 <article class="task-card" tabindex="0" data-task-id="{{ .Task.ID }}" data-priority="{{ .Task.Priority }}" data-id-prefix="{{ .IDPrefix }}" draggable="true" aria-label="Move task {{ .Task.Title }} from {{ .Task.Status }}">
-  <div class="task-card__meta"><code>{{ .IDPrefix }}</code><span class="priority priority--{{ .Task.Priority }}">{{ .Task.Priority }}</span></div>
+  <div class="task-card__meta"><button type="button" class="task-id-copy" data-copy-task-id="{{ .Task.ID }}" aria-label="Copy full task ID {{ .Task.ID }}"><code>{{ .IDPrefix }}</code></button><span class="priority priority--{{ .Task.Priority }}">{{ .Task.Priority }}</span></div>
   <h3><a href="/tasks/{{ .Task.ID }}">{{ .Task.Title }}</a></h3>
   {{ if .Task.Description }}<p>{{ .Task.Description }}</p>{{ end }}
   {{ if .Task.Labels }}<div class="labels">{{ range .Task.Labels }}<span class="label">{{ . }}</span>{{ end }}</div>{{ end }}
@@ -29,7 +29,7 @@
     main { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 1.25rem; }
     .stale { display: none; margin: 0 0 1rem; padding: .55rem .7rem; border-left: 3px solid #b45309; background: #fff6e8; color: #7c3b08; font-size: .875rem; }
     .stale[data-visible="true"] { display: block; }
-    .board-view { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100%; min-height: 0; }
+    .board-view { display: grid; grid-template-rows: auto auto minmax(0, 1fr); height: 100%; min-height: 0; }
     .board { display: grid; grid-template-columns: repeat(6, minmax(12rem, 1fr)); gap: .8rem; min-height: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: .25rem; }
     .column { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); min-width: 12rem; min-height: 0; border: 1px solid #b9c6d8; background: rgba(255,255,255,.36); }
     .column__header { min-height: 5.45rem; padding: .7rem .75rem .6rem; border-top: 3px solid #2457d6; border-bottom: 1px solid #b9c6d8; background: #f8faff; }
@@ -45,6 +45,12 @@
     .task-card.is-dragging { opacity: .5; }
     .task-card__meta { display: flex; align-items: center; justify-content: space-between; gap: .5rem; color: #526075; font-size: .7rem; }
     .task-card code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .task-id-copy { border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; padding: 0; }
+    .task-id-copy:hover { color: #2457d6; }
+    .task-id-copy:focus-visible { outline: 3px solid #2457d6; outline-offset: 2px; }
+    .copy-status { margin: 0 0 .75rem; padding: .45rem .65rem; border-left: 3px solid #2457d6; background: #eef4ff; color: #173f9e; font-size: .78rem; }
+    .copy-status:empty { display: none; }
+    .copy-status[data-kind="error"] { border-left-color: #b42318; background: #fff1f0; color: #8f1d1d; }
     .priority { flex: 0 0 auto; font-size: .64rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
     .priority--high { color: #b42318; } .priority--medium { color: #b45309; } .priority--low { color: #2457d6; }
     .task-card h3 { margin: .55rem 0 .3rem; font-size: .9rem; line-height: 1.24; overflow-wrap: anywhere; }
@@ -98,6 +104,7 @@
   <main id="board" tabindex="-1">
     <div class="board-view" data-board-view>
       <p class="stale" data-stale role="status">Task refresh failed. Showing the last successful board.</p>
+      <p class="copy-status" data-copy-status role="status" aria-live="polite"></p>
       <section class="board" aria-label="Task status board">
         {{ range .Board.Columns }}
         <section class="column">
@@ -128,19 +135,58 @@
       const lists = new Map([...boardView.querySelectorAll("[data-status]")].map((element) => [element.dataset.status, element]));
       const counts = new Map([...boardView.querySelectorAll("[data-count]")].map((element) => [element.dataset.count, element]));
       const stale = boardView.querySelector("[data-stale]");
+      const boardCopyStatus = boardView.querySelector("[data-copy-status]");
       const updated = document.querySelector("[data-updated]");
       let activeDrag = null;
+      let copyFeedbackTimer = null;
+      let copySuppressionTimer = null;
+      let copySuppressedTaskID = null;
       let latestTasks = [];
       let tasksLoaded = false;
       let taskLoadFailed = false;
 
       function text(element, value) { element.textContent = value || ""; return element; }
+      function taskIDCopyControl(taskID, visibleID) {
+        const control = document.createElement("button");
+        control.type = "button";
+        control.className = "task-id-copy";
+        control.dataset.copyTaskId = taskID;
+        control.setAttribute("aria-label", "Copy full task ID " + taskID);
+        const id = document.createElement("code");
+        text(id, visibleID);
+        control.append(id);
+        return control;
+      }
+      function showCopyStatus(status, message, kind) {
+        if (copyFeedbackTimer !== null) window.clearTimeout(copyFeedbackTimer);
+        status.dataset.kind = kind;
+        text(status, message);
+        copyFeedbackTimer = window.setTimeout(() => {
+          text(status, "");
+          delete status.dataset.kind;
+          copyFeedbackTimer = null;
+        }, 4000);
+      }
+      async function copyTaskID(taskID, status) {
+        try {
+          if (!navigator.clipboard || typeof navigator.clipboard.writeText !== "function") {
+            throw new Error("clipboard unavailable");
+          }
+          await navigator.clipboard.writeText(taskID);
+          showCopyStatus(status, "Copied task ID " + taskID + ".", "success");
+        } catch (_) {
+          showCopyStatus(
+            status,
+            "Could not copy task ID " + taskID + ". Select this ID and copy it manually.",
+            "error"
+          );
+        }
+      }
       function card(task, idPrefix) {
         const article = document.createElement("article"); article.className = "task-card"; article.tabIndex = 0; article.dataset.taskId = task.id; article.dataset.priority = task.priority; article.dataset.idPrefix = idPrefix; article.draggable = true; article.setAttribute("aria-label", "Move task " + task.title + " from " + task.status);
         const meta = document.createElement("div"); meta.className = "task-card__meta";
-        const id = document.createElement("code"); text(id, idPrefix);
         const priority = document.createElement("span"); priority.className = "priority priority--" + task.priority; text(priority, task.priority);
-        meta.append(id, priority); article.append(meta);
+        meta.append(taskIDCopyControl(task.id, idPrefix), priority); article.append(meta);
         const title = document.createElement("h3");
         const link = document.createElement("a"); link.href = "/tasks/" + encodeURIComponent(task.id); text(link, task.title);
         title.append(link); article.append(title);
@@ -184,7 +230,10 @@
         const eyebrow = document.createElement("p"); eyebrow.className = "eyebrow"; text(eyebrow, isNew ? "New task" : "Task detail");
         const heading = document.createElement("h2"); heading.id = "task-form-title"; text(heading, isNew ? "Add work to the board" : task.title);
         header.append(eyebrow, heading);
-        if (!isNew) { const taskID = document.createElement("code"); text(taskID, task.id); header.append(taskID); }
+        if (!isNew) {
+          const copyStatus = document.createElement("p"); copyStatus.className = "copy-status"; copyStatus.dataset.copyStatus = ""; copyStatus.setAttribute("role", "status"); copyStatus.setAttribute("aria-live", "polite");
+          header.append(taskIDCopyControl(task.id, task.id), copyStatus);
+        }
 
         const form = document.createElement("form"); form.className = "task-form";
         const title = document.createElement("input"); title.id = "task-title"; title.name = "title"; title.required = true; title.value = task.title || "";
@@ -412,8 +461,22 @@
         }
       }
       window.addEventListener("popstate", renderRoute);
-      document.addEventListener("click", (event) => {
+      document.addEventListener("click", async (event) => {
         if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        const copyControl = event.target && event.target.closest && event.target.closest("[data-copy-task-id]");
+        if (copyControl) {
+          event.preventDefault();
+          if (copyControl.dataset.copyTaskId === copySuppressedTaskID) {
+            copySuppressedTaskID = null;
+            if (copySuppressionTimer !== null) window.clearTimeout(copySuppressionTimer);
+            copySuppressionTimer = null;
+            return;
+          }
+          const taskRoute = copyControl.closest(".task-route");
+          const copyStatus = taskRoute ? taskRoute.querySelector("[data-copy-status]") : boardCopyStatus;
+          await copyTaskID(copyControl.dataset.copyTaskId, copyStatus);
+          return;
+        }
         const anchor = event.target && event.target.closest && event.target.closest("a[href]");
         if (!anchor || (anchor.target && anchor.target !== "_self") || anchor.hasAttribute("download")) return;
         const destination = new URL(anchor.href, window.location.href);
@@ -426,6 +489,7 @@
         const source = item && item.closest("[data-status]");
         if (!item || !source || !source.dataset.dropStatus) return;
         activeDrag = { taskId: item.dataset.taskId, priority: item.dataset.priority, sourceStatus: source.dataset.status };
+        copySuppressedTaskID = item.dataset.taskId;
         event.dataTransfer.effectAllowed = "move";
         event.dataTransfer.setData("text/plain", activeDrag.taskId);
         item.classList.add("is-dragging");
@@ -435,6 +499,14 @@
         if (item) item.classList.remove("is-dragging");
         activeDrag = null;
         clearPlacement();
+        const suppressedTaskID = copySuppressedTaskID;
+        if (copySuppressedTaskID !== null) {
+          if (copySuppressionTimer !== null) window.clearTimeout(copySuppressionTimer);
+          copySuppressionTimer = window.setTimeout(() => {
+            if (copySuppressedTaskID === suppressedTaskID) copySuppressedTaskID = null;
+            copySuppressionTimer = null;
+          }, 250);
+        }
       });
       document.addEventListener("dragover", (event) => {
         const target = dropTarget(event);
