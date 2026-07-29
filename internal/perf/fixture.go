@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -269,7 +270,7 @@ func writeFixtureCommit(
 		args = append(args, "-p", parent)
 	}
 	args = append(args, "-m", message)
-	head, err := fixtureObjectID(ctx, root, nil, args...)
+	head, err := fixtureCommitObjectID(ctx, root, nil, pack.WallTime, args...)
 	if err != nil {
 		return fixtureCommit{}, fmt.Errorf("write fixture commit: %w", err)
 	}
@@ -284,9 +285,22 @@ func fixtureObjectID(ctx context.Context, root string, input []byte, args ...str
 	return fixtureSingleLine(output)
 }
 
+func fixtureCommitObjectID(ctx context.Context, root string, input []byte, timestamp time.Time, args ...string) (string, error) {
+	output, err := runFixtureGitOutputWithEnv(ctx, root, input, fixtureCommitEnvironment(timestamp), args...)
+	if err != nil {
+		return "", err
+	}
+	return fixtureSingleLine(output)
+}
+
 func runFixtureGitOutput(ctx context.Context, root string, input []byte, args ...string) ([]byte, error) {
+	return runFixtureGitOutputWithEnv(ctx, root, input, nil, args...)
+}
+
+func runFixtureGitOutputWithEnv(ctx context.Context, root string, input []byte, extraEnv []string, args ...string) ([]byte, error) {
 	command := exec.CommandContext(ctx, "git", append([]string{"-C", root}, args...)...)
 	command.Stdin = bytes.NewReader(input)
+	command.Env = fixtureGitEnvironment(extraEnv)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	command.Stdout = &stdout
@@ -295,6 +309,37 @@ func runFixtureGitOutput(ctx context.Context, root string, input []byte, args ..
 		return nil, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}
 	return stdout.Bytes(), nil
+}
+
+func fixtureCommitEnvironment(timestamp time.Time) []string {
+	date := timestamp.UTC().Format(time.RFC3339)
+	return []string{
+		"GIT_AUTHOR_NAME=Workbook Benchmark",
+		"GIT_AUTHOR_EMAIL=" + benchmarkActorID,
+		"GIT_AUTHOR_DATE=" + date,
+		"GIT_COMMITTER_NAME=Workbook Benchmark",
+		"GIT_COMMITTER_EMAIL=" + benchmarkActorID,
+		"GIT_COMMITTER_DATE=" + date,
+	}
+}
+
+func fixtureGitEnvironment(extra []string) []string {
+	overridden := make(map[string]struct{}, len(extra))
+	for _, entry := range extra {
+		if name, _, found := strings.Cut(entry, "="); found {
+			overridden[name] = struct{}{}
+		}
+	}
+	environment := make([]string, 0, len(os.Environ())+len(extra))
+	for _, entry := range os.Environ() {
+		if name, _, found := strings.Cut(entry, "="); found {
+			if _, replace := overridden[name]; replace {
+				continue
+			}
+		}
+		environment = append(environment, entry)
+	}
+	return append(environment, extra...)
 }
 
 func fixtureSingleLine(output []byte) (string, error) {

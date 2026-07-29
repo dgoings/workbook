@@ -4,6 +4,7 @@ import (
 	"context"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -53,6 +54,9 @@ func TestBuildRemoteFixture(t *testing.T) {
 						if refs := fixtureRefMap(t, fixture.LocalRoot, "refs/workbook/tasks/"); len(refs) != 0 {
 							t.Fatalf("fresh canonical refs = %v, want none", refs)
 						}
+						if refs := fixtureRefMap(t, fixture.LocalRoot, "refs/workbook/remotes/origin/tasks/"); len(refs) != 0 {
+							t.Fatalf("fresh tracking refs = %v, want none", refs)
+						}
 						if refs := fixtureRemoteRefMap(t, fixture.OriginRoot); len(refs) != len(fixture.TaskIDs) {
 							t.Fatalf("fresh remote refs = %d, want %d", len(refs), len(fixture.TaskIDs))
 						}
@@ -68,16 +72,48 @@ func TestBuildRemoteFixture(t *testing.T) {
 						assertDivergentChildren(t, fixture)
 					case RemoteMalformedLocalTip:
 						assertMalformedTree(t, fixture.LocalRoot, fixture.TaskIDs[0])
+						expected := fixture.Expected[fixture.TaskIDs[0]]
+						if expected.Tracking == "" || expected.Tracking != expected.Remote {
+							t.Fatalf("malformed local remote/tracking refs = %#v", expected)
+						}
+						assertValidTaskTreeAtRef(t, fixture.LocalRoot, remoteTaskRef(fixture.TaskIDs[0]))
 					case RemoteMalformedRemoteTip:
 						assertMalformedTreeAtRef(t, fixture.LocalRoot, remoteTaskRef(fixture.TaskIDs[0]))
 						expected := fixture.Expected[fixture.TaskIDs[0]]
-						if expected.Canonical == expected.Tracking {
+						if expected.Canonical == expected.Tracking || expected.Tracking != expected.Remote {
 							t.Fatalf("malformed tracking tip replaced canonical ref: %#v", expected)
 						}
+						assertValidTaskTree(t, fixture.LocalRoot, fixture.TaskIDs[0])
 					case RemoteBuriedCheckpointCorruption:
 						assertBuriedCorruption(t, fixture)
 					}
 				})
+			}
+		})
+	}
+}
+
+func TestBuildRemoteFixtureUsesDeterministicSyntheticCommitIDs(t *testing.T) {
+	topologies := []RemoteTopology{
+		RemoteSmallChangedRefSet,
+		RemoteDivergentTips,
+		RemoteMalformedLocalTip,
+		RemoteMalformedRemoteTip,
+		RemoteBuriedCheckpointCorruption,
+	}
+	for _, topology := range topologies {
+		t.Run(string(topology), func(t *testing.T) {
+			spec := FixtureSpec{ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"}
+			first, err := BuildRemoteFixture(context.Background(), filepath.Join(t.TempDir(), "first"), spec, topology)
+			if err != nil {
+				t.Fatal(err)
+			}
+			second, err := BuildRemoteFixture(context.Background(), filepath.Join(t.TempDir(), "second"), spec, topology)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(first.TaskIDs, second.TaskIDs) || !reflect.DeepEqual(first.Expected, second.Expected) {
+				t.Fatalf("fixture IDs/refs differ:\nfirst=%#v\nsecond=%#v", first, second)
 			}
 		})
 	}
@@ -205,6 +241,19 @@ func assertMalformedTreeAtRef(t *testing.T, root, ref string) {
 	names := strings.Fields(runGit(t, root, "ls-tree", "--name-only", ref))
 	if strings.Join(names, ",") == "operation.json,state.json" {
 		t.Fatalf("%s has a valid task tree", ref)
+	}
+}
+
+func assertValidTaskTree(t *testing.T, root, taskID string) {
+	t.Helper()
+	assertValidTaskTreeAtRef(t, root, "refs/workbook/tasks/"+taskID)
+}
+
+func assertValidTaskTreeAtRef(t *testing.T, root, ref string) {
+	t.Helper()
+	names := strings.Fields(runGit(t, root, "ls-tree", "--name-only", ref))
+	if strings.Join(names, ",") != "operation.json,state.json" {
+		t.Fatalf("%s task tree = %v, want operation.json and state.json", ref, names)
 	}
 }
 

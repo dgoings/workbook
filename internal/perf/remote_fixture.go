@@ -254,11 +254,15 @@ func replaceFixtureRefWithMalformedCommit(ctx context.Context, root, ref string)
 	if err != nil {
 		return err
 	}
+	parent, err := readFixtureCommit(ctx, root, head)
+	if err != nil {
+		return err
+	}
 	tree, err := fixtureObjectID(ctx, root, nil, "mktree")
 	if err != nil {
 		return fmt.Errorf("write malformed fixture tree: %w", err)
 	}
-	commit, err := fixtureObjectID(ctx, root, nil, "commit-tree", tree, "-p", head, "-m", "workbook: malformed benchmark fixture")
+	commit, err := fixtureCommitObjectID(ctx, root, nil, parent.Pack.WallTime.Add(time.Millisecond), "commit-tree", tree, "-p", head, "-m", "workbook: malformed benchmark fixture")
 	if err != nil {
 		return fmt.Errorf("write malformed fixture commit: %w", err)
 	}
