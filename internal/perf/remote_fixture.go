@@ -51,8 +51,8 @@ func BuildRemoteFixture(ctx context.Context, root string, spec FixtureSpec, topo
 	if !validRemoteTopology(topology) {
 		return RemoteFixture{}, fmt.Errorf("unsupported remote topology %q", topology)
 	}
-	if spec.ActiveTasks < 10 && topology == RemoteSmallChangedRefSet {
-		return RemoteFixture{}, fmt.Errorf("remote topology %q requires at least 10 active tasks", topology)
+	if err := validateRemoteTopologyFixture(spec, topology); err != nil {
+		return RemoteFixture{}, err
 	}
 
 	source, err := BuildFixture(ctx, filepath.Join(root, "source"), spec)
@@ -98,6 +98,20 @@ func BuildRemoteFixture(ctx context.Context, root string, spec FixtureSpec, topo
 		TaskIDs:    taskIDs,
 		Expected:   expected,
 	}, nil
+}
+
+func validateRemoteTopologyFixture(spec FixtureSpec, topology RemoteTopology) error {
+	switch topology {
+	case RemoteSmallChangedRefSet:
+		if spec.ActiveTasks < 10 {
+			return fmt.Errorf("remote topology %q requires at least 10 active tasks", topology)
+		}
+	case RemoteDivergentTips, RemoteMalformedLocalTip, RemoteMalformedRemoteTip, RemoteBuriedCheckpointCorruption:
+		if spec.ActiveTasks < 1 {
+			return fmt.Errorf("remote topology %q requires at least 1 active task", topology)
+		}
+	}
+	return nil
 }
 
 func validRemoteTopology(topology RemoteTopology) bool {

@@ -31,6 +31,16 @@ func TestFixtureSpec(t *testing.T) {
 			want: "total tasks must be positive",
 		},
 		{
+			name: "active tasks is negative despite matching total",
+			spec: FixtureSpec{TotalTasks: 1, ActiveTasks: -1, TombstonedTasks: 2, OperationsPerTask: 2, ObjectFormat: "sha1"},
+			want: "active tasks must not be negative",
+		},
+		{
+			name: "tombstoned tasks is negative despite matching total",
+			spec: FixtureSpec{TotalTasks: 1, ActiveTasks: 2, TombstonedTasks: -1, OperationsPerTask: 2, ObjectFormat: "sha1"},
+			want: "tombstoned tasks must not be negative",
+		},
+		{
 			name: "history depth is zero",
 			spec: FixtureSpec{TotalTasks: 1, ActiveTasks: 1, TombstonedTasks: 0, OperationsPerTask: 0, ObjectFormat: "sha1"},
 			want: "operations per task must be positive",

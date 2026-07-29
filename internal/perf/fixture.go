@@ -125,6 +125,12 @@ func validateFixtureSpec(spec FixtureSpec) error {
 	if spec.TotalTasks < 1 {
 		return fmt.Errorf("total tasks must be positive")
 	}
+	if spec.ActiveTasks < 0 {
+		return fmt.Errorf("active tasks must not be negative")
+	}
+	if spec.TombstonedTasks < 0 {
+		return fmt.Errorf("tombstoned tasks must not be negative")
+	}
 	if spec.ActiveTasks+spec.TombstonedTasks != spec.TotalTasks {
 		return fmt.Errorf("active tasks + tombstoned tasks must equal total tasks")
 	}
