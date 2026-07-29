@@ -209,12 +209,13 @@ func runBenchmark(ctx context.Context, options options) (perf.Report, error) {
 
 	var scenarios []perf.ScenarioResult
 	var repositoryMetrics perf.RepositoryMetrics
-	if hasScenarioWithPrefix(options.scenarios, "cli-") {
-		cold, err := perf.RunColdCLI(ctx, runSpec, filepath.Join(fixtureRoot, "cold"))
+	coldScenarios := selectedColdScenarioNames(options.scenarios)
+	if len(coldScenarios) != 0 {
+		cold, err := perf.RunColdCLI(ctx, runSpec, filepath.Join(fixtureRoot, "cold"), coldScenarios)
 		if err != nil {
 			return perf.Report{}, fmt.Errorf("run cold CLI scenarios: %w", err)
 		}
-		scenarios = append(scenarios, selectedScenarioResults(cold, options.scenarios)...)
+		scenarios = append(scenarios, cold...)
 	}
 	if hasScenarioWithPrefix(options.scenarios, "api-") {
 		warm, err := perf.RunWarmHTTP(ctx, runSpec, filepath.Join(fixtureRoot, "warm"))
@@ -282,6 +283,16 @@ func hasScenarioWithPrefix(scenarios []string, prefix string) bool {
 		}
 	}
 	return false
+}
+
+func selectedColdScenarioNames(scenarios []string) []string {
+	cold := make([]string, 0, len(scenarios))
+	for _, scenario := range scenarios {
+		if strings.HasPrefix(scenario, "cli-") {
+			cold = append(cold, scenario)
+		}
+	}
+	return cold
 }
 
 func hasRepositoryScenario(scenarios []string) bool {

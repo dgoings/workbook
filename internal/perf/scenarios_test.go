@@ -21,24 +21,35 @@ import (
 	"github.com/dgoings/workbook/internal/gitstore"
 )
 
-func TestRunColdCLIIsolatesScenarioSamplesAndRunsTenCommandBursts(t *testing.T) {
+func TestRunColdCLIIsolatesSelectedScenarioSamplesAndPreparesProjection(t *testing.T) {
 	var mutex sync.Mutex
 	var fixtureRoots []string
-	measurements := make(map[string][]CommandSpec)
+	var events []string
+	fixture := testColdCLIFixture()
 	dependencies := scenarioDependencies{
 		buildFixture: func(_ context.Context, root string, spec FixtureSpec) (Fixture, error) {
 			mutex.Lock()
 			fixtureRoots = append(fixtureRoots, root)
+			events = append(events, "build "+filepath.Base(root))
 			mutex.Unlock()
-			taskIDs := make([]string, spec.ActiveTasks)
-			for index := range taskIDs {
-				taskIDs[index] = fmt.Sprintf("WB-%026d", index)
+			fixture.Root = root
+			return fixture, nil
+		},
+		prepareProjection: func(_ context.Context, command CommandSpec, totalTasks int) error {
+			if !reflect.DeepEqual(command.Args, []string{"rebuild", "--json"}) {
+				t.Errorf("prepare args = %q, want rebuild JSON", command.Args)
 			}
-			return Fixture{Root: root, TaskIDs: taskIDs, ActiveTaskIDs: taskIDs}, nil
+			if totalTasks != 11 {
+				t.Errorf("prepare total tasks = %d, want 11", totalTasks)
+			}
+			mutex.Lock()
+			events = append(events, "prepare "+filepath.Base(command.Directory))
+			mutex.Unlock()
+			return nil
 		},
 		measureCommand: func(_ context.Context, spec CommandSpec) Sample {
 			mutex.Lock()
-			measurements[spec.Directory] = append(measurements[spec.Directory], spec)
+			events = append(events, "measure "+filepath.Base(spec.Directory))
 			mutex.Unlock()
 			return Sample{ExitCode: 0, GitProcesses: 1}
 		},
@@ -46,7 +57,7 @@ func TestRunColdCLIIsolatesScenarioSamplesAndRunsTenCommandBursts(t *testing.T) 
 	spec := RunSpec{
 		WorkbookBinary: "workbook",
 		Fixture: FixtureSpec{
-			TotalTasks: 10, ActiveTasks: 10,
+			TotalTasks: 11, ActiveTasks: 10, TombstonedTasks: 1,
 			OperationsPerTask: 4,
 			ObjectFormat:      "sha1",
 		},
@@ -55,7 +66,7 @@ func TestRunColdCLIIsolatesScenarioSamplesAndRunsTenCommandBursts(t *testing.T) 
 	}
 	fixtureRoot := t.TempDir()
 
-	results, err := runColdCLI(context.Background(), spec, fixtureRoot, dependencies)
+	results, err := runColdCLI(context.Background(), spec, fixtureRoot, []string{"cli-delete", "cli-restore"}, dependencies)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,70 +76,129 @@ func TestRunColdCLIIsolatesScenarioSamplesAndRunsTenCommandBursts(t *testing.T) 
 		}
 	}
 
-	if got, want := len(fixtureRoots), 14; got != want {
+	if got, want := len(fixtureRoots), 4; got != want {
 		t.Fatalf("fixture builds = %d, want %d", got, want)
 	}
 	uniqueRoots := make(map[string]struct{}, len(fixtureRoots))
 	for _, root := range fixtureRoots {
 		uniqueRoots[root] = struct{}{}
 	}
-	if got, want := len(uniqueRoots), 14; got != want {
+	if got, want := len(uniqueRoots), 4; got != want {
 		t.Fatalf("unique fixture roots = %d, want %d", got, want)
 	}
-
-	wantCommandsPerGroup := map[string]int{
-		"create":            1,
-		"delete-restore":    2,
-		"depend-free":       2,
-		"move":              1,
-		"update":            1,
-		"burst-independent": 10,
-		"burst-same-task":   10,
+	want := []string{
+		"build cli-delete", "prepare cli-delete", "measure cli-delete",
+		"build cli-restore", "prepare cli-restore", "measure cli-restore",
+		"build cli-delete", "prepare cli-delete", "measure cli-delete",
+		"build cli-restore", "prepare cli-restore", "measure cli-restore",
 	}
-	for sample := 1; sample <= 2; sample++ {
-		for group, want := range wantCommandsPerGroup {
-			directory := filepath.Join(fixtureRoot, fmt.Sprintf("sample-%03d", sample), group)
-			commands := measurements[directory]
-			if got := len(commands); got != want {
-				t.Errorf("sample %d %s commands = %d, want %d", sample, group, got, want)
-			}
-		}
-	}
-
-	for directory, commands := range measurements {
-		switch filepath.Base(directory) {
-		case "burst-independent":
-			targets := make(map[string]struct{}, len(commands))
-			for _, command := range commands {
-				targets[command.Args[1]] = struct{}{}
-			}
-			if got, want := len(targets), 10; got != want {
-				t.Errorf("%s distinct targets = %d, want %d", directory, got, want)
-			}
-		case "burst-same-task":
-			targets := make(map[string]struct{}, len(commands))
-			for _, command := range commands {
-				targets[command.Args[1]] = struct{}{}
-			}
-			if got, want := len(targets), 1; got != want {
-				t.Errorf("%s distinct targets = %d, want %d", directory, got, want)
-			}
-		}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("lifecycle events = %#v, want %#v", events, want)
 	}
 }
 
-func TestScenarioTaskAllocationUsesTenTaskFixture(t *testing.T) {
+func TestRunColdCLISelectsOnlyRequestedScenario(t *testing.T) {
+	var builds, prepares, measures []string
+	dependencies := scenarioDependencies{
+		buildFixture: func(_ context.Context, root string, _ FixtureSpec) (Fixture, error) {
+			builds = append(builds, filepath.Base(root))
+			fixture := testColdCLIFixture()
+			fixture.Root = root
+			return fixture, nil
+		},
+		prepareProjection: func(_ context.Context, command CommandSpec, _ int) error {
+			prepares = append(prepares, filepath.Base(command.Directory))
+			return nil
+		},
+		measureCommand: func(_ context.Context, command CommandSpec) Sample {
+			measures = append(measures, filepath.Base(command.Directory))
+			return Sample{ExitCode: 0}
+		},
+	}
+	spec := RunSpec{WorkbookBinary: "workbook", Fixture: FixtureSpec{TotalTasks: 11, ActiveTasks: 10, TombstonedTasks: 1, OperationsPerTask: 4, ObjectFormat: "sha1"}, Samples: 1, CommandTimeout: time.Second}
+
+	results, err := runColdCLI(context.Background(), spec, t.TempDir(), []string{"cli-update"}, dependencies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Name != "cli-update" {
+		t.Fatalf("selected results = %#v, want cli-update only", results)
+	}
+	if !reflect.DeepEqual(builds, []string{"cli-update"}) || !reflect.DeepEqual(prepares, builds) || !reflect.DeepEqual(measures, builds) {
+		t.Fatalf("selected lifecycle builds=%#v prepares=%#v measures=%#v, want cli-update only", builds, prepares, measures)
+	}
+}
+
+func TestRunColdCLIUsesFixtureTombstoneAndDirectDependency(t *testing.T) {
+	fixture := testColdCLIFixture()
+	var commands []CommandSpec
+	dependencies := scenarioDependencies{
+		buildFixture: func(_ context.Context, root string, _ FixtureSpec) (Fixture, error) {
+			fixture.Root = root
+			return fixture, nil
+		},
+		prepareProjection: func(context.Context, CommandSpec, int) error { return nil },
+		measureCommand: func(_ context.Context, command CommandSpec) Sample {
+			commands = append(commands, command)
+			return Sample{ExitCode: 0}
+		},
+	}
+	spec := RunSpec{WorkbookBinary: "workbook", Fixture: FixtureSpec{TotalTasks: 11, ActiveTasks: 10, TombstonedTasks: 1, OperationsPerTask: 4, ObjectFormat: "sha1"}, Samples: 1, CommandTimeout: time.Second}
+
+	_, err := runColdCLI(context.Background(), spec, t.TempDir(), []string{"cli-free", "cli-restore"}, dependencies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := commands[0].Args, []string{"free", fixture.Dependencies[0].Dependent, fixture.Dependencies[0].Dependency, "--json"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("free args = %#v, want direct fixture dependency %#v", got, want)
+	}
+	if got, want := commands[1].Args, []string{"restore", fixture.TombstonedTaskIDs[0], "--json"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("restore args = %#v, want fixture tombstone %#v", got, want)
+	}
+}
+
+func TestPrepareProjectionValidatesRebuildEnvelope(t *testing.T) {
+	tests := []struct {
+		name    string
+		output  string
+		wantErr string
+	}{
+		{name: "correct rebuild", output: `{"format":"workbook.result","version":1,"command":"rebuild","data":{"taskCount":11}}`},
+		{name: "wrong format", output: `{"format":"workbook.error","version":1,"command":"rebuild","data":{"taskCount":11}}`, wantErr: "format"},
+		{name: "wrong command", output: `{"format":"workbook.result","version":1,"command":"list","data":{"taskCount":11}}`, wantErr: "command"},
+		{name: "wrong task count", output: `{"format":"workbook.result","version":1,"command":"rebuild","data":{"taskCount":10}}`, wantErr: "task count"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			binary := filepath.Join(t.TempDir(), "workbook")
+			if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf '%s\\n' '"+test.output+"'\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			err := prepareProjection(context.Background(), CommandSpec{Binary: binary, Directory: t.TempDir(), Timeout: time.Second}, 11)
+			if test.wantErr == "" && err != nil {
+				t.Fatalf("prepare projection: %v", err)
+			}
+			if test.wantErr != "" && (err == nil || !strings.Contains(err.Error(), test.wantErr)) {
+				t.Fatalf("prepare projection error = %v, want %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func testColdCLIFixture() Fixture {
+	active := []string{"WB-00", "WB-01", "WB-02", "WB-03", "WB-04", "WB-05", "WB-06", "WB-07", "WB-08", "WB-09"}
+	return Fixture{
+		TaskIDs:           append(append([]string(nil), active...), "WB-deleted"),
+		ActiveTaskIDs:     active,
+		TombstonedTaskIDs: []string{"WB-deleted"},
+		Dependencies:      []FixtureDependency{{Dependent: "WB-01", Dependency: "WB-00"}},
+	}
+}
+
+func TestWarmScenarioTaskAllocationUsesTenTaskFixture(t *testing.T) {
 	taskIDs := []string{
 		"WB-00", "WB-01", "WB-02", "WB-03", "WB-04",
 		"WB-05", "WB-06", "WB-07", "WB-08", "WB-09",
-	}
-
-	cold, err := allocateColdCLITasks(taskIDs)
-	if err != nil {
-		t.Fatalf("allocate cold CLI tasks: %v", err)
-	}
-	if !reflect.DeepEqual(cold.independent, taskIDs) {
-		t.Errorf("cold independent tasks = %#v, want all ten fixture tasks", cold.independent)
 	}
 
 	warm, err := allocateWarmHTTPTasks(taskIDs)
@@ -169,7 +239,7 @@ func TestRunColdCLI(t *testing.T) {
 	spec := RunSpec{
 		WorkbookBinary: binary,
 		Fixture: FixtureSpec{
-			TotalTasks: 40, ActiveTasks: 40,
+			TotalTasks: 40, ActiveTasks: 39, TombstonedTasks: 1,
 			OperationsPerTask: 4,
 			ObjectFormat:      "sha1",
 		},
@@ -177,7 +247,9 @@ func TestRunColdCLI(t *testing.T) {
 		CommandTimeout: 60 * time.Second,
 	}
 
-	results, err := RunColdCLI(context.Background(), spec, filepath.Join(t.TempDir(), "fixture"))
+	results, err := RunColdCLI(context.Background(), spec, filepath.Join(t.TempDir(), "fixture"), []string{
+		"cli-create", "cli-delete", "cli-depend", "cli-free", "cli-move", "cli-restore", "cli-update", "cli-burst-independent-10", "cli-burst-same-task-10",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
