@@ -533,7 +533,7 @@ func TestSyncReusesFetchedTipsWithoutRepeatedInspection(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Sync() error = %v; result = %#v", err, result)
 			}
-			if got := countCommand(commands, "fetch", "--no-tags", "--no-auto-maintenance", "origin", "+"+taskRefPrefix+"*:"+remoteTaskRefPrefix+"*"); got != 1 {
+			if got := countCommand(commands, "fetch", "--no-tags", "--prune", "--no-auto-maintenance", "origin", "+"+taskRefPrefix+"*:"+remoteTaskRefPrefix+"*"); got != 1 {
 				t.Fatalf("fetch commands = %d, want 1; commands = %v", got, commands)
 			}
 			if got := countCommand(commands, "cat-file", "--batch"); got != 1 {
@@ -655,6 +655,32 @@ func TestSyncFetchesThenPushesWorkbookTaskRefs(t *testing.T) {
 	assertSyncOutcome(t, secondResult.Push, secondTask.ID, SyncPublished)
 	if got, want := remoteRefValue(t, second, taskRefPrefix+secondTask.ID), refValue(t, second, taskRefPrefix+secondTask.ID); got != want {
 		t.Fatalf("second task remote tip = %q, want local tip %q", got, want)
+	}
+}
+
+func TestSyncRepublishesCanonicalTaskAfterRemoteRefDeletion(t *testing.T) {
+	first, second, config := syncRepositories(t)
+	task := createSyncTask(t, first, config, "Restore remotely deleted task ref")
+	if _, err := first.Sync(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.Fetch(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+
+	refName := taskRefPrefix + task.ID
+	syncGit(t, second.Root, "push", "origin", ":"+refName)
+	if remoteRefExists(t, second, refName) {
+		t.Fatalf("remote task ref %s still exists after deletion", refName)
+	}
+
+	result, err := second.Sync(context.Background(), config)
+	if err != nil {
+		t.Fatalf("Sync() error = %v; result = %#v", err, result)
+	}
+	assertSyncOutcome(t, result.Push, task.ID, SyncPublished)
+	if got, want := remoteRefValue(t, second, refName), refValue(t, second, refName); got != want {
+		t.Fatalf("republished remote head = %q, want canonical %q", got, want)
 	}
 }
 

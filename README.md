@@ -210,7 +210,9 @@ local task is fast-forwarded in one compare-and-swap transaction. Local-ahead
 tasks are left alone; divergent task histories remain on their separate local
 and tracking refs and are reported for later resolution. Invalid fetched data
 remains isolated and causes a nonzero exit; valid unrelated tracking refs can
-still reconcile in that run.
+still reconcile in that run. Stale refs are pruned only from Workbook's
+isolated tracking namespace, allowing `sync` to republish an intact canonical
+task ref if its remote counterpart was removed externally.
 
 `workbook push` publishes validated local `refs/workbook/tasks/*` refs to
 `origin` without force or deletion. One bounded, non-atomic publication retains

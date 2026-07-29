@@ -285,7 +285,7 @@ func (r *Repository) fetch(ctx context.Context, config core.ProjectConfig) (fetc
 	}
 
 	refspec := "+" + taskRefPrefix + "*:" + remoteTaskRefPrefix + "*"
-	if _, err := r.Git(ctx, nil, "fetch", "--no-tags", "--no-auto-maintenance", "origin", refspec); err != nil {
+	if _, err := r.Git(ctx, nil, "fetch", "--no-tags", "--prune", "--no-auto-maintenance", "origin", refspec); err != nil {
 		result, err = failedSyncPhase(result, "fetch failed before completion", err)
 		return state, result, err
 	}

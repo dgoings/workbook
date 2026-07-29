@@ -202,12 +202,15 @@ Fetch uses this bounded sequence:
 2. run exactly one isolated fetch:
 
    ```text
-   git fetch --no-tags --no-auto-maintenance origin \
+   git fetch --no-tags --prune --no-auto-maintenance origin \
      +refs/workbook/tasks/*:refs/workbook/remotes/origin/tasks/*
    ```
 
-   Auto-maintenance is disabled for this explicit task-ref transfer; normal
-   repository maintenance remains the user's or Git's separate concern.
+   Pruning is scoped by the explicit refspec to Workbook's isolated tracking
+   namespace so a remotely missing task ref does not masquerade as an
+   up-to-date task. Auto-maintenance is disabled for this explicit task-ref
+   transfer; normal repository maintenance remains the user's or Git's
+   separate concern.
 
 3. enumerate canonical and tracking refs once each;
 4. read all canonical and tracking tips in one partial object batch;
