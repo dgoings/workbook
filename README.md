@@ -321,10 +321,13 @@ Drag a task card to another canonical status column to update its status through
 the same core service path as `workbook update --status`. The mutation creates a
 normal Workbook operation commit and returns a versioned JSON task-mutation
 document. The executable embeds its HTML, CSS, and JavaScript, and the page polls
-`/api/tasks` every two seconds. Web cards show the actionable task-ID prefix,
-priority, title, optional description, and labels; each title links to its
-full-ID task-detail URL. Every status column has a New Task link that preselects
-that column's canonical status.
+`/api/tasks` every second. The six canonical columns share the available width
+on large screens, scroll horizontally on narrow screens, and keep dense task
+lists vertically scrollable within the viewport. Web cards show the actionable
+task-ID prefix, priority, title, up to six lines of an optional description, and
+labels; each title links to its full-ID task-detail URL, where the complete
+description remains available. Every status column has a New Task link that
+preselects that column's canonical status.
 
 The shared new-task and detail form creates or edits title, description, status,
 priority, and labels through the versioned APIs. Saving returns to the board and

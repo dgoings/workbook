@@ -37,13 +37,20 @@ func TestHandlerServesBoardTasksAndHealth(t *testing.T) {
 		`data-status="in-progress"`,
 		`data-status="blocked"`,
 		`data-status="done"`,
-		`data-status="unknown"`,
 		"Ready task",
-		"Future status task",
 		"Task refresh failed",
 	} {
 		if !strings.Contains(board.Body.String(), fragment) {
 			t.Errorf("GET / body does not contain %q", fragment)
+		}
+	}
+	for _, fragment := range []string{
+		`data-status="unknown"`,
+		"Unrecognized status",
+		"Future status task",
+	} {
+		if strings.Contains(board.Body.String(), fragment) {
+			t.Errorf("GET / body unexpectedly contains %q", fragment)
 		}
 	}
 
@@ -250,7 +257,7 @@ func TestHandlerRendersTaskAndNewTaskLinks(t *testing.T) {
 			t.Errorf("GET / body does not contain canonical %q New Task link %q", definition.Label, want)
 		}
 	}
-	for _, task := range tasks {
+	for _, task := range tasks[:2] {
 		want := `href="/tasks/` + task.ID + `">` + task.Title + `</a>`
 		if !strings.Contains(body, want) {
 			t.Errorf("GET / body does not contain full-ID task link %q", want)
@@ -427,6 +434,77 @@ setTimeout(() => {
 	}
 }
 
+func TestHandlerClientBoardIgnoresUnknownStatuses(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	tasks := boardTasks()
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	document, err := json.Marshal(TasksDocument{
+		Format:       "workbook.tasks",
+		Version:      1,
+		Tasks:        tasks,
+		Presentation: presentationForTasks(tasks),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/", string(document)) + script + `
+setTimeout(() => {
+  const ready = boardLists.find((list) => list.dataset.status === "ready");
+  const card = findElement(ready, (element) => element.dataset.taskId === ` + strconv.Quote(tasks[0].ID) + `);
+  const unknownCard = boardLists.map((list) => findElement(list, (element) => element.dataset.taskId === ` + strconv.Quote(tasks[2].ID) + `)).find(Boolean);
+  if (!card) throw new Error("canonical task did not render when an unknown-status task was present");
+  if (unknownCard) throw new Error("unknown-status task rendered in a canonical list");
+  if (stale.dataset.visible !== "false") throw new Error("unknown-status task triggered the stale state");
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute rendered canonical board filtering: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerClientPollsEverySecond(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	tasks := boardTasks()[:1]
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	document, err := json.Marshal(TasksDocument{
+		Format:       "workbook.tasks",
+		Version:      1,
+		Tasks:        tasks,
+		Presentation: presentationForTasks(tasks),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/", string(document)) + script + `
+if (intervalDelay !== 1000) throw new Error("polling interval = " + intervalDelay + ", want 1000");
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute rendered polling behavior: %v\n%s", err, output)
+	}
+}
+
 func TestHandlerRefreshesTasksOnEveryAPIRequest(t *testing.T) {
 	first := boardTasks()
 	second := append([]core.Task(nil), first...)
@@ -525,11 +603,11 @@ const main = new TestElement("main");
 const boardView = new TestElement("div");
 const stale = new TestElement("p");
 const updated = new TestElement("p");
-const boardStatuses = ["backlog", "ready", "blocked", "in-progress", "in-review", "done", "unknown"];
+const boardStatuses = ["backlog", "ready", "blocked", "in-progress", "in-review", "done"];
 const boardLists = boardStatuses.map((status) => {
   const element = new TestElement("div");
   element.dataset.status = status;
-  if (status !== "unknown") element.dataset.dropStatus = status;
+  element.dataset.dropStatus = status;
   return element;
 });
 const boardCounts = boardStatuses.map((status) => {
@@ -553,10 +631,11 @@ globalThis.document = {
   addEventListener(name, listener) { documentEventListeners[name] = listener; }
 };
 const initialURL = new URL("http://127.0.0.1` + path + `");
+let intervalDelay = null;
 globalThis.window = {
   location: { href: initialURL.href, origin: initialURL.origin },
   addEventListener() {},
-  setInterval() {}
+  setInterval(_callback, delay) { intervalDelay = delay; }
 };
 const historyPaths = [];
 globalThis.history = {
@@ -850,8 +929,11 @@ func TestHandlerInitialCardPrefixesMatchRefreshPresentation(t *testing.T) {
 		t.Fatalf("GET / status = %d, want %d", initial.Code, http.StatusOK)
 	}
 	cards := initialCardPrefixes(initial.Body.String())
-	if len(cards) != len(tasks) {
-		t.Fatalf("initial rendered cards = %#v, want one task identity and prefix for each of %#v", cards, tasks)
+	if len(cards) != 2 {
+		t.Fatalf("initial rendered cards = %#v, want the two canonical-status tasks", cards)
+	}
+	if _, exists := cards[tasks[2].ID]; exists {
+		t.Fatalf("initial rendered cards include unknown-status task %q", tasks[2].ID)
 	}
 
 	refreshed := request(t, handler, http.MethodGet, "/api/tasks")
@@ -1121,4 +1203,12 @@ func boardTasks() []core.Task {
 			Head:              "fedcba9876543210",
 		},
 	}
+}
+
+func presentationForTasks(tasks []core.Task) []TaskPresentation {
+	presentation := make([]TaskPresentation, len(tasks))
+	for i, task := range tasks {
+		presentation[i] = TaskPresentation{TaskID: task.ID, IDPrefix: task.ID}
+	}
+	return presentation
 }
