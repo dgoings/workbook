@@ -257,11 +257,15 @@ func expectedRemoteTaskResults(topology RemoteTopology, taskIDs []string) ([]git
 		fetch := make([]gitstore.SyncTaskResult, len(taskIDs))
 		push := make([]gitstore.SyncTaskResult, len(taskIDs))
 		for index, taskID := range taskIDs {
-			if index < 5 {
+			switch {
+			case index < 5:
 				fetch[index] = gitstore.SyncTaskResult{TaskID: taskID, Status: gitstore.SyncLocalAhead}
 				push[index] = gitstore.SyncTaskResult{TaskID: taskID, Status: gitstore.SyncPublished}
-			} else {
+			case index < 10:
 				fetch[index] = gitstore.SyncTaskResult{TaskID: taskID, Status: gitstore.SyncFastForwarded}
+				push[index] = gitstore.SyncTaskResult{TaskID: taskID, Status: gitstore.SyncUpToDate}
+			default:
+				fetch[index] = gitstore.SyncTaskResult{TaskID: taskID, Status: gitstore.SyncUnchanged}
 				push[index] = gitstore.SyncTaskResult{TaskID: taskID, Status: gitstore.SyncUpToDate}
 			}
 		}

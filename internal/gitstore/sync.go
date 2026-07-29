@@ -69,6 +69,10 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 		return failedSyncPhase(result, "push failed before completion", err)
 	}
 	sort.Slice(refs, func(i, j int) bool { return refs[i].taskID < refs[j].taskID })
+	if len(refs) == 0 {
+		result.Status = SyncPhaseCompleted
+		return result, nil
+	}
 
 	heads := make([]TaskHead, len(refs))
 	for i, ref := range refs {
@@ -281,7 +285,7 @@ func (r *Repository) fetch(ctx context.Context, config core.ProjectConfig) (fetc
 	}
 
 	refspec := "+" + taskRefPrefix + "*:" + remoteTaskRefPrefix + "*"
-	if _, err := r.Git(ctx, nil, "fetch", "--no-tags", "origin", refspec); err != nil {
+	if _, err := r.Git(ctx, nil, "fetch", "--no-tags", "--no-auto-maintenance", "origin", refspec); err != nil {
 		result, err = failedSyncPhase(result, "fetch failed before completion", err)
 		return state, result, err
 	}

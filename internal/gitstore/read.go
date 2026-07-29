@@ -152,11 +152,11 @@ func (r *Repository) listTaskRefs(ctx context.Context) ([]taskRefRecord, error) 
 }
 
 func (r *Repository) listOwnedTaskRefs(ctx context.Context, config core.ProjectConfig, prefix string) ([]taskRefRecord, error) {
-	if err := r.ensureGitObjectIDWidth(ctx); err != nil {
-		return nil, err
-	}
 	contents, err := r.Git(ctx, nil, "for-each-ref", "--format="+taskRefFormat, prefix)
 	if err != nil {
+		return nil, err
+	}
+	if err := r.rememberObjectIDWidthFromOwnedRefOutput(contents); err != nil {
 		return nil, err
 	}
 	return r.parseOwnedRefRecords(config, prefix, contents, "")
@@ -167,11 +167,11 @@ func (r *Repository) taskRef(ctx context.Context, taskID string) (taskRefRecord,
 	if err != nil {
 		return taskRefRecord{}, false, err
 	}
-	if err := r.ensureGitObjectIDWidth(ctx); err != nil {
-		return taskRefRecord{}, false, err
-	}
 	contents, err := r.Git(ctx, nil, "for-each-ref", "--format="+taskRefFormat, taskRefPrefix+taskID)
 	if err != nil {
+		return taskRefRecord{}, false, err
+	}
+	if err := r.rememberObjectIDWidthFromOwnedRefOutput(contents); err != nil {
 		return taskRefRecord{}, false, err
 	}
 	refs, err := r.parseOwnedRefRecords(config, taskRefPrefix, contents, taskID)
@@ -186,6 +186,24 @@ func (r *Repository) taskRef(ctx context.Context, taskID string) (taskRefRecord,
 	default:
 		return taskRefRecord{}, false, core.Errorf(core.CategoryCorruptData, "task ref %q has nested entries", taskRefPrefix+taskID)
 	}
+}
+
+// rememberObjectIDWidthFromOwnedRefOutput learns object width only from the
+// direct output of Git's full-width %(objectname) atom. The parser itself never
+// lets caller-supplied ref records establish this validation boundary.
+func (r *Repository) rememberObjectIDWidthFromOwnedRefOutput(contents []byte) error {
+	lineEnd := bytes.IndexByte(contents, '\n')
+	if lineEnd < 0 {
+		return nil
+	}
+	parts := bytes.Split(contents[:lineEnd], []byte{0})
+	if len(parts) != 3 || len(parts[1]) == 0 {
+		return nil
+	}
+	if err := r.rememberGitObjectID(string(parts[1])); err != nil {
+		return core.Wrap(core.CategoryCorruptData, "Git returned an invalid task ref object ID", err)
+	}
+	return nil
 }
 
 func (r *Repository) parseOwnedRefRecords(

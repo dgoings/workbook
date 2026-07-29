@@ -533,7 +533,7 @@ func TestSyncReusesFetchedTipsWithoutRepeatedInspection(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Sync() error = %v; result = %#v", err, result)
 			}
-			if got := countCommand(commands, "fetch", "--no-tags", "origin", "+"+taskRefPrefix+"*:"+remoteTaskRefPrefix+"*"); got != 1 {
+			if got := countCommand(commands, "fetch", "--no-tags", "--no-auto-maintenance", "origin", "+"+taskRefPrefix+"*:"+remoteTaskRefPrefix+"*"); got != 1 {
 				t.Fatalf("fetch commands = %d, want 1; commands = %v", got, commands)
 			}
 			if got := countCommand(commands, "cat-file", "--batch"); got != 1 {
