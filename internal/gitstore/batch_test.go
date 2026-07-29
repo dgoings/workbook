@@ -70,3 +70,34 @@ func TestReadTaskHeadsPartialRejectsMalformedBatchFramingForAllHeads(t *testing.
 		t.Fatalf("readTaskHeadsPartial() category = %q, want %q; error = %v", got, want, err)
 	}
 }
+
+func TestReadTaskHeadsPartialReadsRepeatedTaskHistoryCommitsInOneBatch(t *testing.T) {
+	// Mutation caught: rejecting repeated task IDs when batching commits from one history.
+	repository, config := writeRepository(t)
+	history := writeHistoryForTask(t, repository, config, 2300, 3)
+	heads := []TaskHead{
+		{TaskID: history[0].Operation.TaskID, ObjectID: history[0].Head},
+		{TaskID: history[1].Operation.TaskID, ObjectID: history[1].Head},
+		{TaskID: history[2].Operation.TaskID, ObjectID: history[2].Head},
+	}
+
+	var commands [][]string
+	repository.commandObserver = func(args []string) {
+		commands = append(commands, append([]string(nil), args...))
+	}
+	results, err := repository.readTaskHeadsPartial(context.Background(), config, heads)
+	if err != nil {
+		t.Fatalf("readTaskHeadsPartial() error = %v", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("results = %d, want 3", len(results))
+	}
+	for i := range history {
+		if results[i].Err != nil || !reflect.DeepEqual(results[i].Snapshot, history[i]) {
+			t.Fatalf("results[%d] = %#v, want history snapshot %#v", i, results[i], history[i])
+		}
+	}
+	if got := countCommand(commands, "cat-file", "--batch"); got != 1 {
+		t.Fatalf("cat-file --batch commands = %d, want 1; commands = %v", got, commands)
+	}
+}
