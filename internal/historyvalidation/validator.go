@@ -73,10 +73,14 @@ func (v *Validator) Validate(ctx context.Context, full bool) (Result, error) {
 	result.TaskCount = len(initialHeads)
 	prepared, err := v.cache.Prepare(ctx, initialHeads, full)
 	if err != nil {
-		if contextErr := ctx.Err(); contextErr != nil {
-			return v.partialResult(ctx, initialHeads, result), contextErr
+		partial := v.partialResult(ctx, initialHeads, result)
+		if full {
+			partial = pendingResult(initialHeads, result)
 		}
-		return v.partialResult(ctx, initialHeads, result), err
+		if contextErr := ctx.Err(); contextErr != nil {
+			return partial, contextErr
+		}
+		return partial, err
 	}
 
 	requests := make([]gitstore.TaskHistoryRequest, 0, len(initialHeads))
@@ -256,6 +260,15 @@ func (v *Validator) emptyResult(full bool) Result {
 func (v *Validator) partialResult(ctx context.Context, heads []gitstore.TaskHead, prior Result) Result {
 	result, _ := v.resultFromSnapshot(ctx, heads, prior)
 	return result
+}
+
+func pendingResult(heads []gitstore.TaskHead, prior Result) Result {
+	prior.TaskCount = len(heads)
+	prior.Valid = 0
+	prior.Invalid = 0
+	prior.Pending = len(heads)
+	prior.Failures = nil
+	return prior
 }
 
 func (v *Validator) completeResult(ctx context.Context, heads []gitstore.TaskHead, prior Result) (Result, error) {

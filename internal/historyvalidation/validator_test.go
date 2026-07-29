@@ -218,6 +218,20 @@ func TestValidateInterruptedInitialPrepareCountsEveryHeadPending(t *testing.T) {
 	}
 }
 
+func TestValidateInterruptedFullInitialPrepareBypassesCachedHead(t *testing.T) {
+	// Production mutation: returning normal partial cache accounting during a full audit reports an uncompleted cached head as valid.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cache := openTestCache(t, context.Background(), testConfig())
+	head := gitstore.TaskHead{TaskID: taskID(1), ObjectID: "cached-head"}
+	seedPreparedValid(t, context.Background(), cache, head, generationID(1))
+	source := &validatorSource{heads: []gitstore.TaskHead{head}, cancelOnListCall: 1, cancel: cancel}
+	got, err := (&Validator{source: source, cache: cache, config: testConfig()}).Validate(ctx, true)
+	if err != context.Canceled || !got.Full || got.CacheHits != 0 || got.Valid != 0 || got.Invalid != 0 || got.Pending != 1 {
+		t.Fatalf("interrupted full result = %#v, error = %v; want cached head pending", got, err)
+	}
+}
+
 func TestValidateCorruptDataOutranksFinalHeadRace(t *testing.T) {
 	// Production mutation: returning stale-write first hides corruption that the same run already observed.
 	ctx := context.Background()
