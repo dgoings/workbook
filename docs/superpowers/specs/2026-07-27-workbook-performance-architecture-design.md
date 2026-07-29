@@ -15,7 +15,7 @@ architectural decision; it does not authorize an open-ended optimization loop.
 
 The interactive acceptance fixture has these minimums:
 
-- at least 500 active tasks;
+- at least 500 total task refs, including at least 25 tombstoned tasks;
 - at least 20 historical operations per task; and
 - the current full task fields, labels, dependencies, ranks, and tombstones.
 
@@ -26,9 +26,10 @@ The target budgets are:
 - ten rapid sequential same-task mutations and ten independent-task mutations
   each completing in less than one second.
 
-Runs below either scale minimum are diagnostic only. Larger fixtures remain
-valid acceptance runs so future evaluations can raise the workload without
-changing the meaning of acceptance.
+Runs below either the task-count or history-depth minimum, or without the
+minimum tombstone population, are diagnostic only. Larger fixtures remain valid
+acceptance runs so future evaluations can raise the workload without changing
+the meaning of acceptance.
 
 Remote wall-clock time depends on the network and Git host. Remote-sync
 evaluation therefore reports network invocation count, local processing time,
