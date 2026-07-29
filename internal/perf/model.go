@@ -15,7 +15,9 @@ const (
 )
 
 type FixtureSpec struct {
+	TotalTasks        int    `json:"totalTasks"`
 	ActiveTasks       int    `json:"activeTasks"`
+	TombstonedTasks   int    `json:"tombstonedTasks"`
 	OperationsPerTask int    `json:"operationsPerTask"`
 	ObjectFormat      string `json:"objectFormat"`
 }

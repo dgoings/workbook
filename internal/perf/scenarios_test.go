@@ -34,7 +34,7 @@ func TestRunColdCLIIsolatesScenarioSamplesAndRunsTenCommandBursts(t *testing.T) 
 			for index := range taskIDs {
 				taskIDs[index] = fmt.Sprintf("WB-%026d", index)
 			}
-			return Fixture{Root: root, TaskIDs: taskIDs}, nil
+			return Fixture{Root: root, TaskIDs: taskIDs, ActiveTaskIDs: taskIDs}, nil
 		},
 		measureCommand: func(_ context.Context, spec CommandSpec) Sample {
 			mutex.Lock()
@@ -46,7 +46,7 @@ func TestRunColdCLIIsolatesScenarioSamplesAndRunsTenCommandBursts(t *testing.T) 
 	spec := RunSpec{
 		WorkbookBinary: "workbook",
 		Fixture: FixtureSpec{
-			ActiveTasks:       10,
+			TotalTasks: 10, ActiveTasks: 10,
 			OperationsPerTask: 4,
 			ObjectFormat:      "sha1",
 		},
@@ -169,7 +169,7 @@ func TestRunColdCLI(t *testing.T) {
 	spec := RunSpec{
 		WorkbookBinary: binary,
 		Fixture: FixtureSpec{
-			ActiveTasks:       40,
+			TotalTasks: 40, ActiveTasks: 40,
 			OperationsPerTask: 4,
 			ObjectFormat:      "sha1",
 		},
@@ -222,7 +222,7 @@ func TestRunWarmHTTP(t *testing.T) {
 	spec := RunSpec{
 		WorkbookBinary: binary,
 		Fixture: FixtureSpec{
-			ActiveTasks:       40,
+			TotalTasks: 40, ActiveTasks: 40,
 			OperationsPerTask: 4,
 			ObjectFormat:      "sha1",
 		},
@@ -267,7 +267,7 @@ func TestRunWarmHTTP(t *testing.T) {
 func TestRunWarmHTTPIsolatesEveryScenarioSampleAndRetainsMeasuredMisses(t *testing.T) {
 	fixtureRoot := t.TempDir()
 	fixtureSpec := FixtureSpec{
-		ActiveTasks:       10,
+		TotalTasks: 10, ActiveTasks: 10,
 		OperationsPerTask: 2,
 		ObjectFormat:      "sha1",
 	}
@@ -290,7 +290,7 @@ func TestRunWarmHTTPIsolatesEveryScenarioSampleAndRetainsMeasuredMisses(t *testi
 			for index := range taskIDs {
 				taskIDs[index] = fmt.Sprintf("WB-%02d", index)
 			}
-			return Fixture{Root: root, TaskIDs: taskIDs}, nil
+			return Fixture{Root: root, TaskIDs: taskIDs, ActiveTaskIDs: taskIDs}, nil
 		},
 		startServer: func(_ context.Context, _ string, root string, timeout time.Duration) (warmScenarioServer, error) {
 			if timeout != time.Second {
@@ -737,7 +737,7 @@ func TestWarmSameTaskBurstStartsWithLiteralStatusSafeForGeneratedFixtures(t *tes
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			fixture, err := BuildFixture(context.Background(), filepath.Join(t.TempDir(), "fixture"), FixtureSpec{
-				ActiveTasks:       10,
+				TotalTasks: 10, ActiveTasks: 10,
 				OperationsPerTask: test.operationsPerTask,
 				ObjectFormat:      "sha1",
 			})
@@ -808,7 +808,7 @@ func TestWarmSameTaskBurstStartsWithLiteralStatusSafeForGeneratedFixtures(t *tes
 func TestMeasureRepository(t *testing.T) {
 	binary := buildWorkbookBinary(t)
 	fixture, err := BuildFixture(context.Background(), filepath.Join(t.TempDir(), "fixture"), FixtureSpec{
-		ActiveTasks:       40,
+		TotalTasks: 40, ActiveTasks: 40,
 		OperationsPerTask: 4,
 		ObjectFormat:      "sha1",
 	})

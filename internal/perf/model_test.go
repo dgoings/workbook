@@ -48,7 +48,7 @@ func TestSummarizeRetainsGitProcessCountsFromTimedOutAndFailedSamples(t *testing
 func TestReportWritesVersionedJSONAndMarkdown(t *testing.T) {
 	report := Report{
 		Format: "workbook.performance-report", Version: 1, Phase: "baseline",
-		Fixture:   FixtureSpec{ActiveTasks: 500, OperationsPerTask: 20, ObjectFormat: "sha1"},
+		Fixture:   FixtureSpec{TotalTasks: 500, ActiveTasks: 500, OperationsPerTask: 20, ObjectFormat: "sha1"},
 		Targets:   Targets{WarmP95Milliseconds: 100, ColdP95Milliseconds: 200, BurstMilliseconds: 1000},
 		Scenarios: []ScenarioResult{{Name: "cli-update", Surface: "cold-cli", Samples: []Sample{{Duration: 25 * time.Millisecond}}}},
 	}

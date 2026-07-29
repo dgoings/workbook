@@ -63,7 +63,7 @@ func TestRunResolvesRelativeWorkbookBinaryAndWritesCompletePerformanceReport(t *
 	if report.Phase != "baseline" {
 		t.Errorf("report phase = %q, want baseline", report.Phase)
 	}
-	if report.Fixture != (perf.FixtureSpec{ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"}) {
+	if report.Fixture != (perf.FixtureSpec{TotalTasks: 10, ActiveTasks: 10, TombstonedTasks: 0, OperationsPerTask: 4, ObjectFormat: "sha1"}) {
 		t.Errorf("report fixture = %#v, want ten tasks and four operations using SHA-1", report.Fixture)
 	}
 

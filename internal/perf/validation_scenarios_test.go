@@ -20,13 +20,14 @@ func TestValidationScenariosUseIndependentFixturesAndCommands(t *testing.T) {
 	var setup []CommandSpec
 	results, err := runValidationScenarios(context.Background(), RunSpec{
 		WorkbookBinary: "workbook",
-		Fixture:        FixtureSpec{ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
+		Fixture:        FixtureSpec{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
 		Samples:        1,
 		CommandTimeout: time.Second,
 	}, t.TempDir(), validationScenarioNames(), validationScenarioDependencies{
 		buildFixture: func(_ context.Context, root string, spec FixtureSpec) (Fixture, error) {
 			roots = append(roots, root)
-			return Fixture{Root: root, TaskIDs: fixtureTaskIDs(spec.ActiveTasks)}, nil
+			taskIDs := fixtureTaskIDs(spec.TotalTasks)
+			return Fixture{Root: root, TaskIDs: taskIDs, ActiveTaskIDs: taskIDs[:spec.ActiveTasks]}, nil
 		},
 		runSetup: func(_ context.Context, spec CommandSpec) CommandMeasurement {
 			setup = append(setup, spec)
@@ -77,10 +78,11 @@ func TestValidationScenarioSetupIsExcludedFromMeasurement(t *testing.T) {
 	setupCalls := 0
 	measureCalls := 0
 	_, err := runValidationScenarios(context.Background(), RunSpec{
-		WorkbookBinary: "workbook", Fixture: FixtureSpec{ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"}, Samples: 1, CommandTimeout: time.Second,
+		WorkbookBinary: "workbook", Fixture: FixtureSpec{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"}, Samples: 1, CommandTimeout: time.Second,
 	}, t.TempDir(), []string{"validate-five-changed"}, validationScenarioDependencies{
 		buildFixture: func(_ context.Context, root string, spec FixtureSpec) (Fixture, error) {
-			return Fixture{Root: root, TaskIDs: fixtureTaskIDs(spec.ActiveTasks)}, nil
+			taskIDs := fixtureTaskIDs(spec.TotalTasks)
+			return Fixture{Root: root, TaskIDs: taskIDs, ActiveTaskIDs: taskIDs[:spec.ActiveTasks]}, nil
 		},
 		runSetup: func(_ context.Context, _ CommandSpec) CommandMeasurement {
 			setupCalls++
@@ -102,7 +104,7 @@ func TestValidationScenarioSetupIsExcludedFromMeasurement(t *testing.T) {
 // Mutation witness: accepting any altered literal validation result would
 // record an untrustworthy product measurement as benchmark evidence.
 func TestValidationScenarioOracleRejectsWrongCounts(t *testing.T) {
-	fixture := FixtureSpec{ActiveTasks: 10, OperationsPerTask: 4}
+	fixture := FixtureSpec{TotalTasks: 10, ActiveTasks: 8, TombstonedTasks: 2, OperationsPerTask: 4}
 	mutations := []struct {
 		name   string
 		mutate func(map[string]any, map[string]any)
@@ -168,8 +170,8 @@ func TestValidationScenarioProcessCountDoesNotScaleWithHistoryDepth(t *testing.T
 	workbook := buildValidationScenarioWorkbook(t)
 	counts := make(map[string][]int)
 	for _, fixture := range []FixtureSpec{
-		{ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
-		{ActiveTasks: 10, OperationsPerTask: 7, ObjectFormat: "sha1"},
+		{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
+		{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 7, ObjectFormat: "sha1"},
 	} {
 		results, err := RunValidationScenarios(context.Background(), RunSpec{
 			WorkbookBinary: workbook, Fixture: fixture, Samples: 1, CommandTimeout: 20 * time.Second,
@@ -226,7 +228,7 @@ func validationEnvelopeForArgs(args []string, tasks, operations int) []byte {
 
 func validationEnvelopeForScenario(scenario string, fixture FixtureSpec) []byte {
 	want := expectedValidationResult(scenario, fixture)
-	return successfulValidationEnvelope(want.Full, fixture.ActiveTasks, want.TasksChecked, want.CommitsChecked, want.CacheHits)
+	return successfulValidationEnvelope(want.Full, fixture.TotalTasks, want.TasksChecked, want.CommitsChecked, want.CacheHits)
 }
 
 func decodeValidationEnvelope(t *testing.T, stdout []byte) (map[string]any, map[string]any) {

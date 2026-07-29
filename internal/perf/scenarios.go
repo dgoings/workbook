@@ -237,7 +237,7 @@ func runWarmHTTP(ctx context.Context, spec RunSpec, fixtureRoot string, dependen
 			if err != nil {
 				return nil, fmt.Errorf("build warm %s sample %d fixture: %w", name, sample+1, err)
 			}
-			tasks, err := allocateWarmHTTPTasks(fixture.TaskIDs)
+			tasks, err := allocateWarmHTTPTasks(fixture.ActiveTaskIDs)
 			if err != nil {
 				return nil, fmt.Errorf("allocate warm %s sample %d fixture: %w", name, sample+1, err)
 			}
@@ -531,7 +531,7 @@ func buildColdCLIFixture(
 	if err != nil {
 		return Fixture{}, coldCLITasks{}, fmt.Errorf("build %s fixture: %w", group, err)
 	}
-	tasks, err := allocateColdCLITasks(fixture.TaskIDs)
+	tasks, err := allocateColdCLITasks(fixture.ActiveTaskIDs)
 	if err != nil {
 		return Fixture{}, coldCLITasks{}, fmt.Errorf("allocate %s fixture: %w", group, err)
 	}

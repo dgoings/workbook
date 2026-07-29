@@ -194,7 +194,9 @@ func runBenchmark(ctx context.Context, options options) (perf.Report, error) {
 	defer os.RemoveAll(fixtureRoot)
 
 	fixtureSpec := perf.FixtureSpec{
+		TotalTasks:        options.tasks,
 		ActiveTasks:       options.tasks,
+		TombstonedTasks:   0,
 		OperationsPerTask: options.operations,
 		ObjectFormat:      options.objectFormat,
 	}

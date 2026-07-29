@@ -36,7 +36,7 @@ func TestBuildRemoteFixture(t *testing.T) {
 			for _, topology := range topologies {
 				t.Run(string(topology), func(t *testing.T) {
 					fixture, err := BuildRemoteFixture(context.Background(), filepath.Join(t.TempDir(), "fixture"), FixtureSpec{
-						ActiveTasks:       10,
+						TotalTasks: 10, ActiveTasks: 10,
 						OperationsPerTask: 4,
 						ObjectFormat:      objectFormat,
 					}, topology)
@@ -105,7 +105,7 @@ func TestBuildRemoteFixtureUsesDeterministicSyntheticCommitIDs(t *testing.T) {
 	}
 	for _, topology := range topologies {
 		t.Run(string(topology), func(t *testing.T) {
-			spec := FixtureSpec{ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"}
+			spec := FixtureSpec{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"}
 			first, err := BuildRemoteFixture(context.Background(), filepath.Join(t.TempDir(), "first"), spec, topology)
 			if err != nil {
 				t.Fatal(err)
@@ -142,7 +142,7 @@ func TestBuildRemoteFixtureIgnoresHostileGlobalSigningAndHooks(t *testing.T) {
 
 	fixtureRoot := filepath.Join(t.TempDir(), "fixture")
 	fixture, err := BuildRemoteFixture(context.Background(), fixtureRoot, FixtureSpec{
-		ActiveTasks:       10,
+		TotalTasks: 10, ActiveTasks: 10,
 		OperationsPerTask: 4,
 		ObjectFormat:      "sha1",
 	}, RemoteAlreadySynchronized)
