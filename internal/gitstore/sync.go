@@ -48,9 +48,9 @@ type SyncRunResult struct {
 	Push   SyncResult `json:"push"`
 }
 
-// Push publishes every validated local Workbook task ref to origin without
-// force or deletion. Each ref is pushed independently so one rejection does
-// not prevent unrelated tasks from publishing.
+// Push publishes validated local Workbook task refs to origin without force or
+// deletion. One non-atomic publication preserves per-ref outcomes so a
+// rejection does not prevent unrelated tasks from publishing.
 func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncResult, error) {
 	result := SyncResult{Remote: "origin", Tasks: []SyncTaskResult{}}
 	if err := r.verifyIdentity(ctx); err != nil {
@@ -65,47 +65,87 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 	}
 	sort.Slice(refs, func(i, j int) bool { return refs[i].taskID < refs[j].taskID })
 
-	rejected := 0
+	heads := make([]TaskHead, len(refs))
+	for i, ref := range refs {
+		heads[i] = TaskHead{TaskID: ref.taskID, ObjectID: ref.objectID}
+	}
+	partial, err := r.readTaskHeadsPartial(ctx, config, heads)
+	if err != nil {
+		return failedSyncPhase(result, "push failed before completion", err)
+	}
+	items := make(map[string]SyncTaskResult, len(refs))
+	observed := make(map[string]string, len(refs))
+	valid := make(map[string]struct{}, len(refs))
 	invalid := 0
-	changed := 0
-	for _, local := range refs {
-		taskID := local.taskID
-		ref := taskRefPrefix + taskID
-		item := SyncTaskResult{TaskID: taskID}
-		if err := r.validateHistory(ctx, config, local, ref); err != nil {
-			item.Status = SyncInvalid
-			item.Detail = err.Error()
-			result.Tasks = append(result.Tasks, item)
+	for _, tip := range partial {
+		observed[tip.Head.TaskID] = tip.Head.ObjectID
+		if tip.Err != nil {
+			items[tip.Head.TaskID] = SyncTaskResult{TaskID: tip.Head.TaskID, Status: SyncInvalid, Detail: tip.Err.Error()}
 			invalid++
 			continue
 		}
-		remoteHead, err := r.remoteRefHead(ctx, ref)
+		valid[tip.Head.TaskID] = struct{}{}
+	}
+
+	remoteOutput, err := r.Git(ctx, nil, "ls-remote", "--refs", "origin", taskRefPrefix+"*")
+	if err != nil {
+		return failedSyncPhase(result, "push failed before completion", err)
+	}
+	remoteHeads, err := r.parseRemoteTaskHeads(config, remoteOutput)
+	if err != nil {
+		return failedSyncPhase(result, "push failed before completion", err)
+	}
+	expected := make(map[string]string, len(valid))
+	for _, ref := range refs {
+		if _, ok := valid[ref.taskID]; !ok {
+			continue
+		}
+		refName := taskRefPrefix + ref.taskID
+		if remoteHeads[ref.taskID] == ref.objectID {
+			items[ref.taskID] = SyncTaskResult{TaskID: ref.taskID, Status: SyncUpToDate}
+			continue
+		}
+		expected[refName] = ref.taskID
+	}
+	if len(expected) != 0 {
+		args := []string{"push", "--porcelain", "origin"}
+		for _, ref := range refs {
+			refName := taskRefPrefix + ref.taskID
+			if _, candidate := expected[refName]; candidate {
+				args = append(args, ref.objectID+":"+refName)
+			}
+		}
+		push := r.gitWithEnvResult(ctx, []string{"WORKBOOK_PRE_PUSH_ACTIVE=1"}, nil, args...)
+		pushed, err := parsePushPorcelain(push.stdout, expected, push.err)
 		if err != nil {
 			return failedSyncPhase(result, "push failed before completion", err)
 		}
-		_, err = r.gitWithEnv(
-			ctx,
-			[]string{"WORKBOOK_PRE_PUSH_ACTIVE=1"},
-			nil,
-			"push",
-			"--porcelain",
-			"origin",
-			local.objectID+":"+ref,
-		)
-		if err != nil {
-			item.Status = SyncRejected
-			item.Detail = err.Error()
+		for taskID, item := range pushed {
+			items[taskID] = item
+		}
+	}
+
+	finalRefs, err := r.listTaskRefs(ctx)
+	if err != nil {
+		return failedSyncPhase(result, "push failed before completion", err)
+	}
+	final := make(map[string]string, len(finalRefs))
+	for _, ref := range finalRefs {
+		final[ref.taskID] = ref.objectID
+	}
+	rejected := 0
+	changed := 0
+	for _, ref := range refs {
+		item := items[ref.taskID]
+		if item.Status == SyncRejected {
 			rejected++
-		} else if !r.refStillAt(ctx, taskID, local.objectID) {
+		} else if (item.Status == SyncPublished || item.Status == SyncUpToDate) && final[ref.taskID] != observed[ref.taskID] {
 			item.Status = SyncLocalChanged
 			item.Detail = "validated task head was published, but the local ref advanced during push; run workbook push again"
+			items[ref.taskID] = item
 			changed++
-		} else if remoteHead == local.objectID {
-			item.Status = SyncUpToDate
-		} else {
-			item.Status = SyncPublished
 		}
-		result.Tasks = append(result.Tasks, item)
+		result.Tasks = append(result.Tasks, items[ref.taskID])
 	}
 	result.Status = SyncPhaseCompleted
 	if invalid > 0 {

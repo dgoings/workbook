@@ -2,6 +2,7 @@ package gitstore
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -150,6 +151,57 @@ func TestPushPublishesAllTaskRefsAndReportsUpToDate(t *testing.T) {
 	assertSyncOutcome(t, result, secondTask.ID, SyncUpToDate)
 }
 
+func TestPushUsesOneBoundedPublication(t *testing.T) {
+	repository, _, config := syncRepositories(t)
+	for i := 0; i < 25; i++ {
+		createSyncTask(t, repository, config, fmt.Sprintf("Task %02d", i))
+	}
+
+	var commands [][]string
+	repository.commandObserver = func(args []string) {
+		commands = append(commands, append([]string(nil), args...))
+	}
+	result, err := repository.Push(context.Background(), config)
+	if err != nil {
+		t.Fatalf("Push() error = %v; result = %#v", err, result)
+	}
+	if got := countCommand(commands, "for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)", taskRefPrefix); got != 2 {
+		t.Fatalf("canonical ref enumerations = %d, want planning plus final snapshot; commands = %v", got, commands)
+	}
+	if got := countCommand(commands, "cat-file", "--batch"); got != 1 {
+		t.Fatalf("tip batches = %d, want 1; commands = %v", got, commands)
+	}
+	if got := countCommand(commands, "ls-remote", "--refs", "origin", taskRefPrefix+"*"); got != 1 {
+		t.Fatalf("wildcard remote probes = %d, want 1; commands = %v", got, commands)
+	}
+	for _, command := range commands {
+		if len(command) > 0 && command[0] == "ls-remote" && (len(command) != 4 || command[3] != taskRefPrefix+"*") {
+			t.Fatalf("Push() ran a per-task remote probe: %v", command)
+		}
+	}
+	pushes := 0
+	for _, command := range commands {
+		if len(command) == 0 || command[0] != "push" {
+			continue
+		}
+		pushes++
+		if strings.Contains(strings.Join(command, " "), "--atomic") || strings.Contains(strings.Join(command, " "), "--force") {
+			t.Fatalf("Push() command must be non-atomic and non-force: %v", command)
+		}
+		if len(command) != 3+25 {
+			t.Fatalf("Push() args = %v, want 25 explicit destinations", command)
+		}
+		for _, refspec := range command[3:] {
+			if !strings.Contains(refspec, ":"+taskRefPrefix) || strings.Contains(refspec, "*") {
+				t.Fatalf("Push() refspec = %q, want one explicit task destination", refspec)
+			}
+		}
+	}
+	if pushes != 1 {
+		t.Fatalf("push commands = %d, want 1; commands = %v", pushes, commands)
+	}
+}
+
 func TestPushRejectsNonFastForwardButPublishesUnrelatedTasks(t *testing.T) {
 	first, second, config := syncRepositories(t)
 	conflicting := createSyncTask(t, first, config, "Conflicting task")
@@ -220,32 +272,56 @@ func TestPushRejectsLocallyCorruptHistoryBeforePublishing(t *testing.T) {
 	}
 	remoteRoot := remoteRefValue(t, first, taskRefPrefix+task.ID)
 
-	updateSyncTask(t, first, config, task.ID, "Operation title")
-	valid, err := first.Get(context.Background(), config, task.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	parent := syncGit(t, first.Root, "rev-parse", valid.Head+"^")
-	state := valid.State
-	state.Task.Title = "Mismatched state title"
-	operationBlob := syncGit(t, first.Root, "rev-parse", valid.Head+":operation.json")
-	stateBlob := writeDocumentBlob(t, first, state)
-	tree := syncGitInput(
-		t,
-		first.Root,
-		[]byte("100644 blob "+operationBlob+"\toperation.json\n100644 blob "+stateBlob+"\tstate.json\n"),
-		"mktree",
-	)
-	invalid := syncGit(t, first.Root, "commit-tree", tree, "-p", parent, "-m", "local corruption")
-	syncGit(t, first.Root, "update-ref", taskRefPrefix+task.ID, invalid, valid.Head)
+	valid := refValue(t, first, taskRefPrefix+task.ID)
+	invalid := syncGitInput(t, first.Root, []byte("not a task commit"), "hash-object", "-w", "--stdin")
+	syncGit(t, first.Root, "update-ref", taskRefPrefix+task.ID, invalid, valid)
 
 	result, err := first.Push(context.Background(), config)
 	if err == nil {
 		t.Fatalf("Push(corrupt local history) error = nil; result = %#v", result)
 	}
+	assertSyncOutcome(t, result, task.ID, SyncInvalid)
 	if got := remoteRefValue(t, first, taskRefPrefix+task.ID); got != remoteRoot {
 		t.Fatalf("corrupt history changed remote from %q to %q", remoteRoot, got)
 	}
+}
+
+func TestPushOmitsInvalidTaskButPublishesIndependentValidTask(t *testing.T) {
+	repository, _, config := syncRepositories(t)
+	invalid := createSyncTask(t, repository, config, "Invalid task")
+	valid := createSyncTask(t, repository, config, "Valid task")
+	invalidHead := refValue(t, repository, taskRefPrefix+invalid.ID)
+	blob := syncGitInput(t, repository.Root, []byte("not a task commit"), "hash-object", "-w", "--stdin")
+	syncGit(t, repository.Root, "update-ref", taskRefPrefix+invalid.ID, blob, invalidHead)
+
+	result, err := repository.Push(context.Background(), config)
+	if err == nil {
+		t.Fatalf("Push() error = nil; result = %#v", result)
+	}
+	assertSyncOutcome(t, result, invalid.ID, SyncInvalid)
+	assertSyncOutcome(t, result, valid.ID, SyncPublished)
+	if got, want := remoteRefValue(t, repository, taskRefPrefix+valid.ID), refValue(t, repository, taskRefPrefix+valid.ID); got != want {
+		t.Fatalf("valid remote head = %q, want %q", got, want)
+	}
+}
+
+func TestPushReportsLocalChangedWhenHeadAdvancesDuringPublication(t *testing.T) {
+	repository, _, config := syncRepositories(t)
+	task := createSyncTask(t, repository, config, "Race task")
+	advanced := false
+	repository.commandObserver = func(args []string) {
+		if advanced || len(args) == 0 || args[0] != "push" {
+			return
+		}
+		advanced = true
+		updateSyncTask(t, repository, config, task.ID, "Advanced during push")
+	}
+
+	result, err := repository.Push(context.Background(), config)
+	if got, want := core.CategoryOf(err), core.CategoryStaleWrite; got != want {
+		t.Fatalf("Push() category = %q, want %q; result = %#v; error = %v", got, want, result, err)
+	}
+	assertSyncOutcome(t, result, task.ID, SyncLocalChanged)
 }
 
 func TestSyncFetchesThenPushesWorkbookTaskRefs(t *testing.T) {
