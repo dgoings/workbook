@@ -120,6 +120,10 @@ func TestValidationScenarioOracleRejectsWrongCounts(t *testing.T) {
 			data["failures"] = []any{map[string]any{"taskId": "WB-001"}}
 		}},
 		{name: "envelope-format", mutate: func(envelope map[string]any, _ map[string]any) { envelope["format"] = "wrong" }},
+		{name: "envelope-version", mutate: func(envelope map[string]any, _ map[string]any) { envelope["version"] = float64(2) }},
+		{name: "envelope-command", mutate: func(envelope map[string]any, _ map[string]any) { envelope["command"] = "wrong" }},
+		{name: "validatorVersion", mutate: func(_ map[string]any, data map[string]any) { data["validatorVersion"] = float64(2) }},
+		{name: "taskCount", mutate: func(_ map[string]any, data map[string]any) { data["taskCount"] = data["taskCount"].(float64) + 1 }},
 	}
 	for _, scenario := range validationScenarioNames() {
 		for _, mutation := range mutations {
