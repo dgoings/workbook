@@ -39,7 +39,7 @@ func TestHandlerServesBoardTasksAndHealth(t *testing.T) {
 		`data-status="done"`,
 		"Ready task",
 		"Task refresh failed",
-		"0 of 1 prerequisites complete",
+		"1 of 2 prerequisites complete",
 		"Waiting on dependencies",
 	} {
 		if !strings.Contains(board.Body.String(), fragment) {
@@ -74,9 +74,9 @@ func TestHandlerServesBoardTasksAndHealth(t *testing.T) {
 	if !reflect.DeepEqual(document.Tasks, tasks) {
 		t.Fatalf("task document tasks = %#v, want %#v", document.Tasks, tasks)
 	}
-	if got := document.Presentation[0]; got.DependenciesComplete != 0 ||
-		got.DependenciesTotal != 1 || !got.WaitingOnDependencies {
-		t.Fatalf("task presentation = %#v, want 0/1 waiting", got)
+	if got := document.Presentation[0]; got.DependenciesComplete != 1 ||
+		got.DependenciesTotal != 2 || !got.WaitingOnDependencies {
+		t.Fatalf("task presentation = %#v, want 1/2 waiting", got)
 	}
 	if strings.Count(board.Body.String(), "prerequisites complete") != 1 {
 		t.Fatal("dependency-free cards changed their rendered content")
@@ -461,10 +461,8 @@ func TestHandlerClientBoardIgnoresUnknownStatuses(t *testing.T) {
 		Format:       "workbook.tasks",
 		Version:      1,
 		Tasks:        tasks,
-		Presentation: presentationForTasks(tasks),
+		Presentation: taskPresentation(tasks),
 	}
-	document.Presentation[0].DependenciesTotal = 1
-	document.Presentation[0].WaitingOnDependencies = true
 	documentJSON, err := json.Marshal(document)
 	if err != nil {
 		t.Fatal(err)
@@ -477,7 +475,7 @@ setTimeout(() => {
   const unknownCard = boardLists.map((list) => findElement(list, (element) => element.dataset.taskId === ` + strconv.Quote(tasks[2].ID) + `)).find(Boolean);
   if (!card) throw new Error("canonical task did not render when an unknown-status task was present");
   const progress = findElement(card, (element) => Object.hasOwn(element.dataset, "dependencyProgress"));
-  const count = progress && findElement(progress, (element) => element.tagName === "SPAN" && element.textContent === "0 of 1 prerequisites complete");
+  const count = progress && findElement(progress, (element) => element.tagName === "SPAN" && element.textContent === "1 of 2 prerequisites complete");
   const waiting = progress && findElement(progress, (element) => element.tagName === "STRONG" && element.textContent === "Waiting on dependencies");
   if (!count || !waiting) {
     throw new Error("refreshed Ready card did not render dependency progress");
@@ -1306,8 +1304,8 @@ func TestHandlerInitialCardPrefixesMatchRefreshPresentation(t *testing.T) {
 		t.Fatalf("GET / status = %d, want %d", initial.Code, http.StatusOK)
 	}
 	cards := initialCardPrefixes(initial.Body.String())
-	if len(cards) != 2 {
-		t.Fatalf("initial rendered cards = %#v, want the two canonical-status tasks", cards)
+	if len(cards) != 3 {
+		t.Fatalf("initial rendered cards = %#v, want the three canonical-status tasks", cards)
 	}
 	if _, exists := cards[tasks[2].ID]; exists {
 		t.Fatalf("initial rendered cards include unknown-status task %q", tasks[2].ID)
@@ -1564,7 +1562,7 @@ func boardTasks() []core.Task {
 				Priority:     core.PriorityHigh,
 				Labels:       []string{"ui", "web"},
 				Rank:         "1/1",
-				Dependencies: []string{"WB-01J00000000000000000000002"},
+				Dependencies: []string{"WB-01J00000000000000000000002", "WB-01J00000000000000000000006"},
 				CreatedAt:    stamp,
 				UpdatedAt:    stamp.Add(time.Minute),
 			},
@@ -1601,6 +1599,22 @@ func boardTasks() []core.Task {
 			},
 			HistoryGeneration: "01J00000000000000000000006",
 			Head:              "fedcba9876543210",
+		},
+		{
+			ID:        "WB-01J00000000000000000000006",
+			ProjectID: "01J00000000000000000000000",
+			TaskData: core.TaskData{
+				Title:       "Completed prerequisite",
+				Description: "Finish the prerequisite work.",
+				Status:      core.StatusDone,
+				Priority:    core.PriorityLow,
+				Labels:      []string{"completed"},
+				Rank:        "4/1",
+				CreatedAt:   stamp,
+				UpdatedAt:   stamp,
+			},
+			HistoryGeneration: "01J00000000000000000000007",
+			Head:              "1234567890abcdef",
 		},
 	}
 }
