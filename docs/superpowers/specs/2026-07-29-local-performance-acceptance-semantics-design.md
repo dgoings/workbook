@@ -197,6 +197,43 @@ Existing version-1 JSON and Markdown evidence is not regenerated. Tests and
 examples that construct diagnostic fixtures specify dimensions that leave
 enough active tasks for their selected scenarios.
 
+## Acceptance Exercise
+
+After the corrected harness passes focused and full verification, build the
+measured Workbook binary and benchmark harness once from the final source
+commit. Record the exact commit and both binary checksums. Run the complete
+local CLI/API acceptance family once in SHA-1 and once in SHA-256 with:
+
+- 500 total tasks;
+- 25 tombstoned tasks;
+- 20 operations per task; and
+- at least 20 samples per selected local scenario.
+
+Select only the `cli-*` and `api-*` scenarios. The untimed rebuild before every
+local mutation exercises the corrected projection-seeding boundary without
+selecting the repository scenario family.
+
+Do not run remote-sync, local-bare-sync, repository storage/ref, semantic
+validation, many-changed projection, task-count/history-depth slope, peak
+resource, or storage-decomposition scenarios. These remain owned by
+`WB-01KYQPRXX1WDF09XQ1C1HV1QHV`,
+`WB-01KYQPRDE8CZ4DHSSZR16TQHM8`,
+`WB-01KYQQJP9HPT9ZFW4X1T5MV91Y`, and
+`WB-01KYQQK0HV42NBVFMTWVTZVAW8`.
+
+A valid target miss is acceptance evidence. Do not tune the product, discard
+the sample, or rerun merely to obtain a pass. If an invocation instead exposes
+invalid fixture data, hidden scenario state, incorrect setup timing, wrong
+target classification, unverifiable provenance, or another harness-construction
+defect, retain an attempt record, add a regression test, fix the harness, rebuild
+both binaries, and rerun both object-format invocations so the final reports use
+one source identity. A product correctness failure that is not caused by the
+harness is recorded and moved to a separate story rather than repaired under
+this benchmark-semantics story.
+
+The valid final JSON and generated Markdown reports are committed as the
+completion evidence for this story.
+
 ## Verification
 
 Implementation proceeds test-first. Focused tests cover:
@@ -215,5 +252,6 @@ Implementation proceeds test-first. Focused tests cover:
 - unchanged remote and validation target behavior.
 
 The final verification runs `go test ./...`, `go vet ./...`, formatting, diff
-checks, and an independent review. No acceptance benchmark is rerun as part of
-this story; the corrected harness enables the next explicit one-shot run.
+checks, and an independent review before the acceptance exercise above. After
+the exercise, targeted report-validation tests and diff checks run again without
+repeating the measured invocations.
