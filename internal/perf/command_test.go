@@ -47,6 +47,23 @@ func TestMeasureCommandRecordsExitCodeAndSingleLineStderr(t *testing.T) {
 	}
 }
 
+func TestMeasureCommandOutputPreservesStreamsAndCompatibilityWrapper(t *testing.T) {
+	got := MeasureCommandOutput(context.Background(), CommandSpec{
+		Binary:    "/bin/sh",
+		Args:      []string{"-c", "printf stdout; printf stderr >&2; exit 7"},
+		Directory: t.TempDir(),
+		Timeout:   time.Second,
+	})
+
+	if string(got.Stdout) != "stdout" || string(got.Stderr) != "stderr" {
+		t.Fatalf("measurement = %#v", got)
+	}
+	if got.Sample.ExitCode != 7 || got.Sample.TimedOut || got.Sample.Error != "stderr" ||
+		got.Sample.Duration <= 0 || got.Sample.GitProcesses != 0 {
+		t.Fatalf("sample = %#v", got.Sample)
+	}
+}
+
 func TestMeasureCommandPassesCallerEnvironment(t *testing.T) {
 	sample := MeasureCommand(context.Background(), CommandSpec{
 		Binary: "/bin/sh", Args: []string{"-c", "test \"$WORKBOOK_PERF_TEST_VALUE\" = present"},

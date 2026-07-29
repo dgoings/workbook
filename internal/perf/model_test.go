@@ -2,6 +2,7 @@ package perf
 
 import (
 	"bytes"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -43,5 +44,70 @@ func TestReportWritesVersionedJSONAndMarkdown(t *testing.T) {
 	}
 	if !strings.Contains(markdownOutput.String(), "| cli-update | cold-cli |") {
 		t.Fatalf("Markdown = %s", markdownOutput.String())
+	}
+}
+
+func TestReportNormalizesScenarioTargetOutcomes(t *testing.T) {
+	target := &ScenarioTarget{MaxMilliseconds: 2000, MaxGitProcesses: 20}
+	report := Report{Scenarios: []ScenarioResult{
+		{
+			Name:    "pass",
+			Target:  target,
+			Samples: []Sample{{Duration: 2 * time.Second, GitProcesses: 19}},
+		},
+		{
+			Name:    "process-miss",
+			Target:  target,
+			Samples: []Sample{{Duration: time.Second, GitProcesses: 20}},
+		},
+		{
+			Name:    "timeout",
+			Target:  target,
+			Samples: []Sample{{Duration: 60 * time.Second, TimedOut: true}},
+		},
+		{
+			Name:    "failed",
+			Target:  target,
+			Samples: []Sample{{Duration: time.Second, ExitCode: 4, Error: "corrupt"}},
+		},
+		{
+			Name:    "local",
+			Samples: []Sample{{Duration: time.Millisecond}},
+		},
+	}}
+
+	normalized := report.normalized()
+	got := make(map[string]string, len(normalized.Scenarios))
+	for _, scenario := range normalized.Scenarios {
+		got[scenario.Name] = scenario.Outcome
+	}
+	want := map[string]string{
+		"pass":         "pass",
+		"process-miss": "miss",
+		"timeout":      "timeout",
+		"failed":       "failed",
+		"local":        "not-evaluated",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("outcomes = %#v, want %#v", got, want)
+	}
+}
+
+func TestReportMarkdownShowsStrictProcessTargetAndOutcome(t *testing.T) {
+	target := &ScenarioTarget{MaxMilliseconds: 2000, MaxGitProcesses: 20}
+	report := Report{
+		Format: "workbook.performance-report",
+		Scenarios: []ScenarioResult{{
+			Name: "sync-small-changed-ref-set", Surface: "remote-sync",
+			Target: target, Samples: []Sample{{Duration: time.Second, GitProcesses: 19}},
+		}},
+	}
+	var output bytes.Buffer
+	if err := report.WriteMarkdown(&output); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "| sync-small-changed-ref-set | remote-sync |") ||
+		!strings.Contains(output.String(), "| 2000.00 | < 20 | pass |") {
+		t.Fatalf("Markdown = %s", output.String())
 	}
 }

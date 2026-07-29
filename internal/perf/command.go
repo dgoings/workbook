@@ -99,14 +99,22 @@ func (cursor *TraceCursor) CountNewGitProcesses() (int, error) {
 	return count, nil
 }
 
-// MeasureCommand runs a command under a fresh Trace2 event file and returns
-// its elapsed runtime, exit outcome, and Git process count.
-func MeasureCommand(ctx context.Context, spec CommandSpec) Sample {
-	sample := Sample{ExitCode: -1}
+// CommandMeasurement preserves a command's measurement and its output streams.
+type CommandMeasurement struct {
+	Sample Sample
+	Stdout []byte
+	Stderr []byte
+}
+
+// MeasureCommandOutput runs a command under a fresh Trace2 event file and
+// returns its elapsed runtime, exit outcome, Git process count, and output
+// streams.
+func MeasureCommandOutput(ctx context.Context, spec CommandSpec) CommandMeasurement {
+	measurement := CommandMeasurement{Sample: Sample{ExitCode: -1}}
 	traceFile, err := os.CreateTemp("", "workbook-git-trace-*.json")
 	if err != nil {
-		sample.Error = fmt.Sprintf("create Trace2 event file: %v", err)
-		return sample
+		measurement.Sample.Error = fmt.Sprintf("create Trace2 event file: %v", err)
+		return measurement
 	}
 	tracePath := traceFile.Name()
 	traceFile.Close()
@@ -114,13 +122,13 @@ func MeasureCommand(ctx context.Context, spec CommandSpec) Sample {
 
 	absTracePath, err := filepath.Abs(tracePath)
 	if err != nil {
-		sample.Error = fmt.Sprintf("resolve Trace2 event file: %v", err)
-		return sample
+		measurement.Sample.Error = fmt.Sprintf("resolve Trace2 event file: %v", err)
+		return measurement
 	}
 	cursor, err := OpenTraceCursor(absTracePath)
 	if err != nil {
-		sample.Error = err.Error()
-		return sample
+		measurement.Sample.Error = err.Error()
+		return measurement
 	}
 
 	commandContext, cancel := context.WithTimeout(ctx, spec.Timeout)
@@ -140,32 +148,40 @@ func MeasureCommand(ctx context.Context, spec CommandSpec) Sample {
 		return err
 	}
 	command.WaitDelay = commandWaitDelay
-	var stderr bytes.Buffer
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
 	command.Stderr = &stderr
 
 	startedAt := time.Now()
 	err = command.Run()
-	sample.Duration = time.Since(startedAt)
+	measurement.Stdout = append([]byte(nil), stdout.Bytes()...)
+	measurement.Stderr = append([]byte(nil), stderr.Bytes()...)
+	measurement.Sample.Duration = time.Since(startedAt)
 	if err == nil {
-		sample.ExitCode = 0
+		measurement.Sample.ExitCode = 0
 	} else {
 		var exitError *exec.ExitError
 		if errors.As(err, &exitError) {
-			sample.ExitCode = exitError.ExitCode()
+			measurement.Sample.ExitCode = exitError.ExitCode()
 		}
-		sample.TimedOut = commandContext.Err() == context.DeadlineExceeded
-		sample.Error = stderrSummary(stderr.String(), err)
+		measurement.Sample.TimedOut = commandContext.Err() == context.DeadlineExceeded
+		measurement.Sample.Error = stderrSummary(string(measurement.Stderr), err)
 	}
 
 	gitProcesses, traceErr := cursor.CountNewGitProcesses()
 	if traceErr != nil {
-		if sample.Error == "" {
-			sample.Error = traceErr.Error()
+		if measurement.Sample.Error == "" {
+			measurement.Sample.Error = traceErr.Error()
 		}
-		return sample
+		return measurement
 	}
-	sample.GitProcesses = gitProcesses
-	return sample
+	measurement.Sample.GitProcesses = gitProcesses
+	return measurement
+}
+
+// MeasureCommand preserves the original sample-only measurement API.
+func MeasureCommand(ctx context.Context, spec CommandSpec) Sample {
+	return MeasureCommandOutput(ctx, spec).Sample
 }
 
 func stderrSummary(stderr string, commandErr error) string {
