@@ -420,14 +420,19 @@ func (s Service) FreeMutation(ctx context.Context, idOrPrefix, dependencyOrPrefi
 	if parent.State.Task.Deleted {
 		return MutationResult{}, Errorf(CategoryValidation, "cannot remove a dependency from a tombstoned task")
 	}
-	dependency, err := s.resolveSnapshot(ctx, dependencyOrPrefix)
-	if err != nil {
-		return MutationResult{}, err
+	dependencyID := dependencyOrPrefix
+	if ValidateTaskID(s.Config.Key, dependencyID) != nil ||
+		!hasDependency(parent.State.Task.Dependencies, dependencyID) {
+		dependency, err := s.resolveSnapshot(ctx, dependencyOrPrefix)
+		if err != nil {
+			return MutationResult{}, err
+		}
+		dependencyID = dependency.State.TaskID
 	}
-	if !hasDependency(parent.State.Task.Dependencies, dependency.State.TaskID) {
+	if !hasDependency(parent.State.Task.Dependencies, dependencyID) {
 		return MutationResult{Task: Project(parent)}, nil
 	}
-	operations := []Operation{{Type: OperationSetRemove, Field: "dependencies", Value: dependency.State.TaskID}}
+	operations := []Operation{{Type: OperationSetRemove, Field: "dependencies", Value: dependencyID}}
 	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
 		return MutationResult{}, err
 	}
