@@ -335,6 +335,12 @@ labels; each title links to its full-ID task-detail URL, where the complete
 description remains available. Every status column has a New Task link that
 preselects that column's canonical status.
 
+Click a card's shortened task ID to copy its full ID. The ID remains part of the
+card's drag target, so dragging moves the task while a click copies. The task
+detail route provides the same action on its full ID. Successful copies show an
+accessible confirmation; clipboard failures keep the full ID visible for manual
+copying.
+
 The shared new-task and detail form creates or edits title, description, status,
 priority, and labels through the versioned APIs. Saving returns to the board and
 refreshes it. A failed save leaves the entered values in place and shows the

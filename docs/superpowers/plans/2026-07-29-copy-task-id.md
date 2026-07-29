@@ -44,7 +44,7 @@
 - Produces: `[data-copy-task-id]` semantic controls and `[data-copy-status]` polite live regions.
 - Preserves: `PATCH /api/tasks/{id}/position` drag placement, same-origin link navigation, and actionable board prefixes.
 
-- [ ] **Step 1: Extend the executable DOM harness for clipboard controls and timers**
+- [x] **Step 1: Extend the executable DOM harness for clipboard controls and timers**
 
 In `clientDOMHarness`, add selector support needed by the production interaction:
 
@@ -108,7 +108,7 @@ window.clearTimeout = (id) => {
 Keep Node's global `setTimeout` unchanged because existing tests use it to wait
 for the client's initial asynchronous refresh.
 
-- [ ] **Step 2: Write the failing server-rendered copy-control test**
+- [x] **Step 2: Write the failing server-rendered copy-control test**
 
 Add `TestHandlerRendersTextLikeCopyableTaskIDControls`. Render `/`, use
 `initialCardPrefixes` to retain the initial-prefix contract, and assert that the
@@ -150,7 +150,7 @@ for _, fragment := range []string{
 }
 ```
 
-- [ ] **Step 3: Write the failing executable interaction test**
+- [x] **Step 3: Write the failing executable interaction test**
 
 Add `TestHandlerClientCopiesFullTaskIDsAndSeparatesDrag`. Render one Ready task,
 build a `TasksDocument` with its actionable presentation prefix, and execute the
@@ -197,7 +197,7 @@ full-ID copy control, and require another full-ID write plus a view-local
 contains both `"Could not copy task ID"` and the full task ID while the write
 count remains unchanged.
 
-- [ ] **Step 4: Run the focused tests and verify the intended RED state**
+- [x] **Step 4: Run the focused tests and verify the intended RED state**
 
 Run:
 
@@ -212,7 +212,7 @@ client does not register copy controls, and no Clipboard API interaction or
 copy-status region exists. Confirm the failure is about those missing
 behaviors, not a harness syntax error.
 
-- [ ] **Step 5: Render a text-like semantic copy control on initial and refreshed cards**
+- [x] **Step 5: Render a text-like semantic copy control on initial and refreshed cards**
 
 Replace the initial task-card ID with:
 
@@ -249,7 +249,7 @@ task ID and prefix, the button's full task ID, and the nested code's visible
 prefix. Add an entry only when both ID values match and both prefix values
 match.
 
-- [ ] **Step 6: Add text-like styles and view-local live regions**
+- [x] **Step 6: Add text-like styles and view-local live regions**
 
 Add these style contracts:
 
@@ -291,7 +291,7 @@ In detail mode, append `taskIDCopyControl(task.id, task.id)` and another
 copy-status paragraph to the task-route header. Do not add either control to the
 new-task route.
 
-- [ ] **Step 7: Implement clipboard feedback and drag suppression**
+- [x] **Step 7: Implement clipboard feedback and drag suppression**
 
 Capture the board live region with:
 
@@ -353,7 +353,7 @@ copySuppressionTimer = window.setTimeout(() => {
 }, 250);
 ```
 
-- [ ] **Step 8: Run focused and package tests to verify GREEN**
+- [x] **Step 8: Run focused and package tests to verify GREEN**
 
 Run:
 
@@ -376,7 +376,7 @@ git diff --check
 Expected: all commands exit 0 and `gofmt` leaves the Go test syntactically
 clean.
 
-- [ ] **Step 9: Commit the tested client behavior**
+- [x] **Step 9: Commit the tested client behavior**
 
 Inspect `git diff` and stage only:
 
@@ -397,7 +397,7 @@ git commit -m "feat: copy web task IDs"
 - Consumes: the tested board and detail copy interaction from Task 1.
 - Produces: user-facing local-web documentation and final repository evidence.
 
-- [ ] **Step 1: Document task-ID copying in the local web board section**
+- [x] **Step 1: Document task-ID copying in the local web board section**
 
 After the paragraph describing card contents and detail links, add:
 
@@ -409,13 +409,13 @@ accessible confirmation; clipboard failures keep the full ID visible for manual
 copying.
 ```
 
-- [ ] **Step 2: Mark completed plan checkboxes**
+- [x] **Step 2: Mark completed plan checkboxes**
 
 Change each executed plan checkbox from `- [ ]` to `- [x]` only after its
 command or behavior has been observed. Leave any unexecuted item unchecked and
 report it rather than claiming completion.
 
-- [ ] **Step 3: Run final verification**
+- [x] **Step 3: Run final verification**
 
 Run fresh commands from the feature worktree:
 
