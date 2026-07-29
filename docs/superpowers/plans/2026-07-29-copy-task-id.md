@@ -430,7 +430,7 @@ git status --short
 Expected: tests and vet exit 0, `git diff --check` emits no errors, and status
 shows only the intended README and plan updates after Task 1's commit.
 
-- [ ] **Step 4: Commit documentation and the execution record**
+- [x] **Step 4: Commit documentation and the execution record**
 
 Inspect the diff, then run:
 
@@ -439,7 +439,7 @@ git add README.md docs/superpowers/plans/2026-07-29-copy-task-id.md
 git commit -m "docs: describe task ID copying"
 ```
 
-- [ ] **Step 5: Verify the branch before publication**
+- [x] **Step 5: Verify the branch before publication**
 
 Run:
 
