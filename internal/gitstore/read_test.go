@@ -200,6 +200,9 @@ func TestTipReadAcceptsInternallyValidNonRootCheckpointMismatch(t *testing.T) {
 func TestOwnedRefsValidateCanonicalAndTrackingNamespaces(t *testing.T) {
 	repository, config := writeRepository(t)
 	snapshot, pack, _ := writeRoot(t, repository, config)
+	if err := repository.ensureGitObjectIDWidth(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	validRecord := func(prefix string) []byte {
 		return []byte(prefix + pack.TaskID + "\x00" + snapshot.Head + "\x00\n")
 	}
@@ -225,7 +228,7 @@ func TestOwnedRefsValidateCanonicalAndTrackingNamespaces(t *testing.T) {
 		{name: "duplicate", contents: append(validRecord(taskRefPrefix), validRecord(taskRefPrefix)...)},
 		{name: "wrong prefix", contents: []byte("refs/heads/main\x00" + snapshot.Head + "\x00\n")},
 		{name: "invalid task ID", contents: []byte(taskRefPrefix + "not-a-task\x00" + snapshot.Head + "\x00\n")},
-		{name: "abbreviated object ID", contents: []byte(taskRefPrefix + pack.TaskID + "\x00" + snapshot.Head[:len(snapshot.Head)-1] + "\x00\n")},
+		{name: "abbreviated object ID", contents: []byte(taskRefPrefix + pack.TaskID + "\x00" + snapshot.Head[:len(snapshot.Head)-2] + "\x00\n")},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := repository.parseOwnedRefRecords(config, taskRefPrefix, test.contents, "")
@@ -233,6 +236,21 @@ func TestOwnedRefsValidateCanonicalAndTrackingNamespaces(t *testing.T) {
 				t.Fatalf("parseOwnedRefRecords() category = %q, want %q; error = %v", got, want, err)
 			}
 		})
+	}
+}
+
+func TestOwnedRefsCannotLearnObjectIDWidthFromUntrustedRecords(t *testing.T) {
+	repository := &Repository{}
+	config := core.ProjectConfig{Key: "WB"}
+	abbreviated := strings.Repeat("a", 38)
+	contents := []byte(taskRefPrefix + "WB-01K0M6B8A4FTT8C39MXXYTW7D1\x00" + abbreviated + "\x00\n")
+
+	_, err := repository.parseOwnedRefRecords(config, taskRefPrefix, contents, "")
+	if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
+		t.Fatalf("parseOwnedRefRecords() category = %q, want %q; error = %v", got, want, err)
+	}
+	if repository.objectIDBytes != 0 {
+		t.Fatalf("objectIDBytes = %d, want 0 after untrusted record", repository.objectIDBytes)
 	}
 }
 

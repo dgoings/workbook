@@ -143,6 +143,31 @@ func (r *Repository) validateFullObjectID(objectID string) error {
 	return nil
 }
 
+// ensureGitObjectIDWidth learns the repository's object-ID width from Git
+// itself, without writing an object. Untrusted ref text must never establish
+// this process-wide validation boundary.
+func (r *Repository) ensureGitObjectIDWidth(ctx context.Context) error {
+	r.metadataMu.RLock()
+	known := r.objectIDBytes != 0
+	r.metadataMu.RUnlock()
+	if known {
+		return nil
+	}
+
+	output, err := r.Git(ctx, nil, "hash-object", "--stdin")
+	if err != nil {
+		return err
+	}
+	objectID, err := gitSingleLine(output)
+	if err != nil {
+		return core.Wrap(core.CategoryOperational, "Git returned an invalid object ID", err)
+	}
+	if err := r.rememberGitObjectID(objectID); err != nil {
+		return core.Wrap(core.CategoryOperational, "Git returned an invalid object ID", err)
+	}
+	return nil
+}
+
 // Git executes Git against this repository's working-tree root.
 func (r *Repository) Git(ctx context.Context, stdin []byte, args ...string) ([]byte, error) {
 	return r.gitWithEnv(ctx, nil, stdin, args...)

@@ -152,6 +152,9 @@ func (r *Repository) listTaskRefs(ctx context.Context) ([]taskRefRecord, error) 
 }
 
 func (r *Repository) listOwnedTaskRefs(ctx context.Context, config core.ProjectConfig, prefix string) ([]taskRefRecord, error) {
+	if err := r.ensureGitObjectIDWidth(ctx); err != nil {
+		return nil, err
+	}
 	contents, err := r.Git(ctx, nil, "for-each-ref", "--format="+taskRefFormat, prefix)
 	if err != nil {
 		return nil, err
@@ -162,6 +165,9 @@ func (r *Repository) listOwnedTaskRefs(ctx context.Context, config core.ProjectC
 func (r *Repository) taskRef(ctx context.Context, taskID string) (taskRefRecord, bool, error) {
 	config, err := r.LoadConfig()
 	if err != nil {
+		return taskRefRecord{}, false, err
+	}
+	if err := r.ensureGitObjectIDWidth(ctx); err != nil {
 		return taskRefRecord{}, false, err
 	}
 	contents, err := r.Git(ctx, nil, "for-each-ref", "--format="+taskRefFormat, taskRefPrefix+taskID)
@@ -228,10 +234,10 @@ func (r *Repository) parseOwnedRefRecords(
 		if symbolicTarget != "" {
 			return nil, core.Errorf(core.CategoryCorruptData, "task ref %q must not be symbolic", refName)
 		}
-		if err := r.rememberGitObjectID(objectID); err != nil {
+		if err := r.validateFullObjectID(objectID); err != nil {
 			return nil, core.Wrap(core.CategoryCorruptData, "task ref object ID is invalid", err)
 		}
-		if err := r.validateFullObjectID(objectID); err != nil {
+		if err := r.rememberGitObjectID(objectID); err != nil {
 			return nil, core.Wrap(core.CategoryCorruptData, "task ref object ID is invalid", err)
 		}
 		if _, duplicate := seen[taskID]; duplicate {
