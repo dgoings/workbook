@@ -32,6 +32,23 @@ have no Git-process target. Reports use format version 2 and record the SHA-256
 of the resolved measured executable in
 `environment.workbookBinarySha256`, alongside its reported version and commit.
 
+### 2026-07-29 corrected local acceptance evidence
+
+The corrected local harness was exercised once per supported Git object format
+with the same reviewed product and harness binaries. Both invocations used 500
+total tasks (475 active and 25 tombstoned), 20 operations per task, 20 samples
+per scenario, a 60-second command timeout, and only the 12 local `cli-*` and
+`api-*` scenarios. See the shared [build and checksum
+provenance](2026-07-29-local-acceptance-provenance.md).
+
+| Format | Evidence | Outcome |
+| --- | --- | --- |
+| SHA-1 | [JSON](2026-07-29-local-acceptance-sha1.json), [Markdown](2026-07-29-local-acceptance-sha1.md) | All samples completed without timeout or product failure. Eight scenarios passed; `api-update`, both same-task bursts, and `cli-depend` missed their duration targets. |
+| SHA-256 | [JSON](2026-07-29-local-acceptance-sha256.json), [Markdown](2026-07-29-local-acceptance-sha256.md) | All samples completed without timeout or product failure. Six scenarios passed; `api-update`, both same-task bursts, `cli-depend`, `cli-free`, and `cli-move` missed their duration targets. |
+
+These valid target misses are retained as the one-shot evidence. The binaries
+were not rebuilt, and neither invocation was tuned or replaced.
+
 ## Bounded baseline
 
 The historical 2026-07-28 baseline predates report version 2 and used 500
@@ -66,10 +83,10 @@ recorded evidence rather than a reason to tune or rerun the baseline. The target
 numbers in a baseline report are reference budgets, not claims that the current
 implementation achieves them.
 
-The final performance acceptance task will run multiple samples after every
-target path is implemented. Acceptance may use a larger fixture, but it must use
-at least 500 total tasks, 25 tombstoned tasks, 20 operations per task, and 10
-active tasks.
+Current local acceptance evidence uses 20 samples per selected local scenario.
+Acceptance may use a larger fixture, but it must use at least 500 total tasks,
+25 tombstoned tasks, 20 operations per task, 10 active tasks, and 20 samples
+when any local scenario is selected.
 
 When the installed Git supports SHA-256 repositories, run the same bounded
 baseline once with `--object-format sha256` and write the results to
