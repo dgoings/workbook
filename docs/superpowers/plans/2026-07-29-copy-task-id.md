@@ -454,7 +454,7 @@ git log --oneline origin/main..HEAD
 Expected: all checks exit 0, the worktree is clean, and the log contains the
 design, implementation, and documentation commits only.
 
-- [ ] **Step 6: Publish for review**
+- [x] **Step 6: Publish for review**
 
 After completing the verification-before-completion gate:
 
