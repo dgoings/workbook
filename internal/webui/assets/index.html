@@ -52,8 +52,6 @@
     .task-card p { margin: 0; color: #56647a; font-size: .8rem; line-height: 1.36; overflow-wrap: anywhere; }
     .labels { display: flex; flex-wrap: wrap; gap: .25rem; margin-top: .65rem; }
     .label { max-width: 100%; overflow: hidden; padding: .14rem .28rem; border: 1px solid #d5deea; border-radius: 3px; color: #4e5d73; font-size: .64rem; text-overflow: ellipsis; white-space: nowrap; }
-    .unknown { margin-top: 1.1rem; border: 1px solid #b45309; background: #fffaf1; }
-    .unknown .column__header { border-top-color: #b45309; background: #fff7ed; }
     .task-list.can-drop { outline: 2px dashed #2457d6; outline-offset: -4px; background: rgba(36,87,214,.08); }
     .task-list.cannot-drop { outline: 2px dashed #b45309; outline-offset: -4px; background: rgba(180,83,9,.08); }
     .task-route { max-width: 48rem; margin: 0 auto; border: 1px solid #b9c6d8; background: #fff; box-shadow: 0 12px 32px rgba(23,32,51,.08); }
@@ -106,10 +104,6 @@
           <div class="task-list" data-status="{{ .Status }}" data-drop-status="{{ .Status }}">{{ range .Tasks }}{{ template "task" . }}{{ end }}</div>
         </section>
         {{ end }}
-      </section>
-      <section class="unknown" aria-label="Unrecognized task statuses">
-        <header class="column__header"><h2 class="column__heading">Unrecognized status <span class="count" data-count="unknown">{{ len .Board.UnknownTasks }}</span></h2><code class="ref-label">refs/workbook/status/unrecognized</code></header>
-        <div class="task-list" data-status="unknown">{{ range .Board.UnknownTasks }}{{ template "task" . }}{{ end }}</div>
       </section>
     </div>
   </main>
@@ -343,7 +337,10 @@
       }
       function render(tasks, presentation) {
         const grouped = new Map([...lists.keys()].map((status) => [status, []]));
-        tasks.forEach((task) => grouped.get(statuses.has(task.status) ? task.status : "unknown").push(task));
+        tasks.forEach((task) => {
+          const items = grouped.get(task.status);
+          if (items) items.push(task);
+        });
         grouped.forEach((items, status) => {
           const list = lists.get(status); list.classList.add("is-refreshing");
           const fragment = document.createDocumentFragment(); items.forEach((task) => fragment.append(card(task, presentation.get(task.id))));
@@ -429,7 +426,7 @@
       });
       renderRoute();
       refresh();
-      window.setInterval(refresh, 2000);
+      window.setInterval(refresh, 1000);
     })();
   </script>
 </body>
