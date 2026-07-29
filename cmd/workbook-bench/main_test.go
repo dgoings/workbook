@@ -128,17 +128,45 @@ func TestRunBenchmarkRunsOnlySelectedRemoteScenario(t *testing.T) {
 // resolution would construct unrelated cold, warm, or remote fixtures.
 func TestBenchmarkMainRunsOnlySelectedValidationScenarios(t *testing.T) {
 	workbook := buildWorkbookBinary(t)
-	outputRoot := t.TempDir()
-	var stdout, stderr bytes.Buffer
-	if exitCode := run(context.Background(), []string{
-		"--workbook", workbook,
-		"--tasks", "10",
-		"--operations", "4",
-		"--scenario", "validate-cached-unchanged",
-		"--output-json", filepath.Join(outputRoot, "report.json"),
-		"--output-markdown", filepath.Join(outputRoot, "report.md"),
-	}, &stdout, &stderr); exitCode != invocationExitCode || !strings.Contains(stderr.String(), "validation scenarios require at least 500 tasks and 20 operations per task") {
-		t.Fatalf("validation workload validation = exit %d stderr %q, want minimum guidance", exitCode, stderr.String())
+	for _, test := range []struct {
+		name       string
+		tasks      string
+		operations string
+		wantErr    bool
+	}{
+		{name: "task count below minimum", tasks: "499", operations: "20", wantErr: true},
+		{name: "history depth below minimum", tasks: "500", operations: "19", wantErr: true},
+		{name: "exact baseline minimum", tasks: "500", operations: "20"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			outputRoot := t.TempDir()
+			var stderr bytes.Buffer
+			flags, options := newFlagSet(&stderr)
+			if err := flags.Parse([]string{
+				"--workbook", workbook,
+				"--tasks", test.tasks,
+				"--operations", test.operations,
+				"--phase", "baseline",
+				"--scenario", "validate-cached-unchanged",
+				"--output-json", filepath.Join(outputRoot, "report.json"),
+				"--output-markdown", filepath.Join(outputRoot, "report.md"),
+			}); err != nil {
+				t.Fatal(err)
+			}
+			err := validateOptions(flags, options)
+			if test.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "validation scenarios require at least 500 tasks and 20 operations per task") {
+					t.Fatalf("validation minimum error = %v, want exact minimum guidance", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validate exact baseline minimum: %v", err)
+			}
+			if !reflect.DeepEqual(options.scenarios, []string{"validate-cached-unchanged"}) {
+				t.Fatalf("selected baseline scenarios = %v, want cached validation only", options.scenarios)
+			}
+		})
 	}
 
 	// The lower-dimensional direct runner is the separate regular diagnostic

@@ -99,24 +99,57 @@ func TestValidationScenarioSetupIsExcludedFromMeasurement(t *testing.T) {
 	}
 }
 
-// Mutation witness: accepting a mismatched validator count would record an
-// untrustworthy product measurement as benchmark evidence.
+// Mutation witness: accepting any altered literal validation result would
+// record an untrustworthy product measurement as benchmark evidence.
 func TestValidationScenarioOracleRejectsWrongCounts(t *testing.T) {
-	measurement := CommandMeasurement{
-		Sample: Sample{ExitCode: 0},
-		Stdout: successfulValidationEnvelope(false, 10, 1, 4, 10),
+	fixture := FixtureSpec{ActiveTasks: 10, OperationsPerTask: 4}
+	mutations := []struct {
+		name   string
+		mutate func(map[string]any, map[string]any)
+	}{
+		{name: "full", mutate: func(_ map[string]any, data map[string]any) { data["full"] = !data["full"].(bool) }},
+		{name: "tasksChecked", mutate: func(_ map[string]any, data map[string]any) { data["tasksChecked"] = data["tasksChecked"].(float64) + 1 }},
+		{name: "commitsChecked", mutate: func(_ map[string]any, data map[string]any) {
+			data["commitsChecked"] = data["commitsChecked"].(float64) + 1
+		}},
+		{name: "cacheHits", mutate: func(_ map[string]any, data map[string]any) { data["cacheHits"] = data["cacheHits"].(float64) + 1 }},
+		{name: "valid", mutate: func(_ map[string]any, data map[string]any) { data["valid"] = data["valid"].(float64) - 1 }},
+		{name: "invalid", mutate: func(_ map[string]any, data map[string]any) { data["invalid"] = float64(1) }},
+		{name: "pending", mutate: func(_ map[string]any, data map[string]any) { data["pending"] = float64(1) }},
+		{name: "failures", mutate: func(_ map[string]any, data map[string]any) {
+			data["failures"] = []any{map[string]any{"taskId": "WB-001"}}
+		}},
+		{name: "envelope-format", mutate: func(envelope map[string]any, _ map[string]any) { envelope["format"] = "wrong" }},
 	}
-	if err := verifyValidationMeasurement("validate-cached-unchanged", measurement, FixtureSpec{ActiveTasks: 10, OperationsPerTask: 4}); err == nil || !strings.Contains(err.Error(), "tasksChecked") {
-		t.Fatalf("wrong cached counts error = %v, want tasksChecked oracle rejection", err)
+	for _, scenario := range validationScenarioNames() {
+		for _, mutation := range mutations {
+			t.Run(scenario+"/"+mutation.name, func(t *testing.T) {
+				envelope, data := decodeValidationEnvelope(t, validationEnvelopeForScenario(scenario, fixture))
+				mutation.mutate(envelope, data)
+				stdout, err := json.Marshal(envelope)
+				if err != nil {
+					t.Fatal(err)
+				}
+				measurement := CommandMeasurement{Sample: Sample{ExitCode: 0}, Stdout: stdout}
+				if err := verifyValidationMeasurement(scenario, measurement, fixture); err == nil {
+					t.Fatal("corrupt literal result was accepted")
+				}
+			})
+		}
 	}
 }
 
 // Mutation witness: treating the limit as inclusive would report twelve Git
 // process samples as passing despite the approved fewer-than-twelve contract.
 func TestValidationScenarioTargetsUseExclusiveProcessLimit(t *testing.T) {
+	want := map[string]ScenarioTarget{
+		"validate-full-history":     {MaxMilliseconds: 10000, MaxGitProcesses: 12},
+		"validate-cached-unchanged": {MaxMilliseconds: 500, MaxGitProcesses: 12},
+		"validate-five-changed":     {MaxMilliseconds: 1000, MaxGitProcesses: 12},
+	}
 	for _, definition := range validationScenarioDefinitions {
-		if definition.target.MaxGitProcesses != 12 {
-			t.Fatalf("%s process target = %d, want 12", definition.name, definition.target.MaxGitProcesses)
+		if got, expected := definition.target, want[definition.name]; got != expected {
+			t.Fatalf("%s target = %#v, want %#v", definition.name, got, expected)
 		}
 		result := ScenarioResult{Name: definition.name, Target: &definition.target, Samples: []Sample{{ExitCode: 0, GitProcesses: 12}}}
 		if got := scenarioOutcome(result); got != "miss" {
@@ -185,6 +218,24 @@ func validationEnvelopeForArgs(args []string, tasks, operations int) []byte {
 		return successfulValidationEnvelope(true, tasks, tasks, tasks*operations, 0)
 	}
 	return successfulValidationEnvelope(false, tasks, 0, 0, tasks)
+}
+
+func validationEnvelopeForScenario(scenario string, fixture FixtureSpec) []byte {
+	want := expectedValidationResult(scenario, fixture)
+	return successfulValidationEnvelope(want.Full, fixture.ActiveTasks, want.TasksChecked, want.CommitsChecked, want.CacheHits)
+}
+
+func decodeValidationEnvelope(t *testing.T, stdout []byte) (map[string]any, map[string]any) {
+	t.Helper()
+	var envelope map[string]any
+	if err := json.Unmarshal(stdout, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	data, ok := envelope["data"].(map[string]any)
+	if !ok {
+		t.Fatal("validation envelope data is not an object")
+	}
+	return envelope, data
 }
 
 func buildValidationScenarioWorkbook(t *testing.T) string {
