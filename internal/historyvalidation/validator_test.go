@@ -52,11 +52,14 @@ func TestValidateContinuesAllTasksAndReportsEveryFirstFailure(t *testing.T) {
 	badOne := validationHistory(t, taskID(2), generationID(2), 40, 2)
 	badTwo := validationHistory(t, taskID(3), generationID(3), 50, 2)
 	badOne[1].State.Task.Title = "tampered"
-	badTwo[0].State.Task.Title = "tampered"
+	structuralMessage := "synthetic structural failure"
 	source := &validatorSource{heads: headsFor(valid, badOne, badTwo), histories: map[string]gitstore.TaskHistoryResult{
 		taskID(1): historyResult(taskID(1), valid[1].ObjectID, false, valid),
 		taskID(2): historyResult(taskID(2), badOne[1].ObjectID, false, badOne),
-		taskID(3): historyResult(taskID(3), badTwo[1].ObjectID, false, badTwo),
+		taskID(3): {
+			TaskID: taskID(3), Head: badTwo[1].ObjectID, CheckedCommits: 2,
+			Commits: badTwo[:1], Failure: &gitstore.HistoryFailure{TaskID: taskID(3), Commit: badTwo[1].ObjectID, Err: core.Errorf(core.CategoryCorruptData, "%s", structuralMessage)},
+		},
 	}}
 	got, err := (&Validator{source: source, cache: cache, config: testConfig()}).Validate(ctx, false)
 	if category := core.CategoryOf(err); category != core.CategoryCorruptData {
@@ -64,6 +67,12 @@ func TestValidateContinuesAllTasksAndReportsEveryFirstFailure(t *testing.T) {
 	}
 	if got.Valid != 1 || got.Invalid != 2 || len(got.Failures) != 2 || got.Failures[0].TaskID != taskID(2) || got.Failures[1].TaskID != taskID(3) {
 		t.Fatalf("failure result = %#v, want sorted first failures for both corrupt tasks", got)
+	}
+	if got.Failures[0].Commit != badOne[1].ObjectID || got.Failures[0].Category != string(core.CategoryCorruptData) || got.Failures[0].Message != "stored checkpoint differs from computed state" {
+		t.Fatalf("semantic failure = %#v, want exact first checkpoint failure", got.Failures[0])
+	}
+	if got.Failures[1].Commit != badTwo[1].ObjectID || got.Failures[1].Category != string(core.CategoryCorruptData) || got.Failures[1].Message != structuralMessage {
+		t.Fatalf("structural failure = %#v, want exact transport failure", got.Failures[1])
 	}
 }
 
@@ -158,11 +167,110 @@ func TestValidateCancellationPreservesCompletedTasksAndLeavesPending(t *testing.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cache := openTestCache(t, context.Background(), testConfig())
-	history := validationHistory(t, taskID(1), generationID(1), 120, 1)
-	source := &validatorSource{heads: []gitstore.TaskHead{{TaskID: taskID(1), ObjectID: history[0].ObjectID}}, histories: map[string]gitstore.TaskHistoryResult{taskID(1): historyResult(taskID(1), history[0].ObjectID, false, history)}, cancelOnRead: cancel}
+	first := validationHistory(t, taskID(1), generationID(1), 120, 1)
+	second := validationHistory(t, taskID(2), generationID(2), 130, 1)
+	source := &validatorSource{heads: headsFor(first, second), histories: map[string]gitstore.TaskHistoryResult{
+		taskID(1): historyResult(taskID(1), first[0].ObjectID, false, first),
+		taskID(2): historyResult(taskID(2), second[0].ObjectID, false, second),
+	}}
+	v := &Validator{source: source, cache: cache, config: testConfig(), afterRecord: cancel}
+	got, err := v.Validate(ctx, false)
+	if err != context.Canceled || got.Valid != 1 || got.Pending != 1 || got.Invalid != 0 || got.TasksChecked != 1 {
+		t.Fatalf("canceled result = %#v, error = %v; want first completion and second pending", got, err)
+	}
+}
+
+func TestValidateInterruptedPrepareCountsMismatchedAndMissingFinalHeadsPending(t *testing.T) {
+	// Production mutation: counting cache rows by task ID alone reports a previous head valid after final preparation is interrupted.
+	for _, scenario := range []struct {
+		name        string
+		finalHeads  []gitstore.TaskHead
+		wantValid   int
+		wantPending int
+	}{
+		{name: "changed", finalHeads: []gitstore.TaskHead{{TaskID: taskID(1), ObjectID: "new-head"}}, wantPending: 1},
+		{name: "added", finalHeads: []gitstore.TaskHead{{TaskID: taskID(1), ObjectID: "old-head"}, {TaskID: taskID(2), ObjectID: "added-head"}}, wantValid: 1, wantPending: 1},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			ctx := context.Background()
+			cache := openTestCache(t, ctx, testConfig())
+			seedPreparedValid(t, ctx, cache, gitstore.TaskHead{TaskID: taskID(1), ObjectID: "old-head"}, generationID(1))
+			canceled, cancel := context.WithCancel(ctx)
+			defer cancel()
+			source := &validatorSource{headLists: [][]gitstore.TaskHead{{{TaskID: taskID(1), ObjectID: "old-head"}}, scenario.finalHeads}, cancelOnListCall: 2, cancel: cancel}
+			got, err := (&Validator{source: source, cache: cache, config: testConfig()}).Validate(canceled, false)
+			if err != context.Canceled || got.Valid != scenario.wantValid || got.Pending != scenario.wantPending || got.Invalid != 0 || got.TaskCount != len(scenario.finalHeads) {
+				t.Fatalf("interrupted %s result = %#v, error = %v", scenario.name, got, err)
+			}
+		})
+	}
+}
+
+func TestValidateInterruptedInitialPrepareCountsEveryHeadPending(t *testing.T) {
+	// Production mutation: returning the empty result after an interrupted initial Prepare omits known canonical heads.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cache := openTestCache(t, context.Background(), testConfig())
+	source := &validatorSource{heads: []gitstore.TaskHead{{TaskID: taskID(1), ObjectID: "first-head"}, {TaskID: taskID(2), ObjectID: "second-head"}}, cancelOnListCall: 1, cancel: cancel}
 	got, err := (&Validator{source: source, cache: cache, config: testConfig()}).Validate(ctx, false)
-	if err != context.Canceled || got.Pending != 1 || got.Invalid != 0 {
-		t.Fatalf("canceled result = %#v, error = %v; want pending and context cancellation", got, err)
+	if err != context.Canceled || got.TaskCount != 2 || got.Valid != 0 || got.Invalid != 0 || got.Pending != 2 {
+		t.Fatalf("initial interruption result = %#v, error = %v; want both known heads pending", got, err)
+	}
+}
+
+func TestValidateCorruptDataOutranksFinalHeadRace(t *testing.T) {
+	// Production mutation: returning stale-write first hides corruption that the same run already observed.
+	ctx := context.Background()
+	cache := openTestCache(t, ctx, testConfig())
+	bad := validationHistory(t, taskID(1), generationID(1), 140, 1)
+	bad[0].State.Task.Title = "tampered"
+	good := validationHistory(t, taskID(2), generationID(2), 150, 1)
+	source := &validatorSource{headLists: [][]gitstore.TaskHead{
+		{{TaskID: taskID(1), ObjectID: bad[0].ObjectID}, {TaskID: taskID(2), ObjectID: good[0].ObjectID}},
+		{{TaskID: taskID(1), ObjectID: bad[0].ObjectID}, {TaskID: taskID(2), ObjectID: "raced-head"}},
+	}, histories: map[string]gitstore.TaskHistoryResult{
+		taskID(1): historyResult(taskID(1), bad[0].ObjectID, false, bad),
+		taskID(2): historyResult(taskID(2), good[0].ObjectID, false, good),
+	}}
+	got, err := (&Validator{source: source, cache: cache, config: testConfig()}).Validate(ctx, false)
+	if core.CategoryOf(err) != core.CategoryCorruptData || got.Invalid != 1 || got.Pending != 1 {
+		t.Fatalf("combined corrupt/race result = %#v, error = %v; want corrupt-data before stale-write", got, err)
+	}
+}
+
+func TestValidateCachesFiveChangedHeadsAcrossFiveHundredTasks(t *testing.T) {
+	// Production mutation: replaying unchanged completed histories defeats the bounded 500-task cache contract.
+	ctx := context.Background()
+	cache := openTestCache(t, ctx, testConfig())
+	source := &validatorSource{histories: map[string]gitstore.TaskHistoryResult{}}
+	initial := make([]gitstore.TaskHead, 0, 500)
+	histories := make(map[string][]gitstore.HistoryCommit, 500)
+	for index := 0; index < 500; index++ {
+		id := "WB-" + validatorULID(1000+index)
+		history := validationHistory(t, id, validatorULID(2000+index), 3000+index*3, 1)
+		histories[id] = history
+		initial = append(initial, gitstore.TaskHead{TaskID: id, ObjectID: history[0].ObjectID})
+		source.histories[id] = historyResult(id, history[0].ObjectID, false, history)
+	}
+	source.heads = initial
+	v := &Validator{source: source, cache: cache, config: testConfig()}
+	if _, err := v.Validate(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	changed := append([]gitstore.TaskHead(nil), initial...)
+	for index := 0; index < 5; index++ {
+		id := changed[index].TaskID
+		history := append(histories[id], validationHistory(t, id, histories[id][0].State.History.Generation, 5000+index*3, 2)[1])
+		// The second record must retain the real root parent and operation stream.
+		history[1].Parents = []string{history[0].ObjectID}
+		histories[id] = history
+		changed[index].ObjectID = history[1].ObjectID
+		source.histories[id] = historyResult(id, history[1].ObjectID, true, history[1:])
+	}
+	source.heads = changed
+	got, err := v.Validate(ctx, false)
+	if err != nil || got.TasksChecked != 5 || got.CommitsChecked != 5 || got.CacheHits != 495 || got.Valid != 500 || got.Pending != 0 {
+		t.Fatalf("500-task incremental result = %#v, error = %v; want 5 tasks, 5 commits, 495 hits", got, err)
 	}
 }
 
@@ -190,6 +298,11 @@ func TestValidateNeverMutatesCanonicalRefs(t *testing.T) {
 		"01K0M6B8A4FTT8C39MXXYTW7D1",
 		"01K0M6B8A4FTT8C39MXXYTW7E1",
 		"01K0M6B8A4FTT8C39MXXYTW7F1",
+		"01K0M6B8A4FTT8C39MXXYTW7G1",
+		"01K0M6B8A4FTT8C39MXXYTW7H1",
+		"01K0M6B8A4FTT8C39MXXYTW7J1",
+		"01K0M6B8A4FTT8C39MXXYTW7K1",
+		"01K0M6B8A4FTT8C39MXXYTW7M1",
 	}
 	index := 0
 	newID := core.IDSourceFunc(func() (string, error) { value := ids[index]; index++; return value, nil })
@@ -198,7 +311,20 @@ func TestValidateNeverMutatesCanonicalRefs(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := core.Service{Config: config, Reader: repo, Writer: repo, IDs: newID, Now: func() time.Time { return time.Date(2026, time.July, 29, 12, 0, 0, 0, time.UTC) }, Actor: "validator@example.test"}
-	if _, err := service.CreateMutation(ctx, core.CreateInput{Title: "immutable history"}); err != nil {
+	first, err := service.CreateMutation(ctx, core.CreateInput{Title: "first immutable history"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.CreateMutation(ctx, core.CreateInput{Title: "second immutable history"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstTitle := "first updated history"
+	if _, err := service.UpdateMutation(ctx, first.Task.ID, core.UpdateInput{Title: &firstTitle}); err != nil {
+		t.Fatal(err)
+	}
+	secondTitle := "second updated history"
+	if _, err := service.UpdateMutation(ctx, second.Task.ID, core.UpdateInput{Title: &secondTitle}); err != nil {
 		t.Fatal(err)
 	}
 	before, err := repo.Git(ctx, nil, "for-each-ref", "--format=%(refname)%00%(objectname)", "refs/workbook/tasks/")
@@ -210,8 +336,12 @@ func TestValidateNeverMutatesCanonicalRefs(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = v.Close() })
-	if _, err := v.Validate(ctx, false); err != nil {
+	result, err := v.Validate(ctx, false)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if result.TaskCount != 2 || result.CommitsChecked != 4 || result.Valid != 2 {
+		t.Fatalf("real Git validation result = %#v, want two two-commit histories", result)
 	}
 	after, err := repo.Git(ctx, nil, "for-each-ref", "--format=%(refname)%00%(objectname)", "refs/workbook/tasks/")
 	if err != nil {
@@ -223,25 +353,35 @@ func TestValidateNeverMutatesCanonicalRefs(t *testing.T) {
 }
 
 type validatorSource struct {
-	heads        []gitstore.TaskHead
-	headLists    [][]gitstore.TaskHead
-	historyIndex int
-	histories    map[string]gitstore.TaskHistoryResult
-	lastRequests []gitstore.TaskHistoryRequest
-	reads        int
-	cancelOnRead context.CancelFunc
+	heads            []gitstore.TaskHead
+	headLists        [][]gitstore.TaskHead
+	historyIndex     int
+	histories        map[string]gitstore.TaskHistoryResult
+	lastRequests     []gitstore.TaskHistoryRequest
+	reads            int
+	cancelOnRead     context.CancelFunc
+	cancelOnListCall int
+	cancel           context.CancelFunc
 }
 
 func (s *validatorSource) ListTaskHeads(_ context.Context, _ core.ProjectConfig) ([]gitstore.TaskHead, error) {
+	s.historyIndex++
 	if len(s.headLists) > 0 {
-		index := s.historyIndex
+		index := s.historyIndex - 1
 		if index >= len(s.headLists) {
 			index = len(s.headLists) - 1
 		}
-		s.historyIndex++
-		return append([]gitstore.TaskHead(nil), s.headLists[index]...), nil
+		heads := append([]gitstore.TaskHead(nil), s.headLists[index]...)
+		if s.cancel != nil && s.cancelOnListCall == s.historyIndex {
+			s.cancel()
+		}
+		return heads, nil
 	}
-	return append([]gitstore.TaskHead(nil), s.heads...), nil
+	heads := append([]gitstore.TaskHead(nil), s.heads...)
+	if s.cancel != nil && s.cancelOnListCall == s.historyIndex {
+		s.cancel()
+	}
+	return heads, nil
 }
 
 func (s *validatorSource) ReadTaskHistories(_ context.Context, _ core.ProjectConfig, requests []gitstore.TaskHistoryRequest) ([]gitstore.TaskHistoryResult, error) {
@@ -299,4 +439,23 @@ func headsFor(histories ...[]gitstore.HistoryCommit) []gitstore.TaskHead {
 	}
 	sort.Slice(heads, func(i, j int) bool { return heads[i].TaskID < heads[j].TaskID })
 	return heads
+}
+
+func seedPreparedValid(t *testing.T, ctx context.Context, cache *Cache, head gitstore.TaskHead, generation string) {
+	t.Helper()
+	if _, err := cache.Prepare(ctx, []gitstore.TaskHead{head}, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.Record(ctx, Completion{
+		TaskID:               head.TaskID,
+		ObservedHead:         head.ObjectID,
+		Status:               StatusValid,
+		LastValidCommit:      "cached-" + head.TaskID,
+		LastValidGeneration:  generation,
+		LastValidState:       canonicalState(t, head.TaskID, generation, "cached"),
+		ValidatedCommitIDs:   []string{"cached-" + head.TaskID},
+		ValidatedCommitCount: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
 }

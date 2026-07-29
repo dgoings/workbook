@@ -31,9 +31,10 @@ type source interface {
 
 // Validator coordinates bounded Git history reads with the disposable cache.
 type Validator struct {
-	source source
-	cache  *Cache
-	config core.ProjectConfig
+	source      source
+	cache       *Cache
+	config      core.ProjectConfig
+	afterRecord func() // test hook for deterministic interruption between task completions
 }
 
 // Open creates a validator for repository's shared Git directory.
@@ -73,9 +74,9 @@ func (v *Validator) Validate(ctx context.Context, full bool) (Result, error) {
 	prepared, err := v.cache.Prepare(ctx, initialHeads, full)
 	if err != nil {
 		if contextErr := ctx.Err(); contextErr != nil {
-			return result, contextErr
+			return v.partialResult(ctx, initialHeads, result), contextErr
 		}
-		return result, err
+		return v.partialResult(ctx, initialHeads, result), err
 	}
 
 	requests := make([]gitstore.TaskHistoryRequest, 0, len(initialHeads))
@@ -128,6 +129,9 @@ func (v *Validator) Validate(ctx context.Context, full bool) (Result, error) {
 					return v.partialResult(ctx, initialHeads, result), contextErr
 				}
 				return v.partialResult(ctx, initialHeads, result), err
+			}
+			if v.afterRecord != nil {
+				v.afterRecord()
 			}
 		}
 	}
@@ -271,7 +275,16 @@ func (v *Validator) resultFromSnapshot(ctx context.Context, heads []gitstore.Tas
 	}
 	prior.Valid, prior.Invalid, prior.Pending = 0, 0, 0
 	prior.Failures = nil
+	byTaskID := make(map[string]CachedTask, len(cached))
 	for _, task := range cached {
+		byTaskID[task.TaskID] = task
+	}
+	for _, head := range heads {
+		task, found := byTaskID[head.TaskID]
+		if !found || task.ObservedHead != head.ObjectID || task.ValidatorVersion != ValidatorVersion {
+			prior.Pending++
+			continue
+		}
 		switch task.Status {
 		case StatusValid:
 			prior.Valid++
