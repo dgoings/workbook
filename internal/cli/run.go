@@ -709,6 +709,12 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 		func(requestContext context.Context, id string) (core.MutationResult, error) {
 			return service.RestoreMutation(requestContext, id)
 		},
+		func(requestContext context.Context, id, dependency string) (core.MutationResult, error) {
+			return service.DependMutation(requestContext, id, dependency)
+		},
+		func(requestContext context.Context, id, dependency string) (core.MutationResult, error) {
+			return service.FreeMutation(requestContext, id, dependency)
+		},
 	)
 	listener, err := net.Listen("tcp", *addr)
 	if err != nil {

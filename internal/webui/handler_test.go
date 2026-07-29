@@ -181,6 +181,8 @@ func TestHandlerDeletesRestoresAndListsTombstonedTasks(t *testing.T) {
 			deleted.Deleted = false
 			return core.MutationResult{Task: deleted}, nil
 		},
+		nil,
+		nil,
 	)
 
 	deletedResponse := request(t, handler, http.MethodGet, "/api/tasks?deleted=true")
@@ -202,6 +204,102 @@ func TestHandlerDeletesRestoresAndListsTombstonedTasks(t *testing.T) {
 	restoreResponse := request(t, handler, http.MethodPost, "/api/tasks/"+deleted.ID+"/restore")
 	if restoreResponse.Code != http.StatusOK || restoredID != deleted.ID {
 		t.Fatalf("POST restore status/id = %d/%q, want %d/%q", restoreResponse.Code, restoredID, http.StatusOK, deleted.ID)
+	}
+}
+
+func TestHandlerAddsAndRemovesTaskDependencies(t *testing.T) {
+	dependent := boardTasks()[0]
+	prerequisite := boardTasks()[1]
+	var calls []string
+	warning := core.Warning{Code: core.WarningProjectionUpdate, Message: "cache update failed"}
+	handler := NewHandlerWithTaskMutations(
+		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
+		unexpectedTaskPosition(t), nil, nil,
+		func(_ context.Context, id, dependency string) (core.MutationResult, error) {
+			calls = append(calls, "add:"+id+":"+dependency)
+			return core.MutationResult{Task: dependent, Warnings: []core.Warning{warning}}, nil
+		},
+		func(_ context.Context, id, dependency string) (core.MutationResult, error) {
+			calls = append(calls, "remove:"+id+":"+dependency)
+			return core.MutationResult{Task: dependent}, nil
+		},
+	)
+	path := "/api/tasks/" + dependent.ID + "/dependencies/" + prerequisite.ID
+
+	add := request(t, handler, http.MethodPut, path)
+	if add.Code != http.StatusOK {
+		t.Fatalf("PUT dependency status = %d; body = %s", add.Code, add.Body.String())
+	}
+	var addDocument TaskMutationDocument
+	if err := json.Unmarshal(add.Body.Bytes(), &addDocument); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(addDocument.Warnings, []core.Warning{warning}) {
+		t.Fatalf("PUT warnings = %#v, want warning", addDocument.Warnings)
+	}
+
+	remove := request(t, handler, http.MethodDelete, path)
+	if remove.Code != http.StatusOK {
+		t.Fatalf("DELETE dependency status = %d; body = %s", remove.Code, remove.Body.String())
+	}
+	wantCalls := []string{
+		"add:" + dependent.ID + ":" + prerequisite.ID,
+		"remove:" + dependent.ID + ":" + prerequisite.ID,
+	}
+	if !reflect.DeepEqual(calls, wantCalls) {
+		t.Fatalf("dependency callbacks = %#v, want %#v", calls, wantCalls)
+	}
+}
+
+func TestHandlerReturnsDependencyMutationErrors(t *testing.T) {
+	dependent := boardTasks()[0]
+	prerequisite := boardTasks()[1]
+	handler := NewHandlerWithTaskMutations(
+		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
+		unexpectedTaskPosition(t), nil, nil,
+		func(context.Context, string, string) (core.MutationResult, error) {
+			return core.MutationResult{}, core.Errorf(core.CategoryValidation, "dependency would create a cycle")
+		},
+		nil,
+	)
+	response := request(t, handler, http.MethodPut, "/api/tasks/"+dependent.ID+"/dependencies/"+prerequisite.ID)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("PUT dependency error status = %d, want %d", response.Code, http.StatusBadRequest)
+	}
+	var document ErrorDocument
+	if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+		t.Fatalf("decode dependency error: %v", err)
+	}
+	if document.Format != "workbook.error" || document.Version != 1 ||
+		document.Error.Category != core.CategoryValidation || document.Error.Message != "dependency would create a cycle" {
+		t.Fatalf("dependency error document = %#v", document)
+	}
+}
+
+func TestHandlerRejectsWrongDependencyMethodsAndMalformedPaths(t *testing.T) {
+	dependent := boardTasks()[0]
+	prerequisite := boardTasks()[1]
+	handler := NewHandlerWithTaskMutations(
+		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
+		unexpectedTaskPosition(t), nil, nil, nil, nil,
+	)
+	path := "/api/tasks/" + dependent.ID + "/dependencies/" + prerequisite.ID
+	response := request(t, handler, http.MethodPost, path)
+	if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != "PUT, DELETE" {
+		t.Fatalf("POST dependency = %d Allow %q, want %d and %q", response.Code, response.Header().Get("Allow"), http.StatusMethodNotAllowed, "PUT, DELETE")
+	}
+	for _, malformed := range []string{
+		"/api/tasks/" + dependent.ID + "/dependencies",
+		"/api/tasks/" + dependent.ID + "/dependencies/",
+		path + "/extra",
+	} {
+		response := request(t, handler, http.MethodPut, malformed)
+		if response.Code != http.StatusNotFound {
+			t.Errorf("PUT %s status = %d, want %d", malformed, response.Code, http.StatusNotFound)
+		}
 	}
 }
 
@@ -1051,6 +1149,8 @@ func TestHandlerPositionsTask(t *testing.T) {
 		},
 		nil,
 		nil,
+		nil,
+		nil,
 	)
 
 	response := requestJSON(
@@ -1098,6 +1198,8 @@ func TestHandlerValidatesPositionRequests(t *testing.T) {
 		},
 		nil,
 		nil,
+		nil,
+		nil,
 	)
 
 	response := requestJSON(t, handler, http.MethodPatch, "/api/tasks/"+taskID+"/position",
@@ -1119,6 +1221,8 @@ func TestHandlerValidatesPositionRequests(t *testing.T) {
 		unexpectedTaskUpdate(t),
 		unexpectedStatusUpdate(t),
 		unexpectedTaskPosition(t),
+		nil,
+		nil,
 		nil,
 		nil,
 	)
