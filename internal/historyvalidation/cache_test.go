@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -510,6 +511,89 @@ func TestOpenCacheUsesCommonGitDirectoryAcrossWorktrees(t *testing.T) {
 	}
 	if len(snapshot) != 1 || snapshot[0].ObservedHead != head.ObjectID || snapshot[0].Status != StatusPending {
 		t.Fatalf("linked-worktree snapshot = %#v, want root worktree's pending row", snapshot)
+	}
+}
+
+func TestOpenCacheSerializesConcurrentRebuildsAcrossWorktrees(t *testing.T) {
+	// Production mutation: removing the common-directory initialization lock or its under-lock usability recheck lets a later rename discard progress recorded through the first cache handle.
+	ctx := context.Background()
+	commonGitDir := t.TempDir()
+	cacheDir := filepath.Join(commonGitDir, "workbook")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := os.OpenFile(
+		filepath.Join(cacheDir, "validation.sqlite.lock"),
+		os.O_CREATE|os.O_RDWR,
+		0o600,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lock.Close() })
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatalf("lock validation cache initialization: %v", err)
+	}
+
+	type openResult struct {
+		cache *Cache
+		err   error
+	}
+	start := make(chan struct{})
+	results := make(chan openResult, 2)
+	for range 2 {
+		go func() {
+			<-start
+			cache, err := OpenCache(ctx, commonGitDir, testConfig())
+			results <- openResult{cache: cache, err: err}
+		}()
+	}
+	close(start)
+
+	var opened []openResult
+	premature := false
+	select {
+	case result := <-results:
+		opened = append(opened, result)
+		premature = true
+	case <-time.After(250 * time.Millisecond):
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); err != nil {
+		t.Fatalf("unlock validation cache initialization: %v", err)
+	}
+	for len(opened) < 2 {
+		select {
+		case result := <-results:
+			opened = append(opened, result)
+		case <-time.After(5 * time.Second):
+			t.Fatal("concurrent OpenCache calls did not finish after releasing initialization lock")
+		}
+	}
+	for _, result := range opened {
+		if result.cache != nil {
+			t.Cleanup(func() { _ = result.cache.Close() })
+		}
+		if result.err != nil {
+			t.Fatalf("OpenCache() error = %v", result.err)
+		}
+	}
+	if premature {
+		t.Fatal("OpenCache returned while another process held the common-directory initialization lock")
+	}
+
+	head := gitstore.TaskHead{TaskID: taskID(1), ObjectID: "concurrent-head"}
+	if _, err := opened[0].cache.Prepare(ctx, []gitstore.TaskHead{head}, false); err != nil {
+		t.Fatalf("Prepare(first handle) error = %v", err)
+	}
+	recordSimpleValid(t, ctx, opened[0].cache, head, "concurrent-commit", generationID(1))
+	snapshot, err := opened[1].cache.Snapshot(ctx, []string{head.TaskID})
+	if err != nil {
+		t.Fatalf("Snapshot(second handle) error = %v", err)
+	}
+	if len(snapshot) != 1 ||
+		snapshot[0].Status != StatusValid ||
+		snapshot[0].LastValidCommit != "concurrent-commit" {
+		t.Fatalf("second handle snapshot = %#v, want first handle's recorded completion", snapshot)
 	}
 }
 

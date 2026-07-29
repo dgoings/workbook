@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
@@ -17,9 +19,10 @@ import (
 )
 
 const (
-	ValidatorVersion = 1
-	schemaVersion    = "1"
-	cacheFilename    = "validation.sqlite"
+	ValidatorVersion           = 1
+	schemaVersion              = "1"
+	cacheFilename              = "validation.sqlite"
+	initializationLockFilename = cacheFilename + ".lock"
 )
 
 type Status string
@@ -112,19 +115,29 @@ func OpenCache(ctx context.Context, commonGitDir string, config core.ProjectConf
 		return nil, cacheError("create validation cache directory", err)
 	}
 
-	if _, err := os.Stat(path); err == nil {
-		db, openErr := openDatabase(path)
-		if openErr == nil && databaseUsable(ctx, db, config.ProjectID) {
-			return &Cache{path: path, db: db}, nil
-		}
-		if db != nil {
-			_ = db.Close()
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, cacheError("inspect validation cache", err)
+	db, usable, err := openUsableDatabase(ctx, path, config.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	if usable {
+		return &Cache{path: path, db: db}, nil
 	}
 
-	db, err := rebuildDatabase(ctx, path, config.ProjectID)
+	lock, err := acquireInitializationLock(ctx, filepath.Join(filepath.Dir(path), initializationLockFilename))
+	if err != nil {
+		return nil, err
+	}
+	defer releaseInitializationLock(lock)
+
+	db, usable, err = openUsableDatabase(ctx, path, config.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	if usable {
+		return &Cache{path: path, db: db}, nil
+	}
+
+	db, err = rebuildDatabase(ctx, path, config.ProjectID)
 	if err != nil {
 		return nil, err
 	}
@@ -488,6 +501,60 @@ func openDatabase(path string) (*sql.DB, error) {
 		return nil, cacheError("open validation cache", err)
 	}
 	return db, nil
+}
+
+func openUsableDatabase(ctx context.Context, path, projectID string) (*sql.DB, bool, error) {
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, nil
+		}
+		return nil, false, cacheError("inspect validation cache", err)
+	}
+	db, err := openDatabase(path)
+	if err != nil {
+		return nil, false, err
+	}
+	if databaseUsable(ctx, db, projectID) {
+		return db, true, nil
+	}
+	_ = db.Close()
+	if err := ctx.Err(); err != nil {
+		return nil, false, cacheError("inspect validation cache", err)
+	}
+	return nil, false, nil
+}
+
+func acquireInitializationLock(ctx context.Context, path string) (*os.File, error) {
+	lock, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, cacheError("open validation cache initialization lock", err)
+	}
+	for {
+		err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return lock, nil
+		}
+		if !errors.Is(err, syscall.EAGAIN) && !errors.Is(err, syscall.EWOULDBLOCK) {
+			_ = lock.Close()
+			return nil, cacheError("acquire validation cache initialization lock", err)
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			_ = lock.Close()
+			return nil, cacheError("acquire validation cache initialization lock", ctx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
+func releaseInitializationLock(lock *os.File) {
+	if lock == nil {
+		return
+	}
+	_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	_ = lock.Close()
 }
 
 func rebuildDatabase(ctx context.Context, path, projectID string) (*sql.DB, error) {
