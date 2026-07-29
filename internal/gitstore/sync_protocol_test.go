@@ -6,19 +6,26 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/dgoings/workbook/internal/core"
 )
 
 func TestParseRemoteTaskHeadsAcceptsFullSHA1AndSHA256Records(t *testing.T) {
+	const (
+		firstTask  = "WB-01K0M6B8A4FTT8C39MXXYTW7D1"
+		secondTask = "WB-01K0M6B8A4FTT8C39MXXYTW7D2"
+	)
 	for _, objectID := range []string{strings.Repeat("a", 40), strings.Repeat("b", 64)} {
 		t.Run(fmt.Sprintf("%d-hex", len(objectID)), func(t *testing.T) {
 			repository := &Repository{objectIDBytes: len(objectID) / 2}
-			output := []byte(objectID + "\trefs/workbook/tasks/task-a\n" + objectID + "\trefs/workbook/tasks/task-b\n")
+			output := []byte(objectID + "\trefs/workbook/tasks/" + firstTask + "\n" +
+				objectID + "\trefs/workbook/tasks/" + secondTask + "\n")
 
-			got, err := repository.parseRemoteTaskHeads(output)
+			got, err := repository.parseRemoteTaskHeads(core.ProjectConfig{Key: "WB"}, output)
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := map[string]string{"task-a": objectID, "task-b": objectID}
+			want := map[string]string{firstTask: objectID, secondTask: objectID}
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("remote task heads = %#v, want %#v", got, want)
 			}
@@ -27,25 +34,30 @@ func TestParseRemoteTaskHeadsAcceptsFullSHA1AndSHA256Records(t *testing.T) {
 }
 
 func TestParseRemoteTaskHeadsRejectsInvalidRecords(t *testing.T) {
+	const taskID = "WB-01K0M6B8A4FTT8C39MXXYTW7D1"
 	objectID := strings.Repeat("a", 40)
-	valid := objectID + "\trefs/workbook/tasks/task-a\n"
+	valid := objectID + "\trefs/workbook/tasks/" + taskID + "\n"
 	tests := []struct {
 		name   string
 		output string
 	}{
 		{name: "unterminated", output: strings.TrimSuffix(valid, "\n")},
 		{name: "wrong prefix", output: objectID + "\trefs/heads/main\n"},
-		{name: "nested task", output: objectID + "\trefs/workbook/tasks/task-a/nested\n"},
+		{name: "nested task", output: objectID + "\trefs/workbook/tasks/" + taskID + "/nested\n"},
 		{name: "duplicate task", output: valid + valid},
-		{name: "abbreviated object ID", output: objectID[:38] + "\trefs/workbook/tasks/task-a\n"},
-		{name: "extra field", output: objectID + "\trefs/workbook/tasks/task-a\textra\n"},
-		{name: "symbolic record", output: "ref: refs/heads/main\trefs/workbook/tasks/task-a\n"},
-		{name: "peeled ref", output: objectID + "\trefs/workbook/tasks/task-a^{}\n"},
+		{name: "invalid task ID", output: objectID + "\trefs/workbook/tasks/not-a-workbook-task\n"},
+		{name: "abbreviated object ID", output: objectID[:38] + "\trefs/workbook/tasks/" + taskID + "\n"},
+		{name: "extra field", output: objectID + "\trefs/workbook/tasks/" + taskID + "\textra\n"},
+		{name: "symbolic record", output: "ref: refs/heads/main\trefs/workbook/tasks/" + taskID + "\n"},
+		{name: "peeled ref", output: objectID + "\trefs/workbook/tasks/" + taskID + "^{}\n"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			repository := &Repository{objectIDBytes: 20}
-			if _, err := repository.parseRemoteTaskHeads([]byte(test.output)); err == nil {
+			if _, err := repository.parseRemoteTaskHeads(
+				core.ProjectConfig{Key: "WB"},
+				[]byte(test.output),
+			); err == nil {
 				t.Fatalf("parseRemoteTaskHeads(%q) error = nil", test.output)
 			}
 		})

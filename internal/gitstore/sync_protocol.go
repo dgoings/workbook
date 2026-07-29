@@ -11,7 +11,10 @@ import (
 // parseRemoteTaskHeads accepts only the flat Workbook task refs emitted by a
 // wildcard `git ls-remote --refs` query. Object IDs are checked against the
 // repository format previously observed from local Git output.
-func (r *Repository) parseRemoteTaskHeads(output []byte) (map[string]string, error) {
+func (r *Repository) parseRemoteTaskHeads(
+	config core.ProjectConfig,
+	output []byte,
+) (map[string]string, error) {
 	heads := make(map[string]string)
 	if len(output) == 0 {
 		return heads, nil
@@ -35,6 +38,9 @@ func (r *Repository) parseRemoteTaskHeads(output []byte) (map[string]string, err
 		taskID := strings.TrimPrefix(refName, taskRefPrefix)
 		if taskID == "" || strings.Contains(taskID, "/") || strings.HasSuffix(taskID, "^{}") {
 			return nil, core.Errorf(core.CategoryOperational, "Git returned invalid remote task ref %q", refName)
+		}
+		if err := core.ValidateTaskID(config.Key, taskID); err != nil {
+			return nil, core.Wrap(core.CategoryCorruptData, "remote task ref ID is invalid", err)
 		}
 		if _, duplicate := heads[taskID]; duplicate {
 			return nil, core.Errorf(core.CategoryOperational, "Git returned duplicate remote task ref %q", refName)
