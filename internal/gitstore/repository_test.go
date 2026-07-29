@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -234,6 +235,40 @@ exit 9
 	}
 	if strings.Contains(err.Error(), "misleading stdout") {
 		t.Fatalf("Git() error contains stdout: %q", err)
+	}
+}
+
+func TestGitResultRetainsNonzeroStreamsAndNotifiesObserverOnce(t *testing.T) {
+	gitPath := filepath.Join(t.TempDir(), "git")
+	script := `#!/bin/sh
+printf 'porcelain stdout\n'
+printf 'transport stderr\n' >&2
+exit 9
+`
+	if err := os.WriteFile(gitPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("WriteFile(fake git) error = %v", err)
+	}
+	repo := &Repository{Root: t.TempDir(), gitPath: gitPath}
+	commands := 0
+	repo.commandObserver = func(args []string) {
+		commands++
+		if got, want := args, []string{"push", "--porcelain", "origin"}; !slices.Equal(got, want) {
+			t.Fatalf("observed command = %q, want %q", got, want)
+		}
+	}
+
+	result := repo.gitWithEnvResult(context.Background(), []string{"WORKBOOK_TEST_TRANSPORT=1"}, nil, "push", "--porcelain", "origin")
+	if got, want := string(result.stdout), "porcelain stdout\n"; got != want {
+		t.Fatalf("result stdout = %q, want %q", got, want)
+	}
+	if got, want := string(result.stderr), "transport stderr\n"; got != want {
+		t.Fatalf("result stderr = %q, want %q", got, want)
+	}
+	if result.err == nil {
+		t.Fatal("result error = nil, want exit error")
+	}
+	if commands != 1 {
+		t.Fatalf("observed commands = %d, want 1", commands)
 	}
 }
 

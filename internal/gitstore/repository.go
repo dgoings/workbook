@@ -16,6 +16,15 @@ import (
 
 type gitCommandObserver func([]string)
 
+// gitCommandResult preserves both Git output streams even when the command
+// exits nonzero. It is private because public Repository.Git intentionally
+// retains its stdout-or-error contract.
+type gitCommandResult struct {
+	stdout []byte
+	stderr []byte
+	err    error
+}
+
 // Repository identifies a working tree and the Git directory shared by its
 // worktrees.
 type Repository struct {
@@ -140,20 +149,24 @@ func (r *Repository) Git(ctx context.Context, stdin []byte, args ...string) ([]b
 }
 
 func (r *Repository) gitWithEnv(ctx context.Context, extraEnv []string, stdin []byte, args ...string) ([]byte, error) {
+	result := r.gitWithEnvResult(ctx, extraEnv, stdin, args...)
+	if result.err != nil {
+		return nil, core.Wrap(core.CategoryOperational, fmt.Sprintf("git %s failed", strings.Join(args, " ")), gitCommandResultError(result))
+	}
+	return result.stdout, nil
+}
+
+func (r *Repository) gitWithEnvResult(ctx context.Context, extraEnv []string, stdin []byte, args ...string) gitCommandResult {
 	gitPath := r.gitPath
 	if gitPath == "" {
 		var err error
 		gitPath, err = exec.LookPath("git")
 		if err != nil {
-			return nil, core.Wrap(core.CategoryOperational, "cannot find git executable", err)
+			return gitCommandResult{err: core.Wrap(core.CategoryOperational, "cannot find git executable", err)}
 		}
 	}
 	r.observeGitCommand(args)
-	output, err := runGitWithEnv(ctx, gitPath, r.Root, extraEnv, stdin, args...)
-	if err != nil {
-		return nil, core.Wrap(core.CategoryOperational, fmt.Sprintf("git %s failed", strings.Join(args, " ")), err)
-	}
-	return output, nil
+	return runGitWithEnvResult(ctx, gitPath, r.Root, extraEnv, stdin, args...)
 }
 
 func (r *Repository) observeGitCommand(args []string) {
@@ -183,6 +196,14 @@ func runGit(ctx context.Context, gitPath, directory string, stdin []byte, args .
 }
 
 func runGitWithEnv(ctx context.Context, gitPath, directory string, extraEnv []string, stdin []byte, args ...string) ([]byte, error) {
+	result := runGitWithEnvResult(ctx, gitPath, directory, extraEnv, stdin, args...)
+	if result.err != nil {
+		return nil, gitCommandResultError(result)
+	}
+	return result.stdout, nil
+}
+
+func runGitWithEnvResult(ctx context.Context, gitPath, directory string, extraEnv []string, stdin []byte, args ...string) gitCommandResult {
 	command := exec.CommandContext(ctx, gitPath, append([]string{"-C", directory}, args...)...)
 	command.Stdin = bytes.NewReader(stdin)
 	command.Env = gitEnvironment(os.Environ(), extraEnv)
@@ -191,15 +212,19 @@ func runGitWithEnv(ctx context.Context, gitPath, directory string, extraEnv []st
 	command.Stdout = &stdout
 	command.Stderr = &stderr
 	err := command.Run()
-	if err != nil {
-		detail := strings.TrimSuffix(stderr.String(), "\n")
-		detail = strings.TrimSuffix(detail, "\r")
-		if detail == "" {
-			return nil, err
-		}
-		return nil, fmt.Errorf("%w: %s", err, detail)
+	return gitCommandResult{stdout: stdout.Bytes(), stderr: stderr.Bytes(), err: err}
+}
+
+func gitCommandResultError(result gitCommandResult) error {
+	if result.err == nil {
+		return nil
 	}
-	return stdout.Bytes(), nil
+	detail := strings.TrimSuffix(string(result.stderr), "\n")
+	detail = strings.TrimSuffix(detail, "\r")
+	if detail == "" {
+		return result.err
+	}
+	return fmt.Errorf("%w: %s", result.err, detail)
 }
 
 func gitEnvironment(environ []string, extra []string) []string {
