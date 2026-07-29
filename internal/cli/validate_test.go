@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -39,13 +40,10 @@ func TestValidateJSONReportsFreshCachedAndIncrementalCounts(t *testing.T) {
 	// audit replay complete histories and report misleading JSON accounting.
 	repository := initializedRepository(t)
 	first := createValidationTask(t, repository, "first")
-	second := createValidationTask(t, repository, "second")
+	createValidationTask(t, repository, "second")
+	cachePath := validationCachePath(t, repository)
 
 	fresh := runValidationJSON(t, repository)
-	cachePath := fresh.CachePath
-	if cachePath == "" || !strings.HasSuffix(cachePath, filepath.Join("workbook", "validation.sqlite")) {
-		t.Fatalf("fresh cache path = %q, want shared validation cache", cachePath)
-	}
 	assertValidationResult(t, fresh, historyvalidation.Result{
 		ValidatorVersion: historyvalidation.ValidatorVersion,
 		Full:             false,
@@ -87,9 +85,83 @@ func TestValidateJSONReportsFreshCachedAndIncrementalCounts(t *testing.T) {
 		Pending:          0,
 		CachePath:        cachePath,
 	})
-	if second.ID == "" {
-		t.Fatal("second task ID is empty")
+
+	t.Run("schema and result assertions reject omitted or wrong fields", func(t *testing.T) {
+		// Production mutation: adding omitempty to a zero-valued Result field or
+		// changing CachePath would silently break machine consumers without these
+		// raw-envelope and field-by-field checks.
+		encoded, err := json.Marshal(fresh)
+		if err != nil {
+			t.Fatalf("encode fresh result: %v", err)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(encoded, &fields); err != nil {
+			t.Fatalf("decode fresh result fields: %v", err)
+		}
+		delete(fields, "full")
+		missingZeroField, err := json.Marshal(fields)
+		if err != nil {
+			t.Fatalf("encode missing field witness: %v", err)
+		}
+		if err := validationResultSchemaError(missingZeroField); err == nil {
+			t.Fatal("schema accepted a result without zero-valued full field")
+		}
+
+		want := historyvalidation.Result{CachePath: cachePath}
+		blankCachePath := want
+		blankCachePath.CachePath = ""
+		if validationResultDifference(blankCachePath, want) == "" {
+			t.Fatal("result comparison accepted a blank cache path")
+		}
+		wrongCachePath := want
+		wrongCachePath.CachePath = filepath.Join(repository, "wrong.sqlite")
+		if validationResultDifference(wrongCachePath, want) == "" {
+			t.Fatal("result comparison accepted a wrong cache path")
+		}
+	})
+}
+
+func TestValidateFullBypassesWarmCacheAndChecksCompleteHistory(t *testing.T) {
+	// Production mutation: always passing false to Validator.Validate makes
+	// --full reuse cache hits instead of auditing every complete history.
+	repository := initializedRepository(t)
+	first := createValidationTask(t, repository, "first")
+	second := createValidationTask(t, repository, "second")
+	updateValidationTask(t, repository, first.ID, "first updated")
+	updateValidationTask(t, repository, second.ID, "second updated")
+	cachePath := validationCachePath(t, repository)
+
+	warm := runValidationJSON(t, repository)
+	assertValidationResult(t, warm, historyvalidation.Result{
+		ValidatorVersion: historyvalidation.ValidatorVersion,
+		Full:             false,
+		TaskCount:        2,
+		TasksChecked:     2,
+		CommitsChecked:   4,
+		CacheHits:        0,
+		Valid:            2,
+		Invalid:          0,
+		Pending:          0,
+		CachePath:        cachePath,
+	})
+
+	code, stdout, stderr := run(t, repository, "validate", "--full", "--json")
+	if code != 0 {
+		t.Fatalf("validate --full --json code = %d; stderr = %q", code, stderr)
 	}
+	full := decodeValidationResult(t, stdout)
+	assertValidationResult(t, full, historyvalidation.Result{
+		ValidatorVersion: historyvalidation.ValidatorVersion,
+		Full:             true,
+		TaskCount:        2,
+		TasksChecked:     2,
+		CommitsChecked:   4,
+		CacheHits:        0,
+		Valid:            2,
+		Invalid:          0,
+		Pending:          0,
+		CachePath:        cachePath,
+	})
 }
 
 func TestValidateHumanOutputListsEveryFailureInTaskOrder(t *testing.T) {
@@ -245,6 +317,9 @@ func runValidationJSON(t *testing.T, repository string) historyvalidation.Result
 func decodeValidationResult(t *testing.T, stdout string) historyvalidation.Result {
 	t.Helper()
 	resultDocument := assertJSONResult(t, stdout, "validate")
+	if err := validationResultSchemaError(resultDocument.Data); err != nil {
+		t.Fatalf("validation JSON result schema: %v; data = %s", err, resultDocument.Data)
+	}
 	var result historyvalidation.Result
 	if err := json.Unmarshal(resultDocument.Data, &result); err != nil {
 		t.Fatalf("decode validation result: %v; data = %s", err, resultDocument.Data)
@@ -254,11 +329,79 @@ func decodeValidationResult(t *testing.T, stdout string) historyvalidation.Resul
 
 func assertValidationResult(t *testing.T, got, want historyvalidation.Result) {
 	t.Helper()
-	if got.ValidatorVersion != want.ValidatorVersion || got.Full != want.Full || got.TaskCount != want.TaskCount ||
-		got.TasksChecked != want.TasksChecked || got.CommitsChecked != want.CommitsChecked || got.CacheHits != want.CacheHits ||
-		got.Valid != want.Valid || got.Invalid != want.Invalid || got.Pending != want.Pending || !equalFailures(got.Failures, want.Failures) {
-		t.Fatalf("validation result = %#v, want %#v", got, want)
+	if difference := validationResultDifference(got, want); difference != "" {
+		t.Fatalf("validation result %s: got %#v, want %#v", difference, got, want)
 	}
+}
+
+func validationResultDifference(got, want historyvalidation.Result) string {
+	switch {
+	case got.ValidatorVersion != want.ValidatorVersion:
+		return "validatorVersion differs"
+	case got.Full != want.Full:
+		return "full differs"
+	case got.TaskCount != want.TaskCount:
+		return "taskCount differs"
+	case got.TasksChecked != want.TasksChecked:
+		return "tasksChecked differs"
+	case got.CommitsChecked != want.CommitsChecked:
+		return "commitsChecked differs"
+	case got.CacheHits != want.CacheHits:
+		return "cacheHits differs"
+	case got.Valid != want.Valid:
+		return "valid differs"
+	case got.Invalid != want.Invalid:
+		return "invalid differs"
+	case got.Pending != want.Pending:
+		return "pending differs"
+	case got.CachePath != want.CachePath:
+		return "cachePath differs"
+	case !equalFailures(got.Failures, want.Failures):
+		return "failures differs"
+	default:
+		return ""
+	}
+}
+
+var validationResultJSONKeys = map[string]struct{}{
+	"validatorVersion": {},
+	"full":             {},
+	"taskCount":        {},
+	"tasksChecked":     {},
+	"commitsChecked":   {},
+	"cacheHits":        {},
+	"valid":            {},
+	"invalid":          {},
+	"pending":          {},
+	"cachePath":        {},
+	"failures":         {},
+}
+
+func validationResultSchemaError(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return fmt.Errorf("decode result object: %w", err)
+	}
+	if len(fields) != len(validationResultJSONKeys) {
+		return fmt.Errorf("key count = %d, want %d", len(fields), len(validationResultJSONKeys))
+	}
+	for key := range validationResultJSONKeys {
+		if _, found := fields[key]; !found {
+			return fmt.Errorf("missing key %q", key)
+		}
+	}
+	for key := range fields {
+		if _, expected := validationResultJSONKeys[key]; !expected {
+			return fmt.Errorf("unexpected key %q", key)
+		}
+	}
+	return nil
+}
+
+func validationCachePath(t *testing.T, repository string) string {
+	t.Helper()
+	commonGitDir := gitOutput(t, repository, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	return filepath.Join(commonGitDir, "workbook", "validation.sqlite")
 }
 
 func equalFailures(left, right []historyvalidation.Failure) bool {
