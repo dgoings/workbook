@@ -91,6 +91,16 @@ func TestReportNormalizesScenarioTargetOutcomes(t *testing.T) {
 			Samples: []Sample{{Duration: time.Second, ExitCode: 4, Error: "corrupt"}, {Duration: time.Second, TimedOut: true}, {Duration: 3 * time.Second, GitProcesses: 20}},
 		},
 		{
+			Name:    "miss-then-failure",
+			Target:  target,
+			Samples: []Sample{{Duration: 3 * time.Second, GitProcesses: 20}, {Duration: time.Second, ExitCode: 4, Error: "corrupt"}},
+		},
+		{
+			Name:    "failure-then-miss",
+			Target:  target,
+			Samples: []Sample{{Duration: time.Second, ExitCode: 4, Error: "corrupt"}, {Duration: 3 * time.Second, GitProcesses: 20}},
+		},
+		{
 			Name:    "local",
 			Samples: []Sample{{Duration: time.Millisecond}},
 		},
@@ -110,6 +120,8 @@ func TestReportNormalizesScenarioTargetOutcomes(t *testing.T) {
 		"later-failure":                         "failed",
 		"later-miss":                            "miss",
 		"timeout-precedence-is-order-resistant": "timeout",
+		"miss-then-failure":                     "failed",
+		"failure-then-miss":                     "failed",
 		"local":                                 "not-evaluated",
 	}
 	if !reflect.DeepEqual(got, want) {
