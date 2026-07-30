@@ -304,6 +304,7 @@ func TestHandlerRendersTextLikeCopyableTaskIDControls(t *testing.T) {
 		`.task-id-copy-group {`,
 		`position: relative`,
 		`.copy-status { position: absolute`,
+		`.task-route__header .copy-status { top: calc(50% + .1rem); }`,
 	} {
 		if !strings.Contains(body, fragment) {
 			t.Errorf("copy control styling does not contain %q", fragment)
