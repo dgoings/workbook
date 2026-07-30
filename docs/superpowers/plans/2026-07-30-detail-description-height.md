@@ -13,6 +13,7 @@
 - Apply the layout to the existing shared new/detail task form without changing task data, APIs, routing, or mutation behavior.
 - Keep status, priority, labels, validation feedback, Save, Back, and Delete above the fold at ordinary desktop viewport heights.
 - Let Description absorb available height and scroll internally when its content exceeds that height.
+- Let the layout, rather than a user resize handle, control Description height so it cannot cover later form controls.
 - Preserve the existing single-column responsive form below 560 pixels.
 - Add no dependency or build step.
 - Follow TDD: observe the missing Description layout hook before adding production code, then verify the computed browser layout after the change.
@@ -79,10 +80,10 @@ Pass `"field--description"` only for the Description field.
 Update the existing CSS rules:
 
 ```css
-.task-route { display: flex; flex-direction: column; height: 100%; max-width: 48rem; margin: 0 auto; border: 1px solid #b9c6d8; background: #fff; box-shadow: 0 12px 32px rgba(23,32,51,.08); }
-.task-form { display: grid; flex: 1 1 auto; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: auto minmax(0, 1fr) auto auto auto auto; gap: 1rem; min-height: 0; padding: 1.15rem; }
+.task-route { display: flex; flex-direction: column; min-height: 100%; max-width: 48rem; margin: 0 auto; border: 1px solid #b9c6d8; background: #fff; box-shadow: 0 12px 32px rgba(23,32,51,.08); }
+.task-form { display: grid; flex: 1 1 auto; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: auto minmax(8rem, 1fr) auto auto auto auto; gap: 1rem; min-height: 0; padding: 1.15rem; }
 .field--description { grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
-.field--description textarea { height: 100%; min-height: 0; overflow-y: auto; }
+.field--description textarea { height: 100%; min-height: 0; overflow-y: auto; resize: none; }
 ```
 
 The existing 560-pixel media rule keeps one column. Its implicit final grid row continues to hold actions after the explicit Description row.
@@ -142,7 +143,7 @@ Expected: every value is `true`. Populate Description with enough lines to overf
 
 - [ ] **Step 2: Verify the constrained-height and narrow layouts**
 
-At 1280-by-600, require status, priority, labels, feedback, and actions to remain within the viewport while Description shrinks and owns overflow. At 390-by-844, require the form to remain one column, the actions to remain reachable, and no horizontal document overflow.
+At 1280-by-600, require the form to grow beyond the viewport rather than overlap its controls, with `main` owning the necessary vertical overflow and every control remaining reachable. At 390-by-844, require the form to remain one column, the actions to remain reachable, and no horizontal document overflow.
 
 - [ ] **Step 3: Run final verification**
 
