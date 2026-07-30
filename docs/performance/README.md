@@ -365,6 +365,133 @@ row at all.
 
 Slopes are descriptive evidence. A wide slope is a reason to open a narrow,
 separately justified optimization story, not a failing benchmark.
+## Storage and peak resource growth
+
+`workbook-bench --storage-resources` measures durable Git storage by object
+class, disposable cache size, and the peak resident memory and I/O of the
+projection rebuild and full validation commands. It replaces the scenario
+families for that invocation and cannot be combined with `--scenario`; the
+scenario fixtures mutate their own repositories and would change the storage
+being measured.
+
+`--storage-operations` takes a comma-separated list of operations-per-task
+depths and defaults to `20,100`. The list is deduplicated and measured in
+ascending order, and each depth gets its own freshly built fixture. `--tasks`
+and `--tombstones` keep their usual meaning and apply to every depth. Under
+`--phase acceptance` every depth must be at least 20 operations per task, in
+addition to the existing acceptance fixture minimums.
+
+```sh
+go build -buildvcs=false -o /private/tmp/workbook-storage ./cmd/workbook
+go run ./cmd/workbook-bench \
+  --workbook /private/tmp/workbook-storage \
+  --tasks 500 \
+  --tombstones 25 \
+  --timeout 120s \
+  --object-format sha1 \
+  --phase baseline \
+  --storage-resources \
+  --storage-operations 20,100 \
+  --output-json /private/tmp/storage-sha1.json \
+  --output-markdown /private/tmp/storage-sha1.md
+```
+
+Per fixture depth the harness builds the fixture, packs refs with `git pack-refs
+--all`, packs objects with `git gc --quiet --prune=now`, classifies durable
+objects, measures `workbook rebuild --json` and `workbook validate --full
+--json`, and then sizes the two SQLite caches. Fixture construction and packing
+are outside every measured command. A failing or timed-out measured command
+aborts the run instead of producing a report.
+
+These results are descriptive. They have no target, no budget, and no
+pass/fail outcome. A storage-only report runs no scenarios, so its `scenarios`
+array is empty and its `targets` object is zero-valued; neither describes the
+storage measurement. The report's top-level `fixture` records the shallowest
+measured depth, and complete per-depth fixture metadata lives in
+`storageResources.depths[].fixture`.
+
+### Reading every storage and resource field
+
+All fields live under the report's optional `storageResources` object. Runs
+that do not measure storage omit the key.
+
+| Field | Meaning |
+| --- | --- |
+| `platform` | `GOOS/GOARCH` of the host that produced the measurement. |
+| `maxResidentRawUnit` | Unit of `ru_maxrss` on that platform: `bytes` on darwin, `kilobytes` on Linux and the BSDs. |
+| `blockIoCountersSupported` | Whether the kernel maintains `ru_inblock` and `ru_oublock`. False on darwin. |
+| `objectSizeSemantics` | Self-describing sentence distinguishing raw from on-disk bytes. |
+| `repositoryState` | How the repository was packed before measuring. |
+| `depths[]` | One entry per operations-per-task depth, ascending. |
+
+Per depth, `fixture` repeats the complete fixture specification: `totalTasks`,
+`activeTasks`, `tombstonedTasks`, `operationsPerTask`, and `objectFormat`.
+
+Durable Git storage lives under `depths[].git`:
+
+| Field | Meaning |
+| --- | --- |
+| `objectFormat` | Object format read back from the measured repository. |
+| `refPrefix`, `workbookRefs`, `taskRefs` | Root ref namespace of the object walk and the ref populations found in it. |
+| `reachableObjects` | Objects reachable from those refs, each counted once. |
+| `classifiedObjects`, `unclassifiedObjects` | Completeness of the accounting. `unclassifiedObjects` is always zero; a non-zero value means the classification missed a case. |
+| `classes[]` | Per class: `class`, `objects`, `rawBytes`, `diskBytes`. Classes are `operation-blob`, `state-blob`, `other-blob`, `tree`, `commit`, `annotated-tag`. |
+| `reachableRawBytes`, `reachableDiskBytes` | Sums of the class byte totals. |
+| `packs`, `packedObjects`, `looseObjects` | Git's own counts from `count-objects -v`. After packing, `packedObjects` should equal `reachableObjects` and `looseObjects` should be zero. |
+| `packFileBytes`, `packIndexBytes`, `packAuxiliaryBytes` | Exact summed sizes of `*.pack`, `*.idx`, and the remaining files in `objects/pack`. |
+| `looseObjectFileBytes` | Exact summed size of loose object files. |
+| `objectDirectoryBytes` | Every regular file under `objects`, including `objects/info` artifacts. |
+
+`rawBytes` is `%(objectsize)`: uncompressed Git object content. `diskBytes` is
+`%(objectsize:disk)`: the stored representation including delta base chain and
+object header, excluding per-pack index and header overhead. `diskBytes` is
+normally smaller for JSON documents but can exceed `rawBytes` for very small
+objects such as the fixture's two-entry trees, where framing outweighs
+compression. That is real Git behavior, not a reporting error.
+
+Object counts are stored-object counts, not logical document counts. Git stores
+byte-identical blobs once, so two identical operation documents contribute one
+object; that is the storage the repository actually pays for.
+
+Disposable cache bytes live under `depths[].disposableCache`. `projectionPath`
+and `validationPath` are repository-relative
+(`.git/workbook/cache.sqlite` and `.git/workbook/validation.sqlite`).
+`projectionBytes` and `validationBytes` are the database files;
+`projectionSidecarBytes` and `validationSidecarBytes` sum any `-wal`, `-shm`,
+and `-journal` companions; `totalBytes` is the sum of all four. Every byte here
+can be deleted and rebuilt from Workbook refs.
+
+Resource measurements live under `depths[].resources`, always in the order
+`projection-rebuild` then `full-validation`:
+
+| Field | Meaning |
+| --- | --- |
+| `command`, `argv` | Measurement name and the product arguments that were run. |
+| `milliseconds`, `userMilliseconds`, `systemMilliseconds` | Elapsed, user, and system time. Context only; no target applies. |
+| `exitCode`, `timedOut`, `error` | Command outcome. A failure aborts the run before a report is written. |
+| `maxResidentRaw`, `maxResidentRawUnit` | `ru_maxrss` exactly as the kernel reported it, plus its unit. |
+| `maxResidentBytes` | `maxResidentRaw` normalized to bytes. |
+| `blockInputOperations`, `blockOutputOperations`, `blockIoCountersSupported` | `ru_inblock` and `ru_oublock`, and whether the platform maintains them. Forced to zero where unsupported. |
+| `minorPageFaults`, `majorPageFaults` | `ru_minflt` and `ru_majflt`. Populated on darwin, where they are the usable I/O pressure signal. |
+| `voluntaryContextSwitches`, `involuntaryContextSwitches` | `ru_nvcsw` and `ru_nivcsw`. |
+| `repositoryBytesDelta` | Change in total on-disk bytes under the repository root across the command, sampled outside the timing window. A durable-write lower bound, not a syscall counter. |
+
+Two platform caveats matter when reading these numbers:
+
+- Peak resident memory from `wait4` is a maximum, not a sum. It is the largest
+  resident set observed for the measured process or any descendant it reaped, so
+  a command that runs several `git` processes concurrently reports the largest
+  single peak, not the concurrent total. Read it as a lower bound on whole-tree
+  peak memory.
+- Darwin does not maintain `ru_inblock` or `ru_oublock`. On darwin those fields
+  are zero and `blockIoCountersSupported` is false; a zero there is not evidence
+  that no I/O happened. Use `majorPageFaults` and `repositoryBytesDelta`
+  instead.
+
+Deliberately not measured: unreachable and dangling objects, non-Workbook refs
+and working-tree files including `.workbook/config.json`, reflog and
+`packed-refs` bytes, delta chain depth, concurrent whole-process-tree peak
+memory, cold-start page-cache behavior, and any latency budget.
 
 ## Reading the reports
 

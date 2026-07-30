@@ -14,6 +14,8 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -44,6 +46,10 @@ type options struct {
 
 	scalingPointFlags stringListFlag
 	scalingPoints     []perf.ScalingPointSpec
+
+	storage           bool
+	storageOperations string
+	storageDepths     []int
 }
 
 type stringListFlag []string
@@ -149,6 +155,8 @@ func newFlagSet(stderr io.Writer) (*flag.FlagSet, *options) {
 	flags.StringVar(&options.phase, "phase", "baseline", "report phase (baseline, acceptance, or scaling)")
 	flags.Var(&options.scenarioFlags, "scenario", "benchmark scenario to run (repeatable)")
 	flags.Var(&options.scalingPointFlags, "scaling-point", "scaling matrix point as <active tasks>x<history depth> (repeatable, requires --phase scaling)")
+	flags.BoolVar(&options.storage, "storage-resources", false, "measure storage and peak resource growth instead of scenarios")
+	flags.StringVar(&options.storageOperations, "storage-operations", "20,100", "comma-separated operations-per-task depths for --storage-resources")
 	return flags, options
 }
 
@@ -223,6 +231,23 @@ func validateOptions(flags *flag.FlagSet, options *options) error {
 			return fmt.Errorf("acceptance requires at least 10 active tasks")
 		}
 	}
+	if options.storage {
+		if len(options.scenarioFlags) != 0 {
+			return fmt.Errorf("--storage-resources cannot be combined with --scenario")
+		}
+		if options.phase == scalingPhase {
+			return fmt.Errorf("--storage-resources cannot be combined with --phase scaling")
+		}
+		if len(options.scalingPointFlags) != 0 {
+			return fmt.Errorf("--scaling-point requires --phase scaling")
+		}
+		depths, err := storageOperationDepths(options.storageOperations, options.phase)
+		if err != nil {
+			return err
+		}
+		options.storageDepths = depths
+		return resolveReportPaths(options)
+	}
 	scenarios, err := perf.ResolveScenarios(options.scenarioFlags)
 	if err != nil {
 		return err
@@ -251,7 +276,10 @@ func validateOptions(flags *flag.FlagSet, options *options) error {
 		}
 		options.scenarios = scenarios
 	}
+	return resolveReportPaths(options)
+}
 
+func resolveReportPaths(options *options) error {
 	jsonPath, err := filepath.Abs(options.outputJSON)
 	if err != nil {
 		return fmt.Errorf("resolve --output-json: %w", err)
@@ -268,6 +296,40 @@ func validateOptions(flags *flag.FlagSet, options *options) error {
 	return nil
 }
 
+// storageOperationDepths parses the comma-separated operations-per-task depths
+// measured by --storage-resources and returns them in ascending order.
+func storageOperationDepths(value, phase string) ([]int, error) {
+	fields := strings.Split(value, ",")
+	seen := make(map[int]struct{}, len(fields))
+	depths := make([]int, 0, len(fields))
+	for _, field := range fields {
+		trimmed := strings.TrimSpace(field)
+		if trimmed == "" {
+			continue
+		}
+		depth, err := strconv.Atoi(trimmed)
+		if err != nil {
+			return nil, fmt.Errorf("invalid --storage-operations value %q", trimmed)
+		}
+		if depth < 2 {
+			return nil, fmt.Errorf("--storage-operations values must be at least 2")
+		}
+		if _, duplicate := seen[depth]; duplicate {
+			return nil, fmt.Errorf("duplicate --storage-operations value %d", depth)
+		}
+		if phase == "acceptance" && depth < 20 {
+			return nil, fmt.Errorf("acceptance requires at least 20 operations per task at every storage depth")
+		}
+		seen[depth] = struct{}{}
+		depths = append(depths, depth)
+	}
+	if len(depths) == 0 {
+		return nil, fmt.Errorf("--storage-operations requires at least one operation depth")
+	}
+	sort.Ints(depths)
+	return depths, nil
+}
+
 func runBenchmark(ctx context.Context, options options) (perf.Report, error) {
 	environment, err := benchmarkEnvironment(ctx, options.workbookBinary, options.timeout)
 	if err != nil {
@@ -275,6 +337,9 @@ func runBenchmark(ctx context.Context, options options) (perf.Report, error) {
 	}
 	if options.phase == "acceptance" && environment.WorkbookCommit == "unknown" {
 		return perf.Report{}, fmt.Errorf("acceptance requires a measured Workbook commit")
+	}
+	if options.storage {
+		return runStorageResourceBenchmark(ctx, options, environment)
 	}
 
 	fixtureRoot, err := os.MkdirTemp("", "workbook-benchmark-")
@@ -375,6 +440,50 @@ func runBenchmark(ctx context.Context, options options) (perf.Report, error) {
 		},
 		Scenarios:  scenarios,
 		Repository: repositoryMetrics,
+	}, nil
+}
+
+// storageFixtureTimeoutFactor bounds fixture construction, which is not a
+// measured command, at a generous multiple of the per-command timeout.
+const storageFixtureTimeoutFactor = 20
+
+// runStorageResourceBenchmark measures descriptive storage and peak resource
+// growth at each requested fixture depth. It runs no scenarios, so the report
+// carries an empty scenario list and zero-valued scenario budgets.
+func runStorageResourceBenchmark(ctx context.Context, options options, environment perf.Environment) (perf.Report, error) {
+	storageRoot, err := os.MkdirTemp("", "workbook-storage-")
+	if err != nil {
+		return perf.Report{}, fmt.Errorf("create temporary storage root: %w", err)
+	}
+	defer os.RemoveAll(storageRoot)
+
+	fixtureSpec := perf.FixtureSpec{
+		TotalTasks:        options.tasks,
+		ActiveTasks:       options.tasks - options.tombstones,
+		TombstonedTasks:   options.tombstones,
+		OperationsPerTask: options.storageDepths[0],
+		ObjectFormat:      options.objectFormat,
+	}
+	storage, err := perf.MeasureStorageResources(ctx, perf.StorageResourceSpec{
+		WorkbookBinary:  options.workbookBinary,
+		Root:            storageRoot,
+		Fixture:         fixtureSpec,
+		OperationDepths: options.storageDepths,
+		CommandTimeout:  options.timeout,
+		FixtureTimeout:  storageFixtureTimeoutFactor * options.timeout,
+	})
+	if err != nil {
+		return perf.Report{}, fmt.Errorf("measure storage and peak resources: %w", err)
+	}
+	return perf.Report{
+		Format:           perf.ReportFormat,
+		Version:          perf.ReportVersion,
+		Phase:            options.phase,
+		GeneratedAt:      time.Now().UTC(),
+		Environment:      environment,
+		Fixture:          fixtureSpec,
+		Scenarios:        []perf.ScenarioResult{},
+		StorageResources: storage,
 	}, nil
 }
 
