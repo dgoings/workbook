@@ -137,3 +137,36 @@ func mustNormalize(task TaskData) error {
 	_, err := NormalizeTask("WB", task)
 	return err
 }
+
+func TestPrioritiesExposesOrderedCanonicalValues(t *testing.T) {
+	want := []PriorityDefinition{
+		{Priority: PriorityLow, Label: "Low"},
+		{Priority: PriorityMedium, Label: "Medium"},
+		{Priority: PriorityHigh, Label: "High"},
+	}
+	if got := Priorities(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Priorities() = %#v, want %#v", got, want)
+	}
+}
+
+func TestPrioritiesReturnsDefensiveCopy(t *testing.T) {
+	// Production mutation: returning the backing array would let one caller
+	// corrupt the canonical priority list for every other caller.
+	Priorities()[0].Priority = "tampered"
+	if got := Priorities()[0].Priority; got != PriorityLow {
+		t.Fatalf("Priorities()[0].Priority = %q, want %q", got, PriorityLow)
+	}
+}
+
+func TestPriorityValidationAgreesWithPriorities(t *testing.T) {
+	// Production mutation: validating priorities from a switch independent of
+	// Priorities() lets generated documentation drift from what the CLI accepts.
+	for _, definition := range Priorities() {
+		if !isValidPriority(definition.Priority) {
+			t.Errorf("isValidPriority(%q) = false, want true", definition.Priority)
+		}
+	}
+	if isValidPriority("urgent") {
+		t.Error("isValidPriority(\"urgent\") = true, want false")
+	}
+}

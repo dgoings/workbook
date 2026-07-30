@@ -204,7 +204,7 @@ func TestRunReportsConfigurationFilesystemFailureAsOperational(t *testing.T) {
 		t.Fatalf("WriteFile(.workbook) error = %v", err)
 	}
 
-	code, stdout, stderr := run(t, repository, "init", "--json")
+	code, stdout, stderr := run(t, repository, "setup", "--json")
 	if code != 1 {
 		t.Fatalf("Run() code = %d, want 1; stderr = %q", code, stderr)
 	}
@@ -227,7 +227,7 @@ func TestRunReportsConfigurationFilesystemFailureAsOperational(t *testing.T) {
 func TestRunJSONIntentAccountsForStringFlagValuesAndParserStops(t *testing.T) {
 	t.Run("init string value consumes terminator before JSON flag", func(t *testing.T) {
 		repository := testrepo.New(t)
-		code, stdout, stderr := run(t, repository, "init", "--key", "--", "--json")
+		code, stdout, stderr := run(t, repository, "setup", "--key", "--", "--json")
 		if code != 5 {
 			t.Fatalf("code = %d, want 5; stderr = %q", code, stderr)
 		}
@@ -239,7 +239,7 @@ func TestRunJSONIntentAccountsForStringFlagValuesAndParserStops(t *testing.T) {
 
 	t.Run("init string value consumes JSON-looking token", func(t *testing.T) {
 		repository := testrepo.New(t)
-		code, stdout, stderr := run(t, repository, "init", "--key", "--json")
+		code, stdout, stderr := run(t, repository, "setup", "--key", "--json")
 		if code != 5 {
 			t.Fatalf("code = %d, want 5; stderr = %q", code, stderr)
 		}
@@ -416,23 +416,23 @@ func TestRunJSONIntentMatchesGoBooleanFlagSyntax(t *testing.T) {
 	}
 }
 
-func TestRunRequiresInitializationAndInitIsIdempotent(t *testing.T) {
+func TestRunRequiresInitializationAndSetupIsIdempotent(t *testing.T) {
 	repository := testrepo.New(t)
 
 	code, stdout, stderr := run(t, repository, "list")
 	if code != 3 {
-		t.Fatalf("list before init code = %d, want 3; stderr = %q", code, stderr)
+		t.Fatalf("list before setup code = %d, want 3; stderr = %q", code, stderr)
 	}
 	if stdout != "" {
-		t.Fatalf("list before init stdout = %q, want empty", stdout)
+		t.Fatalf("list before setup stdout = %q, want empty", stdout)
 	}
 	if !strings.Contains(stderr, "Workbook is not initialized") {
-		t.Fatalf("list before init stderr = %q", stderr)
+		t.Fatalf("list before setup stderr = %q", stderr)
 	}
 
-	code, stdout, stderr = run(t, repository, "init", "--key", "PROJ")
+	code, stdout, stderr = run(t, repository, "setup", "--key", "PROJ")
 	if code != 0 {
-		t.Fatalf("init code = %d, want 0; stderr = %q", code, stderr)
+		t.Fatalf("setup code = %d, want 0; stderr = %q", code, stderr)
 	}
 	canonicalRepository, err := filepath.EvalSymlinks(repository)
 	if err != nil {
@@ -445,17 +445,43 @@ func TestRunRequiresInitializationAndInitIsIdempotent(t *testing.T) {
 		"Tasks:\t0",
 	} {
 		if !strings.Contains(stdout, wanted) {
-			t.Errorf("init stdout = %q, want %q", stdout, wanted)
+			t.Errorf("setup stdout = %q, want %q", stdout, wanted)
 		}
 	}
 
-	code, second, stderr := run(t, repository, "init", "--key", "PROJ")
+	// Setup is idempotent in what it durably records. Its report differs on a
+	// second run because it truthfully distinguishes what it wrote from what
+	// was already current.
+	code, second, stderr := run(t, repository, "setup", "--key", "PROJ")
 	if code != 0 {
-		t.Fatalf("second init code = %d, want 0; stderr = %q", code, stderr)
+		t.Fatalf("second setup code = %d, want 0; stderr = %q", code, stderr)
 	}
-	if second != stdout {
-		t.Fatalf("second init stdout differs:\nfirst:  %q\nsecond: %q", stdout, second)
+	for _, wanted := range []string{
+		"Repository:\t" + canonicalRepository,
+		"Key:\tPROJ",
+		"Tasks:\t0",
+	} {
+		if !strings.Contains(second, wanted) {
+			t.Errorf("second setup stdout = %q, want %q", second, wanted)
+		}
 	}
+	if projectID(t, stdout) != projectID(t, second) {
+		t.Fatalf("second setup project ID = %q, want %q", projectID(t, second), projectID(t, stdout))
+	}
+	if strings.Contains(second, "\twritten") {
+		t.Fatalf("second setup rewrote managed documentation:\n%s", second)
+	}
+}
+
+func projectID(t *testing.T, output string) string {
+	t.Helper()
+	for _, line := range strings.Split(output, "\n") {
+		if value, found := strings.CutPrefix(line, "Project ID:\t"); found {
+			return value
+		}
+	}
+	t.Fatalf("output has no project ID:\n%s", output)
+	return ""
 }
 
 func TestRunRebuildProducesVersionedResult(t *testing.T) {
@@ -585,7 +611,7 @@ func TestReadCommandsRefreshCachedProjectionAfterGitTipAdvances(t *testing.T) {
 func TestRunCRUDLifecycleAndOutputContracts(t *testing.T) {
 	repository := testrepo.New(t)
 
-	code, _, stderr := run(t, repository, "init", "--key", "PROJ")
+	code, _, stderr := run(t, repository, "setup", "--key", "PROJ")
 	if code != 0 {
 		t.Fatalf("init code = %d, want 0; stderr = %q", code, stderr)
 	}
@@ -877,7 +903,7 @@ func TestREADMEImplementedCommands(t *testing.T) {
 		}
 	}
 	want := []string{
-		"workbook init",
+		"workbook setup [--key <key>] [--no-docs] [--no-sync] [--skill-dir <dir>] [--no-skill] [--force] [--json]",
 		"workbook create",
 		"workbook list",
 		"workbook board [--wide | --narrow] [--json]",
@@ -895,6 +921,10 @@ func TestREADMEImplementedCommands(t *testing.T) {
 		"workbook fetch [--json]",
 		"workbook push [--json]",
 		"workbook sync [--json]",
+		"workbook docs install [--create <file>] [--skill-dir <dir>] [--no-skill] [--force] [--json]",
+		"workbook docs update [--skill-dir <dir>] [--no-skill] [--force] [--json]",
+		"workbook docs status [--skill-dir <dir>] [--no-skill] [--json]",
+		"workbook docs remove [--skill-dir <dir>] [--no-skill] [--force] [--json]",
 		"workbook hooks install [--json]",
 		"workbook serve [--addr 127.0.0.1:7331]",
 		"workbook help [command]",
@@ -964,7 +994,7 @@ func TestREADMEImplementedCommands(t *testing.T) {
 	}
 }
 
-func TestREADMEDocumentsSourceInstallationPrerequisites(t *testing.T) {
+func TestREADMEDocumentsInstallationPaths(t *testing.T) {
 	readmePath := filepath.Join("..", "..", "README.md")
 	contents, err := os.ReadFile(readmePath)
 	if err != nil {
@@ -973,14 +1003,17 @@ func TestREADMEDocumentsSourceInstallationPrerequisites(t *testing.T) {
 	readme := string(contents)
 
 	for _, required := range []string{
-		"## Source installation prerequisites",
+		"## Installation",
+		"brew install dgoings/tap/workbook",
+		"workbook setup",
+		"### Building from source",
 		"Go 1.26",
 		"Git",
 		"./scripts/install.sh",
 		"$HOME/.local/bin",
 	} {
 		if !strings.Contains(readme, required) {
-			t.Errorf("README source installation section is missing %q", required)
+			t.Errorf("README installation section is missing %q", required)
 		}
 	}
 }
@@ -1030,7 +1063,7 @@ func assertREADMECommandPolicy(t *testing.T, readme string) {
 
 func readmeCommandPolicyViolations(readme string) []string {
 	implemented := map[string]bool{
-		"init": true, "create": true, "list": true, "board": true,
+		"setup": true, "docs": true, "create": true, "list": true, "board": true,
 		"show": true, "update": true, "delete": true, "restore": true, "fetch": true,
 		"push": true, "sync": true, "hooks": true, "serve": true, "move": true,
 		"depend": true, "free": true, "next": true, "rebuild": true, "validate": true, "version": true,
@@ -1635,9 +1668,9 @@ func waitForHTTP(t *testing.T, url string) {
 func initializedRepository(t *testing.T) string {
 	t.Helper()
 	repository := testrepo.New(t)
-	code, _, stderr := run(t, repository, "init")
+	code, _, stderr := run(t, repository, "setup")
 	if code != 0 {
-		t.Fatalf("init code = %d, want 0; stderr = %q", code, stderr)
+		t.Fatalf("setup code = %d, want 0; stderr = %q", code, stderr)
 	}
 	return repository
 }

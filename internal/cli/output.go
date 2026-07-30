@@ -15,7 +15,7 @@ import (
 const usage = `Usage: workbook <command> [arguments]
 
 Commands:
-  init [--key WB]
+  setup [options]
   create <title> [options]
   list [options]
   board [--wide | --narrow] [--json]
@@ -33,6 +33,7 @@ Commands:
   fetch [--json]
   push [--json]
   sync [--json]
+  docs <command> [options]
   hooks install [--json]
   serve [--addr 127.0.0.1:7331]
 `
@@ -75,7 +76,7 @@ func renderCommandHelp(output io.Writer, helpTarget []string) error {
 	}
 	if len(metadata.Subcommands) > 0 {
 		fmt.Fprintln(output, "\nCommands:")
-		for _, name := range []string{"install"} {
+		for _, name := range metadata.SubcommandOrder {
 			subcommand, exists := metadata.Subcommands[name]
 			if exists {
 				fmt.Fprintf(output, "  %-8s %s\n", name, subcommand.Description)

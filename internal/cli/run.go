@@ -17,13 +17,6 @@ import (
 	"github.com/dgoings/workbook/internal/webui"
 )
 
-type initResult struct {
-	Repository string `json:"repository"`
-	ProjectID  string `json:"projectId"`
-	Key        string `json:"key"`
-	TaskCount  int    `json:"taskCount"`
-}
-
 type rebuildResult struct {
 	TaskCount int    `json:"taskCount"`
 	CachePath string `json:"cachePath"`
@@ -57,8 +50,8 @@ func Run(ctx context.Context, args []string, cwd string, stdout, stderr io.Write
 	commandArgs := args[1:]
 	var err error
 	switch command {
-	case "init":
-		err = runInit(ctx, commandArgs, cwd, stdout)
+	case "setup":
+		err = runSetup(ctx, commandArgs, cwd, stdout)
 	case "create":
 		err = runCreate(ctx, commandArgs, cwd, stdout, stderr)
 	case "list":
@@ -93,6 +86,8 @@ func Run(ctx context.Context, args []string, cwd string, stdout, stderr io.Write
 		err = runPush(ctx, commandArgs, cwd, stdout)
 	case "sync":
 		err = runSync(ctx, commandArgs, cwd, stdout)
+	case "docs":
+		err = runDocs(ctx, commandArgs, cwd, stdout)
 	case "hooks":
 		err = runHooks(ctx, commandArgs, cwd, stdout)
 	case "serve":
@@ -145,11 +140,13 @@ func parseHelpRequest(args []string) (helpRequest, bool, error) {
 		}
 		return helpRequest{Target: args[:1]}, true, nil
 	}
-	if args[0] == "hooks" && len(args) >= 3 && args[1] == "install" && (args[2] == "-h" || args[2] == "--help") {
-		if len(args) != 3 {
-			return helpRequest{}, true, core.Errorf(core.CategoryInvocation, "hooks install help accepts no additional arguments")
+	if len(args) >= 3 && (args[2] == "-h" || args[2] == "--help") {
+		if _, exists := commandMetadataFor(args[:2]); exists {
+			if len(args) != 3 {
+				return helpRequest{}, true, core.Errorf(core.CategoryInvocation, "%s %s help accepts no additional arguments", args[0], args[1])
+			}
+			return helpRequest{Target: args[:2]}, true, nil
 		}
-		return helpRequest{Target: args[:2]}, true, nil
 	}
 	if hasLocalHelpAlias(args) {
 		return helpRequest{}, true, core.Errorf(core.CategoryInvocation, "%s help accepts no additional arguments", args[0])
@@ -197,11 +194,11 @@ func parseExplicitHelpRequest(args []string) (helpRequest, bool, error) {
 	case 1:
 		return helpRequest{Target: args}, true, nil
 	case 2:
-		if args[0] == "hooks" && args[1] == "install" {
+		if _, exists := commandMetadataFor(args); exists {
 			return helpRequest{Target: args}, true, nil
 		}
 	}
-	return helpRequest{}, true, core.Errorf(core.CategoryInvocation, "help accepts a command or hooks install")
+	return helpRequest{}, true, core.Errorf(core.CategoryInvocation, "help accepts a command or one of its subcommands")
 }
 
 func runFetch(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
@@ -286,43 +283,6 @@ func runHooks(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 		writeResult(stdout, "hooks install", result)
 	} else {
 		fmt.Fprintf(stdout, "%s\t%s\t%s\n", result.Hook, result.Status, result.Path)
-	}
-	return nil
-}
-
-func runInit(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
-	flags := newFlagSet("init")
-	key := flags.String("key", "WB", "project key")
-	jsonMode := flags.Bool("json", false, "emit JSON")
-	if err := parseFlags(flags, args); err != nil {
-		return err
-	}
-
-	repository, err := gitstore.Open(ctx, cwd)
-	if err != nil {
-		return err
-	}
-	config, _, err := repository.Init(ctx, *key, core.CryptoULIDSource{})
-	if err != nil {
-		return err
-	}
-	tasks, err := repository.List(ctx, config)
-	if err != nil {
-		return err
-	}
-	result := initResult{
-		Repository: repository.Root,
-		ProjectID:  config.ProjectID,
-		Key:        config.Key,
-		TaskCount:  len(tasks),
-	}
-	if *jsonMode {
-		writeResult(stdout, "init", result)
-	} else {
-		fmt.Fprintf(stdout, "Repository:\t%s\n", result.Repository)
-		fmt.Fprintf(stdout, "Project ID:\t%s\n", result.ProjectID)
-		fmt.Fprintf(stdout, "Key:\t%s\n", result.Key)
-		fmt.Fprintf(stdout, "Tasks:\t%d\n", result.TaskCount)
 	}
 	return nil
 }

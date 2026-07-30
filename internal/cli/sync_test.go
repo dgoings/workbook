@@ -250,8 +250,8 @@ func cliSyncRepositories(t *testing.T) (string, string) {
 
 	seed := testrepo.New(t)
 	cliGit(t, seed, "branch", "-M", "main")
-	if code, _, stderr := run(t, seed, "init"); code != 0 {
-		t.Fatalf("init code = %d; stderr = %q", code, stderr)
+	if code, _, stderr := run(t, seed, "setup"); code != 0 {
+		t.Fatalf("setup code = %d; stderr = %q", code, stderr)
 	}
 	cliGit(t, seed, "add", ".workbook/config.json")
 	cliGit(t, seed, "commit", "--quiet", "-m", "Initialize Workbook")

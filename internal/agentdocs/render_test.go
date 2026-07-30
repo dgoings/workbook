@@ -1,0 +1,120 @@
+package agentdocs
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/dgoings/workbook/internal/core"
+)
+
+func testProject() core.ProjectConfig {
+	return core.ProjectConfig{
+		Format:    "workbook.project",
+		Version:   1,
+		ProjectID: "01KY8964C8TQVBKVACB45DYTNY",
+		Key:       "WB",
+	}
+}
+
+func TestRenderGuidelinesStatesEveryCanonicalStatus(t *testing.T) {
+	// Production mutation: hardcoding a status list here instead of deriving it
+	// from core would let generated documentation drift from CLI validation.
+	guidelines := RenderGuidelines(testProject())
+
+	for _, definition := range core.WorkflowStatuses() {
+		if !strings.Contains(guidelines, string(definition.Status)) {
+			t.Errorf("guidelines missing status %q:\n%s", definition.Status, guidelines)
+		}
+	}
+	for _, definition := range core.Priorities() {
+		if !strings.Contains(guidelines, string(definition.Priority)) {
+			t.Errorf("guidelines missing priority %q:\n%s", definition.Priority, guidelines)
+		}
+	}
+}
+
+func TestRenderGuidelinesWarnsAgainstDisplayLabels(t *testing.T) {
+	guidelines := RenderGuidelines(testProject())
+
+	if !strings.Contains(guidelines, "in-progress") {
+		t.Errorf("guidelines missing the canonical in-progress value:\n%s", guidelines)
+	}
+	if !strings.Contains(guidelines, "not `In Progress`") {
+		t.Errorf("guidelines do not warn against the In Progress display label:\n%s", guidelines)
+	}
+}
+
+func TestRenderGuidelinesIncludesProjectIdentity(t *testing.T) {
+	guidelines := RenderGuidelines(testProject())
+
+	for _, want := range []string{"01KY8964C8TQVBKVACB45DYTNY", "WB-"} {
+		if !strings.Contains(guidelines, want) {
+			t.Errorf("guidelines missing %q:\n%s", want, guidelines)
+		}
+	}
+}
+
+func TestRenderGuidelinesDocumentsExitCodesFromCore(t *testing.T) {
+	guidelines := RenderGuidelines(testProject())
+
+	for _, category := range []core.Category{
+		core.CategoryInvocation,
+		core.CategoryNotInitialized,
+		core.CategoryNotFound,
+		core.CategoryValidation,
+	} {
+		if !strings.Contains(guidelines, string(category)) {
+			t.Errorf("guidelines missing error category %q:\n%s", category, guidelines)
+		}
+	}
+}
+
+func TestRenderGuidelinesNamesTheRefreshCommand(t *testing.T) {
+	guidelines := RenderGuidelines(testProject())
+
+	if !strings.Contains(guidelines, "workbook docs update") {
+		t.Errorf("guidelines do not name the refresh command:\n%s", guidelines)
+	}
+}
+
+func TestRenderReferencePointsAtTheGuidelines(t *testing.T) {
+	reference := RenderReference()
+
+	if !strings.Contains(reference, GuidelinesPath) {
+		t.Errorf("reference block does not point at %q:\n%s", GuidelinesPath, reference)
+	}
+}
+
+func TestSkillDocumentSeparatesFrontmatterFromTheManagedBody(t *testing.T) {
+	// Production mutation: wrapping YAML frontmatter inside the markers would
+	// move it off line one, where skill discovery requires it.
+	document, err := skillDocument("0.2.0")
+	if err != nil {
+		t.Fatalf("skillDocument() error = %v", err)
+	}
+	if !strings.HasPrefix(document.Preamble, "---\n") {
+		t.Fatalf("skill preamble does not start with frontmatter: %q", document.Preamble)
+	}
+	if !strings.HasSuffix(document.Preamble, "---\n") {
+		t.Fatalf("skill preamble does not end with frontmatter: %q", document.Preamble)
+	}
+	if strings.Contains(document.Body, "---\nname:") {
+		t.Fatalf("skill body contains frontmatter:\n%s", document.Body)
+	}
+	if !strings.Contains(document.Body, "workbook") {
+		t.Fatalf("skill body is empty of guidance:\n%s", document.Body)
+	}
+}
+
+func TestSkillDocumentRendersFrontmatterOnLineOne(t *testing.T) {
+	document, err := skillDocument("0.2.0")
+	if err != nil {
+		t.Fatalf("skillDocument() error = %v", err)
+	}
+
+	contents := string(document.Reconcile(nil).Contents)
+
+	if !strings.HasPrefix(contents, "---\n") {
+		t.Fatalf("rendered skill does not begin with frontmatter:\n%s", contents)
+	}
+}

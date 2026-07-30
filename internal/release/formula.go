@@ -56,6 +56,17 @@ class Workbook < Formula
     bin.install "workbook"
   end
 
+  def caveats
+    <<~CAVEATS
+      Workbook generates agent documentation per project, so upgrading this
+      formula cannot refresh the projects on your machine.
+
+      Run "workbook setup" in each project that uses Workbook to refresh its
+      managed documentation, and "workbook docs status" to check whether a
+      project is current.
+    CAVEATS
+  end
+
   test do
     assert_match version, shell_output("#{bin}/workbook version")
   end
