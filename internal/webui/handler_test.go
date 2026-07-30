@@ -495,9 +495,16 @@ func TestHandlerRejectsWrongDependencyMethodsAndMalformedPaths(t *testing.T) {
 		"/api/tasks/" + dependent.ID + "//dependencies/" + prerequisite.ID,
 		"/api/tasks/" + dependent.ID + "/./dependencies/" + prerequisite.ID,
 		"/api/tasks/" + dependent.ID + "/segment/../dependencies/" + prerequisite.ID,
+		"/./api/tasks/" + dependent.ID + "/dependencies/" + prerequisite.ID,
+		"//api/tasks/" + dependent.ID + "/dependencies/" + prerequisite.ID,
+		"/segment/../api/tasks/" + dependent.ID + "/dependencies/" + prerequisite.ID,
+		"/api/tasks/./dependencies/" + prerequisite.ID,
+		"/api/tasks/../dependencies/" + prerequisite.ID,
+		"/api/tasks/" + dependent.ID + "/dependencies/.",
+		"/api/tasks/" + dependent.ID + "/dependencies/..",
 		path + "/extra",
 	} {
-		response := request(t, handler, http.MethodPut, malformed)
+		response := requestWithRawPath(t, handler, http.MethodPut, malformed)
 		if response.Code != http.StatusNotFound {
 			t.Errorf("PUT %s status = %d, want %d", malformed, response.Code, http.StatusNotFound)
 		}
@@ -3039,6 +3046,16 @@ func request(t *testing.T, handler http.Handler, method, target string) *httptes
 	t.Helper()
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest(method, target, nil))
+	return response
+}
+
+func requestWithRawPath(t *testing.T, handler http.Handler, method, rawPath string) *httptest.ResponseRecorder {
+	t.Helper()
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(method, "/", nil)
+	request.URL.Path = rawPath
+	request.RequestURI = rawPath
+	handler.ServeHTTP(response, request)
 	return response
 }
 

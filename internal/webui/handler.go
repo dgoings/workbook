@@ -174,19 +174,27 @@ func methodAllowed(requestMethod, allowed string) bool {
 }
 
 func malformedTaskDependencyPath(requestPath string) bool {
-	const prefix = "/api/tasks/"
-	if !strings.HasPrefix(requestPath, prefix) {
-		return false
-	}
 	if _, _, valid := taskDependencyPathIDs(requestPath); valid {
 		return false
 	}
-	if _, _, cleanedDependency := taskDependencyPathIDs(pathpkg.Clean(requestPath)); cleanedDependency {
+	cleanedPath := pathpkg.Clean(requestPath)
+	if _, _, cleanedDependency := taskDependencyPathIDs(cleanedPath); cleanedDependency {
 		return true
 	}
-	parts := strings.Split(strings.TrimPrefix(requestPath, prefix), "/")
-	for _, part := range parts[1:] {
-		if part == "dependencies" {
+	if !taskAPIPath(requestPath) && !taskAPIPath(cleanedPath) {
+		return false
+	}
+	return hasPathSegment(requestPath, "dependencies") ||
+		hasPathSegment(cleanedPath, "dependencies")
+}
+
+func taskAPIPath(path string) bool {
+	return path == "/api/tasks" || strings.HasPrefix(path, "/api/tasks/")
+}
+
+func hasPathSegment(path, marker string) bool {
+	for _, segment := range strings.Split(path, "/") {
+		if segment == marker {
 			return true
 		}
 	}
@@ -229,7 +237,9 @@ func taskDependencyPathIDs(path string) (string, string, bool) {
 	}
 	parts := strings.Split(strings.TrimPrefix(path, prefix), "/")
 	if len(parts) != 3 || parts[0] == "" ||
-		parts[1] != "dependencies" || parts[2] == "" {
+		parts[0] == "." || parts[0] == ".." ||
+		parts[1] != "dependencies" || parts[2] == "" ||
+		parts[2] == "." || parts[2] == ".." {
 		return "", "", false
 	}
 	return parts[0], parts[2], true
