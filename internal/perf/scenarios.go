@@ -513,18 +513,11 @@ func MeasureRepository(ctx context.Context, workbookBinary, fixtureRoot string, 
 		return RepositoryMetrics{}, nil, fmt.Errorf("create local bare remote root: %w", err)
 	}
 	defer os.RemoveAll(originRoot)
-	origin := filepath.Join(originRoot, "origin.git")
-	if _, _, err := runRepositoryGit(ctx, commandTimeout, "", "init", "--bare", "--quiet", origin); err != nil {
-		return RepositoryMetrics{}, nil, err
-	}
-	if _, _, err := runRepositoryGit(ctx, commandTimeout, fixtureRoot, "remote", "add", "origin", origin); err != nil {
-		return RepositoryMetrics{}, nil, err
-	}
-
-	syncResults, err := measureLocalBareSync(
+	syncResults, err := measureLocalBareSyncAgainstNewOrigin(
 		ctx,
 		workbookBinary,
 		fixtureRoot,
+		filepath.Join(originRoot, "origin.git"),
 		commandTimeout,
 		MeasureCommand,
 	)
@@ -581,6 +574,40 @@ func measureProjectionScenarios(
 		results[index].Summary = Summarize(results[index].Samples)
 	}
 	return results, nil
+}
+
+func measureLocalBareSyncAgainstNewOrigin(
+	ctx context.Context,
+	workbookBinary string,
+	fixtureRoot string,
+	origin string,
+	commandTimeout time.Duration,
+	measureCommand func(context.Context, CommandSpec) Sample,
+) ([]ScenarioResult, error) {
+	output, _, err := runRepositoryGit(
+		ctx, commandTimeout, fixtureRoot, "rev-parse", "--show-object-format",
+	)
+	if err != nil {
+		return nil, err
+	}
+	objectFormat := strings.TrimSuffix(string(output), "\n")
+	if objectFormat == "" || strings.ContainsAny(objectFormat, "\r\n\t ") {
+		return nil, fmt.Errorf("Git returned invalid repository object format %q", objectFormat)
+	}
+	if _, _, err := runRepositoryGit(
+		ctx, commandTimeout, "", "init", "--bare", "--quiet",
+		"--object-format="+objectFormat, origin,
+	); err != nil {
+		return nil, err
+	}
+	if _, _, err := runRepositoryGit(
+		ctx, commandTimeout, fixtureRoot, "remote", "add", "origin", origin,
+	); err != nil {
+		return nil, err
+	}
+	return measureLocalBareSync(
+		ctx, workbookBinary, fixtureRoot, commandTimeout, measureCommand,
+	)
 }
 
 func measureLocalBareSync(
