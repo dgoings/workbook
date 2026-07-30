@@ -337,9 +337,9 @@ preselects that column's canonical status.
 
 Click a card's shortened task ID to copy its full ID. The ID remains part of the
 card's drag target, so dragging moves the task while a click copies. The task
-detail route provides the same action on its full ID. Successful copies show an
-accessible confirmation; clipboard failures keep the full ID visible for manual
-copying.
+detail route provides the same action on its full ID. Copy feedback appears
+inline beside the ID without shifting the board or task form;
+polite live announcements identify the full task ID.
 
 The shared new-task and detail form creates or edits title, description, status,
 priority, and labels through the versioned APIs. Saving returns to the board and

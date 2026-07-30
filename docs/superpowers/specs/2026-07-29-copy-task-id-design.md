@@ -30,26 +30,28 @@ existing interface blue, the pointer cursor communicates clickability, and
 
 ## Clipboard Feedback
 
-Successful copies show a visible polite live-region message containing the full
-ID, for example:
+Each copy control owns a compact, polite live-region message positioned
+immediately after the ID. The visible success message is:
 
 ```text
-Copied task ID WB-01KYQXDDQXSE8WRW7XFKXZQ2DP.
+Copied
 ```
 
-The board owns a copy-status region above its columns. The task detail header
-owns a corresponding copy-status region near the full ID. Copy feedback is
-short-lived but remains visible long enough to read. Repeated copy actions
-replace the previous message and restart its dismissal timer.
+The message is absolutely positioned within the ID's inline group, so showing
+or dismissing it does not change card, board-column, or task-form geometry. Its
+accessible label includes the full task ID and outcome, for example, "Copied
+task ID WB-01KYQXDDQXSE8WRW7XFKXZQ2DP." Copy feedback is short-lived but
+remains visible long enough to read. Repeated copy actions on an ID replace its
+previous message and restart that ID's dismissal timer.
 
-If the Clipboard API is unavailable or rejects the write, the same region shows
-an accessible error containing the full ID and explaining that it can be
-selected there for manual copying. Clipboard failures do not navigate, refresh,
-or mutate task state.
+If the Clipboard API is unavailable or rejects the write, the same inline
+region shows "Copy failed" and its accessible label identifies the full ID that
+could not be copied. Clipboard failures do not navigate, refresh, or mutate
+task state.
 
 ## Client Structure
 
-A shared helper accepts the full task ID and the current view's status region,
+A shared helper accepts the full task ID and its copy control's status region,
 calls `navigator.clipboard.writeText`, and renders success or failure feedback.
 Both the server-rendered board template and client-rendered refresh cards expose
 the full ID as data on the text-like copy button while displaying only the
@@ -66,12 +68,10 @@ No task mutation endpoint or service callback is involved.
   Space without custom key handling.
 - Each board control's accessible name includes the full ID even though its
   visible label is shortened.
-- Success and failure messages use a visible `role="status"` region with polite
-  live announcements.
+- Success and failure messages use a visible, per-ID `role="status"` region
+  with polite live announcements whose accessible labels include the full ID.
 - Hover is not the only affordance: the pointer cursor and keyboard focus
   outline remain available.
-- Clipboard failure feedback includes the full ID as selectable text for manual
-  copying.
 
 ## Verification
 
@@ -80,8 +80,9 @@ cards and the detail view. The existing executable JavaScript harness verifies:
 
 - clicking a shortened board ID writes the matching full ID;
 - clicking a full detail ID writes that ID;
-- successful copies render the accessible confirmation;
-- rejected clipboard writes render the accessible error;
+- successful copies render the inline accessible confirmation without a
+  page-level status region;
+- rejected clipboard writes render the corresponding inline accessible error;
 - dragging from the board ID preserves card drag behavior without copying; and
 - a later intentional click after the drag does copy.
 

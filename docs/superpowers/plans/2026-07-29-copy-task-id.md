@@ -8,6 +8,12 @@
 
 **Tech Stack:** Go 1.26, Go `html/template` and `httptest`, embedded HTML/CSS/vanilla JavaScript, native Clipboard and HTML drag-and-drop APIs, Node-based executable client tests.
 
+> **Review follow-up (2026-07-30):** The completed steps below record the
+> original implementation. User review replaced the view-level feedback regions
+> described in those steps with a compact, per-ID inline status that is
+> positioned outside normal flow. The final implementation and design spec
+> supersede those earlier snippets.
+
 ## Global Constraints
 
 - Work only in `/Users/dylan.goings/source/workbook/.worktrees/copy-task-id` on `codex/copy-task-id`.
