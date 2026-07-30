@@ -152,7 +152,7 @@ func newHandler(list TaskLister, create TaskCreator, update TaskUpdater, updateS
 func (handler *handler) serveHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Content-Security-Policy", securityPolicy)
 	writer.Header().Set("X-Content-Type-Options", "nosniff")
-	if malformedTaskDependencyPath(request.URL.Path) {
+	if malformedTaskDependencyRequestPath(request.URL.Path, request.URL.EscapedPath()) {
 		http.NotFound(writer, request)
 		return
 	}
@@ -171,6 +171,19 @@ func methodAllowed(requestMethod, allowed string) bool {
 		}
 	}
 	return false
+}
+
+func malformedTaskDependencyRequestPath(decodedPath, escapedPath string) bool {
+	if escapedPath != decodedPath &&
+		(taskDependencyRouteShaped(decodedPath) || malformedTaskDependencyPath(decodedPath)) {
+		return true
+	}
+	return malformedTaskDependencyPath(escapedPath)
+}
+
+func taskDependencyRouteShaped(requestPath string) bool {
+	_, _, valid := taskDependencyPathIDs(requestPath)
+	return valid
 }
 
 func malformedTaskDependencyPath(requestPath string) bool {

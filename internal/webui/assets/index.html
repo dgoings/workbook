@@ -225,6 +225,7 @@
       const pendingRelationshipDrafts = new Map();
       const pendingTaskMessages = new Map();
       let createdTaskRecovery = null;
+      let pendingRelationshipRecoveryFocus = null;
 
       function text(element, value) { element.textContent = value || ""; return element; }
       function taskIDCopyControl(taskID, visibleID) {
@@ -420,10 +421,27 @@
             "Task created, but some relationships were not saved.",
             ...recovery.warnings
           ]);
+          pendingRelationshipRecoveryFocus = { taskID: recovery.taskID };
         } else if (recovery.warnings.length) {
           pendingTaskMessages.set(recovery.taskID, recovery.warnings);
         }
         pendingDetailRelationshipContextTaskID = recovery.taskID;
+      }
+      function focusPendingRelationshipRecovery(taskID, controller, generation) {
+        const request = pendingRelationshipRecoveryFocus;
+        if (!request || request.taskID !== taskID) return;
+        Promise.resolve().then(() => {
+          if (pendingRelationshipRecoveryFocus !== request) return;
+          if (generation !== relationshipRefreshGeneration ||
+              !ownsDependencyController(controller) ||
+              !main.contains(controller.region)) {
+            pendingRelationshipRecoveryFocus = null;
+            return;
+          }
+          const action = controller.recoveryActions[0];
+          pendingRelationshipRecoveryFocus = null;
+          if (action && typeof action.focus === "function") action.focus();
+        });
       }
       function showCreatedTaskRefreshFailure(result, retryOperation) {
         text(result, "Task created durably, but the latest task state could not be refreshed. ");
@@ -716,6 +734,7 @@
           renderOptions();
         });
         add.addEventListener("click", () => {
+          if (config.isBusy()) return;
           const candidate = selectedCandidate();
           if (candidate) return config.onAdd(candidate.id);
         });
@@ -847,6 +866,7 @@
             label: labelText,
             isBusy: () => groupController.busy,
             onAdd: (selectedID) => {
+              if (controller.busy) return;
               if (!taskID) {
                 const selectedTask = reconciledRelationshipTasks().active.find((task) => task.id === selectedID);
                 if (!selectedTask) return;
@@ -866,8 +886,13 @@
         });
         region.append(status);
         controller = {
-          region, status, groups, taskID, draftState,
+          region, status, groups, taskID, draftState, busy: false, recoveryActions: [],
+          setBusy(busy) {
+            this.busy = busy;
+            groups.forEach((group) => group.setBusy(busy));
+          },
           update() {
+            this.recoveryActions = [];
             const state = taskID ? dependencyState(taskID) : { dependsOn: [], blocks: [] };
             if (taskID && !state) return;
             [["dependsOn", state.dependsOn], ["blocks", state.blocks]].forEach(([name, persistedRelationships]) => {
@@ -911,6 +936,7 @@
                   )
                   : null;
                 const row = relationshipRow(relationship, () => {
+                  if (controller.busy) return;
                   if (isDraft) {
                     if (taskID && !ownsDependencyController(controller)) return;
                     draftMap.delete(relationship.id);
@@ -933,6 +959,10 @@
                 if (retry) {
                   retry.disabled = group.busy;
                   group.removeButtons.push(retry);
+                }
+                if (isDraft) {
+                  const recoveryAction = retry || remove;
+                  if (recoveryAction) controller.recoveryActions.push(recoveryAction);
                 }
                 return row;
               }));
@@ -1018,6 +1048,7 @@
           };
           let createdDurably = false;
           save.disabled = true;
+          if (isNew) relationshipController.setBusy(true);
           text(result, "");
           try {
             const document = await mutateTask(isNew ? "POST" : "PATCH", isNew ? "/api/tasks" : "/api/tasks/" + encodeURIComponent(task.id), values);
@@ -1044,13 +1075,8 @@
                 const retried = await currentRefreshResult(refresh());
                 if (main.firstElementChild !== section ||
                     createdTaskRecovery !== recovery ||
-                    retried.status !== "applied") return;
-                try {
-                  const deletedTasks = await refreshDeletedTasks();
-                  if (main.firstElementChild !== section ||
-                      createdTaskRecovery !== recovery) return;
-                  latestDeletedTasks = deletedTasks;
-                } catch (_) {
+                    retried.status !== "applied" ||
+                    retried.relationshipContext.status !== "applied") {
                   return;
                 }
                 applyCreatedTaskRecovery(recovery);
@@ -1059,16 +1085,8 @@
                 navigate("/tasks/" + encodeURIComponent(recoveredID));
               };
               const refreshed = await currentRefreshResult(refresh());
-              if (refreshed.status !== "applied") {
-                if (main.firstElementChild !== section) return;
-                showCreatedTaskRefreshFailure(result, retryCreatedTaskRefresh);
-                return;
-              }
-              try {
-                const deletedTasks = await refreshDeletedTasks();
-                if (main.firstElementChild !== section) return;
-                latestDeletedTasks = deletedTasks;
-              } catch (_) {
+              if (refreshed.status !== "applied" ||
+                  refreshed.relationshipContext.status !== "applied") {
                 if (main.firstElementChild !== section) return;
                 showCreatedTaskRefreshFailure(result, retryCreatedTaskRefresh);
                 return;
@@ -1086,7 +1104,10 @@
               ? error.message
               : isNew ? "Task creation failed." : "Task update failed.");
           } finally {
-            if (!createdDurably) save.disabled = false;
+            if (!createdDurably) {
+              save.disabled = false;
+              if (isNew) relationshipController.setBusy(false);
+            }
           }
         });
         section.append(header, form);
@@ -1095,16 +1116,14 @@
           : pendingRelationshipDrafts.get(task.id) || null;
         const relationshipController = taskRelationships(isNew ? "" : task.id, failedDrafts);
         relationshipMount.append(relationshipController.region);
-        if (!isNew) {
-          activeDependencyController = relationshipController;
-          if (pendingDetailRelationshipContextTaskID === task.id) {
-            pendingDetailRelationshipContextTaskID = null;
-          } else {
-            refreshRelationshipContext(
-              relationshipController,
-              ++relationshipRefreshGeneration
-            );
-          }
+        activeDependencyController = relationshipController;
+        if (!isNew && pendingDetailRelationshipContextTaskID === task.id) {
+          pendingDetailRelationshipContextTaskID = null;
+        } else {
+          refreshRelationshipContext(
+            relationshipController,
+            ++relationshipRefreshGeneration
+          );
         }
         return section;
       }
@@ -1243,7 +1262,9 @@
 	  }
       function renderRoute() {
         const current = route();
-        if (current.view !== "detail") activeDependencyController = null;
+        if (current.view !== "detail" && current.view !== "new") {
+          activeDependencyController = null;
+        }
         if (current.view === "board") {
           document.title = "Workbook board";
           if (main.firstElementChild !== boardView) main.replaceChildren(boardView);
@@ -1281,7 +1302,15 @@
           return;
         }
         document.title = task.title + " · Workbook";
-        main.replaceChildren(taskForm("detail", task));
+        const detail = taskForm("detail", task);
+        const controller = activeDependencyController;
+        const relationshipGeneration = relationshipRefreshGeneration;
+        main.replaceChildren(detail);
+        focusPendingRelationshipRecovery(
+          task.id,
+          controller,
+          relationshipGeneration
+        );
       }
       function dropTarget(event) {
         return event.target.closest("[data-drop-status]");

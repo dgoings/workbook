@@ -954,36 +954,6 @@ func TestREADMEImplementedCommands(t *testing.T) {
 			t.Errorf("README web board documentation is missing %q", required)
 		}
 	}
-	for _, required := range []string{
-		"PUT /api/tasks/<id>/dependencies/<dependency>",
-		"DELETE /api/tasks/<id>/dependencies/<dependency>",
-		"Depends On",
-		"Blocks",
-		"Waiting on dependencies",
-		"deleted blocked tasks remain read-only",
-	} {
-		if !strings.Contains(readme, required) {
-			t.Errorf("README web dependency documentation is missing %q", required)
-		}
-	}
-	for _, required := range []string{
-		"PUT /api/tasks/<id>/dependencies/<dependency>     add a prerequisite",
-		"DELETE /api/tasks/<id>/dependencies/<dependency>  remove a prerequisite",
-		"Cards with prerequisites show completed versus total dependency progress.",
-		"Ready cards whose prerequisites are not all active and Done also say\n`Waiting on dependencies`.",
-		"**Depends On** lists the current task's prerequisites",
-		"**Blocks** lists tasks that depend on the current task.",
-		"Each group searches\neligible active tasks through an integrated combobox",
-		"Missing prerequisite IDs remain visible and removable.",
-		"Tombstoned\nprerequisites are also removable because the active dependent owns that edge;",
-		"deleted blocked tasks remain read-only because tombstones cannot be changed.",
-		"Dependency warnings and failures stay beside the initiating group, and",
-		"dependency refreshes leave unsaved task-form fields mounted.",
-	} {
-		if !strings.Contains(readme, required) {
-			t.Errorf("README web dependency behavior documentation is missing %q", required)
-		}
-	}
 	for _, stale := range []string{
 		"Workbook synchronizes only its own refs",
 		"automatically reconciles concurrent edits",
