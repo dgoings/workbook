@@ -1,8 +1,10 @@
 # Task Detail Sidebar Layout Design
 
-**Status:** Approved in conversation; awaiting written-spec review  
-**Task:** `WB-01KYQMZMKMD9RWNH6PDTMZ97MC`  
-**Related task:** `WB-01KYQZ64833PGMFACTMSW4HEM1`  
+**Status:** Approved in conversation; awaiting written-spec review
+
+**Task:** `WB-01KYQMZMKMD9RWNH6PDTMZ97MC`
+
+**Related task:** `WB-01KYQZ64833PGMFACTMSW4HEM1`
 **Pull request:** #11
 
 ## Context
