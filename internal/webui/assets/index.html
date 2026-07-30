@@ -155,6 +155,8 @@
       let taskLoadFailed = false;
       let latestDeletedTasks = [];
       let activeDependencyController = null;
+      let taskRefreshGeneration = 0;
+      let relationshipRefreshGeneration = 0;
 
       function text(element, value) { element.textContent = value || ""; return element; }
       function card(task, view) {
@@ -219,16 +221,22 @@
         if (!response.ok || document.format !== "workbook.tasks" || document.version !== 1 || !Array.isArray(document.tasks)) {
           throw new Error(document.error && document.error.message || "Deleted task data could not be loaded.");
         }
-        latestDeletedTasks = document.tasks;
+        return document.tasks;
       }
-      async function refreshRelationshipContext(controller) {
+      async function refreshRelationshipContext(controller, generation) {
         try {
-          await refreshDeletedTasks();
-          if (activeDependencyController === controller) controller.update();
+          const deletedTasks = await refreshDeletedTasks();
+          if (generation !== relationshipRefreshGeneration || activeDependencyController !== controller) return false;
+          latestDeletedTasks = deletedTasks;
+          text(controller.status, "");
+          controller.update();
+          return true;
         } catch (error) {
-          if (activeDependencyController === controller) {
+          if (generation === relationshipRefreshGeneration && activeDependencyController === controller) {
+            controller.update();
             text(controller.status, error instanceof Error ? error.message : "Deleted task data could not be loaded.");
           }
+          return false;
         }
       }
       function dependencyState(taskID) {
@@ -327,7 +335,7 @@
           }
         };
         controller.update();
-        refreshRelationshipContext(controller);
+        refreshRelationshipContext(controller, ++relationshipRefreshGeneration);
         return controller;
       }
       function taskForm(mode, task) {
@@ -550,20 +558,27 @@
       }
       async function refresh() {
         const wasLoaded = tasksLoaded;
+        const generation = ++taskRefreshGeneration;
         try {
           const response = await fetch("/api/tasks", { cache: "no-store" });
           const document = await response.json();
           if (!response.ok || document.format !== "workbook.tasks" || document.version !== 1 || !Array.isArray(document.tasks) || !Array.isArray(document.presentation)) throw new Error("invalid task document");
           const presentation = new Map(document.presentation.map((view) => [view.taskId, view]));
           if (presentation.size !== document.tasks.length || document.tasks.some((task) => !presentation.has(task.id))) throw new Error("invalid task presentation");
+          if (generation !== taskRefreshGeneration) return false;
           latestTasks = document.tasks;
           tasksLoaded = true;
           taskLoadFailed = false;
           render(document.tasks, presentation); stale.dataset.visible = "false"; text(updated, "Updated " + new Date().toLocaleTimeString());
           if (!wasLoaded) renderRoute();
-          else if (activeDependencyController) await refreshRelationshipContext(activeDependencyController);
+          else if (activeDependencyController) {
+            const controller = activeDependencyController;
+            controller.update();
+            await refreshRelationshipContext(controller, ++relationshipRefreshGeneration);
+          }
           return true;
         } catch (_) {
+          if (generation !== taskRefreshGeneration) return false;
           text(stale, "Task refresh failed. Showing the last successful board."); stale.dataset.visible = "true";
           if (!tasksLoaded) {
             taskLoadFailed = true;

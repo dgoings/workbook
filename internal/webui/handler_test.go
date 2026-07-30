@@ -510,6 +510,12 @@ func TestHandlerClientRendersDependencyRelationships(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	activeAfterDeletedFetchFailure := refreshedCurrent
+	activeAfterDeletedFetchFailure.Dependencies = []string{}
+	deletedFetchFailureDocument, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: []core.Task{activeAfterDeletedFetchFailure, activeDependency}, Presentation: presentationForTasks([]core.Task{activeAfterDeletedFetchFailure, activeDependency})})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	program := clientDOMHarness("/tasks/"+current.ID, string(activeDocument)) + script + `
 deletedTaskResponse = ` + string(deletedDocument) + `;
@@ -542,6 +548,10 @@ setTimeout(async () => {
   if (!title) throw new Error("detail title field did not render");
   title.value = "Unsaved title";
   taskResponse = ` + string(refreshedDocument) + `;
+  let resolveStaleDeleted;
+  deletedTaskResponse = new Promise((resolve) => { resolveStaleDeleted = resolve; });
+  const stalePoll = intervalCallback();
+  await new Promise((resolve) => setTimeout(resolve, 0));
   deletedTaskResponse = ` + string(deletedAfterPollDocument) + `;
   await intervalCallback();
   if (title.value !== "Unsaved title") throw new Error("relationship refresh reconstructed the task form");
@@ -554,6 +564,23 @@ setTimeout(async () => {
       findElement(deletedBlock, (element) => element.tagName === "BUTTON" && element.textContent === "Remove")) {
     throw new Error("poll did not keep a later tombstoned blocked task read-only");
   }
+  resolveStaleDeleted(` + string(deletedDocument) + `);
+  await stalePoll;
+  const blockAfterStaleResponse = findElement(main, (element) => element.dataset.relationshipId === ` + strconv.Quote(activeBlocked.ID) + `);
+  if (!blockAfterStaleResponse || !blockAfterStaleResponse.textContent.includes("Deleted") ||
+      findElement(blockAfterStaleResponse, (element) => element.tagName === "BUTTON" && element.textContent === "Remove")) {
+    throw new Error("stale deleted response regressed the latest blocked-task state");
+  }
+
+  taskResponse = ` + string(deletedFetchFailureDocument) + `;
+  deletedTaskResponse = Promise.reject(new Error("deleted task data unavailable"));
+  await intervalCallback();
+  if (title.value !== "Unsaved title") throw new Error("deleted-context failure reconstructed the task form");
+  if (findElement(main, (element) => element.dataset.relationshipId === ` + strconv.Quote(activeDependency.ID) + `)) {
+    throw new Error("deleted-context failure did not render the latest active relationship state");
+  }
+  const localError = findElement(main, (element) => element.textContent === "deleted task data unavailable");
+  if (!localError) throw new Error("deleted-context failure did not render a relationship-local error");
 }, 0);
 `
 	command := exec.Command(node, "-e", program)
