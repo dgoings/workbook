@@ -566,9 +566,9 @@ func measureProjectionScenarios(
 }
 
 // measureLocalBareSyncAgainstNewOrigin gives every sample its own empty bare
-// origin and clears the fetched tracking namespace, so each sample measures the
-// same initial-publication and already-synchronized topology. That setup is
-// plain Git work outside both measured samples.
+// origin, so each sample measures the same initial-publication and
+// already-synchronized topology. That setup is plain Git work outside both
+// measured samples.
 func measureLocalBareSyncAgainstNewOrigin(
 	ctx context.Context,
 	workbookBinary string,
@@ -612,8 +612,9 @@ func measureLocalBareSyncAgainstNewOrigin(
 	)
 }
 
-// deleteTrackingTaskRefs removes every fetched tracking ref so the next sample
-// starts from an unpublished repository.
+// deleteTrackingTaskRefs clears any fetched tracking ref so a sample's
+// unpublished starting topology does not depend on the measured product still
+// pruning stale tracking refs during its own fetch. It is normally a no-op.
 func deleteTrackingTaskRefs(ctx context.Context, commandTimeout time.Duration, fixtureRoot string) error {
 	output, _, err := runRepositoryGit(
 		ctx, commandTimeout, fixtureRoot, "for-each-ref", "--format=delete %(refname)", "refs/workbook/remotes/",

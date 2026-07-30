@@ -166,9 +166,11 @@ budget: this family has no pass threshold, and a steep slope is evidence to
 record rather than a failure.
 
 Repository-surface scenarios now honor `--samples`. `projection-rebuild` repeats
-its independent rebuild, and each local-bare sync sample receives a fresh empty
-bare origin with the fetched tracking namespace cleared so it measures the same
-initial-publication and already-synchronized topology every time.
+its independent rebuild, and each local-bare sync sample receives its own fresh
+empty bare origin so it measures the same initial-publication and
+already-synchronized topology every time. The harness also clears any fetched
+tracking ref before each sync sample, so that starting topology does not depend
+on the measured product still pruning stale tracking refs itself.
 
 ## Remote synchronization topologies
 

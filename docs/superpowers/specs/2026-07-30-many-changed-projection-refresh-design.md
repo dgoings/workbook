@@ -163,11 +163,15 @@ repository-surface scenario allocates that many samples:
 
 - `projection-rebuild` repeats `workbook rebuild --json`, which is independent by
   construction because it rebuilds the cache from scratch.
-- `sync-initial-local-bare` and `sync-unchanged-local-bare` receive a fresh empty
-  bare origin per sample, with the fetched tracking namespace cleared, so each
-  sample measures the same initial-publication and already-synchronized topology
-  rather than degenerating into a second unchanged sync. That reset is plain Git
-  work outside both measured samples.
+- `sync-initial-local-bare` and `sync-unchanged-local-bare` receive their own
+  fresh empty bare origin per sample, so each sample measures the same
+  initial-publication and already-synchronized topology rather than degenerating
+  into a second unchanged sync. The harness also clears any fetched tracking ref
+  first, so the starting topology does not depend on the measured product still
+  pruning stale tracking refs during its own fetch; against the current
+  implementation that clear is a no-op. An integration test asserts each
+  sample's origin ends up holding exactly the canonical task refs. All of this
+  reset work is plain Git work outside both measured samples.
 - The projection refresh family builds a fresh fixture per `(point, sample)` and
   applies the settle, mutate, and verify sequence above to each one.
 

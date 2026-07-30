@@ -1388,6 +1388,46 @@ func TestMeasureLocalBareSyncAgainstNewOriginPreservesPackedRefs(t *testing.T) {
 	}
 }
 
+func TestMeasureLocalBareSyncPublishesEverySampleToItsOwnOrigin(t *testing.T) {
+	binary := buildWorkbookBinary(t)
+	fixture, err := BuildFixture(context.Background(), filepath.Join(t.TempDir(), "fixture"), FixtureSpec{
+		TotalTasks: 10, ActiveTasks: 10,
+		OperationsPerTask: 2,
+		ObjectFormat:      "sha1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const samples = 2
+	originRoot := t.TempDir()
+	results, err := measureLocalBareSyncAgainstNewOrigin(
+		context.Background(), binary, fixture.Root, originRoot, samples, time.Minute, MeasureCommand,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, result := range results {
+		if len(result.Samples) != samples {
+			t.Fatalf("%s samples = %d, want %d", result.Name, len(result.Samples), samples)
+		}
+		for index, sample := range result.Samples {
+			if !sampleSucceeded(sample) {
+				t.Fatalf("%s sample %d = %#v, want success", result.Name, index+1, sample)
+			}
+		}
+	}
+
+	canonical := fixtureRefMap(t, fixture.Root, "refs/workbook/tasks/")
+	for sample := 1; sample <= samples; sample++ {
+		origin := filepath.Join(originRoot, fmt.Sprintf("origin-%03d.git", sample))
+		remote := fixtureRemoteRefMap(t, origin)
+		if !reflect.DeepEqual(remote, canonical) {
+			t.Fatalf("sample %d origin task refs = %#v, want exact canonical refs %#v", sample, remote, canonical)
+		}
+	}
+}
+
 func TestMeasureProjectionScenariosRetainMeasuredProductMissesForEverySample(t *testing.T) {
 	repository := t.TempDir()
 	samples := []Sample{
