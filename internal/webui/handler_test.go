@@ -589,6 +589,413 @@ setTimeout(async () => {
 	}
 }
 
+func TestHandlerClientFiltersDependencyComboboxCandidates(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	current := clientPlacementTask("WB-01J00000000000000000000041", "Current task", core.StatusReady, core.PriorityMedium)
+	existingDependency := clientPlacementTask("WB-01J00000000000000000000042", "Existing prerequisite", core.StatusDone, core.PriorityHigh)
+	alreadyBlocked := clientPlacementTask("WB-01J00000000000000000000043", "Already blocked", core.StatusBlocked, core.PriorityLow)
+	firstCandidate := clientPlacementTask("WB-01J00000000000000000000044", "First candidate", core.StatusBacklog, core.PriorityHigh)
+	secondCandidate := clientPlacementTask("WB-01J00000000000000000000045", "Second candidate", core.StatusInProgress, core.PriorityMedium)
+	deletedCandidate := clientPlacementTask("WB-01J00000000000000000000046", "Deleted candidate", core.StatusReady, core.PriorityLow)
+	current.Dependencies = []string{existingDependency.ID}
+	alreadyBlocked.Dependencies = []string{current.ID}
+	deletedCandidate.Deleted = true
+	tasks := []core.Task{current, existingDependency, alreadyBlocked, firstCandidate, secondCandidate, deletedCandidate}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<id> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/"+current.ID, string(document)) + script + `
+setTimeout(() => {
+  const dependsHeading = findElement(main, (element) => element.textContent === "Depends On");
+  const blocksHeading = findElement(main, (element) => element.textContent === "Blocks");
+  const dependsInput = dependsHeading && findElement(dependsHeading.parentElement, (element) => element.tagName === "INPUT");
+  const blocksInput = blocksHeading && findElement(blocksHeading.parentElement, (element) => element.tagName === "INPUT");
+  if (!dependsInput || dependsInput.attributes.role !== "combobox" ||
+      dependsInput.attributes["aria-autocomplete"] !== "list" ||
+      !dependsInput.attributes["aria-controls"]) {
+    throw new Error("Depends On input does not expose the combobox contract");
+  }
+  if (!blocksInput || blocksInput.attributes.role !== "combobox" ||
+      blocksInput.attributes["aria-autocomplete"] !== "list" ||
+      !blocksInput.attributes["aria-controls"]) {
+    throw new Error("Blocks input does not expose the combobox contract");
+  }
+
+  const assertOptions = (heading, wantIDs, label) => {
+    const options = heading.parentElement.querySelectorAll('[role="option"]');
+    const gotIDs = options.map((option) => option.dataset.candidateId);
+    if (JSON.stringify(gotIDs) !== JSON.stringify(wantIDs)) {
+      throw new Error(label + " candidates = " + JSON.stringify(gotIDs) + ", want " + JSON.stringify(wantIDs));
+    }
+    const ids = new Set();
+    options.forEach((option) => {
+      const task = taskDocument.tasks.find((candidate) => candidate.id === option.dataset.candidateId);
+      if (!option.id || ids.has(option.id)) throw new Error(label + " option IDs are not stable and unique");
+      ids.add(option.id);
+      if (option.attributes.role !== "option" || option.attributes["aria-selected"] !== "false") {
+        throw new Error(label + " option does not expose selection semantics");
+      }
+      if (!task || !option.textContent.includes(task.title) || !option.textContent.includes(task.status) ||
+          !option.textContent.includes(task.priority) || !option.textContent.includes(task.id)) {
+        throw new Error(label + " option does not show title, status, priority, and full ID");
+      }
+    });
+  };
+
+  assertOptions(dependsHeading, [
+    ` + strconv.Quote(alreadyBlocked.ID) + `,
+    ` + strconv.Quote(firstCandidate.ID) + `,
+    ` + strconv.Quote(secondCandidate.ID) + `
+  ], "Depends On");
+  assertOptions(blocksHeading, [
+    ` + strconv.Quote(existingDependency.ID) + `,
+    ` + strconv.Quote(firstCandidate.ID) + `,
+    ` + strconv.Quote(secondCandidate.ID) + `
+  ], "Blocks");
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute dependency combobox candidate filtering: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerClientDependencyMutationOrientationAndRefresh(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	current := clientPlacementTask("WB-01J00000000000000000000051", "Current task", core.StatusReady, core.PriorityMedium)
+	existingDependency := clientPlacementTask("WB-01J00000000000000000000052", "Existing prerequisite", core.StatusDone, core.PriorityHigh)
+	existingBlocked := clientPlacementTask("WB-01J00000000000000000000053", "Existing blocked task", core.StatusBlocked, core.PriorityLow)
+	dependsCandidate := clientPlacementTask("WB-01J00000000000000000000054", "New prerequisite", core.StatusBacklog, core.PriorityHigh)
+	blocksCandidate := clientPlacementTask("WB-01J00000000000000000000055", "New blocked task", core.StatusInProgress, core.PriorityMedium)
+	current.Dependencies = []string{existingDependency.ID}
+	existingBlocked.Dependencies = []string{current.ID}
+	initialTasks := []core.Task{current, existingDependency, existingBlocked, dependsCandidate, blocksCandidate}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<id> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	documentJSON := func(tasks []core.Task) string {
+		t.Helper()
+		document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(document)
+	}
+	emptyDeleted, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: []core.Task{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	currentAfterAdd := current
+	currentAfterAdd.Dependencies = []string{existingDependency.ID, dependsCandidate.ID}
+	afterDependsAdd := []core.Task{currentAfterAdd, existingDependency, existingBlocked, dependsCandidate, blocksCandidate}
+	newBlockedAfterAdd := blocksCandidate
+	newBlockedAfterAdd.Dependencies = []string{current.ID}
+	afterBlocksAdd := []core.Task{currentAfterAdd, existingDependency, existingBlocked, dependsCandidate, newBlockedAfterAdd}
+	currentAfterRemove := currentAfterAdd
+	currentAfterRemove.Dependencies = []string{dependsCandidate.ID}
+	afterDependsRemove := []core.Task{currentAfterRemove, existingDependency, existingBlocked, dependsCandidate, newBlockedAfterAdd}
+	existingBlockedAfterRemove := existingBlocked
+	existingBlockedAfterRemove.Dependencies = []string{}
+	afterBlocksRemove := []core.Task{currentAfterRemove, existingDependency, existingBlockedAfterRemove, dependsCandidate, newBlockedAfterAdd}
+
+	program := clientDOMHarness("/tasks/"+current.ID, documentJSON(initialTasks)) + script + `
+deletedTaskResponse = ` + string(emptyDeleted) + `;
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const groupFor = (headingText) => {
+    const heading = findElement(main, (element) => element.textContent === headingText);
+    if (!heading) throw new Error("missing " + headingText + " group");
+    return heading.parentElement;
+  };
+  const selectByPointer = (group, candidateID) => {
+    const option = findElement(group, (element) => element.attributes.role === "option" && element.dataset.candidateId === candidateID);
+    if (!option || !option.eventListeners.click) throw new Error("candidate option is not pointer selectable: " + candidateID);
+    option.eventListeners.click();
+    const add = findElement(group, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+    if (!add || add.disabled || !add.eventListeners.click) throw new Error("selected candidate did not enable Add dependency");
+    return add;
+  };
+  const mutationDocument = (task) => ({
+    format: "workbook.task-mutation",
+    version: 1,
+    task
+  });
+  let nextMutation = mutationDocument(taskDocument.tasks[0]);
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if ((options.method || "GET") !== "GET") {
+      return { ok: true, json: async () => nextMutation };
+    }
+    return { ok: true, json: async () => url === "/api/tasks?deleted=true" ? deletedTaskResponse : taskResponse };
+  };
+  fetchCalls.splice(0);
+
+  let dependsGroup = groupFor("Depends On");
+  nextMutation = mutationDocument(` + documentJSON(afterDependsAdd) + `.tasks[0]);
+  taskResponse = ` + documentJSON(afterDependsAdd) + `;
+  await selectByPointer(dependsGroup, ` + strconv.Quote(dependsCandidate.ID) + `).eventListeners.click();
+  const dependsAdd = fetchCalls.find((call) =>
+    call.options.method === "PUT" &&
+    call.url === "/api/tasks/" + encodeURIComponent(` + strconv.Quote(current.ID) + `) +
+      "/dependencies/" + encodeURIComponent(` + strconv.Quote(dependsCandidate.ID) + `));
+  if (!dependsAdd || Object.prototype.hasOwnProperty.call(dependsAdd.options, "body")) {
+    throw new Error("Depends On add did not send a bodyless nested PUT");
+  }
+
+  let blocksGroup = groupFor("Blocks");
+  nextMutation = mutationDocument(` + documentJSON(afterBlocksAdd) + `.tasks[4]);
+  taskResponse = ` + documentJSON(afterBlocksAdd) + `;
+  await selectByPointer(blocksGroup, ` + strconv.Quote(blocksCandidate.ID) + `).eventListeners.click();
+  const blocksAdd = fetchCalls.find((call) =>
+    call.options.method === "PUT" &&
+    call.url === "/api/tasks/" + encodeURIComponent(` + strconv.Quote(blocksCandidate.ID) + `) +
+      "/dependencies/" + encodeURIComponent(` + strconv.Quote(current.ID) + `));
+  if (!blocksAdd || Object.prototype.hasOwnProperty.call(blocksAdd.options, "body")) {
+    throw new Error("Blocks add did not reverse the edge orientation with a bodyless request");
+  }
+
+  dependsGroup = groupFor("Depends On");
+  const existingDependencyRow = findElement(dependsGroup, (element) => element.dataset.relationshipId === ` + strconv.Quote(existingDependency.ID) + `);
+  const dependsRemove = existingDependencyRow && findElement(existingDependencyRow, (element) => element.tagName === "BUTTON" && element.textContent === "Remove");
+  if (!dependsRemove || !dependsRemove.eventListeners.click) throw new Error("active Depends On row is not removable");
+  let resolveDependsRefresh;
+  taskResponse = new Promise((resolve) => { resolveDependsRefresh = resolve; });
+  nextMutation = mutationDocument(` + documentJSON(afterDependsRemove) + `.tasks[0]);
+  const dependsRemovePromise = dependsRemove.eventListeners.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  if (!findElement(dependsGroup, (element) => element.dataset.relationshipId === ` + strconv.Quote(existingDependency.ID) + `)) {
+    throw new Error("Depends On row changed before durable state was refreshed");
+  }
+  resolveDependsRefresh(` + documentJSON(afterDependsRemove) + `);
+  await dependsRemovePromise;
+  if (findElement(dependsGroup, (element) => element.dataset.relationshipId === ` + strconv.Quote(existingDependency.ID) + `)) {
+    throw new Error("Depends On row remained after refreshed state removed it");
+  }
+  const dependsDelete = fetchCalls.find((call) =>
+    call.options.method === "DELETE" &&
+    call.url === "/api/tasks/" + encodeURIComponent(` + strconv.Quote(current.ID) + `) +
+      "/dependencies/" + encodeURIComponent(` + strconv.Quote(existingDependency.ID) + `));
+  if (!dependsDelete || Object.prototype.hasOwnProperty.call(dependsDelete.options, "body")) {
+    throw new Error("Depends On remove did not send the mirrored bodyless nested DELETE");
+  }
+
+  blocksGroup = groupFor("Blocks");
+  const existingBlockedRow = findElement(blocksGroup, (element) => element.dataset.relationshipId === ` + strconv.Quote(existingBlocked.ID) + `);
+  const blocksRemove = existingBlockedRow && findElement(existingBlockedRow, (element) => element.tagName === "BUTTON" && element.textContent === "Remove");
+  if (!blocksRemove || !blocksRemove.eventListeners.click) throw new Error("active Blocks row is not removable");
+  let resolveBlocksRefresh;
+  taskResponse = new Promise((resolve) => { resolveBlocksRefresh = resolve; });
+  nextMutation = mutationDocument(` + documentJSON(afterBlocksRemove) + `.tasks[2]);
+  const blocksRemovePromise = blocksRemove.eventListeners.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  if (!findElement(blocksGroup, (element) => element.dataset.relationshipId === ` + strconv.Quote(existingBlocked.ID) + `)) {
+    throw new Error("Blocks row changed before durable state was refreshed");
+  }
+  resolveBlocksRefresh(` + documentJSON(afterBlocksRemove) + `);
+  await blocksRemovePromise;
+  if (findElement(blocksGroup, (element) => element.dataset.relationshipId === ` + strconv.Quote(existingBlocked.ID) + `)) {
+    throw new Error("Blocks row remained after refreshed state removed it");
+  }
+  const blocksDelete = fetchCalls.find((call) =>
+    call.options.method === "DELETE" &&
+    call.url === "/api/tasks/" + encodeURIComponent(` + strconv.Quote(existingBlocked.ID) + `) +
+      "/dependencies/" + encodeURIComponent(` + strconv.Quote(current.ID) + `));
+  if (!blocksDelete || Object.prototype.hasOwnProperty.call(blocksDelete.options, "body")) {
+    throw new Error("Blocks remove did not reverse the edge orientation with a bodyless nested DELETE");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute dependency mutation orientation and refresh: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerClientDependencyFailureRecoveryAndKeyboard(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	current := clientPlacementTask("WB-01J00000000000000000000061", "Current task", core.StatusReady, core.PriorityMedium)
+	alpha := clientPlacementTask("WB-01J00000000000000000000062", "Alpha prerequisite", core.StatusDone, core.PriorityHigh)
+	beta := clientPlacementTask("WB-01J00000000000000000000063", "Beta blocked task", core.StatusBacklog, core.PriorityLow)
+	initialTasks := []core.Task{current, alpha, beta}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<id> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	documentJSON := func(tasks []core.Task) string {
+		t.Helper()
+		document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(document)
+	}
+	emptyDeleted, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: []core.Task{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	betaAfterAdd := beta
+	betaAfterAdd.Dependencies = []string{current.ID}
+	afterWarning := []core.Task{current, alpha, betaAfterAdd}
+
+	program := clientDOMHarness("/tasks/"+current.ID, documentJSON(initialTasks)) + script + `
+deletedTaskResponse = ` + string(emptyDeleted) + `;
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const groupFor = (headingText) => {
+    const heading = findElement(main, (element) => element.textContent === headingText);
+    if (!heading) throw new Error("missing " + headingText + " group");
+    return heading.parentElement;
+  };
+  const inputFor = (group) => findElement(group, (element) => element.tagName === "INPUT" && element.attributes.role === "combobox");
+  const addFor = (group) => findElement(group, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+  const dispatchKey = (input, key) => {
+    let prevented = false;
+    input.eventListeners.keydown({ key, preventDefault() { prevented = true; } });
+    return prevented;
+  };
+  const selectedOption = (group) => findElement(group, (element) =>
+    element.attributes.role === "option" && element.attributes["aria-selected"] === "true");
+
+  let nextResponse = {
+    ok: false,
+    document: {
+      format: "workbook.error",
+      version: 1,
+      error: { category: "validation", message: "dependency would create a cycle" }
+    }
+  };
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if ((options.method || "GET") !== "GET") {
+      return { ok: nextResponse.ok, json: async () => nextResponse.document };
+    }
+    return { ok: true, json: async () => url === "/api/tasks?deleted=true" ? deletedTaskResponse : taskResponse };
+  };
+  fetchCalls.splice(0);
+
+  const formTitle = findElement(main, (element) => element.id === "task-title");
+  formTitle.value = "Unsaved task title";
+  const dependsGroup = groupFor("Depends On");
+  const dependsInput = inputFor(dependsGroup);
+  dependsInput.value = "Alpha";
+  dependsInput.eventListeners.input();
+  if (!dispatchKey(dependsInput, "ArrowDown") || !dependsInput.attributes["aria-activedescendant"]) {
+    throw new Error("Arrow Down did not activate a matching candidate");
+  }
+  if (!dispatchKey(dependsInput, "Enter")) throw new Error("Enter did not select the active candidate");
+  const alphaOption = selectedOption(dependsGroup);
+  const dependsAdd = addFor(dependsGroup);
+  if (!alphaOption || alphaOption.dataset.candidateId !== ` + strconv.Quote(alpha.ID) + ` || dependsAdd.disabled) {
+    throw new Error("keyboard selection did not select Alpha and enable Add dependency");
+  }
+  const alphaListbox = findElement(dependsGroup, (element) => element.attributes.role === "listbox");
+  if (dependsInput.attributes["aria-expanded"] !== String(!alphaListbox.hidden)) {
+    throw new Error("combobox aria-expanded state does not match the visible popup after selection");
+  }
+
+  await dependsAdd.eventListeners.click();
+  const cycleMessage = findElement(dependsGroup, (element) =>
+    element.attributes.role === "status" && element.textContent.includes("dependency would create a cycle"));
+  if (!cycleMessage) throw new Error("cycle failure did not stay in the initiating live region");
+  if (findElement(main, (element) => element.id === "task-title") !== formTitle ||
+      formTitle.value !== "Unsaved task title") {
+    throw new Error("dependency failure reconstructed or reset the unsaved task form");
+  }
+  const preservedSelection = selectedOption(dependsGroup);
+  if (dependsInput.value !== "Alpha" || !preservedSelection ||
+      preservedSelection.dataset.candidateId !== ` + strconv.Quote(alpha.ID) + ` || dependsAdd.disabled) {
+    throw new Error("dependency failure did not preserve the query and valid selection");
+  }
+
+  const blocksGroup = groupFor("Blocks");
+  const blocksInput = inputFor(blocksGroup);
+  blocksInput.value = "Beta";
+  blocksInput.eventListeners.input();
+  dispatchKey(blocksInput, "ArrowDown");
+  dispatchKey(blocksInput, "Enter");
+  const blocksAdd = addFor(blocksGroup);
+  if (blocksAdd.disabled) throw new Error("Blocks keyboard selection did not enable Add dependency");
+  nextResponse = {
+    ok: true,
+    document: {
+      format: "workbook.task-mutation",
+      version: 1,
+      task: ` + documentJSON(afterWarning) + `.tasks[2],
+      warnings: [{ code: "projection-update-failed", message: "The local projection needs repair." }]
+    }
+  };
+  taskResponse = ` + documentJSON(afterWarning) + `;
+  await blocksAdd.eventListeners.click();
+  const warning = findElement(blocksGroup, (element) =>
+    element.attributes.role === "status" &&
+    element.textContent.includes("Dependency saved durably.") &&
+    element.textContent.includes("The local projection needs repair."));
+  if (!warning) throw new Error("durable projection warning did not stay in the initiating live region");
+  await intervalCallback();
+  if (warning.textContent !== "Dependency saved durably. The local projection needs repair.") {
+    throw new Error("durable mutation warning did not persist through active and deleted refresh");
+  }
+  if (findElement(main, (element) => element.id === "task-title") !== formTitle ||
+      formTitle.value !== "Unsaved task title") {
+    throw new Error("successful relationship refresh reconstructed or reset the unsaved task form");
+  }
+
+  dependsInput.value = "Beta";
+  dependsInput.eventListeners.input();
+  dispatchKey(dependsInput, "ArrowDown");
+  if (!dependsInput.attributes["aria-activedescendant"] || selectedOption(dependsGroup)) {
+    throw new Error("Escape setup unexpectedly selected a candidate");
+  }
+  dispatchKey(dependsInput, "Escape");
+  if (dependsInput.attributes["aria-expanded"] !== "false" ||
+      Object.prototype.hasOwnProperty.call(dependsInput.attributes, "aria-activedescendant") ||
+      selectedOption(dependsGroup)) {
+    throw new Error("Escape did not close the popup and clear active state without selecting");
+  }
+
+  dependsInput.value = "no such task";
+  dependsInput.eventListeners.input();
+  const listbox = findElement(dependsGroup, (element) => element.attributes.role === "listbox");
+  const fakeOption = listbox && findElement(listbox, (element) => element.attributes.role === "option");
+  const emptyStatus = findElement(dependsGroup, (element) =>
+    element.attributes.role === "status" && element.textContent === "No matching tasks.");
+  if (fakeOption || !emptyStatus) {
+    throw new Error("empty matches rendered a fake option instead of an announced message");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute dependency failure recovery and keyboard behavior: %v\n%s", err, output)
+	}
+}
+
 func TestHandlerInterceptsOrdinarySameOriginNavigation(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {

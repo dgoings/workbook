@@ -104,6 +104,21 @@
     .relationship-row__metadata, .relationship-row__note { color: #56647a; font-size: .75rem; overflow-wrap: anywhere; }
     .relationship-remove { align-self: center; grid-column: 2; grid-row: 1 / span 2; }
     .relationship-state { color: #9c2f25; font-size: .75rem; }
+    .relationship-editor { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .4rem .55rem; align-items: end; }
+    .relationship-editor label { grid-column: 1 / -1; color: #34425a; font-size: .75rem; font-weight: 750; }
+    .relationship-editor input { min-width: 0; width: 100%; border: 1px solid #9eafc5; border-radius: 4px; background: #fff; color: #172033; font: inherit; padding: .55rem .62rem; }
+    .relationship-editor input:focus { border-color: #2457d6; outline: 3px solid rgba(36,87,214,.18); }
+    .relationship-editor button { border: 1px solid #173f9e; border-radius: 4px; background: #2457d6; color: #fff; cursor: pointer; font: inherit; font-size: .78rem; font-weight: 750; padding: .58rem .75rem; }
+    .relationship-editor button:disabled { cursor: default; opacity: .52; }
+    .relationship-listbox { grid-column: 1 / -1; max-height: 14rem; overflow-y: auto; border: 1px solid #9eafc5; border-radius: 4px; background: #fff; box-shadow: 0 8px 20px rgba(23,32,51,.12); }
+    .relationship-listbox[hidden] { display: none; }
+    .relationship-option { display: grid; gap: .18rem; padding: .55rem .62rem; border-bottom: 1px solid #e1e7f0; cursor: pointer; }
+    .relationship-option:last-child { border-bottom: 0; }
+    .relationship-option[aria-selected="true"], .relationship-option.is-active { background: #edf3ff; }
+    .relationship-option strong { font-size: .8rem; }
+    .relationship-option span { color: #56647a; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .68rem; overflow-wrap: anywhere; }
+    .relationship-empty { grid-column: 1 / -1; min-height: 1rem; margin: 0; color: #56647a; font-size: .75rem; }
+    .relationship-message { min-height: 1rem; margin: .45rem 0 0; color: #9c2f25; font-size: .78rem; }
     @media (prefers-reduced-motion: no-preference) { .task-list { transition: opacity 120ms ease; } }
     @media (max-width: 900px) { .app-header { align-items: start; flex-direction: column; } .updated { text-align: left; } .board { grid-template-columns: repeat(6, minmax(min(18rem, calc(100vw - 2.5rem)), 1fr)); } .column { min-width: min(18rem, calc(100vw - 2.5rem)); } }
     @media (max-width: 560px) { .task-form { grid-template-columns: 1fr; } .field--wide { grid-column: auto; } }
@@ -249,6 +264,161 @@
           .map((task) => ({ id: task.id, task, removable: !task.deleted }));
         return { current, dependsOn, blocks };
       }
+      function relationshipCandidates(taskID, direction) {
+        const current = latestTasks.find((task) => task.id === taskID);
+        if (!current) return [];
+        const excluded = new Set([taskID]);
+        if (direction === "depends-on") {
+          (current.dependencies || []).forEach((id) => excluded.add(id));
+        } else {
+          latestTasks.forEach((task) => {
+            if ((task.dependencies || []).includes(taskID)) excluded.add(task.id);
+          });
+        }
+        return latestTasks.filter((task) => !task.deleted && !excluded.has(task.id));
+      }
+      function dependencyCombobox(config) {
+        const state = { query: "", selectedID: "", activeIndex: -1, candidates: [] };
+        const region = document.createElement("div");
+        region.className = "relationship-editor";
+        const label = document.createElement("label");
+        label.htmlFor = config.id + "-input";
+        text(label, config.label);
+        const input = document.createElement("input");
+        input.type = "search";
+        input.id = config.id + "-input";
+        input.setAttribute("role", "combobox");
+        input.setAttribute("aria-autocomplete", "list");
+        input.setAttribute("aria-controls", config.id + "-listbox");
+        input.setAttribute("aria-expanded", "false");
+        const listbox = document.createElement("div");
+        listbox.id = config.id + "-listbox";
+        listbox.className = "relationship-listbox";
+        listbox.setAttribute("role", "listbox");
+        listbox.hidden = true;
+        const empty = document.createElement("p");
+        empty.className = "relationship-empty";
+        empty.setAttribute("role", "status");
+        empty.setAttribute("aria-live", "polite");
+        const add = document.createElement("button");
+        add.type = "button";
+        add.disabled = true;
+        text(add, "Add dependency");
+        region.append(label, input, add, listbox, empty);
+
+        function matchingCandidates() {
+          const query = state.query.trim().toLocaleLowerCase();
+          if (!query) return state.candidates;
+          return state.candidates.filter((task) =>
+            task.title.toLocaleLowerCase().includes(query) ||
+            task.id.toLocaleLowerCase().includes(query));
+        }
+        function selectedCandidate() {
+          return state.candidates.find((task) => task.id === state.selectedID) || null;
+        }
+        function selectCandidate(candidate) {
+          if (!candidate) return;
+          state.selectedID = candidate.id;
+          state.activeIndex = matchingCandidates().findIndex((task) => task.id === candidate.id);
+          input.setAttribute("aria-expanded", "false");
+          listbox.hidden = true;
+          renderOptions();
+        }
+        function renderOptions() {
+          const options = matchingCandidates();
+          if (state.activeIndex >= options.length) state.activeIndex = options.length - 1;
+          const active = state.activeIndex >= 0 ? options[state.activeIndex] : null;
+          if (active) {
+            const candidateIndex = state.candidates.findIndex((task) => task.id === active.id);
+            input.setAttribute("aria-activedescendant", config.id + "-option-" + candidateIndex);
+          } else {
+            input.removeAttribute("aria-activedescendant");
+          }
+          listbox.replaceChildren(...options.map((task) => {
+            const option = document.createElement("div");
+            const candidateIndex = state.candidates.findIndex((candidate) => candidate.id === task.id);
+            option.id = config.id + "-option-" + candidateIndex;
+            option.className = "relationship-option" + (active && active.id === task.id ? " is-active" : "");
+            option.dataset.candidateId = task.id;
+            option.setAttribute("role", "option");
+            option.setAttribute("aria-selected", String(state.selectedID === task.id));
+            const title = document.createElement("strong");
+            text(title, task.title);
+            const metadata = document.createElement("span");
+            text(metadata, task.status + " · " + task.priority + " · " + task.id);
+            option.append(title, metadata);
+            option.addEventListener("click", () => selectCandidate(task));
+            return option;
+          }));
+          text(empty, options.length ? "" : "No matching tasks.");
+          add.disabled = config.isBusy() || !selectedCandidate();
+        }
+        input.addEventListener("input", () => {
+          state.query = input.value;
+          state.selectedID = "";
+          state.activeIndex = -1;
+          input.setAttribute("aria-expanded", "true");
+          listbox.hidden = false;
+          renderOptions();
+        });
+        input.addEventListener("focus", () => {
+          input.setAttribute("aria-expanded", "true");
+          listbox.hidden = false;
+          renderOptions();
+        });
+        input.addEventListener("keydown", (event) => {
+          const options = matchingCandidates();
+          if (event.key === "ArrowDown") {
+            event.preventDefault();
+            state.activeIndex = Math.min(state.activeIndex + 1, options.length - 1);
+            input.setAttribute("aria-expanded", "true");
+            listbox.hidden = false;
+          } else if (event.key === "ArrowUp") {
+            event.preventDefault();
+            state.activeIndex = Math.max(state.activeIndex - 1, 0);
+            input.setAttribute("aria-expanded", "true");
+            listbox.hidden = false;
+          } else if (event.key === "Enter" && state.activeIndex >= 0) {
+            event.preventDefault();
+            selectCandidate(options[state.activeIndex]);
+          } else if (event.key === "Escape") {
+            state.activeIndex = -1;
+            input.setAttribute("aria-expanded", "false");
+            listbox.hidden = true;
+          } else {
+            return;
+          }
+          renderOptions();
+        });
+        add.addEventListener("click", () => {
+          const candidate = selectedCandidate();
+          if (candidate) return config.onAdd(candidate.id);
+        });
+
+        const controller = {
+          region, input, listbox, empty, add,
+          setCandidates(candidates) {
+            state.candidates = candidates;
+            if (!selectedCandidate()) state.selectedID = "";
+            state.activeIndex = -1;
+            renderOptions();
+          },
+          setBusy(busy) {
+            input.disabled = busy;
+            renderOptions();
+          },
+          clear() {
+            state.query = "";
+            state.selectedID = "";
+            state.activeIndex = -1;
+            input.value = "";
+            input.setAttribute("aria-expanded", "false");
+            listbox.hidden = true;
+            renderOptions();
+          }
+        };
+        return controller;
+      }
       function relationshipRow(relationship, onRemove) {
         const row = document.createElement("article");
         row.className = "relationship-row";
@@ -281,6 +451,7 @@
           text(remove, "Remove");
           remove.addEventListener("click", () => onRemove(relationship));
           row.append(remove);
+          row.removeButton = remove;
         } else {
           const explanation = document.createElement("p");
           explanation.className = "relationship-row__note";
@@ -298,29 +469,54 @@
         status.setAttribute("role", "status");
         status.setAttribute("aria-live", "polite");
         const groups = new Map();
+        let controller;
         [
-          ["dependsOn", "Depends On", "No prerequisites."],
-          ["blocks", "Blocks", "No tasks are blocked by this task."]
-        ].forEach(([name, headingText, emptyText]) => {
+          ["dependsOn", "depends-on", "Depends On", "No prerequisites.", "Find a prerequisite"],
+          ["blocks", "blocks", "Blocks", "No tasks are blocked by this task.", "Find a task to block"]
+        ].forEach(([name, direction, headingText, emptyText, labelText]) => {
           const group = document.createElement("section");
           group.className = "relationship-group";
-          const heading = document.createElement("h3"); text(heading, headingText);
+          const heading = document.createElement("h3");
+          heading.id = "dependency-" + direction + "-heading";
+          text(heading, headingText);
           const list = document.createElement("div"); list.className = "relationship-list";
-          group.append(heading, list);
+          const message = document.createElement("p");
+          message.className = "relationship-message";
+          message.setAttribute("role", "status");
+          message.setAttribute("aria-live", "polite");
+          const groupController = {
+            group, list, message, emptyText, direction, busy: false, removeButtons: [],
+            setBusy(busy) {
+              this.busy = busy;
+              this.combobox.setBusy(busy);
+              this.removeButtons.forEach((button) => { button.disabled = busy; });
+            },
+            setMessage(value) { text(message, value); }
+          };
+          groupController.combobox = dependencyCombobox({
+            id: "dependency-" + direction,
+            label: labelText,
+            isBusy: () => groupController.busy,
+            onAdd: (selectedID) => {
+              const dependentID = direction === "depends-on" ? taskID : selectedID;
+              const prerequisiteID = direction === "depends-on" ? selectedID : taskID;
+              return mutateRelationship("PUT", dependentID, prerequisiteID, controller, groupController);
+            }
+          });
+          group.append(heading, list, groupController.combobox.region, message);
           region.append(group);
-          groups.set(name, { group, list, emptyText });
+          groups.set(name, groupController);
         });
-        const combobox = document.createElement("div");
-        combobox.className = "relationship-combobox";
-        combobox.hidden = true;
-        region.append(status, combobox);
-        const controller = {
-          region, status, groups, combobox,
+        region.append(status);
+        controller = {
+          region, status, groups,
           update() {
             const state = dependencyState(taskID);
             if (!state) return;
             [["dependsOn", state.dependsOn], ["blocks", state.blocks]].forEach(([name, relationships]) => {
               const group = groups.get(name);
+              group.combobox.setCandidates(relationshipCandidates(taskID, group.direction));
+              group.removeButtons = [];
               if (relationships.length === 0) {
                 const empty = document.createElement("p");
                 empty.className = "relationship-row__note";
@@ -328,9 +524,19 @@
                 group.list.replaceChildren(empty);
                 return;
               }
-              group.list.replaceChildren(...relationships.map((relationship) => relationshipRow(relationship, () => {
-                text(status, "Relationship changes are not available yet.");
-              })));
+              group.list.replaceChildren(...relationships.map((relationship) => {
+                const row = relationshipRow(relationship, () => {
+                  const dependentID = name === "dependsOn" ? taskID : relationship.id;
+                  const prerequisiteID = name === "dependsOn" ? relationship.id : taskID;
+                  return mutateRelationship("DELETE", dependentID, prerequisiteID, controller, group);
+                });
+                const remove = row.removeButton;
+                if (remove) {
+                  remove.disabled = group.busy;
+                  group.removeButtons.push(remove);
+                }
+                return row;
+              }));
             });
           }
         };
@@ -403,15 +609,47 @@
         return section;
       }
       async function mutateTask(method, path, values) {
-        const response = await fetch(path, {
-          method, headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(values),
-        });
+        const options = { method };
+        if (values !== undefined) {
+          options.headers = { "Content-Type": "application/json" };
+          options.body = JSON.stringify(values);
+        }
+        const response = await fetch(path, options);
         const document = await response.json();
-        if (!response.ok || document.format !== "workbook.task-mutation" || document.version !== 1) {
+        if (!response.ok || document.format !== "workbook.task-mutation" ||
+            document.version !== 1 || !document.task) {
           throw new Error(document.error && document.error.message || "Task update failed.");
         }
-        return document.task;
+        return document;
+      }
+      async function mutateRelationship(method, dependentID, prerequisiteID, controller, group) {
+        const path = "/api/tasks/" + encodeURIComponent(dependentID) +
+          "/dependencies/" + encodeURIComponent(prerequisiteID);
+        group.setBusy(true);
+        group.setMessage("");
+        try {
+          const document = await mutateTask(method, path);
+          const messages = [];
+          const warnings = Array.isArray(document.warnings) ? document.warnings : [];
+          if (warnings.length) {
+            messages.push("Dependency saved durably. " +
+              warnings.map((warning) => warning.message).join(" "));
+          }
+          const refreshed = await refresh();
+          if (!refreshed) {
+            messages.push("The dependency was saved durably, but the latest task state could not be refreshed.");
+            group.setMessage(messages.join(" "));
+            return;
+          }
+          controller.update();
+          if (method === "PUT") group.combobox.clear();
+          group.setMessage(messages.join(" "));
+        } catch (error) {
+          await refresh();
+          group.setMessage(error instanceof Error ? error.message : "Dependency update failed.");
+        } finally {
+          group.setBusy(false);
+        }
       }
       function routeMessage(titleText, message, retryable = false) {
         const section = document.createElement("section"); section.className = "task-route"; section.setAttribute("aria-labelledby", "route-message-title");
