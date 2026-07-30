@@ -152,7 +152,7 @@ Run:
 gofmt -w internal/webui/handler_test.go
 GOCACHE=/private/tmp/workbook-gocache go test ./... -count=1
 GOCACHE=/private/tmp/workbook-gocache go vet ./...
-GOCACHE=/private/tmp/workbook-gocache go build -buildvcs=false ./cmd/workbook
+GOCACHE=/private/tmp/workbook-gocache go build -buildvcs=false -o /private/tmp/workbook-detail-verify ./cmd/workbook
 git diff --check
 git status --short
 ```
