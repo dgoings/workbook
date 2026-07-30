@@ -8,5 +8,5 @@ Baseline targets are reference budgets, not achieved guarantees: warm p95 100.00
 ## Scenarios
 | Scenario | Surface | Completed | Timed out | Min (ms) | Median (ms) | P95 (ms) | P95 Git processes | Target duration | Target Git processes | Outcome |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| sync-initial-local-bare | repository | 1 | 0 | 902.97 | 902.97 | 902.97 | 15 | - | - | not-evaluated |
-| sync-unchanged-local-bare | repository | 1 | 0 | 349.30 | 349.30 | 349.30 | 9 | - | - | not-evaluated |
+| sync-initial-local-bare | repository | 1 | 0 | 903.29 | 903.29 | 903.29 | 15 | - | - | not-evaluated |
+| sync-unchanged-local-bare | repository | 1 | 0 | 361.30 | 361.30 | 361.30 | 9 | - | - | not-evaluated |

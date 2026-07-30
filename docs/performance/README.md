@@ -230,13 +230,17 @@ replacement 500-by-20 acceptance sample.
 
 ### 2026-07-30 packed repository sync acceptance evidence
 
-The packed-repository acceptance was run once in each supported object format,
-using one frozen product binary and one frozen harness binary. Both the initial
-and unchanged local-bare sync scenarios completed in SHA-1 and SHA-256; their
-automated integration test verifies the remote refs exactly. The reports have
-no repository latency or Git-process budget because this focused functional
-acceptance introduced neither. No unrelated future-story acceptance family was
-rerun.
+The corrected packed-repository acceptance was run once in each supported object
+format, using one frozen product binary and one frozen harness binary. The
+sync-only dispatcher skipped all projection measurements and mutations. Its real
+regression verifies that every canonical task ref retains its requested commit
+count immediately before and after each sync; the existing integration test
+verifies the remote refs exactly.
+
+Both the initial and unchanged local-bare sync scenarios completed in SHA-1 and
+SHA-256. The reports have no repository latency or Git-process budget because
+this focused functional acceptance introduced neither. No unrelated
+future-story acceptance family was rerun.
 
 | Format | Evidence | Outcome |
 | --- | --- | --- |
