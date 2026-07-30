@@ -81,7 +81,7 @@ Update the existing CSS rules:
 ```css
 .task-route { display: flex; flex-direction: column; height: 100%; max-width: 48rem; margin: 0 auto; border: 1px solid #b9c6d8; background: #fff; box-shadow: 0 12px 32px rgba(23,32,51,.08); }
 .task-form { display: grid; flex: 1 1 auto; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: auto minmax(0, 1fr) auto auto auto auto; gap: 1rem; min-height: 0; padding: 1.15rem; }
-.field--description { min-height: 0; }
+.field--description { grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
 .field--description textarea { height: 100%; min-height: 0; overflow-y: auto; }
 ```
 
@@ -126,8 +126,12 @@ const route = document.querySelector(".task-route");
 const description = document.querySelector("#task-description");
 const actions = document.querySelector(".form-actions");
 const main = document.querySelector("main");
+const mainStyle = getComputedStyle(main);
+const mainContentHeight = main.clientHeight
+  - Number(mainStyle.paddingTop.slice(0, -2))
+  - Number(mainStyle.paddingBottom.slice(0, -2));
 ({
-  routeFillsMain: Math.abs(route.getBoundingClientRect().height - main.clientHeight) <= 2,
+  routeFillsMain: Math.abs(route.getBoundingClientRect().height - mainContentHeight) <= 2,
   descriptionHasExtraHeight: description.clientHeight > 128,
   actionsAboveFold: actions.getBoundingClientRect().bottom <= window.innerHeight,
   descriptionScrollsInternally: getComputedStyle(description).overflowY === "auto",
@@ -158,4 +162,3 @@ Expected: tests, vet, build, and diff checks succeed; status contains only the i
 - [ ] **Step 4: Review, publish, and advance the story**
 
 Request an independent review over `origin/main..HEAD`, address every Critical or Important finding, rerun final verification, commit the plan if it is not already committed, push the feature branch, and open a ready pull request against `main`. After the PR exists, update the story to `in-review` and publish the task ref.
-
