@@ -717,6 +717,79 @@ setTimeout(() => {
 	}
 }
 
+func TestHandlerClientUsesSharedTaskSidebarLayout(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	task := boardTasks()[0]
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return []core.Task{task}, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/new")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/new status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	document, err := json.Marshal(TasksDocument{
+		Format:       "workbook.tasks",
+		Version:      1,
+		Tasks:        []core.Task{task},
+		Presentation: presentationForTasks([]core.Task{task}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/new", string(document)) + script + `
+function assertSharedLayout(expectedMode) {
+  const layout = findElement(main, (element) =>
+    (element.className || "").split(/\s+/).includes("task-layout"));
+  const editor = layout && findElement(layout, (element) =>
+    (element.className || "").split(/\s+/).includes("task-editor"));
+  const sidebar = layout && findElement(layout, (element) =>
+    (element.className || "").split(/\s+/).includes("task-sidebar"));
+  const properties = sidebar && findElement(sidebar, (element) =>
+    (element.className || "").split(/\s+/).includes("task-properties"));
+  const actions = layout && findElement(layout, (element) =>
+    (element.className || "").split(/\s+/).includes("task-actions"));
+  if (!layout || !editor || !sidebar || !properties || !actions) {
+    throw new Error(expectedMode + " does not use the shared task layout");
+  }
+  for (const id of ["task-status", "task-priority", "task-labels"]) {
+    const control = findElement(properties, (element) => element.id === id);
+    if (!control) throw new Error(id + " is not in Properties");
+  }
+  const description = editor && findElement(editor, (element) =>
+    element.id === "task-description");
+  if (!description ||
+      !(description.parentElement.className || "").split(/\s+/).includes("field--description")) {
+    throw new Error("Description lost its flexible editor hook");
+  }
+}
+setTimeout(async () => {
+  assertSharedLayout("new");
+  const detailLink = new TestElement("a");
+  detailLink.href = "/tasks/" + encodeURIComponent(` + strconv.Quote(task.ID) + `);
+  await documentEventListeners.click({
+    target: detailLink,
+    button: 0,
+    defaultPrevented: false,
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+    preventDefault() { this.defaultPrevented = true; }
+  });
+  assertSharedLayout("detail");
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("execute rendered client for shared task sidebar layout: %v\n%s", err, output)
+	}
+}
+
 func TestHandlerShowsRecoverableErrorWhenInitialTaskLoadFails(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
