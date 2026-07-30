@@ -377,19 +377,47 @@
           .map((task) => ({ id: task.id, task, removable: !task.deleted }));
         return { current, dependsOn, blocks };
       }
-      function relationshipCandidates(taskID, direction) {
+      function newRelationshipDraftState() {
+        return {
+          dependsOn: new Map(),
+          blocks: new Map()
+        };
+      }
+      function draftEntry(task) {
+        return {
+          id: task.id,
+          task: {
+            id: task.id,
+            title: task.title,
+            status: task.status,
+            priority: task.priority,
+            deleted: false
+          },
+          error: ""
+        };
+      }
+      function relationshipCandidates(taskID, direction, draftState = null) {
         const snapshot = reconciledRelationshipTasks();
-        const current = snapshot.active.find((task) => task.id === taskID);
-        if (!current) return [];
-        const excluded = new Set([taskID]);
-        if (direction === "depends-on") {
+        const activeTasks = snapshot.active;
+        const current = taskID ? activeTasks.find((task) => task.id === taskID) : null;
+        if (taskID && !current) return [];
+        const excluded = new Set();
+        if (taskID) excluded.add(taskID);
+        if (taskID && direction === "depends-on") {
           (current.dependencies || []).forEach((id) => excluded.add(id));
-        } else {
-          snapshot.active.forEach((task) => {
+        }
+        if (taskID && direction === "blocks") {
+          activeTasks.forEach((task) => {
             if ((task.dependencies || []).includes(taskID)) excluded.add(task.id);
           });
         }
-        return snapshot.active.filter((task) => !excluded.has(task.id));
+        if (draftState) {
+          const draftMap = direction === "depends-on"
+            ? draftState.dependsOn
+            : draftState.blocks;
+          draftMap.forEach((_entry, id) => excluded.add(id));
+        }
+        return activeTasks.filter((task) => !excluded.has(task.id));
       }
       function dependencyCombobox(config) {
         const state = { query: "", selectedID: "", activeIndex: -1, candidates: [] };
@@ -500,9 +528,11 @@
             state.activeIndex = Math.max(state.activeIndex - 1, 0);
             input.setAttribute("aria-expanded", "true");
             listbox.hidden = false;
-          } else if (event.key === "Enter" && state.activeIndex >= 0) {
+          } else if (event.key === "Enter") {
             event.preventDefault();
-            selectCandidate(options[state.activeIndex]);
+            if (state.activeIndex >= 0) {
+              selectCandidate(options[state.activeIndex]);
+            }
           } else if (event.key === "Escape") {
             state.activeIndex = -1;
             input.setAttribute("aria-expanded", "false");
@@ -541,11 +571,12 @@
         };
         return controller;
       }
-      function relationshipRow(relationship, onRemove) {
+      function relationshipRow(relationship, onRemove, isDraft = false) {
         const row = document.createElement("article");
         row.className = "relationship-row relationship-row--compact";
         row.dataset.relationshipRow = "";
         row.dataset.relationshipId = relationship.id;
+        if (isDraft) row.dataset.relationshipDraft = "";
         const heading = document.createElement("h4");
         if (relationship.task && !relationship.task.deleted) {
           const link = document.createElement("a");
@@ -564,13 +595,18 @@
         metadataParts.push(relationship.id);
         text(metadata, metadataParts.join(" · "));
         row.append(heading, metadata);
-        if (relationship.task && relationship.task.deleted) {
+        if (isDraft) {
+          const draft = document.createElement("strong");
+          draft.className = "relationship-state";
+          text(draft, relationship.error || "Not saved");
+          row.append(draft);
+        } else if (relationship.task && relationship.task.deleted) {
           const deleted = document.createElement("strong");
           deleted.className = "relationship-state";
           text(deleted, "Deleted");
           row.append(deleted);
         }
-        if (relationship.removable) {
+        if (isDraft || relationship.removable) {
           const remove = document.createElement("button");
           remove.type = "button";
           remove.className = "relationship-remove";
@@ -586,7 +622,7 @@
         }
         return row;
       }
-      function taskRelationships(taskID, draftState) {
+      function taskRelationships(taskID, draftState = null) {
         const region = document.createElement("section");
         region.className = "task-relationships";
         region.setAttribute("aria-label", "Task relationships");
@@ -624,6 +660,14 @@
             label: labelText,
             isBusy: () => groupController.busy,
             onAdd: (selectedID) => {
+              if (!taskID) {
+                const selectedTask = reconciledRelationshipTasks().active.find((task) => task.id === selectedID);
+                if (!selectedTask) return;
+                const draftMap = direction === "depends-on" ? draftState.dependsOn : draftState.blocks;
+                draftMap.set(selectedID, draftEntry(selectedTask));
+                controller.update();
+                return;
+              }
               const dependentID = direction === "depends-on" ? taskID : selectedID;
               const prerequisiteID = direction === "depends-on" ? selectedID : taskID;
               return mutateRelationship("PUT", dependentID, prerequisiteID, controller, groupController);
@@ -637,11 +681,15 @@
         controller = {
           region, status, groups,
           update() {
-            const state = dependencyState(taskID);
-            if (!state) return;
-            [["dependsOn", state.dependsOn], ["blocks", state.blocks]].forEach(([name, relationships]) => {
+            const state = taskID ? dependencyState(taskID) : { dependsOn: [], blocks: [] };
+            if (taskID && !state) return;
+            [["dependsOn", state.dependsOn], ["blocks", state.blocks]].forEach(([name, persistedRelationships]) => {
               const group = groups.get(name);
-              group.combobox.setCandidates(relationshipCandidates(taskID, group.direction));
+              const draftMap = draftState ? (name === "dependsOn" ? draftState.dependsOn : draftState.blocks) : null;
+              const relationships = draftMap
+                ? [...persistedRelationships, ...draftMap.values()]
+                : persistedRelationships;
+              group.combobox.setCandidates(relationshipCandidates(taskID, group.direction, draftState));
               group.removeButtons = [];
               if (relationships.length === 0) {
                 const empty = document.createElement("p");
@@ -651,11 +699,17 @@
                 return;
               }
               group.list.replaceChildren(...relationships.map((relationship) => {
+                const isDraft = Boolean(draftMap && draftMap.has(relationship.id));
                 const row = relationshipRow(relationship, () => {
+                  if (isDraft) {
+                    draftMap.delete(relationship.id);
+                    controller.update();
+                    return;
+                  }
                   const dependentID = name === "dependsOn" ? taskID : relationship.id;
                   const prerequisiteID = name === "dependsOn" ? relationship.id : taskID;
                   return mutateRelationship("DELETE", dependentID, prerequisiteID, controller, group);
-                });
+                }, isDraft);
                 const remove = row.removeButton;
                 if (remove) {
                   remove.disabled = group.busy;
@@ -671,6 +725,9 @@
       }
       function taskForm(mode, task) {
         const isNew = mode === "new";
+        const relationshipDrafts = isNew
+          ? newRelationshipDraftState()
+          : null;
         const section = document.createElement("section"); section.className = "task-route"; section.setAttribute("aria-labelledby", "task-form-title");
         const header = document.createElement("header"); header.className = "task-route__header";
         const eyebrow = document.createElement("p"); eyebrow.className = "eyebrow"; text(eyebrow, isNew ? "New task" : "Task detail");
@@ -747,11 +804,9 @@
           }
         });
         section.append(header, form);
-        const relationshipController = isNew
-          ? null
-          : taskRelationships(task.id, null);
-        if (relationshipController) {
-          relationshipMount.append(relationshipController.region);
+        const relationshipController = taskRelationships(isNew ? "" : task.id, relationshipDrafts);
+        relationshipMount.append(relationshipController.region);
+        if (!isNew) {
           activeDependencyController = relationshipController;
           refreshRelationshipContext(
             relationshipController,

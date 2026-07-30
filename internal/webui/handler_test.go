@@ -790,6 +790,138 @@ setTimeout(async () => {
 	}
 }
 
+func TestHandlerClientStagesNewTaskRelationshipsWithoutMutating(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	dependsCandidate := clientPlacementTask("WB-01J00000000000000000000072", "Depends on candidate", core.StatusDone, core.PriorityHigh)
+	blocksCandidate := clientPlacementTask("WB-01J00000000000000000000073", "Blocks candidate", core.StatusBacklog, core.PriorityLow)
+	tasks := []core.Task{dependsCandidate, blocksCandidate}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/new")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/new status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/new", string(document)) + script + `
+let createCalls = 0;
+globalThis.fetch = async (url, options = {}) => {
+  fetchCalls.push({ url, options });
+  if (url === "/api/tasks" && options.method === "POST") createCalls += 1;
+  if ((options.method || "GET") !== "GET") {
+    return { ok: true, json: async () => ({ format: "workbook.task-mutation", version: 1, task: taskDocument.tasks[0] }) };
+  }
+  return { ok: true, json: async () => url === "/api/tasks?deleted=true" ? deletedTaskResponse : taskResponse };
+};
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  fetchCalls.splice(0);
+  const groupFor = (headingText) => {
+    const heading = findElement(main, (element) => element.textContent === headingText);
+    if (!heading) throw new Error("missing " + headingText + " group");
+    return heading.parentElement;
+  };
+  const inputFor = (group) => findElement(group, (element) =>
+    element.tagName === "INPUT" && element.attributes.role === "combobox");
+  const addFor = (group) => findElement(group, (element) =>
+    element.tagName === "BUTTON" && element.textContent === "Add dependency");
+  const candidateIDs = (group) => findElements(group, (element) =>
+    element.attributes.role === "option").map((option) => option.dataset.candidateId);
+  const resetCandidates = (group) => {
+    const input = inputFor(group);
+    input.value = "";
+    input.eventListeners.input();
+    return candidateIDs(group);
+  };
+  const selectAndAdd = (group, candidateID, candidateTitle) => {
+    const input = inputFor(group);
+    input.value = candidateTitle;
+    input.eventListeners.input();
+    const option = findElement(group, (element) => element.dataset.candidateId === candidateID && element.attributes.role === "option");
+    if (!option || !option.eventListeners.click) throw new Error("candidate is not selectable: " + candidateID);
+    option.eventListeners.click();
+    const add = addFor(group);
+    if (!add || add.disabled || !add.eventListeners.click) throw new Error("selected candidate did not enable Add dependency");
+    return add.eventListeners.click();
+  };
+  const assertFormValues = () => {
+    const title = findElement(main, (element) => element.id === "task-title");
+    const description = findElement(main, (element) => element.id === "task-description");
+    if (!title || title.value !== "Unchanged title" || !description || description.value !== "Unchanged description") {
+      throw new Error("relationship drafts changed the New Task form values");
+    }
+  };
+  const title = findElement(main, (element) => element.id === "task-title");
+  const description = findElement(main, (element) => element.id === "task-description");
+  title.value = "Unchanged title";
+  description.value = "Unchanged description";
+  const dependsGroup = groupFor("Depends On");
+  const blocksGroup = groupFor("Blocks");
+  const dependsInput = inputFor(dependsGroup);
+  let enterPrevented = false;
+  dependsInput.eventListeners.keydown({
+    key: "Enter",
+    preventDefault() { enterPrevented = true; }
+  });
+  if (!enterPrevented || createCalls !== 0) {
+    throw new Error("relationship combobox Enter submitted New Task");
+  }
+
+  await selectAndAdd(dependsGroup, ` + strconv.Quote(dependsCandidate.ID) + `, ` + strconv.Quote(dependsCandidate.Title) + `);
+  assertFormValues();
+  const dependsRow = findElement(dependsGroup, (element) => element.dataset.relationshipId === ` + strconv.Quote(dependsCandidate.ID) + `);
+  if (!dependsRow || dependsRow.dataset.relationshipDraft === undefined ||
+      !dependsRow.className.split(/\s+/).includes("relationship-row--compact") ||
+      !dependsRow.textContent.includes("Not saved")) {
+    throw new Error("Depends On draft did not render as a compact unsaved row");
+  }
+  if (resetCandidates(dependsGroup).includes(` + strconv.Quote(dependsCandidate.ID) + `) ||
+      !resetCandidates(blocksGroup).includes(` + strconv.Quote(dependsCandidate.ID) + `)) {
+    throw new Error("Depends On draft did not filter candidates by direction");
+  }
+
+  await selectAndAdd(blocksGroup, ` + strconv.Quote(blocksCandidate.ID) + `, ` + strconv.Quote(blocksCandidate.Title) + `);
+  assertFormValues();
+  const blocksRow = findElement(blocksGroup, (element) => element.dataset.relationshipId === ` + strconv.Quote(blocksCandidate.ID) + `);
+  if (!blocksRow || blocksRow.dataset.relationshipDraft === undefined ||
+      !blocksRow.className.split(/\s+/).includes("relationship-row--compact") ||
+      !blocksRow.textContent.includes("Not saved")) {
+    throw new Error("Blocks draft did not render as a compact unsaved row");
+  }
+  if (resetCandidates(blocksGroup).includes(` + strconv.Quote(blocksCandidate.ID) + `) ||
+      !resetCandidates(dependsGroup).includes(` + strconv.Quote(blocksCandidate.ID) + `)) {
+    throw new Error("Blocks draft did not filter candidates by direction");
+  }
+
+  const currentDependsRow = findElement(dependsGroup, (element) => element.dataset.relationshipId === ` + strconv.Quote(dependsCandidate.ID) + `);
+  const remove = currentDependsRow && findElement(currentDependsRow, (element) => element.tagName === "BUTTON" && element.textContent === "Remove");
+  if (!remove || !remove.eventListeners.click) throw new Error("Depends On draft is not removable");
+  await remove.eventListeners.click();
+  assertFormValues();
+  if (findElement(dependsGroup, (element) => element.dataset.relationshipId === ` + strconv.Quote(dependsCandidate.ID) + `)) {
+    throw new Error("removing a Depends On draft left its row mounted");
+  }
+  const dependencyMutations = fetchCalls.filter((call) =>
+    /\/api\/tasks\/.+\/dependencies\/.+/.test(call.url) &&
+    ["PUT", "DELETE"].includes(call.options.method));
+  if (dependencyMutations.length !== 0) {
+    throw new Error("New Task relationship drafts wrote before task creation");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute staged New Task relationship behavior: %v\n%s", err, output)
+	}
+}
+
 func TestHandlerShowsRecoverableErrorWhenInitialTaskLoadFails(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
