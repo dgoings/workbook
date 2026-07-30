@@ -1274,15 +1274,13 @@ func TestMeasureRepository(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			metrics, results, err := MeasureRepository(context.Background(), binary, fixture.Root, 60*time.Second)
+			metrics, results, err := MeasureRepository(context.Background(), binary, fixture.Root, 1, 60*time.Second)
 			if err != nil {
 				t.Fatal(err)
 			}
 
 			want := []string{
 				"projection-rebuild",
-				"projection-refresh-unchanged",
-				"projection-refresh-one-changed",
 				"sync-initial-local-bare",
 				"sync-unchanged-local-bare",
 			}
@@ -1297,10 +1295,10 @@ func TestMeasureRepository(t *testing.T) {
 					continue
 				}
 				sample := result.Samples[0]
-				if sample.TimedOut && i >= 3 {
+				if sample.TimedOut && i >= 1 {
 					continue
 				}
-				if i == 4 && results[3].Samples[0].TimedOut &&
+				if i == 2 && results[1].Samples[0].TimedOut &&
 					sample.Error == "not measured: initial sync timed out before remote completion" {
 					continue
 				}
@@ -1356,9 +1354,10 @@ func TestMeasureLocalBareSyncAgainstNewOriginPreservesPackedRefs(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			origin := filepath.Join(t.TempDir(), "origin.git")
+			originRoot := t.TempDir()
+			origin := filepath.Join(originRoot, "origin-001.git")
 			results, err := measureLocalBareSyncAgainstNewOrigin(
-				context.Background(), binary, fixture.Root, origin, time.Minute, MeasureCommand,
+				context.Background(), binary, fixture.Root, originRoot, 1, time.Minute, MeasureCommand,
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -1389,34 +1388,26 @@ func TestMeasureLocalBareSyncAgainstNewOriginPreservesPackedRefs(t *testing.T) {
 	}
 }
 
-func TestMeasureProjectionScenariosRetainMeasuredProductMisses(t *testing.T) {
+func TestMeasureProjectionScenariosRetainMeasuredProductMissesForEverySample(t *testing.T) {
 	repository := t.TempDir()
 	samples := []Sample{
 		{ExitCode: -1, TimedOut: true, Error: "rebuild timed out"},
-		{ExitCode: 2, Error: "list failed"},
-		{ExitCode: 0},
-		{ExitCode: 3, Error: "changed list failed"},
-	}
-	wantArgs := [][]string{
-		{"rebuild", "--json"},
-		{"list", "--json"},
-		{"update", "WB-task", "--status", "ready", "--json"},
-		{"list", "--json"},
+		{ExitCode: 2, Error: "rebuild failed"},
 	}
 	call := 0
 	results, err := measureProjectionScenarios(
 		context.Background(),
 		"workbook",
 		repository,
-		"WB-task",
+		len(samples),
 		time.Second,
 		func(_ context.Context, spec CommandSpec) Sample {
-			if call >= len(wantArgs) {
+			if call >= len(samples) {
 				t.Fatalf("unexpected command %d: %#v", call+1, spec)
 			}
 			if spec.Binary != "workbook" || spec.Directory != repository || spec.Timeout != time.Second ||
-				!reflect.DeepEqual(spec.Args, wantArgs[call]) {
-				t.Fatalf("command %d = %#v, want args %#v in %q with 1s timeout", call+1, spec, wantArgs[call], repository)
+				!reflect.DeepEqual(spec.Args, []string{"rebuild", "--json"}) {
+				t.Fatalf("command %d = %#v, want rebuild in %q with 1s timeout", call+1, spec, repository)
 			}
 			sample := samples[call]
 			call++
@@ -1426,38 +1417,14 @@ func TestMeasureProjectionScenariosRetainMeasuredProductMisses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if call != 4 {
-		t.Fatalf("measurement calls = %d, want 4", call)
+	if call != len(samples) {
+		t.Fatalf("measurement calls = %d, want %d", call, len(samples))
 	}
-	if got, want := len(results), 3; got != want {
-		t.Fatalf("projection scenarios = %d, want %d", got, want)
+	if len(results) != 1 || results[0].Name != "projection-rebuild" {
+		t.Fatalf("projection scenarios = %#v, want only projection-rebuild", results)
 	}
-	wantSamples := []Sample{samples[0], samples[1], samples[3]}
-	for index := range results {
-		if !reflect.DeepEqual(results[index].Samples, []Sample{wantSamples[index]}) {
-			t.Errorf("%s samples = %#v, want retained sample %#v", results[index].Name, results[index].Samples, wantSamples[index])
-		}
-	}
-}
-
-func TestMeasureProjectionScenariosRejectSetupMutationFailure(t *testing.T) {
-	call := 0
-	_, err := measureProjectionScenarios(
-		context.Background(),
-		"workbook",
-		t.TempDir(),
-		"WB-task",
-		time.Second,
-		func(_ context.Context, _ CommandSpec) Sample {
-			call++
-			if call == 3 {
-				return Sample{ExitCode: 2, Error: "setup update failed"}
-			}
-			return Sample{ExitCode: 0}
-		},
-	)
-	if err == nil || !strings.Contains(err.Error(), "prepare projection-refresh-one-changed") {
-		t.Fatalf("setup mutation error = %v, want harness failure", err)
+	if !reflect.DeepEqual(results[0].Samples, samples) {
+		t.Fatalf("projection-rebuild samples = %#v, want retained samples %#v", results[0].Samples, samples)
 	}
 }
 
@@ -1469,12 +1436,14 @@ func TestMeasureRepositoryRunsUnchangedSyncOnlyAfterInitialCompletes(t *testing.
 			context.Background(),
 			"workbook",
 			repository,
+			1,
 			time.Second,
 			func(_ context.Context, spec CommandSpec) Sample {
 				calls++
 				assertSyncCommandSpec(t, spec, repository)
 				return Sample{ExitCode: -1, TimedOut: true, Error: "timed out"}
 			},
+			nil,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -1507,12 +1476,14 @@ func TestMeasureRepositoryRunsUnchangedSyncOnlyAfterInitialCompletes(t *testing.
 			context.Background(),
 			"workbook",
 			repository,
+			1,
 			time.Second,
 			func(_ context.Context, spec CommandSpec) Sample {
 				calls++
 				assertSyncCommandSpec(t, spec, repository)
 				return Sample{ExitCode: 2, Error: "remote rejected update"}
 			},
+			nil,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -1538,12 +1509,14 @@ func TestMeasureRepositoryRunsUnchangedSyncOnlyAfterInitialCompletes(t *testing.
 			context.Background(),
 			"workbook",
 			repository,
+			1,
 			time.Second,
 			func(_ context.Context, spec CommandSpec) Sample {
 				calls++
 				assertSyncCommandSpec(t, spec, repository)
 				return Sample{ExitCode: 0}
 			},
+			nil,
 		)
 		if err != nil {
 			t.Fatal(err)
