@@ -659,7 +659,8 @@
             messages.push("Dependency saved durably. " +
               warnings.map((warning) => warning.message).join(" "));
           }
-          const refreshed = await currentRefreshResult(await refresh());
+          const refreshed = await currentRefreshResult(refresh());
+          if (refreshed.status === "superseded") return;
           if (refreshed.status === "failed") {
             messages.push("The dependency was saved durably, but the latest task state could not be refreshed.");
             group.setMessage(messages.join(" "));
@@ -821,9 +822,13 @@
           text(counts.get(status), String(items.length));
         });
       }
-      async function currentRefreshResult(result) {
+      async function currentRefreshResult(operation) {
+        let owner = operation;
+        let result = await owner;
         while (result.status === "superseded") {
-          result = await currentTaskRefresh;
+          if (!currentTaskRefresh || currentTaskRefresh === owner) return result;
+          owner = currentTaskRefresh;
+          result = await owner;
         }
         return result;
       }

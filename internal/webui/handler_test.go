@@ -1114,6 +1114,138 @@ setTimeout(async () => {
 	}
 }
 
+func TestHandlerClientDependencyMutationSettlesAfterControllerSupersession(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	current := clientPlacementTask("WB-01J0000000000000000000005A", "Current task", core.StatusReady, core.PriorityMedium)
+	candidate := clientPlacementTask("WB-01J0000000000000000000005B", "Candidate task", core.StatusDone, core.PriorityHigh)
+	initialTasks := []core.Task{current, candidate}
+	updatedCurrent := current
+	updatedCurrent.Dependencies = []string{candidate.ID}
+	updatedTasks := []core.Task{updatedCurrent, candidate}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<id> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	documentJSON := func(tasks []core.Task) string {
+		t.Helper()
+		document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(document)
+	}
+	emptyDeleted, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: []core.Task{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/"+current.ID, documentJSON(initialTasks)) + script + `
+deletedTaskResponse = ` + string(emptyDeleted) + `;
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const dependsHeading = findElement(main, (element) => element.textContent === "Depends On");
+  const dependsGroup = dependsHeading && dependsHeading.parentElement;
+  const relationshipRegion = dependsGroup.parentElement;
+  const controllerStatus = relationshipRegion.children.find((element) => element.className === "form-status");
+  const input = findElement(dependsGroup, (element) => element.attributes.role === "combobox");
+  input.eventListeners.focus();
+  const option = findElement(dependsGroup, (element) =>
+    element.attributes.role === "option" && element.dataset.candidateId === ` + strconv.Quote(candidate.ID) + `);
+  option.eventListeners.click();
+  const add = findElement(dependsGroup, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+
+  let resolveDeletedContext;
+  let activeGets = 0;
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if ((options.method || "GET") !== "GET") {
+      return {
+        ok: true,
+        json: async () => ({
+          format: "workbook.task-mutation",
+          version: 1,
+          task: ` + documentJSON(updatedTasks) + `.tasks[0]
+        })
+      };
+    }
+    if (url === "/api/tasks?deleted=true") {
+      return {
+        ok: true,
+        json: async () => new Promise((resolve) => { resolveDeletedContext = resolve; })
+      };
+    }
+    activeGets += 1;
+    return { ok: true, json: async () => (` + documentJSON(updatedTasks) + `) };
+  };
+  fetchCalls.splice(0);
+
+  const mutation = add.eventListeners.click();
+  while (!resolveDeletedContext) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  if (activeGets !== 1) throw new Error("mutation did not start exactly one active refresh");
+  controllerStatus.textContent = "detached controller remains untouched";
+
+  const back = findElement(main, (element) => element.tagName === "A" && element.textContent === "Back");
+  documentEventListeners.click({
+    target: back,
+    button: 0,
+    defaultPrevented: false,
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+    preventDefault() {}
+  });
+  if (main.firstElementChild !== boardView) throw new Error("navigation did not detach the relationship controller");
+
+  resolveDeletedContext(` + string(emptyDeleted) + `);
+  await mutation;
+  if (input.disabled) throw new Error("settled mutation did not clear the initiating group busy state");
+  if (controllerStatus.textContent !== "detached controller remains untouched") {
+    throw new Error("superseded deleted context wrote to the detached controller");
+  }
+  const groupMessage = findElement(dependsGroup, (element) => element.className === "relationship-message");
+  if (groupMessage.textContent !== "") {
+    throw new Error("settled mutation wrote status into the detached relationship group");
+  }
+  if (activeGets !== 1) throw new Error("controller-only supersession started an unexpected task refresh");
+
+  const newTask = new TestElement("a");
+  newTask.href = "/tasks/new";
+  boardView.append(newTask);
+  documentEventListeners.click({
+    target: newTask,
+    button: 0,
+    defaultPrevented: false,
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+    preventDefault() {}
+  });
+  if (!findElement(main, (element) => element.id === "task-title")) {
+    throw new Error("client did not remain responsive after the mutation settled");
+  }
+}, 0);
+`
+	commandContext, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	command := exec.CommandContext(commandContext, node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		if commandContext.Err() == context.DeadlineExceeded {
+			t.Fatalf("dependency mutation did not settle after controller-only supersession")
+		}
+		t.Fatalf("execute controller-superseded dependency mutation: %v\n%s", err, output)
+	}
+}
+
 func TestHandlerClientDependencyMutationReportsDeletedContextFailure(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
