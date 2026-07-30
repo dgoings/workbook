@@ -90,9 +90,10 @@ func RenderGuidelines(project core.ProjectConfig) string {
 // files such as AGENTS.md and CLAUDE.md.
 func RenderReference() string {
 	return "## Workbook\n\n" +
-		"This project tracks tasks with the Workbook CLI. Read [`" + GuidelinesPath + "`](" +
-		GuidelinesPath + ") for agent workflows and the canonical machine values this project\n" +
-		"accepts, such as `in-progress` rather than the `In Progress` display label.\n\n" +
+		"This project tracks tasks with the Workbook CLI. Read\n" +
+		"[`" + GuidelinesPath + "`](" + GuidelinesPath + ") for agent workflows and the\n" +
+		"canonical machine values this project accepts, such as `in-progress` rather\n" +
+		"than the `In Progress` display label.\n\n" +
 		"Refresh this section with `workbook docs update`.\n"
 }
 
