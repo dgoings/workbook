@@ -630,13 +630,16 @@ func TestValidateOptionsEnforcesAcceptanceMinimum(t *testing.T) {
 		})
 	}
 
+	// An omitted selection includes the whole registry, so a larger acceptance
+	// workload must also satisfy the 500-changed projection refresh point's
+	// 500 mutable active task heads.
 	t.Run("larger future workload", func(t *testing.T) {
 		outputRoot := t.TempDir()
 		var stderr bytes.Buffer
 		flags, options := newFlagSet(&stderr)
 		err := flags.Parse([]string{
 			"--workbook", workbookBinary,
-			"--tasks", "501",
+			"--tasks", "526",
 			"--operations", "21",
 			"--samples", "20",
 			"--phase", "acceptance",
@@ -944,4 +947,145 @@ func flagValue(args []string, name string) string {
 		}
 	}
 	panic("missing test flag " + name)
+}
+
+func TestBenchmarkReportsEveryProjectionRefreshChangeCountPoint(t *testing.T) {
+	workbook := buildWorkbookBinary(t)
+	selected := []string{
+		"projection-refresh-unchanged",
+		"projection-refresh-one-changed",
+		"projection-refresh-five-changed",
+	}
+	report, err := runBenchmark(context.Background(), options{
+		workbookBinary: workbook,
+		tasks:          12,
+		tombstones:     2,
+		operations:     3,
+		samples:        2,
+		timeout:        60 * time.Second,
+		objectFormat:   "sha1",
+		phase:          "baseline",
+		scenarios:      selected,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gotNames := make([]string, len(report.Scenarios))
+	for index, scenario := range report.Scenarios {
+		gotNames[index] = scenario.Name
+		if len(scenario.Samples) != 2 {
+			t.Errorf("%s samples = %d, want the requested 2", scenario.Name, len(scenario.Samples))
+		}
+	}
+	if !reflect.DeepEqual(gotNames, selected) {
+		t.Fatalf("measured scenarios = %#v, want only %#v", gotNames, selected)
+	}
+	if report.ProjectionRefresh == nil {
+		t.Fatal("report has no projection refresh block")
+	}
+	if report.ProjectionRefresh.Samples != 2 {
+		t.Errorf("projection refresh samples = %d, want 2", report.ProjectionRefresh.Samples)
+	}
+	if report.ProjectionRefresh.Fixture.ObjectFormat != "sha1" ||
+		report.ProjectionRefresh.Fixture.TotalTasks != 12 ||
+		report.ProjectionRefresh.Fixture.ActiveTasks != 10 ||
+		report.ProjectionRefresh.Fixture.TombstonedTasks != 2 {
+		t.Errorf("projection refresh fixture = %#v, want the measured fixture shape", report.ProjectionRefresh.Fixture)
+	}
+	wantChanged := []int{0, 1, 5}
+	if len(report.ProjectionRefresh.Points) != len(wantChanged) {
+		t.Fatalf("projection refresh points = %#v, want %d", report.ProjectionRefresh.Points, len(wantChanged))
+	}
+	for index, point := range report.ProjectionRefresh.Points {
+		if point.Scenario != selected[index] || point.ChangedTaskHeads != wantChanged[index] {
+			t.Fatalf("point %d = %#v, want %s at %d changed heads", index+1, point, selected[index], wantChanged[index])
+		}
+	}
+
+	outputRoot := t.TempDir()
+	jsonPath := filepath.Join(outputRoot, "report.json")
+	markdownPath := filepath.Join(outputRoot, "report.md")
+	if err := writeReports(jsonPath, markdownPath, report); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := os.ReadFile(jsonPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded perf.Report
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.ProjectionRefresh == nil ||
+		!reflect.DeepEqual(*decoded.ProjectionRefresh, *report.ProjectionRefresh) {
+		t.Fatalf("decoded projection refresh = %#v, want %#v", decoded.ProjectionRefresh, report.ProjectionRefresh)
+	}
+	markdown, err := os.ReadFile(markdownPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fragments := append([]string{
+		"## Projection refresh change-count family",
+		"2 sample(s) per point",
+		"sha1 object format",
+		"Slope:",
+	}, selected...)
+	for _, fragment := range fragments {
+		if !strings.Contains(string(markdown), fragment) {
+			t.Fatalf("Markdown report does not contain %q:\n%s", fragment, markdown)
+		}
+	}
+}
+
+func TestValidateOptionsRejectsProjectionRefreshFixtureShortfallBeforeAnyWork(t *testing.T) {
+	workbook := buildWorkbookBinary(t)
+	for _, test := range []struct {
+		name       string
+		tasks      string
+		tombstones string
+		want       string
+	}{
+		{
+			name:       "default acceptance fixture is too small",
+			tasks:      "500",
+			tombstones: "25",
+			want:       "projection-refresh-five-hundred-changed requires 500 mutable active task heads",
+		},
+		{
+			name:       "five hundred active tasks are enough",
+			tasks:      "525",
+			tombstones: "25",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			outputRoot := t.TempDir()
+			var stderr bytes.Buffer
+			flags, options := newFlagSet(&stderr)
+			if err := flags.Parse([]string{
+				"--workbook", workbook,
+				"--tasks", test.tasks,
+				"--tombstones", test.tombstones,
+				"--operations", "20",
+				"--scenario", "projection-refresh-five-hundred-changed",
+				"--output-json", filepath.Join(outputRoot, "report.json"),
+				"--output-markdown", filepath.Join(outputRoot, "report.md"),
+			}); err != nil {
+				t.Fatal(err)
+			}
+			err := validateOptions(flags, options)
+			if test.want == "" {
+				if err != nil {
+					t.Fatalf("validate sufficient fixture: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("fixture shortfall error = %v, want %q", err, test.want)
+			}
+			if !strings.Contains(err.Error(), "--tasks 525 --tombstones 25") {
+				t.Fatalf("fixture shortfall error = %v, want actionable fixture guidance", err)
+			}
+		})
+	}
 }

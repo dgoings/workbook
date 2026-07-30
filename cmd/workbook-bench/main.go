@@ -274,6 +274,15 @@ func validateOptions(flags *flag.FlagSet, options *options) error {
 		if containsValidationScenario(scenarios) && (options.tasks < 500 || options.operations < 20) {
 			return fmt.Errorf("validation scenarios require at least 500 tasks and 20 operations per task")
 		}
+		if err := perf.RequireProjectionRefreshFixture(scenarios, perf.FixtureSpec{
+			TotalTasks:        options.tasks,
+			ActiveTasks:       options.tasks - options.tombstones,
+			TombstonedTasks:   options.tombstones,
+			OperationsPerTask: options.operations,
+			ObjectFormat:      options.objectFormat,
+		}); err != nil {
+			return err
+		}
 		options.scenarios = scenarios
 	}
 	return resolveReportPaths(options)
@@ -364,6 +373,7 @@ func runBenchmark(ctx context.Context, options options) (perf.Report, error) {
 
 	var scenarios []perf.ScenarioResult
 	var repositoryMetrics perf.RepositoryMetrics
+	var projectionRefresh *perf.ProjectionRefreshReport
 	coldScenarios := selectedColdScenarioNames(options.scenarios)
 	if len(coldScenarios) != 0 {
 		cold, err := perf.RunColdCLI(ctx, runSpec, filepath.Join(fixtureRoot, "cold"), coldScenarios)
@@ -394,6 +404,7 @@ func runBenchmark(ctx context.Context, options options) (perf.Report, error) {
 				ctx,
 				options.workbookBinary,
 				repositoryFixture.Root,
+				options.samples,
 				options.timeout,
 			)
 		} else {
@@ -401,6 +412,7 @@ func runBenchmark(ctx context.Context, options options) (perf.Report, error) {
 				ctx,
 				options.workbookBinary,
 				repositoryFixture.Root,
+				options.samples,
 				options.timeout,
 			)
 		}
@@ -409,6 +421,17 @@ func runBenchmark(ctx context.Context, options options) (perf.Report, error) {
 		}
 		repositoryMetrics = metrics
 		scenarios = append(scenarios, selectedScenarioResults(repositoryScenarios, options.scenarios)...)
+	}
+	refreshScenarios := selectedProjectionRefreshScenarioNames(options.scenarios)
+	if len(refreshScenarios) != 0 {
+		refresh, refreshReport, err := perf.RunProjectionRefreshScenarios(
+			ctx, runSpec, filepath.Join(fixtureRoot, "projection-refresh"), refreshScenarios,
+		)
+		if err != nil {
+			return perf.Report{}, fmt.Errorf("run projection refresh scenarios: %w", err)
+		}
+		scenarios = append(scenarios, refresh...)
+		projectionRefresh = &refreshReport
 	}
 	remoteScenarios := selectedRemoteScenarioNames(options.scenarios)
 	if len(remoteScenarios) != 0 {
@@ -438,8 +461,9 @@ func runBenchmark(ctx context.Context, options options) (perf.Report, error) {
 			ColdP95Milliseconds: 200,
 			BurstMilliseconds:   1000,
 		},
-		Scenarios:  scenarios,
-		Repository: repositoryMetrics,
+		Scenarios:         scenarios,
+		Repository:        repositoryMetrics,
+		ProjectionRefresh: projectionRefresh,
 	}, nil
 }
 
@@ -518,7 +542,8 @@ func selectedWarmScenarioNames(scenarios []string) []string {
 
 func hasRepositoryScenario(scenarios []string) bool {
 	for _, scenario := range scenarios {
-		if strings.HasPrefix(scenario, "projection-") || scenario == "sync-initial-local-bare" || scenario == "sync-unchanged-local-bare" {
+		switch scenario {
+		case "projection-rebuild", "sync-initial-local-bare", "sync-unchanged-local-bare":
 			return true
 		}
 	}
@@ -527,11 +552,21 @@ func hasRepositoryScenario(scenarios []string) bool {
 
 func hasRepositoryProjectionScenario(scenarios []string) bool {
 	for _, scenario := range scenarios {
-		if strings.HasPrefix(scenario, "projection-") {
+		if scenario == "projection-rebuild" {
 			return true
 		}
 	}
 	return false
+}
+
+func selectedProjectionRefreshScenarioNames(scenarios []string) []string {
+	refresh := make([]string, 0, len(scenarios))
+	for _, scenario := range scenarios {
+		if perf.IsProjectionRefreshScenario(scenario) {
+			refresh = append(refresh, scenario)
+		}
+	}
+	return refresh
 }
 
 func selectedScenarioResults(results []perf.ScenarioResult, selected []string) []perf.ScenarioResult {

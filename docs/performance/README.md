@@ -94,6 +94,85 @@ baseline once with `--object-format sha256` and write the results to
 `docs/performance/2026-07-28-baseline-sha256.json` and
 `docs/performance/2026-07-28-baseline-sha256.md`.
 
+## Projection refresh change-count family
+
+The `projection-refresh-*` selectors measure how the disposable SQLite
+projection refreshes when a known number of canonical task heads changed since
+the projection was last brought current. They are descriptive: no duration or
+Git-process target is attached, so a completed sample is reported
+`not-evaluated`.
+
+| Selector | Changed task heads |
+| --- | ---: |
+| `projection-refresh-unchanged` | 0 |
+| `projection-refresh-one-changed` | 1 |
+| `projection-refresh-five-changed` | 5 |
+| `projection-refresh-fifty-changed` | 50 |
+| `projection-refresh-five-hundred-changed` | 500 |
+
+Each `(point, sample)` pair gets its own fixture. Every sample then runs an
+untimed `workbook list --json` to settle the projection, advances exactly the
+first *N* active task refs by writing Git objects directly, verifies by ref diff
+that exactly *N* refs and no others changed, and only then measures one
+`workbook list --json`. Fixture construction, settling, mutation, and
+verification are outside the timed refresh and outside its Trace2 Git-process
+count. The mutated set is the fixture's deterministic construction order, never
+random. All of this is identical in SHA-1 and SHA-256 repositories.
+
+Only active tasks are mutable, because a tombstoned task's history has ended.
+The 500-changed point therefore requires at least 500 **active** tasks, which
+the default 500-task acceptance fixture (475 active plus 25 tombstoned) cannot
+supply. `workbook-bench` rejects that invocation before reading the measured
+binary's version and before building any fixture:
+
+```text
+projection-refresh-five-hundred-changed requires 500 mutable active task heads,
+but the fixture has 475 active tasks; re-run with a larger fixture, for example
+--tasks 525 --tombstones 25
+```
+
+The harness never silently measures fewer heads than requested. Because an
+omitted `--scenario` selects the whole registry, whole-harness runs must also
+use at least 500 active tasks or select a subset.
+
+Expect the 500-changed point to spend a noticeable amount of untimed wall-clock
+time in setup: it writes 500 operation commits and 500 ref updates through
+individual Git commands before the measured refresh. That cost is outside every
+sample and outside the per-command timeout, which bounds only the measured
+command.
+
+### Reading the slope output
+
+When any family member runs, the JSON report gains a `projectionRefresh` block
+(`workbook.projection-refresh` version 1) alongside the usual `scenarios` array,
+and the Markdown report gains a "Projection refresh change-count family"
+section. The block records the sample count, the measured fixture shape and Git
+object format, and one entry per change-count point:
+
+| Field | Meaning |
+| --- | --- |
+| `changedTaskHeads` | Exact number of task refs advanced before each measured refresh. |
+| `samples` | Measured refreshes at this point. |
+| `taskRefs` | Task refs the refresh had to consider. |
+| `refEnumerationMedianMilliseconds` | Median untimed harness cost of enumerating every task ref and object name immediately before the measured refresh. |
+| `refreshMedianMilliseconds`, `refreshP95Milliseconds` | End-to-end latency of the timed refresh. |
+| `refreshMedianGitProcesses` | Median Git process starts inside the measured refresh only. |
+| `projectedTaskRows` | Task rows the refreshed projection returned. |
+| `projectionCacheBytes` | Size of `<common-git-dir>/workbook/cache.sqlite` after the final measured refresh at this point. |
+
+`slope.millisecondsPerChangedHead` is the plain difference quotient between the
+lowest and highest measured points, and `slope.description` names every measured
+point. Read both as a description of the samples that were taken, not as a
+budget: this family has no pass threshold, and a steep slope is evidence to
+record rather than a failure.
+
+Repository-surface scenarios now honor `--samples`. `projection-rebuild` repeats
+its independent rebuild, and each local-bare sync sample receives its own fresh
+empty bare origin so it measures the same initial-publication and
+already-synchronized topology every time. The harness also clears any fetched
+tracking ref before each sync sample, so that starting topology does not depend
+on the measured product still pruning stale tracking refs itself.
+
 ## Remote synchronization topologies
 
 `workbook-bench` accepts repeatable `--scenario <name>` selectors. With one or
