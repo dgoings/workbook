@@ -54,43 +54,27 @@ if ! amd64_checksum=$(checksum_for "${amd64_archive}"); then
 	exit 1
 fi
 
+repository_root=$(CDPATH='' cd -- "${script_directory}/.." && pwd -P)
+
 output_directory=$(dirname -- "${output_file}")
 mkdir -p -- "${output_directory}"
+# The formula template lives in internal/release so that the Go renderer and
+# this script cannot drift apart. Render through it rather than duplicating it.
+build_directory=$(mktemp -d "${TMPDIR:-/tmp}/workbook-formula.XXXXXX")
 temporary_file=$(mktemp "${output_directory}/.workbook-formula.XXXXXX")
-trap 'rm -f -- "${temporary_file}"' EXIT HUP INT TERM
+trap 'rm -rf -- "${build_directory}"; rm -f -- "${temporary_file}"' EXIT HUP INT TERM
 
-cat > "${temporary_file}" <<EOF
-# typed: strict
-# frozen_string_literal: true
+(
+	cd -- "${repository_root}"
+	CGO_ENABLED=0 go build -buildvcs=false -trimpath \
+		-o "${build_directory}/formula-tool" ./internal/release/formulacmd
+)
 
-# Homebrew formula for Workbook.
-class Workbook < Formula
-  desc "Repository-native project tracker for humans and coding agents"
-  homepage "https://github.com/${repository}"
-  version "${version}"
-  depends_on :macos
-
-  on_macos do
-    on_arm do
-      url "https://github.com/${repository}/releases/download/v${version}/${arm64_archive}"
-      sha256 "${arm64_checksum}"
-    end
-
-    on_intel do
-      url "https://github.com/${repository}/releases/download/v${version}/${amd64_archive}"
-      sha256 "${amd64_checksum}"
-    end
-  end
-
-  def install
-    bin.install "workbook"
-  end
-
-  test do
-    assert_match version, shell_output("#{bin}/workbook version")
-  end
-end
-EOF
+"${build_directory}/formula-tool" \
+	"${version}" \
+	"${arm64_checksum}" \
+	"${amd64_checksum}" \
+	"${repository}" > "${temporary_file}"
 
 chmod 0644 "${temporary_file}"
 mv -- "${temporary_file}" "${output_file}"

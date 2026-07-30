@@ -92,3 +92,14 @@ Prefer integration tests using temporary local bare remotes over mocks for impor
 - Run the most relevant tests and formatting checks available for the files changed.
 - Do not add generated SQLite databases, temporary Git repositories, credentials, tokens, or local cache files to source control.
 - Do not publish branches, tags, refs, releases, or packages unless the user explicitly requests it.
+
+<!-- workbook:begin generator=dev sha256=40cef0a79115cf7aa9e8c6ea6f5755b51b6d40366fb3e94237da5ddb6a9768ff -->
+## Workbook
+
+This project tracks tasks with the Workbook CLI. Read
+[`.workbook/guidelines.md`](.workbook/guidelines.md) for agent workflows and the
+canonical machine values this project accepts, such as `in-progress` rather
+than the `In Progress` display label.
+
+Refresh this section with `workbook docs update`.
+<!-- workbook:end -->
