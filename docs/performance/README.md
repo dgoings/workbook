@@ -141,7 +141,7 @@ individual Git commands before the measured refresh. That cost is outside every
 sample and outside the per-command timeout, which bounds only the measured
 command.
 
-### Reading the slope output
+### Reading the refresh slope output
 
 When any family member runs, the JSON report gains a `projectionRefresh` block
 (`workbook.projection-refresh` version 1) alongside the usual `scenarios` array,
@@ -415,7 +415,7 @@ because the 100-active point is deliberately smaller. That relaxation applies
 only to `--phase scaling`; `--phase baseline` and `--phase acceptance` keep every
 existing minimum.
 
-### Reading the slope output
+### Reading the scaling slope output
 
 Scaling reports use the separate `workbook.performance-scaling-report` format,
 version 1. They carry no duration or Git-process budget: a scaling point is a
