@@ -898,6 +898,59 @@ setTimeout(() => {
 	}
 }
 
+func TestHandlerClientClampsRelationshipListboxPlacement(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return nil, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	response := request(t, handler, http.MethodGet, "/tasks/new")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/new status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	script = strings.Replace(script, "function relationshipListboxPlacement(", "globalThis.relationshipListboxPlacement = function relationshipListboxPlacement(", 1)
+	document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	program := clientDOMHarness("/tasks/new", string(document)) + script + `
+const bounds = { top: 227, bottom: 504 };
+const cases = [
+  {
+    label: "top scroll position",
+    anchor: { top: 250, bottom: 290 },
+    want: { side: "below", top: 295, bottom: 504, maxHeight: 209 }
+  },
+  {
+    label: "middle scroll position",
+    anchor: { top: 343, bottom: 386 },
+    want: { side: "below", top: 391, bottom: 504, maxHeight: 113 }
+  },
+  {
+    label: "bottom scroll position",
+    anchor: { top: 440, bottom: 480 },
+    want: { side: "above", top: 227, bottom: 435, maxHeight: 208 }
+  }
+];
+for (const testCase of cases) {
+  const got = relationshipListboxPlacement(testCase.anchor, bounds, 288, 5);
+  if (JSON.stringify(got) !== JSON.stringify(testCase.want)) {
+    throw new Error(testCase.label + " placement = " + JSON.stringify(got) +
+      ", want " + JSON.stringify(testCase.want));
+  }
+  if (got.top < bounds.top || got.bottom > bounds.bottom) {
+    throw new Error(testCase.label + " escaped the visible sidebar bounds");
+  }
+}
+`
+	command := exec.Command(node, "-e", program)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("execute relationship listbox placement: %v\n%s", err, output)
+	}
+}
+
 func TestHandlerClientStagesNewTaskRelationshipsWithoutMutating(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -3624,6 +3677,7 @@ class TestElement {
     this.className = "";
     this.dataset = {};
     this.attributes = {};
+    this.style = {};
     this.classList = { add() {}, remove() {}, toggle() {} };
     this.eventListeners = {};
     this._value = "";
@@ -3669,11 +3723,15 @@ class TestElement {
   get id() { return this.attributes.id || this._id || ""; }
   set id(value) { this._id = String(value); this.attributes.id = String(value); }
   addEventListener(name, listener) { this.eventListeners[name] = listener; }
+  removeEventListener(name, listener) {
+    if (this.eventListeners[name] === listener) delete this.eventListeners[name];
+  }
   closest(selector) {
     for (let element = this; element; element = element.parentElement) {
       if (selector === "a[href]" && element.tagName === "A" && element.href) return element;
       if (selector === ".task-card" && element.className === "task-card") return element;
       if (selector === ".task-route" && element.className === "task-route") return element;
+      if (selector === ".task-sidebar" && element.className === "task-sidebar") return element;
       if (selector === ".task-id-copy-group" && element.className === "task-id-copy-group") return element;
       if (selector === "[data-copy-task-id]" && Object.prototype.hasOwnProperty.call(element.dataset, "copyTaskId")) return element;
       if (selector === "[data-drop-status]" && element.dataset.dropStatus) return element;
@@ -3705,7 +3763,7 @@ class TestElement {
     visit(this);
     return matches;
   }
-  getBoundingClientRect() { return this.rect || { top: 0, bottom: 0 }; }
+  getBoundingClientRect() { return this.rect || { top: 0, right: 0, bottom: 0, left: 0, width: 0 }; }
   scrollIntoView(options) { scrollIntoViewCalls.push({ element: this, options }); }
   get firstElementChild() { return this.children[0] || null; }
   get textContent() { return this._textContent + this.children.map((child) => child.textContent).join(""); }
@@ -3752,7 +3810,10 @@ globalThis.document = {
   querySelectorAll() { return []; },
   createElement(tagName) { return new TestElement(tagName); },
   createDocumentFragment() { return new TestElement("fragment"); },
-  addEventListener(name, listener) { documentEventListeners[name] = listener; }
+  addEventListener(name, listener) { documentEventListeners[name] = listener; },
+  removeEventListener(name, listener) {
+    if (documentEventListeners[name] === listener) delete documentEventListeners[name];
+  }
 };
 	const initialURL = new URL("http://127.0.0.1` + path + `");
 	let intervalDelay = null;
@@ -3769,9 +3830,12 @@ globalThis.document = {
 	}, configurable: true });
 	const windowTimeouts = [];
 	let nextWindowTimeoutID = 1;
-	globalThis.window = {
+globalThis.window = {
+	  innerHeight: 900,
+	  innerWidth: 1440,
 	  location: { href: initialURL.href, origin: initialURL.origin },
 	  addEventListener() {},
+	  removeEventListener() {},
 	  setInterval(callback, delay) { intervalCallback = callback; intervalDelay = delay; },
 	  setTimeout(callback, delay) {
 	    const timer = { id: nextWindowTimeoutID++, callback, delay, canceled: false };

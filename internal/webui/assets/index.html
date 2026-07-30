@@ -126,7 +126,7 @@
     .relationship-editor input:focus { border-color: #2457d6; outline: 3px solid rgba(36,87,214,.18); }
     .relationship-editor button { border: 1px solid #173f9e; border-radius: 4px; background: #2457d6; color: #fff; cursor: pointer; font: inherit; font-size: .78rem; font-weight: 750; padding: .58rem .75rem; }
     .relationship-editor button:disabled { cursor: default; opacity: .52; }
-    .relationship-listbox { position: absolute; z-index: 20; right: 0; bottom: calc(100% + .3rem); left: 0; max-height: min(18rem, 14vh); overflow-y: auto; border: 1px solid #9eafc5; border-radius: 4px; background: #fff; box-shadow: 0 8px 20px rgba(23,32,51,.12); }
+    .relationship-listbox { position: fixed; z-index: 20; max-height: 18rem; overflow-y: auto; border: 1px solid #9eafc5; border-radius: 4px; background: #fff; box-shadow: 0 8px 20px rgba(23,32,51,.12); }
     .relationship-listbox[hidden] { display: none; }
     .relationship-row--compact { grid-template-columns: minmax(0, 1fr) auto; gap: .22rem .45rem; padding: .48rem 0; border: 0; border-top: 1px solid #e1e7f0; border-radius: 0; }
     .relationship-option { display: grid; gap: .18rem; padding: .55rem .62rem; border-bottom: 1px solid #e1e7f0; cursor: pointer; }
@@ -138,6 +138,26 @@
     .relationship-message { min-height: 1rem; margin: .45rem 0 0; color: #9c2f25; font-size: .78rem; }
     @media (prefers-reduced-motion: no-preference) { .task-list { transition: opacity 120ms ease; } }
     @media (max-width: 900px) { .app-header { align-items: start; flex-direction: column; } .updated { text-align: left; } .board { grid-template-columns: repeat(6, minmax(min(18rem, calc(100vw - 2.5rem)), 1fr)); } .column { min-width: min(18rem, calc(100vw - 2.5rem)); } }
+    @media (min-width: 761px) {
+      .task-sidebar { padding: .9rem 1rem; }
+      .task-properties { gap: .55rem; }
+      .task-properties h3 { margin: 0 0 .15rem; }
+      .task-properties .field { grid-template-columns: 4.5rem minmax(0, 1fr); align-items: center; gap: .45rem; }
+      .task-properties .field input, .task-properties .field select { padding: .5rem .58rem; }
+      .task-relationships { gap: .65rem; padding-top: .7rem; }
+      .relationship-group { padding-top: .7rem; }
+      .relationship-list { gap: .35rem; margin: .45rem 0; }
+      .relationship-editor { gap: .3rem .45rem; }
+      .relationship-editor input { padding: .45rem .55rem; }
+      .relationship-editor button { padding: .48rem .62rem; }
+      .relationship-message { min-height: .75rem; margin-top: .25rem; }
+    }
+    @media (min-width: 761px) and (max-height: 700px) {
+      .task-route { height: auto; min-height: 100%; }
+      .task-layout { grid-template-rows: auto auto; }
+      .task-editor { align-self: start; height: calc(100dvh - 20rem); min-height: 17rem; max-height: 24rem; }
+      .task-sidebar { overflow-y: visible; }
+    }
     @media (max-width: 760px) {
       .task-route { height: auto; min-height: 100%; }
       .task-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto; }
@@ -501,6 +521,28 @@
         }
         return activeTasks.filter((task) => !excluded.has(task.id));
       }
+      function relationshipListboxPlacement(anchor, bounds, desiredHeight = 288, gap = 5) {
+        const belowTop = Math.max(bounds.top, anchor.bottom + gap);
+        const aboveBottom = Math.min(bounds.bottom, anchor.top - gap);
+        const belowSpace = Math.max(0, bounds.bottom - belowTop);
+        const aboveSpace = Math.max(0, aboveBottom - bounds.top);
+        const side = belowSpace >= aboveSpace ? "below" : "above";
+        const maxHeight = Math.min(desiredHeight, side === "below" ? belowSpace : aboveSpace);
+        if (side === "below") {
+          return {
+            side,
+            top: belowTop,
+            bottom: belowTop + maxHeight,
+            maxHeight
+          };
+        }
+        return {
+          side,
+          top: aboveBottom - maxHeight,
+          bottom: aboveBottom,
+          maxHeight
+        };
+      }
       function dependencyCombobox(config) {
         const state = { query: "", selectedID: "", activeIndex: -1, candidates: [] };
         const region = document.createElement("div");
@@ -529,6 +571,61 @@
         add.disabled = true;
         text(add, "Add dependency");
         region.append(label, input, add, listbox, empty);
+        let tracksPosition = false;
+
+        function positionListbox() {
+          if (listbox.hidden) return;
+          const anchor = input.getBoundingClientRect();
+          const sidebar = region.closest(".task-sidebar");
+          const sidebarRect = sidebar
+            ? sidebar.getBoundingClientRect()
+            : { top: 0, right: window.innerWidth, bottom: window.innerHeight, left: 0 };
+          const bounds = {
+            top: Math.max(8, sidebarRect.top),
+            bottom: Math.min(window.innerHeight - 8, sidebarRect.bottom)
+          };
+          const placement = relationshipListboxPlacement(anchor, bounds);
+          const regionRect = region.getBoundingClientRect();
+          const availableWidth = Math.max(0, window.innerWidth - 16);
+          const width = Math.min(regionRect.width || sidebarRect.width || 320, availableWidth);
+          const left = Math.min(
+            Math.max(8, regionRect.left || sidebarRect.left || 8),
+            window.innerWidth - width - 8
+          );
+          listbox.style.left = left + "px";
+          listbox.style.width = width + "px";
+          listbox.style.maxHeight = placement.maxHeight + "px";
+          if (placement.side === "above") {
+            listbox.style.top = "auto";
+            listbox.style.bottom = (window.innerHeight - placement.bottom) + "px";
+          } else {
+            listbox.style.top = placement.top + "px";
+            listbox.style.bottom = "auto";
+          }
+        }
+        function startPositioning() {
+          if (tracksPosition) return;
+          document.addEventListener("scroll", positionListbox, true);
+          window.addEventListener("resize", positionListbox);
+          tracksPosition = true;
+        }
+        function stopPositioning() {
+          if (!tracksPosition) return;
+          document.removeEventListener("scroll", positionListbox, true);
+          window.removeEventListener("resize", positionListbox);
+          tracksPosition = false;
+        }
+        function showListbox() {
+          input.setAttribute("aria-expanded", "true");
+          listbox.hidden = false;
+          startPositioning();
+          positionListbox();
+        }
+        function hideListbox() {
+          input.setAttribute("aria-expanded", "false");
+          listbox.hidden = true;
+          stopPositioning();
+        }
 
         function matchingCandidates() {
           const query = state.query.trim().toLocaleLowerCase();
@@ -546,8 +643,7 @@
           state.query = candidate.title;
           state.activeIndex = -1;
           input.value = candidate.title;
-          input.setAttribute("aria-expanded", "false");
-          listbox.hidden = true;
+          hideListbox();
           renderOptions();
         }
         function renderOptions() {
@@ -589,13 +685,11 @@
           state.query = input.value;
           state.selectedID = "";
           state.activeIndex = -1;
-          input.setAttribute("aria-expanded", "true");
-          listbox.hidden = false;
+          showListbox();
           renderOptions();
         });
         input.addEventListener("focus", () => {
-          input.setAttribute("aria-expanded", "true");
-          listbox.hidden = false;
+          showListbox();
           renderOptions();
         });
         input.addEventListener("keydown", (event) => {
@@ -603,13 +697,11 @@
           if (event.key === "ArrowDown") {
             event.preventDefault();
             state.activeIndex = Math.min(state.activeIndex + 1, options.length - 1);
-            input.setAttribute("aria-expanded", "true");
-            listbox.hidden = false;
+            showListbox();
           } else if (event.key === "ArrowUp") {
             event.preventDefault();
             state.activeIndex = Math.max(state.activeIndex - 1, 0);
-            input.setAttribute("aria-expanded", "true");
-            listbox.hidden = false;
+            showListbox();
           } else if (event.key === "Enter") {
             event.preventDefault();
             if (state.activeIndex >= 0) {
@@ -617,8 +709,7 @@
             }
           } else if (event.key === "Escape") {
             state.activeIndex = -1;
-            input.setAttribute("aria-expanded", "false");
-            listbox.hidden = true;
+            hideListbox();
           } else {
             return;
           }
@@ -646,8 +737,7 @@
             state.selectedID = "";
             state.activeIndex = -1;
             input.value = "";
-            input.setAttribute("aria-expanded", "false");
-            listbox.hidden = true;
+            hideListbox();
             renderOptions();
           }
         };
