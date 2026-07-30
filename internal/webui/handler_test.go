@@ -468,6 +468,87 @@ setTimeout(async () => {
 	}
 }
 
+func TestHandlerClientRendersDependencyRelationships(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	current := clientPlacementTask("WB-01J00000000000000000000031", "Current task", core.StatusReady, core.PriorityMedium)
+	activeDependency := clientPlacementTask("WB-01J00000000000000000000032", "Active prerequisite", core.StatusDone, core.PriorityHigh)
+	activeBlocked := clientPlacementTask("WB-01J00000000000000000000033", "Active blocked task", core.StatusBlocked, core.PriorityLow)
+	deletedDependency := clientPlacementTask("WB-01J00000000000000000000034", "Deleted prerequisite", core.StatusReady, core.PriorityMedium)
+	deletedDependency.Deleted = true
+	deletedBlocked := clientPlacementTask("WB-01J00000000000000000000035", "Deleted blocked task", core.StatusBlocked, core.PriorityLow)
+	deletedBlocked.Deleted = true
+	missingDependencyID := "WB-01J00000000000000000000036"
+	current.Dependencies = []string{activeDependency.ID, deletedDependency.ID, missingDependencyID}
+	activeBlocked.Dependencies = []string{current.ID}
+	deletedBlocked.Dependencies = []string{current.ID}
+	activeTasks := []core.Task{current, activeDependency, activeBlocked}
+	deletedTasks := []core.Task{deletedDependency, deletedBlocked}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return activeTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<id> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	activeDocument, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: activeTasks, Presentation: presentationForTasks(activeTasks)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deletedDocument, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: deletedTasks})
+	if err != nil {
+		t.Fatal(err)
+	}
+	refreshedCurrent := current
+	refreshedCurrent.Dependencies = []string{activeDependency.ID}
+	refreshedDocument, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: []core.Task{refreshedCurrent, activeDependency, activeBlocked}, Presentation: presentationForTasks([]core.Task{refreshedCurrent, activeDependency, activeBlocked})})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/"+current.ID, string(activeDocument)) + script + `
+deletedTaskResponse = ` + string(deletedDocument) + `;
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const dependsHeading = findElement(main, (element) => element.textContent === "Depends On");
+  const blocksHeading = findElement(main, (element) => element.textContent === "Blocks");
+  if (!dependsHeading || !blocksHeading) throw new Error("both relationship groups did not render");
+
+  const activeDependencyLink = findElement(main, (element) =>
+    element.tagName === "A" && element.href === "/tasks/" + encodeURIComponent(` + strconv.Quote(activeDependency.ID) + `));
+  if (!activeDependencyLink) throw new Error("active prerequisite was not linked");
+
+  const unavailable = findElement(main, (element) => element.dataset.relationshipId === ` + strconv.Quote(missingDependencyID) + `);
+  if (!unavailable || !findElement(unavailable, (element) => element.textContent === "Unavailable task")) {
+    throw new Error("missing prerequisite fallback did not render");
+  }
+
+  const deletedBlock = findElement(main, (element) => element.dataset.relationshipId === ` + strconv.Quote(deletedBlocked.ID) + `);
+  if (!deletedBlock || !deletedBlock.textContent.includes("Deleted") ||
+      findElement(deletedBlock, (element) => element.tagName === "BUTTON" && element.textContent === "Remove")) {
+    throw new Error("deleted blocked task was not rendered read-only");
+  }
+
+  const title = findElement(main, (element) => element.id === "task-title");
+  if (!title) throw new Error("detail title field did not render");
+  title.value = "Unsaved title";
+  taskResponse = ` + string(refreshedDocument) + `;
+  await intervalCallback();
+  if (title.value !== "Unsaved title") throw new Error("relationship refresh reconstructed the task form");
+  if (findElement(main, (element) => element.dataset.relationshipId === ` + strconv.Quote(deletedDependency.ID) + `) ||
+      findElement(main, (element) => element.dataset.relationshipId === ` + strconv.Quote(missingDependencyID) + `)) {
+    throw new Error("relationship rows did not follow refreshed canonical state");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute rendered dependency relationships: %v\n%s", err, output)
+	}
+}
+
 func TestHandlerInterceptsOrdinarySameOriginNavigation(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -877,7 +958,7 @@ class TestElement {
     this.classList = { add() {}, remove() {}, toggle() {} };
     this.eventListeners = {};
     this._value = "";
-    this.textContent = "";
+    this._textContent = "";
     this.selected = false;
     this.disabled = false;
     this.required = false;
@@ -912,7 +993,11 @@ class TestElement {
     this.parentElement = null;
   }
   setAttribute(name, value) { this.attributes[name] = String(value); }
+  removeAttribute(name) { delete this.attributes[name]; }
   hasAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attributes, name); }
+  focus() { globalThis.activeElement = this; }
+  get id() { return this.attributes.id || this._id || ""; }
+  set id(value) { this._id = String(value); this.attributes.id = String(value); }
   addEventListener(name, listener) { this.eventListeners[name] = listener; }
   closest(selector) {
     for (let element = this; element; element = element.parentElement) {
@@ -938,6 +1023,8 @@ class TestElement {
     const visit = (element) => {
       for (const child of element.children || []) {
         if (selector === ".task-card" && child.className === "task-card") matches.push(child);
+        if (selector === "[role=\"option\"]" && child.attributes.role === "option") matches.push(child);
+        if (selector === "[data-relationship-row]" && Object.hasOwn(child.dataset, "relationshipRow")) matches.push(child);
         visit(child);
       }
     };
@@ -946,6 +1033,8 @@ class TestElement {
   }
   getBoundingClientRect() { return this.rect || { top: 0, bottom: 0 }; }
   get firstElementChild() { return this.children[0] || null; }
+  get textContent() { return this._textContent + this.children.map((child) => child.textContent).join(""); }
+  set textContent(value) { this._textContent = String(value); }
   get value() {
     if (this.tagName === "SELECT") {
       const selected = this.children.find((option) => option.selected);
@@ -988,10 +1077,11 @@ globalThis.document = {
 };
 const initialURL = new URL("http://127.0.0.1` + path + `");
 let intervalDelay = null;
+let intervalCallback = null;
 globalThis.window = {
   location: { href: initialURL.href, origin: initialURL.origin },
   addEventListener() {},
-  setInterval(_callback, delay) { intervalDelay = delay; }
+  setInterval(callback, delay) { intervalCallback = callback; intervalDelay = delay; }
 };
 const historyPaths = [];
 globalThis.history = {
@@ -1003,6 +1093,7 @@ globalThis.history = {
 globalThis.requestAnimationFrame = (callback) => callback();
 const taskDocument = ` + taskDocument + `;
 let taskResponse = taskDocument;
+let deletedTaskResponse = taskDocument;
 const fetchCalls = [];
 globalThis.fetch = async (url, options = {}) => {
   fetchCalls.push({ url, options });
@@ -1016,7 +1107,7 @@ globalThis.fetch = async (url, options = {}) => {
       })
     };
   }
-  return { ok: true, json: async () => taskResponse };
+  return { ok: true, json: async () => url === "/api/tasks?deleted=true" ? deletedTaskResponse : taskResponse };
 };
 function findElement(root, predicate) {
   if (predicate(root)) return root;

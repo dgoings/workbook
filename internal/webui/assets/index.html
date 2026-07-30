@@ -92,6 +92,18 @@
     .deleted-card { border: 1px solid #b9c6d8; border-radius: 4px; background: #fff; padding: .8rem; }
     .deleted-card__meta { display: flex; align-items: center; justify-content: space-between; gap: .5rem; color: #526075; font-size: .7rem; }
     .deleted-card__description { display: -webkit-box; overflow: hidden; margin: .5rem 0 .75rem; color: #56647a; font-size: .82rem; line-height: 1.36; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+    .task-relationships { display: grid; gap: 1rem; padding: 0 1.15rem 1.15rem; }
+    .relationship-group { border-top: 1px solid #d5deea; padding-top: 1rem; }
+    .relationship-group h3 { margin: 0; font-size: .88rem; }
+    .relationship-list { display: grid; gap: .55rem; margin: .75rem 0; }
+    .relationship-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .35rem .75rem; border: 1px solid #d5deea; border-radius: 4px; padding: .7rem; }
+    .relationship-row h4, .relationship-row p { margin: 0; }
+    .relationship-row h4 { font-size: .84rem; overflow-wrap: anywhere; }
+    .relationship-row h4 a { color: #172033; text-decoration-color: #a9b7ca; text-underline-offset: .16em; }
+    .relationship-row h4 a:hover { color: #2457d6; text-decoration-color: currentcolor; }
+    .relationship-row__metadata, .relationship-row__note { color: #56647a; font-size: .75rem; overflow-wrap: anywhere; }
+    .relationship-remove { align-self: center; grid-column: 2; grid-row: 1 / span 2; }
+    .relationship-state { color: #9c2f25; font-size: .75rem; }
     @media (prefers-reduced-motion: no-preference) { .task-list { transition: opacity 120ms ease; } }
     @media (max-width: 900px) { .app-header { align-items: start; flex-direction: column; } .updated { text-align: left; } .board { grid-template-columns: repeat(6, minmax(min(18rem, calc(100vw - 2.5rem)), 1fr)); } .column { min-width: min(18rem, calc(100vw - 2.5rem)); } }
     @media (max-width: 560px) { .task-form { grid-template-columns: 1fr; } .field--wide { grid-column: auto; } }
@@ -141,6 +153,9 @@
       let latestTasks = [];
       let tasksLoaded = false;
       let taskLoadFailed = false;
+      let latestDeletedTasks = [];
+      let deletedTasksLoaded = false;
+      let activeDependencyController = null;
 
       function text(element, value) { element.textContent = value || ""; return element; }
       function card(task, view) {
@@ -198,6 +213,116 @@
           const option = document.createElement("option"); option.value = optionValue; text(option, label); option.selected = optionValue === value; control.append(option);
         });
         return control;
+      }
+      async function refreshDeletedTasks() {
+        const response = await fetch("/api/tasks?deleted=true", { cache: "no-store" });
+        const document = await response.json();
+        if (!response.ok || document.format !== "workbook.tasks" || document.version !== 1 || !Array.isArray(document.tasks)) {
+          throw new Error(document.error && document.error.message || "Deleted task data could not be loaded.");
+        }
+        latestDeletedTasks = document.tasks;
+        deletedTasksLoaded = true;
+      }
+      function dependencyState(taskID) {
+        const current = latestTasks.find((task) => task.id === taskID);
+        if (!current) return null;
+        const known = new Map([...latestTasks, ...latestDeletedTasks].map((task) => [task.id, task]));
+        const dependsOn = (current.dependencies || []).map((id) => ({ id, task: known.get(id) || null, removable: true }));
+        const blocks = [...latestTasks, ...latestDeletedTasks]
+          .filter((task) => task.id !== taskID && (task.dependencies || []).includes(taskID))
+          .map((task) => ({ id: task.id, task, removable: !task.deleted }));
+        return { current, dependsOn, blocks };
+      }
+      function relationshipRow(relationship, onRemove) {
+        const row = document.createElement("article");
+        row.className = "relationship-row";
+        row.dataset.relationshipRow = "";
+        row.dataset.relationshipId = relationship.id;
+        const heading = document.createElement("h4");
+        if (relationship.task && !relationship.task.deleted) {
+          const link = document.createElement("a");
+          link.href = "/tasks/" + encodeURIComponent(relationship.id);
+          text(link, relationship.task.title);
+          heading.append(link);
+        } else {
+          text(heading, relationship.task ? relationship.task.title : "Unavailable task");
+        }
+        const metadata = document.createElement("p");
+        metadata.className = "relationship-row__metadata";
+        if (relationship.task) text(metadata, relationship.task.status + " · " + relationship.task.priority + " · " + relationship.id);
+        else text(metadata, relationship.id);
+        row.append(heading, metadata);
+        if (relationship.task && relationship.task.deleted) {
+          const deleted = document.createElement("strong");
+          deleted.className = "relationship-state";
+          text(deleted, "Deleted");
+          row.append(deleted);
+        }
+        if (relationship.removable) {
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.className = "relationship-remove";
+          text(remove, "Remove");
+          remove.addEventListener("click", () => onRemove(relationship));
+          row.append(remove);
+        } else {
+          const explanation = document.createElement("p");
+          explanation.className = "relationship-row__note";
+          text(explanation, "Read-only because deleted tasks cannot be changed.");
+          row.append(explanation);
+        }
+        return row;
+      }
+      function dependencyController(taskID) {
+        const region = document.createElement("section");
+        region.className = "task-relationships";
+        region.setAttribute("aria-label", "Task relationships");
+        const status = document.createElement("p");
+        status.className = "form-status";
+        status.setAttribute("role", "status");
+        status.setAttribute("aria-live", "polite");
+        const groups = new Map();
+        [
+          ["dependsOn", "Depends On", "No prerequisites."],
+          ["blocks", "Blocks", "No tasks are blocked by this task."]
+        ].forEach(([name, headingText, emptyText]) => {
+          const group = document.createElement("section");
+          group.className = "relationship-group";
+          const heading = document.createElement("h3"); text(heading, headingText);
+          const list = document.createElement("div"); list.className = "relationship-list";
+          group.append(heading, list);
+          region.append(group);
+          groups.set(name, { group, list, emptyText });
+        });
+        const combobox = document.createElement("div");
+        combobox.className = "relationship-combobox";
+        combobox.hidden = true;
+        region.append(status, combobox);
+        const controller = {
+          region, status, groups, combobox,
+          update() {
+            const state = dependencyState(taskID);
+            if (!state) return;
+            [["dependsOn", state.dependsOn], ["blocks", state.blocks]].forEach(([name, relationships]) => {
+              const group = groups.get(name);
+              if (relationships.length === 0) {
+                const empty = document.createElement("p");
+                empty.className = "relationship-row__note";
+                text(empty, group.emptyText);
+                group.list.replaceChildren(empty);
+                return;
+              }
+              group.list.replaceChildren(...relationships.map((relationship) => relationshipRow(relationship, () => {
+                text(status, "Relationship changes are not available yet.");
+              })));
+            });
+          }
+        };
+        controller.update();
+        refreshDeletedTasks().then(() => controller.update()).catch((error) => {
+          text(status, error instanceof Error ? error.message : "Deleted task data could not be loaded.");
+        });
+        return controller;
       }
       function taskForm(mode, task) {
         const isNew = mode === "new";
@@ -257,6 +382,10 @@
           }
         });
         section.append(header, form);
+        if (!isNew) {
+          activeDependencyController = dependencyController(task.id);
+          section.append(activeDependencyController.region);
+        }
         return section;
       }
       async function mutateTask(method, path, values) {
@@ -309,6 +438,7 @@
 	  }
       function renderRoute() {
         const current = route();
+        if (current.view !== "detail") activeDependencyController = null;
         if (current.view === "board") {
           document.title = "Workbook board";
           if (main.firstElementChild !== boardView) main.replaceChildren(boardView);
@@ -425,12 +555,15 @@
           taskLoadFailed = false;
           render(document.tasks, presentation); stale.dataset.visible = "false"; text(updated, "Updated " + new Date().toLocaleTimeString());
           if (!wasLoaded) renderRoute();
+          else if (activeDependencyController) activeDependencyController.update();
+          return true;
         } catch (_) {
           text(stale, "Task refresh failed. Showing the last successful board."); stale.dataset.visible = "true";
           if (!tasksLoaded) {
             taskLoadFailed = true;
             renderRoute();
           }
+          return false;
         }
       }
       window.addEventListener("popstate", renderRoute);
