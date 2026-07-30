@@ -1,6 +1,6 @@
 {{ define "task" }}
 <article class="task-card" tabindex="0" data-task-id="{{ .Task.ID }}" data-priority="{{ .Task.Priority }}" data-id-prefix="{{ .IDPrefix }}" draggable="true" aria-label="Move task {{ .Task.Title }} from {{ .Task.Status }}">
-  <div class="task-card__meta"><code>{{ .IDPrefix }}</code><span class="priority priority--{{ .Task.Priority }}">{{ .Task.Priority }}</span></div>
+  <div class="task-card__meta"><span class="task-id-copy-group"><button type="button" class="task-id-copy" data-copy-task-id="{{ .Task.ID }}" aria-label="Copy full task ID {{ .Task.ID }}"><code>{{ .IDPrefix }}</code></button><span class="copy-status" data-copy-status role="status" aria-live="polite" aria-atomic="true"></span></span><span class="priority priority--{{ .Task.Priority }}">{{ .Task.Priority }}</span></div>
   <h3><a href="/tasks/{{ .Task.ID }}">{{ .Task.Title }}</a></h3>
   {{ if .Task.Description }}<p>{{ .Task.Description }}</p>{{ end }}
   {{ if .Task.Labels }}<div class="labels">{{ range .Task.Labels }}<span class="label">{{ . }}</span>{{ end }}</div>{{ end }}
@@ -45,6 +45,13 @@
     .task-card.is-dragging { opacity: .5; }
     .task-card__meta { display: flex; align-items: center; justify-content: space-between; gap: .5rem; color: #526075; font-size: .7rem; }
     .task-card code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .task-id-copy-group { position: relative; display: inline-flex; align-items: baseline; min-width: 0; }
+    .task-id-copy { max-width: 100%; border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; padding: 0; }
+    .task-id-copy:hover { color: #2457d6; }
+    .task-id-copy:focus-visible { outline: 3px solid #2457d6; outline-offset: 2px; }
+    .copy-status { position: absolute; left: 100%; top: 50%; margin-left: .35rem; color: #173f9e; font-size: .65rem; font-weight: 800; line-height: 1; pointer-events: none; transform: translateY(-50%); white-space: nowrap; }
+    .copy-status:empty { display: none; }
+    .copy-status[data-kind="error"] { color: #8f1d1d; }
     .priority { flex: 0 0 auto; font-size: .64rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
     .priority--high { color: #b42318; } .priority--medium { color: #b45309; } .priority--low { color: #2457d6; }
     .task-card h3 { margin: .55rem 0 .3rem; font-size: .9rem; line-height: 1.24; overflow-wrap: anywhere; }
@@ -59,6 +66,9 @@
     .task-route__header { padding: 1rem 1.15rem; border-top: 3px solid #2457d6; border-bottom: 1px solid #d5deea; background: #f8faff; }
     .task-route__header h2 { margin: .15rem 0 0; font-size: clamp(1.15rem, 3vw, 1.55rem); letter-spacing: -.025em; }
     .task-route__header code { display: block; margin-top: .35rem; color: #526b9b; font-size: .72rem; overflow-wrap: anywhere; }
+    .task-route__header .task-id-copy-group { margin-top: .35rem; }
+    .task-route__header .task-id-copy code { display: inline; margin-top: 0; }
+    .task-route__header .copy-status { top: calc(50% + .1rem); }
     .task-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; padding: 1.15rem; }
     .field { display: grid; gap: .35rem; }
     .field--wide { grid-column: 1 / -1; }
@@ -130,17 +140,89 @@
       const stale = boardView.querySelector("[data-stale]");
       const updated = document.querySelector("[data-updated]");
       let activeDrag = null;
+      const copyFeedback = new Map();
+      const copyFeedbackTimers = new Map();
+      let copySuppressionTimer = null;
+      let copySuppressedTaskID = null;
       let latestTasks = [];
       let tasksLoaded = false;
       let taskLoadFailed = false;
 
       function text(element, value) { element.textContent = value || ""; return element; }
+      function taskIDCopyControl(taskID, visibleID) {
+        const group = document.createElement("span");
+        group.className = "task-id-copy-group";
+        const control = document.createElement("button");
+        control.type = "button";
+        control.className = "task-id-copy";
+        control.dataset.copyTaskId = taskID;
+        control.setAttribute("aria-label", "Copy full task ID " + taskID);
+        const id = document.createElement("code");
+        text(id, visibleID);
+        control.append(id);
+        const status = document.createElement("span");
+        status.className = "copy-status";
+        status.dataset.copyStatus = "";
+        status.setAttribute("role", "status");
+        status.setAttribute("aria-live", "polite");
+        status.setAttribute("aria-atomic", "true");
+        group.append(control, status);
+        const activeFeedback = copyFeedback.get(taskID);
+        if (activeFeedback) {
+          activeFeedback.statuses.add(status);
+          renderCopyStatus(status, activeFeedback);
+        }
+        return group;
+      }
+      function renderCopyStatus(status, feedback) {
+        status.dataset.kind = feedback.kind;
+        status.setAttribute("aria-label", feedback.announcement);
+        text(status, feedback.visibleMessage);
+      }
+      function clearCopyStatus(status) {
+        text(status, "");
+        status.setAttribute("aria-label", "");
+        delete status.dataset.kind;
+      }
+      function showCopyStatus(taskID, status, visibleMessage, announcement, kind) {
+        const activeTimer = copyFeedbackTimers.get(taskID);
+        if (activeTimer !== undefined) window.clearTimeout(activeTimer);
+        const previousFeedback = copyFeedback.get(taskID);
+        const statuses = previousFeedback ? previousFeedback.statuses : new Set();
+        statuses.add(status);
+        const feedback = { visibleMessage, announcement, kind, statuses };
+        copyFeedback.set(taskID, feedback);
+        statuses.forEach((candidate) => renderCopyStatus(candidate, feedback));
+        const timer = window.setTimeout(() => {
+          if (copyFeedback.get(taskID) !== feedback) return;
+          statuses.forEach(clearCopyStatus);
+          copyFeedback.delete(taskID);
+          copyFeedbackTimers.delete(taskID);
+        }, 4000);
+        copyFeedbackTimers.set(taskID, timer);
+      }
+      async function copyTaskID(taskID, status) {
+        try {
+          if (!navigator.clipboard || typeof navigator.clipboard.writeText !== "function") {
+            throw new Error("clipboard unavailable");
+          }
+          await navigator.clipboard.writeText(taskID);
+          showCopyStatus(taskID, status, "Copied", "Copied task ID " + taskID + ".", "success");
+        } catch (_) {
+          showCopyStatus(
+            taskID,
+            status,
+            "Copy failed",
+            "Could not copy task ID " + taskID + ".",
+            "error"
+          );
+        }
+      }
       function card(task, idPrefix) {
         const article = document.createElement("article"); article.className = "task-card"; article.tabIndex = 0; article.dataset.taskId = task.id; article.dataset.priority = task.priority; article.dataset.idPrefix = idPrefix; article.draggable = true; article.setAttribute("aria-label", "Move task " + task.title + " from " + task.status);
         const meta = document.createElement("div"); meta.className = "task-card__meta";
-        const id = document.createElement("code"); text(id, idPrefix);
         const priority = document.createElement("span"); priority.className = "priority priority--" + task.priority; text(priority, task.priority);
-        meta.append(id, priority); article.append(meta);
+        meta.append(taskIDCopyControl(task.id, idPrefix), priority); article.append(meta);
         const title = document.createElement("h3");
         const link = document.createElement("a"); link.href = "/tasks/" + encodeURIComponent(task.id); text(link, task.title);
         title.append(link); article.append(title);
@@ -184,7 +266,9 @@
         const eyebrow = document.createElement("p"); eyebrow.className = "eyebrow"; text(eyebrow, isNew ? "New task" : "Task detail");
         const heading = document.createElement("h2"); heading.id = "task-form-title"; text(heading, isNew ? "Add work to the board" : task.title);
         header.append(eyebrow, heading);
-        if (!isNew) { const taskID = document.createElement("code"); text(taskID, task.id); header.append(taskID); }
+        if (!isNew) {
+          header.append(taskIDCopyControl(task.id, task.id));
+        }
 
         const form = document.createElement("form"); form.className = "task-form";
         const title = document.createElement("input"); title.id = "task-title"; title.name = "title"; title.required = true; title.value = task.title || "";
@@ -412,8 +496,23 @@
         }
       }
       window.addEventListener("popstate", renderRoute);
-      document.addEventListener("click", (event) => {
+      document.addEventListener("click", async (event) => {
         if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        const copyControl = event.target && event.target.closest && event.target.closest("[data-copy-task-id]");
+        if (copyControl) {
+          event.preventDefault();
+          if (copyControl.dataset.copyTaskId === copySuppressedTaskID) {
+            copySuppressedTaskID = null;
+            if (copySuppressionTimer !== null) window.clearTimeout(copySuppressionTimer);
+            copySuppressionTimer = null;
+            return;
+          }
+          const copyGroup = copyControl.closest(".task-id-copy-group");
+          const copyStatus = copyGroup && copyGroup.querySelector("[data-copy-status]");
+          if (!copyStatus) return;
+          await copyTaskID(copyControl.dataset.copyTaskId, copyStatus);
+          return;
+        }
         const anchor = event.target && event.target.closest && event.target.closest("a[href]");
         if (!anchor || (anchor.target && anchor.target !== "_self") || anchor.hasAttribute("download")) return;
         const destination = new URL(anchor.href, window.location.href);
@@ -426,6 +525,7 @@
         const source = item && item.closest("[data-status]");
         if (!item || !source || !source.dataset.dropStatus) return;
         activeDrag = { taskId: item.dataset.taskId, priority: item.dataset.priority, sourceStatus: source.dataset.status };
+        copySuppressedTaskID = item.dataset.taskId;
         event.dataTransfer.effectAllowed = "move";
         event.dataTransfer.setData("text/plain", activeDrag.taskId);
         item.classList.add("is-dragging");
@@ -435,6 +535,14 @@
         if (item) item.classList.remove("is-dragging");
         activeDrag = null;
         clearPlacement();
+        const suppressedTaskID = copySuppressedTaskID;
+        if (copySuppressedTaskID !== null) {
+          if (copySuppressionTimer !== null) window.clearTimeout(copySuppressionTimer);
+          copySuppressionTimer = window.setTimeout(() => {
+            if (copySuppressedTaskID === suppressedTaskID) copySuppressedTaskID = null;
+            copySuppressionTimer = null;
+          }, 250);
+        }
       });
       document.addEventListener("dragover", (event) => {
         const target = dropTarget(event);
