@@ -478,14 +478,11 @@ func TestHandlerClientRendersDependencyRelationships(t *testing.T) {
 	activeBlocked := clientPlacementTask("WB-01J00000000000000000000033", "Active blocked task", core.StatusBlocked, core.PriorityLow)
 	deletedDependency := clientPlacementTask("WB-01J00000000000000000000034", "Deleted prerequisite", core.StatusReady, core.PriorityMedium)
 	deletedDependency.Deleted = true
-	deletedBlocked := clientPlacementTask("WB-01J00000000000000000000035", "Deleted blocked task", core.StatusBlocked, core.PriorityLow)
-	deletedBlocked.Deleted = true
 	missingDependencyID := "WB-01J00000000000000000000036"
 	current.Dependencies = []string{activeDependency.ID, deletedDependency.ID, missingDependencyID}
 	activeBlocked.Dependencies = []string{current.ID}
-	deletedBlocked.Dependencies = []string{current.ID}
 	activeTasks := []core.Task{current, activeDependency, activeBlocked}
-	deletedTasks := []core.Task{deletedDependency, deletedBlocked}
+	deletedTasks := []core.Task{deletedDependency}
 	handler := NewHandler(func(context.Context) ([]core.Task, error) { return activeTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
 
 	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
@@ -501,9 +498,15 @@ func TestHandlerClientRendersDependencyRelationships(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	deletedBlockedAfterPoll := activeBlocked
+	deletedBlockedAfterPoll.Deleted = true
+	deletedAfterPollDocument, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: []core.Task{deletedDependency, deletedBlockedAfterPoll}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	refreshedCurrent := current
 	refreshedCurrent.Dependencies = []string{activeDependency.ID}
-	refreshedDocument, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: []core.Task{refreshedCurrent, activeDependency, activeBlocked}, Presentation: presentationForTasks([]core.Task{refreshedCurrent, activeDependency, activeBlocked})})
+	refreshedDocument, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: []core.Task{refreshedCurrent, activeDependency}, Presentation: presentationForTasks([]core.Task{refreshedCurrent, activeDependency})})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -525,21 +528,31 @@ setTimeout(async () => {
     throw new Error("missing prerequisite fallback did not render");
   }
 
-  const deletedBlock = findElement(main, (element) => element.dataset.relationshipId === ` + strconv.Quote(deletedBlocked.ID) + `);
-  if (!deletedBlock || !deletedBlock.textContent.includes("Deleted") ||
-      findElement(deletedBlock, (element) => element.tagName === "BUTTON" && element.textContent === "Remove")) {
-    throw new Error("deleted blocked task was not rendered read-only");
+  const deletedDependency = findElement(main, (element) => element.dataset.relationshipId === ` + strconv.Quote(deletedDependency.ID) + `);
+  if (!deletedDependency || !deletedDependency.textContent.includes("Deleted") ||
+      !findElement(deletedDependency, (element) => element.tagName === "BUTTON" && element.textContent === "Remove")) {
+    throw new Error("tombstoned prerequisite was not rendered removable");
+  }
+  const activeBlock = findElement(main, (element) => element.dataset.relationshipId === ` + strconv.Quote(activeBlocked.ID) + `);
+  if (!activeBlock || !findElement(activeBlock, (element) => element.tagName === "BUTTON" && element.textContent === "Remove")) {
+    throw new Error("active blocked task was not rendered removable");
   }
 
   const title = findElement(main, (element) => element.id === "task-title");
   if (!title) throw new Error("detail title field did not render");
   title.value = "Unsaved title";
   taskResponse = ` + string(refreshedDocument) + `;
+  deletedTaskResponse = ` + string(deletedAfterPollDocument) + `;
   await intervalCallback();
   if (title.value !== "Unsaved title") throw new Error("relationship refresh reconstructed the task form");
   if (findElement(main, (element) => element.dataset.relationshipId === ` + strconv.Quote(deletedDependency.ID) + `) ||
       findElement(main, (element) => element.dataset.relationshipId === ` + strconv.Quote(missingDependencyID) + `)) {
     throw new Error("relationship rows did not follow refreshed canonical state");
+  }
+  const deletedBlock = findElement(main, (element) => element.dataset.relationshipId === ` + strconv.Quote(activeBlocked.ID) + `);
+  if (!deletedBlock || !deletedBlock.textContent.includes("Deleted") ||
+      findElement(deletedBlock, (element) => element.tagName === "BUTTON" && element.textContent === "Remove")) {
+    throw new Error("poll did not keep a later tombstoned blocked task read-only");
   }
 }, 0);
 `

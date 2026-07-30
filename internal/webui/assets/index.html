@@ -154,7 +154,6 @@
       let tasksLoaded = false;
       let taskLoadFailed = false;
       let latestDeletedTasks = [];
-      let deletedTasksLoaded = false;
       let activeDependencyController = null;
 
       function text(element, value) { element.textContent = value || ""; return element; }
@@ -221,7 +220,16 @@
           throw new Error(document.error && document.error.message || "Deleted task data could not be loaded.");
         }
         latestDeletedTasks = document.tasks;
-        deletedTasksLoaded = true;
+      }
+      async function refreshRelationshipContext(controller) {
+        try {
+          await refreshDeletedTasks();
+          if (activeDependencyController === controller) controller.update();
+        } catch (error) {
+          if (activeDependencyController === controller) {
+            text(controller.status, error instanceof Error ? error.message : "Deleted task data could not be loaded.");
+          }
+        }
       }
       function dependencyState(taskID) {
         const current = latestTasks.find((task) => task.id === taskID);
@@ -319,9 +327,7 @@
           }
         };
         controller.update();
-        refreshDeletedTasks().then(() => controller.update()).catch((error) => {
-          text(status, error instanceof Error ? error.message : "Deleted task data could not be loaded.");
-        });
+        refreshRelationshipContext(controller);
         return controller;
       }
       function taskForm(mode, task) {
@@ -555,7 +561,7 @@
           taskLoadFailed = false;
           render(document.tasks, presentation); stale.dataset.visible = "false"; text(updated, "Updated " + new Date().toLocaleTimeString());
           if (!wasLoaded) renderRoute();
-          else if (activeDependencyController) activeDependencyController.update();
+          else if (activeDependencyController) await refreshRelationshipContext(activeDependencyController);
           return true;
         } catch (_) {
           text(stale, "Task refresh failed. Showing the last successful board."); stale.dataset.visible = "true";
