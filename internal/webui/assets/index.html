@@ -646,6 +646,9 @@
         }
         return document;
       }
+      function ownsDependencyController(controller) {
+        return activeDependencyController === controller;
+      }
       async function mutateRelationship(method, dependentID, prerequisiteID, controller, group) {
         const path = "/api/tasks/" + encodeURIComponent(dependentID) +
           "/dependencies/" + encodeURIComponent(prerequisiteID);
@@ -660,6 +663,7 @@
               warnings.map((warning) => warning.message).join(" "));
           }
           const refreshed = await currentRefreshResult(refresh());
+          if (!ownsDependencyController(controller)) return;
           if (refreshed.status === "superseded") return;
           if (refreshed.status === "failed") {
             messages.push("The dependency was saved durably, but the latest task state could not be refreshed.");
@@ -674,6 +678,7 @@
           group.setMessage(messages.join(" "));
         } catch (error) {
           await refresh();
+          if (!ownsDependencyController(controller)) return;
           group.setMessage(error instanceof Error ? error.message : "Dependency update failed.");
         } finally {
           group.setBusy(false);

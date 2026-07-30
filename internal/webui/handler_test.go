@@ -1246,6 +1246,228 @@ setTimeout(async () => {
 	}
 }
 
+func TestHandlerClientDependencyMutationDoesNotWriteDetachedGroupAfterNewerPoll(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	current := clientPlacementTask("WB-01J0000000000000000000005C", "Current task", core.StatusReady, core.PriorityMedium)
+	candidate := clientPlacementTask("WB-01J0000000000000000000005D", "Candidate task", core.StatusDone, core.PriorityHigh)
+	initialTasks := []core.Task{current, candidate}
+	updatedCurrent := current
+	updatedCurrent.Dependencies = []string{candidate.ID}
+	updatedTasks := []core.Task{updatedCurrent, candidate}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<id> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	documentJSON := func(tasks []core.Task) string {
+		t.Helper()
+		document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(document)
+	}
+	emptyDeleted, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: []core.Task{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/"+current.ID, documentJSON(initialTasks)) + script + `
+deletedTaskResponse = ` + string(emptyDeleted) + `;
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const dependsHeading = findElement(main, (element) => element.textContent === "Depends On");
+  const dependsGroup = dependsHeading.parentElement;
+  const relationshipRegion = dependsGroup.parentElement;
+  const controllerStatus = relationshipRegion.children.find((element) => element.className === "form-status");
+  const groupMessage = findElement(dependsGroup, (element) => element.className === "relationship-message");
+  const input = findElement(dependsGroup, (element) => element.attributes.role === "combobox");
+  input.eventListeners.focus();
+  const option = findElement(dependsGroup, (element) =>
+    element.attributes.role === "option" && element.dataset.candidateId === ` + strconv.Quote(candidate.ID) + `);
+  option.eventListeners.click();
+  const add = findElement(dependsGroup, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+
+  let resolveDeletedContext;
+  let activeGets = 0;
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if ((options.method || "GET") !== "GET") {
+      return {
+        ok: true,
+        json: async () => ({
+          format: "workbook.task-mutation",
+          version: 1,
+          task: ` + documentJSON(updatedTasks) + `.tasks[0],
+          warnings: [{ code: "projection-update-failed", message: "Detached warning must not render." }]
+        })
+      };
+    }
+    if (url === "/api/tasks?deleted=true") {
+      return {
+        ok: true,
+        json: async () => new Promise((resolve) => { resolveDeletedContext = resolve; })
+      };
+    }
+    activeGets += 1;
+    return { ok: true, json: async () => (` + documentJSON(updatedTasks) + `) };
+  };
+  fetchCalls.splice(0);
+
+  const mutation = add.eventListeners.click();
+  while (!resolveDeletedContext) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  const selectedValue = input.value;
+  const back = findElement(main, (element) => element.tagName === "A" && element.textContent === "Back");
+  documentEventListeners.click({
+    target: back,
+    button: 0,
+    defaultPrevented: false,
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+    preventDefault() {}
+  });
+  controllerStatus.textContent = "detached controller status";
+  groupMessage.textContent = "detached group status";
+
+  await intervalCallback();
+  if (activeGets !== 2) throw new Error("newer polling refresh did not apply");
+  resolveDeletedContext(` + string(emptyDeleted) + `);
+  await mutation;
+
+  if (input.disabled) throw new Error("detached successful mutation did not release busy state");
+  if (input.value !== selectedValue) throw new Error("detached successful mutation cleared the old combobox");
+  if (groupMessage.textContent !== "detached group status") {
+    throw new Error("newer polling result wrote a warning into the detached group");
+  }
+  if (controllerStatus.textContent !== "detached controller status") {
+    throw new Error("newer polling result wrote status into the detached controller");
+  }
+  if (main.firstElementChild !== boardView) throw new Error("newer polling result replaced the current route");
+
+  const newTask = new TestElement("a");
+  newTask.href = "/tasks/new";
+  boardView.append(newTask);
+  documentEventListeners.click({
+    target: newTask,
+    button: 0,
+    defaultPrevented: false,
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+    preventDefault() {}
+  });
+  if (!findElement(main, (element) => element.id === "task-title")) {
+    throw new Error("new route was not responsive after detached mutation completion");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute detached dependency mutation with newer poll: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerClientDependencyMutationErrorDoesNotWriteDetachedGroup(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	current := clientPlacementTask("WB-01J0000000000000000000005E", "Current task", core.StatusReady, core.PriorityMedium)
+	candidate := clientPlacementTask("WB-01J0000000000000000000005F", "Candidate task", core.StatusDone, core.PriorityHigh)
+	tasks := []core.Task{current, candidate}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<id> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptyDeleted, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: []core.Task{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/"+current.ID, string(document)) + script + `
+deletedTaskResponse = ` + string(emptyDeleted) + `;
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const dependsHeading = findElement(main, (element) => element.textContent === "Depends On");
+  const dependsGroup = dependsHeading.parentElement;
+  const groupMessage = findElement(dependsGroup, (element) => element.className === "relationship-message");
+  const input = findElement(dependsGroup, (element) => element.attributes.role === "combobox");
+  input.eventListeners.focus();
+  const option = findElement(dependsGroup, (element) =>
+    element.attributes.role === "option" && element.dataset.candidateId === ` + strconv.Quote(candidate.ID) + `);
+  option.eventListeners.click();
+  const add = findElement(dependsGroup, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+
+  let resolveMutationError;
+  let activeGets = 0;
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if ((options.method || "GET") !== "GET") {
+      return {
+        ok: false,
+        json: async () => new Promise((resolve) => { resolveMutationError = resolve; })
+      };
+    }
+    activeGets += 1;
+    return { ok: true, json: async () => taskDocument };
+  };
+  fetchCalls.splice(0);
+
+  const mutation = add.eventListeners.click();
+  while (!resolveMutationError) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  const back = findElement(main, (element) => element.tagName === "A" && element.textContent === "Back");
+  documentEventListeners.click({
+    target: back,
+    button: 0,
+    defaultPrevented: false,
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+    preventDefault() {}
+  });
+  groupMessage.textContent = "detached group status";
+
+  resolveMutationError({
+    format: "workbook.error",
+    version: 1,
+    error: { category: "validation", message: "dependency would create a cycle" }
+  });
+  await mutation;
+
+  if (activeGets !== 1) throw new Error("mutation-error recovery did not refresh global task state");
+  if (input.disabled) throw new Error("detached failed mutation did not release busy state");
+  if (groupMessage.textContent !== "detached group status") {
+    throw new Error("mutation error wrote into the detached relationship group");
+  }
+  if (main.firstElementChild !== boardView) throw new Error("mutation-error recovery replaced the current route");
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute detached dependency mutation error: %v\n%s", err, output)
+	}
+}
+
 func TestHandlerClientDependencyMutationReportsDeletedContextFailure(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
