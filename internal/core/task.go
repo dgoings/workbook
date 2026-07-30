@@ -54,6 +54,21 @@ const (
 	PriorityHigh   Priority = "high"
 )
 
+type PriorityDefinition struct {
+	Priority Priority
+	Label    string
+}
+
+var priorities = [...]PriorityDefinition{
+	{Priority: PriorityLow, Label: "Low"},
+	{Priority: PriorityMedium, Label: "Medium"},
+	{Priority: PriorityHigh, Label: "High"},
+}
+
+func Priorities() []PriorityDefinition {
+	return append([]PriorityDefinition(nil), priorities[:]...)
+}
+
 type TaskData struct {
 	Title        string    `json:"title"`
 	Description  string    `json:"description"`
@@ -141,12 +156,12 @@ func isValidStatus(status Status) bool {
 }
 
 func isValidPriority(priority Priority) bool {
-	switch priority {
-	case PriorityLow, PriorityMedium, PriorityHigh:
-		return true
-	default:
-		return false
+	for _, definition := range priorities {
+		if priority == definition.Priority {
+			return true
+		}
 	}
+	return false
 }
 
 func normalizeLabels(labels []string) ([]string, error) {
