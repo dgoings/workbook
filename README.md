@@ -315,6 +315,8 @@ PATCH /api/tasks/<id>/status  drag-and-drop status changes
 PATCH /api/tasks/<id>/position  atomically change status and board position
 DELETE /api/tasks/<id>        tombstone a task
 POST /api/tasks/<id>/restore  restore a tombstoned task
+PUT /api/tasks/<id>/dependencies/<dependency>     add a prerequisite
+DELETE /api/tasks/<id>/dependencies/<dependency>  remove a prerequisite
 GET /healthz                  versioned health JSON
 ```
 
@@ -334,6 +336,20 @@ task-ID prefix, priority, title, up to six lines of an optional description, and
 labels; each title links to its full-ID task-detail URL, where the complete
 description remains available. Every status column has a New Task link that
 preselects that column's canonical status.
+
+Cards with prerequisites show completed versus total dependency progress.
+Ready cards whose prerequisites are not all active and Done also say
+`Waiting on dependencies`. Task detail pages derive two views from the same
+directed edge: **Depends On** lists the current task's prerequisites, while
+**Blocks** lists tasks that depend on the current task. Each group searches
+eligible active tasks through an integrated combobox and uses the nested
+Git-durable mutation routes above.
+
+Missing prerequisite IDs remain visible and removable. Tombstoned
+prerequisites are also removable because the active dependent owns that edge;
+deleted blocked tasks remain read-only because tombstones cannot be changed.
+Dependency warnings and failures stay beside the initiating group, and
+dependency refreshes leave unsaved task-form fields mounted.
 
 The shared new-task and detail form creates or edits title, description, status,
 priority, and labels through the versioned APIs. Saving returns to the board and
