@@ -23,7 +23,8 @@
 - Preserve the stable form/controller ownership and refresh-generation guards.
 - Keep board dependency progress and Ready eligibility unchanged.
 - Add no runtime dependency, framework, daemon, or build step.
-- Follow strict TDD and capture the focused RED result before production changes in every task.
+- Follow strict TDD and capture the focused RED result before production
+  behavior changes. Do not add tests that assert human-facing README prose.
 
 ---
 
@@ -1147,45 +1148,15 @@ git commit -m "fix: refine responsive task sidebar"
 
 **Files:**
 - Modify: `README.md`
-- Modify: `internal/cli/run_test.go`
 - Modify: `docs/superpowers/plans/2026-07-30-task-detail-sidebar-layout.md`
 
 **Interfaces:**
 - Documents: shared sidebar layout, mobile stacking, New Task relationship staging, endpoint orientation, and partial success.
 - Preserves: implemented-command policy, local-first limitations, and existing dependency route documentation.
 
-- [ ] **Step 1: Add failing README contract assertions**
+- [ ] **Step 1: Update README behavior documentation**
 
-Extend `TestREADMEImplementedCommands` with:
-
-```go
-for _, required := range []string{
-    "wide main column and a compact Properties sidebar",
-    "New Task stages both Depends On and Blocks",
-    "relationship mutations run after the task receives its durable ID",
-    "successful relationships remain durable",
-    "failed relationships remain available to retry or remove",
-    "On narrow screens, the task editor, Properties, Relationships, and actions stack in that order",
-} {
-    if !strings.Contains(readme, required) {
-        t.Errorf("README task sidebar documentation is missing %q", required)
-    }
-}
-```
-
-- [ ] **Step 2: Run the README test and verify RED**
-
-Run:
-
-```sh
-GOCACHE=/private/tmp/workbook-gocache go test ./internal/cli -run TestREADME -count=1
-```
-
-Expected: FAIL on each new sidebar/draft behavior statement.
-
-- [ ] **Step 3: Update README behavior documentation**
-
-Add a concise web-board paragraph containing the exact asserted text:
+Add a concise web-board paragraph:
 
 ```markdown
 Task forms use a wide main column and a compact Properties sidebar for status,
@@ -1200,19 +1171,33 @@ stack in that order.
 Remove or revise the older statement that dependency editing during task
 creation is out of scope.
 
-- [ ] **Step 4: Run focused documentation and feature tests**
+- [ ] **Step 2: Review the rendered documentation**
+
+Read the edited web-board section as a user-facing sequence. Confirm it:
+
+- describes the shared desktop sidebar and narrow-screen stack;
+- explains both New Task relationship directions;
+- distinguishes durable task creation from the later relationship mutations;
+- explains partial success without implying cross-ref atomicity; and
+- contains no stale statement that New Task dependency editing is out of
+  scope.
+
+Do not add assertions for exact README text. The README is human-facing prose,
+and source-text assertions would be brittle change detectors rather than
+behavior tests.
+
+- [ ] **Step 3: Run focused feature regressions**
 
 Run:
 
 ```sh
-gofmt -w internal/cli/run_test.go internal/webui/handler_test.go
-GOCACHE=/private/tmp/workbook-gocache go test ./internal/cli -run TestREADME -count=1
+gofmt -w internal/webui/handler_test.go
 GOCACHE=/private/tmp/workbook-gocache go test ./internal/core ./internal/presentation ./internal/webui ./internal/cli -count=1
 ```
 
 Expected: PASS.
 
-- [ ] **Step 5: Merge any newer `origin/main` before final verification**
+- [ ] **Step 4: Merge any newer `origin/main` before final verification**
 
 Run:
 
@@ -1236,7 +1221,7 @@ git diff --check
 
 Expected: PASS with no unmerged files.
 
-- [ ] **Step 6: Run complete fresh verification**
+- [ ] **Step 5: Run complete fresh verification**
 
 Run:
 
@@ -1256,14 +1241,14 @@ Expected:
 - both diff checks are clean; and
 - the worktree contains only intended committed feature work.
 
-- [ ] **Step 7: Commit documentation**
+- [ ] **Step 6: Commit documentation**
 
 ```sh
-git add README.md internal/cli/run_test.go docs/superpowers/plans/2026-07-30-task-detail-sidebar-layout.md
+git add README.md docs/superpowers/plans/2026-07-30-task-detail-sidebar-layout.md
 git commit -m "docs: describe task sidebar relationships"
 ```
 
-- [ ] **Step 8: Request independent task and whole-branch review**
+- [ ] **Step 7: Request independent task and whole-branch review**
 
 Review `origin/main...HEAD` against:
 
@@ -1284,7 +1269,7 @@ Require explicit assessment of:
 Resolve every Critical or Important finding and rerun affected plus complete
 verification.
 
-- [ ] **Step 9: Align the Workbook task description and status**
+- [ ] **Step 8: Align the Workbook task description and status**
 
 Update `WB-01KYQMZMKMD9RWNH6PDTMZ97MC` so its acceptance criteria no longer say
 New Task and reverse views are out of scope. Record:
@@ -1301,7 +1286,7 @@ workbook update WB-01KYQMZMKMD9RWNH6PDTMZ97MC --status in-review --json
 git push origin refs/workbook/tasks/WB-01KYQMZMKMD9RWNH6PDTMZ97MC:refs/workbook/tasks/WB-01KYQMZMKMD9RWNH6PDTMZ97MC
 ```
 
-- [ ] **Step 10: Push the branch and verify PR #11**
+- [ ] **Step 9: Push the branch and verify PR #11**
 
 Run:
 
