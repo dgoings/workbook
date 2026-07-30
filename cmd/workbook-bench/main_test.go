@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -280,6 +281,111 @@ func TestRunBenchmarkRunsOnlySelectedWarmScenario(t *testing.T) {
 	}
 	if len(report.Scenarios) != 1 || report.Scenarios[0].Name != "api-update" {
 		t.Fatalf("warm-only scenarios = %#v, want api-update only", report.Scenarios)
+	}
+}
+
+// Mutation witness: routing sync-only repository selection through the full
+// repository suite runs three unselected projection measurements. Its setup
+// update appends an extra operation to the first canonical task before sync.
+func TestRunBenchmarkPackedSyncOnlyPreservesRequestedFixtureDepth(t *testing.T) {
+	realWorkbook := buildWorkbookBinary(t)
+	recordingRoot := t.TempDir()
+	recordingWorkbook := filepath.Join(recordingRoot, "workbook")
+	commandLog := filepath.Join(recordingRoot, "commands.log")
+	t.Setenv("WORKBOOK_REAL_BINARY", realWorkbook)
+	t.Setenv("WORKBOOK_DEPTH_LOG", commandLog)
+	writeExecutableScript(t, recordingWorkbook, `
+printf 'command	%s\n' "$1" >> "$WORKBOOK_DEPTH_LOG"
+if [ "$1" != "sync" ]; then
+	exec "$WORKBOOK_REAL_BINARY" "$@"
+fi
+
+record_depths() {
+	phase=$1
+	git for-each-ref --format='%(refname)' refs/workbook/tasks/ |
+	while IFS= read -r ref; do
+		depth=$(git rev-list --count "$ref") || exit $?
+		printf 'depth	%s	%s	%s\n' "$phase" "$ref" "$depth" >> "$WORKBOOK_DEPTH_LOG"
+	done
+}
+
+record_depths before
+"$WORKBOOK_REAL_BINARY" "$@"
+status=$?
+record_depths after
+exit "$status"
+`)
+
+	report, err := runBenchmark(context.Background(), options{
+		workbookBinary: recordingWorkbook,
+		tasks:          10,
+		tombstones:     0,
+		operations:     2,
+		samples:        1,
+		timeout:        20 * time.Second,
+		objectFormat:   "sha1",
+		phase:          "baseline",
+		scenarios: []string{
+			"sync-initial-local-bare",
+			"sync-unchanged-local-bare",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotScenarios := make([]string, len(report.Scenarios))
+	for index := range report.Scenarios {
+		gotScenarios[index] = report.Scenarios[index].Name
+	}
+	wantScenarios := []string{"sync-initial-local-bare", "sync-unchanged-local-bare"}
+	if !reflect.DeepEqual(gotScenarios, wantScenarios) {
+		t.Errorf("scenario names = %#v, want exactly %#v", gotScenarios, wantScenarios)
+	}
+
+	logData, err := os.ReadFile(commandLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var commands []string
+	syncCall := 0
+	depths := make(map[string]map[string]int)
+	for _, line := range strings.Split(strings.TrimSpace(string(logData)), "\n") {
+		fields := strings.Split(line, "\t")
+		switch {
+		case len(fields) == 2 && fields[0] == "command":
+			commands = append(commands, fields[1])
+			if fields[1] == "sync" {
+				syncCall++
+			}
+		case len(fields) == 4 && fields[0] == "depth":
+			depth, err := strconv.Atoi(fields[3])
+			if err != nil {
+				t.Fatalf("parse recorded depth line %q: %v", line, err)
+			}
+			key := fmt.Sprintf("%s-sync-%d", fields[1], syncCall)
+			if depths[key] == nil {
+				depths[key] = make(map[string]int)
+			}
+			depths[key][fields[2]] = depth
+		default:
+			t.Fatalf("unrecognized recording line %q", line)
+		}
+	}
+	if want := []string{"version", "sync", "sync"}; !reflect.DeepEqual(commands, want) {
+		t.Errorf("Workbook commands = %#v, want sync-only execution %#v", commands, want)
+	}
+	for syncIndex := 1; syncIndex <= 2; syncIndex++ {
+		for _, phase := range []string{"before", "after"} {
+			key := fmt.Sprintf("%s-sync-%d", phase, syncIndex)
+			if len(depths[key]) != 10 {
+				t.Errorf("%s canonical task refs = %d, want 10", key, len(depths[key]))
+			}
+			for ref, depth := range depths[key] {
+				if depth != 2 {
+					t.Errorf("%s %s ancestry depth = %d, want requested depth 2", key, ref, depth)
+				}
+			}
+		}
 	}
 }
 

@@ -440,6 +440,16 @@ func measureWarmSameTaskBurst(ctx context.Context, server warmScenarioServer, fi
 // MeasureRepository records projection, ref, object, and local-bare-remote
 // measurements against an existing Workbook fixture.
 func MeasureRepository(ctx context.Context, workbookBinary, fixtureRoot string, commandTimeout time.Duration) (RepositoryMetrics, []ScenarioResult, error) {
+	return measureRepository(ctx, workbookBinary, fixtureRoot, commandTimeout, true)
+}
+
+// MeasurePackedRepositorySync records ref, object, and local-bare-remote
+// measurements without running projection scenarios that mutate the fixture.
+func MeasurePackedRepositorySync(ctx context.Context, workbookBinary, fixtureRoot string, commandTimeout time.Duration) (RepositoryMetrics, []ScenarioResult, error) {
+	return measureRepository(ctx, workbookBinary, fixtureRoot, commandTimeout, false)
+}
+
+func measureRepository(ctx context.Context, workbookBinary, fixtureRoot string, commandTimeout time.Duration, includeProjection bool) (RepositoryMetrics, []ScenarioResult, error) {
 	if workbookBinary == "" {
 		return RepositoryMetrics{}, nil, fmt.Errorf("workbook binary is required")
 	}
@@ -450,25 +460,28 @@ func MeasureRepository(ctx context.Context, workbookBinary, fixtureRoot string, 
 		return RepositoryMetrics{}, nil, fmt.Errorf("command timeout must be positive")
 	}
 
-	taskRefs, _, err := enumerateTaskRefs(ctx, commandTimeout, fixtureRoot)
-	if err != nil {
-		return RepositoryMetrics{}, nil, err
-	}
-	taskID, err := firstTaskID(taskRefs)
-	if err != nil {
-		return RepositoryMetrics{}, nil, err
-	}
+	var results []ScenarioResult
+	if includeProjection {
+		taskRefs, _, err := enumerateTaskRefs(ctx, commandTimeout, fixtureRoot)
+		if err != nil {
+			return RepositoryMetrics{}, nil, err
+		}
+		taskID, err := firstTaskID(taskRefs)
+		if err != nil {
+			return RepositoryMetrics{}, nil, err
+		}
 
-	results, err := measureProjectionScenarios(
-		ctx,
-		workbookBinary,
-		fixtureRoot,
-		taskID,
-		commandTimeout,
-		MeasureCommand,
-	)
-	if err != nil {
-		return RepositoryMetrics{}, nil, err
+		results, err = measureProjectionScenarios(
+			ctx,
+			workbookBinary,
+			fixtureRoot,
+			taskID,
+			commandTimeout,
+			MeasureCommand,
+		)
+		if err != nil {
+			return RepositoryMetrics{}, nil, err
+		}
 	}
 
 	looseRefs, looseRefDuration, err := enumerateTaskRefs(ctx, commandTimeout, fixtureRoot)
@@ -524,7 +537,7 @@ func MeasureRepository(ctx context.Context, workbookBinary, fixtureRoot string, 
 	if err != nil {
 		return RepositoryMetrics{}, nil, err
 	}
-	results = append(results[:3:3], syncResults...)
+	results = append(results, syncResults...)
 
 	for index := range results {
 		results[index].Summary = Summarize(results[index].Samples)

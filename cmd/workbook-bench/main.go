@@ -303,12 +303,23 @@ func runBenchmark(ctx context.Context, options options) (perf.Report, error) {
 		if err != nil {
 			return perf.Report{}, fmt.Errorf("build repository fixture: %w", err)
 		}
-		metrics, repositoryScenarios, err := perf.MeasureRepository(
-			ctx,
-			options.workbookBinary,
-			repositoryFixture.Root,
-			options.timeout,
-		)
+		var metrics perf.RepositoryMetrics
+		var repositoryScenarios []perf.ScenarioResult
+		if hasRepositoryProjectionScenario(options.scenarios) {
+			metrics, repositoryScenarios, err = perf.MeasureRepository(
+				ctx,
+				options.workbookBinary,
+				repositoryFixture.Root,
+				options.timeout,
+			)
+		} else {
+			metrics, repositoryScenarios, err = perf.MeasurePackedRepositorySync(
+				ctx,
+				options.workbookBinary,
+				repositoryFixture.Root,
+				options.timeout,
+			)
+		}
 		if err != nil {
 			return perf.Report{}, fmt.Errorf("measure repository scenarios: %w", err)
 		}
@@ -380,6 +391,15 @@ func selectedWarmScenarioNames(scenarios []string) []string {
 func hasRepositoryScenario(scenarios []string) bool {
 	for _, scenario := range scenarios {
 		if strings.HasPrefix(scenario, "projection-") || scenario == "sync-initial-local-bare" || scenario == "sync-unchanged-local-bare" {
+			return true
+		}
+	}
+	return false
+}
+
+func hasRepositoryProjectionScenario(scenarios []string) bool {
+	for _, scenario := range scenarios {
+		if strings.HasPrefix(scenario, "projection-") {
 			return true
 		}
 	}
