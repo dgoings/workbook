@@ -97,13 +97,26 @@ project is current.
 Building from source requires Go 1.26 or newer and Git on `PATH`:
 
 ```sh
-./scripts/install.sh
+./scripts/install.sh [destination] [name]
 ```
 
-The script accepts an optional destination directory, defaults to
-`$HOME/.local/bin`, creates the destination when needed, and builds the
-`workbook` executable there. It prints the installed path and, when necessary,
-the `PATH` export needed to run it.
+The destination defaults to `$HOME/.local/bin` and is created when needed. The
+name defaults to `workbook`; pass another to keep a source build beside a
+released install rather than shadowing it:
+
+```sh
+./scripts/install.sh ~/.local/bin workbook-dev
+```
+
+The script prints the installed path and, when necessary, the `PATH` export
+needed to run it.
+
+Source builds are stamped from `git describe`, so `workbook version` reports the
+commit they came from rather than `dev (unknown)`. A source build reports a
+leading `v`, for example `v0.2.0-3-g86281c9`, and gains a `-dirty` suffix when
+built from a modified tree. A released artifact reports a bare `0.2.0`, so the
+two are always distinguishable. Stamping also lets a source build satisfy the
+benchmark harness, which rejects an unknown commit.
 
 Use help to discover commands and their options:
 

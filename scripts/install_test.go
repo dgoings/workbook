@@ -136,3 +136,91 @@ func paths(t *testing.T) (string, string) {
 	root := filepath.Clean(filepath.Join(filepath.Dir(filename), ".."))
 	return root, filepath.Join(root, "scripts", "install.sh")
 }
+
+func TestInstallStampsVersionAndCommit(t *testing.T) {
+	// Production mutation: building without ldflags leaves every source install
+	// reporting "dev (unknown)", so a developer cannot tell which build they are
+	// running, and the binary is rejected by acceptance benchmarking.
+	root, script := paths(t)
+	destination := filepath.Join(t.TempDir(), "bin")
+
+	command := exec.Command(script, destination)
+	command.Dir = root
+	command.Env = append(os.Environ(), "GOCACHE="+filepath.Join(t.TempDir(), "gocache"))
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("install: %v\n%s", err, output)
+	}
+
+	stdout, err := exec.Command(filepath.Join(destination, "workbook"), "version").Output()
+	if err != nil {
+		t.Fatalf("workbook version: %v", err)
+	}
+	reported := strings.TrimSpace(string(stdout))
+	if strings.Contains(reported, "dev") || strings.Contains(reported, "unknown") {
+		t.Fatalf("workbook version = %q, want a stamped version and commit", reported)
+	}
+
+	expectedCommit, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("resolve HEAD: %v", err)
+	}
+	if !strings.Contains(reported, strings.TrimSpace(string(expectedCommit))) {
+		t.Fatalf("workbook version = %q, want commit %q", reported, expectedCommit)
+	}
+}
+
+func TestInstallAcceptsAnAlternateBinaryName(t *testing.T) {
+	// Production mutation: a fixed binary name forces a source build to shadow a
+	// released install that shares the destination directory.
+	root, script := paths(t)
+	destinationRoot := t.TempDir()
+	destination := filepath.Join(destinationRoot, "bin")
+	physicalDestinationRoot, err := filepath.EvalSymlinks(destinationRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	command := exec.Command(script, destination, "workbook-dev")
+	command.Dir = root
+	command.Env = append(os.Environ(), "GOCACHE="+filepath.Join(t.TempDir(), "gocache"))
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("install: %v\n%s", err, output)
+	}
+
+	binary := filepath.Join(physicalDestinationRoot, "bin", "workbook-dev")
+	if !strings.Contains(string(output), "Installed Workbook at "+binary) {
+		t.Fatalf("installer output = %q, want installed path %q", output, binary)
+	}
+	if _, err := os.Stat(binary); err != nil {
+		t.Fatalf("stat installed binary: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(destination, "workbook")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("installer also wrote the default name: %v", err)
+	}
+}
+
+func TestInstallRejectsUnusableBinaryNames(t *testing.T) {
+	// Production mutation: interpolating an unchecked name into the output path
+	// lets an argument such as ../workbook escape the destination directory.
+	root, script := paths(t)
+
+	for name, argument := range map[string]string{
+		"empty":     "",
+		"path":      "nested/workbook",
+		"traversal": "../workbook",
+	} {
+		t.Run(name, func(t *testing.T) {
+			destination := filepath.Join(t.TempDir(), "bin")
+			command := exec.Command(script, destination, argument)
+			command.Dir = root
+			output, err := command.CombinedOutput()
+			if err == nil {
+				t.Fatalf("installer accepted name %q: %s", argument, output)
+			}
+			if !strings.Contains(string(output), "binary name") {
+				t.Fatalf("installer output = %q, want a binary name error", output)
+			}
+		})
+	}
+}
