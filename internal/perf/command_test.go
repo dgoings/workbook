@@ -96,9 +96,40 @@ func TestMeasureCommandTerminatesTimedOutDescendant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
-		t.Fatalf("descendant process %d still exists: %v", pid, err)
+	// MeasureCommand kills the whole process group, but a terminated
+	// descendant stays visible to kill(2) until the init process it was
+	// reparented to reaps it. Poll instead of sampling once. This cannot mask a
+	// descendant that genuinely survived, because that descendant busy-loops
+	// forever and never reaches a terminated state.
+	deadline := time.Now().Add(30 * time.Second)
+	for !descendantTerminated(pid) {
+		if time.Now().After(deadline) {
+			t.Fatalf("descendant process %d still running after the process group was killed", pid)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+// descendantTerminated reports whether a process has stopped running, counting
+// a not-yet-reaped zombie as terminated.
+func descendantTerminated(pid int) bool {
+	if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
+		return true
+	}
+	status, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "stat"))
+	if err != nil {
+		// Without procfs, kill(2) is the only available signal.
+		return false
+	}
+	// The state follows the parenthesised command name, which may itself
+	// contain spaces or brackets, so scan from the final closing parenthesis.
+	tail := string(status)
+	if end := strings.LastIndex(tail, ")"); end >= 0 {
+		if fields := strings.Fields(tail[end+1:]); len(fields) > 0 {
+			return fields[0] == "Z"
+		}
+	}
+	return false
 }
 
 func TestTraceCursorCountsOnlyNewGitProcesses(t *testing.T) {
