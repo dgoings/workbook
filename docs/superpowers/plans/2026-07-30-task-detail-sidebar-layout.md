@@ -1297,6 +1297,19 @@ Expected:
 - both diff checks are clean; and
 - the worktree contains only intended committed feature work.
 
+Phase A verification evidence (2026-07-30):
+
+- the user-facing README sequence covers the shared desktop sidebar, both New
+  Task relationship directions, post-create relationship mutations, partial
+  success without cross-ref atomicity, and the narrow-screen stack;
+- `origin/main` was seven commits ahead and merged without conflicts as
+  `a91c2bc`; `origin/main...HEAD` then reported `0 33`;
+- the focused core, presentation, web UI, and CLI regressions passed;
+- the post-merge web UI and CLI regressions passed, with no unmerged files;
+- `go test ./... -count=1`, `go vet ./...`, and the production build passed; and
+- `git diff --check` was clean, with only the intended documentation changes
+  remaining before the documentation commit.
+
 - [ ] **Step 6: Commit documentation**
 
 ```sh

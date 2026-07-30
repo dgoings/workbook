@@ -404,6 +404,14 @@ directed edge: **Depends On** lists the current task's prerequisites, while
 eligible active tasks through an integrated combobox and uses the nested
 Git-durable mutation routes above.
 
+Task forms use a wide main column and a compact Properties sidebar for status,
+priority, labels, Depends On, and Blocks. New Task stages both Depends On and
+Blocks without writing task refs; relationship mutations run after the task
+receives its durable ID. If only some edges succeed, successful relationships
+remain durable while failed relationships remain available to retry or remove.
+On narrow screens, the task editor, Properties, Relationships, and actions
+stack in that order.
+
 Missing prerequisite IDs remain visible and removable. Tombstoned
 prerequisites are also removable because the active dependent owns that edge;
 deleted blocked tasks remain read-only because tombstones cannot be changed.
