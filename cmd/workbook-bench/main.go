@@ -41,6 +41,9 @@ type options struct {
 	phase          string
 	scenarioFlags  stringListFlag
 	scenarios      []string
+
+	scalingPointFlags stringListFlag
+	scalingPoints     []perf.ScalingPointSpec
 }
 
 type stringListFlag []string
@@ -92,6 +95,9 @@ func runWithBenchmark(
 		fmt.Fprintf(stderr, "workbook-bench: %v\n", err)
 		return invocationExitCode
 	}
+	if options.phase == scalingPhase {
+		return runScalingWithMatrix(ctx, *options, stdout, stderr, runScalingBenchmark)
+	}
 
 	report, err := benchmark(ctx, *options)
 	if err != nil {
@@ -140,8 +146,9 @@ func newFlagSet(stderr io.Writer) (*flag.FlagSet, *options) {
 	flags.StringVar(&options.objectFormat, "object-format", "sha1", "Git object format (sha1 or sha256)")
 	flags.StringVar(&options.outputJSON, "output-json", "", "JSON report path")
 	flags.StringVar(&options.outputMarkdown, "output-markdown", "", "Markdown report path")
-	flags.StringVar(&options.phase, "phase", "baseline", "report phase (baseline or acceptance)")
+	flags.StringVar(&options.phase, "phase", "baseline", "report phase (baseline, acceptance, or scaling)")
 	flags.Var(&options.scenarioFlags, "scenario", "benchmark scenario to run (repeatable)")
+	flags.Var(&options.scalingPointFlags, "scaling-point", "scaling matrix point as <active tasks>x<history depth> (repeatable, requires --phase scaling)")
 	return flags, options
 }
 
@@ -201,8 +208,8 @@ func validateOptions(flags *flag.FlagSet, options *options) error {
 	if options.outputMarkdown == "" {
 		return fmt.Errorf("--output-markdown is required")
 	}
-	if options.phase != "baseline" && options.phase != "acceptance" {
-		return fmt.Errorf("--phase must be baseline or acceptance")
+	if options.phase != "baseline" && options.phase != "acceptance" && options.phase != scalingPhase {
+		return fmt.Errorf("--phase must be baseline, acceptance, or scaling")
 	}
 	if options.phase == "acceptance" {
 		switch {
@@ -225,13 +232,25 @@ func validateOptions(flags *flag.FlagSet, options *options) error {
 		options.samples < 20 {
 		return fmt.Errorf("local acceptance requires at least 20 samples")
 	}
-	if containsRemoteScenario(scenarios) && (options.tasks < 500 || options.operations < 20) {
-		return fmt.Errorf("remote scenarios require at least 500 tasks and 20 operations per task")
+	if options.phase == scalingPhase {
+		// The scaling matrix owns its own fixture points, including one below
+		// the single-run remote and validation workload minimums, so those
+		// minimums are relaxed here and nowhere else.
+		if err := configureScalingOptions(flags, options); err != nil {
+			return err
+		}
+	} else {
+		if len(options.scalingPointFlags) != 0 {
+			return fmt.Errorf("--scaling-point requires --phase scaling")
+		}
+		if containsRemoteScenario(scenarios) && (options.tasks < 500 || options.operations < 20) {
+			return fmt.Errorf("remote scenarios require at least 500 tasks and 20 operations per task")
+		}
+		if containsValidationScenario(scenarios) && (options.tasks < 500 || options.operations < 20) {
+			return fmt.Errorf("validation scenarios require at least 500 tasks and 20 operations per task")
+		}
+		options.scenarios = scenarios
 	}
-	if containsValidationScenario(scenarios) && (options.tasks < 500 || options.operations < 20) {
-		return fmt.Errorf("validation scenarios require at least 500 tasks and 20 operations per task")
-	}
-	options.scenarios = scenarios
 
 	jsonPath, err := filepath.Abs(options.outputJSON)
 	if err != nil {
