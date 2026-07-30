@@ -201,7 +201,9 @@
       let relationshipRefreshGeneration = 0;
       let currentTaskRefresh = null;
       let pendingDetailRelationshipContextTaskID = null;
+      const pendingRelationshipDrafts = new Map();
       const pendingTaskMessages = new Map();
+      let createdTaskRecovery = null;
 
       function text(element, value) { element.textContent = value || ""; return element; }
       function taskIDCopyControl(taskID, visibleID) {
@@ -384,6 +386,39 @@
           dependsOn: new Map(),
           blocks: new Map()
         };
+      }
+      function hasRelationshipDrafts(draftState) {
+        return draftState &&
+          (draftState.dependsOn.size > 0 || draftState.blocks.size > 0);
+      }
+      function applyCreatedTaskRecovery(recovery) {
+        if (!recovery) return;
+        if (hasRelationshipDrafts(recovery.failures)) {
+          pendingRelationshipDrafts.set(recovery.taskID, recovery.failures);
+          pendingTaskMessages.set(recovery.taskID, [
+            "Task created, but some relationships were not saved.",
+            ...recovery.warnings
+          ]);
+        } else if (recovery.warnings.length) {
+          pendingTaskMessages.set(recovery.taskID, recovery.warnings);
+        }
+        pendingDetailRelationshipContextTaskID = recovery.taskID;
+      }
+      function showCreatedTaskRefreshFailure(result, retryOperation) {
+        text(result, "Task created durably, but the latest task state could not be refreshed. ");
+        const retry = document.createElement("button");
+        retry.type = "button";
+        retry.className = "save-button";
+        text(retry, "Retry");
+        retry.addEventListener("click", async () => {
+          retry.disabled = true;
+          try {
+            await retryOperation();
+          } finally {
+            retry.disabled = false;
+          }
+        });
+        result.append(retry);
       }
       function draftEntry(task) {
         return {
@@ -617,7 +652,7 @@
         };
         return controller;
       }
-      function relationshipRow(relationship, onRemove, isDraft = false) {
+      function relationshipRow(relationship, onRemove, isDraft = false, onRetry = null) {
         const row = document.createElement("article");
         row.className = "relationship-row relationship-row--compact";
         row.dataset.relationshipRow = "";
@@ -644,13 +679,28 @@
         if (isDraft) {
           const draft = document.createElement("strong");
           draft.className = "relationship-state";
-          text(draft, relationship.error || "Not saved");
+          text(draft, "Not saved");
           row.append(draft);
+          if (relationship.error) {
+            const error = document.createElement("p");
+            error.className = "relationship-row__note";
+            text(error, relationship.error);
+            row.append(error);
+          }
         } else if (relationship.task && relationship.task.deleted) {
           const deleted = document.createElement("strong");
           deleted.className = "relationship-state";
           text(deleted, "Deleted");
           row.append(deleted);
+        }
+        if (isDraft && onRetry) {
+          const retry = document.createElement("button");
+          retry.type = "button";
+          retry.className = "relationship-retry";
+          text(retry, "Retry");
+          retry.addEventListener("click", () => onRetry(relationship));
+          row.append(retry);
+          row.retryButton = retry;
         }
         if (isDraft || relationship.removable) {
           const remove = document.createElement("button");
@@ -725,7 +775,7 @@
         });
         region.append(status);
         controller = {
-          region, status, groups,
+          region, status, groups, taskID, draftState,
           update() {
             const state = taskID ? dependencyState(taskID) : { dependsOn: [], blocks: [] };
             if (taskID && !state) return;
@@ -746,20 +796,38 @@
               }
               group.list.replaceChildren(...relationships.map((relationship) => {
                 const isDraft = Boolean(draftMap && draftMap.has(relationship.id));
+                const retryDraft = isDraft && taskID && relationship.error
+                  ? () => retryRelationshipDraft(
+                    name,
+                    relationship,
+                    draftMap,
+                    controller,
+                    group
+                  )
+                  : null;
                 const row = relationshipRow(relationship, () => {
                   if (isDraft) {
+                    if (taskID && !ownsDependencyController(controller)) return;
                     draftMap.delete(relationship.id);
+                    if (taskID && !hasRelationshipDrafts(draftState)) {
+                      pendingRelationshipDrafts.delete(taskID);
+                    }
                     controller.update();
                     return;
                   }
                   const dependentID = name === "dependsOn" ? taskID : relationship.id;
                   const prerequisiteID = name === "dependsOn" ? relationship.id : taskID;
                   return mutateRelationship("DELETE", dependentID, prerequisiteID, controller, group);
-                }, isDraft);
+                }, isDraft, retryDraft);
                 const remove = row.removeButton;
                 if (remove) {
                   remove.disabled = group.busy;
                   group.removeButtons.push(remove);
+                }
+                const retry = row.retryButton;
+                if (retry) {
+                  retry.disabled = group.busy;
+                  group.removeButtons.push(retry);
                 }
                 return row;
               }));
@@ -832,8 +900,10 @@
         footer.append(result, actions);
         form.append(editor, sidebar, footer);
 
+        let taskWasCreated = false;
         form.addEventListener("submit", async (event) => {
           event.preventDefault();
+          if (isNew && taskWasCreated) return;
           const values = {
             title: title.value,
             description: description.value,
@@ -841,11 +911,14 @@
             priority: priority.value,
             labels: labels.value.split(",").map((label) => label.trim()).filter(Boolean)
           };
+          let createdDurably = false;
           save.disabled = true;
           text(result, "");
           try {
             const document = await mutateTask(isNew ? "POST" : "PATCH", isNew ? "/api/tasks" : "/api/tasks/" + encodeURIComponent(task.id), values);
             if (isNew) {
+              createdDurably = true;
+              taskWasCreated = true;
               const taskID = document.task.id;
               const relationshipOutcome = await persistRelationshipDrafts(
                 taskID,
@@ -853,30 +926,69 @@
               );
               relationshipDrafts.dependsOn.clear();
               relationshipDrafts.blocks.clear();
+              createdTaskRecovery = {
+                taskID,
+                failures: relationshipOutcome.failures,
+                warnings: [
+                  ...mutationWarnings(document),
+                  ...relationshipOutcome.warnings
+                ]
+              };
+              const retryCreatedTaskRefresh = async () => {
+                const recovery = createdTaskRecovery;
+                const retried = await currentRefreshResult(refresh());
+                if (main.firstElementChild !== section ||
+                    createdTaskRecovery !== recovery ||
+                    retried.status !== "applied") return;
+                try {
+                  const deletedTasks = await refreshDeletedTasks();
+                  if (main.firstElementChild !== section ||
+                      createdTaskRecovery !== recovery) return;
+                  latestDeletedTasks = deletedTasks;
+                } catch (_) {
+                  return;
+                }
+                applyCreatedTaskRecovery(recovery);
+                const recoveredID = recovery.taskID;
+                createdTaskRecovery = null;
+                navigate("/tasks/" + encodeURIComponent(recoveredID));
+              };
               const refreshed = await currentRefreshResult(refresh());
               if (refreshed.status !== "applied") {
-                throw new Error("Task created durably, but the latest task state could not be refreshed.");
+                if (main.firstElementChild !== section) return;
+                showCreatedTaskRefreshFailure(result, retryCreatedTaskRefresh);
+                return;
               }
-              latestDeletedTasks = await refreshDeletedTasks();
-              pendingDetailRelationshipContextTaskID = taskID;
-              const messages = [
-                ...mutationWarnings(document),
-                ...relationshipOutcome.warnings
-              ];
-              if (messages.length) pendingTaskMessages.set(taskID, messages);
+              try {
+                const deletedTasks = await refreshDeletedTasks();
+                if (main.firstElementChild !== section) return;
+                latestDeletedTasks = deletedTasks;
+              } catch (_) {
+                if (main.firstElementChild !== section) return;
+                showCreatedTaskRefreshFailure(result, retryCreatedTaskRefresh);
+                return;
+              }
+              applyCreatedTaskRecovery(createdTaskRecovery);
+              createdTaskRecovery = null;
               navigate("/tasks/" + encodeURIComponent(taskID));
             } else {
               navigate("/");
               await refresh();
             }
           } catch (error) {
-            text(result, error instanceof Error ? error.message : "Task update failed.");
+            if (main.firstElementChild !== section) return;
+            text(result, error instanceof Error
+              ? error.message
+              : isNew ? "Task creation failed." : "Task update failed.");
           } finally {
-            save.disabled = false;
+            if (!createdDurably) save.disabled = false;
           }
         });
         section.append(header, form);
-        const relationshipController = taskRelationships(isNew ? "" : task.id, relationshipDrafts);
+        const failedDrafts = isNew
+          ? relationshipDrafts
+          : pendingRelationshipDrafts.get(task.id) || null;
+        const relationshipController = taskRelationships(isNew ? "" : task.id, failedDrafts);
         relationshipMount.append(relationshipController.region);
         if (!isNew) {
           activeDependencyController = relationshipController;
@@ -912,6 +1024,46 @@
       }
       function ownsDependencyController(controller) {
         return activeDependencyController === controller;
+      }
+      async function retryRelationshipDraft(name, relationship, draftMap, controller, group) {
+        if (!ownsDependencyController(controller)) return;
+        const dependentID = name === "dependsOn" ? controller.taskID : relationship.id;
+        const prerequisiteID = name === "dependsOn" ? relationship.id : controller.taskID;
+        const path = "/api/tasks/" + encodeURIComponent(dependentID) +
+          "/dependencies/" + encodeURIComponent(prerequisiteID);
+        group.setBusy(true);
+        group.setMessage("");
+        try {
+          const document = await mutateTask("PUT", path);
+          draftMap.delete(relationship.id);
+          if (!ownsDependencyController(controller)) return;
+          if (!hasRelationshipDrafts(controller.draftState)) {
+            pendingRelationshipDrafts.delete(controller.taskID);
+          }
+          const refreshed = await currentRefreshResult(refresh());
+          if (!ownsDependencyController(controller)) return;
+          if (refreshed.status === "superseded") return;
+          if (refreshed.status === "failed") {
+            controller.update();
+            group.setMessage("The dependency was saved durably, but the latest task state could not be refreshed.");
+            return;
+          }
+          controller.update();
+          const warnings = mutationWarnings(document);
+          if (warnings.length) {
+            group.setMessage("Dependency saved durably. " + warnings.join(" "));
+          }
+        } catch (error) {
+          await refresh();
+          if (!ownsDependencyController(controller)) return;
+          relationship.error = error instanceof Error
+            ? error.message
+            : "Dependency update failed.";
+          controller.update();
+          group.setMessage(relationship.error);
+        } finally {
+          group.setBusy(false);
+        }
       }
       async function mutateRelationship(method, dependentID, prerequisiteID, controller, group) {
         const path = "/api/tasks/" + encodeURIComponent(dependentID) +

@@ -1068,6 +1068,434 @@ setTimeout(async () => {
 	}
 }
 
+func TestHandlerClientPreservesNewTaskRelationshipDraftsWhenCreateFails(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	prerequisite := clientPlacementTask("WB-01J00000000000000000000077", "Prerequisite", core.StatusDone, core.PriorityHigh)
+	blockedTask := clientPlacementTask("WB-01J00000000000000000000078", "Blocked task", core.StatusBacklog, core.PriorityLow)
+	tasks := []core.Task{prerequisite, blockedTask}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/new")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/new status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/new", string(document)) + script + `
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const groupFor = (headingText) => findElement(main, (element) =>
+    element.textContent === headingText).parentElement;
+  const selectAndAdd = (group, candidateID, candidateTitle) => {
+    const input = findElement(group, (element) => element.attributes.role === "combobox");
+    input.value = candidateTitle;
+    input.eventListeners.input();
+    const option = findElement(group, (element) =>
+      element.attributes.role === "option" && element.dataset.candidateId === candidateID);
+    option.eventListeners.click();
+    return findElement(group, (element) =>
+      element.tagName === "BUTTON" && element.textContent === "Add dependency").eventListeners.click();
+  };
+  const dependsGroup = groupFor("Depends On");
+  const blocksGroup = groupFor("Blocks");
+  await selectAndAdd(dependsGroup, ` + strconv.Quote(prerequisite.ID) + `, ` + strconv.Quote(prerequisite.Title) + `);
+  await selectAndAdd(blocksGroup, ` + strconv.Quote(blockedTask.ID) + `, ` + strconv.Quote(blockedTask.Title) + `);
+  const title = findElement(main, (element) => element.id === "task-title");
+  const description = findElement(main, (element) => element.id === "task-description");
+  const unsavedTitle = "Unsaved title";
+  const unsavedDescription = "Unsaved Description";
+  title.value = unsavedTitle;
+  description.value = unsavedDescription;
+  let createCalls = 0;
+  let dependencyCalls = 0;
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if (url === "/api/tasks" && options.method === "POST") {
+      createCalls += 1;
+      return {
+        ok: false,
+        json: async () => ({
+          format: "workbook.error",
+          version: 1,
+          error: { category: "validation", message: "title is not valid" }
+        })
+      };
+    }
+    if (/\/api\/tasks\/.+\/dependencies\/.+/.test(url)) dependencyCalls += 1;
+    throw new Error("unexpected fetch: " + (options.method || "GET") + " " + url);
+  };
+
+  const form = findElement(main, (element) => element.tagName === "FORM");
+  await form.eventListeners.submit({ preventDefault() {} });
+  const draftDependsOnRow = findElement(dependsGroup, (element) =>
+    element.dataset.relationshipId === ` + strconv.Quote(prerequisite.ID) + ` &&
+    element.dataset.relationshipDraft !== undefined);
+  const draftBlocksRow = findElement(blocksGroup, (element) =>
+    element.dataset.relationshipId === ` + strconv.Quote(blockedTask.ID) + ` &&
+    element.dataset.relationshipDraft !== undefined);
+  if (title.value !== unsavedTitle ||
+      description.value !== unsavedDescription) {
+    throw new Error("task fields were discarded after create failure");
+  }
+  if (!draftDependsOnRow || !draftBlocksRow) {
+    throw new Error("relationship drafts were discarded after create failure");
+  }
+  if (createCalls !== 1 || dependencyCalls !== 0) {
+    throw new Error("create failure attempted relationship persistence");
+  }
+  const removeBlocks = findElement(draftBlocksRow, (element) =>
+    element.tagName === "BUTTON" && element.textContent === "Remove");
+  await removeBlocks.eventListeners.click();
+  if (!findElement(dependsGroup, (element) =>
+      element.dataset.relationshipId === ` + strconv.Quote(prerequisite.ID) + ` &&
+      element.dataset.relationshipDraft !== undefined)) {
+    throw new Error("removing one preserved draft discarded the other");
+  }
+  const feedback = findElement(main, (element) =>
+    element.attributes.role === "status" && element.textContent === "title is not valid");
+  const save = findElement(main, (element) =>
+    element.tagName === "BUTTON" && element.textContent === "Save");
+  if (!feedback || save.disabled) throw new Error("create failure did not restore the current form");
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute failed task creation recovery: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerClientRetainsFailedRelationshipDraftsAfterCreate(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	prerequisite := clientPlacementTask("WB-01J00000000000000000000079", "Prerequisite", core.StatusDone, core.PriorityHigh)
+	blockedTask := clientPlacementTask("WB-01J0000000000000000000007A", "Blocked task", core.StatusBacklog, core.PriorityLow)
+	createdID := "WB-01J0000000000000000000007B"
+	created := clientPlacementTask(createdID, "Created task", core.StatusReady, core.PriorityMedium)
+	created.Dependencies = []string{prerequisite.ID}
+	initialTasks := []core.Task{prerequisite, blockedTask}
+	afterCreate := []core.Task{created, prerequisite, blockedTask}
+	afterRetryBlocked := blockedTask
+	afterRetryBlocked.Dependencies = []string{createdID}
+	afterRetry := []core.Task{created, prerequisite, afterRetryBlocked}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/new")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/new status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	documentJSON := func(tasks []core.Task) string {
+		t.Helper()
+		document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(document)
+	}
+	emptyDeleted, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: []core.Task{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/new", documentJSON(initialTasks)) + script + `
+deletedTaskResponse = ` + string(emptyDeleted) + `;
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const groupFor = (headingText) => findElement(main, (element) =>
+    element.textContent === headingText).parentElement;
+  const selectAndAdd = (group, candidateID, candidateTitle) => {
+    const input = findElement(group, (element) => element.attributes.role === "combobox");
+    input.value = candidateTitle;
+    input.eventListeners.input();
+    findElement(group, (element) =>
+      element.attributes.role === "option" && element.dataset.candidateId === candidateID).eventListeners.click();
+    return findElement(group, (element) =>
+      element.tagName === "BUTTON" && element.textContent === "Add dependency").eventListeners.click();
+  };
+  const prerequisiteID = ` + strconv.Quote(prerequisite.ID) + `;
+  const blockedTaskID = ` + strconv.Quote(blockedTask.ID) + `;
+  const createdID = ` + strconv.Quote(createdID) + `;
+  const createdTask = ` + documentJSON(afterCreate) + `.tasks[0];
+  let activeDocument = ` + documentJSON(afterCreate) + `;
+  let blocksAttempts = 0;
+  let activeRefreshes = 0;
+  let resolveDetachedRetry;
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if (url === "/api/tasks" && options.method === "POST") {
+      return { ok: true, json: async () => ({ format: "workbook.task-mutation", version: 1, task: createdTask }) };
+    }
+    if (options.method === "PUT" &&
+        url === "/api/tasks/" + encodeURIComponent(createdID) + "/dependencies/" + encodeURIComponent(prerequisiteID)) {
+      return {
+        ok: true,
+        json: async () => ({
+          format: "workbook.task-mutation",
+          version: 1,
+          task: createdTask,
+          warnings: [{ code: "projection-update-failed", message: "Depends On projection needs repair." }]
+        })
+      };
+    }
+    if (options.method === "PUT" &&
+        url === "/api/tasks/" + encodeURIComponent(blockedTaskID) + "/dependencies/" + encodeURIComponent(createdID)) {
+      blocksAttempts += 1;
+      if (blocksAttempts === 1) {
+        return {
+          ok: false,
+          json: async () => ({
+            format: "workbook.error",
+            version: 1,
+            error: { category: "validation", message: "dependency would create a cycle" }
+          })
+        };
+      }
+      if (blocksAttempts === 2) {
+        return {
+          ok: false,
+          json: async () => new Promise((resolve) => {
+            resolveDetachedRetry = () => resolve({
+              format: "workbook.error",
+              version: 1,
+              error: { category: "validation", message: "detached retry failed" }
+            });
+          })
+        };
+      }
+      activeDocument = ` + documentJSON(afterRetry) + `;
+      return { ok: true, json: async () => ({ format: "workbook.task-mutation", version: 1, task: activeDocument.tasks[2] }) };
+    }
+    if (url === "/api/tasks" && (options.method || "GET") === "GET") {
+      activeRefreshes += 1;
+      return { ok: true, json: async () => activeDocument };
+    }
+    if (url === "/api/tasks?deleted=true") {
+      return { ok: true, json: async () => deletedTaskResponse };
+    }
+    throw new Error("unexpected fetch: " + (options.method || "GET") + " " + url);
+  };
+
+  await selectAndAdd(groupFor("Depends On"), prerequisiteID, ` + strconv.Quote(prerequisite.Title) + `);
+  await selectAndAdd(groupFor("Blocks"), blockedTaskID, ` + strconv.Quote(blockedTask.Title) + `);
+  await findElement(main, (element) => element.tagName === "FORM").eventListeners.submit({ preventDefault() {} });
+
+  if (historyPaths.at(-1) !== "/tasks/" + encodeURIComponent(createdID)) {
+    throw new Error("partial relationship success did not open created task detail");
+  }
+  const detailDependsGroup = groupFor("Depends On");
+  const detailBlocksGroup = groupFor("Blocks");
+  const durableDependsOnRow = findElement(detailDependsGroup, (element) =>
+    element.dataset.relationshipId === prerequisiteID &&
+    element.dataset.relationshipDraft === undefined);
+  const failedBlocksRow = findElement(detailBlocksGroup, (element) =>
+    element.dataset.relationshipId === blockedTaskID &&
+    element.dataset.relationshipDraft !== undefined);
+  const retry = failedBlocksRow && findElement(failedBlocksRow, (element) =>
+    element.tagName === "BUTTON" && element.textContent === "Retry");
+  const remove = failedBlocksRow && findElement(failedBlocksRow, (element) =>
+    element.tagName === "BUTTON" && element.textContent === "Remove");
+  if (!durableDependsOnRow) throw new Error("durable Depends On relationship was not rendered");
+  if (!failedBlocksRow ||
+      !failedBlocksRow.textContent.includes("Not saved") ||
+      !failedBlocksRow.textContent.includes("dependency would create a cycle")) {
+    throw new Error("failed Blocks relationship was not retained with its error");
+  }
+  if (!retry || !remove) throw new Error("failed relationship draft lacks Retry or Remove");
+  const feedback = findElement(main, (element) =>
+    element.className === "form-status" &&
+    element.textContent.includes("Task created, but some relationships were not saved.") &&
+    element.textContent.includes("Depends On projection needs repair."));
+  if (!feedback) throw new Error("created task did not explain its partial relationship success");
+
+  const refreshesBeforeRetry = activeRefreshes;
+  const detachedRetry = retry.eventListeners.click();
+  for (let attempt = 0; !resolveDetachedRetry && attempt < 20; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  if (!resolveDetachedRetry) {
+    throw new Error("Retry did not issue the correctly oriented Blocks PUT");
+  }
+  const detailStatus = findElement(detailBlocksGroup, (element) =>
+    element.className === "relationship-message");
+  const back = findElement(main, (element) =>
+    element.tagName === "A" && element.textContent === "Back");
+  documentEventListeners.click({
+    target: back,
+    button: 0,
+    defaultPrevented: false,
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+    preventDefault() {}
+  });
+  detailStatus.textContent = "detached retry status";
+  resolveDetachedRetry();
+  await detachedRetry;
+  if (retry.disabled) throw new Error("detached Retry did not release its busy state");
+  if (detailStatus.textContent !== "detached retry status") {
+    throw new Error("detached Retry wrote to its former controller");
+  }
+  if (activeRefreshes !== refreshesBeforeRetry + 1) {
+    throw new Error("detached Retry did not perform its one required refresh");
+  }
+
+  const detailLink = new TestElement("a");
+  detailLink.href = "/tasks/" + encodeURIComponent(createdID);
+  boardView.append(detailLink);
+  documentEventListeners.click({
+    target: detailLink,
+    button: 0,
+    defaultPrevented: false,
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+    preventDefault() {}
+  });
+  const recoveredDraft = findElement(groupFor("Blocks"), (element) =>
+    element.dataset.relationshipId === blockedTaskID &&
+    element.dataset.relationshipDraft !== undefined);
+  const recoveredRetry = recoveredDraft && findElement(recoveredDraft, (element) =>
+    element.tagName === "BUTTON" && element.textContent === "Retry");
+  if (!recoveredRetry) throw new Error("detached Retry discarded the failed client draft");
+  const refreshesBeforeSuccessfulRetry = activeRefreshes;
+  await recoveredRetry.eventListeners.click();
+  if (blocksAttempts !== 3) throw new Error("Retry did not issue the correctly oriented Blocks PUT");
+  if (activeRefreshes !== refreshesBeforeSuccessfulRetry + 1) throw new Error("successful Retry did not refresh exactly once");
+  const retriedBlocksRow = findElement(groupFor("Blocks"), (element) =>
+    element.dataset.relationshipId === blockedTaskID);
+  if (!retriedBlocksRow || retriedBlocksRow.dataset.relationshipDraft !== undefined) {
+    throw new Error("successful Retry did not replace the failed draft with durable state");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute partial relationship creation recovery: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerClientDoesNotDuplicateCreatedTaskWhenRefreshFails(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	prerequisite := clientPlacementTask("WB-01J0000000000000000000007C", "Prerequisite", core.StatusDone, core.PriorityHigh)
+	blockedTask := clientPlacementTask("WB-01J0000000000000000000007D", "Blocked task", core.StatusBacklog, core.PriorityLow)
+	createdID := "WB-01J0000000000000000000007E"
+	created := clientPlacementTask(createdID, "Created task", core.StatusReady, core.PriorityMedium)
+	initialTasks := []core.Task{prerequisite, blockedTask}
+	refreshedTasks := []core.Task{created, prerequisite, blockedTask}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/new")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/new status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	documentJSON := func(tasks []core.Task) string {
+		t.Helper()
+		document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(document)
+	}
+
+	program := clientDOMHarness("/tasks/new", documentJSON(initialTasks)) + script + `
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const groupFor = (headingText) => findElement(main, (element) =>
+    element.textContent === headingText).parentElement;
+  const selectAndAdd = (group, candidateID, candidateTitle) => {
+    const input = findElement(group, (element) => element.attributes.role === "combobox");
+    input.value = candidateTitle;
+    input.eventListeners.input();
+    findElement(group, (element) =>
+      element.attributes.role === "option" && element.dataset.candidateId === candidateID).eventListeners.click();
+    return findElement(group, (element) =>
+      element.tagName === "BUTTON" && element.textContent === "Add dependency").eventListeners.click();
+  };
+  const createdID = ` + strconv.Quote(createdID) + `;
+  let createCalls = 0;
+  let activeRefreshCalls = 0;
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if (url === "/api/tasks" && options.method === "POST") {
+      createCalls += 1;
+      return {
+        ok: true,
+        json: async () => ({
+          format: "workbook.task-mutation",
+          version: 1,
+          task: ` + documentJSON(refreshedTasks) + `.tasks[0]
+        })
+      };
+    }
+    if (options.method === "PUT") {
+      return {
+        ok: true,
+        json: async () => ({
+          format: "workbook.task-mutation",
+          version: 1,
+          task: ` + documentJSON(refreshedTasks) + `.tasks[0]
+        })
+      };
+    }
+    if (url === "/api/tasks" && (options.method || "GET") === "GET") {
+      activeRefreshCalls += 1;
+      if (activeRefreshCalls === 1) {
+        return {
+          ok: false,
+          json: async () => ({
+            format: "workbook.error",
+            version: 1,
+            error: { category: "internal", message: "task refresh failed" }
+          })
+        };
+      }
+      return { ok: true, json: async () => (` + documentJSON(refreshedTasks) + `) };
+    }
+    if (url === "/api/tasks?deleted=true") {
+      return {
+        ok: true,
+        json: async () => ({ format: "workbook.tasks", version: 1, tasks: [] })
+      };
+    }
+    throw new Error("unexpected fetch: " + (options.method || "GET") + " " + url);
+  };
+
+  await selectAndAdd(groupFor("Depends On"), ` + strconv.Quote(prerequisite.ID) + `, ` + strconv.Quote(prerequisite.Title) + `);
+  await selectAndAdd(groupFor("Blocks"), ` + strconv.Quote(blockedTask.ID) + `, ` + strconv.Quote(blockedTask.Title) + `);
+  await findElement(main, (element) => element.tagName === "FORM").eventListeners.submit({ preventDefault() {} });
+  const retry = findElement(main, (element) =>
+    element.tagName === "BUTTON" && element.type === "button" && element.textContent === "Retry");
+  if (!retry) throw new Error("durable create refresh failure did not render a retry action");
+  await retry.eventListeners.click();
+  if (createCalls !== 1) {
+    throw new Error("refresh retry created a duplicate task");
+  }
+  if (historyPaths.at(-1) !== "/tasks/" + createdID) {
+    throw new Error("refresh retry did not open the created task");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute durable create refresh recovery: %v\n%s", err, output)
+	}
+}
+
 func TestHandlerShowsRecoverableErrorWhenInitialTaskLoadFails(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
