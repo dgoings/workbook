@@ -71,6 +71,16 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	return runWithBenchmark(ctx, args, stdout, stderr, runBenchmark)
+}
+
+func runWithBenchmark(
+	ctx context.Context,
+	args []string,
+	stdout io.Writer,
+	stderr io.Writer,
+	benchmark func(context.Context, options) (perf.Report, error),
+) int {
 	flags, options := newFlagSet(stderr)
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -83,7 +93,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return invocationExitCode
 	}
 
-	report, err := runBenchmark(ctx, *options)
+	report, err := benchmark(ctx, *options)
 	if err != nil {
 		fmt.Fprintf(stderr, "workbook-bench: %v\n", err)
 		return failureExitCode

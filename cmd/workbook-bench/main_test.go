@@ -94,35 +94,35 @@ func TestRunResolvesRelativeWorkbookBinaryAndWritesCompletePerformanceReport(t *
 func TestRunRetainsLocalMeasurementOutcomesAndReturnsExecutionStatus(t *testing.T) {
 	tests := []struct {
 		name         string
-		measuredBody string
+		sample       perf.Sample
 		timeout      string
 		wantExitCode int
 		wantOutcome  string
 	}{
 		{
 			name:         "timeout exits one",
-			measuredBody: "/bin/sleep 2",
+			sample:       perf.Sample{Duration: time.Second, TimedOut: true},
 			timeout:      "1s",
 			wantExitCode: failureExitCode,
 			wantOutcome:  "timeout",
 		},
 		{
 			name:         "nonzero exit exits one",
-			measuredBody: "echo 'measured product failure' >&2\nexit 7",
+			sample:       perf.Sample{Duration: time.Millisecond, ExitCode: 7},
 			timeout:      "1s",
 			wantExitCode: failureExitCode,
 			wantOutcome:  "failed",
 		},
 		{
 			name:         "measurement start error exits one",
-			measuredBody: ":",
+			sample:       perf.Sample{Duration: time.Millisecond, Error: "start measured command"},
 			timeout:      "1s",
 			wantExitCode: failureExitCode,
 			wantOutcome:  "failed",
 		},
 		{
 			name:         "valid target miss exits zero",
-			measuredBody: "/bin/sleep 0.25",
+			sample:       perf.Sample{Duration: 250 * time.Millisecond},
 			timeout:      "1s",
 			wantExitCode: 0,
 			wantOutcome:  "miss",
@@ -133,29 +133,13 @@ func TestRunRetainsLocalMeasurementOutcomesAndReturnsExecutionStatus(t *testing.
 		t.Run(test.name, func(t *testing.T) {
 			outputRoot := t.TempDir()
 			workbookPath := filepath.Join(outputRoot, "workbook")
-			removeAfterRebuild := ""
-			if test.name == "measurement start error exits one" {
-				removeAfterRebuild = `/bin/rm "$0"`
-			}
-			writeExecutableScript(t, workbookPath, fmt.Sprintf(`
-case "$1" in
-version)
-	printf '%%s\n' '{"format":"workbook.result","version":1,"command":"version","data":{"version":"dev","commit":"test"}}'
-	;;
-rebuild)
-	printf '%%s\n' '{"format":"workbook.result","version":1,"command":"rebuild","data":{"taskCount":10,"cachePath":"test"}}'
-	%s
-	;;
-update)
-	%s
-	;;
-esac`, removeAfterRebuild, test.measuredBody))
+			writeExecutableScript(t, workbookPath, ":")
 
 			jsonPath := filepath.Join(outputRoot, "report.json")
 			markdownPath := filepath.Join(outputRoot, "report.md")
 			var stdout bytes.Buffer
 			var stderr bytes.Buffer
-			exitCode := run(context.Background(), []string{
+			exitCode := runWithBenchmark(context.Background(), []string{
 				"--workbook", workbookPath,
 				"--tasks", "10",
 				"--tombstones", "0",
@@ -165,18 +149,35 @@ esac`, removeAfterRebuild, test.measuredBody))
 				"--scenario", "cli-update",
 				"--output-json", jsonPath,
 				"--output-markdown", markdownPath,
-			}, &stdout, &stderr)
+			}, &stdout, &stderr, func(context.Context, options) (perf.Report, error) {
+				target := perf.ScenarioTarget{
+					DurationStatistic:  perf.DurationP95,
+					DurationComparison: perf.DurationAtMost,
+					MaxMilliseconds:    200,
+				}
+				return perf.Report{
+					Format:  perf.ReportFormat,
+					Version: perf.ReportVersion,
+					Phase:   "baseline",
+					Scenarios: []perf.ScenarioResult{{
+						Name:    "cli-update",
+						Surface: "cold CLI",
+						Target:  &target,
+						Samples: []perf.Sample{test.sample},
+					}},
+				}, nil
+			})
 
 			if exitCode != test.wantExitCode {
 				t.Fatalf("exit code = %d, want %d; stdout = %q; stderr = %q", exitCode, test.wantExitCode, stdout.String(), stderr.String())
 			}
 			jsonReport, err := os.ReadFile(jsonPath)
 			if err != nil {
-				t.Fatalf("read retained JSON report: %v", err)
+				t.Fatalf("read retained JSON report: %v; exit code = %d; stdout = %q; stderr = %q", err, exitCode, stdout.String(), stderr.String())
 			}
 			markdownReport, err := os.ReadFile(markdownPath)
 			if err != nil {
-				t.Fatalf("read retained Markdown report: %v", err)
+				t.Fatalf("read retained Markdown report: %v; exit code = %d; stdout = %q; stderr = %q", err, exitCode, stdout.String(), stderr.String())
 			}
 			if !bytes.Contains(jsonReport, []byte(`"outcome":"`+test.wantOutcome+`"`)) {
 				t.Fatalf("JSON report does not retain %q outcome:\n%s", test.wantOutcome, jsonReport)
