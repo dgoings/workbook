@@ -440,6 +440,16 @@ func measureWarmSameTaskBurst(ctx context.Context, server warmScenarioServer, fi
 // MeasureRepository records projection, ref, object, and local-bare-remote
 // measurements against an existing Workbook fixture.
 func MeasureRepository(ctx context.Context, workbookBinary, fixtureRoot string, commandTimeout time.Duration) (RepositoryMetrics, []ScenarioResult, error) {
+	return measureRepository(ctx, workbookBinary, fixtureRoot, commandTimeout, true)
+}
+
+// MeasurePackedRepositorySync records ref, object, and local-bare-remote
+// measurements without running projection scenarios that mutate the fixture.
+func MeasurePackedRepositorySync(ctx context.Context, workbookBinary, fixtureRoot string, commandTimeout time.Duration) (RepositoryMetrics, []ScenarioResult, error) {
+	return measureRepository(ctx, workbookBinary, fixtureRoot, commandTimeout, false)
+}
+
+func measureRepository(ctx context.Context, workbookBinary, fixtureRoot string, commandTimeout time.Duration, includeProjection bool) (RepositoryMetrics, []ScenarioResult, error) {
 	if workbookBinary == "" {
 		return RepositoryMetrics{}, nil, fmt.Errorf("workbook binary is required")
 	}
@@ -450,25 +460,28 @@ func MeasureRepository(ctx context.Context, workbookBinary, fixtureRoot string, 
 		return RepositoryMetrics{}, nil, fmt.Errorf("command timeout must be positive")
 	}
 
-	taskRefs, _, err := enumerateTaskRefs(ctx, commandTimeout, fixtureRoot)
-	if err != nil {
-		return RepositoryMetrics{}, nil, err
-	}
-	taskID, err := firstTaskID(taskRefs)
-	if err != nil {
-		return RepositoryMetrics{}, nil, err
-	}
+	var results []ScenarioResult
+	if includeProjection {
+		taskRefs, _, err := enumerateTaskRefs(ctx, commandTimeout, fixtureRoot)
+		if err != nil {
+			return RepositoryMetrics{}, nil, err
+		}
+		taskID, err := firstTaskID(taskRefs)
+		if err != nil {
+			return RepositoryMetrics{}, nil, err
+		}
 
-	results, err := measureProjectionScenarios(
-		ctx,
-		workbookBinary,
-		fixtureRoot,
-		taskID,
-		commandTimeout,
-		MeasureCommand,
-	)
-	if err != nil {
-		return RepositoryMetrics{}, nil, err
+		results, err = measureProjectionScenarios(
+			ctx,
+			workbookBinary,
+			fixtureRoot,
+			taskID,
+			commandTimeout,
+			MeasureCommand,
+		)
+		if err != nil {
+			return RepositoryMetrics{}, nil, err
+		}
 	}
 
 	looseRefs, looseRefDuration, err := enumerateTaskRefs(ctx, commandTimeout, fixtureRoot)
@@ -513,25 +526,18 @@ func MeasureRepository(ctx context.Context, workbookBinary, fixtureRoot string, 
 		return RepositoryMetrics{}, nil, fmt.Errorf("create local bare remote root: %w", err)
 	}
 	defer os.RemoveAll(originRoot)
-	origin := filepath.Join(originRoot, "origin.git")
-	if _, _, err := runRepositoryGit(ctx, commandTimeout, "", "init", "--bare", "--quiet", origin); err != nil {
-		return RepositoryMetrics{}, nil, err
-	}
-	if _, _, err := runRepositoryGit(ctx, commandTimeout, fixtureRoot, "remote", "add", "origin", origin); err != nil {
-		return RepositoryMetrics{}, nil, err
-	}
-
-	syncResults, err := measureLocalBareSync(
+	syncResults, err := measureLocalBareSyncAgainstNewOrigin(
 		ctx,
 		workbookBinary,
 		fixtureRoot,
+		filepath.Join(originRoot, "origin.git"),
 		commandTimeout,
 		MeasureCommand,
 	)
 	if err != nil {
 		return RepositoryMetrics{}, nil, err
 	}
-	results = append(results[:3:3], syncResults...)
+	results = append(results, syncResults...)
 
 	for index := range results {
 		results[index].Summary = Summarize(results[index].Samples)
@@ -581,6 +587,40 @@ func measureProjectionScenarios(
 		results[index].Summary = Summarize(results[index].Samples)
 	}
 	return results, nil
+}
+
+func measureLocalBareSyncAgainstNewOrigin(
+	ctx context.Context,
+	workbookBinary string,
+	fixtureRoot string,
+	origin string,
+	commandTimeout time.Duration,
+	measureCommand func(context.Context, CommandSpec) Sample,
+) ([]ScenarioResult, error) {
+	output, _, err := runRepositoryGit(
+		ctx, commandTimeout, fixtureRoot, "rev-parse", "--show-object-format",
+	)
+	if err != nil {
+		return nil, err
+	}
+	objectFormat := strings.TrimSuffix(string(output), "\n")
+	if objectFormat == "" || strings.ContainsAny(objectFormat, "\r\n\t ") {
+		return nil, fmt.Errorf("Git returned invalid repository object format %q", objectFormat)
+	}
+	if _, _, err := runRepositoryGit(
+		ctx, commandTimeout, "", "init", "--bare", "--quiet",
+		"--object-format="+objectFormat, origin,
+	); err != nil {
+		return nil, err
+	}
+	if _, _, err := runRepositoryGit(
+		ctx, commandTimeout, fixtureRoot, "remote", "add", "origin", origin,
+	); err != nil {
+		return nil, err
+	}
+	return measureLocalBareSync(
+		ctx, workbookBinary, fixtureRoot, commandTimeout, measureCommand,
+	)
 }
 
 func measureLocalBareSync(

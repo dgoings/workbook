@@ -70,19 +70,21 @@
     .dependency-progress { display: grid; gap: .18rem; margin-top: .65rem; color: #4e5d73; font-size: .72rem; }
     .dependency-progress strong { color: #9c2f25; font-size: .72rem; }
     .drop-marker { height: 0; margin: -.1rem 0; border-top: 3px solid #2457d6; border-radius: 3px; pointer-events: none; }
-    .task-route { max-width: 48rem; margin: 0 auto; border: 1px solid #b9c6d8; background: #fff; box-shadow: 0 12px 32px rgba(23,32,51,.08); }
+    .task-route { display: flex; flex-direction: column; min-height: 100%; max-width: 48rem; margin: 0 auto; border: 1px solid #b9c6d8; background: #fff; box-shadow: 0 12px 32px rgba(23,32,51,.08); }
     .task-route__header { padding: 1rem 1.15rem; border-top: 3px solid #2457d6; border-bottom: 1px solid #d5deea; background: #f8faff; }
     .task-route__header h2 { margin: .15rem 0 0; font-size: clamp(1.15rem, 3vw, 1.55rem); letter-spacing: -.025em; }
     .task-route__header code { display: block; margin-top: .35rem; color: #526b9b; font-size: .72rem; overflow-wrap: anywhere; }
     .task-route__header .task-id-copy-group { margin-top: .35rem; }
     .task-route__header .task-id-copy code { display: inline; margin-top: 0; }
     .task-route__header .copy-status { top: calc(50% + .1rem); }
-    .task-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; padding: 1.15rem; }
+    .task-form { display: grid; flex: 1 1 auto; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: auto minmax(8rem, 1fr) auto auto auto auto; gap: 1rem; min-height: 0; padding: 1.15rem; }
     .field { display: grid; gap: .35rem; }
     .field--wide { grid-column: 1 / -1; }
+    .field--description { grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
     .field label { color: #34425a; font-size: .78rem; font-weight: 750; }
     .field input, .field textarea, .field select { width: 100%; border: 1px solid #9eafc5; border-radius: 4px; background: #fff; color: #172033; font: inherit; padding: .62rem .68rem; }
     .field textarea { min-height: 8rem; resize: vertical; line-height: 1.45; }
+    .field--description textarea { height: 100%; min-height: 0; overflow-y: auto; resize: none; }
     .field input:focus, .field textarea:focus, .field select:focus { border-color: #2457d6; outline: 3px solid rgba(36,87,214,.18); }
     .form-status { grid-column: 1 / -1; min-height: 1.35rem; margin: 0; color: #9c2f25; font-size: .82rem; }
     .form-actions { display: flex; align-items: center; gap: .85rem; grid-column: 1 / -1; padding-top: .1rem; }
@@ -300,8 +302,11 @@
         history.pushState({}, "", path);
         renderRoute();
       }
-      function field(labelText, control, wide = false) {
-        const wrapper = document.createElement("div"); wrapper.className = "field" + (wide ? " field--wide" : "");
+      function field(labelText, control, wide = false, modifier = "") {
+        const classes = ["field"];
+        if (wide) classes.push("field--wide");
+        if (modifier) classes.push(modifier);
+        const wrapper = document.createElement("div"); wrapper.className = classes.join(" ");
         const label = document.createElement("label"); label.htmlFor = control.id; text(label, labelText);
         wrapper.append(label, control);
         return wrapper;
@@ -686,7 +691,7 @@
 		  });
 		  danger.append(remove); actions.append(danger);
 		}
-        form.append(field("Title", title, true), field("Description", description, true), field("Status", status), field("Priority", priority), field("Labels", labels, true), result, actions);
+        form.append(field("Title", title, true), field("Description", description, true, "field--description"), field("Status", status), field("Priority", priority), field("Labels", labels, true), result, actions);
 
         form.addEventListener("submit", async (event) => {
           event.preventDefault();
