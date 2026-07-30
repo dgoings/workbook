@@ -10,9 +10,10 @@ SQLite materialized view accelerates normal task reads while Git remains canonic
 > **Status:** initial collaborative POC. Repository initialization, local task
 > CRUD, task ordering and dependencies, terminal and web boards, web
 > drag-and-drop status changes, explicit origin-only task fetch/push/sync, and a
-> disposable SQLite task projection are implemented. Conflict reconciliation
-> remains proposed. Release artifact tooling exists, but no public package has
-> been published yet.
+> disposable SQLite task projection are implemented, along with clone bootstrap
+> through `workbook setup` and managed agent documentation through `workbook
+> docs`. Conflict reconciliation remains proposed. Workbook is published for
+> macOS through the `dgoings/homebrew-tap` Homebrew tap.
 
 ## Why Workbook?
 
@@ -42,12 +43,14 @@ and their safe ancestry relationships in isolated tracking refs, and leaves the
 checked-out code branch untouched. Exhaustive checkpoint replay belongs to the
 separate validation audit rather than ordinary synchronization.
 
-After cloning the repository and installing Workbook, fetch the shared tasks:
+After cloning the repository, bootstrap Workbook with one command. It creates or
+validates project identity, installs managed agent documentation, and exchanges
+shared task refs with `origin`:
 
 ```sh
 git clone <repository>
-./init.sh
-workbook fetch
+cd <repository>
+workbook setup
 ```
 
 Publish local task changes explicitly with `workbook push`. Teams that want task
@@ -65,7 +68,8 @@ The proposed command flow is:
 
 ```sh
 git clone <repository>
-./init.sh
+cd <repository>
+workbook setup
 
 workbook claim TASK-123 --remote-required --json
 workbook show TASK-123 --json
@@ -75,19 +79,44 @@ workbook show TASK-123 --json
 workbook finish TASK-123 --commit HEAD --push --json
 ```
 
-## Source installation prerequisites
+## Installation
 
-The current POC builds from source and requires Go 1.26 or newer and Git to be
-available on `PATH`. Install it with:
+Workbook is published for macOS through a Homebrew tap:
 
 ```sh
-./scripts/install.sh
+brew install dgoings/tap/workbook
 ```
 
-The script accepts an optional destination directory, defaults to
-`$HOME/.local/bin`, creates the destination when needed, and builds the
-`workbook` executable there. It prints the installed path and, when necessary,
-the `PATH` export needed to run it.
+Workbook generates per-project agent documentation, so an upgrade cannot refresh
+every checkout on its own. After installing or upgrading, run `workbook setup` in
+each project that uses Workbook, and `workbook docs status` to check whether a
+project is current.
+
+### Building from source
+
+Building from source requires Go 1.26 or newer and Git on `PATH`:
+
+```sh
+./scripts/install.sh [destination] [name]
+```
+
+The destination defaults to `$HOME/.local/bin` and is created when needed. The
+name defaults to `workbook`; pass another to keep a source build beside a
+released install rather than shadowing it:
+
+```sh
+./scripts/install.sh ~/.local/bin workbook-dev
+```
+
+The script prints the installed path and, when necessary, the `PATH` export
+needed to run it.
+
+Source builds are stamped from `git describe`, so `workbook version` reports the
+commit they came from rather than `dev (unknown)`. A source build reports a
+leading `v`, for example `v0.2.0-3-g86281c9`, and gains a `-dirty` suffix when
+built from a modified tree. A released artifact reports a bare `0.2.0`, so the
+two are always distinguishable. Stamping also lets a source build satisfy the
+benchmark harness, which rejects an unknown commit.
 
 Use help to discover commands and their options:
 
@@ -106,7 +135,7 @@ The current CLI implements these local commands. Commands marked `--json` suppor
 both human-readable output and a versioned machine-readable result envelope:
 
 ```text
-workbook init
+workbook setup [--key <key>] [--no-docs] [--no-sync] [--skill-dir <dir>] [--no-skill] [--force] [--json]
 workbook create
 workbook list
 workbook board [--wide | --narrow] [--json]
@@ -124,13 +153,55 @@ workbook version [--json]
 workbook fetch [--json]
 workbook push [--json]
 workbook sync [--json]
+workbook docs install [--create <file>] [--skill-dir <dir>] [--no-skill] [--force] [--json]
+workbook docs update [--skill-dir <dir>] [--no-skill] [--force] [--json]
+workbook docs status [--skill-dir <dir>] [--no-skill] [--json]
+workbook docs remove [--skill-dir <dir>] [--no-skill] [--force] [--json]
 workbook hooks install [--json]
 workbook serve [--addr 127.0.0.1:7331]
 workbook help [command]
 ```
 
-`workbook init` creates a tracked `.workbook/config.json` with the project ID and
-key. Create, update, delete, and restore append immutable task commits under
+`workbook setup` is the single bootstrap path for a fresh clone. It creates or
+validates the tracked `.workbook/config.json` holding the project ID and key,
+writes the user-global configuration file when it is missing, installs or
+refreshes managed agent documentation, and synchronizes shared task refs with
+`origin`. It skips synchronization when no `origin` remote is configured, so a
+solo local project needs no remote. Use `--no-sync` to bootstrap without
+exchanging refs and `--no-docs` to create project identity alone.
+
+The Workbook skill is installed under the directory named by the user-global
+`skillDir` setting, `.claude/skills` by default. Because that setting applies to
+every project on a machine, `--skill-dir <dir>` overrides it for one project and
+`--no-skill` leaves the skill alone while still managing the guidelines. These
+flags are a stopgap until per-project configuration lands.
+
+### User-global configuration
+
+Settings that describe a developer rather than a project live in
+`$XDG_CONFIG_HOME/workbook/config.json`, defaulting to
+`~/.config/workbook/config.json`. `workbook setup` writes it with defaults when
+it is missing, and a missing file always means defaults rather than an error:
+
+```json
+{
+  "format": "workbook.user",
+  "version": 1,
+  "docTargets": ["AGENTS.md", "CLAUDE.md"],
+  "skillDir": ".claude/skills",
+  "preferences": {}
+}
+```
+
+`docTargets` names the agent documentation files Workbook manages. A target is
+refreshed only when the project already contains it; Workbook never creates one
+on its own, so listing a file here is safe. `preferences` is reserved for future
+settings and is deliberately untyped, so adding one later needs no format
+version bump.
+
+Project identity and task data stay in the repository. Nothing in this file
+affects what Workbook records.
+Create, update, delete, and restore append immutable task commits under
 `refs/workbook/tasks/`; delete records a tombstone instead of removing the ref.
 Creation and ordinary updates write descriptive task-operation commit subjects
 suitable for `git log`, while canonical data remains in the operation and state
@@ -386,7 +457,7 @@ repository compares the portable configuration with the common guard, then cache
 that validated configuration for the repository session. Reopening the repository
 observes later tracked or guard changes and rejects use when the tracked and common
 identities do not match. For repositories initialized before the guard was
-introduced, the first configuration load or repeated `workbook init` atomically
+introduced, the first configuration load or repeated `workbook setup` atomically
 backfills the missing guard from `.workbook/config.json`. Concurrent first users
 must either publish that same identity or observe and validate the identity another
 user published.
@@ -401,12 +472,7 @@ workbook claim TASK-123 --remote-required --json
 
 Remote compare-and-swap claims, automatic conflict reconciliation, multiple
 remote selection, and a combined `workbook finish --commit HEAD --push` flow
-remain design proposals. After the first public release has been published,
-Workbook can be installed on macOS with Homebrew:
-
-```sh
-brew install dgoings/tap/workbook
-```
+remain design proposals.
 
 ## Architecture
 
@@ -580,17 +646,22 @@ The cache can be deleted at any time and rebuilt entirely from Workbook refs.
 
 ## Bootstrap and portability
 
-A normal Git clone does not fetch arbitrary custom ref namespaces. The implemented
-`workbook init` command creates local project configuration and a private cache
-directory; it does not install the CLI, fetch custom refs, build SQLite, or install
-hooks. A future bootstrap command or `init.sh` should:
+A normal Git clone does not fetch arbitrary custom ref namespaces, so bootstrap
+stays explicit. Installing Workbook is a separate step: `brew install
+dgoings/tap/workbook`, or `./scripts/install.sh` to build from source.
 
-1. install or discover the Workbook CLI;
-2. detect the repository and its remote;
-3. explicitly fetch `refs/workbook/*`;
-4. initialize or validate the SQLite projection through a normal read or `workbook rebuild`;
-5. verify read access and, when requested, write access;
-6. install optional convenience hooks.
+`workbook setup` then performs the repository half of the bootstrap:
+
+1. detect the repository and validate Git identity;
+2. create or validate project configuration and the private common-directory guard;
+3. write the user-global configuration file when it is missing;
+4. install or refresh managed agent documentation and the project-local Workbook skill;
+5. explicitly fetch and publish `refs/workbook/tasks/*` through `origin`, or report
+   that synchronization was skipped when no remote is configured;
+6. report the resulting task count.
+
+Setup deliberately does not install Git hooks. Hooks remain opt-in through
+`workbook hooks install`, because they must never be required for correctness.
 
 The default shared backend uses custom refs because they avoid branch switching and per-repository head contention. A conventional `workbook/state` branch may be offered as a compatibility fallback for Git hosts that reject custom refs. A future optional relay may provide strict leases, heartbeats, notifications, or high-concurrency agent coordination while retaining the same operation model.
 

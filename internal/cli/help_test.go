@@ -91,8 +91,8 @@ func TestRunMalformedLocalHelpAfterJSONIsPlainText(t *testing.T) {
 		name string
 		args []string
 	}{
-		{name: "option-only command short help", args: []string{"init", "--json", "-h"}},
-		{name: "option-only command long help", args: []string{"init", "--json", "--help"}},
+		{name: "option-only command short help", args: []string{"setup", "--json", "-h"}},
+		{name: "option-only command long help", args: []string{"setup", "--json", "--help"}},
 		{name: "positional command", args: []string{"create", "Title", "--json", "--help"}},
 		{name: "hooks install", args: []string{"hooks", "install", "--json", "--help"}},
 	} {
@@ -119,7 +119,7 @@ func TestRunMalformedLocalHelpAfterJSONIsPlainText(t *testing.T) {
 func TestRunLocalHelpRecognitionRespectsStringValuesAndTerminator(t *testing.T) {
 	t.Run("help-looking string flag value remains normal JSON invocation", func(t *testing.T) {
 		repository := testrepo.New(t)
-		code, stdout, stderr := run(t, repository, "init", "--json", "--key", "--help")
+		code, stdout, stderr := run(t, repository, "setup", "--json", "--key", "--help")
 		if code != 5 {
 			t.Fatalf("Run() code = %d, want 5; stderr = %q", code, stderr)
 		}
@@ -132,14 +132,14 @@ func TestRunLocalHelpRecognitionRespectsStringValuesAndTerminator(t *testing.T) 
 
 	t.Run("help after terminator remains positional input", func(t *testing.T) {
 		repository := testrepo.New(t)
-		code, stdout, stderr := run(t, repository, "init", "--json", "--", "--help")
+		code, stdout, stderr := run(t, repository, "setup", "--json", "--", "--help")
 		if code != 2 {
 			t.Fatalf("Run() code = %d, want 2; stderr = %q", code, stderr)
 		}
 		if stdout != "" {
 			t.Fatalf("Run() stdout = %q, want empty", stdout)
 		}
-		assertJSONError(t, stderr, core.CategoryInvocation, "init accepts no additional positional arguments")
+		assertJSONError(t, stderr, core.CategoryInvocation, "setup accepts no additional positional arguments")
 		assertNoWorkbookDirectory(t, repository)
 	})
 }
