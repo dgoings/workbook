@@ -672,6 +672,191 @@ setTimeout(() => {
 	}
 }
 
+func TestHandlerClientDependencySnapshotPrefersTombstones(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	current := clientPlacementTask("WB-01J00000000000000000000047", "Current task", core.StatusReady, core.PriorityMedium)
+	activeDependency := clientPlacementTask("WB-01J00000000000000000000048", "Active prerequisite copy", core.StatusDone, core.PriorityHigh)
+	activeBlocked := clientPlacementTask("WB-01J00000000000000000000049", "Active blocked copy", core.StatusBlocked, core.PriorityLow)
+	activeCandidate := clientPlacementTask("WB-01J0000000000000000000004A", "Active candidate copy", core.StatusBacklog, core.PriorityMedium)
+	current.Dependencies = []string{activeDependency.ID}
+	activeBlocked.Dependencies = []string{current.ID}
+	activeTasks := []core.Task{current, activeDependency, activeBlocked, activeCandidate}
+	deletedDependency := activeDependency
+	deletedDependency.Title = "Deleted prerequisite copy"
+	deletedDependency.Deleted = true
+	deletedBlocked := activeBlocked
+	deletedBlocked.Title = "Deleted blocked copy"
+	deletedBlocked.Deleted = true
+	deletedCandidate := activeCandidate
+	deletedCandidate.Title = "Deleted candidate copy"
+	deletedCandidate.Deleted = true
+	deletedTasks := []core.Task{deletedDependency, deletedBlocked, deletedCandidate}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return activeTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<id> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	activeDocument, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: activeTasks, Presentation: presentationForTasks(activeTasks)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deletedDocument, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: deletedTasks})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/"+current.ID, string(activeDocument)) + script + `
+deletedTaskResponse = ` + string(deletedDocument) + `;
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const dependsHeading = findElement(main, (element) => element.textContent === "Depends On");
+  const blocksHeading = findElement(main, (element) => element.textContent === "Blocks");
+  const dependsGroup = dependsHeading && dependsHeading.parentElement;
+  const blocksGroup = blocksHeading && blocksHeading.parentElement;
+  const candidateID = ` + strconv.Quote(activeCandidate.ID) + `;
+  if (findElement(dependsGroup, (element) => element.attributes.role === "option" && element.dataset.candidateId === candidateID) ||
+      findElement(blocksGroup, (element) => element.attributes.role === "option" && element.dataset.candidateId === candidateID)) {
+    throw new Error("tombstoned ID remained an editable relationship candidate");
+  }
+
+  const dependsRows = dependsGroup.querySelectorAll("[data-relationship-row]")
+    .filter((row) => row.dataset.relationshipId === ` + strconv.Quote(activeDependency.ID) + `);
+  if (dependsRows.length !== 1 || !dependsRows[0].textContent.includes("Deleted") ||
+      !findElement(dependsRows[0], (element) => element.tagName === "BUTTON" && element.textContent === "Remove")) {
+    throw new Error("tombstoned Depends On ID was not rendered once and removable");
+  }
+
+  const blocksRows = blocksGroup.querySelectorAll("[data-relationship-row]")
+    .filter((row) => row.dataset.relationshipId === ` + strconv.Quote(activeBlocked.ID) + `);
+  if (blocksRows.length !== 1 || !blocksRows[0].textContent.includes("Deleted") ||
+      findElement(blocksRows[0], (element) => element.tagName === "BUTTON" && element.textContent === "Remove")) {
+    throw new Error("tombstoned Blocks ID was not rendered once and read-only");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute conflicting relationship snapshot behavior: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerClientDependencyComboboxSelectionCollapseIsCoherent(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	current := clientPlacementTask("WB-01J0000000000000000000004B", "Current task", core.StatusReady, core.PriorityMedium)
+	pointerCandidate := clientPlacementTask("WB-01J0000000000000000000004C", "Pointer candidate", core.StatusDone, core.PriorityHigh)
+	keyboardCandidate := clientPlacementTask("WB-01J0000000000000000000004D", "Keyboard candidate", core.StatusBacklog, core.PriorityLow)
+	tasks := []core.Task{current, pointerCandidate, keyboardCandidate}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<id> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/"+current.ID, string(document)) + script + `
+setTimeout(() => {
+  const assertCollapsedSelection = (group, input, candidate, label) => {
+    const listbox = findElement(group, (element) => element.attributes.role === "listbox");
+    const selected = findElement(group, (element) =>
+      element.attributes.role === "option" && element.attributes["aria-selected"] === "true");
+    const add = findElement(group, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+    if (input.value !== candidate.title) {
+      throw new Error(label + " did not expose the accepted task as the combobox value");
+    }
+    if (input.attributes["aria-expanded"] !== "false" || !listbox.hidden ||
+        Object.prototype.hasOwnProperty.call(input.attributes, "aria-activedescendant")) {
+      throw new Error(label + " did not collapse without an active descendant");
+    }
+    if (!selected || selected.dataset.candidateId !== candidate.id || add.disabled) {
+      throw new Error(label + " did not retain selection semantics and an enabled Add button");
+    }
+  };
+
+  const dependsHeading = findElement(main, (element) => element.textContent === "Depends On");
+  const dependsGroup = dependsHeading.parentElement;
+  const dependsInput = findElement(dependsGroup, (element) => element.attributes.role === "combobox");
+  dependsInput.eventListeners.focus();
+  const pointerOption = findElement(dependsGroup, (element) =>
+    element.attributes.role === "option" && element.dataset.candidateId === ` + strconv.Quote(pointerCandidate.ID) + `);
+  pointerOption.eventListeners.click();
+  assertCollapsedSelection(dependsGroup, dependsInput, taskDocument.tasks[1], "pointer selection from an empty query");
+
+  const blocksHeading = findElement(main, (element) => element.textContent === "Blocks");
+  const blocksGroup = blocksHeading.parentElement;
+  const blocksInput = findElement(blocksGroup, (element) => element.attributes.role === "combobox");
+  blocksInput.value = "Keyboard";
+  blocksInput.eventListeners.input();
+  blocksInput.eventListeners.keydown({ key: "ArrowDown", preventDefault() {} });
+  blocksInput.eventListeners.keydown({ key: "Enter", preventDefault() {} });
+  assertCollapsedSelection(blocksGroup, blocksInput, taskDocument.tasks[2], "keyboard selection");
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute coherent dependency combobox collapse: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerClientDependencyComboboxScrollsKeyboardOptionIntoView(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	current := clientPlacementTask("WB-01J0000000000000000000004E", "Current task", core.StatusReady, core.PriorityMedium)
+	first := clientPlacementTask("WB-01J0000000000000000000004F", "First candidate", core.StatusDone, core.PriorityHigh)
+	second := clientPlacementTask("WB-01J0000000000000000000004G", "Second candidate", core.StatusBacklog, core.PriorityLow)
+	third := clientPlacementTask("WB-01J0000000000000000000004H", "Third candidate", core.StatusBlocked, core.PriorityMedium)
+	fourth := clientPlacementTask("WB-01J0000000000000000000004J", "Fourth candidate", core.StatusInProgress, core.PriorityHigh)
+	tasks := []core.Task{current, first, second, third, fourth}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<id> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/"+current.ID, string(document)) + script + `
+setTimeout(() => {
+  const dependsHeading = findElement(main, (element) => element.textContent === "Depends On");
+  const input = findElement(dependsHeading.parentElement, (element) => element.attributes.role === "combobox");
+  input.eventListeners.focus();
+  for (let index = 0; index < 3; index += 1) {
+    input.eventListeners.keydown({ key: "ArrowDown", preventDefault() {} });
+  }
+  if (scrollIntoViewCalls.length !== 3) {
+    throw new Error("keyboard navigation scroll calls = " + scrollIntoViewCalls.length + ", want 3");
+  }
+  const last = scrollIntoViewCalls[2];
+  if (last.element.dataset.candidateId !== ` + strconv.Quote(third.ID) + ` ||
+      !last.options || last.options.block !== "nearest") {
+    throw new Error("keyboard navigation did not scroll the third active option with block nearest");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute dependency keyboard option scrolling: %v\n%s", err, output)
+	}
+}
+
 func TestHandlerClientDependencyMutationOrientationAndRefresh(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -831,6 +1016,194 @@ setTimeout(async () => {
 	}
 }
 
+func TestHandlerClientDependencyMutationFollowsSupersedingRefresh(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	current := clientPlacementTask("WB-01J00000000000000000000056", "Current task", core.StatusReady, core.PriorityMedium)
+	candidate := clientPlacementTask("WB-01J00000000000000000000057", "Candidate task", core.StatusDone, core.PriorityHigh)
+	initialTasks := []core.Task{current, candidate}
+	updatedCurrent := current
+	updatedCurrent.Dependencies = []string{candidate.ID}
+	updatedTasks := []core.Task{updatedCurrent, candidate}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<id> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	documentJSON := func(tasks []core.Task) string {
+		t.Helper()
+		document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(document)
+	}
+	emptyDeleted, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: []core.Task{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/"+current.ID, documentJSON(initialTasks)) + script + `
+deletedTaskResponse = ` + string(emptyDeleted) + `;
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const dependsHeading = findElement(main, (element) => element.textContent === "Depends On");
+  const dependsGroup = dependsHeading && dependsHeading.parentElement;
+  const input = findElement(dependsGroup, (element) => element.attributes.role === "combobox");
+  input.value = "Candidate";
+  input.eventListeners.input();
+  const option = findElement(dependsGroup, (element) =>
+    element.attributes.role === "option" && element.dataset.candidateId === ` + strconv.Quote(candidate.ID) + `);
+  option.eventListeners.click();
+  const add = findElement(dependsGroup, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+
+  let resolveSupersededRefresh;
+  let activeGets = 0;
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if ((options.method || "GET") !== "GET") {
+      return {
+        ok: true,
+        json: async () => ({
+          format: "workbook.task-mutation",
+          version: 1,
+          task: ` + documentJSON(updatedTasks) + `.tasks[0]
+        })
+      };
+    }
+    if (url === "/api/tasks?deleted=true") {
+      return { ok: true, json: async () => deletedTaskResponse };
+    }
+    activeGets += 1;
+    if (activeGets === 1) {
+      return {
+        ok: true,
+        json: async () => new Promise((resolve) => { resolveSupersededRefresh = resolve; })
+      };
+    }
+    return { ok: true, json: async () => (` + documentJSON(updatedTasks) + `) };
+  };
+  fetchCalls.splice(0);
+
+  const mutation = add.eventListeners.click();
+  while (!resolveSupersededRefresh) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  await intervalCallback();
+  const refreshedRow = findElement(dependsGroup, (element) =>
+    element.dataset.relationshipId === ` + strconv.Quote(candidate.ID) + `);
+  if (!refreshedRow) throw new Error("superseding refresh did not render the durable relationship");
+
+  resolveSupersededRefresh(` + documentJSON(initialTasks) + `);
+  await mutation;
+  const falseFailure = findElement(dependsGroup, (element) =>
+    element.textContent.includes("latest task state could not be refreshed"));
+  if (falseFailure) throw new Error("superseded successful refresh was reported as a durable-refresh failure");
+  if (input.value !== "" || !add.disabled) {
+    throw new Error("superseded successful refresh did not apply PUT combobox clear semantics");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute superseding dependency refresh behavior: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerClientDependencyMutationReportsDeletedContextFailure(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	current := clientPlacementTask("WB-01J00000000000000000000058", "Current task", core.StatusReady, core.PriorityMedium)
+	candidate := clientPlacementTask("WB-01J00000000000000000000059", "Candidate task", core.StatusDone, core.PriorityHigh)
+	initialTasks := []core.Task{current, candidate}
+	updatedCurrent := current
+	updatedCurrent.Dependencies = []string{candidate.ID}
+	updatedTasks := []core.Task{updatedCurrent, candidate}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<id> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	documentJSON := func(tasks []core.Task) string {
+		t.Helper()
+		document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(document)
+	}
+	emptyDeleted, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: []core.Task{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/"+current.ID, documentJSON(initialTasks)) + script + `
+deletedTaskResponse = ` + string(emptyDeleted) + `;
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const dependsHeading = findElement(main, (element) => element.textContent === "Depends On");
+  const dependsGroup = dependsHeading && dependsHeading.parentElement;
+  const input = findElement(dependsGroup, (element) => element.attributes.role === "combobox");
+  input.eventListeners.focus();
+  const option = findElement(dependsGroup, (element) =>
+    element.attributes.role === "option" && element.dataset.candidateId === ` + strconv.Quote(candidate.ID) + `);
+  option.eventListeners.click();
+  const add = findElement(dependsGroup, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if ((options.method || "GET") !== "GET") {
+      return {
+        ok: true,
+        json: async () => ({
+          format: "workbook.task-mutation",
+          version: 1,
+          task: ` + documentJSON(updatedTasks) + `.tasks[0],
+          warnings: [{ code: "projection-update-failed", message: "Projection needs repair." }]
+        })
+      };
+    }
+    if (url === "/api/tasks?deleted=true") {
+      return {
+        ok: false,
+        json: async () => ({
+          format: "workbook.error",
+          version: 1,
+          error: { category: "internal", message: "Deleted task context is unavailable." }
+        })
+      };
+    }
+    return { ok: true, json: async () => (` + documentJSON(updatedTasks) + `) };
+  };
+  fetchCalls.splice(0);
+
+  await add.eventListeners.click();
+  const feedback = findElement(dependsGroup, (element) =>
+    element.attributes.role === "status" &&
+    element.textContent.includes("Dependency saved durably. Projection needs repair.") &&
+    element.textContent.includes("Deleted task context is unavailable."));
+  if (!feedback) {
+    throw new Error("initiating group did not preserve the durable warning and deleted-context failure");
+  }
+  if (!findElement(dependsGroup, (element) => element.dataset.relationshipId === ` + strconv.Quote(candidate.ID) + `)) {
+    throw new Error("active relationship state did not render when deleted context failed");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute deleted-context dependency mutation feedback: %v\n%s", err, output)
+	}
+}
+
 func TestHandlerClientDependencyFailureRecoveryAndKeyboard(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -928,7 +1301,7 @@ setTimeout(async () => {
     throw new Error("dependency failure reconstructed or reset the unsaved task form");
   }
   const preservedSelection = selectedOption(dependsGroup);
-  if (dependsInput.value !== "Alpha" || !preservedSelection ||
+  if (dependsInput.value !== ` + strconv.Quote(alpha.Title) + ` || !preservedSelection ||
       preservedSelection.dataset.candidateId !== ` + strconv.Quote(alpha.ID) + ` || dependsAdd.disabled) {
     throw new Error("dependency failure did not preserve the query and valid selection");
   }
@@ -1396,6 +1769,7 @@ func renderedClientScript(t *testing.T, body string) string {
 
 func clientDOMHarness(path, taskDocument string) string {
 	return `
+const scrollIntoViewCalls = [];
 class TestElement {
   constructor(tagName) {
     this.tagName = tagName.toUpperCase();
@@ -1479,6 +1853,7 @@ class TestElement {
     return matches;
   }
   getBoundingClientRect() { return this.rect || { top: 0, bottom: 0 }; }
+  scrollIntoView(options) { scrollIntoViewCalls.push({ element: this, options }); }
   get firstElementChild() { return this.children[0] || null; }
   get textContent() { return this._textContent + this.children.map((child) => child.textContent).join(""); }
   set textContent(value) { this._textContent = String(value); }
