@@ -10,13 +10,15 @@ SQLite projections, or configuration directly.
 
 ## Select and read the task
 
-1. If the invocation supplies a task ID or prefix, use it. Otherwise run
-   `workbook next --json`.
-2. Stop and report the error when Workbook is unavailable or uninitialized,
-   selection fails, or no task is eligible. Do not guess.
-3. Keep the resolved full ID from `data.id`, then run
+1. If the invocation supplies a task ID or prefix, run
+   `workbook show <supplied-id-or-prefix> --json`, then keep the canonical full
+   ID from `data.id`.
+2. Otherwise run `workbook next --json`, keep its full `data.id`, then run
    `workbook show <full-id> --json`.
-4. Read the full title, description, status, dependencies, labels, and
+3. Stop and report the error when Workbook is unavailable or uninitialized,
+   selection or reading fails, or no task is eligible. Do not guess.
+4. Use the resolved full ID for every later Workbook command.
+5. Read the full title, description, status, dependencies, labels, and
    acceptance context before editing files.
 
 ## Follow the lifecycle
