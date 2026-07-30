@@ -2076,6 +2076,166 @@ setTimeout(async () => {
 	}
 }
 
+func TestHandlerClientCreatedTaskRefreshDoesNotNavigateDetachedRoute(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	blockedTask := clientPlacementTask("WB-01J00000000000000000000085", "Blocked task", core.StatusBacklog, core.PriorityLow)
+	otherTask := clientPlacementTask("WB-01J00000000000000000000086", "Other task", core.StatusInProgress, core.PriorityMedium)
+	createdID := "WB-01J00000000000000000000087"
+	created := clientPlacementTask(createdID, "Created task", core.StatusReady, core.PriorityHigh)
+	initialTasks := []core.Task{blockedTask, otherTask}
+	refreshedTasks := []core.Task{created, blockedTask, otherTask}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/new")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/new status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	documentJSON := func(tasks []core.Task) string {
+		t.Helper()
+		document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(document)
+	}
+
+	program := clientDOMHarness("/tasks/new", documentJSON(initialTasks)) + script + `
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const groupFor = (headingText) => findElement(main, (element) =>
+    element.textContent === headingText).parentElement;
+  const blocksGroup = groupFor("Blocks");
+  const blocksInput = findElement(blocksGroup, (element) =>
+    element.tagName === "INPUT" && element.attributes.role === "combobox");
+  blocksInput.value = ` + strconv.Quote(blockedTask.Title) + `;
+  blocksInput.eventListeners.input();
+  const blockedOption = findElement(blocksGroup, (element) =>
+    element.attributes.role === "option" &&
+    element.dataset.candidateId === ` + strconv.Quote(blockedTask.ID) + `);
+  if (!blockedOption) throw new Error("Blocks candidate is not selectable");
+  blockedOption.eventListeners.click();
+  await findElement(blocksGroup, (element) =>
+    element.tagName === "BUTTON" && element.textContent === "Add dependency").eventListeners.click();
+
+  const createdID = ` + strconv.Quote(createdID) + `;
+  const blockedTaskID = ` + strconv.Quote(blockedTask.ID) + `;
+  const otherTaskID = ` + strconv.Quote(otherTask.ID) + `;
+  let createCalls = 0;
+  let finalRefreshCalls = 0;
+  let resolveFinalRefresh = null;
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if (url === "/api/tasks" && options.method === "POST") {
+      createCalls += 1;
+      return {
+        ok: true,
+        json: async () => ({
+          format: "workbook.task-mutation",
+          version: 1,
+          task: ` + documentJSON(refreshedTasks) + `.tasks[0]
+        })
+      };
+    }
+    if (options.method === "PUT" &&
+        url === "/api/tasks/" + encodeURIComponent(blockedTaskID) +
+          "/dependencies/" + encodeURIComponent(createdID)) {
+      return {
+        ok: false,
+        json: async () => ({
+          format: "workbook.error",
+          version: 1,
+          error: { category: "validation", message: "dependency would create a cycle" }
+        })
+      };
+    }
+    if (url === "/api/tasks" && (options.method || "GET") === "GET") {
+      finalRefreshCalls += 1;
+      return {
+        ok: true,
+        json: async () => new Promise((resolve) => {
+          resolveFinalRefresh = () => resolve(` + documentJSON(refreshedTasks) + `);
+        })
+      };
+    }
+    if (url === "/api/tasks?deleted=true") {
+      return {
+        ok: true,
+        json: async () => ({ format: "workbook.tasks", version: 1, tasks: [] })
+      };
+    }
+    throw new Error("unexpected fetch: " + (options.method || "GET") + " " + url);
+  };
+
+  const originForm = findElement(main, (element) => element.tagName === "FORM");
+  const submission = originForm.eventListeners.submit({ preventDefault() {} });
+  for (let attempt = 0; !resolveFinalRefresh && attempt < 20; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  if (!resolveFinalRefresh) throw new Error("created task did not reach its delayed final refresh");
+
+  const otherLink = new TestElement("a");
+  otherLink.href = "/tasks/" + encodeURIComponent(otherTaskID);
+  boardView.append(otherLink);
+  documentEventListeners.click({
+    target: otherLink,
+    button: 0,
+    defaultPrevented: false,
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+    preventDefault() {}
+  });
+  const otherForm = findElement(main, (element) => element.tagName === "FORM");
+  const otherTitle = findElement(otherForm, (element) => element.id === "task-title");
+  otherTitle.value = "Unsaved other task title";
+
+  resolveFinalRefresh();
+  await submission;
+  if (createCalls !== 1 || finalRefreshCalls !== 1) {
+    throw new Error("detached final refresh changed task creation cardinality");
+  }
+  if (historyPaths.length !== 1 ||
+      historyPaths[0] !== "/tasks/" + encodeURIComponent(otherTaskID) ||
+      findElement(main, (element) => element.tagName === "FORM") !== otherForm ||
+      otherTitle.value !== "Unsaved other task title") {
+    throw new Error("created task final refresh navigated away from the owning current route");
+  }
+
+  const createdLink = new TestElement("a");
+  createdLink.href = "/tasks/" + encodeURIComponent(createdID);
+  boardView.append(createdLink);
+  documentEventListeners.click({
+    target: createdLink,
+    button: 0,
+    defaultPrevented: false,
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+    preventDefault() {}
+  });
+  const staleDraft = findElement(main, (element) =>
+    element.dataset.relationshipId === blockedTaskID &&
+    element.dataset.relationshipDraft !== undefined);
+  const staleMessage = findElement(main, (element) =>
+    element.className === "form-status" &&
+    element.textContent.includes("Task created, but some relationships were not saved."));
+  if (staleDraft || staleMessage) {
+    throw new Error("detached created task recovery leaked into a later detail route");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute detached created-task final refresh: %v\n%s", err, output)
+	}
+}
+
 func TestHandlerShowsRecoverableErrorWhenInitialTaskLoadFails(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {

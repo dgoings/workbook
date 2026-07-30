@@ -1062,7 +1062,7 @@
               );
               relationshipDrafts.dependsOn.clear();
               relationshipDrafts.blocks.clear();
-              createdTaskRecovery = {
+              const recovery = {
                 taskID,
                 failures: relationshipOutcome.failures,
                 warnings: [
@@ -1070,12 +1070,27 @@
                   ...relationshipOutcome.warnings
                 ]
               };
+              createdTaskRecovery = recovery;
+              const creationOwner = {
+                route: section,
+                controller: relationshipController
+              };
+              const ownsCreation = () =>
+                main.firstElementChild === creationOwner.route &&
+                ownsDependencyController(creationOwner.controller) &&
+                createdTaskRecovery === recovery;
+              const abandonDetachedRecovery = () => {
+                if (createdTaskRecovery === recovery) {
+                  createdTaskRecovery = null;
+                }
+              };
               const retryCreatedTaskRefresh = async () => {
-                const recovery = createdTaskRecovery;
                 const retried = await currentRefreshResult(refresh());
-                if (main.firstElementChild !== section ||
-                    createdTaskRecovery !== recovery ||
-                    retried.status !== "applied" ||
+                if (!ownsCreation()) {
+                  abandonDetachedRecovery();
+                  return;
+                }
+                if (retried.status !== "applied" ||
                     retried.relationshipContext.status !== "applied") {
                   return;
                 }
@@ -1085,13 +1100,16 @@
                 navigate("/tasks/" + encodeURIComponent(recoveredID));
               };
               const refreshed = await currentRefreshResult(refresh());
+              if (!ownsCreation()) {
+                abandonDetachedRecovery();
+                return;
+              }
               if (refreshed.status !== "applied" ||
                   refreshed.relationshipContext.status !== "applied") {
-                if (main.firstElementChild !== section) return;
                 showCreatedTaskRefreshFailure(result, retryCreatedTaskRefresh);
                 return;
               }
-              applyCreatedTaskRecovery(createdTaskRecovery);
+              applyCreatedTaskRecovery(recovery);
               createdTaskRecovery = null;
               navigate("/tasks/" + encodeURIComponent(taskID));
             } else {
