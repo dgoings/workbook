@@ -360,6 +360,10 @@ normally smaller for JSON documents but can exceed `rawBytes` for very small
 objects such as the fixture's two-entry trees, where framing outweighs
 compression. That is real Git behavior, not a reporting error.
 
+Object counts are stored-object counts, not logical document counts. Git stores
+byte-identical blobs once, so two identical operation documents contribute one
+object; that is the storage the repository actually pays for.
+
 Disposable cache bytes live under `depths[].disposableCache`. `projectionPath`
 and `validationPath` are repository-relative
 (`.git/workbook/cache.sqlite` and `.git/workbook/validation.sqlite`).

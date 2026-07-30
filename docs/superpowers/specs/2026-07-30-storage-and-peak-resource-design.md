@@ -72,6 +72,15 @@ attachment blob or a future annotated tag lands somewhere real instead of
 vanishing. Both are zero for the current fixture, which is itself reported
 rather than assumed.
 
+Two consequences of Git's content addressing are intentional and should be read
+as storage facts rather than logical counts. First, two byte-identical blobs are
+one object and are counted once, because they occupy storage once. Second, if a
+single blob were reachable under more than one tree path, `rev-list --objects`
+would emit it once under the first path found and it would land in that one
+class. Both cases are impossible for the current fixture, whose operation and
+state documents differ in every commit, but a report on a repository with
+duplicated documents describes the stored objects, not the logical documents.
+
 Three invariants are recorded in every report and asserted by tests:
 
 - `classifiedObjects == reachableObjects` and `unclassifiedObjects == 0`.
