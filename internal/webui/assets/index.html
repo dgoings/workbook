@@ -200,6 +200,8 @@
       let taskRefreshGeneration = 0;
       let relationshipRefreshGeneration = 0;
       let currentTaskRefresh = null;
+      let pendingDetailRelationshipContextTaskID = null;
+      const pendingTaskMessages = new Map();
 
       function text(element, value) { element.textContent = value || ""; return element; }
       function taskIDCopyControl(taskID, visibleID) {
@@ -395,6 +397,50 @@
           },
           error: ""
         };
+      }
+      function draftRelationshipOperations(taskID, draftState) {
+        const operations = [];
+        draftState.dependsOn.forEach((entry) => {
+          operations.push({
+            direction: "dependsOn",
+            dependentID: taskID,
+            prerequisiteID: entry.id,
+            entry
+          });
+        });
+        draftState.blocks.forEach((entry) => {
+          operations.push({
+            direction: "blocks",
+            dependentID: entry.id,
+            prerequisiteID: taskID,
+            entry
+          });
+        });
+        return operations;
+      }
+      async function persistRelationshipDrafts(taskID, draftState) {
+        const failures = newRelationshipDraftState();
+        const warnings = [];
+        for (const operation of draftRelationshipOperations(taskID, draftState)) {
+          const path = "/api/tasks/" +
+            encodeURIComponent(operation.dependentID) +
+            "/dependencies/" +
+            encodeURIComponent(operation.prerequisiteID);
+          try {
+            const document = await mutateTask("PUT", path);
+            (document.warnings || []).forEach((warning) =>
+              warnings.push(warning.message));
+          } catch (error) {
+            const failed = {
+              ...operation.entry,
+              error: error instanceof Error
+                ? error.message
+                : "Dependency update failed."
+            };
+            failures[operation.direction].set(operation.entry.id, failed);
+          }
+        }
+        return { failures, warnings };
       }
       function relationshipCandidates(taskID, direction, draftState = null) {
         const snapshot = reconciledRelationshipTasks();
@@ -747,6 +793,10 @@
         const priority = select("priority", [["high", "High"], ["medium", "Medium"], ["low", "Low"]], task.priority);
         const labels = document.createElement("input"); labels.id = "task-labels"; labels.name = "labels"; labels.value = (task.labels || []).join(", "); labels.placeholder = "web, docs, release";
         const result = document.createElement("p"); result.className = "form-status"; result.setAttribute("role", "status"); result.setAttribute("aria-live", "polite");
+        if (!isNew && pendingTaskMessages.has(task.id)) {
+          text(result, pendingTaskMessages.get(task.id).join(" "));
+          pendingTaskMessages.delete(task.id);
+        }
         const actions = document.createElement("div"); actions.className = "form-actions";
         const save = document.createElement("button"); save.className = "save-button"; save.type = "submit"; text(save, "Save");
         const back = document.createElement("a"); back.className = "board-link"; back.href = "/"; text(back, "Back");
@@ -794,9 +844,31 @@
           save.disabled = true;
           text(result, "");
           try {
-            await mutateTask(isNew ? "POST" : "PATCH", isNew ? "/api/tasks" : "/api/tasks/" + encodeURIComponent(task.id), values);
-            navigate("/");
-            await refresh();
+            const document = await mutateTask(isNew ? "POST" : "PATCH", isNew ? "/api/tasks" : "/api/tasks/" + encodeURIComponent(task.id), values);
+            if (isNew) {
+              const taskID = document.task.id;
+              const relationshipOutcome = await persistRelationshipDrafts(
+                taskID,
+                relationshipDrafts
+              );
+              relationshipDrafts.dependsOn.clear();
+              relationshipDrafts.blocks.clear();
+              const refreshed = await currentRefreshResult(refresh());
+              if (refreshed.status !== "applied") {
+                throw new Error("Task created durably, but the latest task state could not be refreshed.");
+              }
+              latestDeletedTasks = await refreshDeletedTasks();
+              pendingDetailRelationshipContextTaskID = taskID;
+              const messages = [
+                ...mutationWarnings(document),
+                ...relationshipOutcome.warnings
+              ];
+              if (messages.length) pendingTaskMessages.set(taskID, messages);
+              navigate("/tasks/" + encodeURIComponent(taskID));
+            } else {
+              navigate("/");
+              await refresh();
+            }
           } catch (error) {
             text(result, error instanceof Error ? error.message : "Task update failed.");
           } finally {
@@ -808,10 +880,14 @@
         relationshipMount.append(relationshipController.region);
         if (!isNew) {
           activeDependencyController = relationshipController;
-          refreshRelationshipContext(
-            relationshipController,
-            ++relationshipRefreshGeneration
-          );
+          if (pendingDetailRelationshipContextTaskID === task.id) {
+            pendingDetailRelationshipContextTaskID = null;
+          } else {
+            refreshRelationshipContext(
+              relationshipController,
+              ++relationshipRefreshGeneration
+            );
+          }
         }
         return section;
       }
@@ -828,6 +904,11 @@
           throw new Error(document.error && document.error.message || "Task update failed.");
         }
         return document;
+      }
+      function mutationWarnings(document) {
+        return Array.isArray(document.warnings)
+          ? document.warnings.map((warning) => warning.message)
+          : [];
       }
       function ownsDependencyController(controller) {
         return activeDependencyController === controller;

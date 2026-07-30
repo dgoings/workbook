@@ -922,6 +922,146 @@ setTimeout(async () => {
 	}
 }
 
+func TestHandlerClientCreatesTaskWithBothRelationshipDirections(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	prerequisite := clientPlacementTask("WB-01J00000000000000000000074", "Prerequisite", core.StatusDone, core.PriorityHigh)
+	blockedTask := clientPlacementTask("WB-01J00000000000000000000075", "Blocked task", core.StatusBacklog, core.PriorityLow)
+	createdID := "WB-01J00000000000000000000076"
+	created := clientPlacementTask(createdID, "Created task", core.StatusReady, core.PriorityMedium)
+	initialTasks := []core.Task{prerequisite, blockedTask}
+	refreshedTasks := []core.Task{created, prerequisite, blockedTask}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/new")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/new status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	documentJSON := func(tasks []core.Task) string {
+		t.Helper()
+		document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(document)
+	}
+	emptyDeleted, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: []core.Task{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/new", documentJSON(initialTasks)) + script + `
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const groupFor = (headingText) => {
+    const heading = findElement(main, (element) => element.textContent === headingText);
+    if (!heading) throw new Error("missing " + headingText + " group");
+    return heading.parentElement;
+  };
+  const selectAndAdd = (group, candidateID, candidateTitle) => {
+    const input = findElement(group, (element) => element.tagName === "INPUT" && element.attributes.role === "combobox");
+    input.value = candidateTitle;
+    input.eventListeners.input();
+    const option = findElement(group, (element) => element.attributes.role === "option" && element.dataset.candidateId === candidateID);
+    if (!option) throw new Error("candidate is not selectable: " + candidateID);
+    option.eventListeners.click();
+    const add = findElement(group, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+    if (!add || add.disabled) throw new Error("selected candidate did not enable Add dependency");
+    return add.eventListeners.click();
+  };
+  const prerequisiteID = ` + strconv.Quote(prerequisite.ID) + `;
+  const blockedTaskID = ` + strconv.Quote(blockedTask.ID) + `;
+  const createdID = ` + strconv.Quote(createdID) + `;
+  const createdTask = ` + documentJSON(refreshedTasks) + `.tasks[0];
+  const activeRefresh = ` + documentJSON(refreshedTasks) + `;
+  const deletedRefresh = ` + string(emptyDeleted) + `;
+  const events = [];
+  const originalPushState = history.pushState;
+  history.pushState = (...args) => {
+    events.push("navigate");
+    return originalPushState(...args);
+  };
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if (url === "/api/tasks" && options.method === "POST") {
+      return { ok: true, json: async () => { events.push("post"); return { format: "workbook.task-mutation", version: 1, task: createdTask, warnings: [{ code: "projection-update-failed", message: "Task creation projection needs repair." }] }; } };
+    }
+    if ((options.method || "GET") === "PUT") {
+      const message = url.endsWith("/" + encodeURIComponent(prerequisiteID))
+        ? "Depends On projection needs repair."
+        : "Blocks projection needs repair.";
+      return { ok: true, json: async () => { events.push("put"); return { format: "workbook.task-mutation", version: 1, task: createdTask, warnings: [{ code: "projection-update-failed", message }] }; } };
+    }
+    if (url === "/api/tasks") {
+      return { ok: true, json: async () => { events.push("active-refresh"); return activeRefresh; } };
+    }
+    if (url === "/api/tasks?deleted=true") {
+      return { ok: true, json: async () => { events.push("deleted-refresh"); return deletedRefresh; } };
+    }
+    throw new Error("unexpected fetch: " + (options.method || "GET") + " " + url);
+  };
+  fetchCalls.splice(0);
+
+  await selectAndAdd(groupFor("Depends On"), prerequisiteID, ` + strconv.Quote(prerequisite.Title) + `);
+  await selectAndAdd(groupFor("Blocks"), blockedTaskID, ` + strconv.Quote(blockedTask.Title) + `);
+  const form = findElement(main, (element) => element.tagName === "FORM");
+  if (!form || !form.eventListeners.submit) throw new Error("New Task form did not register submit behavior");
+  await form.eventListeners.submit({ preventDefault() {} });
+
+  const assertCall = (method, url, hasBody) => {
+    const call = fetchCalls.find((candidate) => candidate.options.method === method && candidate.url === url);
+    if (!call) throw new Error("missing " + method + " " + url);
+    if (Object.prototype.hasOwnProperty.call(call.options, "body") !== hasBody) {
+      throw new Error(method + " " + url + " body presence was wrong");
+    }
+  };
+  assertCall("PUT",
+    "/api/tasks/" + encodeURIComponent(createdID) +
+    "/dependencies/" + encodeURIComponent(prerequisiteID),
+    false);
+  assertCall("PUT",
+    "/api/tasks/" + encodeURIComponent(blockedTaskID) +
+    "/dependencies/" + encodeURIComponent(createdID),
+    false);
+  const dependencyMutations = fetchCalls.filter((call) =>
+    call.options.method === "PUT" && /\/api\/tasks\/.+\/dependencies\/.+/.test(call.url));
+  if (dependencyMutations.length !== 2 || dependencyMutations.some((call) =>
+      Object.prototype.hasOwnProperty.call(call.options, "body"))) {
+    throw new Error("New Task relationship writes were not exactly two bodyless requests");
+  }
+  if (fetchCalls.filter((call) => call.options.method === "POST" && call.url === "/api/tasks").length !== 1) {
+    throw new Error("New Task did not issue exactly one task POST");
+  }
+  if (fetchCalls.filter((call) => (call.options.method || "GET") === "GET" && call.url === "/api/tasks").length !== 1) {
+    throw new Error("New Task did not issue exactly one final active refresh");
+  }
+  if (fetchCalls.filter((call) => (call.options.method || "GET") === "GET" && call.url === "/api/tasks?deleted=true").length !== 1) {
+    throw new Error("New Task did not issue exactly one final deleted refresh");
+  }
+  const navigateAt = events.indexOf("navigate");
+  if (navigateAt < 0 || events.slice(0, navigateAt).filter((event) => event === "put").length !== 2 ||
+      events.indexOf("active-refresh") > navigateAt || events.indexOf("deleted-refresh") > navigateAt) {
+    throw new Error("New Task navigated before both relationship writes and refreshes resolved");
+  }
+  if (historyPaths.length !== 1 || historyPaths[0] !== "/tasks/" + encodeURIComponent(createdID)) {
+    throw new Error("New Task did not navigate to the durable created task");
+  }
+  const feedback = findElement(main, (element) => element.className === "form-status" &&
+    element.textContent.includes("Task creation projection needs repair.") &&
+    element.textContent.includes("Depends On projection needs repair.") &&
+    element.textContent.includes("Blocks projection needs repair."));
+  if (!feedback) throw new Error("created task detail did not receive durable mutation warnings");
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute created task relationship persistence: %v\n%s", err, output)
+	}
+}
+
 func TestHandlerShowsRecoverableErrorWhenInitialTaskLoadFails(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
