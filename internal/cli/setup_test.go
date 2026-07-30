@@ -328,3 +328,83 @@ func TestDocsHelpListsEverySubcommand(t *testing.T) {
 		}
 	}
 }
+
+func TestSetupInstallsTheSkillIntoAnOverriddenDirectory(t *testing.T) {
+	repository := testrepo.New(t)
+
+	code, _, stderr := run(t, repository, "setup", "--skill-dir", "tools/skills")
+
+	if code != 0 {
+		t.Fatalf("setup code = %d, want 0; stderr = %q", code, stderr)
+	}
+	if _, err := os.Stat(filepath.Join(repository, "tools", "skills", "workbook", "SKILL.md")); err != nil {
+		t.Fatalf("skill not installed to the overridden directory: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repository, ".claude")); !os.IsNotExist(err) {
+		t.Fatalf("setup also used the configured directory: %v", err)
+	}
+}
+
+func TestSetupWithNoSkillStillInstallsGuidelines(t *testing.T) {
+	repository := testrepo.New(t)
+
+	code, stdout, stderr := run(t, repository, "setup", "--no-skill")
+
+	if code != 0 {
+		t.Fatalf("setup code = %d, want 0; stderr = %q", code, stderr)
+	}
+	if strings.Contains(stdout, "SKILL.md") {
+		t.Fatalf("setup --no-skill reported a skill:\n%s", stdout)
+	}
+	if _, err := os.Stat(filepath.Join(repository, ".claude")); !os.IsNotExist(err) {
+		t.Fatalf("setup --no-skill installed the skill: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repository, filepath.FromSlash(agentdocs.GuidelinesPath))); err != nil {
+		t.Fatalf("setup --no-skill skipped the guidelines: %v", err)
+	}
+}
+
+func TestSkillDirectoryAndNoSkillAreMutuallyExclusive(t *testing.T) {
+	// Production mutation: silently ignoring one of two contradictory flags
+	// leaves the user guessing which one took effect.
+	repository := testrepo.New(t)
+
+	for _, args := range [][]string{
+		{"setup", "--no-skill", "--skill-dir", "tools/skills"},
+		{"docs", "install", "--no-skill", "--skill-dir", "tools/skills"},
+	} {
+		t.Run(strings.Join(args[:len(args)-2], " "), func(t *testing.T) {
+			code, _, stderr := run(t, repository, args...)
+			if code != core.ExitCode(core.Errorf(core.CategoryInvocation, "x")) {
+				t.Fatalf("code = %d, want invocation exit code; stderr = %q", code, stderr)
+			}
+			assertHumanError(t, stderr, "cannot use --skill-dir with --no-skill")
+		})
+	}
+}
+
+func TestDocsSubcommandsHonourTheSkillDirectoryOverride(t *testing.T) {
+	repository := testrepo.New(t)
+	if code, _, stderr := run(t, repository, "setup", "--skill-dir", "tools/skills"); code != 0 {
+		t.Fatalf("setup code = %d, want 0; stderr = %q", code, stderr)
+	}
+
+	code, stdout, stderr := run(t, repository, "docs", "status", "--skill-dir", "tools/skills")
+
+	if code != 0 {
+		t.Fatalf("docs status code = %d, want 0; stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stdout, "tools/skills/workbook/SKILL.md") {
+		t.Fatalf("docs status did not report the overridden skill:\n%s", stdout)
+	}
+	if strings.Contains(stdout, string(agentdocs.StateAbsent)) {
+		t.Fatalf("docs status reported an absent artifact:\n%s", stdout)
+	}
+
+	if code, _, stderr := run(t, repository, "docs", "remove", "--no-skill"); code != 0 {
+		t.Fatalf("docs remove code = %d, want 0; stderr = %q", code, stderr)
+	}
+	if _, err := os.Stat(filepath.Join(repository, "tools", "skills", "workbook", "SKILL.md")); err != nil {
+		t.Fatalf("docs remove --no-skill deleted the skill: %v", err)
+	}
+}

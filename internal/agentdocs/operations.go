@@ -26,6 +26,13 @@ type Options struct {
 	// Create names documentation targets to create even when absent. Each
 	// entry must appear in the user configuration's DocTargets.
 	Create []string
+	// SkillDir overrides the user configuration's skill destination for this
+	// project. A relative value resolves against Root. Empty means use the
+	// configured value.
+	SkillDir string
+	// SkipSkill leaves the Workbook skill alone, for projects that package
+	// skills themselves. Guidelines and documentation targets are unaffected.
+	SkipSkill bool
 }
 
 // Artifact reports one managed file.
@@ -173,11 +180,6 @@ func plan(options Options) ([]target, error) {
 		Body:      RenderGuidelines(options.Project),
 	}
 
-	skill, err := skillDocument(options.Generator)
-	if err != nil {
-		return nil, err
-	}
-
 	targets := []target{{
 		path:     filepath.Join(options.Root, filepath.FromSlash(GuidelinesPath)),
 		display:  GuidelinesPath,
@@ -185,18 +187,27 @@ func plan(options Options) ([]target, error) {
 		owned:    true,
 	}}
 
-	skillDirectory := options.User.SkillDir
-	if skillDirectory == "" {
-		skillDirectory = userconfig.Default().SkillDir
+	if !options.SkipSkill {
+		skill, err := skillDocument(options.Generator)
+		if err != nil {
+			return nil, err
+		}
+		skillDirectory := options.SkillDir
+		if skillDirectory == "" {
+			skillDirectory = options.User.SkillDir
+		}
+		if skillDirectory == "" {
+			skillDirectory = userconfig.Default().SkillDir
+		}
+		skillPath := filepath.Join(skillDirectory, "workbook", "SKILL.md")
+		display := filepath.ToSlash(skillPath)
+		if !filepath.IsAbs(skillDirectory) {
+			skillPath = filepath.Join(options.Root, skillPath)
+		} else {
+			display = skillPath
+		}
+		targets = append(targets, target{path: skillPath, display: display, document: skill, owned: true})
 	}
-	skillPath := filepath.Join(skillDirectory, "workbook", "SKILL.md")
-	display := filepath.ToSlash(skillPath)
-	if !filepath.IsAbs(skillDirectory) {
-		skillPath = filepath.Join(options.Root, skillPath)
-	} else {
-		display = skillPath
-	}
-	targets = append(targets, target{path: skillPath, display: display, document: skill, owned: true})
 
 	reference := Document{Generator: options.Generator, Body: RenderReference()}
 	for _, name := range options.Create {

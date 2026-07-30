@@ -903,7 +903,7 @@ func TestREADMEImplementedCommands(t *testing.T) {
 		}
 	}
 	want := []string{
-		"workbook setup [--key WB] [--no-docs] [--no-sync] [--force] [--json]",
+		"workbook setup [--key <key>] [--no-docs] [--no-sync] [--skill-dir <dir>] [--no-skill] [--force] [--json]",
 		"workbook create",
 		"workbook list",
 		"workbook board [--wide | --narrow] [--json]",
@@ -921,10 +921,10 @@ func TestREADMEImplementedCommands(t *testing.T) {
 		"workbook fetch [--json]",
 		"workbook push [--json]",
 		"workbook sync [--json]",
-		"workbook docs install [--create <file>] [--force] [--json]",
-		"workbook docs update [--force] [--json]",
-		"workbook docs status [--json]",
-		"workbook docs remove [--force] [--json]",
+		"workbook docs install [--create <file>] [--skill-dir <dir>] [--no-skill] [--force] [--json]",
+		"workbook docs update [--skill-dir <dir>] [--no-skill] [--force] [--json]",
+		"workbook docs status [--skill-dir <dir>] [--no-skill] [--json]",
+		"workbook docs remove [--skill-dir <dir>] [--no-skill] [--force] [--json]",
 		"workbook hooks install [--json]",
 		"workbook serve [--addr 127.0.0.1:7331]",
 		"workbook help [command]",

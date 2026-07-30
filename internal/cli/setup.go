@@ -41,9 +41,14 @@ func runSetup(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 	key := flags.String("key", "WB", "project key")
 	noDocs := flags.Bool("no-docs", false, "skip managed agent documentation")
 	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with origin")
+	skillDir := flags.String("skill-dir", "", "install the Workbook skill here")
+	noSkill := flags.Bool("no-skill", false, "leave the Workbook skill alone")
 	force := flags.Bool("force", false, "overwrite locally modified managed documentation")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
+		return err
+	}
+	if err := validateSkillFlags(*skillDir, *noSkill); err != nil {
 		return err
 	}
 
@@ -79,6 +84,8 @@ func runSetup(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 			User:      user,
 			Generator: release.Version,
 			Force:     *force,
+			SkillDir:  *skillDir,
+			SkipSkill: *noSkill,
 		})
 		if err != nil {
 			return err
@@ -164,12 +171,17 @@ func runDocs(ctx context.Context, args []string, cwd string, stdout io.Writer) e
 	if subcommand == "install" {
 		flags.Var(&create, "create", "also create this documentation target")
 	}
+	skillDir := flags.String("skill-dir", "", "install the Workbook skill here")
+	noSkill := flags.Bool("no-skill", false, "leave the Workbook skill alone")
 	var force *bool
 	if subcommand != "status" {
 		force = flags.Bool("force", false, "overwrite locally modified files")
 	}
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
+		return err
+	}
+	if err := validateSkillFlags(*skillDir, *noSkill); err != nil {
 		return err
 	}
 
@@ -188,6 +200,8 @@ func runDocs(ctx context.Context, args []string, cwd string, stdout io.Writer) e
 		User:      user,
 		Generator: release.Version,
 		Create:    create.values,
+		SkillDir:  *skillDir,
+		SkipSkill: *noSkill,
 	}
 	if force != nil {
 		options.Force = *force
@@ -217,6 +231,15 @@ func runDocs(ctx context.Context, args []string, cwd string, stdout io.Writer) e
 			continue
 		}
 		fmt.Fprintf(stdout, "%s\t%s\t%s\n", artifact.Path, artifact.State, artifactAction(artifact))
+	}
+	return nil
+}
+
+// validateSkillFlags rejects the contradictory combination rather than
+// silently letting one flag win.
+func validateSkillFlags(skillDir string, noSkill bool) error {
+	if skillDir != "" && noSkill {
+		return core.Errorf(core.CategoryInvocation, "cannot use --skill-dir with --no-skill")
 	}
 	return nil
 }
