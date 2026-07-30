@@ -104,16 +104,18 @@ func runWithBenchmark(
 	}
 
 	fmt.Fprintf(stdout, "wrote %s and %s\n", options.outputJSON, options.outputMarkdown)
-	if hasFailedLocalMeasurement(report) {
-		fmt.Fprintln(stderr, "workbook-bench: local measurement failed; see retained reports")
+	if hasFailedRetainedMeasurement(report) {
+		fmt.Fprintln(stderr, "workbook-bench: measurement failed; see retained reports")
 		return failureExitCode
 	}
 	return 0
 }
 
-func hasFailedLocalMeasurement(report perf.Report) bool {
+func hasFailedRetainedMeasurement(report perf.Report) bool {
 	for _, scenario := range report.Scenarios {
-		if !strings.HasPrefix(scenario.Name, "cli-") && !strings.HasPrefix(scenario.Name, "api-") {
+		switch scenario.Surface {
+		case "cold-cli", "warm-http", "repository":
+		default:
 			continue
 		}
 		for _, sample := range scenario.Samples {

@@ -94,6 +94,9 @@ func TestRunResolvesRelativeWorkbookBinaryAndWritesCompletePerformanceReport(t *
 func TestRunRetainsLocalMeasurementOutcomesAndReturnsExecutionStatus(t *testing.T) {
 	tests := []struct {
 		name         string
+		scenarioName string
+		surface      string
+		target       *perf.ScenarioTarget
 		sample       perf.Sample
 		timeout      string
 		wantExitCode int
@@ -101,6 +104,13 @@ func TestRunRetainsLocalMeasurementOutcomesAndReturnsExecutionStatus(t *testing.
 	}{
 		{
 			name:         "timeout exits one",
+			scenarioName: "cli-update",
+			surface:      "cold-cli",
+			target: &perf.ScenarioTarget{
+				DurationStatistic:  perf.DurationP95,
+				DurationComparison: perf.DurationAtMost,
+				MaxMilliseconds:    200,
+			},
 			sample:       perf.Sample{Duration: time.Second, TimedOut: true},
 			timeout:      "1s",
 			wantExitCode: failureExitCode,
@@ -108,6 +118,13 @@ func TestRunRetainsLocalMeasurementOutcomesAndReturnsExecutionStatus(t *testing.
 		},
 		{
 			name:         "nonzero exit exits one",
+			scenarioName: "cli-update",
+			surface:      "cold-cli",
+			target: &perf.ScenarioTarget{
+				DurationStatistic:  perf.DurationP95,
+				DurationComparison: perf.DurationAtMost,
+				MaxMilliseconds:    200,
+			},
 			sample:       perf.Sample{Duration: time.Millisecond, ExitCode: 7},
 			timeout:      "1s",
 			wantExitCode: failureExitCode,
@@ -115,6 +132,13 @@ func TestRunRetainsLocalMeasurementOutcomesAndReturnsExecutionStatus(t *testing.
 		},
 		{
 			name:         "measurement start error exits one",
+			scenarioName: "cli-update",
+			surface:      "cold-cli",
+			target: &perf.ScenarioTarget{
+				DurationStatistic:  perf.DurationP95,
+				DurationComparison: perf.DurationAtMost,
+				MaxMilliseconds:    200,
+			},
 			sample:       perf.Sample{Duration: time.Millisecond, Error: "start measured command"},
 			timeout:      "1s",
 			wantExitCode: failureExitCode,
@@ -122,10 +146,26 @@ func TestRunRetainsLocalMeasurementOutcomesAndReturnsExecutionStatus(t *testing.
 		},
 		{
 			name:         "valid target miss exits zero",
+			scenarioName: "cli-update",
+			surface:      "cold-cli",
+			target: &perf.ScenarioTarget{
+				DurationStatistic:  perf.DurationP95,
+				DurationComparison: perf.DurationAtMost,
+				MaxMilliseconds:    200,
+			},
 			sample:       perf.Sample{Duration: 250 * time.Millisecond},
 			timeout:      "1s",
 			wantExitCode: 0,
 			wantOutcome:  "miss",
+		},
+		{
+			name:         "repository failure exits one after reports",
+			scenarioName: "sync-initial-local-bare",
+			surface:      "repository",
+			sample:       perf.Sample{Duration: time.Millisecond, ExitCode: 1, Error: "sync failed"},
+			timeout:      "1s",
+			wantExitCode: failureExitCode,
+			wantOutcome:  "failed",
 		},
 	}
 
@@ -150,19 +190,14 @@ func TestRunRetainsLocalMeasurementOutcomesAndReturnsExecutionStatus(t *testing.
 				"--output-json", jsonPath,
 				"--output-markdown", markdownPath,
 			}, &stdout, &stderr, func(context.Context, options) (perf.Report, error) {
-				target := perf.ScenarioTarget{
-					DurationStatistic:  perf.DurationP95,
-					DurationComparison: perf.DurationAtMost,
-					MaxMilliseconds:    200,
-				}
 				return perf.Report{
 					Format:  perf.ReportFormat,
 					Version: perf.ReportVersion,
 					Phase:   "baseline",
 					Scenarios: []perf.ScenarioResult{{
-						Name:    "cli-update",
-						Surface: "cold CLI",
-						Target:  &target,
+						Name:    test.scenarioName,
+						Surface: test.surface,
+						Target:  test.target,
 						Samples: []perf.Sample{test.sample},
 					}},
 				}, nil
