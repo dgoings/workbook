@@ -246,21 +246,54 @@ must become schema-driven or `docs` subcommands will not appear in help.
 
 The Homebrew formula gains a `caveats` block naming `workbook setup`, so every
 `brew install` and `brew upgrade` prints the per-project action Homebrew cannot
-take itself.
+take itself. Homebrew prints caveats on both install and upgrade, which is the
+only automatic signal available — the tool cannot refresh a developer's other
+checkouts, so it tells them to.
 
-**Risk being addressed.** `internal/release.RenderFormula`
-(`internal/release/formula.go:17`) has no production caller — the live path is
-`scripts/publish-release.sh:136` invoking `scripts/render-homebrew-formula.sh`.
-Both contain the same formula template, and no test compares them, so editing
-one silently diverges. Before adding caveats, add a parity test that runs the
-shell script and asserts its output equals `release.RenderFormula` byte for
-byte. Collapsing the shell renderer onto the Go one — the pattern `release.sh`
-already uses for `internal/release/archivecmd` — is the better fix and is
-deliberately left as follow-up work.
+The block goes between `def install` and `test do`, which leaves intact the
+`"  end\n\n  def install"` delimiter that
+`assertArchitectureFormulaBlock` relies on
+(`scripts/render_homebrew_formula_test.go:53`). Existing Go assertions are all
+`strings.Contains` (`internal/release/release_test.go:97`), so they are
+unaffected.
 
-Release itself is tagging `v0.2.0` and letting
-`.github/workflows/release.yml` build, publish, and update the tap. No release
-tooling changes are needed beyond the caveats block.
+### Deduplicating the renderer first
+
+`internal/release.RenderFormula` (`internal/release/formula.go:17`) currently
+has no production caller. The live path is `scripts/publish-release.sh:136`
+invoking `scripts/render-homebrew-formula.sh`, whose heredoc
+(`render-homebrew-formula.sh:62-93`) is a byte-for-byte copy of the Go template.
+Nothing compares them. Adding caveats to both is precisely the edit that
+diverges silently, so the duplication is removed before the caveats are added.
+
+The duplicated thing is the *template*, not the validation. So only the template
+moves:
+
+- Add `internal/release/formulacmd`, a thin `main` that takes
+  `<version> <arm64-sha> <amd64-sha> <repository>`, calls `release.RenderFormula`,
+  and writes the result to stdout. This mirrors `internal/release/archivecmd`,
+  which `scripts/release.sh:33` already builds into a temporary directory and
+  invokes the same way.
+- `render-homebrew-formula.sh` keeps everything else: its usage message,
+  `require_safe_release_version`, the checksums-file existence check, the
+  `owner/name` shape check, the `awk` `checksum_for` extraction with its exact
+  error strings, and the mktemp-in-output-directory plus `chmod 0644` plus `mv`
+  atomic write. It replaces only the heredoc with a build-and-invoke of
+  `formulacmd`.
+
+This preserves every contract the three existing shell tests assert, including
+that an unsafe version produces no output file, because validation still runs
+before anything is written. `RenderFormula`'s own semantic-version, repository,
+and 64-hex-digit checks become a redundant second guard rather than a competing
+implementation, and it becomes live production code.
+
+Go is already on `PATH` wherever this runs: `.github/workflows/release.yml`
+performs its `setup-go` step before `release.sh` and `publish-release.sh`, and
+`release.sh` already shells out to `go build`.
+
+Release itself is tagging `v0.2.0` and letting `.github/workflows/release.yml`
+build, publish, and update `dgoings/homebrew-tap`. No other release tooling
+changes are required.
 
 ## Documentation updates
 
@@ -305,8 +338,11 @@ invocation error.
 pattern (`internal/gitstore/sync_test.go:772`), covering both the fresh-clone
 fetch and the no-`origin` skip path.
 
-**Release:** the new shell-versus-Go formula parity test, and an assertion that
-the rendered formula contains the caveats text.
+**Release:** the three existing `render-homebrew-formula.sh` tests must pass
+unchanged after the renderer is deduplicated — that is the evidence the shell
+contract survived. Add an assertion that the rendered formula contains the
+caveats text and names `workbook setup`, and a `formulacmd` test covering
+argument-count rejection and a non-zero exit on an invalid version.
 
 **Migration note.** `initializedRepository` (`internal/cli/run_test.go:1488`) is
 the single choke point for the `init` → `setup` rename across the existing
@@ -318,7 +354,6 @@ suite.
   design generates from `core.WorkflowStatuses()` so that work can supply a
   different source without a second status list.
 - Multiple task remotes (`WB-01KYD742HDHMJ8QGJ72NJ3YTNT`).
-- Collapsing `render-homebrew-formula.sh` onto `release.RenderFormula`.
 - Linux release artifacts, signing, and notarization.
 - Runtime staleness warnings on ordinary commands, notification throttling, and
   any user-facing preference for suppressing them.
