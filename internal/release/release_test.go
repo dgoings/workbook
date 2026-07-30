@@ -384,3 +384,29 @@ func releasePaths(t *testing.T) (string, string) {
 	root := filepath.Clean(filepath.Join(filepath.Dir(filename), "..", ".."))
 	return root, filepath.Join(root, "scripts", "release.sh")
 }
+
+func TestRenderFormulaDirectsUpgradersToRerunSetup(t *testing.T) {
+	// Production mutation: shipping a formula without caveats would leave a
+	// `brew upgrade` silent about the per-project refresh Homebrew cannot do.
+	formula, err := release.RenderFormula(
+		"0.2.0",
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		"dgoings/workbook",
+	)
+	if err != nil {
+		t.Fatalf("render formula: %v", err)
+	}
+
+	for _, want := range []string{"def caveats", "workbook setup", "workbook docs status"} {
+		if !strings.Contains(formula, want) {
+			t.Errorf("formula missing %q:\n%s", want, formula)
+		}
+	}
+	install := strings.Index(formula, "bin.install")
+	caveats := strings.Index(formula, "def caveats")
+	test := strings.Index(formula, "test do")
+	if !(install < caveats && caveats < test) {
+		t.Fatalf("caveats are not between install and test:\n%s", formula)
+	}
+}
