@@ -360,6 +360,45 @@ setTimeout(() => {
 	}
 }
 
+func TestHandlerClientMarksDescriptionAsFlexibleField(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	task := boardTasks()[0]
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return []core.Task{task}, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+task.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<id> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	document, err := json.Marshal(TasksDocument{
+		Format:       "workbook.tasks",
+		Version:      1,
+		Tasks:        []core.Task{task},
+		Presentation: presentationForTasks([]core.Task{task}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/"+task.ID, string(document)) + script + `
+setTimeout(() => {
+  const description = findElement(main, (element) => element.id === "task-description");
+  if (!description) throw new Error("detail form did not render Description");
+  if (!description.parentElement.className.split(/\s+/).includes("field--description")) {
+    throw new Error("Description is not marked as the flexible form field");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("execute rendered client for flexible Description: %v\n%s", err, output)
+	}
+}
+
 func TestHandlerShowsRecoverableErrorWhenInitialTaskLoadFails(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
