@@ -35,6 +35,8 @@ type commandMetadata struct {
 	Positionals []string
 	Options     []optionMetadata
 	Subcommands map[string]commandMetadata
+	// SubcommandOrder lists Subcommands in the order help should present them.
+	SubcommandOrder []string
 }
 
 func (metadata commandMetadata) optionKind(name string) (flagKind, bool) {
@@ -63,6 +65,26 @@ func commandMetadataFor(target []string) (commandMetadata, bool) {
 	return metadata, true
 }
 
+// subcommandUnion returns metadata whose options are the union of every
+// subcommand's options, first declaration winning on a repeated name.
+func subcommandUnion(root commandMetadata) commandMetadata {
+	union := root
+	seen := make(map[string]bool, len(root.Options))
+	for _, option := range union.Options {
+		seen[option.Name] = true
+	}
+	for _, name := range root.SubcommandOrder {
+		for _, option := range root.Subcommands[name].Options {
+			if seen[option.Name] {
+				continue
+			}
+			seen[option.Name] = true
+			union.Options = append(union.Options, option)
+		}
+	}
+	return union
+}
+
 func commandInvocationMetadata(args []string) (commandMetadata, []string, bool) {
 	if len(args) == 0 {
 		return commandMetadata{}, nil, false
@@ -72,6 +94,21 @@ func commandInvocationMetadata(args []string) (commandMetadata, []string, bool) 
 		return commandMetadata{}, nil, false
 	}
 
+	if len(root.Subcommands) > 0 {
+		optionArgs := args[1:]
+		if len(optionArgs) > 0 && isRequiredFirstArgument(optionArgs[0]) {
+			name := optionArgs[0]
+			optionArgs = optionArgs[1:]
+			if metadata, exists := commandMetadataFor([]string{args[0], name}); exists {
+				return metadata, optionArgs, true
+			}
+		}
+		// The subcommand is missing or unknown, but recognizing options still
+		// decides the output format of the resulting error, so fall back to
+		// every option any subcommand accepts.
+		return subcommandUnion(root), optionArgs, true
+	}
+
 	optionArgs := args[1:]
 	for range root.Positionals {
 		if len(optionArgs) == 0 || !isRequiredFirstArgument(optionArgs[0]) {
@@ -79,22 +116,63 @@ func commandInvocationMetadata(args []string) (commandMetadata, []string, bool) 
 		}
 		optionArgs = optionArgs[1:]
 	}
-
-	if root.Name != "hooks" {
-		return root, optionArgs, true
-	}
-	metadata, exists := commandMetadataFor([]string{"hooks", "install"})
-	return metadata, optionArgs, exists
+	return root, optionArgs, true
 }
 
 var commandSchemas = map[string]commandMetadata{
-	"init": {
-		Name:        "init",
-		Synopsis:    "workbook init [options]",
-		Description: "Initialize Workbook in the current Git repository.",
+	"setup": {
+		Name:        "setup",
+		Synopsis:    "workbook setup [options]",
+		Description: "Bootstrap Workbook in the current Git repository: create or validate\nproject identity, install managed agent documentation, and synchronize\nshared task refs with origin.",
 		Options: []optionMetadata{
 			{Name: "key", Kind: stringFlag, Value: "<key>", Description: "project key"},
+			{Name: "no-docs", Kind: boolFlag, Description: "skip managed agent documentation"},
+			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with origin"},
+			{Name: "force", Kind: boolFlag, Description: "overwrite locally modified managed documentation"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+		},
+	},
+	"docs": {
+		Name:            "docs",
+		Synopsis:        "workbook docs <command> [options]",
+		Description:     "Manage the agent documentation Workbook generates for this project.",
+		Positionals:     []string{"<command>"},
+		SubcommandOrder: []string{"install", "update", "status", "remove"},
+		Subcommands: map[string]commandMetadata{
+			"install": {
+				Name:        "install",
+				Synopsis:    "workbook docs install [options]",
+				Description: "Install or refresh managed agent documentation.",
+				Options: []optionMetadata{
+					{Name: "create", Kind: stringFlag, Value: "<file>", Description: "also create this documentation target"},
+					{Name: "force", Kind: boolFlag, Description: "overwrite locally modified files"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
+			"update": {
+				Name:        "update",
+				Synopsis:    "workbook docs update [options]",
+				Description: "Refresh managed agent documentation.",
+				Options: []optionMetadata{
+					{Name: "force", Kind: boolFlag, Description: "overwrite locally modified files"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
+			"status": {
+				Name:        "status",
+				Synopsis:    "workbook docs status [--json]",
+				Description: "Report whether managed documentation is current, stale, or modified.",
+				Options:     []optionMetadata{{Name: "json", Kind: boolFlag, Description: "emit JSON"}},
+			},
+			"remove": {
+				Name:        "remove",
+				Synopsis:    "workbook docs remove [options]",
+				Description: "Remove managed documentation, preserving user-authored content.",
+				Options: []optionMetadata{
+					{Name: "force", Kind: boolFlag, Description: "remove locally modified files"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
 		},
 	},
 	"create": {
@@ -193,10 +271,11 @@ var commandSchemas = map[string]commandMetadata{
 		Options:     []optionMetadata{{Name: "json", Kind: boolFlag, Description: "emit JSON"}},
 	},
 	"hooks": {
-		Name:        "hooks",
-		Synopsis:    "workbook hooks <command> [options]",
-		Description: "Manage optional Git hooks.",
-		Positionals: []string{"<command>"},
+		Name:            "hooks",
+		Synopsis:        "workbook hooks <command> [options]",
+		Description:     "Manage optional Git hooks.",
+		Positionals:     []string{"<command>"},
+		SubcommandOrder: []string{"install"},
 		Subcommands: map[string]commandMetadata{
 			"install": {
 				Name:        "install",
@@ -261,7 +340,7 @@ var commandSchemas = map[string]commandMetadata{
 }
 
 var commandOrder = []string{
-	"init", "create", "list", "board", "show", "update", "delete", "restore", "move", "depend", "free", "next", "rebuild", "validate", "version", "fetch", "push", "sync", "hooks", "serve",
+	"setup", "create", "list", "board", "show", "update", "delete", "restore", "move", "depend", "free", "next", "rebuild", "validate", "version", "fetch", "push", "sync", "docs", "hooks", "serve",
 }
 
 type commandFlagSet struct {

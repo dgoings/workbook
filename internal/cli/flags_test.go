@@ -21,8 +21,8 @@ func TestGlobalHelpListsHelpAndTopLevelCommands(t *testing.T) {
 		}
 	}
 	assertInOrder(t, output.String(), []string{
-		"  init", "  create", "  list", "  board", "  show", "  update", "  delete", "  restore", "  move",
-		"  depend", "  free", "  next", "  rebuild", "  validate", "  version", "  fetch", "  push", "  sync", "  hooks", "  serve", "  help [command]",
+		"  setup", "  create", "  list", "  board", "  show", "  update", "  delete", "  restore", "  move",
+		"  depend", "  free", "  next", "  rebuild", "  validate", "  version", "  fetch", "  push", "  sync", "  docs", "  hooks", "  serve", "  help [command]",
 	})
 }
 
@@ -124,7 +124,8 @@ func TestHooksInstallUsesChildMetadataForParserFlags(t *testing.T) {
 
 func TestHelpMetadataMatchesSchemas(t *testing.T) {
 	want := map[string]map[string]flagKind{
-		"init":     {"key": stringFlag, "json": boolFlag},
+		"setup":    {"key": stringFlag, "no-docs": boolFlag, "no-sync": boolFlag, "force": boolFlag, "json": boolFlag},
+		"docs":     {},
 		"create":   {"description": stringFlag, "status": stringFlag, "priority": stringFlag, "label": stringFlag, "json": boolFlag},
 		"list":     {"status": stringFlag, "priority": stringFlag, "label": stringFlag, "all": boolFlag, "json": boolFlag},
 		"board":    {"wide": boolFlag, "narrow": boolFlag, "json": boolFlag},
