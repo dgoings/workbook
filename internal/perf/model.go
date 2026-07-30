@@ -108,6 +108,9 @@ type Report struct {
 	Targets     Targets           `json:"targets"`
 	Scenarios   []ScenarioResult  `json:"scenarios"`
 	Repository  RepositoryMetrics `json:"repository"`
+	// ProjectionRefresh is present only when the projection refresh
+	// change-count family was measured.
+	ProjectionRefresh *ProjectionRefreshReport `json:"projectionRefresh,omitempty"`
 }
 
 func Summarize(samples []Sample) Summary {
@@ -180,6 +183,9 @@ func (r Report) WriteMarkdown(w io.Writer) error {
 		if _, err := fmt.Fprintf(w, "| %s | %s | %d | %d | %.2f | %.2f | %.2f | %d | %s | %s | %s |\n", scenario.Name, scenario.Surface, scenario.Summary.Completed, scenario.Summary.TimedOut, scenario.Summary.MinMilliseconds, scenario.Summary.MedianMilliseconds, scenario.Summary.P95Milliseconds, scenario.Summary.P95GitProcesses, targetDuration, targetGitProcesses, scenario.Outcome); err != nil {
 			return err
 		}
+	}
+	if r.ProjectionRefresh != nil {
+		return r.ProjectionRefresh.writeMarkdown(w)
 	}
 	return nil
 }
