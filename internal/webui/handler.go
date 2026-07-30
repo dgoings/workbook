@@ -8,6 +8,7 @@ import (
 	"html/template"
 	"io"
 	"net/http"
+	pathpkg "path"
 	"strings"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -172,17 +173,24 @@ func methodAllowed(requestMethod, allowed string) bool {
 	return false
 }
 
-func malformedTaskDependencyPath(path string) bool {
+func malformedTaskDependencyPath(requestPath string) bool {
 	const prefix = "/api/tasks/"
-	if !strings.HasPrefix(path, prefix) {
+	if !strings.HasPrefix(requestPath, prefix) {
 		return false
 	}
-	parts := strings.Split(strings.TrimPrefix(path, prefix), "/")
-	if len(parts) < 2 || parts[1] != "dependencies" {
+	if _, _, valid := taskDependencyPathIDs(requestPath); valid {
 		return false
 	}
-	_, _, valid := taskDependencyPathIDs(path)
-	return !valid
+	if _, _, cleanedDependency := taskDependencyPathIDs(pathpkg.Clean(requestPath)); cleanedDependency {
+		return true
+	}
+	parts := strings.Split(strings.TrimPrefix(requestPath, prefix), "/")
+	for _, part := range parts[1:] {
+		if part == "dependencies" {
+			return true
+		}
+	}
+	return false
 }
 
 func allowedMethod(path string) (string, bool) {

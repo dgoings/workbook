@@ -492,6 +492,9 @@ func TestHandlerRejectsWrongDependencyMethodsAndMalformedPaths(t *testing.T) {
 		"/api/tasks/" + dependent.ID + "/dependencies/",
 		"/api/tasks/" + dependent.ID + "/dependencies//" + prerequisite.ID,
 		"/api/tasks/" + dependent.ID + "/dependencies/../" + prerequisite.ID,
+		"/api/tasks/" + dependent.ID + "//dependencies/" + prerequisite.ID,
+		"/api/tasks/" + dependent.ID + "/./dependencies/" + prerequisite.ID,
+		"/api/tasks/" + dependent.ID + "/segment/../dependencies/" + prerequisite.ID,
 		path + "/extra",
 	} {
 		response := request(t, handler, http.MethodPut, malformed)
