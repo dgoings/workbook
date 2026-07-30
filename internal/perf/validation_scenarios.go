@@ -29,9 +29,9 @@ type validationScenarioDefinition struct {
 }
 
 var validationScenarioDefinitions = []validationScenarioDefinition{
-	{name: "validate-full-history", args: []string{"validate", "--full", "--json"}, target: ScenarioTarget{MaxMilliseconds: 10000, MaxGitProcesses: 12}},
-	{name: "validate-cached-unchanged", args: []string{"validate", "--json"}, target: ScenarioTarget{MaxMilliseconds: 500, MaxGitProcesses: 12}},
-	{name: "validate-five-changed", args: []string{"validate", "--json"}, target: ScenarioTarget{MaxMilliseconds: 1000, MaxGitProcesses: 12}},
+	{name: "validate-full-history", args: []string{"validate", "--full", "--json"}, target: ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 10000, MaxGitProcesses: 12}},
+	{name: "validate-cached-unchanged", args: []string{"validate", "--json"}, target: ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 500, MaxGitProcesses: 12}},
+	{name: "validate-five-changed", args: []string{"validate", "--json"}, target: ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 1000, MaxGitProcesses: 12}},
 }
 
 type validationScenarioDependencies struct {
@@ -159,10 +159,10 @@ func prepareValidationScenario(ctx context.Context, scenario string, fixture Fix
 	if scenario != "validate-five-changed" {
 		return nil
 	}
-	if len(fixture.TaskIDs) < 5 {
-		return fmt.Errorf("fixture has %d tasks, want at least 5", len(fixture.TaskIDs))
+	if len(fixture.ActiveTaskIDs) < 5 {
+		return fmt.Errorf("fixture has %d active tasks, want at least 5", len(fixture.ActiveTaskIDs))
 	}
-	for index, taskID := range fixture.TaskIDs[:5] {
+	for index, taskID := range fixture.ActiveTaskIDs[:5] {
 		if err := requireSuccessfulSetup(scenario, runSetup(ctx, CommandSpec{
 			Binary:    spec.WorkbookBinary,
 			Args:      []string{"update", taskID, "--description", fmt.Sprintf("validation benchmark change %d", index+1), "--json"},
@@ -204,27 +204,27 @@ func verifyValidationMeasurement(scenario string, measurement CommandMeasurement
 	}
 	want := expectedValidationResult(scenario, fixture)
 	got := envelope.Data
-	if got.ValidatorVersion != 1 || got.Full != want.Full || got.TaskCount != fixture.ActiveTasks ||
+	if got.ValidatorVersion != 1 || got.Full != want.Full || got.TaskCount != fixture.TotalTasks ||
 		got.TasksChecked != want.TasksChecked || got.CommitsChecked != want.CommitsChecked || got.CacheHits != want.CacheHits ||
-		got.Valid != fixture.ActiveTasks || got.Invalid != 0 || got.Pending != 0 || len(got.Failures) != 0 {
+		got.Valid != fixture.TotalTasks || got.Invalid != 0 || got.Pending != 0 || len(got.Failures) != 0 {
 		return fmt.Errorf("validate result does not match %s literal oracle: validatorVersion=%d full=%t taskCount=%d tasksChecked=%d commitsChecked=%d cacheHits=%d valid=%d invalid=%d pending=%d failures=%d", scenario, got.ValidatorVersion, got.Full, got.TaskCount, got.TasksChecked, got.CommitsChecked, got.CacheHits, got.Valid, got.Invalid, got.Pending, len(got.Failures))
 	}
 	return nil
 }
 
 func expectedValidationResult(scenario string, fixture FixtureSpec) historyvalidation.Result {
-	result := historyvalidation.Result{ValidatorVersion: 1, TaskCount: fixture.ActiveTasks, Valid: fixture.ActiveTasks, Failures: []historyvalidation.Failure{}}
+	result := historyvalidation.Result{ValidatorVersion: 1, TaskCount: fixture.TotalTasks, Valid: fixture.TotalTasks, Failures: []historyvalidation.Failure{}}
 	switch scenario {
 	case "validate-full-history":
 		result.Full = true
-		result.TasksChecked = fixture.ActiveTasks
-		result.CommitsChecked = fixture.ActiveTasks * fixture.OperationsPerTask
+		result.TasksChecked = fixture.TotalTasks
+		result.CommitsChecked = fixture.TotalTasks * fixture.OperationsPerTask
 	case "validate-cached-unchanged":
-		result.CacheHits = fixture.ActiveTasks
+		result.CacheHits = fixture.TotalTasks
 	case "validate-five-changed":
 		result.TasksChecked = 5
 		result.CommitsChecked = 5
-		result.CacheHits = fixture.ActiveTasks - 5
+		result.CacheHits = fixture.TotalTasks - 5
 	}
 	return result
 }

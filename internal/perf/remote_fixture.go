@@ -51,8 +51,8 @@ func BuildRemoteFixture(ctx context.Context, root string, spec FixtureSpec, topo
 	if !validRemoteTopology(topology) {
 		return RemoteFixture{}, fmt.Errorf("unsupported remote topology %q", topology)
 	}
-	if spec.ActiveTasks < 10 && topology == RemoteSmallChangedRefSet {
-		return RemoteFixture{}, fmt.Errorf("remote topology %q requires at least 10 active tasks", topology)
+	if err := validateRemoteTopologyFixture(spec, topology); err != nil {
+		return RemoteFixture{}, err
 	}
 
 	source, err := BuildFixture(ctx, filepath.Join(root, "source"), spec)
@@ -63,7 +63,9 @@ func BuildRemoteFixture(ctx context.Context, root string, spec FixtureSpec, topo
 		return RemoteFixture{}, err
 	}
 	taskIDs := append([]string(nil), source.TaskIDs...)
+	activeTaskIDs := append([]string(nil), source.ActiveTaskIDs...)
 	sort.Strings(taskIDs)
+	sort.Strings(activeTaskIDs)
 
 	originRoot := filepath.Join(root, "origin.git")
 	if err := runFixtureGitInRoot(ctx, originRoot, "init", "--bare", "--quiet", "--object-format="+spec.ObjectFormat, originRoot); err != nil {
@@ -81,7 +83,7 @@ func BuildRemoteFixture(ctx context.Context, root string, spec FixtureSpec, topo
 		return RemoteFixture{}, err
 	}
 
-	if err := constructRemoteTopology(ctx, source.Root, localRoot, peerRoot, originRoot, source.Config, taskIDs, topology); err != nil {
+	if err := constructRemoteTopology(ctx, source.Root, localRoot, peerRoot, originRoot, source.Config, taskIDs, activeTaskIDs, topology); err != nil {
 		return RemoteFixture{}, err
 	}
 	expected, err := collectExpectedRefs(ctx, localRoot, originRoot, taskIDs)
@@ -96,6 +98,20 @@ func BuildRemoteFixture(ctx context.Context, root string, spec FixtureSpec, topo
 		TaskIDs:    taskIDs,
 		Expected:   expected,
 	}, nil
+}
+
+func validateRemoteTopologyFixture(spec FixtureSpec, topology RemoteTopology) error {
+	switch topology {
+	case RemoteSmallChangedRefSet:
+		if spec.ActiveTasks < 10 {
+			return fmt.Errorf("remote topology %q requires at least 10 active tasks", topology)
+		}
+	case RemoteDivergentTips, RemoteMalformedLocalTip, RemoteMalformedRemoteTip, RemoteBuriedCheckpointCorruption:
+		if spec.ActiveTasks < 1 {
+			return fmt.Errorf("remote topology %q requires at least 1 active task", topology)
+		}
+	}
+	return nil
 }
 
 func validRemoteTopology(topology RemoteTopology) bool {
@@ -135,7 +151,7 @@ func cloneFixtureRepository(ctx context.Context, sourceRoot, destination, origin
 	return absDestination, nil
 }
 
-func constructRemoteTopology(ctx context.Context, sourceRoot, localRoot, peerRoot, originRoot string, config core.ProjectConfig, taskIDs []string, topology RemoteTopology) error {
+func constructRemoteTopology(ctx context.Context, sourceRoot, localRoot, peerRoot, originRoot string, config core.ProjectConfig, taskIDs, activeTaskIDs []string, topology RemoteTopology) error {
 	switch topology {
 	case RemoteFreshCheckout:
 		return publishFixtureTasks(ctx, sourceRoot, originRoot)
@@ -153,12 +169,12 @@ func constructRemoteTopology(ctx context.Context, sourceRoot, localRoot, peerRoo
 		if err := populateSynchronizedFixture(ctx, sourceRoot, localRoot, peerRoot, originRoot); err != nil {
 			return err
 		}
-		for taskIndex, taskID := range taskIDs[:5] {
+		for taskIndex, taskID := range activeTaskIDs[:5] {
 			if err := appendFixtureTask(ctx, localRoot, config, taskID, taskIndex); err != nil {
 				return err
 			}
 		}
-		for taskIndex, taskID := range taskIDs[5:10] {
+		for taskIndex, taskID := range activeTaskIDs[5:10] {
 			if err := appendFixtureTask(ctx, peerRoot, config, taskID, taskIndex+5); err != nil {
 				return err
 			}
@@ -171,10 +187,10 @@ func constructRemoteTopology(ctx context.Context, sourceRoot, localRoot, peerRoo
 		if err := populateSynchronizedFixture(ctx, sourceRoot, localRoot, peerRoot, originRoot); err != nil {
 			return err
 		}
-		if err := appendFixtureTask(ctx, localRoot, config, taskIDs[0], 0); err != nil {
+		if err := appendFixtureTask(ctx, localRoot, config, activeTaskIDs[0], 0); err != nil {
 			return err
 		}
-		if err := appendFixtureTask(ctx, peerRoot, config, taskIDs[0], 1000); err != nil {
+		if err := appendFixtureTask(ctx, peerRoot, config, activeTaskIDs[0], 1000); err != nil {
 			return err
 		}
 		if err := publishFixtureTasks(ctx, peerRoot, originRoot); err != nil {
@@ -185,12 +201,12 @@ func constructRemoteTopology(ctx context.Context, sourceRoot, localRoot, peerRoo
 		if err := populateSynchronizedFixture(ctx, sourceRoot, localRoot, peerRoot, originRoot); err != nil {
 			return err
 		}
-		return replaceFixtureRefWithMalformedCommit(ctx, localRoot, taskRefName(taskIDs[0]))
+		return replaceFixtureRefWithMalformedCommit(ctx, localRoot, taskRefName(activeTaskIDs[0]))
 	case RemoteMalformedRemoteTip:
 		if err := populateSynchronizedFixture(ctx, sourceRoot, localRoot, peerRoot, originRoot); err != nil {
 			return err
 		}
-		if err := replaceFixtureRefWithMalformedCommit(ctx, peerRoot, taskRefName(taskIDs[0])); err != nil {
+		if err := replaceFixtureRefWithMalformedCommit(ctx, peerRoot, taskRefName(activeTaskIDs[0])); err != nil {
 			return err
 		}
 		if err := publishFixtureTasks(ctx, peerRoot, originRoot); err != nil {
@@ -201,7 +217,7 @@ func constructRemoteTopology(ctx context.Context, sourceRoot, localRoot, peerRoo
 		if err := populateSynchronizedFixture(ctx, sourceRoot, localRoot, peerRoot, originRoot); err != nil {
 			return err
 		}
-		return writeBuriedCheckpointCorruption(ctx, localRoot, config, taskRefName(taskIDs[0]))
+		return writeBuriedCheckpointCorruption(ctx, localRoot, config, taskRefName(activeTaskIDs[0]))
 	default:
 		return fmt.Errorf("unsupported remote topology %q", topology)
 	}

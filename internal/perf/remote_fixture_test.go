@@ -36,7 +36,7 @@ func TestBuildRemoteFixture(t *testing.T) {
 			for _, topology := range topologies {
 				t.Run(string(topology), func(t *testing.T) {
 					fixture, err := BuildRemoteFixture(context.Background(), filepath.Join(t.TempDir(), "fixture"), FixtureSpec{
-						ActiveTasks:       10,
+						TotalTasks: 10, ActiveTasks: 10,
 						OperationsPerTask: 4,
 						ObjectFormat:      objectFormat,
 					}, topology)
@@ -95,6 +95,38 @@ func TestBuildRemoteFixture(t *testing.T) {
 	}
 }
 
+// Mutation witness: indexing the active-task population without first
+// validating it turns a valid all-tombstoned fixture into a setup panic.
+func TestBuildRemoteFixtureRejectsTopologiesWithoutRequiredActiveTasks(t *testing.T) {
+	spec := FixtureSpec{TotalTasks: 1, ActiveTasks: 0, TombstonedTasks: 1, OperationsPerTask: 2, ObjectFormat: "sha1"}
+	fixture, err := BuildRemoteFixture(context.Background(), filepath.Join(t.TempDir(), "fresh"), spec, RemoteFreshCheckout)
+	if err != nil {
+		t.Fatalf("BuildRemoteFixture fresh all-tombstoned fixture: %v", err)
+	}
+	if got, want := len(fixture.TaskIDs), 1; got != want {
+		t.Fatalf("fresh all-tombstoned task IDs = %d, want %d", got, want)
+	}
+
+	tests := []struct {
+		topology RemoteTopology
+		want     string
+	}{
+		{topology: RemoteSmallChangedRefSet, want: "requires at least 10 active tasks"},
+		{topology: RemoteDivergentTips, want: "requires at least 1 active task"},
+		{topology: RemoteMalformedLocalTip, want: "requires at least 1 active task"},
+		{topology: RemoteMalformedRemoteTip, want: "requires at least 1 active task"},
+		{topology: RemoteBuriedCheckpointCorruption, want: "requires at least 1 active task"},
+	}
+	for _, test := range tests {
+		t.Run(string(test.topology), func(t *testing.T) {
+			_, err := BuildRemoteFixture(context.Background(), filepath.Join(t.TempDir(), string(test.topology)), spec, test.topology)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("BuildRemoteFixture(%s) error = %v, want %q", test.topology, err, test.want)
+			}
+		})
+	}
+}
+
 func TestBuildRemoteFixtureUsesDeterministicSyntheticCommitIDs(t *testing.T) {
 	topologies := []RemoteTopology{
 		RemoteSmallChangedRefSet,
@@ -105,7 +137,7 @@ func TestBuildRemoteFixtureUsesDeterministicSyntheticCommitIDs(t *testing.T) {
 	}
 	for _, topology := range topologies {
 		t.Run(string(topology), func(t *testing.T) {
-			spec := FixtureSpec{ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"}
+			spec := FixtureSpec{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"}
 			first, err := BuildRemoteFixture(context.Background(), filepath.Join(t.TempDir(), "first"), spec, topology)
 			if err != nil {
 				t.Fatal(err)
@@ -142,7 +174,7 @@ func TestBuildRemoteFixtureIgnoresHostileGlobalSigningAndHooks(t *testing.T) {
 
 	fixtureRoot := filepath.Join(t.TempDir(), "fixture")
 	fixture, err := BuildRemoteFixture(context.Background(), fixtureRoot, FixtureSpec{
-		ActiveTasks:       10,
+		TotalTasks: 10, ActiveTasks: 10,
 		OperationsPerTask: 4,
 		ObjectFormat:      "sha1",
 	}, RemoteAlreadySynchronized)

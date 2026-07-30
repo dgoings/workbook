@@ -79,3 +79,37 @@ func TestResolveScenariosUsesRegistryOrderAndRejectsInvalidSelectors(t *testing.
 		t.Fatalf("unknown selection error = %v, want valid names %q", err, strings.Join(all, ", "))
 	}
 }
+
+// Mutation witnesses: assigning the warm 100 ms policy to a cold mutation,
+// omitting a local target, or making a burst p95-based would all make at least
+// one public scenario report the wrong policy.
+func TestLocalScenarioResultsAttachApprovedDurationTargets(t *testing.T) {
+	coldSingle := ScenarioTarget{DurationStatistic: DurationP95, DurationComparison: DurationAtMost, MaxMilliseconds: 200}
+	warmUpdate := ScenarioTarget{DurationStatistic: DurationP95, DurationComparison: DurationAtMost, MaxMilliseconds: 100}
+	burst := ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationLessThan, MaxMilliseconds: 1000}
+
+	want := map[string]ScenarioTarget{
+		"cli-create":               coldSingle,
+		"cli-delete":               coldSingle,
+		"cli-depend":               coldSingle,
+		"cli-free":                 coldSingle,
+		"cli-move":                 coldSingle,
+		"cli-restore":              coldSingle,
+		"cli-update":               coldSingle,
+		"cli-burst-independent-10": burst,
+		"cli-burst-same-task-10":   burst,
+		"api-update":               warmUpdate,
+		"api-burst-independent-10": burst,
+		"api-burst-same-task-10":   burst,
+	}
+	results := append(coldCLIResults(1), warmHTTPResults(1)...)
+	for _, result := range results {
+		expected, ok := want[result.Name]
+		if !ok {
+			t.Fatalf("unexpected local scenario %q", result.Name)
+		}
+		if result.Target == nil || *result.Target != expected {
+			t.Fatalf("%s target = %#v, want %#v", result.Name, result.Target, expected)
+		}
+	}
+}

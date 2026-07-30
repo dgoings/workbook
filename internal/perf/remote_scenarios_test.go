@@ -99,7 +99,7 @@ func TestRunRemoteScenariosUsesTopologyCommandsAndVerifiesResults(t *testing.T) 
 			var commands []CommandSpec
 			results, err := runRemoteScenarios(context.Background(), RunSpec{
 				WorkbookBinary: workbook,
-				Fixture:        FixtureSpec{ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
+				Fixture:        FixtureSpec{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
 				Samples:        1, CommandTimeout: 20 * time.Second,
 			}, filepath.Join(t.TempDir(), "scenarios"), []string{test.name}, remoteScenarioDependencies{
 				buildFixture: buildRemoteFixtureWithinTimeout,
@@ -135,7 +135,7 @@ func TestRunRemoteScenariosBuildsOnlySelectedTopology(t *testing.T) {
 	var built []RemoteTopology
 	_, err := runRemoteScenarios(context.Background(), RunSpec{
 		WorkbookBinary: workbook,
-		Fixture:        FixtureSpec{ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
+		Fixture:        FixtureSpec{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
 		Samples:        1, CommandTimeout: 5 * time.Second,
 	}, filepath.Join(t.TempDir(), "scenarios"), []string{"sync-fresh-checkout"}, remoteScenarioDependencies{
 		buildFixture: func(ctx context.Context, root string, spec FixtureSpec, topology RemoteTopology) (RemoteFixture, error) {
@@ -152,12 +152,23 @@ func TestRunRemoteScenariosBuildsOnlySelectedTopology(t *testing.T) {
 	}
 }
 
+// Mutation witness: leaving a remote target at a local p95 policy could allow
+// one slow completed remote sample to satisfy a target that applies to every
+// completed sample.
+func TestRemoteScenarioTargetsUseEverySampleInclusiveDurationLimits(t *testing.T) {
+	for _, definition := range remoteScenarioDefinitions {
+		if definition.target.DurationStatistic != DurationEverySample || definition.target.DurationComparison != DurationAtMost {
+			t.Fatalf("%s duration policy = %q/%q, want every-sample/at-most", definition.name, definition.target.DurationStatistic, definition.target.DurationComparison)
+		}
+	}
+}
+
 func TestRemoteScenarioProcessCountDoesNotScaleWithFixtureSize(t *testing.T) {
 	workbook := buildRemoteScenarioWorkbook(t)
 	counts := make([]int, 0, 2)
 	for _, fixture := range []FixtureSpec{
-		{ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
-		{ActiveTasks: 25, OperationsPerTask: 7, ObjectFormat: "sha1"},
+		{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
+		{TotalTasks: 25, ActiveTasks: 25, OperationsPerTask: 7, ObjectFormat: "sha1"},
 	} {
 		results, err := runRemoteScenarios(context.Background(), RunSpec{
 			WorkbookBinary: workbook, Fixture: fixture, Samples: 1, CommandTimeout: 5 * time.Second,
@@ -183,7 +194,7 @@ func TestRemoteSyncProductsStayUnderExclusiveProcessTargets(t *testing.T) {
 	workbook := buildRemoteScenarioWorkbook(t)
 	results, err := runRemoteScenarios(context.Background(), RunSpec{
 		WorkbookBinary: workbook,
-		Fixture:        FixtureSpec{ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
+		Fixture:        FixtureSpec{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
 		Samples:        1,
 		CommandTimeout: 20 * time.Second,
 	}, filepath.Join(t.TempDir(), "scenarios"), []string{
@@ -307,7 +318,7 @@ func TestRunRemoteScenariosUsesIndependentFixturesForEachSample(t *testing.T) {
 	measures := 0
 	results, err := runRemoteScenarios(context.Background(), RunSpec{
 		WorkbookBinary: "workbook",
-		Fixture:        FixtureSpec{ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
+		Fixture:        FixtureSpec{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
 		Samples:        2,
 		CommandTimeout: time.Second,
 	}, t.TempDir(), []string{"sync-fresh-checkout"}, remoteScenarioDependencies{
@@ -334,7 +345,7 @@ func TestRunRemoteScenariosUsesIndependentFixturesForEachSample(t *testing.T) {
 func TestRunRemoteScenariosRejectsZeroSamples(t *testing.T) {
 	_, err := runRemoteScenarios(context.Background(), RunSpec{
 		WorkbookBinary: "workbook",
-		Fixture:        FixtureSpec{ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
+		Fixture:        FixtureSpec{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
 		CommandTimeout: time.Second,
 	}, t.TempDir(), []string{"sync-fresh-checkout"}, remoteScenarioDependencies{})
 	if err == nil || !strings.Contains(err.Error(), "samples must be positive") {
@@ -347,7 +358,7 @@ func TestSmallChangedRefSetKeepsTrackingAtPrePushRemoteTip(t *testing.T) {
 	var fixture RemoteFixture
 	_, err := runRemoteScenarios(context.Background(), RunSpec{
 		WorkbookBinary: workbook,
-		Fixture:        FixtureSpec{ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
+		Fixture:        FixtureSpec{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
 		Samples:        1,
 		CommandTimeout: 20 * time.Second,
 	}, t.TempDir(), []string{"sync-small-changed-ref-set"}, remoteScenarioDependencies{
@@ -413,8 +424,8 @@ func TestSmallChangedRefSetExpectedResultsChangeOnlyTenTasks(t *testing.T) {
 func TestRemoteScenarioVerificationGitCallsDoNotScaleWithFixture(t *testing.T) {
 	workbook := buildRemoteScenarioWorkbook(t)
 	fixtureSpecs := []FixtureSpec{
-		{ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
-		{ActiveTasks: 25, OperationsPerTask: 7, ObjectFormat: "sha1"},
+		{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
+		{TotalTasks: 25, ActiveTasks: 25, OperationsPerTask: 7, ObjectFormat: "sha1"},
 	}
 	type outcome struct {
 		count int

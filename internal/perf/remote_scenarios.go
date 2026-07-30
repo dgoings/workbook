@@ -68,13 +68,13 @@ type remoteScenarioContract struct {
 }
 
 var remoteScenarioDefinitions = []remoteScenarioDefinition{
-	{name: "sync-fresh-checkout", topology: RemoteFreshCheckout, command: "fetch", target: ScenarioTarget{MaxMilliseconds: 5000, MaxGitProcesses: 20}},
-	{name: "sync-initial-publication", topology: RemoteInitialPublication, command: "push", target: ScenarioTarget{MaxMilliseconds: 5000, MaxGitProcesses: 20}},
-	{name: "sync-already-synchronized", topology: RemoteAlreadySynchronized, command: "sync", target: ScenarioTarget{MaxMilliseconds: 1000, MaxGitProcesses: 10}},
-	{name: "sync-small-changed-ref-set", topology: RemoteSmallChangedRefSet, command: "sync", target: ScenarioTarget{MaxMilliseconds: 2000, MaxGitProcesses: 20}},
-	{name: "sync-divergent-tips", topology: RemoteDivergentTips, command: "sync", expectFailure: true, target: ScenarioTarget{MaxMilliseconds: 2000, MaxGitProcesses: 20}},
-	{name: "sync-malformed-local-tip", topology: RemoteMalformedLocalTip, command: "push", expectFailure: true, target: ScenarioTarget{MaxMilliseconds: 2000, MaxGitProcesses: 20}},
-	{name: "sync-malformed-remote-tip", topology: RemoteMalformedRemoteTip, command: "fetch", expectFailure: true, target: ScenarioTarget{MaxMilliseconds: 2000, MaxGitProcesses: 20}},
+	{name: "sync-fresh-checkout", topology: RemoteFreshCheckout, command: "fetch", target: ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 5000, MaxGitProcesses: 20}},
+	{name: "sync-initial-publication", topology: RemoteInitialPublication, command: "push", target: ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 5000, MaxGitProcesses: 20}},
+	{name: "sync-already-synchronized", topology: RemoteAlreadySynchronized, command: "sync", target: ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 1000, MaxGitProcesses: 10}},
+	{name: "sync-small-changed-ref-set", topology: RemoteSmallChangedRefSet, command: "sync", target: ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 2000, MaxGitProcesses: 20}},
+	{name: "sync-divergent-tips", topology: RemoteDivergentTips, command: "sync", expectFailure: true, target: ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 2000, MaxGitProcesses: 20}},
+	{name: "sync-malformed-local-tip", topology: RemoteMalformedLocalTip, command: "push", expectFailure: true, target: ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 2000, MaxGitProcesses: 20}},
+	{name: "sync-malformed-remote-tip", topology: RemoteMalformedRemoteTip, command: "fetch", expectFailure: true, target: ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 2000, MaxGitProcesses: 20}},
 }
 
 // RunRemoteScenarios measures only the requested remote synchronization
