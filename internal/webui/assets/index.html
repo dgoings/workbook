@@ -126,8 +126,9 @@
     .relationship-editor input:focus { border-color: #2457d6; outline: 3px solid rgba(36,87,214,.18); }
     .relationship-editor button { border: 1px solid #173f9e; border-radius: 4px; background: #2457d6; color: #fff; cursor: pointer; font: inherit; font-size: .78rem; font-weight: 750; padding: .58rem .75rem; }
     .relationship-editor button:disabled { cursor: default; opacity: .52; }
-    .relationship-listbox { grid-column: 1 / -1; max-height: 14rem; overflow-y: auto; border: 1px solid #9eafc5; border-radius: 4px; background: #fff; box-shadow: 0 8px 20px rgba(23,32,51,.12); }
+    .relationship-listbox { position: absolute; z-index: 20; top: calc(100% + .3rem); right: 0; left: 0; max-height: min(18rem, 45vh); overflow-y: auto; border: 1px solid #9eafc5; border-radius: 4px; background: #fff; box-shadow: 0 8px 20px rgba(23,32,51,.12); }
     .relationship-listbox[hidden] { display: none; }
+    .relationship-row--compact { grid-template-columns: minmax(0, 1fr) auto; gap: .22rem .45rem; padding: .48rem 0; border: 0; border-top: 1px solid #e1e7f0; border-radius: 0; }
     .relationship-option { display: grid; gap: .18rem; padding: .55rem .62rem; border-bottom: 1px solid #e1e7f0; cursor: pointer; }
     .relationship-option:last-child { border-bottom: 0; }
     .relationship-option[aria-selected="true"], .relationship-option.is-active { background: #edf3ff; }
@@ -542,7 +543,7 @@
       }
       function relationshipRow(relationship, onRemove) {
         const row = document.createElement("article");
-        row.className = "relationship-row";
+        row.className = "relationship-row relationship-row--compact";
         row.dataset.relationshipRow = "";
         row.dataset.relationshipId = relationship.id;
         const heading = document.createElement("h4");
@@ -556,8 +557,12 @@
         }
         const metadata = document.createElement("p");
         metadata.className = "relationship-row__metadata";
-        if (relationship.task) text(metadata, relationship.task.status + " · " + relationship.task.priority + " · " + relationship.id);
-        else text(metadata, relationship.id);
+        const metadataParts = [];
+        if (relationship.task) {
+          metadataParts.push(relationship.task.status, relationship.task.priority);
+        }
+        metadataParts.push(relationship.id);
+        text(metadata, metadataParts.join(" · "));
         row.append(heading, metadata);
         if (relationship.task && relationship.task.deleted) {
           const deleted = document.createElement("strong");
@@ -581,7 +586,7 @@
         }
         return row;
       }
-      function dependencyController(taskID) {
+      function taskRelationships(taskID, draftState) {
         const region = document.createElement("section");
         region.className = "task-relationships";
         region.setAttribute("aria-label", "Task relationships");
@@ -662,7 +667,6 @@
           }
         };
         controller.update();
-        refreshRelationshipContext(controller, ++relationshipRefreshGeneration);
         return controller;
       }
       function taskForm(mode, task) {
@@ -743,9 +747,16 @@
           }
         });
         section.append(header, form);
-        if (!isNew) {
-          activeDependencyController = dependencyController(task.id);
-          relationshipMount.append(activeDependencyController.region);
+        const relationshipController = isNew
+          ? null
+          : taskRelationships(task.id, null);
+        if (relationshipController) {
+          relationshipMount.append(relationshipController.region);
+          activeDependencyController = relationshipController;
+          refreshRelationshipContext(
+            relationshipController,
+            ++relationshipRefreshGeneration
+          );
         }
         return section;
       }

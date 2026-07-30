@@ -961,6 +961,93 @@ setTimeout(async () => {
 	}
 }
 
+func TestHandlerClientMountsCompactRelationshipsInSidebar(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	current := clientPlacementTask("WB-01J00000000000000000000037", "Current task", core.StatusReady, core.PriorityMedium)
+	activeDependency := clientPlacementTask("WB-01J00000000000000000000038", "Active prerequisite", core.StatusDone, core.PriorityHigh)
+	activeBlocked := clientPlacementTask("WB-01J00000000000000000000039", "Active blocked task", core.StatusBlocked, core.PriorityLow)
+	deletedDependency := clientPlacementTask("WB-01J00000000000000000000040", "Deleted prerequisite", core.StatusReady, core.PriorityMedium)
+	deletedDependency.Deleted = true
+	deletedBlocked := clientPlacementTask("WB-01J00000000000000000000043", "Deleted blocked task", core.StatusReady, core.PriorityLow)
+	deletedBlocked.Deleted = true
+	missingDependencyID := "WB-01J00000000000000000000044"
+	current.Dependencies = []string{activeDependency.ID, deletedDependency.ID, missingDependencyID}
+	activeBlocked.Dependencies = []string{current.ID}
+	deletedBlocked.Dependencies = []string{current.ID}
+	activeTasks := []core.Task{current, activeDependency, activeBlocked}
+	deletedTasks := []core.Task{deletedDependency, deletedBlocked}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return activeTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<id> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	activeDocument, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: activeTasks, Presentation: presentationForTasks(activeTasks)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deletedDocument, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: deletedTasks})
+	if err != nil {
+		t.Fatal(err)
+	}
+	refreshedCurrent := current
+	refreshedCurrent.Dependencies = []string{activeDependency.ID}
+	refreshedDocument, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: []core.Task{refreshedCurrent, activeDependency}, Presentation: presentationForTasks([]core.Task{refreshedCurrent, activeDependency})})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/"+current.ID, string(activeDocument)) + script + `
+deletedTaskResponse = ` + string(deletedDocument) + `;
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const sidebar = findElement(main, (element) =>
+    element.className.split(/\s+/).includes("task-sidebar"));
+  const region = findElement(sidebar, (element) =>
+    element.className.split(/\s+/).includes("task-relationships"));
+  if (!region) throw new Error("Relationships are not mounted in the sidebar");
+
+  const rows = findElements(region, (element) =>
+    element.dataset.relationshipRow !== undefined);
+  if (!rows.length ||
+      rows.some((row) =>
+        !row.className.split(/\s+/).includes("relationship-row--compact"))) {
+    throw new Error("Relationships did not use compact sidebar rows");
+  }
+
+  const missing = findElement(region, (element) => element.dataset.relationshipId === ` + strconv.Quote(missingDependencyID) + `);
+  const deletedDependency = findElement(region, (element) => element.dataset.relationshipId === ` + strconv.Quote(deletedDependency.ID) + `);
+  const activeBlock = findElement(region, (element) => element.dataset.relationshipId === ` + strconv.Quote(activeBlocked.ID) + `);
+  const deletedBlock = findElement(region, (element) => element.dataset.relationshipId === ` + strconv.Quote(deletedBlocked.ID) + `);
+  const hasRemove = (row) => findElement(row, (element) => element.tagName === "BUTTON" && element.textContent === "Remove");
+  if (!missing || !hasRemove(missing) || !deletedDependency || !hasRemove(deletedDependency)) {
+    throw new Error("missing or tombstoned Depends On rows were not removable");
+  }
+  if (!activeBlock || !hasRemove(activeBlock)) {
+    throw new Error("active Blocks rows were not removable");
+  }
+  if (!deletedBlock || hasRemove(deletedBlock)) {
+    throw new Error("tombstoned Blocks rows were not read-only");
+  }
+
+  const mountedForm = findElement(main, (element) => element.tagName === "FORM");
+  taskResponse = ` + string(refreshedDocument) + `;
+  await intervalCallback();
+  const form = findElement(main, (element) => element.tagName === "FORM");
+  const sameForm = form === mountedForm;
+  if (!sameForm) throw new Error("relationship refresh replaced the task form");
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute rendered compact sidebar relationships: %v\n%s", err, output)
+	}
+}
+
 func TestHandlerClientFiltersDependencyComboboxCandidates(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -2620,6 +2707,7 @@ class TestElement {
   constructor(tagName) {
     this.tagName = tagName.toUpperCase();
     this.children = [];
+    this.className = "";
     this.dataset = {};
     this.attributes = {};
     this.classList = { add() {}, remove() {}, toggle() {} };
@@ -2813,6 +2901,11 @@ function findElement(root, predicate) {
     if (match) return match;
   }
   return null;
+}
+function findElements(root, predicate, matches = []) {
+  if (predicate(root)) matches.push(root);
+  for (const child of root.children || []) findElements(child, predicate, matches);
+  return matches;
 }
 `
 }
