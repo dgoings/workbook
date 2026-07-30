@@ -1142,6 +1142,62 @@ git add docs/superpowers/plans/2026-07-30-task-detail-sidebar-layout.md internal
 git commit -m "fix: refine responsive task sidebar"
 ```
 
+#### Task 6 execution evidence — 2026-07-30
+
+- Accessibility: `TestHandlerClientSidebarAccessibilityAndMobileOrder` verifies
+  the sidebar label, both combobox roles, polite group/form live regions,
+  non-submit Remove/Retry controls, and editor → sidebar → actions DOM order.
+- Wide desktop, New and Detail:
+  - 1440×900: route `1344px`, columns `1022px 320px`, sidebar `320px`,
+    actions bottom `879px`; Description client heights were `459px` New and
+    `432px` Detail. Every planned boolean was true.
+  - 1280×800: route `1240px`, columns `918px 320px`, sidebar `320px`,
+    actions bottom `779px`; Description client heights were `360px` New and
+    `333px` Detail. Every planned boolean was true.
+  - At 1440×900 New, adding three staged dependency rows changed sidebar
+    `scrollHeight` from `835px` to `1160px` while Description height remained
+    exactly `461.38px`.
+- Constrained desktop, 1280×600 Detail:
+  - route rect `21,112.20 → 1259,580` (`1240px` wide);
+  - editor `21,226.98 → 939,503.59`, sidebar
+    `939,226.98 → 1259,503.59`, actions
+    `21,503.59 → 1259,579`;
+  - Description `350.40 → 485.19` (`134.79px`);
+  - no editor/sidebar overlap, no content/footer overlap, actions in viewport,
+    and no horizontal overflow were all true;
+  - open listbox rect `958.40,232.57 → 1240.60,316.57` (`84px` high) was fully
+    contained by the viewport and sidebar clip `226.98 → 503.59`; it retained
+    internal scrolling (`clientHeight 82`, `scrollHeight 2797`).
+- Mobile:
+  - 390×844 New: route `350px`, grid `348px`, document scroll width `390px`,
+    editor/sidebar/actions tops `220.89/554.70/1390.25px`, actions bottom
+    `1465.66px`, Description client height `190px` with bounding height
+    `>=192px`; every planned boolean was true.
+  - 390×844 Detail: route `350px`, grid `348px`, document scroll width `390px`,
+    editor/sidebar/actions tops `273.48/607.30/1442.84px`, actions bottom
+    `1518.26px`, Description client height `190px` with bounding height
+    `>=192px`; every planned boolean was true.
+  - 360×640 New: route `320px`, grid `318px`, document scroll width `360px`,
+    editor/sidebar/actions tops `220.89/554.70/1390.25px`, actions bottom
+    `1465.66px`, Description client height `190px` with bounding height
+    `>=192px`; every planned boolean was true.
+  - 360×640 Detail: route `320px`, grid `318px`, document scroll width `360px`,
+    editor/sidebar/actions tops `273.48/607.30/1442.84px`, actions bottom
+    `1518.26px`, Description client height `190px` with bounding height
+    `>=192px`; every planned boolean was true.
+  - New listbox rects were fully within both mobile widths: at 390×844,
+    Depends On `x 39.40→350.60`, Blocks `x 39.40→350.60`; at 360×640,
+    Depends On `x 39.40→320.60`, Blocks `x 39.40→320.60`.
+- Keyboard focus: the relationship combobox exposed a visible solid `3px`
+  `rgba(36,87,214,.18)` outline.
+- Screenshots:
+  - `/private/tmp/workbook-sidebar-new-1440.png`
+  - `/private/tmp/workbook-sidebar-detail-1440.png`
+  - `/private/tmp/workbook-sidebar-detail-1280x600.png`
+  - `/private/tmp/workbook-sidebar-detail-1280x600-listbox.png`
+  - `/private/tmp/workbook-sidebar-new-390.png`
+  - `/private/tmp/workbook-sidebar-detail-390.png`
+
 ---
 
 ### Task 7: Document, Verify, Review, and Update the Pull Request

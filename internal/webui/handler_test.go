@@ -790,6 +790,114 @@ setTimeout(async () => {
 	}
 }
 
+func TestHandlerClientSidebarAccessibilityAndMobileOrder(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	current := clientPlacementTask("WB-01J00000000000000000000072", "Current task", core.StatusReady, core.PriorityMedium)
+	candidate := clientPlacementTask("WB-01J00000000000000000000073", "Candidate task", core.StatusDone, core.PriorityHigh)
+	tasks := []core.Task{current, candidate}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/new")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/new status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	script = strings.Replace(script, "function relationshipRow(", "globalThis.relationshipRow = function relationshipRow(", 1)
+	document, err := json.Marshal(TasksDocument{
+		Format:       "workbook.tasks",
+		Version:      1,
+		Tasks:        tasks,
+		Presentation: presentationForTasks(tasks),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidateJSON, err := json.Marshal(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/new", string(document)) + script + `
+setTimeout(() => {
+  const form = findElement(main, (element) => element.tagName === "FORM");
+  const editor = findElement(form, (element) =>
+    element.className.split(/\s+/).includes("task-editor"));
+  const sidebar = findElement(form, (element) =>
+    element.className.split(/\s+/).includes("task-sidebar"));
+  const actions = findElement(form, (element) =>
+    element.className.split(/\s+/).includes("task-actions"));
+  if (!form || !editor || !sidebar || !actions) {
+    throw new Error("shared task regions did not render");
+  }
+  if (sidebar.getAttribute("aria-label") !==
+      "Task properties and relationships") {
+    throw new Error("sidebar does not identify its contents");
+  }
+
+  const groupFor = (headingText) => {
+    const heading = findElement(sidebar, (element) => element.textContent === headingText);
+    if (!heading) throw new Error("missing " + headingText + " group");
+    return heading.parentElement;
+  };
+  const dependsGroup = groupFor("Depends On");
+  const blocksGroup = groupFor("Blocks");
+  const dependsInput = findElement(dependsGroup, (element) => element.tagName === "INPUT");
+  const blocksInput = findElement(blocksGroup, (element) => element.tagName === "INPUT");
+  if (dependsInput.attributes.role !== "combobox" ||
+      blocksInput.attributes.role !== "combobox") {
+    throw new Error("relationship controls lost combobox semantics");
+  }
+  for (const group of [dependsGroup, blocksGroup]) {
+    const message = findElement(group, (element) =>
+      element.className.split(/\s+/).includes("relationship-message"));
+    if (!message ||
+        message.attributes.role !== "status" ||
+        message.attributes["aria-live"] !== "polite") {
+      throw new Error("relationship group feedback is not announced politely");
+    }
+  }
+  const formMessage = findElement(actions, (element) =>
+    element.className.split(/\s+/).includes("form-status"));
+  if (!formMessage ||
+      formMessage.attributes.role !== "status" ||
+      formMessage.attributes["aria-live"] !== "polite") {
+    throw new Error("task form feedback is not announced politely");
+  }
+
+  const failedDraft = relationshipRow(
+    { id: candidateTask.id, task: candidateTask, error: "not saved" },
+    () => {},
+    true,
+    () => {}
+  );
+  const removeButton = failedDraft.removeButton;
+  const retryButton = failedDraft.retryButton;
+  if (removeButton.type !== "button" ||
+      retryButton.type !== "button") {
+    throw new Error("relationship actions can submit the task form");
+  }
+  const order = [
+    editor,
+    sidebar,
+    actions
+  ].map((element) => form.children.indexOf(element));
+  if (!(order[0] < order[1] && order[1] < order[2])) {
+    throw new Error("mobile DOM order does not match visual order");
+  }
+}, 0);
+`
+	program = strings.Replace(program, "candidateTask.id", strconv.Quote(candidate.ID), 1)
+	program = strings.Replace(program, "candidateTask", string(candidateJSON), 1)
+	command := exec.Command(node, "-e", program)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("execute rendered client for sidebar accessibility: %v\n%s", err, output)
+	}
+}
+
 func TestHandlerClientStagesNewTaskRelationshipsWithoutMutating(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -3554,6 +3662,7 @@ class TestElement {
     this.parentElement = null;
   }
   setAttribute(name, value) { this.attributes[name] = String(value); }
+  getAttribute(name) { return this.attributes[name] ?? null; }
   removeAttribute(name) { delete this.attributes[name]; }
   hasAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attributes, name); }
   focus() { globalThis.activeElement = this; }
