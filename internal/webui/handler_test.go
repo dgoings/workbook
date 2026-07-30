@@ -1032,6 +1032,17 @@ setTimeout(async () => {
       Object.prototype.hasOwnProperty.call(call.options, "body"))) {
     throw new Error("New Task relationship writes were not exactly two bodyless requests");
   }
+  const postAt = events.indexOf("post");
+  const putIndexes = events.flatMap((event, index) => event === "put" ? [index] : []);
+  const activeRefreshAt = events.indexOf("active-refresh");
+  const deletedRefreshAt = events.indexOf("deleted-refresh");
+  const navigateAt = events.indexOf("navigate");
+  if (postAt < 0 || putIndexes.length !== 2 || activeRefreshAt < 0 ||
+      deletedRefreshAt < 0 || navigateAt < 0 ||
+      !putIndexes.every((putAt) => postAt < putAt && putAt < activeRefreshAt) ||
+      !(activeRefreshAt < deletedRefreshAt && deletedRefreshAt < navigateAt)) {
+    throw new Error("New Task did not finish both relationship writes before its final refreshes and navigation");
+  }
   if (fetchCalls.filter((call) => call.options.method === "POST" && call.url === "/api/tasks").length !== 1) {
     throw new Error("New Task did not issue exactly one task POST");
   }
@@ -1040,11 +1051,6 @@ setTimeout(async () => {
   }
   if (fetchCalls.filter((call) => (call.options.method || "GET") === "GET" && call.url === "/api/tasks?deleted=true").length !== 1) {
     throw new Error("New Task did not issue exactly one final deleted refresh");
-  }
-  const navigateAt = events.indexOf("navigate");
-  if (navigateAt < 0 || events.slice(0, navigateAt).filter((event) => event === "put").length !== 2 ||
-      events.indexOf("active-refresh") > navigateAt || events.indexOf("deleted-refresh") > navigateAt) {
-    throw new Error("New Task navigated before both relationship writes and refreshes resolved");
   }
   if (historyPaths.length !== 1 || historyPaths[0] !== "/tasks/" + encodeURIComponent(createdID)) {
     throw new Error("New Task did not navigate to the durable created task");
