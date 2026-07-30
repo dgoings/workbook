@@ -1,0 +1,4 @@
+interface:
+  display_name: "Workbook"
+  short_description: "Work a Workbook task through review and merge"
+  default_prompt: "Use $workbook to work the next eligible Workbook task through implementation, review, and merge."
