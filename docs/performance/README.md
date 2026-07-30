@@ -228,6 +228,23 @@ object-width probe and fetch auto-maintenance. That test demonstrates the
 constant process shape now meets the approved exclusive limits; it is not a
 replacement 500-by-20 acceptance sample.
 
+### 2026-07-30 packed repository sync acceptance evidence
+
+The packed-repository acceptance was run once in each supported object format,
+using one frozen product binary and one frozen harness binary. Both the initial
+and unchanged local-bare sync scenarios completed in SHA-1 and SHA-256; their
+automated integration test verifies the remote refs exactly. The reports have
+no repository latency or Git-process budget because this focused functional
+acceptance introduced neither. No unrelated future-story acceptance family was
+rerun.
+
+| Format | Evidence | Outcome |
+| --- | --- | --- |
+| SHA-1 | [JSON](2026-07-30-packed-repository-sync-acceptance-sha1.json), [Markdown](2026-07-30-packed-repository-sync-acceptance-sha1.md) | Both selected scenarios completed once without timeout or product error. |
+| SHA-256 | [JSON](2026-07-30-packed-repository-sync-acceptance-sha256.json), [Markdown](2026-07-30-packed-repository-sync-acceptance-sha256.md) | Both selected scenarios completed once without timeout or product error. |
+
+See the shared [build and checksum provenance](2026-07-30-packed-repository-sync-acceptance-provenance.md).
+
 ### 2026-07-29 semantic history validation evidence
 
 The measured product binary was built once. Each supported object format then
