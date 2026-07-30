@@ -167,6 +167,7 @@ var coldScenarioDefinitions = []coldScenarioDefinition{
 	{name: "cli-delete", measure: measureColdDelete},
 	{name: "cli-depend", measure: measureColdDepend},
 	{name: "cli-free", measure: measureColdFree},
+	{name: "cli-list", measure: measureColdList},
 	{name: "cli-move", measure: measureColdMove},
 	{name: "cli-restore", measure: measureColdRestore},
 	{name: "cli-update", measure: measureColdUpdate},
@@ -694,8 +695,13 @@ func coldCLIResults(samples int) []ScenarioResult {
 
 func coldCLIResult(name string, samples int) ScenarioResult {
 	target := &coldSingleTarget
-	if name == "cli-burst-independent-10" || name == "cli-burst-same-task-10" {
+	switch name {
+	case "cli-burst-independent-10", "cli-burst-same-task-10":
 		target = &burstTarget
+	case "cli-list":
+		// The read path has no approved duration budget, so it is reported
+		// descriptively rather than classified against an invented threshold.
+		target = nil
 	}
 	return ScenarioResult{Name: name, Surface: "cold-cli", Target: target, Samples: make([]Sample, samples)}
 }

@@ -10,6 +10,7 @@ var scenarioRegistry = []string{
 	"cli-delete",
 	"cli-depend",
 	"cli-free",
+	"cli-list",
 	"cli-move",
 	"cli-restore",
 	"cli-update",
