@@ -273,10 +273,11 @@ pending and the command exits nonzero. Validation never mutates canonical or
 tracking Git refs.
 
 The following acceptance scenarios are **planned targets**, not recorded
-performance evidence: with 500 active tasks and 20 operations per task, a full
-audit targets at most 10 seconds; an unchanged cached audit targets at most 500
-milliseconds; and five one-operation changes target at most 1 second. Each
-scenario also targets fewer than 12 Git processes.
+performance evidence: with 500 total task refs (475 active and 25 tombstoned)
+and 20 operations per task, a full audit targets at most 10 seconds; an
+unchanged cached audit targets at most 500 milliseconds; and five one-operation
+changes target at most 1 second. Each scenario also targets fewer than 12 Git
+processes.
 
 ### Terminal board
 
@@ -351,6 +352,12 @@ deleted blocked tasks remain read-only because tombstones cannot be changed.
 Dependency warnings and failures stay beside the initiating group, and
 dependency refreshes leave unsaved task-form fields mounted.
 
+Click a card's shortened task ID to copy its full ID. The ID remains part of the
+card's drag target, so dragging moves the task while a click copies. The task
+detail route provides the same action on its full ID. Copy feedback appears
+inline beside the ID without shifting the board or task form;
+polite live announcements identify the full task ID.
+
 The shared new-task and detail form creates or edits title, description, status,
 priority, and labels through the versioned APIs. Saving returns to the board and
 refreshes it. A failed save leaves the entered values in place and shows the
@@ -367,12 +374,19 @@ a known route receives `405` with the route's allowed method.
 Development performance is measured with the reproducible, bounded harness
 documented in [`docs/performance/README.md`](docs/performance/README.md).
 Remote synchronization benchmarks select one or more of seven named topologies
-with repeatable `--scenario` flags and always use at least 500 active tasks with
-20 operations per task. Their reports evaluate each topology as `pass`, `miss`,
-`timeout`, or `failed` against a time and Git-process reference budget;
-`not-evaluated` means that scenario has no target. Baseline budgets and outcomes
-are evidence, not achieved-performance guarantees; in particular, a timeout is
-only lower-bound elapsed-time evidence.
+with repeatable `--scenario` flags and use at least 500 total tasks with 20
+operations per task. In the benchmark CLI, `--tasks` counts total refs; omitted
+`--tombstones` produces 25 tombstones at 500 or more total tasks and one in
+smaller diagnostics, while an explicit zero is diagnostic-only. Cold CLI
+rebuilds and warm HTTP task-list loads are untimed setup. Local CLI p95 targets
+are 200 ms, warm-update p95 is 100 ms, and every burst must be below 1 second;
+local scenarios have no Git-process target. Version-2 reports include the
+SHA-256 of the resolved measured binary and acceptance rejects an `unknown`
+measured commit before it builds a fixture. Reports evaluate each topology as
+`pass`, `miss`, `timeout`, or `failed` against a time and Git-process reference
+budget; `not-evaluated` means that scenario has no target. Baseline budgets and
+outcomes are evidence, not achieved-performance guarantees; in particular, a
+timeout is only lower-bound elapsed-time evidence.
 
 ### Project identity across worktrees
 

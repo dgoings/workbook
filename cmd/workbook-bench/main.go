@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -28,6 +30,8 @@ const (
 type options struct {
 	workbookBinary string
 	tasks          int
+	tombstones     int
+	tombstonesSet  bool
 	operations     int
 	samples        int
 	timeout        time.Duration
@@ -67,6 +71,16 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	return runWithBenchmark(ctx, args, stdout, stderr, runBenchmark)
+}
+
+func runWithBenchmark(
+	ctx context.Context,
+	args []string,
+	stdout io.Writer,
+	stderr io.Writer,
+	benchmark func(context.Context, options) (perf.Report, error),
+) int {
 	flags, options := newFlagSet(stderr)
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -79,7 +93,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return invocationExitCode
 	}
 
-	report, err := runBenchmark(ctx, *options)
+	report, err := benchmark(ctx, *options)
 	if err != nil {
 		fmt.Fprintf(stderr, "workbook-bench: %v\n", err)
 		return failureExitCode
@@ -90,7 +104,25 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 
 	fmt.Fprintf(stdout, "wrote %s and %s\n", options.outputJSON, options.outputMarkdown)
+	if hasFailedLocalMeasurement(report) {
+		fmt.Fprintln(stderr, "workbook-bench: local measurement failed; see retained reports")
+		return failureExitCode
+	}
 	return 0
+}
+
+func hasFailedLocalMeasurement(report perf.Report) bool {
+	for _, scenario := range report.Scenarios {
+		if !strings.HasPrefix(scenario.Name, "cli-") && !strings.HasPrefix(scenario.Name, "api-") {
+			continue
+		}
+		for _, sample := range scenario.Samples {
+			if sample.TimedOut || sample.ExitCode != 0 || sample.Error != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func newFlagSet(stderr io.Writer) (*flag.FlagSet, *options) {
@@ -98,7 +130,8 @@ func newFlagSet(stderr io.Writer) (*flag.FlagSet, *options) {
 	flags := flag.NewFlagSet("workbook-bench", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.StringVar(&options.workbookBinary, "workbook", "", "path to the Workbook executable")
-	flags.IntVar(&options.tasks, "tasks", 500, "active task count")
+	flags.IntVar(&options.tasks, "tasks", 500, "total task refs")
+	flags.IntVar(&options.tombstones, "tombstones", 0, "tombstoned task refs (default depends on --tasks)")
 	flags.IntVar(&options.operations, "operations", 20, "operations per task")
 	flags.IntVar(&options.samples, "samples", 1, "samples per scenario")
 	flags.DurationVar(&options.timeout, "timeout", 60*time.Second, "per-command timeout")
@@ -129,6 +162,25 @@ func validateOptions(flags *flag.FlagSet, options *options) error {
 	if options.tasks < 10 {
 		return fmt.Errorf("--tasks must be at least 10")
 	}
+	options.tombstonesSet = false
+	flags.Visit(func(flag *flag.Flag) {
+		if flag.Name == "tombstones" {
+			options.tombstonesSet = true
+		}
+	})
+	if !options.tombstonesSet {
+		if options.tasks >= 500 {
+			options.tombstones = 25
+		} else {
+			options.tombstones = 1
+		}
+	}
+	if options.tombstones < 0 {
+		return fmt.Errorf("--tombstones must not be negative")
+	}
+	if options.tombstones > options.tasks {
+		return fmt.Errorf("--tombstones must not exceed --tasks")
+	}
 	if options.operations < 2 {
 		return fmt.Errorf("--operations must be at least 2")
 	}
@@ -150,12 +202,26 @@ func validateOptions(flags *flag.FlagSet, options *options) error {
 	if options.phase != "baseline" && options.phase != "acceptance" {
 		return fmt.Errorf("--phase must be baseline or acceptance")
 	}
-	if options.phase == "acceptance" && (options.tasks < 500 || options.operations < 20) {
-		return fmt.Errorf("acceptance requires at least 500 tasks and 20 operations per task")
+	if options.phase == "acceptance" {
+		switch {
+		case options.tasks < 500:
+			return fmt.Errorf("acceptance requires at least 500 total tasks")
+		case options.tombstones < 25:
+			return fmt.Errorf("acceptance requires at least 25 tombstoned tasks")
+		case options.operations < 20:
+			return fmt.Errorf("acceptance requires at least 20 operations per task")
+		case options.tasks-options.tombstones < 10:
+			return fmt.Errorf("acceptance requires at least 10 active tasks")
+		}
 	}
 	scenarios, err := perf.ResolveScenarios(options.scenarioFlags)
 	if err != nil {
 		return err
+	}
+	if options.phase == "acceptance" &&
+		(hasScenarioWithPrefix(scenarios, "cli-") || hasScenarioWithPrefix(scenarios, "api-")) &&
+		options.samples < 20 {
+		return fmt.Errorf("local acceptance requires at least 20 samples")
 	}
 	if containsRemoteScenario(scenarios) && (options.tasks < 500 || options.operations < 20) {
 		return fmt.Errorf("remote scenarios require at least 500 tasks and 20 operations per task")
@@ -186,6 +252,9 @@ func runBenchmark(ctx context.Context, options options) (perf.Report, error) {
 	if err != nil {
 		return perf.Report{}, err
 	}
+	if options.phase == "acceptance" && environment.WorkbookCommit == "unknown" {
+		return perf.Report{}, fmt.Errorf("acceptance requires a measured Workbook commit")
+	}
 
 	fixtureRoot, err := os.MkdirTemp("", "workbook-benchmark-")
 	if err != nil {
@@ -194,7 +263,9 @@ func runBenchmark(ctx context.Context, options options) (perf.Report, error) {
 	defer os.RemoveAll(fixtureRoot)
 
 	fixtureSpec := perf.FixtureSpec{
-		ActiveTasks:       options.tasks,
+		TotalTasks:        options.tasks,
+		ActiveTasks:       options.tasks - options.tombstones,
+		TombstonedTasks:   options.tombstones,
 		OperationsPerTask: options.operations,
 		ObjectFormat:      options.objectFormat,
 	}
@@ -207,19 +278,21 @@ func runBenchmark(ctx context.Context, options options) (perf.Report, error) {
 
 	var scenarios []perf.ScenarioResult
 	var repositoryMetrics perf.RepositoryMetrics
-	if hasScenarioWithPrefix(options.scenarios, "cli-") {
-		cold, err := perf.RunColdCLI(ctx, runSpec, filepath.Join(fixtureRoot, "cold"))
+	coldScenarios := selectedColdScenarioNames(options.scenarios)
+	if len(coldScenarios) != 0 {
+		cold, err := perf.RunColdCLI(ctx, runSpec, filepath.Join(fixtureRoot, "cold"), coldScenarios)
 		if err != nil {
 			return perf.Report{}, fmt.Errorf("run cold CLI scenarios: %w", err)
 		}
-		scenarios = append(scenarios, selectedScenarioResults(cold, options.scenarios)...)
+		scenarios = append(scenarios, cold...)
 	}
-	if hasScenarioWithPrefix(options.scenarios, "api-") {
-		warm, err := perf.RunWarmHTTP(ctx, runSpec, filepath.Join(fixtureRoot, "warm"))
+	warmScenarios := selectedWarmScenarioNames(options.scenarios)
+	if len(warmScenarios) != 0 {
+		warm, err := perf.RunWarmHTTP(ctx, runSpec, filepath.Join(fixtureRoot, "warm"), warmScenarios)
 		if err != nil {
 			return perf.Report{}, fmt.Errorf("run warm HTTP scenarios: %w", err)
 		}
-		scenarios = append(scenarios, selectedScenarioResults(warm, options.scenarios)...)
+		scenarios = append(scenarios, warm...)
 	}
 	if hasRepositoryScenario(options.scenarios) {
 		fixtureContext, cancelFixture := context.WithTimeout(ctx, options.timeout)
@@ -282,6 +355,26 @@ func hasScenarioWithPrefix(scenarios []string, prefix string) bool {
 	return false
 }
 
+func selectedColdScenarioNames(scenarios []string) []string {
+	cold := make([]string, 0, len(scenarios))
+	for _, scenario := range scenarios {
+		if strings.HasPrefix(scenario, "cli-") {
+			cold = append(cold, scenario)
+		}
+	}
+	return cold
+}
+
+func selectedWarmScenarioNames(scenarios []string) []string {
+	warm := make([]string, 0, len(scenarios))
+	for _, scenario := range scenarios {
+		if strings.HasPrefix(scenario, "api-") {
+			warm = append(warm, scenario)
+		}
+	}
+	return warm
+}
+
 func hasRepositoryScenario(scenarios []string) bool {
 	for _, scenario := range scenarios {
 		if strings.HasPrefix(scenario, "projection-") || scenario == "sync-initial-local-bare" || scenario == "sync-unchanged-local-bare" {
@@ -336,6 +429,10 @@ func selectedRemoteScenarioNames(scenarios []string) []string {
 }
 
 func benchmarkEnvironment(ctx context.Context, workbookBinary string, commandTimeout time.Duration) (perf.Environment, error) {
+	workbookChecksum, err := fileSHA256(workbookBinary)
+	if err != nil {
+		return perf.Environment{}, fmt.Errorf("hash Workbook binary: %w", err)
+	}
 	gitVersion, err := commandOutput(ctx, commandTimeout, "git", "--version")
 	if err != nil {
 		return perf.Environment{}, fmt.Errorf("read Git version: %w", err)
@@ -357,13 +454,27 @@ func benchmarkEnvironment(ctx context.Context, workbookBinary string, commandTim
 		return perf.Environment{}, fmt.Errorf("decode Workbook version: unexpected result envelope")
 	}
 	return perf.Environment{
-		OS:              runtime.GOOS,
-		Arch:            runtime.GOARCH,
-		GitVersion:      gitVersion,
-		GoVersion:       goVersion,
-		WorkbookVersion: version.Data.Version,
-		WorkbookCommit:  version.Data.Commit,
+		OS:                   runtime.GOOS,
+		Arch:                 runtime.GOARCH,
+		GitVersion:           gitVersion,
+		GoVersion:            goVersion,
+		WorkbookVersion:      version.Data.Version,
+		WorkbookCommit:       version.Data.Commit,
+		WorkbookBinarySHA256: workbookChecksum,
 	}, nil
+}
+
+func fileSHA256(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func commandOutput(ctx context.Context, timeout time.Duration, binary string, args ...string) (string, error) {

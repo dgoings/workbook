@@ -27,9 +27,25 @@ var benchmarkOrigin = time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC)
 // Fixture is a deterministic Workbook repository populated with valid task
 // operation histories.
 type Fixture struct {
-	Root    string
-	Config  core.ProjectConfig
-	TaskIDs []string
+	Root              string
+	Config            core.ProjectConfig
+	TaskIDs           []string
+	ActiveTaskIDs     []string
+	TombstonedTaskIDs []string
+	Dependencies      []FixtureDependency
+}
+
+type FixtureDependency struct {
+	Dependent  string
+	Dependency string
+}
+
+type fixtureTaskPlan struct {
+	TaskID     string
+	Generation string
+	Initial    core.TaskData
+	Operations []core.Operation
+	Tombstoned bool
 }
 
 type fixtureCommit struct {
@@ -41,14 +57,8 @@ type fixtureCommit struct {
 // BuildFixture creates a Git-backed Workbook fixture without replaying each
 // operation through the repository writer.
 func BuildFixture(ctx context.Context, root string, spec FixtureSpec) (Fixture, error) {
-	if spec.ActiveTasks < 1 {
-		return Fixture{}, fmt.Errorf("active tasks must be positive")
-	}
-	if spec.OperationsPerTask < 1 {
-		return Fixture{}, fmt.Errorf("operations per task must be positive")
-	}
-	if spec.ObjectFormat != "sha1" && spec.ObjectFormat != "sha256" {
-		return Fixture{}, fmt.Errorf("unsupported object format %q", spec.ObjectFormat)
+	if err := validateFixtureSpec(spec); err != nil {
+		return Fixture{}, err
 	}
 
 	absRoot, err := filepath.Abs(root)
@@ -81,7 +91,11 @@ func BuildFixture(ctx context.Context, root string, spec FixtureSpec) (Fixture, 
 		return Fixture{}, fmt.Errorf("start git fast-import: %w", err)
 	}
 
-	taskIDs, writeErr := writeFixtureHistory(input, config, spec, ids)
+	plans, err := newFixtureTaskPlans(config, spec, ids)
+	if err != nil {
+		return Fixture{}, err
+	}
+	fixture, writeErr := writeFixtureHistory(input, config, plans, ids)
 	closeErr := input.Close()
 	waitErr := command.Wait()
 	if writeErr != nil {
@@ -98,11 +112,38 @@ func BuildFixture(ctx context.Context, root string, spec FixtureSpec) (Fixture, 
 	if err != nil {
 		return Fixture{}, err
 	}
-	if countRefLines(refs) != spec.ActiveTasks {
-		return Fixture{}, fmt.Errorf("task refs = %d, want %d", countRefLines(refs), spec.ActiveTasks)
+	if countRefLines(refs) != spec.TotalTasks {
+		return Fixture{}, fmt.Errorf("task refs = %d, want %d", countRefLines(refs), spec.TotalTasks)
 	}
 
-	return Fixture{Root: absRoot, Config: config, TaskIDs: taskIDs}, nil
+	fixture.Root = absRoot
+	fixture.Config = config
+	return fixture, nil
+}
+
+func validateFixtureSpec(spec FixtureSpec) error {
+	if spec.TotalTasks < 1 {
+		return fmt.Errorf("total tasks must be positive")
+	}
+	if spec.ActiveTasks < 0 {
+		return fmt.Errorf("active tasks must not be negative")
+	}
+	if spec.TombstonedTasks < 0 {
+		return fmt.Errorf("tombstoned tasks must not be negative")
+	}
+	if spec.ActiveTasks+spec.TombstonedTasks != spec.TotalTasks {
+		return fmt.Errorf("active tasks + tombstoned tasks must equal total tasks")
+	}
+	if spec.OperationsPerTask < 1 {
+		return fmt.Errorf("operations per task must be positive")
+	}
+	if spec.TombstonedTasks > 0 && spec.OperationsPerTask < 2 {
+		return fmt.Errorf("tombstoned tasks require at least two operations per task")
+	}
+	if spec.ObjectFormat != "sha1" && spec.ObjectFormat != "sha256" {
+		return fmt.Errorf("unsupported object format %q", spec.ObjectFormat)
+	}
+	return nil
 }
 
 type fixtureIDs struct {
@@ -132,10 +173,9 @@ func (ids *fixtureIDs) timestamp() time.Time {
 	return timestamp
 }
 
-func writeFixtureHistory(w io.Writer, config core.ProjectConfig, spec FixtureSpec, ids *fixtureIDs) ([]string, error) {
-	taskIDs := make([]string, 0, spec.ActiveTasks)
-	mark := 0
-	for taskIndex := 0; taskIndex < spec.ActiveTasks; taskIndex++ {
+func newFixtureTaskPlans(config core.ProjectConfig, spec FixtureSpec, ids *fixtureIDs) ([]fixtureTaskPlan, error) {
+	plans := make([]fixtureTaskPlan, spec.TotalTasks)
+	for taskIndex := range plans {
 		taskULID, err := ids.next()
 		if err != nil {
 			return nil, fmt.Errorf("generate task ID: %w", err)
@@ -144,41 +184,250 @@ func writeFixtureHistory(w io.Writer, config core.ProjectConfig, spec FixtureSpe
 		if err != nil {
 			return nil, fmt.Errorf("generate history generation: %w", err)
 		}
-		taskID := config.Key + "-" + taskULID
-		taskIDs = append(taskIDs, taskID)
+		plans[taskIndex].TaskID = config.Key + "-" + taskULID
+		plans[taskIndex].Generation = generation
+		plans[taskIndex].Tombstoned = taskIndex >= spec.ActiveTasks
+	}
 
+	for taskIndex := range plans {
+		dependency := ""
+		if taskIndex > 0 && spec.ActiveTasks > 0 {
+			dependency = plans[(taskIndex-1)%spec.ActiveTasks].TaskID
+		}
+		plans[taskIndex].Initial = core.TaskData{
+			Title:        fmt.Sprintf("Benchmark task %04d", taskIndex),
+			Description:  fmt.Sprintf("Representative benchmark task %04d", taskIndex),
+			Status:       core.StatusBacklog,
+			Priority:     core.PriorityMedium,
+			Labels:       []string{},
+			Rank:         fmt.Sprintf("%d/1", taskIndex+1),
+			Dependencies: fixtureInitialDependencies(dependency),
+		}
+		plans[taskIndex].Operations = fixturePlanOperations(
+			spec.OperationsPerTask,
+			plans[taskIndex].Tombstoned,
+			taskIndex,
+			dependency,
+		)
+	}
+	return plans, nil
+}
+
+func fixtureInitialDependencies(dependency string) []string {
+	if dependency == "" {
+		return []string{}
+	}
+	return []string{dependency}
+}
+
+func fixturePlanOperations(count int, tombstoned bool, taskIndex int, dependency string) []core.Operation {
+	operations := make([]core.Operation, count)
+	operations[0] = core.Operation{Type: core.OperationTaskCreate}
+	for index := 1; index < count; index++ {
+		logicalClock := index + 1
+		if tombstoned && logicalClock == count {
+			operations[index] = core.Operation{Type: core.OperationTaskTombstone}
+			continue
+		}
+		operations[index] = fixtureRepresentativeOperation(taskIndex, logicalClock, dependency)
+	}
+	return operations
+}
+
+func fixtureRepresentativeOperation(taskIndex, logicalClock int, dependency string) core.Operation {
+	labels := []string{"benchmark", "git", "projection", "workflow"}
+	if logicalClock > 19 {
+		return core.Operation{
+			Type:  core.OperationFieldSet,
+			Field: "description",
+			Value: fmt.Sprintf("Benchmark task %04d update %02d", taskIndex, logicalClock),
+		}
+	}
+
+	switch logicalClock {
+	case 2:
+		return core.Operation{
+			Type:  core.OperationFieldSet,
+			Field: "description",
+			Value: fmt.Sprintf("Benchmark task %04d update %02d", taskIndex, logicalClock),
+		}
+	case 3, 9, 15:
+		statuses := []core.Status{
+			core.StatusInProgress,
+			core.StatusBlocked,
+			core.StatusInReview,
+			core.StatusDone,
+		}
+		phase := (logicalClock - 3) / 6
+		return core.Operation{
+			Type:  core.OperationFieldSet,
+			Field: "status",
+			Value: string(statuses[(taskIndex/2+phase)%len(statuses)]),
+		}
+	case 4, 10, 16:
+		priorities := []core.Priority{core.PriorityLow, core.PriorityHigh}
+		phase := (logicalClock - 4) / 6
+		return core.Operation{
+			Type:  core.OperationFieldSet,
+			Field: "priority",
+			Value: string(priorities[(taskIndex/2+phase)%len(priorities)]),
+		}
+	case 5:
+		return core.Operation{
+			Type:  core.OperationSetAdd,
+			Field: "labels",
+			Value: labels[taskIndex%len(labels)],
+		}
+	case 6:
+		if dependency != "" {
+			return core.Operation{
+				Type:  core.OperationSetRemove,
+				Field: "dependencies",
+				Value: dependency,
+			}
+		}
+		return core.Operation{
+			Type:  core.OperationSetAdd,
+			Field: "labels",
+			Value: labels[(taskIndex+2)%len(labels)],
+		}
+	case 7:
+		if dependency != "" {
+			return core.Operation{
+				Type:  core.OperationSetAdd,
+				Field: "dependencies",
+				Value: dependency,
+			}
+		}
+		return fixtureRankOperation(taskIndex, 0)
+	case 8:
+		if dependency != "" {
+			return fixtureRankOperation(taskIndex, 0)
+		}
+		return core.Operation{
+			Type:  core.OperationFieldSet,
+			Field: "description",
+			Value: fmt.Sprintf("Benchmark task %04d update %02d", taskIndex, logicalClock),
+		}
+	case 13:
+		if dependency != "" {
+			return core.Operation{
+				Type:  core.OperationSetAdd,
+				Field: "dependencies",
+				Value: dependency,
+			}
+		}
+		return fixtureRankOperation(taskIndex, 1)
+	case 14:
+		if dependency != "" {
+			return fixtureRankOperation(taskIndex, 1)
+		}
+		return core.Operation{
+			Type:  core.OperationFieldSet,
+			Field: "description",
+			Value: fmt.Sprintf("Benchmark task %04d update %02d", taskIndex, logicalClock),
+		}
+	case 19:
+		phase := (logicalClock - 7) / 6
+		return fixtureRankOperation(taskIndex, phase)
+	case 11:
+		return core.Operation{
+			Type:  core.OperationSetRemove,
+			Field: "labels",
+			Value: labels[taskIndex%len(labels)],
+		}
+	case 12:
+		if dependency != "" {
+			return core.Operation{
+				Type:  core.OperationSetRemove,
+				Field: "dependencies",
+				Value: dependency,
+			}
+		}
+		return core.Operation{
+			Type:  core.OperationSetRemove,
+			Field: "labels",
+			Value: labels[(taskIndex+2)%len(labels)],
+		}
+	case 17:
+		return core.Operation{
+			Type:  core.OperationSetAdd,
+			Field: "labels",
+			Value: labels[(taskIndex+1)%len(labels)],
+		}
+	case 18:
+		return core.Operation{
+			Type:  core.OperationSetAdd,
+			Field: "labels",
+			Value: labels[(taskIndex+3)%len(labels)],
+		}
+	default:
+		return core.Operation{
+			Type:  core.OperationFieldSet,
+			Field: "description",
+			Value: fmt.Sprintf("Benchmark task %04d update %02d", taskIndex, logicalClock),
+		}
+	}
+}
+
+func fixtureRankOperation(taskIndex, phase int) core.Operation {
+	return core.Operation{
+		Type:  core.OperationFieldSet,
+		Field: "rank",
+		Value: fmt.Sprintf("%d/2", 2*(taskIndex%4)+1+2*phase),
+	}
+}
+
+func writeFixtureHistory(w io.Writer, config core.ProjectConfig, plans []fixtureTaskPlan, ids *fixtureIDs) (Fixture, error) {
+	fixture := Fixture{
+		TaskIDs:           make([]string, 0, len(plans)),
+		ActiveTaskIDs:     make([]string, 0, len(plans)),
+		TombstonedTaskIDs: make([]string, 0, len(plans)),
+	}
+	mark := 0
+	for taskIndex, plan := range plans {
 		var parent *core.StateDocument
 		parentMark := 0
-		for logicalClock := 1; logicalClock <= spec.OperationsPerTask; logicalClock++ {
+		for operationIndex, plannedOperation := range plan.Operations {
+			logicalClock := operationIndex + 1
 			operationID, err := ids.next()
 			if err != nil {
-				return nil, fmt.Errorf("generate operation ID: %w", err)
+				return Fixture{}, fmt.Errorf("generate operation ID: %w", err)
 			}
 			timestamp := ids.timestamp()
-			pack := fixtureOperationPack(config, taskID, generation, taskIndex, logicalClock, operationID, timestamp)
+			pack := fixturePlanOperationPack(config, plan, taskIndex, logicalClock, operationID, timestamp, plannedOperation)
 			state, err := core.Apply(parent, pack, config.Key)
 			if err != nil {
-				return nil, fmt.Errorf("apply task %q operation %d: %w", taskID, logicalClock, err)
+				return Fixture{}, fmt.Errorf("apply task %q operation %d: %w", plan.TaskID, logicalClock, err)
 			}
 			operation, err := core.EncodeDocument(pack)
 			if err != nil {
-				return nil, fmt.Errorf("encode task %q operation %d: %w", taskID, logicalClock, err)
+				return Fixture{}, fmt.Errorf("encode task %q operation %d: %w", plan.TaskID, logicalClock, err)
 			}
 			checkpoint, err := core.EncodeDocument(state)
 			if err != nil {
-				return nil, fmt.Errorf("encode task %q state %d: %w", taskID, logicalClock, err)
+				return Fixture{}, fmt.Errorf("encode task %q state %d: %w", plan.TaskID, logicalClock, err)
 			}
 
 			mark++
-			if err := writeImportedCommit(w, "refs/workbook/tasks/"+taskID, mark, parentMark, timestamp, fmt.Sprintf("workbook: benchmark task %04d operation %02d", taskIndex, logicalClock), operation, checkpoint); err != nil {
-				return nil, fmt.Errorf("write task %q operation %d: %w", taskID, logicalClock, err)
+			if err := writeImportedCommit(w, "refs/workbook/tasks/"+plan.TaskID, mark, parentMark, timestamp, fmt.Sprintf("workbook: benchmark task %04d operation %02d", taskIndex, logicalClock), operation, checkpoint); err != nil {
+				return Fixture{}, fmt.Errorf("write task %q operation %d: %w", plan.TaskID, logicalClock, err)
 			}
 			stateCopy := state
 			parent = &stateCopy
 			parentMark = mark
 		}
+		fixture.TaskIDs = append(fixture.TaskIDs, plan.TaskID)
+		if parent.Task.Deleted {
+			fixture.TombstonedTaskIDs = append(fixture.TombstonedTaskIDs, plan.TaskID)
+		} else {
+			fixture.ActiveTaskIDs = append(fixture.ActiveTaskIDs, plan.TaskID)
+		}
+		for _, dependency := range parent.Task.Dependencies {
+			fixture.Dependencies = append(fixture.Dependencies, FixtureDependency{Dependent: plan.TaskID, Dependency: dependency})
+		}
 	}
-	return taskIDs, nil
+	return fixture, nil
 }
 
 // readFixtureCommit reads a fixture commit's independently valid durable
@@ -416,7 +665,39 @@ func fixtureOperationPack(config core.ProjectConfig, taskID, generation string, 
 		return pack
 	}
 
-	operation := core.Operation{ID: operationID, Type: core.OperationFieldSet}
+	operation := fixtureFieldSetOperation(taskIndex, logicalClock)
+	operation.ID = operationID
+	pack.Operations = []core.Operation{operation}
+	return pack
+}
+
+func fixturePlanOperationPack(config core.ProjectConfig, plan fixtureTaskPlan, taskIndex, logicalClock int, operationID string, timestamp time.Time, operation core.Operation) core.OperationPack {
+	pack := core.OperationPack{
+		Format:            "workbook.operation-pack",
+		Version:           1,
+		ProjectID:         config.ProjectID,
+		TaskID:            plan.TaskID,
+		HistoryGeneration: plan.Generation,
+		Actor:             core.Actor{ID: benchmarkActorID},
+		LogicalClock:      uint64(logicalClock),
+		WallTime:          timestamp,
+	}
+	operation.ID = operationID
+	if operation.Type == core.OperationTaskCreate {
+		initial := operation
+		task := plan.Initial
+		task.CreatedAt = timestamp
+		task.UpdatedAt = timestamp
+		initial.Task = &task
+		pack.Operations = []core.Operation{initial}
+		return pack
+	}
+	pack.Operations = []core.Operation{operation}
+	return pack
+}
+
+func fixtureFieldSetOperation(taskIndex, logicalClock int) core.Operation {
+	operation := core.Operation{Type: core.OperationFieldSet}
 	switch (logicalClock - 2) % 3 {
 	case 0:
 		operation.Field = "description"
@@ -428,8 +709,7 @@ func fixtureOperationPack(config core.ProjectConfig, taskID, generation string, 
 		operation.Field = "priority"
 		operation.Value = string(core.PriorityHigh)
 	}
-	pack.Operations = []core.Operation{operation}
-	return pack
+	return operation
 }
 
 func writeImportedCommit(

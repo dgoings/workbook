@@ -26,18 +26,6 @@ const (
 	warmServerPrefix        = "Workbook board: http://"
 )
 
-const (
-	coldCreate = iota
-	coldDelete
-	coldDepend
-	coldFree
-	coldMove
-	coldRestore
-	coldUpdate
-	coldBurstIndependent
-	coldBurstSameTask
-)
-
 // RunSpec configures one benchmark scenario run.
 type RunSpec struct {
 	WorkbookBinary string
@@ -46,20 +34,11 @@ type RunSpec struct {
 	CommandTimeout time.Duration
 }
 
-type coldCLITasks struct {
-	update      string
-	delete      string
-	move        string
-	moveAnchor  string
-	dependent   string
-	dependency  string
-	sameBurst   string
-	independent []string
-}
-
 type scenarioDependencies struct {
-	buildFixture   func(context.Context, string, FixtureSpec) (Fixture, error)
-	measureCommand func(context.Context, CommandSpec) Sample
+	buildFixture      func(context.Context, string, FixtureSpec) (Fixture, error)
+	prepareProjection func(context.Context, CommandSpec, int) error
+	measureCommand    func(context.Context, CommandSpec) Sample
+	cleanupFixture    func(string) error
 }
 
 type warmHTTPTasks struct {
@@ -69,6 +48,7 @@ type warmHTTPTasks struct {
 }
 
 type warmScenarioServer interface {
+	prepareProjection(context.Context, int, time.Duration) error
 	measureStatus(context.Context, string, string, time.Duration) (Sample, error)
 	measureIndependentBurst(context.Context, []string, string, time.Duration) (Sample, error)
 	measureSameTaskBurst(context.Context, string, int, time.Duration) (Sample, error)
@@ -76,8 +56,9 @@ type warmScenarioServer interface {
 }
 
 type warmHTTPDependencies struct {
-	buildFixture func(context.Context, string, FixtureSpec) (Fixture, error)
-	startServer  func(context.Context, string, string, time.Duration) (warmScenarioServer, error)
+	buildFixture   func(context.Context, string, FixtureSpec) (Fixture, error)
+	startServer    func(context.Context, string, string, time.Duration) (warmScenarioServer, error)
+	cleanupFixture func(string) error
 }
 
 type warmHTTPServer struct {
@@ -97,12 +78,14 @@ type countObjectsMetrics struct {
 
 // RunColdCLI builds deterministic fixtures and measures cold CLI mutations
 // against an acceptance-sized baseline isolated by scenario and sample.
-func RunColdCLI(ctx context.Context, spec RunSpec, fixtureRoot string) ([]ScenarioResult, error) {
-	return runColdCLI(ctx, spec, fixtureRoot, scenarioDependencies{
+func RunColdCLI(ctx context.Context, spec RunSpec, fixtureRoot string, selected []string) ([]ScenarioResult, error) {
+	return runColdCLI(ctx, spec, fixtureRoot, selected, scenarioDependencies{
 		buildFixture: func(ctx context.Context, root string, fixture FixtureSpec) (Fixture, error) {
 			return buildFixtureWithinTimeout(ctx, root, fixture, spec.CommandTimeout)
 		},
-		measureCommand: MeasureCommand,
+		prepareProjection: prepareProjection,
+		measureCommand:    MeasureCommand,
+		cleanupFixture:    os.RemoveAll,
 	})
 }
 
@@ -112,7 +95,7 @@ func buildFixtureWithinTimeout(ctx context.Context, root string, spec FixtureSpe
 	return BuildFixture(fixtureContext, root, spec)
 }
 
-func runColdCLI(ctx context.Context, spec RunSpec, fixtureRoot string, dependencies scenarioDependencies) ([]ScenarioResult, error) {
+func runColdCLI(ctx context.Context, spec RunSpec, fixtureRoot string, selected []string, dependencies scenarioDependencies) ([]ScenarioResult, error) {
 	if spec.Samples < 1 {
 		return nil, fmt.Errorf("samples must be positive")
 	}
@@ -122,76 +105,51 @@ func runColdCLI(ctx context.Context, spec RunSpec, fixtureRoot string, dependenc
 	if fixtureRoot == "" {
 		return nil, fmt.Errorf("fixture root is required")
 	}
+	if dependencies.buildFixture == nil || dependencies.prepareProjection == nil || dependencies.measureCommand == nil {
+		return nil, fmt.Errorf("cold CLI scenario dependencies are required")
+	}
+	cleanupFixture := dependencies.cleanupFixture
+	if cleanupFixture == nil {
+		cleanupFixture = os.RemoveAll
+	}
 	if err := os.MkdirAll(fixtureRoot, 0o755); err != nil {
 		return nil, fmt.Errorf("create fixture root: %w", err)
 	}
 
-	results := coldCLIResults(spec.Samples)
+	definitions, err := selectedColdCLIScenarios(selected)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]ScenarioResult, len(definitions))
+	for index, definition := range definitions {
+		results[index] = coldCLIResult(definition.name, spec.Samples)
+	}
 	for sample := range spec.Samples {
 		sampleRoot := filepath.Join(fixtureRoot, fmt.Sprintf("sample-%03d", sample+1))
-
-		createFixture, _, err := buildColdCLIFixture(ctx, dependencies, spec.Fixture, sampleRoot, "create")
-		if err != nil {
-			return nil, err
+		for index, definition := range definitions {
+			root := filepath.Join(sampleRoot, definition.name)
+			fixture, err := dependencies.buildFixture(ctx, root, spec.Fixture)
+			if err != nil {
+				primaryErr := fmt.Errorf("build %s fixture: %w", definition.name, err)
+				return nil, withFixtureCleanupError(primaryErr, cleanupFixture(root), definition.name)
+			}
+			if err := dependencies.prepareProjection(ctx, CommandSpec{
+				Binary: spec.WorkbookBinary, Args: []string{"rebuild", "--json"}, Directory: fixture.Root, Timeout: spec.CommandTimeout,
+			}, spec.Fixture.TotalTasks); err != nil {
+				primaryErr := fmt.Errorf("prepare %s projection: %w", definition.name, err)
+				return nil, withFixtureCleanupError(primaryErr, cleanupFixture(root), definition.name)
+			}
+			measured, err := definition.measure(ctx, dependencies, spec, fixture, sample)
+			cleanupErr := cleanupFixture(root)
+			if err != nil {
+				primaryErr := fmt.Errorf("measure %s: %w", definition.name, err)
+				return nil, withFixtureCleanupError(primaryErr, cleanupErr, definition.name)
+			}
+			if cleanupErr != nil {
+				return nil, withFixtureCleanupError(nil, cleanupErr, definition.name)
+			}
+			results[index].Samples[sample] = measured
 		}
-		results[coldCreate].Samples[sample] = measureColdCLICommand(ctx, dependencies, spec, createFixture.Root, []string{
-			"create", fmt.Sprintf("Benchmark created task %d", sample+1),
-			"--status", "ready", "--priority", "high", "--json",
-		})
-
-		deleteFixture, deleteTasks, err := buildColdCLIFixture(ctx, dependencies, spec.Fixture, sampleRoot, "delete-restore")
-		if err != nil {
-			return nil, err
-		}
-		results[coldDelete].Samples[sample] = measureColdCLICommand(ctx, dependencies, spec, deleteFixture.Root, []string{
-			"delete", deleteTasks.delete, "--json",
-		})
-		results[coldRestore].Samples[sample] = measureColdCLICommand(ctx, dependencies, spec, deleteFixture.Root, []string{
-			"restore", deleteTasks.delete, "--json",
-		})
-
-		dependFixture, dependTasks, err := buildColdCLIFixture(ctx, dependencies, spec.Fixture, sampleRoot, "depend-free")
-		if err != nil {
-			return nil, err
-		}
-		results[coldDepend].Samples[sample] = measureColdCLICommand(ctx, dependencies, spec, dependFixture.Root, []string{
-			"depend", dependTasks.dependent, dependTasks.dependency, "--json",
-		})
-		results[coldFree].Samples[sample] = measureColdCLICommand(ctx, dependencies, spec, dependFixture.Root, []string{
-			"free", dependTasks.dependent, dependTasks.dependency, "--json",
-		})
-
-		moveFixture, moveTasks, err := buildColdCLIFixture(ctx, dependencies, spec.Fixture, sampleRoot, "move")
-		if err != nil {
-			return nil, err
-		}
-		results[coldMove].Samples[sample] = measureColdCLICommand(ctx, dependencies, spec, moveFixture.Root, []string{
-			"move", moveTasks.move, "--before", moveTasks.moveAnchor, "--json",
-		})
-
-		updateFixture, updateTasks, err := buildColdCLIFixture(ctx, dependencies, spec.Fixture, sampleRoot, "update")
-		if err != nil {
-			return nil, err
-		}
-		results[coldUpdate].Samples[sample] = measureColdCLICommand(ctx, dependencies, spec, updateFixture.Root, []string{
-			"update", updateTasks.update, "--status", "ready", "--json",
-		})
-
-		independentFixture, independentTasks, err := buildColdCLIFixture(ctx, dependencies, spec.Fixture, sampleRoot, "burst-independent")
-		if err != nil {
-			return nil, err
-		}
-		results[coldBurstIndependent].Samples[sample] = measureIndependentBurst(
-			ctx, dependencies, spec, independentFixture.Root, independentTasks.independent,
-		)
-
-		sameFixture, sameTasks, err := buildColdCLIFixture(ctx, dependencies, spec.Fixture, sampleRoot, "burst-same-task")
-		if err != nil {
-			return nil, err
-		}
-		results[coldBurstSameTask].Samples[sample] = measureSameTaskBurst(
-			ctx, dependencies, spec, sameFixture.Root, sameTasks.sameBurst,
-		)
 	}
 	for index := range results {
 		results[index].Summary = Summarize(results[index].Samples)
@@ -199,10 +157,133 @@ func runColdCLI(ctx context.Context, spec RunSpec, fixtureRoot string, dependenc
 	return results, nil
 }
 
+type coldScenarioDefinition struct {
+	name    string
+	measure func(context.Context, scenarioDependencies, RunSpec, Fixture, int) (Sample, error)
+}
+
+var coldScenarioDefinitions = []coldScenarioDefinition{
+	{name: "cli-create", measure: measureColdCreate},
+	{name: "cli-delete", measure: measureColdDelete},
+	{name: "cli-depend", measure: measureColdDepend},
+	{name: "cli-free", measure: measureColdFree},
+	{name: "cli-move", measure: measureColdMove},
+	{name: "cli-restore", measure: measureColdRestore},
+	{name: "cli-update", measure: measureColdUpdate},
+	{name: "cli-burst-independent-10", measure: measureColdIndependentBurst},
+	{name: "cli-burst-same-task-10", measure: measureColdSameTaskBurst},
+}
+
+func selectedColdCLIScenarios(selected []string) ([]coldScenarioDefinition, error) {
+	wanted := make(map[string]struct{}, len(selected))
+	for _, name := range selected {
+		wanted[name] = struct{}{}
+	}
+	definitions := make([]coldScenarioDefinition, 0, len(selected))
+	for _, definition := range coldScenarioDefinitions {
+		if _, ok := wanted[definition.name]; ok {
+			definitions = append(definitions, definition)
+			delete(wanted, definition.name)
+		}
+	}
+	for name := range wanted {
+		return nil, fmt.Errorf("unknown cold CLI scenario %q", name)
+	}
+	return definitions, nil
+}
+
+func measureColdCreate(ctx context.Context, dependencies scenarioDependencies, spec RunSpec, fixture Fixture, sample int) (Sample, error) {
+	return measureColdCLICommand(ctx, dependencies, spec, fixture.Root, []string{
+		"create", fmt.Sprintf("Benchmark created task %d", sample+1), "--status", "ready", "--priority", "high", "--json",
+	}), nil
+}
+
+func measureColdDelete(ctx context.Context, dependencies scenarioDependencies, spec RunSpec, fixture Fixture, _ int) (Sample, error) {
+	taskID, err := fixtureActiveTask(fixture, 1)
+	if err != nil {
+		return Sample{}, err
+	}
+	return measureColdCLICommand(ctx, dependencies, spec, fixture.Root, []string{"delete", taskID[0], "--json"}), nil
+}
+
+func measureColdDepend(ctx context.Context, dependencies scenarioDependencies, spec RunSpec, fixture Fixture, _ int) (Sample, error) {
+	taskIDs, err := fixtureActiveTask(fixture, 3)
+	if err != nil {
+		return Sample{}, err
+	}
+	return measureColdCLICommand(ctx, dependencies, spec, fixture.Root, []string{"depend", taskIDs[2], taskIDs[0], "--json"}), nil
+}
+
+func measureColdFree(ctx context.Context, dependencies scenarioDependencies, spec RunSpec, fixture Fixture, _ int) (Sample, error) {
+	if len(fixture.Dependencies) == 0 {
+		return Sample{}, fmt.Errorf("fixture has no direct dependency")
+	}
+	pair := fixture.Dependencies[0]
+	if !containsTaskID(fixture.ActiveTaskIDs, pair.Dependent) || !containsTaskID(fixture.ActiveTaskIDs, pair.Dependency) {
+		return Sample{}, fmt.Errorf("fixture direct dependency must have active tasks")
+	}
+	return measureColdCLICommand(ctx, dependencies, spec, fixture.Root, []string{"free", pair.Dependent, pair.Dependency, "--json"}), nil
+}
+
+func measureColdMove(ctx context.Context, dependencies scenarioDependencies, spec RunSpec, fixture Fixture, _ int) (Sample, error) {
+	taskIDs, err := fixtureActiveTask(fixture, 2)
+	if err != nil {
+		return Sample{}, err
+	}
+	return measureColdCLICommand(ctx, dependencies, spec, fixture.Root, []string{"move", taskIDs[1], "--before", taskIDs[0], "--json"}), nil
+}
+
+func measureColdRestore(ctx context.Context, dependencies scenarioDependencies, spec RunSpec, fixture Fixture, _ int) (Sample, error) {
+	if len(fixture.TombstonedTaskIDs) == 0 {
+		return Sample{}, fmt.Errorf("fixture has no tombstoned tasks")
+	}
+	return measureColdCLICommand(ctx, dependencies, spec, fixture.Root, []string{"restore", fixture.TombstonedTaskIDs[0], "--json"}), nil
+}
+
+func measureColdUpdate(ctx context.Context, dependencies scenarioDependencies, spec RunSpec, fixture Fixture, _ int) (Sample, error) {
+	taskID, err := fixtureActiveTask(fixture, 1)
+	if err != nil {
+		return Sample{}, err
+	}
+	return measureColdCLICommand(ctx, dependencies, spec, fixture.Root, []string{"update", taskID[0], "--status", "ready", "--json"}), nil
+}
+
+func measureColdIndependentBurst(ctx context.Context, dependencies scenarioDependencies, spec RunSpec, fixture Fixture, _ int) (Sample, error) {
+	taskIDs, err := fixtureActiveTask(fixture, coldCLITasksPerFixture)
+	if err != nil {
+		return Sample{}, err
+	}
+	return measureIndependentBurst(ctx, dependencies, spec, fixture.Root, taskIDs), nil
+}
+
+func measureColdSameTaskBurst(ctx context.Context, dependencies scenarioDependencies, spec RunSpec, fixture Fixture, _ int) (Sample, error) {
+	taskID, err := fixtureActiveTask(fixture, 1)
+	if err != nil {
+		return Sample{}, err
+	}
+	return measureSameTaskBurst(ctx, dependencies, spec, fixture.Root, taskID[0]), nil
+}
+
+func fixtureActiveTask(fixture Fixture, count int) ([]string, error) {
+	if len(fixture.ActiveTaskIDs) < count {
+		return nil, fmt.Errorf("fixture has %d active tasks, need %d", len(fixture.ActiveTaskIDs), count)
+	}
+	return fixture.ActiveTaskIDs[:count], nil
+}
+
+func containsTaskID(taskIDs []string, taskID string) bool {
+	for _, candidate := range taskIDs {
+		if candidate == taskID {
+			return true
+		}
+	}
+	return false
+}
+
 // RunWarmHTTP measures status mutations against independently warmed Workbook
 // servers so each scenario sample starts from an exact-size fixture.
-func RunWarmHTTP(ctx context.Context, spec RunSpec, fixtureRoot string) ([]ScenarioResult, error) {
-	return runWarmHTTP(ctx, spec, fixtureRoot, warmHTTPDependencies{
+func RunWarmHTTP(ctx context.Context, spec RunSpec, fixtureRoot string, selected []string) ([]ScenarioResult, error) {
+	return runWarmHTTP(ctx, spec, fixtureRoot, selected, warmHTTPDependencies{
 		buildFixture: func(ctx context.Context, root string, fixture FixtureSpec) (Fixture, error) {
 			return buildFixtureWithinTimeout(ctx, root, fixture, spec.CommandTimeout)
 		},
@@ -210,10 +291,11 @@ func RunWarmHTTP(ctx context.Context, spec RunSpec, fixtureRoot string) ([]Scena
 			server, err := startWarmHTTPServer(ctx, binary, root, timeout)
 			return server, err
 		},
+		cleanupFixture: os.RemoveAll,
 	})
 }
 
-func runWarmHTTP(ctx context.Context, spec RunSpec, fixtureRoot string, dependencies warmHTTPDependencies) ([]ScenarioResult, error) {
+func runWarmHTTP(ctx context.Context, spec RunSpec, fixtureRoot string, selected []string, dependencies warmHTTPDependencies) ([]ScenarioResult, error) {
 	if spec.Samples < 1 {
 		return nil, fmt.Errorf("samples must be positive")
 	}
@@ -223,52 +305,136 @@ func runWarmHTTP(ctx context.Context, spec RunSpec, fixtureRoot string, dependen
 	if fixtureRoot == "" {
 		return nil, fmt.Errorf("fixture root is required")
 	}
+	if dependencies.buildFixture == nil || dependencies.startServer == nil {
+		return nil, fmt.Errorf("warm HTTP scenario dependencies are required")
+	}
+	cleanupFixture := dependencies.cleanupFixture
+	if cleanupFixture == nil {
+		cleanupFixture = os.RemoveAll
+	}
 	if err := os.MkdirAll(fixtureRoot, 0o755); err != nil {
 		return nil, fmt.Errorf("create warm fixture root: %w", err)
 	}
 
-	results := warmHTTPResults(spec.Samples)
+	definitions, err := selectedWarmHTTPScenarios(selected)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]ScenarioResult, len(definitions))
+	for index, definition := range definitions {
+		results[index] = warmHTTPResult(definition.name, spec.Samples)
+	}
 	for sample := range spec.Samples {
 		sampleRoot := filepath.Join(fixtureRoot, fmt.Sprintf("sample-%03d", sample+1))
-		for scenario := range results {
-			name := results[scenario].Name
+		for index, definition := range definitions {
+			name := definition.name
 			root := filepath.Join(sampleRoot, name)
 			fixture, err := dependencies.buildFixture(ctx, root, spec.Fixture)
 			if err != nil {
-				return nil, fmt.Errorf("build warm %s sample %d fixture: %w", name, sample+1, err)
-			}
-			tasks, err := allocateWarmHTTPTasks(fixture.TaskIDs)
-			if err != nil {
-				return nil, fmt.Errorf("allocate warm %s sample %d fixture: %w", name, sample+1, err)
+				primaryErr := fmt.Errorf("build warm %s sample %d fixture: %w", name, sample+1, err)
+				return nil, withFixtureCleanupError(primaryErr, cleanupFixture(root), name)
 			}
 			server, err := dependencies.startServer(ctx, spec.WorkbookBinary, fixture.Root, spec.CommandTimeout)
 			if err != nil {
-				return nil, fmt.Errorf("start warm %s sample %d server: %w", name, sample+1, err)
+				primaryErr := fmt.Errorf("start warm %s sample %d server: %w", name, sample+1, err)
+				return nil, withFixtureCleanupError(primaryErr, cleanupFixture(root), name)
 			}
-
-			var measured Sample
-			switch scenario {
-			case 0:
-				measured, err = server.measureStatus(ctx, tasks.update, "ready", spec.CommandTimeout)
-			case 1:
-				measured, err = server.measureIndependentBurst(ctx, tasks.independent, "ready", spec.CommandTimeout)
-			case 2:
-				measured, err = server.measureSameTaskBurst(ctx, tasks.sameBurst, 0, spec.CommandTimeout)
+			if err := server.prepareProjection(ctx, spec.Fixture.ActiveTasks, spec.CommandTimeout); err != nil {
+				closeErr := server.close(spec.CommandTimeout)
+				cleanupErr := cleanupFixture(root)
+				primaryErr := fmt.Errorf("prepare %s sample %d: %w", name, sample+1, err)
+				if closeErr != nil {
+					primaryErr = fmt.Errorf("%w (close warm server: %v)", primaryErr, closeErr)
+				}
+				return nil, withFixtureCleanupError(primaryErr, cleanupErr, name)
 			}
+			measured, measureErr := definition.measure(ctx, server, fixture, spec.CommandTimeout)
 			closeErr := server.close(spec.CommandTimeout)
-			if err != nil {
-				return nil, fmt.Errorf("measure %s sample %d: %w", name, sample+1, err)
+			cleanupErr := cleanupFixture(root)
+			if measureErr != nil {
+				primaryErr := fmt.Errorf("measure %s sample %d: %w", name, sample+1, measureErr)
+				if closeErr != nil {
+					primaryErr = fmt.Errorf("%w (close warm server: %v)", primaryErr, closeErr)
+				}
+				return nil, withFixtureCleanupError(primaryErr, cleanupErr, name)
 			}
 			if closeErr != nil {
-				return nil, fmt.Errorf("close warm %s sample %d server: %w", name, sample+1, closeErr)
+				primaryErr := fmt.Errorf("close warm %s sample %d server: %w", name, sample+1, closeErr)
+				return nil, withFixtureCleanupError(primaryErr, cleanupErr, name)
 			}
-			results[scenario].Samples[sample] = measured
+			if cleanupErr != nil {
+				return nil, withFixtureCleanupError(nil, cleanupErr, name)
+			}
+			results[index].Samples[sample] = measured
 		}
 	}
 	for index := range results {
 		results[index].Summary = Summarize(results[index].Samples)
 	}
 	return results, nil
+}
+
+func withFixtureCleanupError(primaryErr, cleanupErr error, scenario string) error {
+	if cleanupErr == nil {
+		return primaryErr
+	}
+	if primaryErr == nil {
+		return fmt.Errorf("cleanup %s fixture: %w", scenario, cleanupErr)
+	}
+	return fmt.Errorf("%w (cleanup %s fixture: %v)", primaryErr, scenario, cleanupErr)
+}
+
+type warmHTTPScenarioDefinition struct {
+	name    string
+	measure func(context.Context, warmScenarioServer, Fixture, time.Duration) (Sample, error)
+}
+
+var warmHTTPScenarioDefinitions = []warmHTTPScenarioDefinition{
+	{name: "api-update", measure: measureWarmUpdate},
+	{name: "api-burst-independent-10", measure: measureWarmIndependentBurst},
+	{name: "api-burst-same-task-10", measure: measureWarmSameTaskBurst},
+}
+
+func selectedWarmHTTPScenarios(selected []string) ([]warmHTTPScenarioDefinition, error) {
+	wanted := make(map[string]struct{}, len(selected))
+	for _, name := range selected {
+		wanted[name] = struct{}{}
+	}
+	definitions := make([]warmHTTPScenarioDefinition, 0, len(selected))
+	for _, definition := range warmHTTPScenarioDefinitions {
+		if _, ok := wanted[definition.name]; ok {
+			definitions = append(definitions, definition)
+			delete(wanted, definition.name)
+		}
+	}
+	for name := range wanted {
+		return nil, fmt.Errorf("unknown warm HTTP scenario %q", name)
+	}
+	return definitions, nil
+}
+
+func measureWarmUpdate(ctx context.Context, server warmScenarioServer, fixture Fixture, timeout time.Duration) (Sample, error) {
+	taskIDs, err := fixtureActiveTask(fixture, 1)
+	if err != nil {
+		return Sample{}, err
+	}
+	return server.measureStatus(ctx, taskIDs[0], "ready", timeout)
+}
+
+func measureWarmIndependentBurst(ctx context.Context, server warmScenarioServer, fixture Fixture, timeout time.Duration) (Sample, error) {
+	taskIDs, err := fixtureActiveTask(fixture, warmHTTPTasksPerFixture)
+	if err != nil {
+		return Sample{}, err
+	}
+	return server.measureIndependentBurst(ctx, taskIDs, "ready", timeout)
+}
+
+func measureWarmSameTaskBurst(ctx context.Context, server warmScenarioServer, fixture Fixture, timeout time.Duration) (Sample, error) {
+	taskIDs, err := fixtureActiveTask(fixture, 2)
+	if err != nil {
+		return Sample{}, err
+	}
+	return server.measureSameTaskBurst(ctx, taskIDs[1], 0, timeout)
 }
 
 // MeasureRepository records projection, ref, object, and local-bare-remote
@@ -460,42 +626,57 @@ func measureLocalBareSync(
 	return results, nil
 }
 
+var coldSingleTarget = ScenarioTarget{
+	DurationStatistic:  DurationP95,
+	DurationComparison: DurationAtMost,
+	MaxMilliseconds:    200,
+}
+
+var warmUpdateTarget = ScenarioTarget{
+	DurationStatistic:  DurationP95,
+	DurationComparison: DurationAtMost,
+	MaxMilliseconds:    100,
+}
+
+var burstTarget = ScenarioTarget{
+	DurationStatistic:  DurationEverySample,
+	DurationComparison: DurationLessThan,
+	MaxMilliseconds:    1000,
+}
+
 func coldCLIResults(samples int) []ScenarioResult {
-	names := []string{
-		"cli-create",
-		"cli-delete",
-		"cli-depend",
-		"cli-free",
-		"cli-move",
-		"cli-restore",
-		"cli-update",
-		"cli-burst-independent-10",
-		"cli-burst-same-task-10",
-	}
-	results := make([]ScenarioResult, len(names))
-	for index, name := range names {
-		results[index] = ScenarioResult{
-			Name:    name,
-			Surface: "cold-cli",
-			Samples: make([]Sample, samples),
-		}
+	results := make([]ScenarioResult, len(coldScenarioDefinitions))
+	for index, definition := range coldScenarioDefinitions {
+		results[index] = coldCLIResult(definition.name, samples)
 	}
 	return results
 }
 
-func warmHTTPResults(samples int) []ScenarioResult {
-	names := []string{
-		"api-update",
-		"api-burst-independent-10",
-		"api-burst-same-task-10",
+func coldCLIResult(name string, samples int) ScenarioResult {
+	target := &coldSingleTarget
+	if name == "cli-burst-independent-10" || name == "cli-burst-same-task-10" {
+		target = &burstTarget
 	}
-	results := make([]ScenarioResult, len(names))
-	for index, name := range names {
-		results[index] = ScenarioResult{
-			Name:    name,
-			Surface: "warm-http",
-			Samples: make([]Sample, samples),
-		}
+	return ScenarioResult{Name: name, Surface: "cold-cli", Target: target, Samples: make([]Sample, samples)}
+}
+
+func warmHTTPResult(name string, samples int) ScenarioResult {
+	target := &warmUpdateTarget
+	if name == "api-burst-independent-10" || name == "api-burst-same-task-10" {
+		target = &burstTarget
+	}
+	return ScenarioResult{
+		Name:    name,
+		Surface: "warm-http",
+		Target:  target,
+		Samples: make([]Sample, samples),
+	}
+}
+
+func warmHTTPResults(samples int) []ScenarioResult {
+	results := make([]ScenarioResult, len(warmHTTPScenarioDefinitions))
+	for index, definition := range warmHTTPScenarioDefinitions {
+		results[index] = warmHTTPResult(definition.name, samples)
 	}
 	return results
 }
@@ -519,41 +700,6 @@ func repositoryResults() []ScenarioResult {
 	return results
 }
 
-func buildColdCLIFixture(
-	ctx context.Context,
-	dependencies scenarioDependencies,
-	spec FixtureSpec,
-	sampleRoot string,
-	group string,
-) (Fixture, coldCLITasks, error) {
-	root := filepath.Join(sampleRoot, group)
-	fixture, err := dependencies.buildFixture(ctx, root, spec)
-	if err != nil {
-		return Fixture{}, coldCLITasks{}, fmt.Errorf("build %s fixture: %w", group, err)
-	}
-	tasks, err := allocateColdCLITasks(fixture.TaskIDs)
-	if err != nil {
-		return Fixture{}, coldCLITasks{}, fmt.Errorf("allocate %s fixture: %w", group, err)
-	}
-	return fixture, tasks, nil
-}
-
-func allocateColdCLITasks(taskIDs []string) (coldCLITasks, error) {
-	if len(taskIDs) < coldCLITasksPerFixture {
-		return coldCLITasks{}, fmt.Errorf("fixture has %d tasks, need %d for cold CLI scenarios", len(taskIDs), coldCLITasksPerFixture)
-	}
-	return coldCLITasks{
-		update:      taskIDs[0],
-		delete:      taskIDs[1],
-		moveAnchor:  taskIDs[2],
-		move:        taskIDs[3],
-		dependent:   taskIDs[4],
-		dependency:  taskIDs[5],
-		sameBurst:   taskIDs[6],
-		independent: append([]string(nil), taskIDs[:10]...),
-	}, nil
-}
-
 func allocateWarmHTTPTasks(taskIDs []string) (warmHTTPTasks, error) {
 	if len(taskIDs) < warmHTTPTasksPerFixture {
 		return warmHTTPTasks{}, fmt.Errorf("fixture has %d tasks, need %d for warm HTTP scenarios", len(taskIDs), warmHTTPTasksPerFixture)
@@ -561,7 +707,7 @@ func allocateWarmHTTPTasks(taskIDs []string) (warmHTTPTasks, error) {
 	return warmHTTPTasks{
 		update:      taskIDs[0],
 		sameBurst:   taskIDs[1],
-		independent: append([]string(nil), taskIDs[:10]...),
+		independent: append([]string(nil), taskIDs[:warmHTTPTasksPerFixture]...),
 	}, nil
 }
 
@@ -578,6 +724,40 @@ func measureColdCLICommand(
 		Directory: directory,
 		Timeout:   spec.CommandTimeout,
 	})
+}
+
+type rebuildProjectionResult struct {
+	TaskCount int `json:"taskCount"`
+}
+
+// prepareProjection rebuilds the disposable SQLite projection outside the
+// measured mutation and validates the versioned rebuild result.
+func prepareProjection(ctx context.Context, spec CommandSpec, totalTasks int) error {
+	measurement := MeasureCommandOutput(ctx, spec)
+	if measurement.Sample.ExitCode != 0 || measurement.Sample.Error != "" {
+		return fmt.Errorf("rebuild failed with exit code %d: %s", measurement.Sample.ExitCode, measurement.Sample.Error)
+	}
+	var envelope remoteResultEnvelope
+	if err := json.Unmarshal(measurement.Stdout, &envelope); err != nil {
+		return fmt.Errorf("decode rebuild result: %w", err)
+	}
+	if envelope.Format != workbookResultFormat {
+		return fmt.Errorf("rebuild result format = %q, want %q", envelope.Format, workbookResultFormat)
+	}
+	if envelope.Version != workbookJSONVersion {
+		return fmt.Errorf("rebuild result version = %d, want %d", envelope.Version, workbookJSONVersion)
+	}
+	if envelope.Command != "rebuild" {
+		return fmt.Errorf("rebuild result command = %q, want rebuild", envelope.Command)
+	}
+	var result rebuildProjectionResult
+	if err := json.Unmarshal(envelope.Data, &result); err != nil {
+		return fmt.Errorf("decode rebuild data: %w", err)
+	}
+	if result.TaskCount != totalTasks {
+		return fmt.Errorf("rebuild task count = %d, want %d", result.TaskCount, totalTasks)
+	}
+	return nil
 }
 
 func measureSameTaskBurst(
@@ -753,6 +933,53 @@ func waitForWarmHealth(ctx context.Context, client *http.Client, baseURL string,
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
+}
+
+func (server *warmHTTPServer) prepareProjection(ctx context.Context, activeTasks int, timeout time.Duration) error {
+	requestContext, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(requestContext, http.MethodGet, server.baseURL+"/api/tasks", nil)
+	if err != nil {
+		return fmt.Errorf("build task list request: %w", err)
+	}
+	response, err := server.client.Do(request)
+	if err != nil {
+		return fmt.Errorf("send task list request: %w", err)
+	}
+	body, readErr := io.ReadAll(response.Body)
+	closeErr := response.Body.Close()
+	if readErr != nil {
+		return fmt.Errorf("read task list response: %w", readErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close task list response: %w", closeErr)
+	}
+	if response.StatusCode != http.StatusOK {
+		evidence := conciseHTTPBody(body)
+		message := fmt.Sprintf("HTTP %d %s", response.StatusCode, http.StatusText(response.StatusCode))
+		if evidence != "" {
+			message += ": " + evidence
+		}
+		return errors.New(message)
+	}
+	var document struct {
+		Format  string            `json:"format"`
+		Version int               `json:"version"`
+		Tasks   []json.RawMessage `json:"tasks"`
+	}
+	if err := json.Unmarshal(body, &document); err != nil {
+		return fmt.Errorf("decode task list response: %w", err)
+	}
+	if document.Format != "workbook.tasks" || document.Version != 1 {
+		return fmt.Errorf(
+			"task list response = %q v%d, want workbook.tasks v1",
+			document.Format, document.Version,
+		)
+	}
+	if len(document.Tasks) != activeTasks {
+		return fmt.Errorf("task list response task count = %d, want %d", len(document.Tasks), activeTasks)
+	}
+	return nil
 }
 
 func (server *warmHTTPServer) measureStatus(ctx context.Context, taskID, status string, timeout time.Duration) (Sample, error) {

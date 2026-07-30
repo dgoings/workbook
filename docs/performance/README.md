@@ -4,10 +4,58 @@ Workbook's performance harness measures representative cold CLI, warm HTTP,
 burst, projection, validation, synchronization, and Git repository paths against
 generated task histories. Run benchmarks from the repository root.
 
+## Fixture dimensions, timing boundaries, and provenance
+
+`--tasks` is the total number of canonical task refs, not the active-task
+count. When `--tombstones` is omitted, a 500-or-more-task fixture contains 25
+tombstoned tasks and the remaining tasks are active; therefore the default
+500-task fixture is 475 active plus 25 tombstoned. Smaller diagnostic fixtures
+default to one tombstone. Supplying `--tombstones 0` is allowed for diagnostics,
+but not for acceptance evidence.
+
+Acceptance requires at least 500 total tasks, 25 tombstoned tasks, 20
+operations per task, and 10 active tasks. It also requires the measured
+`workbook version --json` result to name an exact source commit; `unknown` is
+rejected before fixture construction. Baseline runs retain their reported
+commit even when it is `unknown`.
+
+Each cold CLI sample rebuilds the SQLite projection with `workbook rebuild
+--json` before the timed command; that rebuild and its Trace2 Git-process work
+are deliberately untimed. Each warm HTTP sample starts its own server and makes
+an untimed `/api/tasks` load that verifies the active-task population before the
+timed mutation. Fixture construction is also outside every sample.
+
+Local single-operation CLI scenarios use an inclusive p95 target of 200 ms;
+the warm `api-update` scenario uses an inclusive p95 target of 100 ms; and each
+ten-operation burst sample must be strictly below 1,000 ms. Local scenarios
+have no Git-process target. Reports use format version 2 and record the SHA-256
+of the resolved measured executable in
+`environment.workbookBinarySha256`, alongside its reported version and commit.
+
+### 2026-07-29 corrected local acceptance evidence
+
+The corrected local harness was exercised once per supported Git object format
+with the same reviewed product and harness binaries. Both invocations used 500
+total tasks (475 active and 25 tombstoned), 20 operations per task, 20 samples
+per scenario, a 60-second command timeout, and only the 12 local `cli-*` and
+`api-*` scenarios. See the shared [build and checksum
+provenance](2026-07-29-local-acceptance-provenance.md).
+
+| Format | Evidence | Outcome |
+| --- | --- | --- |
+| SHA-1 | [JSON](2026-07-29-local-acceptance-sha1.json), [Markdown](2026-07-29-local-acceptance-sha1.md) | All samples completed without timeout or product failure. Eight scenarios passed; `api-update`, both same-task bursts, and `cli-depend` missed their duration targets. |
+| SHA-256 | [JSON](2026-07-29-local-acceptance-sha256.json), [Markdown](2026-07-29-local-acceptance-sha256.md) | All samples completed without timeout or product failure. Six scenarios passed; `api-update`, both same-task bursts, `cli-depend`, `cli-free`, and `cli-move` missed their duration targets. |
+
+These valid target misses are retained as the one-shot evidence. The binaries
+were not rebuilt, and neither invocation was tuned or replaced.
+
 ## Bounded baseline
 
-The 2026-07-28 baseline uses 500 active tasks with exactly 20 operations per
-task, one sample per scenario, and a 60-second per-command timeout:
+The historical 2026-07-28 baseline predates report version 2 and used 500
+active tasks with exactly 20 operations per task, one sample per scenario, and
+a 60-second per-command timeout. It is retained as recorded; new version-2
+runs use the total/active/tombstoned dimensions described above. A current
+version-2 baseline invocation is:
 
 [The current baseline evidence](2026-07-28-baseline.md) is an explicitly
 hand-authored, incomplete lower-bound record. Both SHA-1 attempts aborted before
@@ -19,6 +67,7 @@ go build -o /tmp/workbook-benchmark-target ./cmd/workbook
 go run ./cmd/workbook-bench \
   --workbook /tmp/workbook-benchmark-target \
   --tasks 500 \
+  --tombstones 25 \
   --operations 20 \
   --samples 1 \
   --timeout 60s \
@@ -34,9 +83,10 @@ recorded evidence rather than a reason to tune or rerun the baseline. The target
 numbers in a baseline report are reference budgets, not claims that the current
 implementation achieves them.
 
-The final performance acceptance task will run multiple samples after every
-target path is implemented. Acceptance may use a larger fixture, but it must use
-at least 500 active tasks and 20 operations per task.
+Current local acceptance evidence uses 20 samples per selected local scenario.
+Acceptance may use a larger fixture, but it must use at least 500 total tasks,
+25 tombstoned tasks, 20 operations per task, 10 active tasks, and 20 samples
+when any local scenario is selected.
 
 When the installed Git supports SHA-256 repositories, run the same bounded
 baseline once with `--object-format sha256` and write the results to
@@ -52,7 +102,7 @@ the existing local scenarios and every registered remote synchronization
 scenario. Selected scenarios run in the harness's stable registry order, not
 the order of the flags.
 
-Every remote scenario requires at least 500 active tasks and 20 operations per
+Every remote scenario requires at least 500 total tasks and 20 operations per
 task, even for a baseline run. The seven remote selectors are:
 
 Synchronization measurements exercise the bounded default path: one isolated
@@ -90,7 +140,7 @@ tune or replace the one-shot baseline.
 
 The validation selectors each create an independent fixture, and all cache
 seeding and five-task updates occur before the measured command. They require
-at least 500 active tasks and 20 operations per task, including baseline mode.
+at least 500 total tasks and 20 operations per task, including baseline mode.
 
 | Selector | Measured command | Reference target |
 | --- | --- | --- |
@@ -181,8 +231,10 @@ replacement 500-by-20 acceptance sample.
 ### 2026-07-29 semantic history validation evidence
 
 The measured product binary was built once. Each supported object format then
-received one acceptance invocation with 500 active tasks, exactly 20 operations
-per task, one sample, and a 60-second command timeout.
+received one historical acceptance invocation with 500 active tasks, exactly 20
+operations per task, one sample, and a 60-second command timeout. This
+version-1 evidence remains unchanged; new version-2 acceptance evidence uses
+the dimensions and provenance rules above.
 
 | Format | Evidence | Outcome |
 | --- | --- | --- |

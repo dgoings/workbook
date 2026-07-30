@@ -21,32 +21,55 @@ import (
 	"github.com/dgoings/workbook/internal/gitstore"
 )
 
-func TestRunColdCLIIsolatesScenarioSamplesAndRunsTenCommandBursts(t *testing.T) {
+func TestRunColdCLIIsolatesSelectedScenarioSamplesAndPreparesProjection(t *testing.T) {
 	var mutex sync.Mutex
 	var fixtureRoots []string
-	measurements := make(map[string][]CommandSpec)
+	var events []string
+	fixture := testColdCLIFixture()
 	dependencies := scenarioDependencies{
 		buildFixture: func(_ context.Context, root string, spec FixtureSpec) (Fixture, error) {
 			mutex.Lock()
 			fixtureRoots = append(fixtureRoots, root)
+			events = append(events, "build "+filepath.Base(root))
 			mutex.Unlock()
-			taskIDs := make([]string, spec.ActiveTasks)
-			for index := range taskIDs {
-				taskIDs[index] = fmt.Sprintf("WB-%026d", index)
+			if err := os.MkdirAll(root, 0o755); err != nil {
+				return Fixture{}, err
 			}
-			return Fixture{Root: root, TaskIDs: taskIDs}, nil
+			if err := os.WriteFile(filepath.Join(root, "fixture-sentinel"), []byte("fixture"), 0o644); err != nil {
+				return Fixture{}, err
+			}
+			fixture.Root = root
+			return fixture, nil
+		},
+		prepareProjection: func(_ context.Context, command CommandSpec, totalTasks int) error {
+			if !reflect.DeepEqual(command.Args, []string{"rebuild", "--json"}) {
+				t.Errorf("prepare args = %q, want rebuild JSON", command.Args)
+			}
+			if totalTasks != 11 {
+				t.Errorf("prepare total tasks = %d, want 11", totalTasks)
+			}
+			mutex.Lock()
+			events = append(events, "prepare "+filepath.Base(command.Directory))
+			mutex.Unlock()
+			return nil
 		},
 		measureCommand: func(_ context.Context, spec CommandSpec) Sample {
 			mutex.Lock()
-			measurements[spec.Directory] = append(measurements[spec.Directory], spec)
+			events = append(events, "measure "+filepath.Base(spec.Directory))
 			mutex.Unlock()
 			return Sample{ExitCode: 0, GitProcesses: 1}
+		},
+		cleanupFixture: func(root string) error {
+			mutex.Lock()
+			events = append(events, "cleanup "+filepath.Base(root))
+			mutex.Unlock()
+			return os.RemoveAll(root)
 		},
 	}
 	spec := RunSpec{
 		WorkbookBinary: "workbook",
 		Fixture: FixtureSpec{
-			ActiveTasks:       10,
+			TotalTasks: 11, ActiveTasks: 10, TombstonedTasks: 1,
 			OperationsPerTask: 4,
 			ObjectFormat:      "sha1",
 		},
@@ -55,7 +78,7 @@ func TestRunColdCLIIsolatesScenarioSamplesAndRunsTenCommandBursts(t *testing.T) 
 	}
 	fixtureRoot := t.TempDir()
 
-	results, err := runColdCLI(context.Background(), spec, fixtureRoot, dependencies)
+	results, err := runColdCLI(context.Background(), spec, fixtureRoot, []string{"cli-delete", "cli-restore"}, dependencies)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,70 +88,208 @@ func TestRunColdCLIIsolatesScenarioSamplesAndRunsTenCommandBursts(t *testing.T) 
 		}
 	}
 
-	if got, want := len(fixtureRoots), 14; got != want {
+	if got, want := len(fixtureRoots), 4; got != want {
 		t.Fatalf("fixture builds = %d, want %d", got, want)
 	}
 	uniqueRoots := make(map[string]struct{}, len(fixtureRoots))
 	for _, root := range fixtureRoots {
 		uniqueRoots[root] = struct{}{}
 	}
-	if got, want := len(uniqueRoots), 14; got != want {
+	if got, want := len(uniqueRoots), 4; got != want {
 		t.Fatalf("unique fixture roots = %d, want %d", got, want)
 	}
-
-	wantCommandsPerGroup := map[string]int{
-		"create":            1,
-		"delete-restore":    2,
-		"depend-free":       2,
-		"move":              1,
-		"update":            1,
-		"burst-independent": 10,
-		"burst-same-task":   10,
-	}
-	for sample := 1; sample <= 2; sample++ {
-		for group, want := range wantCommandsPerGroup {
-			directory := filepath.Join(fixtureRoot, fmt.Sprintf("sample-%03d", sample), group)
-			commands := measurements[directory]
-			if got := len(commands); got != want {
-				t.Errorf("sample %d %s commands = %d, want %d", sample, group, got, want)
-			}
+	for _, root := range fixtureRoots {
+		if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("fixture root %q still exists after sample cleanup: %v", root, err)
 		}
 	}
-
-	for directory, commands := range measurements {
-		switch filepath.Base(directory) {
-		case "burst-independent":
-			targets := make(map[string]struct{}, len(commands))
-			for _, command := range commands {
-				targets[command.Args[1]] = struct{}{}
-			}
-			if got, want := len(targets), 10; got != want {
-				t.Errorf("%s distinct targets = %d, want %d", directory, got, want)
-			}
-		case "burst-same-task":
-			targets := make(map[string]struct{}, len(commands))
-			for _, command := range commands {
-				targets[command.Args[1]] = struct{}{}
-			}
-			if got, want := len(targets), 1; got != want {
-				t.Errorf("%s distinct targets = %d, want %d", directory, got, want)
-			}
-		}
+	want := []string{
+		"build cli-delete", "prepare cli-delete", "measure cli-delete", "cleanup cli-delete",
+		"build cli-restore", "prepare cli-restore", "measure cli-restore", "cleanup cli-restore",
+		"build cli-delete", "prepare cli-delete", "measure cli-delete", "cleanup cli-delete",
+		"build cli-restore", "prepare cli-restore", "measure cli-restore", "cleanup cli-restore",
+	}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("lifecycle events = %#v, want %#v", events, want)
 	}
 }
 
-func TestScenarioTaskAllocationUsesTenTaskFixture(t *testing.T) {
+func TestRunColdCLICleansFixtureOnSetupAndMeasurementErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		buildErr   error
+		prepareErr error
+		activeIDs  []string
+		wantEvents []string
+		wantErr    string
+	}{
+		{
+			name:       "build failure",
+			buildErr:   errors.New("fixture import failed"),
+			wantEvents: []string{"build", "cleanup"},
+			wantErr:    "fixture import failed",
+		},
+		{
+			name:       "projection preparation failure",
+			prepareErr: errors.New("rebuild failed"),
+			activeIDs:  []string{"WB-00"},
+			wantEvents: []string{"build", "prepare", "cleanup"},
+			wantErr:    "rebuild failed",
+		},
+		{
+			name:       "measurement allocation failure",
+			activeIDs:  []string{},
+			wantEvents: []string{"build", "prepare", "cleanup"},
+			wantErr:    "fixture has 0 active tasks",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var events []string
+			cleanupErr := errors.New("cleanup failed")
+			dependencies := scenarioDependencies{
+				buildFixture: func(_ context.Context, root string, _ FixtureSpec) (Fixture, error) {
+					events = append(events, "build")
+					return Fixture{Root: root, ActiveTaskIDs: test.activeIDs}, test.buildErr
+				},
+				prepareProjection: func(context.Context, CommandSpec, int) error {
+					events = append(events, "prepare")
+					return test.prepareErr
+				},
+				measureCommand: func(context.Context, CommandSpec) Sample {
+					events = append(events, "measure")
+					return Sample{ExitCode: 0}
+				},
+				cleanupFixture: func(string) error {
+					events = append(events, "cleanup")
+					return cleanupErr
+				},
+			}
+			spec := RunSpec{
+				WorkbookBinary: "workbook",
+				Fixture: FixtureSpec{
+					TotalTasks: 1, ActiveTasks: 1,
+					OperationsPerTask: 2,
+					ObjectFormat:      "sha1",
+				},
+				Samples:        1,
+				CommandTimeout: time.Second,
+			}
+
+			_, err := runColdCLI(context.Background(), spec, t.TempDir(), []string{"cli-update"}, dependencies)
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) || !strings.Contains(err.Error(), cleanupErr.Error()) {
+				t.Fatalf("runColdCLI error = %v, want primary %q plus cleanup error", err, test.wantErr)
+			}
+			if !reflect.DeepEqual(events, test.wantEvents) {
+				t.Fatalf("cold error lifecycle = %#v, want %#v", events, test.wantEvents)
+			}
+		})
+	}
+}
+
+func TestRunColdCLISelectsOnlyRequestedScenario(t *testing.T) {
+	var builds, prepares, measures []string
+	dependencies := scenarioDependencies{
+		buildFixture: func(_ context.Context, root string, _ FixtureSpec) (Fixture, error) {
+			builds = append(builds, filepath.Base(root))
+			fixture := testColdCLIFixture()
+			fixture.Root = root
+			return fixture, nil
+		},
+		prepareProjection: func(_ context.Context, command CommandSpec, _ int) error {
+			prepares = append(prepares, filepath.Base(command.Directory))
+			return nil
+		},
+		measureCommand: func(_ context.Context, command CommandSpec) Sample {
+			measures = append(measures, filepath.Base(command.Directory))
+			return Sample{ExitCode: 0}
+		},
+	}
+	spec := RunSpec{WorkbookBinary: "workbook", Fixture: FixtureSpec{TotalTasks: 11, ActiveTasks: 10, TombstonedTasks: 1, OperationsPerTask: 4, ObjectFormat: "sha1"}, Samples: 1, CommandTimeout: time.Second}
+
+	results, err := runColdCLI(context.Background(), spec, t.TempDir(), []string{"cli-update"}, dependencies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Name != "cli-update" {
+		t.Fatalf("selected results = %#v, want cli-update only", results)
+	}
+	if !reflect.DeepEqual(builds, []string{"cli-update"}) || !reflect.DeepEqual(prepares, builds) || !reflect.DeepEqual(measures, builds) {
+		t.Fatalf("selected lifecycle builds=%#v prepares=%#v measures=%#v, want cli-update only", builds, prepares, measures)
+	}
+}
+
+func TestRunColdCLIUsesFixtureTombstoneAndDirectDependency(t *testing.T) {
+	fixture := testColdCLIFixture()
+	var commands []CommandSpec
+	dependencies := scenarioDependencies{
+		buildFixture: func(_ context.Context, root string, _ FixtureSpec) (Fixture, error) {
+			fixture.Root = root
+			return fixture, nil
+		},
+		prepareProjection: func(context.Context, CommandSpec, int) error { return nil },
+		measureCommand: func(_ context.Context, command CommandSpec) Sample {
+			commands = append(commands, command)
+			return Sample{ExitCode: 0}
+		},
+	}
+	spec := RunSpec{WorkbookBinary: "workbook", Fixture: FixtureSpec{TotalTasks: 11, ActiveTasks: 10, TombstonedTasks: 1, OperationsPerTask: 4, ObjectFormat: "sha1"}, Samples: 1, CommandTimeout: time.Second}
+
+	_, err := runColdCLI(context.Background(), spec, t.TempDir(), []string{"cli-free", "cli-restore"}, dependencies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := commands[0].Args, []string{"free", fixture.Dependencies[0].Dependent, fixture.Dependencies[0].Dependency, "--json"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("free args = %#v, want direct fixture dependency %#v", got, want)
+	}
+	if got, want := commands[1].Args, []string{"restore", fixture.TombstonedTaskIDs[0], "--json"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("restore args = %#v, want fixture tombstone %#v", got, want)
+	}
+}
+
+func TestPrepareProjectionValidatesRebuildEnvelope(t *testing.T) {
+	tests := []struct {
+		name    string
+		output  string
+		wantErr string
+	}{
+		{name: "correct rebuild", output: `{"format":"workbook.result","version":1,"command":"rebuild","data":{"taskCount":11}}`},
+		{name: "wrong format", output: `{"format":"workbook.error","version":1,"command":"rebuild","data":{"taskCount":11}}`, wantErr: "format"},
+		{name: "wrong command", output: `{"format":"workbook.result","version":1,"command":"list","data":{"taskCount":11}}`, wantErr: "command"},
+		{name: "wrong task count", output: `{"format":"workbook.result","version":1,"command":"rebuild","data":{"taskCount":10}}`, wantErr: "task count"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			binary := filepath.Join(t.TempDir(), "workbook")
+			if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf '%s\\n' '"+test.output+"'\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			err := prepareProjection(context.Background(), CommandSpec{Binary: binary, Directory: t.TempDir(), Timeout: time.Second}, 11)
+			if test.wantErr == "" && err != nil {
+				t.Fatalf("prepare projection: %v", err)
+			}
+			if test.wantErr != "" && (err == nil || !strings.Contains(err.Error(), test.wantErr)) {
+				t.Fatalf("prepare projection error = %v, want %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func testColdCLIFixture() Fixture {
+	active := []string{"WB-00", "WB-01", "WB-02", "WB-03", "WB-04", "WB-05", "WB-06", "WB-07", "WB-08", "WB-09"}
+	return Fixture{
+		TaskIDs:           append(append([]string(nil), active...), "WB-deleted"),
+		ActiveTaskIDs:     active,
+		TombstonedTaskIDs: []string{"WB-deleted"},
+		Dependencies:      []FixtureDependency{{Dependent: "WB-01", Dependency: "WB-00"}},
+	}
+}
+
+func TestWarmScenarioTaskAllocationUsesTenTaskFixture(t *testing.T) {
 	taskIDs := []string{
 		"WB-00", "WB-01", "WB-02", "WB-03", "WB-04",
 		"WB-05", "WB-06", "WB-07", "WB-08", "WB-09",
-	}
-
-	cold, err := allocateColdCLITasks(taskIDs)
-	if err != nil {
-		t.Fatalf("allocate cold CLI tasks: %v", err)
-	}
-	if !reflect.DeepEqual(cold.independent, taskIDs) {
-		t.Errorf("cold independent tasks = %#v, want all ten fixture tasks", cold.independent)
 	}
 
 	warm, err := allocateWarmHTTPTasks(taskIDs)
@@ -169,7 +330,7 @@ func TestRunColdCLI(t *testing.T) {
 	spec := RunSpec{
 		WorkbookBinary: binary,
 		Fixture: FixtureSpec{
-			ActiveTasks:       40,
+			TotalTasks: 40, ActiveTasks: 39, TombstonedTasks: 1,
 			OperationsPerTask: 4,
 			ObjectFormat:      "sha1",
 		},
@@ -177,7 +338,9 @@ func TestRunColdCLI(t *testing.T) {
 		CommandTimeout: 60 * time.Second,
 	}
 
-	results, err := RunColdCLI(context.Background(), spec, filepath.Join(t.TempDir(), "fixture"))
+	results, err := RunColdCLI(context.Background(), spec, filepath.Join(t.TempDir(), "fixture"), []string{
+		"cli-create", "cli-delete", "cli-depend", "cli-free", "cli-move", "cli-restore", "cli-update", "cli-burst-independent-10", "cli-burst-same-task-10",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +385,7 @@ func TestRunWarmHTTP(t *testing.T) {
 	spec := RunSpec{
 		WorkbookBinary: binary,
 		Fixture: FixtureSpec{
-			ActiveTasks:       40,
+			TotalTasks: 40, ActiveTasks: 40,
 			OperationsPerTask: 4,
 			ObjectFormat:      "sha1",
 		},
@@ -230,7 +393,9 @@ func TestRunWarmHTTP(t *testing.T) {
 		CommandTimeout: 60 * time.Second,
 	}
 
-	results, err := RunWarmHTTP(context.Background(), spec, filepath.Join(t.TempDir(), "fixture"))
+	results, err := RunWarmHTTP(context.Background(), spec, filepath.Join(t.TempDir(), "fixture"), []string{
+		"api-update", "api-burst-independent-10", "api-burst-same-task-10",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +432,7 @@ func TestRunWarmHTTP(t *testing.T) {
 func TestRunWarmHTTPIsolatesEveryScenarioSampleAndRetainsMeasuredMisses(t *testing.T) {
 	fixtureRoot := t.TempDir()
 	fixtureSpec := FixtureSpec{
-		ActiveTasks:       10,
+		TotalTasks: 10, ActiveTasks: 10,
 		OperationsPerTask: 2,
 		ObjectFormat:      "sha1",
 	}
@@ -290,7 +455,7 @@ func TestRunWarmHTTPIsolatesEveryScenarioSampleAndRetainsMeasuredMisses(t *testi
 			for index := range taskIDs {
 				taskIDs[index] = fmt.Sprintf("WB-%02d", index)
 			}
-			return Fixture{Root: root, TaskIDs: taskIDs}, nil
+			return Fixture{Root: root, TaskIDs: taskIDs, ActiveTaskIDs: taskIDs}, nil
 		},
 		startServer: func(_ context.Context, _ string, root string, timeout time.Duration) (warmScenarioServer, error) {
 			if timeout != time.Second {
@@ -306,7 +471,9 @@ func TestRunWarmHTTPIsolatesEveryScenarioSampleAndRetainsMeasuredMisses(t *testi
 		},
 	}
 
-	results, err := runWarmHTTP(context.Background(), spec, fixtureRoot, dependencies)
+	results, err := runWarmHTTP(context.Background(), spec, fixtureRoot, []string{
+		"api-update", "api-burst-independent-10", "api-burst-same-task-10",
+	}, dependencies)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -371,6 +538,287 @@ func TestRunWarmHTTPIsolatesEveryScenarioSampleAndRetainsMeasuredMisses(t *testi
 	if writtenConflict.ExitCode != http.StatusConflict ||
 		!strings.Contains(writtenConflict.Error, "task head changed") {
 		t.Fatalf("written report conflict = %#v, want measured product evidence preserved", writtenConflict)
+	}
+}
+
+// Mutation witness: starting every API scenario and filtering results afterward
+// would create burst fixtures and servers even when only api-update is selected.
+func TestRunWarmHTTPSelectsAndPreparesBeforeEveryMeasurement(t *testing.T) {
+	fixtureRoot := t.TempDir()
+	spec := RunSpec{
+		WorkbookBinary: "workbook",
+		Fixture: FixtureSpec{
+			TotalTasks: 10, ActiveTasks: 10,
+			OperationsPerTask: 2,
+			ObjectFormat:      "sha1",
+		},
+		Samples:        2,
+		CommandTimeout: time.Second,
+	}
+	var events []string
+	var roots []string
+	closedServers := 0
+	dependencies := warmHTTPDependencies{
+		buildFixture: func(_ context.Context, root string, _ FixtureSpec) (Fixture, error) {
+			events = append(events, "build "+filepath.Base(root))
+			roots = append(roots, root)
+			if err := os.MkdirAll(root, 0o755); err != nil {
+				return Fixture{}, err
+			}
+			if err := os.WriteFile(filepath.Join(root, "fixture-sentinel"), []byte("fixture"), 0o644); err != nil {
+				return Fixture{}, err
+			}
+			return Fixture{
+				Root: root,
+				ActiveTaskIDs: []string{
+					"WB-00", "WB-01", "WB-02", "WB-03", "WB-04",
+					"WB-05", "WB-06", "WB-07", "WB-08", "WB-09",
+				},
+			}, nil
+		},
+		startServer: func(_ context.Context, _ string, root string, _ time.Duration) (warmScenarioServer, error) {
+			events = append(events, "start "+filepath.Base(root))
+			return &recordingWarmScenarioServer{
+				t:           t,
+				role:        filepath.Base(root),
+				sample:      filepath.Base(filepath.Dir(root)),
+				events:      &events,
+				closedCount: &closedServers,
+			}, nil
+		},
+		cleanupFixture: func(root string) error {
+			events = append(events, "cleanup "+filepath.Base(root))
+			return os.RemoveAll(root)
+		},
+	}
+
+	results, err := runWarmHTTP(context.Background(), spec, fixtureRoot, []string{"api-update"}, dependencies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Name != "api-update" || len(results[0].Samples) != 2 {
+		t.Fatalf("selected warm results = %#v, want only two api-update samples", results)
+	}
+	wantRoots := []string{
+		filepath.Join(fixtureRoot, "sample-001", "api-update"),
+		filepath.Join(fixtureRoot, "sample-002", "api-update"),
+	}
+	if !reflect.DeepEqual(roots, wantRoots) {
+		t.Fatalf("warm fixture roots = %#v, want %#v", roots, wantRoots)
+	}
+	for _, root := range roots {
+		if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("warm fixture root %q still exists after sample cleanup: %v", root, err)
+		}
+	}
+	if closedServers != 2 {
+		t.Fatalf("closed servers = %d, want 2", closedServers)
+	}
+	wantEvents := []string{
+		"build api-update", "start api-update", "prepare api-update", "measure api-update", "close api-update", "cleanup api-update",
+		"build api-update", "start api-update", "prepare api-update", "measure api-update", "close api-update", "cleanup api-update",
+	}
+	if !reflect.DeepEqual(events, wantEvents) {
+		t.Fatalf("warm lifecycle events = %#v, want %#v", events, wantEvents)
+	}
+}
+
+func TestRunWarmHTTPCleansFixtureOnErrorPathsWithoutHidingPrimary(t *testing.T) {
+	tests := []struct {
+		name       string
+		startErr   error
+		prepareErr error
+		measureErr error
+		closeErr   error
+		wantEvents []string
+		wantErr    string
+	}{
+		{
+			name:       "start failure",
+			startErr:   errors.New("server start failed"),
+			wantEvents: []string{"build", "start", "cleanup"},
+			wantErr:    "server start failed",
+		},
+		{
+			name:       "prepare failure",
+			prepareErr: errors.New("task projection unavailable"),
+			wantEvents: []string{"build", "start", "prepare api-update", "close api-update", "cleanup"},
+			wantErr:    "task projection unavailable",
+		},
+		{
+			name:       "measurement failure",
+			measureErr: errors.New("malformed success response"),
+			wantEvents: []string{"build", "start", "prepare api-update", "measure api-update", "close api-update", "cleanup"},
+			wantErr:    "malformed success response",
+		},
+		{
+			name:       "close failure",
+			closeErr:   errors.New("server did not stop"),
+			wantEvents: []string{"build", "start", "prepare api-update", "measure api-update", "close api-update", "cleanup"},
+			wantErr:    "server did not stop",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var events []string
+			closedServers := 0
+			cleanupErr := errors.New("cleanup failed")
+			dependencies := warmHTTPDependencies{
+				buildFixture: func(_ context.Context, root string, _ FixtureSpec) (Fixture, error) {
+					events = append(events, "build")
+					return Fixture{
+						Root: root,
+						ActiveTaskIDs: []string{
+							"WB-00", "WB-01", "WB-02", "WB-03", "WB-04",
+							"WB-05", "WB-06", "WB-07", "WB-08", "WB-09",
+						},
+					}, nil
+				},
+				startServer: func(context.Context, string, string, time.Duration) (warmScenarioServer, error) {
+					events = append(events, "start")
+					if test.startErr != nil {
+						return nil, test.startErr
+					}
+					return &recordingWarmScenarioServer{
+						t:           t,
+						role:        "api-update",
+						events:      &events,
+						prepareErr:  test.prepareErr,
+						measureErr:  test.measureErr,
+						closeErr:    test.closeErr,
+						closedCount: &closedServers,
+					}, nil
+				},
+				cleanupFixture: func(string) error {
+					events = append(events, "cleanup")
+					return cleanupErr
+				},
+			}
+			spec := RunSpec{
+				WorkbookBinary: "workbook",
+				Fixture: FixtureSpec{
+					TotalTasks: 10, ActiveTasks: 10,
+					OperationsPerTask: 2,
+					ObjectFormat:      "sha1",
+				},
+				Samples:        1,
+				CommandTimeout: time.Second,
+			}
+
+			_, err := runWarmHTTP(context.Background(), spec, t.TempDir(), []string{"api-update"}, dependencies)
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) || !strings.Contains(err.Error(), cleanupErr.Error()) {
+				t.Fatalf("runWarmHTTP error = %v, want primary %q plus cleanup error", err, test.wantErr)
+			}
+			if !reflect.DeepEqual(events, test.wantEvents) {
+				t.Fatalf("warm error lifecycle = %#v, want %#v", events, test.wantEvents)
+			}
+		})
+	}
+}
+
+func TestRunWarmHTTPClosesServerWhenProjectionPreparationFails(t *testing.T) {
+	closedServers := 0
+	dependencies := warmHTTPDependencies{
+		buildFixture: func(_ context.Context, root string, _ FixtureSpec) (Fixture, error) {
+			return Fixture{Root: root, ActiveTaskIDs: []string{"WB-00"}}, nil
+		},
+		startServer: func(_ context.Context, _ string, _ string, _ time.Duration) (warmScenarioServer, error) {
+			return &recordingWarmScenarioServer{
+				t:           t,
+				role:        "api-update",
+				prepareErr:  errors.New("task projection unavailable"),
+				closedCount: &closedServers,
+			}, nil
+		},
+	}
+	spec := RunSpec{
+		WorkbookBinary: "workbook",
+		Fixture: FixtureSpec{
+			TotalTasks: 1, ActiveTasks: 1,
+			OperationsPerTask: 2,
+			ObjectFormat:      "sha1",
+		},
+		Samples:        1,
+		CommandTimeout: time.Second,
+	}
+
+	_, err := runWarmHTTP(context.Background(), spec, t.TempDir(), []string{"api-update"}, dependencies)
+	if err == nil || !strings.Contains(err.Error(), "prepare api-update") {
+		t.Fatalf("preparation failure = %v, want contextual error", err)
+	}
+	if closedServers != 1 {
+		t.Fatalf("closed servers = %d, want cleanup after failed preparation", closedServers)
+	}
+}
+
+func TestWarmHTTPServerPrepareProjection(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		body       string
+		wantErr    string
+	}{
+		{
+			name:       "correct task envelope and count",
+			statusCode: http.StatusOK,
+			body:       `{"format":"workbook.tasks","version":1,"tasks":[{"id":"WB-1"},{"id":"WB-2"}]}`,
+		},
+		{
+			name:       "wrong task count",
+			statusCode: http.StatusOK,
+			body:       `{"format":"workbook.tasks","version":1,"tasks":[{"id":"WB-1"}]}`,
+			wantErr:    "task count = 1, want 2",
+		},
+		{
+			name:       "malformed JSON",
+			statusCode: http.StatusOK,
+			body:       `{`,
+			wantErr:    "decode task list response",
+		},
+		{
+			name:       "wrong format",
+			statusCode: http.StatusOK,
+			body:       `{"format":"workbook.result","version":1,"tasks":[{"id":"WB-1"},{"id":"WB-2"}]}`,
+			wantErr:    "task list response = \"workbook.result\" v1",
+		},
+		{
+			name:       "wrong version",
+			statusCode: http.StatusOK,
+			body:       `{"format":"workbook.tasks","version":2,"tasks":[{"id":"WB-1"},{"id":"WB-2"}]}`,
+			wantErr:    "task list response = \"workbook.tasks\" v2",
+		},
+		{
+			name:       "non-OK response",
+			statusCode: http.StatusServiceUnavailable,
+			body:       `temporarily unavailable`,
+			wantErr:    "HTTP 503 Service Unavailable",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			httpServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				if request.Method != http.MethodGet || request.URL.Path != "/api/tasks" {
+					t.Fatalf("task preparation request = %s %s, want GET /api/tasks", request.Method, request.URL.Path)
+				}
+				writer.WriteHeader(test.statusCode)
+				_, _ = io.WriteString(writer, test.body)
+			}))
+			defer httpServer.Close()
+
+			server := warmHTTPServer{baseURL: httpServer.URL, client: httpServer.Client()}
+			err := server.prepareProjection(context.Background(), 2, time.Second)
+			if test.wantErr == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("preparation error = %v, want %q", err, test.wantErr)
+			}
+		})
 	}
 }
 
@@ -737,7 +1185,7 @@ func TestWarmSameTaskBurstStartsWithLiteralStatusSafeForGeneratedFixtures(t *tes
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			fixture, err := BuildFixture(context.Background(), filepath.Join(t.TempDir(), "fixture"), FixtureSpec{
-				ActiveTasks:       10,
+				TotalTasks: 10, ActiveTasks: 10,
 				OperationsPerTask: test.operationsPerTask,
 				ObjectFormat:      "sha1",
 			})
@@ -808,7 +1256,7 @@ func TestWarmSameTaskBurstStartsWithLiteralStatusSafeForGeneratedFixtures(t *tes
 func TestMeasureRepository(t *testing.T) {
 	binary := buildWorkbookBinary(t)
 	fixture, err := BuildFixture(context.Background(), filepath.Join(t.TempDir(), "fixture"), FixtureSpec{
-		ActiveTasks:       40,
+		TotalTasks: 40, ActiveTasks: 40,
 		OperationsPerTask: 4,
 		ObjectFormat:      "sha1",
 	})
@@ -1145,7 +1593,22 @@ type recordingWarmScenarioServer struct {
 	role        string
 	sample      string
 	ambiguous   bool
+	events      *[]string
+	prepareErr  error
+	measureErr  error
+	closeErr    error
 	closedCount *int
+}
+
+func (server *recordingWarmScenarioServer) prepareProjection(_ context.Context, activeTasks int, _ time.Duration) error {
+	server.t.Helper()
+	if server.role == "api-update" && activeTasks != 10 && server.prepareErr == nil {
+		server.t.Fatalf("prepared active tasks = %d, want 10", activeTasks)
+	}
+	if server.events != nil {
+		*server.events = append(*server.events, "prepare "+server.role)
+	}
+	return server.prepareErr
 }
 
 func (server *recordingWarmScenarioServer) measureStatus(
@@ -1157,6 +1620,12 @@ func (server *recordingWarmScenarioServer) measureStatus(
 	server.t.Helper()
 	if server.role != "api-update" || taskID != "WB-00" || status != "ready" {
 		server.t.Fatalf("update role = %q task = %q status = %q, want isolated api-update on WB-00 to ready", server.role, taskID, status)
+	}
+	if server.events != nil {
+		*server.events = append(*server.events, "measure "+server.role)
+	}
+	if server.measureErr != nil {
+		return Sample{}, server.measureErr
 	}
 	return Sample{ExitCode: 0, GitProcesses: 1}, nil
 }
@@ -1202,8 +1671,11 @@ func (server *recordingWarmScenarioServer) measureSameTaskBurst(
 }
 
 func (server *recordingWarmScenarioServer) close(time.Duration) error {
+	if server.events != nil {
+		*server.events = append(*server.events, "close "+server.role)
+	}
 	(*server.closedCount)++
-	return nil
+	return server.closeErr
 }
 
 func assertSyncCommandSpec(t *testing.T, got CommandSpec, repository string) {
