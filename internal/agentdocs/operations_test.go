@@ -290,3 +290,82 @@ func TestApplyHonoursAnAbsoluteSkillDirectory(t *testing.T) {
 		t.Fatalf("skill not installed to the absolute directory: %v", err)
 	}
 }
+
+func TestApplyPrefersAnOverriddenSkillDirectory(t *testing.T) {
+	// Production mutation: reading the skill directory only from user-global
+	// configuration makes one machine-wide value decide every project's layout.
+	options := testOptions(t)
+	options.SkillDir = filepath.Join("tools", "skills")
+
+	if _, err := Apply(options); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(options.Root, "tools", "skills", "workbook", "SKILL.md")); err != nil {
+		t.Fatalf("skill not installed to the overridden directory: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(options.Root, ".claude")); !os.IsNotExist(err) {
+		t.Fatalf("Apply() also used the configured directory: %v", err)
+	}
+}
+
+func TestApplySkipsTheSkillWhenRequested(t *testing.T) {
+	// Production mutation: forcing the skill alongside the guidelines leaves no
+	// way to manage documentation in a project that packages skills itself.
+	options := testOptions(t)
+	options.SkipSkill = true
+
+	report, err := Apply(options)
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(options.Root, ".claude")); !os.IsNotExist(err) {
+		t.Fatalf("Apply() installed a skipped skill: %v", err)
+	}
+	for _, artifact := range report.Artifacts {
+		if strings.Contains(artifact.Path, "SKILL.md") {
+			t.Fatalf("report includes a skipped skill: %#v", report.Artifacts)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(options.Root, GuidelinesPath)); err != nil {
+		t.Fatalf("Apply(skip skill) did not install guidelines: %v", err)
+	}
+}
+
+func TestRemoveLeavesASkippedSkillInPlace(t *testing.T) {
+	options := testOptions(t)
+	if _, err := Apply(options); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	skill := filepath.Join(options.Root, ".claude", "skills", "workbook", "SKILL.md")
+
+	options.SkipSkill = true
+	if _, err := Remove(options); err != nil {
+		t.Fatalf("Remove() error = %v", err)
+	}
+
+	if _, err := os.Stat(skill); err != nil {
+		t.Fatalf("Remove(skip skill) deleted the skill: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(options.Root, GuidelinesPath)); !os.IsNotExist(err) {
+		t.Fatalf("Remove(skip skill) left the guidelines: %v", err)
+	}
+}
+
+func TestStatusReportsTheOverriddenSkillDirectory(t *testing.T) {
+	options := testOptions(t)
+	options.SkillDir = filepath.Join("tools", "skills")
+	if _, err := Apply(options); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+
+	report, err := Status(options)
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+
+	if got := stateOf(t, report, "tools/skills/workbook/SKILL.md"); got != StateCurrent {
+		t.Fatalf("overridden skill state = %q, want %q", got, StateCurrent)
+	}
+}

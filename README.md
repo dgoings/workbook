@@ -122,7 +122,7 @@ The current CLI implements these local commands. Commands marked `--json` suppor
 both human-readable output and a versioned machine-readable result envelope:
 
 ```text
-workbook setup [--key WB] [--no-docs] [--no-sync] [--force] [--json]
+workbook setup [--key <key>] [--no-docs] [--no-sync] [--skill-dir <dir>] [--no-skill] [--force] [--json]
 workbook create
 workbook list
 workbook board [--wide | --narrow] [--json]
@@ -140,10 +140,10 @@ workbook version [--json]
 workbook fetch [--json]
 workbook push [--json]
 workbook sync [--json]
-workbook docs install [--create <file>] [--force] [--json]
-workbook docs update [--force] [--json]
-workbook docs status [--json]
-workbook docs remove [--force] [--json]
+workbook docs install [--create <file>] [--skill-dir <dir>] [--no-skill] [--force] [--json]
+workbook docs update [--skill-dir <dir>] [--no-skill] [--force] [--json]
+workbook docs status [--skill-dir <dir>] [--no-skill] [--json]
+workbook docs remove [--skill-dir <dir>] [--no-skill] [--force] [--json]
 workbook hooks install [--json]
 workbook serve [--addr 127.0.0.1:7331]
 workbook help [command]
@@ -156,6 +156,38 @@ refreshes managed agent documentation, and synchronizes shared task refs with
 `origin`. It skips synchronization when no `origin` remote is configured, so a
 solo local project needs no remote. Use `--no-sync` to bootstrap without
 exchanging refs and `--no-docs` to create project identity alone.
+
+The Workbook skill is installed under the directory named by the user-global
+`skillDir` setting, `.claude/skills` by default. Because that setting applies to
+every project on a machine, `--skill-dir <dir>` overrides it for one project and
+`--no-skill` leaves the skill alone while still managing the guidelines. These
+flags are a stopgap until per-project configuration lands.
+
+### User-global configuration
+
+Settings that describe a developer rather than a project live in
+`$XDG_CONFIG_HOME/workbook/config.json`, defaulting to
+`~/.config/workbook/config.json`. `workbook setup` writes it with defaults when
+it is missing, and a missing file always means defaults rather than an error:
+
+```json
+{
+  "format": "workbook.user",
+  "version": 1,
+  "docTargets": ["AGENTS.md", "CLAUDE.md"],
+  "skillDir": ".claude/skills",
+  "preferences": {}
+}
+```
+
+`docTargets` names the agent documentation files Workbook manages. A target is
+refreshed only when the project already contains it; Workbook never creates one
+on its own, so listing a file here is safe. `preferences` is reserved for future
+settings and is deliberately untyped, so adding one later needs no format
+version bump.
+
+Project identity and task data stay in the repository. Nothing in this file
+affects what Workbook records.
 Create, update, delete, and restore append immutable task commits under
 `refs/workbook/tasks/`; delete records a tombstone instead of removing the ref.
 Creation and ordinary updates write descriptive task-operation commit subjects
