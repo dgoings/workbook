@@ -202,12 +202,6 @@ func (r Report) normalized() Report {
 }
 
 func scenarioOutcome(scenario ScenarioResult) string {
-	if scenario.Target == nil {
-		return "not-evaluated"
-	}
-	if len(scenario.Samples) == 0 {
-		return "failed"
-	}
 	failed := false
 	for _, sample := range scenario.Samples {
 		if sample.TimedOut {
@@ -219,6 +213,12 @@ func scenarioOutcome(scenario ScenarioResult) string {
 		}
 	}
 	if failed {
+		return "failed"
+	}
+	if scenario.Target == nil {
+		return "not-evaluated"
+	}
+	if len(scenario.Samples) == 0 {
 		return "failed"
 	}
 	if scenarioTargetMissed(scenario) {

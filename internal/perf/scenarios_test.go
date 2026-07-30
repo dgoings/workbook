@@ -1254,71 +1254,138 @@ func TestWarmSameTaskBurstStartsWithLiteralStatusSafeForGeneratedFixtures(t *tes
 }
 
 func TestMeasureRepository(t *testing.T) {
-	binary := buildWorkbookBinary(t)
-	fixture, err := BuildFixture(context.Background(), filepath.Join(t.TempDir(), "fixture"), FixtureSpec{
-		TotalTasks: 40, ActiveTasks: 40,
-		OperationsPerTask: 4,
-		ObjectFormat:      "sha1",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	for _, objectFormat := range []string{"sha1", "sha256"} {
+		t.Run(objectFormat, func(t *testing.T) {
+			if objectFormat == "sha256" && !supportsObjectFormat(t, objectFormat) {
+				return
+			}
+			if objectFormat == "sha256" {
+				t.Setenv("GIT_CONFIG_COUNT", "1")
+				t.Setenv("GIT_CONFIG_KEY_0", "init.defaultObjectFormat")
+				t.Setenv("GIT_CONFIG_VALUE_0", "sha1")
+			}
+			binary := buildWorkbookBinary(t)
+			fixture, err := BuildFixture(context.Background(), filepath.Join(t.TempDir(), "fixture"), FixtureSpec{
+				TotalTasks: 10, ActiveTasks: 10,
+				OperationsPerTask: 2,
+				ObjectFormat:      objectFormat,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	metrics, results, err := MeasureRepository(context.Background(), binary, fixture.Root, 60*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
+			metrics, results, err := MeasureRepository(context.Background(), binary, fixture.Root, 60*time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	want := []string{
-		"projection-rebuild",
-		"projection-refresh-unchanged",
-		"projection-refresh-one-changed",
-		"sync-initial-local-bare",
-		"sync-unchanged-local-bare",
-	}
-	got := make([]string, len(results))
-	for i, result := range results {
-		got[i] = result.Name
-		if result.Surface != "repository" {
-			t.Errorf("%s surface = %q, want repository", result.Name, result.Surface)
-		}
-		if len(result.Samples) != 1 {
-			t.Errorf("%s samples = %d, want 1", result.Name, len(result.Samples))
-			continue
-		}
-		sample := result.Samples[0]
-		if sample.TimedOut && i >= 3 {
-			continue
-		}
-		if i == 4 && results[3].Samples[0].TimedOut &&
-			sample.Error == "not measured: initial sync timed out before remote completion" {
-			continue
-		}
-		if sample.ExitCode != 0 || sample.TimedOut || sample.Error != "" {
-			t.Errorf("%s sample = %#v, want success", result.Name, sample)
-		}
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("scenario names = %#v, want %#v", got, want)
-	}
+			want := []string{
+				"projection-rebuild",
+				"projection-refresh-unchanged",
+				"projection-refresh-one-changed",
+				"sync-initial-local-bare",
+				"sync-unchanged-local-bare",
+			}
+			got := make([]string, len(results))
+			for i, result := range results {
+				got[i] = result.Name
+				if result.Surface != "repository" {
+					t.Errorf("%s surface = %q, want repository", result.Name, result.Surface)
+				}
+				if len(result.Samples) != 1 {
+					t.Errorf("%s samples = %d, want 1", result.Name, len(result.Samples))
+					continue
+				}
+				sample := result.Samples[0]
+				if sample.TimedOut && i >= 3 {
+					continue
+				}
+				if i == 4 && results[3].Samples[0].TimedOut &&
+					sample.Error == "not measured: initial sync timed out before remote completion" {
+					continue
+				}
+				if sample.ExitCode != 0 || sample.TimedOut || sample.Error != "" {
+					t.Errorf("%s sample = %#v, want success", result.Name, sample)
+				}
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("scenario names = %#v, want %#v", got, want)
+			}
 
-	if metrics.LooseRefEnumerationMilliseconds <= 0 {
-		t.Errorf("loose ref enumeration = %f ms, want positive", metrics.LooseRefEnumerationMilliseconds)
+			if metrics.LooseRefEnumerationMilliseconds <= 0 {
+				t.Errorf("loose ref enumeration = %f ms, want positive", metrics.LooseRefEnumerationMilliseconds)
+			}
+			if metrics.PackedRefEnumerationMilliseconds <= 0 {
+				t.Errorf("packed ref enumeration = %f ms, want positive", metrics.PackedRefEnumerationMilliseconds)
+			}
+			if metrics.LooseObjects <= 0 {
+				t.Errorf("loose objects = %d, want positive", metrics.LooseObjects)
+			}
+			if metrics.LooseObjectBytes <= 0 {
+				t.Errorf("loose object bytes = %d, want positive", metrics.LooseObjectBytes)
+			}
+			if metrics.PackedObjects <= 0 {
+				t.Errorf("packed objects = %d, want positive", metrics.PackedObjects)
+			}
+			if metrics.PackBytes <= 0 {
+				t.Errorf("pack bytes = %d, want positive", metrics.PackBytes)
+			}
+		})
 	}
-	if metrics.PackedRefEnumerationMilliseconds <= 0 {
-		t.Errorf("packed ref enumeration = %f ms, want positive", metrics.PackedRefEnumerationMilliseconds)
-	}
-	if metrics.LooseObjects <= 0 {
-		t.Errorf("loose objects = %d, want positive", metrics.LooseObjects)
-	}
-	if metrics.LooseObjectBytes <= 0 {
-		t.Errorf("loose object bytes = %d, want positive", metrics.LooseObjectBytes)
-	}
-	if metrics.PackedObjects <= 0 {
-		t.Errorf("packed objects = %d, want positive", metrics.PackedObjects)
-	}
-	if metrics.PackBytes <= 0 {
-		t.Errorf("pack bytes = %d, want positive", metrics.PackBytes)
+}
+
+func TestMeasureLocalBareSyncAgainstNewOriginPreservesPackedRefs(t *testing.T) {
+	for _, objectFormat := range []string{"sha1", "sha256"} {
+		t.Run(objectFormat, func(t *testing.T) {
+			if objectFormat == "sha256" && !supportsObjectFormat(t, objectFormat) {
+				return
+			}
+			binary := buildWorkbookBinary(t)
+			fixture, err := BuildFixture(context.Background(), filepath.Join(t.TempDir(), "fixture"), FixtureSpec{
+				TotalTasks: 10, ActiveTasks: 10,
+				OperationsPerTask: 2,
+				ObjectFormat:      objectFormat,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := runRepositoryGit(context.Background(), time.Minute, fixture.Root, "pack-refs", "--all"); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := runRepositoryGit(context.Background(), time.Minute, fixture.Root, "gc"); err != nil {
+				t.Fatal(err)
+			}
+
+			origin := filepath.Join(t.TempDir(), "origin.git")
+			results, err := measureLocalBareSyncAgainstNewOrigin(
+				context.Background(), binary, fixture.Root, origin, time.Minute, MeasureCommand,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantNames := []string{"sync-initial-local-bare", "sync-unchanged-local-bare"}
+			gotNames := make([]string, len(results))
+			for i, result := range results {
+				gotNames[i] = result.Name
+				if len(result.Samples) != 1 {
+					t.Errorf("%s samples = %d, want 1", result.Name, len(result.Samples))
+					continue
+				}
+				sample := result.Samples[0]
+				if sample.ExitCode != 0 || sample.TimedOut || sample.Error != "" {
+					t.Errorf("%s sample = %#v, want success", result.Name, sample)
+				}
+			}
+			if !reflect.DeepEqual(gotNames, wantNames) {
+				t.Fatalf("scenario names = %#v, want %#v", gotNames, wantNames)
+			}
+
+			canonical := fixtureRefMap(t, fixture.Root, "refs/workbook/tasks/")
+			remote := fixtureRemoteRefMap(t, origin)
+			if !reflect.DeepEqual(remote, canonical) {
+				t.Fatalf("remote task refs = %#v, want exact canonical refs %#v", remote, canonical)
+			}
+		})
 	}
 }
 

@@ -246,6 +246,21 @@ func TestReportNormalizesScenarioTargetOutcomes(t *testing.T) {
 			Name:    "local",
 			Samples: []Sample{{Duration: time.Millisecond}},
 		},
+		{
+			Name:    "repository-success",
+			Surface: "repository",
+			Samples: []Sample{{Duration: time.Millisecond}},
+		},
+		{
+			Name:    "repository-failure",
+			Surface: "repository",
+			Samples: []Sample{{Duration: time.Millisecond, ExitCode: 1, Error: "sync failed"}},
+		},
+		{
+			Name:    "repository-timeout",
+			Surface: "repository",
+			Samples: []Sample{{Duration: time.Second, TimedOut: true, Error: "timed out"}},
+		},
 	}}
 
 	normalized := report.normalized()
@@ -265,6 +280,9 @@ func TestReportNormalizesScenarioTargetOutcomes(t *testing.T) {
 		"miss-then-failure":                     "failed",
 		"failure-then-miss":                     "failed",
 		"local":                                 "not-evaluated",
+		"repository-success":                    "not-evaluated",
+		"repository-failure":                    "failed",
+		"repository-timeout":                    "timeout",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("outcomes = %#v, want %#v", got, want)

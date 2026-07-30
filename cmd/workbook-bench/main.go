@@ -104,16 +104,18 @@ func runWithBenchmark(
 	}
 
 	fmt.Fprintf(stdout, "wrote %s and %s\n", options.outputJSON, options.outputMarkdown)
-	if hasFailedLocalMeasurement(report) {
-		fmt.Fprintln(stderr, "workbook-bench: local measurement failed; see retained reports")
+	if hasFailedRetainedMeasurement(report) {
+		fmt.Fprintln(stderr, "workbook-bench: measurement failed; see retained reports")
 		return failureExitCode
 	}
 	return 0
 }
 
-func hasFailedLocalMeasurement(report perf.Report) bool {
+func hasFailedRetainedMeasurement(report perf.Report) bool {
 	for _, scenario := range report.Scenarios {
-		if !strings.HasPrefix(scenario.Name, "cli-") && !strings.HasPrefix(scenario.Name, "api-") {
+		switch scenario.Surface {
+		case "cold-cli", "warm-http", "repository":
+		default:
 			continue
 		}
 		for _, sample := range scenario.Samples {
@@ -301,12 +303,23 @@ func runBenchmark(ctx context.Context, options options) (perf.Report, error) {
 		if err != nil {
 			return perf.Report{}, fmt.Errorf("build repository fixture: %w", err)
 		}
-		metrics, repositoryScenarios, err := perf.MeasureRepository(
-			ctx,
-			options.workbookBinary,
-			repositoryFixture.Root,
-			options.timeout,
-		)
+		var metrics perf.RepositoryMetrics
+		var repositoryScenarios []perf.ScenarioResult
+		if hasRepositoryProjectionScenario(options.scenarios) {
+			metrics, repositoryScenarios, err = perf.MeasureRepository(
+				ctx,
+				options.workbookBinary,
+				repositoryFixture.Root,
+				options.timeout,
+			)
+		} else {
+			metrics, repositoryScenarios, err = perf.MeasurePackedRepositorySync(
+				ctx,
+				options.workbookBinary,
+				repositoryFixture.Root,
+				options.timeout,
+			)
+		}
 		if err != nil {
 			return perf.Report{}, fmt.Errorf("measure repository scenarios: %w", err)
 		}
@@ -378,6 +391,15 @@ func selectedWarmScenarioNames(scenarios []string) []string {
 func hasRepositoryScenario(scenarios []string) bool {
 	for _, scenario := range scenarios {
 		if strings.HasPrefix(scenario, "projection-") || scenario == "sync-initial-local-bare" || scenario == "sync-unchanged-local-bare" {
+			return true
+		}
+	}
+	return false
+}
+
+func hasRepositoryProjectionScenario(scenarios []string) bool {
+	for _, scenario := range scenarios {
+		if strings.HasPrefix(scenario, "projection-") {
 			return true
 		}
 	}
