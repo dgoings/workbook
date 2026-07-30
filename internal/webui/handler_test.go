@@ -1075,7 +1075,9 @@ func TestHandlerClientPreservesNewTaskRelationshipDraftsWhenCreateFails(t *testi
 	}
 	prerequisite := clientPlacementTask("WB-01J00000000000000000000077", "Prerequisite", core.StatusDone, core.PriorityHigh)
 	blockedTask := clientPlacementTask("WB-01J00000000000000000000078", "Blocked task", core.StatusBacklog, core.PriorityLow)
-	tasks := []core.Task{prerequisite, blockedTask}
+	pendingPrerequisite := clientPlacementTask("WB-01J0000000000000000000007F", "Pending prerequisite", core.StatusReady, core.PriorityMedium)
+	pendingBlockedTask := clientPlacementTask("WB-01J0000000000000000000007G", "Pending blocked task", core.StatusInProgress, core.PriorityHigh)
+	tasks := []core.Task{prerequisite, blockedTask, pendingPrerequisite, pendingBlockedTask}
 	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
 
 	response := request(t, handler, http.MethodGet, "/tasks/new")
@@ -1109,10 +1111,40 @@ setTimeout(async () => {
   await selectAndAdd(blocksGroup, ` + strconv.Quote(blockedTask.ID) + `, ` + strconv.Quote(blockedTask.Title) + `);
   const title = findElement(main, (element) => element.id === "task-title");
   const description = findElement(main, (element) => element.id === "task-description");
+  const status = findElement(main, (element) => element.id === "task-status");
+  const priority = findElement(main, (element) => element.id === "task-priority");
+  const labels = findElement(main, (element) => element.id === "task-labels");
   const unsavedTitle = "Unsaved title";
   const unsavedDescription = "Unsaved Description";
   title.value = unsavedTitle;
   description.value = unsavedDescription;
+  status.children.forEach((option) => { option.selected = option.value === "in-review"; });
+  priority.children.forEach((option) => { option.selected = option.value === "high"; });
+  labels.value = "review, recovery";
+  const selectPending = (group, candidateID, candidateTitle) => {
+    const input = findElement(group, (element) => element.attributes.role === "combobox");
+    input.value = candidateTitle;
+    input.eventListeners.input();
+    const option = findElement(group, (element) =>
+      element.attributes.role === "option" && element.dataset.candidateId === candidateID);
+    if (!option) throw new Error("pending candidate is not selectable: " + candidateID);
+    option.eventListeners.click();
+    return {
+      input,
+      add: findElement(group, (element) =>
+        element.tagName === "BUTTON" && element.textContent === "Add dependency")
+    };
+  };
+  const pendingDepends = selectPending(
+    dependsGroup,
+    ` + strconv.Quote(pendingPrerequisite.ID) + `,
+    ` + strconv.Quote(pendingPrerequisite.Title) + `
+  );
+  const pendingBlocks = selectPending(
+    blocksGroup,
+    ` + strconv.Quote(pendingBlockedTask.ID) + `,
+    ` + strconv.Quote(pendingBlockedTask.Title) + `
+  );
   let createCalls = 0;
   let dependencyCalls = 0;
   globalThis.fetch = async (url, options = {}) => {
@@ -1143,6 +1175,25 @@ setTimeout(async () => {
   if (title.value !== unsavedTitle ||
       description.value !== unsavedDescription) {
     throw new Error("task fields were discarded after create failure");
+  }
+  if (status.value !== "in-review" ||
+      priority.value !== "high" ||
+      labels.value !== "review, recovery") {
+    throw new Error("task properties were discarded after create failure");
+  }
+  const pendingDependsOption = findElement(dependsGroup, (element) =>
+    element.attributes.role === "option" &&
+    element.dataset.candidateId === ` + strconv.Quote(pendingPrerequisite.ID) + ` &&
+    element.attributes["aria-selected"] === "true");
+  const pendingBlocksOption = findElement(blocksGroup, (element) =>
+    element.attributes.role === "option" &&
+    element.dataset.candidateId === ` + strconv.Quote(pendingBlockedTask.ID) + ` &&
+    element.attributes["aria-selected"] === "true");
+  if (pendingDepends.input.value !== ` + strconv.Quote(pendingPrerequisite.Title) + ` ||
+      pendingBlocks.input.value !== ` + strconv.Quote(pendingBlockedTask.Title) + ` ||
+      !pendingDependsOption || !pendingBlocksOption ||
+      pendingDepends.add.disabled || pendingBlocks.add.disabled) {
+    throw new Error("relationship queries or valid selections were discarded after create failure");
   }
   if (!draftDependsOnRow || !draftBlocksRow) {
     throw new Error("relationship drafts were discarded after create failure");
@@ -1227,6 +1278,7 @@ setTimeout(async () => {
   const createdTask = ` + documentJSON(afterCreate) + `.tasks[0];
   let activeDocument = ` + documentJSON(afterCreate) + `;
   let blocksAttempts = 0;
+  let blocksDeletes = 0;
   let activeRefreshes = 0;
   let resolveDetachedRetry;
   globalThis.fetch = async (url, options = {}) => {
@@ -1261,18 +1313,32 @@ setTimeout(async () => {
       }
       if (blocksAttempts === 2) {
         return {
-          ok: false,
+          ok: true,
           json: async () => new Promise((resolve) => {
-            resolveDetachedRetry = () => resolve({
-              format: "workbook.error",
-              version: 1,
-              error: { category: "validation", message: "detached retry failed" }
-            });
+            resolveDetachedRetry = () => {
+              resolve({
+                format: "workbook.task-mutation",
+                version: 1,
+                task: ` + documentJSON(afterRetry) + `.tasks[2]
+              });
+            };
           })
         };
       }
-      activeDocument = ` + documentJSON(afterRetry) + `;
-      return { ok: true, json: async () => ({ format: "workbook.task-mutation", version: 1, task: activeDocument.tasks[2] }) };
+      throw new Error("unexpected additional Blocks Retry");
+    }
+    if (options.method === "DELETE" &&
+        url === "/api/tasks/" + encodeURIComponent(blockedTaskID) + "/dependencies/" + encodeURIComponent(createdID)) {
+      blocksDeletes += 1;
+      activeDocument = ` + documentJSON(afterCreate) + `;
+      return {
+        ok: true,
+        json: async () => ({
+          format: "workbook.task-mutation",
+          version: 1,
+          task: activeDocument.tasks[2]
+        })
+      };
     }
     if (url === "/api/tasks" && (options.method || "GET") === "GET") {
       activeRefreshes += 1;
@@ -1362,20 +1428,28 @@ setTimeout(async () => {
     altKey: false,
     preventDefault() {}
   });
+  if (blocksAttempts !== 2) throw new Error("Retry did not issue the correctly oriented Blocks PUT");
   const recoveredDraft = findElement(groupFor("Blocks"), (element) =>
     element.dataset.relationshipId === blockedTaskID &&
     element.dataset.relationshipDraft !== undefined);
-  const recoveredRetry = recoveredDraft && findElement(recoveredDraft, (element) =>
-    element.tagName === "BUTTON" && element.textContent === "Retry");
-  if (!recoveredRetry) throw new Error("detached Retry discarded the failed client draft");
-  const refreshesBeforeSuccessfulRetry = activeRefreshes;
-  await recoveredRetry.eventListeners.click();
-  if (blocksAttempts !== 3) throw new Error("Retry did not issue the correctly oriented Blocks PUT");
-  if (activeRefreshes !== refreshesBeforeSuccessfulRetry + 1) throw new Error("successful Retry did not refresh exactly once");
+  if (!recoveredDraft ||
+      !recoveredDraft.textContent.includes("dependency would create a cycle")) {
+    throw new Error("detached successful Retry mutated the shared failed draft");
+  }
+  activeDocument = ` + documentJSON(afterRetry) + `;
+  await intervalCallback();
   const retriedBlocksRow = findElement(groupFor("Blocks"), (element) =>
     element.dataset.relationshipId === blockedTaskID);
   if (!retriedBlocksRow || retriedBlocksRow.dataset.relationshipDraft !== undefined) {
-    throw new Error("successful Retry did not replace the failed draft with durable state");
+    throw new Error("canonical refresh did not replace the detached draft with durable state");
+  }
+  const removeDurableBlock = findElement(retriedBlocksRow, (element) =>
+    element.tagName === "BUTTON" && element.textContent === "Remove");
+  await removeDurableBlock.eventListeners.click();
+  if (blocksDeletes !== 1 ||
+      findElement(groupFor("Blocks"), (element) =>
+        element.dataset.relationshipId === blockedTaskID)) {
+    throw new Error("removing the durable edge revived stale detached draft state");
   }
 }, 0);
 `
@@ -1429,6 +1503,7 @@ setTimeout(async () => {
   const createdID = ` + strconv.Quote(createdID) + `;
   let createCalls = 0;
   let activeRefreshCalls = 0;
+  let deletedRefreshCalls = 0;
   globalThis.fetch = async (url, options = {}) => {
     fetchCalls.push({ url, options });
     if (url === "/api/tasks" && options.method === "POST") {
@@ -1467,6 +1542,17 @@ setTimeout(async () => {
       return { ok: true, json: async () => (` + documentJSON(refreshedTasks) + `) };
     }
     if (url === "/api/tasks?deleted=true") {
+      deletedRefreshCalls += 1;
+      if (deletedRefreshCalls === 1) {
+        return {
+          ok: false,
+          json: async () => ({
+            format: "workbook.error",
+            version: 1,
+            error: { category: "internal", message: "deleted task context failed" }
+          })
+        };
+      }
       return {
         ok: true,
         json: async () => ({ format: "workbook.tasks", version: 1, tasks: [] })
@@ -1477,13 +1563,27 @@ setTimeout(async () => {
 
   await selectAndAdd(groupFor("Depends On"), ` + strconv.Quote(prerequisite.ID) + `, ` + strconv.Quote(prerequisite.Title) + `);
   await selectAndAdd(groupFor("Blocks"), ` + strconv.Quote(blockedTask.ID) + `, ` + strconv.Quote(blockedTask.Title) + `);
-  await findElement(main, (element) => element.tagName === "FORM").eventListeners.submit({ preventDefault() {} });
+  const form = findElement(main, (element) => element.tagName === "FORM");
+  await form.eventListeners.submit({ preventDefault() {} });
   const retry = findElement(main, (element) =>
     element.tagName === "BUTTON" && element.type === "button" && element.textContent === "Retry");
   if (!retry) throw new Error("durable create refresh failure did not render a retry action");
+  await form.eventListeners.submit({ preventDefault() {} });
+  if (createCalls !== 1) {
+    throw new Error("second programmatic submit created a duplicate task");
+  }
+  await retry.eventListeners.click();
+  if (deletedRefreshCalls !== 1 ||
+      historyPaths.at(-1) === "/tasks/" + createdID ||
+      retry.disabled) {
+    throw new Error("deleted-context refresh failure did not remain recoverable");
+  }
   await retry.eventListeners.click();
   if (createCalls !== 1) {
     throw new Error("refresh retry created a duplicate task");
+  }
+  if (deletedRefreshCalls !== 2) {
+    throw new Error("deleted-context refresh retry did not recover");
   }
   if (historyPaths.at(-1) !== "/tasks/" + createdID) {
     throw new Error("refresh retry did not open the created task");

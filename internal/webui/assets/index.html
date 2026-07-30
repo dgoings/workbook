@@ -782,8 +782,18 @@
             [["dependsOn", state.dependsOn], ["blocks", state.blocks]].forEach(([name, persistedRelationships]) => {
               const group = groups.get(name);
               const draftMap = draftState ? (name === "dependsOn" ? draftState.dependsOn : draftState.blocks) : null;
+              const persistedIDs = new Set(persistedRelationships.map((relationship) => relationship.id));
+              if (draftMap && taskID && ownsDependencyController(controller)) {
+                persistedIDs.forEach((id) => draftMap.delete(id));
+                if (!hasRelationshipDrafts(draftState)) {
+                  pendingRelationshipDrafts.delete(taskID);
+                }
+              }
               const relationships = draftMap
-                ? [...persistedRelationships, ...draftMap.values()]
+                ? [
+                  ...persistedRelationships,
+                  ...[...draftMap.values()].filter((relationship) => !persistedIDs.has(relationship.id))
+                ]
                 : persistedRelationships;
               group.combobox.setCandidates(relationshipCandidates(taskID, group.direction, draftState));
               group.removeButtons = [];
@@ -795,7 +805,11 @@
                 return;
               }
               group.list.replaceChildren(...relationships.map((relationship) => {
-                const isDraft = Boolean(draftMap && draftMap.has(relationship.id));
+                const isDraft = Boolean(
+                  draftMap &&
+                  draftMap.has(relationship.id) &&
+                  !persistedIDs.has(relationship.id)
+                );
                 const retryDraft = isDraft && taskID && relationship.error
                   ? () => retryRelationshipDraft(
                     name,
@@ -1035,13 +1049,12 @@
         group.setMessage("");
         try {
           const document = await mutateTask("PUT", path);
-          draftMap.delete(relationship.id);
+          const refreshed = await currentRefreshResult(refresh());
           if (!ownsDependencyController(controller)) return;
+          draftMap.delete(relationship.id);
           if (!hasRelationshipDrafts(controller.draftState)) {
             pendingRelationshipDrafts.delete(controller.taskID);
           }
-          const refreshed = await currentRefreshResult(refresh());
-          if (!ownsDependencyController(controller)) return;
           if (refreshed.status === "superseded") return;
           if (refreshed.status === "failed") {
             controller.update();
