@@ -715,7 +715,7 @@
 		    const title = document.createElement("h3"); text(title, task.title);
 		    const description = document.createElement("p"); description.className = "deleted-card__description"; text(description, task.description || "No description.");
 		    const restore = document.createElement("button"); restore.className = "save-button"; restore.type = "button"; text(restore, "Restore");
-		    restore.addEventListener("click", async () => { restore.disabled = true; try { await mutateTask("POST", "/api/tasks/" + encodeURIComponent(task.id) + "/restore"); await refresh(); navigate("/tasks/" + encodeURIComponent(task.id)); } catch (error) { text(description, error instanceof Error ? error.message : "Task restoration failed."); } finally { restore.disabled = false; } });
+		    restore.addEventListener("click", async () => { restore.disabled = true; try { await mutateTask("POST", "/api/tasks/" + encodeURIComponent(task.id) + "/restore"); const refreshed = await currentRefreshResult(refresh()); if (refreshed.status !== "applied") throw new Error("Task restored durably, but the latest task state could not be refreshed."); navigate("/tasks/" + encodeURIComponent(task.id)); } catch (error) { text(description, error instanceof Error ? error.message : "Task restoration failed."); } finally { restore.disabled = false; } });
 		    row.append(meta, title, description, restore); body.append(row);
 		  });
 		}).catch((error) => { const failed = document.createElement("p"); text(failed, error instanceof Error ? error.message : "Deleted tasks could not be loaded."); body.prepend(failed); });

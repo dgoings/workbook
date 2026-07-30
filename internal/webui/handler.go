@@ -151,6 +151,10 @@ func newHandler(list TaskLister, create TaskCreator, update TaskUpdater, updateS
 func (handler *handler) serveHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Content-Security-Policy", securityPolicy)
 	writer.Header().Set("X-Content-Type-Options", "nosniff")
+	if malformedTaskDependencyPath(request.URL.Path) {
+		http.NotFound(writer, request)
+		return
+	}
 	if method, known := allowedMethod(request.URL.Path); known && !methodAllowed(request.Method, method) {
 		writer.Header().Set("Allow", method)
 		writer.WriteHeader(http.StatusMethodNotAllowed)
@@ -166,6 +170,19 @@ func methodAllowed(requestMethod, allowed string) bool {
 		}
 	}
 	return false
+}
+
+func malformedTaskDependencyPath(path string) bool {
+	const prefix = "/api/tasks/"
+	if !strings.HasPrefix(path, prefix) {
+		return false
+	}
+	parts := strings.Split(strings.TrimPrefix(path, prefix), "/")
+	if len(parts) < 2 || parts[1] != "dependencies" {
+		return false
+	}
+	_, _, valid := taskDependencyPathIDs(path)
+	return !valid
 }
 
 func allowedMethod(path string) (string, bool) {
@@ -431,6 +448,10 @@ func (handler *handler) restoreTask(writer http.ResponseWriter, request *http.Re
 }
 
 func (handler *handler) addTaskDependency(writer http.ResponseWriter, request *http.Request) {
+	if err := requireEmptyRequestBody(request.Body); err != nil {
+		handler.writeError(writer, core.Wrap(core.CategoryInvocation, "validate dependency request", err))
+		return
+	}
 	if handler.depend == nil {
 		handler.writeError(writer, core.Errorf(core.CategoryOperational, "task dependency addition is not configured"))
 		return
@@ -444,6 +465,10 @@ func (handler *handler) addTaskDependency(writer http.ResponseWriter, request *h
 }
 
 func (handler *handler) removeTaskDependency(writer http.ResponseWriter, request *http.Request) {
+	if err := requireEmptyRequestBody(request.Body); err != nil {
+		handler.writeError(writer, core.Wrap(core.CategoryInvocation, "validate dependency request", err))
+		return
+	}
 	if handler.free == nil {
 		handler.writeError(writer, core.Errorf(core.CategoryOperational, "task dependency removal is not configured"))
 		return
@@ -454,6 +479,17 @@ func (handler *handler) removeTaskDependency(writer http.ResponseWriter, request
 		return
 	}
 	handler.writeTaskMutation(writer, result)
+}
+
+func requireEmptyRequestBody(body io.Reader) error {
+	read, err := io.CopyN(io.Discard, body, 1)
+	if read > 0 {
+		return errors.New("request body must be empty")
+	}
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	return err
 }
 
 func decodeRequest(body io.Reader, value any) error {

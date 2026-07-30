@@ -207,6 +207,118 @@ func TestHandlerDeletesRestoresAndListsTombstonedTasks(t *testing.T) {
 	}
 }
 
+func TestHandlerClientRestoreFollowsSupersedingRefreshBeforeNavigation(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	deleted := clientPlacementTask("WB-01J00000000000000000000060", "Restored task", core.StatusReady, core.PriorityMedium)
+	deleted.Description = "Restore me without racing the task refresh."
+	deleted.Deleted = true
+	restored := deleted
+	restored.Deleted = false
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return nil, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/deleted")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /deleted status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	documentJSON := func(tasks []core.Task) string {
+		t.Helper()
+		document, err := json.Marshal(TasksDocument{
+			Format:       "workbook.tasks",
+			Version:      1,
+			Tasks:        tasks,
+			Presentation: presentationForTasks(tasks),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(document)
+	}
+	deletedDocument, err := json.Marshal(TasksDocument{
+		Format:  "workbook.tasks",
+		Version: 1,
+		Tasks:   []core.Task{deleted},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/deleted", documentJSON(nil)) + script + `
+deletedTaskResponse = ` + string(deletedDocument) + `;
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const restore = findElement(main, (element) =>
+    element.tagName === "BUTTON" && element.textContent === "Restore");
+  if (!restore) throw new Error("deleted task Restore button did not render");
+
+  let resolveRestoreRefresh;
+  let resolveWinningRefresh;
+  let activeGets = 0;
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if ((options.method || "GET") !== "GET") {
+      return {
+        ok: true,
+        json: async () => ({
+          format: "workbook.task-mutation",
+          version: 1,
+          task: (` + documentJSON([]core.Task{restored}) + `).tasks[0]
+        })
+      };
+    }
+    if (url === "/api/tasks?deleted=true") {
+      return { ok: true, json: async () => deletedTaskResponse };
+    }
+    activeGets += 1;
+    if (activeGets === 1) {
+      return {
+        ok: true,
+        json: async () => new Promise((resolve) => { resolveRestoreRefresh = resolve; })
+      };
+    }
+    return {
+      ok: true,
+      json: async () => new Promise((resolve) => { resolveWinningRefresh = resolve; })
+    };
+  };
+
+  const restoration = restore.eventListeners.click();
+  while (!resolveRestoreRefresh) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  const winningPoll = intervalCallback();
+  while (!resolveWinningRefresh) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  resolveRestoreRefresh(` + documentJSON(nil) + `);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  if (historyPaths.length !== 0) {
+    throw new Error("restore navigated before the superseding refresh populated the restored task");
+  }
+
+  resolveWinningRefresh(` + documentJSON([]core.Task{restored}) + `);
+  await winningPoll;
+  await restoration;
+  const wantPath = "/tasks/" + encodeURIComponent(` + strconv.Quote(restored.ID) + `);
+  if (historyPaths.length !== 1 || historyPaths[0] !== wantPath) {
+    throw new Error("restore navigation = " + JSON.stringify(historyPaths) + ", want " + wantPath);
+  }
+  const title = findElement(main, (element) => element.id === "task-title");
+  if (!title || title.value !== ` + strconv.Quote(restored.Title) + `) {
+    throw new Error("restored detail form did not render after the winning refresh");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute superseding restore refresh behavior: %v\n%s", err, output)
+	}
+}
+
 func TestHandlerAddsAndRemovesTaskDependencies(t *testing.T) {
 	dependent := boardTasks()[0]
 	prerequisite := boardTasks()[1]
@@ -252,6 +364,81 @@ func TestHandlerAddsAndRemovesTaskDependencies(t *testing.T) {
 	}
 }
 
+func TestHandlerDependencyMutationsRequireEmptyRequestBodies(t *testing.T) {
+	dependent := boardTasks()[0]
+	prerequisite := boardTasks()[1]
+	dependencyCalls := 0
+	handler := NewHandlerWithTaskMutations(
+		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
+		unexpectedTaskPosition(t), nil, nil,
+		func(context.Context, string, string) (core.MutationResult, error) {
+			dependencyCalls++
+			return core.MutationResult{Task: dependent}, nil
+		},
+		func(context.Context, string, string) (core.MutationResult, error) {
+			dependencyCalls++
+			return core.MutationResult{Task: dependent}, nil
+		},
+	)
+	path := "/api/tasks/" + dependent.ID + "/dependencies/" + prerequisite.ID
+	tests := []struct {
+		name                 string
+		method               string
+		body                 string
+		unknownContentLength bool
+		wantStatus           int
+		wantCalls            int
+	}{
+		{name: "empty PUT", method: http.MethodPut, wantStatus: http.StatusOK, wantCalls: 1},
+		{name: "empty DELETE", method: http.MethodDelete, wantStatus: http.StatusOK, wantCalls: 2},
+		{name: "PUT JSON body", method: http.MethodPut, body: `{"unexpected":true}`, wantStatus: http.StatusBadRequest, wantCalls: 2},
+		{name: "DELETE JSON body", method: http.MethodDelete, body: `{"unexpected":true}`, wantStatus: http.StatusBadRequest, wantCalls: 2},
+		{name: "chunked PUT body", method: http.MethodPut, body: "x", unknownContentLength: true, wantStatus: http.StatusBadRequest, wantCalls: 2},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(test.method, path, strings.NewReader(test.body))
+			if test.unknownContentLength {
+				request.ContentLength = -1
+				request.TransferEncoding = []string{"chunked"}
+			}
+			handler.ServeHTTP(response, request)
+			if response.Code != test.wantStatus {
+				t.Fatalf("%s dependency status = %d, want %d; body = %s", test.method, response.Code, test.wantStatus, response.Body.String())
+			}
+			if dependencyCalls != test.wantCalls {
+				t.Fatalf("dependency callbacks = %d, want %d", dependencyCalls, test.wantCalls)
+			}
+			if test.wantStatus == http.StatusBadRequest {
+				var document ErrorDocument
+				if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+					t.Fatalf("decode dependency body error: %v", err)
+				}
+				if document.Format != "workbook.error" || document.Version != 1 ||
+					document.Error.Category != core.CategoryInvocation {
+					t.Fatalf("dependency body error = %#v, want workbook.error v1 invocation", document)
+				}
+			}
+		})
+	}
+
+	unconfigured := NewHandlerWithTaskMutations(
+		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
+		unexpectedTaskPosition(t), nil, nil, nil, nil,
+	)
+	response := requestJSON(t, unconfigured, http.MethodPut, path, `{"unexpected":true}`)
+	var document ErrorDocument
+	if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+		t.Fatalf("decode unconfigured dependency body error: %v", err)
+	}
+	if response.Code != http.StatusBadRequest || document.Error.Category != core.CategoryInvocation {
+		t.Fatalf("unconfigured dependency body status/error = %d/%#v, want invocation before callback configuration", response.Code, document.Error)
+	}
+}
+
 func TestHandlerReturnsDependencyMutationErrors(t *testing.T) {
 	dependent := boardTasks()[0]
 	prerequisite := boardTasks()[1]
@@ -281,10 +468,19 @@ func TestHandlerReturnsDependencyMutationErrors(t *testing.T) {
 func TestHandlerRejectsWrongDependencyMethodsAndMalformedPaths(t *testing.T) {
 	dependent := boardTasks()[0]
 	prerequisite := boardTasks()[1]
+	dependencyCalls := 0
 	handler := NewHandlerWithTaskMutations(
 		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
 		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
-		unexpectedTaskPosition(t), nil, nil, nil, nil,
+		unexpectedTaskPosition(t), nil, nil,
+		func(context.Context, string, string) (core.MutationResult, error) {
+			dependencyCalls++
+			return core.MutationResult{}, nil
+		},
+		func(context.Context, string, string) (core.MutationResult, error) {
+			dependencyCalls++
+			return core.MutationResult{}, nil
+		},
 	)
 	path := "/api/tasks/" + dependent.ID + "/dependencies/" + prerequisite.ID
 	response := request(t, handler, http.MethodPost, path)
@@ -294,12 +490,17 @@ func TestHandlerRejectsWrongDependencyMethodsAndMalformedPaths(t *testing.T) {
 	for _, malformed := range []string{
 		"/api/tasks/" + dependent.ID + "/dependencies",
 		"/api/tasks/" + dependent.ID + "/dependencies/",
+		"/api/tasks/" + dependent.ID + "/dependencies//" + prerequisite.ID,
+		"/api/tasks/" + dependent.ID + "/dependencies/../" + prerequisite.ID,
 		path + "/extra",
 	} {
 		response := request(t, handler, http.MethodPut, malformed)
 		if response.Code != http.StatusNotFound {
 			t.Errorf("PUT %s status = %d, want %d", malformed, response.Code, http.StatusNotFound)
 		}
+	}
+	if dependencyCalls != 0 {
+		t.Fatalf("malformed dependency paths invoked %d mutation callbacks, want 0", dependencyCalls)
 	}
 }
 
