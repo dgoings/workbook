@@ -14,10 +14,13 @@ import (
 )
 
 const (
-	configPath     = ".workbook/config.json"
-	projectFormat  = "workbook.project"
-	projectVersion = 1
-	projectGuard   = "project.json"
+	configPath    = ".workbook/config.json"
+	projectFormat = "workbook.project"
+	// projectVersion is the version Workbook writes. Version 1 documents
+	// predate the automatic synchronization policy and remain readable.
+	projectVersion       = 2
+	legacyProjectVersion = 1
+	projectGuard         = "project.json"
 )
 
 // Init creates a repository's tracked Workbook configuration when absent. An
@@ -317,8 +320,12 @@ func decodeConfig(contents []byte) (core.ProjectConfig, error) {
 	if config.Format != projectFormat {
 		return core.ProjectConfig{}, core.Errorf(core.CategoryCorruptData, "unsupported Workbook configuration format %q", config.Format)
 	}
-	if config.Version != projectVersion {
+	if config.Version != projectVersion && config.Version != legacyProjectVersion {
 		return core.ProjectConfig{}, core.Errorf(core.CategoryCorruptData, "unsupported Workbook configuration version %d", config.Version)
+	}
+	if config.Version == legacyProjectVersion && config.AutoSync != core.AutoSyncUnset {
+		return core.ProjectConfig{}, core.Errorf(core.CategoryCorruptData,
+			"Workbook configuration version %d cannot carry an automatic synchronization policy", legacyProjectVersion)
 	}
 	if err := validateProjectID(config.ProjectID); err != nil {
 		return core.ProjectConfig{}, core.Wrap(core.CategoryCorruptData, "Workbook configuration project ID is invalid", err)
