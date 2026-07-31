@@ -16,6 +16,7 @@ func TestScenarioNamesReturnsStableDefensiveRegistry(t *testing.T) {
 		"cli-move",
 		"cli-restore",
 		"cli-update",
+		"cli-update-autosync",
 		"cli-burst-independent-10",
 		"cli-burst-same-task-10",
 		"api-update",
@@ -91,6 +92,7 @@ func TestLocalScenarioResultsAttachApprovedDurationTargets(t *testing.T) {
 	coldSingle := ScenarioTarget{DurationStatistic: DurationP95, DurationComparison: DurationAtMost, MaxMilliseconds: 200}
 	warmUpdate := ScenarioTarget{DurationStatistic: DurationP95, DurationComparison: DurationAtMost, MaxMilliseconds: 100}
 	burst := ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationLessThan, MaxMilliseconds: 1000}
+	coldAutoSync := ScenarioTarget{DurationStatistic: DurationP95, DurationComparison: DurationAtMost, MaxMilliseconds: 1000}
 
 	want := map[string]ScenarioTarget{
 		"cli-create":               coldSingle,
@@ -100,6 +102,7 @@ func TestLocalScenarioResultsAttachApprovedDurationTargets(t *testing.T) {
 		"cli-move":                 coldSingle,
 		"cli-restore":              coldSingle,
 		"cli-update":               coldSingle,
+		"cli-update-autosync":      coldAutoSync,
 		"cli-burst-independent-10": burst,
 		"cli-burst-same-task-10":   burst,
 		"api-update":               warmUpdate,
