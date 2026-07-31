@@ -1,6 +1,6 @@
 # Task Detail Sidebar Layout Design
 
-**Status:** Approved in conversation; awaiting written-spec review
+**Status:** Approved; footer action placement amended in conversation
 
 **Task:** `WB-01KYQMZMKMD9RWNH6PDTMZ97MC`
 
@@ -71,7 +71,8 @@ The shared task form uses two columns:
 │                                               │ Depends On           │
 │                                               │ Blocks               │
 ├───────────────────────────────────────────────┴──────────────────────┤
-│ Feedback                                    Back  Save/Create Delete │
+│ Feedback                                                             │
+│ Save/Create  Back                                           Delete   │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -82,7 +83,11 @@ The shared task form uses two columns:
   content exceeds the available height.
 - The footer spans both columns so feedback and actions remain independent of
   relationship-list length.
-- Delete appears only for active existing tasks.
+- Feedback occupies its own full-width row above the action controls.
+- Save/Create and Back form a left-aligned action group, matching the task
+  form's earlier placement.
+- Delete is visually and structurally separate at the far right and appears
+  only for active existing tasks.
 - New Task and existing detail use the same proportions.
 
 ### Sidebar
@@ -282,6 +287,8 @@ At mobile sizes:
 ### Executable client tests
 
 - New and existing task routes render the same sidebar shell.
+- Save/Create and Back render in the footer's left action group while Delete,
+  when present, renders in a separate right action group.
 - Desktop region classes and mobile DOM order are stable.
 - Description retains its flexible field hook.
 - Existing relationship mutations retain correct orientation and refresh
