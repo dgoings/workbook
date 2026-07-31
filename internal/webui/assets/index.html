@@ -4,6 +4,12 @@
   <h3><a href="/tasks/{{ .Task.ID }}">{{ .Task.Title }}</a></h3>
   {{ if .Task.Description }}<p>{{ .Task.Description }}</p>{{ end }}
   {{ if .Task.Labels }}<div class="labels">{{ range .Task.Labels }}<span class="label">{{ . }}</span>{{ end }}</div>{{ end }}
+  {{ if .DependenciesTotal }}
+  <div class="dependency-progress" data-dependency-progress>
+    <span>{{ .DependenciesComplete }} of {{ .DependenciesTotal }} prerequisites complete</span>
+    {{ if .WaitingOnDependencies }}<strong>Waiting on dependencies</strong>{{ end }}
+  </div>
+  {{ end }}
 </article>
 {{ end }}
 <!doctype html>
@@ -61,15 +67,21 @@
     .task-card p { display: -webkit-box; max-height: calc(1.36em * 6); overflow: hidden; margin: 0; color: #56647a; font-size: .8rem; line-height: 1.36; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 6; }
     .labels { display: flex; flex-wrap: wrap; gap: .25rem; margin-top: .65rem; }
     .label { max-width: 100%; overflow: hidden; padding: .14rem .28rem; border: 1px solid #d5deea; border-radius: 3px; color: #4e5d73; font-size: .64rem; text-overflow: ellipsis; white-space: nowrap; }
+    .dependency-progress { display: grid; gap: .18rem; margin-top: .65rem; color: #4e5d73; font-size: .72rem; }
+    .dependency-progress strong { color: #9c2f25; font-size: .72rem; }
     .drop-marker { height: 0; margin: -.1rem 0; border-top: 3px solid #2457d6; border-radius: 3px; pointer-events: none; }
-    .task-route { display: flex; flex-direction: column; min-height: 100%; max-width: 48rem; margin: 0 auto; border: 1px solid #b9c6d8; background: #fff; box-shadow: 0 12px 32px rgba(23,32,51,.08); }
+    .task-route { display: flex; flex-direction: column; height: 100%; min-height: 0; width: min(100%, 84rem); margin: 0 auto; border: 1px solid #b9c6d8; background: #fff; box-shadow: 0 12px 32px rgba(23,32,51,.08); }
     .task-route__header { padding: 1rem 1.15rem; border-top: 3px solid #2457d6; border-bottom: 1px solid #d5deea; background: #f8faff; }
     .task-route__header h2 { margin: .15rem 0 0; font-size: clamp(1.15rem, 3vw, 1.55rem); letter-spacing: -.025em; }
     .task-route__header code { display: block; margin-top: .35rem; color: #526b9b; font-size: .72rem; overflow-wrap: anywhere; }
     .task-route__header .task-id-copy-group { margin-top: .35rem; }
     .task-route__header .task-id-copy code { display: inline; margin-top: 0; }
     .task-route__header .copy-status { top: calc(50% + .1rem); }
-    .task-form { display: grid; flex: 1 1 auto; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: auto minmax(8rem, 1fr) auto auto auto auto; gap: 1rem; min-height: 0; padding: 1.15rem; }
+    .task-layout { display: grid; flex: 1 1 auto; grid-template-columns: minmax(0, 1fr) 20rem; grid-template-rows: minmax(0, 1fr) auto; min-height: 0; }
+    .task-editor { display: grid; grid-template-rows: auto minmax(8rem, 1fr); gap: 1rem; min-width: 0; min-height: 0; padding: 1.15rem; }
+    .task-sidebar { min-width: 0; min-height: 0; overflow-y: auto; padding: 1.15rem; border-left: 1px solid #d5deea; background: #fafbfd; }
+    .task-properties { display: grid; gap: .85rem; }
+    .task-actions { display: grid; grid-column: 1 / -1; gap: .75rem; padding: .85rem 1.15rem 1.15rem; border-top: 1px solid #d5deea; }
     .field { display: grid; gap: .35rem; }
     .field--wide { grid-column: 1 / -1; }
     .field--description { grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
@@ -78,8 +90,9 @@
     .field textarea { min-height: 8rem; resize: vertical; line-height: 1.45; }
     .field--description textarea { height: 100%; min-height: 0; overflow-y: auto; resize: none; }
     .field input:focus, .field textarea:focus, .field select:focus { border-color: #2457d6; outline: 3px solid rgba(36,87,214,.18); }
-    .form-status { grid-column: 1 / -1; min-height: 1.35rem; margin: 0; color: #9c2f25; font-size: .82rem; }
-    .form-actions { display: flex; align-items: center; gap: .85rem; grid-column: 1 / -1; padding-top: .1rem; }
+    .form-status { min-height: 1.35rem; margin: 0; color: #9c2f25; font-size: .82rem; }
+    .form-actions { display: flex; align-items: center; justify-content: space-between; gap: .85rem; width: 100%; padding-top: .1rem; }
+    .form-primary-actions { display: flex; align-items: center; gap: .85rem; }
     .form-danger { margin-left: auto; }
     .save-button { border: 1px solid #173f9e; border-radius: 4px; background: #2457d6; color: #fff; cursor: pointer; font: inherit; font-size: .86rem; font-weight: 750; padding: .62rem .95rem; }
     .save-button:hover { background: #1d49b7; }
@@ -96,9 +109,64 @@
     .deleted-card { border: 1px solid #b9c6d8; border-radius: 4px; background: #fff; padding: .8rem; }
     .deleted-card__meta { display: flex; align-items: center; justify-content: space-between; gap: .5rem; color: #526075; font-size: .7rem; }
     .deleted-card__description { display: -webkit-box; overflow: hidden; margin: .5rem 0 .75rem; color: #56647a; font-size: .82rem; line-height: 1.36; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+    .task-relationships { display: grid; gap: 1rem; padding: 1rem 0 0; }
+    .relationship-group { border-top: 1px solid #d5deea; padding-top: 1rem; }
+    .relationship-group h3 { margin: 0; font-size: .88rem; }
+    .relationship-list { display: grid; gap: .55rem; margin: .75rem 0; }
+    .relationship-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .35rem .75rem; border: 1px solid #d5deea; border-radius: 4px; padding: .7rem; }
+    .relationship-row h4, .relationship-row p { margin: 0; }
+    .relationship-row h4 { font-size: .84rem; overflow-wrap: anywhere; }
+    .relationship-row h4 a { color: #172033; text-decoration-color: #a9b7ca; text-underline-offset: .16em; }
+    .relationship-row h4 a:hover { color: #2457d6; text-decoration-color: currentcolor; }
+    .relationship-row__metadata, .relationship-row__note { color: #56647a; font-size: .75rem; overflow-wrap: anywhere; }
+    .relationship-remove { align-self: center; grid-column: 2; grid-row: 1 / span 2; }
+    .relationship-state { color: #9c2f25; font-size: .75rem; }
+    .relationship-editor { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .4rem .55rem; align-items: end; }
+    .relationship-editor label { grid-column: 1 / -1; color: #34425a; font-size: .75rem; font-weight: 750; }
+    .relationship-editor input { min-width: 0; width: 100%; border: 1px solid #9eafc5; border-radius: 4px; background: #fff; color: #172033; font: inherit; padding: .55rem .62rem; }
+    .relationship-editor input:focus { border-color: #2457d6; outline: 3px solid rgba(36,87,214,.18); }
+    .relationship-editor button { border: 1px solid #173f9e; border-radius: 4px; background: #2457d6; color: #fff; cursor: pointer; font: inherit; font-size: .78rem; font-weight: 750; padding: .58rem .75rem; }
+    .relationship-editor button:disabled { cursor: default; opacity: .52; }
+    .relationship-listbox { position: fixed; z-index: 20; max-height: 18rem; overflow-y: auto; border: 1px solid #9eafc5; border-radius: 4px; background: #fff; box-shadow: 0 8px 20px rgba(23,32,51,.12); }
+    .relationship-listbox[hidden] { display: none; }
+    .relationship-row--compact { grid-template-columns: minmax(0, 1fr) auto; gap: .22rem .45rem; padding: .48rem 0; border: 0; border-top: 1px solid #e1e7f0; border-radius: 0; }
+    .relationship-option { display: grid; gap: .18rem; padding: .55rem .62rem; border-bottom: 1px solid #e1e7f0; cursor: pointer; }
+    .relationship-option:last-child { border-bottom: 0; }
+    .relationship-option[aria-selected="true"], .relationship-option.is-active { background: #edf3ff; }
+    .relationship-option strong { font-size: .8rem; }
+    .relationship-option span { color: #56647a; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .68rem; overflow-wrap: anywhere; }
+    .relationship-empty { grid-column: 1 / -1; min-height: 1rem; margin: 0; color: #56647a; font-size: .75rem; }
+    .relationship-message { min-height: 1rem; margin: .45rem 0 0; color: #9c2f25; font-size: .78rem; }
     @media (prefers-reduced-motion: no-preference) { .task-list { transition: opacity 120ms ease; } }
     @media (max-width: 900px) { .app-header { align-items: start; flex-direction: column; } .updated { text-align: left; } .board { grid-template-columns: repeat(6, minmax(min(18rem, calc(100vw - 2.5rem)), 1fr)); } .column { min-width: min(18rem, calc(100vw - 2.5rem)); } }
-    @media (max-width: 560px) { .task-form { grid-template-columns: 1fr; } .field--wide { grid-column: auto; } }
+    @media (min-width: 761px) {
+      .task-sidebar { padding: .9rem 1rem; }
+      .task-properties { gap: .55rem; }
+      .task-properties h3 { margin: 0 0 .15rem; }
+      .task-properties .field { grid-template-columns: 4.5rem minmax(0, 1fr); align-items: center; gap: .45rem; }
+      .task-properties .field input, .task-properties .field select { padding: .5rem .58rem; }
+      .task-relationships { gap: .65rem; padding-top: .7rem; }
+      .relationship-group { padding-top: .7rem; }
+      .relationship-list { gap: .35rem; margin: .45rem 0; }
+      .relationship-editor { gap: .3rem .45rem; }
+      .relationship-editor input { padding: .45rem .55rem; }
+      .relationship-editor button { padding: .48rem .62rem; }
+      .relationship-message { min-height: .75rem; margin-top: .25rem; }
+    }
+    @media (min-width: 761px) and (max-height: 700px) {
+      .task-route { height: auto; min-height: 100%; }
+      .task-layout { grid-template-rows: auto auto; }
+      .task-editor { align-self: start; height: calc(100dvh - 20rem); min-height: 17rem; max-height: 24rem; }
+      .task-sidebar { overflow-y: visible; }
+    }
+    @media (max-width: 760px) {
+      .task-route { height: auto; min-height: 100%; }
+      .task-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto; }
+      .task-editor { grid-template-rows: auto auto; }
+      .task-sidebar { overflow-y: visible; border-top: 1px solid #d5deea; border-left: 0; }
+      .task-actions { grid-column: 1; }
+      .field--description textarea { min-height: 12rem; }
+    }
   </style>
 </head>
 <body>
@@ -149,6 +217,16 @@
       let latestTasks = [];
       let tasksLoaded = false;
       let taskLoadFailed = false;
+      let latestDeletedTasks = [];
+      let activeDependencyController = null;
+      let taskRefreshGeneration = 0;
+      let relationshipRefreshGeneration = 0;
+      let currentTaskRefresh = null;
+      let pendingDetailRelationshipContextTaskID = null;
+      const pendingRelationshipDrafts = new Map();
+      const pendingTaskMessages = new Map();
+      let createdTaskRecovery = null;
+      let pendingRelationshipRecoveryFocus = null;
 
       function text(element, value) { element.textContent = value || ""; return element; }
       function taskIDCopyControl(taskID, visibleID) {
@@ -220,16 +298,30 @@
           );
         }
       }
-      function card(task, idPrefix) {
-        const article = document.createElement("article"); article.className = "task-card"; article.tabIndex = 0; article.dataset.taskId = task.id; article.dataset.priority = task.priority; article.dataset.idPrefix = idPrefix; article.draggable = true; article.setAttribute("aria-label", "Move task " + task.title + " from " + task.status);
+      function card(task, view) {
+        const article = document.createElement("article"); article.className = "task-card"; article.tabIndex = 0; article.dataset.taskId = task.id; article.dataset.priority = task.priority; article.dataset.idPrefix = view.idPrefix; article.draggable = true; article.setAttribute("aria-label", "Move task " + task.title + " from " + task.status);
         const meta = document.createElement("div"); meta.className = "task-card__meta";
         const priority = document.createElement("span"); priority.className = "priority priority--" + task.priority; text(priority, task.priority);
-        meta.append(taskIDCopyControl(task.id, idPrefix), priority); article.append(meta);
+        meta.append(taskIDCopyControl(task.id, view.idPrefix), priority); article.append(meta);
         const title = document.createElement("h3");
         const link = document.createElement("a"); link.href = "/tasks/" + encodeURIComponent(task.id); text(link, task.title);
         title.append(link); article.append(title);
         if (task.description) { const description = document.createElement("p"); text(description, task.description); article.append(description); }
         if (task.labels && task.labels.length) { const labels = document.createElement("div"); labels.className = "labels"; task.labels.forEach((label) => { const item = document.createElement("span"); item.className = "label"; text(item, label); labels.append(item); }); article.append(labels); }
+        if (view.dependenciesTotal > 0) {
+          const progress = document.createElement("div");
+          progress.className = "dependency-progress";
+          progress.dataset.dependencyProgress = "";
+          const count = document.createElement("span");
+          text(count, view.dependenciesComplete + " of " + view.dependenciesTotal + " prerequisites " + "complete");
+          progress.append(count);
+          if (view.waitingOnDependencies) {
+            const waiting = document.createElement("strong");
+            text(waiting, "Waiting on dependencies");
+            progress.append(waiting);
+          }
+          article.append(progress);
+        }
         return article;
       }
       function route(url = new URL(window.location.href)) {
@@ -264,8 +356,628 @@
         });
         return control;
       }
+      async function refreshDeletedTasks() {
+        const response = await fetch("/api/tasks?deleted=true", { cache: "no-store" });
+        const document = await response.json();
+        if (!response.ok || document.format !== "workbook.tasks" || document.version !== 1 || !Array.isArray(document.tasks)) {
+          throw new Error(document.error && document.error.message || "Deleted task data could not be loaded.");
+        }
+        return document.tasks;
+      }
+      async function refreshRelationshipContext(controller, generation) {
+        try {
+          const deletedTasks = await refreshDeletedTasks();
+          if (generation !== relationshipRefreshGeneration || activeDependencyController !== controller) {
+            return { status: "superseded" };
+          }
+          latestDeletedTasks = deletedTasks;
+          text(controller.status, "");
+          controller.update();
+          return { status: "applied" };
+        } catch (error) {
+          if (generation === relationshipRefreshGeneration && activeDependencyController === controller) {
+            const message = error instanceof Error ? error.message : "Deleted task data could not be loaded.";
+            controller.update();
+            text(controller.status, message);
+            return { status: "failed", message };
+          }
+          return { status: "superseded" };
+        }
+      }
+      function reconciledRelationshipTasks() {
+        const deletedByID = new Map();
+        latestTasks.forEach((task) => {
+          if (task.deleted) deletedByID.set(task.id, task);
+        });
+        latestDeletedTasks.forEach((task) => deletedByID.set(task.id, task));
+        const active = latestTasks.filter((task) => !task.deleted && !deletedByID.has(task.id));
+        return { active, deleted: [...deletedByID.values()] };
+      }
+      function dependencyState(taskID) {
+        const snapshot = reconciledRelationshipTasks();
+        const current = snapshot.active.find((task) => task.id === taskID);
+        if (!current) return null;
+        const known = new Map([...snapshot.active, ...snapshot.deleted].map((task) => [task.id, task]));
+        const dependsOn = (current.dependencies || []).map((id) => ({ id, task: known.get(id) || null, removable: true }));
+        const blocks = [...snapshot.active, ...snapshot.deleted]
+          .filter((task) => task.id !== taskID && (task.dependencies || []).includes(taskID))
+          .map((task) => ({ id: task.id, task, removable: !task.deleted }));
+        return { current, dependsOn, blocks };
+      }
+      function newRelationshipDraftState() {
+        return {
+          dependsOn: new Map(),
+          blocks: new Map()
+        };
+      }
+      function hasRelationshipDrafts(draftState) {
+        return draftState &&
+          (draftState.dependsOn.size > 0 || draftState.blocks.size > 0);
+      }
+      function applyCreatedTaskRecovery(recovery) {
+        if (!recovery) return;
+        if (hasRelationshipDrafts(recovery.failures)) {
+          pendingRelationshipDrafts.set(recovery.taskID, recovery.failures);
+          pendingTaskMessages.set(recovery.taskID, [
+            "Task created, but some relationships were not saved.",
+            ...recovery.warnings
+          ]);
+          pendingRelationshipRecoveryFocus = { taskID: recovery.taskID };
+        } else if (recovery.warnings.length) {
+          pendingTaskMessages.set(recovery.taskID, recovery.warnings);
+        }
+        pendingDetailRelationshipContextTaskID = recovery.taskID;
+      }
+      function focusPendingRelationshipRecovery(taskID, controller, generation) {
+        const request = pendingRelationshipRecoveryFocus;
+        if (!request || request.taskID !== taskID) return;
+        Promise.resolve().then(() => {
+          if (pendingRelationshipRecoveryFocus !== request) return;
+          if (generation !== relationshipRefreshGeneration ||
+              !ownsDependencyController(controller) ||
+              !main.contains(controller.region)) {
+            pendingRelationshipRecoveryFocus = null;
+            return;
+          }
+          const action = controller.recoveryActions[0];
+          pendingRelationshipRecoveryFocus = null;
+          if (action && typeof action.focus === "function") action.focus();
+        });
+      }
+      function showCreatedTaskRefreshFailure(result, retryOperation) {
+        text(result, "Task created durably, but the latest task state could not be refreshed. ");
+        const retry = document.createElement("button");
+        retry.type = "button";
+        retry.className = "save-button";
+        text(retry, "Retry");
+        retry.addEventListener("click", async () => {
+          retry.disabled = true;
+          try {
+            await retryOperation();
+          } finally {
+            retry.disabled = false;
+          }
+        });
+        result.append(retry);
+      }
+      function draftEntry(task) {
+        return {
+          id: task.id,
+          task: {
+            id: task.id,
+            title: task.title,
+            status: task.status,
+            priority: task.priority,
+            deleted: false
+          },
+          error: ""
+        };
+      }
+      function draftRelationshipOperations(taskID, draftState) {
+        const operations = [];
+        draftState.dependsOn.forEach((entry) => {
+          operations.push({
+            direction: "dependsOn",
+            dependentID: taskID,
+            prerequisiteID: entry.id,
+            entry
+          });
+        });
+        draftState.blocks.forEach((entry) => {
+          operations.push({
+            direction: "blocks",
+            dependentID: entry.id,
+            prerequisiteID: taskID,
+            entry
+          });
+        });
+        return operations;
+      }
+      async function persistRelationshipDrafts(taskID, draftState) {
+        const failures = newRelationshipDraftState();
+        const warnings = [];
+        for (const operation of draftRelationshipOperations(taskID, draftState)) {
+          const path = "/api/tasks/" +
+            encodeURIComponent(operation.dependentID) +
+            "/dependencies/" +
+            encodeURIComponent(operation.prerequisiteID);
+          try {
+            const document = await mutateTask("PUT", path);
+            (document.warnings || []).forEach((warning) =>
+              warnings.push(warning.message));
+          } catch (error) {
+            const failed = {
+              ...operation.entry,
+              error: error instanceof Error
+                ? error.message
+                : "Dependency update failed."
+            };
+            failures[operation.direction].set(operation.entry.id, failed);
+          }
+        }
+        return { failures, warnings };
+      }
+      function relationshipCandidates(taskID, direction, draftState = null) {
+        const snapshot = reconciledRelationshipTasks();
+        const activeTasks = snapshot.active;
+        const current = taskID ? activeTasks.find((task) => task.id === taskID) : null;
+        if (taskID && !current) return [];
+        const excluded = new Set();
+        if (taskID) excluded.add(taskID);
+        if (taskID && direction === "depends-on") {
+          (current.dependencies || []).forEach((id) => excluded.add(id));
+        }
+        if (taskID && direction === "blocks") {
+          activeTasks.forEach((task) => {
+            if ((task.dependencies || []).includes(taskID)) excluded.add(task.id);
+          });
+        }
+        if (draftState) {
+          const draftMap = direction === "depends-on"
+            ? draftState.dependsOn
+            : draftState.blocks;
+          draftMap.forEach((_entry, id) => excluded.add(id));
+        }
+        return activeTasks.filter((task) => !excluded.has(task.id));
+      }
+      function relationshipListboxPlacement(anchor, bounds, desiredHeight = 288, gap = 5) {
+        const belowTop = Math.max(bounds.top, anchor.bottom + gap);
+        const aboveBottom = Math.min(bounds.bottom, anchor.top - gap);
+        const belowSpace = Math.max(0, bounds.bottom - belowTop);
+        const aboveSpace = Math.max(0, aboveBottom - bounds.top);
+        const side = belowSpace >= aboveSpace ? "below" : "above";
+        const maxHeight = Math.min(desiredHeight, side === "below" ? belowSpace : aboveSpace);
+        if (side === "below") {
+          return {
+            side,
+            top: belowTop,
+            bottom: belowTop + maxHeight,
+            maxHeight
+          };
+        }
+        return {
+          side,
+          top: aboveBottom - maxHeight,
+          bottom: aboveBottom,
+          maxHeight
+        };
+      }
+      function dependencyCombobox(config) {
+        const state = { query: "", selectedID: "", activeIndex: -1, candidates: [] };
+        const region = document.createElement("div");
+        region.className = "relationship-editor";
+        const label = document.createElement("label");
+        label.htmlFor = config.id + "-input";
+        text(label, config.label);
+        const input = document.createElement("input");
+        input.type = "search";
+        input.id = config.id + "-input";
+        input.setAttribute("role", "combobox");
+        input.setAttribute("aria-autocomplete", "list");
+        input.setAttribute("aria-controls", config.id + "-listbox");
+        input.setAttribute("aria-expanded", "false");
+        const listbox = document.createElement("div");
+        listbox.id = config.id + "-listbox";
+        listbox.className = "relationship-listbox";
+        listbox.setAttribute("role", "listbox");
+        listbox.hidden = true;
+        const empty = document.createElement("p");
+        empty.className = "relationship-empty";
+        empty.setAttribute("role", "status");
+        empty.setAttribute("aria-live", "polite");
+        const add = document.createElement("button");
+        add.type = "button";
+        add.disabled = true;
+        text(add, "Add dependency");
+        region.append(label, input, add, listbox, empty);
+        let tracksPosition = false;
+
+        function positionListbox() {
+          if (listbox.hidden) return;
+          const anchor = input.getBoundingClientRect();
+          const sidebar = region.closest(".task-sidebar");
+          const sidebarRect = sidebar
+            ? sidebar.getBoundingClientRect()
+            : { top: 0, right: window.innerWidth, bottom: window.innerHeight, left: 0 };
+          const bounds = {
+            top: Math.max(8, sidebarRect.top),
+            bottom: Math.min(window.innerHeight - 8, sidebarRect.bottom)
+          };
+          const placement = relationshipListboxPlacement(anchor, bounds);
+          const regionRect = region.getBoundingClientRect();
+          const availableWidth = Math.max(0, window.innerWidth - 16);
+          const width = Math.min(regionRect.width || sidebarRect.width || 320, availableWidth);
+          const left = Math.min(
+            Math.max(8, regionRect.left || sidebarRect.left || 8),
+            window.innerWidth - width - 8
+          );
+          listbox.style.left = left + "px";
+          listbox.style.width = width + "px";
+          listbox.style.maxHeight = placement.maxHeight + "px";
+          if (placement.side === "above") {
+            listbox.style.top = "auto";
+            listbox.style.bottom = (window.innerHeight - placement.bottom) + "px";
+          } else {
+            listbox.style.top = placement.top + "px";
+            listbox.style.bottom = "auto";
+          }
+        }
+        function startPositioning() {
+          if (tracksPosition) return;
+          document.addEventListener("scroll", positionListbox, true);
+          window.addEventListener("resize", positionListbox);
+          tracksPosition = true;
+        }
+        function stopPositioning() {
+          if (!tracksPosition) return;
+          document.removeEventListener("scroll", positionListbox, true);
+          window.removeEventListener("resize", positionListbox);
+          tracksPosition = false;
+        }
+        function showListbox() {
+          input.setAttribute("aria-expanded", "true");
+          listbox.hidden = false;
+          startPositioning();
+          positionListbox();
+        }
+        function hideListbox() {
+          input.setAttribute("aria-expanded", "false");
+          listbox.hidden = true;
+          stopPositioning();
+        }
+
+        function matchingCandidates() {
+          const query = state.query.trim().toLocaleLowerCase();
+          if (!query) return state.candidates;
+          return state.candidates.filter((task) =>
+            task.title.toLocaleLowerCase().includes(query) ||
+            task.id.toLocaleLowerCase().includes(query));
+        }
+        function selectedCandidate() {
+          return state.candidates.find((task) => task.id === state.selectedID) || null;
+        }
+        function selectCandidate(candidate) {
+          if (!candidate) return;
+          state.selectedID = candidate.id;
+          state.query = candidate.title;
+          state.activeIndex = -1;
+          input.value = candidate.title;
+          hideListbox();
+          renderOptions();
+        }
+        function renderOptions() {
+          const options = matchingCandidates();
+          if (state.activeIndex >= options.length) state.activeIndex = options.length - 1;
+          const active = state.activeIndex >= 0 ? options[state.activeIndex] : null;
+          let activeOptionID = "";
+          if (active) {
+            const candidateIndex = state.candidates.findIndex((task) => task.id === active.id);
+            activeOptionID = config.id + "-option-" + candidateIndex;
+            input.setAttribute("aria-activedescendant", activeOptionID);
+          } else {
+            input.removeAttribute("aria-activedescendant");
+          }
+          listbox.replaceChildren(...options.map((task) => {
+            const option = document.createElement("div");
+            const candidateIndex = state.candidates.findIndex((candidate) => candidate.id === task.id);
+            option.id = config.id + "-option-" + candidateIndex;
+            option.className = "relationship-option" + (active && active.id === task.id ? " is-active" : "");
+            option.dataset.candidateId = task.id;
+            option.setAttribute("role", "option");
+            option.setAttribute("aria-selected", String(state.selectedID === task.id));
+            const title = document.createElement("strong");
+            text(title, task.title);
+            const metadata = document.createElement("span");
+            text(metadata, task.status + " · " + task.priority + " · " + task.id);
+            option.append(title, metadata);
+            option.addEventListener("click", () => selectCandidate(task));
+            return option;
+          }));
+          if (activeOptionID && !listbox.hidden) {
+            const activeOption = [...listbox.children].find((option) => option.id === activeOptionID);
+            if (activeOption) activeOption.scrollIntoView({ block: "nearest" });
+          }
+          text(empty, options.length ? "" : "No matching tasks.");
+          add.disabled = config.isBusy() || !selectedCandidate();
+        }
+        input.addEventListener("input", () => {
+          state.query = input.value;
+          state.selectedID = "";
+          state.activeIndex = -1;
+          showListbox();
+          renderOptions();
+        });
+        input.addEventListener("focus", () => {
+          showListbox();
+          renderOptions();
+        });
+        input.addEventListener("keydown", (event) => {
+          const options = matchingCandidates();
+          if (event.key === "ArrowDown") {
+            event.preventDefault();
+            state.activeIndex = Math.min(state.activeIndex + 1, options.length - 1);
+            showListbox();
+          } else if (event.key === "ArrowUp") {
+            event.preventDefault();
+            state.activeIndex = Math.max(state.activeIndex - 1, 0);
+            showListbox();
+          } else if (event.key === "Enter") {
+            event.preventDefault();
+            if (state.activeIndex >= 0) {
+              selectCandidate(options[state.activeIndex]);
+            }
+          } else if (event.key === "Escape") {
+            state.activeIndex = -1;
+            hideListbox();
+          } else {
+            return;
+          }
+          renderOptions();
+        });
+        add.addEventListener("click", () => {
+          if (config.isBusy()) return;
+          const candidate = selectedCandidate();
+          if (candidate) return config.onAdd(candidate.id);
+        });
+
+        const controller = {
+          region, input, listbox, empty, add,
+          setCandidates(candidates) {
+            state.candidates = candidates;
+            if (!selectedCandidate()) state.selectedID = "";
+            state.activeIndex = -1;
+            renderOptions();
+          },
+          setBusy(busy) {
+            input.disabled = busy;
+            renderOptions();
+          },
+          clear() {
+            state.query = "";
+            state.selectedID = "";
+            state.activeIndex = -1;
+            input.value = "";
+            hideListbox();
+            renderOptions();
+          }
+        };
+        return controller;
+      }
+      function relationshipRow(relationship, onRemove, isDraft = false, onRetry = null) {
+        const row = document.createElement("article");
+        row.className = "relationship-row relationship-row--compact";
+        row.dataset.relationshipRow = "";
+        row.dataset.relationshipId = relationship.id;
+        if (isDraft) row.dataset.relationshipDraft = "";
+        const heading = document.createElement("h4");
+        if (relationship.task && !relationship.task.deleted) {
+          const link = document.createElement("a");
+          link.href = "/tasks/" + encodeURIComponent(relationship.id);
+          text(link, relationship.task.title);
+          heading.append(link);
+        } else {
+          text(heading, relationship.task ? relationship.task.title : "Unavailable task");
+        }
+        const metadata = document.createElement("p");
+        metadata.className = "relationship-row__metadata";
+        const metadataParts = [];
+        if (relationship.task) {
+          metadataParts.push(relationship.task.status, relationship.task.priority);
+        }
+        metadataParts.push(relationship.id);
+        text(metadata, metadataParts.join(" · "));
+        row.append(heading, metadata);
+        if (isDraft) {
+          const draft = document.createElement("strong");
+          draft.className = "relationship-state";
+          text(draft, "Not saved");
+          row.append(draft);
+          if (relationship.error) {
+            const error = document.createElement("p");
+            error.className = "relationship-row__note";
+            text(error, relationship.error);
+            row.append(error);
+          }
+        } else if (relationship.task && relationship.task.deleted) {
+          const deleted = document.createElement("strong");
+          deleted.className = "relationship-state";
+          text(deleted, "Deleted");
+          row.append(deleted);
+        }
+        if (isDraft && onRetry) {
+          const retry = document.createElement("button");
+          retry.type = "button";
+          retry.className = "relationship-retry";
+          text(retry, "Retry");
+          retry.addEventListener("click", () => onRetry(relationship));
+          row.append(retry);
+          row.retryButton = retry;
+        }
+        if (isDraft || relationship.removable) {
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.className = "relationship-remove";
+          text(remove, "Remove");
+          remove.addEventListener("click", () => onRemove(relationship));
+          row.append(remove);
+          row.removeButton = remove;
+        } else {
+          const explanation = document.createElement("p");
+          explanation.className = "relationship-row__note";
+          text(explanation, "Read-only because deleted tasks cannot be changed.");
+          row.append(explanation);
+        }
+        return row;
+      }
+      function taskRelationships(taskID, draftState = null) {
+        const region = document.createElement("section");
+        region.className = "task-relationships";
+        region.setAttribute("aria-label", "Task relationships");
+        const status = document.createElement("p");
+        status.className = "form-status";
+        status.setAttribute("role", "status");
+        status.setAttribute("aria-live", "polite");
+        const groups = new Map();
+        let controller;
+        [
+          ["dependsOn", "depends-on", "Depends On", "No prerequisites.", "Find a prerequisite"],
+          ["blocks", "blocks", "Blocks", "No tasks are blocked by this task.", "Find a task to block"]
+        ].forEach(([name, direction, headingText, emptyText, labelText]) => {
+          const group = document.createElement("section");
+          group.className = "relationship-group";
+          const heading = document.createElement("h3");
+          heading.id = "dependency-" + direction + "-heading";
+          text(heading, headingText);
+          const list = document.createElement("div"); list.className = "relationship-list";
+          const message = document.createElement("p");
+          message.className = "relationship-message";
+          message.setAttribute("role", "status");
+          message.setAttribute("aria-live", "polite");
+          const groupController = {
+            group, list, message, emptyText, direction, busy: false, removeButtons: [],
+            setBusy(busy) {
+              this.busy = busy;
+              this.combobox.setBusy(busy);
+              this.removeButtons.forEach((button) => { button.disabled = busy; });
+            },
+            setMessage(value) { text(message, value); }
+          };
+          groupController.combobox = dependencyCombobox({
+            id: "dependency-" + direction,
+            label: labelText,
+            isBusy: () => groupController.busy,
+            onAdd: (selectedID) => {
+              if (controller.busy) return;
+              if (!taskID) {
+                const selectedTask = reconciledRelationshipTasks().active.find((task) => task.id === selectedID);
+                if (!selectedTask) return;
+                const draftMap = direction === "depends-on" ? draftState.dependsOn : draftState.blocks;
+                draftMap.set(selectedID, draftEntry(selectedTask));
+                controller.update();
+                return;
+              }
+              const dependentID = direction === "depends-on" ? taskID : selectedID;
+              const prerequisiteID = direction === "depends-on" ? selectedID : taskID;
+              return mutateRelationship("PUT", dependentID, prerequisiteID, controller, groupController);
+            }
+          });
+          group.append(heading, list, groupController.combobox.region, message);
+          region.append(group);
+          groups.set(name, groupController);
+        });
+        region.append(status);
+        controller = {
+          region, status, groups, taskID, draftState, busy: false, recoveryActions: [],
+          setBusy(busy) {
+            this.busy = busy;
+            groups.forEach((group) => group.setBusy(busy));
+          },
+          update() {
+            this.recoveryActions = [];
+            const state = taskID ? dependencyState(taskID) : { dependsOn: [], blocks: [] };
+            if (taskID && !state) return;
+            [["dependsOn", state.dependsOn], ["blocks", state.blocks]].forEach(([name, persistedRelationships]) => {
+              const group = groups.get(name);
+              const draftMap = draftState ? (name === "dependsOn" ? draftState.dependsOn : draftState.blocks) : null;
+              const persistedIDs = new Set(persistedRelationships.map((relationship) => relationship.id));
+              if (draftMap && taskID && ownsDependencyController(controller)) {
+                persistedIDs.forEach((id) => draftMap.delete(id));
+                if (!hasRelationshipDrafts(draftState)) {
+                  pendingRelationshipDrafts.delete(taskID);
+                }
+              }
+              const relationships = draftMap
+                ? [
+                  ...persistedRelationships,
+                  ...[...draftMap.values()].filter((relationship) => !persistedIDs.has(relationship.id))
+                ]
+                : persistedRelationships;
+              group.combobox.setCandidates(relationshipCandidates(taskID, group.direction, draftState));
+              group.removeButtons = [];
+              if (relationships.length === 0) {
+                const empty = document.createElement("p");
+                empty.className = "relationship-row__note";
+                text(empty, group.emptyText);
+                group.list.replaceChildren(empty);
+                return;
+              }
+              group.list.replaceChildren(...relationships.map((relationship) => {
+                const isDraft = Boolean(
+                  draftMap &&
+                  draftMap.has(relationship.id) &&
+                  !persistedIDs.has(relationship.id)
+                );
+                const retryDraft = isDraft && taskID && relationship.error
+                  ? () => retryRelationshipDraft(
+                    name,
+                    relationship,
+                    draftMap,
+                    controller,
+                    group
+                  )
+                  : null;
+                const row = relationshipRow(relationship, () => {
+                  if (controller.busy) return;
+                  if (isDraft) {
+                    if (taskID && !ownsDependencyController(controller)) return;
+                    draftMap.delete(relationship.id);
+                    if (taskID && !hasRelationshipDrafts(draftState)) {
+                      pendingRelationshipDrafts.delete(taskID);
+                    }
+                    controller.update();
+                    return;
+                  }
+                  const dependentID = name === "dependsOn" ? taskID : relationship.id;
+                  const prerequisiteID = name === "dependsOn" ? relationship.id : taskID;
+                  return mutateRelationship("DELETE", dependentID, prerequisiteID, controller, group);
+                }, isDraft, retryDraft);
+                const remove = row.removeButton;
+                if (remove) {
+                  remove.disabled = group.busy;
+                  group.removeButtons.push(remove);
+                }
+                const retry = row.retryButton;
+                if (retry) {
+                  retry.disabled = group.busy;
+                  group.removeButtons.push(retry);
+                }
+                if (isDraft) {
+                  const recoveryAction = retry || remove;
+                  if (recoveryAction) controller.recoveryActions.push(recoveryAction);
+                }
+                return row;
+              }));
+            });
+          }
+        };
+        controller.update();
+        return controller;
+      }
       function taskForm(mode, task) {
         const isNew = mode === "new";
+        const relationshipDrafts = isNew
+          ? newRelationshipDraftState()
+          : null;
         const section = document.createElement("section"); section.className = "task-route"; section.setAttribute("aria-labelledby", "task-form-title");
         const header = document.createElement("header"); header.className = "task-route__header";
         const eyebrow = document.createElement("p"); eyebrow.className = "eyebrow"; text(eyebrow, isNew ? "New task" : "Task detail");
@@ -275,7 +987,7 @@
           header.append(taskIDCopyControl(task.id, task.id));
         }
 
-        const form = document.createElement("form"); form.className = "task-form";
+        const form = document.createElement("form"); form.className = "task-layout";
         const title = document.createElement("input"); title.id = "task-title"; title.name = "title"; title.required = true; title.value = task.title || "";
         const description = document.createElement("textarea"); description.id = "task-description"; description.name = "description"; description.value = task.description || "";
         const knownStatus = statuses.has(task.status);
@@ -285,10 +997,15 @@
         const priority = select("priority", [["high", "High"], ["medium", "Medium"], ["low", "Low"]], task.priority);
         const labels = document.createElement("input"); labels.id = "task-labels"; labels.name = "labels"; labels.value = (task.labels || []).join(", "); labels.placeholder = "web, docs, release";
         const result = document.createElement("p"); result.className = "form-status"; result.setAttribute("role", "status"); result.setAttribute("aria-live", "polite");
+        if (!isNew && pendingTaskMessages.has(task.id)) {
+          text(result, pendingTaskMessages.get(task.id).join(" "));
+          pendingTaskMessages.delete(task.id);
+        }
         const actions = document.createElement("div"); actions.className = "form-actions";
+        const primaryActions = document.createElement("div"); primaryActions.className = "form-primary-actions";
         const save = document.createElement("button"); save.className = "save-button"; save.type = "submit"; text(save, "Save");
         const back = document.createElement("a"); back.className = "board-link"; back.href = "/"; text(back, "Back");
-        actions.append(save, back);
+        primaryActions.append(save, back); actions.append(primaryActions);
 		if (!isNew) {
 		  const danger = document.createElement("div"); danger.className = "form-danger";
 		  const remove = document.createElement("button"); remove.className = "delete-button"; remove.type = "button"; text(remove, "Delete");
@@ -300,10 +1017,30 @@
 		  });
 		  danger.append(remove); actions.append(danger);
 		}
-        form.append(field("Title", title, true), field("Description", description, true, "field--description"), field("Status", status), field("Priority", priority), field("Labels", labels, true), result, actions);
+        const editor = document.createElement("div"); editor.className = "task-editor";
+        editor.append(
+          field("Title", title, true),
+          field("Description", description, true, "field--description")
+        );
+        const sidebar = document.createElement("aside"); sidebar.className = "task-sidebar"; sidebar.setAttribute("aria-label", "Task properties and relationships");
+        const properties = document.createElement("section"); properties.className = "task-properties";
+        const propertiesHeading = document.createElement("h3"); text(propertiesHeading, "Properties");
+        properties.append(
+          propertiesHeading,
+          field("Status", status),
+          field("Priority", priority),
+          field("Labels", labels, true)
+        );
+        const relationshipMount = document.createElement("div"); relationshipMount.dataset.relationshipMount = "";
+        sidebar.append(properties, relationshipMount);
+        const footer = document.createElement("footer"); footer.className = "task-actions";
+        footer.append(result, actions);
+        form.append(editor, sidebar, footer);
 
+        let taskWasCreated = false;
         form.addEventListener("submit", async (event) => {
           event.preventDefault();
+          if (isNew && taskWasCreated) return;
           const values = {
             title: title.value,
             description: description.value,
@@ -311,31 +1048,200 @@
             priority: priority.value,
             labels: labels.value.split(",").map((label) => label.trim()).filter(Boolean)
           };
+          let createdDurably = false;
           save.disabled = true;
+          if (isNew) relationshipController.setBusy(true);
           text(result, "");
           try {
-            await mutateTask(isNew ? "POST" : "PATCH", isNew ? "/api/tasks" : "/api/tasks/" + encodeURIComponent(task.id), values);
-            navigate("/");
-            await refresh();
+            const document = await mutateTask(isNew ? "POST" : "PATCH", isNew ? "/api/tasks" : "/api/tasks/" + encodeURIComponent(task.id), values);
+            if (isNew) {
+              createdDurably = true;
+              taskWasCreated = true;
+              const taskID = document.task.id;
+              const relationshipOutcome = await persistRelationshipDrafts(
+                taskID,
+                relationshipDrafts
+              );
+              relationshipDrafts.dependsOn.clear();
+              relationshipDrafts.blocks.clear();
+              const recovery = {
+                taskID,
+                failures: relationshipOutcome.failures,
+                warnings: [
+                  ...mutationWarnings(document),
+                  ...relationshipOutcome.warnings
+                ]
+              };
+              createdTaskRecovery = recovery;
+              const creationOwner = {
+                route: section,
+                controller: relationshipController
+              };
+              const ownsCreation = () =>
+                main.firstElementChild === creationOwner.route &&
+                ownsDependencyController(creationOwner.controller) &&
+                createdTaskRecovery === recovery;
+              const abandonDetachedRecovery = () => {
+                if (createdTaskRecovery === recovery) {
+                  createdTaskRecovery = null;
+                }
+              };
+              const retryCreatedTaskRefresh = async () => {
+                const retried = await currentRefreshResult(refresh());
+                if (!ownsCreation()) {
+                  abandonDetachedRecovery();
+                  return;
+                }
+                if (retried.status !== "applied" ||
+                    retried.relationshipContext.status !== "applied") {
+                  return;
+                }
+                applyCreatedTaskRecovery(recovery);
+                const recoveredID = recovery.taskID;
+                createdTaskRecovery = null;
+                navigate("/tasks/" + encodeURIComponent(recoveredID));
+              };
+              const refreshed = await currentRefreshResult(refresh());
+              if (!ownsCreation()) {
+                abandonDetachedRecovery();
+                return;
+              }
+              if (refreshed.status !== "applied" ||
+                  refreshed.relationshipContext.status !== "applied") {
+                showCreatedTaskRefreshFailure(result, retryCreatedTaskRefresh);
+                return;
+              }
+              applyCreatedTaskRecovery(recovery);
+              createdTaskRecovery = null;
+              navigate("/tasks/" + encodeURIComponent(taskID));
+            } else {
+              navigate("/");
+              await refresh();
+            }
           } catch (error) {
-            text(result, error instanceof Error ? error.message : "Task update failed.");
+            if (main.firstElementChild !== section) return;
+            text(result, error instanceof Error
+              ? error.message
+              : isNew ? "Task creation failed." : "Task update failed.");
           } finally {
-            save.disabled = false;
+            if (!createdDurably) {
+              save.disabled = false;
+              if (isNew) relationshipController.setBusy(false);
+            }
           }
         });
         section.append(header, form);
+        const failedDrafts = isNew
+          ? relationshipDrafts
+          : pendingRelationshipDrafts.get(task.id) || null;
+        const relationshipController = taskRelationships(isNew ? "" : task.id, failedDrafts);
+        relationshipMount.append(relationshipController.region);
+        activeDependencyController = relationshipController;
+        if (!isNew && pendingDetailRelationshipContextTaskID === task.id) {
+          pendingDetailRelationshipContextTaskID = null;
+        } else {
+          refreshRelationshipContext(
+            relationshipController,
+            ++relationshipRefreshGeneration
+          );
+        }
         return section;
       }
       async function mutateTask(method, path, values) {
-        const response = await fetch(path, {
-          method, headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(values),
-        });
+        const options = { method };
+        if (values !== undefined) {
+          options.headers = { "Content-Type": "application/json" };
+          options.body = JSON.stringify(values);
+        }
+        const response = await fetch(path, options);
         const document = await response.json();
-        if (!response.ok || document.format !== "workbook.task-mutation" || document.version !== 1) {
+        if (!response.ok || document.format !== "workbook.task-mutation" ||
+            document.version !== 1 || !document.task) {
           throw new Error(document.error && document.error.message || "Task update failed.");
         }
-        return document.task;
+        return document;
+      }
+      function mutationWarnings(document) {
+        return Array.isArray(document.warnings)
+          ? document.warnings.map((warning) => warning.message)
+          : [];
+      }
+      function ownsDependencyController(controller) {
+        return activeDependencyController === controller;
+      }
+      async function retryRelationshipDraft(name, relationship, draftMap, controller, group) {
+        if (!ownsDependencyController(controller)) return;
+        const dependentID = name === "dependsOn" ? controller.taskID : relationship.id;
+        const prerequisiteID = name === "dependsOn" ? relationship.id : controller.taskID;
+        const path = "/api/tasks/" + encodeURIComponent(dependentID) +
+          "/dependencies/" + encodeURIComponent(prerequisiteID);
+        group.setBusy(true);
+        group.setMessage("");
+        try {
+          const document = await mutateTask("PUT", path);
+          const refreshed = await currentRefreshResult(refresh());
+          if (!ownsDependencyController(controller)) return;
+          draftMap.delete(relationship.id);
+          if (!hasRelationshipDrafts(controller.draftState)) {
+            pendingRelationshipDrafts.delete(controller.taskID);
+          }
+          if (refreshed.status === "superseded") return;
+          if (refreshed.status === "failed") {
+            controller.update();
+            group.setMessage("The dependency was saved durably, but the latest task state could not be refreshed.");
+            return;
+          }
+          controller.update();
+          const warnings = mutationWarnings(document);
+          if (warnings.length) {
+            group.setMessage("Dependency saved durably. " + warnings.join(" "));
+          }
+        } catch (error) {
+          await refresh();
+          if (!ownsDependencyController(controller)) return;
+          relationship.error = error instanceof Error
+            ? error.message
+            : "Dependency update failed.";
+          controller.update();
+          group.setMessage(relationship.error);
+        } finally {
+          group.setBusy(false);
+        }
+      }
+      async function mutateRelationship(method, dependentID, prerequisiteID, controller, group) {
+        const path = "/api/tasks/" + encodeURIComponent(dependentID) +
+          "/dependencies/" + encodeURIComponent(prerequisiteID);
+        group.setBusy(true);
+        group.setMessage("");
+        try {
+          const document = await mutateTask(method, path);
+          const messages = [];
+          const warnings = Array.isArray(document.warnings) ? document.warnings : [];
+          if (warnings.length) {
+            messages.push("Dependency saved durably. " +
+              warnings.map((warning) => warning.message).join(" "));
+          }
+          const refreshed = await currentRefreshResult(refresh());
+          if (!ownsDependencyController(controller)) return;
+          if (refreshed.status === "superseded") return;
+          if (refreshed.status === "failed") {
+            messages.push("The dependency was saved durably, but the latest task state could not be refreshed.");
+            group.setMessage(messages.join(" "));
+            return;
+          }
+          if (refreshed.relationshipContext.status === "failed") {
+            messages.push(refreshed.relationshipContext.message);
+          }
+          controller.update();
+          if (method === "PUT") group.combobox.clear();
+          group.setMessage(messages.join(" "));
+        } catch (error) {
+          await refresh();
+          if (!ownsDependencyController(controller)) return;
+          group.setMessage(error instanceof Error ? error.message : "Dependency update failed.");
+        } finally {
+          group.setBusy(false);
+        }
       }
       function routeMessage(titleText, message, retryable = false) {
         const section = document.createElement("section"); section.className = "task-route"; section.setAttribute("aria-labelledby", "route-message-title");
@@ -368,7 +1274,7 @@
 		    const title = document.createElement("h3"); text(title, task.title);
 		    const description = document.createElement("p"); description.className = "deleted-card__description"; text(description, task.description || "No description.");
 		    const restore = document.createElement("button"); restore.className = "save-button"; restore.type = "button"; text(restore, "Restore");
-		    restore.addEventListener("click", async () => { restore.disabled = true; try { await mutateTask("POST", "/api/tasks/" + encodeURIComponent(task.id) + "/restore"); await refresh(); navigate("/tasks/" + encodeURIComponent(task.id)); } catch (error) { text(description, error instanceof Error ? error.message : "Task restoration failed."); } finally { restore.disabled = false; } });
+		    restore.addEventListener("click", async () => { restore.disabled = true; try { await mutateTask("POST", "/api/tasks/" + encodeURIComponent(task.id) + "/restore"); const refreshed = await currentRefreshResult(refresh()); if (refreshed.status !== "applied") throw new Error("Task restored durably, but the latest task state could not be refreshed."); navigate("/tasks/" + encodeURIComponent(task.id)); } catch (error) { text(description, error instanceof Error ? error.message : "Task restoration failed."); } finally { restore.disabled = false; } });
 		    row.append(meta, title, description, restore); body.append(row);
 		  });
 		}).catch((error) => { const failed = document.createElement("p"); text(failed, error instanceof Error ? error.message : "Deleted tasks could not be loaded."); body.prepend(failed); });
@@ -376,6 +1282,9 @@
 	  }
       function renderRoute() {
         const current = route();
+        if (current.view !== "detail" && current.view !== "new") {
+          activeDependencyController = null;
+        }
         if (current.view === "board") {
           document.title = "Workbook board";
           if (main.firstElementChild !== boardView) main.replaceChildren(boardView);
@@ -413,7 +1322,15 @@
           return;
         }
         document.title = task.title + " · Workbook";
-        main.replaceChildren(taskForm("detail", task));
+        const detail = taskForm("detail", task);
+        const controller = activeDependencyController;
+        const relationshipGeneration = relationshipRefreshGeneration;
+        main.replaceChildren(detail);
+        focusPendingRelationshipRecovery(
+          task.id,
+          controller,
+          relationshipGeneration
+        );
       }
       function dropTarget(event) {
         return event.target.closest("[data-drop-status]");
@@ -479,26 +1396,52 @@
           text(counts.get(status), String(items.length));
         });
       }
-      async function refresh() {
-        const wasLoaded = tasksLoaded;
-        try {
-          const response = await fetch("/api/tasks", { cache: "no-store" });
-          const document = await response.json();
-          if (!response.ok || document.format !== "workbook.tasks" || document.version !== 1 || !Array.isArray(document.tasks) || !Array.isArray(document.presentation)) throw new Error("invalid task document");
-          const presentation = new Map(document.presentation.map((view) => [view.taskId, view.idPrefix]));
-          if (presentation.size !== document.tasks.length || document.tasks.some((task) => !presentation.has(task.id))) throw new Error("invalid task presentation");
-          latestTasks = document.tasks;
-          tasksLoaded = true;
-          taskLoadFailed = false;
-          render(document.tasks, presentation); stale.dataset.visible = "false"; text(updated, "Updated " + new Date().toLocaleTimeString());
-          if (!wasLoaded) renderRoute();
-        } catch (_) {
-          text(stale, "Task refresh failed. Showing the last successful board."); stale.dataset.visible = "true";
-          if (!tasksLoaded) {
-            taskLoadFailed = true;
-            renderRoute();
-          }
+      async function currentRefreshResult(operation) {
+        let owner = operation;
+        let result = await owner;
+        while (result.status === "superseded") {
+          if (!currentTaskRefresh || currentTaskRefresh === owner) return result;
+          owner = currentTaskRefresh;
+          result = await owner;
         }
+        return result;
+      }
+      function refresh() {
+        const wasLoaded = tasksLoaded;
+        const generation = ++taskRefreshGeneration;
+        const operation = (async () => {
+          try {
+            const response = await fetch("/api/tasks", { cache: "no-store" });
+            const document = await response.json();
+            if (!response.ok || document.format !== "workbook.tasks" || document.version !== 1 || !Array.isArray(document.tasks) || !Array.isArray(document.presentation)) throw new Error("invalid task document");
+            const presentation = new Map(document.presentation.map((view) => [view.taskId, view]));
+            if (presentation.size !== document.tasks.length || document.tasks.some((task) => !presentation.has(task.id))) throw new Error("invalid task presentation");
+            if (generation !== taskRefreshGeneration) return { status: "superseded" };
+            latestTasks = document.tasks;
+            tasksLoaded = true;
+            taskLoadFailed = false;
+            render(document.tasks, presentation); stale.dataset.visible = "false"; text(updated, "Updated " + new Date().toLocaleTimeString());
+            let relationshipContext = { status: "not-applicable" };
+            if (!wasLoaded) renderRoute();
+            else if (activeDependencyController) {
+              const controller = activeDependencyController;
+              controller.update();
+              relationshipContext = await refreshRelationshipContext(controller, ++relationshipRefreshGeneration);
+              if (relationshipContext.status === "superseded") return { status: "superseded" };
+            }
+            return { status: "applied", relationshipContext };
+          } catch (_) {
+            if (generation !== taskRefreshGeneration) return { status: "superseded" };
+            text(stale, "Task refresh failed. Showing the last successful board."); stale.dataset.visible = "true";
+            if (!tasksLoaded) {
+              taskLoadFailed = true;
+              renderRoute();
+            }
+            return { status: "failed" };
+          }
+        })();
+        currentTaskRefresh = operation;
+        return operation;
       }
       window.addEventListener("popstate", renderRoute);
       document.addEventListener("click", async (event) => {

@@ -7,8 +7,11 @@ import (
 )
 
 type TaskView struct {
-	Task     core.Task
-	IDPrefix string
+	Task                  core.Task
+	IDPrefix              string
+	DependenciesComplete  int
+	DependenciesTotal     int
+	WaitingOnDependencies bool
 }
 
 type Column struct {
@@ -23,11 +26,28 @@ type Board struct {
 }
 
 func TaskViews(tasks []core.Task) []TaskView {
+	active := make(map[string]core.Task, len(tasks))
+	for _, task := range tasks {
+		if !task.Deleted {
+			active[task.ID] = task
+		}
+	}
 	views := make([]TaskView, len(tasks))
 	for i, task := range tasks {
+		complete := 0
+		for _, dependencyID := range task.Dependencies {
+			if dependency, ok := active[dependencyID]; ok &&
+				dependency.Status == core.StatusDone {
+				complete++
+			}
+		}
+		total := len(task.Dependencies)
 		views[i] = TaskView{
-			Task:     task,
-			IDPrefix: shortestUniquePrefix(i, tasks),
+			Task:                  task,
+			IDPrefix:              shortestUniquePrefix(i, tasks),
+			DependenciesComplete:  complete,
+			DependenciesTotal:     total,
+			WaitingOnDependencies: task.Status == core.StatusReady && complete < total,
 		}
 	}
 	return views

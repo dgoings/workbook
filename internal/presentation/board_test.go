@@ -99,6 +99,64 @@ func TestTaskViewsUseShortestActionableUniquePrefixes(t *testing.T) {
 	}
 }
 
+func TestTaskViewsSummarizeDependencyReadiness(t *testing.T) {
+	done := core.Task{
+		ID:       "WB-01ARZ3NDEKTSV4RRFFQ69G5FAV",
+		TaskData: core.TaskData{Status: core.StatusDone},
+	}
+	active := core.Task{
+		ID:       "WB-01BRZ3NDEKTSV4RRFFQ69G5FAW",
+		TaskData: core.TaskData{Status: core.StatusInProgress},
+	}
+	ready := core.Task{
+		ID: "WB-01CRZ3NDEKTSV4RRFFQ69G5FAX",
+		TaskData: core.TaskData{
+			Status: core.StatusReady,
+			Dependencies: []string{
+				done.ID,
+				active.ID,
+				"WB-01DRZ3NDEKTSV4RRFFQ69G5FAY",
+			},
+		},
+	}
+	inReview := ready
+	inReview.ID = "WB-01ERZ3NDEKTSV4RRFFQ69G5FAZ"
+	inReview.Status = core.StatusInReview
+	withoutDependencies := core.Task{
+		ID:       "WB-01FRZ3NDEKTSV4RRFFQ69G5FA0",
+		TaskData: core.TaskData{Status: core.StatusReady},
+	}
+	tombstonedDone := core.Task{
+		ID:       "WB-01GRZ3NDEKTSV4RRFFQ69G5FA1",
+		TaskData: core.TaskData{Status: core.StatusDone, Deleted: true},
+	}
+	readyDependingOnTombstonedDone := core.Task{
+		ID: "WB-01HRZ3NDEKTSV4RRFFQ69G5FA2",
+		TaskData: core.TaskData{
+			Status:       core.StatusReady,
+			Dependencies: []string{tombstonedDone.ID},
+		},
+	}
+
+	views := TaskViews([]core.Task{done, active, ready, inReview, withoutDependencies, tombstonedDone, readyDependingOnTombstonedDone})
+	if got := views[2]; got.DependenciesComplete != 1 ||
+		got.DependenciesTotal != 3 || !got.WaitingOnDependencies {
+		t.Fatalf("ready dependency summary = %#v, want 1/3 waiting", got)
+	}
+	if got := views[3]; got.DependenciesComplete != 1 ||
+		got.DependenciesTotal != 3 || got.WaitingOnDependencies {
+		t.Fatalf("in-review dependency summary = %#v, want 1/3 not waiting", got)
+	}
+	if got := views[4]; got.DependenciesComplete != 0 ||
+		got.DependenciesTotal != 0 || got.WaitingOnDependencies {
+		t.Fatalf("dependency-free summary = %#v, want zero values", got)
+	}
+	if got := views[6]; got.DependenciesComplete != 0 ||
+		got.DependenciesTotal != 1 || !got.WaitingOnDependencies {
+		t.Fatalf("tombstoned Done dependency summary = %#v, want 0/1 waiting", got)
+	}
+}
+
 func TestNewBoardPreservesInputOrderAndIncludesEmptyColumns(t *testing.T) {
 	tasks := []core.Task{
 		{ID: "WB-01ARZ3NDEKTSV4RRFFQ69G5FAV", TaskData: core.TaskData{Status: core.StatusDone}},

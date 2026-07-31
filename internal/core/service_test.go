@@ -1002,6 +1002,35 @@ func TestServiceFreeRemovesExistingDependencyAndIsIdempotentWhenAbsent(t *testin
 	}
 }
 
+func TestServiceFreeRemovesStoredDependencyWhenReferencedTaskIsUnavailable(t *testing.T) {
+	dependency := "WB-01K0M6B8A4FTT8C39MXXYTW7E2"
+	dependent := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E1", TaskData{
+		Title: "dependent", Status: StatusReady, Priority: PriorityHigh,
+		Rank: "1/1", Dependencies: []string{dependency},
+	})
+	store := newMemoryTaskStore(dependent)
+	service := serviceUnderTest(store, &sequenceIDSource{
+		values: []string{"01K0M6B8A4FTT8C39MXXYTW7E3"},
+	})
+
+	result, err := service.FreeMutation(context.Background(), dependent.State.TaskID, dependency)
+	if err != nil {
+		t.Fatalf("FreeMutation() error = %v", err)
+	}
+	if got, want := result.Task.Dependencies, []string{}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("FreeMutation() dependencies = %#v, want %#v", got, want)
+	}
+	if got, want := len(store.writes), 1; got != want {
+		t.Fatalf("FreeMutation() writes = %d, want %d", got, want)
+	}
+	assertOperations(t, store.writes[0].pack.Operations, []Operation{{
+		ID:    "01K0M6B8A4FTT8C39MXXYTW7E3",
+		Type:  OperationSetRemove,
+		Field: "dependencies",
+		Value: dependency,
+	}})
+}
+
 func TestServiceDependRejectsCycleInActiveGraphWithoutWriting(t *testing.T) {
 	a := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E1", TaskData{Title: "a", Status: StatusReady, Priority: PriorityHigh, Rank: "1/1", Dependencies: []string{"WB-01K0M6B8A4FTT8C39MXXYTW7E2"}})
 	b := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E2", TaskData{Title: "b", Status: StatusReady, Priority: PriorityHigh, Rank: "2/1", Dependencies: []string{"WB-01K0M6B8A4FTT8C39MXXYTW7E3"}})

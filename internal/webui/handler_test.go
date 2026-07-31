@@ -39,6 +39,8 @@ func TestHandlerServesBoardTasksAndHealth(t *testing.T) {
 		`data-status="done"`,
 		"Ready task",
 		"Task refresh failed",
+		"1 of 2 prerequisites complete",
+		"Waiting on dependencies",
 	} {
 		if !strings.Contains(board.Body.String(), fragment) {
 			t.Errorf("GET / body does not contain %q", fragment)
@@ -71,6 +73,13 @@ func TestHandlerServesBoardTasksAndHealth(t *testing.T) {
 	}
 	if !reflect.DeepEqual(document.Tasks, tasks) {
 		t.Fatalf("task document tasks = %#v, want %#v", document.Tasks, tasks)
+	}
+	if got := document.Presentation[0]; got.DependenciesComplete != 1 ||
+		got.DependenciesTotal != 2 || !got.WaitingOnDependencies {
+		t.Fatalf("task presentation = %#v, want 1/2 waiting", got)
+	}
+	if strings.Count(board.Body.String(), "prerequisites complete") != 1 {
+		t.Fatal("dependency-free cards changed their rendered content")
 	}
 
 	health := request(t, handler, http.MethodGet, "/healthz")
@@ -172,6 +181,8 @@ func TestHandlerDeletesRestoresAndListsTombstonedTasks(t *testing.T) {
 			deleted.Deleted = false
 			return core.MutationResult{Task: deleted}, nil
 		},
+		nil,
+		nil,
 	)
 
 	deletedResponse := request(t, handler, http.MethodGet, "/api/tasks?deleted=true")
@@ -193,6 +204,374 @@ func TestHandlerDeletesRestoresAndListsTombstonedTasks(t *testing.T) {
 	restoreResponse := request(t, handler, http.MethodPost, "/api/tasks/"+deleted.ID+"/restore")
 	if restoreResponse.Code != http.StatusOK || restoredID != deleted.ID {
 		t.Fatalf("POST restore status/id = %d/%q, want %d/%q", restoreResponse.Code, restoredID, http.StatusOK, deleted.ID)
+	}
+}
+
+func TestHandlerClientRestoreFollowsSupersedingRefreshBeforeNavigation(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	deleted := clientPlacementTask("WB-01J00000000000000000000060", "Restored task", core.StatusReady, core.PriorityMedium)
+	deleted.Description = "Restore me without racing the task refresh."
+	deleted.Deleted = true
+	restored := deleted
+	restored.Deleted = false
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return nil, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/deleted")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /deleted status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	documentJSON := func(tasks []core.Task) string {
+		t.Helper()
+		document, err := json.Marshal(TasksDocument{
+			Format:       "workbook.tasks",
+			Version:      1,
+			Tasks:        tasks,
+			Presentation: presentationForTasks(tasks),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(document)
+	}
+	deletedDocument, err := json.Marshal(TasksDocument{
+		Format:  "workbook.tasks",
+		Version: 1,
+		Tasks:   []core.Task{deleted},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/deleted", documentJSON(nil)) + script + `
+deletedTaskResponse = ` + string(deletedDocument) + `;
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const restore = findElement(main, (element) =>
+    element.tagName === "BUTTON" && element.textContent === "Restore");
+  if (!restore) throw new Error("deleted task Restore button did not render");
+
+  let resolveRestoreRefresh;
+  let resolveWinningRefresh;
+  let activeGets = 0;
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if ((options.method || "GET") !== "GET") {
+      return {
+        ok: true,
+        json: async () => ({
+          format: "workbook.task-mutation",
+          version: 1,
+          task: (` + documentJSON([]core.Task{restored}) + `).tasks[0]
+        })
+      };
+    }
+    if (url === "/api/tasks?deleted=true") {
+      return { ok: true, json: async () => deletedTaskResponse };
+    }
+    activeGets += 1;
+    if (activeGets === 1) {
+      return {
+        ok: true,
+        json: async () => new Promise((resolve) => { resolveRestoreRefresh = resolve; })
+      };
+    }
+    return {
+      ok: true,
+      json: async () => new Promise((resolve) => { resolveWinningRefresh = resolve; })
+    };
+  };
+
+  const restoration = restore.eventListeners.click();
+  while (!resolveRestoreRefresh) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  const winningPoll = intervalCallback();
+  while (!resolveWinningRefresh) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  resolveRestoreRefresh(` + documentJSON(nil) + `);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  if (historyPaths.length !== 0) {
+    throw new Error("restore navigated before the superseding refresh populated the restored task");
+  }
+
+  resolveWinningRefresh(` + documentJSON([]core.Task{restored}) + `);
+  await winningPoll;
+  await restoration;
+  const wantPath = "/tasks/" + encodeURIComponent(` + strconv.Quote(restored.ID) + `);
+  if (historyPaths.length !== 1 || historyPaths[0] !== wantPath) {
+    throw new Error("restore navigation = " + JSON.stringify(historyPaths) + ", want " + wantPath);
+  }
+  const title = findElement(main, (element) => element.id === "task-title");
+  if (!title || title.value !== ` + strconv.Quote(restored.Title) + `) {
+    throw new Error("restored detail form did not render after the winning refresh");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute superseding restore refresh behavior: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerAddsAndRemovesTaskDependencies(t *testing.T) {
+	dependent := boardTasks()[0]
+	prerequisite := boardTasks()[1]
+	var calls []string
+	warning := core.Warning{Code: core.WarningProjectionUpdate, Message: "cache update failed"}
+	handler := NewHandlerWithTaskMutations(
+		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
+		unexpectedTaskPosition(t), nil, nil,
+		func(_ context.Context, id, dependency string) (core.MutationResult, error) {
+			calls = append(calls, "add:"+id+":"+dependency)
+			return core.MutationResult{Task: dependent, Warnings: []core.Warning{warning}}, nil
+		},
+		func(_ context.Context, id, dependency string) (core.MutationResult, error) {
+			calls = append(calls, "remove:"+id+":"+dependency)
+			return core.MutationResult{Task: dependent}, nil
+		},
+	)
+	path := "/api/tasks/" + dependent.ID + "/dependencies/" + prerequisite.ID
+
+	add := request(t, handler, http.MethodPut, path)
+	if add.Code != http.StatusOK {
+		t.Fatalf("PUT dependency status = %d; body = %s", add.Code, add.Body.String())
+	}
+	var addDocument TaskMutationDocument
+	if err := json.Unmarshal(add.Body.Bytes(), &addDocument); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(addDocument.Warnings, []core.Warning{warning}) {
+		t.Fatalf("PUT warnings = %#v, want warning", addDocument.Warnings)
+	}
+
+	remove := request(t, handler, http.MethodDelete, path)
+	if remove.Code != http.StatusOK {
+		t.Fatalf("DELETE dependency status = %d; body = %s", remove.Code, remove.Body.String())
+	}
+	wantCalls := []string{
+		"add:" + dependent.ID + ":" + prerequisite.ID,
+		"remove:" + dependent.ID + ":" + prerequisite.ID,
+	}
+	if !reflect.DeepEqual(calls, wantCalls) {
+		t.Fatalf("dependency callbacks = %#v, want %#v", calls, wantCalls)
+	}
+}
+
+func TestHandlerDependencyMutationsRequireEmptyRequestBodies(t *testing.T) {
+	dependent := boardTasks()[0]
+	prerequisite := boardTasks()[1]
+	dependencyCalls := 0
+	handler := NewHandlerWithTaskMutations(
+		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
+		unexpectedTaskPosition(t), nil, nil,
+		func(context.Context, string, string) (core.MutationResult, error) {
+			dependencyCalls++
+			return core.MutationResult{Task: dependent}, nil
+		},
+		func(context.Context, string, string) (core.MutationResult, error) {
+			dependencyCalls++
+			return core.MutationResult{Task: dependent}, nil
+		},
+	)
+	path := "/api/tasks/" + dependent.ID + "/dependencies/" + prerequisite.ID
+	tests := []struct {
+		name                 string
+		method               string
+		body                 string
+		unknownContentLength bool
+		wantStatus           int
+		wantCalls            int
+	}{
+		{name: "empty PUT", method: http.MethodPut, wantStatus: http.StatusOK, wantCalls: 1},
+		{name: "empty DELETE", method: http.MethodDelete, wantStatus: http.StatusOK, wantCalls: 2},
+		{name: "PUT JSON body", method: http.MethodPut, body: `{"unexpected":true}`, wantStatus: http.StatusBadRequest, wantCalls: 2},
+		{name: "DELETE JSON body", method: http.MethodDelete, body: `{"unexpected":true}`, wantStatus: http.StatusBadRequest, wantCalls: 2},
+		{name: "chunked PUT body", method: http.MethodPut, body: "x", unknownContentLength: true, wantStatus: http.StatusBadRequest, wantCalls: 2},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(test.method, path, strings.NewReader(test.body))
+			if test.unknownContentLength {
+				request.ContentLength = -1
+				request.TransferEncoding = []string{"chunked"}
+			}
+			handler.ServeHTTP(response, request)
+			if response.Code != test.wantStatus {
+				t.Fatalf("%s dependency status = %d, want %d; body = %s", test.method, response.Code, test.wantStatus, response.Body.String())
+			}
+			if dependencyCalls != test.wantCalls {
+				t.Fatalf("dependency callbacks = %d, want %d", dependencyCalls, test.wantCalls)
+			}
+			if test.wantStatus == http.StatusBadRequest {
+				var document ErrorDocument
+				if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+					t.Fatalf("decode dependency body error: %v", err)
+				}
+				if document.Format != "workbook.error" || document.Version != 1 ||
+					document.Error.Category != core.CategoryInvocation {
+					t.Fatalf("dependency body error = %#v, want workbook.error v1 invocation", document)
+				}
+			}
+		})
+	}
+
+	unconfigured := NewHandlerWithTaskMutations(
+		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
+		unexpectedTaskPosition(t), nil, nil, nil, nil,
+	)
+	response := requestJSON(t, unconfigured, http.MethodPut, path, `{"unexpected":true}`)
+	var document ErrorDocument
+	if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+		t.Fatalf("decode unconfigured dependency body error: %v", err)
+	}
+	if response.Code != http.StatusBadRequest || document.Error.Category != core.CategoryInvocation {
+		t.Fatalf("unconfigured dependency body status/error = %d/%#v, want invocation before callback configuration", response.Code, document.Error)
+	}
+}
+
+func TestHandlerReturnsDependencyMutationErrors(t *testing.T) {
+	dependent := boardTasks()[0]
+	prerequisite := boardTasks()[1]
+	handler := NewHandlerWithTaskMutations(
+		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
+		unexpectedTaskPosition(t), nil, nil,
+		func(context.Context, string, string) (core.MutationResult, error) {
+			return core.MutationResult{}, core.Errorf(core.CategoryValidation, "dependency would create a cycle")
+		},
+		nil,
+	)
+	response := request(t, handler, http.MethodPut, "/api/tasks/"+dependent.ID+"/dependencies/"+prerequisite.ID)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("PUT dependency error status = %d, want %d", response.Code, http.StatusBadRequest)
+	}
+	var document ErrorDocument
+	if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+		t.Fatalf("decode dependency error: %v", err)
+	}
+	if document.Format != "workbook.error" || document.Version != 1 ||
+		document.Error.Category != core.CategoryValidation || document.Error.Message != "dependency would create a cycle" {
+		t.Fatalf("dependency error document = %#v", document)
+	}
+}
+
+func TestHandlerRejectsWrongDependencyMethodsAndMalformedPaths(t *testing.T) {
+	dependent := boardTasks()[0]
+	prerequisite := boardTasks()[1]
+	dependencyCalls := 0
+	handler := NewHandlerWithTaskMutations(
+		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
+		unexpectedTaskPosition(t), nil, nil,
+		func(context.Context, string, string) (core.MutationResult, error) {
+			dependencyCalls++
+			return core.MutationResult{}, nil
+		},
+		func(context.Context, string, string) (core.MutationResult, error) {
+			dependencyCalls++
+			return core.MutationResult{}, nil
+		},
+	)
+	path := "/api/tasks/" + dependent.ID + "/dependencies/" + prerequisite.ID
+	response := request(t, handler, http.MethodPost, path)
+	if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != "PUT, DELETE" {
+		t.Fatalf("POST dependency = %d Allow %q, want %d and %q", response.Code, response.Header().Get("Allow"), http.StatusMethodNotAllowed, "PUT, DELETE")
+	}
+	for _, malformed := range []string{
+		"/api/tasks/" + dependent.ID + "/dependencies",
+		"/api/tasks/" + dependent.ID + "/dependencies/",
+		"/api/tasks/" + dependent.ID + "/dependencies//" + prerequisite.ID,
+		"/api/tasks/" + dependent.ID + "/dependencies/../" + prerequisite.ID,
+		"/api/tasks/" + dependent.ID + "//dependencies/" + prerequisite.ID,
+		"/api/tasks/" + dependent.ID + "/./dependencies/" + prerequisite.ID,
+		"/api/tasks/" + dependent.ID + "/segment/../dependencies/" + prerequisite.ID,
+		"/./api/tasks/" + dependent.ID + "/dependencies/" + prerequisite.ID,
+		"//api/tasks/" + dependent.ID + "/dependencies/" + prerequisite.ID,
+		"/segment/../api/tasks/" + dependent.ID + "/dependencies/" + prerequisite.ID,
+		"/api/tasks/./dependencies/" + prerequisite.ID,
+		"/api/tasks/../dependencies/" + prerequisite.ID,
+		"/api/tasks/" + dependent.ID + "/dependencies/.",
+		"/api/tasks/" + dependent.ID + "/dependencies/..",
+		path + "/extra",
+	} {
+		response := requestWithRawPath(t, handler, http.MethodPut, malformed)
+		if response.Code != http.StatusNotFound {
+			t.Errorf("PUT %s status = %d, want %d", malformed, response.Code, http.StatusNotFound)
+		}
+	}
+	if dependencyCalls != 0 {
+		t.Fatalf("malformed dependency paths invoked %d mutation callbacks, want 0", dependencyCalls)
+	}
+}
+
+func TestHandlerRejectsEncodedDependencyPathAliases(t *testing.T) {
+	dependent := boardTasks()[0]
+	prerequisite := boardTasks()[1]
+	dependencyCalls := 0
+	handler := NewHandlerWithTaskMutations(
+		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
+		unexpectedTaskPosition(t), nil, nil,
+		func(_ context.Context, id, dependency string) (core.MutationResult, error) {
+			dependencyCalls++
+			if id != dependent.ID || dependency != prerequisite.ID {
+				t.Fatalf("dependency callback IDs = %q/%q, want %q/%q", id, dependency, dependent.ID, prerequisite.ID)
+			}
+			return core.MutationResult{Task: dependent}, nil
+		},
+		nil,
+	)
+	canonicalPath := "/api/tasks/" + dependent.ID + "/dependencies/" + prerequisite.ID
+	tests := []struct {
+		name       string
+		target     string
+		wantStatus int
+		wantCalls  int
+	}{
+		{
+			name:       "encoded dependencies segment",
+			target:     "/api/tasks/" + dependent.ID + "/%64ependencies/" + prerequisite.ID,
+			wantStatus: http.StatusNotFound,
+			wantCalls:  0,
+		},
+		{
+			name:       "encoded task ID character",
+			target:     "/api/tasks/" + strings.Replace(dependent.ID, "WB-", "WB%2D", 1) + "/dependencies/" + prerequisite.ID,
+			wantStatus: http.StatusNotFound,
+			wantCalls:  0,
+		},
+		{
+			name:       "canonical ASCII route",
+			target:     canonicalPath,
+			wantStatus: http.StatusOK,
+			wantCalls:  1,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPut, test.target, nil)
+			if test.target != canonicalPath && request.URL.EscapedPath() == request.URL.Path {
+				t.Fatalf("test request %q did not retain a real encoded path", test.target)
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != test.wantStatus {
+				t.Fatalf("PUT %s status = %d, want %d; body = %s", test.target, response.Code, test.wantStatus, response.Body.String())
+			}
+			if dependencyCalls != test.wantCalls {
+				t.Fatalf("dependency callbacks after %s = %d, want %d", test.name, dependencyCalls, test.wantCalls)
+			}
+		})
 	}
 }
 
@@ -399,6 +778,1488 @@ setTimeout(() => {
 	}
 }
 
+func TestHandlerClientUsesSharedTaskSidebarLayout(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	task := boardTasks()[0]
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return []core.Task{task}, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/new")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/new status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	document, err := json.Marshal(TasksDocument{
+		Format:       "workbook.tasks",
+		Version:      1,
+		Tasks:        []core.Task{task},
+		Presentation: presentationForTasks([]core.Task{task}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/new", string(document)) + script + `
+function assertSharedLayout(expectedMode) {
+  const layout = findElement(main, (element) =>
+    (element.className || "").split(/\s+/).includes("task-layout"));
+  const editor = layout && findElement(layout, (element) =>
+    (element.className || "").split(/\s+/).includes("task-editor"));
+  const sidebar = layout && findElement(layout, (element) =>
+    (element.className || "").split(/\s+/).includes("task-sidebar"));
+  const properties = sidebar && findElement(sidebar, (element) =>
+    (element.className || "").split(/\s+/).includes("task-properties"));
+  const footer = layout && findElement(layout, (element) =>
+    (element.className || "").split(/\s+/).includes("task-actions"));
+  const actionBar = footer && findElement(footer, (element) =>
+    (element.className || "").split(/\s+/).includes("form-actions"));
+  const primaryActions = actionBar && findElement(actionBar, (element) =>
+    (element.className || "").split(/\s+/).includes("form-primary-actions"));
+  const save = primaryActions && findElement(primaryActions, (element) =>
+    element.tagName === "BUTTON" && element.textContent === "Save");
+  const back = primaryActions && findElement(primaryActions, (element) =>
+    element.tagName === "A" && element.textContent === "Back");
+  const danger = actionBar && findElement(actionBar, (element) =>
+    (element.className || "").split(/\s+/).includes("form-danger"));
+  if (!layout || !editor || !sidebar || !properties || !footer) {
+    throw new Error(expectedMode + " does not use the shared task layout");
+  }
+  if (!actionBar || !primaryActions || !save || !back ||
+      primaryActions.parentElement !== actionBar) {
+    throw new Error(expectedMode + " does not left-group Save and Back");
+  }
+  if (expectedMode === "new") {
+    if (danger) throw new Error("new task unexpectedly renders destructive actions");
+  } else {
+    const remove = danger && findElement(danger, (element) =>
+      element.tagName === "BUTTON" && element.textContent === "Delete");
+    if (!danger || !remove || danger.parentElement !== actionBar ||
+        primaryActions.contains(danger) || danger.contains(primaryActions)) {
+      throw new Error("detail does not separate Delete from primary actions");
+    }
+  }
+  for (const id of ["task-status", "task-priority", "task-labels"]) {
+    const control = findElement(properties, (element) => element.id === id);
+    if (!control) throw new Error(id + " is not in Properties");
+  }
+  const description = editor && findElement(editor, (element) =>
+    element.id === "task-description");
+  if (!description ||
+      !(description.parentElement.className || "").split(/\s+/).includes("field--description")) {
+    throw new Error("Description lost its flexible editor hook");
+  }
+}
+setTimeout(async () => {
+  assertSharedLayout("new");
+  const detailLink = new TestElement("a");
+  detailLink.href = "/tasks/" + encodeURIComponent(` + strconv.Quote(task.ID) + `);
+  await documentEventListeners.click({
+    target: detailLink,
+    button: 0,
+    defaultPrevented: false,
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+    preventDefault() { this.defaultPrevented = true; }
+  });
+  assertSharedLayout("detail");
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("execute rendered client for shared task sidebar layout: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerClientSidebarAccessibilityAndMobileOrder(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	current := clientPlacementTask("WB-01J00000000000000000000072", "Current task", core.StatusReady, core.PriorityMedium)
+	candidate := clientPlacementTask("WB-01J00000000000000000000073", "Candidate task", core.StatusDone, core.PriorityHigh)
+	tasks := []core.Task{current, candidate}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/new")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/new status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	script = strings.Replace(script, "function relationshipRow(", "globalThis.relationshipRow = function relationshipRow(", 1)
+	document, err := json.Marshal(TasksDocument{
+		Format:       "workbook.tasks",
+		Version:      1,
+		Tasks:        tasks,
+		Presentation: presentationForTasks(tasks),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidateJSON, err := json.Marshal(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/new", string(document)) + script + `
+setTimeout(() => {
+  const form = findElement(main, (element) => element.tagName === "FORM");
+  const editor = findElement(form, (element) =>
+    element.className.split(/\s+/).includes("task-editor"));
+  const sidebar = findElement(form, (element) =>
+    element.className.split(/\s+/).includes("task-sidebar"));
+  const actions = findElement(form, (element) =>
+    element.className.split(/\s+/).includes("task-actions"));
+  if (!form || !editor || !sidebar || !actions) {
+    throw new Error("shared task regions did not render");
+  }
+  if (sidebar.getAttribute("aria-label") !==
+      "Task properties and relationships") {
+    throw new Error("sidebar does not identify its contents");
+  }
+
+  const groupFor = (headingText) => {
+    const heading = findElement(sidebar, (element) => element.textContent === headingText);
+    if (!heading) throw new Error("missing " + headingText + " group");
+    return heading.parentElement;
+  };
+  const dependsGroup = groupFor("Depends On");
+  const blocksGroup = groupFor("Blocks");
+  const dependsInput = findElement(dependsGroup, (element) => element.tagName === "INPUT");
+  const blocksInput = findElement(blocksGroup, (element) => element.tagName === "INPUT");
+  if (dependsInput.attributes.role !== "combobox" ||
+      blocksInput.attributes.role !== "combobox") {
+    throw new Error("relationship controls lost combobox semantics");
+  }
+  for (const group of [dependsGroup, blocksGroup]) {
+    const message = findElement(group, (element) =>
+      element.className.split(/\s+/).includes("relationship-message"));
+    if (!message ||
+        message.attributes.role !== "status" ||
+        message.attributes["aria-live"] !== "polite") {
+      throw new Error("relationship group feedback is not announced politely");
+    }
+  }
+  const formMessage = findElement(actions, (element) =>
+    element.className.split(/\s+/).includes("form-status"));
+  if (!formMessage ||
+      formMessage.attributes.role !== "status" ||
+      formMessage.attributes["aria-live"] !== "polite") {
+    throw new Error("task form feedback is not announced politely");
+  }
+
+  const failedDraft = relationshipRow(
+    { id: candidateTask.id, task: candidateTask, error: "not saved" },
+    () => {},
+    true,
+    () => {}
+  );
+  const removeButton = failedDraft.removeButton;
+  const retryButton = failedDraft.retryButton;
+  if (removeButton.type !== "button" ||
+      retryButton.type !== "button") {
+    throw new Error("relationship actions can submit the task form");
+  }
+  const order = [
+    editor,
+    sidebar,
+    actions
+  ].map((element) => form.children.indexOf(element));
+  if (!(order[0] < order[1] && order[1] < order[2])) {
+    throw new Error("mobile DOM order does not match visual order");
+  }
+}, 0);
+`
+	program = strings.Replace(program, "candidateTask.id", strconv.Quote(candidate.ID), 1)
+	program = strings.Replace(program, "candidateTask", string(candidateJSON), 1)
+	command := exec.Command(node, "-e", program)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("execute rendered client for sidebar accessibility: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerClientClampsRelationshipListboxPlacement(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return nil, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	response := request(t, handler, http.MethodGet, "/tasks/new")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/new status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	script = strings.Replace(script, "function relationshipListboxPlacement(", "globalThis.relationshipListboxPlacement = function relationshipListboxPlacement(", 1)
+	document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	program := clientDOMHarness("/tasks/new", string(document)) + script + `
+const bounds = { top: 227, bottom: 504 };
+const cases = [
+  {
+    label: "top scroll position",
+    anchor: { top: 250, bottom: 290 },
+    want: { side: "below", top: 295, bottom: 504, maxHeight: 209 }
+  },
+  {
+    label: "middle scroll position",
+    anchor: { top: 343, bottom: 386 },
+    want: { side: "below", top: 391, bottom: 504, maxHeight: 113 }
+  },
+  {
+    label: "bottom scroll position",
+    anchor: { top: 440, bottom: 480 },
+    want: { side: "above", top: 227, bottom: 435, maxHeight: 208 }
+  }
+];
+for (const testCase of cases) {
+  const got = relationshipListboxPlacement(testCase.anchor, bounds, 288, 5);
+  if (JSON.stringify(got) !== JSON.stringify(testCase.want)) {
+    throw new Error(testCase.label + " placement = " + JSON.stringify(got) +
+      ", want " + JSON.stringify(testCase.want));
+  }
+  if (got.top < bounds.top || got.bottom > bounds.bottom) {
+    throw new Error(testCase.label + " escaped the visible sidebar bounds");
+  }
+}
+`
+	command := exec.Command(node, "-e", program)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("execute relationship listbox placement: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerClientStagesNewTaskRelationshipsWithoutMutating(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	dependsCandidate := clientPlacementTask("WB-01J00000000000000000000072", "Depends on candidate", core.StatusDone, core.PriorityHigh)
+	blocksCandidate := clientPlacementTask("WB-01J00000000000000000000073", "Blocks candidate", core.StatusBacklog, core.PriorityLow)
+	tasks := []core.Task{dependsCandidate, blocksCandidate}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/new")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/new status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/new", string(document)) + script + `
+let createCalls = 0;
+globalThis.fetch = async (url, options = {}) => {
+  fetchCalls.push({ url, options });
+  if (url === "/api/tasks" && options.method === "POST") createCalls += 1;
+  if ((options.method || "GET") !== "GET") {
+    return { ok: true, json: async () => ({ format: "workbook.task-mutation", version: 1, task: taskDocument.tasks[0] }) };
+  }
+  return { ok: true, json: async () => url === "/api/tasks?deleted=true" ? deletedTaskResponse : taskResponse };
+};
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  fetchCalls.splice(0);
+  const groupFor = (headingText) => {
+    const heading = findElement(main, (element) => element.textContent === headingText);
+    if (!heading) throw new Error("missing " + headingText + " group");
+    return heading.parentElement;
+  };
+  const inputFor = (group) => findElement(group, (element) =>
+    element.tagName === "INPUT" && element.attributes.role === "combobox");
+  const addFor = (group) => findElement(group, (element) =>
+    element.tagName === "BUTTON" && element.textContent === "Add dependency");
+  const candidateIDs = (group) => findElements(group, (element) =>
+    element.attributes.role === "option").map((option) => option.dataset.candidateId);
+  const resetCandidates = (group) => {
+    const input = inputFor(group);
+    input.value = "";
+    input.eventListeners.input();
+    return candidateIDs(group);
+  };
+  const selectAndAdd = (group, candidateID, candidateTitle) => {
+    const input = inputFor(group);
+    input.value = candidateTitle;
+    input.eventListeners.input();
+    const option = findElement(group, (element) => element.dataset.candidateId === candidateID && element.attributes.role === "option");
+    if (!option || !option.eventListeners.click) throw new Error("candidate is not selectable: " + candidateID);
+    option.eventListeners.click();
+    const add = addFor(group);
+    if (!add || add.disabled || !add.eventListeners.click) throw new Error("selected candidate did not enable Add dependency");
+    return add.eventListeners.click();
+  };
+  const assertFormValues = () => {
+    const title = findElement(main, (element) => element.id === "task-title");
+    const description = findElement(main, (element) => element.id === "task-description");
+    if (!title || title.value !== "Unchanged title" || !description || description.value !== "Unchanged description") {
+      throw new Error("relationship drafts changed the New Task form values");
+    }
+  };
+  const title = findElement(main, (element) => element.id === "task-title");
+  const description = findElement(main, (element) => element.id === "task-description");
+  title.value = "Unchanged title";
+  description.value = "Unchanged description";
+  const dependsGroup = groupFor("Depends On");
+  const blocksGroup = groupFor("Blocks");
+  const dependsInput = inputFor(dependsGroup);
+  let enterPrevented = false;
+  dependsInput.eventListeners.keydown({
+    key: "Enter",
+    preventDefault() { enterPrevented = true; }
+  });
+  if (!enterPrevented || createCalls !== 0) {
+    throw new Error("relationship combobox Enter submitted New Task");
+  }
+
+  await selectAndAdd(dependsGroup, ` + strconv.Quote(dependsCandidate.ID) + `, ` + strconv.Quote(dependsCandidate.Title) + `);
+  assertFormValues();
+  const dependsRow = findElement(dependsGroup, (element) => element.dataset.relationshipId === ` + strconv.Quote(dependsCandidate.ID) + `);
+  if (!dependsRow || dependsRow.dataset.relationshipDraft === undefined ||
+      !dependsRow.className.split(/\s+/).includes("relationship-row--compact") ||
+      !dependsRow.textContent.includes("Not saved")) {
+    throw new Error("Depends On draft did not render as a compact unsaved row");
+  }
+  if (resetCandidates(dependsGroup).includes(` + strconv.Quote(dependsCandidate.ID) + `) ||
+      !resetCandidates(blocksGroup).includes(` + strconv.Quote(dependsCandidate.ID) + `)) {
+    throw new Error("Depends On draft did not filter candidates by direction");
+  }
+
+  await selectAndAdd(blocksGroup, ` + strconv.Quote(blocksCandidate.ID) + `, ` + strconv.Quote(blocksCandidate.Title) + `);
+  assertFormValues();
+  const blocksRow = findElement(blocksGroup, (element) => element.dataset.relationshipId === ` + strconv.Quote(blocksCandidate.ID) + `);
+  if (!blocksRow || blocksRow.dataset.relationshipDraft === undefined ||
+      !blocksRow.className.split(/\s+/).includes("relationship-row--compact") ||
+      !blocksRow.textContent.includes("Not saved")) {
+    throw new Error("Blocks draft did not render as a compact unsaved row");
+  }
+  if (resetCandidates(blocksGroup).includes(` + strconv.Quote(blocksCandidate.ID) + `) ||
+      !resetCandidates(dependsGroup).includes(` + strconv.Quote(blocksCandidate.ID) + `)) {
+    throw new Error("Blocks draft did not filter candidates by direction");
+  }
+
+  const currentDependsRow = findElement(dependsGroup, (element) => element.dataset.relationshipId === ` + strconv.Quote(dependsCandidate.ID) + `);
+  const remove = currentDependsRow && findElement(currentDependsRow, (element) => element.tagName === "BUTTON" && element.textContent === "Remove");
+  if (!remove || !remove.eventListeners.click) throw new Error("Depends On draft is not removable");
+  await remove.eventListeners.click();
+  assertFormValues();
+  if (findElement(dependsGroup, (element) => element.dataset.relationshipId === ` + strconv.Quote(dependsCandidate.ID) + `)) {
+    throw new Error("removing a Depends On draft left its row mounted");
+  }
+  const dependencyMutations = fetchCalls.filter((call) =>
+    /\/api\/tasks\/.+\/dependencies\/.+/.test(call.url) &&
+    ["PUT", "DELETE"].includes(call.options.method));
+  if (dependencyMutations.length !== 0) {
+    throw new Error("New Task relationship drafts wrote before task creation");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute staged New Task relationship behavior: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerClientRefreshesMountedNewTaskRelationshipCandidates(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	becomesDeleted := clientPlacementTask("WB-01J00000000000000000000081", "Becomes deleted", core.StatusReady, core.PriorityHigh)
+	becomesRestored := clientPlacementTask("WB-01J00000000000000000000082", "Becomes restored", core.StatusBacklog, core.PriorityLow)
+	becomesRestored.Deleted = true
+	stableCandidate := clientPlacementTask("WB-01J00000000000000000000083", "Stable candidate", core.StatusInProgress, core.PriorityMedium)
+	draftCandidate := clientPlacementTask("WB-01J00000000000000000000084", "Draft candidate", core.StatusDone, core.PriorityHigh)
+	initialActive := []core.Task{becomesDeleted, stableCandidate, draftCandidate}
+	restoredActive := becomesRestored
+	restoredActive.Deleted = false
+	deletedAfterPoll := becomesDeleted
+	deletedAfterPoll.Deleted = true
+	afterPollActive := []core.Task{restoredActive, stableCandidate, draftCandidate}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialActive, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/new")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/new status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	documentJSON := func(tasks []core.Task) string {
+		t.Helper()
+		document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(document)
+	}
+	deletedDocumentJSON := func(tasks []core.Task) string {
+		t.Helper()
+		document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(document)
+	}
+
+	program := clientDOMHarness("/tasks/new", documentJSON(initialActive)) + script + `
+deletedTaskResponse = ` + deletedDocumentJSON([]core.Task{becomesRestored}) + `;
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const groupFor = (headingText) => findElement(main, (element) =>
+    element.textContent === headingText).parentElement;
+  const inputFor = (group) => findElement(group, (element) =>
+    element.tagName === "INPUT" && element.attributes.role === "combobox");
+  const addFor = (group) => findElement(group, (element) =>
+    element.tagName === "BUTTON" && element.textContent === "Add dependency");
+  const selectCandidate = (group, candidateID, query) => {
+    const input = inputFor(group);
+    input.value = query;
+    input.eventListeners.input();
+    const option = findElement(group, (element) =>
+      element.attributes.role === "option" && element.dataset.candidateId === candidateID);
+    if (!option) throw new Error("candidate is not selectable: " + candidateID);
+    option.eventListeners.click();
+    return { input, add: addFor(group) };
+  };
+  const dependsGroup = groupFor("Depends On");
+  const blocksGroup = groupFor("Blocks");
+  const draftID = ` + strconv.Quote(draftCandidate.ID) + `;
+  const deletingID = ` + strconv.Quote(becomesDeleted.ID) + `;
+  const restoredID = ` + strconv.Quote(becomesRestored.ID) + `;
+  const stableID = ` + strconv.Quote(stableCandidate.ID) + `;
+
+  const draftSelection = selectCandidate(dependsGroup, draftID, ` + strconv.Quote(draftCandidate.Title) + `);
+  await draftSelection.add.eventListeners.click();
+  const deletingSelection = selectCandidate(dependsGroup, deletingID, ` + strconv.Quote(becomesDeleted.Title) + `);
+  const stableSelection = selectCandidate(blocksGroup, stableID, ` + strconv.Quote(stableCandidate.Title) + `);
+  const mountedForm = findElement(main, (element) => element.tagName === "FORM");
+
+  let activeDocument = ` + documentJSON(afterPollActive) + `;
+  let deletedDocument = ` + deletedDocumentJSON([]core.Task{deletedAfterPoll}) + `;
+  let delayedDeletedResolve = null;
+  let delayDeleted = false;
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if (url === "/api/tasks" && (options.method || "GET") === "GET") {
+      return { ok: true, json: async () => activeDocument };
+    }
+    if (url === "/api/tasks?deleted=true") {
+      if (delayDeleted) {
+        delayDeleted = false;
+        return {
+          ok: true,
+          json: async () => new Promise((resolve) => { delayedDeletedResolve = resolve; })
+        };
+      }
+      return { ok: true, json: async () => deletedDocument };
+    }
+    throw new Error("unexpected fetch: " + (options.method || "GET") + " " + url);
+  };
+
+  await intervalCallback();
+  if (findElement(main, (element) => element.tagName === "FORM") !== mountedForm) {
+    throw new Error("New Task polling replaced the mounted form");
+  }
+  const draftRow = findElement(dependsGroup, (element) =>
+    element.dataset.relationshipId === draftID &&
+    element.dataset.relationshipDraft !== undefined);
+  if (!draftRow) throw new Error("New Task polling discarded a relationship draft");
+  if (deletingSelection.input.value !== ` + strconv.Quote(becomesDeleted.Title) + ` ||
+      !deletingSelection.add.disabled) {
+    throw new Error("polling did not clear only the selection that became invalid");
+  }
+  deletingSelection.input.value = "";
+  deletingSelection.input.eventListeners.input();
+  const restoredOption = findElement(dependsGroup, (element) =>
+    element.attributes.role === "option" && element.dataset.candidateId === restoredID);
+  const deletedOption = findElement(dependsGroup, (element) =>
+    element.attributes.role === "option" && element.dataset.candidateId === deletingID);
+  if (!restoredOption || deletedOption) {
+    throw new Error("New Task candidates did not reconcile delete and restore polling");
+  }
+  const stableSelectedOption = findElement(blocksGroup, (element) =>
+    element.attributes.role === "option" &&
+    element.dataset.candidateId === stableID &&
+    element.attributes["aria-selected"] === "true");
+  if (stableSelection.input.value !== ` + strconv.Quote(stableCandidate.Title) + ` ||
+      stableSelection.add.disabled || !stableSelectedOption) {
+    throw new Error("polling discarded a still-valid New Task query or selection");
+  }
+
+  delayDeleted = true;
+  const stalePoll = intervalCallback();
+  for (let attempt = 0; !delayedDeletedResolve && attempt < 20; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  if (!delayedDeletedResolve) throw new Error("stale New Task refresh did not reach deleted context");
+  const back = findElement(main, (element) => element.tagName === "A" && element.textContent === "Back");
+	  documentEventListeners.click({
+	    target: back,
+    button: 0,
+    defaultPrevented: false,
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+    preventDefault() {}
+  });
+  const newTaskLink = new TestElement("a");
+  newTaskLink.href = "/tasks/new";
+  boardView.append(newTaskLink);
+  documentEventListeners.click({
+    target: newTaskLink,
+    button: 0,
+    defaultPrevented: false,
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+    preventDefault() {}
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const currentForm = findElement(main, (element) => element.tagName === "FORM");
+  const currentDependsGroup = groupFor("Depends On");
+  const currentSelection = selectCandidate(currentDependsGroup, restoredID, ` + strconv.Quote(becomesRestored.Title) + `);
+  delayedDeletedResolve(` + deletedDocumentJSON([]core.Task{deletedAfterPoll, becomesRestored}) + `);
+  await stalePoll;
+  const currentSelectedOption = findElement(currentDependsGroup, (element) =>
+    element.attributes.role === "option" &&
+    element.dataset.candidateId === restoredID &&
+    element.attributes["aria-selected"] === "true");
+  if (findElement(main, (element) => element.tagName === "FORM") !== currentForm ||
+      currentSelection.input.value !== ` + strconv.Quote(becomesRestored.Title) + ` ||
+      currentSelection.add.disabled || !currentSelectedOption) {
+    throw new Error("stale detached New Task refresh wrote into the current controller");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute mounted New Task relationship polling: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerClientCreatesTaskWithBothRelationshipDirections(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	prerequisite := clientPlacementTask("WB-01J00000000000000000000074", "Prerequisite", core.StatusDone, core.PriorityHigh)
+	blockedTask := clientPlacementTask("WB-01J00000000000000000000075", "Blocked task", core.StatusBacklog, core.PriorityLow)
+	lateCandidate := clientPlacementTask("WB-01J00000000000000000000080", "Late candidate", core.StatusInProgress, core.PriorityMedium)
+	createdID := "WB-01J00000000000000000000076"
+	created := clientPlacementTask(createdID, "Created task", core.StatusReady, core.PriorityMedium)
+	created.Dependencies = []string{prerequisite.ID}
+	refreshedBlockedTask := blockedTask
+	refreshedBlockedTask.Dependencies = []string{createdID}
+	initialTasks := []core.Task{prerequisite, blockedTask, lateCandidate}
+	refreshedTasks := []core.Task{created, prerequisite, refreshedBlockedTask, lateCandidate}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/new")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/new status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	documentJSON := func(tasks []core.Task) string {
+		t.Helper()
+		document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(document)
+	}
+	emptyDeleted, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: []core.Task{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/new", documentJSON(initialTasks)) + script + `
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const groupFor = (headingText) => {
+    const heading = findElement(main, (element) => element.textContent === headingText);
+    if (!heading) throw new Error("missing " + headingText + " group");
+    return heading.parentElement;
+  };
+  const selectAndAdd = (group, candidateID, candidateTitle) => {
+    const input = findElement(group, (element) => element.tagName === "INPUT" && element.attributes.role === "combobox");
+    input.value = candidateTitle;
+    input.eventListeners.input();
+    const option = findElement(group, (element) => element.attributes.role === "option" && element.dataset.candidateId === candidateID);
+    if (!option) throw new Error("candidate is not selectable: " + candidateID);
+    option.eventListeners.click();
+    const add = findElement(group, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+    if (!add || add.disabled) throw new Error("selected candidate did not enable Add dependency");
+    return add.eventListeners.click();
+  };
+  const prerequisiteID = ` + strconv.Quote(prerequisite.ID) + `;
+  const blockedTaskID = ` + strconv.Quote(blockedTask.ID) + `;
+  const createdID = ` + strconv.Quote(createdID) + `;
+  const createdTask = ` + documentJSON(refreshedTasks) + `.tasks[0];
+  const activeRefresh = ` + documentJSON(refreshedTasks) + `;
+  const deletedRefresh = ` + string(emptyDeleted) + `;
+	  const events = [];
+	  let resolvePost;
+	  const originalPushState = history.pushState;
+	  history.pushState = (...args) => {
+	    events.push("navigate");
+    return originalPushState(...args);
+  };
+  globalThis.fetch = async (url, options = {}) => {
+	    fetchCalls.push({ url, options });
+	    if (url === "/api/tasks" && options.method === "POST") {
+	      return {
+	        ok: true,
+	        json: async () => new Promise((resolve) => {
+	          resolvePost = () => {
+	            events.push("post");
+	            resolve({
+	              format: "workbook.task-mutation",
+	              version: 1,
+	              task: createdTask,
+	              warnings: [{ code: "projection-update-failed", message: "Task creation projection needs repair." }]
+	            });
+	          };
+	        })
+	      };
+    }
+    if ((options.method || "GET") === "PUT") {
+      const message = url.endsWith("/" + encodeURIComponent(prerequisiteID))
+        ? "Depends On projection needs repair."
+        : "Blocks projection needs repair.";
+      return { ok: true, json: async () => { events.push("put"); return { format: "workbook.task-mutation", version: 1, task: createdTask, warnings: [{ code: "projection-update-failed", message }] }; } };
+    }
+    if (url === "/api/tasks") {
+      return { ok: true, json: async () => { events.push("active-refresh"); return activeRefresh; } };
+    }
+    if (url === "/api/tasks?deleted=true") {
+      return { ok: true, json: async () => { events.push("deleted-refresh"); return deletedRefresh; } };
+    }
+    throw new Error("unexpected fetch: " + (options.method || "GET") + " " + url);
+  };
+  fetchCalls.splice(0);
+
+	  await selectAndAdd(groupFor("Depends On"), prerequisiteID, ` + strconv.Quote(prerequisite.Title) + `);
+	  await selectAndAdd(groupFor("Blocks"), blockedTaskID, ` + strconv.Quote(blockedTask.Title) + `);
+	  const dependsGroup = groupFor("Depends On");
+	  const blocksGroup = groupFor("Blocks");
+	  const lateCandidateID = ` + strconv.Quote(lateCandidate.ID) + `;
+	  const dependsInput = findElement(dependsGroup, (element) =>
+	    element.tagName === "INPUT" && element.attributes.role === "combobox");
+	  dependsInput.value = ` + strconv.Quote(lateCandidate.Title) + `;
+	  dependsInput.eventListeners.input();
+	  findElement(dependsGroup, (element) =>
+	    element.attributes.role === "option" &&
+	    element.dataset.candidateId === lateCandidateID).eventListeners.click();
+	  const lateAdd = findElement(dependsGroup, (element) =>
+	    element.tagName === "BUTTON" && element.textContent === "Add dependency");
+	  const capturedBlocksRow = findElement(blocksGroup, (element) =>
+	    element.dataset.relationshipId === blockedTaskID &&
+	    element.dataset.relationshipDraft !== undefined);
+	  const capturedRemove = capturedBlocksRow && findElement(capturedBlocksRow, (element) =>
+	    element.tagName === "BUTTON" && element.textContent === "Remove");
+	  const form = findElement(main, (element) => element.tagName === "FORM");
+	  if (!form || !form.eventListeners.submit) throw new Error("New Task form did not register submit behavior");
+	  const submission = form.eventListeners.submit({ preventDefault() {} });
+	  for (let attempt = 0; !resolvePost && attempt < 20; attempt += 1) {
+	    await new Promise((resolve) => setTimeout(resolve, 0));
+	  }
+	  if (!resolvePost) throw new Error("New Task POST did not reach its delayed response");
+	  const blocksInput = findElement(blocksGroup, (element) =>
+	    element.tagName === "INPUT" && element.attributes.role === "combobox");
+	  const controlsWereLocked = dependsInput.disabled && blocksInput.disabled &&
+	    lateAdd.disabled && capturedRemove && capturedRemove.disabled;
+	  await lateAdd.eventListeners.click();
+	  await capturedRemove.eventListeners.click();
+	  const capturedDependsOnStillVisible = findElement(dependsGroup, (element) =>
+	    element.dataset.relationshipId === prerequisiteID &&
+	    element.dataset.relationshipDraft !== undefined);
+	  const capturedBlocksStillVisible = findElement(blocksGroup, (element) =>
+	    element.dataset.relationshipId === blockedTaskID &&
+	    element.dataset.relationshipDraft !== undefined);
+	  const lateDraft = findElement(dependsGroup, (element) =>
+	    element.dataset.relationshipId === lateCandidateID &&
+	    element.dataset.relationshipDraft !== undefined);
+	  if (!controlsWereLocked || !capturedDependsOnStillVisible ||
+	      !capturedBlocksStillVisible || lateDraft) {
+	    throw new Error("New Task relationship drafts changed while task creation was in flight");
+	  }
+	  resolvePost();
+	  await submission;
+
+  const assertCall = (method, url, hasBody) => {
+    const call = fetchCalls.find((candidate) => candidate.options.method === method && candidate.url === url);
+    if (!call) throw new Error("missing " + method + " " + url);
+    if (Object.prototype.hasOwnProperty.call(call.options, "body") !== hasBody) {
+      throw new Error(method + " " + url + " body presence was wrong");
+    }
+  };
+  assertCall("PUT",
+    "/api/tasks/" + encodeURIComponent(createdID) +
+    "/dependencies/" + encodeURIComponent(prerequisiteID),
+    false);
+  assertCall("PUT",
+    "/api/tasks/" + encodeURIComponent(blockedTaskID) +
+    "/dependencies/" + encodeURIComponent(createdID),
+    false);
+  const dependencyMutations = fetchCalls.filter((call) =>
+    call.options.method === "PUT" && /\/api\/tasks\/.+\/dependencies\/.+/.test(call.url));
+  if (dependencyMutations.length !== 2 || dependencyMutations.some((call) =>
+      Object.prototype.hasOwnProperty.call(call.options, "body"))) {
+    throw new Error("New Task relationship writes were not exactly two bodyless requests");
+  }
+  const postAt = events.indexOf("post");
+  const putIndexes = events.flatMap((event, index) => event === "put" ? [index] : []);
+  const activeRefreshAt = events.indexOf("active-refresh");
+  const deletedRefreshAt = events.indexOf("deleted-refresh");
+  const navigateAt = events.indexOf("navigate");
+  if (postAt < 0 || putIndexes.length !== 2 || activeRefreshAt < 0 ||
+      deletedRefreshAt < 0 || navigateAt < 0 ||
+      !putIndexes.every((putAt) => postAt < putAt && putAt < activeRefreshAt) ||
+      !(activeRefreshAt < deletedRefreshAt && deletedRefreshAt < navigateAt)) {
+    throw new Error("New Task did not finish both relationship writes before its final refreshes and navigation");
+  }
+  if (fetchCalls.filter((call) => call.options.method === "POST" && call.url === "/api/tasks").length !== 1) {
+    throw new Error("New Task did not issue exactly one task POST");
+  }
+  if (fetchCalls.filter((call) => (call.options.method || "GET") === "GET" && call.url === "/api/tasks").length !== 1) {
+    throw new Error("New Task did not issue exactly one final active refresh");
+  }
+  if (fetchCalls.filter((call) => (call.options.method || "GET") === "GET" && call.url === "/api/tasks?deleted=true").length !== 1) {
+    throw new Error("New Task did not issue exactly one final deleted refresh");
+  }
+	  if (historyPaths.length !== 1 || historyPaths[0] !== "/tasks/" + encodeURIComponent(createdID)) {
+	    throw new Error("New Task did not navigate to the durable created task");
+	  }
+	  const durableDependsOn = findElement(groupFor("Depends On"), (element) =>
+	    element.dataset.relationshipId === prerequisiteID &&
+	    element.dataset.relationshipDraft === undefined);
+	  const durableBlocks = findElement(groupFor("Blocks"), (element) =>
+	    element.dataset.relationshipId === blockedTaskID &&
+	    element.dataset.relationshipDraft === undefined);
+	  if (!durableDependsOn || !durableBlocks ||
+	      findElement(groupFor("Depends On"), (element) =>
+	        element.dataset.relationshipId === lateCandidateID)) {
+	    throw new Error("visible relationships did not match the captured bodyless mutations");
+	  }
+  const feedback = findElement(main, (element) => element.className === "form-status" &&
+    element.textContent.includes("Task creation projection needs repair.") &&
+    element.textContent.includes("Depends On projection needs repair.") &&
+    element.textContent.includes("Blocks projection needs repair."));
+  if (!feedback) throw new Error("created task detail did not receive durable mutation warnings");
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute created task relationship persistence: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerClientPreservesNewTaskRelationshipDraftsWhenCreateFails(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	prerequisite := clientPlacementTask("WB-01J00000000000000000000077", "Prerequisite", core.StatusDone, core.PriorityHigh)
+	blockedTask := clientPlacementTask("WB-01J00000000000000000000078", "Blocked task", core.StatusBacklog, core.PriorityLow)
+	pendingPrerequisite := clientPlacementTask("WB-01J0000000000000000000007F", "Pending prerequisite", core.StatusReady, core.PriorityMedium)
+	pendingBlockedTask := clientPlacementTask("WB-01J0000000000000000000007G", "Pending blocked task", core.StatusInProgress, core.PriorityHigh)
+	tasks := []core.Task{prerequisite, blockedTask, pendingPrerequisite, pendingBlockedTask}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/new")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/new status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/new", string(document)) + script + `
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const groupFor = (headingText) => findElement(main, (element) =>
+    element.textContent === headingText).parentElement;
+  const selectAndAdd = (group, candidateID, candidateTitle) => {
+    const input = findElement(group, (element) => element.attributes.role === "combobox");
+    input.value = candidateTitle;
+    input.eventListeners.input();
+    const option = findElement(group, (element) =>
+      element.attributes.role === "option" && element.dataset.candidateId === candidateID);
+    option.eventListeners.click();
+    return findElement(group, (element) =>
+      element.tagName === "BUTTON" && element.textContent === "Add dependency").eventListeners.click();
+  };
+  const dependsGroup = groupFor("Depends On");
+  const blocksGroup = groupFor("Blocks");
+  await selectAndAdd(dependsGroup, ` + strconv.Quote(prerequisite.ID) + `, ` + strconv.Quote(prerequisite.Title) + `);
+  await selectAndAdd(blocksGroup, ` + strconv.Quote(blockedTask.ID) + `, ` + strconv.Quote(blockedTask.Title) + `);
+  const title = findElement(main, (element) => element.id === "task-title");
+  const description = findElement(main, (element) => element.id === "task-description");
+  const status = findElement(main, (element) => element.id === "task-status");
+  const priority = findElement(main, (element) => element.id === "task-priority");
+  const labels = findElement(main, (element) => element.id === "task-labels");
+  const unsavedTitle = "Unsaved title";
+  const unsavedDescription = "Unsaved Description";
+  title.value = unsavedTitle;
+  description.value = unsavedDescription;
+  status.children.forEach((option) => { option.selected = option.value === "in-review"; });
+  priority.children.forEach((option) => { option.selected = option.value === "high"; });
+  labels.value = "review, recovery";
+  const selectPending = (group, candidateID, candidateTitle) => {
+    const input = findElement(group, (element) => element.attributes.role === "combobox");
+    input.value = candidateTitle;
+    input.eventListeners.input();
+    const option = findElement(group, (element) =>
+      element.attributes.role === "option" && element.dataset.candidateId === candidateID);
+    if (!option) throw new Error("pending candidate is not selectable: " + candidateID);
+    option.eventListeners.click();
+    return {
+      input,
+      add: findElement(group, (element) =>
+        element.tagName === "BUTTON" && element.textContent === "Add dependency")
+    };
+  };
+  const pendingDepends = selectPending(
+    dependsGroup,
+    ` + strconv.Quote(pendingPrerequisite.ID) + `,
+    ` + strconv.Quote(pendingPrerequisite.Title) + `
+  );
+  const pendingBlocks = selectPending(
+    blocksGroup,
+    ` + strconv.Quote(pendingBlockedTask.ID) + `,
+    ` + strconv.Quote(pendingBlockedTask.Title) + `
+  );
+  let createCalls = 0;
+  let dependencyCalls = 0;
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if (url === "/api/tasks" && options.method === "POST") {
+      createCalls += 1;
+      return {
+        ok: false,
+        json: async () => ({
+          format: "workbook.error",
+          version: 1,
+          error: { category: "validation", message: "title is not valid" }
+        })
+      };
+    }
+    if (/\/api\/tasks\/.+\/dependencies\/.+/.test(url)) dependencyCalls += 1;
+    throw new Error("unexpected fetch: " + (options.method || "GET") + " " + url);
+  };
+
+  const form = findElement(main, (element) => element.tagName === "FORM");
+  await form.eventListeners.submit({ preventDefault() {} });
+  const draftDependsOnRow = findElement(dependsGroup, (element) =>
+    element.dataset.relationshipId === ` + strconv.Quote(prerequisite.ID) + ` &&
+    element.dataset.relationshipDraft !== undefined);
+  const draftBlocksRow = findElement(blocksGroup, (element) =>
+    element.dataset.relationshipId === ` + strconv.Quote(blockedTask.ID) + ` &&
+    element.dataset.relationshipDraft !== undefined);
+  if (title.value !== unsavedTitle ||
+      description.value !== unsavedDescription) {
+    throw new Error("task fields were discarded after create failure");
+  }
+  if (status.value !== "in-review" ||
+      priority.value !== "high" ||
+      labels.value !== "review, recovery") {
+    throw new Error("task properties were discarded after create failure");
+  }
+  const pendingDependsOption = findElement(dependsGroup, (element) =>
+    element.attributes.role === "option" &&
+    element.dataset.candidateId === ` + strconv.Quote(pendingPrerequisite.ID) + ` &&
+    element.attributes["aria-selected"] === "true");
+  const pendingBlocksOption = findElement(blocksGroup, (element) =>
+    element.attributes.role === "option" &&
+    element.dataset.candidateId === ` + strconv.Quote(pendingBlockedTask.ID) + ` &&
+    element.attributes["aria-selected"] === "true");
+  if (pendingDepends.input.value !== ` + strconv.Quote(pendingPrerequisite.Title) + ` ||
+      pendingBlocks.input.value !== ` + strconv.Quote(pendingBlockedTask.Title) + ` ||
+      !pendingDependsOption || !pendingBlocksOption ||
+      pendingDepends.add.disabled || pendingBlocks.add.disabled) {
+    throw new Error("relationship queries or valid selections were discarded after create failure");
+  }
+  if (!draftDependsOnRow || !draftBlocksRow) {
+    throw new Error("relationship drafts were discarded after create failure");
+  }
+  if (createCalls !== 1 || dependencyCalls !== 0) {
+    throw new Error("create failure attempted relationship persistence");
+  }
+  const removeBlocks = findElement(draftBlocksRow, (element) =>
+    element.tagName === "BUTTON" && element.textContent === "Remove");
+  await removeBlocks.eventListeners.click();
+  if (!findElement(dependsGroup, (element) =>
+      element.dataset.relationshipId === ` + strconv.Quote(prerequisite.ID) + ` &&
+      element.dataset.relationshipDraft !== undefined)) {
+    throw new Error("removing one preserved draft discarded the other");
+  }
+  const feedback = findElement(main, (element) =>
+    element.attributes.role === "status" && element.textContent === "title is not valid");
+  const save = findElement(main, (element) =>
+    element.tagName === "BUTTON" && element.textContent === "Save");
+  if (!feedback || save.disabled) throw new Error("create failure did not restore the current form");
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute failed task creation recovery: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerClientRetainsFailedRelationshipDraftsAfterCreate(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	prerequisite := clientPlacementTask("WB-01J00000000000000000000079", "Prerequisite", core.StatusDone, core.PriorityHigh)
+	blockedTask := clientPlacementTask("WB-01J0000000000000000000007A", "Blocked task", core.StatusBacklog, core.PriorityLow)
+	createdID := "WB-01J0000000000000000000007B"
+	created := clientPlacementTask(createdID, "Created task", core.StatusReady, core.PriorityMedium)
+	created.Dependencies = []string{prerequisite.ID}
+	initialTasks := []core.Task{prerequisite, blockedTask}
+	afterCreate := []core.Task{created, prerequisite, blockedTask}
+	afterRetryBlocked := blockedTask
+	afterRetryBlocked.Dependencies = []string{createdID}
+	afterRetry := []core.Task{created, prerequisite, afterRetryBlocked}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/new")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/new status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	documentJSON := func(tasks []core.Task) string {
+		t.Helper()
+		document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(document)
+	}
+	emptyDeleted, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: []core.Task{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/new", documentJSON(initialTasks)) + script + `
+deletedTaskResponse = ` + string(emptyDeleted) + `;
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const groupFor = (headingText) => findElement(main, (element) =>
+    element.textContent === headingText).parentElement;
+  const selectAndAdd = (group, candidateID, candidateTitle) => {
+    const input = findElement(group, (element) => element.attributes.role === "combobox");
+    input.value = candidateTitle;
+    input.eventListeners.input();
+    findElement(group, (element) =>
+      element.attributes.role === "option" && element.dataset.candidateId === candidateID).eventListeners.click();
+    return findElement(group, (element) =>
+      element.tagName === "BUTTON" && element.textContent === "Add dependency").eventListeners.click();
+  };
+  const prerequisiteID = ` + strconv.Quote(prerequisite.ID) + `;
+  const blockedTaskID = ` + strconv.Quote(blockedTask.ID) + `;
+  const createdID = ` + strconv.Quote(createdID) + `;
+  const createdTask = ` + documentJSON(afterCreate) + `.tasks[0];
+  let activeDocument = ` + documentJSON(afterCreate) + `;
+  let blocksAttempts = 0;
+  let blocksDeletes = 0;
+  let activeRefreshes = 0;
+  let resolveDetachedRetry;
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if (url === "/api/tasks" && options.method === "POST") {
+      return { ok: true, json: async () => ({ format: "workbook.task-mutation", version: 1, task: createdTask }) };
+    }
+    if (options.method === "PUT" &&
+        url === "/api/tasks/" + encodeURIComponent(createdID) + "/dependencies/" + encodeURIComponent(prerequisiteID)) {
+      return {
+        ok: true,
+        json: async () => ({
+          format: "workbook.task-mutation",
+          version: 1,
+          task: createdTask,
+          warnings: [{ code: "projection-update-failed", message: "Depends On projection needs repair." }]
+        })
+      };
+    }
+    if (options.method === "PUT" &&
+        url === "/api/tasks/" + encodeURIComponent(blockedTaskID) + "/dependencies/" + encodeURIComponent(createdID)) {
+      blocksAttempts += 1;
+      if (blocksAttempts === 1) {
+        return {
+          ok: false,
+          json: async () => ({
+            format: "workbook.error",
+            version: 1,
+            error: { category: "validation", message: "dependency would create a cycle" }
+          })
+        };
+      }
+      if (blocksAttempts === 2) {
+        return {
+          ok: true,
+          json: async () => new Promise((resolve) => {
+            resolveDetachedRetry = () => {
+              resolve({
+                format: "workbook.task-mutation",
+                version: 1,
+                task: ` + documentJSON(afterRetry) + `.tasks[2]
+              });
+            };
+          })
+        };
+      }
+      throw new Error("unexpected additional Blocks Retry");
+    }
+    if (options.method === "DELETE" &&
+        url === "/api/tasks/" + encodeURIComponent(blockedTaskID) + "/dependencies/" + encodeURIComponent(createdID)) {
+      blocksDeletes += 1;
+      activeDocument = ` + documentJSON(afterCreate) + `;
+      return {
+        ok: true,
+        json: async () => ({
+          format: "workbook.task-mutation",
+          version: 1,
+          task: activeDocument.tasks[2]
+        })
+      };
+    }
+    if (url === "/api/tasks" && (options.method || "GET") === "GET") {
+      activeRefreshes += 1;
+      return { ok: true, json: async () => activeDocument };
+    }
+    if (url === "/api/tasks?deleted=true") {
+      return { ok: true, json: async () => deletedTaskResponse };
+    }
+    throw new Error("unexpected fetch: " + (options.method || "GET") + " " + url);
+  };
+
+  await selectAndAdd(groupFor("Depends On"), prerequisiteID, ` + strconv.Quote(prerequisite.Title) + `);
+  await selectAndAdd(groupFor("Blocks"), blockedTaskID, ` + strconv.Quote(blockedTask.Title) + `);
+  await findElement(main, (element) => element.tagName === "FORM").eventListeners.submit({ preventDefault() {} });
+
+  if (historyPaths.at(-1) !== "/tasks/" + encodeURIComponent(createdID)) {
+    throw new Error("partial relationship success did not open created task detail");
+  }
+  const detailDependsGroup = groupFor("Depends On");
+  const detailBlocksGroup = groupFor("Blocks");
+  const durableDependsOnRow = findElement(detailDependsGroup, (element) =>
+    element.dataset.relationshipId === prerequisiteID &&
+    element.dataset.relationshipDraft === undefined);
+  const failedBlocksRow = findElement(detailBlocksGroup, (element) =>
+    element.dataset.relationshipId === blockedTaskID &&
+    element.dataset.relationshipDraft !== undefined);
+	  const retry = failedBlocksRow && findElement(failedBlocksRow, (element) =>
+	    element.tagName === "BUTTON" && element.textContent === "Retry");
+	  const remove = failedBlocksRow && findElement(failedBlocksRow, (element) =>
+	    element.tagName === "BUTTON" && element.textContent === "Remove");
+  if (!durableDependsOnRow) throw new Error("durable Depends On relationship was not rendered");
+  if (!failedBlocksRow ||
+      !failedBlocksRow.textContent.includes("Not saved") ||
+      !failedBlocksRow.textContent.includes("dependency would create a cycle")) {
+    throw new Error("failed Blocks relationship was not retained with its error");
+	  }
+	  if (!retry || !remove) throw new Error("failed relationship draft lacks Retry or Remove");
+	  if (document.activeElement !== retry) {
+	    throw new Error("partial relationship recovery did not focus the first failed draft Retry");
+	  }
+  const feedback = findElement(main, (element) =>
+    element.className === "form-status" &&
+    element.textContent.includes("Task created, but some relationships were not saved.") &&
+    element.textContent.includes("Depends On projection needs repair."));
+  if (!feedback) throw new Error("created task did not explain its partial relationship success");
+
+  const refreshesBeforeRetry = activeRefreshes;
+  const detachedRetry = retry.eventListeners.click();
+  for (let attempt = 0; !resolveDetachedRetry && attempt < 20; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  if (!resolveDetachedRetry) {
+    throw new Error("Retry did not issue the correctly oriented Blocks PUT");
+  }
+  const detailStatus = findElement(detailBlocksGroup, (element) =>
+    element.className === "relationship-message");
+  const back = findElement(main, (element) =>
+    element.tagName === "A" && element.textContent === "Back");
+  documentEventListeners.click({
+    target: back,
+    button: 0,
+    defaultPrevented: false,
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+	    altKey: false,
+	    preventDefault() {}
+	  });
+	  const detachedFocus = new TestElement("button");
+	  boardView.append(detachedFocus);
+	  detachedFocus.focus();
+	  detailStatus.textContent = "detached retry status";
+	  resolveDetachedRetry();
+	  await detachedRetry;
+  if (retry.disabled) throw new Error("detached Retry did not release its busy state");
+	  if (detailStatus.textContent !== "detached retry status") {
+	    throw new Error("detached Retry wrote to its former controller");
+	  }
+	  if (document.activeElement !== detachedFocus) {
+	    throw new Error("detached partial-recovery work stole focus from the current view");
+	  }
+  if (activeRefreshes !== refreshesBeforeRetry + 1) {
+    throw new Error("detached Retry did not perform its one required refresh");
+  }
+
+  const detailLink = new TestElement("a");
+  detailLink.href = "/tasks/" + encodeURIComponent(createdID);
+  boardView.append(detailLink);
+  documentEventListeners.click({
+    target: detailLink,
+    button: 0,
+    defaultPrevented: false,
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+    preventDefault() {}
+  });
+  if (blocksAttempts !== 2) throw new Error("Retry did not issue the correctly oriented Blocks PUT");
+  const recoveredDraft = findElement(groupFor("Blocks"), (element) =>
+    element.dataset.relationshipId === blockedTaskID &&
+    element.dataset.relationshipDraft !== undefined);
+  if (!recoveredDraft ||
+      !recoveredDraft.textContent.includes("dependency would create a cycle")) {
+    throw new Error("detached successful Retry mutated the shared failed draft");
+  }
+  activeDocument = ` + documentJSON(afterRetry) + `;
+  await intervalCallback();
+  const retriedBlocksRow = findElement(groupFor("Blocks"), (element) =>
+    element.dataset.relationshipId === blockedTaskID);
+  if (!retriedBlocksRow || retriedBlocksRow.dataset.relationshipDraft !== undefined) {
+    throw new Error("canonical refresh did not replace the detached draft with durable state");
+  }
+  const removeDurableBlock = findElement(retriedBlocksRow, (element) =>
+    element.tagName === "BUTTON" && element.textContent === "Remove");
+  await removeDurableBlock.eventListeners.click();
+  if (blocksDeletes !== 1 ||
+      findElement(groupFor("Blocks"), (element) =>
+        element.dataset.relationshipId === blockedTaskID)) {
+    throw new Error("removing the durable edge revived stale detached draft state");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute partial relationship creation recovery: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerClientDoesNotDuplicateCreatedTaskWhenRefreshFails(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	prerequisite := clientPlacementTask("WB-01J0000000000000000000007C", "Prerequisite", core.StatusDone, core.PriorityHigh)
+	blockedTask := clientPlacementTask("WB-01J0000000000000000000007D", "Blocked task", core.StatusBacklog, core.PriorityLow)
+	createdID := "WB-01J0000000000000000000007E"
+	created := clientPlacementTask(createdID, "Created task", core.StatusReady, core.PriorityMedium)
+	initialTasks := []core.Task{prerequisite, blockedTask}
+	refreshedTasks := []core.Task{created, prerequisite, blockedTask}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/new")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/new status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	documentJSON := func(tasks []core.Task) string {
+		t.Helper()
+		document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(document)
+	}
+
+	program := clientDOMHarness("/tasks/new", documentJSON(initialTasks)) + script + `
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const groupFor = (headingText) => findElement(main, (element) =>
+    element.textContent === headingText).parentElement;
+  const selectAndAdd = (group, candidateID, candidateTitle) => {
+    const input = findElement(group, (element) => element.attributes.role === "combobox");
+    input.value = candidateTitle;
+    input.eventListeners.input();
+    findElement(group, (element) =>
+      element.attributes.role === "option" && element.dataset.candidateId === candidateID).eventListeners.click();
+    return findElement(group, (element) =>
+      element.tagName === "BUTTON" && element.textContent === "Add dependency").eventListeners.click();
+  };
+  const createdID = ` + strconv.Quote(createdID) + `;
+  let createCalls = 0;
+  let activeRefreshCalls = 0;
+  let deletedRefreshCalls = 0;
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if (url === "/api/tasks" && options.method === "POST") {
+      createCalls += 1;
+      return {
+        ok: true,
+        json: async () => ({
+          format: "workbook.task-mutation",
+          version: 1,
+          task: ` + documentJSON(refreshedTasks) + `.tasks[0]
+        })
+      };
+    }
+    if (options.method === "PUT") {
+      return {
+        ok: true,
+        json: async () => ({
+          format: "workbook.task-mutation",
+          version: 1,
+          task: ` + documentJSON(refreshedTasks) + `.tasks[0]
+        })
+      };
+    }
+    if (url === "/api/tasks" && (options.method || "GET") === "GET") {
+      activeRefreshCalls += 1;
+      if (activeRefreshCalls === 1) {
+        return {
+          ok: false,
+          json: async () => ({
+            format: "workbook.error",
+            version: 1,
+            error: { category: "internal", message: "task refresh failed" }
+          })
+        };
+      }
+      return { ok: true, json: async () => (` + documentJSON(refreshedTasks) + `) };
+    }
+    if (url === "/api/tasks?deleted=true") {
+      deletedRefreshCalls += 1;
+      if (deletedRefreshCalls === 1) {
+        return {
+          ok: false,
+          json: async () => ({
+            format: "workbook.error",
+            version: 1,
+            error: { category: "internal", message: "deleted task context failed" }
+          })
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({ format: "workbook.tasks", version: 1, tasks: [] })
+      };
+    }
+    throw new Error("unexpected fetch: " + (options.method || "GET") + " " + url);
+  };
+
+  await selectAndAdd(groupFor("Depends On"), ` + strconv.Quote(prerequisite.ID) + `, ` + strconv.Quote(prerequisite.Title) + `);
+  await selectAndAdd(groupFor("Blocks"), ` + strconv.Quote(blockedTask.ID) + `, ` + strconv.Quote(blockedTask.Title) + `);
+  const form = findElement(main, (element) => element.tagName === "FORM");
+  await form.eventListeners.submit({ preventDefault() {} });
+  const retry = findElement(main, (element) =>
+    element.tagName === "BUTTON" && element.type === "button" && element.textContent === "Retry");
+  if (!retry) throw new Error("durable create refresh failure did not render a retry action");
+  await form.eventListeners.submit({ preventDefault() {} });
+  if (createCalls !== 1) {
+    throw new Error("second programmatic submit created a duplicate task");
+  }
+  await retry.eventListeners.click();
+  if (deletedRefreshCalls !== 1 ||
+      historyPaths.at(-1) === "/tasks/" + createdID ||
+      retry.disabled) {
+    throw new Error("deleted-context refresh failure did not remain recoverable");
+  }
+  await retry.eventListeners.click();
+  if (createCalls !== 1) {
+    throw new Error("refresh retry created a duplicate task");
+  }
+  if (deletedRefreshCalls !== 2) {
+    throw new Error("deleted-context refresh retry did not recover");
+  }
+  if (historyPaths.at(-1) !== "/tasks/" + createdID) {
+    throw new Error("refresh retry did not open the created task");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute durable create refresh recovery: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerClientCreatedTaskRefreshDoesNotNavigateDetachedRoute(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	blockedTask := clientPlacementTask("WB-01J00000000000000000000085", "Blocked task", core.StatusBacklog, core.PriorityLow)
+	otherTask := clientPlacementTask("WB-01J00000000000000000000086", "Other task", core.StatusInProgress, core.PriorityMedium)
+	createdID := "WB-01J00000000000000000000087"
+	created := clientPlacementTask(createdID, "Created task", core.StatusReady, core.PriorityHigh)
+	initialTasks := []core.Task{blockedTask, otherTask}
+	refreshedTasks := []core.Task{created, blockedTask, otherTask}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/new")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/new status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	documentJSON := func(tasks []core.Task) string {
+		t.Helper()
+		document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(document)
+	}
+
+	program := clientDOMHarness("/tasks/new", documentJSON(initialTasks)) + script + `
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const groupFor = (headingText) => findElement(main, (element) =>
+    element.textContent === headingText).parentElement;
+  const blocksGroup = groupFor("Blocks");
+  const blocksInput = findElement(blocksGroup, (element) =>
+    element.tagName === "INPUT" && element.attributes.role === "combobox");
+  blocksInput.value = ` + strconv.Quote(blockedTask.Title) + `;
+  blocksInput.eventListeners.input();
+  const blockedOption = findElement(blocksGroup, (element) =>
+    element.attributes.role === "option" &&
+    element.dataset.candidateId === ` + strconv.Quote(blockedTask.ID) + `);
+  if (!blockedOption) throw new Error("Blocks candidate is not selectable");
+  blockedOption.eventListeners.click();
+  await findElement(blocksGroup, (element) =>
+    element.tagName === "BUTTON" && element.textContent === "Add dependency").eventListeners.click();
+
+  const createdID = ` + strconv.Quote(createdID) + `;
+  const blockedTaskID = ` + strconv.Quote(blockedTask.ID) + `;
+  const otherTaskID = ` + strconv.Quote(otherTask.ID) + `;
+  let createCalls = 0;
+  let finalRefreshCalls = 0;
+  let resolveFinalRefresh = null;
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if (url === "/api/tasks" && options.method === "POST") {
+      createCalls += 1;
+      return {
+        ok: true,
+        json: async () => ({
+          format: "workbook.task-mutation",
+          version: 1,
+          task: ` + documentJSON(refreshedTasks) + `.tasks[0]
+        })
+      };
+    }
+    if (options.method === "PUT" &&
+        url === "/api/tasks/" + encodeURIComponent(blockedTaskID) +
+          "/dependencies/" + encodeURIComponent(createdID)) {
+      return {
+        ok: false,
+        json: async () => ({
+          format: "workbook.error",
+          version: 1,
+          error: { category: "validation", message: "dependency would create a cycle" }
+        })
+      };
+    }
+    if (url === "/api/tasks" && (options.method || "GET") === "GET") {
+      finalRefreshCalls += 1;
+      return {
+        ok: true,
+        json: async () => new Promise((resolve) => {
+          resolveFinalRefresh = () => resolve(` + documentJSON(refreshedTasks) + `);
+        })
+      };
+    }
+    if (url === "/api/tasks?deleted=true") {
+      return {
+        ok: true,
+        json: async () => ({ format: "workbook.tasks", version: 1, tasks: [] })
+      };
+    }
+    throw new Error("unexpected fetch: " + (options.method || "GET") + " " + url);
+  };
+
+  const originForm = findElement(main, (element) => element.tagName === "FORM");
+  const submission = originForm.eventListeners.submit({ preventDefault() {} });
+  for (let attempt = 0; !resolveFinalRefresh && attempt < 20; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  if (!resolveFinalRefresh) throw new Error("created task did not reach its delayed final refresh");
+
+  const otherLink = new TestElement("a");
+  otherLink.href = "/tasks/" + encodeURIComponent(otherTaskID);
+  boardView.append(otherLink);
+  documentEventListeners.click({
+    target: otherLink,
+    button: 0,
+    defaultPrevented: false,
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+    preventDefault() {}
+  });
+  const otherForm = findElement(main, (element) => element.tagName === "FORM");
+  const otherTitle = findElement(otherForm, (element) => element.id === "task-title");
+  otherTitle.value = "Unsaved other task title";
+
+  resolveFinalRefresh();
+  await submission;
+  if (createCalls !== 1 || finalRefreshCalls !== 1) {
+    throw new Error("detached final refresh changed task creation cardinality");
+  }
+  if (historyPaths.length !== 1 ||
+      historyPaths[0] !== "/tasks/" + encodeURIComponent(otherTaskID) ||
+      findElement(main, (element) => element.tagName === "FORM") !== otherForm ||
+      otherTitle.value !== "Unsaved other task title") {
+    throw new Error("created task final refresh navigated away from the owning current route");
+  }
+
+  const createdLink = new TestElement("a");
+  createdLink.href = "/tasks/" + encodeURIComponent(createdID);
+  boardView.append(createdLink);
+  documentEventListeners.click({
+    target: createdLink,
+    button: 0,
+    defaultPrevented: false,
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+    preventDefault() {}
+  });
+  const staleDraft = findElement(main, (element) =>
+    element.dataset.relationshipId === blockedTaskID &&
+    element.dataset.relationshipDraft !== undefined);
+  const staleMessage = findElement(main, (element) =>
+    element.className === "form-status" &&
+    element.textContent.includes("Task created, but some relationships were not saved."));
+  if (staleDraft || staleMessage) {
+    throw new Error("detached created task recovery leaked into a later detail route");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute detached created-task final refresh: %v\n%s", err, output)
+	}
+}
+
 func TestHandlerShowsRecoverableErrorWhenInitialTaskLoadFails(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -446,6 +2307,1348 @@ setTimeout(async () => {
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("execute rendered client for initial load recovery: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerClientRendersDependencyRelationships(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	current := clientPlacementTask("WB-01J00000000000000000000031", "Current task", core.StatusReady, core.PriorityMedium)
+	activeDependency := clientPlacementTask("WB-01J00000000000000000000032", "Active prerequisite", core.StatusDone, core.PriorityHigh)
+	activeBlocked := clientPlacementTask("WB-01J00000000000000000000033", "Active blocked task", core.StatusBlocked, core.PriorityLow)
+	deletedDependency := clientPlacementTask("WB-01J00000000000000000000034", "Deleted prerequisite", core.StatusReady, core.PriorityMedium)
+	deletedDependency.Deleted = true
+	missingDependencyID := "WB-01J00000000000000000000036"
+	current.Dependencies = []string{activeDependency.ID, deletedDependency.ID, missingDependencyID}
+	activeBlocked.Dependencies = []string{current.ID}
+	activeTasks := []core.Task{current, activeDependency, activeBlocked}
+	deletedTasks := []core.Task{deletedDependency}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return activeTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<id> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	activeDocument, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: activeTasks, Presentation: presentationForTasks(activeTasks)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deletedDocument, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: deletedTasks})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deletedBlockedAfterPoll := activeBlocked
+	deletedBlockedAfterPoll.Deleted = true
+	deletedAfterPollDocument, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: []core.Task{deletedDependency, deletedBlockedAfterPoll}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	refreshedCurrent := current
+	refreshedCurrent.Dependencies = []string{activeDependency.ID}
+	refreshedDocument, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: []core.Task{refreshedCurrent, activeDependency}, Presentation: presentationForTasks([]core.Task{refreshedCurrent, activeDependency})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeAfterDeletedFetchFailure := refreshedCurrent
+	activeAfterDeletedFetchFailure.Dependencies = []string{}
+	deletedFetchFailureDocument, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: []core.Task{activeAfterDeletedFetchFailure, activeDependency}, Presentation: presentationForTasks([]core.Task{activeAfterDeletedFetchFailure, activeDependency})})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/"+current.ID, string(activeDocument)) + script + `
+deletedTaskResponse = ` + string(deletedDocument) + `;
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const dependsHeading = findElement(main, (element) => element.textContent === "Depends On");
+  const blocksHeading = findElement(main, (element) => element.textContent === "Blocks");
+  if (!dependsHeading || !blocksHeading) throw new Error("both relationship groups did not render");
+
+  const activeDependencyLink = findElement(main, (element) =>
+    element.tagName === "A" && element.href === "/tasks/" + encodeURIComponent(` + strconv.Quote(activeDependency.ID) + `));
+  if (!activeDependencyLink) throw new Error("active prerequisite was not linked");
+
+  const unavailable = findElement(main, (element) => element.dataset.relationshipId === ` + strconv.Quote(missingDependencyID) + `);
+  if (!unavailable || !findElement(unavailable, (element) => element.textContent === "Unavailable task")) {
+    throw new Error("missing prerequisite fallback did not render");
+  }
+
+  const deletedDependency = findElement(main, (element) => element.dataset.relationshipId === ` + strconv.Quote(deletedDependency.ID) + `);
+  if (!deletedDependency || !deletedDependency.textContent.includes("Deleted") ||
+      !findElement(deletedDependency, (element) => element.tagName === "BUTTON" && element.textContent === "Remove")) {
+    throw new Error("tombstoned prerequisite was not rendered removable");
+  }
+  const activeBlock = findElement(main, (element) => element.dataset.relationshipId === ` + strconv.Quote(activeBlocked.ID) + `);
+  if (!activeBlock || !findElement(activeBlock, (element) => element.tagName === "BUTTON" && element.textContent === "Remove")) {
+    throw new Error("active blocked task was not rendered removable");
+  }
+
+  const title = findElement(main, (element) => element.id === "task-title");
+  if (!title) throw new Error("detail title field did not render");
+  title.value = "Unsaved title";
+  taskResponse = ` + string(refreshedDocument) + `;
+  let resolveStaleDeleted;
+  deletedTaskResponse = new Promise((resolve) => { resolveStaleDeleted = resolve; });
+  const stalePoll = intervalCallback();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  deletedTaskResponse = ` + string(deletedAfterPollDocument) + `;
+  await intervalCallback();
+  if (title.value !== "Unsaved title") throw new Error("relationship refresh reconstructed the task form");
+  if (findElement(main, (element) => element.dataset.relationshipId === ` + strconv.Quote(deletedDependency.ID) + `) ||
+      findElement(main, (element) => element.dataset.relationshipId === ` + strconv.Quote(missingDependencyID) + `)) {
+    throw new Error("relationship rows did not follow refreshed canonical state");
+  }
+  const deletedBlock = findElement(main, (element) => element.dataset.relationshipId === ` + strconv.Quote(activeBlocked.ID) + `);
+  if (!deletedBlock || !deletedBlock.textContent.includes("Deleted") ||
+      findElement(deletedBlock, (element) => element.tagName === "BUTTON" && element.textContent === "Remove")) {
+    throw new Error("poll did not keep a later tombstoned blocked task read-only");
+  }
+  resolveStaleDeleted(` + string(deletedDocument) + `);
+  await stalePoll;
+  const blockAfterStaleResponse = findElement(main, (element) => element.dataset.relationshipId === ` + strconv.Quote(activeBlocked.ID) + `);
+  if (!blockAfterStaleResponse || !blockAfterStaleResponse.textContent.includes("Deleted") ||
+      findElement(blockAfterStaleResponse, (element) => element.tagName === "BUTTON" && element.textContent === "Remove")) {
+    throw new Error("stale deleted response regressed the latest blocked-task state");
+  }
+
+  taskResponse = ` + string(deletedFetchFailureDocument) + `;
+  deletedTaskResponse = Promise.reject(new Error("deleted task data unavailable"));
+  await intervalCallback();
+  if (title.value !== "Unsaved title") throw new Error("deleted-context failure reconstructed the task form");
+  if (findElement(main, (element) => element.dataset.relationshipId === ` + strconv.Quote(activeDependency.ID) + `)) {
+    throw new Error("deleted-context failure did not render the latest active relationship state");
+  }
+  const localError = findElement(main, (element) => element.textContent === "deleted task data unavailable");
+  if (!localError) throw new Error("deleted-context failure did not render a relationship-local error");
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute rendered dependency relationships: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerClientMountsCompactRelationshipsInSidebar(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	current := clientPlacementTask("WB-01J00000000000000000000037", "Current task", core.StatusReady, core.PriorityMedium)
+	activeDependency := clientPlacementTask("WB-01J00000000000000000000038", "Active prerequisite", core.StatusDone, core.PriorityHigh)
+	activeBlocked := clientPlacementTask("WB-01J00000000000000000000039", "Active blocked task", core.StatusBlocked, core.PriorityLow)
+	deletedDependency := clientPlacementTask("WB-01J00000000000000000000040", "Deleted prerequisite", core.StatusReady, core.PriorityMedium)
+	deletedDependency.Deleted = true
+	deletedBlocked := clientPlacementTask("WB-01J00000000000000000000043", "Deleted blocked task", core.StatusReady, core.PriorityLow)
+	deletedBlocked.Deleted = true
+	missingDependencyID := "WB-01J00000000000000000000044"
+	current.Dependencies = []string{activeDependency.ID, deletedDependency.ID, missingDependencyID}
+	activeBlocked.Dependencies = []string{current.ID}
+	deletedBlocked.Dependencies = []string{current.ID}
+	activeTasks := []core.Task{current, activeDependency, activeBlocked}
+	deletedTasks := []core.Task{deletedDependency, deletedBlocked}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return activeTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<id> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	activeDocument, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: activeTasks, Presentation: presentationForTasks(activeTasks)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deletedDocument, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: deletedTasks})
+	if err != nil {
+		t.Fatal(err)
+	}
+	refreshedCurrent := current
+	refreshedCurrent.Dependencies = []string{activeDependency.ID}
+	refreshedDocument, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: []core.Task{refreshedCurrent, activeDependency}, Presentation: presentationForTasks([]core.Task{refreshedCurrent, activeDependency})})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/"+current.ID, string(activeDocument)) + script + `
+deletedTaskResponse = ` + string(deletedDocument) + `;
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const sidebar = findElement(main, (element) =>
+    element.className.split(/\s+/).includes("task-sidebar"));
+  const region = findElement(sidebar, (element) =>
+    element.className.split(/\s+/).includes("task-relationships"));
+  if (!region) throw new Error("Relationships are not mounted in the sidebar");
+
+  const rows = findElements(region, (element) =>
+    element.dataset.relationshipRow !== undefined);
+  if (!rows.length ||
+      rows.some((row) =>
+        !row.className.split(/\s+/).includes("relationship-row--compact"))) {
+    throw new Error("Relationships did not use compact sidebar rows");
+  }
+
+  const missing = findElement(region, (element) => element.dataset.relationshipId === ` + strconv.Quote(missingDependencyID) + `);
+  const deletedDependency = findElement(region, (element) => element.dataset.relationshipId === ` + strconv.Quote(deletedDependency.ID) + `);
+  const activeBlock = findElement(region, (element) => element.dataset.relationshipId === ` + strconv.Quote(activeBlocked.ID) + `);
+  const deletedBlock = findElement(region, (element) => element.dataset.relationshipId === ` + strconv.Quote(deletedBlocked.ID) + `);
+  const hasRemove = (row) => findElement(row, (element) => element.tagName === "BUTTON" && element.textContent === "Remove");
+  if (!missing || !hasRemove(missing) || !deletedDependency || !hasRemove(deletedDependency)) {
+    throw new Error("missing or tombstoned Depends On rows were not removable");
+  }
+  if (!activeBlock || !hasRemove(activeBlock)) {
+    throw new Error("active Blocks rows were not removable");
+  }
+  if (!deletedBlock || hasRemove(deletedBlock)) {
+    throw new Error("tombstoned Blocks rows were not read-only");
+  }
+
+  const mountedForm = findElement(main, (element) => element.tagName === "FORM");
+  taskResponse = ` + string(refreshedDocument) + `;
+  await intervalCallback();
+  const form = findElement(main, (element) => element.tagName === "FORM");
+  const sameForm = form === mountedForm;
+  if (!sameForm) throw new Error("relationship refresh replaced the task form");
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute rendered compact sidebar relationships: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerClientFiltersDependencyComboboxCandidates(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	current := clientPlacementTask("WB-01J00000000000000000000041", "Current task", core.StatusReady, core.PriorityMedium)
+	existingDependency := clientPlacementTask("WB-01J00000000000000000000042", "Existing prerequisite", core.StatusDone, core.PriorityHigh)
+	alreadyBlocked := clientPlacementTask("WB-01J00000000000000000000043", "Already blocked", core.StatusBlocked, core.PriorityLow)
+	firstCandidate := clientPlacementTask("WB-01J00000000000000000000044", "First candidate", core.StatusBacklog, core.PriorityHigh)
+	secondCandidate := clientPlacementTask("WB-01J00000000000000000000045", "Second candidate", core.StatusInProgress, core.PriorityMedium)
+	deletedCandidate := clientPlacementTask("WB-01J00000000000000000000046", "Deleted candidate", core.StatusReady, core.PriorityLow)
+	current.Dependencies = []string{existingDependency.ID}
+	alreadyBlocked.Dependencies = []string{current.ID}
+	deletedCandidate.Deleted = true
+	tasks := []core.Task{current, existingDependency, alreadyBlocked, firstCandidate, secondCandidate, deletedCandidate}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<id> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/"+current.ID, string(document)) + script + `
+setTimeout(() => {
+  const dependsHeading = findElement(main, (element) => element.textContent === "Depends On");
+  const blocksHeading = findElement(main, (element) => element.textContent === "Blocks");
+  const dependsInput = dependsHeading && findElement(dependsHeading.parentElement, (element) => element.tagName === "INPUT");
+  const blocksInput = blocksHeading && findElement(blocksHeading.parentElement, (element) => element.tagName === "INPUT");
+  if (!dependsInput || dependsInput.attributes.role !== "combobox" ||
+      dependsInput.attributes["aria-autocomplete"] !== "list" ||
+      !dependsInput.attributes["aria-controls"]) {
+    throw new Error("Depends On input does not expose the combobox contract");
+  }
+  if (!blocksInput || blocksInput.attributes.role !== "combobox" ||
+      blocksInput.attributes["aria-autocomplete"] !== "list" ||
+      !blocksInput.attributes["aria-controls"]) {
+    throw new Error("Blocks input does not expose the combobox contract");
+  }
+
+  const assertOptions = (heading, wantIDs, label) => {
+    const options = heading.parentElement.querySelectorAll('[role="option"]');
+    const gotIDs = options.map((option) => option.dataset.candidateId);
+    if (JSON.stringify(gotIDs) !== JSON.stringify(wantIDs)) {
+      throw new Error(label + " candidates = " + JSON.stringify(gotIDs) + ", want " + JSON.stringify(wantIDs));
+    }
+    const ids = new Set();
+    options.forEach((option) => {
+      const task = taskDocument.tasks.find((candidate) => candidate.id === option.dataset.candidateId);
+      if (!option.id || ids.has(option.id)) throw new Error(label + " option IDs are not stable and unique");
+      ids.add(option.id);
+      if (option.attributes.role !== "option" || option.attributes["aria-selected"] !== "false") {
+        throw new Error(label + " option does not expose selection semantics");
+      }
+      if (!task || !option.textContent.includes(task.title) || !option.textContent.includes(task.status) ||
+          !option.textContent.includes(task.priority) || !option.textContent.includes(task.id)) {
+        throw new Error(label + " option does not show title, status, priority, and full ID");
+      }
+    });
+  };
+
+  assertOptions(dependsHeading, [
+    ` + strconv.Quote(alreadyBlocked.ID) + `,
+    ` + strconv.Quote(firstCandidate.ID) + `,
+    ` + strconv.Quote(secondCandidate.ID) + `
+  ], "Depends On");
+  assertOptions(blocksHeading, [
+    ` + strconv.Quote(existingDependency.ID) + `,
+    ` + strconv.Quote(firstCandidate.ID) + `,
+    ` + strconv.Quote(secondCandidate.ID) + `
+  ], "Blocks");
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute dependency combobox candidate filtering: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerClientDependencySnapshotPrefersTombstones(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	current := clientPlacementTask("WB-01J00000000000000000000047", "Current task", core.StatusReady, core.PriorityMedium)
+	activeDependency := clientPlacementTask("WB-01J00000000000000000000048", "Active prerequisite copy", core.StatusDone, core.PriorityHigh)
+	activeBlocked := clientPlacementTask("WB-01J00000000000000000000049", "Active blocked copy", core.StatusBlocked, core.PriorityLow)
+	activeCandidate := clientPlacementTask("WB-01J0000000000000000000004A", "Active candidate copy", core.StatusBacklog, core.PriorityMedium)
+	current.Dependencies = []string{activeDependency.ID}
+	activeBlocked.Dependencies = []string{current.ID}
+	activeTasks := []core.Task{current, activeDependency, activeBlocked, activeCandidate}
+	deletedDependency := activeDependency
+	deletedDependency.Title = "Deleted prerequisite copy"
+	deletedDependency.Deleted = true
+	deletedBlocked := activeBlocked
+	deletedBlocked.Title = "Deleted blocked copy"
+	deletedBlocked.Deleted = true
+	deletedCandidate := activeCandidate
+	deletedCandidate.Title = "Deleted candidate copy"
+	deletedCandidate.Deleted = true
+	deletedTasks := []core.Task{deletedDependency, deletedBlocked, deletedCandidate}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return activeTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<id> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	activeDocument, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: activeTasks, Presentation: presentationForTasks(activeTasks)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deletedDocument, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: deletedTasks})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/"+current.ID, string(activeDocument)) + script + `
+deletedTaskResponse = ` + string(deletedDocument) + `;
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const dependsHeading = findElement(main, (element) => element.textContent === "Depends On");
+  const blocksHeading = findElement(main, (element) => element.textContent === "Blocks");
+  const dependsGroup = dependsHeading && dependsHeading.parentElement;
+  const blocksGroup = blocksHeading && blocksHeading.parentElement;
+  const candidateID = ` + strconv.Quote(activeCandidate.ID) + `;
+  if (findElement(dependsGroup, (element) => element.attributes.role === "option" && element.dataset.candidateId === candidateID) ||
+      findElement(blocksGroup, (element) => element.attributes.role === "option" && element.dataset.candidateId === candidateID)) {
+    throw new Error("tombstoned ID remained an editable relationship candidate");
+  }
+
+  const dependsRows = dependsGroup.querySelectorAll("[data-relationship-row]")
+    .filter((row) => row.dataset.relationshipId === ` + strconv.Quote(activeDependency.ID) + `);
+  if (dependsRows.length !== 1 || !dependsRows[0].textContent.includes("Deleted") ||
+      !findElement(dependsRows[0], (element) => element.tagName === "BUTTON" && element.textContent === "Remove")) {
+    throw new Error("tombstoned Depends On ID was not rendered once and removable");
+  }
+
+  const blocksRows = blocksGroup.querySelectorAll("[data-relationship-row]")
+    .filter((row) => row.dataset.relationshipId === ` + strconv.Quote(activeBlocked.ID) + `);
+  if (blocksRows.length !== 1 || !blocksRows[0].textContent.includes("Deleted") ||
+      findElement(blocksRows[0], (element) => element.tagName === "BUTTON" && element.textContent === "Remove")) {
+    throw new Error("tombstoned Blocks ID was not rendered once and read-only");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute conflicting relationship snapshot behavior: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerClientDependencyComboboxSelectionCollapseIsCoherent(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	current := clientPlacementTask("WB-01J0000000000000000000004B", "Current task", core.StatusReady, core.PriorityMedium)
+	pointerCandidate := clientPlacementTask("WB-01J0000000000000000000004C", "Pointer candidate", core.StatusDone, core.PriorityHigh)
+	keyboardCandidate := clientPlacementTask("WB-01J0000000000000000000004D", "Keyboard candidate", core.StatusBacklog, core.PriorityLow)
+	tasks := []core.Task{current, pointerCandidate, keyboardCandidate}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<id> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/"+current.ID, string(document)) + script + `
+setTimeout(() => {
+  const assertCollapsedSelection = (group, input, candidate, label) => {
+    const listbox = findElement(group, (element) => element.attributes.role === "listbox");
+    const selected = findElement(group, (element) =>
+      element.attributes.role === "option" && element.attributes["aria-selected"] === "true");
+    const add = findElement(group, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+    if (input.value !== candidate.title) {
+      throw new Error(label + " did not expose the accepted task as the combobox value");
+    }
+    if (input.attributes["aria-expanded"] !== "false" || !listbox.hidden ||
+        Object.prototype.hasOwnProperty.call(input.attributes, "aria-activedescendant")) {
+      throw new Error(label + " did not collapse without an active descendant");
+    }
+    if (!selected || selected.dataset.candidateId !== candidate.id || add.disabled) {
+      throw new Error(label + " did not retain selection semantics and an enabled Add button");
+    }
+  };
+
+  const dependsHeading = findElement(main, (element) => element.textContent === "Depends On");
+  const dependsGroup = dependsHeading.parentElement;
+  const dependsInput = findElement(dependsGroup, (element) => element.attributes.role === "combobox");
+  dependsInput.eventListeners.focus();
+  const pointerOption = findElement(dependsGroup, (element) =>
+    element.attributes.role === "option" && element.dataset.candidateId === ` + strconv.Quote(pointerCandidate.ID) + `);
+  pointerOption.eventListeners.click();
+  assertCollapsedSelection(dependsGroup, dependsInput, taskDocument.tasks[1], "pointer selection from an empty query");
+
+  const blocksHeading = findElement(main, (element) => element.textContent === "Blocks");
+  const blocksGroup = blocksHeading.parentElement;
+  const blocksInput = findElement(blocksGroup, (element) => element.attributes.role === "combobox");
+  blocksInput.value = "Keyboard";
+  blocksInput.eventListeners.input();
+  blocksInput.eventListeners.keydown({ key: "ArrowDown", preventDefault() {} });
+  blocksInput.eventListeners.keydown({ key: "Enter", preventDefault() {} });
+  assertCollapsedSelection(blocksGroup, blocksInput, taskDocument.tasks[2], "keyboard selection");
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute coherent dependency combobox collapse: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerClientDependencyComboboxScrollsKeyboardOptionIntoView(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	current := clientPlacementTask("WB-01J0000000000000000000004E", "Current task", core.StatusReady, core.PriorityMedium)
+	first := clientPlacementTask("WB-01J0000000000000000000004F", "First candidate", core.StatusDone, core.PriorityHigh)
+	second := clientPlacementTask("WB-01J0000000000000000000004G", "Second candidate", core.StatusBacklog, core.PriorityLow)
+	third := clientPlacementTask("WB-01J0000000000000000000004H", "Third candidate", core.StatusBlocked, core.PriorityMedium)
+	fourth := clientPlacementTask("WB-01J0000000000000000000004J", "Fourth candidate", core.StatusInProgress, core.PriorityHigh)
+	tasks := []core.Task{current, first, second, third, fourth}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<id> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/"+current.ID, string(document)) + script + `
+setTimeout(() => {
+  const dependsHeading = findElement(main, (element) => element.textContent === "Depends On");
+  const input = findElement(dependsHeading.parentElement, (element) => element.attributes.role === "combobox");
+  input.eventListeners.focus();
+  for (let index = 0; index < 3; index += 1) {
+    input.eventListeners.keydown({ key: "ArrowDown", preventDefault() {} });
+  }
+  if (scrollIntoViewCalls.length !== 3) {
+    throw new Error("keyboard navigation scroll calls = " + scrollIntoViewCalls.length + ", want 3");
+  }
+  const last = scrollIntoViewCalls[2];
+  if (last.element.dataset.candidateId !== ` + strconv.Quote(third.ID) + ` ||
+      !last.options || last.options.block !== "nearest") {
+    throw new Error("keyboard navigation did not scroll the third active option with block nearest");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute dependency keyboard option scrolling: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerClientDependencyMutationOrientationAndRefresh(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	current := clientPlacementTask("WB-01J00000000000000000000051", "Current task", core.StatusReady, core.PriorityMedium)
+	existingDependency := clientPlacementTask("WB-01J00000000000000000000052", "Existing prerequisite", core.StatusDone, core.PriorityHigh)
+	existingBlocked := clientPlacementTask("WB-01J00000000000000000000053", "Existing blocked task", core.StatusBlocked, core.PriorityLow)
+	dependsCandidate := clientPlacementTask("WB-01J00000000000000000000054", "New prerequisite", core.StatusBacklog, core.PriorityHigh)
+	blocksCandidate := clientPlacementTask("WB-01J00000000000000000000055", "New blocked task", core.StatusInProgress, core.PriorityMedium)
+	current.Dependencies = []string{existingDependency.ID}
+	existingBlocked.Dependencies = []string{current.ID}
+	initialTasks := []core.Task{current, existingDependency, existingBlocked, dependsCandidate, blocksCandidate}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<id> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	documentJSON := func(tasks []core.Task) string {
+		t.Helper()
+		document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(document)
+	}
+	emptyDeleted, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: []core.Task{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	currentAfterAdd := current
+	currentAfterAdd.Dependencies = []string{existingDependency.ID, dependsCandidate.ID}
+	afterDependsAdd := []core.Task{currentAfterAdd, existingDependency, existingBlocked, dependsCandidate, blocksCandidate}
+	newBlockedAfterAdd := blocksCandidate
+	newBlockedAfterAdd.Dependencies = []string{current.ID}
+	afterBlocksAdd := []core.Task{currentAfterAdd, existingDependency, existingBlocked, dependsCandidate, newBlockedAfterAdd}
+	currentAfterRemove := currentAfterAdd
+	currentAfterRemove.Dependencies = []string{dependsCandidate.ID}
+	afterDependsRemove := []core.Task{currentAfterRemove, existingDependency, existingBlocked, dependsCandidate, newBlockedAfterAdd}
+	existingBlockedAfterRemove := existingBlocked
+	existingBlockedAfterRemove.Dependencies = []string{}
+	afterBlocksRemove := []core.Task{currentAfterRemove, existingDependency, existingBlockedAfterRemove, dependsCandidate, newBlockedAfterAdd}
+
+	program := clientDOMHarness("/tasks/"+current.ID, documentJSON(initialTasks)) + script + `
+deletedTaskResponse = ` + string(emptyDeleted) + `;
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const groupFor = (headingText) => {
+    const heading = findElement(main, (element) => element.textContent === headingText);
+    if (!heading) throw new Error("missing " + headingText + " group");
+    return heading.parentElement;
+  };
+  const selectByPointer = (group, candidateID) => {
+    const option = findElement(group, (element) => element.attributes.role === "option" && element.dataset.candidateId === candidateID);
+    if (!option || !option.eventListeners.click) throw new Error("candidate option is not pointer selectable: " + candidateID);
+    option.eventListeners.click();
+    const add = findElement(group, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+    if (!add || add.disabled || !add.eventListeners.click) throw new Error("selected candidate did not enable Add dependency");
+    return add;
+  };
+  const mutationDocument = (task) => ({
+    format: "workbook.task-mutation",
+    version: 1,
+    task
+  });
+  let nextMutation = mutationDocument(taskDocument.tasks[0]);
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if ((options.method || "GET") !== "GET") {
+      return { ok: true, json: async () => nextMutation };
+    }
+    return { ok: true, json: async () => url === "/api/tasks?deleted=true" ? deletedTaskResponse : taskResponse };
+  };
+  fetchCalls.splice(0);
+
+  let dependsGroup = groupFor("Depends On");
+  nextMutation = mutationDocument(` + documentJSON(afterDependsAdd) + `.tasks[0]);
+  taskResponse = ` + documentJSON(afterDependsAdd) + `;
+  await selectByPointer(dependsGroup, ` + strconv.Quote(dependsCandidate.ID) + `).eventListeners.click();
+  const dependsAdd = fetchCalls.find((call) =>
+    call.options.method === "PUT" &&
+    call.url === "/api/tasks/" + encodeURIComponent(` + strconv.Quote(current.ID) + `) +
+      "/dependencies/" + encodeURIComponent(` + strconv.Quote(dependsCandidate.ID) + `));
+  if (!dependsAdd || Object.prototype.hasOwnProperty.call(dependsAdd.options, "body")) {
+    throw new Error("Depends On add did not send a bodyless nested PUT");
+  }
+
+  let blocksGroup = groupFor("Blocks");
+  nextMutation = mutationDocument(` + documentJSON(afterBlocksAdd) + `.tasks[4]);
+  taskResponse = ` + documentJSON(afterBlocksAdd) + `;
+  await selectByPointer(blocksGroup, ` + strconv.Quote(blocksCandidate.ID) + `).eventListeners.click();
+  const blocksAdd = fetchCalls.find((call) =>
+    call.options.method === "PUT" &&
+    call.url === "/api/tasks/" + encodeURIComponent(` + strconv.Quote(blocksCandidate.ID) + `) +
+      "/dependencies/" + encodeURIComponent(` + strconv.Quote(current.ID) + `));
+  if (!blocksAdd || Object.prototype.hasOwnProperty.call(blocksAdd.options, "body")) {
+    throw new Error("Blocks add did not reverse the edge orientation with a bodyless request");
+  }
+
+  dependsGroup = groupFor("Depends On");
+  const existingDependencyRow = findElement(dependsGroup, (element) => element.dataset.relationshipId === ` + strconv.Quote(existingDependency.ID) + `);
+  const dependsRemove = existingDependencyRow && findElement(existingDependencyRow, (element) => element.tagName === "BUTTON" && element.textContent === "Remove");
+  if (!dependsRemove || !dependsRemove.eventListeners.click) throw new Error("active Depends On row is not removable");
+  let resolveDependsRefresh;
+  taskResponse = new Promise((resolve) => { resolveDependsRefresh = resolve; });
+  nextMutation = mutationDocument(` + documentJSON(afterDependsRemove) + `.tasks[0]);
+  const dependsRemovePromise = dependsRemove.eventListeners.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  if (!findElement(dependsGroup, (element) => element.dataset.relationshipId === ` + strconv.Quote(existingDependency.ID) + `)) {
+    throw new Error("Depends On row changed before durable state was refreshed");
+  }
+  resolveDependsRefresh(` + documentJSON(afterDependsRemove) + `);
+  await dependsRemovePromise;
+  if (findElement(dependsGroup, (element) => element.dataset.relationshipId === ` + strconv.Quote(existingDependency.ID) + `)) {
+    throw new Error("Depends On row remained after refreshed state removed it");
+  }
+  const dependsDelete = fetchCalls.find((call) =>
+    call.options.method === "DELETE" &&
+    call.url === "/api/tasks/" + encodeURIComponent(` + strconv.Quote(current.ID) + `) +
+      "/dependencies/" + encodeURIComponent(` + strconv.Quote(existingDependency.ID) + `));
+  if (!dependsDelete || Object.prototype.hasOwnProperty.call(dependsDelete.options, "body")) {
+    throw new Error("Depends On remove did not send the mirrored bodyless nested DELETE");
+  }
+
+  blocksGroup = groupFor("Blocks");
+  const existingBlockedRow = findElement(blocksGroup, (element) => element.dataset.relationshipId === ` + strconv.Quote(existingBlocked.ID) + `);
+  const blocksRemove = existingBlockedRow && findElement(existingBlockedRow, (element) => element.tagName === "BUTTON" && element.textContent === "Remove");
+  if (!blocksRemove || !blocksRemove.eventListeners.click) throw new Error("active Blocks row is not removable");
+  let resolveBlocksRefresh;
+  taskResponse = new Promise((resolve) => { resolveBlocksRefresh = resolve; });
+  nextMutation = mutationDocument(` + documentJSON(afterBlocksRemove) + `.tasks[2]);
+  const blocksRemovePromise = blocksRemove.eventListeners.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  if (!findElement(blocksGroup, (element) => element.dataset.relationshipId === ` + strconv.Quote(existingBlocked.ID) + `)) {
+    throw new Error("Blocks row changed before durable state was refreshed");
+  }
+  resolveBlocksRefresh(` + documentJSON(afterBlocksRemove) + `);
+  await blocksRemovePromise;
+  if (findElement(blocksGroup, (element) => element.dataset.relationshipId === ` + strconv.Quote(existingBlocked.ID) + `)) {
+    throw new Error("Blocks row remained after refreshed state removed it");
+  }
+  const blocksDelete = fetchCalls.find((call) =>
+    call.options.method === "DELETE" &&
+    call.url === "/api/tasks/" + encodeURIComponent(` + strconv.Quote(existingBlocked.ID) + `) +
+      "/dependencies/" + encodeURIComponent(` + strconv.Quote(current.ID) + `));
+  if (!blocksDelete || Object.prototype.hasOwnProperty.call(blocksDelete.options, "body")) {
+    throw new Error("Blocks remove did not reverse the edge orientation with a bodyless nested DELETE");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute dependency mutation orientation and refresh: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerClientDependencyMutationFollowsSupersedingRefresh(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	current := clientPlacementTask("WB-01J00000000000000000000056", "Current task", core.StatusReady, core.PriorityMedium)
+	candidate := clientPlacementTask("WB-01J00000000000000000000057", "Candidate task", core.StatusDone, core.PriorityHigh)
+	initialTasks := []core.Task{current, candidate}
+	updatedCurrent := current
+	updatedCurrent.Dependencies = []string{candidate.ID}
+	updatedTasks := []core.Task{updatedCurrent, candidate}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<id> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	documentJSON := func(tasks []core.Task) string {
+		t.Helper()
+		document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(document)
+	}
+	emptyDeleted, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: []core.Task{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/"+current.ID, documentJSON(initialTasks)) + script + `
+deletedTaskResponse = ` + string(emptyDeleted) + `;
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const dependsHeading = findElement(main, (element) => element.textContent === "Depends On");
+  const dependsGroup = dependsHeading && dependsHeading.parentElement;
+  const input = findElement(dependsGroup, (element) => element.attributes.role === "combobox");
+  input.value = "Candidate";
+  input.eventListeners.input();
+  const option = findElement(dependsGroup, (element) =>
+    element.attributes.role === "option" && element.dataset.candidateId === ` + strconv.Quote(candidate.ID) + `);
+  option.eventListeners.click();
+  const add = findElement(dependsGroup, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+
+  let resolveSupersededRefresh;
+  let activeGets = 0;
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if ((options.method || "GET") !== "GET") {
+      return {
+        ok: true,
+        json: async () => ({
+          format: "workbook.task-mutation",
+          version: 1,
+          task: ` + documentJSON(updatedTasks) + `.tasks[0]
+        })
+      };
+    }
+    if (url === "/api/tasks?deleted=true") {
+      return { ok: true, json: async () => deletedTaskResponse };
+    }
+    activeGets += 1;
+    if (activeGets === 1) {
+      return {
+        ok: true,
+        json: async () => new Promise((resolve) => { resolveSupersededRefresh = resolve; })
+      };
+    }
+    return { ok: true, json: async () => (` + documentJSON(updatedTasks) + `) };
+  };
+  fetchCalls.splice(0);
+
+  const mutation = add.eventListeners.click();
+  while (!resolveSupersededRefresh) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  await intervalCallback();
+  const refreshedRow = findElement(dependsGroup, (element) =>
+    element.dataset.relationshipId === ` + strconv.Quote(candidate.ID) + `);
+  if (!refreshedRow) throw new Error("superseding refresh did not render the durable relationship");
+
+  resolveSupersededRefresh(` + documentJSON(initialTasks) + `);
+  await mutation;
+  const falseFailure = findElement(dependsGroup, (element) =>
+    element.textContent.includes("latest task state could not be refreshed"));
+  if (falseFailure) throw new Error("superseded successful refresh was reported as a durable-refresh failure");
+  if (input.value !== "" || !add.disabled) {
+    throw new Error("superseded successful refresh did not apply PUT combobox clear semantics");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute superseding dependency refresh behavior: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerClientDependencyMutationSettlesAfterControllerSupersession(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	current := clientPlacementTask("WB-01J0000000000000000000005A", "Current task", core.StatusReady, core.PriorityMedium)
+	candidate := clientPlacementTask("WB-01J0000000000000000000005B", "Candidate task", core.StatusDone, core.PriorityHigh)
+	initialTasks := []core.Task{current, candidate}
+	updatedCurrent := current
+	updatedCurrent.Dependencies = []string{candidate.ID}
+	updatedTasks := []core.Task{updatedCurrent, candidate}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<id> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	documentJSON := func(tasks []core.Task) string {
+		t.Helper()
+		document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(document)
+	}
+	emptyDeleted, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: []core.Task{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/"+current.ID, documentJSON(initialTasks)) + script + `
+deletedTaskResponse = ` + string(emptyDeleted) + `;
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const dependsHeading = findElement(main, (element) => element.textContent === "Depends On");
+  const dependsGroup = dependsHeading && dependsHeading.parentElement;
+  const relationshipRegion = dependsGroup.parentElement;
+  const controllerStatus = relationshipRegion.children.find((element) => element.className === "form-status");
+  const input = findElement(dependsGroup, (element) => element.attributes.role === "combobox");
+  input.eventListeners.focus();
+  const option = findElement(dependsGroup, (element) =>
+    element.attributes.role === "option" && element.dataset.candidateId === ` + strconv.Quote(candidate.ID) + `);
+  option.eventListeners.click();
+  const add = findElement(dependsGroup, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+
+  let resolveDeletedContext;
+  let activeGets = 0;
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if ((options.method || "GET") !== "GET") {
+      return {
+        ok: true,
+        json: async () => ({
+          format: "workbook.task-mutation",
+          version: 1,
+          task: ` + documentJSON(updatedTasks) + `.tasks[0]
+        })
+      };
+    }
+    if (url === "/api/tasks?deleted=true") {
+      return {
+        ok: true,
+        json: async () => new Promise((resolve) => { resolveDeletedContext = resolve; })
+      };
+    }
+    activeGets += 1;
+    return { ok: true, json: async () => (` + documentJSON(updatedTasks) + `) };
+  };
+  fetchCalls.splice(0);
+
+  const mutation = add.eventListeners.click();
+  while (!resolveDeletedContext) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  if (activeGets !== 1) throw new Error("mutation did not start exactly one active refresh");
+  controllerStatus.textContent = "detached controller remains untouched";
+
+  const back = findElement(main, (element) => element.tagName === "A" && element.textContent === "Back");
+  documentEventListeners.click({
+    target: back,
+    button: 0,
+    defaultPrevented: false,
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+    preventDefault() {}
+  });
+  if (main.firstElementChild !== boardView) throw new Error("navigation did not detach the relationship controller");
+
+  resolveDeletedContext(` + string(emptyDeleted) + `);
+  await mutation;
+  if (input.disabled) throw new Error("settled mutation did not clear the initiating group busy state");
+  if (controllerStatus.textContent !== "detached controller remains untouched") {
+    throw new Error("superseded deleted context wrote to the detached controller");
+  }
+  const groupMessage = findElement(dependsGroup, (element) => element.className === "relationship-message");
+  if (groupMessage.textContent !== "") {
+    throw new Error("settled mutation wrote status into the detached relationship group");
+  }
+  if (activeGets !== 1) throw new Error("controller-only supersession started an unexpected task refresh");
+
+  const newTask = new TestElement("a");
+  newTask.href = "/tasks/new";
+  boardView.append(newTask);
+  documentEventListeners.click({
+    target: newTask,
+    button: 0,
+    defaultPrevented: false,
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+    preventDefault() {}
+  });
+  if (!findElement(main, (element) => element.id === "task-title")) {
+    throw new Error("client did not remain responsive after the mutation settled");
+  }
+}, 0);
+`
+	commandContext, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	command := exec.CommandContext(commandContext, node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		if commandContext.Err() == context.DeadlineExceeded {
+			t.Fatalf("dependency mutation did not settle after controller-only supersession")
+		}
+		t.Fatalf("execute controller-superseded dependency mutation: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerClientDependencyMutationDoesNotWriteDetachedGroupAfterNewerPoll(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	current := clientPlacementTask("WB-01J0000000000000000000005C", "Current task", core.StatusReady, core.PriorityMedium)
+	candidate := clientPlacementTask("WB-01J0000000000000000000005D", "Candidate task", core.StatusDone, core.PriorityHigh)
+	initialTasks := []core.Task{current, candidate}
+	updatedCurrent := current
+	updatedCurrent.Dependencies = []string{candidate.ID}
+	updatedTasks := []core.Task{updatedCurrent, candidate}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<id> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	documentJSON := func(tasks []core.Task) string {
+		t.Helper()
+		document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(document)
+	}
+	emptyDeleted, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: []core.Task{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/"+current.ID, documentJSON(initialTasks)) + script + `
+deletedTaskResponse = ` + string(emptyDeleted) + `;
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const dependsHeading = findElement(main, (element) => element.textContent === "Depends On");
+  const dependsGroup = dependsHeading.parentElement;
+  const relationshipRegion = dependsGroup.parentElement;
+  const controllerStatus = relationshipRegion.children.find((element) => element.className === "form-status");
+  const groupMessage = findElement(dependsGroup, (element) => element.className === "relationship-message");
+  const input = findElement(dependsGroup, (element) => element.attributes.role === "combobox");
+  input.eventListeners.focus();
+  const option = findElement(dependsGroup, (element) =>
+    element.attributes.role === "option" && element.dataset.candidateId === ` + strconv.Quote(candidate.ID) + `);
+  option.eventListeners.click();
+  const add = findElement(dependsGroup, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+
+  let resolveDeletedContext;
+  let activeGets = 0;
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if ((options.method || "GET") !== "GET") {
+      return {
+        ok: true,
+        json: async () => ({
+          format: "workbook.task-mutation",
+          version: 1,
+          task: ` + documentJSON(updatedTasks) + `.tasks[0],
+          warnings: [{ code: "projection-update-failed", message: "Detached warning must not render." }]
+        })
+      };
+    }
+    if (url === "/api/tasks?deleted=true") {
+      return {
+        ok: true,
+        json: async () => new Promise((resolve) => { resolveDeletedContext = resolve; })
+      };
+    }
+    activeGets += 1;
+    return { ok: true, json: async () => (` + documentJSON(updatedTasks) + `) };
+  };
+  fetchCalls.splice(0);
+
+  const mutation = add.eventListeners.click();
+  while (!resolveDeletedContext) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  const selectedValue = input.value;
+  const back = findElement(main, (element) => element.tagName === "A" && element.textContent === "Back");
+  documentEventListeners.click({
+    target: back,
+    button: 0,
+    defaultPrevented: false,
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+    preventDefault() {}
+  });
+  controllerStatus.textContent = "detached controller status";
+  groupMessage.textContent = "detached group status";
+
+  await intervalCallback();
+  if (activeGets !== 2) throw new Error("newer polling refresh did not apply");
+  resolveDeletedContext(` + string(emptyDeleted) + `);
+  await mutation;
+
+  if (input.disabled) throw new Error("detached successful mutation did not release busy state");
+  if (input.value !== selectedValue) throw new Error("detached successful mutation cleared the old combobox");
+  if (groupMessage.textContent !== "detached group status") {
+    throw new Error("newer polling result wrote a warning into the detached group");
+  }
+  if (controllerStatus.textContent !== "detached controller status") {
+    throw new Error("newer polling result wrote status into the detached controller");
+  }
+  if (main.firstElementChild !== boardView) throw new Error("newer polling result replaced the current route");
+
+  const newTask = new TestElement("a");
+  newTask.href = "/tasks/new";
+  boardView.append(newTask);
+  documentEventListeners.click({
+    target: newTask,
+    button: 0,
+    defaultPrevented: false,
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+    preventDefault() {}
+  });
+  if (!findElement(main, (element) => element.id === "task-title")) {
+    throw new Error("new route was not responsive after detached mutation completion");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute detached dependency mutation with newer poll: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerClientDependencyMutationErrorDoesNotWriteDetachedGroup(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	current := clientPlacementTask("WB-01J0000000000000000000005E", "Current task", core.StatusReady, core.PriorityMedium)
+	candidate := clientPlacementTask("WB-01J0000000000000000000005F", "Candidate task", core.StatusDone, core.PriorityHigh)
+	tasks := []core.Task{current, candidate}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<id> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptyDeleted, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: []core.Task{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/"+current.ID, string(document)) + script + `
+deletedTaskResponse = ` + string(emptyDeleted) + `;
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const dependsHeading = findElement(main, (element) => element.textContent === "Depends On");
+  const dependsGroup = dependsHeading.parentElement;
+  const groupMessage = findElement(dependsGroup, (element) => element.className === "relationship-message");
+  const input = findElement(dependsGroup, (element) => element.attributes.role === "combobox");
+  input.eventListeners.focus();
+  const option = findElement(dependsGroup, (element) =>
+    element.attributes.role === "option" && element.dataset.candidateId === ` + strconv.Quote(candidate.ID) + `);
+  option.eventListeners.click();
+  const add = findElement(dependsGroup, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+
+  let resolveMutationError;
+  let activeGets = 0;
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if ((options.method || "GET") !== "GET") {
+      return {
+        ok: false,
+        json: async () => new Promise((resolve) => { resolveMutationError = resolve; })
+      };
+    }
+    activeGets += 1;
+    return { ok: true, json: async () => taskDocument };
+  };
+  fetchCalls.splice(0);
+
+  const mutation = add.eventListeners.click();
+  while (!resolveMutationError) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  const back = findElement(main, (element) => element.tagName === "A" && element.textContent === "Back");
+  documentEventListeners.click({
+    target: back,
+    button: 0,
+    defaultPrevented: false,
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+    preventDefault() {}
+  });
+  groupMessage.textContent = "detached group status";
+
+  resolveMutationError({
+    format: "workbook.error",
+    version: 1,
+    error: { category: "validation", message: "dependency would create a cycle" }
+  });
+  await mutation;
+
+  if (activeGets !== 1) throw new Error("mutation-error recovery did not refresh global task state");
+  if (input.disabled) throw new Error("detached failed mutation did not release busy state");
+  if (groupMessage.textContent !== "detached group status") {
+    throw new Error("mutation error wrote into the detached relationship group");
+  }
+  if (main.firstElementChild !== boardView) throw new Error("mutation-error recovery replaced the current route");
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute detached dependency mutation error: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerClientDependencyMutationReportsDeletedContextFailure(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	current := clientPlacementTask("WB-01J00000000000000000000058", "Current task", core.StatusReady, core.PriorityMedium)
+	candidate := clientPlacementTask("WB-01J00000000000000000000059", "Candidate task", core.StatusDone, core.PriorityHigh)
+	initialTasks := []core.Task{current, candidate}
+	updatedCurrent := current
+	updatedCurrent.Dependencies = []string{candidate.ID}
+	updatedTasks := []core.Task{updatedCurrent, candidate}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<id> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	documentJSON := func(tasks []core.Task) string {
+		t.Helper()
+		document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(document)
+	}
+	emptyDeleted, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: []core.Task{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/"+current.ID, documentJSON(initialTasks)) + script + `
+deletedTaskResponse = ` + string(emptyDeleted) + `;
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const dependsHeading = findElement(main, (element) => element.textContent === "Depends On");
+  const dependsGroup = dependsHeading && dependsHeading.parentElement;
+  const input = findElement(dependsGroup, (element) => element.attributes.role === "combobox");
+  input.eventListeners.focus();
+  const option = findElement(dependsGroup, (element) =>
+    element.attributes.role === "option" && element.dataset.candidateId === ` + strconv.Quote(candidate.ID) + `);
+  option.eventListeners.click();
+  const add = findElement(dependsGroup, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if ((options.method || "GET") !== "GET") {
+      return {
+        ok: true,
+        json: async () => ({
+          format: "workbook.task-mutation",
+          version: 1,
+          task: ` + documentJSON(updatedTasks) + `.tasks[0],
+          warnings: [{ code: "projection-update-failed", message: "Projection needs repair." }]
+        })
+      };
+    }
+    if (url === "/api/tasks?deleted=true") {
+      return {
+        ok: false,
+        json: async () => ({
+          format: "workbook.error",
+          version: 1,
+          error: { category: "internal", message: "Deleted task context is unavailable." }
+        })
+      };
+    }
+    return { ok: true, json: async () => (` + documentJSON(updatedTasks) + `) };
+  };
+  fetchCalls.splice(0);
+
+  await add.eventListeners.click();
+  const feedback = findElement(dependsGroup, (element) =>
+    element.attributes.role === "status" &&
+    element.textContent.includes("Dependency saved durably. Projection needs repair.") &&
+    element.textContent.includes("Deleted task context is unavailable."));
+  if (!feedback) {
+    throw new Error("initiating group did not preserve the durable warning and deleted-context failure");
+  }
+  if (!findElement(dependsGroup, (element) => element.dataset.relationshipId === ` + strconv.Quote(candidate.ID) + `)) {
+    throw new Error("active relationship state did not render when deleted context failed");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute deleted-context dependency mutation feedback: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerClientDependencyFailureRecoveryAndKeyboard(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	current := clientPlacementTask("WB-01J00000000000000000000061", "Current task", core.StatusReady, core.PriorityMedium)
+	alpha := clientPlacementTask("WB-01J00000000000000000000062", "Alpha prerequisite", core.StatusDone, core.PriorityHigh)
+	beta := clientPlacementTask("WB-01J00000000000000000000063", "Beta blocked task", core.StatusBacklog, core.PriorityLow)
+	initialTasks := []core.Task{current, alpha, beta}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<id> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	documentJSON := func(tasks []core.Task) string {
+		t.Helper()
+		document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(document)
+	}
+	emptyDeleted, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: []core.Task{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	betaAfterAdd := beta
+	betaAfterAdd.Dependencies = []string{current.ID}
+	afterWarning := []core.Task{current, alpha, betaAfterAdd}
+
+	program := clientDOMHarness("/tasks/"+current.ID, documentJSON(initialTasks)) + script + `
+deletedTaskResponse = ` + string(emptyDeleted) + `;
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const groupFor = (headingText) => {
+    const heading = findElement(main, (element) => element.textContent === headingText);
+    if (!heading) throw new Error("missing " + headingText + " group");
+    return heading.parentElement;
+  };
+  const inputFor = (group) => findElement(group, (element) => element.tagName === "INPUT" && element.attributes.role === "combobox");
+  const addFor = (group) => findElement(group, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+  const dispatchKey = (input, key) => {
+    let prevented = false;
+    input.eventListeners.keydown({ key, preventDefault() { prevented = true; } });
+    return prevented;
+  };
+  const selectedOption = (group) => findElement(group, (element) =>
+    element.attributes.role === "option" && element.attributes["aria-selected"] === "true");
+
+  let nextResponse = {
+    ok: false,
+    document: {
+      format: "workbook.error",
+      version: 1,
+      error: { category: "validation", message: "dependency would create a cycle" }
+    }
+  };
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if ((options.method || "GET") !== "GET") {
+      return { ok: nextResponse.ok, json: async () => nextResponse.document };
+    }
+    return { ok: true, json: async () => url === "/api/tasks?deleted=true" ? deletedTaskResponse : taskResponse };
+  };
+  fetchCalls.splice(0);
+
+  const formTitle = findElement(main, (element) => element.id === "task-title");
+  formTitle.value = "Unsaved task title";
+  const dependsGroup = groupFor("Depends On");
+  const dependsInput = inputFor(dependsGroup);
+  dependsInput.value = "Alpha";
+  dependsInput.eventListeners.input();
+  if (!dispatchKey(dependsInput, "ArrowDown") || !dependsInput.attributes["aria-activedescendant"]) {
+    throw new Error("Arrow Down did not activate a matching candidate");
+  }
+  if (!dispatchKey(dependsInput, "Enter")) throw new Error("Enter did not select the active candidate");
+  const alphaOption = selectedOption(dependsGroup);
+  const dependsAdd = addFor(dependsGroup);
+  if (!alphaOption || alphaOption.dataset.candidateId !== ` + strconv.Quote(alpha.ID) + ` || dependsAdd.disabled) {
+    throw new Error("keyboard selection did not select Alpha and enable Add dependency");
+  }
+  const alphaListbox = findElement(dependsGroup, (element) => element.attributes.role === "listbox");
+  if (dependsInput.attributes["aria-expanded"] !== String(!alphaListbox.hidden)) {
+    throw new Error("combobox aria-expanded state does not match the visible popup after selection");
+  }
+
+  await dependsAdd.eventListeners.click();
+  const cycleMessage = findElement(dependsGroup, (element) =>
+    element.attributes.role === "status" && element.textContent.includes("dependency would create a cycle"));
+  if (!cycleMessage) throw new Error("cycle failure did not stay in the initiating live region");
+  if (findElement(main, (element) => element.id === "task-title") !== formTitle ||
+      formTitle.value !== "Unsaved task title") {
+    throw new Error("dependency failure reconstructed or reset the unsaved task form");
+  }
+  const preservedSelection = selectedOption(dependsGroup);
+  if (dependsInput.value !== ` + strconv.Quote(alpha.Title) + ` || !preservedSelection ||
+      preservedSelection.dataset.candidateId !== ` + strconv.Quote(alpha.ID) + ` || dependsAdd.disabled) {
+    throw new Error("dependency failure did not preserve the query and valid selection");
+  }
+
+  const blocksGroup = groupFor("Blocks");
+  const blocksInput = inputFor(blocksGroup);
+  blocksInput.value = "Beta";
+  blocksInput.eventListeners.input();
+  dispatchKey(blocksInput, "ArrowDown");
+  dispatchKey(blocksInput, "Enter");
+  const blocksAdd = addFor(blocksGroup);
+  if (blocksAdd.disabled) throw new Error("Blocks keyboard selection did not enable Add dependency");
+  nextResponse = {
+    ok: true,
+    document: {
+      format: "workbook.task-mutation",
+      version: 1,
+      task: ` + documentJSON(afterWarning) + `.tasks[2],
+      warnings: [{ code: "projection-update-failed", message: "The local projection needs repair." }]
+    }
+  };
+  taskResponse = ` + documentJSON(afterWarning) + `;
+  await blocksAdd.eventListeners.click();
+  const warning = findElement(blocksGroup, (element) =>
+    element.attributes.role === "status" &&
+    element.textContent.includes("Dependency saved durably.") &&
+    element.textContent.includes("The local projection needs repair."));
+  if (!warning) throw new Error("durable projection warning did not stay in the initiating live region");
+  await intervalCallback();
+  if (warning.textContent !== "Dependency saved durably. The local projection needs repair.") {
+    throw new Error("durable mutation warning did not persist through active and deleted refresh");
+  }
+  if (findElement(main, (element) => element.id === "task-title") !== formTitle ||
+      formTitle.value !== "Unsaved task title") {
+    throw new Error("successful relationship refresh reconstructed or reset the unsaved task form");
+  }
+
+  dependsInput.value = "Beta";
+  dependsInput.eventListeners.input();
+  dispatchKey(dependsInput, "ArrowDown");
+  if (!dependsInput.attributes["aria-activedescendant"] || selectedOption(dependsGroup)) {
+    throw new Error("Escape setup unexpectedly selected a candidate");
+  }
+  dispatchKey(dependsInput, "Escape");
+  if (dependsInput.attributes["aria-expanded"] !== "false" ||
+      Object.prototype.hasOwnProperty.call(dependsInput.attributes, "aria-activedescendant") ||
+      selectedOption(dependsGroup)) {
+    throw new Error("Escape did not close the popup and clear active state without selecting");
+  }
+
+  dependsInput.value = "no such task";
+  dependsInput.eventListeners.input();
+  const listbox = findElement(dependsGroup, (element) => element.attributes.role === "listbox");
+  const fakeOption = listbox && findElement(listbox, (element) => element.attributes.role === "option");
+  const emptyStatus = findElement(dependsGroup, (element) =>
+    element.attributes.role === "status" && element.textContent === "No matching tasks.");
+  if (fakeOption || !emptyStatus) {
+    throw new Error("empty matches rendered a fake option instead of an announced message");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute dependency failure recovery and keyboard behavior: %v\n%s", err, output)
 	}
 }
 
@@ -656,22 +3859,33 @@ func TestHandlerClientBoardIgnoresUnknownStatuses(t *testing.T) {
 		t.Fatalf("GET / status = %d, want %d", response.Code, http.StatusOK)
 	}
 	script := renderedClientScript(t, response.Body.String())
-	document, err := json.Marshal(TasksDocument{
+	document := TasksDocument{
 		Format:       "workbook.tasks",
 		Version:      1,
 		Tasks:        tasks,
-		Presentation: presentationForTasks(tasks),
-	})
+		Presentation: taskPresentation(tasks),
+	}
+	documentJSON, err := json.Marshal(document)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	program := clientDOMHarness("/", string(document)) + script + `
+	program := clientDOMHarness("/", string(documentJSON)) + script + `
 setTimeout(() => {
   const ready = boardLists.find((list) => list.dataset.status === "ready");
   const card = findElement(ready, (element) => element.dataset.taskId === ` + strconv.Quote(tasks[0].ID) + `);
   const unknownCard = boardLists.map((list) => findElement(list, (element) => element.dataset.taskId === ` + strconv.Quote(tasks[2].ID) + `)).find(Boolean);
   if (!card) throw new Error("canonical task did not render when an unknown-status task was present");
+  const progress = findElement(card, (element) => Object.hasOwn(element.dataset, "dependencyProgress"));
+  const count = progress && findElement(progress, (element) => element.tagName === "SPAN" && element.textContent === "1 of 2 prerequisites complete");
+  const waiting = progress && findElement(progress, (element) => element.tagName === "STRONG" && element.textContent === "Waiting on dependencies");
+  if (!count || !waiting) {
+    throw new Error("refreshed Ready card did not render dependency progress");
+  }
+  const dependencyFree = boardLists.map((list) => findElement(list, (element) => element.dataset.taskId === ` + strconv.Quote(tasks[1].ID) + `)).find(Boolean);
+  if (!dependencyFree || findElement(dependencyFree, (element) => Object.hasOwn(element.dataset, "dependencyProgress"))) {
+    throw new Error("dependency-free refreshed card rendered dependency progress");
+  }
   if (unknownCard) throw new Error("unknown-status task rendered in a canonical list");
   if (stale.dataset.visible !== "false") throw new Error("unknown-status task triggered the stale state");
 }, 0);
@@ -958,16 +4172,19 @@ func renderedClientScript(t *testing.T, body string) string {
 
 func clientDOMHarness(path, taskDocument string) string {
 	return `
+const scrollIntoViewCalls = [];
 class TestElement {
   constructor(tagName) {
     this.tagName = tagName.toUpperCase();
     this.children = [];
+    this.className = "";
     this.dataset = {};
     this.attributes = {};
+    this.style = {};
     this.classList = { add() {}, remove() {}, toggle() {} };
     this.eventListeners = {};
     this._value = "";
-    this.textContent = "";
+    this._textContent = "";
     this.selected = false;
     this.disabled = false;
     this.required = false;
@@ -1002,13 +4219,22 @@ class TestElement {
     this.parentElement = null;
   }
   setAttribute(name, value) { this.attributes[name] = String(value); }
+  getAttribute(name) { return this.attributes[name] ?? null; }
+  removeAttribute(name) { delete this.attributes[name]; }
   hasAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attributes, name); }
+  focus() { globalThis.activeElement = this; }
+  get id() { return this.attributes.id || this._id || ""; }
+  set id(value) { this._id = String(value); this.attributes.id = String(value); }
   addEventListener(name, listener) { this.eventListeners[name] = listener; }
+  removeEventListener(name, listener) {
+    if (this.eventListeners[name] === listener) delete this.eventListeners[name];
+  }
   closest(selector) {
     for (let element = this; element; element = element.parentElement) {
       if (selector === "a[href]" && element.tagName === "A" && element.href) return element;
       if (selector === ".task-card" && element.className === "task-card") return element;
       if (selector === ".task-route" && element.className === "task-route") return element;
+      if (selector === ".task-sidebar" && element.className === "task-sidebar") return element;
       if (selector === ".task-id-copy-group" && element.className === "task-id-copy-group") return element;
       if (selector === "[data-copy-task-id]" && Object.prototype.hasOwnProperty.call(element.dataset, "copyTaskId")) return element;
       if (selector === "[data-drop-status]" && element.dataset.dropStatus) return element;
@@ -1032,14 +4258,19 @@ class TestElement {
     const visit = (element) => {
       for (const child of element.children || []) {
         if (selector === ".task-card" && child.className === "task-card") matches.push(child);
+        if (selector === "[role=\"option\"]" && child.attributes.role === "option") matches.push(child);
+        if (selector === "[data-relationship-row]" && Object.hasOwn(child.dataset, "relationshipRow")) matches.push(child);
         visit(child);
       }
     };
     visit(this);
     return matches;
   }
-  getBoundingClientRect() { return this.rect || { top: 0, bottom: 0 }; }
+  getBoundingClientRect() { return this.rect || { top: 0, right: 0, bottom: 0, left: 0, width: 0 }; }
+  scrollIntoView(options) { scrollIntoViewCalls.push({ element: this, options }); }
   get firstElementChild() { return this.children[0] || null; }
+  get textContent() { return this._textContent + this.children.map((child) => child.textContent).join(""); }
+  set textContent(value) { this._textContent = String(value); }
   get value() {
     if (this.tagName === "SELECT") {
       const selected = this.children.find((option) => option.selected);
@@ -1071,9 +4302,10 @@ const boardCounts = boardStatuses.map((status) => {
 });
 boardView.querySelectorAll = (selector) => selector === "[data-status]" ? boardLists : boardCounts;
 const documentEventListeners = {};
-globalThis.document = {
-  title: "",
-  querySelector(selector) {
+	globalThis.document = {
+	  title: "",
+	  get activeElement() { return globalThis.activeElement || null; },
+	  querySelector(selector) {
     if (selector === "main") return main;
     if (selector === "[data-board-view]") return boardView;
     if (selector === "[data-updated]") return updated;
@@ -1082,7 +4314,10 @@ globalThis.document = {
   querySelectorAll() { return []; },
   createElement(tagName) { return new TestElement(tagName); },
   createDocumentFragment() { return new TestElement("fragment"); },
-  addEventListener(name, listener) { documentEventListeners[name] = listener; }
+  addEventListener(name, listener) { documentEventListeners[name] = listener; },
+  removeEventListener(name, listener) {
+    if (documentEventListeners[name] === listener) delete documentEventListeners[name];
+  }
 };
 	const initialURL = new URL("http://127.0.0.1` + path + `");
 	let intervalDelay = null;
@@ -1099,9 +4334,12 @@ globalThis.document = {
 	}, configurable: true });
 	const windowTimeouts = [];
 	let nextWindowTimeoutID = 1;
-	globalThis.window = {
+globalThis.window = {
+	  innerHeight: 900,
+	  innerWidth: 1440,
 	  location: { href: initialURL.href, origin: initialURL.origin },
 	  addEventListener() {},
+	  removeEventListener() {},
 	  setInterval(callback, delay) { intervalCallback = callback; intervalDelay = delay; },
 	  setTimeout(callback, delay) {
 	    const timer = { id: nextWindowTimeoutID++, callback, delay, canceled: false };
@@ -1121,8 +4359,9 @@ globalThis.history = {
   }
 };
 globalThis.requestAnimationFrame = (callback) => callback();
-const taskDocument = ` + taskDocument + `;
-let taskResponse = taskDocument;
+	const taskDocument = ` + taskDocument + `;
+	let taskResponse = taskDocument;
+	let deletedTaskResponse = { format: "workbook.tasks", version: 1, tasks: [] };
 const fetchCalls = [];
 globalThis.fetch = async (url, options = {}) => {
   fetchCalls.push({ url, options });
@@ -1136,7 +4375,7 @@ globalThis.fetch = async (url, options = {}) => {
       })
     };
   }
-  return { ok: true, json: async () => taskResponse };
+  return { ok: true, json: async () => url === "/api/tasks?deleted=true" ? deletedTaskResponse : taskResponse };
 };
 function findElement(root, predicate) {
   if (predicate(root)) return root;
@@ -1145,6 +4384,11 @@ function findElement(root, predicate) {
     if (match) return match;
   }
   return null;
+}
+function findElements(root, predicate, matches = []) {
+  if (predicate(root)) matches.push(root);
+  for (const child of root.children || []) findElements(child, predicate, matches);
+  return matches;
 }
 `
 }
@@ -1269,6 +4513,8 @@ func TestHandlerPositionsTask(t *testing.T) {
 		},
 		nil,
 		nil,
+		nil,
+		nil,
 	)
 
 	response := requestJSON(
@@ -1316,6 +4562,8 @@ func TestHandlerValidatesPositionRequests(t *testing.T) {
 		},
 		nil,
 		nil,
+		nil,
+		nil,
 	)
 
 	response := requestJSON(t, handler, http.MethodPatch, "/api/tasks/"+taskID+"/position",
@@ -1337,6 +4585,8 @@ func TestHandlerValidatesPositionRequests(t *testing.T) {
 		unexpectedTaskUpdate(t),
 		unexpectedStatusUpdate(t),
 		unexpectedTaskPosition(t),
+		nil,
+		nil,
 		nil,
 		nil,
 	)
@@ -1503,7 +4753,7 @@ func TestHandlerProvidesActionablePrefixesForRefresh(t *testing.T) {
 	if !strings.Contains(body, "document.presentation") {
 		t.Error("embedded refresh script does not read server presentation data")
 	}
-	if !strings.Contains(body, "taskIDCopyControl(task.id, idPrefix)") {
+	if !strings.Contains(body, "taskIDCopyControl(task.id, view.idPrefix)") {
 		t.Error("embedded refresh script does not render the server-provided ID prefix")
 	}
 }
@@ -1519,8 +4769,8 @@ func TestHandlerInitialCardPrefixesMatchRefreshPresentation(t *testing.T) {
 		t.Fatalf("GET / status = %d, want %d", initial.Code, http.StatusOK)
 	}
 	cards := initialCardPrefixes(initial.Body.String())
-	if len(cards) != 2 {
-		t.Fatalf("initial rendered cards = %#v, want the two canonical-status tasks", cards)
+	if len(cards) != 3 {
+		t.Fatalf("initial rendered cards = %#v, want the three canonical-status tasks", cards)
 	}
 	if _, exists := cards[tasks[2].ID]; exists {
 		t.Fatalf("initial rendered cards include unknown-status task %q", tasks[2].ID)
@@ -1682,6 +4932,16 @@ func request(t *testing.T, handler http.Handler, method, target string) *httptes
 	return response
 }
 
+func requestWithRawPath(t *testing.T, handler http.Handler, method, rawPath string) *httptest.ResponseRecorder {
+	t.Helper()
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(method, "/", nil)
+	request.URL.Path = rawPath
+	request.RequestURI = rawPath
+	handler.ServeHTTP(response, request)
+	return response
+}
+
 func requestJSON(t *testing.T, handler http.Handler, method, target, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	response := httptest.NewRecorder()
@@ -1777,7 +5037,7 @@ func boardTasks() []core.Task {
 				Priority:     core.PriorityHigh,
 				Labels:       []string{"ui", "web"},
 				Rank:         "1/1",
-				Dependencies: []string{"WB-01J00000000000000000000002"},
+				Dependencies: []string{"WB-01J00000000000000000000002", "WB-01J00000000000000000000006"},
 				CreatedAt:    stamp,
 				UpdatedAt:    stamp.Add(time.Minute),
 			},
@@ -1814,6 +5074,22 @@ func boardTasks() []core.Task {
 			},
 			HistoryGeneration: "01J00000000000000000000006",
 			Head:              "fedcba9876543210",
+		},
+		{
+			ID:        "WB-01J00000000000000000000006",
+			ProjectID: "01J00000000000000000000000",
+			TaskData: core.TaskData{
+				Title:       "Completed prerequisite",
+				Description: "Finish the prerequisite work.",
+				Status:      core.StatusDone,
+				Priority:    core.PriorityLow,
+				Labels:      []string{"completed"},
+				Rank:        "4/1",
+				CreatedAt:   stamp,
+				UpdatedAt:   stamp,
+			},
+			HistoryGeneration: "01J00000000000000000000007",
+			Head:              "1234567890abcdef",
 		},
 	}
 }

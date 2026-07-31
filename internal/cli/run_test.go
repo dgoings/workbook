@@ -1299,6 +1299,123 @@ func TestRunServePositionsTaskThroughWebRoute(t *testing.T) {
 	}
 }
 
+func TestRunServeMutatesDependenciesThroughWebRoutes(t *testing.T) {
+	repository := initializedRepository(t)
+	code, stdout, stderr := run(t, repository, "create", "Dependent through web", "--json")
+	if code != 0 {
+		t.Fatalf("create dependent code = %d, want 0; stderr = %q", code, stderr)
+	}
+	dependent := decodeMutationTask(t, stdout, "create")
+	code, stdout, stderr = run(t, repository, "create", "Prerequisite through web", "--json")
+	if code != 0 {
+		t.Fatalf("create prerequisite code = %d, want 0; stderr = %q", code, stderr)
+	}
+	prerequisite := decodeMutationTask(t, stdout, "create")
+
+	dependentHeadBefore := gitOutput(t, repository, "rev-parse", "--verify", "refs/workbook/tasks/"+dependent.ID)
+	prerequisiteHeadBefore := gitOutput(t, repository, "rev-parse", "--verify", "refs/workbook/tasks/"+prerequisite.ID)
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := probe.Addr().String()
+	if err := probe.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result := make(chan error, 1)
+	var serveStdout, serveStderr bytes.Buffer
+	go func() {
+		result <- runServe(ctx, []string{"--addr", addr}, repository, &serveStdout, &serveStderr)
+	}()
+	waitForHTTP(t, "http://"+addr+"/healthz")
+
+	path := "http://" + addr + "/api/tasks/" + dependent.ID + "/dependencies/" + prerequisite.ID
+	request, err := http.NewRequest(http.MethodPut, path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("PUT dependency: %v", err)
+	}
+	body, readErr := io.ReadAll(response.Body)
+	response.Body.Close()
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("PUT dependency = %d, want %d; body = %s", response.StatusCode, http.StatusOK, body)
+	}
+	var mutation struct {
+		Task core.Task `json:"task"`
+	}
+	if err := json.Unmarshal(body, &mutation); err != nil {
+		t.Fatalf("decode dependency mutation: %v", err)
+	}
+	if got, want := mutation.Task.Dependencies, []string{prerequisite.ID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("PUT dependencies = %#v, want %#v", got, want)
+	}
+	dependentHeadAfterAdd := gitOutput(t, repository, "rev-parse", "--verify", "refs/workbook/tasks/"+dependent.ID)
+	prerequisiteHeadAfterAdd := gitOutput(t, repository, "rev-parse", "--verify", "refs/workbook/tasks/"+prerequisite.ID)
+	if dependentHeadAfterAdd == dependentHeadBefore {
+		t.Fatal("PUT dependency did not advance dependent ref")
+	}
+	if prerequisiteHeadAfterAdd != prerequisiteHeadBefore {
+		t.Fatal("PUT dependency advanced prerequisite ref")
+	}
+	assertDependencyOperation(t, repository, dependentHeadAfterAdd, core.OperationSetAdd, prerequisite.ID)
+
+	request, err = http.NewRequest(http.MethodDelete, path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err = http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("DELETE dependency: %v", err)
+	}
+	body, readErr = io.ReadAll(response.Body)
+	response.Body.Close()
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("DELETE dependency = %d, want %d; body = %s", response.StatusCode, http.StatusOK, body)
+	}
+	dependentHeadAfterRemove := gitOutput(t, repository, "rev-parse", "--verify", "refs/workbook/tasks/"+dependent.ID)
+	prerequisiteHeadAfterRemove := gitOutput(t, repository, "rev-parse", "--verify", "refs/workbook/tasks/"+prerequisite.ID)
+	if dependentHeadAfterRemove == dependentHeadAfterAdd {
+		t.Fatal("DELETE dependency did not advance dependent ref")
+	}
+	if prerequisiteHeadAfterRemove != prerequisiteHeadBefore {
+		t.Fatal("DELETE dependency advanced prerequisite ref")
+	}
+	assertDependencyOperation(t, repository, dependentHeadAfterRemove, core.OperationSetRemove, prerequisite.ID)
+
+	cancel()
+	if err := <-result; err != nil {
+		t.Fatalf("runServe() error = %v; stderr = %q", err, serveStderr.String())
+	}
+	if serveStdout.Len() != 0 {
+		t.Fatalf("serve stdout = %q, want empty", serveStdout.String())
+	}
+}
+
+func assertDependencyOperation(t *testing.T, repository, head string, operationType core.OperationType, dependencyID string) {
+	t.Helper()
+	var pack core.OperationPack
+	if err := json.Unmarshal([]byte(gitOutput(t, repository, "show", head+":operation.json")), &pack); err != nil {
+		t.Fatalf("decode dependency operation pack: %v", err)
+	}
+	if len(pack.Operations) != 1 ||
+		pack.Operations[0].Type != operationType ||
+		pack.Operations[0].Field != "dependencies" ||
+		pack.Operations[0].Value != dependencyID {
+		t.Fatalf("dependency operations = %#v, want exactly one %q dependencies operation for %q", pack.Operations, operationType, dependencyID)
+	}
+}
+
 func TestRunServeListsGitTipAdvancedAfterStarting(t *testing.T) {
 	repository := initializedRepository(t)
 	code, stdout, stderr := run(t, repository, "create", "Before web advance", "--json")

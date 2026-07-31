@@ -8,6 +8,7 @@ import (
 	"html/template"
 	"io"
 	"net/http"
+	pathpkg "path"
 	"strings"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -33,6 +34,10 @@ type TaskDeleter func(context.Context, string) (core.MutationResult, error)
 
 type TaskRestorer func(context.Context, string) (core.MutationResult, error)
 
+type TaskDependencyAdder func(context.Context, string, string) (core.MutationResult, error)
+
+type TaskDependencyRemover func(context.Context, string, string) (core.MutationResult, error)
+
 type TasksDocument struct {
 	Format       string             `json:"format"`
 	Version      int                `json:"version"`
@@ -48,8 +53,11 @@ type TaskMutationDocument struct {
 }
 
 type TaskPresentation struct {
-	TaskID   string `json:"taskId"`
-	IDPrefix string `json:"idPrefix"`
+	TaskID                string `json:"taskId"`
+	IDPrefix              string `json:"idPrefix"`
+	DependenciesComplete  int    `json:"dependenciesComplete"`
+	DependenciesTotal     int    `json:"dependenciesTotal"`
+	WaitingOnDependencies bool   `json:"waitingOnDependencies"`
 }
 
 type HealthDocument struct {
@@ -77,6 +85,8 @@ type handler struct {
 	position     TaskPositionUpdater
 	delete       TaskDeleter
 	restore      TaskRestorer
+	depend       TaskDependencyAdder
+	free         TaskDependencyRemover
 	page         *template.Template
 	mux          *http.ServeMux
 }
@@ -112,16 +122,16 @@ type updateTaskRequest struct {
 }
 
 func NewHandler(list TaskLister, create TaskCreator, update TaskUpdater, updateStatus TaskStatusUpdater) http.Handler {
-	return newHandler(list, create, update, updateStatus, nil, nil, nil)
+	return newHandler(list, create, update, updateStatus, nil, nil, nil, nil, nil)
 }
 
-func NewHandlerWithTaskMutations(list TaskLister, create TaskCreator, update TaskUpdater, updateStatus TaskStatusUpdater, position TaskPositionUpdater, delete TaskDeleter, restore TaskRestorer) http.Handler {
-	return newHandler(list, create, update, updateStatus, position, delete, restore)
+func NewHandlerWithTaskMutations(list TaskLister, create TaskCreator, update TaskUpdater, updateStatus TaskStatusUpdater, position TaskPositionUpdater, delete TaskDeleter, restore TaskRestorer, depend TaskDependencyAdder, free TaskDependencyRemover) http.Handler {
+	return newHandler(list, create, update, updateStatus, position, delete, restore, depend, free)
 }
 
-func newHandler(list TaskLister, create TaskCreator, update TaskUpdater, updateStatus TaskStatusUpdater, position TaskPositionUpdater, delete TaskDeleter, restore TaskRestorer) http.Handler {
+func newHandler(list TaskLister, create TaskCreator, update TaskUpdater, updateStatus TaskStatusUpdater, position TaskPositionUpdater, delete TaskDeleter, restore TaskRestorer, depend TaskDependencyAdder, free TaskDependencyRemover) http.Handler {
 	page := template.Must(template.New("index.html").ParseFS(assets, "assets/index.html"))
-	handler := &handler{list: list, create: create, update: update, updateStatus: updateStatus, position: position, delete: delete, restore: restore, page: page, mux: http.NewServeMux()}
+	handler := &handler{list: list, create: create, update: update, updateStatus: updateStatus, position: position, delete: delete, restore: restore, depend: depend, free: free, page: page, mux: http.NewServeMux()}
 	handler.mux.HandleFunc("GET /{$}", handler.serveBoard)
 	handler.mux.HandleFunc("GET /deleted", handler.serveBoard)
 	handler.mux.HandleFunc("GET /tasks/new", handler.serveBoard)
@@ -133,6 +143,8 @@ func newHandler(list TaskLister, create TaskCreator, update TaskUpdater, updateS
 	handler.mux.HandleFunc("PATCH /api/tasks/{id}/position", handler.positionTask)
 	handler.mux.HandleFunc("DELETE /api/tasks/{id}", handler.deleteTask)
 	handler.mux.HandleFunc("POST /api/tasks/{id}/restore", handler.restoreTask)
+	handler.mux.HandleFunc("PUT /api/tasks/{id}/dependencies/{dependency}", handler.addTaskDependency)
+	handler.mux.HandleFunc("DELETE /api/tasks/{id}/dependencies/{dependency}", handler.removeTaskDependency)
 	handler.mux.HandleFunc("GET /healthz", handler.serveHealth)
 	return http.HandlerFunc(handler.serveHTTP)
 }
@@ -140,6 +152,10 @@ func newHandler(list TaskLister, create TaskCreator, update TaskUpdater, updateS
 func (handler *handler) serveHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Content-Security-Policy", securityPolicy)
 	writer.Header().Set("X-Content-Type-Options", "nosniff")
+	if malformedTaskDependencyRequestPath(request.URL.Path, request.URL.EscapedPath()) {
+		http.NotFound(writer, request)
+		return
+	}
 	if method, known := allowedMethod(request.URL.Path); known && !methodAllowed(request.Method, method) {
 		writer.Header().Set("Allow", method)
 		writer.WriteHeader(http.StatusMethodNotAllowed)
@@ -157,6 +173,47 @@ func methodAllowed(requestMethod, allowed string) bool {
 	return false
 }
 
+func malformedTaskDependencyRequestPath(decodedPath, escapedPath string) bool {
+	if escapedPath != decodedPath &&
+		(taskDependencyRouteShaped(decodedPath) || malformedTaskDependencyPath(decodedPath)) {
+		return true
+	}
+	return malformedTaskDependencyPath(escapedPath)
+}
+
+func taskDependencyRouteShaped(requestPath string) bool {
+	_, _, valid := taskDependencyPathIDs(requestPath)
+	return valid
+}
+
+func malformedTaskDependencyPath(requestPath string) bool {
+	if _, _, valid := taskDependencyPathIDs(requestPath); valid {
+		return false
+	}
+	cleanedPath := pathpkg.Clean(requestPath)
+	if _, _, cleanedDependency := taskDependencyPathIDs(cleanedPath); cleanedDependency {
+		return true
+	}
+	if !taskAPIPath(requestPath) && !taskAPIPath(cleanedPath) {
+		return false
+	}
+	return hasPathSegment(requestPath, "dependencies") ||
+		hasPathSegment(cleanedPath, "dependencies")
+}
+
+func taskAPIPath(path string) bool {
+	return path == "/api/tasks" || strings.HasPrefix(path, "/api/tasks/")
+}
+
+func hasPathSegment(path, marker string) bool {
+	for _, segment := range strings.Split(path, "/") {
+		if segment == marker {
+			return true
+		}
+	}
+	return false
+}
+
 func allowedMethod(path string) (string, bool) {
 	switch path {
 	case "/", "/deleted", "/healthz", "/tasks/new":
@@ -164,6 +221,9 @@ func allowedMethod(path string) (string, bool) {
 	case "/api/tasks":
 		return http.MethodGet + ", " + http.MethodPost, true
 	default:
+		if _, _, ok := taskDependencyPathIDs(path); ok {
+			return http.MethodPut + ", " + http.MethodDelete, true
+		}
 		if taskPositionPathID(path) != "" {
 			return http.MethodPatch, true
 		}
@@ -181,6 +241,21 @@ func allowedMethod(path string) (string, bool) {
 		}
 		return "", false
 	}
+}
+
+func taskDependencyPathIDs(path string) (string, string, bool) {
+	const prefix = "/api/tasks/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", "", false
+	}
+	parts := strings.Split(strings.TrimPrefix(path, prefix), "/")
+	if len(parts) != 3 || parts[0] == "" ||
+		parts[0] == "." || parts[0] == ".." ||
+		parts[1] != "dependencies" || parts[2] == "" ||
+		parts[2] == "." || parts[2] == ".." {
+		return "", "", false
+	}
+	return parts[0], parts[2], true
 }
 
 func taskPagePathID(path string) string {
@@ -403,6 +478,51 @@ func (handler *handler) restoreTask(writer http.ResponseWriter, request *http.Re
 	handler.writeTaskMutation(writer, result)
 }
 
+func (handler *handler) addTaskDependency(writer http.ResponseWriter, request *http.Request) {
+	if err := requireEmptyRequestBody(request.Body); err != nil {
+		handler.writeError(writer, core.Wrap(core.CategoryInvocation, "validate dependency request", err))
+		return
+	}
+	if handler.depend == nil {
+		handler.writeError(writer, core.Errorf(core.CategoryOperational, "task dependency addition is not configured"))
+		return
+	}
+	result, err := handler.depend(request.Context(), request.PathValue("id"), request.PathValue("dependency"))
+	if err != nil {
+		handler.writeError(writer, err)
+		return
+	}
+	handler.writeTaskMutation(writer, result)
+}
+
+func (handler *handler) removeTaskDependency(writer http.ResponseWriter, request *http.Request) {
+	if err := requireEmptyRequestBody(request.Body); err != nil {
+		handler.writeError(writer, core.Wrap(core.CategoryInvocation, "validate dependency request", err))
+		return
+	}
+	if handler.free == nil {
+		handler.writeError(writer, core.Errorf(core.CategoryOperational, "task dependency removal is not configured"))
+		return
+	}
+	result, err := handler.free(request.Context(), request.PathValue("id"), request.PathValue("dependency"))
+	if err != nil {
+		handler.writeError(writer, err)
+		return
+	}
+	handler.writeTaskMutation(writer, result)
+}
+
+func requireEmptyRequestBody(body io.Reader) error {
+	read, err := io.CopyN(io.Discard, body, 1)
+	if read > 0 {
+		return errors.New("request body must be empty")
+	}
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	return err
+}
+
 func decodeRequest(body io.Reader, value any) error {
 	decoder := json.NewDecoder(body)
 	decoder.DisallowUnknownFields()
@@ -431,7 +551,13 @@ func taskPresentation(tasks []core.Task) []TaskPresentation {
 	views := presentation.TaskViews(tasks)
 	result := make([]TaskPresentation, len(views))
 	for index, view := range views {
-		result[index] = TaskPresentation{TaskID: view.Task.ID, IDPrefix: view.IDPrefix}
+		result[index] = TaskPresentation{
+			TaskID:                view.Task.ID,
+			IDPrefix:              view.IDPrefix,
+			DependenciesComplete:  view.DependenciesComplete,
+			DependenciesTotal:     view.DependenciesTotal,
+			WaitingOnDependencies: view.WaitingOnDependencies,
+		}
 	}
 	return result
 }
