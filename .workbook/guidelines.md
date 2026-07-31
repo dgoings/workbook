@@ -1,4 +1,4 @@
-<!-- workbook:begin generator=dev sha256=73684339a3cad4c0e4ee119c7edce5af768455a1081ec2f60c2acd08f025d6c6 -->
+<!-- workbook:begin generator=dev sha256=d3f68ba2747fc37b0e8dc7d2e17a548c5ff8f72e456d2c7020fbc3418cb5f9d6 -->
 # Workbook guidelines
 
 Workbook tracks this project's tasks in Git refs under `refs/workbook/tasks/`.
@@ -65,11 +65,25 @@ Check the result of every mutation; do not assume it succeeded.
 | 6 | `stale-write` |
 | 7 | `corrupt-data` |
 
-## Publication is explicit
+## Publication is automatic
 
-`workbook fetch`, `workbook push`, and `workbook sync` exchange task refs with
-`origin`. Do not run them automatically; follow repository guidance and user
-authorization.
+Commands that create or update a task fetch shared task refs from `origin`,
+apply the change to the refreshed tip, then publish the single ref they
+changed. `workbook next` fetches before answering. A repository with no
+`origin` synchronizes nothing.
+
+Disable it for one command with `--no-sync`, for this project with `autoSync`
+in `.workbook/config.json`, or for every project with `"autoSync": false` in
+the user configuration's `preferences` block. A project policy outranks a user
+preference; `--no-sync` outranks both.
+
+The `sync` member of a result envelope reports what happened. A `failed`
+status still means the change was recorded locally and the command exits 0.
+Exit code 6 means the task diverged from `origin` and was not published;
+reconcile with `workbook sync` rather than retrying the mutation.
+
+`workbook fetch`, `workbook push`, and `workbook sync` remain available for
+explicit whole-project synchronization.
 
 ---
 

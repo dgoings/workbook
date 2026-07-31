@@ -47,11 +47,21 @@ Approval, passing CI, opening a pull request, or finishing locally is not a
 merge. If acceptance and merge cannot both be verified, leave the task
 `in-review` and report what remains.
 
-## Keep publication separate
+## Publication is automatic
 
-Do not automatically run `workbook fetch`, `workbook sync`, or `workbook push`.
-Follow repository guidance and user authorization for shared task-ref
-publication.
+Task commands publish their own work. `create`, `update`, and the other
+mutations fetch shared task refs, apply the change to the refreshed tip, and
+push the single ref they changed; `next` fetches before answering. No extra
+command is needed.
+
+Pass `--no-sync` when a change must stay local. Read the `sync` member of the
+result envelope to confirm what happened: `status` is `completed`, `skipped`, or
+`failed`. A `failed` status still means the change was recorded locally, and the
+command exits 0. Exit code 6 means the task diverged from `origin` and was not
+published; report that rather than retrying the mutation.
+
+Run `workbook fetch`, `workbook sync`, or `workbook push` only when explicitly
+asked, or to reconcile after exit code 6.
 
 ## Common mistakes
 

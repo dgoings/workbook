@@ -53,10 +53,25 @@ cd <repository>
 workbook setup
 ```
 
-Publish local task changes explicitly with `workbook push`. Teams that want task
-publication tied to ordinary code pushes can opt in once per clone with
-`workbook hooks install`. To perform the safe fetch-then-push sequence manually,
-run `workbook sync`.
+Task changes synchronize themselves. A command that creates or updates a task
+fetches shared task refs from `origin`, applies its change to the refreshed tip,
+and publishes the single ref it changed. `workbook next` fetches before
+answering so two agents do not claim the same task. A repository with no
+`origin` is a local-only project and synchronizes nothing.
+
+Turn it off for one command with `--no-sync`, for one project with `autoSync` in
+`.workbook/config.json`, or for every project with `"autoSync": false` in the
+`preferences` block of the user configuration. A tracked project policy outranks
+a personal preference, so a team can require synchronization in a repository;
+`--no-sync` always wins over both.
+
+An unreachable `origin` is a warning, not a failure: the change is recorded
+locally and the command still succeeds. A task whose history has diverged from
+`origin` is not published and exits `6`, because it needs reconciliation.
+
+`workbook fetch`, `workbook push`, and `workbook sync` remain available for
+explicit whole-project synchronization, and teams that want publication tied to
+ordinary code pushes can still opt in per clone with `workbook hooks install`.
 
 ### Proposed ephemeral coding-agent workflow
 
