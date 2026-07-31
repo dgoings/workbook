@@ -12,6 +12,7 @@ func TestScenarioNamesReturnsStableDefensiveRegistry(t *testing.T) {
 		"cli-delete",
 		"cli-depend",
 		"cli-free",
+		"cli-list",
 		"cli-move",
 		"cli-restore",
 		"cli-update",
@@ -23,6 +24,9 @@ func TestScenarioNamesReturnsStableDefensiveRegistry(t *testing.T) {
 		"projection-rebuild",
 		"projection-refresh-unchanged",
 		"projection-refresh-one-changed",
+		"projection-refresh-five-changed",
+		"projection-refresh-fifty-changed",
+		"projection-refresh-five-hundred-changed",
 		"sync-initial-local-bare",
 		"sync-unchanged-local-bare",
 		"sync-fresh-checkout",
@@ -104,6 +108,11 @@ func TestLocalScenarioResultsAttachApprovedDurationTargets(t *testing.T) {
 	}
 	results := append(coldCLIResults(1), warmHTTPResults(1)...)
 	for _, result := range results {
+		if result.Name == "cli-list" {
+			// The read path deliberately has no approved budget; see
+			// TestColdListScenarioHasNoApprovedDurationTarget.
+			continue
+		}
 		expected, ok := want[result.Name]
 		if !ok {
 			t.Fatalf("unexpected local scenario %q", result.Name)

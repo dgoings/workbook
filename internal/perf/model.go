@@ -108,6 +108,12 @@ type Report struct {
 	Targets     Targets           `json:"targets"`
 	Scenarios   []ScenarioResult  `json:"scenarios"`
 	Repository  RepositoryMetrics `json:"repository"`
+	// ProjectionRefresh is present only when the projection refresh
+	// change-count family was measured.
+	ProjectionRefresh *ProjectionRefreshReport `json:"projectionRefresh,omitempty"`
+	// StorageResources is the descriptive storage and peak-resource
+	// accounting. It is absent from runs that did not measure it.
+	StorageResources *StorageResourceReport `json:"storageResources,omitempty"`
 }
 
 func Summarize(samples []Sample) Summary {
@@ -181,11 +187,16 @@ func (r Report) WriteMarkdown(w io.Writer) error {
 			return err
 		}
 	}
-	return nil
+	if r.ProjectionRefresh != nil {
+		if err := r.ProjectionRefresh.writeMarkdown(w); err != nil {
+			return err
+		}
+	}
+	return writeStorageResourceMarkdown(w, r.StorageResources)
 }
 
 func (r Report) normalized() Report {
-	r.Scenarios = append([]ScenarioResult(nil), r.Scenarios...)
+	r.Scenarios = append(make([]ScenarioResult, 0, len(r.Scenarios)), r.Scenarios...)
 	for i := range r.Scenarios {
 		scenario := &r.Scenarios[i]
 		scenario.Samples = append([]Sample(nil), scenario.Samples...)
