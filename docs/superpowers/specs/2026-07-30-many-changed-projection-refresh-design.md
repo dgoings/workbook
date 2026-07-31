@@ -17,6 +17,13 @@ called without the `--samples` value, and the one-changed setup used
 The projection was therefore already current when the following `list --json`
 ran, so the measured "one changed" refresh saw zero stale task heads.
 
+That defective scenario never produced committed evidence. `docs/performance/`
+contains no generated report with any `projection-refresh-*` result before
+2026-07-30; the only earlier mention is a preparation timeout recorded in
+`2026-07-28-baseline.md`, an attempt that aborted before writing a report. The
+2026-07-30 reports are therefore the first published refresh measurements rather
+than a replacement for a superseded number.
+
 ## Goals
 
 - Measure projection refresh at 0, 1, 5, 50, and 500 changed task heads.
