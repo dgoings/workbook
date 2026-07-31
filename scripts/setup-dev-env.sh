@@ -107,10 +107,10 @@ esac
 repository_root=$(CDPATH= cd -- "${script_directory}/.." && pwd -P)
 
 if [ "${install_stable}" = yes ] && [ "${stable_method}" = auto ]; then
-	# The published formula declares depends_on :macos and the release archives
-	# are darwin builds, so Homebrew can only serve Workbook on macOS. Everywhere
-	# else the released tag is built from source to provide the same fallback.
-	if [ "$(uname -s)" = Darwin ] && command -v brew >/dev/null 2>&1; then
+	# The formula serves macOS and Linux, so Homebrew is the published route
+	# wherever it is installed. Without it, build the released tag from source
+	# to provide the same fallback.
+	if command -v brew >/dev/null 2>&1; then
 		stable_method=brew
 	else
 		stable_method=source

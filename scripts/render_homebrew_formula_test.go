@@ -18,11 +18,7 @@ func TestRenderHomebrewFormulaReadsExactChecksums(t *testing.T) {
 	root, script := renderFormulaPaths(t)
 	checksums := filepath.Join(t.TempDir(), "checksums.txt")
 	output := filepath.Join(t.TempDir(), "workbook.rb")
-	if err := os.WriteFile(checksums, []byte(strings.Join([]string{
-		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  workbook_0.1.0_darwin_arm64.tar.gz",
-		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  workbook_0.1.0_darwin_amd64.tar.gz",
-		"",
-	}, "\n")), 0o600); err != nil {
+	if err := os.WriteFile(checksums, []byte(fixtureChecksums("0.1.0")), 0o600); err != nil {
 		t.Fatalf("write checksums: %v", err)
 	}
 
@@ -46,23 +42,41 @@ func TestRenderHomebrewFormulaReadsExactChecksums(t *testing.T) {
 	if !strings.HasPrefix(contents, "# typed: strict\n# frozen_string_literal: true\n") {
 		t.Errorf("rendered formula missing Homebrew Sorbet sigil:\n%s", contents)
 	}
-	if !strings.Contains(contents, "\n  depends_on :macos\n\n  on_macos do") {
-		t.Errorf("rendered formula missing top-level macOS dependency:\n%s", contents)
+	// Production mutation: keeping the macOS-only dependency would reject the
+	// formula on Linux even though the script now reads Linux checksums.
+	if strings.Contains(contents, "depends_on :macos") {
+		t.Errorf("rendered formula still restricts installation to macOS:\n%s", contents)
 	}
-	assertArchitectureFormulaBlock(t, contents, "on_arm do", "on_intel do", "workbook_0.1.0_darwin_arm64.tar.gz", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "workbook_0.1.0_darwin_amd64.tar.gz", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-	assertArchitectureFormulaBlock(t, contents, "on_intel do", "  end\n\n  def install", "workbook_0.1.0_darwin_amd64.tar.gz", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "workbook_0.1.0_darwin_arm64.tar.gz", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+
+	macos := formulaSection(t, contents, "on_macos do", "\n  on_linux do")
+	assertArchitectureFormulaBlock(t, macos, "on_arm do", "on_intel do", "workbook_0.1.0_darwin_arm64.tar.gz", checksumA, "workbook_0.1.0_darwin_amd64.tar.gz", checksumB)
+	assertArchitectureFormulaBlock(t, macos, "on_intel do", "\n  end", "workbook_0.1.0_darwin_amd64.tar.gz", checksumB, "workbook_0.1.0_darwin_arm64.tar.gz", checksumA)
+	if strings.Contains(macos, "_linux_") {
+		t.Errorf("macOS block serves a Linux archive:\n%s", macos)
+	}
+
+	linux := formulaSection(t, contents, "on_linux do", "\n  def install")
+	assertArchitectureFormulaBlock(t, linux, "on_arm do", "on_intel do", "workbook_0.1.0_linux_arm64.tar.gz", checksumC, "workbook_0.1.0_linux_amd64.tar.gz", checksumD)
+	assertArchitectureFormulaBlock(t, linux, "on_intel do", "\n  end", "workbook_0.1.0_linux_amd64.tar.gz", checksumD, "workbook_0.1.0_linux_arm64.tar.gz", checksumC)
+	if strings.Contains(linux, "_darwin_") {
+		t.Errorf("Linux block serves a darwin archive:\n%s", linux)
+	}
 }
 
 func TestRenderHomebrewFormulaRejectsMissingOrDuplicateChecksums(t *testing.T) {
+	// Production mutation: rendering from an incomplete checksums file would
+	// publish a formula whose downloads were never built or verified.
 	root, script := renderFormulaPaths(t)
 	tests := map[string]string{
-		"missing": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  workbook_0.1.0_darwin_arm64.tar.gz\n",
-		"duplicate": strings.Join([]string{
-			"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  workbook_0.1.0_darwin_arm64.tar.gz",
+		"missing darwin": checksumLines(checksumA+"  workbook_0.1.0_darwin_arm64.tar.gz", checksumC+"  workbook_0.1.0_linux_arm64.tar.gz", checksumD+"  workbook_0.1.0_linux_amd64.tar.gz"),
+		"missing linux":  checksumLines(checksumA+"  workbook_0.1.0_darwin_arm64.tar.gz", checksumB+"  workbook_0.1.0_darwin_amd64.tar.gz", checksumC+"  workbook_0.1.0_linux_arm64.tar.gz"),
+		"duplicate": checksumLines(
+			checksumA+"  workbook_0.1.0_darwin_arm64.tar.gz",
 			"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc  workbook_0.1.0_darwin_arm64.tar.gz",
-			"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  workbook_0.1.0_darwin_amd64.tar.gz",
-			"",
-		}, "\n"),
+			checksumB+"  workbook_0.1.0_darwin_amd64.tar.gz",
+			checksumC+"  workbook_0.1.0_linux_arm64.tar.gz",
+			checksumD+"  workbook_0.1.0_linux_amd64.tar.gz",
+		),
 	}
 	for name, contents := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -70,10 +84,14 @@ func TestRenderHomebrewFormulaRejectsMissingOrDuplicateChecksums(t *testing.T) {
 			if err := os.WriteFile(checksums, []byte(contents), 0o600); err != nil {
 				t.Fatalf("write checksums: %v", err)
 			}
-			command := exec.Command(script, "0.1.0", checksums, filepath.Join(t.TempDir(), "workbook.rb"), "dgoings/workbook")
+			output := filepath.Join(t.TempDir(), "workbook.rb")
+			command := exec.Command(script, "0.1.0", checksums, output, "dgoings/workbook")
 			command.Dir = root
-			if output, err := command.CombinedOutput(); err == nil {
-				t.Fatalf("render formula unexpectedly succeeded: %s", output)
+			if result, err := command.CombinedOutput(); err == nil {
+				t.Fatalf("render formula unexpectedly succeeded: %s", result)
+			}
+			if _, err := os.Stat(output); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("render formula wrote output for %s checksums: %v", name, err)
 			}
 		})
 	}
@@ -82,11 +100,7 @@ func TestRenderHomebrewFormulaRejectsMissingOrDuplicateChecksums(t *testing.T) {
 func TestRenderHomebrewFormulaRejectsUnsafeVersionsBeforeWritingOutput(t *testing.T) {
 	root, script := renderFormulaPaths(t)
 	checksums := filepath.Join(t.TempDir(), "checksums.txt")
-	if err := os.WriteFile(checksums, []byte(strings.Join([]string{
-		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  workbook_0.1.0_darwin_arm64.tar.gz",
-		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  workbook_0.1.0_darwin_amd64.tar.gz",
-		"",
-	}, "\n")), 0o600); err != nil {
+	if err := os.WriteFile(checksums, []byte(fixtureChecksums("0.1.0")), 0o600); err != nil {
 		t.Fatalf("write checksums: %v", err)
 	}
 
@@ -280,6 +294,45 @@ func validateReleaseConcurrency(workflow []byte) error {
 		return fmt.Errorf("cancel-in-progress = true, want false")
 	}
 	return nil
+}
+
+// The four fixture checksums stand in for the archives scripts/release.sh
+// builds, one per platform the formula serves.
+const (
+	checksumA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	checksumB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	checksumC = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	checksumD = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+)
+
+func fixtureChecksums(version string) string {
+	return checksumLines(
+		checksumA+"  workbook_"+version+"_darwin_arm64.tar.gz",
+		checksumB+"  workbook_"+version+"_darwin_amd64.tar.gz",
+		checksumC+"  workbook_"+version+"_linux_arm64.tar.gz",
+		checksumD+"  workbook_"+version+"_linux_amd64.tar.gz",
+	)
+}
+
+func checksumLines(lines ...string) string {
+	return strings.Join(append(lines, ""), "\n")
+}
+
+// formulaSection returns the part of the formula between start and the first
+// following end, so per-platform blocks can be asserted without matching the
+// identically named architecture blocks of the other platform.
+func formulaSection(t *testing.T, formula, start, end string) string {
+	t.Helper()
+	startIndex := strings.Index(formula, start)
+	if startIndex < 0 {
+		t.Fatalf("formula missing %q:\n%s", start, formula)
+	}
+	section := formula[startIndex:]
+	endIndex := strings.Index(section, end)
+	if endIndex < 0 {
+		t.Fatalf("formula missing %q after %q:\n%s", end, start, formula)
+	}
+	return section[:endIndex]
 }
 
 func assertArchitectureFormulaBlock(t *testing.T, formula, start, end, wantArchive, wantChecksum, wrongArchive, wrongChecksum string) {

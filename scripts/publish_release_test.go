@@ -155,11 +155,7 @@ func TestPublishReleaseNeverDeletesPublicReleaseAfterAmbiguousPublishFailure(t *
 func writeReleaseFixture(t *testing.T, version string) string {
 	t.Helper()
 	dist := t.TempDir()
-	archives := []string{
-		"workbook_" + version + "_darwin_amd64.tar.gz",
-		"workbook_" + version + "_darwin_arm64.tar.gz",
-	}
-	for _, name := range archives {
+	for _, name := range releaseArchiveNames(version) {
 		contents := []byte(name + " fixture\n")
 		if err := os.WriteFile(filepath.Join(dist, name), contents, 0o600); err != nil {
 			t.Fatalf("write %s: %v", name, err)
@@ -169,13 +165,20 @@ func writeReleaseFixture(t *testing.T, version string) string {
 	return dist
 }
 
+// releaseArchiveNames lists the archives scripts/release.sh publishes, in the
+// order they appear in checksums.txt.
+func releaseArchiveNames(version string) []string {
+	names := make([]string, 0, 4)
+	for _, platform := range []string{"darwin_amd64", "darwin_arm64", "linux_amd64", "linux_arm64"} {
+		names = append(names, "workbook_"+version+"_"+platform+".tar.gz")
+	}
+	return names
+}
+
 func writeFixtureChecksums(t *testing.T, dist, version string) {
 	t.Helper()
 	var checksums strings.Builder
-	for _, name := range []string{
-		"workbook_" + version + "_darwin_amd64.tar.gz",
-		"workbook_" + version + "_darwin_arm64.tar.gz",
-	} {
+	for _, name := range releaseArchiveNames(version) {
 		contents, err := os.ReadFile(filepath.Join(dist, name))
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)

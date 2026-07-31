@@ -20,9 +20,13 @@ version=$("${script_directory}/validate-release-tag.sh" "${tag}")
 distribution_directory=$(CDPATH='' cd -- "${distribution_directory}" && pwd -P)
 tap_directory=$(CDPATH='' cd -- "${tap_directory}" && pwd -P)
 
-arm64_archive="workbook_${version}_darwin_arm64.tar.gz"
-amd64_archive="workbook_${version}_darwin_amd64.tar.gz"
-asset_names="${amd64_archive} ${arm64_archive} checksums.txt"
+# Must match the platforms scripts/release.sh builds and the formula serves.
+archive_names=
+for platform in darwin_amd64 darwin_arm64 linux_amd64 linux_arm64; do
+	archive_names="${archive_names:+${archive_names} }workbook_${version}_${platform}.tar.gz"
+done
+asset_names="${archive_names} checksums.txt"
+expected_asset_count=5
 for asset_name in ${asset_names}; do
 	if [ ! -f "${distribution_directory}/${asset_name}" ]; then
 		echo "workbook release: missing release asset ${asset_name}" >&2
@@ -107,8 +111,8 @@ if release_is_draft=$(gh release view "${tag}" --repo "${repository}" --json isD
 		esac
 		asset_count=$((asset_count + 1))
 	done
-	if [ "${asset_count}" -ne 3 ]; then
-		echo "workbook release: existing release must contain exactly three assets" >&2
+	if [ "${asset_count}" -ne "${expected_asset_count}" ]; then
+		echo "workbook release: existing release must contain exactly ${expected_asset_count} assets" >&2
 		exit 1
 	fi
 	for asset_name in ${asset_names}; do
@@ -120,10 +124,12 @@ if release_is_draft=$(gh release view "${tag}" --repo "${repository}" --json isD
 		fi
 	done
 else
+	set --
+	for asset_name in ${asset_names}; do
+		set -- "$@" "${distribution_directory}/${asset_name}"
+	done
 	gh release create "${tag}" \
-		"${distribution_directory}/${arm64_archive}" \
-		"${distribution_directory}/${amd64_archive}" \
-		"${distribution_directory}/checksums.txt" \
+		"$@" \
 		--repo "${repository}" \
 		--verify-tag \
 		--draft \

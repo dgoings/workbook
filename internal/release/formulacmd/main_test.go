@@ -24,13 +24,15 @@ func TestFormulaToolRendersToStandardOutput(t *testing.T) {
 		"0.2.0",
 		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+		"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
 		"dgoings/workbook",
 	).Output()
 	if err != nil {
 		t.Fatalf("render formula: %v", err)
 	}
 
-	for _, want := range []string{"class Workbook < Formula", "version \"0.2.0\"", "def caveats"} {
+	for _, want := range []string{"class Workbook < Formula", "version \"0.2.0\"", "def caveats", "on_linux do"} {
 		if !strings.Contains(string(output), want) {
 			t.Errorf("rendered formula missing %q:\n%s", want, output)
 		}
@@ -43,9 +45,10 @@ func TestFormulaToolRejectsWrongArgumentCount(t *testing.T) {
 	binary := buildFormulaTool(t)
 
 	for name, args := range map[string][]string{
-		"none": {},
-		"few":  {"0.2.0"},
-		"many": {"0.2.0", "a", "b", "dgoings/workbook", "extra"},
+		"none":        {},
+		"few":         {"0.2.0"},
+		"darwin only": {"0.2.0", "a", "b", "dgoings/workbook"},
+		"many":        {"0.2.0", "a", "b", "c", "d", "dgoings/workbook", "extra"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			output, err := exec.Command(binary, args...).CombinedOutput()
@@ -64,9 +67,10 @@ func TestFormulaToolRejectsUnsafeInput(t *testing.T) {
 	valid := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 	for name, args := range map[string][]string{
-		"version":    {"v0.2.0", valid, valid, "dgoings/workbook"},
-		"checksum":   {"0.2.0", "short", valid, "dgoings/workbook"},
-		"repository": {"0.2.0", valid, valid, "workbook"},
+		"version":         {"v0.2.0", valid, valid, valid, valid, "dgoings/workbook"},
+		"darwin checksum": {"0.2.0", "short", valid, valid, valid, "dgoings/workbook"},
+		"linux checksum":  {"0.2.0", valid, valid, valid, "short", "dgoings/workbook"},
+		"repository":      {"0.2.0", valid, valid, valid, valid, "workbook"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			output, err := exec.Command(binary, args...).CombinedOutput()

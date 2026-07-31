@@ -13,7 +13,7 @@ SQLite materialized view accelerates normal task reads while Git remains canonic
 > disposable SQLite task projection are implemented, along with clone bootstrap
 > through `workbook setup` and managed agent documentation through `workbook
 > docs`. Conflict reconciliation remains proposed. Workbook is published for
-> macOS through the `dgoings/homebrew-tap` Homebrew tap.
+> macOS and Linux through the `dgoings/homebrew-tap` Homebrew tap.
 
 ## Why Workbook?
 
@@ -81,7 +81,8 @@ workbook finish TASK-123 --commit HEAD --push --json
 
 ## Installation
 
-Workbook is published for macOS through a Homebrew tap:
+Workbook is published for macOS and Linux, on both arm64 and amd64, through a
+Homebrew tap:
 
 ```sh
 brew install dgoings/tap/workbook
@@ -133,12 +134,11 @@ under separate names, so neither can shadow or overwrite the other:
 | published | `workbook` | Homebrew prefix, or `$HOME/.local/share/workbook/stable/bin` | the tap, or the newest release tag |
 | working tree | `workbook-dev` | `$HOME/.local/share/workbook/dev/bin` | the current checkout |
 
-The published build comes from `brew install dgoings/tap/workbook` on macOS. The
-formula declares `depends_on :macos` and the release archives are darwin builds,
-so on other platforms the script builds the newest release tag instead, in a
-detached worktree that leaves the checkout untouched. Both routes produce a
-`workbook` to fall back on when `workbook-dev` breaks; a source-built fallback
-reports a leading `v`, as any source build does.
+The published build comes from `brew install dgoings/tap/workbook` wherever
+Homebrew is installed. Without Homebrew the script builds the newest release tag
+instead, in a detached worktree that leaves the checkout untouched. Both routes
+produce a `workbook` to fall back on when `workbook-dev` breaks; a source-built
+fallback reports a leading `v`, as any source build does.
 
 The script adds both directories to the detected shell profiles inside a marked
 block that later runs replace rather than duplicate, and prints the `PATH`
@@ -149,7 +149,7 @@ Useful options:
 
 ```sh
 ./scripts/setup-dev-env.sh --dev-only                  # rebuild the working tree alone
-./scripts/setup-dev-env.sh --stable-method source      # skip Homebrew on macOS
+./scripts/setup-dev-env.sh --stable-method source      # skip Homebrew entirely
 ./scripts/setup-dev-env.sh --stable-version v0.2.0     # pin the fallback release
 ./scripts/setup-dev-env.sh --no-profile                # leave shell profiles alone
 ```
@@ -292,8 +292,10 @@ and cache path.
 
 ### Release artifacts
 
-`scripts/release.sh <version> <output-dir>` creates macOS Apple Silicon and
-Intel archives plus a sorted `checksums.txt` file. Each archive contains only
+`scripts/release.sh <version> <output-dir>` creates macOS and Linux archives for
+Apple Silicon and Intel plus a sorted `checksums.txt` file. The four archives
+match the platform blocks in the published Homebrew formula, which serves
+`darwin` and `linux` on `arm64` and `amd64`. Each archive contains only
 the `workbook` executable. The script cross-compiles with the requested version
 and the current Git commit injected into `workbook version`; source builds
 report `dev` and `unknown` instead. Release versions must use the exact
