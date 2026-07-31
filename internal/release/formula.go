@@ -98,7 +98,7 @@ class Workbook < Formula
   end
 
   test do
-    assert_match version, shell_output("#{bin}/workbook version")
+    assert_match version.to_s, shell_output("#{bin}/workbook version")
   end
 end
 `, repository, version, darwinARM64, darwinAMD64, linuxARM64, linuxAMD64), nil

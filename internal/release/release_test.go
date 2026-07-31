@@ -120,6 +120,21 @@ func TestRenderFormulaUsesImmutablePlatformArchives(t *testing.T) {
 	}
 }
 
+func TestRenderFormulaComparesTheTestVersionAsAString(t *testing.T) {
+	formula, err := release.RenderFormula("0.1.0", "dgoings/workbook", fixtureArchives())
+	if err != nil {
+		t.Fatalf("render formula: %v", err)
+	}
+
+	// Production mutation: passing the bare `version` to assert_match hands
+	// Homebrew a Version object, which does not respond to `=~`, so
+	// `brew test` aborts with a Minitest assertion error instead of running
+	// the released binary.
+	if !strings.Contains(formula, `assert_match version.to_s, shell_output("#{bin}/workbook version")`) {
+		t.Errorf("formula does not compare the test version as a string:\n%s", formula)
+	}
+}
+
 func TestRenderFormulaRejectsMissingChecksums(t *testing.T) {
 	// Production mutation: rendering with a blank checksum for any platform
 	// publishes a formula that cannot install on it.
