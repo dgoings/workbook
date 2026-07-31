@@ -811,10 +811,34 @@ function assertSharedLayout(expectedMode) {
     (element.className || "").split(/\s+/).includes("task-sidebar"));
   const properties = sidebar && findElement(sidebar, (element) =>
     (element.className || "").split(/\s+/).includes("task-properties"));
-  const actions = layout && findElement(layout, (element) =>
+  const footer = layout && findElement(layout, (element) =>
     (element.className || "").split(/\s+/).includes("task-actions"));
-  if (!layout || !editor || !sidebar || !properties || !actions) {
+  const actionBar = footer && findElement(footer, (element) =>
+    (element.className || "").split(/\s+/).includes("form-actions"));
+  const primaryActions = actionBar && findElement(actionBar, (element) =>
+    (element.className || "").split(/\s+/).includes("form-primary-actions"));
+  const save = primaryActions && findElement(primaryActions, (element) =>
+    element.tagName === "BUTTON" && element.textContent === "Save");
+  const back = primaryActions && findElement(primaryActions, (element) =>
+    element.tagName === "A" && element.textContent === "Back");
+  const danger = actionBar && findElement(actionBar, (element) =>
+    (element.className || "").split(/\s+/).includes("form-danger"));
+  if (!layout || !editor || !sidebar || !properties || !footer) {
     throw new Error(expectedMode + " does not use the shared task layout");
+  }
+  if (!actionBar || !primaryActions || !save || !back ||
+      primaryActions.parentElement !== actionBar) {
+    throw new Error(expectedMode + " does not left-group Save and Back");
+  }
+  if (expectedMode === "new") {
+    if (danger) throw new Error("new task unexpectedly renders destructive actions");
+  } else {
+    const remove = danger && findElement(danger, (element) =>
+      element.tagName === "BUTTON" && element.textContent === "Delete");
+    if (!danger || !remove || danger.parentElement !== actionBar ||
+        primaryActions.contains(danger) || danger.contains(primaryActions)) {
+      throw new Error("detail does not separate Delete from primary actions");
+    }
   }
   for (const id of ["task-status", "task-priority", "task-labels"]) {
     const control = findElement(properties, (element) => element.id === id);
