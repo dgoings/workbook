@@ -21,6 +21,19 @@ type ProjectConfig struct {
 	AutoSync AutoSyncSetting `json:"autoSync,omitempty"`
 }
 
+// SameIdentity reports whether two configurations name the same project.
+//
+// Identity is the format, the project ID, and the project key. Mutable
+// preferences such as the automatic synchronization policy are deliberately
+// excluded: the private project guard exists to detect a swapped project, and
+// changing a preference must not read as corruption. The document version is
+// excluded too, so a version 1 guard still matches a version 2 configuration.
+func (config ProjectConfig) SameIdentity(other ProjectConfig) bool {
+	return config.Format == other.Format &&
+		config.ProjectID == other.ProjectID &&
+		config.Key == other.Key
+}
+
 // AutoSyncSetting records whether a configuration layer enables automatic
 // synchronization, disables it, or leaves the decision to the next layer.
 //

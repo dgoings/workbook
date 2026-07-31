@@ -821,3 +821,72 @@ func TestProjectConfigRoundTripsAutoSyncPolicyCanonically(t *testing.T) {
 		t.Fatalf("round trip = %#v, want %#v", decoded, config)
 	}
 }
+
+// The common project guard detects a swapped project identity. A project's
+// automatic synchronization policy is a mutable preference, so changing it must
+// not read as corruption.
+func TestLoadConfigAcceptsProjectPolicyChangedAfterGuardPublication(t *testing.T) {
+	ctx := context.Background()
+	repoDir := testrepo.New(t)
+	repo, err := Open(ctx, repoDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, _, err := repo.Init(ctx, "WB", fixedIDs())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	policy := config
+	policy.AutoSync = core.AutoSyncDisabled
+	contents, err := encodeConfig(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, configPath), contents, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	fresh, err := Open(ctx, repoDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := fresh.LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig() after policy change error = %v", err)
+	}
+	if loaded.AutoSync != core.AutoSyncDisabled {
+		t.Fatalf("AutoSync = %v, want %v", loaded.AutoSync, core.AutoSyncDisabled)
+	}
+}
+
+func TestLoadConfigStillRejectsProjectIdentityMismatch(t *testing.T) {
+	ctx := context.Background()
+	repoDir := testrepo.New(t)
+	repo, err := Open(ctx, repoDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, _, err := repo.Init(ctx, "WB", fixedIDs())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	foreign := config
+	foreign.ProjectID = "01K0M65GBZ8F5ZQX0VC1J8H3TQ"
+	contents, err := encodeConfig(foreign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, configPath), contents, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	fresh, err := Open(ctx, repoDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fresh.LoadConfig(); err == nil || core.CategoryOf(err) != core.CategoryCorruptData {
+		t.Fatalf("LoadConfig() error = %v, want corrupt-data for a swapped project identity", err)
+	}
+}

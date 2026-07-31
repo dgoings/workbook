@@ -47,7 +47,7 @@ func (r *Repository) Init(ctx context.Context, key string, ids core.IDSource) (c
 
 	switch {
 	case trackedExists && guardExists:
-		if tracked != guard {
+		if !tracked.SameIdentity(guard) {
 			return core.ProjectConfig{}, false, core.Errorf(core.CategoryCorruptData, "tracked Workbook configuration does not match common project guard")
 		}
 		if err := validateRequestedProjectKey(key, tracked); err != nil {
@@ -62,7 +62,7 @@ func (r *Repository) Init(ctx context.Context, key string, ids core.IDSource) (c
 		if err != nil {
 			return core.ProjectConfig{}, false, err
 		}
-		if persisted != tracked {
+		if !persisted.SameIdentity(tracked) {
 			return core.ProjectConfig{}, false, core.Errorf(core.CategoryCorruptData, "tracked Workbook configuration does not match concurrently published project guard")
 		}
 		return r.rememberConfig(tracked), false, nil
@@ -125,7 +125,7 @@ func (r *Repository) LoadConfig() (core.ProjectConfig, error) {
 		return core.ProjectConfig{}, err
 	}
 	if guardExists {
-		if tracked != guard {
+		if !tracked.SameIdentity(guard) {
 			return core.ProjectConfig{}, core.Errorf(core.CategoryCorruptData, "tracked Workbook configuration does not match common project guard")
 		}
 		r.config = tracked
@@ -139,7 +139,7 @@ func (r *Repository) LoadConfig() (core.ProjectConfig, error) {
 	if err != nil {
 		return core.ProjectConfig{}, err
 	}
-	if persisted != tracked {
+	if !persisted.SameIdentity(tracked) {
 		return core.ProjectConfig{}, core.Errorf(core.CategoryCorruptData, "tracked Workbook configuration does not match concurrently published project guard")
 	}
 	r.config = tracked
