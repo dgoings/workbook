@@ -942,3 +942,125 @@ func stringTrimLine(output []byte) string {
 	}
 	return result
 }
+
+func TestPushTaskPublishesOnlyTheNamedRef(t *testing.T) {
+	repository, _, config := syncRepositories(t)
+	target := createSyncTask(t, repository, config, "Targeted task")
+	untouched := createSyncTask(t, repository, config, "Untouched task")
+
+	result, err := repository.PushTask(context.Background(), config, target.ID)
+	if err != nil {
+		t.Fatalf("PushTask() error = %v; result = %#v", err, result)
+	}
+	if result.Status != SyncPublished {
+		t.Fatalf("status = %q, want %q", result.Status, SyncPublished)
+	}
+	if got, want := remoteRefValue(t, repository, taskRefPrefix+target.ID), refValue(t, repository, taskRefPrefix+target.ID); got != want {
+		t.Fatalf("published remote head = %q, want %q", got, want)
+	}
+	if remoteRefExists(t, repository, taskRefPrefix+untouched.ID) {
+		t.Fatal("unrelated remote ref exists, want absent")
+	}
+}
+
+func TestPushTaskReportsUpToDateWhenRemoteAlreadyMatches(t *testing.T) {
+	repository, _, config := syncRepositories(t)
+	task := createSyncTask(t, repository, config, "Repeated task")
+	if _, err := repository.PushTask(context.Background(), config, task.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := repository.PushTask(context.Background(), config, task.ID)
+	if err != nil {
+		t.Fatalf("PushTask(up-to-date) error = %v; result = %#v", err, result)
+	}
+	if result.Status != SyncUpToDate {
+		t.Fatalf("status = %q, want %q", result.Status, SyncUpToDate)
+	}
+}
+
+func TestPushTaskReportsRejectionWhenRemoteAdvanced(t *testing.T) {
+	first, second, config := syncRepositories(t)
+	task := createSyncTask(t, first, config, "Contested task")
+	if _, err := first.PushTask(context.Background(), config, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.Fetch(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+	updateSyncTask(t, second, config, task.ID, "Remote winner")
+	if _, err := second.PushTask(context.Background(), config, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	remoteHead := refValue(t, second, taskRefPrefix+task.ID)
+
+	updateSyncTask(t, first, config, task.ID, "Local loser")
+	result, err := first.PushTask(context.Background(), config, task.ID)
+	if err == nil {
+		t.Fatalf("PushTask(rejected) error = nil; result = %#v", result)
+	}
+	if result.Status != SyncRejected {
+		t.Fatalf("status = %q, want %q", result.Status, SyncRejected)
+	}
+	if got := remoteRefValue(t, first, taskRefPrefix+task.ID); got != remoteHead {
+		t.Fatalf("remote head = %q, want unchanged %q", got, remoteHead)
+	}
+}
+
+func TestPushTaskListsNoRemoteRefsAndPublishesOnce(t *testing.T) {
+	repository, _, config := syncRepositories(t)
+	task := createSyncTask(t, repository, config, "Bounded task")
+	for i := 0; i < 10; i++ {
+		createSyncTask(t, repository, config, fmt.Sprintf("Unrelated %02d", i))
+	}
+
+	var commands [][]string
+	repository.commandObserver = func(args []string) {
+		commands = append(commands, append([]string(nil), args...))
+	}
+	if _, err := repository.PushTask(context.Background(), config, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := countCommandPrefix(commands, "ls-remote"); got != 0 {
+		t.Fatalf("ls-remote invocations = %d, want 0; commands = %v", got, commands)
+	}
+	if got := countCommandPrefix(commands, "push"); got != 1 {
+		t.Fatalf("push invocations = %d, want 1; commands = %v", got, commands)
+	}
+}
+
+func TestPushTaskIgnoresUnrelatedMalformedLocalRef(t *testing.T) {
+	repository, _, config := syncRepositories(t)
+	target := createSyncTask(t, repository, config, "Valid target")
+	broken := createSyncTask(t, repository, config, "Malformed neighbour")
+	brokenHead := refValue(t, repository, taskRefPrefix+broken.ID)
+	blob := syncGitInput(t, repository.Root, []byte("not a task commit"), "hash-object", "-w", "--stdin")
+	syncGit(t, repository.Root, "update-ref", taskRefPrefix+broken.ID, blob, brokenHead)
+
+	result, err := repository.PushTask(context.Background(), config, target.ID)
+	if err != nil {
+		t.Fatalf("PushTask() error = %v; result = %#v", err, result)
+	}
+	if result.Status != SyncPublished {
+		t.Fatalf("status = %q, want %q", result.Status, SyncPublished)
+	}
+}
+
+func TestPushTaskRejectsMalformedTargetBeforePublishing(t *testing.T) {
+	repository, _, config := syncRepositories(t)
+	task := createSyncTask(t, repository, config, "Malformed target")
+	head := refValue(t, repository, taskRefPrefix+task.ID)
+	blob := syncGitInput(t, repository.Root, []byte("not a task commit"), "hash-object", "-w", "--stdin")
+	syncGit(t, repository.Root, "update-ref", taskRefPrefix+task.ID, blob, head)
+
+	result, err := repository.PushTask(context.Background(), config, task.ID)
+	if err == nil {
+		t.Fatalf("PushTask(malformed) error = nil; result = %#v", result)
+	}
+	if result.Status != SyncInvalid {
+		t.Fatalf("status = %q, want %q", result.Status, SyncInvalid)
+	}
+	if remoteRefExists(t, repository, taskRefPrefix+task.ID) {
+		t.Fatal("remote ref exists, want absent after refusing to publish a malformed tip")
+	}
+}
