@@ -36,12 +36,19 @@ trap 'rm -rf -- "${temporary_directory}"' EXIT HUP INT TERM
 		-o "${temporary_directory}/archive-tool" ./internal/release/archivecmd
 )
 
-for architecture in amd64 arm64; do
-	archive_name="workbook_${version}_darwin_${architecture}.tar.gz"
+# Every platform the Homebrew formula serves needs an archive, so this list and
+# the formula's platform blocks must stay in step. The order is the sorted
+# archive order, which keeps checksums.txt stable.
+platforms='darwin_amd64 darwin_arm64 linux_amd64 linux_arm64'
+
+for platform in ${platforms}; do
+	operating_system=${platform%_*}
+	architecture=${platform#*_}
+	archive_name="workbook_${version}_${platform}.tar.gz"
 	binary_path="${temporary_directory}/workbook"
 	(
 		cd -- "${repository_root}"
-		CGO_ENABLED=0 GOOS=darwin GOARCH="${architecture}" go build -buildvcs=false -trimpath \
+		CGO_ENABLED=0 GOOS="${operating_system}" GOARCH="${architecture}" go build -buildvcs=false -trimpath \
 			-ldflags "-X main.version=${version} -X main.commit=${commit}" \
 			-o "${binary_path}" ./cmd/workbook
 	)
@@ -52,9 +59,13 @@ done
 
 (
 	cd -- "${output_directory}"
+	set --
+	for platform in ${platforms}; do
+		set -- "$@" "workbook_${version}_${platform}.tar.gz"
+	done
 	if command -v shasum >/dev/null 2>&1; then
-		shasum -a 256 workbook_"${version}"_darwin_amd64.tar.gz workbook_"${version}"_darwin_arm64.tar.gz
+		shasum -a 256 "$@"
 	else
-		sha256sum workbook_"${version}"_darwin_amd64.tar.gz workbook_"${version}"_darwin_arm64.tar.gz
+		sha256sum "$@"
 	fi
 ) > "${output_directory}/checksums.txt"

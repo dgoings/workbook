@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -83,13 +84,8 @@ func TestVersionCommandReportsDevelopmentDefaultsAsJSON(t *testing.T) {
 	}
 }
 
-func TestRenderFormulaUsesImmutableDarwinArchives(t *testing.T) {
-	formula, err := release.RenderFormula(
-		"0.1.0",
-		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-		"dgoings/workbook",
-	)
+func TestRenderFormulaUsesImmutablePlatformArchives(t *testing.T) {
+	formula, err := release.RenderFormula("0.1.0", "dgoings/workbook", fixtureArchives())
 	if err != nil {
 		t.Fatalf("render formula: %v", err)
 	}
@@ -97,14 +93,16 @@ func TestRenderFormulaUsesImmutableDarwinArchives(t *testing.T) {
 	for _, want := range []string{
 		"# typed: strict\n# frozen_string_literal: true",
 		"class Workbook < Formula",
-		"\n  depends_on :macos\n\n  on_macos do",
 		"on_macos do",
-		"on_arm do",
 		"https://github.com/dgoings/workbook/releases/download/v0.1.0/workbook_0.1.0_darwin_arm64.tar.gz",
 		"sha256 \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"",
-		"on_intel do",
 		"https://github.com/dgoings/workbook/releases/download/v0.1.0/workbook_0.1.0_darwin_amd64.tar.gz",
 		"sha256 \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"",
+		"on_linux do",
+		"https://github.com/dgoings/workbook/releases/download/v0.1.0/workbook_0.1.0_linux_arm64.tar.gz",
+		"sha256 \"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\"",
+		"https://github.com/dgoings/workbook/releases/download/v0.1.0/workbook_0.1.0_linux_amd64.tar.gz",
+		"sha256 \"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"",
 		"bin.install \"workbook\"",
 		"test do",
 		"workbook version",
@@ -113,17 +111,113 @@ func TestRenderFormulaUsesImmutableDarwinArchives(t *testing.T) {
 			t.Errorf("formula missing %q:\n%s", want, formula)
 		}
 	}
+	// Production mutation: leaving the macOS-only dependency in place makes
+	// Homebrew refuse the formula on Linux even though Linux archives ship.
+	if strings.Contains(formula, "depends_on :macos") {
+		t.Errorf("formula still restricts installation to macOS:\n%s", formula)
+	}
+	if macos, linux := strings.Index(formula, "on_macos do"), strings.Index(formula, "on_linux do"); macos > linux {
+		t.Errorf("formula platform blocks are out of order:\n%s", formula)
+	}
+}
+
+func TestRenderFormulaComparesTheTestVersionAsAString(t *testing.T) {
+	formula, err := release.RenderFormula("0.1.0", "dgoings/workbook", fixtureArchives())
+	if err != nil {
+		t.Fatalf("render formula: %v", err)
+	}
+
+	// Production mutation: passing the bare `version` to assert_match hands
+	// Homebrew a Version object, which does not respond to `=~`, so
+	// `brew test` aborts with a Minitest assertion error instead of running
+	// the released binary.
+	if !strings.Contains(formula, `assert_match version.to_s, shell_output("#{bin}/workbook version")`) {
+		t.Errorf("formula does not compare the test version as a string:\n%s", formula)
+	}
+}
+
+func TestRenderFormulaKeepsTheVersionInTheDownloadPath(t *testing.T) {
+	// The formula declares no version, so Homebrew derives one from the URL of
+	// whichever platform block it selects, by matching
+	// "github.com/.+/releases/download/v<version>/". Both the host and the tag
+	// segment are part of that rule: change either and Homebrew falls back to
+	// filename heuristics that read workbook_<version>_linux_amd64.tar.gz as
+	// version "64". Check the URL format rather than one rendered version, so
+	// the guard holds for whatever version is released next.
+	for _, version := range []string{"0.1.0", "1.2.3", "10.20.30"} {
+		t.Run(version, func(t *testing.T) {
+			formula, err := release.RenderFormula(version, "dgoings/workbook", fixtureArchives())
+			if err != nil {
+				t.Fatalf("render formula: %v", err)
+			}
+
+			urls := regexp.MustCompile(`(?m)^\s*url "([^"]*)"$`).FindAllStringSubmatch(formula, -1)
+			// One URL per platform block; a formula that lost a block would
+			// otherwise pass this test by having nothing left to check.
+			if len(urls) != 4 {
+				t.Fatalf("formula has %d url lines, want one per platform:\n%s", len(urls), formula)
+			}
+
+			// Production mutation: dropping the "/v<version>/" segment, or
+			// naming the archive without the version, silently installs the
+			// release under a version Homebrew invented from the filename.
+			wantURL := regexp.MustCompile(
+				`^https://github\.com/dgoings/workbook/releases/download/v` +
+					regexp.QuoteMeta(version) +
+					`/workbook_` + regexp.QuoteMeta(version) +
+					`_(darwin|linux)_(arm64|amd64)\.tar\.gz$`)
+			for _, url := range urls {
+				if !wantURL.MatchString(url[1]) {
+					t.Errorf("url %q does not carry the version in its release-tag path and filename", url[1])
+				}
+			}
+		})
+	}
+}
+
+func TestRenderFormulaOmitsTheRedundantVersionStanza(t *testing.T) {
+	formula, err := release.RenderFormula("0.1.0", "dgoings/workbook", fixtureArchives())
+	if err != nil {
+		t.Fatalf("render formula: %v", err)
+	}
+
+	// Production mutation: restoring a "version" stanza that agrees with the
+	// version Homebrew scans from the URL fails "brew audit" as redundant,
+	// which turns every tap update red.
+	if regexp.MustCompile(`(?m)^\s*version "`).MatchString(formula) {
+		t.Errorf("formula declares a version Homebrew already scans from the URL:\n%s", formula)
+	}
 }
 
 func TestRenderFormulaRejectsMissingChecksums(t *testing.T) {
-	_, err := release.RenderFormula(
-		"0.1.0",
-		"",
-		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-		"dgoings/workbook",
-	)
-	if err == nil {
-		t.Fatal("RenderFormula succeeded without an arm64 checksum")
+	// Production mutation: rendering with a blank checksum for any platform
+	// publishes a formula that cannot install on it.
+	for platform, blank := range map[string]func(*release.FormulaArchives){
+		"darwin arm64": func(a *release.FormulaArchives) { a.DarwinARM64 = "" },
+		"darwin amd64": func(a *release.FormulaArchives) { a.DarwinAMD64 = "" },
+		"linux arm64":  func(a *release.FormulaArchives) { a.LinuxARM64 = "" },
+		"linux amd64":  func(a *release.FormulaArchives) { a.LinuxAMD64 = "" },
+	} {
+		t.Run(platform, func(t *testing.T) {
+			archives := fixtureArchives()
+			blank(&archives)
+			_, err := release.RenderFormula("0.1.0", "dgoings/workbook", archives)
+			if err == nil {
+				t.Fatalf("RenderFormula succeeded without a %s checksum", platform)
+			}
+			if !strings.Contains(err.Error(), platform) {
+				t.Fatalf("RenderFormula error = %v, want the %s platform named", err, platform)
+			}
+		})
+	}
+}
+
+func fixtureArchives() release.FormulaArchives {
+	return release.FormulaArchives{
+		DarwinARM64: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		DarwinAMD64: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		LinuxARM64:  "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+		LinuxAMD64:  "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
 	}
 }
 
@@ -140,12 +234,7 @@ func TestRenderFormulaRejectsUnsafeVersions(t *testing.T) {
 		"1.2.3\"",
 	} {
 		t.Run(version, func(t *testing.T) {
-			_, err := release.RenderFormula(
-				version,
-				"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-				"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-				"dgoings/workbook",
-			)
+			_, err := release.RenderFormula(version, "dgoings/workbook", fixtureArchives())
 			if err == nil {
 				t.Fatalf("RenderFormula(%q) succeeded, want safe SemVer rejection", version)
 			}
@@ -218,7 +307,9 @@ func TestReleaseScriptRejectsUnsafeVersionsBeforeCreatingArtifacts(t *testing.T)
 	}
 }
 
-func TestReleaseScriptCreatesVerifiedDarwinArchives(t *testing.T) {
+func TestReleaseScriptCreatesVerifiedPlatformArchives(t *testing.T) {
+	// Production mutation: building only darwin archives leaves the Homebrew
+	// formula pointing at Linux downloads that were never published.
 	root, script := releasePaths(t)
 	outputDirectory := t.TempDir()
 	command := exec.Command(script, "0.1.0", outputDirectory)
@@ -231,6 +322,8 @@ func TestReleaseScriptCreatesVerifiedDarwinArchives(t *testing.T) {
 	archiveNames := []string{
 		"workbook_0.1.0_darwin_arm64.tar.gz",
 		"workbook_0.1.0_darwin_amd64.tar.gz",
+		"workbook_0.1.0_linux_arm64.tar.gz",
+		"workbook_0.1.0_linux_amd64.tar.gz",
 	}
 	for _, archiveName := range archiveNames {
 		assertExecutableOnlyArchive(t, filepath.Join(outputDirectory, archiveName))
@@ -248,6 +341,8 @@ func TestReleaseScriptCreatesVerifiedDarwinArchives(t *testing.T) {
 		"checksums.txt",
 		"workbook_0.1.0_darwin_amd64.tar.gz",
 		"workbook_0.1.0_darwin_arm64.tar.gz",
+		"workbook_0.1.0_linux_amd64.tar.gz",
+		"workbook_0.1.0_linux_arm64.tar.gz",
 	}
 	if strings.Join(gotNames, "\n") != strings.Join(wantNames, "\n") {
 		t.Fatalf("release files = %q, want %q", gotNames, wantNames)
@@ -306,6 +401,8 @@ func TestReleaseScriptProducesDeterministicArtifacts(t *testing.T) {
 	for _, name := range []string{
 		"workbook_0.1.0_darwin_amd64.tar.gz",
 		"workbook_0.1.0_darwin_arm64.tar.gz",
+		"workbook_0.1.0_linux_amd64.tar.gz",
+		"workbook_0.1.0_linux_arm64.tar.gz",
 		"checksums.txt",
 	} {
 		first, err := os.ReadFile(filepath.Join(firstOutputDirectory, name))
@@ -388,12 +485,7 @@ func releasePaths(t *testing.T) (string, string) {
 func TestRenderFormulaDirectsUpgradersToRerunSetup(t *testing.T) {
 	// Production mutation: shipping a formula without caveats would leave a
 	// `brew upgrade` silent about the per-project refresh Homebrew cannot do.
-	formula, err := release.RenderFormula(
-		"0.2.0",
-		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-		"dgoings/workbook",
-	)
+	formula, err := release.RenderFormula("0.2.0", "dgoings/workbook", fixtureArchives())
 	if err != nil {
 		t.Fatalf("render formula: %v", err)
 	}

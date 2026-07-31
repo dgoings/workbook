@@ -43,16 +43,20 @@ checksum_for() {
 	' "${checksums_file}"
 }
 
-arm64_archive="workbook_${version}_darwin_arm64.tar.gz"
-amd64_archive="workbook_${version}_darwin_amd64.tar.gz"
-if ! arm64_checksum=$(checksum_for "${arm64_archive}"); then
-	echo "workbook formula: expected exactly one SHA-256 checksum for ${arm64_archive}" >&2
-	exit 1
-fi
-if ! amd64_checksum=$(checksum_for "${amd64_archive}"); then
-	echo "workbook formula: expected exactly one SHA-256 checksum for ${amd64_archive}" >&2
-	exit 1
-fi
+# The formula serves macOS and Linux on both architectures, so a checksums file
+# that is missing any one of them cannot produce an installable formula.
+required_checksum() {
+	archive_name="workbook_${version}_$1.tar.gz"
+	if ! checksum_for "${archive_name}"; then
+		echo "workbook formula: expected exactly one SHA-256 checksum for ${archive_name}" >&2
+		return 1
+	fi
+}
+
+darwin_arm64_checksum=$(required_checksum darwin_arm64)
+darwin_amd64_checksum=$(required_checksum darwin_amd64)
+linux_arm64_checksum=$(required_checksum linux_arm64)
+linux_amd64_checksum=$(required_checksum linux_amd64)
 
 repository_root=$(CDPATH='' cd -- "${script_directory}/.." && pwd -P)
 
@@ -72,8 +76,10 @@ trap 'rm -rf -- "${build_directory}"; rm -f -- "${temporary_file}"' EXIT HUP INT
 
 "${build_directory}/formula-tool" \
 	"${version}" \
-	"${arm64_checksum}" \
-	"${amd64_checksum}" \
+	"${darwin_arm64_checksum}" \
+	"${darwin_amd64_checksum}" \
+	"${linux_arm64_checksum}" \
+	"${linux_amd64_checksum}" \
 	"${repository}" > "${temporary_file}"
 
 chmod 0644 "${temporary_file}"

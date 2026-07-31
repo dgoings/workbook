@@ -13,7 +13,7 @@ SQLite materialized view accelerates normal task reads while Git remains canonic
 > disposable SQLite task projection are implemented, along with clone bootstrap
 > through `workbook setup` and managed agent documentation through `workbook
 > docs`. Conflict reconciliation remains proposed. Workbook is published for
-> macOS through the `dgoings/homebrew-tap` Homebrew tap.
+> macOS and Linux through the `dgoings/homebrew-tap` Homebrew tap.
 
 ## Why Workbook?
 
@@ -81,7 +81,8 @@ workbook finish TASK-123 --commit HEAD --push --json
 
 ## Installation
 
-Workbook is published for macOS through a Homebrew tap:
+Workbook is published for macOS and Linux, on both arm64 and amd64, through a
+Homebrew tap:
 
 ```sh
 brew install dgoings/tap/workbook
@@ -117,6 +118,45 @@ leading `v`, for example `v0.2.0-3-g86281c9`, and gains a `-dirty` suffix when
 built from a modified tree. A released artifact reports a bare `0.2.0`, so the
 two are always distinguishable. Stamping also lets a source build satisfy the
 benchmark harness, which rejects an unknown commit.
+
+### Setting up a development environment
+
+Working on Workbook with Workbook needs a build that survives a broken working
+tree. `scripts/setup-dev-env.sh` installs both builds into separate directories
+under separate names, so neither can shadow or overwrite the other:
+
+```sh
+./scripts/setup-dev-env.sh
+```
+
+| Build | Name | Default location | Source |
+| --- | --- | --- | --- |
+| published | `workbook` | Homebrew prefix, or `$HOME/.local/share/workbook/stable/bin` | the tap, or the newest release tag |
+| working tree | `workbook-dev` | `$HOME/.local/share/workbook/dev/bin` | the current checkout |
+
+The published build comes from `brew install dgoings/tap/workbook` wherever
+Homebrew is installed. Without Homebrew the script builds the newest release tag
+instead, in a detached worktree that leaves the checkout untouched. Both routes
+produce a `workbook` to fall back on when `workbook-dev` breaks; a source-built
+fallback reports a leading `v`, as any source build does.
+
+The script adds both directories to the detected shell profiles inside a marked
+block that later runs replace rather than duplicate, and prints the `PATH`
+export needed by the current shell. It ends by reporting the resolved path and
+reported version of each build.
+
+Useful options:
+
+```sh
+./scripts/setup-dev-env.sh --dev-only                  # rebuild the working tree alone
+./scripts/setup-dev-env.sh --stable-method source      # skip Homebrew entirely
+./scripts/setup-dev-env.sh --stable-version v0.2.0     # pin the fallback release
+./scripts/setup-dev-env.sh --no-profile                # leave shell profiles alone
+```
+
+`WORKBOOK_STABLE_PREFIX`, `WORKBOOK_DEV_PREFIX`, and `WORKBOOK_SETUP_PROFILE`
+override the install prefixes and the profile that is updated. Run
+`workbook-dev setup` afterwards to bootstrap the clone.
 
 Use help to discover commands and their options:
 
@@ -250,27 +290,71 @@ reads may repair the affected row; `workbook rebuild` recreates the projection
 from the canonical Git refs when recovery is needed and reports its task count
 and cache path.
 
-### Release artifacts
+### Releasing
 
-`scripts/release.sh <version> <output-dir>` creates macOS Apple Silicon and
-Intel archives plus a sorted `checksums.txt` file. Each archive contains only
+Workbook is developed on a trunk. Features merge to `main` continuously, and a
+release is a periodic version bump that gathers whatever has landed since the
+last tag. Merging does not publish anything, so work can accumulate on `main`
+until a group of it is worth releasing.
+
+Cutting a release is one command:
+
+```sh
+./scripts/cut-release.sh 0.3.0
+```
+
+It refuses to publish anything until the release is one that can be reproduced:
+the version is strict `MAJOR.MINOR.PATCH` and orders after the latest release,
+`HEAD` is on `main` with nothing uncommitted, `main` matches the remote, and the
+tag is unused both locally and on the remote. It then runs `go test ./...`,
+creates the annotated tag, and pushes only that tag. Pushing the tag is what
+starts the release; nothing else needs to be run by hand.
+
+Check a release without publishing it with `--dry-run`, which runs every check
+and stops before tagging:
+
+```sh
+./scripts/cut-release.sh 0.3.0 --dry-run
+```
+
+`--skip-tests` skips the test run, and `--remote` and `--branch` override the
+`origin` and `main` defaults.
+
+#### What the workflow publishes
+
+Pushing a version tag such as `v0.1.0` runs the release workflow. It revalidates
+the strict SemVer tag, publishes the four archives and checksums to GitHub
+Releases, and updates the `dgoings/homebrew-tap` formula from those generated
+checksums. The protected release environment exposes a credential scoped only to
+that tap repository after validation. New assets are staged in a draft, the tap
+update is pushed first, and the draft is published last. A rerun verifies
+existing assets byte-for-byte and never overwrites them; a failed final
+publication reverts the tap update and removes only a draft created by that run.
+
+This source repository intentionally does not track an installable
+`Formula/workbook.rb` with placeholder checksums. The workflow renders the real
+formula directly into the tap from the built artifacts.
+
+#### Release artifacts
+
+`scripts/release.sh <version> <output-dir>` creates macOS and Linux archives for
+Apple Silicon and Intel plus a sorted `checksums.txt` file. The four archives
+match the platform blocks in the published Homebrew formula, which serves
+`darwin` and `linux` on `arm64` and `amd64`. Each archive contains only
 the `workbook` executable. The script cross-compiles with the requested version
 and the current Git commit injected into `workbook version`; source builds
 report `dev` and `unknown` instead. Release versions must use the exact
 `MAJOR.MINOR.PATCH` form without leading zeroes.
 
-Pushing a version tag such as `v0.1.0` runs the release workflow. It tests the
-strict SemVer tag, publishes the two archives and checksums to GitHub Releases,
-and updates the `dgoings/homebrew-tap` formula from those generated checksums.
-The protected release environment exposes a credential scoped only to that tap
-repository after validation. New assets are staged in a draft, the tap update is
-pushed first, and the draft is published last. A rerun verifies existing assets
-byte-for-byte and never overwrites them; a failed final publication reverts the
-tap update and removes only a draft created by that run.
-
-This source repository intentionally does not track an installable
-`Formula/workbook.rb` with placeholder checksums. The workflow renders the real
-formula directly into the tap from the built artifacts.
+The rendered formula declares no `version`. Homebrew derives one from the URL of
+whichever platform block it selects, by matching
+`github.com/.+/releases/download/v<version>/`, and a `version` that agrees with
+what Homebrew already scans fails `brew audit` as redundant. Both the host and
+the release-tag segment are part of that rule, so the download URLs are what
+make the published version correct: served from another host, or without the
+tag segment, Homebrew falls back to filename heuristics that read
+`workbook_0.3.0_linux_amd64.tar.gz` as version `64`. Keep the version in the
+release-tag path when changing where archives are published.
 
 ### Explicit task sharing
 

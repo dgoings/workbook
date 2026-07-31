@@ -64,7 +64,9 @@ func TestPublishReleaseCreatesAssetsOnceAndRejectsMismatchedRerun(t *testing.T) 
 	if strings.Contains(string(logContents), "release upload") {
 		t.Fatalf("publisher attempted release upload on a rerun:\n%s", logContents)
 	}
-	if formula := gitOutput(t, remote, "show", "main:Formula/workbook.rb"); !strings.Contains(formula, `version "0.1.0"`) {
+	// The formula carries no version stanza, so its version lives in the
+	// release-tag path of each download URL.
+	if formula := gitOutput(t, remote, "show", "main:Formula/workbook.rb"); !strings.Contains(formula, "/releases/download/v0.1.0/workbook_0.1.0_") {
 		t.Fatalf("tap formula was not published from verified assets:\n%s", formula)
 	}
 }
@@ -155,11 +157,7 @@ func TestPublishReleaseNeverDeletesPublicReleaseAfterAmbiguousPublishFailure(t *
 func writeReleaseFixture(t *testing.T, version string) string {
 	t.Helper()
 	dist := t.TempDir()
-	archives := []string{
-		"workbook_" + version + "_darwin_amd64.tar.gz",
-		"workbook_" + version + "_darwin_arm64.tar.gz",
-	}
-	for _, name := range archives {
+	for _, name := range releaseArchiveNames(version) {
 		contents := []byte(name + " fixture\n")
 		if err := os.WriteFile(filepath.Join(dist, name), contents, 0o600); err != nil {
 			t.Fatalf("write %s: %v", name, err)
@@ -169,13 +167,20 @@ func writeReleaseFixture(t *testing.T, version string) string {
 	return dist
 }
 
+// releaseArchiveNames lists the archives scripts/release.sh publishes, in the
+// order they appear in checksums.txt.
+func releaseArchiveNames(version string) []string {
+	names := make([]string, 0, 4)
+	for _, platform := range []string{"darwin_amd64", "darwin_arm64", "linux_amd64", "linux_arm64"} {
+		names = append(names, "workbook_"+version+"_"+platform+".tar.gz")
+	}
+	return names
+}
+
 func writeFixtureChecksums(t *testing.T, dist, version string) {
 	t.Helper()
 	var checksums strings.Builder
-	for _, name := range []string{
-		"workbook_" + version + "_darwin_amd64.tar.gz",
-		"workbook_" + version + "_darwin_arm64.tar.gz",
-	} {
+	for _, name := range releaseArchiveNames(version) {
 		contents, err := os.ReadFile(filepath.Join(dist, name))
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)
