@@ -25,6 +25,18 @@ type FormulaArchives struct {
 
 // RenderFormula produces the Homebrew formula for a Workbook release. The
 // formula serves macOS and Linux, on both arm64 and amd64.
+//
+// The formula deliberately carries no "version" stanza. Homebrew always derives
+// a version from the active platform's URL, and declaring one that agrees with
+// it fails "brew audit" as redundant.
+//
+// That derivation is a host-specific rule: Homebrew matches
+// "github.com/.+/releases/download/v<version>/" and takes the release tag. The
+// URL format below is therefore what makes the version correct. Serve these
+// archives from any other host, or drop the tag segment, and Homebrew falls
+// back to filename heuristics that read
+// "workbook_0.3.0_linux_amd64.tar.gz" as version "64".
+// TestRenderFormulaKeepsTheVersionInTheDownloadPath guards the format.
 func RenderFormula(version, repository string, archives FormulaArchives) (string, error) {
 	if !semanticVersion.MatchString(version) {
 		return "", fmt.Errorf("release version %q must be MAJOR.MINOR.PATCH without leading zeroes", version)
@@ -56,7 +68,6 @@ func RenderFormula(version, repository string, archives FormulaArchives) (string
 class Workbook < Formula
   desc "Repository-native project tracker for humans and coding agents"
   homepage "https://github.com/%[1]s"
-  version "%[2]s"
 
   on_macos do
     on_arm do

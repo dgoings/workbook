@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -132,6 +133,59 @@ func TestRenderFormulaComparesTheTestVersionAsAString(t *testing.T) {
 	// the released binary.
 	if !strings.Contains(formula, `assert_match version.to_s, shell_output("#{bin}/workbook version")`) {
 		t.Errorf("formula does not compare the test version as a string:\n%s", formula)
+	}
+}
+
+func TestRenderFormulaKeepsTheVersionInTheDownloadPath(t *testing.T) {
+	// The formula declares no version, so Homebrew derives one from the URL of
+	// whichever platform block it selects, by matching
+	// "github.com/.+/releases/download/v<version>/". Both the host and the tag
+	// segment are part of that rule: change either and Homebrew falls back to
+	// filename heuristics that read workbook_<version>_linux_amd64.tar.gz as
+	// version "64". Check the URL format rather than one rendered version, so
+	// the guard holds for whatever version is released next.
+	for _, version := range []string{"0.1.0", "1.2.3", "10.20.30"} {
+		t.Run(version, func(t *testing.T) {
+			formula, err := release.RenderFormula(version, "dgoings/workbook", fixtureArchives())
+			if err != nil {
+				t.Fatalf("render formula: %v", err)
+			}
+
+			urls := regexp.MustCompile(`(?m)^\s*url "([^"]*)"$`).FindAllStringSubmatch(formula, -1)
+			// One URL per platform block; a formula that lost a block would
+			// otherwise pass this test by having nothing left to check.
+			if len(urls) != 4 {
+				t.Fatalf("formula has %d url lines, want one per platform:\n%s", len(urls), formula)
+			}
+
+			// Production mutation: dropping the "/v<version>/" segment, or
+			// naming the archive without the version, silently installs the
+			// release under a version Homebrew invented from the filename.
+			wantURL := regexp.MustCompile(
+				`^https://github\.com/dgoings/workbook/releases/download/v` +
+					regexp.QuoteMeta(version) +
+					`/workbook_` + regexp.QuoteMeta(version) +
+					`_(darwin|linux)_(arm64|amd64)\.tar\.gz$`)
+			for _, url := range urls {
+				if !wantURL.MatchString(url[1]) {
+					t.Errorf("url %q does not carry the version in its release-tag path and filename", url[1])
+				}
+			}
+		})
+	}
+}
+
+func TestRenderFormulaOmitsTheRedundantVersionStanza(t *testing.T) {
+	formula, err := release.RenderFormula("0.1.0", "dgoings/workbook", fixtureArchives())
+	if err != nil {
+		t.Fatalf("render formula: %v", err)
+	}
+
+	// Production mutation: restoring a "version" stanza that agrees with the
+	// version Homebrew scans from the URL fails "brew audit" as redundant,
+	// which turns every tap update red.
+	if regexp.MustCompile(`(?m)^\s*version "`).MatchString(formula) {
+		t.Errorf("formula declares a version Homebrew already scans from the URL:\n%s", formula)
 	}
 }
 

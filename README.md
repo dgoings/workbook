@@ -301,8 +301,18 @@ and the current Git commit injected into `workbook version`; source builds
 report `dev` and `unknown` instead. Release versions must use the exact
 `MAJOR.MINOR.PATCH` form without leading zeroes.
 
+The rendered formula declares no `version`. Homebrew derives one from the URL of
+whichever platform block it selects, by matching
+`github.com/.+/releases/download/v<version>/`, and a `version` that agrees with
+what Homebrew already scans fails `brew audit` as redundant. Both the host and
+the release-tag segment are part of that rule, so the download URLs are what
+make the published version correct: served from another host, or without the
+tag segment, Homebrew falls back to filename heuristics that read
+`workbook_0.3.0_linux_amd64.tar.gz` as version `64`. Keep the version in the
+release-tag path when changing where archives are published.
+
 Pushing a version tag such as `v0.1.0` runs the release workflow. It tests the
-strict SemVer tag, publishes the two archives and checksums to GitHub Releases,
+strict SemVer tag, publishes the four archives and checksums to GitHub Releases,
 and updates the `dgoings/homebrew-tap` formula from those generated checksums.
 The protected release environment exposes a credential scoped only to that tap
 repository after validation. New assets are staged in a draft, the tap update is

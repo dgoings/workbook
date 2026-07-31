@@ -64,7 +64,9 @@ func TestPublishReleaseCreatesAssetsOnceAndRejectsMismatchedRerun(t *testing.T) 
 	if strings.Contains(string(logContents), "release upload") {
 		t.Fatalf("publisher attempted release upload on a rerun:\n%s", logContents)
 	}
-	if formula := gitOutput(t, remote, "show", "main:Formula/workbook.rb"); !strings.Contains(formula, `version "0.1.0"`) {
+	// The formula carries no version stanza, so its version lives in the
+	// release-tag path of each download URL.
+	if formula := gitOutput(t, remote, "show", "main:Formula/workbook.rb"); !strings.Contains(formula, "/releases/download/v0.1.0/workbook_0.1.0_") {
 		t.Fatalf("tap formula was not published from verified assets:\n%s", formula)
 	}
 }
