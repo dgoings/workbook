@@ -197,6 +197,7 @@ var commandSchemas = map[string]commandMetadata{
 			{Name: "status", Kind: stringFlag, Value: "<status>", Description: "task status"},
 			{Name: "priority", Kind: stringFlag, Value: "<priority>", Description: "task priority"},
 			{Name: "label", Kind: stringFlag, Value: "<label>", Description: "task label"},
+			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with origin"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},
 	},
@@ -241,6 +242,7 @@ var commandSchemas = map[string]commandMetadata{
 			{Name: "priority", Kind: stringFlag, Value: "<priority>", Description: "task priority"},
 			{Name: "label", Kind: stringFlag, Value: "<label>", Description: "replacement task label"},
 			{Name: "clear-labels", Kind: boolFlag, Description: "replace labels with an empty set"},
+			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with origin"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},
 	},
@@ -249,14 +251,20 @@ var commandSchemas = map[string]commandMetadata{
 		Synopsis:    "workbook delete <id-or-prefix> [--json]",
 		Description: "Delete a task.",
 		Positionals: []string{"<id-or-prefix>"},
-		Options:     []optionMetadata{{Name: "json", Kind: boolFlag, Description: "emit JSON"}},
+		Options: []optionMetadata{
+			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with origin"},
+			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+		},
 	},
 	"restore": {
 		Name:        "restore",
 		Synopsis:    "workbook restore <id-or-prefix> [--json]",
 		Description: "Restore a tombstoned task.",
 		Positionals: []string{"<id-or-prefix>"},
-		Options:     []optionMetadata{{Name: "json", Kind: boolFlag, Description: "emit JSON"}},
+		Options: []optionMetadata{
+			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with origin"},
+			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+		},
 	},
 	"serve": {
 		Name:        "serve",
@@ -305,6 +313,7 @@ var commandSchemas = map[string]commandMetadata{
 		Options: []optionMetadata{
 			{Name: "before", Kind: stringFlag, Value: "<id-or-prefix>", Description: "move before task ID"},
 			{Name: "after", Kind: stringFlag, Value: "<id-or-prefix>", Description: "move after task ID"},
+			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with origin"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},
 	},
@@ -313,20 +322,29 @@ var commandSchemas = map[string]commandMetadata{
 		Synopsis:    "workbook depend <id-or-prefix> <dependency-id-or-prefix> [--json]",
 		Description: "Add a task dependency.",
 		Positionals: []string{"<id-or-prefix>", "<dependency-id-or-prefix>"},
-		Options:     []optionMetadata{{Name: "json", Kind: boolFlag, Description: "emit JSON"}},
+		Options: []optionMetadata{
+			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with origin"},
+			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+		},
 	},
 	"free": {
 		Name:        "free",
 		Synopsis:    "workbook free <id-or-prefix> <dependency-id-or-prefix> [--json]",
 		Description: "Remove a task dependency.",
 		Positionals: []string{"<id-or-prefix>", "<dependency-id-or-prefix>"},
-		Options:     []optionMetadata{{Name: "json", Kind: boolFlag, Description: "emit JSON"}},
+		Options: []optionMetadata{
+			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with origin"},
+			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+		},
 	},
 	"next": {
 		Name:        "next",
 		Synopsis:    "workbook next [--json]",
 		Description: "Show the next eligible task.",
-		Options:     []optionMetadata{{Name: "json", Kind: boolFlag, Description: "emit JSON"}},
+		Options: []optionMetadata{
+			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with origin"},
+			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+		},
 	},
 	"rebuild": {
 		Name:        "rebuild",

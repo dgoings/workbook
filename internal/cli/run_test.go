@@ -60,7 +60,7 @@ func TestWriteMutationResultRendersWarning(t *testing.T) {
 	t.Run("human", func(t *testing.T) {
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
-		writeMutationResult(&stdout, &stderr, "create", result, false)
+		writeMutationResult(&stdout, &stderr, "create", result, nil, false)
 
 		if got, want := stdout.String(), "WB-01K0M6B8A4FTT8C39MXXYTW7D1\tready\thigh\tDurable\n"; got != want {
 			t.Fatalf("stdout = %q, want %q", got, want)
@@ -73,7 +73,7 @@ func TestWriteMutationResultRendersWarning(t *testing.T) {
 	t.Run("JSON", func(t *testing.T) {
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
-		writeMutationResult(&stdout, &stderr, "create", result, true)
+		writeMutationResult(&stdout, &stderr, "create", result, nil, true)
 
 		if stderr.Len() != 0 {
 			t.Fatalf("stderr = %q, want empty", stderr.String())

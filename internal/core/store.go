@@ -32,6 +32,10 @@ type ProjectionUpdater interface {
 
 const WarningProjectionUpdate = "projection-update-failed"
 
+// WarningAutoSync reports that a change was recorded locally but automatic
+// synchronization did not complete.
+const WarningAutoSync = "auto-sync-incomplete"
+
 type Warning struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`

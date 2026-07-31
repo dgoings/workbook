@@ -272,7 +272,7 @@ func cliClone(t *testing.T, bare string) string {
 
 func cliCreateTask(t *testing.T, repository, title string) core.Task {
 	t.Helper()
-	code, stdout, stderr := run(t, repository, "create", title, "--json")
+	code, stdout, stderr := run(t, repository, "create", title, "--no-sync", "--json")
 	if code != 0 || stderr != "" {
 		t.Fatalf("create = code %d, stderr %q", code, stderr)
 	}
@@ -285,7 +285,7 @@ func cliCreateTask(t *testing.T, repository, title string) core.Task {
 
 func cliUpdateTitle(t *testing.T, repository, taskID, title string) {
 	t.Helper()
-	if code, _, stderr := run(t, repository, "update", taskID, "--title", title); code != 0 {
+	if code, _, stderr := run(t, repository, "update", taskID, "--title", title, "--no-sync"); code != 0 {
 		t.Fatalf("update %s = code %d; stderr = %q", taskID, code, stderr)
 	}
 }
