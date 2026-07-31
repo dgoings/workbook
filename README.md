@@ -290,7 +290,52 @@ reads may repair the affected row; `workbook rebuild` recreates the projection
 from the canonical Git refs when recovery is needed and reports its task count
 and cache path.
 
-### Release artifacts
+### Releasing
+
+Workbook is developed on a trunk. Features merge to `main` continuously, and a
+release is a periodic version bump that gathers whatever has landed since the
+last tag. Merging does not publish anything, so work can accumulate on `main`
+until a group of it is worth releasing.
+
+Cutting a release is one command:
+
+```sh
+./scripts/cut-release.sh 0.3.0
+```
+
+It refuses to publish anything until the release is one that can be reproduced:
+the version is strict `MAJOR.MINOR.PATCH` and orders after the latest release,
+`HEAD` is on `main` with nothing uncommitted, `main` matches the remote, and the
+tag is unused both locally and on the remote. It then runs `go test ./...`,
+creates the annotated tag, and pushes only that tag. Pushing the tag is what
+starts the release; nothing else needs to be run by hand.
+
+Check a release without publishing it with `--dry-run`, which runs every check
+and stops before tagging:
+
+```sh
+./scripts/cut-release.sh 0.3.0 --dry-run
+```
+
+`--skip-tests` skips the test run, and `--remote` and `--branch` override the
+`origin` and `main` defaults.
+
+#### What the workflow publishes
+
+Pushing a version tag such as `v0.1.0` runs the release workflow. It revalidates
+the strict SemVer tag, publishes the four archives and checksums to GitHub
+Releases, and updates the `dgoings/homebrew-tap` formula from those generated
+checksums. The protected release environment exposes a credential scoped only to
+that tap repository after validation. New assets are staged in a draft, the tap
+update is pushed first, and the draft is published last. A rerun verifies
+existing assets byte-for-byte and never overwrites them; a failed final
+publication reverts the tap update and removes only a draft created by that run.
+
+This source repository intentionally does not track an installable
+`Formula/workbook.rb` with placeholder checksums. The workflow renders the real
+formula directly into the tap from the built artifacts.
+
+#### Release artifacts
 
 `scripts/release.sh <version> <output-dir>` creates macOS and Linux archives for
 Apple Silicon and Intel plus a sorted `checksums.txt` file. The four archives
@@ -310,19 +355,6 @@ make the published version correct: served from another host, or without the
 tag segment, Homebrew falls back to filename heuristics that read
 `workbook_0.3.0_linux_amd64.tar.gz` as version `64`. Keep the version in the
 release-tag path when changing where archives are published.
-
-Pushing a version tag such as `v0.1.0` runs the release workflow. It tests the
-strict SemVer tag, publishes the four archives and checksums to GitHub Releases,
-and updates the `dgoings/homebrew-tap` formula from those generated checksums.
-The protected release environment exposes a credential scoped only to that tap
-repository after validation. New assets are staged in a draft, the tap update is
-pushed first, and the draft is published last. A rerun verifies existing assets
-byte-for-byte and never overwrites them; a failed final publication reverts the
-tap update and removes only a draft created by that run.
-
-This source repository intentionally does not track an installable
-`Formula/workbook.rb` with placeholder checksums. The workflow renders the real
-formula directly into the tap from the built artifacts.
 
 ### Explicit task sharing
 
