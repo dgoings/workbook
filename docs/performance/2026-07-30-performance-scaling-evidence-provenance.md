@@ -155,10 +155,15 @@ does not fan out one Git process per changed task. Refreshing 500 changed heads
 costs about 5.9x an unchanged refresh; the step from zero to one changed head is
 the fixed cost of performing any projection update at all.
 
-These measurements supersede the 2026-07-29 `projection-refresh-one-changed`
-number. That earlier scenario mutated through `workbook update`, which advances
-the projection for the task it mutates, so the refresh it timed observed zero
-stale heads rather than one.
+These are the first published one-changed refresh measurements; they do not
+replace an earlier number. The change-count family also corrects a harness
+defect: the previous `projection-refresh-one-changed` scenario mutated its task
+through `workbook update`, which advances the projection for the task it
+mutates, so the refresh it timed would have observed zero stale heads rather
+than one. That scenario never produced committed evidence. Its only prior
+mention in this directory is a preparation timeout recorded in
+`2026-07-28-baseline.md`, an attempt that wrote no report and claims no
+per-scenario result.
 
 ## Storage and peak resource growth
 
