@@ -1,4 +1,4 @@
-<!-- workbook:begin generator=dev sha256=d3f68ba2747fc37b0e8dc7d2e17a548c5ff8f72e456d2c7020fbc3418cb5f9d6 -->
+<!-- workbook:begin generator=v0.2.0-81-ge9a389b-dirty sha256=d49b3a00dac1c0d7d676a76d3999b076aa9d401815964e69dbaf9e34420c86a2 -->
 # Workbook guidelines
 
 Workbook tracks this project's tasks in Git refs under `refs/workbook/tasks/`.
@@ -72,10 +72,13 @@ apply the change to the refreshed tip, then publish the single ref they
 changed. `workbook next` fetches before answering. A repository with no
 `origin` synchronizes nothing.
 
-Disable it for one command with `--no-sync`, for this project with `autoSync`
-in `.workbook/config.json`, or for every project with `"autoSync": false` in
-the user configuration's `preferences` block. A project policy outranks a user
-preference; `--no-sync` outranks both.
+Disable it for one command with `--no-sync`, for this project with
+`workbook config set auto-sync false`, or for every project with
+`"autoSync": false` in the user configuration's `preferences` block. A project
+policy outranks a user preference; `--no-sync` outranks both.
+`workbook config show` reports the resolved policy and which layer decided it.
+Record a project policy with that command rather than editing
+`.workbook/config.json`.
 
 The `sync` member of a result envelope reports what happened. A `failed`
 status still means the change was recorded locally and the command exits 0.

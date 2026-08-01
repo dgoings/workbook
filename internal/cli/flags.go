@@ -134,6 +134,35 @@ var commandSchemas = map[string]commandMetadata{
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},
 	},
+	"config": {
+		Name:            "config",
+		Synopsis:        "workbook config <command> [options]",
+		Description:     "Inspect and record this project's Workbook settings.",
+		Positionals:     []string{"<command>"},
+		SubcommandOrder: []string{"show", "set", "unset"},
+		Subcommands: map[string]commandMetadata{
+			"show": {
+				Name:        "show",
+				Synopsis:    "workbook config show [--json]",
+				Description: "Show the project configuration and resolved settings.",
+				Options:     []optionMetadata{{Name: "json", Kind: boolFlag, Description: "emit JSON"}},
+			},
+			"set": {
+				Name:        "set",
+				Synopsis:    "workbook config set <setting> <value> [--json]",
+				Description: "Record a project setting.",
+				Positionals: []string{"<setting>", "<value>"},
+				Options:     []optionMetadata{{Name: "json", Kind: boolFlag, Description: "emit JSON"}},
+			},
+			"unset": {
+				Name:        "unset",
+				Synopsis:    "workbook config unset <setting> [--json]",
+				Description: "Clear a project setting so the user configuration decides.",
+				Positionals: []string{"<setting>"},
+				Options:     []optionMetadata{{Name: "json", Kind: boolFlag, Description: "emit JSON"}},
+			},
+		},
+	},
 	"docs": {
 		Name:            "docs",
 		Synopsis:        "workbook docs <command> [options]",
@@ -370,7 +399,7 @@ var commandSchemas = map[string]commandMetadata{
 }
 
 var commandOrder = []string{
-	"setup", "create", "list", "board", "show", "update", "delete", "restore", "move", "depend", "free", "next", "rebuild", "validate", "version", "fetch", "push", "sync", "docs", "hooks", "serve",
+	"setup", "create", "list", "board", "show", "update", "delete", "restore", "move", "depend", "free", "next", "rebuild", "validate", "version", "fetch", "push", "sync", "config", "docs", "hooks", "serve",
 }
 
 type commandFlagSet struct {

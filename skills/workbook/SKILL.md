@@ -54,7 +54,9 @@ mutations fetch shared task refs, apply the change to the refreshed tip, and
 push the single ref they changed; `next` fetches before answering. No extra
 command is needed.
 
-Pass `--no-sync` when a change must stay local. Read the `sync` member of the
+Pass `--no-sync` when a change must stay local. Record a project-wide policy
+with `workbook config set auto-sync <true|false>`, never by editing
+`.workbook/config.json`. Read the `sync` member of the
 result envelope to confirm what happened: `status` is `completed`, `skipped`, or
 `failed`. A `failed` status still means the change was recorded locally, and the
 command exits 0. Exit code 6 means the task diverged from `origin` and was not

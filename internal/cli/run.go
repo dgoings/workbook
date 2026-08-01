@@ -86,6 +86,8 @@ func Run(ctx context.Context, args []string, cwd string, stdout, stderr io.Write
 		err = runPush(ctx, commandArgs, cwd, stdout)
 	case "sync":
 		err = runSync(ctx, commandArgs, cwd, stdout)
+	case "config":
+		err = runConfig(ctx, commandArgs, cwd, stdout)
 	case "docs":
 		err = runDocs(ctx, commandArgs, cwd, stdout)
 	case "hooks":

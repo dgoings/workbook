@@ -59,9 +59,11 @@ and publishes the single ref it changed. `workbook next` fetches before
 answering so two agents do not claim the same task. A repository with no
 `origin` is a local-only project and synchronizes nothing.
 
-Turn it off for one command with `--no-sync`, for one project with `autoSync` in
-`.workbook/config.json`, or for every project with `"autoSync": false` in the
-`preferences` block of the user configuration. A tracked project policy outranks
+Turn it off for one command with `--no-sync`, for one project with
+`workbook config set auto-sync false`, or for every project with
+`"autoSync": false` in the `preferences` block of the user configuration.
+`workbook config show` reports the resolved policy and which layer decided it,
+and `workbook config unset auto-sync` returns the project to the user setting. A tracked project policy outranks
 a personal preference, so a team can require synchronization in a repository;
 `--no-sync` always wins over both.
 
@@ -72,6 +74,12 @@ locally and the command still succeeds. A task whose history has diverged from
 `workbook fetch`, `workbook push`, and `workbook sync` remain available for
 explicit whole-project synchronization, and teams that want publication tied to
 ordinary code pushes can still opt in per clone with `workbook hooks install`.
+
+Recording a project policy requires a version 2 project configuration. A
+repository created by an earlier Workbook still has version 1, which keeps
+working as it stands; `workbook setup` upgrades it and reports that it did.
+Commit the result, and note that Workbook versions older than the upgrade
+cannot read a version 2 configuration.
 
 ### Proposed ephemeral coding-agent workflow
 

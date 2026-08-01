@@ -147,6 +147,71 @@ func (r *Repository) LoadConfig() (core.ProjectConfig, error) {
 	return r.config, nil
 }
 
+// UpgradeConfig rewrites a legacy tracked configuration at the version
+// Workbook currently writes, reporting whether it changed anything.
+//
+// Only setup calls this. Ordinary reads and writes accept a legacy document as
+// it stands, because upgrading is a tracked-file change the user has to commit
+// and it makes the project unreadable to older Workbook binaries. That belongs
+// to a command the user ran deliberately, not to every mutation.
+func (r *Repository) UpgradeConfig(ctx context.Context) (bool, error) {
+	if err := r.verifyIdentity(ctx); err != nil {
+		return false, err
+	}
+	tracked, exists, err := r.readConfig()
+	if err != nil {
+		return false, err
+	}
+	if !exists {
+		return false, core.Errorf(core.CategoryNotInitialized, "Workbook is not initialized")
+	}
+	if tracked.Version == projectVersion {
+		return false, nil
+	}
+
+	upgraded := tracked
+	upgraded.Version = projectVersion
+	if err := r.writeConfig(upgraded); err != nil {
+		return false, err
+	}
+	r.replaceConfig(upgraded)
+	return true, nil
+}
+
+// SetProjectAutoSync records the project's automatic synchronization policy,
+// writing the configuration at the current document version. Passing
+// core.AutoSyncUnset clears the policy so the user configuration decides again.
+func (r *Repository) SetProjectAutoSync(ctx context.Context, setting core.AutoSyncSetting) (core.ProjectConfig, error) {
+	if err := r.verifyIdentity(ctx); err != nil {
+		return core.ProjectConfig{}, err
+	}
+	tracked, exists, err := r.readConfig()
+	if err != nil {
+		return core.ProjectConfig{}, err
+	}
+	if !exists {
+		return core.ProjectConfig{}, core.Errorf(core.CategoryNotInitialized, "Workbook is not initialized")
+	}
+
+	updated := tracked
+	updated.Version = projectVersion
+	updated.AutoSync = setting
+	if err := r.writeConfig(updated); err != nil {
+		return core.ProjectConfig{}, err
+	}
+	r.replaceConfig(updated)
+	return updated, nil
+}
+
+// replaceConfig updates the memoized configuration after this process rewrote
+// it, so later work in the same command does not use the superseded document.
+func (r *Repository) replaceConfig(config core.ProjectConfig) {
+	r.metadataMu.Lock()
+	defer r.metadataMu.Unlock()
+	r.config = config
+	r.configLoaded = true
+}
+
 func (r *Repository) rememberConfig(config core.ProjectConfig) core.ProjectConfig {
 	r.metadataMu.Lock()
 	defer r.metadataMu.Unlock()

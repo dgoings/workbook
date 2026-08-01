@@ -125,6 +125,7 @@ func TestHooksInstallUsesChildMetadataForParserFlags(t *testing.T) {
 func TestHelpMetadataMatchesSchemas(t *testing.T) {
 	want := map[string]map[string]flagKind{
 		"setup":    {"key": stringFlag, "no-docs": boolFlag, "no-sync": boolFlag, "skill-dir": stringFlag, "no-skill": boolFlag, "force": boolFlag, "json": boolFlag},
+		"config":   {},
 		"docs":     {},
 		"create":   {"description": stringFlag, "status": stringFlag, "priority": stringFlag, "label": stringFlag, "no-sync": boolFlag, "json": boolFlag},
 		"list":     {"status": stringFlag, "priority": stringFlag, "label": stringFlag, "all": boolFlag, "json": boolFlag},

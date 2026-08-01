@@ -890,3 +890,109 @@ func TestLoadConfigStillRejectsProjectIdentityMismatch(t *testing.T) {
 		t.Fatalf("LoadConfig() error = %v, want corrupt-data for a swapped project identity", err)
 	}
 }
+
+func TestUpgradeConfigRewritesLegacyDocumentAtCurrentVersion(t *testing.T) {
+	ctx := context.Background()
+	repoDir := testrepo.New(t)
+	repo, err := Open(ctx, repoDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := core.ProjectConfig{
+		Format: projectFormat, Version: legacyProjectVersion, ProjectID: fixedProjectID, Key: "WB",
+	}
+	writeProjectConfigFile(t, filepath.Join(repoDir, configPath), legacy)
+
+	upgraded, err := repo.UpgradeConfig(ctx)
+	if err != nil {
+		t.Fatalf("UpgradeConfig() error = %v", err)
+	}
+	if !upgraded {
+		t.Fatal("UpgradeConfig() = false, want true for a legacy document")
+	}
+	want := legacy
+	want.Version = projectVersion
+	assertProjectConfigFile(t, filepath.Join(repoDir, configPath), want)
+}
+
+func TestUpgradeConfigLeavesACurrentDocumentByteIdentical(t *testing.T) {
+	ctx := context.Background()
+	repoDir := testrepo.New(t)
+	repo, err := Open(ctx, repoDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.Init(ctx, "WB", fixedIDs()); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(repoDir, configPath)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	upgraded, err := repo.UpgradeConfig(ctx)
+	if err != nil {
+		t.Fatalf("UpgradeConfig() error = %v", err)
+	}
+	if upgraded {
+		t.Fatal("UpgradeConfig() = true, want false for a current document")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("UpgradeConfig() rewrote a current document: before %q, after %q", before, after)
+	}
+}
+
+func TestSetProjectAutoSyncWritesPolicyAndUpgradesLegacyDocument(t *testing.T) {
+	ctx := context.Background()
+	repoDir := testrepo.New(t)
+	repo, err := Open(ctx, repoDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := core.ProjectConfig{
+		Format: projectFormat, Version: legacyProjectVersion, ProjectID: fixedProjectID, Key: "WB",
+	}
+	writeProjectConfigFile(t, filepath.Join(repoDir, configPath), legacy)
+
+	got, err := repo.SetProjectAutoSync(ctx, core.AutoSyncDisabled)
+	if err != nil {
+		t.Fatalf("SetProjectAutoSync() error = %v", err)
+	}
+	want := core.ProjectConfig{
+		Format: projectFormat, Version: projectVersion, ProjectID: fixedProjectID, Key: "WB",
+		AutoSync: core.AutoSyncDisabled,
+	}
+	if got != want {
+		t.Fatalf("SetProjectAutoSync() = %#v, want %#v", got, want)
+	}
+	assertProjectConfigFile(t, filepath.Join(repoDir, configPath), want)
+}
+
+func TestSetProjectAutoSyncClearsPolicy(t *testing.T) {
+	ctx := context.Background()
+	repoDir := testrepo.New(t)
+	repo, err := Open(ctx, repoDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.Init(ctx, "WB", fixedIDs()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.SetProjectAutoSync(ctx, core.AutoSyncEnabled); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := repo.SetProjectAutoSync(ctx, core.AutoSyncUnset)
+	if err != nil {
+		t.Fatalf("SetProjectAutoSync(unset) error = %v", err)
+	}
+	if got.AutoSync != core.AutoSyncUnset {
+		t.Fatalf("AutoSync = %v, want unset", got.AutoSync)
+	}
+	assertProjectConfigFile(t, filepath.Join(repoDir, configPath), got)
+}
