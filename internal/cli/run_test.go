@@ -921,6 +921,9 @@ func TestREADMEImplementedCommands(t *testing.T) {
 		"workbook fetch [--json]",
 		"workbook push [--json]",
 		"workbook sync [--json]",
+		"workbook config show [--json]",
+		"workbook config set <setting> <value> [--json]",
+		"workbook config unset <setting> [--json]",
 		"workbook docs install [--create <file>] [--skill-dir <dir>] [--no-skill] [--force] [--json]",
 		"workbook docs update [--skill-dir <dir>] [--no-skill] [--force] [--json]",
 		"workbook docs status [--skill-dir <dir>] [--no-skill] [--json]",
@@ -1033,7 +1036,7 @@ func assertREADMECommandPolicy(t *testing.T, readme string) {
 
 func readmeCommandPolicyViolations(readme string) []string {
 	implemented := map[string]bool{
-		"setup": true, "docs": true, "create": true, "list": true, "board": true,
+		"setup": true, "config": true, "docs": true, "create": true, "list": true, "board": true,
 		"show": true, "update": true, "delete": true, "restore": true, "fetch": true,
 		"push": true, "sync": true, "hooks": true, "serve": true, "move": true,
 		"depend": true, "free": true, "next": true, "rebuild": true, "validate": true, "version": true,
