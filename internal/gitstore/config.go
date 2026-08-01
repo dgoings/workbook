@@ -320,7 +320,7 @@ func decodeConfig(contents []byte) (core.ProjectConfig, error) {
 	if config.Format != projectFormat {
 		return core.ProjectConfig{}, core.Errorf(core.CategoryCorruptData, "unsupported Workbook configuration format %q", config.Format)
 	}
-	if config.Version != projectVersion && config.Version != legacyProjectVersion {
+	if !supportedProjectVersion(config.Version) {
 		return core.ProjectConfig{}, core.Errorf(core.CategoryCorruptData, "unsupported Workbook configuration version %d", config.Version)
 	}
 	if config.Version == legacyProjectVersion && config.AutoSync != core.AutoSyncUnset {
@@ -341,6 +341,17 @@ func decodeConfig(contents []byte) (core.ProjectConfig, error) {
 		return core.ProjectConfig{}, core.Errorf(core.CategoryCorruptData, "Workbook configuration is not canonical")
 	}
 	return config, nil
+}
+
+// supportedProjectVersion reports whether Workbook can operate on a project
+// configuration document of this version.
+//
+// Every read and write path consults this, not projectVersion. Init never
+// rewrites an existing configuration, so a repository initialized before the
+// automatic synchronization policy keeps its version 1 document indefinitely
+// and must remain fully usable.
+func supportedProjectVersion(version int) bool {
+	return version == projectVersion || version == legacyProjectVersion
 }
 
 func validateProjectID(projectID string) error {
