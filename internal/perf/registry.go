@@ -14,6 +14,7 @@ var scenarioRegistry = []string{
 	"cli-move",
 	"cli-restore",
 	"cli-update",
+	"cli-update-autosync",
 	"cli-burst-independent-10",
 	"cli-burst-same-task-10",
 	"api-update",

@@ -86,6 +86,8 @@ func Run(ctx context.Context, args []string, cwd string, stdout, stderr io.Write
 		err = runPush(ctx, commandArgs, cwd, stdout)
 	case "sync":
 		err = runSync(ctx, commandArgs, cwd, stdout)
+	case "config":
+		err = runConfig(ctx, commandArgs, cwd, stdout)
 	case "docs":
 		err = runDocs(ctx, commandArgs, cwd, stdout)
 	case "hooks":
@@ -298,29 +300,32 @@ func runCreate(ctx context.Context, args []string, cwd string, stdout, stderr io
 	priority := flags.String("priority", "", "task priority")
 	var labels stringListValue
 	flags.Var(&labels, "label", "task label")
+	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with origin")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
 
-	service, err := openService(ctx, cwd)
-	if err != nil {
-		return err
-	}
 	if strings.TrimSpace(title) == "" {
 		return core.Errorf(core.CategoryValidation, "title is required")
 	}
-	result, err := service.CreateMutation(ctx, core.CreateInput{
-		Title:       title,
-		Description: *description,
-		Status:      core.Status(*status),
-		Priority:    core.Priority(*priority),
-		Labels:      labels.values,
+	session, err := openTaskSession(ctx, cwd, *noSync, true)
+	if err != nil {
+		return err
+	}
+	result, err := session.mutate(ctx, func(ctx context.Context) (core.MutationResult, error) {
+		return session.service.CreateMutation(ctx, core.CreateInput{
+			Title:       title,
+			Description: *description,
+			Status:      core.Status(*status),
+			Priority:    core.Priority(*priority),
+			Labels:      labels.values,
+		})
 	})
 	if err != nil {
 		return err
 	}
-	writeMutationResult(stdout, stderr, "create", result, *jsonMode)
+	writeMutationResult(stdout, stderr, "create", result, &session.report, *jsonMode)
 	return nil
 }
 
@@ -402,6 +407,7 @@ func runUpdate(ctx context.Context, args []string, cwd string, stdout, stderr io
 	var labels stringListValue
 	flags.Var(&labels, "label", "replacement task label")
 	clearLabels := flags.Bool("clear-labels", false, "replace labels with an empty set")
+	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with origin")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
@@ -432,15 +438,17 @@ func runUpdate(ctx context.Context, args []string, cwd string, stdout, stderr io
 		input.Labels = &empty
 	}
 
-	service, err := openService(ctx, cwd)
+	session, err := openTaskSession(ctx, cwd, *noSync, true)
 	if err != nil {
 		return err
 	}
-	result, err := service.UpdateMutation(ctx, id, input)
+	result, err := session.mutate(ctx, func(ctx context.Context) (core.MutationResult, error) {
+		return session.service.UpdateMutation(ctx, id, input)
+	})
 	if err != nil {
 		return err
 	}
-	writeMutationResult(stdout, stderr, "update", result, *jsonMode)
+	writeMutationResult(stdout, stderr, "update", result, &session.report, *jsonMode)
 	return nil
 }
 
@@ -450,20 +458,23 @@ func runDelete(ctx context.Context, args []string, cwd string, stdout, stderr io
 		return err
 	}
 	flags := newFlagSet("delete")
+	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with origin")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
 
-	service, err := openService(ctx, cwd)
+	session, err := openTaskSession(ctx, cwd, *noSync, true)
 	if err != nil {
 		return err
 	}
-	result, err := service.DeleteMutation(ctx, id)
+	result, err := session.mutate(ctx, func(ctx context.Context) (core.MutationResult, error) {
+		return session.service.DeleteMutation(ctx, id)
+	})
 	if err != nil {
 		return err
 	}
-	writeMutationResult(stdout, stderr, "delete", result, *jsonMode)
+	writeMutationResult(stdout, stderr, "delete", result, &session.report, *jsonMode)
 	return nil
 }
 
@@ -473,20 +484,23 @@ func runRestore(ctx context.Context, args []string, cwd string, stdout, stderr i
 		return err
 	}
 	flags := newFlagSet("restore")
+	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with origin")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
 
-	service, err := openService(ctx, cwd)
+	session, err := openTaskSession(ctx, cwd, *noSync, true)
 	if err != nil {
 		return err
 	}
-	result, err := service.RestoreMutation(ctx, id)
+	result, err := session.mutate(ctx, func(ctx context.Context) (core.MutationResult, error) {
+		return session.service.RestoreMutation(ctx, id)
+	})
 	if err != nil {
 		return err
 	}
-	writeMutationResult(stdout, stderr, "restore", result, *jsonMode)
+	writeMutationResult(stdout, stderr, "restore", result, &session.report, *jsonMode)
 	return nil
 }
 
@@ -498,6 +512,7 @@ func runMove(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	flags := newFlagSet("move")
 	before := flags.String("before", "", "move before task ID")
 	after := flags.String("after", "", "move after task ID")
+	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with origin")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
@@ -505,15 +520,17 @@ func runMove(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	if (*before == "") == (*after == "") {
 		return core.Errorf(core.CategoryInvocation, "move requires exactly one of --before or --after")
 	}
-	service, err := openService(ctx, cwd)
+	session, err := openTaskSession(ctx, cwd, *noSync, true)
 	if err != nil {
 		return err
 	}
-	result, err := service.MoveMutation(ctx, id, core.MoveInput{Before: *before, After: *after})
+	result, err := session.mutate(ctx, func(ctx context.Context) (core.MutationResult, error) {
+		return session.service.MoveMutation(ctx, id, core.MoveInput{Before: *before, After: *after})
+	})
 	if err != nil {
 		return err
 	}
-	writeMutationResult(stdout, stderr, "move", result, *jsonMode)
+	writeMutationResult(stdout, stderr, "move", result, &session.report, *jsonMode)
 	return nil
 }
 
@@ -531,43 +548,46 @@ func runDependencyMutation(ctx context.Context, command string, args []string, c
 		return err
 	}
 	flags := newFlagSet(command)
+	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with origin")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
-	service, err := openService(ctx, cwd)
+	session, err := openTaskSession(ctx, cwd, *noSync, true)
 	if err != nil {
 		return err
 	}
-	var result core.MutationResult
-	if command == "depend" {
-		result, err = service.DependMutation(ctx, ids[0], ids[1])
-	} else {
-		result, err = service.FreeMutation(ctx, ids[0], ids[1])
-	}
+	result, err := session.mutate(ctx, func(ctx context.Context) (core.MutationResult, error) {
+		if command == "depend" {
+			return session.service.DependMutation(ctx, ids[0], ids[1])
+		}
+		return session.service.FreeMutation(ctx, ids[0], ids[1])
+	})
 	if err != nil {
 		return err
 	}
-	writeMutationResult(stdout, stderr, command, result, *jsonMode)
+	writeMutationResult(stdout, stderr, command, result, &session.report, *jsonMode)
 	return nil
 }
 
 func runNext(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
 	flags := newFlagSet("next")
+	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with origin")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
-	service, err := openReadService(ctx, cwd)
+	session, err := openTaskSession(ctx, cwd, *noSync, false)
 	if err != nil {
 		return err
 	}
-	task, err := service.Next(ctx)
+	session.fetchBefore(ctx)
+	task, err := session.service.Next(ctx)
 	if err != nil {
 		return err
 	}
 	if *jsonMode {
-		writeResult(stdout, "next", task)
+		writeSyncedResult(stdout, "next", task, &session.report)
 	} else if task == nil {
 		fmt.Fprintln(stdout, "No eligible task.")
 	} else {

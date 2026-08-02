@@ -33,6 +33,16 @@ descriptively. Local scenarios have no Git-process target. Reports use format ve
 of the resolved measured executable in
 `environment.workbookBinarySha256`, alongside its reported version and commit.
 
+Every local `cli-*` mutation scenario passes `--no-sync`, so those budgets
+measure the local mutation path alone. `cli-update-autosync` measures the same
+update with automatic synchronization enabled, against a local bare origin that
+already holds the fixture's task refs, and carries an inclusive p95 target of
+1,000 ms. Creating that origin and publishing the starting refs is setup,
+outside the measured sample. Separating the two budgets keeps a local regression
+from hiding inside network variance: the synchronized budget is dominated by two
+connections to `origin`, and a connection costs roughly the same whatever it
+carries.
+
 ### 2026-07-29 corrected local acceptance evidence
 
 The corrected local harness was exercised once per supported Git object format

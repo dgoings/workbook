@@ -53,10 +53,33 @@ cd <repository>
 workbook setup
 ```
 
-Publish local task changes explicitly with `workbook push`. Teams that want task
-publication tied to ordinary code pushes can opt in once per clone with
-`workbook hooks install`. To perform the safe fetch-then-push sequence manually,
-run `workbook sync`.
+Task changes synchronize themselves. A command that creates or updates a task
+fetches shared task refs from `origin`, applies its change to the refreshed tip,
+and publishes the single ref it changed. `workbook next` fetches before
+answering so two agents do not claim the same task. A repository with no
+`origin` is a local-only project and synchronizes nothing.
+
+Turn it off for one command with `--no-sync`, for one project with
+`workbook config set auto-sync false`, or for every project with
+`"autoSync": false` in the `preferences` block of the user configuration.
+`workbook config show` reports the resolved policy and which layer decided it,
+and `workbook config unset auto-sync` returns the project to the user setting. A tracked project policy outranks
+a personal preference, so a team can require synchronization in a repository;
+`--no-sync` always wins over both.
+
+An unreachable `origin` is a warning, not a failure: the change is recorded
+locally and the command still succeeds. A task whose history has diverged from
+`origin` is not published and exits `6`, because it needs reconciliation.
+
+`workbook fetch`, `workbook push`, and `workbook sync` remain available for
+explicit whole-project synchronization, and teams that want publication tied to
+ordinary code pushes can still opt in per clone with `workbook hooks install`.
+
+Recording a project policy requires a version 2 project configuration. A
+repository created by an earlier Workbook still has version 1, which keeps
+working as it stands; `workbook setup` upgrades it and reports that it did.
+Commit the result, and note that Workbook versions older than the upgrade
+cannot read a version 2 configuration.
 
 ### Proposed ephemeral coding-agent workflow
 
@@ -193,6 +216,9 @@ workbook version [--json]
 workbook fetch [--json]
 workbook push [--json]
 workbook sync [--json]
+workbook config show [--json]
+workbook config set <setting> <value> [--json]
+workbook config unset <setting> [--json]
 workbook docs install [--create <file>] [--skill-dir <dir>] [--no-skill] [--force] [--json]
 workbook docs update [--skill-dir <dir>] [--no-skill] [--force] [--json]
 workbook docs status [--skill-dir <dir>] [--no-skill] [--json]

@@ -32,7 +32,13 @@ func TestFormulaToolRendersToStandardOutput(t *testing.T) {
 		t.Fatalf("render formula: %v", err)
 	}
 
-	for _, want := range []string{"class Workbook < Formula", "version \"0.2.0\"", "def caveats", "on_linux do"} {
+	// The formula carries no "version" stanza; Homebrew scans the version from
+	// the release-tag segment of the active platform's URL, and declaring it
+	// again fails "brew audit" as redundant. Assert the segment that actually
+	// determines the version, because dropping it fails silently: Homebrew
+	// falls back to filename heuristics and reads
+	// "workbook_0.2.0_linux_amd64.tar.gz" as version "64".
+	for _, want := range []string{"class Workbook < Formula", "/download/v0.2.0/", "def caveats", "on_linux do"} {
 		if !strings.Contains(string(output), want) {
 			t.Errorf("rendered formula missing %q:\n%s", want, output)
 		}

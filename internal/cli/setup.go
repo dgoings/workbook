@@ -18,8 +18,17 @@ type setupResult struct {
 	Key        string            `json:"key"`
 	TaskCount  int               `json:"taskCount"`
 	UserConfig setupUserConfig   `json:"userConfig"`
+	Config     setupConfigResult `json:"config"`
 	Docs       *agentdocs.Report `json:"docs,omitempty"`
 	Sync       setupSyncResult   `json:"sync"`
+}
+
+// setupConfigResult reports the project document version and whether this run
+// upgraded it, because an upgrade is a tracked-file change to commit and makes
+// the project unreadable to older Workbook versions.
+type setupConfigResult struct {
+	Version  int  `json:"version"`
+	Upgraded bool `json:"upgraded"`
 }
 
 type setupUserConfig struct {
@@ -61,6 +70,17 @@ func runSetup(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 		return err
 	}
 
+	upgraded, err := repository.UpgradeConfig(ctx)
+	if err != nil {
+		return err
+	}
+	if upgraded {
+		config, err = repository.LoadConfig()
+		if err != nil {
+			return err
+		}
+	}
+
 	user, created, err := userconfig.Ensure()
 	if err != nil {
 		return err
@@ -75,6 +95,7 @@ func runSetup(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 		ProjectID:  config.ProjectID,
 		Key:        config.Key,
 		UserConfig: setupUserConfig{Path: configPath, Created: created},
+		Config:     setupConfigResult{Version: config.Version, Upgraded: upgraded},
 	}
 
 	if !*noDocs {
@@ -116,6 +137,9 @@ func runSetup(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 		suffix = "\t(created)"
 	}
 	fmt.Fprintf(stdout, "Config:\t%s%s\n", result.UserConfig.Path, suffix)
+	if result.Config.Upgraded {
+		fmt.Fprintf(stdout, "Project:\tupgraded to version %d\t(commit it; older Workbook versions cannot read it)\n", result.Config.Version)
+	}
 	if result.Docs != nil {
 		for _, artifact := range result.Docs.Artifacts {
 			fmt.Fprintf(stdout, "Docs:\t%s\t%s\n", artifact.Path, artifactAction(artifact))

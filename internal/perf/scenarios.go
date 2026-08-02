@@ -171,6 +171,7 @@ var coldScenarioDefinitions = []coldScenarioDefinition{
 	{name: "cli-move", measure: measureColdMove},
 	{name: "cli-restore", measure: measureColdRestore},
 	{name: "cli-update", measure: measureColdUpdate},
+	{name: "cli-update-autosync", measure: measureColdUpdateAutoSync},
 	{name: "cli-burst-independent-10", measure: measureColdIndependentBurst},
 	{name: "cli-burst-same-task-10", measure: measureColdSameTaskBurst},
 }
@@ -195,7 +196,7 @@ func selectedColdCLIScenarios(selected []string) ([]coldScenarioDefinition, erro
 
 func measureColdCreate(ctx context.Context, dependencies scenarioDependencies, spec RunSpec, fixture Fixture, sample int) (Sample, error) {
 	return measureColdCLICommand(ctx, dependencies, spec, fixture.Root, []string{
-		"create", fmt.Sprintf("Benchmark created task %d", sample+1), "--status", "ready", "--priority", "high", "--json",
+		"create", fmt.Sprintf("Benchmark created task %d", sample+1), "--status", "ready", "--priority", "high", "--no-sync", "--json",
 	}), nil
 }
 
@@ -204,7 +205,7 @@ func measureColdDelete(ctx context.Context, dependencies scenarioDependencies, s
 	if err != nil {
 		return Sample{}, err
 	}
-	return measureColdCLICommand(ctx, dependencies, spec, fixture.Root, []string{"delete", taskID[0], "--json"}), nil
+	return measureColdCLICommand(ctx, dependencies, spec, fixture.Root, []string{"delete", taskID[0], "--no-sync", "--json"}), nil
 }
 
 func measureColdDepend(ctx context.Context, dependencies scenarioDependencies, spec RunSpec, fixture Fixture, _ int) (Sample, error) {
@@ -212,7 +213,7 @@ func measureColdDepend(ctx context.Context, dependencies scenarioDependencies, s
 	if err != nil {
 		return Sample{}, err
 	}
-	return measureColdCLICommand(ctx, dependencies, spec, fixture.Root, []string{"depend", taskIDs[2], taskIDs[0], "--json"}), nil
+	return measureColdCLICommand(ctx, dependencies, spec, fixture.Root, []string{"depend", taskIDs[2], taskIDs[0], "--no-sync", "--json"}), nil
 }
 
 func measureColdFree(ctx context.Context, dependencies scenarioDependencies, spec RunSpec, fixture Fixture, _ int) (Sample, error) {
@@ -223,7 +224,7 @@ func measureColdFree(ctx context.Context, dependencies scenarioDependencies, spe
 	if !containsTaskID(fixture.ActiveTaskIDs, pair.Dependent) || !containsTaskID(fixture.ActiveTaskIDs, pair.Dependency) {
 		return Sample{}, fmt.Errorf("fixture direct dependency must have active tasks")
 	}
-	return measureColdCLICommand(ctx, dependencies, spec, fixture.Root, []string{"free", pair.Dependent, pair.Dependency, "--json"}), nil
+	return measureColdCLICommand(ctx, dependencies, spec, fixture.Root, []string{"free", pair.Dependent, pair.Dependency, "--no-sync", "--json"}), nil
 }
 
 func measureColdMove(ctx context.Context, dependencies scenarioDependencies, spec RunSpec, fixture Fixture, _ int) (Sample, error) {
@@ -231,14 +232,14 @@ func measureColdMove(ctx context.Context, dependencies scenarioDependencies, spe
 	if err != nil {
 		return Sample{}, err
 	}
-	return measureColdCLICommand(ctx, dependencies, spec, fixture.Root, []string{"move", taskIDs[1], "--before", taskIDs[0], "--json"}), nil
+	return measureColdCLICommand(ctx, dependencies, spec, fixture.Root, []string{"move", taskIDs[1], "--before", taskIDs[0], "--no-sync", "--json"}), nil
 }
 
 func measureColdRestore(ctx context.Context, dependencies scenarioDependencies, spec RunSpec, fixture Fixture, _ int) (Sample, error) {
 	if len(fixture.TombstonedTaskIDs) == 0 {
 		return Sample{}, fmt.Errorf("fixture has no tombstoned tasks")
 	}
-	return measureColdCLICommand(ctx, dependencies, spec, fixture.Root, []string{"restore", fixture.TombstonedTaskIDs[0], "--json"}), nil
+	return measureColdCLICommand(ctx, dependencies, spec, fixture.Root, []string{"restore", fixture.TombstonedTaskIDs[0], "--no-sync", "--json"}), nil
 }
 
 func measureColdUpdate(ctx context.Context, dependencies scenarioDependencies, spec RunSpec, fixture Fixture, _ int) (Sample, error) {
@@ -246,7 +247,75 @@ func measureColdUpdate(ctx context.Context, dependencies scenarioDependencies, s
 	if err != nil {
 		return Sample{}, err
 	}
-	return measureColdCLICommand(ctx, dependencies, spec, fixture.Root, []string{"update", taskID[0], "--status", "ready", "--json"}), nil
+	return measureColdCLICommand(ctx, dependencies, spec, fixture.Root, []string{"update", taskID[0], "--status", "ready", "--no-sync", "--json"}), nil
+}
+
+// measureColdUpdateAutoSync measures a mutation with automatic synchronization
+// left enabled, against a local bare origin that already holds the project's
+// task refs.
+//
+// The already-synchronized topology is the steady state a team works in, and it
+// is the shape the fetch-then-targeted-push sequence has to stay affordable in.
+// Its sibling cli-update measures the same mutation with --no-sync, so the two
+// budgets separate local mutation cost from synchronization cost instead of
+// letting a local regression hide inside network variance.
+//
+// Creating the origin and publishing the starting refs is setup, outside the
+// measured sample.
+func measureColdUpdateAutoSync(ctx context.Context, dependencies scenarioDependencies, spec RunSpec, fixture Fixture, _ int) (Sample, error) {
+	taskID, err := fixtureActiveTask(fixture, 1)
+	if err != nil {
+		return Sample{}, err
+	}
+	if err := publishFixtureToLocalOrigin(ctx, spec.CommandTimeout, fixture.Root); err != nil {
+		return Sample{}, err
+	}
+	return measureColdCLICommand(ctx, dependencies, spec, fixture.Root, []string{
+		"update", taskID[0], "--status", "ready", "--json",
+	}), nil
+}
+
+// publishFixtureToLocalOrigin gives the fixture an origin holding its current
+// task refs. The bare repository lives inside the fixture so the harness's
+// existing per-sample cleanup reclaims it.
+func publishFixtureToLocalOrigin(ctx context.Context, timeout time.Duration, fixtureRoot string) error {
+	output, _, err := runRepositoryGit(ctx, timeout, fixtureRoot, "rev-parse", "--show-object-format")
+	if err != nil {
+		return err
+	}
+	objectFormat := strings.TrimSuffix(string(output), "\n")
+	if objectFormat == "" || strings.ContainsAny(objectFormat, "\r\n\t ") {
+		return fmt.Errorf("Git returned invalid repository object format %q", objectFormat)
+	}
+
+	origin := filepath.Join(fixtureRoot, "benchmark-origin.git")
+	if _, _, err := runRepositoryGit(
+		ctx, timeout, "", "init", "--bare", "--quiet", "--object-format="+objectFormat, origin,
+	); err != nil {
+		return err
+	}
+	if _, _, err := runRepositoryGit(ctx, timeout, fixtureRoot, "remote", "add", "origin", origin); err != nil {
+		return err
+	}
+
+	// Git rejects a wildcard refspec that matches nothing, so a fixture with no
+	// task refs publishes nothing rather than failing the scenario.
+	refs, _, err := runRepositoryGit(
+		ctx, timeout, fixtureRoot, "for-each-ref", "--format=%(refname)", "refs/workbook/tasks/",
+	)
+	if err != nil {
+		return err
+	}
+	if len(bytes.TrimSpace(refs)) == 0 {
+		return nil
+	}
+	if _, _, err := runRepositoryGit(
+		ctx, timeout, fixtureRoot, "push", "--quiet", "origin",
+		"refs/workbook/tasks/*:refs/workbook/tasks/*",
+	); err != nil {
+		return err
+	}
+	return nil
 }
 
 func measureColdIndependentBurst(ctx context.Context, dependencies scenarioDependencies, spec RunSpec, fixture Fixture, _ int) (Sample, error) {
@@ -683,6 +752,15 @@ var coldSingleTarget = ScenarioTarget{
 	MaxMilliseconds:    200,
 }
 
+// coldAutoSyncTarget budgets a synchronized mutation. Two connections to origin
+// dominate it, and a connection costs roughly the same whatever it carries, so
+// the budget is a network allowance rather than a scaled local budget.
+var coldAutoSyncTarget = ScenarioTarget{
+	DurationStatistic:  DurationP95,
+	DurationComparison: DurationAtMost,
+	MaxMilliseconds:    1000,
+}
+
 var warmUpdateTarget = ScenarioTarget{
 	DurationStatistic:  DurationP95,
 	DurationComparison: DurationAtMost,
@@ -708,6 +786,8 @@ func coldCLIResult(name string, samples int) ScenarioResult {
 	switch name {
 	case "cli-burst-independent-10", "cli-burst-same-task-10":
 		target = &burstTarget
+	case "cli-update-autosync":
+		target = &coldAutoSyncTarget
 	case "cli-list":
 		// The read path has no approved duration budget, so it is reported
 		// descriptively rather than classified against an invented threshold.
@@ -829,7 +909,7 @@ func measureSameTaskBurst(
 			status = "in-progress"
 		}
 		members[command] = measureColdCLICommand(ctx, dependencies, spec, directory, []string{
-			"update", taskID, "--status", status, "--json",
+			"update", taskID, "--status", status, "--no-sync", "--json",
 		})
 	}
 	return aggregateBurst(time.Since(startedAt), members)
@@ -854,7 +934,7 @@ func measureIndependentBurst(
 			ready.Done()
 			<-start
 			members[index] = measureColdCLICommand(ctx, dependencies, spec, directory, []string{
-				"update", taskID, "--status", "ready", "--json",
+				"update", taskID, "--status", "ready", "--no-sync", "--json",
 			})
 		}()
 	}

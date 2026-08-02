@@ -33,6 +33,7 @@ Commands:
   fetch [--json]
   push [--json]
   sync [--json]
+  config <command> [options]
   docs <command> [options]
   hooks install [--json]
   serve [--addr 127.0.0.1:7331]
@@ -101,6 +102,7 @@ type ResultEnvelope struct {
 	Command  string         `json:"command"`
 	Data     any            `json:"data"`
 	Warnings []core.Warning `json:"warnings,omitempty"`
+	Sync     *syncReport    `json:"sync,omitempty"`
 }
 
 type ErrorBody struct {
@@ -123,7 +125,13 @@ func writeResult(output io.Writer, command string, data any) {
 	})
 }
 
-func writeMutationResult(stdout, stderr io.Writer, command string, result core.MutationResult, jsonMode bool) {
+func writeMutationResult(
+	stdout, stderr io.Writer,
+	command string,
+	result core.MutationResult,
+	sync *syncReport,
+	jsonMode bool,
+) {
 	if jsonMode {
 		_ = json.NewEncoder(stdout).Encode(ResultEnvelope{
 			Format:   "workbook.result",
@@ -131,14 +139,39 @@ func writeMutationResult(stdout, stderr io.Writer, command string, result core.M
 			Command:  command,
 			Data:     result.Task,
 			Warnings: result.Warnings,
+			Sync:     sync,
 		})
 		return
 	}
 
 	writeMutation(stdout, result.Task)
+	writeSyncReport(stdout, sync)
 	for _, warning := range result.Warnings {
 		fmt.Fprintf(stderr, "workbook: warning: %s\n", warning.Message)
 	}
+}
+
+// writeSyncReport prints one line only when synchronization was attempted.
+// A command the user deliberately kept local should not gain output saying so.
+func writeSyncReport(output io.Writer, sync *syncReport) {
+	if sync == nil || !sync.Enabled {
+		return
+	}
+	fmt.Fprintf(output, "Sync:\t%s", sync.Status)
+	if sync.Detail != "" {
+		fmt.Fprintf(output, "\t%s", sync.Detail)
+	}
+	fmt.Fprintln(output)
+}
+
+func writeSyncedResult(output io.Writer, command string, data any, sync *syncReport) {
+	_ = json.NewEncoder(output).Encode(ResultEnvelope{
+		Format:  "workbook.result",
+		Version: 1,
+		Command: command,
+		Data:    data,
+		Sync:    sync,
+	})
 }
 
 func writeError(output io.Writer, err error, jsonMode bool) {

@@ -60,7 +60,7 @@ func TestWriteMutationResultRendersWarning(t *testing.T) {
 	t.Run("human", func(t *testing.T) {
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
-		writeMutationResult(&stdout, &stderr, "create", result, false)
+		writeMutationResult(&stdout, &stderr, "create", result, nil, false)
 
 		if got, want := stdout.String(), "WB-01K0M6B8A4FTT8C39MXXYTW7D1\tready\thigh\tDurable\n"; got != want {
 			t.Fatalf("stdout = %q, want %q", got, want)
@@ -73,7 +73,7 @@ func TestWriteMutationResultRendersWarning(t *testing.T) {
 	t.Run("JSON", func(t *testing.T) {
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
-		writeMutationResult(&stdout, &stderr, "create", result, true)
+		writeMutationResult(&stdout, &stderr, "create", result, nil, true)
 
 		if stderr.Len() != 0 {
 			t.Fatalf("stderr = %q, want empty", stderr.String())
@@ -921,6 +921,9 @@ func TestREADMEImplementedCommands(t *testing.T) {
 		"workbook fetch [--json]",
 		"workbook push [--json]",
 		"workbook sync [--json]",
+		"workbook config show [--json]",
+		"workbook config set <setting> <value> [--json]",
+		"workbook config unset <setting> [--json]",
 		"workbook docs install [--create <file>] [--skill-dir <dir>] [--no-skill] [--force] [--json]",
 		"workbook docs update [--skill-dir <dir>] [--no-skill] [--force] [--json]",
 		"workbook docs status [--skill-dir <dir>] [--no-skill] [--json]",
@@ -1033,7 +1036,7 @@ func assertREADMECommandPolicy(t *testing.T, readme string) {
 
 func readmeCommandPolicyViolations(readme string) []string {
 	implemented := map[string]bool{
-		"setup": true, "docs": true, "create": true, "list": true, "board": true,
+		"setup": true, "config": true, "docs": true, "create": true, "list": true, "board": true,
 		"show": true, "update": true, "delete": true, "restore": true, "fetch": true,
 		"push": true, "sync": true, "hooks": true, "serve": true, "move": true,
 		"depend": true, "free": true, "next": true, "rebuild": true, "validate": true, "version": true,

@@ -240,10 +240,10 @@ func TestRunColdCLIUsesFixtureTombstoneAndDirectDependency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := commands[0].Args, []string{"free", fixture.Dependencies[0].Dependent, fixture.Dependencies[0].Dependency, "--json"}; !reflect.DeepEqual(got, want) {
+	if got, want := commands[0].Args, []string{"free", fixture.Dependencies[0].Dependent, fixture.Dependencies[0].Dependency, "--no-sync", "--json"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("free args = %#v, want direct fixture dependency %#v", got, want)
 	}
-	if got, want := commands[1].Args, []string{"restore", fixture.TombstonedTaskIDs[0], "--json"}; !reflect.DeepEqual(got, want) {
+	if got, want := commands[1].Args, []string{"restore", fixture.TombstonedTaskIDs[0], "--no-sync", "--json"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("restore args = %#v, want fixture tombstone %#v", got, want)
 	}
 }
@@ -1776,4 +1776,77 @@ func buildWorkbookBinary(t *testing.T) string {
 		t.Fatalf("build workbook: %v\n%s", err, output)
 	}
 	return binary
+}
+
+// TestColdAutoSyncScenarioMeasuresSynchronizedUpdate pins the two properties
+// that make this scenario worth running: the measured command leaves automatic
+// synchronization enabled, and it runs against a repository that already has a
+// published origin, so the sample covers the steady-state fetch and targeted
+// push rather than an initial publication.
+func TestColdAutoSyncScenarioMeasuresSynchronizedUpdate(t *testing.T) {
+	fixture := testColdCLIFixture()
+	var commands []CommandSpec
+	var originAtMeasure string
+	dependencies := scenarioDependencies{
+		buildFixture: func(_ context.Context, root string, _ FixtureSpec) (Fixture, error) {
+			if err := initBenchmarkWorktree(t, root); err != nil {
+				return Fixture{}, err
+			}
+			fixture.Root = root
+			return fixture, nil
+		},
+		prepareProjection: func(context.Context, CommandSpec, int) error { return nil },
+		measureCommand: func(_ context.Context, command CommandSpec) Sample {
+			commands = append(commands, command)
+			originAtMeasure = gitConfigValue(t, command.Directory, "remote.origin.url")
+			return Sample{ExitCode: 0}
+		},
+	}
+	spec := RunSpec{
+		WorkbookBinary: "workbook",
+		Fixture:        FixtureSpec{TotalTasks: 11, ActiveTasks: 10, TombstonedTasks: 1, OperationsPerTask: 4, ObjectFormat: "sha1"},
+		Samples:        1,
+		CommandTimeout: 10 * time.Second,
+	}
+
+	if _, err := runColdCLI(context.Background(), spec, t.TempDir(), []string{"cli-update-autosync"}, dependencies); err != nil {
+		t.Fatal(err)
+	}
+	if len(commands) != 1 {
+		t.Fatalf("measured commands = %d, want 1", len(commands))
+	}
+	for _, argument := range commands[0].Args {
+		if argument == "--no-sync" {
+			t.Fatalf("measured args = %#v, want automatic synchronization enabled", commands[0].Args)
+		}
+	}
+	if originAtMeasure == "" {
+		t.Fatal("no origin remote was configured before the measured sample")
+	}
+}
+
+func initBenchmarkWorktree(t *testing.T, root string) error {
+	t.Helper()
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return err
+	}
+	for _, args := range [][]string{
+		{"init", "--quiet", "--object-format=sha1", root},
+		{"-C", root, "config", "user.name", "Workbook Bench"},
+		{"-C", root, "config", "user.email", "bench@example.test"},
+	} {
+		if output, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			return fmt.Errorf("git %v: %v\n%s", args, err, output)
+		}
+	}
+	return nil
+}
+
+func gitConfigValue(t *testing.T, directory, key string) string {
+	t.Helper()
+	output, err := exec.Command("git", "-C", directory, "config", "--get", key).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
 }

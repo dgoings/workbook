@@ -14,10 +14,13 @@ import (
 )
 
 const (
-	configPath     = ".workbook/config.json"
-	projectFormat  = "workbook.project"
-	projectVersion = 1
-	projectGuard   = "project.json"
+	configPath    = ".workbook/config.json"
+	projectFormat = "workbook.project"
+	// projectVersion is the version Workbook writes. Version 1 documents
+	// predate the automatic synchronization policy and remain readable.
+	projectVersion       = 2
+	legacyProjectVersion = 1
+	projectGuard         = "project.json"
 )
 
 // Init creates a repository's tracked Workbook configuration when absent. An
@@ -44,7 +47,7 @@ func (r *Repository) Init(ctx context.Context, key string, ids core.IDSource) (c
 
 	switch {
 	case trackedExists && guardExists:
-		if tracked != guard {
+		if !tracked.SameIdentity(guard) {
 			return core.ProjectConfig{}, false, core.Errorf(core.CategoryCorruptData, "tracked Workbook configuration does not match common project guard")
 		}
 		if err := validateRequestedProjectKey(key, tracked); err != nil {
@@ -59,7 +62,7 @@ func (r *Repository) Init(ctx context.Context, key string, ids core.IDSource) (c
 		if err != nil {
 			return core.ProjectConfig{}, false, err
 		}
-		if persisted != tracked {
+		if !persisted.SameIdentity(tracked) {
 			return core.ProjectConfig{}, false, core.Errorf(core.CategoryCorruptData, "tracked Workbook configuration does not match concurrently published project guard")
 		}
 		return r.rememberConfig(tracked), false, nil
@@ -122,7 +125,7 @@ func (r *Repository) LoadConfig() (core.ProjectConfig, error) {
 		return core.ProjectConfig{}, err
 	}
 	if guardExists {
-		if tracked != guard {
+		if !tracked.SameIdentity(guard) {
 			return core.ProjectConfig{}, core.Errorf(core.CategoryCorruptData, "tracked Workbook configuration does not match common project guard")
 		}
 		r.config = tracked
@@ -136,12 +139,77 @@ func (r *Repository) LoadConfig() (core.ProjectConfig, error) {
 	if err != nil {
 		return core.ProjectConfig{}, err
 	}
-	if persisted != tracked {
+	if !persisted.SameIdentity(tracked) {
 		return core.ProjectConfig{}, core.Errorf(core.CategoryCorruptData, "tracked Workbook configuration does not match concurrently published project guard")
 	}
 	r.config = tracked
 	r.configLoaded = true
 	return r.config, nil
+}
+
+// UpgradeConfig rewrites a legacy tracked configuration at the version
+// Workbook currently writes, reporting whether it changed anything.
+//
+// Only setup calls this. Ordinary reads and writes accept a legacy document as
+// it stands, because upgrading is a tracked-file change the user has to commit
+// and it makes the project unreadable to older Workbook binaries. That belongs
+// to a command the user ran deliberately, not to every mutation.
+func (r *Repository) UpgradeConfig(ctx context.Context) (bool, error) {
+	if err := r.verifyIdentity(ctx); err != nil {
+		return false, err
+	}
+	tracked, exists, err := r.readConfig()
+	if err != nil {
+		return false, err
+	}
+	if !exists {
+		return false, core.Errorf(core.CategoryNotInitialized, "Workbook is not initialized")
+	}
+	if tracked.Version == projectVersion {
+		return false, nil
+	}
+
+	upgraded := tracked
+	upgraded.Version = projectVersion
+	if err := r.writeConfig(upgraded); err != nil {
+		return false, err
+	}
+	r.replaceConfig(upgraded)
+	return true, nil
+}
+
+// SetProjectAutoSync records the project's automatic synchronization policy,
+// writing the configuration at the current document version. Passing
+// core.AutoSyncUnset clears the policy so the user configuration decides again.
+func (r *Repository) SetProjectAutoSync(ctx context.Context, setting core.AutoSyncSetting) (core.ProjectConfig, error) {
+	if err := r.verifyIdentity(ctx); err != nil {
+		return core.ProjectConfig{}, err
+	}
+	tracked, exists, err := r.readConfig()
+	if err != nil {
+		return core.ProjectConfig{}, err
+	}
+	if !exists {
+		return core.ProjectConfig{}, core.Errorf(core.CategoryNotInitialized, "Workbook is not initialized")
+	}
+
+	updated := tracked
+	updated.Version = projectVersion
+	updated.AutoSync = setting
+	if err := r.writeConfig(updated); err != nil {
+		return core.ProjectConfig{}, err
+	}
+	r.replaceConfig(updated)
+	return updated, nil
+}
+
+// replaceConfig updates the memoized configuration after this process rewrote
+// it, so later work in the same command does not use the superseded document.
+func (r *Repository) replaceConfig(config core.ProjectConfig) {
+	r.metadataMu.Lock()
+	defer r.metadataMu.Unlock()
+	r.config = config
+	r.configLoaded = true
 }
 
 func (r *Repository) rememberConfig(config core.ProjectConfig) core.ProjectConfig {
@@ -317,8 +385,12 @@ func decodeConfig(contents []byte) (core.ProjectConfig, error) {
 	if config.Format != projectFormat {
 		return core.ProjectConfig{}, core.Errorf(core.CategoryCorruptData, "unsupported Workbook configuration format %q", config.Format)
 	}
-	if config.Version != projectVersion {
+	if !supportedProjectVersion(config.Version) {
 		return core.ProjectConfig{}, core.Errorf(core.CategoryCorruptData, "unsupported Workbook configuration version %d", config.Version)
+	}
+	if config.Version == legacyProjectVersion && config.AutoSync != core.AutoSyncUnset {
+		return core.ProjectConfig{}, core.Errorf(core.CategoryCorruptData,
+			"Workbook configuration version %d cannot carry an automatic synchronization policy", legacyProjectVersion)
 	}
 	if err := validateProjectID(config.ProjectID); err != nil {
 		return core.ProjectConfig{}, core.Wrap(core.CategoryCorruptData, "Workbook configuration project ID is invalid", err)
@@ -334,6 +406,17 @@ func decodeConfig(contents []byte) (core.ProjectConfig, error) {
 		return core.ProjectConfig{}, core.Errorf(core.CategoryCorruptData, "Workbook configuration is not canonical")
 	}
 	return config, nil
+}
+
+// supportedProjectVersion reports whether Workbook can operate on a project
+// configuration document of this version.
+//
+// Every read and write path consults this, not projectVersion. Init never
+// rewrites an existing configuration, so a repository initialized before the
+// automatic synchronization policy keeps its version 1 document indefinitely
+// and must remain fully usable.
+func supportedProjectVersion(version int) bool {
+	return version == projectVersion || version == legacyProjectVersion
 }
 
 func validateProjectID(projectID string) error {

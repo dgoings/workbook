@@ -183,7 +183,7 @@ func validateWriteIdentity(config core.ProjectConfig, pack core.OperationPack, s
 	if config.Format != projectFormat {
 		return core.Errorf(core.CategoryValidation, "unsupported Workbook configuration format %q", config.Format)
 	}
-	if config.Version != projectVersion {
+	if !supportedProjectVersion(config.Version) {
 		return core.Errorf(core.CategoryValidation, "unsupported Workbook configuration version %d", config.Version)
 	}
 	if err := validateProjectID(config.ProjectID); err != nil {

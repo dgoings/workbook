@@ -15,6 +15,73 @@ type ProjectConfig struct {
 	Version   int    `json:"version"`
 	ProjectID string `json:"projectId"`
 	Key       string `json:"key"`
+	// AutoSync is the project's automatic synchronization policy. An unset
+	// policy defers to the user configuration and then to the built-in
+	// default.
+	AutoSync AutoSyncSetting `json:"autoSync,omitempty"`
+}
+
+// SameIdentity reports whether two configurations name the same project.
+//
+// Identity is the format, the project ID, and the project key. Mutable
+// preferences such as the automatic synchronization policy are deliberately
+// excluded: the private project guard exists to detect a swapped project, and
+// changing a preference must not read as corruption. The document version is
+// excluded too, so a version 1 guard still matches a version 2 configuration.
+func (config ProjectConfig) SameIdentity(other ProjectConfig) bool {
+	return config.Format == other.Format &&
+		config.ProjectID == other.ProjectID &&
+		config.Key == other.Key
+}
+
+// AutoSyncSetting records whether a configuration layer enables automatic
+// synchronization, disables it, or leaves the decision to the next layer.
+//
+// It is a comparable tri-state rather than a *bool because ProjectConfig is
+// compared with == when reconciling the tracked configuration against the
+// common project guard; two pointers to equal values would compare unequal and
+// report corrupt data.
+type AutoSyncSetting uint8
+
+const (
+	AutoSyncUnset AutoSyncSetting = iota
+	AutoSyncEnabled
+	AutoSyncDisabled
+)
+
+// Enabled reports the policy, falling back to the supplied value when unset.
+func (setting AutoSyncSetting) Enabled(fallback bool) bool {
+	switch setting {
+	case AutoSyncEnabled:
+		return true
+	case AutoSyncDisabled:
+		return false
+	default:
+		return fallback
+	}
+}
+
+func (setting AutoSyncSetting) MarshalJSON() ([]byte, error) {
+	switch setting {
+	case AutoSyncEnabled:
+		return []byte("true"), nil
+	case AutoSyncDisabled:
+		return []byte("false"), nil
+	default:
+		return nil, Errorf(CategoryValidation, "cannot encode an unset automatic synchronization policy")
+	}
+}
+
+func (setting *AutoSyncSetting) UnmarshalJSON(contents []byte) error {
+	switch string(contents) {
+	case "true":
+		*setting = AutoSyncEnabled
+	case "false":
+		*setting = AutoSyncDisabled
+	default:
+		return Errorf(CategoryCorruptData, "automatic synchronization policy must be true or false")
+	}
+	return nil
 }
 
 type Status string

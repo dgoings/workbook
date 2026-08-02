@@ -198,6 +198,60 @@ func failedPushTransport(
 	return result, err
 }
 
+// PushTask publishes one validated task ref to origin.
+//
+// It deliberately issues no remote listing. Git's own non-fast-forward rule is
+// already the remote race guard, and push porcelain reports the up-to-date
+// outcome that the full Push uses ls-remote to discover. That makes the cost of
+// publishing one task constant in the number of tasks a project holds.
+//
+// Only the named tip is validated, so an unrelated malformed ref cannot block
+// an unrelated mutation. The full validation sweep remains in Push.
+func (r *Repository) PushTask(ctx context.Context, config core.ProjectConfig, taskID string) (SyncTaskResult, error) {
+	result := SyncTaskResult{TaskID: taskID}
+	if err := r.verifyIdentity(ctx); err != nil {
+		return result, err
+	}
+	if err := r.validateRepositoryConfig(config); err != nil {
+		return result, err
+	}
+	ref, found, err := r.taskRef(ctx, taskID)
+	if err != nil {
+		return result, err
+	}
+	if !found {
+		return result, core.Errorf(core.CategoryNotFound, "task %s has no Workbook ref to publish", taskID)
+	}
+
+	tips, err := r.readTaskHeadsPartial(ctx, config, []TaskHead{{TaskID: ref.taskID, ObjectID: ref.objectID}})
+	if err != nil {
+		return result, err
+	}
+	if len(tips) != 1 {
+		return result, core.Errorf(core.CategoryOperational, "tip validation returned %d results, want 1", len(tips))
+	}
+	if tips[0].Err != nil {
+		result.Status = SyncInvalid
+		result.Detail = tips[0].Err.Error()
+		return result, core.Errorf(core.CategoryCorruptData, "local task ref %s failed validation", taskID)
+	}
+
+	refName := taskRefPrefix + taskID
+	expected := map[string]string{refName: taskID}
+	push := r.gitWithEnvResult(ctx, []string{"WORKBOOK_PRE_PUSH_ACTIVE=1"}, nil,
+		"push", "--porcelain", "origin", ref.objectID+":"+refName)
+	published, err := parsePushPorcelain(push.stdout, expected, push.err)
+	if err != nil {
+		return result, err
+	}
+	result = published[taskID]
+	if result.Status == SyncRejected {
+		return result, core.Errorf(core.CategoryStaleWrite,
+			"task ref %s was rejected by origin; fetch and reconcile before publishing again", taskID)
+	}
+	return result, nil
+}
+
 type SyncResult struct {
 	Remote string           `json:"remote"`
 	Status SyncPhaseStatus  `json:"status,omitempty"`
