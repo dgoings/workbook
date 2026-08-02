@@ -39,9 +39,51 @@ update with automatic synchronization enabled, against a local bare origin that
 already holds the fixture's task refs, and carries an inclusive p95 target of
 1,000 ms. Creating that origin and publishing the starting refs is setup,
 outside the measured sample. Separating the two budgets keeps a local regression
-from hiding inside network variance: the synchronized budget is dominated by two
-connections to `origin`, and a connection costs roughly the same whatever it
-carries.
+from hiding inside network variance.
+
+The synchronized budget is not a pure network allowance. Against a real remote,
+a connection costs roughly the same whatever it carries, so the targeted push is
+constant in the number of tasks a project holds. The broad fetch is not: it
+enumerates and validates every task ref, and at 500 tasks that work dominates
+the measured delta even against a local bare origin, where connections are
+cheap. A real remote adds its connection latency on top. The 1,000 ms budget
+accommodates both, and the measured delta belongs to the fetch half.
+
+### 2026-08-02 v0.3.0 local acceptance evidence
+
+Release `v0.3.0` was exercised once per supported Git object format with the
+same frozen product and harness binaries. Both invocations used 500 total tasks
+(475 active and 25 tombstoned), 20 operations per task, 20 samples per scenario,
+a 60-second command timeout, and all 14 local `cli-*` and `api-*` scenarios,
+which now include `cli-list` and `cli-update-autosync`. See the shared [build and
+checksum provenance](2026-08-02-local-acceptance-provenance.md).
+
+| Format | Evidence | Outcome |
+| --- | --- | --- |
+| SHA-1 | [JSON](2026-08-02-local-acceptance-sha1.json), [Markdown](2026-08-02-local-acceptance-sha1.md) | All samples completed without timeout or product failure. Eight scenarios passed; `api-update`, both same-task bursts, `cli-depend`, and `cli-move` missed their duration targets. `cli-list` has no target. |
+| SHA-256 | [JSON](2026-08-02-local-acceptance-sha256.json), [Markdown](2026-08-02-local-acceptance-sha256.md) | All samples completed without timeout or product failure. Eight scenarios passed; the same five scenarios missed their duration targets. `cli-list` has no target. |
+
+The automatic synchronization budgets both held:
+
+| Scenario | SHA-1 p95 | SHA-256 p95 | Target | Git processes |
+| --- | ---: | ---: | ---: | ---: |
+| `cli-update` (`--no-sync`) | 179.76 ms | 170.93 ms | 200 ms | 9 |
+| `cli-update-autosync` | 695.90 ms | 745.53 ms | 1,000 ms | 25 |
+
+Synchronizing a mutation therefore cost 516 ms in SHA-1 and 575 ms in SHA-256
+against a local bare origin, well inside its budget but above the roughly 420 ms
+the design projected from connection latency alone. The difference is the broad
+fetch: enumerating and validating 500 task refs is real work that a cheap local
+connection does not hide, and it grows with the project. The targeted push is
+the half that stays constant.
+
+`cli-move` missed at 227.90 ms and 219.61 ms, having passed at 199.18 ms in the
+2026-07-29 evidence, and `cli-update` rose from 153.74 ms to 179.76 ms while
+still passing. Both scenarios pass `--no-sync` and perform no synchronization,
+so neither delta is explained by this release's behaviour. The report
+`environment` block records no CPU model or host load, so these one-shot runs
+cannot be attributed to a code change rather than the host. Per the acceptance
+rules the misses are recorded rather than retried or tuned.
 
 ### 2026-07-29 corrected local acceptance evidence
 
