@@ -38,6 +38,7 @@ type taskSession struct {
 	service    core.Service
 	report     syncReport
 	fetched    *gitstore.SyncResult
+	conflicts  []core.Conflict
 }
 
 func openTaskSession(ctx context.Context, cwd string, noSync, withWriter bool) (*taskSession, error) {
@@ -87,12 +88,14 @@ func openTaskSession(ctx context.Context, cwd string, noSync, withWriter bool) (
 }
 
 // fetchBefore refreshes shared task refs so the mutation that follows applies
-// to origin's current tip. A teammate's advance is therefore absorbed as a
-// fast-forward instead of becoming a divergence to reconcile later.
+// to origin's current tip. A teammate's advance is absorbed as a fast-forward,
+// and local work origin does not have is replayed onto the fetched tip.
 //
 // An unreachable origin is a warning rather than a failure: the local write is
 // the durable result, and refusing to record work because the network is down
-// would defeat the local-first design.
+// would defeat the local-first design. A conflict is different — the fetch
+// itself completed and advanced refs, so it is recorded and left for the caller
+// to act on.
 func (session *taskSession) fetchBefore(ctx context.Context) {
 	if !session.report.Enabled {
 		return
@@ -104,7 +107,8 @@ func (session *taskSession) fetchBefore(ctx context.Context) {
 	}
 	result, err := session.repository.Fetch(ctx, session.config)
 	session.report.Fetch = &result
-	if err != nil {
+	session.conflicts = result.Conflicts
+	if err != nil && core.CategoryOf(err) != core.CategoryConflict {
 		session.report.Status = syncStatusFailed
 		session.report.Detail = "fetch failed: " + err.Error()
 		return
@@ -116,62 +120,68 @@ func (session *taskSession) fetchBefore(ctx context.Context) {
 // publish sends exactly the ref the mutation changed.
 //
 // It is skipped when the fetch did not complete, because a second connection to
-// an unreachable origin only buys a second timeout, and when the fetch reported
-// this task as divergent, because origin would reject the push anyway.
-func (session *taskSession) publish(ctx context.Context, taskID string) error {
+// an unreachable origin only buys a second timeout. A rejection is reported as
+// a warning: the change is durable locally, and the next fetch replays it onto
+// whatever origin holds by then.
+func (session *taskSession) publish(ctx context.Context, taskID string) {
 	if !session.report.Enabled || session.fetched == nil {
-		return nil
+		return
 	}
-	if session.divergedDuringFetch(taskID) {
-		session.report.Status = syncStatusFailed
-		session.report.Detail = "task " + taskID + " diverged from origin"
-		return core.Errorf(core.CategoryStaleWrite,
-			"change recorded locally, but task %s diverged from origin and was not published; reconcile with `workbook sync`",
-			taskID)
-	}
-
 	pushed, err := session.repository.PushTask(ctx, session.config, taskID)
 	session.report.Push = &pushed
 	if err != nil {
 		session.report.Status = syncStatusFailed
 		session.report.Detail = "push failed: " + err.Error()
-		if core.CategoryOf(err) == core.CategoryStaleWrite {
-			return core.Errorf(core.CategoryStaleWrite,
-				"change recorded locally, but origin rejected task %s; reconcile with `workbook sync`", taskID)
-		}
-		return nil
+		return
 	}
 	session.report.Status = syncStatusCompleted
-	return nil
 }
 
-func (session *taskSession) divergedDuringFetch(taskID string) bool {
-	if session.fetched == nil {
-		return false
+// conflictFor reports whether this command's own task is one the fetch could
+// not finish replaying. An unrelated task's conflict never blocks a mutation;
+// this task's does, because the mutation would otherwise build on a history
+// that silently dropped the caller's earlier local operations.
+func (session *taskSession) conflictFor(ctx context.Context, target string) *core.Conflict {
+	if len(session.conflicts) == 0 || target == "" {
+		return nil
 	}
-	for _, task := range session.fetched.Tasks {
-		if task.TaskID == taskID && task.Status == gitstore.SyncDiverged {
-			return true
+	taskID := target
+	if core.ValidateTaskID(session.config.Key, taskID) != nil {
+		resolved, err := session.service.Reader.Resolve(ctx, session.config, target)
+		if err != nil {
+			return nil
+		}
+		taskID = resolved
+	}
+	for index := range session.conflicts {
+		if session.conflicts[index].TaskID == taskID {
+			return &session.conflicts[index]
 		}
 	}
-	return false
+	return nil
 }
 
 // mutate runs the fetch, the mutation, and the targeted push in order. The
 // mutation's result names the canonical task ID, which is what makes one
 // sequence work for create as well as for the commands that take an ID.
+//
+// target is the id-or-prefix the command was given, or empty when it creates a
+// task. It is checked before the mutation runs so a conflicted task is left
+// exactly where the fetch put it and the caller can retry this same command.
 func (session *taskSession) mutate(
 	ctx context.Context,
+	target string,
 	apply func(context.Context) (core.MutationResult, error),
 ) (core.MutationResult, error) {
 	session.fetchBefore(ctx)
+	if conflict := session.conflictFor(ctx, target); conflict != nil {
+		return core.MutationResult{}, core.ConflictError([]core.Conflict{*conflict})
+	}
 	result, err := apply(ctx)
 	if err != nil {
 		return core.MutationResult{}, err
 	}
-	if err := session.publish(ctx, result.Task.ID); err != nil {
-		return core.MutationResult{}, err
-	}
+	session.publish(ctx, result.Task.ID)
 	if session.report.Status == syncStatusFailed {
 		result.Warnings = append(result.Warnings, core.Warning{
 			Code:    core.WarningAutoSync,

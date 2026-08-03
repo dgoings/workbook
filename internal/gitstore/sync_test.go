@@ -49,7 +49,7 @@ func TestFetchDiscoversAndFastForwardsTasksWithoutOverwritingLocalWork(t *testin
 	}
 }
 
-func TestFetchPreservesDivergence(t *testing.T) {
+func TestFetchReplaysDivergentLocalHistory(t *testing.T) {
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Divergent task")
 	publishTaskRefs(t, first)
@@ -58,21 +58,89 @@ func TestFetchPreservesDivergence(t *testing.T) {
 	}
 
 	updateSyncTask(t, first, config, task.ID, "Remote branch")
-	updateSyncTask(t, second, config, task.ID, "Local branch")
+	setSyncTaskPriority(t, second, config, task.ID, core.PriorityHigh)
 	publishTaskRefs(t, first)
 	localTip := refValue(t, second, taskRefPrefix+task.ID)
+	remoteTip := refValue(t, first, taskRefPrefix+task.ID)
 
 	result, err := second.Fetch(context.Background(), config)
 	if err != nil {
 		t.Fatalf("Fetch(diverged) error = %v; result = %#v", err, result)
 	}
-	assertSyncOutcome(t, result, task.ID, SyncDiverged)
-	if got := refValue(t, second, taskRefPrefix+task.ID); got != localTip {
-		t.Fatalf("diverged fetch changed local tip from %q to %q", localTip, got)
+	assertSyncOutcome(t, result, task.ID, SyncReconciled)
+	if len(result.Conflicts) != 0 {
+		t.Fatalf("Fetch(diverged) conflicts = %#v, want none", result.Conflicts)
 	}
-	tracking := remoteTaskRefPrefix + task.ID
-	if got, want := refValue(t, second, tracking), refValue(t, first, taskRefPrefix+task.ID); got != want {
+
+	reconciled := refValue(t, second, taskRefPrefix+task.ID)
+	if reconciled == localTip || reconciled == remoteTip {
+		t.Fatalf("reconciled tip = %q, want a replayed commit distinct from %q and %q", reconciled, localTip, remoteTip)
+	}
+	if !mergeBaseIsAncestor(t, second.Root, remoteTip, reconciled) {
+		t.Fatalf("reconciled tip %q is not a descendant of the fetched tip %q", reconciled, remoteTip)
+	}
+	if got := parentCount(t, second, reconciled); got != 1 {
+		t.Fatalf("reconciled tip parent count = %d, want 1", got)
+	}
+
+	snapshot, err := second.ReadTaskHead(context.Background(), config, TaskHead{TaskID: task.ID, ObjectID: reconciled})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := snapshot.State.Task.Title, "Remote branch"; got != want {
+		t.Fatalf("reconciled title = %q, want the fetched %q", got, want)
+	}
+	if got, want := snapshot.State.Task.Priority, core.PriorityHigh; got != want {
+		t.Fatalf("reconciled priority = %q, want the replayed %q", got, want)
+	}
+
+	parked := reconciledRefPrefix + task.ID + "/0"
+	if !refExists(t, second, parked) {
+		t.Fatalf("fetch did not park the orphaned local tip at %s", parked)
+	}
+	if got := refValue(t, second, parked); got != localTip {
+		t.Fatalf("parked ref = %q, want the orphaned local tip %q", got, localTip)
+	}
+	if got, want := refValue(t, second, remoteTaskRefPrefix+task.ID), remoteTip; got != want {
 		t.Fatalf("tracking tip = %q, want remote tip %q", got, want)
+	}
+}
+
+func TestFetchReportsDescriptionConflictWithoutPublishingIt(t *testing.T) {
+	first, second, config := syncRepositories(t)
+	task := createSyncTask(t, first, config, "Described task")
+	setSyncTaskDescription(t, first, config, task.ID, "Base text")
+	publishTaskRefs(t, first)
+	if _, err := second.Fetch(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+
+	setSyncTaskDescription(t, first, config, task.ID, "Their text")
+	setSyncTaskDescription(t, second, config, task.ID, "Our text")
+	publishTaskRefs(t, first)
+	remoteTip := refValue(t, first, taskRefPrefix+task.ID)
+
+	result, err := second.Fetch(context.Background(), config)
+	if core.CategoryOf(err) != core.CategoryConflict {
+		t.Fatalf("Fetch(description conflict) error = %v, want a conflict; result = %#v", err, result)
+	}
+	if core.ExitCode(err) != 8 {
+		t.Fatalf("conflict exit code = %d, want 8", core.ExitCode(err))
+	}
+	assertSyncOutcome(t, result, task.ID, SyncConflicted)
+	if len(result.Conflicts) != 1 {
+		t.Fatalf("conflicts = %#v, want exactly one", result.Conflicts)
+	}
+	conflict := result.Conflicts[0]
+	if conflict.TaskID != task.ID || conflict.Type != core.ConflictDescription || conflict.Description == nil {
+		t.Fatalf("conflict = %#v, want a description conflict for %s", conflict, task.ID)
+	}
+	want := core.DescriptionConflict{Base: "Base text", Ours: "Our text", Theirs: "Their text"}
+	if *conflict.Description != want {
+		t.Fatalf("description conflict = %#v, want %#v", *conflict.Description, want)
+	}
+	if got := refValue(t, second, taskRefPrefix+task.ID); got != remoteTip {
+		t.Fatalf("conflicted tip = %q, want the fetched tip %q", got, remoteTip)
 	}
 }
 
@@ -684,7 +752,38 @@ func TestSyncRepublishesCanonicalTaskAfterRemoteRefDeletion(t *testing.T) {
 	}
 }
 
-func TestSyncStopsBeforePushWhenFetchedHistoryDiverges(t *testing.T) {
+func TestSyncReplaysDivergentHistoryAndPublishesIt(t *testing.T) {
+	first, second, config := syncRepositories(t)
+	divergent := createSyncTask(t, first, config, "Divergent task")
+	if _, err := first.Sync(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.Fetch(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+
+	updateSyncTask(t, first, config, divergent.ID, "Remote branch")
+	if _, err := first.Push(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+	setSyncTaskPriority(t, second, config, divergent.ID, core.PriorityHigh)
+	unrelated := createSyncTask(t, second, config, "Unrelated local task")
+
+	result, err := second.Sync(context.Background(), config)
+	if err != nil {
+		t.Fatalf("Sync(diverged) error = %v; result = %#v", err, result)
+	}
+	assertSyncOutcome(t, result.Fetch, divergent.ID, SyncReconciled)
+	assertSyncOutcome(t, result.Push, divergent.ID, SyncPublished)
+	assertSyncOutcome(t, result.Push, unrelated.ID, SyncPublished)
+	if got, want := remoteRefValue(t, second, taskRefPrefix+divergent.ID), refValue(t, second, taskRefPrefix+divergent.ID); got != want {
+		t.Fatalf("published divergent tip = %q, want the reconciled local tip %q", got, want)
+	}
+}
+
+// A task needing a decision must not stop the tasks that do not. Reconciliation
+// and publication are both per task, matching the per-ref outcomes push retains.
+func TestSyncPublishesUnrelatedTasksWhenOneTaskConflicts(t *testing.T) {
 	first, second, config := syncRepositories(t)
 	conflicting := createSyncTask(t, first, config, "Conflicting task")
 	if _, err := first.Sync(context.Background(), config); err != nil {
@@ -694,29 +793,33 @@ func TestSyncStopsBeforePushWhenFetchedHistoryDiverges(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	updateSyncTask(t, first, config, conflicting.ID, "Remote branch")
+	setSyncTaskDescription(t, first, config, conflicting.ID, "Their text")
 	if _, err := first.Push(context.Background(), config); err != nil {
 		t.Fatal(err)
 	}
-	updateSyncTask(t, second, config, conflicting.ID, "Local branch")
+	setSyncTaskDescription(t, second, config, conflicting.ID, "Our text")
 	unrelated := createSyncTask(t, second, config, "Unrelated local task")
+	remoteTip := refValue(t, first, taskRefPrefix+conflicting.ID)
 
 	result, err := second.Sync(context.Background(), config)
-	if err == nil {
-		t.Fatalf("Sync(diverged) error = nil; result = %#v", result)
+	if core.CategoryOf(err) != core.CategoryConflict {
+		t.Fatalf("Sync(conflict) error = %v, want a conflict; result = %#v", err, result)
 	}
-	assertSyncOutcome(t, result.Fetch, conflicting.ID, SyncDiverged)
-	if result.Push.Status != SyncPhaseSkipped {
-		t.Fatalf("divergent sync push status = %q, want %q", result.Push.Status, SyncPhaseSkipped)
+	assertSyncOutcome(t, result.Fetch, conflicting.ID, SyncConflicted)
+	if len(result.Fetch.Conflicts) != 1 {
+		t.Fatalf("conflicts = %#v, want exactly one", result.Fetch.Conflicts)
 	}
-	if !strings.Contains(result.Push.Detail, "push skipped") {
-		t.Fatalf("divergent sync push detail = %q, want skipped detail", result.Push.Detail)
+	assertSyncOutcome(t, result.Push, unrelated.ID, SyncPublished)
+	if !remoteRefExists(t, second, taskRefPrefix+unrelated.ID) {
+		t.Fatalf("sync did not publish unrelated task %s alongside a conflict", unrelated.ID)
 	}
-	if len(result.Push.Tasks) != 0 {
-		t.Fatalf("Sync(diverged) pushed tasks = %#v, want none", result.Push.Tasks)
+	for _, item := range result.Push.Tasks {
+		if item.TaskID == conflicting.ID {
+			t.Fatalf("sync published conflicted task %s: %#v", conflicting.ID, item)
+		}
 	}
-	if remoteRefExists(t, second, taskRefPrefix+unrelated.ID) {
-		t.Fatalf("sync published unrelated task %s after detecting divergence", unrelated.ID)
+	if got := refValue(t, second, taskRefPrefix+conflicting.ID); got != remoteTip {
+		t.Fatalf("conflicted tip = %q, want the fetched tip %q", got, remoteTip)
 	}
 }
 
@@ -839,6 +942,28 @@ func updateSyncTask(t *testing.T, repo *Repository, config core.ProjectConfig, t
 	if _, err := service.UpdateMutation(context.Background(), taskID, core.UpdateInput{Title: &title}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func setSyncTaskDescription(t *testing.T, repo *Repository, config core.ProjectConfig, taskID, description string) {
+	t.Helper()
+	service := syncService(repo, config)
+	if _, err := service.UpdateMutation(context.Background(), taskID, core.UpdateInput{Description: &description}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func setSyncTaskPriority(t *testing.T, repo *Repository, config core.ProjectConfig, taskID string, priority core.Priority) {
+	t.Helper()
+	service := syncService(repo, config)
+	if _, err := service.UpdateMutation(context.Background(), taskID, core.UpdateInput{Priority: &priority}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func parentCount(t *testing.T, repo *Repository, objectID string) int {
+	t.Helper()
+	output := syncGit(t, repo.Root, "rev-list", "--parents", "-n", "1", objectID)
+	return len(strings.Fields(output)) - 1
 }
 
 func syncService(repo *Repository, config core.ProjectConfig) core.Service {

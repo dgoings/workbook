@@ -68,8 +68,11 @@ a personal preference, so a team can require synchronization in a repository;
 `--no-sync` always wins over both.
 
 An unreachable `origin` is a warning, not a failure: the change is recorded
-locally and the command still succeeds. A task whose history has diverged from
-`origin` is not published and exits `6`, because it needs reconciliation.
+locally and the command still succeeds. Local work that `origin` does not have
+is replayed onto the fetched tip and published, so a task whose history diverged
+needs no separate reconciliation step. The three concurrent situations Workbook
+will not decide are reported instead, and exit `8`; see
+[Reconciling divergent histories](#reconciling-divergent-histories).
 
 `workbook fetch`, `workbook push`, and `workbook sync` remain available for
 explicit whole-project synchronization, and teams that want publication tied to
@@ -389,10 +392,10 @@ release-tag path when changing where archives are published.
 canonical tips' IDs, documents, and safe ancestry relationship before touching
 the corresponding local task ref. A missing local task is created, and a behind
 local task is fast-forwarded in one compare-and-swap transaction. Local-ahead
-tasks are left alone; divergent task histories remain on their separate local
-and tracking refs and are reported for later resolution. Invalid fetched data
-remains isolated and causes a nonzero exit; valid unrelated tracking refs can
-still reconcile in that run. Stale refs are pruned only from Workbook's
+tasks are left alone; a divergent task has its local-only operations replayed
+onto the fetched tip in the same transaction. Invalid fetched data remains
+isolated and causes a nonzero exit; valid unrelated tracking refs can still
+reconcile in that run. Stale refs are pruned only from Workbook's
 isolated tracking namespace, allowing `sync` to republish an intact canonical
 task ref if its remote counterpart was removed externally.
 
@@ -411,16 +414,61 @@ never overwritten; Workbook instead prints manual chaining guidance. Hooks are
 optional convenience only and are not required for correctness.
 
 The collaborative POC supports only the remote named `origin`. Multiple named
-remotes, automatic fetching, and divergent-operation reconciliation remain
-future work.
+remotes remain future work.
 
-`workbook sync` runs the POC-safe sequence against `origin`: fetch Workbook task
+`workbook sync` runs the full sequence against `origin`: fetch Workbook task
 refs into the isolated tracking namespace, validate and fast-forward/create
-compatible local task refs, stop before pushing if any task history diverged or
-failed validation, then publish the already validated local tips. The command
-does not replay every buried checkpoint during ordinary synchronization; that
-is reserved for the explicit `workbook validate` audit. The command never fetches
-or pushes code branches and does not create a hidden tasks branch.
+compatible local task refs, replay any divergent local history onto the fetched
+tip, then publish the resulting local tips. Reconciliation and publication are
+both per task, so one task that needs a decision leaves every other task
+fetched, replayed, and published. The command does not replay every buried
+checkpoint during ordinary synchronization; that is reserved for the explicit
+`workbook validate` audit. The command never fetches or pushes code branches and
+does not create a hidden tasks branch.
+
+### Reconciling divergent histories
+
+When `origin` holds operations this clone does not, and this clone holds
+operations `origin` does not, the fetch replays the local ones onto the fetched
+tip. The canonical task ref moves to the last replayed commit, the orphaned
+local tip is parked at `refs/workbook/reconciled/<task-id>/<n>` in the same
+compare-and-swap transaction, and every replayed pack keeps its actor, wall
+time, and operation IDs, rewriting only its logical clock. Replayed commits have
+exactly one parent; Workbook writes no merge commits and never rebases or
+force-pushes a shared ref.
+
+Most concurrent edits touch different fields, commute, and replay silently, so a
+mutation that loses a push race and a fetch that finds week-old local work both
+republish without asking anything. A replayed operation whose value `origin`
+already holds records no commit at all. Every other concurrent field change is
+last-syncer-wins.
+
+Exactly three situations stop a task's replay:
+
+| Type | Situation | Reported detail |
+| --- | --- | --- |
+| `description` | both sides changed the description | `base`, `ours`, `theirs` |
+| `dependency-cycle` | a replayed dependency closes a cycle against the fetched graph | the edge and the closing path |
+| `tombstone` | `origin` tombstoned a task a local operation still edits | the blocked operation |
+
+A conflict aborts replay for its own task only, leaving that ref at the fetched
+tip or at the furthest operation replayed before the conflict arose. Conflicts
+are reported in the result envelope's `conflict` list — a list, because one
+fetch can stop on several tasks — and the command exits `8`. Workbook never
+writes a conflict marker or an unresolved value into a commit.
+
+Resolution is a plain retry of the ordinary command against the now
+fast-forwarded ref. There is no reconcile command, no continue command, no
+discard flow, and no conflict state kept between invocations. The contract is
+complete without a terminal, so JSON output, hooks, agents, and the web board
+all consume the same list.
+
+Parked refs stay local; they are never pushed, because every enumeration that
+builds a push refspec is scoped to `refs/workbook/tasks/`. The next successful
+mutation of a task retires that task's oldest parked refs inside the same
+`update-ref` transaction, keeping the most recent few. Fetches and reads never
+prune them: a fetch must not delete recoverable work in the command that
+orphaned it.
 
 ### Semantic history validation
 
@@ -714,25 +762,31 @@ tombstones. Later CLI and format work is expected to add:
 - `implementation.link` for associating work with code commits.
 
 Historical operation commits are immutable. Tasks are tombstoned rather than
-deleting their refs. Shared task histories are never rebased or force-pushed;
-divergent histories remain visible until future reconciliation support resolves
-them.
+deleting their refs. Shared task histories are never rebased or force-pushed. A
+clone that diverged from `origin` replays its own unpublished operations onto
+the fetched tip and parks the tip it replaced, which changes only local refs and
+appends to the shared history.
 
 ## Concurrency and synchronization
 
-Explicit fast-forward-only synchronization and a combined fetch-then-push sync
-command are implemented. Concurrent domain reconciliation is still proposed. The
-intended later reconciliation model is:
+Explicit synchronization, a combined fetch-then-push sync command, and
+replay-based reconciliation of divergent task histories are implemented. The
+model is:
 
 1. Fetch the relevant Workbook ref.
-2. Merge any newly discovered operation DAGs.
+2. Replay any local-only operation packs onto the fetched tip.
 3. Validate the requested transition against the projected task.
 4. Write an operation pack and Git commit.
 5. Atomically advance the local task ref.
 6. Push that task ref.
-7. If the remote changed concurrently, fetch, reconcile, and retry.
+7. If the remote changed concurrently, the next fetch replays onto its new tip.
 
-Most operations can converge through CRDT-inspired merge rules. Meaningful contradictions should be surfaced rather than silently hidden. For example, concurrent `done` and `blocked` status changes may produce a multi-value conflict that requires an operation causally following both values.
+Most operations converge because they touch different fields. Meaningful
+contradictions are surfaced rather than silently hidden, through the three
+conflicts described in
+[Reconciling divergent histories](#reconciling-divergent-histories). Concurrent
+`done` and `blocked` status changes are not among them: status is
+last-syncer-wins, and multi-value status conflicts remain proposed.
 
 Exclusive claims are different. When `--remote-required` is used, a claim succeeds only after the remote accepts a fast-forward update based on the task ref that was fetched. If another agent claimed the task first, Workbook refetches and reports that the claim failed instead of merging two exclusive claims. Offline claims, if supported, must be visibly tentative.
 

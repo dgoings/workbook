@@ -596,7 +596,7 @@ func statusForError(category core.Category) int {
 		return http.StatusBadRequest
 	case core.CategoryNotFound:
 		return http.StatusNotFound
-	case core.CategoryNotInitialized, core.CategoryStaleWrite:
+	case core.CategoryNotInitialized, core.CategoryStaleWrite, core.CategoryConflict:
 		return http.StatusConflict
 	case core.CategoryCorruptData, core.CategoryOperational:
 		return http.StatusInternalServerError

@@ -248,7 +248,7 @@ checkpoint; the planned explicit validation audit is a separate future path.
 | `sync-initial-publication` | `push` a populated local repository to an empty bare remote | at most 5 seconds; fewer than 20 Git processes |
 | `sync-already-synchronized` | `sync` when local, tracking, and remote refs match | at most 1 second; fewer than 10 Git processes |
 | `sync-small-changed-ref-set` | `sync` with five local-ahead and five disjoint remote-ahead tasks | at most 2 seconds; fewer than 20 Git processes |
-| `sync-divergent-tips` | `sync` with one task whose local and remote tips diverge | at most 2 seconds; fewer than 20 Git processes |
+| `sync-divergent-tips` | `sync` with one task whose local and remote tips diverge, replayed and published | none yet; reported as `not-evaluated` |
 | `sync-malformed-local-tip` | `push` with one malformed owned local task ref | at most 2 seconds; fewer than 20 Git processes |
 | `sync-malformed-remote-tip` | `fetch` with one malformed fetched tracking ref | at most 2 seconds; fewer than 20 Git processes |
 
@@ -256,10 +256,13 @@ The remote report target is evaluated per scenario. `pass` means every sample
 completed within the inclusive time limit and below the exclusive Git-process
 limit; `miss` means a completed sample exceeded either budget; `timeout` means
 at least one sample reached its command timeout; and `failed` means a command
-sample failed. Scenarios with no target are `not-evaluated`. Expected product
-errors in the divergent and malformed topologies remain measured samples when
-their result and ref invariants are correct, but their nonzero command samples
-still produce `failed` evidence. A timeout's elapsed duration is a lower bound:
+sample failed. Scenarios with no target are `not-evaluated`, which is where
+`sync-divergent-tips` sits: reconciliation replays local history rather than
+refusing to publish it, so the scenario measures work no recorded run has priced
+yet and gets a budget from observed evidence rather than a guess. Expected
+product errors in the malformed topologies remain measured samples when their
+result and ref invariants are correct, but their nonzero command samples still
+produce `failed` evidence. A timeout's elapsed duration is a lower bound:
 it shows the command ran for at least that long, not its final latency. Harness
 setup, report encoding, JSON decoding, or ref-verification failures are fatal
 because they make the measurement untrustworthy.

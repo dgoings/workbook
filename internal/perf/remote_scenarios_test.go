@@ -84,12 +84,15 @@ func TestRunRemoteScenariosUsesTopologyCommandsAndVerifiesResults(t *testing.T) 
 	tests := []struct {
 		name    string
 		command string
+		// unbudgeted marks a scenario that is measured and verified but has no
+		// approved threshold, so its samples are reported rather than classified.
+		unbudgeted bool
 	}{
 		{name: "sync-fresh-checkout", command: "fetch"},
 		{name: "sync-initial-publication", command: "push"},
 		{name: "sync-already-synchronized", command: "sync"},
 		{name: "sync-small-changed-ref-set", command: "sync"},
-		{name: "sync-divergent-tips", command: "sync"},
+		{name: "sync-divergent-tips", command: "sync", unbudgeted: true},
 		{name: "sync-malformed-local-tip", command: "push"},
 		{name: "sync-malformed-remote-tip", command: "fetch"},
 	}
@@ -117,7 +120,14 @@ func TestRunRemoteScenariosUsesTopologyCommandsAndVerifiesResults(t *testing.T) 
 				t.Fatalf("results/commands = %d/%d, want 1/1", len(results), len(commands))
 			}
 			result := results[0]
-			if result.Target == nil || result.Target.MaxGitProcesses <= 7 || result.Target.MaxMilliseconds <= 0 {
+			if test.unbudgeted {
+				if result.Target != nil {
+					t.Fatalf("%s target = %#v, want none until a recorded run supplies evidence", result.Name, result.Target)
+				}
+				if got := scenarioOutcome(result); got != "not-evaluated" {
+					t.Fatalf("%s outcome = %q, want not-evaluated", result.Name, got)
+				}
+			} else if result.Target == nil || result.Target.MaxGitProcesses <= 7 || result.Target.MaxMilliseconds <= 0 {
 				t.Fatalf("%s target = %#v, want approved target above measured count", result.Name, result.Target)
 			}
 			if len(result.Samples) != 1 || result.Samples[0].GitProcesses != 7 {
@@ -157,6 +167,9 @@ func TestRunRemoteScenariosBuildsOnlySelectedTopology(t *testing.T) {
 // completed sample.
 func TestRemoteScenarioTargetsUseEverySampleInclusiveDurationLimits(t *testing.T) {
 	for _, definition := range remoteScenarioDefinitions {
+		if definition.target == nil {
+			continue
+		}
 		if definition.target.DurationStatistic != DurationEverySample || definition.target.DurationComparison != DurationAtMost {
 			t.Fatalf("%s duration policy = %q/%q, want every-sample/at-most", definition.name, definition.target.DurationStatistic, definition.target.DurationComparison)
 		}

@@ -34,6 +34,7 @@ func TestExitCode(t *testing.T) {
 		{"not found", Errorf(CategoryNotFound, "missing task"), 4},
 		{"validation", Errorf(CategoryValidation, "bad task"), 5},
 		{"stale write", Errorf(CategoryStaleWrite, "head changed"), 6},
+		{"conflict", Errorf(CategoryConflict, "both sides changed the description"), 8},
 		{"corrupt data", Errorf(CategoryCorruptData, "bad state"), 7},
 		{"operational", Errorf(CategoryOperational, "git failed"), 1},
 		{"unknown typed category", Errorf(Category("future"), "unknown"), 7},

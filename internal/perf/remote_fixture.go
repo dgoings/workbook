@@ -187,7 +187,11 @@ func constructRemoteTopology(ctx context.Context, sourceRoot, localRoot, peerRoo
 		if err := populateSynchronizedFixture(ctx, sourceRoot, localRoot, peerRoot, originRoot); err != nil {
 			return err
 		}
-		if err := appendFixtureTask(ctx, localRoot, config, activeTaskIDs[0], 0); err != nil {
+		// The two sides touch different fields, which is what concurrent edits
+		// usually do and what reconciliation is meant to absorb silently. A
+		// scenario where both wrote the same description would measure the
+		// conflict report instead of the replay.
+		if err := appendFixtureLabel(ctx, localRoot, config, activeTaskIDs[0], 0, "benchmark-local"); err != nil {
 			return err
 		}
 		if err := appendFixtureTask(ctx, peerRoot, config, activeTaskIDs[0], 1000); err != nil {
@@ -260,6 +264,55 @@ func appendFixtureTask(ctx context.Context, root string, config core.ProjectConf
 	ids := newFixtureIDs()
 	ids.nextAt = benchmarkOrigin.AddDate(1, 0, 0).Add(time.Duration(taskIndex) * time.Millisecond)
 	commit, err := appendFixtureOperation(ctx, root, config, parent, taskID, parent.Pack.HistoryGeneration, taskIndex, int(parent.Pack.LogicalClock)+1, ids)
+	if err != nil {
+		return err
+	}
+	return updateFixtureRef(ctx, root, taskRefName(taskID), commit.Head, head)
+}
+
+// appendFixtureLabel appends one label addition. A set.add commutes with every
+// scalar field the other side may have written, so the resulting divergence
+// replays without needing a decision.
+func appendFixtureLabel(
+	ctx context.Context,
+	root string,
+	config core.ProjectConfig,
+	taskID string,
+	taskIndex int,
+	label string,
+) error {
+	head, err := fixtureRefObjectID(ctx, root, taskRefName(taskID))
+	if err != nil {
+		return err
+	}
+	parent, err := readFixtureCommit(ctx, root, head)
+	if err != nil {
+		return err
+	}
+	ids := newFixtureIDs()
+	ids.nextAt = benchmarkOrigin.AddDate(1, 0, 0).Add(time.Duration(taskIndex) * time.Millisecond)
+	operationID, err := ids.next()
+	if err != nil {
+		return fmt.Errorf("generate fixture operation ID: %w", err)
+	}
+	pack := core.OperationPack{
+		Format:            "workbook.operation-pack",
+		Version:           1,
+		ProjectID:         config.ProjectID,
+		TaskID:            taskID,
+		HistoryGeneration: parent.Pack.HistoryGeneration,
+		Actor:             core.Actor{ID: benchmarkActorID},
+		LogicalClock:      parent.Pack.LogicalClock + 1,
+		WallTime:          ids.timestamp(),
+		Operations: []core.Operation{{
+			ID: operationID, Type: core.OperationSetAdd, Field: "labels", Value: label,
+		}},
+	}
+	state, err := core.Apply(&parent.State, pack, config.Key)
+	if err != nil {
+		return fmt.Errorf("apply fixture label operation: %w", err)
+	}
+	commit, err := writeFixtureCommit(ctx, root, parent.Head, pack, state, "workbook: benchmark fixture label")
 	if err != nil {
 		return err
 	}

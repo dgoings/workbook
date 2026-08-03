@@ -32,23 +32,31 @@ type canonicalRefUpdate struct {
 	TaskID   string
 	Next     string
 	Expected string
+	// ParkedRef and ParkedHead retain a reconciliation's orphaned local tip.
+	// They ride in the same transaction that moves the canonical ref off that
+	// tip, so the commit is never unreachable even momentarily.
+	ParkedRef  string
+	ParkedHead string
 }
 
 // classifyTaskHeadRelationships classifies validated canonical and tracking
-// snapshots with at most one Git ancestry walk.
+// snapshots with at most one Git ancestry walk. It also returns that walk's
+// parent graph, which already contains everything reconciliation needs to find
+// a divergent task's shared base and local-only commits.
 func (r *Repository) classifyTaskHeadRelationships(
 	ctx context.Context,
 	config core.ProjectConfig,
 	pairs []taskHeadPair,
-) ([]taskHeadRelationshipResult, error) {
+) ([]taskHeadRelationshipResult, map[string][]string, error) {
+	graph := map[string][]string{}
 	if err := r.verifyIdentity(ctx); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := r.validateRepositoryConfig(config); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := r.ensureGitObjectIDWidth(ctx); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	results := make([]taskHeadRelationshipResult, len(pairs))
@@ -56,17 +64,17 @@ func (r *Repository) classifyTaskHeadRelationships(
 	seenTaskIDs := make(map[string]struct{}, len(pairs))
 	for i, pair := range pairs {
 		if _, duplicate := seenTaskIDs[pair.TaskID]; duplicate {
-			return nil, core.Errorf(core.CategoryCorruptData, "task head pairs contain duplicate task ID %q", pair.TaskID)
+			return nil, nil, core.Errorf(core.CategoryCorruptData, "task head pairs contain duplicate task ID %q", pair.TaskID)
 		}
 		seenTaskIDs[pair.TaskID] = struct{}{}
 		if err := r.validateClassifiableTaskHead(config, pair.TaskID, pair.Local); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if err := r.validateClassifiableTaskHead(config, pair.TaskID, pair.Remote); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if pair.Local.Operation.HistoryGeneration != pair.Remote.Operation.HistoryGeneration {
-			return nil, core.Errorf(core.CategoryCorruptData, "task %q heads use different history generations", pair.TaskID)
+			return nil, nil, core.Errorf(core.CategoryCorruptData, "task %q heads use different history generations", pair.TaskID)
 		}
 
 		results[i].TaskID = pair.TaskID
@@ -77,7 +85,7 @@ func (r *Repository) classifyTaskHeadRelationships(
 		unequal = append(unequal, pair)
 	}
 	if len(unequal) == 0 {
-		return results, nil
+		return results, graph, nil
 	}
 
 	var input bytes.Buffer
@@ -93,24 +101,24 @@ func (r *Repository) classifyTaskHeadRelationships(
 	}
 	output, err := r.Git(ctx, input.Bytes(), "rev-list", "--parents", "--stdin")
 	if err != nil {
-		return nil, core.Wrap(core.CategoryCorruptData, "cannot classify task head relationships", err)
+		return nil, nil, core.Wrap(core.CategoryCorruptData, "cannot classify task head relationships", err)
 	}
-	graph, err := parseParentGraph(output)
+	graph, err = parseParentGraph(output)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for objectID, parents := range graph {
 		if err := r.validateFullObjectID(objectID); err != nil {
-			return nil, core.Wrap(core.CategoryCorruptData, "Git returned an invalid parent graph object ID", err)
+			return nil, nil, core.Wrap(core.CategoryCorruptData, "Git returned an invalid parent graph object ID", err)
 		}
 		for _, parent := range parents {
 			if err := r.validateFullObjectID(parent); err != nil {
-				return nil, core.Wrap(core.CategoryCorruptData, "Git returned an invalid parent graph object ID", err)
+				return nil, nil, core.Wrap(core.CategoryCorruptData, "Git returned an invalid parent graph object ID", err)
 			}
 		}
 	}
 	if err := validateCompleteParentGraph(graph); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	for i, pair := range pairs {
@@ -118,10 +126,10 @@ func (r *Repository) classifyTaskHeadRelationships(
 			continue
 		}
 		if _, found := graph[pair.Local.Head]; !found {
-			return nil, core.Errorf(core.CategoryCorruptData, "Git parent graph omitted local head for task %q", pair.TaskID)
+			return nil, nil, core.Errorf(core.CategoryCorruptData, "Git parent graph omitted local head for task %q", pair.TaskID)
 		}
 		if _, found := graph[pair.Remote.Head]; !found {
-			return nil, core.Errorf(core.CategoryCorruptData, "Git parent graph omitted remote head for task %q", pair.TaskID)
+			return nil, nil, core.Errorf(core.CategoryCorruptData, "Git parent graph omitted remote head for task %q", pair.TaskID)
 		}
 		switch {
 		case graphReaches(graph, pair.Remote.Head, pair.Local.Head):
@@ -132,7 +140,7 @@ func (r *Repository) classifyTaskHeadRelationships(
 			results[i].Relationship = taskHeadsDiverged
 		}
 	}
-	return results, nil
+	return results, graph, nil
 }
 
 func validateCompleteParentGraph(graph map[string][]string) error {
@@ -233,6 +241,14 @@ func (r *Repository) updateCanonicalRefsFromValidated(
 				return core.Wrap(core.CategoryCorruptData, "canonical task ref expected target is invalid", err)
 			}
 		}
+		if update.ParkedRef != "" {
+			if !validParkedRefName(update.TaskID, update.ParkedRef) {
+				return core.Errorf(core.CategoryCorruptData, "parked task ref %q does not name task %q", update.ParkedRef, update.TaskID)
+			}
+			if err := r.validateFullObjectID(update.ParkedHead); err != nil {
+				return core.Wrap(core.CategoryCorruptData, "parked task ref target is invalid", err)
+			}
+		}
 		current, found := observed[update.TaskID]
 		switch {
 		case update.Expected == "" && found:
@@ -246,6 +262,9 @@ func (r *Repository) updateCanonicalRefsFromValidated(
 	input.WriteString("start\noption no-deref\n")
 	for _, update := range updates {
 		ref := taskRefPrefix + update.TaskID
+		if update.ParkedRef != "" {
+			fmt.Fprintf(&input, "create %s %s\n", update.ParkedRef, update.ParkedHead)
+		}
 		if update.Expected == "" {
 			fmt.Fprintf(&input, "create %s %s\n", ref, update.Next)
 			continue

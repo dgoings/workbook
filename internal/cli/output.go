@@ -97,12 +97,17 @@ func renderCommandHelp(output io.Writer, helpTarget []string) error {
 }
 
 type ResultEnvelope struct {
-	Format   string         `json:"format"`
-	Version  int            `json:"version"`
-	Command  string         `json:"command"`
-	Data     any            `json:"data"`
-	Warnings []core.Warning `json:"warnings,omitempty"`
-	Sync     *syncReport    `json:"sync,omitempty"`
+	Format  string `json:"format"`
+	Version int    `json:"version"`
+	Command string `json:"command"`
+	Data    any    `json:"data"`
+	// Conflict lists every task whose local operations could not be replayed.
+	// It is a list because one fetch reconciles every task at once and can stop
+	// on several of them, and it lives on the envelope so one command reports
+	// one list whatever mix of phases produced it.
+	Conflict []core.Conflict `json:"conflict,omitempty"`
+	Warnings []core.Warning  `json:"warnings,omitempty"`
+	Sync     *syncReport     `json:"sync,omitempty"`
 }
 
 type ErrorBody struct {
@@ -125,11 +130,34 @@ func writeResult(output io.Writer, command string, data any) {
 	})
 }
 
+func writeSyncPhaseResult(
+	output io.Writer,
+	command string,
+	data any,
+	conflicts []core.Conflict,
+	jsonMode bool,
+	renderText func(io.Writer),
+) {
+	if jsonMode {
+		_ = json.NewEncoder(output).Encode(ResultEnvelope{
+			Format:   "workbook.result",
+			Version:  1,
+			Command:  command,
+			Data:     data,
+			Conflict: conflicts,
+		})
+		return
+	}
+	renderText(output)
+	writeConflicts(output, conflicts)
+}
+
 func writeMutationResult(
 	stdout, stderr io.Writer,
 	command string,
 	result core.MutationResult,
 	sync *syncReport,
+	conflicts []core.Conflict,
 	jsonMode bool,
 ) {
 	if jsonMode {
@@ -138,6 +166,7 @@ func writeMutationResult(
 			Version:  1,
 			Command:  command,
 			Data:     result.Task,
+			Conflict: conflicts,
 			Warnings: result.Warnings,
 			Sync:     sync,
 		})
@@ -146,9 +175,57 @@ func writeMutationResult(
 
 	writeMutation(stdout, result.Task)
 	writeSyncReport(stdout, sync)
+	writeConflicts(stdout, conflicts)
 	for _, warning := range result.Warnings {
 		fmt.Fprintf(stderr, "workbook: warning: %s\n", warning.Message)
 	}
+}
+
+// writeMutationOutcome reports what the command did, including when a conflict
+// stopped it before it did anything. A conflicted mutation still writes a
+// result envelope because the conflict list is the only place the caller can
+// read the values it needs in order to retry.
+func writeMutationOutcome(
+	stdout, stderr io.Writer,
+	command string,
+	session *taskSession,
+	result core.MutationResult,
+	err error,
+	jsonMode bool,
+) error {
+	if err != nil {
+		if core.CategoryOf(err) != core.CategoryConflict {
+			return err
+		}
+		writeSyncPhaseResult(stdout, command, nil, session.conflicts, jsonMode, func(io.Writer) {})
+		return err
+	}
+	writeMutationResult(stdout, stderr, command, result, &session.report, session.conflicts, jsonMode)
+	return nil
+}
+
+// writeConflicts renders the same list the JSON envelope carries. The three
+// values a description conflict reports are printed in full because retyping
+// the wanted text is the whole resolution.
+func writeConflicts(output io.Writer, conflicts []core.Conflict) {
+	for _, conflict := range conflicts {
+		fmt.Fprintf(output, "Conflict:\t%s\t%s\t%s\n", conflict.TaskID, conflict.Type, core.ConflictDetail(conflict))
+		switch {
+		case conflict.Description != nil:
+			fmt.Fprintf(output, "\tbase:\t%s\n", singleLine(conflict.Description.Base))
+			fmt.Fprintf(output, "\tours:\t%s\n", singleLine(conflict.Description.Ours))
+			fmt.Fprintf(output, "\ttheirs:\t%s\n", singleLine(conflict.Description.Theirs))
+		case conflict.Dependency != nil:
+			fmt.Fprintf(output, "\tedge:\t%s → %s\n", conflict.Dependency.From, conflict.Dependency.To)
+			fmt.Fprintf(output, "\tpath:\t%s\n", strings.Join(conflict.Dependency.Path, " → "))
+		case conflict.Tombstone != nil:
+			fmt.Fprintf(output, "\tblocked:\t%s\t%s\n", conflict.Tombstone.OperationID, conflict.Tombstone.Operation)
+		}
+	}
+}
+
+func singleLine(value string) string {
+	return strings.Join(strings.Fields(value), " ")
 }
 
 // writeSyncReport prints one line only when synchronization was attempted.
@@ -164,13 +241,14 @@ func writeSyncReport(output io.Writer, sync *syncReport) {
 	fmt.Fprintln(output)
 }
 
-func writeSyncedResult(output io.Writer, command string, data any, sync *syncReport) {
+func writeSyncedResult(output io.Writer, command string, data any, sync *syncReport, conflicts []core.Conflict) {
 	_ = json.NewEncoder(output).Encode(ResultEnvelope{
-		Format:  "workbook.result",
-		Version: 1,
-		Command: command,
-		Data:    data,
-		Sync:    sync,
+		Format:   "workbook.result",
+		Version:  1,
+		Command:  command,
+		Data:     data,
+		Conflict: conflicts,
+		Sync:     sync,
 	})
 }
 
@@ -226,6 +304,10 @@ func writeSyncResult(output io.Writer, result gitstore.SyncResult) {
 		return
 	}
 	if len(result.Tasks) == 0 {
+		if result.Detail != "" {
+			fmt.Fprintf(output, "%s\n", result.Detail)
+			return
+		}
 		fmt.Fprintf(output, "No task refs on %s.\n", result.Remote)
 		return
 	}

@@ -56,7 +56,10 @@ type remoteScenarioDefinition struct {
 	topology      RemoteTopology
 	command       string
 	expectFailure bool
-	target        ScenarioTarget
+	// target is nil for a scenario that is measured but has no approved
+	// budget. Its samples are recorded and reported as not-evaluated rather
+	// than classified against a threshold nobody has observed evidence for.
+	target *ScenarioTarget
 }
 
 type remoteScenarioContract struct {
@@ -68,13 +71,16 @@ type remoteScenarioContract struct {
 }
 
 var remoteScenarioDefinitions = []remoteScenarioDefinition{
-	{name: "sync-fresh-checkout", topology: RemoteFreshCheckout, command: "fetch", target: ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 5000, MaxGitProcesses: 20}},
-	{name: "sync-initial-publication", topology: RemoteInitialPublication, command: "push", target: ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 5000, MaxGitProcesses: 20}},
-	{name: "sync-already-synchronized", topology: RemoteAlreadySynchronized, command: "sync", target: ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 1000, MaxGitProcesses: 10}},
-	{name: "sync-small-changed-ref-set", topology: RemoteSmallChangedRefSet, command: "sync", target: ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 2000, MaxGitProcesses: 20}},
-	{name: "sync-divergent-tips", topology: RemoteDivergentTips, command: "sync", expectFailure: true, target: ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 2000, MaxGitProcesses: 20}},
-	{name: "sync-malformed-local-tip", topology: RemoteMalformedLocalTip, command: "push", expectFailure: true, target: ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 2000, MaxGitProcesses: 20}},
-	{name: "sync-malformed-remote-tip", topology: RemoteMalformedRemoteTip, command: "fetch", expectFailure: true, target: ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 2000, MaxGitProcesses: 20}},
+	{name: "sync-fresh-checkout", topology: RemoteFreshCheckout, command: "fetch", target: &ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 5000, MaxGitProcesses: 20}},
+	{name: "sync-initial-publication", topology: RemoteInitialPublication, command: "push", target: &ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 5000, MaxGitProcesses: 20}},
+	{name: "sync-already-synchronized", topology: RemoteAlreadySynchronized, command: "sync", target: &ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 1000, MaxGitProcesses: 10}},
+	{name: "sync-small-changed-ref-set", topology: RemoteSmallChangedRefSet, command: "sync", target: &ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 2000, MaxGitProcesses: 20}},
+	// Reconciliation replays local history rather than refusing to publish it,
+	// so this scenario now measures work the earlier contract never did. It
+	// stays unbudgeted until a recorded run says what that work costs.
+	{name: "sync-divergent-tips", topology: RemoteDivergentTips, command: "sync"},
+	{name: "sync-malformed-local-tip", topology: RemoteMalformedLocalTip, command: "push", expectFailure: true, target: &ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 2000, MaxGitProcesses: 20}},
+	{name: "sync-malformed-remote-tip", topology: RemoteMalformedRemoteTip, command: "fetch", expectFailure: true, target: &ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 2000, MaxGitProcesses: 20}},
 }
 
 // RunRemoteScenarios measures only the requested remote synchronization
@@ -128,11 +134,10 @@ func runRemoteScenarios(ctx context.Context, spec RunSpec, fixtureRoot string, s
 
 	results := make([]ScenarioResult, 0, len(definitions))
 	for _, definition := range definitions {
-		target := definition.target
 		result := ScenarioResult{
 			Name:    definition.name,
 			Surface: "remote-sync",
-			Target:  &target,
+			Target:  definition.target,
 			Samples: make([]Sample, spec.Samples),
 		}
 		for sample := range spec.Samples {
@@ -228,10 +233,6 @@ func remoteScenarioContractFor(definition remoteScenarioDefinition) remoteScenar
 	if definition.command == "push" {
 		contract.fetchStatus = ""
 	}
-	if definition.topology == RemoteDivergentTips {
-		contract.pushStatus = gitstore.SyncPhaseSkipped
-		contract.errorCategory = core.CategoryStaleWrite
-	}
 	if definition.topology == RemoteMalformedLocalTip || definition.topology == RemoteMalformedRemoteTip {
 		contract.errorCategory = core.CategoryCorruptData
 	}
@@ -272,8 +273,10 @@ func expectedRemoteTaskResults(topology RemoteTopology, taskIDs []string) ([]git
 		return fetch, push
 	case RemoteDivergentTips:
 		fetch := all(gitstore.SyncUnchanged)
-		fetch[0].Status = gitstore.SyncDiverged
-		return fetch, nil
+		fetch[0].Status = gitstore.SyncReconciled
+		push := all(gitstore.SyncUpToDate)
+		push[0].Status = gitstore.SyncPublished
+		return fetch, push
 	case RemoteMalformedLocalTip:
 		push := all(gitstore.SyncUpToDate)
 		push[0].Status = gitstore.SyncInvalid
@@ -313,6 +316,26 @@ func requireRemoteScenarioRefs(ctx context.Context, topology RemoteTopology, fix
 	if err := requireExactRemoteRefNamespace("remote", remote, want, func(refs ExpectedRefs) string { return refs.Remote }); err != nil {
 		return err
 	}
+	return requireReconciledRefsAgree(want, fixture, canonical, remote)
+}
+
+// requireReconciledRefsAgree checks the refs whose value a replay decides. The
+// replayed commit ID cannot be predicted, so the assertion is that the canonical
+// and published tips agree with each other and differ from both tips the
+// fixture diverged from.
+func requireReconciledRefsAgree(want map[string]ExpectedRefs, fixture RemoteFixture, canonical, remote map[string]string) error {
+	for taskID, refs := range want {
+		if refs.Canonical != remoteRefReconciled {
+			continue
+		}
+		if canonical[taskID] != remote[taskID] {
+			return fmt.Errorf("reconciled task %s canonical ref = %q, want the published %q", taskID, canonical[taskID], remote[taskID])
+		}
+		started := fixture.Expected[taskID]
+		if canonical[taskID] == started.Canonical || canonical[taskID] == started.Remote {
+			return fmt.Errorf("reconciled task %s ref = %q, want a replayed commit", taskID, canonical[taskID])
+		}
+	}
 	return nil
 }
 
@@ -339,14 +362,24 @@ func requireExactRemoteRefNamespace(name string, got map[string]string, want map
 		return fmt.Errorf("%s task ref count = %d, want %d", name, len(got), len(wanted))
 	}
 	for taskID, expected := range wanted {
-		if actual, found := got[taskID]; !found {
+		actual, found := got[taskID]
+		if !found {
 			return fmt.Errorf("%s refs missing task %s", name, taskID)
-		} else if actual != expected {
+		}
+		if expected == remoteRefReconciled {
+			continue
+		}
+		if actual != expected {
 			return fmt.Errorf("%s ref for %s = %q, want %q", name, taskID, actual, expected)
 		}
 	}
 	return nil
 }
+
+// remoteRefReconciled marks an expected ref whose value a replay produces. The
+// commit ID depends on content the harness does not compute, so presence and
+// cross-namespace agreement are asserted instead of an exact value.
+const remoteRefReconciled = "reconciled"
 
 func expectedRemoteScenarioRefs(topology RemoteTopology, fixture RemoteFixture) (map[string]ExpectedRefs, error) {
 	want := make(map[string]ExpectedRefs, len(fixture.Expected))
@@ -383,7 +416,21 @@ func expectedRemoteScenarioRefs(topology RemoteTopology, fixture RemoteFixture) 
 			}
 			want[taskID] = refs
 		}
-	case RemoteDivergentTips, RemoteMalformedLocalTip, RemoteMalformedRemoteTip:
+	case RemoteDivergentTips:
+		// Every unchanged task fast-forwards nothing and republishes nothing.
+		// The divergent task's local operation is replayed onto origin's tip and
+		// published, leaving tracking on the tip the fetch downloaded.
+		for index, taskID := range fixture.TaskIDs {
+			refs := want[taskID]
+			if index == 0 {
+				refs.Tracking = refs.Remote
+				refs.Canonical, refs.Remote = remoteRefReconciled, remoteRefReconciled
+			} else {
+				refs.Canonical, refs.Tracking = refs.Remote, refs.Remote
+			}
+			want[taskID] = refs
+		}
+	case RemoteMalformedLocalTip, RemoteMalformedRemoteTip:
 	default:
 		return nil, fmt.Errorf("unsupported remote topology %q", topology)
 	}

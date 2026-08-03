@@ -12,9 +12,18 @@ const (
 	CategoryNotInitialized Category = "not-initialized"
 	CategoryNotFound       Category = "not-found"
 	CategoryValidation     Category = "validation"
-	CategoryStaleWrite     Category = "stale-write"
-	CategoryCorruptData    Category = "corrupt-data"
-	CategoryOperational    Category = "operational"
+	// CategoryStaleWrite reports a race that the caller did not cause and
+	// cannot fix by changing anything: a local ref or a validation-cache row
+	// moved between observation and write. Retrying the identical command is
+	// the correct response and will usually succeed.
+	CategoryStaleWrite  Category = "stale-write"
+	CategoryCorruptData Category = "corrupt-data"
+	// CategoryConflict reports concurrent intent that Workbook refuses to
+	// decide on the caller's behalf. Retrying the identical command reproduces
+	// it; the caller must read the envelope's conflict list, choose a
+	// resolution, and issue the ordinary command again with new input.
+	CategoryConflict    Category = "conflict"
+	CategoryOperational Category = "operational"
 )
 
 type Error struct {
@@ -64,6 +73,8 @@ func ExitCode(err error) int {
 		return 6
 	case CategoryCorruptData:
 		return 7
+	case CategoryConflict:
+		return 8
 	case CategoryOperational:
 		return 1
 	}
