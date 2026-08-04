@@ -304,10 +304,6 @@ func writeSyncResult(output io.Writer, result gitstore.SyncResult) {
 		return
 	}
 	if len(result.Tasks) == 0 {
-		if result.Detail != "" {
-			fmt.Fprintf(output, "%s\n", result.Detail)
-			return
-		}
 		fmt.Fprintf(output, "No task refs on %s.\n", result.Remote)
 		return
 	}

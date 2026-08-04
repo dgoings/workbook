@@ -56,10 +56,6 @@ type fetchState struct {
 	Canonical map[string]core.Snapshot
 	Tracking  map[string]core.Snapshot
 	Outcomes  map[string]SyncTaskResult
-	// Conflicted names the tasks whose replay stopped. Their canonical refs
-	// hold a valid partial history, but publishing work the caller has not yet
-	// resolved would push a decision Workbook declined to make.
-	Conflicted map[string]struct{}
 }
 
 // Push publishes validated local Workbook task refs to origin without force or
@@ -329,10 +325,9 @@ func (r *Repository) Fetch(ctx context.Context, config core.ProjectConfig) (Sync
 
 func (r *Repository) fetch(ctx context.Context, config core.ProjectConfig) (fetchState, SyncResult, error) {
 	state := fetchState{
-		Canonical:  make(map[string]core.Snapshot),
-		Tracking:   make(map[string]core.Snapshot),
-		Outcomes:   make(map[string]SyncTaskResult),
-		Conflicted: make(map[string]struct{}),
+		Canonical: make(map[string]core.Snapshot),
+		Tracking:  make(map[string]core.Snapshot),
+		Outcomes:  make(map[string]SyncTaskResult),
 	}
 	result := SyncResult{Remote: "origin", Tasks: []SyncTaskResult{}}
 	if err := r.verifyIdentity(ctx); err != nil {
@@ -488,7 +483,6 @@ func (r *Repository) fetch(ctx context.Context, config core.ProjectConfig) (fetc
 		})
 		plannedOutcomes[outcome.TaskID] = reconciledSyncOutcome(outcome)
 		if outcome.Conflict != nil {
-			state.Conflicted[outcome.TaskID] = struct{}{}
 			result.Conflicts = append(result.Conflicts, *outcome.Conflict)
 		}
 	}
@@ -595,23 +589,16 @@ func (r *Repository) publishFetched(ctx context.Context, config core.ProjectConf
 		return failedSyncPhase(result, "push failed before completion", err)
 	}
 
+	// Every canonical tip is published, including one whose replay stopped
+	// partway. Publishing is about what this clone durably holds, not about
+	// whether more was intended: the operations that did replay are ordinary
+	// history, and withholding them would make sync disagree with push about
+	// the same refs while stranding work the caller already recorded.
 	taskIDs := make([]string, 0, len(state.Canonical))
-	withheld := 0
 	for taskID := range state.Canonical {
-		// A conflicted task holds a valid partial replay, but its remaining
-		// local intent is still unresolved. Publishing it would share a
-		// half-applied change the caller has not yet decided about; the next
-		// ordinary mutation publishes it once they have.
-		if _, conflicted := state.Conflicted[taskID]; conflicted {
-			withheld++
-			continue
-		}
 		taskIDs = append(taskIDs, taskID)
 	}
 	sort.Strings(taskIDs)
-	if withheld > 0 {
-		result.Detail = fmt.Sprintf("%d task(s) were withheld because their replay needs a decision", withheld)
-	}
 	items := make(map[string]SyncTaskResult, len(taskIDs))
 	observed := make(map[string]string, len(taskIDs))
 	expected := make(map[string]string, len(taskIDs))

@@ -1,4 +1,4 @@
-<!-- workbook:begin generator=v0.3.0-2-g3dc3783-dirty sha256=7252a7ea54b072204dc42bc37857b3160d9aad40dbfa54d840cae7440f6290ed -->
+<!-- workbook:begin generator=v0.3.0-3-g2506281-dirty sha256=43c036283a186a93c903650313ea2a3801424cb181350a3a83761418eb68e11f -->
 # Workbook guidelines
 
 Workbook tracks this project's tasks in Git refs under `refs/workbook/tasks/`.
@@ -95,11 +95,12 @@ local operation still edits.
 
 They are reported in the result envelope's `conflict` list, which names each
 task and a `type` of `description`, `dependency-cycle`, or `tombstone`. The
-task ref is left at what `origin` holds, and the local operations that could
-not be replayed are dropped. Resolve one by reading the reported values and
-running the ordinary command again; there is no reconcile or continue
-command, and no conflict state is kept between invocations. A conflict on
-one task never blocks a command that touches a different task.
+task ref stops at the last operation that replayed cleanly, everything up to
+that point is published, and the remaining local operations are dropped.
+Resolve one by reading the reported values and running the ordinary command
+again; there is no reconcile or continue command, and no conflict state is
+kept between invocations. A conflict on one task never blocks a command that
+touches a different task.
 
 `workbook fetch`, `workbook push`, and `workbook sync` remain available for
 explicit whole-project synchronization.

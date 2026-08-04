@@ -419,9 +419,10 @@ remotes remain future work.
 `workbook sync` runs the full sequence against `origin`: fetch Workbook task
 refs into the isolated tracking namespace, validate and fast-forward/create
 compatible local task refs, replay any divergent local history onto the fetched
-tip, then publish the resulting local tips. Reconciliation and publication are
-both per task, so one task that needs a decision leaves every other task
-fetched, replayed, and published. The command does not replay every buried
+tip, then publish the resulting local tips. Reconciliation is per task and
+publication covers every canonical tip, so one task that needs a decision leaves
+every other task fetched, replayed, and published, and publishes its own
+replayed prefix too. The command does not replay every buried
 checkpoint during ordinary synchronization; that is reserved for the explicit
 `workbook validate` audit. The command never fetches or pushes code branches and
 does not create a hidden tasks branch.
@@ -452,10 +453,13 @@ Exactly three situations stop a task's replay:
 | `tombstone` | `origin` tombstoned a task a local operation still edits | the blocked operation |
 
 A conflict aborts replay for its own task only, leaving that ref at the fetched
-tip or at the furthest operation replayed before the conflict arose. Conflicts
-are reported in the result envelope's `conflict` list — a list, because one
-fetch can stop on several tasks — and the command exits `8`. Workbook never
-writes a conflict marker or an unresolved value into a commit.
+tip or at the furthest operation replayed before the conflict arose. Whatever
+did replay is ordinary history and is published like any other advance, so
+`sync` and `push` always agree about the same refs; only the operations from the
+conflict onward are dropped. Conflicts are reported in the result envelope's
+`conflict` list — a list, because one fetch can stop on several tasks — and the
+command exits `8`. Workbook never writes a conflict marker or an unresolved
+value into a commit.
 
 Resolution is a plain retry of the ordinary command against the now
 fast-forwarded ref. There is no reconcile command, no continue command, no

@@ -106,7 +106,7 @@ func TestFetchReplaysDivergentLocalHistory(t *testing.T) {
 	}
 }
 
-func TestFetchReportsDescriptionConflictWithoutPublishingIt(t *testing.T) {
+func TestFetchReportsDescriptionConflictAndStopsAtTheFetchedTip(t *testing.T) {
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Described task")
 	setSyncTaskDescription(t, first, config, task.ID, "Base text")
@@ -781,11 +781,13 @@ func TestSyncReplaysDivergentHistoryAndPublishesIt(t *testing.T) {
 	}
 }
 
-// A task needing a decision must not stop the tasks that do not. Reconciliation
-// and publication are both per task, matching the per-ref outcomes push retains.
-func TestSyncPublishesUnrelatedTasksWhenOneTaskConflicts(t *testing.T) {
+// A partial replay is ordinary history the clone already holds, so sync
+// publishes exactly what push would. Stopping at the conflict decides how far
+// the ref advances; it does not decide whether that advance is shareable.
+func TestSyncPublishesEveryReplayedOperationBeforeAConflict(t *testing.T) {
 	first, second, config := syncRepositories(t)
 	conflicting := createSyncTask(t, first, config, "Conflicting task")
+	setSyncTaskDescription(t, first, config, conflicting.ID, "Base text")
 	if _, err := first.Sync(context.Background(), config); err != nil {
 		t.Fatal(err)
 	}
@@ -793,13 +795,18 @@ func TestSyncPublishesUnrelatedTasksWhenOneTaskConflicts(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Origin gains one operation this clone has not seen.
 	setSyncTaskDescription(t, first, config, conflicting.ID, "Their text")
 	if _, err := first.Push(context.Background(), config); err != nil {
 		t.Fatal(err)
 	}
+	fetchedTip := refValue(t, first, taskRefPrefix+conflicting.ID)
+
+	// Locally, a status change replays cleanly and the description change after
+	// it does not.
+	setSyncTaskStatus(t, second, config, conflicting.ID, core.StatusReady)
 	setSyncTaskDescription(t, second, config, conflicting.ID, "Our text")
 	unrelated := createSyncTask(t, second, config, "Unrelated local task")
-	remoteTip := refValue(t, first, taskRefPrefix+conflicting.ID)
 
 	result, err := second.Sync(context.Background(), config)
 	if core.CategoryOf(err) != core.CategoryConflict {
@@ -809,18 +816,63 @@ func TestSyncPublishesUnrelatedTasksWhenOneTaskConflicts(t *testing.T) {
 	if len(result.Fetch.Conflicts) != 1 {
 		t.Fatalf("conflicts = %#v, want exactly one", result.Fetch.Conflicts)
 	}
+	assertSyncOutcome(t, result.Push, conflicting.ID, SyncPublished)
 	assertSyncOutcome(t, result.Push, unrelated.ID, SyncPublished)
+
+	canonical := refValue(t, second, taskRefPrefix+conflicting.ID)
+	if canonical == fetchedTip {
+		t.Fatalf("conflicted tip = %q, want the replayed status change on top of %q", canonical, fetchedTip)
+	}
+	if !mergeBaseIsAncestor(t, second.Root, fetchedTip, canonical) {
+		t.Fatalf("conflicted tip %q is not a descendant of the fetched tip %q", canonical, fetchedTip)
+	}
+	if got := remoteRefValue(t, second, taskRefPrefix+conflicting.ID); got != canonical {
+		t.Fatalf("published tip = %q, want the partially replayed local tip %q", got, canonical)
+	}
+
+	snapshot, err := second.Get(context.Background(), config, conflicting.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := snapshot.State.Task.Status, core.StatusReady; got != want {
+		t.Fatalf("replayed status = %q, want %q", got, want)
+	}
+	if got, want := snapshot.State.Task.Description, "Their text"; got != want {
+		t.Fatalf("description = %q, want the fetched %q with the conflicting local edit dropped", got, want)
+	}
 	if !remoteRefExists(t, second, taskRefPrefix+unrelated.ID) {
 		t.Fatalf("sync did not publish unrelated task %s alongside a conflict", unrelated.ID)
 	}
-	for _, item := range result.Push.Tasks {
-		if item.TaskID == conflicting.ID {
-			t.Fatalf("sync published conflicted task %s: %#v", conflicting.ID, item)
-		}
+}
+
+// Sync and push must agree about the same refs, so a partial replay that sync
+// publishes is already up to date when push runs next.
+func TestPushAgreesWithSyncAfterAPartialReplay(t *testing.T) {
+	first, second, config := syncRepositories(t)
+	task := createSyncTask(t, first, config, "Contested task")
+	setSyncTaskDescription(t, first, config, task.ID, "Base text")
+	if _, err := first.Sync(context.Background(), config); err != nil {
+		t.Fatal(err)
 	}
-	if got := refValue(t, second, taskRefPrefix+conflicting.ID); got != remoteTip {
-		t.Fatalf("conflicted tip = %q, want the fetched tip %q", got, remoteTip)
+	if _, err := second.Fetch(context.Background(), config); err != nil {
+		t.Fatal(err)
 	}
+
+	setSyncTaskDescription(t, first, config, task.ID, "Their text")
+	if _, err := first.Push(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+	setSyncTaskStatus(t, second, config, task.ID, core.StatusReady)
+	setSyncTaskDescription(t, second, config, task.ID, "Our text")
+
+	if _, err := second.Sync(context.Background(), config); core.CategoryOf(err) != core.CategoryConflict {
+		t.Fatalf("Sync(conflict) error = %v, want a conflict", err)
+	}
+	pushed, err := second.Push(context.Background(), config)
+	if err != nil {
+		t.Fatalf("Push() after a conflicted sync error = %v; result = %#v", err, pushed)
+	}
+	assertSyncOutcome(t, pushed, task.ID, SyncUpToDate)
 }
 
 func TestSyncReportsFailedFetchAndSkipsPushWhenOriginIsMissing(t *testing.T) {
