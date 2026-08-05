@@ -367,9 +367,10 @@ self-ticks, isolating the probe and nudge from the watcher's own git work.
 Trace2 attribution is already correct, since the harness passes
 `GIT_TRACE2_EVENT` only to the measured process.
 
-The expected result is a p95 near `cli-update`'s 179.76 ms and **9 git processes
-rather than 25**. The process count is the cleanest evidence, because it carries
-no network variance.
+The expected result is a p95 indistinguishable from `cli-update`'s, and **the
+same git-process count as an unsynchronized mutation rather than sixteen more**.
+The process count is the cleanest evidence, because it carries no network
+variance.
 
 `cli-update` and `cli-update-autosync` keep their existing budgets and meanings.
 
@@ -400,7 +401,8 @@ Integration coverage, using temporary local bare remotes rather than mocks:
 - a watcher-reported conflict on the target exits 8 with output identical to
   today, records the acknowledgement, and the identical retry then succeeds;
 - a conflict on an unrelated task never blocks the mutation;
-- an unresolvable target with a non-empty conflict set refuses to defer;
+- a watcher that answers but refuses to publish is caught by the receipt
+  handshake and the change is pushed inline instead;
 - a watcher publishes unsynced work on shutdown;
 - `serve` surfaces an `origin` advance with no command run, and defers to an
   external watcher when one already owns the socket;
