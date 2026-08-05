@@ -72,7 +72,7 @@ func TestClassifyTaskHeadsUsesOneGraphForUnequalPairs(t *testing.T) {
 			repository.commandObserver = func(args []string) {
 				commands = append(commands, append([]string(nil), args...))
 			}
-			results, err := repository.classifyTaskHeadRelationships(context.Background(), config, []taskHeadPair{
+			results, _, err := repository.classifyTaskHeadRelationships(context.Background(), config, []taskHeadPair{
 				{TaskID: equalRoot.Operation.TaskID, Local: equalRoot, Remote: equalRoot},
 				{TaskID: remoteRoot.Operation.TaskID, Local: remoteRoot, Remote: remoteChild},
 				{TaskID: localRoot.Operation.TaskID, Local: localChild, Remote: localRoot},
@@ -108,7 +108,7 @@ func TestClassifyTaskHeadsSkipsGraphWhenAllPairsAreEqual(t *testing.T) {
 		commands = append(commands, append([]string(nil), args...))
 	}
 
-	results, err := repository.classifyTaskHeadRelationships(context.Background(), config, []taskHeadPair{{
+	results, _, err := repository.classifyTaskHeadRelationships(context.Background(), config, []taskHeadPair{{
 		TaskID: snapshot.Operation.TaskID,
 		Local:  snapshot,
 		Remote: snapshot,
@@ -162,7 +162,7 @@ func TestClassifyTaskHeadsRejectsInvalidPairsBeforeGraph(t *testing.T) {
 			repository.commandObserver = func(args []string) {
 				commands = append(commands, append([]string(nil), args...))
 			}
-			_, err := repository.classifyTaskHeadRelationships(context.Background(), config, test.pairs)
+			_, _, err := repository.classifyTaskHeadRelationships(context.Background(), config, test.pairs)
 			if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
 				t.Fatalf("classifyTaskHeadRelationships() category = %q, want %q; error = %v", got, want, err)
 			}

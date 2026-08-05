@@ -756,7 +756,12 @@ func movedRank(snapshots []Snapshot, movedID, anchorID string, anchor TaskData, 
 			representable = strings.Compare(anchorID, movedID) < 0 && strings.Compare(movedID, neighborID) < 0
 		}
 		if !representable {
-			return "", Errorf(CategoryStaleWrite, "cannot place task in an equal-rank gap without reordering another task")
+			// Equal ranks are a reachable state, not a race: replaying a move
+			// records its literal computed rank, so two clones converge on one.
+			// The same command fails the same way on every retry, so this is a
+			// validation failure the caller must resolve by moving something
+			// else first.
+			return "", Errorf(CategoryValidation, "cannot place task in an equal-rank gap without reordering another task")
 		}
 		return formatRank(anchorRank), nil
 	}

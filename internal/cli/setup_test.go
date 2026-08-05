@@ -408,3 +408,51 @@ func TestDocsSubcommandsHonourTheSkillDirectoryOverride(t *testing.T) {
 		t.Fatalf("docs remove --no-skill deleted the skill: %v", err)
 	}
 }
+
+// Setup bootstraps a clone by synchronizing, so it reaches the same replay the
+// other fetching commands do and must hand back the same contract.
+func TestSetupReportsConflictsAndFinishesBootstrapping(t *testing.T) {
+	first, second := cliSyncRepositories(t)
+	code, stdout, stderr := run(t, first, "create", "Described", "--json")
+	if code != 0 {
+		t.Fatalf("create = code %d, stderr %q", code, stderr)
+	}
+	task := decodeMutationTask(t, stdout, "create")
+	if code, _, stderr := run(t, first, "update", task.ID, "--description", "Base text", "--json"); code != 0 {
+		t.Fatalf("base description = code %d, stderr %q", code, stderr)
+	}
+	if code, _, stderr := run(t, second, "fetch", "--json"); code != 0 {
+		t.Fatalf("fetch = code %d, stderr %q", code, stderr)
+	}
+	if code, _, stderr := run(t, second, "update", task.ID, "--description", "Their text", "--json"); code != 0 {
+		t.Fatalf("remote description = code %d, stderr %q", code, stderr)
+	}
+	if code, _, _ := run(t, first, "update", task.ID, "--description", "Our text", "--no-sync", "--json"); code != 0 {
+		t.Fatalf("seeding local divergence = code %d", code)
+	}
+
+	code, stdout, stderr = run(t, first, "setup", "--json")
+	if code != 8 {
+		t.Fatalf("setup = code %d, want 8; stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	document := assertJSONResult(t, stdout, "setup")
+	if len(document.Conflict) != 1 || document.Conflict[0].TaskID != task.ID {
+		t.Fatalf("conflict list = %#v, want one entry for %s", document.Conflict, task.ID)
+	}
+	var payload struct {
+		TaskCount int `json:"taskCount"`
+		Sync      struct {
+			Status string `json:"status"`
+		} `json:"sync"`
+	}
+	if err := json.Unmarshal(document.Data, &payload); err != nil {
+		t.Fatalf("decode setup result: %v", err)
+	}
+	if payload.Sync.Status != "conflicted" {
+		t.Fatalf("setup sync status = %q, want conflicted", payload.Sync.Status)
+	}
+	if payload.TaskCount == 0 {
+		t.Fatal("setup did not finish bootstrapping after reporting a conflict")
+	}
+	assertJSONError(t, stderr, core.CategoryConflict, "")
+}

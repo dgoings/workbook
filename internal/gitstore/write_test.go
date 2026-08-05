@@ -80,7 +80,7 @@ func TestWriteAppendsCommitToCurrentHead(t *testing.T) {
 	}
 }
 
-func TestWriteValidatedUsesFiveGitCommandsToAppendCanonicalTaskCommit(t *testing.T) {
+func TestWriteValidatedUsesSixGitCommandsToAppendCanonicalTaskCommit(t *testing.T) {
 	ctx := context.Background()
 	repo, config := writeRepository(t)
 	created, createPack, createState := writeRoot(t, repo, config)
@@ -130,14 +130,18 @@ func TestWriteValidatedUsesFiveGitCommandsToAppendCanonicalTaskCommit(t *testing
 	if got, want := gitOutput(t, repo, "reflog", "show", "--format=%gs", "-n", "1", taskRef(createPack.TaskID)), "workbook: update task"; got != want {
 		t.Fatalf("reflog message = %q, want %q", got, want)
 	}
-	if got := len(writeCommands); got != 5 {
-		t.Fatalf("Git commands = %d, want 5: %#v", got, writeCommands)
+	// The parked-ref enumeration is the one command a mutation spends on
+	// retiring reconciliation bookkeeping. It is bounded to this task's
+	// namespace and stays constant in the number of tasks a project holds.
+	if got := len(writeCommands); got != 6 {
+		t.Fatalf("Git commands = %d, want 6: %#v", got, writeCommands)
 	}
 	assertCommandSequence(t, writeCommands, []string{
 		"hash-object -w --stdin",
 		"hash-object -w --stdin",
 		"mktree",
 		"commit-tree",
+		"for-each-ref",
 		"update-ref",
 	})
 }

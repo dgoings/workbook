@@ -114,9 +114,18 @@ func runSetup(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 		result.Docs = &report
 	}
 
-	result.Sync, err = setupSync(ctx, repository, config, *noSync)
-	if err != nil {
-		return err
+	// A conflict is not a bootstrap failure: the fetch completed, refs
+	// advanced, and the report is what the caller needs. Setup finishes and
+	// hands the conflict list back with exit 8, the same as every other command
+	// whose fetch could not finish a replay.
+	var syncErr error
+	result.Sync, syncErr = setupSync(ctx, repository, config, *noSync)
+	if syncErr != nil && core.CategoryOf(syncErr) != core.CategoryConflict {
+		return syncErr
+	}
+	var conflicts []core.Conflict
+	if result.Sync.Result != nil {
+		conflicts = result.Sync.Result.Fetch.Conflicts
 	}
 
 	tasks, err := repository.List(ctx, config)
@@ -126,8 +135,8 @@ func runSetup(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 	result.TaskCount = len(tasks)
 
 	if *jsonMode {
-		writeResult(stdout, "setup", result)
-		return nil
+		writeSyncPhaseResult(stdout, "setup", result, conflicts, true, func(io.Writer) {})
+		return syncErr
 	}
 	fmt.Fprintf(stdout, "Repository:\t%s\n", result.Repository)
 	fmt.Fprintf(stdout, "Project ID:\t%s\n", result.ProjectID)
@@ -153,7 +162,8 @@ func runSetup(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 	}
 	fmt.Fprintln(stdout)
 	fmt.Fprintf(stdout, "Tasks:\t%d\n", result.TaskCount)
-	return nil
+	writeConflicts(stdout, conflicts)
+	return syncErr
 }
 
 // setupSync synchronizes shared task refs unless it was skipped or the
@@ -173,7 +183,11 @@ func setupSync(
 	}
 	run, err := repository.Sync(ctx, config)
 	if err != nil {
-		return setupSyncResult{Status: "failed", Result: &run}, err
+		status := "failed"
+		if core.CategoryOf(err) == core.CategoryConflict {
+			status = "conflicted"
+		}
+		return setupSyncResult{Status: status, Detail: err.Error(), Result: &run}, err
 	}
 	return setupSyncResult{Status: "completed", Result: &run}, nil
 }

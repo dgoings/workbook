@@ -69,7 +69,7 @@ func (r *Repository) Write(
 		}
 	}
 
-	return r.writeCanonical(ctx, ref, parent, pack, state, reason)
+	return r.writeCanonical(ctx, config, ref, parent, pack, state, reason)
 }
 
 // WriteValidated persists one task operation pack after its parent snapshot
@@ -104,61 +104,110 @@ func (r *Repository) WriteValidated(
 		}
 	}
 
-	return r.writeCanonical(ctx, ref, parent, pack, state, reason)
+	return r.writeCanonical(ctx, config, ref, parent, pack, state, reason)
 }
 
 func (r *Repository) writeCanonical(
 	ctx context.Context,
+	config core.ProjectConfig,
 	ref string,
 	parent *core.Snapshot,
 	pack core.OperationPack,
 	state core.StateDocument,
 	reason string,
 ) (core.Snapshot, error) {
-	packBytes, err := core.EncodeDocument(pack)
-	if err != nil {
-		return core.Snapshot{}, err
+	parentHead := ""
+	if parent != nil {
+		parentHead = parent.Head
 	}
-	stateBytes, err := core.EncodeDocument(state)
-	if err != nil {
-		return core.Snapshot{}, err
-	}
-	operationBlob, err := r.writeBlob(ctx, packBytes)
-	if err != nil {
-		return core.Snapshot{}, err
-	}
-	stateBlob, err := r.writeBlob(ctx, stateBytes)
-	if err != nil {
-		return core.Snapshot{}, err
-	}
-	tree, err := r.writeTaskTree(ctx, operationBlob, stateBlob)
-	if err != nil {
-		return core.Snapshot{}, err
-	}
-	head, err := r.writeCommit(ctx, tree, parent, reason)
+	head, err := r.writeTaskObjects(ctx, parentHead, pack, state, reason)
 	if err != nil {
 		return core.Snapshot{}, err
 	}
 
-	expected := ""
-	if parent != nil {
-		expected = parent.Head
+	// A successful mutation of this task is the one moment the clone is
+	// certainly acting on this task and already writing a ref, so it is where
+	// superseded parked tips are retired. Reads and fetches leave them alone:
+	// pruning during a fetch would delete recoverable local work in the same
+	// command that orphaned it.
+	pruned, err := r.prunableParkedRefs(ctx, config, pack.TaskID)
+	if err != nil {
+		return core.Snapshot{}, err
 	}
+	if err := r.commitTaskRefUpdate(ctx, ref, head, parentHead, pruned, reason); err != nil {
+		return core.Snapshot{}, err
+	}
+	return core.Snapshot{Head: head, Operation: pack, State: state}, nil
+}
+
+// writeTaskObjects durably records one operation pack and its checkpoint
+// without touching any ref. Unreferenced objects are harmless, so a caller may
+// write every commit it plans and then move refs in one transaction.
+func (r *Repository) writeTaskObjects(
+	ctx context.Context,
+	parentHead string,
+	pack core.OperationPack,
+	state core.StateDocument,
+	reason string,
+) (string, error) {
+	packBytes, err := core.EncodeDocument(pack)
+	if err != nil {
+		return "", err
+	}
+	stateBytes, err := core.EncodeDocument(state)
+	if err != nil {
+		return "", err
+	}
+	operationBlob, err := r.writeBlob(ctx, packBytes)
+	if err != nil {
+		return "", err
+	}
+	stateBlob, err := r.writeBlob(ctx, stateBytes)
+	if err != nil {
+		return "", err
+	}
+	tree, err := r.writeTaskTree(ctx, operationBlob, stateBlob)
+	if err != nil {
+		return "", err
+	}
+	return r.writeCommit(ctx, tree, parentHead, reason)
+}
+
+// commitTaskRefUpdate compare-and-swaps the task ref and retires superseded
+// parked refs in one transaction, so a mutation never leaves the ref advanced
+// while stale bookkeeping refs survive.
+func (r *Repository) commitTaskRefUpdate(
+	ctx context.Context,
+	ref, head, expected string,
+	pruned []string,
+	reason string,
+) error {
 	reflogReason := reason
 	if !strings.HasPrefix(reflogReason, "workbook:") {
 		reflogReason = "workbook: " + reflogReason
 	}
-	if _, err := r.Git(ctx, nil, "update-ref", "--no-deref", "--create-reflog", "-m", reflogReason, ref, head, expected); err != nil {
+
+	var input bytes.Buffer
+	input.WriteString("start\noption no-deref\n")
+	fmt.Fprintf(&input, "update %s %s %s\n", ref, head, expected)
+	for _, name := range pruned {
+		fmt.Fprintf(&input, "delete %s\n", name)
+	}
+	input.WriteString("prepare\ncommit\n")
+	if _, err := r.Git(
+		ctx,
+		input.Bytes(),
+		"update-ref", "--no-deref", "--create-reflog", "-m", reflogReason, "--stdin",
+	); err != nil {
 		if symbolicErr := r.rejectSymbolicTaskRef(ctx, ref); symbolicErr != nil {
-			return core.Snapshot{}, symbolicErr
+			return symbolicErr
 		}
 		if r.refValueDiffers(ctx, ref, expected) {
-			return core.Snapshot{}, core.Wrap(core.CategoryStaleWrite, "task ref changed concurrently", err)
+			return core.Wrap(core.CategoryStaleWrite, "task ref changed concurrently", err)
 		}
-		return core.Snapshot{}, err
+		return err
 	}
-
-	return core.Snapshot{Head: head, Operation: pack, State: state}, nil
+	return nil
 }
 
 func (r *Repository) validateParentHead(ctx context.Context, head string) error {
@@ -244,10 +293,10 @@ func (r *Repository) writeTaskTree(ctx context.Context, operationBlob, stateBlob
 	return treeID, nil
 }
 
-func (r *Repository) writeCommit(ctx context.Context, tree string, parent *core.Snapshot, reason string) (string, error) {
+func (r *Repository) writeCommit(ctx context.Context, tree string, parentHead string, reason string) (string, error) {
 	args := []string{"commit-tree", tree}
-	if parent != nil {
-		args = append(args, "-p", parent.Head)
+	if parentHead != "" {
+		args = append(args, "-p", parentHead)
 	}
 	args = append(args, "-m", reason)
 	output, err := r.Git(ctx, nil, args...)

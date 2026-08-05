@@ -18,12 +18,17 @@ const (
 	SyncFastForwarded SyncStatus = "fast-forwarded"
 	SyncUnchanged     SyncStatus = "unchanged"
 	SyncLocalAhead    SyncStatus = "local-ahead"
-	SyncDiverged      SyncStatus = "diverged"
-	SyncInvalid       SyncStatus = "invalid"
-	SyncPublished     SyncStatus = "published"
-	SyncUpToDate      SyncStatus = "up-to-date"
-	SyncRejected      SyncStatus = "rejected"
-	SyncLocalChanged  SyncStatus = "local-changed"
+	// SyncReconciled reports a task whose local-only operations were replayed
+	// onto the fetched tip, leaving the canonical ref a descendant of origin.
+	SyncReconciled SyncStatus = "reconciled"
+	// SyncConflicted reports a replay that stopped on concurrent intent
+	// Workbook will not decide. The envelope's conflict list carries the detail.
+	SyncConflicted   SyncStatus = "conflicted"
+	SyncInvalid      SyncStatus = "invalid"
+	SyncPublished    SyncStatus = "published"
+	SyncUpToDate     SyncStatus = "up-to-date"
+	SyncRejected     SyncStatus = "rejected"
+	SyncLocalChanged SyncStatus = "local-changed"
 )
 
 const (
@@ -246,8 +251,12 @@ func (r *Repository) PushTask(ctx context.Context, config core.ProjectConfig, ta
 	}
 	result = published[taskID]
 	if result.Status == SyncRejected {
-		return result, core.Errorf(core.CategoryStaleWrite,
-			"task ref %s was rejected by origin; fetch and reconcile before publishing again", taskID)
+		// A rejection means origin moved between this command's fetch and its
+		// push. The change is already durable locally and the next fetch
+		// replays it onto the new tip, so this is an ordinary operational
+		// outcome rather than something the caller must act on.
+		return result, core.Errorf(core.CategoryOperational,
+			"task ref %s was rejected by origin; the next fetch replays it onto origin's tip", taskID)
 	}
 	return result, nil
 }
@@ -257,11 +266,19 @@ type SyncResult struct {
 	Status SyncPhaseStatus  `json:"status,omitempty"`
 	Detail string           `json:"detail,omitempty"`
 	Tasks  []SyncTaskResult `json:"tasks"`
+	// Conflicts travels with the phase that produced it but is not part of its
+	// JSON. Callers lift it to the result envelope's single conflict member so
+	// one command reports one list, whatever mix of phases produced it.
+	Conflicts []core.Conflict `json:"-"`
 }
 
-// Sync performs the POC-safe synchronization sequence: fetch and validate
-// origin's Workbook refs, stop if any task history diverged or failed
-// validation, then publish local Workbook task refs without touching code refs.
+// Sync fetches and validates origin's Workbook refs, replays any divergent
+// local history onto the fetched tip, then publishes local Workbook task refs
+// without touching code refs.
+//
+// Reconciliation and publication are per task. One task that needs a decision
+// leaves every other task fetched, replayed, and published, matching the
+// per-ref outcomes push already retains.
 func (r *Repository) Sync(ctx context.Context, config core.ProjectConfig) (SyncRunResult, error) {
 	result := SyncRunResult{
 		Remote: "origin",
@@ -271,23 +288,17 @@ func (r *Repository) Sync(ctx context.Context, config core.ProjectConfig) (SyncR
 
 	state, fetched, fetchErr := r.fetch(ctx, config)
 	result.Fetch = fetched
-	if fetchErr != nil {
+	if fetchErr != nil && core.CategoryOf(fetchErr) != core.CategoryConflict {
 		result.Push = skippedSyncPhase("push skipped because fetch failed")
 		return result, fetchErr
-	}
-	diverged := countSyncStatus(fetched, SyncDiverged)
-	if diverged > 0 {
-		message := fmt.Sprintf("%d divergent task history(s) require reconciliation before sync can push", diverged)
-		result.Push = skippedSyncPhase("push skipped because " + message)
-		return result, core.Errorf(core.CategoryStaleWrite, "%s", message)
 	}
 
 	pushed, pushErr := r.publishFetched(ctx, config, state)
 	result.Push = pushed
-	if pushErr != nil {
-		return result, pushErr
+	if fetchErr != nil {
+		return result, fetchErr
 	}
-	return result, nil
+	return result, pushErr
 }
 
 func skippedSyncPhase(detail string) SyncResult {
@@ -302,16 +313,6 @@ func failedSyncPhase(result SyncResult, detail string, err error) (SyncResult, e
 		result.Detail = detail
 	}
 	return result, err
-}
-
-func countSyncStatus(result SyncResult, status SyncStatus) int {
-	count := 0
-	for _, task := range result.Tasks {
-		if task.Status == status {
-			count++
-		}
-	}
-	return count
 }
 
 // Fetch downloads origin's Workbook task refs into an isolated tracking
@@ -413,7 +414,7 @@ func (r *Repository) fetch(ctx context.Context, config core.ProjectConfig) (fetc
 			pairs = append(pairs, taskHeadPair{TaskID: ref.taskID, Local: local, Remote: remote})
 		}
 	}
-	relationships, err := r.classifyTaskHeadRelationships(ctx, config, pairs)
+	relationships, graph, err := r.classifyTaskHeadRelationships(ctx, config, pairs)
 	if err != nil {
 		result.Tasks = sortedSyncOutcomes(state.Outcomes)
 		result, err = failedSyncPhase(result, "fetch failed before completion", err)
@@ -422,6 +423,7 @@ func (r *Repository) fetch(ctx context.Context, config core.ProjectConfig) (fetc
 
 	updates := make([]canonicalRefUpdate, 0, len(state.Tracking))
 	plannedOutcomes := make(map[string]SyncTaskResult)
+	diverged := make([]reconcileRequest, 0, len(pairs))
 	for _, ref := range trackingRefs {
 		remote, valid := state.Tracking[ref.taskID]
 		if !valid {
@@ -449,11 +451,42 @@ func (r *Repository) fetch(ctx context.Context, config core.ProjectConfig) (fetc
 			case taskHeadsLocalAhead:
 				state.Outcomes[ref.taskID] = SyncTaskResult{TaskID: ref.taskID, Status: SyncLocalAhead}
 			case taskHeadsDiverged:
-				state.Outcomes[ref.taskID] = SyncTaskResult{TaskID: ref.taskID, Status: SyncDiverged}
+				diverged = append(diverged, reconcileRequest{TaskID: ref.taskID, Local: local, Remote: remote})
 			}
 			break
 		}
 	}
+
+	reconciled, err := r.reconcileDivergentTasks(ctx, config, graph, fetchedDependencies(state, updates, diverged), diverged)
+	if err != nil {
+		result.Tasks = sortedSyncOutcomes(state.Outcomes)
+		result, err = failedSyncPhase(result, "fetch failed before completion", err)
+		return state, result, err
+	}
+	invalidReconciled := 0
+	for index, outcome := range reconciled {
+		if outcome.Err != nil {
+			invalidReconciled++
+			state.Outcomes[outcome.TaskID] = SyncTaskResult{
+				TaskID: outcome.TaskID,
+				Status: SyncInvalid,
+				Detail: outcome.Err.Error(),
+			}
+			continue
+		}
+		updates = append(updates, canonicalRefUpdate{
+			TaskID:     outcome.TaskID,
+			Next:       outcome.Head,
+			Expected:   diverged[index].Local.Head,
+			ParkedRef:  outcome.ParkedRef,
+			ParkedHead: outcome.Parked,
+		})
+		plannedOutcomes[outcome.TaskID] = reconciledSyncOutcome(outcome)
+		if outcome.Conflict != nil {
+			result.Conflicts = append(result.Conflicts, *outcome.Conflict)
+		}
+	}
+
 	if err := r.updateCanonicalRefsFromValidated(ctx, config, canonicalRefs, updates); err != nil {
 		result.Tasks = sortedSyncOutcomes(state.Outcomes)
 		result, err = failedSyncPhase(result, "fetch failed before completion", err)
@@ -461,6 +494,11 @@ func (r *Repository) fetch(ctx context.Context, config core.ProjectConfig) (fetc
 	}
 	for _, update := range updates {
 		state.Canonical[update.TaskID] = state.Tracking[update.TaskID]
+	}
+	for _, outcome := range reconciled {
+		if outcome.Err == nil {
+			state.Canonical[outcome.TaskID] = outcome.Snapshot
+		}
 	}
 	for taskID, outcome := range plannedOutcomes {
 		state.Outcomes[taskID] = outcome
@@ -473,7 +511,56 @@ func (r *Repository) fetch(ctx context.Context, config core.ProjectConfig) (fetc
 	if invalidTracking > 0 {
 		return state, result, core.Errorf(core.CategoryCorruptData, "%d fetched task ref(s) failed validation", invalidTracking)
 	}
+	if invalidReconciled > 0 {
+		return state, result, core.Errorf(core.CategoryCorruptData, "%d divergent task history(s) could not be replayed", invalidReconciled)
+	}
+	if len(result.Conflicts) > 0 {
+		return state, result, core.ConflictError(result.Conflicts)
+	}
 	return state, result, nil
+}
+
+func reconciledSyncOutcome(outcome reconcileOutcome) SyncTaskResult {
+	if outcome.Conflict != nil {
+		return SyncTaskResult{
+			TaskID: outcome.TaskID,
+			Status: SyncConflicted,
+			Detail: core.ConflictDetail(*outcome.Conflict),
+		}
+	}
+	return SyncTaskResult{
+		TaskID: outcome.TaskID,
+		Status: SyncReconciled,
+		Detail: fmt.Sprintf("replayed %d local operation(s); %d already applied upstream", outcome.Replayed, outcome.Skipped),
+	}
+}
+
+// fetchedDependencies builds the dependency edges every active task will hold
+// once this fetch lands. Divergent tasks contribute origin's edges rather than
+// their local ones: replay is what decides whether a local edge survives, and
+// checking it against an edge it might drop would invent a cycle.
+func fetchedDependencies(state fetchState, updates []canonicalRefUpdate, diverged []reconcileRequest) map[string][]string {
+	fetched := make(map[string]core.Snapshot, len(state.Canonical))
+	for taskID, snapshot := range state.Canonical {
+		fetched[taskID] = snapshot
+	}
+	for _, update := range updates {
+		if tracking, found := state.Tracking[update.TaskID]; found {
+			fetched[update.TaskID] = tracking
+		}
+	}
+	for _, request := range diverged {
+		fetched[request.TaskID] = request.Remote
+	}
+
+	dependencies := make(map[string][]string, len(fetched))
+	for taskID, snapshot := range fetched {
+		if snapshot.State.Task.Deleted {
+			continue
+		}
+		dependencies[taskID] = snapshot.State.Task.Dependencies
+	}
+	return dependencies
 }
 
 func sortedSyncOutcomes(outcomes map[string]SyncTaskResult) []SyncTaskResult {
@@ -502,6 +589,11 @@ func (r *Repository) publishFetched(ctx context.Context, config core.ProjectConf
 		return failedSyncPhase(result, "push failed before completion", err)
 	}
 
+	// Every canonical tip is published, including one whose replay stopped
+	// partway. Publishing is about what this clone durably holds, not about
+	// whether more was intended: the operations that did replay are ordinary
+	// history, and withholding them would make sync disagree with push about
+	// the same refs while stranding work the caller already recorded.
 	taskIDs := make([]string, 0, len(state.Canonical))
 	for taskID := range state.Canonical {
 		taskIDs = append(taskIDs, taskID)

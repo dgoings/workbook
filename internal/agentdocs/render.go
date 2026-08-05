@@ -58,18 +58,23 @@ func RenderGuidelines(project core.ProjectConfig) string {
 	builder.WriteString("Check the result of every mutation; do not assume it succeeded.\n\n")
 
 	builder.WriteString("## Exit codes\n\n")
-	builder.WriteString("| Code | Category |\n| --- | --- |\n")
-	builder.WriteString("| 0 | success |\n")
-	for _, category := range []core.Category{
-		core.CategoryOperational,
-		core.CategoryInvocation,
-		core.CategoryNotInitialized,
-		core.CategoryNotFound,
-		core.CategoryValidation,
-		core.CategoryStaleWrite,
-		core.CategoryCorruptData,
+	builder.WriteString("| Code | Category | What to do |\n| --- | --- | --- |\n")
+	builder.WriteString("| 0 | success | nothing |\n")
+	for _, category := range []struct {
+		category core.Category
+		remedy   string
+	}{
+		{core.CategoryOperational, "read the message; the environment or remote is at fault"},
+		{core.CategoryInvocation, "fix the command line"},
+		{core.CategoryNotInitialized, "run `workbook setup`"},
+		{core.CategoryNotFound, "use an existing task ID"},
+		{core.CategoryValidation, "change the input; it fails the same way on every retry"},
+		{core.CategoryStaleWrite, "retry the identical command; it will probably succeed"},
+		{core.CategoryCorruptData, "read the message; repair or rebuild before continuing"},
+		{core.CategoryConflict, "read the envelope's `conflict` list, change the input, then retry"},
 	} {
-		builder.WriteString("| " + strconv.Itoa(core.ExitCode(core.Errorf(category, "x"))) + " | `" + string(category) + "` |\n")
+		builder.WriteString("| " + strconv.Itoa(core.ExitCode(core.Errorf(category.category, "x"))) +
+			" | `" + string(category.category) + "` | " + category.remedy + " |\n")
 	}
 	builder.WriteString("\n")
 
@@ -87,8 +92,21 @@ func RenderGuidelines(project core.ProjectConfig) string {
 	builder.WriteString("`.workbook/config.json`.\n\n")
 	builder.WriteString("The `sync` member of a result envelope reports what happened. A `failed`\n")
 	builder.WriteString("status still means the change was recorded locally and the command exits 0.\n")
-	builder.WriteString("Exit code 6 means the task diverged from `origin` and was not published;\n")
-	builder.WriteString("reconcile with `workbook sync` rather than retrying the mutation.\n\n")
+	builder.WriteString("Local work that `origin` does not have is replayed onto the fetched tip and\n")
+	builder.WriteString("published, so a divergent task needs no separate reconciliation step.\n\n")
+	builder.WriteString("## Conflicts\n\n")
+	builder.WriteString("Concurrent edits to different fields are applied silently. Exactly three\n")
+	builder.WriteString("situations stop a replay and exit `8`: both sides changed the description, a\n")
+	builder.WriteString("replayed dependency would close a cycle, and `origin` tombstoned a task a\n")
+	builder.WriteString("local operation still edits.\n\n")
+	builder.WriteString("They are reported in the result envelope's `conflict` list, which names each\n")
+	builder.WriteString("task and a `type` of `description`, `dependency-cycle`, or `tombstone`. The\n")
+	builder.WriteString("task ref stops at the last operation that replayed cleanly, everything up to\n")
+	builder.WriteString("that point is published, and the remaining local operations are dropped.\n")
+	builder.WriteString("Resolve one by reading the reported values and running the ordinary command\n")
+	builder.WriteString("again; there is no reconcile or continue command, and no conflict state is\n")
+	builder.WriteString("kept between invocations. A conflict on one task never blocks a command that\n")
+	builder.WriteString("touches a different task.\n\n")
 	builder.WriteString("`workbook fetch`, `workbook push`, and `workbook sync` remain available for\n")
 	builder.WriteString("explicit whole-project synchronization.\n\n")
 

@@ -754,7 +754,7 @@ func TestServicePlaceRejectsUnrepresentableTiedRankGapsWithoutWriting(t *testing
 			service := serviceUnderTest(store, ids)
 
 			_, err := service.PlaceMutation(context.Background(), test.moved.State.TaskID, test.input)
-			if got, want := CategoryOf(err), CategoryStaleWrite; got != want {
+			if got, want := CategoryOf(err), CategoryValidation; got != want {
 				t.Errorf("PlaceMutation() error category = %q, want %q (error: %v)", got, want, err)
 			}
 			if got, want := len(store.writes), 0; got != want {

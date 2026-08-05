@@ -391,14 +391,34 @@ func (r *Repository) ValidateTaskHeadAdvances(
 	if err != nil {
 		return err
 	}
+	unreachable := make([]HeadAdvance, 0, len(changed))
 	for _, advance := range changed {
 		if !graphReaches(graph, advance.Current.ObjectID, advance.Previous.Head) {
-			return core.Errorf(
-				core.CategoryCorruptData,
-				"task %q current head is not a descendant of its previous head",
-				advance.Current.TaskID,
-			)
+			unreachable = append(unreachable, advance)
 		}
+	}
+	if len(unreachable) == 0 {
+		return nil
+	}
+
+	// Reconciliation is the one thing that legitimately moves a canonical ref
+	// off its previous tip, and it parks that tip in the process. The parked
+	// ref is therefore the evidence that distinguishes a replay from a ref
+	// rolled backwards by corruption, and it costs a Git process only on this
+	// already-exceptional path.
+	parked, err := r.parkedTaskHeads(ctx, config)
+	if err != nil {
+		return err
+	}
+	for _, advance := range unreachable {
+		if _, found := parked[advance.Current.TaskID][advance.Previous.Head]; found {
+			continue
+		}
+		return core.Errorf(
+			core.CategoryCorruptData,
+			"task %q current head is not a descendant of its previous head and that head was not parked by a reconciliation; run `workbook rebuild`",
+			advance.Current.TaskID,
+		)
 	}
 	return nil
 }

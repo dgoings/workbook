@@ -1,4 +1,4 @@
-<!-- workbook:begin generator=v0.2.0-81-ge9a389b-dirty sha256=d49b3a00dac1c0d7d676a76d3999b076aa9d401815964e69dbaf9e34420c86a2 -->
+<!-- workbook:begin generator=v0.3.0-3-g2506281-dirty sha256=43c036283a186a93c903650313ea2a3801424cb181350a3a83761418eb68e11f -->
 # Workbook guidelines
 
 Workbook tracks this project's tasks in Git refs under `refs/workbook/tasks/`.
@@ -54,16 +54,17 @@ Check the result of every mutation; do not assume it succeeded.
 
 ## Exit codes
 
-| Code | Category |
-| --- | --- |
-| 0 | success |
-| 1 | `operational` |
-| 2 | `invalid-invocation` |
-| 3 | `not-initialized` |
-| 4 | `not-found` |
-| 5 | `validation` |
-| 6 | `stale-write` |
-| 7 | `corrupt-data` |
+| Code | Category | What to do |
+| --- | --- | --- |
+| 0 | success | nothing |
+| 1 | `operational` | read the message; the environment or remote is at fault |
+| 2 | `invalid-invocation` | fix the command line |
+| 3 | `not-initialized` | run `workbook setup` |
+| 4 | `not-found` | use an existing task ID |
+| 5 | `validation` | change the input; it fails the same way on every retry |
+| 6 | `stale-write` | retry the identical command; it will probably succeed |
+| 7 | `corrupt-data` | read the message; repair or rebuild before continuing |
+| 8 | `conflict` | read the envelope's `conflict` list, change the input, then retry |
 
 ## Publication is automatic
 
@@ -82,8 +83,24 @@ Record a project policy with that command rather than editing
 
 The `sync` member of a result envelope reports what happened. A `failed`
 status still means the change was recorded locally and the command exits 0.
-Exit code 6 means the task diverged from `origin` and was not published;
-reconcile with `workbook sync` rather than retrying the mutation.
+Local work that `origin` does not have is replayed onto the fetched tip and
+published, so a divergent task needs no separate reconciliation step.
+
+## Conflicts
+
+Concurrent edits to different fields are applied silently. Exactly three
+situations stop a replay and exit `8`: both sides changed the description, a
+replayed dependency would close a cycle, and `origin` tombstoned a task a
+local operation still edits.
+
+They are reported in the result envelope's `conflict` list, which names each
+task and a `type` of `description`, `dependency-cycle`, or `tombstone`. The
+task ref stops at the last operation that replayed cleanly, everything up to
+that point is published, and the remaining local operations are dropped.
+Resolve one by reading the reported values and running the ordinary command
+again; there is no reconcile or continue command, and no conflict state is
+kept between invocations. A conflict on one task never blocks a command that
+touches a different task.
 
 `workbook fetch`, `workbook push`, and `workbook sync` remain available for
 explicit whole-project synchronization.

@@ -29,6 +29,7 @@ type resultDocument struct {
 	Version  int             `json:"version"`
 	Command  string          `json:"command"`
 	Data     json.RawMessage `json:"data"`
+	Conflict []core.Conflict `json:"conflict,omitempty"`
 	Warnings []core.Warning  `json:"warnings,omitempty"`
 }
 
@@ -60,7 +61,7 @@ func TestWriteMutationResultRendersWarning(t *testing.T) {
 	t.Run("human", func(t *testing.T) {
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
-		writeMutationResult(&stdout, &stderr, "create", result, nil, false)
+		writeMutationResult(&stdout, &stderr, "create", result, nil, nil, false)
 
 		if got, want := stdout.String(), "WB-01K0M6B8A4FTT8C39MXXYTW7D1\tready\thigh\tDurable\n"; got != want {
 			t.Fatalf("stdout = %q, want %q", got, want)
@@ -73,7 +74,7 @@ func TestWriteMutationResultRendersWarning(t *testing.T) {
 	t.Run("JSON", func(t *testing.T) {
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
-		writeMutationResult(&stdout, &stderr, "create", result, nil, true)
+		writeMutationResult(&stdout, &stderr, "create", result, nil, nil, true)
 
 		if stderr.Len() != 0 {
 			t.Fatalf("stderr = %q, want empty", stderr.String())

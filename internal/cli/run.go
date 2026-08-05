@@ -214,11 +214,9 @@ func runFetch(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 		return err
 	}
 	result, syncErr := repository.Fetch(ctx, config)
-	if *jsonMode {
-		writeResult(stdout, "fetch", result)
-	} else {
-		writeSyncResult(stdout, result)
-	}
+	writeSyncPhaseResult(stdout, "fetch", result, result.Conflicts, *jsonMode, func(output io.Writer) {
+		writeSyncResult(output, result)
+	})
 	return syncErr
 }
 
@@ -252,11 +250,9 @@ func runSync(ctx context.Context, args []string, cwd string, stdout io.Writer) e
 		return err
 	}
 	result, syncErr := repository.Sync(ctx, config)
-	if *jsonMode {
-		writeResult(stdout, "sync", result)
-	} else {
-		writeSyncRunResult(stdout, result)
-	}
+	writeSyncPhaseResult(stdout, "sync", result, result.Fetch.Conflicts, *jsonMode, func(output io.Writer) {
+		writeSyncRunResult(output, result)
+	})
 	return syncErr
 }
 
@@ -313,7 +309,7 @@ func runCreate(ctx context.Context, args []string, cwd string, stdout, stderr io
 	if err != nil {
 		return err
 	}
-	result, err := session.mutate(ctx, func(ctx context.Context) (core.MutationResult, error) {
+	result, err := session.mutate(ctx, "", func(ctx context.Context) (core.MutationResult, error) {
 		return session.service.CreateMutation(ctx, core.CreateInput{
 			Title:       title,
 			Description: *description,
@@ -322,11 +318,7 @@ func runCreate(ctx context.Context, args []string, cwd string, stdout, stderr io
 			Labels:      labels.values,
 		})
 	})
-	if err != nil {
-		return err
-	}
-	writeMutationResult(stdout, stderr, "create", result, &session.report, *jsonMode)
-	return nil
+	return writeMutationOutcome(stdout, stderr, "create", session, result, err, *jsonMode)
 }
 
 func runList(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
@@ -442,14 +434,10 @@ func runUpdate(ctx context.Context, args []string, cwd string, stdout, stderr io
 	if err != nil {
 		return err
 	}
-	result, err := session.mutate(ctx, func(ctx context.Context) (core.MutationResult, error) {
+	result, err := session.mutate(ctx, id, func(ctx context.Context) (core.MutationResult, error) {
 		return session.service.UpdateMutation(ctx, id, input)
 	})
-	if err != nil {
-		return err
-	}
-	writeMutationResult(stdout, stderr, "update", result, &session.report, *jsonMode)
-	return nil
+	return writeMutationOutcome(stdout, stderr, "update", session, result, err, *jsonMode)
 }
 
 func runDelete(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
@@ -468,14 +456,10 @@ func runDelete(ctx context.Context, args []string, cwd string, stdout, stderr io
 	if err != nil {
 		return err
 	}
-	result, err := session.mutate(ctx, func(ctx context.Context) (core.MutationResult, error) {
+	result, err := session.mutate(ctx, id, func(ctx context.Context) (core.MutationResult, error) {
 		return session.service.DeleteMutation(ctx, id)
 	})
-	if err != nil {
-		return err
-	}
-	writeMutationResult(stdout, stderr, "delete", result, &session.report, *jsonMode)
-	return nil
+	return writeMutationOutcome(stdout, stderr, "delete", session, result, err, *jsonMode)
 }
 
 func runRestore(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
@@ -494,14 +478,10 @@ func runRestore(ctx context.Context, args []string, cwd string, stdout, stderr i
 	if err != nil {
 		return err
 	}
-	result, err := session.mutate(ctx, func(ctx context.Context) (core.MutationResult, error) {
+	result, err := session.mutate(ctx, id, func(ctx context.Context) (core.MutationResult, error) {
 		return session.service.RestoreMutation(ctx, id)
 	})
-	if err != nil {
-		return err
-	}
-	writeMutationResult(stdout, stderr, "restore", result, &session.report, *jsonMode)
-	return nil
+	return writeMutationOutcome(stdout, stderr, "restore", session, result, err, *jsonMode)
 }
 
 func runMove(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
@@ -524,14 +504,10 @@ func runMove(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	if err != nil {
 		return err
 	}
-	result, err := session.mutate(ctx, func(ctx context.Context) (core.MutationResult, error) {
+	result, err := session.mutate(ctx, id, func(ctx context.Context) (core.MutationResult, error) {
 		return session.service.MoveMutation(ctx, id, core.MoveInput{Before: *before, After: *after})
 	})
-	if err != nil {
-		return err
-	}
-	writeMutationResult(stdout, stderr, "move", result, &session.report, *jsonMode)
-	return nil
+	return writeMutationOutcome(stdout, stderr, "move", session, result, err, *jsonMode)
 }
 
 func runDepend(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
@@ -557,17 +533,13 @@ func runDependencyMutation(ctx context.Context, command string, args []string, c
 	if err != nil {
 		return err
 	}
-	result, err := session.mutate(ctx, func(ctx context.Context) (core.MutationResult, error) {
+	result, err := session.mutate(ctx, ids[0], func(ctx context.Context) (core.MutationResult, error) {
 		if command == "depend" {
 			return session.service.DependMutation(ctx, ids[0], ids[1])
 		}
 		return session.service.FreeMutation(ctx, ids[0], ids[1])
 	})
-	if err != nil {
-		return err
-	}
-	writeMutationResult(stdout, stderr, command, result, &session.report, *jsonMode)
-	return nil
+	return writeMutationOutcome(stdout, stderr, command, session, result, err, *jsonMode)
 }
 
 func runNext(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
@@ -586,13 +558,19 @@ func runNext(ctx context.Context, args []string, cwd string, stdout io.Writer) e
 	if err != nil {
 		return err
 	}
+	// Selecting work succeeds even when some other task needs a decision, so
+	// the conflicts are reported without failing the command. An agent that
+	// only wants the next task is not the caller who must resolve them.
 	if *jsonMode {
-		writeSyncedResult(stdout, "next", task, &session.report)
-	} else if task == nil {
+		writeSyncedResult(stdout, "next", task, &session.report, session.conflicts)
+		return nil
+	}
+	if task == nil {
 		fmt.Fprintln(stdout, "No eligible task.")
 	} else {
 		writeShow(stdout, *task)
 	}
+	writeConflicts(stdout, session.conflicts)
 	return nil
 }
 
