@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"net"
+	"net/http"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -120,14 +123,9 @@ func TestMutationDefersToALiveWatcher(t *testing.T) {
 		t.Fatalf("deferred report carried inline phases: %#v", report)
 	}
 
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		if remoteHasTaskRef(t, second, task.ID) {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("watcher never published %s after the nudge", task.ID)
+	// The opening synchronization already published the create, so existence
+	// proves nothing. Only the tip the update wrote does.
+	waitForPublishedTip(t, second, task.ID)
 }
 
 func TestMutationFallsBackWhenTheWatcherIsGone(t *testing.T) {
@@ -266,7 +264,182 @@ func TestDeferredMutationIgnoresAnUnrelatedWatcherConflict(t *testing.T) {
 	}
 }
 
+// The board polls its own API once a second, so hosting the loop is the whole
+// change: a teammate's push reaches the browser with no client work.
+func TestRunServeSurfacesAnOriginAdvanceWithoutACommand(t *testing.T) {
+	first, second := cliSyncRepositories(t)
+	task := cliCreateTask(t, first, "Board task")
+	if code, _, stderr := run(t, first, "push"); code != 0 {
+		t.Fatalf("push = code %d, stderr %q", code, stderr)
+	}
+
+	address := reserveAddress(t)
+	stopServe := startServe(t, second, address)
+	defer stopServe()
+
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(fetchBoardTasks(t, address), task.ID) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("board never surfaced %s pushed by another clone", task.ID)
+}
+
+func TestRunServeDefersToAnExternalWatcher(t *testing.T) {
+	_, second := cliSyncRepositories(t)
+	startCLIWatcher(t, second, "1h")
+
+	address := reserveAddress(t)
+	output, stopServe := startServeCapturing(t, second, address)
+	defer stopServe()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(output.String(), "external sync watcher") {
+			// The board still serves; it simply runs no loop of its own.
+			if !strings.Contains(fetchBoardTasks(t, address), "workbook.tasks") {
+				t.Fatal("board stopped serving after deferring to an external watcher")
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("board never reported deferring to the external watcher; wrote %q", output.String())
+}
+
+// Ctrl-C must not strand work the watcher was still holding.
+func TestWatcherPublishesUnsyncedWorkOnShutdown(t *testing.T) {
+	_, second := cliSyncRepositories(t)
+	task := cliCreateTask(t, second, "Shutdown task")
+
+	output := &watcherOutput{}
+	ctx, cancel := context.WithCancel(context.Background())
+	finished := make(chan int, 1)
+	go func() {
+		finished <- Run(ctx, []string{"sync", "--watch", "--interval", "1h"}, second, output, output)
+	}()
+	waitForWatcherReady(t, output)
+
+	// Record more work locally without telling the watcher, so only the final
+	// synchronization can publish it.
+	cliUpdateTitle(t, second, task.ID, "Recorded before shutdown")
+
+	cancel()
+	select {
+	case code := <-finished:
+		if code != 0 {
+			t.Fatalf("watcher exit code = %d; wrote %q", code, output.String())
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("watcher did not stop")
+	}
+
+	if local, remote := localTaskRef(t, second, task.ID), remoteTaskRefValue(t, second, task.ID); local != remote {
+		t.Fatalf("origin holds %q, local holds %q; shutdown stranded work the watcher was holding", remote, local)
+	}
+}
+
+// The board's final synchronization runs alongside the HTTP drain rather than
+// after it, so shutdown stays inside one budget instead of two.
+func TestServeShutdownStaysWithinBudget(t *testing.T) {
+	_, second := cliSyncRepositories(t)
+	address := reserveAddress(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	output := &watcherOutput{}
+	finished := make(chan int, 1)
+	go func() {
+		finished <- Run(ctx, []string{"serve", "--addr", address}, second, output, output)
+	}()
+	waitForHTTP(t, "http://"+address+"/healthz")
+
+	cancel()
+	started := time.Now()
+	select {
+	case code := <-finished:
+		if code != 0 {
+			t.Fatalf("serve exit code = %d; wrote %q", code, output.String())
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("serve did not stop")
+	}
+	if elapsed := time.Since(started); elapsed > 8*time.Second {
+		t.Fatalf("serve took %s to shut down, want the drain and the final sync concurrent", elapsed)
+	}
+}
+
 // --- helpers ---
+
+func reserveAddress(t *testing.T) string {
+	t.Helper()
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve address: %v", err)
+	}
+	address := probe.Addr().String()
+	if err := probe.Close(); err != nil {
+		t.Fatalf("release address: %v", err)
+	}
+	return address
+}
+
+func startServe(t *testing.T, repository, address string) func() {
+	t.Helper()
+	_, stop := startServeCapturing(t, repository, address)
+	return stop
+}
+
+func startServeCapturing(t *testing.T, repository, address string) (*watcherOutput, func()) {
+	t.Helper()
+	output := &watcherOutput{}
+	ctx, cancel := context.WithCancel(context.Background())
+	finished := make(chan int, 1)
+	go func() {
+		finished <- Run(ctx, []string{"serve", "--addr", address}, repository, output, output)
+	}()
+	waitForHTTP(t, "http://"+address+"/healthz")
+	stopped := false
+	return output, func() {
+		if stopped {
+			return
+		}
+		stopped = true
+		cancel()
+		select {
+		case <-finished:
+		case <-time.After(20 * time.Second):
+			t.Error("serve did not stop")
+		}
+	}
+}
+
+func fetchBoardTasks(t *testing.T, address string) string {
+	t.Helper()
+	response, err := http.Get("http://" + address + "/api/tasks")
+	if err != nil {
+		return ""
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read board tasks: %v", err)
+	}
+	return string(body)
+}
+
+func waitForWatcherReady(t *testing.T, output *watcherOutput) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(output.String(), syncloop.ReadyPrefix) {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("watcher never reported readiness; wrote %q", output.String())
+}
 
 func commonGitDir(t *testing.T, repository string) string {
 	t.Helper()
@@ -363,6 +536,44 @@ func watcherStatus(t *testing.T, repository string) watcherStatusResult {
 		t.Fatal(err)
 	}
 	return result
+}
+
+// waitForPublishedTip waits until origin holds exactly the tip this clone does,
+// which is the only assertion that distinguishes work the nudge published from
+// work an earlier synchronization already carried.
+func waitForPublishedTip(t *testing.T, repository, taskID string) {
+	t.Helper()
+	local := localTaskRef(t, repository, taskID)
+	if local == "" {
+		t.Fatalf("no local ref for %s", taskID)
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if remoteTaskRefValue(t, repository, taskID) == local {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("origin never reached the local tip %s for %s", local, taskID)
+}
+
+func localTaskRef(t *testing.T, repository, taskID string) string {
+	t.Helper()
+	command := exec.Command("git", "-C", repository, "rev-parse", "--verify", "--quiet", "refs/workbook/tasks/"+taskID)
+	output, err := command.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
+}
+
+func remoteTaskRefValue(t *testing.T, repository, taskID string) string {
+	t.Helper()
+	fields := strings.Fields(remoteTaskRef(t, repository, taskID))
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[0]
 }
 
 func localHasTaskRef(t *testing.T, repository, taskID string) bool {

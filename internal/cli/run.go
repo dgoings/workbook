@@ -9,6 +9,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -809,7 +810,7 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 		return err
 	}
 
-	service, err := openService(ctx, cwd)
+	service, repository, store, err := openServiceParts(ctx, cwd)
 	if err != nil {
 		return err
 	}
@@ -847,24 +848,101 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 		return core.Wrap(core.CategoryOperational, "open board listener", err)
 	}
 	fmt.Fprintf(stderr, "Workbook board: http://%s\n", listener.Addr())
+
+	// The board polls its own API once a second, so a loop running here is all
+	// it takes for a teammate's change to appear: no new endpoint, no client
+	// change, and no server-sent events.
+	watcher := serveWatcher(ctx, repository, service.Config, store, stderr)
+	defer watcher.stop()
+
 	if err := webui.Serve(ctx, listener, handler); err != nil {
 		return core.Wrap(core.CategoryOperational, "serve board", err)
 	}
 	return nil
 }
 
+// serveWatcher runs a sync loop alongside the board.
+//
+// Whoever binds the socket owns the loop. A board that finds an external
+// watcher already answering runs none and retries each interval, so the two
+// never both fetch, the board still starts, and a watcher's death is picked up
+// within one interval.
+func serveWatcher(
+	ctx context.Context,
+	repository *gitstore.Repository,
+	config core.ProjectConfig,
+	store *projection.Store,
+	stderr io.Writer,
+) *boardWatcher {
+	watcher := &boardWatcher{finished: make(chan struct{})}
+	go func() {
+		defer close(watcher.finished)
+		for ctx.Err() == nil {
+			err := syncloop.Run(ctx, syncloop.Options{
+				CommonGitDir: repository.CommonGitDir,
+				Repository:   repository,
+				Config:       config,
+				Projection:   store,
+				Stderr:       stderr,
+			})
+			if !errors.Is(err, syncloop.ErrWatcherLive) {
+				if err != nil && ctx.Err() == nil {
+					fmt.Fprintf(stderr, "workbook: board synchronization stopped: %s\n", err)
+				}
+				return
+			}
+			watcher.announceExternal(stderr)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(syncloop.DefaultInterval):
+			}
+		}
+	}()
+	return watcher
+}
+
+type boardWatcher struct {
+	finished chan struct{}
+	once     sync.Once
+}
+
+func (w *boardWatcher) announceExternal(stderr io.Writer) {
+	w.once.Do(func() {
+		fmt.Fprintln(stderr, "Workbook board: an external sync watcher owns this repository; not starting a second one.")
+	})
+}
+
+// stop waits for the loop to finish, including its final synchronization, so
+// the board's shutdown does not race publication. The loop and the HTTP drain
+// run concurrently rather than in series, so shutdown stays inside one budget.
+func (w *boardWatcher) stop() {
+	select {
+	case <-w.finished:
+	case <-time.After(syncloop.DefaultShutdown + time.Second):
+	}
+}
+
 func openService(ctx context.Context, cwd string) (core.Service, error) {
+	service, _, _, err := openServiceParts(ctx, cwd)
+	return service, err
+}
+
+// openServiceParts also returns the repository and projection the service was
+// built on, so a long-running command can share them with a sync loop instead
+// of opening a second projection handle on the same cache file.
+func openServiceParts(ctx context.Context, cwd string) (core.Service, *gitstore.Repository, *projection.Store, error) {
 	repository, config, err := openRepository(ctx, cwd)
 	if err != nil {
-		return core.Service{}, err
+		return core.Service{}, nil, nil, err
 	}
 	actor, err := repository.Actor(ctx)
 	if err != nil {
-		return core.Service{}, err
+		return core.Service{}, nil, nil, err
 	}
 	store, err := projection.Open(ctx, repository, config)
 	if err != nil {
-		return core.Service{}, err
+		return core.Service{}, nil, nil, err
 	}
 	return core.Service{
 		Config:     config,
@@ -874,7 +952,7 @@ func openService(ctx context.Context, cwd string) (core.Service, error) {
 		IDs:        core.CryptoULIDSource{},
 		Now:        time.Now,
 		Actor:      actor,
-	}, nil
+	}, repository, store, nil
 }
 
 func openReadService(ctx context.Context, cwd string) (core.Service, error) {
