@@ -100,7 +100,7 @@ func (session *taskSession) fetchBefore(ctx context.Context) {
 	if !session.report.Enabled {
 		return
 	}
-	if _, err := session.repository.Git(ctx, nil, "remote", "get-url", "origin"); err != nil {
+	if !session.repository.HasOrigin(ctx) {
 		session.report.Status = syncStatusSkipped
 		session.report.Detail = "no origin remote configured"
 		return

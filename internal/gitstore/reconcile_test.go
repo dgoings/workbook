@@ -157,6 +157,100 @@ func TestMutationPrunesParkedRefsAndFetchDoesNot(t *testing.T) {
 	}
 }
 
+// Pruning from a mutation bounds retention only for tasks this clone still
+// mutates. A clone that fetches and reconciles without ever mutating a task
+// again grows its parked namespace forever, so the sweep has to stand alone.
+func TestPruneParkedRefsRetainsTheNewestPerTask(t *testing.T) {
+	ctx := context.Background()
+	first, second, config := syncRepositories(t)
+	left := createSyncTask(t, first, config, "Left task")
+	right := createSyncTask(t, first, config, "Right task")
+	publishTaskRefs(t, first)
+	if _, err := second.Fetch(ctx, config); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, task := range []string{left.ID, right.ID} {
+		head := refValue(t, second, taskRefPrefix+task)
+		for index := range 5 {
+			syncGit(t, second.Root, "update-ref", fmt.Sprintf("%s%s/%d", reconciledRefPrefix, task, index), head)
+		}
+	}
+
+	pruned, err := second.PruneParkedRefs(ctx, config)
+	if err != nil {
+		t.Fatalf("PruneParkedRefs() error = %v", err)
+	}
+	if want := 2 * (5 - maxParkedRefsPerTask); pruned != want {
+		t.Fatalf("PruneParkedRefs() = %d, want %d", pruned, want)
+	}
+	for _, task := range []string{left.ID, right.ID} {
+		for index := range 5 {
+			name := fmt.Sprintf("%s%s/%d", reconciledRefPrefix, task, index)
+			want := index >= 5-maxParkedRefsPerTask
+			if got := refExists(t, second, name); got != want {
+				t.Fatalf("parked ref %s present = %t, want %t", name, got, want)
+			}
+		}
+	}
+
+	if pruned, err := second.PruneParkedRefs(ctx, config); err != nil || pruned != 0 {
+		t.Fatalf("PruneParkedRefs(settled) = %d, %v, want 0, nil", pruned, err)
+	}
+}
+
+// Retention counted from the post-fetch state always keeps the tip the fetch
+// just orphaned, so sweeping after a fetch does not delete recoverable work in
+// the same command that created it.
+func TestPruneParkedRefsKeepsTheRefTheFetchJustCreated(t *testing.T) {
+	ctx := context.Background()
+	first, second, config := syncRepositories(t)
+	task := createSyncTask(t, first, config, "Reconciling task")
+	publishTaskRefs(t, first)
+	if _, err := second.Fetch(ctx, config); err != nil {
+		t.Fatal(err)
+	}
+
+	head := refValue(t, second, taskRefPrefix+task.ID)
+	for index := range maxParkedRefsPerTask {
+		syncGit(t, second.Root, "update-ref", fmt.Sprintf("%s%s/%d", reconciledRefPrefix, task.ID, index), head)
+	}
+
+	updateSyncTask(t, first, config, task.ID, "Remote branch")
+	setSyncTaskPriority(t, second, config, task.ID, core.PriorityHigh)
+	publishTaskRefs(t, first)
+	if _, err := second.Fetch(ctx, config); err != nil {
+		t.Fatal(err)
+	}
+
+	created := fmt.Sprintf("%s%s/%d", reconciledRefPrefix, task.ID, maxParkedRefsPerTask)
+	if !refExists(t, second, created) {
+		t.Fatalf("reconciliation did not park the orphaned tip at %s", created)
+	}
+	if _, err := second.PruneParkedRefs(ctx, config); err != nil {
+		t.Fatalf("PruneParkedRefs() error = %v", err)
+	}
+	if !refExists(t, second, created) {
+		t.Fatalf("prune deleted %s, the tip the fetch had just orphaned", created)
+	}
+	if refExists(t, second, reconciledRefPrefix+task.ID+"/0") {
+		t.Fatal("prune retained the oldest parked ref past the bound")
+	}
+}
+
+func TestHasOriginReportsWhetherAnOriginIsConfigured(t *testing.T) {
+	ctx := context.Background()
+	_, second, _ := syncRepositories(t)
+	if !second.HasOrigin(ctx) {
+		t.Fatal("HasOrigin(clone) = false, want true")
+	}
+
+	syncGit(t, second.Root, "remote", "remove", "origin")
+	if second.HasOrigin(ctx) {
+		t.Fatal("HasOrigin(no remote) = true, want false")
+	}
+}
+
 // Parked refs live outside the task namespace, so nothing that enumerates task
 // refs — including the refspec a push builds — can carry them to origin.
 func TestParkedRefsAreNeverPublished(t *testing.T) {

@@ -200,6 +200,17 @@ func (r *Repository) observeGitCommand(args []string) {
 	}
 }
 
+// HasOrigin reports whether an origin remote is configured.
+//
+// Any failure reads as "not configured" because that is the only actionable
+// distinction: a caller consults this to decide whether attempting the network
+// is worth a timeout, and a repository too broken to answer has nothing to
+// synchronize with either.
+func (r *Repository) HasOrigin(ctx context.Context) bool {
+	_, err := r.Git(ctx, nil, "remote", "get-url", "origin")
+	return err == nil
+}
+
 // Actor returns the author email configured for this repository.
 func (r *Repository) Actor(ctx context.Context) (string, error) {
 	r.actorOnce.Do(func() {
