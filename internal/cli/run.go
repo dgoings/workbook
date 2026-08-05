@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -15,8 +16,14 @@ import (
 	"github.com/dgoings/workbook/internal/historyvalidation"
 	"github.com/dgoings/workbook/internal/projection"
 	"github.com/dgoings/workbook/internal/release"
+	"github.com/dgoings/workbook/internal/syncloop"
 	"github.com/dgoings/workbook/internal/webui"
 )
+
+// watcherProbeDeadline bounds every exchange with a watcher. It is short on
+// purpose: a command consults one to save roughly half a second, so a slow
+// answer is worth abandoning for the inline path rather than waiting on.
+const watcherProbeDeadline = 50 * time.Millisecond
 
 type rebuildResult struct {
 	TaskCount int    `json:"taskCount"`
@@ -86,7 +93,7 @@ func Run(ctx context.Context, args []string, cwd string, stdout, stderr io.Write
 	case "push":
 		err = runPush(ctx, commandArgs, cwd, stdout)
 	case "sync":
-		err = runSync(ctx, commandArgs, cwd, stdout)
+		err = runSync(ctx, commandArgs, cwd, stdout, stderr)
 	case "config":
 		err = runConfig(ctx, commandArgs, cwd, stdout)
 	case "docs":
@@ -240,21 +247,140 @@ func runPush(ctx context.Context, args []string, cwd string, stdout io.Writer) e
 	return syncErr
 }
 
-func runSync(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+func runSync(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
 	flags := newFlagSet("sync")
 	jsonMode := flags.Bool("json", false, "emit JSON")
+	watch := flags.Bool("watch", false, "synchronize continuously until interrupted")
+	interval := flags.String("interval", "", "time between synchronizations while watching")
+	status := flags.Bool("status", false, "report whether a watcher is running for this repository")
 	if err := parseFlags(flags, args); err != nil {
 		return err
+	}
+	if *watch && *status {
+		return core.Errorf(core.CategoryInvocation, "sync accepts --watch or --status, not both")
+	}
+	if *interval != "" && !*watch {
+		return core.Errorf(core.CategoryInvocation, "sync --interval requires --watch")
 	}
 	repository, config, err := openRepository(ctx, cwd)
 	if err != nil {
 		return err
 	}
+	if *status {
+		return runSyncStatus(repository, stdout, *jsonMode)
+	}
+	if *watch {
+		return runSyncWatch(ctx, repository, config, *interval, stdout, stderr, *jsonMode)
+	}
+
 	result, syncErr := repository.Sync(ctx, config)
 	writeSyncPhaseResult(stdout, "sync", result, result.Fetch.Conflicts, *jsonMode, func(output io.Writer) {
 		writeSyncRunResult(output, result)
 	})
 	return syncErr
+}
+
+// watcherStatusResult reports what `sync --status` found. It answers even when
+// no watcher is running, because "nothing is running" is the ordinary state and
+// a caller has to be able to tell it from a failure to look.
+type watcherStatusResult struct {
+	Running    bool            `json:"running"`
+	PID        int             `json:"pid,omitempty"`
+	IntervalMS int64           `json:"intervalMs,omitempty"`
+	LastSyncAt string          `json:"lastSyncAt,omitempty"`
+	LastSyncOK bool            `json:"lastSyncOk,omitempty"`
+	LastError  string          `json:"lastSyncError,omitempty"`
+	Conflicts  []core.Conflict `json:"conflicts,omitempty"`
+}
+
+func runSyncStatus(repository *gitstore.Repository, stdout io.Writer, jsonMode bool) error {
+	result := watcherStatusResult{}
+	client, err := syncloop.Dial(repository.CommonGitDir, watcherProbeDeadline)
+	if err == nil {
+		defer client.Close()
+		if status, statusErr := client.Status(); statusErr == nil {
+			result.Running = true
+			result.PID = status.PID
+			result.IntervalMS = status.IntervalMS
+			result.LastSyncAt = status.LastSyncAt.Format(time.RFC3339)
+			result.LastSyncOK = status.LastSyncOK
+			result.LastError = status.LastError
+			for _, entry := range status.Conflicts {
+				result.Conflicts = append(result.Conflicts, entry.Conflict)
+			}
+		}
+	}
+
+	if jsonMode {
+		writeResult(stdout, "sync", result)
+		return nil
+	}
+	if !result.Running {
+		fmt.Fprintln(stdout, "No sync watcher is running for this repository.")
+		return nil
+	}
+	fmt.Fprintf(stdout, "Sync watcher running (pid %d), every %s.\n", result.PID, time.Duration(result.IntervalMS)*time.Millisecond)
+	if result.LastSyncOK {
+		fmt.Fprintf(stdout, "Last synchronized %s.\n", result.LastSyncAt)
+	} else {
+		fmt.Fprintf(stdout, "Last synchronization failed: %s\n", result.LastError)
+	}
+	if len(result.Conflicts) > 0 {
+		writeConflicts(stdout, result.Conflicts)
+	}
+	return nil
+}
+
+func runSyncWatch(
+	ctx context.Context,
+	repository *gitstore.Repository,
+	config core.ProjectConfig,
+	interval string,
+	stdout, stderr io.Writer,
+	jsonMode bool,
+) error {
+	every := syncloop.DefaultInterval
+	if interval != "" {
+		parsed, err := time.ParseDuration(interval)
+		if err != nil {
+			return core.Wrap(core.CategoryInvocation, "sync --interval must be a duration such as 5s", err)
+		}
+		if parsed <= 0 {
+			return core.Errorf(core.CategoryInvocation, "sync --interval must be positive")
+		}
+		every = parsed
+	}
+	store, err := projection.Open(ctx, repository, config)
+	if err != nil {
+		return err
+	}
+
+	// The watcher reports to stderr, leaving stdout free for the terminating
+	// result. --json changes only that final document, not the running report.
+	err = syncloop.Run(ctx, syncloop.Options{
+		CommonGitDir: repository.CommonGitDir,
+		Repository:   repository,
+		Config:       config,
+		Projection:   store,
+		Interval:     every,
+		Stderr:       stderr,
+	})
+	if errors.Is(err, syncloop.ErrWatcherLive) {
+		return core.Errorf(core.CategoryOperational, "a sync watcher is already running for this repository")
+	}
+	if err != nil {
+		return err
+	}
+	if jsonMode {
+		writeResult(stdout, "sync", watcherStoppedResult{Stopped: true})
+	} else {
+		fmt.Fprintln(stdout, "Sync watcher stopped.")
+	}
+	return nil
+}
+
+type watcherStoppedResult struct {
+	Stopped bool `json:"stopped"`
 }
 
 func runHooks(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
