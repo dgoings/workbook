@@ -94,13 +94,17 @@ flag plus the quiet period collapses a burst into a single follow-up sync;
 `cli-burst-independent-10` and `cli-burst-same-task-10` are the scenarios that
 would otherwise expose this.
 
-The same quiet period is the whole race posture. A watcher's fetch transaction
-can collide with a CLI's write compare-and-swap, and the loser gets
-`stale-write`, exit 6. That outcome is already documented and already has a
-recovery — run the identical command again — but the watcher changes its
-*frequency* from "two people collide" to "a timer collides with every burst".
-The rule is that the watcher never runs a scheduled tick within the quiet period
-of the last nudge. One knob, no lock.
+A scheduled tick is also skipped while a nudged synchronization is pending, so
+the timer does not follow a burst with a second redundant round trip.
+
+That is a narrower guarantee than it may look, and the narrower reading is the
+correct one. A watcher's fetch transaction can still collide with a CLI's write
+compare-and-swap, and the loser still gets `stale-write`, exit 6. No nudge-based
+suppression can prevent that, because the collision window opens *before* the
+nudge exists — the watcher has no way to know a write is coming. What the rule
+does prevent is a tick landing on the heels of a burst while more mutations are
+still arriving. The residual collision keeps its existing documented recovery:
+run the identical command again.
 
 A lock was considered and rejected. Held across the watcher's ~500 ms network
 sync it would stall the CLI, which defeats the entire design; held only around
@@ -248,10 +252,13 @@ membership would re-fire forever and wedge the task:
 Because head-move expiry exists, the CLI needs only task-ID membership, so the
 deferred path adds no git call and the change stays inside one file.
 
-`conflictFor` currently returns "no conflict" when a prefix will not resolve,
-which fails *open*. Tombstone conflicts are exactly the case where a task may
-have no projected row to resolve against. In deferred mode this fails closed
-instead: a reported conflict set plus an unresolvable target means do not defer.
+A fail-closed rule was drafted here and then removed. `conflictFor` returns "no
+conflict" when a prefix will not resolve, which reads like failing open, but
+`Store.Resolve` queries the projected task table with no filter on `deleted`, so
+it resolves tombstoned tasks like any other. Resolution therefore fails only
+when a prefix genuinely matches nothing or is ambiguous, and in both cases the
+mutation itself fails identically on the same lookup. The gate cannot be slipped
+past, so guarding it would have added a branch defending nothing.
 
 **Residual risk, stated rather than hidden.** A conflict that occurs and is
 head-move-expired before any command runs, or that occurs while the watcher is
@@ -322,14 +329,22 @@ not contradict the existing reasoning that pruning during a fetch would delete
 recoverable work in the same command that orphaned it, because retention counted
 from the post-fetch state always keeps the ref the fetch just created.
 
-**A rebuilt projection cache is read as a deleted file.** `cacheUsable` stats
-the *path* and queries the *old handle*, so after another process renames a new
-cache into place the old inode still answers with valid metadata and the check
-reports usable forever. This already breaks `workbook rebuild` during `workbook
-serve`. The fix compares `os.FileInfo` with `os.SameFile` and splits recovery: a
-different inode means reopen, while a missing file or a metadata mismatch means
-rebuild as today. There is already an `os.Stat` on that path, so it costs
-nothing.
+**A rebuilt projection cache wedges every process holding the old one.**
+`cacheUsable` stats the *path* and queries the *old handle*, so after another
+process renames a new cache into place the old inode still answers with valid
+metadata and the check reports usable forever. The failure is not the silent
+staleness it looks like: SQLite notices the file was replaced and reports every
+subsequent write as `attempt to write a readonly database`, with a hint to run
+`workbook rebuild` — the command that caused it. This already breaks
+`workbook rebuild` during `workbook serve`. The fix compares `os.FileInfo` with
+`os.SameFile` and splits recovery: a different inode means reopen, while a
+missing file or a metadata mismatch means rebuild as today. There is already an
+`os.Stat` on that path, so it costs nothing.
+
+Reproducing it needs a handle with a live connection. `sql.Open` is lazy, so a
+process that has not queried yet rebinds to the new file by accident on its next
+query and the defect hides — which is why a long-running command is where it
+surfaces.
 
 **`SIGTERM` is unhandled.** Only `os.Interrupt` is trapped, so a backgrounded
 watcher killed with plain `kill` dies without its final sync.

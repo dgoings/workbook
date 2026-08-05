@@ -41,6 +41,18 @@ already holds the fixture's task refs, and carries an inclusive p95 target of
 outside the measured sample. Separating the two budgets keeps a local regression
 from hiding inside network variance.
 
+`cli-update-watched` measures that same synchronized update with a
+`workbook sync --watch` process running, and is held to the **200 ms local**
+budget rather than the 1,000 ms synchronized one. That is the entire claim the
+scenario exists to test: a watched mutation defers both round trips to the
+watcher, so it is a local mutation and has to be measured as one. Starting the
+watcher and waiting for it to complete its opening synchronization is setup. Its
+interval is one hour, so it never synchronizes on its own and the sample
+measures the probe and the hand-off rather than the watcher's Git work; the
+harness passes `GIT_TRACE2_EVENT` only to the measured command, so the watcher's
+Git processes are not attributed to the sample either. The Git-process count is
+the least noisy evidence here, because it carries no network variance.
+
 The synchronized budget is not a pure network allowance. Against a real remote,
 a connection costs roughly the same whatever it carries, so the targeted push is
 constant in the number of tasks a project holds. The broad fetch is not: it

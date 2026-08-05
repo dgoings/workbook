@@ -24,6 +24,7 @@ const (
 	coldCLITasksPerFixture  = 10
 	warmHTTPTasksPerFixture = 10
 	warmServerPrefix        = "Workbook board: http://"
+	watcherReadyPrefix      = "Workbook sync watcher:"
 )
 
 // RunSpec configures one benchmark scenario run.
@@ -172,6 +173,7 @@ var coldScenarioDefinitions = []coldScenarioDefinition{
 	{name: "cli-restore", measure: measureColdRestore},
 	{name: "cli-update", measure: measureColdUpdate},
 	{name: "cli-update-autosync", measure: measureColdUpdateAutoSync},
+	{name: "cli-update-watched", measure: measureColdUpdateWatched},
 	{name: "cli-burst-independent-10", measure: measureColdIndependentBurst},
 	{name: "cli-burst-same-task-10", measure: measureColdSameTaskBurst},
 }
@@ -273,6 +275,124 @@ func measureColdUpdateAutoSync(ctx context.Context, dependencies scenarioDepende
 	return measureColdCLICommand(ctx, dependencies, spec, fixture.Root, []string{
 		"update", taskID[0], "--status", "ready", "--json",
 	}), nil
+}
+
+// measureColdUpdateWatched measures a mutation with a sync watcher running.
+//
+// It is held to the local budget rather than the auto-sync one on purpose: the
+// claim this scenario exists to test is that a watched mutation is a local
+// mutation, and measuring it against the network budget would prove nothing.
+//
+// The watcher's interval is an hour so it never synchronizes on its own, which
+// leaves the sample measuring the probe and the nudge rather than the watcher's
+// Git work. Trace2 attribution is already correct, because the harness passes
+// GIT_TRACE2_EVENT only to the measured command.
+func measureColdUpdateWatched(ctx context.Context, dependencies scenarioDependencies, spec RunSpec, fixture Fixture, _ int) (Sample, error) {
+	taskID, err := fixtureActiveTask(fixture, 1)
+	if err != nil {
+		return Sample{}, err
+	}
+	if err := publishFixtureToLocalOrigin(ctx, spec.CommandTimeout, fixture.Root); err != nil {
+		return Sample{}, err
+	}
+	watcher, err := startSyncWatcher(ctx, spec.WorkbookBinary, fixture.Root, spec.CommandTimeout)
+	if err != nil {
+		return Sample{}, err
+	}
+	defer watcher.stop()
+	return measureColdCLICommand(ctx, dependencies, spec, fixture.Root, []string{
+		"update", taskID[0], "--status", "ready", "--json",
+	}), nil
+}
+
+type syncWatcher struct {
+	command *exec.Cmd
+	wait    <-chan error
+}
+
+// startSyncWatcher runs `workbook sync --watch` and returns once it is not just
+// listening but trustworthy, since a mutation correctly refuses to defer to a
+// watcher that has not yet completed a synchronization.
+func startSyncWatcher(ctx context.Context, binary, directory string, timeout time.Duration) (*syncWatcher, error) {
+	command := exec.Command(binary, "sync", "--watch", "--interval", "1h")
+	command.Dir = directory
+	// The watcher's own Git processes must not be attributed to the measured
+	// command, so it runs without a Trace2 event file of its own.
+	command.Env = append(os.Environ(), "GIT_TRACE2_EVENT=")
+	command.Stdout = io.Discard
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	stderr, err := command.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("open sync watcher stderr: %w", err)
+	}
+	if err := command.Start(); err != nil {
+		return nil, fmt.Errorf("start sync watcher: %w", err)
+	}
+
+	ready := make(chan struct{}, 1)
+	go func() {
+		scanner := bufio.NewScanner(stderr)
+		reported := false
+		for scanner.Scan() {
+			if !reported && strings.HasPrefix(scanner.Text(), watcherReadyPrefix) {
+				ready <- struct{}{}
+				reported = true
+			}
+		}
+	}()
+	wait := make(chan error, 1)
+	go func() { wait <- command.Wait() }()
+	watcher := &syncWatcher{command: command, wait: wait}
+
+	startupTimer := time.NewTimer(timeout)
+	defer startupTimer.Stop()
+	select {
+	case <-ready:
+	case err := <-wait:
+		return nil, fmt.Errorf("sync watcher exited before readiness: %w", err)
+	case <-ctx.Done():
+		watcher.stop()
+		return nil, ctx.Err()
+	case <-startupTimer.C:
+		watcher.stop()
+		return nil, fmt.Errorf("sync watcher did not report readiness within %s", timeout)
+	}
+
+	if err := waitForWatcherSync(ctx, binary, directory, timeout); err != nil {
+		watcher.stop()
+		return nil, err
+	}
+	return watcher, nil
+}
+
+func waitForWatcherSync(ctx context.Context, binary, directory string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		command := exec.Command(binary, "sync", "--status", "--json")
+		command.Dir = directory
+		output, err := command.Output()
+		if err == nil {
+			var envelope struct {
+				Data struct {
+					Running    bool `json:"running"`
+					LastSyncOK bool `json:"lastSyncOk"`
+				} `json:"data"`
+			}
+			if json.Unmarshal(output, &envelope) == nil && envelope.Data.Running && envelope.Data.LastSyncOK {
+				return nil
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return fmt.Errorf("sync watcher did not complete a synchronization within %s", timeout)
+}
+
+func (w *syncWatcher) stop() {
+	terminateWarmServer(w.command)
+	<-w.wait
 }
 
 // publishFixtureToLocalOrigin gives the fixture an origin holding its current

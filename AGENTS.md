@@ -55,7 +55,7 @@ Preserve these decisions unless the user explicitly changes them and the documen
 - Version every durable serialization format from its first release.
 - Reject unknown destructive operations safely while preserving data for future versions.
 - Keep bootstrap behavior explicit: normal clones do not automatically fetch arbitrary custom refs.
-- Avoid adding a required background daemon. A daemon may optimize IDE usage, but every operation must work through the CLI.
+- Keep every background process optional and additive. `workbook sync --watch` exists to make synchronization cheap, and every command must stay correct and complete with no watcher running, dead, or stale; a command that cannot reach one synchronizes inline instead.
 - Avoid introducing a coordination service until a concrete requirement cannot be met by the Git backend. Keep the operation model portable if one is added.
 
 ## Testing expectations
