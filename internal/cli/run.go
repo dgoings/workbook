@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -177,8 +178,8 @@ func hasLocalHelpAlias(args []string) bool {
 		if !known {
 			return false
 		}
-		if kind == stringFlag && !hasValue {
-			index++
+		if !hasValue {
+			index += optionValueCount(kind)
 		}
 	}
 	return false
@@ -364,9 +365,31 @@ func runShow(ctx context.Context, args []string, cwd string, stdout io.Writer) e
 	if err != nil {
 		return err
 	}
+	compare, args, comparing, err := takePairOption("show", "compare", args)
+	if err != nil {
+		return err
+	}
 	flags := newFlagSet("show")
+	history := flags.Bool("history", false, "list this task's changes")
+	limit := flags.String("limit", "", "show this many recent changes")
+	all := flags.Bool("all", false, "show every change")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
+		return err
+	}
+
+	options := core.ShowOptions{History: *history, All: *all}
+	if comparing {
+		options.Compare = &core.ComparePoints{From: compare[0], To: compare[1]}
+	}
+	if *limit != "" {
+		parsed, err := strconv.Atoi(*limit)
+		if err != nil || parsed < 1 {
+			return core.Errorf(core.CategoryInvocation, "show --limit must be a positive whole number")
+		}
+		options.Limit = parsed
+	}
+	if err := validateHistoryOptions(flags, options); err != nil {
 		return err
 	}
 
@@ -374,16 +397,35 @@ func runShow(ctx context.Context, args []string, cwd string, stdout io.Writer) e
 	if err != nil {
 		return err
 	}
-	task, err := service.Show(ctx, id)
+	detail, err := service.ShowDetail(ctx, id, options)
 	if err != nil {
 		return err
 	}
 	if *jsonMode {
-		writeResult(stdout, "show", task)
+		writeResult(stdout, "show", detail)
 	} else {
-		writeShow(stdout, task)
+		writeShowDetail(stdout, detail)
 	}
 	return nil
+}
+
+// validateHistoryOptions rejects windowing flags that would silently do
+// nothing, so a caller who asked for ten changes and got a plain task never has
+// to wonder which flag it ignored.
+func validateHistoryOptions(flags *commandFlagSet, options core.ShowOptions) error {
+	if options.History {
+		if options.Limit > 0 && options.All {
+			return core.Errorf(core.CategoryInvocation, "cannot use --limit with --all")
+		}
+		return nil
+	}
+	var offending error
+	flags.Visit(func(visited *flag.Flag) {
+		if visited.Name == "limit" || visited.Name == "all" {
+			offending = core.Errorf(core.CategoryInvocation, "show --%s requires --history", visited.Name)
+		}
+	})
+	return offending
 }
 
 func runUpdate(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
@@ -718,7 +760,13 @@ func openReadService(ctx context.Context, cwd string) (core.Service, error) {
 	if err != nil {
 		return core.Service{}, err
 	}
-	return core.Service{Config: config, Reader: store, IDs: core.CryptoULIDSource{}, Now: time.Now}, nil
+	return core.Service{
+		Config:  config,
+		Reader:  store,
+		History: store,
+		IDs:     core.CryptoULIDSource{},
+		Now:     time.Now,
+	}, nil
 }
 
 func openRepository(ctx context.Context, cwd string) (*gitstore.Repository, core.ProjectConfig, error) {

@@ -32,6 +32,7 @@ type taskHeadSource interface {
 	InspectTaskHead(context.Context, core.ProjectConfig, string) (gitstore.TaskHead, bool, error)
 	ReadTaskHeads(context.Context, core.ProjectConfig, []gitstore.TaskHead) ([]core.Snapshot, error)
 	ValidateTaskHeadAdvances(context.Context, core.ProjectConfig, []gitstore.HeadAdvance) error
+	ReadTaskOperations(context.Context, core.ProjectConfig, []gitstore.TaskHistoryRequest) ([]gitstore.TaskOperationsResult, error)
 }
 
 type repositorySource struct {
@@ -54,6 +55,14 @@ func (s repositorySource) ValidateTaskHeadAdvances(ctx context.Context, config c
 	return s.repository.ValidateTaskHeadAdvances(ctx, config, advances)
 }
 
+func (s repositorySource) ReadTaskOperations(
+	ctx context.Context,
+	config core.ProjectConfig,
+	requests []gitstore.TaskHistoryRequest,
+) ([]gitstore.TaskOperationsResult, error) {
+	return s.repository.ReadTaskOperations(ctx, config, requests)
+}
+
 // Store is a read-only task store backed by a disposable SQLite projection.
 type Store struct {
 	rebuildMu sync.RWMutex
@@ -66,6 +75,7 @@ type Store struct {
 
 var _ core.TaskReader = (*Store)(nil)
 var _ core.ProjectionUpdater = (*Store)(nil)
+var _ core.TaskHistorySource = (*Store)(nil)
 
 // Open opens the repository's shared projection cache. The first read creates
 // the cache from the current Git task heads when necessary.
@@ -191,6 +201,65 @@ func (s *Store) Get(ctx context.Context, config core.ProjectConfig, taskID strin
 	return s.getExactActive(ctx, taskID)
 }
 
+// TaskHistory returns one task's recorded operation packs, oldest first along
+// the parent chain, after refreshing that task from its exact Git ref.
+func (s *Store) TaskHistory(ctx context.Context, config core.ProjectConfig, taskID string) (core.TaskHistory, error) {
+	if err := s.validateConfig(config); err != nil {
+		return core.TaskHistory{}, err
+	}
+	if err := core.ValidateTaskID(config.Key, taskID); err != nil {
+		return core.TaskHistory{}, core.Wrap(core.CategoryValidation, "task ID is invalid", err)
+	}
+	if err := s.lockActiveDatabase(ctx); err != nil {
+		return core.TaskHistory{}, err
+	}
+	defer s.rebuildMu.RUnlock()
+
+	snapshot, err := s.getExactActive(ctx, taskID)
+	if err != nil {
+		return core.TaskHistory{}, err
+	}
+	history, found, err := s.readProjectedHistory(ctx, taskID, "")
+	if err != nil {
+		return core.TaskHistory{}, err
+	}
+	if found {
+		return history, nil
+	}
+	return s.gitHistory(ctx, taskID, snapshot.Head)
+}
+
+// CommitHistory returns the chain ending at one named commit object.
+//
+// The fallback to Git is gated per commit as well as per task. The projection
+// is fed from refs/workbook/tasks/ only, so a parked pre-replay commit has no
+// row even when its task is fully projected, and a per-task gate would never
+// fire for the comparison argument that most needs it.
+func (s *Store) CommitHistory(ctx context.Context, config core.ProjectConfig, taskID, commit string) (core.TaskHistory, error) {
+	if err := s.validateConfig(config); err != nil {
+		return core.TaskHistory{}, err
+	}
+	if err := core.ValidateTaskID(config.Key, taskID); err != nil {
+		return core.TaskHistory{}, core.Wrap(core.CategoryValidation, "task ID is invalid", err)
+	}
+	if err := s.lockActiveDatabase(ctx); err != nil {
+		return core.TaskHistory{}, err
+	}
+	defer s.rebuildMu.RUnlock()
+
+	if _, err := s.getExactActive(ctx, taskID); err != nil {
+		return core.TaskHistory{}, err
+	}
+	history, found, err := s.readProjectedHistory(ctx, taskID, commit)
+	if err != nil {
+		return core.TaskHistory{}, err
+	}
+	if found {
+		return history, nil
+	}
+	return s.gitHistory(ctx, taskID, commit)
+}
+
 // Resolve returns a canonical full task ID for an unambiguous case-insensitive prefix.
 func (s *Store) Resolve(ctx context.Context, config core.ProjectConfig, prefix string) (string, error) {
 	if err := s.validateConfig(config); err != nil {
@@ -245,7 +314,7 @@ func (s *Store) Advance(ctx context.Context, config core.ProjectConfig, expected
 		return false, err
 	}
 	defer s.rebuildMu.RUnlock()
-	return s.advanceActive(ctx, expectedParent, snapshot)
+	return s.advanceActive(ctx, expectedParent, snapshot, nil)
 }
 
 // Invalidate removes one projected task only when it still names an expected head.
@@ -329,6 +398,7 @@ func (s *Store) requiredSchemaExists(ctx context.Context) bool {
 		`SELECT task_id, head, project_id, history_generation, logical_clock, title, description, status, priority, rank, created_at, updated_at, deleted FROM tasks LIMIT 0`,
 		`SELECT task_id, label FROM task_labels LIMIT 0`,
 		`SELECT task_id, dependency_id FROM task_dependencies LIMIT 0`,
+		`SELECT operation_id, task_id, commit_id, chain_index, pack_index, logical_clock, history_generation, actor, wall_time, type, field, value, task_data FROM operations LIMIT 0`,
 	} {
 		rows, err := s.db.QueryContext(ctx, query)
 		if err != nil {
@@ -386,7 +456,16 @@ func (s *Store) getExactActive(ctx context.Context, taskID string) (core.Snapsho
 		if cachedFound {
 			expectedParent = cached.Head
 		}
-		applied, err := s.advanceActive(ctx, expectedParent, snapshot)
+		// One exact read can cross many commits, so the operation rows come
+		// from the same head-to-head walk the broad refresh uses rather than
+		// from the tip alone.
+		chains, err := s.readOperationChains(ctx, []gitstore.TaskHead{head}, map[string]cachedTaskHead{
+			taskID: {head: expectedParent},
+		})
+		if err != nil {
+			return core.Snapshot{}, err
+		}
+		applied, err := s.advanceActive(ctx, expectedParent, snapshot, &chains[0])
 		if err != nil {
 			return core.Snapshot{}, err
 		}
@@ -451,7 +530,59 @@ func (s *Store) refreshChangedHeads(ctx context.Context, cached map[string]cache
 			return historyGenerationChanged(head.TaskID)
 		}
 	}
-	return s.applyChanges(ctx, expectedHeads, snapshots)
+	// Comparing tips is complete for current state but blind to the
+	// intermediate commits an operation table needs: a fetch advancing a task
+	// twelve commits yields one new tip and eleven unread packs. Walking each
+	// changed task from its projected head to its new one reads exactly those.
+	chains, err := s.readOperationChains(ctx, changed, cached)
+	if err != nil {
+		return err
+	}
+	return s.applyChanges(ctx, expectedHeads, snapshots, chains)
+}
+
+// readOperationChains walks every changed task from the head the projection
+// already holds to its current one.
+func (s *Store) readOperationChains(
+	ctx context.Context,
+	changed []gitstore.TaskHead,
+	cached map[string]cachedTaskHead,
+) ([]gitstore.TaskOperationsResult, error) {
+	requests := make([]gitstore.TaskHistoryRequest, 0, len(changed))
+	for _, head := range changed {
+		request := gitstore.TaskHistoryRequest{Head: head}
+		if previous, found := cached[head.TaskID]; found {
+			request.StopAt = previous.head
+		}
+		requests = append(requests, request)
+	}
+	chains, err := s.source.ReadTaskOperations(ctx, s.config, requests)
+	if err != nil {
+		return nil, err
+	}
+	if len(chains) != len(requests) {
+		return nil, core.Errorf(core.CategoryCorruptData, "task operation read returned %d chains, want %d", len(chains), len(requests))
+	}
+	return chains, nil
+}
+
+// projectChain records one task's newly read commits. A new head that does not
+// descend from the projected one restarts the read at the root and reports
+// BoundaryReached false, which is the reconciliation signal: replay may have
+// orphaned rows this task still owns, so they are deleted before the returned
+// chain is projected rather than upserted into.
+//
+// A truncated read projects nothing. A stored chain that stops short of the
+// head would look complete to every later reader, whereas dropping the rows
+// sends the next history read to Git, which reports the boundary.
+func projectChain(ctx context.Context, transaction *sql.Tx, chain gitstore.TaskOperationsResult, previousHead string) error {
+	if chain.Truncated != nil {
+		return deleteOperations(ctx, transaction, chain.TaskID)
+	}
+	if !chain.BoundaryReached {
+		return replaceOperations(ctx, transaction, chain.TaskID, chain.Commits)
+	}
+	return appendOperations(ctx, transaction, chain.TaskID, previousHead, chain.Commits)
 }
 
 type cachedTaskHead struct {
@@ -510,7 +641,16 @@ func historyGenerationChanged(taskID string) error {
 	return core.Errorf(core.CategoryCorruptData, "task %q history generation changed across a projected head advance", taskID)
 }
 
-func (s *Store) advanceActive(ctx context.Context, expectedParent string, snapshot core.Snapshot) (bool, error) {
+// advanceActive conditionally replaces one projected task. chain carries the
+// commits a multi-commit advance crossed; a nil chain means the caller just
+// wrote exactly one commit onto expectedParent and the snapshot's own pack is
+// the whole advance.
+func (s *Store) advanceActive(
+	ctx context.Context,
+	expectedParent string,
+	snapshot core.Snapshot,
+	chain *gitstore.TaskOperationsResult,
+) (bool, error) {
 	transaction, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, s.databaseError("begin conditional projection advancement", err)
@@ -556,10 +696,30 @@ func (s *Store) advanceActive(ctx context.Context, expectedParent string, snapsh
 	if err := upsertSnapshot(ctx, transaction, snapshot); err != nil {
 		return false, err
 	}
+	if err := s.advanceOperations(ctx, transaction, expectedParent, snapshot, chain); err != nil {
+		return false, err
+	}
 	if err := transaction.Commit(); err != nil {
 		return false, s.databaseError("commit conditional projection advancement", err)
 	}
 	return true, nil
+}
+
+func (s *Store) advanceOperations(
+	ctx context.Context,
+	transaction *sql.Tx,
+	expectedParent string,
+	snapshot core.Snapshot,
+	chain *gitstore.TaskOperationsResult,
+) error {
+	if chain != nil {
+		return projectChain(ctx, transaction, *chain, expectedParent)
+	}
+	return appendOperations(ctx, transaction, snapshot.State.TaskID, expectedParent, []gitstore.OperationCommit{{
+		ObjectID:  snapshot.Head,
+		Parent:    expectedParent,
+		Operation: snapshot.Operation,
+	}})
 }
 
 func (s *Store) invalidateActive(ctx context.Context, taskID, expectedParent, writtenHead string) error {
@@ -569,7 +729,7 @@ func (s *Store) invalidateActive(ctx context.Context, taskID, expectedParent, wr
 	}
 	defer transaction.Rollback()
 
-	for _, table := range []string{"task_labels", "task_dependencies"} {
+	for _, table := range []string{"task_labels", "task_dependencies", "operations"} {
 		if _, err := transaction.ExecContext(
 			ctx,
 			`DELETE FROM `+table+` WHERE task_id = ? AND EXISTS (
@@ -598,17 +758,36 @@ func (s *Store) invalidateActive(ctx context.Context, taskID, expectedParent, wr
 	return nil
 }
 
-func replaceSnapshots(ctx context.Context, db *sql.DB, snapshots []core.Snapshot) error {
+func replaceSnapshots(
+	ctx context.Context,
+	db *sql.DB,
+	snapshots []core.Snapshot,
+	chains []gitstore.TaskOperationsResult,
+) error {
 	transaction, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return cacheError("begin projection rebuild", err)
 	}
 	defer transaction.Rollback()
-	if _, err := transaction.ExecContext(ctx, `DELETE FROM task_labels; DELETE FROM task_dependencies; DELETE FROM tasks`); err != nil {
+	if _, err := transaction.ExecContext(
+		ctx,
+		`DELETE FROM task_labels; DELETE FROM task_dependencies; DELETE FROM operations; DELETE FROM tasks`,
+	); err != nil {
 		return cacheError("clear projection rebuild", err)
 	}
 	for _, snapshot := range snapshots {
 		if err := upsertSnapshot(ctx, transaction, snapshot); err != nil {
+			return err
+		}
+	}
+	// A rebuild reprojects full histories, so every chain starts at its root. A
+	// truncated one is left out for the same reason a refresh drops it: a
+	// partial chain would read as a complete one.
+	for _, chain := range chains {
+		if chain.Truncated != nil {
+			continue
+		}
+		if err := insertOperations(ctx, transaction, chain.TaskID, 0, chain.Commits); err != nil {
 			return err
 		}
 	}
@@ -618,7 +797,12 @@ func replaceSnapshots(ctx context.Context, db *sql.DB, snapshots []core.Snapshot
 	return nil
 }
 
-func (s *Store) applyChanges(ctx context.Context, expectedHeads map[string]string, snapshots []core.Snapshot) error {
+func (s *Store) applyChanges(
+	ctx context.Context,
+	expectedHeads map[string]string,
+	snapshots []core.Snapshot,
+	chains []gitstore.TaskOperationsResult,
+) error {
 	transaction, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return s.databaseError("begin projection refresh", err)
@@ -633,11 +817,26 @@ func (s *Store) applyChanges(ctx context.Context, expectedHeads map[string]strin
 			return errStaleProjectionRefresh
 		}
 	}
+	byTaskID := make(map[string]gitstore.TaskOperationsResult, len(chains))
+	for _, chain := range chains {
+		byTaskID[chain.TaskID] = chain
+	}
 	for _, snapshot := range snapshots {
-		if err := deleteTask(ctx, transaction, snapshot.State.TaskID); err != nil {
+		taskID := snapshot.State.TaskID
+		if err := deleteTask(ctx, transaction, taskID); err != nil {
 			return err
 		}
 		if err := upsertSnapshot(ctx, transaction, snapshot); err != nil {
+			return err
+		}
+		chain, found := byTaskID[taskID]
+		if !found {
+			if err := deleteOperations(ctx, transaction, taskID); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := projectChain(ctx, transaction, chain, expectedHeads[taskID]); err != nil {
 			return err
 		}
 	}
@@ -928,6 +1127,7 @@ func (s *Store) buildTemporaryDatabase(ctx context.Context, heads []gitstore.Tas
 		return "", cacheError("initialize temporary projection metadata", err)
 	}
 	var snapshots []core.Snapshot
+	var chains []gitstore.TaskOperationsResult
 	if len(heads) > 0 {
 		snapshots, err = s.source.ReadTaskHeads(ctx, s.config, heads)
 		if err != nil {
@@ -944,8 +1144,13 @@ func (s *Store) buildTemporaryDatabase(ctx context.Context, heads []gitstore.Tas
 				return "", err
 			}
 		}
+		chains, err = s.readOperationChains(ctx, heads, nil)
+		if err != nil {
+			_ = os.Remove(temporaryPath)
+			return "", err
+		}
 	}
-	if err := replaceSnapshots(ctx, db, snapshots); err != nil {
+	if err := replaceSnapshots(ctx, db, snapshots, chains); err != nil {
 		_ = os.Remove(temporaryPath)
 		return "", err
 	}

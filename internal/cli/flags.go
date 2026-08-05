@@ -19,6 +19,10 @@ type flagKind uint8
 const (
 	stringFlag flagKind = iota
 	boolFlag
+	// pairFlag is one option that consumes the two arguments after it, as
+	// `--compare <commit> <commit>` does. The flag package cannot express it,
+	// so a pair option is lifted out of the argument list before parsing.
+	pairFlag
 )
 
 type optionMetadata struct {
@@ -254,10 +258,16 @@ var commandSchemas = map[string]commandMetadata{
 	},
 	"show": {
 		Name:        "show",
-		Synopsis:    "workbook show <id-or-prefix> [--json]",
-		Description: "Show a task.",
+		Synopsis:    "workbook show <id-or-prefix> [--history [--limit <n>] [--all]] [--compare <commit> <commit>] [--json]",
+		Description: "Show a task.\n\nWith --history, list how the task reached its current state, ordered by the\ncommit chain rather than by wall time. With --compare, diff two points in that\nhistory in the order given. Both name entries by full Git commit object ID.",
 		Positionals: []string{"<id-or-prefix>"},
-		Options:     []optionMetadata{{Name: "json", Kind: boolFlag, Description: "emit JSON"}},
+		Options: []optionMetadata{
+			{Name: "history", Kind: boolFlag, Description: "list this task's changes"},
+			{Name: "limit", Kind: stringFlag, Value: "<n>", Description: "show this many recent changes (default 10)"},
+			{Name: "all", Kind: boolFlag, Description: "show every change"},
+			{Name: "compare", Kind: pairFlag, Value: "<commit> <commit>", Description: "diff two commits from this task's history"},
+			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+		},
 	},
 	"update": {
 		Name:        "update",
@@ -468,10 +478,60 @@ func (flags *commandFlagSet) validateSchema() {
 		defined[item.Name] = struct{}{}
 	})
 	for _, option := range flags.schema.Options {
+		// A pair option never reaches the flag set: it is lifted out of the
+		// argument list first, because the flag package has no two-value form.
+		if option.Kind == pairFlag {
+			continue
+		}
 		if _, exists := defined[option.Name]; !exists {
 			panic("flag schema defines unregistered " + flags.Name() + " --" + option.Name)
 		}
 	}
+}
+
+// takePairOption removes `--name a b` from args and returns its two values.
+// Absent option, absent values, and a repeated option are all distinguishable
+// so the caller can report each precisely.
+func takePairOption(command, name string, args []string) ([2]string, []string, bool, error) {
+	var values [2]string
+	found := false
+	rest := make([]string, 0, len(args))
+	for index := 0; index < len(args); index++ {
+		argument := args[index]
+		if argument == "--" {
+			rest = append(rest, args[index:]...)
+			break
+		}
+		optionName, _, hasValue, isFlag := splitFlag(argument)
+		if !isFlag || optionName != name {
+			rest = append(rest, argument)
+			continue
+		}
+		if hasValue {
+			return values, nil, false, core.Errorf(
+				core.CategoryInvocation,
+				"%s --%s takes two separate arguments, not --%s=<value>",
+				command, name, name,
+			)
+		}
+		if found {
+			return values, nil, false, core.Errorf(core.CategoryInvocation, "%s accepts --%s once", command, name)
+		}
+		if index+2 >= len(args) || !isRequiredFirstArgument(args[index+1]) || !isRequiredFirstArgument(args[index+2]) {
+			return values, nil, false, core.Errorf(
+				core.CategoryInvocation,
+				"%s --%s requires two arguments",
+				command, name,
+			)
+		}
+		values[0], values[1] = args[index+1], args[index+2]
+		found = true
+		index += 2
+	}
+	if !found {
+		return values, args, false, nil
+	}
+	return values, rest, true, nil
 }
 
 func requiredFirstArgument(command, name string, args []string) (string, []string, error) {
@@ -520,8 +580,8 @@ func requestedJSON(args []string) bool {
 		if !known {
 			continue
 		}
-		if kind == stringFlag {
-			if !hasValue && index+1 < len(args) {
+		if kind == stringFlag || kind == pairFlag {
+			for skipped := 0; skipped < optionValueCount(kind) && !hasValue && index+1 < len(args); skipped++ {
 				index++
 			}
 			continue
@@ -546,6 +606,18 @@ func requestedJSON(args []string) bool {
 		}
 	}
 	return jsonMode
+}
+
+// optionValueCount reports how many following arguments one option consumes.
+func optionValueCount(kind flagKind) int {
+	switch kind {
+	case stringFlag:
+		return 1
+	case pairFlag:
+		return 2
+	default:
+		return 0
+	}
 }
 
 func isRequiredFirstArgument(argument string) bool {

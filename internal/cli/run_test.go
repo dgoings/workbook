@@ -908,7 +908,7 @@ func TestREADMEImplementedCommands(t *testing.T) {
 		"workbook create",
 		"workbook list",
 		"workbook board [--wide | --narrow] [--json]",
-		"workbook show",
+		"workbook show <task> [--history [--limit <n>] [--all]] [--compare <commit> <commit>] [--json]",
 		"workbook update",
 		"workbook delete",
 		"workbook restore",

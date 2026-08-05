@@ -1,9 +1,7 @@
 package gitstore
 
 import (
-	"bytes"
 	"context"
-	"fmt"
 
 	"github.com/dgoings/workbook/internal/core"
 )
@@ -66,35 +64,13 @@ func (r *Repository) ReadTaskHistories(
 		return []TaskHistoryResult{}, nil
 	}
 
+	if err := r.validateHistoryRequests(ctx, config, requests, core.CategoryCorruptData); err != nil {
+		return nil, err
+	}
 	results := make([]TaskHistoryResult, len(requests))
-	seenTaskIDs := make(map[string]struct{}, len(requests))
 	for i, request := range requests {
 		results[i].TaskID = request.Head.TaskID
 		results[i].Head = request.Head.ObjectID
-		if _, duplicate := seenTaskIDs[request.Head.TaskID]; duplicate {
-			return nil, core.Errorf(
-				core.CategoryCorruptData,
-				"task history requests contain duplicate task ID %q",
-				request.Head.TaskID,
-			)
-		}
-		seenTaskIDs[request.Head.TaskID] = struct{}{}
-		if err := core.ValidateTaskID(config.Key, request.Head.TaskID); err != nil {
-			return nil, core.Wrap(core.CategoryCorruptData, "task history request ID is invalid", err)
-		}
-	}
-	if err := r.ensureGitObjectIDWidth(ctx); err != nil {
-		return nil, err
-	}
-	for _, request := range requests {
-		if err := r.validateFullObjectID(request.Head.ObjectID); err != nil {
-			return nil, core.Wrap(core.CategoryCorruptData, "task history head object ID is invalid", err)
-		}
-		if request.StopAt != "" {
-			if err := r.validateFullObjectID(request.StopAt); err != nil {
-				return nil, core.Wrap(core.CategoryCorruptData, "task history boundary object ID is invalid", err)
-			}
-		}
 	}
 
 	heads := make([]TaskHead, len(requests))
@@ -115,101 +91,18 @@ func (r *Repository) ReadTaskHistories(
 		}
 		graphIndexes = append(graphIndexes, i)
 	}
-	var input bytes.Buffer
-	for _, index := range graphIndexes {
-		fmt.Fprintln(&input, requests[index].Head.ObjectID)
-	}
-	output, err := r.Git(
-		ctx,
-		input.Bytes(),
-		"rev-list", "--reverse", "--topo-order", "--parents", "--stdin",
-	)
+	graph, err := r.parentGraphFor(ctx, requests, graphIndexes)
 	if err != nil {
-		return nil, core.Wrap(core.CategoryCorruptData, "cannot read task history parent graph", err)
-	}
-	graph, err := parseParentGraph(output)
-	if err != nil {
-		return nil, err
-	}
-	for objectID, parents := range graph {
-		if err := r.validateFullObjectID(objectID); err != nil {
-			return nil, core.Wrap(core.CategoryCorruptData, "Git returned an invalid history graph object ID", err)
-		}
-		for _, parent := range parents {
-			if err := r.validateFullObjectID(parent); err != nil {
-				return nil, core.Wrap(core.CategoryCorruptData, "Git returned an invalid history graph object ID", err)
-			}
-		}
-	}
-	if err := validateCompleteParentGraph(graph); err != nil {
 		return nil, err
 	}
 
 	perRequest := make([][]historyCandidate, len(requests))
 	for _, index := range graphIndexes {
-		request := requests[index]
-		if _, found := graph[request.Head.ObjectID]; !found {
-			return nil, core.Errorf(
-				core.CategoryCorruptData,
-				"Git parent graph omitted task history head %q",
-				request.Head.ObjectID,
-			)
+		candidates, boundaryReached, err := walkCommitChain(graph, requests[index], index)
+		if err != nil {
+			return nil, err
 		}
-
-		var newestFirst []historyCandidate
-		seenCommits := make(map[string]struct{}, len(graph))
-		current := request.Head.ObjectID
-		for {
-			if current == request.StopAt {
-				results[index].BoundaryReached = true
-				break
-			}
-			if _, seen := seenCommits[current]; seen {
-				for candidate := range newestFirst {
-					if newestFirst[candidate].objectID == current {
-						newestFirst[candidate].structuralErr = core.Errorf(
-							core.CategoryCorruptData,
-							"task history contains a parent cycle at commit %q",
-							current,
-						)
-						break
-					}
-				}
-				break
-			}
-			seenCommits[current] = struct{}{}
-
-			parents, found := graph[current]
-			if !found {
-				return nil, core.Errorf(
-					core.CategoryCorruptData,
-					"Git parent graph omitted task history commit %q",
-					current,
-				)
-			}
-			candidate := historyCandidate{
-				requestIndex: index,
-				objectID:     current,
-				parents:      append([]string{}, parents...),
-			}
-			if len(parents) > 1 {
-				candidate.structuralErr = core.Errorf(
-					core.CategoryCorruptData,
-					"task history commit %q has more than one parent",
-					current,
-				)
-			}
-			newestFirst = append(newestFirst, candidate)
-			if candidate.structuralErr != nil || len(parents) == 0 {
-				break
-			}
-			current = parents[0]
-		}
-
-		candidates := make([]historyCandidate, len(newestFirst))
-		for i := range newestFirst {
-			candidates[len(newestFirst)-1-i] = newestFirst[i]
-		}
+		results[index].BoundaryReached = boundaryReached
 		perRequest[index] = candidates
 	}
 
