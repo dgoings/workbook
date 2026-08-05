@@ -181,6 +181,18 @@ Useful options:
 override the install prefixes and the profile that is updated. Run
 `workbook-dev setup` afterwards to bootstrap the clone.
 
+#### Remote agent sessions
+
+`.claude/hooks/session-start.sh` runs the same setup for Claude Code on the web.
+It is registered as a `SessionStart` hook in `.claude/settings.json` and does
+nothing outside a remote session, so local checkouts keep their own shell
+profile and install locations. In a remote session it warms the Go module and
+build caches, installs `workbook-dev` and then `workbook`, adds both install
+directories to `PATH` for the session, and runs `workbook-dev setup` to
+bootstrap the clone. The working-tree build is installed first, and a failure to
+build the published release is reported rather than fatal, so a session always
+ends up with a CLI.
+
 Use help to discover commands and their options:
 
 ```text

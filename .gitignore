@@ -1,4 +1,9 @@
 .DS_STORE
 .worktrees/
 .superpowers/
-.claude/
+.claude/*
+# The SessionStart hook is part of the repository so remote sessions pick it
+# up; everything else Claude writes under .claude/, such as the generated
+# Workbook skill, stays local.
+!.claude/hooks/
+!.claude/settings.json
