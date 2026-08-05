@@ -218,6 +218,31 @@ point. Read both as a description of the samples that were taken, not as a
 budget: this family has no pass threshold, and a steep slope is evidence to
 record rather than a failure.
 
+### 2026-08-05 re-baseline
+
+The change history view moved projection refresh and rebuild from scaling with
+task count to scaling with operation count, because the projection now
+materializes each task's recorded operations rather than its current state
+alone. The family was re-measured on the same 525-total by 20 fixture in both
+object formats; see the [re-baseline
+provenance](2026-08-05-projection-refresh-provenance.md).
+
+| Changed heads | 2026-07-30 SHA-1 (ms) | 2026-08-05 SHA-1 (ms) | Git processes, before → after |
+| ---: | ---: | ---: | --- |
+| 0 | 67.54 | 72.31 | 3 → 3 |
+| 1 | 99.17 | 144.49 | 5 → 8 |
+| 5 | 108.10 | 153.18 | 5 → 8 |
+| 50 | 137.55 | 187.98 | 5 → 8 |
+| 500 | 399.53 | 585.20 | 5 → 8 |
+
+An unchanged refresh is the control and did not move. Any changed refresh now
+also walks each changed task from the head the projection holds to its new one,
+which costs three more Git processes in total — not per task — and reads that
+task's previously unread operation packs. The marginal cost rose from 0.6640 to
+1.0258 ms per changed head, and the disposable cache grew from 372,736 to
+4,726,784 bytes at 20 operations per task. These remain descriptive
+measurements; the family still has no pass threshold.
+
 Repository-surface scenarios now honor `--samples`. `projection-rebuild` repeats
 its independent rebuild, and each local-bare sync sample receives its own fresh
 empty bare origin so it measures the same initial-publication and

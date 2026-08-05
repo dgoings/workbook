@@ -571,7 +571,14 @@ func (s *Store) readOperationChains(
 // BoundaryReached false, which is the reconciliation signal: replay may have
 // orphaned rows this task still owns, so they are deleted before the returned
 // chain is projected rather than upserted into.
+//
+// A truncated read projects nothing. A stored chain that stops short of the
+// head would look complete to every later reader, whereas dropping the rows
+// sends the next history read to Git, which reports the boundary.
 func projectChain(ctx context.Context, transaction *sql.Tx, chain gitstore.TaskOperationsResult, previousHead string) error {
+	if chain.Truncated != nil {
+		return deleteOperations(ctx, transaction, chain.TaskID)
+	}
 	if !chain.BoundaryReached {
 		return replaceOperations(ctx, transaction, chain.TaskID, chain.Commits)
 	}
@@ -773,8 +780,13 @@ func replaceSnapshots(
 			return err
 		}
 	}
-	// A rebuild reprojects full histories, so every chain starts at its root.
+	// A rebuild reprojects full histories, so every chain starts at its root. A
+	// truncated one is left out for the same reason a refresh drops it: a
+	// partial chain would read as a complete one.
 	for _, chain := range chains {
+		if chain.Truncated != nil {
+			continue
+		}
 		if err := insertOperations(ctx, transaction, chain.TaskID, 0, chain.Commits); err != nil {
 			return err
 		}

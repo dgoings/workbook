@@ -249,6 +249,73 @@ func TestStoreProjectsOperationsWrittenThroughAMutation(t *testing.T) {
 	}
 }
 
+func TestStoreProjectsNothingForATruncatedChain(t *testing.T) {
+	// Mutation caught: storing the valid prefix of a truncated read, which every
+	// later reader would take for a complete chain instead of being sent to Git
+	// and told where the history stopped.
+	ctx := context.Background()
+	repository, config := initializeWorkbook(t, testrepo.New(t))
+	created := createTask(t, repository, config, "Initial title")
+	advanceTaskTitle(t, repository, config, created.ID, "Second title", 0)
+
+	store, err := openStore(ctx, truncatingSource{repository: repository}, config, t.TempDir()+"/cache.sqlite")
+	if err != nil {
+		t.Fatalf("openStore() error = %v", err)
+	}
+	if _, err := store.List(ctx, config); err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if rows := countOperationRows(t, store, created.ID); rows != 0 {
+		t.Fatalf("projected operation rows = %d, want none for a truncated chain", rows)
+	}
+}
+
+// truncatingSource reports every operation chain as stopping at its head, the
+// way an unreadable commit does.
+type truncatingSource struct {
+	repository *gitstore.Repository
+}
+
+func (s truncatingSource) ListTaskHeads(ctx context.Context, config core.ProjectConfig) ([]gitstore.TaskHead, error) {
+	return s.repository.ListTaskHeads(ctx, config)
+}
+
+func (s truncatingSource) InspectTaskHead(ctx context.Context, config core.ProjectConfig, taskID string) (gitstore.TaskHead, bool, error) {
+	return s.repository.InspectTaskHead(ctx, config, taskID)
+}
+
+func (s truncatingSource) ReadTaskHeads(ctx context.Context, config core.ProjectConfig, heads []gitstore.TaskHead) ([]core.Snapshot, error) {
+	return s.repository.ReadTaskHeads(ctx, config, heads)
+}
+
+func (s truncatingSource) ValidateTaskHeadAdvances(ctx context.Context, config core.ProjectConfig, advances []gitstore.HeadAdvance) error {
+	return s.repository.ValidateTaskHeadAdvances(ctx, config, advances)
+}
+
+func (s truncatingSource) ReadTaskOperations(
+	ctx context.Context,
+	config core.ProjectConfig,
+	requests []gitstore.TaskHistoryRequest,
+) ([]gitstore.TaskOperationsResult, error) {
+	results, err := s.repository.ReadTaskOperations(ctx, config, requests)
+	if err != nil {
+		return nil, err
+	}
+	for index := range results {
+		if len(results[index].Commits) == 0 {
+			continue
+		}
+		last := len(results[index].Commits) - 1
+		results[index].Truncated = &gitstore.HistoryFailure{
+			TaskID: results[index].TaskID,
+			Commit: results[index].Commits[last].ObjectID,
+			Err:    core.Errorf(core.CategoryCorruptData, "cannot read task commit"),
+		}
+		results[index].Commits = results[index].Commits[:last]
+	}
+	return results, nil
+}
+
 func TestStoreDropsIncompleteOperationRowsRatherThanLeavingAHole(t *testing.T) {
 	// Mutation caught: appending onto a chain whose projected tail is not the
 	// parent, which records a chain with a hole a replay cannot cross.
