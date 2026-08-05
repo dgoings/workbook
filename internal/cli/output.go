@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
@@ -19,7 +20,7 @@ Commands:
   create <title> [options]
   list [options]
   board [--wide | --narrow] [--json]
-  show <id-or-prefix> [--json]
+  show <id-or-prefix> [--history [--limit <n>] [--all]] [--compare <commit> <commit>] [--json]
   update <id-or-prefix> [options]
   delete <id-or-prefix> [--json]
   restore <id-or-prefix> [--json]
@@ -329,6 +330,101 @@ func writeList(output io.Writer, tasks []core.Task) error {
 		width = nonInteractiveWidth
 	}
 	return terminalui.RenderList(output, tasks, width)
+}
+
+func writeShowDetail(output io.Writer, detail core.TaskDetail) {
+	writeShow(output, detail.Task)
+	if detail.History != nil {
+		writeChangeLog(output, *detail.History)
+	}
+	if detail.Comparison != nil {
+		writeComparison(output, *detail.Comparison)
+	}
+}
+
+// writeChangeLog prints the chain oldest first and its wall times as
+// attribution only. After a reconciliation those timestamps legitimately read
+// out of order; that disagreement is the visible fingerprint of replayed work,
+// so it is shown rather than sorted away.
+func writeChangeLog(output io.Writer, log core.ChangeLog) {
+	fmt.Fprintln(output)
+	if log.Showing < log.Total {
+		fmt.Fprintf(output, "Showing %d most recent changes out of %d.\n", log.Showing, log.Total)
+	} else {
+		fmt.Fprintf(output, "Showing all %d change(s).\n", log.Total)
+	}
+	for _, change := range log.Changes {
+		fmt.Fprintf(
+			output,
+			"%s\t%s\t%s\t%s\n",
+			change.Commit,
+			change.WallTime.Format(time.RFC3339),
+			change.Actor,
+			change.Summary,
+		)
+		writeFieldChanges(output, change.Fields)
+	}
+	writeHistoryTruncation(output, log.Truncated)
+}
+
+func writeComparison(output io.Writer, comparison core.Comparison) {
+	fmt.Fprintln(output)
+	fmt.Fprintf(output, "Comparing:\t%s\t→\t%s\n", comparison.From, comparison.To)
+	if len(comparison.Fields) == 0 {
+		fmt.Fprintln(output, "\tThese two points hold the same task state.")
+		return
+	}
+	writeFieldChanges(output, comparison.Fields)
+}
+
+func writeFieldChanges(output io.Writer, fields []core.FieldChange) {
+	for _, change := range fields {
+		label := core.FieldLabel(change.Field)
+		switch change.Kind {
+		case core.ChangeReordered:
+			fmt.Fprintf(output, "\t%s:\tReordered\n", label)
+		case core.ChangeAdded:
+			fmt.Fprintf(output, "\t%s:\t+%s\n", label, singleLine(change.To))
+		case core.ChangeRemoved:
+			fmt.Fprintf(output, "\t%s:\t-%s\n", label, singleLine(change.From))
+		case core.ChangeCreated:
+			fmt.Fprintf(output, "\t%s:\tCreated\t%s\n", label, singleLine(change.To))
+		case core.ChangeDeleted:
+			fmt.Fprintf(output, "\t%s:\tDeleted\n", label)
+		case core.ChangeRestored:
+			fmt.Fprintf(output, "\t%s:\tRestored\n", label)
+		default:
+			if len(change.Diff) > 0 {
+				fmt.Fprintf(output, "\t%s:\t%s\n", label, renderWordDiff(change.Diff))
+				continue
+			}
+			fmt.Fprintf(output, "\t%s:\t%s → %s\n", label, singleLine(change.From), singleLine(change.To))
+		}
+	}
+}
+
+// renderWordDiff marks removed and added runs the way `git diff --word-diff`
+// does, so the surrounding prose stays readable and the change is copyable.
+func renderWordDiff(spans []core.DiffSpan) string {
+	var rendered strings.Builder
+	for _, span := range spans {
+		switch span.Kind {
+		case core.DiffDelete:
+			rendered.WriteString("[-" + span.Text + "-]")
+		case core.DiffInsert:
+			rendered.WriteString("{+" + span.Text + "+}")
+		default:
+			rendered.WriteString(span.Text)
+		}
+	}
+	return singleLine(rendered.String())
+}
+
+func writeHistoryTruncation(output io.Writer, truncation *core.HistoryTruncation) {
+	if truncation == nil {
+		return
+	}
+	fmt.Fprintf(output, "Truncated at %s: %s\n", truncation.Commit, truncation.Message)
 }
 
 func writeShow(output io.Writer, task core.Task) {

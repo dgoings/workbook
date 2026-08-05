@@ -130,7 +130,7 @@ func TestHelpMetadataMatchesSchemas(t *testing.T) {
 		"create":   {"description": stringFlag, "status": stringFlag, "priority": stringFlag, "label": stringFlag, "no-sync": boolFlag, "json": boolFlag},
 		"list":     {"status": stringFlag, "priority": stringFlag, "label": stringFlag, "all": boolFlag, "json": boolFlag},
 		"board":    {"wide": boolFlag, "narrow": boolFlag, "json": boolFlag},
-		"show":     {"json": boolFlag},
+		"show":     {"history": boolFlag, "limit": stringFlag, "all": boolFlag, "compare": pairFlag, "json": boolFlag},
 		"update":   {"title": stringFlag, "description": stringFlag, "status": stringFlag, "priority": stringFlag, "label": stringFlag, "clear-labels": boolFlag, "no-sync": boolFlag, "json": boolFlag},
 		"delete":   {"no-sync": boolFlag, "json": boolFlag},
 		"restore":  {"no-sync": boolFlag, "json": boolFlag},

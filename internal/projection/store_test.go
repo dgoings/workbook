@@ -1208,7 +1208,30 @@ func TestStoreQueries(t *testing.T) {
 	}
 }
 
+// emptyTaskOperations satisfies the operation-chain half of taskHeadSource for
+// fakes whose tests exercise task heads alone. Returning no commits leaves the
+// projection with no operation rows for those tasks, which is exactly the state
+// the bounded Git fallback exists to answer from.
+type emptyTaskOperations struct{}
+
+func (emptyTaskOperations) ReadTaskOperations(
+	_ context.Context,
+	_ core.ProjectConfig,
+	requests []gitstore.TaskHistoryRequest,
+) ([]gitstore.TaskOperationsResult, error) {
+	results := make([]gitstore.TaskOperationsResult, len(requests))
+	for index, request := range requests {
+		results[index] = gitstore.TaskOperationsResult{
+			TaskID:          request.Head.TaskID,
+			Head:            request.Head.ObjectID,
+			BoundaryReached: request.StopAt != "",
+		}
+	}
+	return results, nil
+}
+
 type countingHeadSource struct {
+	emptyTaskOperations
 	heads             []gitstore.TaskHead
 	snapshots         map[string]core.Snapshot
 	listCalls         int
@@ -1223,12 +1246,14 @@ type countingHeadSource struct {
 }
 
 type headSequenceSource struct {
+	emptyTaskOperations
 	headSets  [][]gitstore.TaskHead
 	snapshots map[string]core.Snapshot
 	index     int
 }
 
 type concurrentRefreshSource struct {
+	emptyTaskOperations
 	mu                sync.Mutex
 	snapshots         map[string]core.Snapshot
 	headCalls         int
@@ -1238,6 +1263,7 @@ type concurrentRefreshSource struct {
 }
 
 type exactRefreshRaceSource struct {
+	emptyTaskOperations
 	mu                 sync.Mutex
 	changed            core.Snapshot
 	newer              core.Snapshot
@@ -1256,6 +1282,7 @@ type gitListBarrierSource struct {
 }
 
 type staticHeadSource struct {
+	emptyTaskOperations
 	heads     []gitstore.TaskHead
 	snapshots map[string]core.Snapshot
 	readErr   error
@@ -1306,6 +1333,14 @@ func newExactRefreshRaceSource(changed, newer core.Snapshot) *exactRefreshRaceSo
 		changedReadStarted: make(chan struct{}),
 		releaseChangedRead: make(chan struct{}),
 	}
+}
+
+func (s *gitListBarrierSource) ReadTaskOperations(
+	ctx context.Context,
+	config core.ProjectConfig,
+	requests []gitstore.TaskHistoryRequest,
+) ([]gitstore.TaskOperationsResult, error) {
+	return s.repository.ReadTaskOperations(ctx, config, requests)
 }
 
 func newGitListBarrierSource(repository *gitstore.Repository) *gitListBarrierSource {

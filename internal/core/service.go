@@ -16,6 +16,7 @@ type Service struct {
 	Reader     TaskReader
 	Writer     CanonicalTaskWriter
 	Projection ProjectionUpdater
+	History    TaskHistorySource
 	IDs        IDSource
 	Now        func() time.Time
 	Actor      string
@@ -193,6 +194,83 @@ func (s Service) Show(ctx context.Context, idOrPrefix string) (Task, error) {
 		return Task{}, err
 	}
 	return Project(snapshot), nil
+}
+
+// ShowOptions selects the opt-in history views. Plain show requests neither.
+type ShowOptions struct {
+	History bool
+	Limit   int
+	All     bool
+	Compare *ComparePoints
+}
+
+func (options ShowOptions) requested() bool {
+	return options.History || options.Compare != nil
+}
+
+// TaskDetail is a task plus the history views the caller asked for. Both extra
+// members are omitted when they are not requested, so a consumer that reads
+// plain show sees an unchanged shape.
+type TaskDetail struct {
+	Task
+	History    *ChangeLog  `json:"history,omitempty"`
+	Comparison *Comparison `json:"comparison,omitempty"`
+}
+
+// ShowDetail returns one task, optionally with its change log and a field-level
+// comparison between two points in its history.
+func (s Service) ShowDetail(ctx context.Context, idOrPrefix string, options ShowOptions) (TaskDetail, error) {
+	snapshot, err := s.resolveSnapshot(ctx, idOrPrefix)
+	if err != nil {
+		return TaskDetail{}, err
+	}
+	detail := TaskDetail{Task: Project(snapshot)}
+	if !options.requested() {
+		return detail, nil
+	}
+	if s.History == nil {
+		return TaskDetail{}, Errorf(CategoryOperational, "task history source is not configured")
+	}
+
+	if options.History {
+		history, err := s.History.TaskHistory(ctx, s.Config, detail.ID)
+		if err != nil {
+			return TaskDetail{}, err
+		}
+		log := BuildChangeLog(s.Config.Key, history, options.Limit, options.All)
+		detail.History = &log
+	}
+	if options.Compare != nil {
+		comparison, err := s.compare(ctx, detail.ID, *options.Compare)
+		if err != nil {
+			return TaskDetail{}, err
+		}
+		detail.Comparison = &comparison
+	}
+	return detail, nil
+}
+
+// compare diffs the two named commits in the order given, the way git diff
+// does. Sorting them would be wrong: operation ULIDs sort by authoring time and
+// no longer track chain position once a task has been reconciled.
+func (s Service) compare(ctx context.Context, taskID string, points ComparePoints) (Comparison, error) {
+	from, err := s.stateAtCommit(ctx, taskID, points.From)
+	if err != nil {
+		return Comparison{}, err
+	}
+	to, err := s.stateAtCommit(ctx, taskID, points.To)
+	if err != nil {
+		return Comparison{}, err
+	}
+	return Comparison{From: points.From, To: points.To, Fields: CompareTasks(from, to)}, nil
+}
+
+func (s Service) stateAtCommit(ctx context.Context, taskID, commit string) (TaskData, error) {
+	history, err := s.History.CommitHistory(ctx, s.Config, taskID, commit)
+	if err != nil {
+		return TaskData{}, err
+	}
+	return StateAt(s.Config.Key, history)
 }
 
 func (s Service) UpdateMutation(ctx context.Context, idOrPrefix string, input UpdateInput) (MutationResult, error) {
