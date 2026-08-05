@@ -33,7 +33,6 @@ type Recorder struct {
 	refuse   bool
 	listener net.Listener
 	socket   string
-	dir      string
 	stopped  bool
 }
 
@@ -56,7 +55,7 @@ func Start(t *testing.T, commonGitDir string, status syncloop.Status) *Recorder 
 	if err != nil {
 		t.Fatalf("watchertest listen: %v", err)
 	}
-	recorder := &Recorder{status: status, listener: listener, socket: socket, dir: commonGitDir}
+	recorder := &Recorder{status: status, listener: listener, socket: socket}
 
 	if err := os.MkdirAll(filepath.Dir(syncloop.PointerPath(commonGitDir)), 0o755); err != nil {
 		t.Fatalf("watchertest pointer directory: %v", err)
@@ -144,7 +143,6 @@ func (r *Recorder) handle(conn net.Conn) {
 		} `json:"nudge"`
 		Ack *struct {
 			TaskID string `json:"taskId"`
-			Head   string `json:"head"`
 		} `json:"ack"`
 	}
 	if err := json.Unmarshal(line, &message); err != nil {

@@ -203,7 +203,7 @@ func TestAcknowledgementRemovesOneConflict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dial() error = %v", err)
 	}
-	if err := client.Acknowledge(reported, "head-1"); err != nil {
+	if err := client.Acknowledge(reported); err != nil {
 		t.Fatalf("Acknowledge() error = %v", err)
 	}
 	client.Close()
@@ -276,9 +276,6 @@ func TestDialReportsNoWatcherForADeadSocket(t *testing.T) {
 	}
 	if _, err := Dial(directory, probeDeadline); !errors.Is(err, ErrNoWatcher) {
 		t.Fatalf("Dial(dead socket) error = %v, want ErrNoWatcher", err)
-	}
-	if Live(directory, probeDeadline) {
-		t.Fatal("Live(dead socket) = true, want false")
 	}
 }
 

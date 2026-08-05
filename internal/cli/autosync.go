@@ -150,7 +150,7 @@ func (session *taskSession) acknowledge(conflict core.Conflict) {
 		return
 	}
 	defer client.Close()
-	_ = client.Acknowledge(conflict.TaskID, "")
+	_ = client.Acknowledge(conflict.TaskID)
 }
 
 // fetchBefore refreshes shared task refs so the mutation that follows applies

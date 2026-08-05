@@ -66,8 +66,8 @@ func (c *Client) Nudge(taskID string) error {
 // Acknowledge reports that a conflict reached a caller, so the watcher stops
 // gating the task. Without it a set-membership gate would re-fire on every
 // mutation and the task could never be moved forward.
-func (c *Client) Acknowledge(taskID, head string) error {
-	_, err := c.exchange(request{Ack: &ackRequest{TaskID: taskID, Head: head}})
+func (c *Client) Acknowledge(taskID string) error {
+	_, err := c.exchange(request{Ack: &ackRequest{TaskID: taskID}})
 	return err
 }
 

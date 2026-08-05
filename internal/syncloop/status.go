@@ -71,16 +71,6 @@ func (s Status) Trustworthy(now time.Time) bool {
 	return now.Sub(s.LastSyncAt) <= s.StaleAfter()
 }
 
-// ConflictFor returns the recorded conflict for a task, if any.
-func (s Status) ConflictFor(taskID string) (ConflictEntry, bool) {
-	for _, entry := range s.Conflicts {
-		if entry.TaskID == taskID {
-			return entry, true
-		}
-	}
-	return ConflictEntry{}, false
-}
-
 // conflictSet is the watcher's memory of conflicts no command has reported.
 //
 // The generated guidelines used to promise that no conflict state is kept
@@ -174,7 +164,6 @@ type nudgeRequest struct {
 
 type ackRequest struct {
 	TaskID string `json:"taskId"`
-	Head   string `json:"head,omitempty"`
 }
 
 type response struct {

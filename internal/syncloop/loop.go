@@ -84,18 +84,6 @@ func Run(ctx context.Context, options Options) error {
 	return loop.run(ctx)
 }
 
-// Live reports whether a watcher currently answers for this repository,
-// without disturbing it.
-func Live(commonGitDir string, deadline time.Duration) bool {
-	client, err := Dial(commonGitDir, deadline)
-	if err != nil {
-		return false
-	}
-	defer client.Close()
-	_, err = client.Status()
-	return err == nil
-}
-
 type loop struct {
 	options   Options
 	conflicts *conflictSet
