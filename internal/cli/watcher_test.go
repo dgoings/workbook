@@ -5,12 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/syncloop"
+	"github.com/dgoings/workbook/internal/syncloop/watchertest"
 )
 
 func TestSyncWatchRejectsInvalidInvocations(t *testing.T) {
@@ -97,7 +100,211 @@ func TestSecondSyncWatchRefusesToStart(t *testing.T) {
 	}
 }
 
+// A mutation with a live watcher does the local write and hands publication
+// over. The watcher's interval is an hour, so origin only holds the tip if the
+// nudge delivered it rather than a scheduled tick.
+func TestMutationDefersToALiveWatcher(t *testing.T) {
+	_, second := cliSyncRepositories(t)
+	task := cliCreateTask(t, second, "Deferred task")
+	startCLIWatcher(t, second, "1h")
+
+	code, stdout, stderr := run(t, second, "update", task.ID, "--status", "ready", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("update = code %d, stderr %q", code, stderr)
+	}
+	report := decodeWatcherSync(t, stdout)
+	if report.Status != syncStatusDeferred {
+		t.Fatalf("sync report = %#v, want status %q", report, syncStatusDeferred)
+	}
+	if report.Fetch != nil || report.Push != nil {
+		t.Fatalf("deferred report carried inline phases: %#v", report)
+	}
+
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if remoteHasTaskRef(t, second, task.ID) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("watcher never published %s after the nudge", task.ID)
+}
+
+func TestMutationFallsBackWhenTheWatcherIsGone(t *testing.T) {
+	_, second := cliSyncRepositories(t)
+	task := cliCreateTask(t, second, "Orphaned pointer")
+	watchertest.StartDead(t, commonGitDir(t, second))
+
+	code, stdout, stderr := run(t, second, "update", task.ID, "--status", "ready", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("update = code %d, stderr %q", code, stderr)
+	}
+	assertInlineSync(t, decodeWatcherSync(t, stdout))
+	if !remoteHasTaskRef(t, second, task.ID) {
+		t.Fatal("a dead watcher pointer left the change unpublished")
+	}
+}
+
+func TestMutationFallsBackWhenTheWatcherStatusIsStale(t *testing.T) {
+	_, second := cliSyncRepositories(t)
+	task := cliCreateTask(t, second, "Stale watcher")
+	watchertest.Start(t, commonGitDir(t, second), syncloop.Status{
+		PID:        4211,
+		IntervalMS: 5000,
+		LastSyncAt: time.Now().Add(-time.Hour),
+		LastSyncOK: true,
+	})
+
+	code, stdout, stderr := run(t, second, "update", task.ID, "--status", "ready", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("update = code %d, stderr %q", code, stderr)
+	}
+	assertInlineSync(t, decodeWatcherSync(t, stdout))
+	if !remoteHasTaskRef(t, second, task.ID) {
+		t.Fatal("a stale watcher left the change unpublished")
+	}
+}
+
+// A watcher whose last synchronization failed knows origin is unreachable.
+// Deferring would swallow the warning that says the work is local-only.
+func TestMutationFallsBackWhenTheWatcherLastSyncFailed(t *testing.T) {
+	_, second := cliSyncRepositories(t)
+	task := cliCreateTask(t, second, "Failing watcher")
+	watchertest.Start(t, commonGitDir(t, second), syncloop.Status{
+		PID:        4211,
+		IntervalMS: 5000,
+		LastSyncAt: time.Now(),
+		LastSyncOK: false,
+		LastError:  "fetch failed: could not read from remote",
+	})
+
+	code, stdout, stderr := run(t, second, "update", task.ID, "--status", "ready", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("update = code %d, stderr %q", code, stderr)
+	}
+	assertInlineSync(t, decodeWatcherSync(t, stdout))
+}
+
+// A watcher that answers but cannot publish must not leave the caller believing
+// the change was handed off.
+func TestMutationPublishesInlineWhenTheNudgeIsRefused(t *testing.T) {
+	_, second := cliSyncRepositories(t)
+	task := cliCreateTask(t, second, "Refused nudge")
+	recorder := watchertest.Start(t, commonGitDir(t, second), syncloop.Status{
+		PID:        4211,
+		IntervalMS: 5000,
+		LastSyncAt: time.Now(),
+		LastSyncOK: true,
+	})
+	recorder.RefuseNudges()
+
+	code, stdout, stderr := run(t, second, "update", task.ID, "--status", "ready", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("update = code %d, stderr %q", code, stderr)
+	}
+	report := decodeWatcherSync(t, stdout)
+	if report.Status != syncStatusCompleted || report.Push == nil {
+		t.Fatalf("sync report = %#v, want an inline push after the refused nudge", report)
+	}
+	if !remoteHasTaskRef(t, second, task.ID) {
+		t.Fatal("a refused nudge left the change unpublished")
+	}
+}
+
+func TestDeferredMutationGatesOnAWatcherConflict(t *testing.T) {
+	_, second := cliSyncRepositories(t)
+	task := cliCreateTask(t, second, "Conflicted task")
+	recorder := watchertest.Start(t, commonGitDir(t, second), syncloop.Status{
+		PID:        4211,
+		IntervalMS: 5000,
+		LastSyncAt: time.Now(),
+		LastSyncOK: true,
+		Conflicts: []syncloop.ConflictEntry{{
+			Conflict: core.Conflict{
+				TaskID:      task.ID,
+				Type:        core.ConflictDescription,
+				Description: &core.DescriptionConflict{Base: "b", Ours: "o", Theirs: "t"},
+			},
+			Head: "head-1",
+		}},
+	})
+
+	code, stdout, stderr := run(t, second, "update", task.ID, "--status", "ready", "--json")
+	if code != 8 {
+		t.Fatalf("update against a conflicted task = code %d, stdout %q, stderr %q", code, stdout, stderr)
+	}
+	if acknowledged := recorder.Acknowledgements(); len(acknowledged) != 1 || acknowledged[0] != task.ID {
+		t.Fatalf("acknowledgements = %#v, want one for %s", acknowledged, task.ID)
+	}
+}
+
+func TestDeferredMutationIgnoresAnUnrelatedWatcherConflict(t *testing.T) {
+	_, second := cliSyncRepositories(t)
+	task := cliCreateTask(t, second, "Unaffected task")
+	other := cliCreateTask(t, second, "Conflicted elsewhere")
+	watchertest.Start(t, commonGitDir(t, second), syncloop.Status{
+		PID:        4211,
+		IntervalMS: 5000,
+		LastSyncAt: time.Now(),
+		LastSyncOK: true,
+		Conflicts: []syncloop.ConflictEntry{{
+			Conflict: core.Conflict{
+				TaskID:      other.ID,
+				Type:        core.ConflictDescription,
+				Description: &core.DescriptionConflict{},
+			},
+			Head: "head-1",
+		}},
+	})
+
+	code, stdout, stderr := run(t, second, "update", task.ID, "--status", "ready", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("update = code %d, stdout %q, stderr %q", code, stdout, stderr)
+	}
+	if report := decodeWatcherSync(t, stdout); report.Status != syncStatusDeferred {
+		t.Fatalf("sync report = %#v, want status %q", report, syncStatusDeferred)
+	}
+}
+
 // --- helpers ---
+
+func commonGitDir(t *testing.T, repository string) string {
+	t.Helper()
+	return filepath.Join(repository, ".git")
+}
+
+// watcherSyncReport decodes only the envelope members these tests assert on,
+// so an unrelated addition does not break them.
+type watcherSyncReport struct {
+	Status string          `json:"status"`
+	Detail string          `json:"detail"`
+	Fetch  json.RawMessage `json:"fetch"`
+	Push   json.RawMessage `json:"push"`
+}
+
+func decodeWatcherSync(t *testing.T, output string) watcherSyncReport {
+	t.Helper()
+	var envelope struct {
+		Sync *watcherSyncReport `json:"sync"`
+	}
+	if err := json.Unmarshal([]byte(output), &envelope); err != nil {
+		t.Fatalf("decode sync envelope: %v; output = %q", err, output)
+	}
+	if envelope.Sync == nil {
+		t.Fatalf("result carried no sync member; output = %q", output)
+	}
+	return *envelope.Sync
+}
+
+func assertInlineSync(t *testing.T, report watcherSyncReport) {
+	t.Helper()
+	if report.Status != syncStatusCompleted {
+		t.Fatalf("sync report = %#v, want an inline %q", report, syncStatusCompleted)
+	}
+	if report.Fetch == nil || report.Push == nil {
+		t.Fatalf("sync report = %#v, want both inline phases", report)
+	}
+}
 
 // startCLIWatcher runs `workbook sync --watch` in the background and returns
 // once it is listening. The watcher is stopped and its exit checked at cleanup.

@@ -2,12 +2,14 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/dgoings/workbook/internal/autosync"
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
 	"github.com/dgoings/workbook/internal/projection"
+	"github.com/dgoings/workbook/internal/syncloop"
 	"github.com/dgoings/workbook/internal/userconfig"
 )
 
@@ -15,6 +17,12 @@ const (
 	syncStatusCompleted = "completed"
 	syncStatusSkipped   = "skipped"
 	syncStatusFailed    = "failed"
+	// syncStatusDeferred reports that a running watcher was handed this change
+	// instead of the command synchronizing inline. It is best-effort rather
+	// than a guarantee: the local write is durable, and publication follows
+	// within milliseconds, but a watcher killed in that window leaves the work
+	// local until `workbook push` or the next watcher runs.
+	syncStatusDeferred = "deferred"
 )
 
 // syncReport is the machine-readable account of what a command did about
@@ -39,6 +47,10 @@ type taskSession struct {
 	report     syncReport
 	fetched    *gitstore.SyncResult
 	conflicts  []core.Conflict
+	// deferred reports that a trustworthy watcher answered, so this command
+	// writes locally and hands publication to it.
+	deferred bool
+	watcher  syncloop.Status
 }
 
 func openTaskSession(ctx context.Context, cwd string, noSync, withWriter bool) (*taskSession, error) {
@@ -83,8 +95,62 @@ func openTaskSession(ctx context.Context, cwd string, noSync, withWriter bool) (
 	}
 	if !policy.Enabled {
 		session.report.Detail = "automatic synchronization is disabled"
+		return session, nil
 	}
+	session.probeWatcher()
 	return session, nil
+}
+
+// probeWatcher asks a running watcher whether it can be trusted with this
+// command's synchronization.
+//
+// Every failure is silent and lands on the inline path, because no watcher is
+// the ordinary case. With none running the whole probe is one os.ReadFile
+// returning ENOENT, which is what keeps an unwatched repository's behavior
+// indistinguishable from before watchers existed.
+func (session *taskSession) probeWatcher() {
+	client, err := syncloop.Dial(session.repository.CommonGitDir, watcherProbeDeadline)
+	if err != nil {
+		return
+	}
+	defer client.Close()
+	status, err := client.Status()
+	if err != nil || !status.Trustworthy(time.Now()) {
+		return
+	}
+	session.deferred = true
+	session.watcher = status
+	// A watcher's conflicts are this command's conflicts. Carrying the whole
+	// set rather than only the target's matches the inline path, where a
+	// fetch's entire conflict list is reported.
+	for _, entry := range status.Conflicts {
+		session.conflicts = append(session.conflicts, entry.Conflict)
+	}
+}
+
+// nudge asks the watcher to publish, waiting for receipt rather than for
+// completion.
+func (session *taskSession) nudge(taskID string) error {
+	client, err := syncloop.Dial(session.repository.CommonGitDir, watcherProbeDeadline)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	return client.Nudge(taskID)
+}
+
+// acknowledge tells the watcher a conflict reached a caller, so the identical
+// retry proceeds instead of meeting the same gate forever.
+func (session *taskSession) acknowledge(conflict core.Conflict) {
+	if !session.deferred {
+		return
+	}
+	client, err := syncloop.Dial(session.repository.CommonGitDir, watcherProbeDeadline)
+	if err != nil {
+		return
+	}
+	defer client.Close()
+	_ = client.Acknowledge(conflict.TaskID, "")
 }
 
 // fetchBefore refreshes shared task refs so the mutation that follows applies
@@ -98,6 +164,15 @@ func openTaskSession(ctx context.Context, cwd string, noSync, withWriter bool) (
 // to act on.
 func (session *taskSession) fetchBefore(ctx context.Context) {
 	if !session.report.Enabled {
+		return
+	}
+	if session.deferred {
+		// The watcher fetched within its staleness window, so the tip this
+		// mutation applies to is current enough. Reconciliation makes a
+		// slightly stale tip a case the fetch path already handles rather than
+		// one worth a network round trip to prevent.
+		session.report.Status = syncStatusDeferred
+		session.report.Detail = fmt.Sprintf("handed to the sync watcher (pid %d)", session.watcher.PID)
 		return
 	}
 	if !session.repository.HasOrigin(ctx) {
@@ -124,9 +199,29 @@ func (session *taskSession) fetchBefore(ctx context.Context) {
 // a warning: the change is durable locally, and the next fetch replays it onto
 // whatever origin holds by then.
 func (session *taskSession) publish(ctx context.Context, taskID string) {
-	if !session.report.Enabled || session.fetched == nil {
+	if !session.report.Enabled {
 		return
 	}
+	if session.deferred {
+		if err := session.nudge(taskID); err == nil {
+			return
+		}
+		// The watcher answered the probe and was gone by the time the write
+		// landed. Publishing here is what keeps "deferred" from being a promise
+		// this command has no basis to make.
+		session.deferred = false
+		session.report.Status = syncStatusCompleted
+		session.report.Detail = ""
+		session.pushInline(ctx, taskID)
+		return
+	}
+	if session.fetched == nil {
+		return
+	}
+	session.pushInline(ctx, taskID)
+}
+
+func (session *taskSession) pushInline(ctx context.Context, taskID string) {
 	pushed, err := session.repository.PushTask(ctx, session.config, taskID)
 	session.report.Push = &pushed
 	if err != nil {
@@ -175,6 +270,7 @@ func (session *taskSession) mutate(
 ) (core.MutationResult, error) {
 	session.fetchBefore(ctx)
 	if conflict := session.conflictFor(ctx, target); conflict != nil {
+		session.acknowledge(*conflict)
 		return core.MutationResult{}, core.ConflictError([]core.Conflict{*conflict})
 	}
 	result, err := apply(ctx)

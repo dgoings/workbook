@@ -41,8 +41,15 @@ type pointer struct {
 	PID     int    `json:"pid"`
 }
 
-func pointerPath(commonGitDir string) string {
+// PointerPath is where a watcher publishes its socket for this repository.
+// Exported so a test double can stand in for a watcher without reimplementing
+// the rendezvous.
+func PointerPath(commonGitDir string) string {
 	return filepath.Join(commonGitDir, "workbook", pointerFilename)
+}
+
+func pointerPath(commonGitDir string) string {
+	return PointerPath(commonGitDir)
 }
 
 func readPointer(commonGitDir string) (pointer, error) {
