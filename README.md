@@ -217,7 +217,7 @@ workbook setup [--key <key>] [--no-docs] [--no-sync] [--skill-dir <dir>] [--no-s
 workbook create
 workbook list
 workbook board [--wide | --narrow] [--json]
-workbook show
+workbook show <task> [--history [--limit <n>] [--all]] [--compare <commit> <commit>] [--json]
 workbook update
 workbook delete
 workbook restore
@@ -301,6 +301,64 @@ unambiguous task-ID prefix with each card's priority, title, and labels. Its JSO
 output retains full task IDs, descriptions, and the rest of the task data. Normal
 `list`, `show`, `board`, and `next` reads use the local SQLite projection.
 Claims and implementation links remain future work.
+
+### Task change history
+
+`workbook show` gains two opt-in views. Plain `workbook show` is unchanged, and
+in `--json` each view's member is omitted entirely unless its flag is given, so
+existing consumers see the same shape they always did.
+
+```sh
+workbook show WB-01K0M6B8A4FTT8C39MXXYTW7C1 --history
+workbook show WB-01K0M6B8A4FTT8C39MXXYTW7C1 --history --limit 25
+workbook show WB-01K0M6B8A4FTT8C39MXXYTW7C1 --history --all
+workbook show WB-01K0M6B8A4FTT8C39MXXYTW7C1 --compare <commit> <commit>
+```
+
+`--history` lists one row per operation pack rather than one per operation,
+because actor, wall time, and logical clock are all pack-level. A pack touching
+several fields renders as one row naming them, "changed title and status". The
+default shows the ten most recent changes and says what it left out — "Showing
+10 most recent changes out of 200" — while `--limit <n>` and `--all` widen the
+window.
+
+Each field renders in its own terms. Title, status, and priority read as old to
+new. Rank reads as "Reordered" with no values, because a rank is opaque and its
+literal value tells a reader nothing. Description is the only field needing a
+real diff, so Workbook computes a word-level diff and marks it the way
+`git diff --word-diff` does: `Alpha beta [-gamma-]{+delta+}`. In `--json` that
+diff is a list of `{kind, text}` spans, and concatenating the equal and delete
+spans reproduces the old text exactly while the equal and insert spans reproduce
+the new one.
+
+Entries are ordered by the parent chain, not by wall time, and wall time is
+printed as attribution only. Replay preserves an operation's wall time while
+rewriting its logical clock, so after a reconciliation the two orders
+legitimately disagree. Workbook shows what the chain says and lets the
+timestamps read out of order rather than reordering them; that disagreement is
+the visible fingerprint of replayed work.
+
+`--compare` diffs the two commits in the order given, the way `git diff` does,
+and never sorts them: operation ULIDs sort by authoring time and no longer track
+chain position once a task has been reconciled. Both arguments are full Git
+commit object IDs, exactly as `--history` prints them.
+
+Addressing entries by commit object ID works across a reconciliation because
+reconciliation parks the pre-replay tip under
+`refs/workbook/reconciled/<task-id>/<n>` rather than discarding it, so an object
+an earlier listing named usually stays reachable. That reachability is bounded,
+not permanent: Workbook keeps at most three parked tips per task and retires the
+excess inside a later mutation's ref transaction, after which the oldest
+pre-replay chain is collectable. A named object that no longer resolves is an
+ordinary not-found for that argument, exit `4`, naming the commit rather than
+reporting corruption.
+
+Both views are served from the SQLite projection's `operations` table, which
+stores operations alone and reconstructs any state by replaying from the root;
+`--compare` replays both endpoints in full. Where the projection holds no
+operations for a task, or for a commit it does not hold — every parked
+pre-replay tip, since the projection is fed from `refs/workbook/tasks/` only —
+Workbook falls back to a bounded Git read so `show` still answers.
 
 ### Local mutation durability
 
@@ -689,7 +747,7 @@ flowchart TD
 | --- | --- |
 | Operation model | Defines task history, current tip checkpoints, causality, and validation |
 | Git refs and objects | Store task operations durably and explicitly synchronize task refs with `origin` |
-| SQLite projection | Materializes current task state for local reads; Git remains canonical |
+| SQLite projection | Materializes current task state and recorded operations for local reads; Git remains canonical |
 | CLI/core library | Currently owns initialization, local validation, CRUD, and user-facing output |
 | Optional adapters (proposed) | IDE integrations, local API, MCP, or a coordination relay |
 
@@ -730,8 +788,17 @@ ref
 - Ordinary `list`, `show`, `fetch`, and `sync` validate and use current tip
   checkpoints without replaying the complete history. This bounded default does
   not change the authority of immutable operations or Git ancestry.
+- Reading a task's operation history — for the projection's `operations` table
+  and for `workbook show --history` — reads the operation packs alone and does
+  not revalidate their documents, tree shape, or stored checkpoints. The write
+  path already prevents this clone from recording an invalid commit, and setup,
+  sync, and fetch validate what arrives from elsewhere, so revalidating a whole
+  history on every read buys nothing and makes a read scale with history depth.
+  An unreadable commit truncates the read softly: the valid prefix is returned
+  and the boundary commit is named.
 - `workbook validate` explicitly replays history and reconstructs checkpoints;
-  it is not part of ordinary current-tip reads or synchronization.
+  it is not part of ordinary current-tip reads or synchronization, and it
+  remains the path that audits stored checkpoints.
 
 Using one ref per task avoids a single global state-branch bottleneck: local
 commands working on different tasks update different refs. Future concurrent edits
@@ -846,7 +913,29 @@ cache; it builds a temporary database, checks task heads again, retries once if
 they changed during the build, and atomically installs a stable result. With
 `--json`, the normal result envelope contains `taskCount` and `cachePath`.
 
+An `operations` table alongside the task tables materializes each task's recorded
+operations for `workbook show --history` and `--compare`. Its rows are keyed on
+the operation ULID rather than the commit object ID, because replay preserves
+operation ULIDs while rewriting logical clocks and therefore every downstream
+object ID; a surviving row changes only its ordering and object-ID columns. Rows
+hold operations alone, with no per-row state checkpoint: any state is
+reconstructed by replaying from the root.
+
+Because comparing tips is complete for current state but blind to intermediate
+commits — a fetch advancing a task twelve commits yields one new tip and eleven
+unread packs — refresh walks each changed task from the head the projection
+already holds to its new one, and a rebuild reprojects full histories. A new head
+that does not descend from the projected one is the reconciliation signal: replay
+drops operations three ways, so upserting alone would strand rows and break the
+logical-clock chain a root-first replay depends on. Workbook deletes that task's
+operation rows and reprojects the returned chain instead. Refresh and rebuild
+therefore scale with operation count rather than task count; see the
+[projection refresh evidence](docs/performance/README.md#projection-refresh-change-count-family).
+
 The cache can be deleted at any time and rebuilt entirely from Workbook refs.
+Semantic validation results live in a separate `validation.sqlite` beside it, so
+a validator-version bump does not force a projection rebuild and a long
+validation pass does not hold the projection's writer lock against mutations.
 
 ## Bootstrap and portability
 

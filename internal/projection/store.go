@@ -1214,11 +1214,3 @@ func cacheError(action string, err error) error {
 func formatTime(value time.Time) string {
 	return value.Format(time.RFC3339Nano)
 }
-
-func parseProjectedTime(value string) (time.Time, error) {
-	parsed, err := time.Parse(time.RFC3339Nano, value)
-	if err != nil {
-		return time.Time{}, core.Wrap(core.CategoryCorruptData, "projected operation has an invalid wall time", err)
-	}
-	return parsed, nil
-}

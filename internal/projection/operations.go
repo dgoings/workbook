@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"time"
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
@@ -189,9 +190,13 @@ func (s *Store) readProjectedHistory(ctx context.Context, taskID, throughCommit 
 		return core.TaskHistory{}, false, nil
 	}
 
-	history, err := assembleHistory(s.config.ProjectID, taskID, scanned)
-	if err != nil {
-		return core.TaskHistory{}, false, err
+	// A chain the projection cannot assemble is reported as absent rather than
+	// as a failure. The projection is disposable and Git is canonical, so the
+	// bounded Git read both answers the question and repairs the rows on the
+	// next refresh.
+	history, ok := assembleHistory(s.config.ProjectID, taskID, scanned)
+	if !ok {
+		return core.TaskHistory{}, false, nil
 	}
 	if throughCommit != "" && history.Entries[len(history.Entries)-1].Commit != throughCommit {
 		return core.TaskHistory{}, false, nil
@@ -200,36 +205,30 @@ func (s *Store) readProjectedHistory(ctx context.Context, taskID, throughCommit 
 }
 
 // assembleHistory groups operation rows back into the packs they were recorded
-// in. A chain that does not start at the root is treated as unusable rather
-// than repaired, because replaying from a mid-chain state is exactly the thing
-// the projection does not store.
-func assembleHistory(projectID, taskID string, rows []operationScan) (core.TaskHistory, error) {
+// in, reporting false for a chain it cannot use. A chain that skips a position
+// is unusable rather than repairable: replaying from a mid-chain state is
+// exactly what the projection deliberately does not store.
+func assembleHistory(projectID, taskID string, rows []operationScan) (core.TaskHistory, bool) {
 	entries := make([]core.HistoryEntry, 0, len(rows))
 	expectedChainIndex := int64(0)
 	for index := 0; index < len(rows); {
 		row := rows[index]
-		if row.chainIndex != expectedChainIndex {
-			return core.TaskHistory{}, core.Errorf(
-				core.CategoryCorruptData,
-				"projected task %q operation chain skips position %d",
-				taskID,
-				expectedChainIndex,
-			)
+		if row.chainIndex != expectedChainIndex || row.logicalClock < 0 {
+			return core.TaskHistory{}, false
 		}
 		operations := make([]core.Operation, 0, 2)
+		usable := true
 		for ; index < len(rows) && rows[index].chainIndex == row.chainIndex; index++ {
-			operation, err := decodeOperation(rows[index])
-			if err != nil {
-				return core.TaskHistory{}, err
+			operation, ok := decodeOperation(rows[index])
+			if !ok {
+				usable = false
+				continue
 			}
 			operations = append(operations, operation)
 		}
-		wallTime, err := parseProjectedTime(row.wallTime)
-		if err != nil {
-			return core.TaskHistory{}, err
-		}
-		if row.logicalClock < 0 {
-			return core.TaskHistory{}, core.Errorf(core.CategoryCorruptData, "projected operation has an invalid logical clock")
+		wallTime, err := time.Parse(time.RFC3339Nano, row.wallTime)
+		if !usable || err != nil {
+			return core.TaskHistory{}, false
 		}
 		parent := ""
 		if len(entries) > 0 {
@@ -245,10 +244,10 @@ func assembleHistory(projectID, taskID string, rows []operationScan) (core.TaskH
 		})
 		expectedChainIndex++
 	}
-	return core.TaskHistory{Entries: entries}, nil
+	return core.TaskHistory{Entries: entries}, true
 }
 
-func decodeOperation(row operationScan) (core.Operation, error) {
+func decodeOperation(row operationScan) (core.Operation, bool) {
 	operation := core.Operation{
 		ID:    row.operationID,
 		Type:  core.OperationType(row.operationType),
@@ -258,11 +257,11 @@ func decodeOperation(row operationScan) (core.Operation, error) {
 	if row.taskData != "" {
 		var task core.TaskData
 		if err := json.Unmarshal([]byte(row.taskData), &task); err != nil {
-			return core.Operation{}, core.Wrap(core.CategoryCorruptData, "cannot decode projected task creation payload", err)
+			return core.Operation{}, false
 		}
 		operation.Task = &task
 	}
-	return operation, nil
+	return operation, true
 }
 
 // gitHistory reads one chain straight from Git. It is the bounded fallback for
