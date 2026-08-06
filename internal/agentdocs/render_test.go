@@ -106,6 +106,34 @@ func TestSkillDocumentSeparatesFrontmatterFromTheManagedBody(t *testing.T) {
 	}
 }
 
+func TestSkillDocumentSeparatesMachineIDsFromHumanTitles(t *testing.T) {
+	// Production mutation: dropping either half of this guidance would let
+	// agents run CLI commands against ambiguous prefixes, or flood
+	// human-facing prose with ULIDs no human can parse or remember.
+	document, err := skillDocument("0.2.0")
+	if err != nil {
+		t.Fatalf("skillDocument() error = %v", err)
+	}
+
+	for _, want := range []string{
+		// The machine interface: every CLI invocation uses the full ID.
+		"resolved full ID for every",
+		// The human interface: prose leads with the title.
+		"titles are for humans",
+		"progress reports, completion summaries, questions, and error",
+		// The surfaces where IDs leak into prose.
+		"Announce a selected task by title",
+		"lifecycle transitions",
+		"dependencies and blockers by the titles",
+		// The exception that keeps IDs useful to humans.
+		"similarly titled",
+	} {
+		if !strings.Contains(document.Body, want) {
+			t.Errorf("skill body missing %q:\n%s", want, document.Body)
+		}
+	}
+}
+
 func TestSkillDocumentRendersFrontmatterOnLineOne(t *testing.T) {
 	document, err := skillDocument("0.2.0")
 	if err != nil {
