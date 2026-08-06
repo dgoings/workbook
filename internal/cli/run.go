@@ -814,33 +814,42 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 	if err != nil {
 		return err
 	}
+	publisher := &boardPublisher{repository: repository, config: service.Config}
 	handler := webui.NewHandlerWithTaskMutations(
 		func(requestContext context.Context) ([]core.Task, error) {
 			return service.List(requestContext, core.ListFilter{All: true})
 		},
 		func(requestContext context.Context, input core.CreateInput) (core.MutationResult, error) {
-			return service.CreateMutation(requestContext, input)
+			result, err := service.CreateMutation(requestContext, input)
+			return publisher.publish(requestContext, result, err)
 		},
 		func(requestContext context.Context, id string, input core.UpdateInput) (core.MutationResult, error) {
-			return service.UpdateMutation(requestContext, id, input)
+			result, err := service.UpdateMutation(requestContext, id, input)
+			return publisher.publish(requestContext, result, err)
 		},
 		func(requestContext context.Context, id string, status core.Status) (core.MutationResult, error) {
-			return service.UpdateMutation(requestContext, id, core.UpdateInput{Status: &status})
+			result, err := service.UpdateMutation(requestContext, id, core.UpdateInput{Status: &status})
+			return publisher.publish(requestContext, result, err)
 		},
 		func(requestContext context.Context, id string, input core.PlaceInput) (core.MutationResult, error) {
-			return service.PlaceMutation(requestContext, id, input)
+			result, err := service.PlaceMutation(requestContext, id, input)
+			return publisher.publish(requestContext, result, err)
 		},
 		func(requestContext context.Context, id string) (core.MutationResult, error) {
-			return service.DeleteMutation(requestContext, id)
+			result, err := service.DeleteMutation(requestContext, id)
+			return publisher.publish(requestContext, result, err)
 		},
 		func(requestContext context.Context, id string) (core.MutationResult, error) {
-			return service.RestoreMutation(requestContext, id)
+			result, err := service.RestoreMutation(requestContext, id)
+			return publisher.publish(requestContext, result, err)
 		},
 		func(requestContext context.Context, id, dependency string) (core.MutationResult, error) {
-			return service.DependMutation(requestContext, id, dependency)
+			result, err := service.DependMutation(requestContext, id, dependency)
+			return publisher.publish(requestContext, result, err)
 		},
 		func(requestContext context.Context, id, dependency string) (core.MutationResult, error) {
-			return service.FreeMutation(requestContext, id, dependency)
+			result, err := service.FreeMutation(requestContext, id, dependency)
+			return publisher.publish(requestContext, result, err)
 		},
 		// The board's detail view shows history by default and derives a status
 		// lane that reaches back to the task's creation, so it reads the whole
@@ -865,6 +874,68 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 		return core.Wrap(core.CategoryOperational, "serve board", err)
 	}
 	return nil
+}
+
+// boardPublisher publishes what a web mutation wrote.
+//
+// It hands the change to a watcher rather than fetching and pushing inline.
+// Inline would put two network round trips inside every request — roughly
+// 530 ms and 16 Git processes on the measured CLI path — which is the latency
+// the board's optimistic rendering exists to hide.
+type boardPublisher struct {
+	repository *gitstore.Repository
+	config     core.ProjectConfig
+}
+
+// publish takes a mutation's result and error so a handler closure can wrap its
+// service call in one expression.
+//
+// It never turns a successful write into a failed request. The local commit is
+// the durable result, and refusing to acknowledge recorded work because the
+// network is unavailable would defeat the local-first design.
+func (p *boardPublisher) publish(
+	ctx context.Context,
+	result core.MutationResult,
+	err error,
+) (core.MutationResult, error) {
+	if err != nil {
+		return result, err
+	}
+	if !p.repository.HasOrigin(ctx) {
+		return result, nil
+	}
+	if p.handOff(result.Task.ID) {
+		return result, nil
+	}
+	if _, pushErr := p.repository.PushTask(ctx, p.config, result.Task.ID); pushErr != nil {
+		result.Warnings = append(result.Warnings, core.Warning{
+			Code:    core.WarningAutoSync,
+			Message: "the change was recorded locally, but publishing it failed: " + pushErr.Error(),
+		})
+	}
+	return result, nil
+}
+
+// handOff reports whether a trustworthy watcher accepted the change.
+//
+// The socket is dialed rather than the in-process loop being called directly,
+// because `serve` runs no loop of its own when an external watcher already owns
+// the repository. Dialing covers both, and reuses the path the CLI exercises.
+//
+// An untrustworthy watcher is refused for the same reason the CLI refuses one:
+// a watcher whose last synchronization failed knows origin is unreachable, and
+// accepting its receipt would swallow the warning that says so.
+func (p *boardPublisher) handOff(taskID string) bool {
+	client, err := syncloop.Dial(p.repository.CommonGitDir, watcherProbeDeadline)
+	if err != nil {
+		return false
+	}
+	defer client.Close()
+	status, err := client.Status()
+	if err != nil || !status.Trustworthy(time.Now()) {
+		return false
+	}
+	return client.Nudge(taskID) == nil
 }
 
 // serveWatcher runs a sync loop alongside the board.

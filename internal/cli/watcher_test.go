@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -309,6 +310,43 @@ func TestRunServeDefersToAnExternalWatcher(t *testing.T) {
 	t.Fatalf("board never reported deferring to the external watcher; wrote %q", output.String())
 }
 
+// A web mutation publishes by nudging, not by waiting for a scheduled tick.
+// The external watcher's interval is an hour, so origin only holds the new ref
+// if the mutation handed it over.
+func TestWebMutationPublishesWithoutWaitingForATick(t *testing.T) {
+	_, second := cliSyncRepositories(t)
+	startCLIWatcher(t, second, "1h")
+
+	address := reserveAddress(t)
+	_, stopServe := startServeCapturing(t, second, address)
+	defer stopServe()
+
+	created := createTaskThroughBoard(t, address, "Nudged from the board")
+
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if remoteTaskRefValue(t, second, created) != "" {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("origin never received %s; the board waited for a tick instead of nudging", created)
+}
+
+// A repository with no origin has nothing to publish to. The mutation still
+// has to succeed, because the local write is the durable result.
+func TestWebMutationSucceedsWithoutAnOrigin(t *testing.T) {
+	repository := initializedRepository(t)
+	address := reserveAddress(t)
+	_, stopServe := startServeCapturing(t, repository, address)
+	defer stopServe()
+
+	created := createTaskThroughBoard(t, address, "No origin here")
+	if localTaskRef(t, repository, created) == "" {
+		t.Fatalf("task %s was not recorded locally", created)
+	}
+}
+
 // Ctrl-C must not strand work the watcher was still holding.
 func TestWatcherPublishesUnsyncedWorkOnShutdown(t *testing.T) {
 	_, second := cliSyncRepositories(t)
@@ -413,6 +451,37 @@ func startServeCapturing(t *testing.T, repository, address string) (*watcherOutp
 			t.Error("serve did not stop")
 		}
 	}
+}
+
+// createTaskThroughBoard drives the real HTTP surface the browser uses and
+// returns the created task's ID.
+func createTaskThroughBoard(t *testing.T, address, title string) string {
+	t.Helper()
+	body := strings.NewReader(`{"title":` + strconv.Quote(title) + `}`)
+	response, err := http.Post("http://"+address+"/api/tasks", "application/json", body)
+	if err != nil {
+		t.Fatalf("create through the board: %v", err)
+	}
+	defer response.Body.Close()
+	contents, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read create response: %v", err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("create through the board = %d: %s", response.StatusCode, contents)
+	}
+	var document struct {
+		Task struct {
+			ID string `json:"id"`
+		} `json:"task"`
+	}
+	if err := json.Unmarshal(contents, &document); err != nil {
+		t.Fatalf("decode create response: %v; body %s", err, contents)
+	}
+	if document.Task.ID == "" {
+		t.Fatalf("create response named no task: %s", contents)
+	}
+	return document.Task.ID
 }
 
 func fetchBoardTasks(t *testing.T, address string) string {
