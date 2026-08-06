@@ -4410,7 +4410,7 @@ func TestHandlerUpdatesTaskStatus(t *testing.T) {
 		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
 		unexpectedTaskCreate(t),
 		unexpectedTaskUpdate(t),
-		func(_ context.Context, id string, status core.Status) (core.MutationResult, error) {
+		func(_ context.Context, id string, status core.Status, _ string) (core.MutationResult, error) {
 			gotID = id
 			gotStatus = status
 			return core.MutationResult{Task: updated}, nil
@@ -4656,7 +4656,7 @@ func TestHandlerPreservesStatusMutationRoute(t *testing.T) {
 		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
 		unexpectedTaskCreate(t),
 		unexpectedTaskUpdate(t),
-		func(context.Context, string, core.Status) (core.MutationResult, error) {
+		func(context.Context, string, core.Status, string) (core.MutationResult, error) {
 			called = true
 			return core.MutationResult{Task: boardTasks()[0]}, nil
 		},
@@ -4702,7 +4702,7 @@ func TestHandlerMapsStatusUpdateErrorsToVersionedErrorDocuments(t *testing.T) {
 		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
 		unexpectedTaskCreate(t),
 		unexpectedTaskUpdate(t),
-		func(context.Context, string, core.Status) (core.MutationResult, error) {
+		func(context.Context, string, core.Status, string) (core.MutationResult, error) {
 			return core.MutationResult{}, core.Errorf(core.CategoryValidation, "invalid task status")
 		},
 	)
@@ -4877,6 +4877,299 @@ func TestHandlerRejectsUnknownRoutesAndMutationMethods(t *testing.T) {
 		}
 		assertSecurityHeaders(t, response.Result())
 	}
+}
+
+// The board sends the tip it rendered so a change proposed against a stale
+// view is reported rather than silently overwriting whatever arrived since.
+// The card lands in its new column before the write completes, and the poll
+// that fires while the request is still open must not drag it back. Reverting
+// for the length of every round trip is the flicker this queue removes.
+func TestHandlerClientRendersAPlacementBeforeItsResponseAndSurvivesAPoll(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	moved := clientPlacementTask("WB-01J00000000000000000000031", "Moved", core.StatusReady, core.PriorityMedium)
+	moved.Head = "head-1"
+	settled := moved
+	settled.Status = core.StatusInProgress
+	settled.Head = "head-2"
+	tasks := []core.Task{moved}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/")
+	script := renderedClientScript(t, response.Body.String())
+	document, err := json.Marshal(TasksDocument{
+		Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmed, err := json.Marshal(settled)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/", string(document)) + script + `
+setTimeout(async () => {
+  const ready = boardLists.find((list) => list.dataset.status === "ready");
+  const inProgress = boardLists.find((list) => list.dataset.status === "in-progress");
+  const card = ready.querySelectorAll(".task-card").find((item) => item.dataset.taskId === ` + strconv.Quote(moved.ID) + `);
+  const dataTransfer = { effectAllowed: "", dropEffect: "", setData() {} };
+  card.rect = { top: 0, bottom: 80 };
+
+  let releaseMutation;
+  const boardFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => {
+    if ((options.method || "GET") !== "GET") {
+      fetchCalls.push({ url, options });
+      return new Promise((resolve) => {
+        releaseMutation = () => resolve({
+          ok: true,
+          json: async () => ({ format: "workbook.task-mutation", version: 1, task: ` + string(confirmed) + ` })
+        });
+      });
+    }
+    return boardFetch(url, options);
+  };
+
+  documentEventListeners.dragstart({ target: card, dataTransfer });
+  const pending = documentEventListeners.drop({
+    target: inProgress, clientY: 1, dataTransfer, preventDefault() {}
+  });
+
+  await Promise.resolve();
+  if (!inProgress.querySelectorAll(".task-card").some((item) => item.dataset.taskId === ` + strconv.Quote(moved.ID) + `)) {
+    throw new Error("the card did not move before the response arrived");
+  }
+
+  // A poll lands while the write is still open. It replaces the whole model,
+  // and the pending intent has to survive that.
+  await intervalCallback();
+  if (!inProgress.querySelectorAll(".task-card").some((item) => item.dataset.taskId === ` + strconv.Quote(moved.ID) + `)) {
+    throw new Error("a poll reverted the optimistic card while the write was open");
+  }
+
+  releaseMutation();
+  await pending;
+  if (!inProgress.querySelectorAll(".task-card").some((item) => item.dataset.taskId === ` + strconv.Quote(moved.ID) + `)) {
+    throw new Error("the confirmed task did not stay in its new column");
+  }
+}, 0);
+`
+	if output, err := exec.Command(node, "-e", program).CombinedOutput(); err != nil {
+		t.Fatalf("execute optimistic placement behavior: %v\n%s", err, output)
+	}
+}
+
+// Two intents on one task go out one at a time, and the second carries the head
+// the first returned. Without that serialization there is no single head the
+// client could name while its own writes are in flight.
+func TestHandlerClientSendsOneTasksIntentsSeriallyThreadingTheHead(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	moved := clientPlacementTask("WB-01J00000000000000000000041", "Moved", core.StatusReady, core.PriorityMedium)
+	moved.Head = "head-1"
+	tasks := []core.Task{moved}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/")
+	script := renderedClientScript(t, response.Body.String())
+	document, err := json.Marshal(TasksDocument{
+		Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/", string(document)) + script + `
+setTimeout(async () => {
+  const ready = boardLists.find((list) => list.dataset.status === "ready");
+  const inProgress = boardLists.find((list) => list.dataset.status === "in-progress");
+  const done = boardLists.find((list) => list.dataset.status === "done");
+  const dataTransfer = { effectAllowed: "", dropEffect: "", setData() {} };
+
+  let open = 0;
+  let maxOpen = 0;
+  const heads = [];
+  let nextHead = 2;
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if ((options.method || "GET") !== "GET") {
+      open += 1;
+      maxOpen = Math.max(maxOpen, open);
+      heads.push(JSON.parse(options.body).expectedHead);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      open -= 1;
+      const head = "head-" + nextHead++;
+      return { ok: true, json: async () => ({
+        format: "workbook.task-mutation", version: 1,
+        task: Object.assign({}, ` + string(mustJSON(t, moved)) + `, { head })
+      }) };
+    }
+    return { ok: true, json: async () => (` + string(document) + `) };
+  };
+
+  const first = ready.querySelectorAll(".task-card").find((item) => item.dataset.taskId === ` + strconv.Quote(moved.ID) + `);
+  first.rect = { top: 0, bottom: 80 };
+  documentEventListeners.dragstart({ target: first, dataTransfer });
+  const firstDrop = documentEventListeners.drop({ target: inProgress, clientY: 1, dataTransfer, preventDefault() {} });
+
+  const second = inProgress.querySelectorAll(".task-card").find((item) => item.dataset.taskId === ` + strconv.Quote(moved.ID) + `);
+  second.rect = { top: 0, bottom: 80 };
+  documentEventListeners.dragstart({ target: second, dataTransfer });
+  const secondDrop = documentEventListeners.drop({ target: done, clientY: 1, dataTransfer, preventDefault() {} });
+
+  await Promise.all([firstDrop, secondDrop]);
+  if (maxOpen !== 1) {
+    throw new Error("one task's intents overlapped; max concurrent writes was " + maxOpen);
+  }
+  if (heads.length !== 2 || heads[0] !== "head-1" || heads[1] !== "head-2") {
+    throw new Error("intents did not thread the confirmed head: " + JSON.stringify(heads));
+  }
+}, 0);
+`
+	if output, err := exec.Command(node, "-e", program).CombinedOutput(); err != nil {
+		t.Fatalf("execute serial intent behavior: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerReportsAndShiftsThePublicationMode(t *testing.T) {
+	state := SyncState{Mode: SyncModeDeferred, Watcher: true}
+	handler := NewHandlerWithSyncControl(
+		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
+		nil, nil, nil, nil, nil, nil,
+		func(context.Context) SyncState { return state },
+		func(_ context.Context, mode string) (SyncState, error) {
+			if mode != SyncModeInline && mode != SyncModeDeferred {
+				return SyncState{}, core.Errorf(core.CategoryValidation, "bad mode")
+			}
+			state = SyncState{Mode: mode, Watcher: true}
+			return state, nil
+		},
+	)
+
+	response := request(t, handler, http.MethodGet, "/api/sync")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /api/sync = %d, want 200", response.Code)
+	}
+	var document SyncDocument
+	if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+		t.Fatalf("decode sync document: %v; body %s", err, response.Body.String())
+	}
+	if document.Format != "workbook.sync" || document.Version != 1 || document.Sync.Mode != SyncModeDeferred {
+		t.Fatalf("sync document = %#v, want a deferred workbook.sync v1", document)
+	}
+
+	response = requestJSON(t, handler, http.MethodPut, "/api/sync", `{"mode":"inline"}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("PUT /api/sync = %d, want 200", response.Code)
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+		t.Fatal(err)
+	}
+	if document.Sync.Mode != SyncModeInline {
+		t.Fatalf("mode after the toggle = %q, want %q", document.Sync.Mode, SyncModeInline)
+	}
+
+	response = requestJSON(t, handler, http.MethodPut, "/api/sync", `{"mode":"sideways"}`)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("PUT /api/sync with an unknown mode = %d, want 400", response.Code)
+	}
+}
+
+// A board with no sync control configured must still serve, because the
+// four-argument constructor is what most callers use.
+func TestHandlerReportsSyncControlIsNotConfigured(t *testing.T) {
+	handler := NewHandler(
+		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
+	)
+	if response := request(t, handler, http.MethodGet, "/api/sync"); response.Code != http.StatusInternalServerError {
+		t.Fatalf("GET /api/sync without sync control = %d, want 500", response.Code)
+	}
+}
+
+func TestHandlerForwardsTheExpectedHeadOnEveryRequestThatCarriesIt(t *testing.T) {
+	updated := boardTasks()[0]
+
+	t.Run("status", func(t *testing.T) {
+		var got string
+		handler := NewHandler(
+			func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+			unexpectedTaskCreate(t),
+			unexpectedTaskUpdate(t),
+			func(_ context.Context, _ string, _ core.Status, expectedHead string) (core.MutationResult, error) {
+				got = expectedHead
+				return core.MutationResult{Task: updated}, nil
+			},
+		)
+		requestJSON(t, handler, http.MethodPatch,
+			"/api/tasks/WB-01J00000000000000000000001/status",
+			`{"status":"in-progress","expectedHead":"head-from-the-board"}`)
+		if got != "head-from-the-board" {
+			t.Fatalf("status updater expectedHead = %q, want the request's", got)
+		}
+	})
+
+	t.Run("update", func(t *testing.T) {
+		var got core.UpdateInput
+		handler := NewHandler(
+			func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+			unexpectedTaskCreate(t),
+			func(_ context.Context, _ string, input core.UpdateInput) (core.MutationResult, error) {
+				got = input
+				return core.MutationResult{Task: updated}, nil
+			},
+			unexpectedStatusUpdate(t),
+		)
+		requestJSON(t, handler, http.MethodPatch,
+			"/api/tasks/WB-01J00000000000000000000001",
+			`{"title":"Renamed","expectedHead":"head-from-the-board"}`)
+		if got.ExpectedHead != "head-from-the-board" {
+			t.Fatalf("update input expectedHead = %q, want the request's", got.ExpectedHead)
+		}
+	})
+
+	t.Run("position", func(t *testing.T) {
+		var got core.PlaceInput
+		handler := NewHandlerWithTaskMutations(
+			func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+			unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
+			func(_ context.Context, _ string, input core.PlaceInput) (core.MutationResult, error) {
+				got = input
+				return core.MutationResult{Task: updated}, nil
+			},
+			nil, nil, nil, nil, nil,
+		)
+		requestJSON(t, handler, http.MethodPatch,
+			"/api/tasks/WB-01J00000000000000000000001/position",
+			`{"status":"ready","expectedHead":"head-from-the-board"}`)
+		if got.ExpectedHead != "head-from-the-board" {
+			t.Fatalf("place input expectedHead = %q, want the request's", got.ExpectedHead)
+		}
+	})
+
+	t.Run("omitted stays empty", func(t *testing.T) {
+		var got core.UpdateInput
+		handler := NewHandler(
+			func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+			unexpectedTaskCreate(t),
+			func(_ context.Context, _ string, input core.UpdateInput) (core.MutationResult, error) {
+				got = input
+				return core.MutationResult{Task: updated}, nil
+			},
+			unexpectedStatusUpdate(t),
+		)
+		requestJSON(t, handler, http.MethodPatch,
+			"/api/tasks/WB-01J00000000000000000000001", `{"title":"Renamed"}`)
+		if got.ExpectedHead != "" {
+			t.Fatalf("update input expectedHead = %q, want empty when omitted", got.ExpectedHead)
+		}
+	})
 }
 
 func TestHandlerMapsTaskErrorsToVersionedErrorDocuments(t *testing.T) {
@@ -5245,7 +5538,7 @@ func requestJSON(t *testing.T, handler http.Handler, method, target, body string
 
 func unexpectedStatusUpdate(t *testing.T) TaskStatusUpdater {
 	t.Helper()
-	return func(context.Context, string, core.Status) (core.MutationResult, error) {
+	return func(context.Context, string, core.Status, string) (core.MutationResult, error) {
 		t.Fatal("unexpected status update")
 		return core.MutationResult{}, nil
 	}
@@ -5392,4 +5685,13 @@ func presentationForTasks(tasks []core.Task) []TaskPresentation {
 		presentation[i] = TaskPresentation{TaskID: task.ID, IDPrefix: task.ID}
 	}
 	return presentation
+}
+
+func mustJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
 }

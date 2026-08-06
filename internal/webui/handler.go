@@ -23,7 +23,7 @@ var assets embed.FS
 
 type TaskLister func(context.Context) ([]core.Task, error)
 
-type TaskStatusUpdater func(context.Context, string, core.Status) (core.MutationResult, error)
+type TaskStatusUpdater func(context.Context, string, core.Status, string) (core.MutationResult, error)
 
 type TaskPositionUpdater func(context.Context, string, core.PlaceInput) (core.MutationResult, error)
 
@@ -45,6 +45,39 @@ type TaskDependencyRemover func(context.Context, string, string) (core.MutationR
 // creation, so the board asks for the whole chain rather than the CLI's
 // ten-change default window.
 type TaskHistoryReader func(context.Context, string) (core.TaskDetail, error)
+
+// SyncStateReporter answers what the board will do with the next mutation.
+type SyncStateReporter func(context.Context) SyncState
+
+// SyncModeSetter shifts between handing publication to a watcher and waiting
+// for the push. It rejects a mode it does not recognize.
+type SyncModeSetter func(context.Context, string) (SyncState, error)
+
+// SyncModeDeferred hands publication to a running watcher; SyncModeInline waits
+// for the push so a successful response means origin has the change.
+const (
+	SyncModeDeferred = "deferred"
+	SyncModeInline   = "inline"
+)
+
+// SyncState is what the board reports about publication. Watcher is false when
+// no trustworthy watcher answers, in which case a deferred board still falls
+// back to publishing inline and the indicator says so.
+type SyncState struct {
+	Mode    string `json:"mode"`
+	Watcher bool   `json:"watcher"`
+	Detail  string `json:"detail,omitempty"`
+}
+
+type SyncDocument struct {
+	Format  string    `json:"format"`
+	Version int       `json:"version"`
+	Sync    SyncState `json:"sync"`
+}
+
+type syncModeRequest struct {
+	Mode string `json:"mode"`
+}
 
 type TasksDocument struct {
 	Format       string             `json:"format"`
@@ -120,6 +153,8 @@ type handler struct {
 	depend       TaskDependencyAdder
 	free         TaskDependencyRemover
 	history      TaskHistoryReader
+	syncState    SyncStateReporter
+	setSyncMode  SyncModeSetter
 	page         *template.Template
 	mux          *http.ServeMux
 }
@@ -128,14 +163,20 @@ type pageData struct {
 	Board presentation.Board
 }
 
+// expectedHead is the task tip the browser rendered before proposing a change.
+// It is optional on every request that carries it: a client that omits it keeps
+// the behavior these routes had before the field existed, which is what lets
+// the server half land before any client sends one.
 type updateStatusRequest struct {
-	Status core.Status `json:"status"`
+	Status       core.Status `json:"status"`
+	ExpectedHead string      `json:"expectedHead"`
 }
 
 type positionTaskRequest struct {
-	Status core.Status `json:"status"`
-	Before string      `json:"before"`
-	After  string      `json:"after"`
+	Status       core.Status `json:"status"`
+	Before       string      `json:"before"`
+	After        string      `json:"after"`
+	ExpectedHead string      `json:"expectedHead"`
 }
 
 type createTaskRequest struct {
@@ -146,25 +187,39 @@ type createTaskRequest struct {
 	Labels      []string      `json:"labels"`
 }
 
+// updateTaskRequest is converted directly to core.UpdateInput, so its fields
+// must stay identical in name, type, and order.
 type updateTaskRequest struct {
-	Title       *string        `json:"title"`
-	Description *string        `json:"description"`
-	Status      *core.Status   `json:"status"`
-	Priority    *core.Priority `json:"priority"`
-	Labels      *[]string      `json:"labels"`
+	Title        *string        `json:"title"`
+	Description  *string        `json:"description"`
+	Status       *core.Status   `json:"status"`
+	Priority     *core.Priority `json:"priority"`
+	Labels       *[]string      `json:"labels"`
+	ExpectedHead string         `json:"expectedHead"`
 }
 
 func NewHandler(list TaskLister, create TaskCreator, update TaskUpdater, updateStatus TaskStatusUpdater) http.Handler {
-	return newHandler(list, create, update, updateStatus, nil, nil, nil, nil, nil, nil)
+	return newHandler(list, create, update, updateStatus, nil, nil, nil, nil, nil, nil, nil, nil)
 }
 
 func NewHandlerWithTaskMutations(list TaskLister, create TaskCreator, update TaskUpdater, updateStatus TaskStatusUpdater, position TaskPositionUpdater, delete TaskDeleter, restore TaskRestorer, depend TaskDependencyAdder, free TaskDependencyRemover, history TaskHistoryReader) http.Handler {
-	return newHandler(list, create, update, updateStatus, position, delete, restore, depend, free, history)
+	return newHandler(list, create, update, updateStatus, position, delete, restore, depend, free, history, nil, nil)
 }
 
-func newHandler(list TaskLister, create TaskCreator, update TaskUpdater, updateStatus TaskStatusUpdater, position TaskPositionUpdater, delete TaskDeleter, restore TaskRestorer, depend TaskDependencyAdder, free TaskDependencyRemover, history TaskHistoryReader) http.Handler {
+// NewHandlerWithSyncControl adds the publication indicator and its toggle on
+// top of the full mutation surface.
+//
+// This positional list is past comfortable at twelve, and each addition makes a
+// mis-ordered call easier to write and harder to see. Reshaping it into an
+// options struct is worth doing, and is deliberately not bundled into the
+// change that happened to be the twelfth.
+func NewHandlerWithSyncControl(list TaskLister, create TaskCreator, update TaskUpdater, updateStatus TaskStatusUpdater, position TaskPositionUpdater, delete TaskDeleter, restore TaskRestorer, depend TaskDependencyAdder, free TaskDependencyRemover, history TaskHistoryReader, syncState SyncStateReporter, setSyncMode SyncModeSetter) http.Handler {
+	return newHandler(list, create, update, updateStatus, position, delete, restore, depend, free, history, syncState, setSyncMode)
+}
+
+func newHandler(list TaskLister, create TaskCreator, update TaskUpdater, updateStatus TaskStatusUpdater, position TaskPositionUpdater, delete TaskDeleter, restore TaskRestorer, depend TaskDependencyAdder, free TaskDependencyRemover, history TaskHistoryReader, syncState SyncStateReporter, setSyncMode SyncModeSetter) http.Handler {
 	page := template.Must(template.New("index.html").ParseFS(assets, "assets/index.html"))
-	handler := &handler{list: list, create: create, update: update, updateStatus: updateStatus, position: position, delete: delete, restore: restore, depend: depend, free: free, history: history, page: page, mux: http.NewServeMux()}
+	handler := &handler{list: list, create: create, update: update, updateStatus: updateStatus, position: position, delete: delete, restore: restore, depend: depend, free: free, history: history, syncState: syncState, setSyncMode: setSyncMode, page: page, mux: http.NewServeMux()}
 	handler.mux.HandleFunc("GET /{$}", handler.serveBoard)
 	handler.mux.HandleFunc("GET /deleted", handler.serveBoard)
 	handler.mux.HandleFunc("GET /tasks/new", handler.serveBoard)
@@ -179,6 +234,8 @@ func newHandler(list TaskLister, create TaskCreator, update TaskUpdater, updateS
 	handler.mux.HandleFunc("POST /api/tasks/{id}/restore", handler.restoreTask)
 	handler.mux.HandleFunc("PUT /api/tasks/{id}/dependencies/{dependency}", handler.addTaskDependency)
 	handler.mux.HandleFunc("DELETE /api/tasks/{id}/dependencies/{dependency}", handler.removeTaskDependency)
+	handler.mux.HandleFunc("GET /api/sync", handler.serveSyncState)
+	handler.mux.HandleFunc("PUT /api/sync", handler.updateSyncMode)
 	handler.mux.HandleFunc("GET /healthz", handler.serveHealth)
 	return http.HandlerFunc(handler.serveHTTP)
 }
@@ -254,6 +311,8 @@ func allowedMethod(path string) (string, bool) {
 		return http.MethodGet, true
 	case "/api/tasks":
 		return http.MethodGet + ", " + http.MethodPost, true
+	case "/api/sync":
+		return http.MethodGet + ", " + http.MethodPut, true
 	default:
 		if _, _, ok := taskDependencyPathIDs(path); ok {
 			return http.MethodPut + ", " + http.MethodDelete, true
@@ -475,7 +534,7 @@ func (handler *handler) updateTaskStatus(writer http.ResponseWriter, request *ht
 		handler.writeError(writer, core.Wrap(core.CategoryInvocation, "decode status update", err))
 		return
 	}
-	result, err := handler.updateStatus(request.Context(), id, input.Status)
+	result, err := handler.updateStatus(request.Context(), id, input.Status, input.ExpectedHead)
 	if err != nil {
 		handler.writeError(writer, err)
 		return
@@ -496,7 +555,7 @@ func (handler *handler) positionTask(writer http.ResponseWriter, request *http.R
 	result, err := handler.position(
 		request.Context(),
 		request.PathValue("id"),
-		core.PlaceInput{Status: body.Status, Before: body.Before, After: body.After},
+		core.PlaceInput{Status: body.Status, Before: body.Before, After: body.After, ExpectedHead: body.ExpectedHead},
 	)
 	if err != nil {
 		handler.writeError(writer, err)
@@ -653,6 +712,32 @@ func taskPresentation(tasks []core.Task) []TaskPresentation {
 		}
 	}
 	return result
+}
+
+func (handler *handler) serveSyncState(writer http.ResponseWriter, request *http.Request) {
+	if handler.syncState == nil {
+		handler.writeError(writer, core.Errorf(core.CategoryOperational, "publication state is not configured"))
+		return
+	}
+	writeJSON(writer, http.StatusOK, SyncDocument{Format: "workbook.sync", Version: 1, Sync: handler.syncState(request.Context())})
+}
+
+func (handler *handler) updateSyncMode(writer http.ResponseWriter, request *http.Request) {
+	if handler.setSyncMode == nil {
+		handler.writeError(writer, core.Errorf(core.CategoryOperational, "publication mode is not configured"))
+		return
+	}
+	var body syncModeRequest
+	if err := decodeRequest(request.Body, &body); err != nil {
+		handler.writeError(writer, core.Wrap(core.CategoryInvocation, "decode publication mode", err))
+		return
+	}
+	state, err := handler.setSyncMode(request.Context(), body.Mode)
+	if err != nil {
+		handler.writeError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, SyncDocument{Format: "workbook.sync", Version: 1, Sync: state})
 }
 
 func (handler *handler) serveHealth(writer http.ResponseWriter, _ *http.Request) {

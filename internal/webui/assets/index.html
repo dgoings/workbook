@@ -205,7 +205,7 @@
   <a class="skip-link" href="#board">Skip to task board</a>
   <header class="app-header">
     <div><p class="eyebrow">Repository workbench</p><h1>Workbook board</h1></div>
-    <div class="header-links"><a class="header-link" href="/">Board</a><a class="header-link" href="/deleted">Deleted tasks</a><p class="updated" data-updated>Loaded from this checkout</p></div>
+    <div class="header-links"><a class="header-link" href="/">Board</a><a class="header-link" href="/deleted">Deleted tasks</a><p class="updated" data-updated>Loaded from this checkout</p><button type="button" class="header-link" data-sync-toggle hidden></button></div>
   </header>
   <main id="board" tabindex="-1">
     <div class="board-view" data-board-view>
@@ -241,12 +241,16 @@
       const counts = new Map([...boardView.querySelectorAll("[data-count]")].map((element) => [element.dataset.count, element]));
       const stale = boardView.querySelector("[data-stale]");
       const updated = document.querySelector("[data-updated]");
+      const syncToggle = document.querySelector("[data-sync-toggle]");
+      let syncState = null;
       let activeDrag = null;
       const copyFeedback = new Map();
       const copyFeedbackTimers = new Map();
       let copySuppressionTimer = null;
       let copySuppressedTaskID = null;
       let latestTasks = [];
+      let latestPresentation = new Map();
+      const pendingIntents = new Map();
       let tasksLoaded = false;
       let taskLoadFailed = false;
       let latestDeletedTasks = [];
@@ -1429,7 +1433,12 @@
         const document = await response.json();
         if (!response.ok || document.format !== "workbook.task-mutation" ||
             document.version !== 1 || !document.task) {
-          throw new Error(document.error && document.error.message || "Task update failed.");
+          const failure = new Error(document.error && document.error.message || "Task update failed.");
+          // The category is what separates "your view was stale, reload" from
+          // "that was not a legal change". Without it every failure looks the
+          // same to the caller.
+          failure.category = document.error && document.error.category || "";
+          throw failure;
         }
         return document;
       }
@@ -1437,6 +1446,136 @@
         return Array.isArray(document.warnings)
           ? document.warnings.map((warning) => warning.message)
           : [];
+      }
+      // Pending intents let the board show a change before it is durable.
+      //
+      // latestTasks is replaced wholesale by every poll, so intents are folded
+      // in at render time rather than written into it. That is the whole reason
+      // the overlay sits where it does: the one-second refresh can keep
+      // overwriting the model and pending work survives untouched.
+      function intentEntry(taskID, head) {
+        let entry = pendingIntents.get(taskID);
+        if (!entry) {
+          entry = { queue: [], inFlight: false, head: head || "" };
+          pendingIntents.set(taskID, entry);
+        }
+        return entry;
+      }
+      function projectTasks(tasks) {
+        if (pendingIntents.size === 0) return tasks;
+        return tasks.map((task) => {
+          const entry = pendingIntents.get(task.id);
+          if (!entry || entry.queue.length === 0) return task;
+          return entry.queue.reduce((current, intent) => intent.apply(current), task);
+        });
+      }
+      function rerender() {
+        if (!tasksLoaded) return;
+        render(projectTasks(latestTasks), latestPresentation);
+      }
+      function replaceProjectedTask(task) {
+        const index = latestTasks.findIndex((candidate) => candidate.id === task.id);
+        if (index < 0) latestTasks = latestTasks.concat([task]);
+        else latestTasks = latestTasks.map((candidate, at) => (at === index ? task : candidate));
+      }
+      // One task's intents are sent one at a time, because each carries the head
+      // the one before it returned. Independent tasks drain concurrently, so a
+      // slow write to one card never stalls the rest of the board.
+      // The returned promise settles once this task's queue is empty. Nothing
+      // in the browser awaits it — an event listener's result is discarded —
+      // but it is the seam the client tests use to observe a settled board
+      // without the UI ever waiting on a round trip.
+      function queueIntent(taskID, head, intent) {
+        const entry = intentEntry(taskID, head);
+        entry.queue.push(intent);
+        rerender();
+        return drainIntents(taskID);
+      }
+      async function drainIntents(taskID) {
+        const entry = pendingIntents.get(taskID);
+        if (!entry || entry.inFlight) return;
+        entry.inFlight = true;
+        try {
+          while (entry.queue.length > 0) {
+            const intent = entry.queue[0];
+            try {
+              const confirmed = await intent.send(entry.head);
+              entry.queue.shift();
+              if (confirmed.task && confirmed.task.head) entry.head = confirmed.task.head;
+              replaceProjectedTask(confirmed.task);
+            } catch (error) {
+              // Drop the intent that failed and keep the ones queued behind
+              // it: those were separate decisions, and discarding a later
+              // change because an earlier one was refused is the clobbering
+              // this queue exists to avoid. One that genuinely depended on the
+              // failed intent is refused in turn and rolls back on its own.
+              entry.queue.shift();
+              reportIntentFailure(error);
+              if (error && error.category === "stale-write") refresh();
+            }
+            rerender();
+          }
+        } finally {
+          entry.inFlight = false;
+          if (entry.queue.length === 0) pendingIntents.delete(taskID);
+          rerender();
+        }
+      }
+      // The indicator says what the next mutation will do, which is why it is
+      // read from the server rather than assumed: a board set to defer still
+      // publishes inline when no watcher answers, and saying "deferred" then
+      // would be a claim the board cannot keep.
+      function renderSyncState() {
+        if (!syncToggle) return;
+        if (!syncState) { syncToggle.hidden = true; return; }
+        syncToggle.hidden = false;
+        const deferring = syncState.mode === "deferred" && syncState.watcher;
+        text(syncToggle, deferring ? "Publishing: handed to watcher" : "Publishing: inline");
+        syncToggle.title = syncState.detail ||
+          (deferring
+            ? "A watcher publishes each change just after it is recorded. Click to wait for the push instead."
+            : "Each change is pushed before the response returns. Click to hand publication to a watcher.");
+      }
+      async function refreshSyncState() {
+        try {
+          const response = await fetch("/api/sync", { cache: "no-store" });
+          const document = await response.json();
+          if (!response.ok || document.format !== "workbook.sync" || document.version !== 1) return;
+          syncState = document.sync;
+        } catch (_) {
+          syncState = null;
+        }
+        renderSyncState();
+      }
+      async function toggleSyncMode() {
+        if (!syncState) return;
+        const wanted = syncState.mode === "inline" ? "deferred" : "inline";
+        try {
+          const response = await fetch("/api/sync", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ mode: wanted }),
+          });
+          const document = await response.json();
+          if (response.ok && document.format === "workbook.sync") syncState = document.sync;
+        } catch (_) {
+        }
+        renderSyncState();
+      }
+      if (syncToggle) syncToggle.addEventListener("click", toggleSyncMode);
+      function adoptRefreshedHeads(tasks) {
+        if (pendingIntents.size === 0) return;
+        tasks.forEach((task) => {
+          const entry = pendingIntents.get(task.id);
+          if (entry && !entry.inFlight && task.head) entry.head = task.head;
+        });
+      }
+      function reportIntentFailure(error) {
+        const message = error && error.category === "stale-write"
+          ? "That task changed elsewhere. Showing the latest board."
+          : "Task update failed. Showing the latest board.";
+        text(stale, message);
+        stale.dataset.visible = "true";
       }
       function ownsDependencyController(controller) {
         return activeDependencyController === controller;
@@ -1587,7 +1726,10 @@
           main.replaceChildren(taskForm("new", { title: "", description: "", status: current.status, priority: "medium", labels: [] }));
           return;
         }
-        const task = latestTasks.find((candidate) => candidate.id === current.id);
+        // The detail view projects pending intents too. Opening a card right
+        // after moving it on the board would otherwise show the status the
+        // server still holds, which reads as the move having been lost.
+        const task = projectTasks(latestTasks).find((candidate) => candidate.id === current.id);
         if (!task) {
           document.title = "Task not found · Workbook";
           main.replaceChildren(routeMessage("Task not found", "No task has the full ID " + current.id + "."));
@@ -1690,9 +1832,16 @@
             if (presentation.size !== document.tasks.length || document.tasks.some((task) => !presentation.has(task.id))) throw new Error("invalid task presentation");
             if (generation !== taskRefreshGeneration) return { status: "superseded" };
             latestTasks = document.tasks;
+            latestPresentation = presentation;
             tasksLoaded = true;
             taskLoadFailed = false;
-            render(document.tasks, presentation); stale.dataset.visible = "false"; text(updated, "Updated " + new Date().toLocaleTimeString());
+            // A queue whose last request was refused is holding a head the
+            // server has moved past. Re-basing it here is what lets the intents
+            // behind the failed one retry against current truth instead of
+            // failing identically. A queue with a request in flight has already
+            // committed to its head and is left alone.
+            adoptRefreshedHeads(document.tasks);
+            render(projectTasks(document.tasks), presentation); stale.dataset.visible = "false"; text(updated, "Updated " + new Date().toLocaleTimeString());
             let relationshipContext = { status: "not-applicable" };
             if (!wasLoaded) renderRoute();
             else if (activeDependencyController) {
@@ -1789,17 +1938,22 @@
         const body = { status: placement.status };
         if (placement.before) body.before = placement.before;
         if (placement.after) body.after = placement.after;
-        try {
-          await mutateTask("PATCH", "/api/tasks/" + encodeURIComponent(taskId) + "/position", body);
-          await refresh();
-        } catch (_) {
-          await refresh();
-          text(stale, "Task placement failed. Showing the latest board.");
-          stale.dataset.visible = "true";
-        }
+        const observed = latestTasks.find((task) => task.id === taskId);
+        return queueIntent(taskId, observed && observed.head, {
+          // The card lands in its new column immediately. Ordering within the
+          // column still comes from the server, because rank is computed from
+          // the whole board rather than from the two neighbours the drop names.
+          apply: (task) => Object.assign({}, task, { status: placement.status }),
+          send: (expectedHead) => mutateTask(
+            "PATCH",
+            "/api/tasks/" + encodeURIComponent(taskId) + "/position",
+            expectedHead ? Object.assign({}, body, { expectedHead }) : body
+          ),
+        });
       });
       renderRoute();
       refresh();
+      refreshSyncState();
       window.setInterval(refresh, 1000);
     })();
   </script>

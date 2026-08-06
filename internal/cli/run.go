@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -814,33 +815,42 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 	if err != nil {
 		return err
 	}
-	handler := webui.NewHandlerWithTaskMutations(
+	publisher := &boardPublisher{repository: repository, config: service.Config}
+	handler := webui.NewHandlerWithSyncControl(
 		func(requestContext context.Context) ([]core.Task, error) {
 			return service.List(requestContext, core.ListFilter{All: true})
 		},
 		func(requestContext context.Context, input core.CreateInput) (core.MutationResult, error) {
-			return service.CreateMutation(requestContext, input)
+			result, err := service.CreateMutation(requestContext, input)
+			return publisher.publish(requestContext, result, err)
 		},
 		func(requestContext context.Context, id string, input core.UpdateInput) (core.MutationResult, error) {
-			return service.UpdateMutation(requestContext, id, input)
+			result, err := service.UpdateMutation(requestContext, id, input)
+			return publisher.publish(requestContext, result, err)
 		},
-		func(requestContext context.Context, id string, status core.Status) (core.MutationResult, error) {
-			return service.UpdateMutation(requestContext, id, core.UpdateInput{Status: &status})
+		func(requestContext context.Context, id string, status core.Status, expectedHead string) (core.MutationResult, error) {
+			result, err := service.UpdateMutation(requestContext, id, core.UpdateInput{Status: &status, ExpectedHead: expectedHead})
+			return publisher.publish(requestContext, result, err)
 		},
 		func(requestContext context.Context, id string, input core.PlaceInput) (core.MutationResult, error) {
-			return service.PlaceMutation(requestContext, id, input)
+			result, err := service.PlaceMutation(requestContext, id, input)
+			return publisher.publish(requestContext, result, err)
 		},
 		func(requestContext context.Context, id string) (core.MutationResult, error) {
-			return service.DeleteMutation(requestContext, id)
+			result, err := service.DeleteMutation(requestContext, id)
+			return publisher.publish(requestContext, result, err)
 		},
 		func(requestContext context.Context, id string) (core.MutationResult, error) {
-			return service.RestoreMutation(requestContext, id)
+			result, err := service.RestoreMutation(requestContext, id)
+			return publisher.publish(requestContext, result, err)
 		},
 		func(requestContext context.Context, id, dependency string) (core.MutationResult, error) {
-			return service.DependMutation(requestContext, id, dependency)
+			result, err := service.DependMutation(requestContext, id, dependency)
+			return publisher.publish(requestContext, result, err)
 		},
 		func(requestContext context.Context, id, dependency string) (core.MutationResult, error) {
-			return service.FreeMutation(requestContext, id, dependency)
+			result, err := service.FreeMutation(requestContext, id, dependency)
+			return publisher.publish(requestContext, result, err)
 		},
 		// The board's detail view shows history by default and derives a status
 		// lane that reaches back to the task's creation, so it reads the whole
@@ -848,6 +858,8 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 		func(requestContext context.Context, id string) (core.TaskDetail, error) {
 			return service.ShowDetail(requestContext, id, core.ShowOptions{History: true, All: true})
 		},
+		publisher.state,
+		publisher.setMode,
 	)
 	listener, err := net.Listen("tcp", *addr)
 	if err != nil {
@@ -865,6 +877,120 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 		return core.Wrap(core.CategoryOperational, "serve board", err)
 	}
 	return nil
+}
+
+// boardPublisher publishes what a web mutation wrote.
+//
+// It hands the change to a watcher rather than fetching and pushing inline.
+// Inline would put two network round trips inside every request — roughly
+// 530 ms and 16 Git processes on the measured CLI path — which is the latency
+// the board's optimistic rendering exists to hide.
+type boardPublisher struct {
+	repository *gitstore.Repository
+	config     core.ProjectConfig
+	// inline shifts the board to waiting for the push, so a successful
+	// response means origin has the change rather than that a watcher accepted
+	// it. It lives in memory for the life of this server: it is a preference
+	// about how this board behaves, not a project setting, and `workbook config
+	// set auto-sync` already means something different.
+	inline atomic.Bool
+}
+
+// state reports what the board will do with the next mutation. The watcher is
+// probed rather than remembered, so the indicator describes the next mutation
+// instead of a cached opinion that may have gone stale.
+func (p *boardPublisher) state(ctx context.Context) webui.SyncState {
+	if !p.repository.HasOrigin(ctx) {
+		return webui.SyncState{Mode: p.mode(), Detail: "no origin is configured, so nothing is published"}
+	}
+	if watching := p.watcherAnswers(); !watching {
+		return webui.SyncState{Mode: p.mode(), Detail: "no watcher is running, so changes publish inline"}
+	}
+	return webui.SyncState{Mode: p.mode(), Watcher: true}
+}
+
+func (p *boardPublisher) mode() string {
+	if p.inline.Load() {
+		return webui.SyncModeInline
+	}
+	return webui.SyncModeDeferred
+}
+
+func (p *boardPublisher) setMode(ctx context.Context, mode string) (webui.SyncState, error) {
+	switch mode {
+	case webui.SyncModeDeferred:
+		p.inline.Store(false)
+	case webui.SyncModeInline:
+		p.inline.Store(true)
+	default:
+		return webui.SyncState{}, core.Errorf(
+			core.CategoryValidation,
+			"publication mode must be %q or %q",
+			webui.SyncModeDeferred, webui.SyncModeInline,
+		)
+	}
+	return p.state(ctx), nil
+}
+
+func (p *boardPublisher) watcherAnswers() bool {
+	client, err := syncloop.Dial(p.repository.CommonGitDir, watcherProbeDeadline)
+	if err != nil {
+		return false
+	}
+	defer client.Close()
+	status, err := client.Status()
+	return err == nil && status.Trustworthy(time.Now())
+}
+
+// publish takes a mutation's result and error so a handler closure can wrap its
+// service call in one expression.
+//
+// It never turns a successful write into a failed request. The local commit is
+// the durable result, and refusing to acknowledge recorded work because the
+// network is unavailable would defeat the local-first design.
+func (p *boardPublisher) publish(
+	ctx context.Context,
+	result core.MutationResult,
+	err error,
+) (core.MutationResult, error) {
+	if err != nil {
+		return result, err
+	}
+	if !p.repository.HasOrigin(ctx) {
+		return result, nil
+	}
+	if !p.inline.Load() && p.handOff(result.Task.ID) {
+		return result, nil
+	}
+	if _, pushErr := p.repository.PushTask(ctx, p.config, result.Task.ID); pushErr != nil {
+		result.Warnings = append(result.Warnings, core.Warning{
+			Code:    core.WarningAutoSync,
+			Message: "the change was recorded locally, but publishing it failed: " + pushErr.Error(),
+		})
+	}
+	return result, nil
+}
+
+// handOff reports whether a trustworthy watcher accepted the change.
+//
+// The socket is dialed rather than the in-process loop being called directly,
+// because `serve` runs no loop of its own when an external watcher already owns
+// the repository. Dialing covers both, and reuses the path the CLI exercises.
+//
+// An untrustworthy watcher is refused for the same reason the CLI refuses one:
+// a watcher whose last synchronization failed knows origin is unreachable, and
+// accepting its receipt would swallow the warning that says so.
+func (p *boardPublisher) handOff(taskID string) bool {
+	client, err := syncloop.Dial(p.repository.CommonGitDir, watcherProbeDeadline)
+	if err != nil {
+		return false
+	}
+	defer client.Close()
+	status, err := client.Status()
+	if err != nil || !status.Trustworthy(time.Now()) {
+		return false
+	}
+	return client.Nudge(taskID) == nil
 }
 
 // serveWatcher runs a sync loop alongside the board.

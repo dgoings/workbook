@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -309,6 +310,67 @@ func TestRunServeDefersToAnExternalWatcher(t *testing.T) {
 	t.Fatalf("board never reported deferring to the external watcher; wrote %q", output.String())
 }
 
+// A web mutation publishes by nudging, not by waiting for a scheduled tick.
+// The external watcher's interval is an hour, so origin only holds the new ref
+// if the mutation handed it over.
+func TestWebMutationPublishesWithoutWaitingForATick(t *testing.T) {
+	_, second := cliSyncRepositories(t)
+	startCLIWatcher(t, second, "1h")
+
+	address := reserveAddress(t)
+	_, stopServe := startServeCapturing(t, second, address)
+	defer stopServe()
+
+	created := createTaskThroughBoard(t, address, "Nudged from the board")
+
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if remoteTaskRefValue(t, second, created) != "" {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("origin never received %s; the board waited for a tick instead of nudging", created)
+}
+
+// The toggle has to change what actually happens, not just what is reported.
+// Inline means the response returns only after origin has the change, so a
+// watcher that refuses to publish cannot hide behind a receipt.
+func TestBoardInlineModePublishesBeforeResponding(t *testing.T) {
+	_, second := cliSyncRepositories(t)
+	startCLIWatcher(t, second, "1h")
+
+	address := reserveAddress(t)
+	_, stopServe := startServeCapturing(t, second, address)
+	defer stopServe()
+
+	if mode := boardSyncMode(t, address); mode != "deferred" {
+		t.Fatalf("initial publication mode = %q, want deferred", mode)
+	}
+	if mode := setBoardSyncMode(t, address, "inline"); mode != "inline" {
+		t.Fatalf("mode after the toggle = %q, want inline", mode)
+	}
+
+	created := createTaskThroughBoard(t, address, "Published inline")
+	if remoteTaskRefValue(t, second, created) == "" {
+		t.Fatal("inline mode returned before origin had the change")
+	}
+}
+
+// A repository with no origin has nothing to publish to. The mutation still
+// has to succeed, because the local write is the durable result.
+func TestWebMutationSucceedsWithoutAnOrigin(t *testing.T) {
+	repository := initializedRepository(t)
+	address := reserveAddress(t)
+	_, stopServe := startServeCapturing(t, repository, address)
+	defer stopServe()
+
+	created := createTaskThroughBoard(t, address, "No origin here")
+	if localTaskRef(t, repository, created) == "" {
+		t.Fatalf("task %s was not recorded locally", created)
+	}
+}
+
 // Ctrl-C must not strand work the watcher was still holding.
 func TestWatcherPublishesUnsyncedWorkOnShutdown(t *testing.T) {
 	_, second := cliSyncRepositories(t)
@@ -413,6 +475,86 @@ func startServeCapturing(t *testing.T, repository, address string) (*watcherOutp
 			t.Error("serve did not stop")
 		}
 	}
+}
+
+// createTaskThroughBoard drives the real HTTP surface the browser uses and
+// returns the created task's ID.
+func createTaskThroughBoard(t *testing.T, address, title string) string {
+	t.Helper()
+	body := strings.NewReader(`{"title":` + strconv.Quote(title) + `}`)
+	response, err := http.Post("http://"+address+"/api/tasks", "application/json", body)
+	if err != nil {
+		t.Fatalf("create through the board: %v", err)
+	}
+	defer response.Body.Close()
+	contents, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read create response: %v", err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("create through the board = %d: %s", response.StatusCode, contents)
+	}
+	var document struct {
+		Task struct {
+			ID string `json:"id"`
+		} `json:"task"`
+	}
+	if err := json.Unmarshal(contents, &document); err != nil {
+		t.Fatalf("decode create response: %v; body %s", err, contents)
+	}
+	if document.Task.ID == "" {
+		t.Fatalf("create response named no task: %s", contents)
+	}
+	return document.Task.ID
+}
+
+func boardSyncMode(t *testing.T, address string) string {
+	t.Helper()
+	response, err := http.Get("http://" + address + "/api/sync")
+	if err != nil {
+		t.Fatalf("read the board's publication mode: %v", err)
+	}
+	defer response.Body.Close()
+	return decodeBoardSyncMode(t, response)
+}
+
+func setBoardSyncMode(t *testing.T, address, mode string) string {
+	t.Helper()
+	request, err := http.NewRequest(
+		http.MethodPut,
+		"http://"+address+"/api/sync",
+		strings.NewReader(`{"mode":`+strconv.Quote(mode)+`}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("shift the board's publication mode: %v", err)
+	}
+	defer response.Body.Close()
+	return decodeBoardSyncMode(t, response)
+}
+
+func decodeBoardSyncMode(t *testing.T, response *http.Response) string {
+	t.Helper()
+	contents, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("/api/sync = %d: %s", response.StatusCode, contents)
+	}
+	var document struct {
+		Sync struct {
+			Mode string `json:"mode"`
+		} `json:"sync"`
+	}
+	if err := json.Unmarshal(contents, &document); err != nil {
+		t.Fatalf("decode sync document: %v; body %s", err, contents)
+	}
+	return document.Sync.Mode
 }
 
 func fetchBoardTasks(t *testing.T, address string) string {

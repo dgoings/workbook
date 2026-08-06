@@ -36,6 +36,11 @@ type UpdateInput struct {
 	Status      *Status
 	Priority    *Priority
 	Labels      *[]string
+	// ExpectedHead is the task tip the caller believes it is changing. An
+	// empty value means the caller is not tracking one and accepts whatever
+	// the store currently holds, which is how every command behaved before
+	// this field existed.
+	ExpectedHead string
 }
 
 type MoveInput struct {
@@ -47,6 +52,8 @@ type PlaceInput struct {
 	Status Status
 	Before string
 	After  string
+	// ExpectedHead carries the same meaning it does on UpdateInput.
+	ExpectedHead string
 }
 
 type ListFilter struct {
@@ -278,6 +285,9 @@ func (s Service) UpdateMutation(ctx context.Context, idOrPrefix string, input Up
 	if err != nil {
 		return MutationResult{}, err
 	}
+	if err := requireExpectedHead(parent, input.ExpectedHead); err != nil {
+		return MutationResult{}, err
+	}
 	if parent.State.Task.Deleted {
 		return MutationResult{}, Errorf(CategoryValidation, "cannot update a tombstoned task")
 	}
@@ -399,6 +409,9 @@ func (s Service) PlaceMutation(ctx context.Context, idOrPrefix string, input Pla
 
 	parent, err := s.resolveSnapshot(ctx, idOrPrefix)
 	if err != nil {
+		return MutationResult{}, err
+	}
+	if err := requireExpectedHead(parent, input.ExpectedHead); err != nil {
 		return MutationResult{}, err
 	}
 	if parent.State.Task.Deleted {
@@ -525,6 +538,26 @@ func Project(snapshot Snapshot) Task {
 		HistoryGeneration: snapshot.State.History.Generation,
 		Head:              snapshot.Head,
 	}
+}
+
+// requireExpectedHead reports a stale write when the caller named a tip that is
+// no longer the task's.
+//
+// The Git ref compare-and-swap already guards the window between this process
+// reading the parent and writing over it, which is milliseconds. This guards
+// the window a client actually experiences: a view rendered seconds ago
+// proposing a change against state that has since moved. An empty expectation
+// opts out, so callers that do not track a head are unaffected.
+func requireExpectedHead(parent Snapshot, expected string) error {
+	if expected == "" || expected == parent.Head {
+		return nil
+	}
+	return Errorf(
+		CategoryStaleWrite,
+		"task %s has changed since %s; reload and try again",
+		parent.State.TaskID,
+		expected,
+	)
 }
 
 func (s Service) resolveSnapshot(ctx context.Context, idOrPrefix string) (Snapshot, error) {
