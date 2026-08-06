@@ -137,7 +137,7 @@ func TestHelpMetadataMatchesSchemas(t *testing.T) {
 		"serve":    {"addr": stringFlag},
 		"fetch":    {"json": boolFlag},
 		"push":     {"json": boolFlag},
-		"sync":     {"json": boolFlag},
+		"sync":     {"json": boolFlag, "watch": boolFlag, "interval": stringFlag, "status": boolFlag},
 		"hooks":    {},
 		"move":     {"before": stringFlag, "after": stringFlag, "no-sync": boolFlag, "json": boolFlag},
 		"depend":   {"no-sync": boolFlag, "json": boolFlag},

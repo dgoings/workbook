@@ -2,12 +2,14 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -15,8 +17,14 @@ import (
 	"github.com/dgoings/workbook/internal/historyvalidation"
 	"github.com/dgoings/workbook/internal/projection"
 	"github.com/dgoings/workbook/internal/release"
+	"github.com/dgoings/workbook/internal/syncloop"
 	"github.com/dgoings/workbook/internal/webui"
 )
+
+// watcherProbeDeadline bounds every exchange with a watcher. It is short on
+// purpose: a command consults one to save roughly half a second, so a slow
+// answer is worth abandoning for the inline path rather than waiting on.
+const watcherProbeDeadline = 50 * time.Millisecond
 
 type rebuildResult struct {
 	TaskCount int    `json:"taskCount"`
@@ -86,7 +94,7 @@ func Run(ctx context.Context, args []string, cwd string, stdout, stderr io.Write
 	case "push":
 		err = runPush(ctx, commandArgs, cwd, stdout)
 	case "sync":
-		err = runSync(ctx, commandArgs, cwd, stdout)
+		err = runSync(ctx, commandArgs, cwd, stdout, stderr)
 	case "config":
 		err = runConfig(ctx, commandArgs, cwd, stdout)
 	case "docs":
@@ -240,21 +248,140 @@ func runPush(ctx context.Context, args []string, cwd string, stdout io.Writer) e
 	return syncErr
 }
 
-func runSync(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+func runSync(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
 	flags := newFlagSet("sync")
 	jsonMode := flags.Bool("json", false, "emit JSON")
+	watch := flags.Bool("watch", false, "synchronize continuously until interrupted")
+	interval := flags.String("interval", "", "time between synchronizations while watching")
+	status := flags.Bool("status", false, "report whether a watcher is running for this repository")
 	if err := parseFlags(flags, args); err != nil {
 		return err
+	}
+	if *watch && *status {
+		return core.Errorf(core.CategoryInvocation, "sync accepts --watch or --status, not both")
+	}
+	if *interval != "" && !*watch {
+		return core.Errorf(core.CategoryInvocation, "sync --interval requires --watch")
 	}
 	repository, config, err := openRepository(ctx, cwd)
 	if err != nil {
 		return err
 	}
+	if *status {
+		return runSyncStatus(repository, stdout, *jsonMode)
+	}
+	if *watch {
+		return runSyncWatch(ctx, repository, config, *interval, stdout, stderr, *jsonMode)
+	}
+
 	result, syncErr := repository.Sync(ctx, config)
 	writeSyncPhaseResult(stdout, "sync", result, result.Fetch.Conflicts, *jsonMode, func(output io.Writer) {
 		writeSyncRunResult(output, result)
 	})
 	return syncErr
+}
+
+// watcherStatusResult reports what `sync --status` found. It answers even when
+// no watcher is running, because "nothing is running" is the ordinary state and
+// a caller has to be able to tell it from a failure to look.
+type watcherStatusResult struct {
+	Running    bool            `json:"running"`
+	PID        int             `json:"pid,omitempty"`
+	IntervalMS int64           `json:"intervalMs,omitempty"`
+	LastSyncAt string          `json:"lastSyncAt,omitempty"`
+	LastSyncOK bool            `json:"lastSyncOk,omitempty"`
+	LastError  string          `json:"lastSyncError,omitempty"`
+	Conflicts  []core.Conflict `json:"conflicts,omitempty"`
+}
+
+func runSyncStatus(repository *gitstore.Repository, stdout io.Writer, jsonMode bool) error {
+	result := watcherStatusResult{}
+	client, err := syncloop.Dial(repository.CommonGitDir, watcherProbeDeadline)
+	if err == nil {
+		defer client.Close()
+		if status, statusErr := client.Status(); statusErr == nil {
+			result.Running = true
+			result.PID = status.PID
+			result.IntervalMS = status.IntervalMS
+			result.LastSyncAt = status.LastSyncAt.Format(time.RFC3339)
+			result.LastSyncOK = status.LastSyncOK
+			result.LastError = status.LastError
+			for _, entry := range status.Conflicts {
+				result.Conflicts = append(result.Conflicts, entry.Conflict)
+			}
+		}
+	}
+
+	if jsonMode {
+		writeResult(stdout, "sync", result)
+		return nil
+	}
+	if !result.Running {
+		fmt.Fprintln(stdout, "No sync watcher is running for this repository.")
+		return nil
+	}
+	fmt.Fprintf(stdout, "Sync watcher running (pid %d), every %s.\n", result.PID, time.Duration(result.IntervalMS)*time.Millisecond)
+	if result.LastSyncOK {
+		fmt.Fprintf(stdout, "Last synchronized %s.\n", result.LastSyncAt)
+	} else {
+		fmt.Fprintf(stdout, "Last synchronization failed: %s\n", result.LastError)
+	}
+	if len(result.Conflicts) > 0 {
+		writeConflicts(stdout, result.Conflicts)
+	}
+	return nil
+}
+
+func runSyncWatch(
+	ctx context.Context,
+	repository *gitstore.Repository,
+	config core.ProjectConfig,
+	interval string,
+	stdout, stderr io.Writer,
+	jsonMode bool,
+) error {
+	every := syncloop.DefaultInterval
+	if interval != "" {
+		parsed, err := time.ParseDuration(interval)
+		if err != nil {
+			return core.Wrap(core.CategoryInvocation, "sync --interval must be a duration such as 5s", err)
+		}
+		if parsed <= 0 {
+			return core.Errorf(core.CategoryInvocation, "sync --interval must be positive")
+		}
+		every = parsed
+	}
+	store, err := projection.Open(ctx, repository, config)
+	if err != nil {
+		return err
+	}
+
+	// The watcher reports to stderr, leaving stdout free for the terminating
+	// result. --json changes only that final document, not the running report.
+	err = syncloop.Run(ctx, syncloop.Options{
+		CommonGitDir: repository.CommonGitDir,
+		Repository:   repository,
+		Config:       config,
+		Projection:   store,
+		Interval:     every,
+		Stderr:       stderr,
+	})
+	if errors.Is(err, syncloop.ErrWatcherLive) {
+		return core.Errorf(core.CategoryOperational, "a sync watcher is already running for this repository")
+	}
+	if err != nil {
+		return err
+	}
+	if jsonMode {
+		writeResult(stdout, "sync", watcherStoppedResult{Stopped: true})
+	} else {
+		fmt.Fprintln(stdout, "Sync watcher stopped.")
+	}
+	return nil
+}
+
+type watcherStoppedResult struct {
+	Stopped bool `json:"stopped"`
 }
 
 func runHooks(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
@@ -683,7 +810,7 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 		return err
 	}
 
-	service, err := openService(ctx, cwd)
+	service, repository, store, err := openServiceParts(ctx, cwd)
 	if err != nil {
 		return err
 	}
@@ -721,24 +848,101 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 		return core.Wrap(core.CategoryOperational, "open board listener", err)
 	}
 	fmt.Fprintf(stderr, "Workbook board: http://%s\n", listener.Addr())
+
+	// The board polls its own API once a second, so a loop running here is all
+	// it takes for a teammate's change to appear: no new endpoint, no client
+	// change, and no server-sent events.
+	watcher := serveWatcher(ctx, repository, service.Config, store, stderr)
+	defer watcher.stop()
+
 	if err := webui.Serve(ctx, listener, handler); err != nil {
 		return core.Wrap(core.CategoryOperational, "serve board", err)
 	}
 	return nil
 }
 
+// serveWatcher runs a sync loop alongside the board.
+//
+// Whoever binds the socket owns the loop. A board that finds an external
+// watcher already answering runs none and retries each interval, so the two
+// never both fetch, the board still starts, and a watcher's death is picked up
+// within one interval.
+func serveWatcher(
+	ctx context.Context,
+	repository *gitstore.Repository,
+	config core.ProjectConfig,
+	store *projection.Store,
+	stderr io.Writer,
+) *boardWatcher {
+	watcher := &boardWatcher{finished: make(chan struct{})}
+	go func() {
+		defer close(watcher.finished)
+		for ctx.Err() == nil {
+			err := syncloop.Run(ctx, syncloop.Options{
+				CommonGitDir: repository.CommonGitDir,
+				Repository:   repository,
+				Config:       config,
+				Projection:   store,
+				Stderr:       stderr,
+			})
+			if !errors.Is(err, syncloop.ErrWatcherLive) {
+				if err != nil && ctx.Err() == nil {
+					fmt.Fprintf(stderr, "workbook: board synchronization stopped: %s\n", err)
+				}
+				return
+			}
+			watcher.announceExternal(stderr)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(syncloop.DefaultInterval):
+			}
+		}
+	}()
+	return watcher
+}
+
+type boardWatcher struct {
+	finished chan struct{}
+	once     sync.Once
+}
+
+func (w *boardWatcher) announceExternal(stderr io.Writer) {
+	w.once.Do(func() {
+		fmt.Fprintln(stderr, "Workbook board: an external sync watcher owns this repository; not starting a second one.")
+	})
+}
+
+// stop waits for the loop to finish, including its final synchronization, so
+// the board's shutdown does not race publication. The loop and the HTTP drain
+// run concurrently rather than in series, so shutdown stays inside one budget.
+func (w *boardWatcher) stop() {
+	select {
+	case <-w.finished:
+	case <-time.After(syncloop.DefaultShutdown + time.Second):
+	}
+}
+
 func openService(ctx context.Context, cwd string) (core.Service, error) {
+	service, _, _, err := openServiceParts(ctx, cwd)
+	return service, err
+}
+
+// openServiceParts also returns the repository and projection the service was
+// built on, so a long-running command can share them with a sync loop instead
+// of opening a second projection handle on the same cache file.
+func openServiceParts(ctx context.Context, cwd string) (core.Service, *gitstore.Repository, *projection.Store, error) {
 	repository, config, err := openRepository(ctx, cwd)
 	if err != nil {
-		return core.Service{}, err
+		return core.Service{}, nil, nil, err
 	}
 	actor, err := repository.Actor(ctx)
 	if err != nil {
-		return core.Service{}, err
+		return core.Service{}, nil, nil, err
 	}
 	store, err := projection.Open(ctx, repository, config)
 	if err != nil {
-		return core.Service{}, err
+		return core.Service{}, nil, nil, err
 	}
 	return core.Service{
 		Config:     config,
@@ -748,7 +952,7 @@ func openService(ctx context.Context, cwd string) (core.Service, error) {
 		IDs:        core.CryptoULIDSource{},
 		Now:        time.Now,
 		Actor:      actor,
-	}, nil
+	}, repository, store, nil
 }
 
 func openReadService(ctx context.Context, cwd string) (core.Service, error) {

@@ -921,7 +921,7 @@ func TestREADMEImplementedCommands(t *testing.T) {
 		"workbook version [--json]",
 		"workbook fetch [--json]",
 		"workbook push [--json]",
-		"workbook sync [--json]",
+		"workbook sync [--watch [--interval <duration>]] [--status] [--json]",
 		"workbook config show [--json]",
 		"workbook config set <setting> <value> [--json]",
 		"workbook config unset <setting> [--json]",

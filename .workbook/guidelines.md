@@ -1,4 +1,4 @@
-<!-- workbook:begin generator=v0.3.0-3-g2506281-dirty sha256=43c036283a186a93c903650313ea2a3801424cb181350a3a83761418eb68e11f -->
+<!-- workbook:begin generator=dev sha256=9f8f31de4d9c0ea12ee9c4fd61bbf6c4ef38cfda6ad8a720b40f4ca1417eab3b -->
 # Workbook guidelines
 
 Workbook tracks this project's tasks in Git refs under `refs/workbook/tasks/`.
@@ -98,12 +98,33 @@ task and a `type` of `description`, `dependency-cycle`, or `tombstone`. The
 task ref stops at the last operation that replayed cleanly, everything up to
 that point is published, and the remaining local operations are dropped.
 Resolve one by reading the reported values and running the ordinary command
-again; there is no reconcile or continue command, and no conflict state is
-kept between invocations. A conflict on one task never blocks a command that
-touches a different task.
+again; there is no reconcile or continue command. A conflict on one task
+never blocks a command that touches a different task.
+
+A running watcher does remember conflicts between invocations, because it
+meets them with nobody present and a stopped replay leaves nothing for the
+next fetch to find. It reports each one to its own terminal, gates the next
+mutation of that task, and forgets it once reported or once the task moves
+on, so the retry behaves exactly as it does without one.
 
 `workbook fetch`, `workbook push`, and `workbook sync` remain available for
 explicit whole-project synchronization.
+
+## Continuous synchronization
+
+`workbook sync --watch` runs in the foreground and keeps this clone current.
+While one runs, a mutation writes locally, hands publication to it, and
+reports a `sync` status of `deferred` instead of fetching and pushing
+itself, which is roughly 500 ms and 16 Git processes cheaper. `workbook
+serve` runs the same loop, so the board reflects other clones' work.
+
+It is an optimization and never a requirement. With no watcher running, or
+one that is stale or whose last synchronization failed, commands
+synchronize inline exactly as before. `deferred` is best-effort: the local
+write is durable and publication follows within milliseconds, but a watcher
+killed in that window leaves the work local until `workbook push` runs.
+`workbook sync --status` reports whether one is running and what it last
+did.
 
 ---
 

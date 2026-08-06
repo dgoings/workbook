@@ -15,6 +15,7 @@ var scenarioRegistry = []string{
 	"cli-restore",
 	"cli-update",
 	"cli-update-autosync",
+	"cli-update-watched",
 	"cli-burst-independent-10",
 	"cli-burst-same-task-10",
 	"api-update",

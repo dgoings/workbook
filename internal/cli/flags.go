@@ -325,9 +325,14 @@ var commandSchemas = map[string]commandMetadata{
 	},
 	"sync": {
 		Name:        "sync",
-		Synopsis:    "workbook sync [--json]",
-		Description: "Fetch then push shared task refs.",
-		Options:     []optionMetadata{{Name: "json", Kind: boolFlag, Description: "emit JSON"}},
+		Synopsis:    "workbook sync [--watch [--interval <duration>]] [--status] [--json]",
+		Description: "Fetch then push shared task refs, once or continuously.",
+		Options: []optionMetadata{
+			{Name: "watch", Kind: boolFlag, Description: "synchronize continuously until interrupted"},
+			{Name: "interval", Kind: stringFlag, Value: "<duration>", Description: "time between synchronizations while watching (default 5s)"},
+			{Name: "status", Kind: boolFlag, Description: "report whether a watcher is running for this repository"},
+			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+		},
 	},
 	"hooks": {
 		Name:            "hooks",

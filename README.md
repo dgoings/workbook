@@ -230,7 +230,7 @@ workbook validate [--full] [--json]
 workbook version [--json]
 workbook fetch [--json]
 workbook push [--json]
-workbook sync [--json]
+workbook sync [--watch [--interval <duration>]] [--status] [--json]
 workbook config show [--json]
 workbook config set <setting> <value> [--json]
 workbook config unset <setting> [--json]
@@ -496,6 +496,38 @@ replayed prefix too. The command does not replay every buried
 checkpoint during ordinary synchronization; that is reserved for the explicit
 `workbook validate` audit. The command never fetches or pushes code branches and
 does not create a hidden tasks branch.
+
+### Continuous synchronization
+
+`workbook sync --watch` runs the same sequence on a loop in the foreground,
+default every five seconds, until it is interrupted. It is an optimization and
+never a requirement: every command works unchanged with none running.
+
+While a watcher is running, a mutation writes locally, asks the watcher to
+publish, and returns, reporting a `sync` status of `deferred` rather than the
+usual `completed`. That removes both network round trips from the command's
+critical path — roughly 500 ms and 16 Git processes per mutation, measured in
+[`docs/performance/`](docs/performance/). Publication follows within
+milliseconds rather than at the next scheduled tick, because the command hands
+the change over rather than waiting for the timer.
+
+`deferred` is best-effort, and deliberately not a guarantee. The local write is
+durable before anything is attempted, but a watcher killed between accepting the
+change and publishing it leaves the work local until `workbook push` or the next
+watcher runs. A command falls back to synchronizing inline whenever no watcher
+answers, its socket is dead, it has not synchronized recently, or its last
+synchronization failed — that last case matters, because a watcher that cannot
+reach `origin` knows it, and deferring would swallow the warning that says the
+work is local-only.
+
+`workbook sync --status` reports whether a watcher is running, what it last did,
+and any conflicts it is holding. `workbook serve` runs the same loop, so the
+board reflects other clones' work without anyone running a command; an external
+watcher already running keeps ownership and the board runs no second loop.
+
+Reconciliation is what makes this safe. A mutation applied to a tip a few
+seconds stale is no longer a case worth a network round trip to prevent; it is
+one the fetch path already handles.
 
 ### Reconciling divergent histories
 
@@ -962,7 +994,7 @@ The default shared backend uses custom refs because they avoid branch switching 
 
 - **Repository-native:** use the existing Git repository and remote.
 - **Local-first:** remain useful offline; synchronize explicitly and transparently.
-- **CLI-first:** every capability is available without a GUI or long-running server.
+- **CLI-first:** every capability is available without a GUI or long-running server. A watcher makes synchronization cheaper; it never becomes required.
 - **Agent-friendly:** stable semantic commands and machine-readable output minimize context and token use.
 - **Human-inspectable:** operation payloads use versioned, inspectable formats.
 - **Derived when possible:** do not duplicate facts already represented by Git.

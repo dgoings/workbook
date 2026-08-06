@@ -1126,6 +1126,92 @@ func TestRebuildLeavesPreviousDatabaseWhenReplacementFails(t *testing.T) {
 	}
 }
 
+func TestStoreWritesToTheCacheAnotherProcessReplaced(t *testing.T) {
+	ctx := context.Background()
+	config := testConfig()
+	first := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "First")
+	second := testSnapshot(first.State.TaskID, "head-2", "Second")
+	cachePath := filepath.Join(t.TempDir(), "cache.sqlite")
+	newSource := func() *countingHeadSource {
+		return &countingHeadSource{
+			heads:     []gitstore.TaskHead{{TaskID: first.State.TaskID, ObjectID: first.Head}},
+			snapshots: map[string]core.Snapshot{first.Head: first, second.Head: second},
+		}
+	}
+
+	source := newSource()
+	store, err := openStore(ctx, source, config, cachePath)
+	if err != nil {
+		t.Fatalf("openStore(long lived) error = %v", err)
+	}
+	if _, err := store.Rebuild(ctx); err != nil {
+		t.Fatalf("Rebuild(initial) error = %v", err)
+	}
+	// Read once so the pool holds a live connection to this inode. A long-lived
+	// process always does; without it sql.Open's laziness would rebind by
+	// accident on the next query and hide the defect.
+	if _, err := store.List(ctx, config); err != nil {
+		t.Fatalf("List(initial) error = %v", err)
+	}
+
+	// Another process rebuilds the same cache, renaming a new database over the
+	// file this store holds open. The long-lived store must notice and rebind.
+	replacement, err := openStore(ctx, newSource(), config, cachePath)
+	if err != nil {
+		t.Fatalf("openStore(replacement) error = %v", err)
+	}
+	if _, err := replacement.Rebuild(ctx); err != nil {
+		t.Fatalf("Rebuild(replacement) error = %v", err)
+	}
+
+	source.heads[0].ObjectID = second.Head
+	if _, err := store.List(ctx, config); err != nil {
+		t.Fatalf("List(after replacement) error = %v", err)
+	}
+
+	reader, err := openStore(ctx, newSource(), config, cachePath)
+	if err != nil {
+		t.Fatalf("openStore(reader) error = %v", err)
+	}
+	snapshots, err := reader.querySnapshots(ctx)
+	if err != nil {
+		t.Fatalf("querySnapshots() error = %v", err)
+	}
+	if len(snapshots) != 1 || snapshots[0].Head != second.Head {
+		t.Fatalf("cache at path = %#v, want the refreshed head %q", snapshots, second.Head)
+	}
+}
+
+func TestStoreStillRebuildsWhenTheCacheIsDeleted(t *testing.T) {
+	ctx := context.Background()
+	config := testConfig()
+	only := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-1", "Only")
+	cachePath := filepath.Join(t.TempDir(), "cache.sqlite")
+	source := &countingHeadSource{
+		heads:     []gitstore.TaskHead{{TaskID: only.State.TaskID, ObjectID: only.Head}},
+		snapshots: map[string]core.Snapshot{only.Head: only},
+	}
+	store, err := openStore(ctx, source, config, cachePath)
+	if err != nil {
+		t.Fatalf("openStore() error = %v", err)
+	}
+	if _, err := store.List(ctx, config); err != nil {
+		t.Fatalf("List(initial) error = %v", err)
+	}
+
+	if err := os.Remove(cachePath); err != nil {
+		t.Fatalf("Remove(cache) error = %v", err)
+	}
+
+	snapshots, err := store.List(ctx, config)
+	if err != nil {
+		t.Fatalf("List(after deletion) error = %v", err)
+	}
+	if len(snapshots) != 1 || snapshots[0].State.Task.Title != "Only" {
+		t.Fatalf("snapshots after deletion = %#v, want the canonical task rebuilt", snapshots)
+	}
+}
+
 func TestRebuildRetriesOnceWhenHeadsChangeDuringBuild(t *testing.T) {
 	ctx := context.Background()
 	config := testConfig()

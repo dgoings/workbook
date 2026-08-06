@@ -41,6 +41,18 @@ already holds the fixture's task refs, and carries an inclusive p95 target of
 outside the measured sample. Separating the two budgets keeps a local regression
 from hiding inside network variance.
 
+`cli-update-watched` measures that same synchronized update with a
+`workbook sync --watch` process running, and is held to the **200 ms local**
+budget rather than the 1,000 ms synchronized one. That is the entire claim the
+scenario exists to test: a watched mutation defers both round trips to the
+watcher, so it is a local mutation and has to be measured as one. Starting the
+watcher and waiting for it to complete its opening synchronization is setup. Its
+interval is one hour, so it never synchronizes on its own and the sample
+measures the probe and the hand-off rather than the watcher's Git work; the
+harness passes `GIT_TRACE2_EVENT` only to the measured command, so the watcher's
+Git processes are not attributed to the sample either. The Git-process count is
+the least noisy evidence here, because it carries no network variance.
+
 The synchronized budget is not a pure network allowance. Against a real remote,
 a connection costs roughly the same whatever it carries, so the targeted push is
 constant in the number of tasks a project holds. The broad fetch is not: it
@@ -48,6 +60,51 @@ enumerates and validates every task ref, and at 500 tasks that work dominates
 the measured delta even against a local bare origin, where connections are
 cheap. A real remote adds its connection latency on top. The 1,000 ms budget
 accommodates both, and the measured delta belongs to the fetch half.
+
+### 2026-08-05 sync watcher local acceptance evidence
+
+The sync watcher branch was exercised once per supported Git object format with
+the same frozen product and harness binaries, using 525 total tasks (500 active
+and 25 tombstoned), 20 operations per task, 20 samples per scenario, a 60-second
+command timeout, and all 15 local `cli-*` and `api-*` scenarios, which now
+include `cli-update-watched`. See the shared [build and checksum
+provenance](2026-08-05-local-acceptance-provenance.md).
+
+| Format | Evidence | Outcome |
+| --- | --- | --- |
+| SHA-1 | [JSON](2026-08-05-local-acceptance-sha1.json), [Markdown](2026-08-05-local-acceptance-sha1.md) | All samples completed without timeout or product failure. Nine scenarios passed; `api-update`, both same-task bursts, `cli-depend`, and `cli-move` missed their duration targets. `cli-list` has no target. |
+| SHA-256 | [JSON](2026-08-05-local-acceptance-sha256.json), [Markdown](2026-08-05-local-acceptance-sha256.md) | All samples completed without timeout or product failure. Nine scenarios passed; the same five scenarios missed their duration targets. `cli-list` has no target. |
+
+The miss set is exactly the one the 2026-08-02 v0.3.0 evidence recorded, so this
+work introduced no new missed budget.
+
+These numbers were measured after `WB-01KZ1JCYZCPD156TCXMRB4Z6ZB` landed and
+rewrote projection refresh to walk operation chains. An earlier pair measured
+before it was re-run rather than carried forward, because the older evidence
+described a tree that no longer exists. The measured values moved by less than
+two milliseconds, which says the refresh rewrite does not reach the timed
+mutation path — each cold CLI sample rebuilds the projection untimed, and the
+timed command advances a single head rather than refreshing.
+
+The decisive result is that a watched mutation is a local mutation:
+
+| Scenario | SHA-1 p95 | SHA-256 p95 | Target | Git processes |
+| --- | ---: | ---: | ---: | ---: |
+| `cli-update` (`--no-sync`) | 174.63 ms | 174.45 ms | 200 ms | 10 |
+| `cli-update-watched` | 172.85 ms | 173.82 ms | 200 ms | 10 |
+| `cli-update-autosync` | 706.97 ms | 711.54 ms | 1,000 ms | 26 |
+
+Deferring to a watcher removed 534 ms in SHA-1 and 538 ms in SHA-256, and
+sixteen of the twenty-six Git processes. The watched scenario came in marginally
+below the unsynchronized one in both formats, by 1.78 ms and 0.63 ms. That
+difference is noise and should not be read as watching being *faster* than not
+synchronizing at all; the claim it supports is the weaker and more useful one,
+that the difference between them is no longer measurable.
+
+The Git-process count is the sturdier half of this evidence. Durations move with
+host load, but 10 against 26 is a structural count of the work the command
+performs, and it says plainly that both network round trips left the critical
+path rather than merely getting faster.
 
 ### 2026-08-02 v0.3.0 local acceptance evidence
 

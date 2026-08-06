@@ -70,7 +70,14 @@ type Store struct {
 	config    core.ProjectConfig
 	cachePath string
 	db        *sql.DB
-	rename    func(string, string) error
+	// dbInfo identifies the file db is open on. Another process replacing the
+	// cache renames a new file over cachePath, which leaves this handle bound
+	// to the unlinked inode; SQLite then reports every later write as
+	// "attempt to write a readonly database". Comparing identities is what
+	// turns that into a reopen. It is nil until the cache file exists, because
+	// sql.Open is lazy and creates it on first use.
+	dbInfo os.FileInfo
+	rename func(string, string) error
 }
 
 var _ core.TaskReader = (*Store)(nil)
@@ -100,7 +107,9 @@ func openStore(ctx context.Context, source taskHeadSource, config core.ProjectCo
 	if err != nil {
 		return nil, err
 	}
-	return &Store{source: source, config: config, cachePath: cachePath, db: db, rename: os.Rename}, nil
+	store := &Store{source: source, config: config, cachePath: cachePath, db: db, rename: os.Rename}
+	store.dbInfo, _ = store.cacheStat()
+	return store, nil
 }
 
 // CachePath returns the disposable cache location shared by repository worktrees.
@@ -348,7 +357,7 @@ func (s *Store) lockActiveDatabase(ctx context.Context) error {
 
 	s.rebuildMu.Lock()
 	if !s.cacheUsable(ctx) {
-		if _, err := s.rebuildLocked(ctx); err != nil {
+		if err := s.recoverLocked(ctx); err != nil {
 			s.rebuildMu.Unlock()
 			return err
 		}
@@ -363,13 +372,42 @@ func (s *Store) lockActiveDatabase(ctx context.Context) error {
 	return cacheError("activate projection cache after rebuild", errors.New("projection cache is unavailable"))
 }
 
-func (s *Store) cacheUsable(ctx context.Context) bool {
-	return s.cacheExists() && s.metaMatches(ctx)
+// recoverLocked restores a usable cache with rebuildMu held exclusively.
+//
+// A cache another process replaced is a complete, valid projection that this
+// handle simply is not open on, so it is reopened rather than rebuilt.
+// Rebuilding it would discard the work that process just did and rename yet
+// another file into place, which is the failure the caller was already in.
+// Anything else — a deleted, malformed, or foreign cache — still rebuilds.
+func (s *Store) recoverLocked(ctx context.Context) error {
+	if info, ok := s.cacheStat(); ok && !s.boundTo(info) {
+		if err := s.reopenDatabase(ctx); err != nil {
+			return err
+		}
+		if s.cacheUsable(ctx) {
+			return nil
+		}
+	}
+	_, err := s.rebuildLocked(ctx)
+	return err
 }
 
-func (s *Store) cacheExists() bool {
-	_, err := os.Stat(s.cachePath)
-	return err == nil
+func (s *Store) cacheUsable(ctx context.Context) bool {
+	info, ok := s.cacheStat()
+	return ok && s.boundTo(info) && s.metaMatches(ctx)
+}
+
+func (s *Store) cacheStat() (os.FileInfo, bool) {
+	info, err := os.Stat(s.cachePath)
+	if err != nil {
+		return nil, false
+	}
+	return info, true
+}
+
+// boundTo reports whether db is open on the file now at cachePath.
+func (s *Store) boundTo(info os.FileInfo) bool {
+	return s.dbInfo != nil && os.SameFile(s.dbInfo, info)
 }
 
 func (s *Store) metaMatches(ctx context.Context) bool {
@@ -1178,11 +1216,16 @@ func (s *Store) replaceAtomically(ctx context.Context, temporary string) error {
 }
 
 func (s *Store) reopenDatabase(ctx context.Context) error {
+	if s.db != nil {
+		_ = s.db.Close()
+		s.db = nil
+	}
 	db, err := openDatabase(ctx, s.cachePath)
 	if err != nil {
 		return err
 	}
 	s.db = db
+	s.dbInfo, _ = s.cacheStat()
 	return nil
 }
 

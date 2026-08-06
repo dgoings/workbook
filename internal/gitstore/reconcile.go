@@ -510,6 +510,69 @@ func (r *Repository) nextParkedRefIndexes(ctx context.Context, config core.Proje
 	return next, nil
 }
 
+// PruneParkedRefs retires orphaned tips past the retention bound across every
+// task and reports how many refs it deleted.
+//
+// Pruning inside a mutation bounds retention only for tasks this clone still
+// mutates. A clone that fetches and reconciles but never mutates a task again
+// keeps every tip that task ever orphaned, so the sweep has to be able to stand
+// alone. Running it after a fetch does not contradict that fetch's refusal to
+// prune: retention counted from the post-fetch state always ranks the tip the
+// fetch just parked among the newest, so the recoverable work survives the
+// command that orphaned it.
+func (r *Repository) PruneParkedRefs(ctx context.Context, config core.ProjectConfig) (int, error) {
+	if err := r.verifyIdentity(ctx); err != nil {
+		return 0, err
+	}
+	if err := r.validateRepositoryConfig(config); err != nil {
+		return 0, err
+	}
+	refs, err := r.listParkedRefs(ctx, config, reconciledRefPrefix)
+	if err != nil {
+		return 0, err
+	}
+
+	byTask := make(map[string][]parkedRef, len(refs))
+	for _, ref := range refs {
+		byTask[ref.taskID] = append(byTask[ref.taskID], ref)
+	}
+	taskIDs := make([]string, 0, len(byTask))
+	for taskID := range byTask {
+		taskIDs = append(taskIDs, taskID)
+	}
+	sort.Strings(taskIDs)
+
+	names := make([]string, 0, len(refs))
+	for _, taskID := range taskIDs {
+		group := byTask[taskID]
+		if len(group) <= maxParkedRefsPerTask {
+			continue
+		}
+		sort.Slice(group, func(i, j int) bool { return group[i].index < group[j].index })
+		for _, ref := range group[:len(group)-maxParkedRefsPerTask] {
+			names = append(names, ref.name)
+		}
+	}
+	if len(names) == 0 {
+		return 0, nil
+	}
+
+	var input bytes.Buffer
+	input.WriteString("start\noption no-deref\n")
+	for _, name := range names {
+		fmt.Fprintf(&input, "delete %s\n", name)
+	}
+	input.WriteString("prepare\ncommit\n")
+	if _, err := r.Git(
+		ctx,
+		input.Bytes(),
+		"update-ref", "--no-deref", "-m", "workbook: prune parked refs", "--stdin",
+	); err != nil {
+		return 0, err
+	}
+	return len(names), nil
+}
+
 // prunableParkedRefs returns the parked refs for one task that exceed the
 // retention bound, oldest first.
 func (r *Repository) prunableParkedRefs(ctx context.Context, config core.ProjectConfig, taskID string) ([]string, error) {

@@ -33,7 +33,7 @@ Commands:
   version [--json]
   fetch [--json]
   push [--json]
-  sync [--json]
+  sync [--watch [--interval <duration>]] [--status] [--json]
   config <command> [options]
   docs <command> [options]
   hooks install [--json]
