@@ -205,7 +205,7 @@
   <a class="skip-link" href="#board">Skip to task board</a>
   <header class="app-header">
     <div><p class="eyebrow">Repository workbench</p><h1>Workbook board</h1></div>
-    <div class="header-links"><a class="header-link" href="/">Board</a><a class="header-link" href="/deleted">Deleted tasks</a><p class="updated" data-updated>Loaded from this checkout</p></div>
+    <div class="header-links"><a class="header-link" href="/">Board</a><a class="header-link" href="/deleted">Deleted tasks</a><p class="updated" data-updated>Loaded from this checkout</p><button type="button" class="header-link" data-sync-toggle hidden></button></div>
   </header>
   <main id="board" tabindex="-1">
     <div class="board-view" data-board-view>
@@ -241,6 +241,8 @@
       const counts = new Map([...boardView.querySelectorAll("[data-count]")].map((element) => [element.dataset.count, element]));
       const stale = boardView.querySelector("[data-stale]");
       const updated = document.querySelector("[data-updated]");
+      const syncToggle = document.querySelector("[data-sync-toggle]");
+      let syncState = null;
       let activeDrag = null;
       const copyFeedback = new Map();
       const copyFeedbackTimers = new Map();
@@ -1519,6 +1521,48 @@
           rerender();
         }
       }
+      // The indicator says what the next mutation will do, which is why it is
+      // read from the server rather than assumed: a board set to defer still
+      // publishes inline when no watcher answers, and saying "deferred" then
+      // would be a claim the board cannot keep.
+      function renderSyncState() {
+        if (!syncToggle) return;
+        if (!syncState) { syncToggle.hidden = true; return; }
+        syncToggle.hidden = false;
+        const deferring = syncState.mode === "deferred" && syncState.watcher;
+        text(syncToggle, deferring ? "Publishing: handed to watcher" : "Publishing: inline");
+        syncToggle.title = syncState.detail ||
+          (deferring
+            ? "A watcher publishes each change just after it is recorded. Click to wait for the push instead."
+            : "Each change is pushed before the response returns. Click to hand publication to a watcher.");
+      }
+      async function refreshSyncState() {
+        try {
+          const response = await fetch("/api/sync", { cache: "no-store" });
+          const document = await response.json();
+          if (!response.ok || document.format !== "workbook.sync" || document.version !== 1) return;
+          syncState = document.sync;
+        } catch (_) {
+          syncState = null;
+        }
+        renderSyncState();
+      }
+      async function toggleSyncMode() {
+        if (!syncState) return;
+        const wanted = syncState.mode === "inline" ? "deferred" : "inline";
+        try {
+          const response = await fetch("/api/sync", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ mode: wanted }),
+          });
+          const document = await response.json();
+          if (response.ok && document.format === "workbook.sync") syncState = document.sync;
+        } catch (_) {
+        }
+        renderSyncState();
+      }
+      if (syncToggle) syncToggle.addEventListener("click", toggleSyncMode);
       function adoptRefreshedHeads(tasks) {
         if (pendingIntents.size === 0) return;
         tasks.forEach((task) => {
@@ -1906,6 +1950,7 @@
       });
       renderRoute();
       refresh();
+      refreshSyncState();
       window.setInterval(refresh, 1000);
     })();
   </script>

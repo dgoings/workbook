@@ -5036,6 +5036,63 @@ setTimeout(async () => {
 	}
 }
 
+func TestHandlerReportsAndShiftsThePublicationMode(t *testing.T) {
+	state := SyncState{Mode: SyncModeDeferred, Watcher: true}
+	handler := NewHandlerWithSyncControl(
+		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
+		nil, nil, nil, nil, nil, nil,
+		func(context.Context) SyncState { return state },
+		func(_ context.Context, mode string) (SyncState, error) {
+			if mode != SyncModeInline && mode != SyncModeDeferred {
+				return SyncState{}, core.Errorf(core.CategoryValidation, "bad mode")
+			}
+			state = SyncState{Mode: mode, Watcher: true}
+			return state, nil
+		},
+	)
+
+	response := request(t, handler, http.MethodGet, "/api/sync")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /api/sync = %d, want 200", response.Code)
+	}
+	var document SyncDocument
+	if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+		t.Fatalf("decode sync document: %v; body %s", err, response.Body.String())
+	}
+	if document.Format != "workbook.sync" || document.Version != 1 || document.Sync.Mode != SyncModeDeferred {
+		t.Fatalf("sync document = %#v, want a deferred workbook.sync v1", document)
+	}
+
+	response = requestJSON(t, handler, http.MethodPut, "/api/sync", `{"mode":"inline"}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("PUT /api/sync = %d, want 200", response.Code)
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+		t.Fatal(err)
+	}
+	if document.Sync.Mode != SyncModeInline {
+		t.Fatalf("mode after the toggle = %q, want %q", document.Sync.Mode, SyncModeInline)
+	}
+
+	response = requestJSON(t, handler, http.MethodPut, "/api/sync", `{"mode":"sideways"}`)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("PUT /api/sync with an unknown mode = %d, want 400", response.Code)
+	}
+}
+
+// A board with no sync control configured must still serve, because the
+// four-argument constructor is what most callers use.
+func TestHandlerReportsSyncControlIsNotConfigured(t *testing.T) {
+	handler := NewHandler(
+		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
+	)
+	if response := request(t, handler, http.MethodGet, "/api/sync"); response.Code != http.StatusInternalServerError {
+		t.Fatalf("GET /api/sync without sync control = %d, want 500", response.Code)
+	}
+}
+
 func TestHandlerForwardsTheExpectedHeadOnEveryRequestThatCarriesIt(t *testing.T) {
 	updated := boardTasks()[0]
 
@@ -5086,7 +5143,7 @@ func TestHandlerForwardsTheExpectedHeadOnEveryRequestThatCarriesIt(t *testing.T)
 				got = input
 				return core.MutationResult{Task: updated}, nil
 			},
-			nil, nil, nil, nil,
+			nil, nil, nil, nil, nil,
 		)
 		requestJSON(t, handler, http.MethodPatch,
 			"/api/tasks/WB-01J00000000000000000000001/position",

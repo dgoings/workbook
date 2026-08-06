@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -815,7 +816,7 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 		return err
 	}
 	publisher := &boardPublisher{repository: repository, config: service.Config}
-	handler := webui.NewHandlerWithTaskMutations(
+	handler := webui.NewHandlerWithSyncControl(
 		func(requestContext context.Context) ([]core.Task, error) {
 			return service.List(requestContext, core.ListFilter{All: true})
 		},
@@ -857,6 +858,8 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 		func(requestContext context.Context, id string) (core.TaskDetail, error) {
 			return service.ShowDetail(requestContext, id, core.ShowOptions{History: true, All: true})
 		},
+		publisher.state,
+		publisher.setMode,
 	)
 	listener, err := net.Listen("tcp", *addr)
 	if err != nil {
@@ -885,6 +888,58 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 type boardPublisher struct {
 	repository *gitstore.Repository
 	config     core.ProjectConfig
+	// inline shifts the board to waiting for the push, so a successful
+	// response means origin has the change rather than that a watcher accepted
+	// it. It lives in memory for the life of this server: it is a preference
+	// about how this board behaves, not a project setting, and `workbook config
+	// set auto-sync` already means something different.
+	inline atomic.Bool
+}
+
+// state reports what the board will do with the next mutation. The watcher is
+// probed rather than remembered, so the indicator describes the next mutation
+// instead of a cached opinion that may have gone stale.
+func (p *boardPublisher) state(ctx context.Context) webui.SyncState {
+	if !p.repository.HasOrigin(ctx) {
+		return webui.SyncState{Mode: p.mode(), Detail: "no origin is configured, so nothing is published"}
+	}
+	if watching := p.watcherAnswers(); !watching {
+		return webui.SyncState{Mode: p.mode(), Detail: "no watcher is running, so changes publish inline"}
+	}
+	return webui.SyncState{Mode: p.mode(), Watcher: true}
+}
+
+func (p *boardPublisher) mode() string {
+	if p.inline.Load() {
+		return webui.SyncModeInline
+	}
+	return webui.SyncModeDeferred
+}
+
+func (p *boardPublisher) setMode(ctx context.Context, mode string) (webui.SyncState, error) {
+	switch mode {
+	case webui.SyncModeDeferred:
+		p.inline.Store(false)
+	case webui.SyncModeInline:
+		p.inline.Store(true)
+	default:
+		return webui.SyncState{}, core.Errorf(
+			core.CategoryValidation,
+			"publication mode must be %q or %q",
+			webui.SyncModeDeferred, webui.SyncModeInline,
+		)
+	}
+	return p.state(ctx), nil
+}
+
+func (p *boardPublisher) watcherAnswers() bool {
+	client, err := syncloop.Dial(p.repository.CommonGitDir, watcherProbeDeadline)
+	if err != nil {
+		return false
+	}
+	defer client.Close()
+	status, err := client.Status()
+	return err == nil && status.Trustworthy(time.Now())
 }
 
 // publish takes a mutation's result and error so a handler closure can wrap its
@@ -904,7 +959,7 @@ func (p *boardPublisher) publish(
 	if !p.repository.HasOrigin(ctx) {
 		return result, nil
 	}
-	if p.handOff(result.Task.ID) {
+	if !p.inline.Load() && p.handOff(result.Task.ID) {
 		return result, nil
 	}
 	if _, pushErr := p.repository.PushTask(ctx, p.config, result.Task.ID); pushErr != nil {
