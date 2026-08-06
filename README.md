@@ -645,6 +645,7 @@ GET /tasks/new                new-task shell; client-rendered form
 GET /tasks/<id>               linkable task-detail shell; client-rendered form
 GET /deleted                  deleted-task shell; client-rendered list
 GET /api/tasks                versioned task JSON
+GET /api/tasks/<id>/history   versioned change log and status lifecycle JSON
 POST /api/tasks               create a task
 PATCH /api/tasks/<id>         update task fields
 PATCH /api/tasks/<id>/status  drag-and-drop status changes
@@ -694,6 +695,28 @@ prerequisites are also removable because the active dependent owns that edge;
 deleted blocked tasks remain read-only because tombstones cannot be changed.
 Dependency warnings and failures stay beside the initiating group, and
 dependency refreshes leave unsaved task-form fields mounted.
+
+Task detail pages show that task's change history by default, unlike
+`workbook show`, where it is opt in behind `--history`. The view leads with a
+status lifecycle lane rather than another flat row type: status is the most
+common change by a wide margin, and a lane reading Backlog to Ready to In
+Progress to In Review to Done tells a task's life in a way a chronological list
+cannot. Each stop names the change that entered that status and marks where the
+task stands now. No operation records the status a task was created in, because
+a create pack carries the whole task rather than a field change, so the lane
+opens at the earliest status the log can name; a task whose status never changed
+shows its current status as the only stop, without attribution.
+
+Every other field change reads as one ordinary row per operation pack beside the
+lane, oldest first, following the parent chain exactly as `--history` does. A
+pack that changed only status is not repeated as a row, and the row count says
+how many the lane absorbed. Selecting a row expands it in place into the
+field-level comparison the server already computed for that pack, description
+word diff included, and names the commit object so the same two points can be
+compared from the CLI. Expanding needs no second request, no comparison route,
+and no range syntax, so it keeps working with the board offline. A history read
+that fails leaves the task form usable and offers a retry, and a history the
+server could only read in part says where it stopped.
 
 Click a card's shortened task ID to copy its full ID. The ID remains part of the
 card's drag target, so dragging moves the task while a click copies. The task
@@ -946,7 +969,8 @@ they changed during the build, and atomically installs a stable result. With
 `--json`, the normal result envelope contains `taskCount` and `cachePath`.
 
 An `operations` table alongside the task tables materializes each task's recorded
-operations for `workbook show --history` and `--compare`. Its rows are keyed on
+operations for `workbook show --history`, `--compare`, and web
+`GET /api/tasks/<id>/history`. Its rows are keyed on
 the operation ULID rather than the commit object ID, because replay preserves
 operation ULIDs while rewriting logical clocks and therefore every downstream
 object ID; a surviving row changes only its ordering and object-ID columns. Rows

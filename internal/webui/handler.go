@@ -10,6 +10,7 @@ import (
 	"net/http"
 	pathpkg "path"
 	"strings"
+	"time"
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/presentation"
@@ -38,6 +39,13 @@ type TaskDependencyAdder func(context.Context, string, string) (core.MutationRes
 
 type TaskDependencyRemover func(context.Context, string, string) (core.MutationResult, error)
 
+// TaskHistoryReader reads one task together with its complete change log. The
+// detail view shows history by default rather than behind an opt-in flag, and
+// the status lifecycle lane it derives has to reach back to the task's
+// creation, so the board asks for the whole chain rather than the CLI's
+// ten-change default window.
+type TaskHistoryReader func(context.Context, string) (core.TaskDetail, error)
+
 type TasksDocument struct {
 	Format       string             `json:"format"`
 	Version      int                `json:"version"`
@@ -58,6 +66,30 @@ type TaskPresentation struct {
 	DependenciesComplete  int    `json:"dependenciesComplete"`
 	DependenciesTotal     int    `json:"dependenciesTotal"`
 	WaitingOnDependencies bool   `json:"waitingOnDependencies"`
+}
+
+// LifecycleStage is one stop on a task's status lane. WallTime, Commit, and
+// Actor are absent for a stop no recorded change entered, which is how a task
+// that never changed status and a history a read could not walk in full both
+// render honestly.
+type LifecycleStage struct {
+	Status   core.Status `json:"status"`
+	Label    string      `json:"label"`
+	Commit   string      `json:"commit,omitempty"`
+	Actor    string      `json:"actor,omitempty"`
+	WallTime *time.Time  `json:"wallTime,omitempty"`
+	Current  bool        `json:"current"`
+}
+
+// TaskHistoryDocument carries one task's change log and the status lane derived
+// from it. The lane is derived on the server from the whole chain, so a client
+// that renders only part of the log still shows every status the task stood in.
+type TaskHistoryDocument struct {
+	Format    string           `json:"format"`
+	Version   int              `json:"version"`
+	TaskID    string           `json:"taskId"`
+	Lifecycle []LifecycleStage `json:"lifecycle"`
+	History   core.ChangeLog   `json:"history"`
 }
 
 type HealthDocument struct {
@@ -87,6 +119,7 @@ type handler struct {
 	restore      TaskRestorer
 	depend       TaskDependencyAdder
 	free         TaskDependencyRemover
+	history      TaskHistoryReader
 	page         *template.Template
 	mux          *http.ServeMux
 }
@@ -122,21 +155,22 @@ type updateTaskRequest struct {
 }
 
 func NewHandler(list TaskLister, create TaskCreator, update TaskUpdater, updateStatus TaskStatusUpdater) http.Handler {
-	return newHandler(list, create, update, updateStatus, nil, nil, nil, nil, nil)
+	return newHandler(list, create, update, updateStatus, nil, nil, nil, nil, nil, nil)
 }
 
-func NewHandlerWithTaskMutations(list TaskLister, create TaskCreator, update TaskUpdater, updateStatus TaskStatusUpdater, position TaskPositionUpdater, delete TaskDeleter, restore TaskRestorer, depend TaskDependencyAdder, free TaskDependencyRemover) http.Handler {
-	return newHandler(list, create, update, updateStatus, position, delete, restore, depend, free)
+func NewHandlerWithTaskMutations(list TaskLister, create TaskCreator, update TaskUpdater, updateStatus TaskStatusUpdater, position TaskPositionUpdater, delete TaskDeleter, restore TaskRestorer, depend TaskDependencyAdder, free TaskDependencyRemover, history TaskHistoryReader) http.Handler {
+	return newHandler(list, create, update, updateStatus, position, delete, restore, depend, free, history)
 }
 
-func newHandler(list TaskLister, create TaskCreator, update TaskUpdater, updateStatus TaskStatusUpdater, position TaskPositionUpdater, delete TaskDeleter, restore TaskRestorer, depend TaskDependencyAdder, free TaskDependencyRemover) http.Handler {
+func newHandler(list TaskLister, create TaskCreator, update TaskUpdater, updateStatus TaskStatusUpdater, position TaskPositionUpdater, delete TaskDeleter, restore TaskRestorer, depend TaskDependencyAdder, free TaskDependencyRemover, history TaskHistoryReader) http.Handler {
 	page := template.Must(template.New("index.html").ParseFS(assets, "assets/index.html"))
-	handler := &handler{list: list, create: create, update: update, updateStatus: updateStatus, position: position, delete: delete, restore: restore, depend: depend, free: free, page: page, mux: http.NewServeMux()}
+	handler := &handler{list: list, create: create, update: update, updateStatus: updateStatus, position: position, delete: delete, restore: restore, depend: depend, free: free, history: history, page: page, mux: http.NewServeMux()}
 	handler.mux.HandleFunc("GET /{$}", handler.serveBoard)
 	handler.mux.HandleFunc("GET /deleted", handler.serveBoard)
 	handler.mux.HandleFunc("GET /tasks/new", handler.serveBoard)
 	handler.mux.HandleFunc("GET /tasks/{id}", handler.serveBoard)
 	handler.mux.HandleFunc("GET /api/tasks", handler.serveTasks)
+	handler.mux.HandleFunc("GET /api/tasks/{id}/history", handler.serveTaskHistory)
 	handler.mux.HandleFunc("POST /api/tasks", handler.createTask)
 	handler.mux.HandleFunc("PATCH /api/tasks/{id}", handler.updateTask)
 	handler.mux.HandleFunc("PATCH /api/tasks/{id}/status", handler.updateTaskStatus)
@@ -233,6 +267,9 @@ func allowedMethod(path string) (string, bool) {
 		if taskRestorePathID(path) != "" {
 			return http.MethodPost, true
 		}
+		if taskHistoryPathID(path) != "" {
+			return http.MethodGet, true
+		}
 		if taskPathID(path) != "" {
 			return http.MethodPatch + ", " + http.MethodDelete, true
 		}
@@ -321,6 +358,19 @@ func taskRestorePathID(path string) string {
 	return id
 }
 
+func taskHistoryPathID(path string) string {
+	const prefix = "/api/tasks/"
+	const suffix = "/history"
+	if !strings.HasPrefix(path, prefix) || !strings.HasSuffix(path, suffix) {
+		return ""
+	}
+	id := strings.TrimSuffix(strings.TrimPrefix(path, prefix), suffix)
+	if id == "" || strings.Contains(id, "/") {
+		return ""
+	}
+	return id
+}
+
 func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Request) {
 	tasks, err := handler.list(request.Context())
 	if err != nil {
@@ -350,6 +400,49 @@ func (handler *handler) serveTasks(writer http.ResponseWriter, request *http.Req
 		Tasks:        tasks,
 		Presentation: taskPresentation(tasks),
 	})
+}
+
+func (handler *handler) serveTaskHistory(writer http.ResponseWriter, request *http.Request) {
+	if handler.history == nil {
+		handler.writeError(writer, core.Errorf(core.CategoryOperational, "task history is not configured"))
+		return
+	}
+	id := request.PathValue("id")
+	if id == "" {
+		id = taskHistoryPathID(request.URL.Path)
+	}
+	detail, err := handler.history(request.Context(), id)
+	if err != nil {
+		handler.writeError(writer, err)
+		return
+	}
+	if detail.History == nil {
+		handler.writeError(writer, core.Errorf(core.CategoryOperational, "task history reader returned no change log"))
+		return
+	}
+	writeJSON(writer, http.StatusOK, TaskHistoryDocument{
+		Format:    "workbook.task-history",
+		Version:   1,
+		TaskID:    detail.ID,
+		Lifecycle: lifecycleStages(*detail.History, detail.Status),
+		History:   *detail.History,
+	})
+}
+
+func lifecycleStages(log core.ChangeLog, current core.Status) []LifecycleStage {
+	stops := presentation.Lifecycle(log, current)
+	stages := make([]LifecycleStage, len(stops))
+	for index, stop := range stops {
+		stages[index] = LifecycleStage{
+			Status:   stop.Status,
+			Label:    stop.Label,
+			Commit:   stop.Commit,
+			Actor:    stop.Actor,
+			WallTime: stop.WallTime,
+			Current:  stop.Current,
+		}
+	}
+	return stages
 }
 
 func activeTasks(tasks []core.Task) []core.Task {
