@@ -74,11 +74,18 @@ refspec only for tasks whose canonical head differs from tracking and guards the
 push behind a non-empty set, so a clone with nothing to publish issues no push
 at all. This matters because it is the steady state.
 
-Gating the refresh on changed refs is not a micro-optimization.
-`WB-01KZ1JCYZCPD156TCXMRB4Z6ZB` is in progress and rewrites projection refresh
-to walk full histories into an operations table, stating that refresh comes to
-scale with operation count rather than task count. An unconditional per-tick
-refresh would inherit that growth for no benefit.
+The refresh is gated on the sync reporting changed refs. `refreshChangedHeads`
+already returns early when nothing changed, so this is a smaller saving than it
+first appears: it avoids one `git for-each-ref` and two SQLite round trips on a
+quiet tick, not the walk itself. It is still worth having, because a quiet tick
+is the steady state and a watcher runs one every interval forever.
+
+The walk is what makes the gate worth stating rather than assuming.
+`WB-01KZ1JCYZCPD156TCXMRB4Z6ZB` landed the operations table, so refresh now
+reads every intermediate commit a changed task gained rather than just its tip,
+and scales with operation count rather than task count. The gate does not avoid
+that cost when refs did change — nothing can, since that is the work — but it
+keeps the loop from paying anything for it while idle.
 
 | Knob | Default | Purpose |
 | --- | --- | --- |
@@ -319,9 +326,13 @@ A long-lived process makes three latent bugs routine. All are fixed here.
 
 **Parked refs grow without bound.** Pruning runs only inside a mutation's ref
 transaction, so `maxParkedRefsPerTask` holds only for tasks under active local
-mutation. This is already true for hand-run `fetch` and `sync`, which makes the
-retention bound softer than `WB-01KZ1JCYZCPD156TCXMRB4Z6ZB` currently assumes; a
-watcher that reconciles but never mutates would grow the namespace forever. A
+mutation. This is already true for hand-run `fetch` and `sync`, which made the
+retention bound softer than `WB-01KZ1JCYZCPD156TCXMRB4Z6ZB` assumed when it
+described parked reachability as bounded by `maxParkedRefsPerTask`; a watcher
+that reconciles but never mutates would grow the namespace forever. Sweeping on
+every tick restores that bound as written, and stays inside what the history
+view already tolerates, since it treats a parked commit that no longer resolves
+as an ordinary not-found. A
 new `Repository.PruneParkedRefs` enumerates the namespace once, groups by task,
 and deletes past the retained rank in one `update-ref --stdin` — two git
 processes, and only when parked refs exist. Running it *after* the fetch does

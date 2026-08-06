@@ -78,17 +78,25 @@ provenance](2026-08-05-local-acceptance-provenance.md).
 The miss set is exactly the one the 2026-08-02 v0.3.0 evidence recorded, so this
 work introduced no new missed budget.
 
+These numbers were measured after `WB-01KZ1JCYZCPD156TCXMRB4Z6ZB` landed and
+rewrote projection refresh to walk operation chains. An earlier pair measured
+before it was re-run rather than carried forward, because the older evidence
+described a tree that no longer exists. The measured values moved by less than
+two milliseconds, which says the refresh rewrite does not reach the timed
+mutation path — each cold CLI sample rebuilds the projection untimed, and the
+timed command advances a single head rather than refreshing.
+
 The decisive result is that a watched mutation is a local mutation:
 
 | Scenario | SHA-1 p95 | SHA-256 p95 | Target | Git processes |
 | --- | ---: | ---: | ---: | ---: |
-| `cli-update` (`--no-sync`) | 174.27 ms | 176.02 ms | 200 ms | 10 |
-| `cli-update-watched` | 171.87 ms | 174.65 ms | 200 ms | 10 |
-| `cli-update-autosync` | 704.35 ms | 705.49 ms | 1,000 ms | 26 |
+| `cli-update` (`--no-sync`) | 174.63 ms | 174.45 ms | 200 ms | 10 |
+| `cli-update-watched` | 172.85 ms | 173.82 ms | 200 ms | 10 |
+| `cli-update-autosync` | 706.97 ms | 711.54 ms | 1,000 ms | 26 |
 
-Deferring to a watcher removed 532 ms in SHA-1 and 531 ms in SHA-256, and
+Deferring to a watcher removed 534 ms in SHA-1 and 538 ms in SHA-256, and
 sixteen of the twenty-six Git processes. The watched scenario came in marginally
-below the unsynchronized one in both formats, by 2.40 ms and 1.37 ms. That
+below the unsynchronized one in both formats, by 1.78 ms and 0.63 ms. That
 difference is noise and should not be read as watching being *faster* than not
 synchronizing at all; the claim it supports is the weaker and more useful one,
 that the difference between them is no longer measurable.

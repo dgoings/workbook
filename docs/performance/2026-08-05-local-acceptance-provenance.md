@@ -5,15 +5,15 @@ commit and the same two binaries. Neither binary was rebuilt between object
 formats, and neither invocation was retried, tuned, or replaced.
 
 - Version: `0.3.0-sync-watcher`, an unreleased build of the sync watcher branch
-- Source commit: `0bf8982e8ba0e09bb77b83be6c77523b8647f471`
+- Source commit: `9d485885c1f7f677d79183d7f63cfb2e2b2aa6ba`
 - Measured Workbook binary:
   `/private/tmp/claude-502/.../scratchpad/bench/workbook`
 - Measured Workbook binary SHA-256:
-  `adcadbcbba17a764464f43cd4c5e7ed841160120af7b4581728619f3265f4852`
+  `0d3ffc504cced428853d41a361fd6135bbae744115c0b40c03105f7bb773f8c8`
 - Benchmark harness binary:
   `/private/tmp/claude-502/.../scratchpad/bench/workbook-bench`
 - Benchmark harness binary SHA-256:
-  `3f34a31d5b26d0b0fbf69d0d009ae43240f83211f91cf0ec3e54681125271af2`
+  `978320693c672263c17bbeda228ff9582224d2020dc5305bff6aaf6fd3e125ff`
 
 This is branch evidence rather than a release measurement, so the measured
 binary was stamped by hand with the same `-ldflags` `scripts/install.sh` uses
@@ -34,10 +34,17 @@ Independent checksum command:
 shasum -a 256 <destination>/workbook <destination>/workbook-bench
 ```
 
-One commit landed after the binaries were built, `20a7c4c`, which edits only
-`docs/superpowers/specs/` and changes neither binary. It is recorded here rather
-than left for a reader to discover from a mismatch between this file and the
-branch tip.
+These reports replace an earlier pair measured before
+`WB-01KZ1JCYZCPD156TCXMRB4Z6ZB` landed. That work rewrote projection refresh to
+walk operation chains, so the earlier numbers described a tree that no longer
+exists and were re-measured rather than carried forward. The measured values
+barely moved, which is itself worth recording: the refresh rewrite does not
+reach the timed mutation path.
+
+Only documentation changed after the binaries were built — this file, the
+evidence section of `README.md`, and the design spec. Neither binary is
+affected. It is recorded here rather than left for a reader to discover from a
+mismatch between this file and the branch tip.
 
 Host toolchain, as recorded in each report's `environment` block:
 
