@@ -183,6 +183,7 @@ func TestHandlerDeletesRestoresAndListsTombstonedTasks(t *testing.T) {
 		},
 		nil,
 		nil,
+		nil,
 	)
 
 	deletedResponse := request(t, handler, http.MethodGet, "/api/tasks?deleted=true")
@@ -336,6 +337,7 @@ func TestHandlerAddsAndRemovesTaskDependencies(t *testing.T) {
 			calls = append(calls, "remove:"+id+":"+dependency)
 			return core.MutationResult{Task: dependent}, nil
 		},
+		nil,
 	)
 	path := "/api/tasks/" + dependent.ID + "/dependencies/" + prerequisite.ID
 
@@ -380,6 +382,7 @@ func TestHandlerDependencyMutationsRequireEmptyRequestBodies(t *testing.T) {
 			dependencyCalls++
 			return core.MutationResult{Task: dependent}, nil
 		},
+		nil,
 	)
 	path := "/api/tasks/" + dependent.ID + "/dependencies/" + prerequisite.ID
 	tests := []struct {
@@ -428,6 +431,7 @@ func TestHandlerDependencyMutationsRequireEmptyRequestBodies(t *testing.T) {
 		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
 		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
 		unexpectedTaskPosition(t), nil, nil, nil, nil,
+		nil,
 	)
 	response := requestJSON(t, unconfigured, http.MethodPut, path, `{"unexpected":true}`)
 	var document ErrorDocument
@@ -449,6 +453,7 @@ func TestHandlerReturnsDependencyMutationErrors(t *testing.T) {
 		func(context.Context, string, string) (core.MutationResult, error) {
 			return core.MutationResult{}, core.Errorf(core.CategoryValidation, "dependency would create a cycle")
 		},
+		nil,
 		nil,
 	)
 	response := request(t, handler, http.MethodPut, "/api/tasks/"+dependent.ID+"/dependencies/"+prerequisite.ID)
@@ -481,6 +486,7 @@ func TestHandlerRejectsWrongDependencyMethodsAndMalformedPaths(t *testing.T) {
 			dependencyCalls++
 			return core.MutationResult{}, nil
 		},
+		nil,
 	)
 	path := "/api/tasks/" + dependent.ID + "/dependencies/" + prerequisite.ID
 	response := request(t, handler, http.MethodPost, path)
@@ -529,6 +535,7 @@ func TestHandlerRejectsEncodedDependencyPathAliases(t *testing.T) {
 			}
 			return core.MutationResult{Task: dependent}, nil
 		},
+		nil,
 		nil,
 	)
 	canonicalPath := "/api/tasks/" + dependent.ID + "/dependencies/" + prerequisite.ID
@@ -4230,12 +4237,13 @@ class TestElement {
     if (this.eventListeners[name] === listener) delete this.eventListeners[name];
   }
   closest(selector) {
+    const hasClass = (element, name) => (element.className || "").split(/\s+/).includes(name);
     for (let element = this; element; element = element.parentElement) {
       if (selector === "a[href]" && element.tagName === "A" && element.href) return element;
-      if (selector === ".task-card" && element.className === "task-card") return element;
-      if (selector === ".task-route" && element.className === "task-route") return element;
-      if (selector === ".task-sidebar" && element.className === "task-sidebar") return element;
-      if (selector === ".task-id-copy-group" && element.className === "task-id-copy-group") return element;
+      if (selector === ".task-card" && hasClass(element, "task-card")) return element;
+      if (selector === ".task-route" && hasClass(element, "task-route")) return element;
+      if (selector === ".task-sidebar" && hasClass(element, "task-sidebar")) return element;
+      if (selector === ".task-id-copy-group" && hasClass(element, "task-id-copy-group")) return element;
       if (selector === "[data-copy-task-id]" && Object.prototype.hasOwnProperty.call(element.dataset, "copyTaskId")) return element;
       if (selector === "[data-drop-status]" && element.dataset.dropStatus) return element;
       if (selector === "[data-status]" && element.dataset.status) return element;
@@ -4515,6 +4523,7 @@ func TestHandlerPositionsTask(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
 	)
 
 	response := requestJSON(
@@ -4564,6 +4573,7 @@ func TestHandlerValidatesPositionRequests(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
 	)
 
 	response := requestJSON(t, handler, http.MethodPatch, "/api/tasks/"+taskID+"/position",
@@ -4585,6 +4595,7 @@ func TestHandlerValidatesPositionRequests(t *testing.T) {
 		unexpectedTaskUpdate(t),
 		unexpectedStatusUpdate(t),
 		unexpectedTaskPosition(t),
+		nil,
 		nil,
 		nil,
 		nil,
@@ -4924,6 +4935,286 @@ func TestHandlerEscapesHostileTaskContent(t *testing.T) {
 	if !strings.Contains(body, "&lt;img src=x onerror=alert(1)&gt;") {
 		t.Fatalf("GET / did not preserve hostile title as escaped text: %s", body)
 	}
+}
+
+func TestHandlerClientRendersTaskHistoryLaneRowsAndComparisons(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	detail := historyDetail()
+	task := detail.Task
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return []core.Task{task}, nil },
+		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+task.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<id> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	tasks, err := json.Marshal(TasksDocument{
+		Format:       "workbook.tasks",
+		Version:      1,
+		Tasks:        []core.Task{task},
+		Presentation: presentationForTasks([]core.Task{task}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	history, err := json.Marshal(TaskHistoryDocument{
+		Format:    "workbook.task-history",
+		Version:   1,
+		TaskID:    task.ID,
+		Lifecycle: lifecycleStages(*detail.History, task.Status),
+		History:   *detail.History,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/"+task.ID, string(tasks)) + script + `
+const historyDocument = ` + string(history) + `;
+const historyURL = "/api/tasks/" + encodeURIComponent(` + strconv.Quote(task.ID) + `) + "/history";
+let historyReads = 0;
+globalThis.fetch = async (url, options = {}) => {
+  fetchCalls.push({ url, options });
+  if (url === historyURL) {
+    historyReads += 1;
+    if (historyReads === 1) {
+      return { ok: false, json: async () => ({
+        format: "workbook.error",
+        version: 1,
+        error: { category: "operational", message: "history read failed" }
+      }) };
+    }
+    return { ok: true, json: async () => historyDocument };
+  }
+  return { ok: true, json: async () => taskResponse };
+};
+const laneStops = () => {
+  const lane = findElement(main, (element) => Object.hasOwn(element.dataset, "lifecycle"));
+  return lane ? lane.children : [];
+};
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  // A failed history read leaves the detail form usable and offers a retry.
+  const failure = findElement(main, (element) =>
+    (element.className || "").split(/\s+/).includes("history-state") &&
+    element.dataset.kind === "error");
+  if (!failure || failure.textContent !== "history read failed") {
+    throw new Error("failed history read did not report the server message");
+  }
+  if (!findElement(main, (element) => element.id === "task-title")) {
+    throw new Error("failed history read removed the task form");
+  }
+  const retry = findElement(main, (element) =>
+    element.tagName === "BUTTON" && element.textContent === "Retry history");
+  if (!retry || retry.type !== "button") {
+    throw new Error("failed history read offers no retry that cannot submit the form");
+  }
+
+  await retry.eventListeners.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const stops = laneStops().map((stop) => [stop.dataset.status, stop.dataset.current || ""]);
+  const wantStops = [["backlog", ""], ["ready", ""], ["in-progress", "true"]];
+  if (JSON.stringify(stops) !== JSON.stringify(wantStops)) {
+    throw new Error("lifecycle lane = " + JSON.stringify(stops) + ", want " + JSON.stringify(wantStops));
+  }
+  const current = laneStops()[2];
+  if (current.getAttribute("aria-current") !== "step") {
+    throw new Error("the current lifecycle stop is not announced as the current step");
+  }
+
+  const rows = findElements(main, (element) => Object.hasOwn(element.dataset, "changeRow"));
+  // The chain records aaa before ccc; the rows read newest first.
+  const rowCommits = rows.map((row) => row.dataset.changeRow);
+  if (JSON.stringify(rowCommits) !== JSON.stringify(["ccc", "aaa"])) {
+    throw new Error("change rows = " + JSON.stringify(rowCommits) + ", want the packs that changed more than status, newest first");
+  }
+  const summary = findElement(main, (element) => Object.hasOwn(element.dataset, "changeSummary"));
+  if (!summary || summary.textContent !==
+      "4 changes recorded. 2 of them changed only status and read as the lifecycle above.") {
+    throw new Error("change summary = " + JSON.stringify(summary && summary.textContent));
+  }
+
+  // Drilling into a row expands it in place into the comparison the server
+  // already computed, description word diff included.
+  const descriptionRow = rows[0];
+  const toggle = descriptionRow.children[0];
+  const comparison = descriptionRow.children[1];
+  if (toggle.getAttribute("aria-expanded") !== "false" || comparison.hidden !== true) {
+    throw new Error("change rows do not start collapsed");
+  }
+  toggle.eventListeners.click();
+  if (toggle.getAttribute("aria-expanded") !== "true" || comparison.hidden !== false) {
+    throw new Error("clicking a change row did not expand its comparison");
+  }
+  if (!findElement(comparison, (element) => element.textContent === "ccc")) {
+    throw new Error("the expanded comparison does not name its commit");
+  }
+  const removed = findElements(comparison, (element) => element.tagName === "DEL").map((element) => element.textContent);
+  const added = findElements(comparison, (element) => element.tagName === "INS").map((element) => element.textContent);
+  if (!removed.includes("board") || !added.includes("history")) {
+    throw new Error("the expanded comparison lost the word-level description diff: " +
+      JSON.stringify({ removed, added }));
+  }
+  toggle.eventListeners.click();
+  if (toggle.getAttribute("aria-expanded") !== "false" || comparison.hidden !== true) {
+    throw new Error("clicking an expanded change row did not collapse it");
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute rendered client for task history: %v\n%s", err, output)
+	}
+}
+
+func TestHandlerServesTaskHistoryWithItsLifecycleLane(t *testing.T) {
+	detail := historyDetail()
+	var gotID string
+	handler := historyHandler(t, func(_ context.Context, id string) (core.TaskDetail, error) {
+		gotID = id
+		return detail, nil
+	})
+
+	response := request(t, handler, http.MethodGet, "/api/tasks/"+detail.ID+"/history")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET history status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	assertSecurityHeaders(t, response.Result())
+	if gotID != detail.ID {
+		t.Fatalf("history reader saw id = %q, want %q", gotID, detail.ID)
+	}
+	var document TaskHistoryDocument
+	if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+		t.Fatalf("decode history document: %v; body = %s", err, response.Body.String())
+	}
+	if document.Format != "workbook.task-history" || document.Version != 1 || document.TaskID != detail.ID {
+		t.Fatalf("history document envelope = %#v, want workbook.task-history v1", document)
+	}
+
+	lane := make([]string, 0, len(document.Lifecycle))
+	for _, stage := range document.Lifecycle {
+		lane = append(lane, string(stage.Status))
+	}
+	if !reflect.DeepEqual(lane, []string{"backlog", "ready", "in-progress"}) {
+		t.Fatalf("lifecycle lane = %v, want backlog, ready, in-progress", lane)
+	}
+	if !document.Lifecycle[len(document.Lifecycle)-1].Current {
+		t.Fatal("lifecycle lane does not mark the task's current status")
+	}
+	if document.Lifecycle[0].Commit != "aaa" || document.Lifecycle[0].WallTime == nil {
+		t.Fatalf("opening lifecycle stage = %#v, want the creating change's attribution", document.Lifecycle[0])
+	}
+
+	// The rows keep the whole chain and the diff spans the CLI already renders,
+	// so the client needs no second request to compare one change.
+	if document.History.Total != len(detail.History.Changes) ||
+		len(document.History.Changes) != len(detail.History.Changes) {
+		t.Fatalf("history document changes = %#v, want the whole chain", document.History)
+	}
+	description := document.History.Changes[2].Fields[0]
+	if description.Field != "description" || len(description.Diff) == 0 {
+		t.Fatalf("description change = %#v, want the server-computed word diff", description)
+	}
+}
+
+func TestHandlerRejectsUnconfiguredAndMistypedTaskHistoryRequests(t *testing.T) {
+	unconfigured := NewHandler(
+		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
+	)
+	response := request(t, unconfigured, http.MethodGet, "/api/tasks/WB-01J00000000000000000000001/history")
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("unconfigured history status = %d, want %d", response.Code, http.StatusInternalServerError)
+	}
+	assertErrorDocument(t, response, core.CategoryOperational, "task history is not configured")
+
+	missing := historyHandler(t, func(context.Context, string) (core.TaskDetail, error) {
+		return core.TaskDetail{}, core.Errorf(core.CategoryNotFound, "no task matches %q", "WB-nope")
+	})
+	notFound := request(t, missing, http.MethodGet, "/api/tasks/WB-nope/history")
+	if notFound.Code != http.StatusNotFound {
+		t.Fatalf("missing task history status = %d, want %d", notFound.Code, http.StatusNotFound)
+	}
+	assertErrorDocument(t, notFound, core.CategoryNotFound, `no task matches "WB-nope"`)
+
+	configured := historyHandler(t, func(context.Context, string) (core.TaskDetail, error) {
+		t.Fatal("history reader ran for a request using the wrong method")
+		return core.TaskDetail{}, nil
+	})
+	wrongMethod := requestJSON(t, configured, http.MethodPost, "/api/tasks/WB-01J00000000000000000000001/history", "{}")
+	if wrongMethod.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST history status = %d, want %d", wrongMethod.Code, http.StatusMethodNotAllowed)
+	}
+	if got := wrongMethod.Header().Get("Allow"); got != http.MethodGet {
+		t.Fatalf("POST history Allow = %q, want %q", got, http.MethodGet)
+	}
+}
+
+func assertErrorDocument(t *testing.T, response *httptest.ResponseRecorder, category core.Category, message string) {
+	t.Helper()
+	var document ErrorDocument
+	if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+		t.Fatalf("decode error document: %v; body = %s", err, response.Body.String())
+	}
+	if document.Format != "workbook.error" || document.Version != 1 ||
+		document.Error.Category != category || document.Error.Message != message {
+		t.Fatalf("error document = %#v, want %s: %s", document, category, message)
+	}
+}
+
+func historyHandler(t *testing.T, read TaskHistoryReader) http.Handler {
+	t.Helper()
+	return NewHandlerWithTaskMutations(
+		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
+		unexpectedTaskPosition(t), nil, nil, nil, nil,
+		read,
+	)
+}
+
+// historyDetail is one task whose chain creates it, moves it twice, and
+// rewrites its description, so a lane, an ordinary row, and a word diff all
+// have something to render.
+func historyDetail() core.TaskDetail {
+	task := boardTasks()[0]
+	task.Status = core.StatusInProgress
+	stamp := time.Date(2026, time.August, 1, 9, 0, 0, 0, time.UTC)
+	log := core.ChangeLog{
+		Total:   4,
+		Showing: 4,
+		Changes: []core.Change{
+			{
+				Commit: "aaa", Actor: "dylan", WallTime: stamp, LogicalClock: 1,
+				Summary: "created the task",
+				Fields:  []core.FieldChange{{Field: "task", Kind: core.ChangeCreated, To: task.Title}},
+			},
+			{
+				Commit: "bbb", Actor: "dylan", WallTime: stamp.Add(time.Hour), LogicalClock: 2,
+				Summary: "changed status",
+				Fields:  []core.FieldChange{{Field: "status", Kind: core.ChangeSet, From: "backlog", To: "ready"}},
+			},
+			{
+				Commit: "ccc", Actor: "agent", WallTime: stamp.Add(2 * time.Hour), LogicalClock: 3,
+				Summary: "changed description",
+				Fields: []core.FieldChange{{
+					Field: "description", Kind: core.ChangeSet,
+					From: "Build the board surface.",
+					To:   "Build the history surface.",
+					Diff: core.WordDiff("Build the board surface.", "Build the history surface."),
+				}},
+			},
+			{
+				Commit: "ddd", Actor: "agent", WallTime: stamp.Add(3 * time.Hour), LogicalClock: 4,
+				Summary: "changed status",
+				Fields:  []core.FieldChange{{Field: "status", Kind: core.ChangeSet, From: "ready", To: "in-progress"}},
+			},
+		},
+	}
+	return core.TaskDetail{Task: task, History: &log}
 }
 
 func request(t *testing.T, handler http.Handler, method, target string) *httptest.ResponseRecorder {

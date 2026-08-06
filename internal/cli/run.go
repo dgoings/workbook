@@ -842,6 +842,12 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 		func(requestContext context.Context, id, dependency string) (core.MutationResult, error) {
 			return service.FreeMutation(requestContext, id, dependency)
 		},
+		// The board's detail view shows history by default and derives a status
+		// lane that reaches back to the task's creation, so it reads the whole
+		// chain rather than the CLI's ten-change default window.
+		func(requestContext context.Context, id string) (core.TaskDetail, error) {
+			return service.ShowDetail(requestContext, id, core.ShowOptions{History: true, All: true})
+		},
 	)
 	listener, err := net.Listen("tcp", *addr)
 	if err != nil {
@@ -949,6 +955,7 @@ func openServiceParts(ctx context.Context, cwd string) (core.Service, *gitstore.
 		Reader:     store,
 		Writer:     repository,
 		Projection: store,
+		History:    store,
 		IDs:        core.CryptoULIDSource{},
 		Now:        time.Now,
 		Actor:      actor,
