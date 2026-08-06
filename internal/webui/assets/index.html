@@ -1156,7 +1156,12 @@
       }
       function historyContent(payload) {
         const log = payload.history;
-        const rows = log.changes.filter((change) => !changedOnlyStatus(change));
+        // The rows read newest first. That is still the parent chain's order,
+        // read from the current tip backwards, rather than wall time's: after a
+        // reconciliation the two legitimately disagree, and the chain is what
+        // this view exists to carry. The lane keeps reading forwards, because a
+        // lifecycle is a progression.
+        const rows = log.changes.filter((change) => !changedOnlyStatus(change)).reverse();
         const parts = [lifecycleLane(payload.lifecycle)];
         const summary = document.createElement("p");
         summary.className = "change-summary";
@@ -1191,7 +1196,7 @@
         const list = document.createElement("ol");
         list.className = "change-list";
         list.dataset.changeList = "";
-        list.setAttribute("aria-label", "Recorded changes, oldest first");
+        list.setAttribute("aria-label", "Recorded changes, newest first");
         rows.forEach((change) => list.append(changeRow(change)));
         parts.push(list);
         return parts;

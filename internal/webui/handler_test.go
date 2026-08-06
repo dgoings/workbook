@@ -5027,9 +5027,10 @@ setTimeout(async () => {
   }
 
   const rows = findElements(main, (element) => Object.hasOwn(element.dataset, "changeRow"));
+  // The chain records aaa before ccc; the rows read newest first.
   const rowCommits = rows.map((row) => row.dataset.changeRow);
-  if (JSON.stringify(rowCommits) !== JSON.stringify(["aaa", "ccc"])) {
-    throw new Error("change rows = " + JSON.stringify(rowCommits) + ", want the packs that changed more than status");
+  if (JSON.stringify(rowCommits) !== JSON.stringify(["ccc", "aaa"])) {
+    throw new Error("change rows = " + JSON.stringify(rowCommits) + ", want the packs that changed more than status, newest first");
   }
   const summary = findElement(main, (element) => Object.hasOwn(element.dataset, "changeSummary"));
   if (!summary || summary.textContent !==
@@ -5039,7 +5040,7 @@ setTimeout(async () => {
 
   // Drilling into a row expands it in place into the comparison the server
   // already computed, description word diff included.
-  const descriptionRow = rows[1];
+  const descriptionRow = rows[0];
   const toggle = descriptionRow.children[0];
   const comparison = descriptionRow.children[1];
   if (toggle.getAttribute("aria-expanded") !== "false" || comparison.hidden !== true) {

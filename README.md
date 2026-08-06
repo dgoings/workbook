@@ -708,9 +708,11 @@ opens at the earliest status the log can name; a task whose status never changed
 shows its current status as the only stop, without attribution.
 
 Every other field change reads as one ordinary row per operation pack beside the
-lane, oldest first, following the parent chain exactly as `--history` does. A
-pack that changed only status is not repeated as a row, and the row count says
-how many the lane absorbed. Selecting a row expands it in place into the
+lane, newest first. That is the same parent chain `--history` prints, read from
+the current tip backwards rather than sorted by wall time, so a timestamp that
+reads out of order after a reconciliation stays where the chain puts it. A pack
+that changed only status is not repeated as a row, and the row count says how
+many the lane absorbed. Selecting a row expands it in place into the
 field-level comparison the server already computed for that pack, description
 word diff included, and names the commit object so the same two points can be
 compared from the CLI. Expanding needs no second request, no comparison route,
