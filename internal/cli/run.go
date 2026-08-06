@@ -827,8 +827,8 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 			result, err := service.UpdateMutation(requestContext, id, input)
 			return publisher.publish(requestContext, result, err)
 		},
-		func(requestContext context.Context, id string, status core.Status) (core.MutationResult, error) {
-			result, err := service.UpdateMutation(requestContext, id, core.UpdateInput{Status: &status})
+		func(requestContext context.Context, id string, status core.Status, expectedHead string) (core.MutationResult, error) {
+			result, err := service.UpdateMutation(requestContext, id, core.UpdateInput{Status: &status, ExpectedHead: expectedHead})
 			return publisher.publish(requestContext, result, err)
 		},
 		func(requestContext context.Context, id string, input core.PlaceInput) (core.MutationResult, error) {

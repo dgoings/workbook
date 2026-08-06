@@ -4410,7 +4410,7 @@ func TestHandlerUpdatesTaskStatus(t *testing.T) {
 		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
 		unexpectedTaskCreate(t),
 		unexpectedTaskUpdate(t),
-		func(_ context.Context, id string, status core.Status) (core.MutationResult, error) {
+		func(_ context.Context, id string, status core.Status, _ string) (core.MutationResult, error) {
 			gotID = id
 			gotStatus = status
 			return core.MutationResult{Task: updated}, nil
@@ -4656,7 +4656,7 @@ func TestHandlerPreservesStatusMutationRoute(t *testing.T) {
 		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
 		unexpectedTaskCreate(t),
 		unexpectedTaskUpdate(t),
-		func(context.Context, string, core.Status) (core.MutationResult, error) {
+		func(context.Context, string, core.Status, string) (core.MutationResult, error) {
 			called = true
 			return core.MutationResult{Task: boardTasks()[0]}, nil
 		},
@@ -4702,7 +4702,7 @@ func TestHandlerMapsStatusUpdateErrorsToVersionedErrorDocuments(t *testing.T) {
 		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
 		unexpectedTaskCreate(t),
 		unexpectedTaskUpdate(t),
-		func(context.Context, string, core.Status) (core.MutationResult, error) {
+		func(context.Context, string, core.Status, string) (core.MutationResult, error) {
 			return core.MutationResult{}, core.Errorf(core.CategoryValidation, "invalid task status")
 		},
 	)
@@ -4877,6 +4877,87 @@ func TestHandlerRejectsUnknownRoutesAndMutationMethods(t *testing.T) {
 		}
 		assertSecurityHeaders(t, response.Result())
 	}
+}
+
+// The board sends the tip it rendered so a change proposed against a stale
+// view is reported rather than silently overwriting whatever arrived since.
+func TestHandlerForwardsTheExpectedHeadOnEveryRequestThatCarriesIt(t *testing.T) {
+	updated := boardTasks()[0]
+
+	t.Run("status", func(t *testing.T) {
+		var got string
+		handler := NewHandler(
+			func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+			unexpectedTaskCreate(t),
+			unexpectedTaskUpdate(t),
+			func(_ context.Context, _ string, _ core.Status, expectedHead string) (core.MutationResult, error) {
+				got = expectedHead
+				return core.MutationResult{Task: updated}, nil
+			},
+		)
+		requestJSON(t, handler, http.MethodPatch,
+			"/api/tasks/WB-01J00000000000000000000001/status",
+			`{"status":"in-progress","expectedHead":"head-from-the-board"}`)
+		if got != "head-from-the-board" {
+			t.Fatalf("status updater expectedHead = %q, want the request's", got)
+		}
+	})
+
+	t.Run("update", func(t *testing.T) {
+		var got core.UpdateInput
+		handler := NewHandler(
+			func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+			unexpectedTaskCreate(t),
+			func(_ context.Context, _ string, input core.UpdateInput) (core.MutationResult, error) {
+				got = input
+				return core.MutationResult{Task: updated}, nil
+			},
+			unexpectedStatusUpdate(t),
+		)
+		requestJSON(t, handler, http.MethodPatch,
+			"/api/tasks/WB-01J00000000000000000000001",
+			`{"title":"Renamed","expectedHead":"head-from-the-board"}`)
+		if got.ExpectedHead != "head-from-the-board" {
+			t.Fatalf("update input expectedHead = %q, want the request's", got.ExpectedHead)
+		}
+	})
+
+	t.Run("position", func(t *testing.T) {
+		var got core.PlaceInput
+		handler := NewHandlerWithTaskMutations(
+			func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+			unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
+			func(_ context.Context, _ string, input core.PlaceInput) (core.MutationResult, error) {
+				got = input
+				return core.MutationResult{Task: updated}, nil
+			},
+			nil, nil, nil, nil,
+		)
+		requestJSON(t, handler, http.MethodPatch,
+			"/api/tasks/WB-01J00000000000000000000001/position",
+			`{"status":"ready","expectedHead":"head-from-the-board"}`)
+		if got.ExpectedHead != "head-from-the-board" {
+			t.Fatalf("place input expectedHead = %q, want the request's", got.ExpectedHead)
+		}
+	})
+
+	t.Run("omitted stays empty", func(t *testing.T) {
+		var got core.UpdateInput
+		handler := NewHandler(
+			func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+			unexpectedTaskCreate(t),
+			func(_ context.Context, _ string, input core.UpdateInput) (core.MutationResult, error) {
+				got = input
+				return core.MutationResult{Task: updated}, nil
+			},
+			unexpectedStatusUpdate(t),
+		)
+		requestJSON(t, handler, http.MethodPatch,
+			"/api/tasks/WB-01J00000000000000000000001", `{"title":"Renamed"}`)
+		if got.ExpectedHead != "" {
+			t.Fatalf("update input expectedHead = %q, want empty when omitted", got.ExpectedHead)
+		}
+	})
 }
 
 func TestHandlerMapsTaskErrorsToVersionedErrorDocuments(t *testing.T) {
@@ -5245,7 +5326,7 @@ func requestJSON(t *testing.T, handler http.Handler, method, target, body string
 
 func unexpectedStatusUpdate(t *testing.T) TaskStatusUpdater {
 	t.Helper()
-	return func(context.Context, string, core.Status) (core.MutationResult, error) {
+	return func(context.Context, string, core.Status, string) (core.MutationResult, error) {
 		t.Fatal("unexpected status update")
 		return core.MutationResult{}, nil
 	}

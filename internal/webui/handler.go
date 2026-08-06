@@ -23,7 +23,7 @@ var assets embed.FS
 
 type TaskLister func(context.Context) ([]core.Task, error)
 
-type TaskStatusUpdater func(context.Context, string, core.Status) (core.MutationResult, error)
+type TaskStatusUpdater func(context.Context, string, core.Status, string) (core.MutationResult, error)
 
 type TaskPositionUpdater func(context.Context, string, core.PlaceInput) (core.MutationResult, error)
 
@@ -128,14 +128,20 @@ type pageData struct {
 	Board presentation.Board
 }
 
+// expectedHead is the task tip the browser rendered before proposing a change.
+// It is optional on every request that carries it: a client that omits it keeps
+// the behavior these routes had before the field existed, which is what lets
+// the server half land before any client sends one.
 type updateStatusRequest struct {
-	Status core.Status `json:"status"`
+	Status       core.Status `json:"status"`
+	ExpectedHead string      `json:"expectedHead"`
 }
 
 type positionTaskRequest struct {
-	Status core.Status `json:"status"`
-	Before string      `json:"before"`
-	After  string      `json:"after"`
+	Status       core.Status `json:"status"`
+	Before       string      `json:"before"`
+	After        string      `json:"after"`
+	ExpectedHead string      `json:"expectedHead"`
 }
 
 type createTaskRequest struct {
@@ -146,12 +152,15 @@ type createTaskRequest struct {
 	Labels      []string      `json:"labels"`
 }
 
+// updateTaskRequest is converted directly to core.UpdateInput, so its fields
+// must stay identical in name, type, and order.
 type updateTaskRequest struct {
-	Title       *string        `json:"title"`
-	Description *string        `json:"description"`
-	Status      *core.Status   `json:"status"`
-	Priority    *core.Priority `json:"priority"`
-	Labels      *[]string      `json:"labels"`
+	Title        *string        `json:"title"`
+	Description  *string        `json:"description"`
+	Status       *core.Status   `json:"status"`
+	Priority     *core.Priority `json:"priority"`
+	Labels       *[]string      `json:"labels"`
+	ExpectedHead string         `json:"expectedHead"`
 }
 
 func NewHandler(list TaskLister, create TaskCreator, update TaskUpdater, updateStatus TaskStatusUpdater) http.Handler {
@@ -475,7 +484,7 @@ func (handler *handler) updateTaskStatus(writer http.ResponseWriter, request *ht
 		handler.writeError(writer, core.Wrap(core.CategoryInvocation, "decode status update", err))
 		return
 	}
-	result, err := handler.updateStatus(request.Context(), id, input.Status)
+	result, err := handler.updateStatus(request.Context(), id, input.Status, input.ExpectedHead)
 	if err != nil {
 		handler.writeError(writer, err)
 		return
@@ -496,7 +505,7 @@ func (handler *handler) positionTask(writer http.ResponseWriter, request *http.R
 	result, err := handler.position(
 		request.Context(),
 		request.PathValue("id"),
-		core.PlaceInput{Status: body.Status, Before: body.Before, After: body.After},
+		core.PlaceInput{Status: body.Status, Before: body.Before, After: body.After, ExpectedHead: body.ExpectedHead},
 	)
 	if err != nil {
 		handler.writeError(writer, err)

@@ -265,6 +265,70 @@ func TestServiceShowResolvesPrefixAndIncludesTombstone(t *testing.T) {
 	}
 }
 
+// The Git ref compare-and-swap only catches the ref moving during a write. A
+// client proposing a change against a view it rendered seconds ago is stale by
+// a much wider margin, and without an expected head that is silent
+// last-writer-wins.
+func TestServiceUpdateRejectsAStaleExpectedHead(t *testing.T) {
+	snapshot := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", TaskData{
+		Title: "Current", Status: StatusBacklog, Priority: PriorityMedium, Rank: "1/1",
+	})
+	store := newMemoryTaskStore(snapshot)
+	service := serviceUnderTest(store, &sequenceIDSource{values: []string{"01K0M6B8A4FTT8C39MXXYTW7D2"}})
+	title := "Rejected"
+
+	_, err := service.UpdateMutation(context.Background(), snapshot.State.TaskID, UpdateInput{
+		Title: &title, ExpectedHead: "head-from-a-stale-board",
+	})
+	if CategoryOf(err) != CategoryStaleWrite {
+		t.Fatalf("UpdateMutation() error = %v, want a stale-write", err)
+	}
+	if got := len(store.writes); got != 0 {
+		t.Fatalf("Write() calls = %d, want 0; the mutation must not reach Git", got)
+	}
+}
+
+func TestServiceUpdateAcceptsAMatchingOrOmittedExpectedHead(t *testing.T) {
+	snapshotHead := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", TaskData{}).Head
+	for name, expected := range map[string]string{"matching": snapshotHead, "omitted": ""} {
+		t.Run(name, func(t *testing.T) {
+			snapshot := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", TaskData{
+				Title: "Current", Status: StatusBacklog, Priority: PriorityMedium, Rank: "1/1",
+			})
+			store := newMemoryTaskStore(snapshot)
+			service := serviceUnderTest(store, &sequenceIDSource{values: []string{"01K0M6B8A4FTT8C39MXXYTW7D2"}})
+			title := "Accepted"
+
+			if _, err := service.UpdateMutation(context.Background(), snapshot.State.TaskID, UpdateInput{
+				Title: &title, ExpectedHead: expected,
+			}); err != nil {
+				t.Fatalf("UpdateMutation() error = %v", err)
+			}
+			if got := len(store.writes); got != 1 {
+				t.Fatalf("Write() calls = %d, want 1", got)
+			}
+		})
+	}
+}
+
+func TestServicePlaceRejectsAStaleExpectedHead(t *testing.T) {
+	snapshot := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", TaskData{
+		Title: "Current", Status: StatusBacklog, Priority: PriorityMedium, Rank: "1/1",
+	})
+	store := newMemoryTaskStore(snapshot)
+	service := serviceUnderTest(store, &sequenceIDSource{values: []string{"01K0M6B8A4FTT8C39MXXYTW7D2"}})
+
+	_, err := service.PlaceMutation(context.Background(), snapshot.State.TaskID, PlaceInput{
+		Status: StatusReady, ExpectedHead: "head-from-a-stale-board",
+	})
+	if CategoryOf(err) != CategoryStaleWrite {
+		t.Fatalf("PlaceMutation() error = %v, want a stale-write", err)
+	}
+	if got := len(store.writes); got != 0 {
+		t.Fatalf("Write() calls = %d, want 0; the mutation must not reach Git", got)
+	}
+}
+
 func TestServiceUpdateBuildsOneDeterministicPackFromNormalizedValues(t *testing.T) {
 	snapshot := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", TaskData{
 		Title: "Old title", Description: "old", Status: StatusBacklog, Priority: PriorityMedium,
