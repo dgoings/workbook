@@ -43,7 +43,8 @@
     .count { color: #2457d6; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .8rem; }
     .ref-label { display: block; overflow: hidden; margin-top: .45rem; color: #526b9b; font-size: .65rem; text-overflow: ellipsis; white-space: nowrap; }
     .new-task-link { display: inline-block; margin-top: .45rem; color: #2457d6; font-size: .73rem; font-weight: 750; text-decoration-thickness: 1px; text-underline-offset: .18em; }
-    .task-list { display: grid; align-content: start; gap: .55rem; min-height: 0; overflow-y: auto; padding: .55rem; }
+    /* overflow-anchor: none guards against browser scroll anchoring walking a scrolled column downward when a render rebuilds its cards (fresh nodes every poll). Keep it even if the renderer reuses nodes. */
+    .task-list { display: grid; align-content: start; gap: .55rem; min-height: 0; overflow-anchor: none; overflow-y: auto; padding: .55rem; }
     .task-list.is-refreshing { opacity: .58; }
     .task-card { border: 1px solid #b9c6d8; border-radius: 4px; background: #fff; padding: .7rem; box-shadow: 0 1px 0 rgba(23,32,51,.05); cursor: grab; }
     .task-card:active { cursor: grabbing; }
