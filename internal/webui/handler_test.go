@@ -4881,6 +4881,161 @@ func TestHandlerRejectsUnknownRoutesAndMutationMethods(t *testing.T) {
 
 // The board sends the tip it rendered so a change proposed against a stale
 // view is reported rather than silently overwriting whatever arrived since.
+// The card lands in its new column before the write completes, and the poll
+// that fires while the request is still open must not drag it back. Reverting
+// for the length of every round trip is the flicker this queue removes.
+func TestHandlerClientRendersAPlacementBeforeItsResponseAndSurvivesAPoll(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	moved := clientPlacementTask("WB-01J00000000000000000000031", "Moved", core.StatusReady, core.PriorityMedium)
+	moved.Head = "head-1"
+	settled := moved
+	settled.Status = core.StatusInProgress
+	settled.Head = "head-2"
+	tasks := []core.Task{moved}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/")
+	script := renderedClientScript(t, response.Body.String())
+	document, err := json.Marshal(TasksDocument{
+		Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmed, err := json.Marshal(settled)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/", string(document)) + script + `
+setTimeout(async () => {
+  const ready = boardLists.find((list) => list.dataset.status === "ready");
+  const inProgress = boardLists.find((list) => list.dataset.status === "in-progress");
+  const card = ready.querySelectorAll(".task-card").find((item) => item.dataset.taskId === ` + strconv.Quote(moved.ID) + `);
+  const dataTransfer = { effectAllowed: "", dropEffect: "", setData() {} };
+  card.rect = { top: 0, bottom: 80 };
+
+  let releaseMutation;
+  const boardFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => {
+    if ((options.method || "GET") !== "GET") {
+      fetchCalls.push({ url, options });
+      return new Promise((resolve) => {
+        releaseMutation = () => resolve({
+          ok: true,
+          json: async () => ({ format: "workbook.task-mutation", version: 1, task: ` + string(confirmed) + ` })
+        });
+      });
+    }
+    return boardFetch(url, options);
+  };
+
+  documentEventListeners.dragstart({ target: card, dataTransfer });
+  const pending = documentEventListeners.drop({
+    target: inProgress, clientY: 1, dataTransfer, preventDefault() {}
+  });
+
+  await Promise.resolve();
+  if (!inProgress.querySelectorAll(".task-card").some((item) => item.dataset.taskId === ` + strconv.Quote(moved.ID) + `)) {
+    throw new Error("the card did not move before the response arrived");
+  }
+
+  // A poll lands while the write is still open. It replaces the whole model,
+  // and the pending intent has to survive that.
+  await intervalCallback();
+  if (!inProgress.querySelectorAll(".task-card").some((item) => item.dataset.taskId === ` + strconv.Quote(moved.ID) + `)) {
+    throw new Error("a poll reverted the optimistic card while the write was open");
+  }
+
+  releaseMutation();
+  await pending;
+  if (!inProgress.querySelectorAll(".task-card").some((item) => item.dataset.taskId === ` + strconv.Quote(moved.ID) + `)) {
+    throw new Error("the confirmed task did not stay in its new column");
+  }
+}, 0);
+`
+	if output, err := exec.Command(node, "-e", program).CombinedOutput(); err != nil {
+		t.Fatalf("execute optimistic placement behavior: %v\n%s", err, output)
+	}
+}
+
+// Two intents on one task go out one at a time, and the second carries the head
+// the first returned. Without that serialization there is no single head the
+// client could name while its own writes are in flight.
+func TestHandlerClientSendsOneTasksIntentsSeriallyThreadingTheHead(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	moved := clientPlacementTask("WB-01J00000000000000000000041", "Moved", core.StatusReady, core.PriorityMedium)
+	moved.Head = "head-1"
+	tasks := []core.Task{moved}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/")
+	script := renderedClientScript(t, response.Body.String())
+	document, err := json.Marshal(TasksDocument{
+		Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/", string(document)) + script + `
+setTimeout(async () => {
+  const ready = boardLists.find((list) => list.dataset.status === "ready");
+  const inProgress = boardLists.find((list) => list.dataset.status === "in-progress");
+  const done = boardLists.find((list) => list.dataset.status === "done");
+  const dataTransfer = { effectAllowed: "", dropEffect: "", setData() {} };
+
+  let open = 0;
+  let maxOpen = 0;
+  const heads = [];
+  let nextHead = 2;
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if ((options.method || "GET") !== "GET") {
+      open += 1;
+      maxOpen = Math.max(maxOpen, open);
+      heads.push(JSON.parse(options.body).expectedHead);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      open -= 1;
+      const head = "head-" + nextHead++;
+      return { ok: true, json: async () => ({
+        format: "workbook.task-mutation", version: 1,
+        task: Object.assign({}, ` + string(mustJSON(t, moved)) + `, { head })
+      }) };
+    }
+    return { ok: true, json: async () => (` + string(document) + `) };
+  };
+
+  const first = ready.querySelectorAll(".task-card").find((item) => item.dataset.taskId === ` + strconv.Quote(moved.ID) + `);
+  first.rect = { top: 0, bottom: 80 };
+  documentEventListeners.dragstart({ target: first, dataTransfer });
+  const firstDrop = documentEventListeners.drop({ target: inProgress, clientY: 1, dataTransfer, preventDefault() {} });
+
+  const second = inProgress.querySelectorAll(".task-card").find((item) => item.dataset.taskId === ` + strconv.Quote(moved.ID) + `);
+  second.rect = { top: 0, bottom: 80 };
+  documentEventListeners.dragstart({ target: second, dataTransfer });
+  const secondDrop = documentEventListeners.drop({ target: done, clientY: 1, dataTransfer, preventDefault() {} });
+
+  await Promise.all([firstDrop, secondDrop]);
+  if (maxOpen !== 1) {
+    throw new Error("one task's intents overlapped; max concurrent writes was " + maxOpen);
+  }
+  if (heads.length !== 2 || heads[0] !== "head-1" || heads[1] !== "head-2") {
+    throw new Error("intents did not thread the confirmed head: " + JSON.stringify(heads));
+  }
+}, 0);
+`
+	if output, err := exec.Command(node, "-e", program).CombinedOutput(); err != nil {
+		t.Fatalf("execute serial intent behavior: %v\n%s", err, output)
+	}
+}
+
 func TestHandlerForwardsTheExpectedHeadOnEveryRequestThatCarriesIt(t *testing.T) {
 	updated := boardTasks()[0]
 
@@ -5473,4 +5628,13 @@ func presentationForTasks(tasks []core.Task) []TaskPresentation {
 		presentation[i] = TaskPresentation{TaskID: task.ID, IDPrefix: task.ID}
 	}
 	return presentation
+}
+
+func mustJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
 }
