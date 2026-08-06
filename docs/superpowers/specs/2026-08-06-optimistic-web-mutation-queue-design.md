@@ -143,8 +143,15 @@ genuinely depends on the failed one — a position within a status the task neve
 reached — the server rejects it in turn and it rolls back on its own merits.
 
 **Conflict.** A `stale-write` category rolls the intent back, forces a refresh,
-and reports it on the task rather than in the global banner, because it is about
-one card and the board around it is fine.
+and re-bases the queue's head from that refresh so the intents behind it retry
+against current truth instead of failing identically.
+
+Reporting stays on the existing board-level banner, worded to distinguish "that
+task changed elsewhere" from an ordinary failure. Per-card reporting would be
+better and is deliberately not attempted here: the card has no message affordance
+today, `pendingTaskMessages` serves the detail view rather than the board, and
+inventing one is a UI design question that deserves its own attention rather
+than a corner of this change.
 
 ## Auto-sync state in the UI
 
@@ -159,7 +166,17 @@ one.
 
 State is read from the same probe the mutation path performs, so the indicator
 reflects what the next mutation will actually do rather than a separately cached
-opinion.
+opinion. A board set to defer still publishes inline when no watcher answers,
+and the indicator says so rather than reporting a mode the board cannot honor.
+
+The mode lives in memory for the life of the server. It is a preference about
+how this board behaves, not a project setting, and `workbook config set
+auto-sync` already means something different — whether CLI mutations publish at
+all. Overloading it would make one name mean two things.
+
+The capability arrives through a separate `NewHandlerWithSyncControl`
+constructor rather than two more positional parameters on one that already
+carries nine.
 
 ## Out of Scope
 
