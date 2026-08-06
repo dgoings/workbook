@@ -1726,7 +1726,10 @@
           main.replaceChildren(taskForm("new", { title: "", description: "", status: current.status, priority: "medium", labels: [] }));
           return;
         }
-        const task = latestTasks.find((candidate) => candidate.id === current.id);
+        // The detail view projects pending intents too. Opening a card right
+        // after moving it on the board would otherwise show the status the
+        // server still holds, which reads as the move having been lost.
+        const task = projectTasks(latestTasks).find((candidate) => candidate.id === current.id);
         if (!task) {
           document.title = "Task not found · Workbook";
           main.replaceChildren(routeMessage("Task not found", "No task has the full ID " + current.id + "."));
