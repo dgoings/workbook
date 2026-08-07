@@ -265,6 +265,90 @@ func assertCLIIgnoredRef(t *testing.T, result gitstore.SyncResult, ref string) {
 	}
 }
 
+// A tip origin holds under a well-formed task name that is not a Workbook
+// history is isolated per task: the fetch still runs to completion and advances
+// every other ref. The mutation that follows must publish on the back of it,
+// because refusing denies every clone publication over one task no command
+// touched -- the same repository-wide denial a stray ref name caused, reached
+// through the object instead of the name.
+func TestRunMutationPublishesWhenAnotherRemoteTaskTipIsMalformed(t *testing.T) {
+	first, second := cliSyncRepositories(t)
+	shared := cliCreateTask(t, first, "Shared task")
+	poisoned := cliCreateTask(t, first, "Poisoned task")
+	if code, _, stderr := run(t, first, "push"); code != 0 {
+		t.Fatalf("initial push code = %d; stderr = %q", code, stderr)
+	}
+	tree := cliGitOutput(t, first, "mktree")
+	commit := cliGitOutput(t, first, "commit-tree", tree, "-m", "not a Workbook task")
+	cliGit(t, first, "push", "--force", "origin", commit+":refs/workbook/tasks/"+poisoned.ID)
+
+	code, stdout, stderr := run(t, second, "create", "After poison", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("poisoned create code = %d, want 0; stderr = %q", code, stderr)
+	}
+	document := assertJSONResult(t, stdout, "create")
+	var created core.Task
+	if err := json.Unmarshal(document.Data, &created); err != nil {
+		t.Fatal(err)
+	}
+	report := decodeMutationSync(t, stdout)
+	if report.Status != syncStatusCompleted || report.Fetch == nil || report.Push == nil {
+		t.Fatalf("sync report = %#v, want a %q inline synchronization", report, syncStatusCompleted)
+	}
+	assertCLISyncStatus(t, *report.Fetch, shared.ID, gitstore.SyncCreated)
+	assertCLISyncStatus(t, *report.Fetch, poisoned.ID, gitstore.SyncInvalid)
+	if report.Push.Status != gitstore.SyncPublished {
+		t.Fatalf("push phase = %#v, want %q", report.Push, gitstore.SyncPublished)
+	}
+	if !remoteHasTaskRef(t, second, created.ID) {
+		t.Fatalf("one malformed remote tip left task %s unpublished; output = %q", created.ID, stdout)
+	}
+
+	// Publication succeeding is not a reason to go quiet: the caller is told
+	// which refs origin holds that this fetch could not validate, because
+	// nothing else in a mutation's output names them.
+	if len(document.Warnings) != 1 ||
+		document.Warnings[0].Code != core.WarningAutoSync ||
+		!strings.Contains(document.Warnings[0].Message, "failed validation") {
+		t.Fatalf("warnings = %#v, want one %s naming the refs that failed validation",
+			document.Warnings, core.WarningAutoSync)
+	}
+
+	// The explicit command reports the same repository state the same way. It
+	// still exits nonzero over the ref it could not validate, but it has
+	// nothing left to publish, which is what the inline gate had stopped being
+	// able to agree with.
+	code, stdout, stderr = run(t, second, "sync", "--json")
+	if code != 7 {
+		t.Fatalf("poisoned sync code = %d, want 7; stderr = %q", code, stderr)
+	}
+	assertJSONError(t, stderr, core.CategoryCorruptData, "")
+	assertCLISyncStatus(t, decodeSyncRunResult(t, stdout, "sync").Push, created.ID, gitstore.SyncUpToDate)
+}
+
+// mutationSyncReport decodes only the sync members these tests assert on, so an
+// unrelated addition to the envelope does not break them.
+type mutationSyncReport struct {
+	Status string                   `json:"status"`
+	Detail string                   `json:"detail"`
+	Fetch  *gitstore.SyncResult     `json:"fetch"`
+	Push   *gitstore.SyncTaskResult `json:"push"`
+}
+
+func decodeMutationSync(t *testing.T, output string) mutationSyncReport {
+	t.Helper()
+	var envelope struct {
+		Sync *mutationSyncReport `json:"sync"`
+	}
+	if err := json.Unmarshal([]byte(output), &envelope); err != nil {
+		t.Fatalf("decode sync envelope: %v; output = %q", err, output)
+	}
+	if envelope.Sync == nil {
+		t.Fatalf("result carried no sync member; output = %q", output)
+	}
+	return *envelope.Sync
+}
+
 func TestRunSyncJSONReportsFailedFetchWhenOriginIsMissing(t *testing.T) {
 	repository := initializedRepository(t)
 
@@ -477,4 +561,14 @@ func cliGit(t *testing.T, directory string, args ...string) {
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, output)
 	}
+}
+
+func cliGitOutput(t *testing.T, directory string, args ...string) string {
+	t.Helper()
+	command := exec.Command("git", append([]string{"-C", directory}, args...)...)
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("git %v: %v", args, err)
+	}
+	return strings.TrimSpace(string(output))
 }

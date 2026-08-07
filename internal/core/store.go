@@ -32,8 +32,10 @@ type ProjectionUpdater interface {
 
 const WarningProjectionUpdate = "projection-update-failed"
 
-// WarningAutoSync reports that a change was recorded locally but automatic
-// synchronization did not complete.
+// WarningAutoSync reports that automatic synchronization did not complete
+// cleanly. Usually the change was recorded locally and nothing was published;
+// it also covers a synchronization that published while leaving something
+// behind, such as a ref on origin it could not validate.
 const WarningAutoSync = "auto-sync-incomplete"
 
 type Warning struct {
