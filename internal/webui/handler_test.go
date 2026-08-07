@@ -4160,6 +4160,15 @@ func renderedClientScript(t *testing.T, body string) string {
 func clientDOMHarness(path, taskDocument string) string {
 	return `
 const scrollIntoViewCalls = [];
+function classTokens(element) {
+  return (element.className || "").split(/\s+/).filter(Boolean);
+}
+function writeClassTokens(element, tokens) {
+  element.className = tokens.join(" ");
+}
+function hasClassToken(element, name) {
+  return classTokens(element).includes(name);
+}
 class TestElement {
   constructor(tagName) {
     this.tagName = tagName.toUpperCase();
@@ -4168,7 +4177,17 @@ class TestElement {
     this.dataset = {};
     this.attributes = {};
     this.style = {};
-    this.classList = { add() {}, remove() {}, toggle() {} };
+    this.classList = {
+      contains: (name) => classTokens(this).includes(name),
+      add: (...names) => { writeClassTokens(this, classTokens(this).concat(names.filter((name) => !classTokens(this).includes(name)))); },
+      remove: (...names) => { writeClassTokens(this, classTokens(this).filter((token) => !names.includes(token))); },
+      toggle: (name, force) => {
+        const present = classTokens(this).includes(name);
+        const next = force === undefined ? !present : Boolean(force);
+        if (next) this.classList.add(name); else this.classList.remove(name);
+        return next;
+      }
+    };
     this.eventListeners = {};
     this._value = "";
     this._textContent = "";
@@ -4188,8 +4207,7 @@ class TestElement {
     });
   }
   replaceChildren(...children) {
-    this.children.forEach((child) => { child.parentElement = null; });
-    this.children = [];
+    [...this.children].forEach((child) => child.remove());
     this.append(...children);
   }
   insertBefore(child, reference) {
@@ -4204,6 +4222,10 @@ class TestElement {
     const index = this.parentElement.children.indexOf(this);
     if (index >= 0) this.parentElement.children.splice(index, 1);
     this.parentElement = null;
+    // A browser blurs a focused element the moment it leaves the document, so
+    // the harness has to as well: without this a destroy-and-rebuild render
+    // looks like it preserved focus when it actually dropped it on the floor.
+    if (globalThis.activeElement && this.contains(globalThis.activeElement)) globalThis.activeElement = null;
   }
   setAttribute(name, value) { this.attributes[name] = String(value); }
   getAttribute(name) { return this.attributes[name] ?? null; }
@@ -4217,7 +4239,7 @@ class TestElement {
     if (this.eventListeners[name] === listener) delete this.eventListeners[name];
   }
   closest(selector) {
-    const hasClass = (element, name) => (element.className || "").split(/\s+/).includes(name);
+    const hasClass = hasClassToken;
     for (let element = this; element; element = element.parentElement) {
       if (selector === "a[href]" && element.tagName === "A" && element.href) return element;
       if (selector === ".task-card" && hasClass(element, "task-card")) return element;
@@ -4245,7 +4267,7 @@ class TestElement {
     const matches = [];
     const visit = (element) => {
       for (const child of element.children || []) {
-        if (selector === ".task-card" && child.className === "task-card") matches.push(child);
+        if (selector === ".task-card" && hasClassToken(child, "task-card")) matches.push(child);
         if (selector === "[role=\"option\"]" && child.attributes.role === "option") matches.push(child);
         if (selector === "[data-relationship-row]" && Object.hasOwn(child.dataset, "relationshipRow")) matches.push(child);
         visit(child);
