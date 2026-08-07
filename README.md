@@ -657,6 +657,28 @@ DELETE /api/tasks/<id>/dependencies/<dependency>  remove a prerequisite
 GET /healthz                  versioned health JSON
 ```
 
+The board answers only its own pages. It has no accounts and no tokens, so three
+checks stand in for them and every route is subject to all three:
+
+- The `Host` header must name the address the listener bound. A page that
+  rebinds its own DNS name to the loopback address reaches the port with a
+  foreign `Host` and is refused, so it never gains same-origin access.
+- An `Origin` header, when a browser sends one, must name the board itself. A
+  cross-site request that carries one is refused whatever its method.
+- `POST`, `PUT`, `PATCH`, and `DELETE` must send `Content-Type: application/json`,
+  with or without a body. The three media types a cross-site HTML form can send
+  need no preflight, so refusing them is what keeps a drive-by page from creating
+  tasks that publish to `origin` and are later read as agent instructions.
+
+A refused request is answered with a versioned `workbook.error` document and
+never reaches task storage: `403` for a foreign `Host` or `Origin`, and `415`
+for a mutation that does not declare JSON.
+
+Binding `--addr` to anything other than a loopback address makes the board
+reachable by whoever shares the network, and those checks cannot tell a
+teammate from a stranger. `workbook serve` prints a warning naming the address
+and the missing authentication when it does.
+
 Drag a task card within a column to reorder it or into another canonical status
 column to change status and position together. Workbook keeps the task's priority
 unchanged and clamps drops outside that priority group to the nearest group
