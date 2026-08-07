@@ -11,6 +11,7 @@ import (
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
+	"github.com/dgoings/workbook/internal/testenv"
 )
 
 // Mutation witness: accepting inconsistent populations, an empty history, or
@@ -208,7 +209,7 @@ func TestBuildFixtureCreatesExactAcceptancePopulationAcrossObjectFormats(t *test
 	for _, objectFormat := range []string{"sha1", "sha256"} {
 		t.Run(objectFormat, func(t *testing.T) {
 			if objectFormat == "sha256" && !supportsObjectFormat(t, objectFormat) {
-				t.Skip("Git does not support SHA-256 repositories")
+				testenv.MissingCapability(t, "Git does not support SHA-256 repositories")
 			}
 			spec := FixtureSpec{
 				TotalTasks:        500,
@@ -413,7 +414,7 @@ func TestBuildFixtureCreatesCompleteTipStatesWithoutReplay(t *testing.T) {
 	for _, objectFormat := range []string{"sha1", "sha256"} {
 		t.Run(objectFormat, func(t *testing.T) {
 			if objectFormat == "sha256" && !supportsObjectFormat(t, objectFormat) {
-				t.Skip("Git does not support SHA-256 repositories")
+				testenv.MissingCapability(t, "Git does not support SHA-256 repositories")
 			}
 
 			spec := FixtureSpec{TotalTasks: 3, ActiveTasks: 3, OperationsPerTask: 4, ObjectFormat: objectFormat}

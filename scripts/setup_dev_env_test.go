@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/dgoings/workbook/internal/testenv"
 )
 
 func TestSetupInstallsPublishedAndWorkingTreeBuildsSideBySide(t *testing.T) {
@@ -282,7 +284,7 @@ func latestReleaseTag(t *testing.T, root string) string {
 	}
 	tags := strings.Fields(string(output))
 	if len(tags) == 0 {
-		t.Skip("no release tag is available in this clone")
+		testenv.MissingCapability(t, "no release tag is available in this clone")
 	}
 	return tags[0]
 }

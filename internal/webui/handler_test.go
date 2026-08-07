@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/testenv"
 )
 
 const contentSecurityPolicy = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"
@@ -209,10 +210,7 @@ func TestHandlerDeletesRestoresAndListsTombstonedTasks(t *testing.T) {
 }
 
 func TestHandlerClientRestoreFollowsSupersedingRefreshBeforeNavigation(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	deleted := clientPlacementTask("WB-01J00000000000000000000060", "Restored task", core.StatusReady, core.PriorityMedium)
 	deleted.Description = "Restore me without racing the task refresh."
 	deleted.Deleted = true
@@ -702,10 +700,7 @@ func TestHandlerRendersTextLikeCopyableTaskIDControls(t *testing.T) {
 }
 
 func TestHandlerRequiresCanonicalStatusChoiceForUnknownTask(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	tasks := boardTasks()
 	unknown := tasks[2]
 	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
@@ -747,10 +742,7 @@ setTimeout(() => {
 }
 
 func TestHandlerClientMarksDescriptionAsFlexibleField(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	task := boardTasks()[0]
 	handler := NewHandler(func(context.Context) ([]core.Task, error) { return []core.Task{task}, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
 
@@ -786,10 +778,7 @@ setTimeout(() => {
 }
 
 func TestHandlerClientUsesSharedTaskSidebarLayout(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	task := boardTasks()[0]
 	handler := NewHandler(func(context.Context) ([]core.Task, error) { return []core.Task{task}, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
 
@@ -883,10 +872,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientSidebarAccessibilityAndMobileOrder(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	current := clientPlacementTask("WB-01J00000000000000000000072", "Current task", core.StatusReady, core.PriorityMedium)
 	candidate := clientPlacementTask("WB-01J00000000000000000000073", "Candidate task", core.StatusDone, core.PriorityHigh)
 	tasks := []core.Task{current, candidate}
@@ -991,10 +977,7 @@ setTimeout(() => {
 }
 
 func TestHandlerClientClampsRelationshipListboxPlacement(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	handler := NewHandler(func(context.Context) ([]core.Task, error) { return nil, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
 	response := request(t, handler, http.MethodGet, "/tasks/new")
 	if response.Code != http.StatusOK {
@@ -1044,10 +1027,7 @@ for (const testCase of cases) {
 }
 
 func TestHandlerClientStagesNewTaskRelationshipsWithoutMutating(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	dependsCandidate := clientPlacementTask("WB-01J00000000000000000000072", "Depends on candidate", core.StatusDone, core.PriorityHigh)
 	blocksCandidate := clientPlacementTask("WB-01J00000000000000000000073", "Blocks candidate", core.StatusBacklog, core.PriorityLow)
 	tasks := []core.Task{dependsCandidate, blocksCandidate}
@@ -1176,10 +1156,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientRefreshesMountedNewTaskRelationshipCandidates(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	becomesDeleted := clientPlacementTask("WB-01J00000000000000000000081", "Becomes deleted", core.StatusReady, core.PriorityHigh)
 	becomesRestored := clientPlacementTask("WB-01J00000000000000000000082", "Becomes restored", core.StatusBacklog, core.PriorityLow)
 	becomesRestored.Deleted = true
@@ -1354,10 +1331,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientCreatesTaskWithBothRelationshipDirections(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	prerequisite := clientPlacementTask("WB-01J00000000000000000000074", "Prerequisite", core.StatusDone, core.PriorityHigh)
 	blockedTask := clientPlacementTask("WB-01J00000000000000000000075", "Blocked task", core.StatusBacklog, core.PriorityLow)
 	lateCandidate := clientPlacementTask("WB-01J00000000000000000000080", "Late candidate", core.StatusInProgress, core.PriorityMedium)
@@ -1571,10 +1545,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientPreservesNewTaskRelationshipDraftsWhenCreateFails(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	prerequisite := clientPlacementTask("WB-01J00000000000000000000077", "Prerequisite", core.StatusDone, core.PriorityHigh)
 	blockedTask := clientPlacementTask("WB-01J00000000000000000000078", "Blocked task", core.StatusBacklog, core.PriorityLow)
 	pendingPrerequisite := clientPlacementTask("WB-01J0000000000000000000007F", "Pending prerequisite", core.StatusReady, core.PriorityMedium)
@@ -1725,10 +1696,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientRetainsFailedRelationshipDraftsAfterCreate(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	prerequisite := clientPlacementTask("WB-01J00000000000000000000079", "Prerequisite", core.StatusDone, core.PriorityHigh)
 	blockedTask := clientPlacementTask("WB-01J0000000000000000000007A", "Blocked task", core.StatusBacklog, core.PriorityLow)
 	createdID := "WB-01J0000000000000000000007B"
@@ -1971,10 +1939,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientDoesNotDuplicateCreatedTaskWhenRefreshFails(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	prerequisite := clientPlacementTask("WB-01J0000000000000000000007C", "Prerequisite", core.StatusDone, core.PriorityHigh)
 	blockedTask := clientPlacementTask("WB-01J0000000000000000000007D", "Blocked task", core.StatusBacklog, core.PriorityLow)
 	createdID := "WB-01J0000000000000000000007E"
@@ -2108,10 +2073,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientCreatedTaskRefreshDoesNotNavigateDetachedRoute(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	blockedTask := clientPlacementTask("WB-01J00000000000000000000085", "Blocked task", core.StatusBacklog, core.PriorityLow)
 	otherTask := clientPlacementTask("WB-01J00000000000000000000086", "Other task", core.StatusInProgress, core.PriorityMedium)
 	createdID := "WB-01J00000000000000000000087"
@@ -2268,10 +2230,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerShowsRecoverableErrorWhenInitialTaskLoadFails(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	task := boardTasks()[0]
 	handler := NewHandler(func(context.Context) ([]core.Task, error) { return []core.Task{task}, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
 
@@ -2318,10 +2277,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientRendersDependencyRelationships(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	current := clientPlacementTask("WB-01J00000000000000000000031", "Current task", core.StatusReady, core.PriorityMedium)
 	activeDependency := clientPlacementTask("WB-01J00000000000000000000032", "Active prerequisite", core.StatusDone, core.PriorityHigh)
 	activeBlocked := clientPlacementTask("WB-01J00000000000000000000033", "Active blocked task", core.StatusBlocked, core.PriorityLow)
@@ -2439,10 +2395,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientMountsCompactRelationshipsInSidebar(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	current := clientPlacementTask("WB-01J00000000000000000000037", "Current task", core.StatusReady, core.PriorityMedium)
 	activeDependency := clientPlacementTask("WB-01J00000000000000000000038", "Active prerequisite", core.StatusDone, core.PriorityHigh)
 	activeBlocked := clientPlacementTask("WB-01J00000000000000000000039", "Active blocked task", core.StatusBlocked, core.PriorityLow)
@@ -2526,10 +2479,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientFiltersDependencyComboboxCandidates(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	current := clientPlacementTask("WB-01J00000000000000000000041", "Current task", core.StatusReady, core.PriorityMedium)
 	existingDependency := clientPlacementTask("WB-01J00000000000000000000042", "Existing prerequisite", core.StatusDone, core.PriorityHigh)
 	alreadyBlocked := clientPlacementTask("WB-01J00000000000000000000043", "Already blocked", core.StatusBlocked, core.PriorityLow)
@@ -2609,10 +2559,7 @@ setTimeout(() => {
 }
 
 func TestHandlerClientDependencySnapshotPrefersTombstones(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	current := clientPlacementTask("WB-01J00000000000000000000047", "Current task", core.StatusReady, core.PriorityMedium)
 	activeDependency := clientPlacementTask("WB-01J00000000000000000000048", "Active prerequisite copy", core.StatusDone, core.PriorityHigh)
 	activeBlocked := clientPlacementTask("WB-01J00000000000000000000049", "Active blocked copy", core.StatusBlocked, core.PriorityLow)
@@ -2682,10 +2629,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientDependencyComboboxSelectionCollapseIsCoherent(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	current := clientPlacementTask("WB-01J0000000000000000000004B", "Current task", core.StatusReady, core.PriorityMedium)
 	pointerCandidate := clientPlacementTask("WB-01J0000000000000000000004C", "Pointer candidate", core.StatusDone, core.PriorityHigh)
 	keyboardCandidate := clientPlacementTask("WB-01J0000000000000000000004D", "Keyboard candidate", core.StatusBacklog, core.PriorityLow)
@@ -2747,10 +2691,7 @@ setTimeout(() => {
 }
 
 func TestHandlerClientDependencyComboboxScrollsKeyboardOptionIntoView(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	current := clientPlacementTask("WB-01J0000000000000000000004E", "Current task", core.StatusReady, core.PriorityMedium)
 	first := clientPlacementTask("WB-01J0000000000000000000004F", "First candidate", core.StatusDone, core.PriorityHigh)
 	second := clientPlacementTask("WB-01J0000000000000000000004G", "Second candidate", core.StatusBacklog, core.PriorityLow)
@@ -2794,10 +2735,7 @@ setTimeout(() => {
 }
 
 func TestHandlerClientDependencyMutationOrientationAndRefresh(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	current := clientPlacementTask("WB-01J00000000000000000000051", "Current task", core.StatusReady, core.PriorityMedium)
 	existingDependency := clientPlacementTask("WB-01J00000000000000000000052", "Existing prerequisite", core.StatusDone, core.PriorityHigh)
 	existingBlocked := clientPlacementTask("WB-01J00000000000000000000053", "Existing blocked task", core.StatusBlocked, core.PriorityLow)
@@ -2953,10 +2891,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientDependencyMutationFollowsSupersedingRefresh(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	current := clientPlacementTask("WB-01J00000000000000000000056", "Current task", core.StatusReady, core.PriorityMedium)
 	candidate := clientPlacementTask("WB-01J00000000000000000000057", "Candidate task", core.StatusDone, core.PriorityHigh)
 	initialTasks := []core.Task{current, candidate}
@@ -3051,10 +2986,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientDependencyMutationSettlesAfterControllerSupersession(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	current := clientPlacementTask("WB-01J0000000000000000000005A", "Current task", core.StatusReady, core.PriorityMedium)
 	candidate := clientPlacementTask("WB-01J0000000000000000000005B", "Candidate task", core.StatusDone, core.PriorityHigh)
 	initialTasks := []core.Task{current, candidate}
@@ -3183,10 +3115,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientDependencyMutationDoesNotWriteDetachedGroupAfterNewerPoll(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	current := clientPlacementTask("WB-01J0000000000000000000005C", "Current task", core.StatusReady, core.PriorityMedium)
 	candidate := clientPlacementTask("WB-01J0000000000000000000005D", "Candidate task", core.StatusDone, core.PriorityHigh)
 	initialTasks := []core.Task{current, candidate}
@@ -3314,10 +3243,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientDependencyMutationErrorDoesNotWriteDetachedGroup(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	current := clientPlacementTask("WB-01J0000000000000000000005E", "Current task", core.StatusReady, core.PriorityMedium)
 	candidate := clientPlacementTask("WB-01J0000000000000000000005F", "Candidate task", core.StatusDone, core.PriorityHigh)
 	tasks := []core.Task{current, candidate}
@@ -3405,10 +3331,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientDependencyMutationReportsDeletedContextFailure(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	current := clientPlacementTask("WB-01J00000000000000000000058", "Current task", core.StatusReady, core.PriorityMedium)
 	candidate := clientPlacementTask("WB-01J00000000000000000000059", "Candidate task", core.StatusDone, core.PriorityHigh)
 	initialTasks := []core.Task{current, candidate}
@@ -3495,10 +3418,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientDependencyFailureRecoveryAndKeyboard(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	current := clientPlacementTask("WB-01J00000000000000000000061", "Current task", core.StatusReady, core.PriorityMedium)
 	alpha := clientPlacementTask("WB-01J00000000000000000000062", "Alpha prerequisite", core.StatusDone, core.PriorityHigh)
 	beta := clientPlacementTask("WB-01J00000000000000000000063", "Beta blocked task", core.StatusBacklog, core.PriorityLow)
@@ -3660,10 +3580,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerInterceptsOrdinarySameOriginNavigation(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	task := boardTasks()[0]
 	handler := NewHandler(func(context.Context) ([]core.Task, error) { return []core.Task{task}, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
 
@@ -3734,10 +3651,7 @@ setTimeout(() => {
 }
 
 func TestHandlerClientCopiesFullTaskIDsAndSeparatesDrag(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	tasks := boardTasks()[:1]
 	task := tasks[0]
 	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
@@ -3854,10 +3768,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientBoardIgnoresUnknownStatuses(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	tasks := boardTasks()
 	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
 
@@ -3904,10 +3815,7 @@ setTimeout(() => {
 }
 
 func TestHandlerClientPollsEverySecond(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	tasks := boardTasks()[:1]
 	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
 
@@ -3936,10 +3844,7 @@ if (intervalDelay !== 1000) throw new Error("polling interval = " + intervalDela
 }
 
 func TestHandlerClientPlacementClampsSameColumnPointerGapsToSamePriorityPeers(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	high := clientPlacementTask("WB-01J00000000000000000000011", "High", core.StatusReady, core.PriorityHigh)
 	moved := clientPlacementTask("WB-01J00000000000000000000012", "Moved medium", core.StatusReady, core.PriorityMedium)
 	firstMedium := clientPlacementTask("WB-01J00000000000000000000013", "First medium", core.StatusReady, core.PriorityMedium)
@@ -4027,10 +3932,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientSendsAtomicClampedPlacementRequests(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	moved := clientPlacementTask("WB-01J00000000000000000000021", "Moved medium", core.StatusReady, core.PriorityMedium)
 	destinationHigh := clientPlacementTask("WB-01J00000000000000000000022", "In progress high", core.StatusInProgress, core.PriorityHigh)
 	destinationMedium := clientPlacementTask("WB-01J00000000000000000000023", "In progress medium", core.StatusInProgress, core.PriorityMedium)
@@ -4163,6 +4065,18 @@ func TestHandlerRefreshesTasksOnEveryAPIRequest(t *testing.T) {
 	if calls != 2 {
 		t.Fatalf("lister calls = %d, want 2", calls)
 	}
+}
+
+// requireNode resolves the node binary the embedded client behavior tests
+// execute. Without one the test skips as a marked missing capability, and
+// fails instead when the environment requires every capability present.
+func requireNode(t *testing.T) string {
+	t.Helper()
+	node, err := exec.LookPath("node")
+	if err != nil {
+		testenv.MissingCapability(t, "node is required to execute the embedded client behavior")
+	}
+	return node
 }
 
 func renderedClientScript(t *testing.T, body string) string {
@@ -4885,10 +4799,7 @@ func TestHandlerRejectsUnknownRoutesAndMutationMethods(t *testing.T) {
 // that fires while the request is still open must not drag it back. Reverting
 // for the length of every round trip is the flicker this queue removes.
 func TestHandlerClientRendersAPlacementBeforeItsResponseAndSurvivesAPoll(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	moved := clientPlacementTask("WB-01J00000000000000000000031", "Moved", core.StatusReady, core.PriorityMedium)
 	moved.Head = "head-1"
 	settled := moved
@@ -4966,10 +4877,7 @@ setTimeout(async () => {
 // the first returned. Without that serialization there is no single head the
 // client could name while its own writes are in flight.
 func TestHandlerClientSendsOneTasksIntentsSeriallyThreadingTheHead(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	moved := clientPlacementTask("WB-01J00000000000000000000041", "Moved", core.StatusReady, core.PriorityMedium)
 	moved.Head = "head-1"
 	tasks := []core.Task{moved}
@@ -5231,10 +5139,7 @@ func TestHandlerEscapesHostileTaskContent(t *testing.T) {
 }
 
 func TestHandlerClientRendersTaskHistoryLaneRowsAndComparisons(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	detail := historyDetail()
 	task := detail.Task
 	handler := NewHandler(func(context.Context) ([]core.Task, error) { return []core.Task{task}, nil },
