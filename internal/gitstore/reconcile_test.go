@@ -121,6 +121,73 @@ func TestFetchRecordsNoCommitWhenReplayedValueMatchesUpstream(t *testing.T) {
 	}
 }
 
+// Two clones setting the same field to *different* values is the case the
+// README calls last-syncer-wins, and it is the one same-field shape no test
+// pinned: the agreeing case above says nothing about which value survives.
+// The replay decides it — the fetching clone's operation lands on top of the
+// fetched tip — so the clone that synchronizes last wins, quietly, with no
+// conflict entry. Making it silently a conflict, or silently keeping the
+// remote value, would both pass every other test in this package.
+func TestFetchResolvesOpposedSameFieldStatusChangesLastSyncerWins(t *testing.T) {
+	ctx := context.Background()
+	first, second, config := syncRepositories(t)
+	task := createSyncTask(t, first, config, "Contested status")
+	publishTaskRefs(t, first)
+	if _, err := second.Fetch(ctx, config); err != nil {
+		t.Fatal(err)
+	}
+
+	// The same field, two different values, neither clone having seen the other.
+	setSyncTaskStatus(t, first, config, task.ID, core.StatusInProgress)
+	publishTaskRefs(t, first)
+	setSyncTaskStatus(t, second, config, task.ID, core.StatusBlocked)
+
+	result, err := second.Fetch(ctx, config)
+	if err != nil {
+		t.Fatalf("Fetch(opposed status) error = %v; result = %#v", err, result)
+	}
+	if len(result.Conflicts) != 0 {
+		t.Fatalf("conflicts = %#v, want none: opposed status is decided, not reported", result.Conflicts)
+	}
+	assertSyncOutcome(t, result, task.ID, SyncReconciled)
+
+	// The fetching clone replayed last, so its value is the one that stands,
+	// and it stands on top of the remote history rather than replacing it.
+	snapshot, err := second.Get(ctx, config, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.State.Task.Status != core.StatusBlocked {
+		t.Fatalf("reconciled status = %q, want %q from the clone that synchronized last",
+			snapshot.State.Task.Status, core.StatusBlocked)
+	}
+	remoteTip := refValue(t, first, taskRefPrefix+task.ID)
+	if !mergeBaseIsAncestor(t, second.Root, remoteTip, snapshot.Head) {
+		t.Fatalf("reconciled tip %s does not descend from the fetched tip %s", snapshot.Head, remoteTip)
+	}
+
+	// Convergence is the point: publishing the replay leaves the clone that
+	// synchronized first holding the same value, with nothing left to resolve.
+	if _, err := second.Push(ctx, config); err != nil {
+		t.Fatal(err)
+	}
+	firstResult, err := first.Fetch(ctx, config)
+	if err != nil {
+		t.Fatalf("Fetch(converging) error = %v; result = %#v", err, firstResult)
+	}
+	if len(firstResult.Conflicts) != 0 {
+		t.Fatalf("converging conflicts = %#v, want none", firstResult.Conflicts)
+	}
+	converged, err := first.Get(ctx, config, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if converged.State.Task.Status != core.StatusBlocked || converged.Head != snapshot.Head {
+		t.Fatalf("converged task = %q at %s, want %q at %s",
+			converged.State.Task.Status, converged.Head, core.StatusBlocked, snapshot.Head)
+	}
+}
+
 // Parked tips are retired by the next mutation of their task, not by the fetch
 // that created them: a fetch must not delete recoverable work in the same
 // command that orphaned it.
