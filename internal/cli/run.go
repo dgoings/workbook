@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -804,12 +805,59 @@ func writeValidationResult(output io.Writer, result historyvalidation.Result) {
 	}
 }
 
+// defaultServeAddr is where the board prefers to live, so the common
+// single-project setup keeps a stable, bookmarkable URL. The port is a
+// preference rather than a contract: when nobody passed --addr and another
+// process already holds it — a second project's board on the same machine is
+// an expected setup — serve falls back to an OS-assigned port instead of
+// dying. An explicit --addr is a contract and never falls back.
+const defaultServeAddr = "127.0.0.1:7331"
+
+// openBoardListener binds the board's listener. The fallback triggers only
+// for an unchosen default address that is already in use; every other bind
+// failure, such as permission denied on a privileged port, stays a loud
+// operational error because moving to another port would not cure it.
+func openBoardListener(addr string, explicit bool) (net.Listener, error) {
+	return openBoardListenerWith(net.Listen, addr, explicit)
+}
+
+// openBoardListenerWith takes the bind as a parameter so a test can reproduce
+// failures a test process cannot provoke for real, such as permission denied
+// on a privileged port.
+func openBoardListenerWith(listen func(network, address string) (net.Listener, error), addr string, explicit bool) (net.Listener, error) {
+	listener, err := listen("tcp", addr)
+	if err == nil {
+		return listener, nil
+	}
+	if explicit || !errors.Is(err, syscall.EADDRINUSE) {
+		return nil, core.Wrap(core.CategoryOperational, "open board listener", err)
+	}
+	host, _, splitErr := net.SplitHostPort(addr)
+	if splitErr != nil {
+		return nil, core.Wrap(core.CategoryOperational, "open board listener", err)
+	}
+	// Port 0 hands the choice to the OS, and the caller prints the resolved
+	// address, so the user learns where the board actually is.
+	fallback, fallbackErr := listen("tcp", net.JoinHostPort(host, "0"))
+	if fallbackErr != nil {
+		return nil, core.Wrap(core.CategoryOperational, "open board listener", fallbackErr)
+	}
+	return fallback, nil
+}
+
 func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, stderr io.Writer) error {
 	flags := newFlagSet("serve")
-	addr := flags.String("addr", "127.0.0.1:7331", "listener address")
+	addr := flags.String("addr", defaultServeAddr, "listener address (default "+defaultServeAddr+", or a free port when that one is taken)")
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
+	// An address the user typed is a contract; the default is a preference.
+	addrChosen := false
+	flags.Visit(func(visited *flag.Flag) {
+		if visited.Name == "addr" {
+			addrChosen = true
+		}
+	})
 
 	service, repository, store, err := openServiceParts(ctx, cwd)
 	if err != nil {
@@ -861,9 +909,9 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 		publisher.state,
 		publisher.setMode,
 	)
-	listener, err := net.Listen("tcp", *addr)
+	listener, err := openBoardListener(*addr, addrChosen)
 	if err != nil {
-		return core.Wrap(core.CategoryOperational, "open board listener", err)
+		return err
 	}
 	fmt.Fprintf(stderr, "Workbook board: http://%s\n", listener.Addr())
 
