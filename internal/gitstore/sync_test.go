@@ -1038,6 +1038,11 @@ func syncRepositories(t *testing.T) (*Repository, *Repository, core.ProjectConfi
 	ctx := context.Background()
 	bare := filepath.Join(t.TempDir(), "origin.git")
 	syncGit(t, t.TempDir(), "init", "--bare", "--quiet", bare)
+	// Background auto-gc spawned by receive-pack can outlive the test and race
+	// t.TempDir cleanup with "directory not empty" on slow runners.
+	syncGit(t, bare, "config", "receive.autogc", "false")
+	syncGit(t, bare, "config", "gc.auto", "0")
+	syncGit(t, bare, "config", "maintenance.auto", "false")
 
 	seedPath := testrepo.New(t)
 	syncGit(t, seedPath, "branch", "-M", "main")
