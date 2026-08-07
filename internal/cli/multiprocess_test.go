@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -274,7 +273,13 @@ func buildWorkbookBinary(t *testing.T) string {
 	}
 	command := exec.Command("go", "build", "-o", binary, "./cmd/workbook")
 	command.Dir = root
-	command.Env = os.Environ()
+	// Not os.Environ(): TestMain has already pointed HOME at a temporary
+	// directory, and the module and build caches would move with it. See
+	// toolchainEnvironment.
+	if len(toolchainEnvironment) == 0 {
+		t.Fatal("toolchainEnvironment is empty; TestMain must record it before replacing HOME")
+	}
+	command.Env = toolchainEnvironment
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("go build ./cmd/workbook: %v\n%s", err, output)
 	}
