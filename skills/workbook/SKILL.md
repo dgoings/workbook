@@ -21,6 +21,21 @@ SQLite projections, or configuration directly.
 5. Read the full title, description, status, dependencies, labels, and
    acceptance context before editing files.
 
+## IDs are for commands, titles are for humans
+
+The full task ID is the machine interface; titles are for humans. Keep using
+the resolved full ID for every Workbook CLI invocation, but build prose —
+progress reports, completion summaries, questions, and error reports — around
+the task title.
+
+- Announce a selected task by title: `Taking "Add remote claim and lease
+  workflow".`, not `Taking WB-01KYD730XZ9S88N1GGGSSG2CJ5.`
+- Report lifecycle transitions the same way: `"Add remote claim and lease
+  workflow" is ready for review.`
+- Describe dependencies and blockers by the titles of the tasks involved.
+- Mention an ID only when it adds something: disambiguating similarly titled
+  tasks, or giving a human a command to run themselves.
+
 ## Follow the lifecycle
 
 Before implementation, run:
@@ -69,5 +84,6 @@ asked, or to reconcile after exit code 6.
 
 - Use canonical `in-progress` and `in-review`, not display labels.
 - Keep using the resolved full task ID after selection.
+- Lead with task titles, not raw IDs, when reporting to a human.
 - Check every JSON command result; do not assume a mutation succeeded.
 - Do not claim that Workbook creates branches, pull requests, or merges code.
