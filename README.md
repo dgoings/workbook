@@ -74,6 +74,15 @@ needs no separate reconciliation step. The three concurrent situations Workbook
 will not decide are reported instead, and exit `8`; see
 [Reconciling divergent histories](#reconciling-divergent-histories).
 
+A ref on `origin` that fails validation is likewise no reason to stop
+publishing. Validation is per task, so a fetch that ran to completion isolates
+the bad tip, advances every other ref, and the change is published as usual; the
+refs it could not validate travel back as an `auto-sync-incomplete` warning
+naming them. Only a fetch that failed before it completed — an unreachable
+`origin`, a repository it could not read — leaves the change recorded locally
+and unpublished. One task nobody's command touched cannot deny publication to
+every clone.
+
 `workbook fetch`, `workbook push`, and `workbook sync` remain available for
 explicit whole-project synchronization, and teams that want publication tied to
 ordinary code pushes can still opt in per clone with `workbook hooks install`.
@@ -464,8 +473,10 @@ the corresponding local task ref. A missing local task is created, and a behind
 local task is fast-forwarded in one compare-and-swap transaction. Local-ahead
 tasks are left alone; a divergent task has its local-only operations replayed
 onto the fetched tip in the same transaction. Invalid fetched data remains
-isolated and causes a nonzero exit; valid unrelated tracking refs can still
-reconcile in that run. Stale refs are pruned only from Workbook's
+isolated to its own task and causes a nonzero exit; valid unrelated tracking
+refs can still reconcile in that run, and because the fetch phase ran to
+completion the publication that follows it in a `sync` or an automatically
+synchronizing mutation still happens. Stale refs are pruned only from Workbook's
 isolated tracking namespace, allowing `sync` to republish an intact canonical
 task ref if its remote counterpart was removed externally.
 
@@ -504,7 +515,10 @@ compatible local task refs, replay any divergent local history onto the fetched
 tip, then publish the resulting local tips. Reconciliation is per task and
 publication covers every canonical tip, so one task that needs a decision leaves
 every other task fetched, replayed, and published, and publishes its own
-replayed prefix too. The command does not replay every buried
+replayed prefix too. The same holds for a task whose tip on `origin` failed
+validation: the push phase is gated on the fetch phase having completed, not on
+whether it reported failures, so a single malformed tip is reported and exits
+nonzero while every other task is still published. The command does not replay every buried
 checkpoint during ordinary synchronization; that is reserved for the explicit
 `workbook validate` audit. The command never fetches or pushes code branches and
 does not create a hidden tasks branch.
