@@ -655,7 +655,15 @@ task ID is accepted.
 ### Local web board
 
 `workbook serve` starts a foreground, loopback-only board at
-`http://127.0.0.1:7331` by default. In fish, run it in the foreground with:
+`http://127.0.0.1:7331` by default. That port is a preference rather than a
+requirement: when it is already taken — a second project's board on the same
+machine is an expected setup — serve binds a free port instead and prints the
+address it chose, so the second board simply starts. Only an address already in
+use is treated this way; any other bind failure, such as permission denied on a
+privileged port, still fails with an operational error. An address given with
+`--addr` is a contract and never moves: serve fails rather than silently
+listening somewhere the user did not ask for. In fish, run it in the foreground
+with:
 
 ```fish
 workbook serve

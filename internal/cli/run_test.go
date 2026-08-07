@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -15,6 +16,8 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1616,6 +1619,214 @@ func TestRunServeReportsListenerFailureAsOperational(t *testing.T) {
 	}
 	if stdout.Len() != 0 || stderr.Len() != 0 {
 		t.Fatalf("runServe() output = stdout %q stderr %q, want empty", stdout.String(), stderr.String())
+	}
+}
+
+func TestOpenBoardListenerKeepsRequestedAddressWhenFree(t *testing.T) {
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := probe.Addr().String()
+	if err := probe.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	listener, err := openBoardListener(addr, false)
+	if err != nil {
+		t.Fatalf("openBoardListener(%q, false) error = %v, want nil", addr, err)
+	}
+	defer listener.Close()
+	if got := listener.Addr().String(); got != addr {
+		t.Fatalf("openBoardListener(%q, false) bound %q, want the requested address", addr, got)
+	}
+}
+
+func TestOpenBoardListenerFallsBackWhenDefaultAddressTaken(t *testing.T) {
+	// An OS-assigned port stands in for 7331 so this test never competes with a
+	// board or another test run for the real default; the address serve did not
+	// choose is what drives the fallback, not the number.
+	// TestRunServeFallsBackWhenDefaultAddressTaken exercises 7331 itself.
+	blocker, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Close()
+	taken := blocker.Addr().String()
+
+	listener, err := openBoardListener(taken, false)
+	if err != nil {
+		t.Fatalf("openBoardListener(%q, false) error = %v, want ephemeral fallback", taken, err)
+	}
+	defer listener.Close()
+
+	host, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if host != "127.0.0.1" {
+		t.Fatalf("fallback host = %q, want the requested host 127.0.0.1", host)
+	}
+	_, takenPort, err := net.SplitHostPort(taken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if port == takenPort {
+		t.Fatalf("fallback port = %q, want a port other than the occupied %q", port, takenPort)
+	}
+}
+
+func TestOpenBoardListenerNeverFallsBackForExplicitAddress(t *testing.T) {
+	blocker, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Close()
+	taken := blocker.Addr().String()
+
+	listener, err := openBoardListener(taken, true)
+	if listener != nil {
+		listener.Close()
+		t.Fatalf("openBoardListener(%q, true) bound %q, want a failure for the occupied explicit address", taken, listener.Addr())
+	}
+	if core.CategoryOf(err) != core.CategoryOperational {
+		t.Fatalf("openBoardListener(%q, true) category = %q, want %q; error = %v", taken, core.CategoryOf(err), core.CategoryOperational, err)
+	}
+	if !strings.Contains(err.Error(), "listen tcp") {
+		t.Fatalf("openBoardListener(%q, true) error = %q, want listener cause", taken, err)
+	}
+}
+
+func TestOpenBoardListenerNeverFallsBackOnOtherBindFailures(t *testing.T) {
+	// Permission denied on a privileged port is the archetypal failure another
+	// port would not cure, and a test process cannot provoke it portably, so
+	// the bind is injected. The recorded attempts prove serve did not quietly
+	// retry somewhere else.
+	var attempts []string
+	denied := &net.OpError{Op: "listen", Net: "tcp", Err: os.NewSyscallError("bind", syscall.EACCES)}
+	listen := func(_ string, address string) (net.Listener, error) {
+		attempts = append(attempts, address)
+		return nil, denied
+	}
+
+	listener, err := openBoardListenerWith(listen, defaultServeAddr, false)
+	if listener != nil {
+		listener.Close()
+		t.Fatalf("openBoardListenerWith bound %q, want the permission failure to surface", listener.Addr())
+	}
+	if core.CategoryOf(err) != core.CategoryOperational {
+		t.Fatalf("openBoardListenerWith category = %q, want %q; error = %v", core.CategoryOf(err), core.CategoryOperational, err)
+	}
+	if !errors.Is(err, syscall.EACCES) {
+		t.Fatalf("openBoardListenerWith error = %v, want the bind cause preserved", err)
+	}
+	if !reflect.DeepEqual(attempts, []string{defaultServeAddr}) {
+		t.Fatalf("bind attempts = %v, want only %q", attempts, defaultServeAddr)
+	}
+}
+
+func TestOpenBoardListenerFallsBackOnlyOnce(t *testing.T) {
+	// An in-use default earns exactly one retry, and it asks for port 0 on the
+	// same host rather than guessing at 7332.
+	var attempts []string
+	inUse := &net.OpError{Op: "listen", Net: "tcp", Err: os.NewSyscallError("bind", syscall.EADDRINUSE)}
+	listen := func(_ string, address string) (net.Listener, error) {
+		attempts = append(attempts, address)
+		return nil, inUse
+	}
+
+	listener, err := openBoardListenerWith(listen, defaultServeAddr, false)
+	if listener != nil {
+		listener.Close()
+		t.Fatalf("openBoardListenerWith bound %q, want the second failure to surface", listener.Addr())
+	}
+	if core.CategoryOf(err) != core.CategoryOperational {
+		t.Fatalf("openBoardListenerWith category = %q, want %q; error = %v", core.CategoryOf(err), core.CategoryOperational, err)
+	}
+	if !reflect.DeepEqual(attempts, []string{defaultServeAddr, "127.0.0.1:0"}) {
+		t.Fatalf("bind attempts = %v, want the default then an OS-assigned port", attempts)
+	}
+}
+
+// lockedWriter lets the test read serve's stderr while the server is still
+// writing to it.
+type lockedWriter struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (w *lockedWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.Write(p)
+}
+
+func (w *lockedWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.String()
+}
+
+func TestRunServeFallsBackWhenDefaultAddressTaken(t *testing.T) {
+	repository := initializedRepository(t)
+
+	// Occupy the default address ourselves. When the bind fails, an unrelated
+	// process on this machine already holds 7331 and the precondition is
+	// satisfied without us; we then cannot assume it stays held, so the
+	// not-7331 assertion applies only to our own blocker.
+	blocker, blockerErr := net.Listen("tcp", defaultServeAddr)
+	if blockerErr == nil {
+		defer blocker.Close()
+	} else {
+		t.Logf("default address already taken (%v); relying on the existing occupant", blockerErr)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result := make(chan error, 1)
+	var serveStdout bytes.Buffer
+	serveStderr := &lockedWriter{}
+	go func() {
+		result <- runServe(ctx, nil, repository, &serveStdout, serveStderr)
+	}()
+
+	banner := regexp.MustCompile(`Workbook board: http://(\S+)`)
+	var boundAddr string
+	deadline := time.Now().Add(5 * time.Second)
+	for boundAddr == "" {
+		select {
+		case err := <-result:
+			t.Fatalf("runServe() exited early: %v; stderr = %q", err, serveStderr.String())
+		default:
+		}
+		if match := banner.FindStringSubmatch(serveStderr.String()); match != nil {
+			boundAddr = match[1]
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for the board banner; stderr = %q", serveStderr.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	host, port, err := net.SplitHostPort(boundAddr)
+	if err != nil {
+		t.Fatalf("banner address %q: %v", boundAddr, err)
+	}
+	if host != "127.0.0.1" {
+		t.Fatalf("fallback host = %q, want 127.0.0.1", host)
+	}
+	if blockerErr == nil && "127.0.0.1:"+port == defaultServeAddr {
+		t.Fatalf("serve bound the occupied default %q, want an OS-assigned fallback port", defaultServeAddr)
+	}
+	waitForHTTP(t, "http://"+boundAddr+"/healthz")
+
+	cancel()
+	if err := <-result; err != nil {
+		t.Fatalf("runServe() error = %v; stderr = %q", err, serveStderr.String())
+	}
+	if serveStdout.Len() != 0 {
+		t.Fatalf("serve stdout = %q, want empty", serveStdout.String())
 	}
 }
 
