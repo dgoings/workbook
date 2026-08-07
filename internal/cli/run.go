@@ -914,6 +914,9 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 		return err
 	}
 	fmt.Fprintf(stderr, "Workbook board: http://%s\n", listener.Addr())
+	if warning := boardExposureWarning(listener.Addr().String()); warning != "" {
+		fmt.Fprintln(stderr, warning)
+	}
 
 	// The board polls its own API once a second, so a loop running here is all
 	// it takes for a teammate's change to appear: no new endpoint, no client
@@ -921,10 +924,31 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 	watcher := serveWatcher(ctx, repository, service.Config, store, stderr)
 	defer watcher.stop()
 
+	// webui.Serve refuses foreign Host headers, cross-origin requests, and
+	// mutations that do not declare JSON. That guard is the board's only access
+	// control, and a non-loopback bind is what the warning above is about.
 	if err := webui.Serve(ctx, listener, handler); err != nil {
 		return core.Wrap(core.CategoryOperational, "serve board", err)
 	}
 	return nil
+}
+
+// boardExposureWarning names what a board off this machine gives away.
+//
+// The board has no accounts, no tokens, and no authorization: whoever opens the
+// port reads every task and writes changes that publish to the project's
+// origin. The same-origin guard stops a browser on another site from acting for
+// a person at this machine; it cannot tell a teammate from a stranger on the
+// same network. A non-loopback bind is therefore a deliberate exposure and is
+// said out loud rather than left to be discovered.
+func boardExposureWarning(address string) string {
+	if webui.BoundToLoopback(address) {
+		return ""
+	}
+	return fmt.Sprintf(
+		"Warning: the board at %s is reachable beyond this machine and has no authentication. Anyone who can open that address can read and change every task.",
+		address,
+	)
 }
 
 // boardPublisher publishes what a web mutation wrote.

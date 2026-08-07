@@ -318,6 +318,72 @@ setTimeout(async () => {
 	}
 }
 
+func TestHandlerClientNamesJSONMediaTypeOnEveryMutation(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	deleted := clientPlacementTask("WB-01J00000000000000000000070", "Body-less restore", core.StatusReady, core.PriorityMedium)
+	deleted.Deleted = true
+	restored := deleted
+	restored.Deleted = false
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return nil, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/deleted")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /deleted status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	taskDocument := mustJSON(t, TasksDocument{
+		Format:       "workbook.tasks",
+		Version:      1,
+		Tasks:        []core.Task{restored},
+		Presentation: presentationForTasks([]core.Task{restored}),
+	})
+	deletedDocument := mustJSON(t, TasksDocument{
+		Format:  "workbook.tasks",
+		Version: 1,
+		Tasks:   []core.Task{deleted},
+	})
+
+	// The server rejects mutations that do not declare Content-Type:
+	// application/json, because an absent media type is exactly what a
+	// cross-site form POST looks like. The body-less restore route is the
+	// mutation most likely to lose the header, so it is the one exercised.
+	program := clientDOMHarness("/deleted", string(taskDocument)) + script + `
+deletedTaskResponse = ` + string(deletedDocument) + `;
+let asserted = false;
+process.on("exit", () => {
+  if (!asserted) {
+    console.error("mutation media type assertions did not run");
+    process.exitCode = 1;
+  }
+});
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const restore = findElement(main, (element) =>
+    element.tagName === "BUTTON" && element.textContent === "Restore");
+  if (!restore) throw new Error("deleted task Restore button did not render");
+  restore.eventListeners.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const mutations = fetchCalls.filter(({ options }) => (options.method || "GET") !== "GET");
+  if (mutations.length === 0) throw new Error("restore issued no mutation request");
+  for (const { url, options } of mutations) {
+    const contentType = options.headers && options.headers["Content-Type"];
+    if (contentType !== "application/json") {
+      throw new Error(options.method + " " + url + " Content-Type = " +
+        JSON.stringify(contentType) + ", want application/json");
+    }
+  }
+  asserted = true;
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute mutation media type behavior: %v\n%s", err, output)
+	}
+}
+
 func TestHandlerAddsAndRemovesTaskDependencies(t *testing.T) {
 	dependent := boardTasks()[0]
 	prerequisite := boardTasks()[1]

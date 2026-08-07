@@ -240,9 +240,15 @@ func newHandler(list TaskLister, create TaskCreator, update TaskUpdater, updateS
 	return http.HandlerFunc(handler.serveHTTP)
 }
 
-func (handler *handler) serveHTTP(writer http.ResponseWriter, request *http.Request) {
+// writeSecurityHeaders states the page's own restrictions on every response,
+// including the ones the same-origin guard refuses before this handler runs.
+func writeSecurityHeaders(writer http.ResponseWriter) {
 	writer.Header().Set("Content-Security-Policy", securityPolicy)
 	writer.Header().Set("X-Content-Type-Options", "nosniff")
+}
+
+func (handler *handler) serveHTTP(writer http.ResponseWriter, request *http.Request) {
+	writeSecurityHeaders(writer)
 	if malformedTaskDependencyRequestPath(request.URL.Path, request.URL.EscapedPath()) {
 		http.NotFound(writer, request)
 		return
