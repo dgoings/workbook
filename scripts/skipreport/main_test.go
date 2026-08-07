@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -166,6 +168,43 @@ func TestMarkdownReportOnEmptySuiteSaysSo(t *testing.T) {
 	}
 	if strings.Contains(report, "## Missing capabilities") {
 		t.Fatalf("report %q invents a missing-capability section", report)
+	}
+}
+
+// Mutation witness: writing the report anywhere but GITHUB_STEP_SUMMARY buries
+// it in the log, which is exactly where a shrinking suite already hides.
+func TestPublishReportAppendsToTheJobSummary(t *testing.T) {
+	summary := filepath.Join(t.TempDir(), "summary.md")
+	if err := os.WriteFile(summary, []byte("earlier step\n"), 0o644); err != nil {
+		t.Fatalf("seed summary: %v", err)
+	}
+	t.Setenv("GITHUB_STEP_SUMMARY", summary)
+
+	var fallback strings.Builder
+	if err := publishReport("## Skipped tests\n", &fallback); err != nil {
+		t.Fatalf("publishReport: %v", err)
+	}
+
+	contents, err := os.ReadFile(summary)
+	if err != nil {
+		t.Fatalf("read summary: %v", err)
+	}
+	if string(contents) != "earlier step\n## Skipped tests\n" {
+		t.Fatalf("summary = %q, want the report appended after the existing content", contents)
+	}
+	if fallback.String() != "" {
+		t.Fatalf("fallback = %q, want nothing written when a summary file exists", fallback.String())
+	}
+}
+
+func TestPublishReportFallsBackWithoutAJobSummary(t *testing.T) {
+	t.Setenv("GITHUB_STEP_SUMMARY", "")
+	var fallback strings.Builder
+	if err := publishReport("## Skipped tests\n", &fallback); err != nil {
+		t.Fatalf("publishReport: %v", err)
+	}
+	if fallback.String() != "## Skipped tests\n" {
+		t.Fatalf("fallback = %q, want the report", fallback.String())
 	}
 }
 
