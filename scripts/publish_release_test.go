@@ -196,6 +196,11 @@ func newTapRepository(t *testing.T) (string, string) {
 	t.Helper()
 	remote := filepath.Join(t.TempDir(), "homebrew-tap.git")
 	runCommand(t, "", nil, "git", "init", "--bare", "--initial-branch=main", remote)
+	// Background auto-gc spawned by receive-pack can outlive the test and race
+	// t.TempDir cleanup with "directory not empty" on slow runners.
+	runCommand(t, remote, nil, "git", "config", "receive.autogc", "false")
+	runCommand(t, remote, nil, "git", "config", "gc.auto", "0")
+	runCommand(t, remote, nil, "git", "config", "maintenance.auto", "false")
 	tap := filepath.Join(t.TempDir(), "homebrew-tap")
 	runCommand(t, "", nil, "git", "clone", remote, tap)
 	runCommand(t, tap, nil, "git", "config", "user.name", "Release Test")

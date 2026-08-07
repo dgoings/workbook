@@ -457,6 +457,11 @@ func cliSyncRepositories(t *testing.T) (string, string) {
 	t.Helper()
 	bare := filepath.Join(t.TempDir(), "origin.git")
 	cliGit(t, t.TempDir(), "init", "--bare", "--quiet", bare)
+	// Background auto-gc spawned by receive-pack can outlive the test and race
+	// t.TempDir cleanup with "directory not empty" on slow runners.
+	cliGit(t, bare, "config", "receive.autogc", "false")
+	cliGit(t, bare, "config", "gc.auto", "0")
+	cliGit(t, bare, "config", "maintenance.auto", "false")
 
 	seed := testrepo.New(t)
 	cliGit(t, seed, "branch", "-M", "main")
