@@ -66,6 +66,23 @@ func TestValidateHelpDocumentsFullAndJSON(t *testing.T) {
 	}
 }
 
+func TestServeHelpDocumentsDefaultPortFallback(t *testing.T) {
+	// Production mutation: describing --addr as a plain listener address leaves
+	// a user who sees an unexpected port with no way to learn it was chosen for
+	// them, or that naming an address opts out of that.
+	output := assertHelpOutput(t, []string{"help", "serve"}, "Usage: workbook serve [--addr <address>]")
+	for _, want := range []string{
+		"--addr <address>",
+		defaultServeAddr,
+		"free port when that one is taken",
+		"is a contract and fails rather than moving",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("serve help = %q, want %q", output, want)
+		}
+	}
+}
+
 func TestRunHelpHandlesHooksAndInstall(t *testing.T) {
 	for _, test := range []struct {
 		name string
