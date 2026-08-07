@@ -114,9 +114,11 @@ func (r *Repository) ReadTaskHistories(
 // the same three Git processes, but hands each commit to the caller as Git
 // answers for it instead of materializing every commit of every task first.
 //
-// Streaming is what keeps a full audit's memory bounded: the residual is the
-// shared parent graph plus one decoded commit, not the whole corpus decoded
-// several times over.
+// Streaming is what keeps a full audit's memory bounded. What stays resident
+// during the read is one commit's decoded documents plus the walked chains,
+// which hold an object ID and a parent list per commit rather than that
+// commit's documents; the parent graph and the decoded tips are already gone.
+// Nothing here holds a task's documents once its handler has seen them.
 func (r *Repository) ReadTaskHistoriesStream(
 	ctx context.Context,
 	config core.ProjectConfig,

@@ -291,7 +291,7 @@ func storageResourceCommands() []storageResourceCommand {
 			name: ResourceCommandFullValidation,
 			args: []string{"validate", "--full", "--json"},
 			verify: func(fixture FixtureSpec, stdout []byte) error {
-				return VerifyValidationResultOutput("validate-full-history", stdout, fixture)
+				return verifyValidationResultOutput("validate-full-history", stdout, fixture)
 			},
 		},
 	}
