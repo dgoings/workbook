@@ -622,6 +622,22 @@ sections for narrow or noninteractive output; `--wide` and `--narrow` force the
 respective layouts. The task-ID prefixes in human output are accepted anywhere a
 task ID is accepted.
 
+### Text-mode output safety
+
+Task titles, descriptions, and labels are authored by whoever can push to the
+shared refs, so text-mode rendering treats them as untrusted. Every control rune
+becomes a space and whitespace runs collapse, which means one stored value
+always renders as one line: an escape sequence in a title cannot redraw the row
+into a task that does not exist, and a newline in a description cannot introduce
+a line that reads as a top-level `workbook show` field. The same rule already
+shaped Git commit subjects and now applies to `list`, `board`, `show`, its
+history and comparison output, conflict detail, and the line a mutation prints.
+
+This is a rendering rule, not a validation rule. Stored task data keeps the
+bytes it was written with, and JSON output reproduces them exactly, because
+`encoding/json` escapes every byte below `0x20`. A consumer that wants the
+authored text should read `--json`.
+
 ### Local web board
 
 `workbook serve` starts a foreground, loopback-only board at
