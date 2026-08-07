@@ -832,6 +832,14 @@ The shared new-task and detail form creates or edits title, description, status,
 priority, and labels through the versioned APIs. Saving returns to the board and
 refreshes it. A failed save leaves the entered values in place and shows the
 server error in the form; Back returns to the board without mutating a task.
+
+An edit to an existing task sends only the fields that form changed, together
+with the task tip it rendered. A change someone else made to a field you did not
+touch therefore survives your save, and a save proposed against a tip the task
+has moved past is refused rather than applied: the form keeps your edits, says
+the task changed elsewhere, and saving again applies the same fields to the
+version the server now holds. Saving a form you changed nothing in sends no
+request at all and simply returns to the board.
 Active task details also provide Delete; successful deletion opens `/deleted`.
 That route lists tombstoned tasks and restores a selected task through the
 explicit restore operation.

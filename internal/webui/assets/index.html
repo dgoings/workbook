@@ -925,6 +925,10 @@
         region.append(status);
         controller = {
           region, status, groups, taskID, draftState, busy: false, recoveryActions: [],
+          // Replaced by the detail form so an edge written to this task can
+          // hand back the head it moved to. The sidebar is also mounted on the
+          // new-task form, which has no head to move, hence the default.
+          adoptTaskHead() {},
           setBusy(busy) {
             this.busy = busy;
             groups.forEach((group) => group.setBusy(busy));
@@ -1269,7 +1273,10 @@
         if (!knownStatus) status.firstElementChild.disabled = true;
         const priority = select("priority", [["high", "High"], ["medium", "Medium"], ["low", "Low"]], task.priority);
         const labels = document.createElement("input"); labels.id = "task-labels"; labels.name = "labels"; labels.value = (task.labels || []).join(", "); labels.placeholder = "web, docs, release";
-        const result = document.createElement("p"); result.className = "form-status"; result.setAttribute("role", "status"); result.setAttribute("aria-live", "polite");
+        // Named, because the relationship region carries a form-status of its
+        // own and "the first .form-status in the route" is the wrong element
+        // as often as it is the right one.
+        const result = document.createElement("p"); result.className = "form-status"; result.dataset.saveStatus = ""; result.setAttribute("role", "status"); result.setAttribute("aria-live", "polite");
         if (!isNew && pendingTaskMessages.has(task.id)) {
           text(result, pendingTaskMessages.get(task.id).join(" "));
           pendingTaskMessages.delete(task.id);
@@ -1311,16 +1318,27 @@
         form.append(editor, sidebar, footer);
 
         let taskWasCreated = false;
+        // The tip this form was rendered from. A save names it so a form opened
+        // before someone else's change is refused rather than reverting them,
+        // and a refusal re-bases it so a deliberate retry lands on the version
+        // that exists.
+        let expectedHead = isNew ? "" : task.head || "";
+        const controls = { title, description, status, priority, labels };
         form.addEventListener("submit", async (event) => {
           event.preventDefault();
           if (isNew && taskWasCreated) return;
-          const values = {
-            title: title.value,
-            description: description.value,
-            status: status.value,
-            priority: priority.value,
-            labels: labels.value.split(",").map((label) => label.trim()).filter(Boolean)
-          };
+          const values = isNew ? allTaskValues(controls) : changedTaskValues(task, controls);
+          if (!isNew) {
+            if (Object.keys(values).length === 0) {
+              // The server refuses an update that changes nothing, and it is
+              // right to: there is no operation to record. Saving an untouched
+              // form is not an error though, it is finished, so it leaves the
+              // way an accepted save does.
+              navigate("/");
+              return;
+            }
+            if (expectedHead) values.expectedHead = expectedHead;
+          }
           let createdDurably = false;
           save.disabled = true;
           if (isNew) relationshipController.setBusy(true);
@@ -1393,6 +1411,18 @@
             }
           } catch (error) {
             if (main.firstElementChild !== section) return;
+            if (!isNew && error && error.category === "stale-write") {
+              // The edits stay in the form. Re-rendering it from the refreshed
+              // task would discard the work the refusal just protected, and the
+              // baseline stays where it was so a retry still sends only the
+              // fields this user changed — the concurrent edit that caused the
+              // refusal survives it.
+              const rebased = await refreshedTaskHead(task.id);
+              if (main.firstElementChild !== section) return;
+              if (rebased) expectedHead = rebased;
+              text(result, "That task changed elsewhere. Your edits are kept; save again to apply them to the version the server holds.");
+              return;
+            }
             text(result, error instanceof Error
               ? error.message
               : isNew ? "Task creation failed." : "Task update failed.");
@@ -1412,6 +1442,11 @@
           ? relationshipDrafts
           : pendingRelationshipDrafts.get(task.id) || null;
         const relationshipController = taskRelationships(isNew ? "" : task.id, failedDrafts);
+        // A "Depends On" edge is stored on the dependent, which is this task, so
+        // adding or removing one from this sidebar moves the very head this form
+        // proposes. Following it keeps the next save from being refused as a
+        // conflict with a change the user made here seconds earlier.
+        relationshipController.adoptTaskHead = (head) => { if (head) expectedHead = head; };
         relationshipMount.append(relationshipController.region);
         activeDependencyController = relationshipController;
         if (!isNew && pendingDetailRelationshipContextTaskID === task.id) {
@@ -1423,6 +1458,45 @@
           );
         }
         return section;
+      }
+      function labelValues(control) {
+        return control.value.split(",").map((label) => label.trim()).filter(Boolean);
+      }
+      function allTaskValues(controls) {
+        return {
+          title: controls.title.value,
+          description: controls.description.value,
+          status: controls.status.value,
+          priority: controls.priority.value,
+          labels: labelValues(controls.labels)
+        };
+      }
+      // An update carries the fields this form changed and no others. Sending
+      // all five on every save is last-writer-wins even when the heads agree:
+      // re-asserting the title this form rendered is indistinguishable from
+      // editing it, so a description-only save would revert a teammate's rename
+      // that landed in between.
+      function changedTaskValues(task, controls) {
+        const values = {};
+        if (controls.title.value !== (task.title || "")) values.title = controls.title.value;
+        if (controls.description.value !== (task.description || "")) values.description = controls.description.value;
+        // A status the client does not know renders as an unselected
+        // placeholder. Leaving it alone is not a request to clear the status.
+        if (controls.status.value && controls.status.value !== task.status) values.status = controls.status.value;
+        if (controls.priority.value !== task.priority) values.priority = controls.priority.value;
+        const labels = labelValues(controls.labels);
+        if (!sameLabels(labels, task.labels || [])) values.labels = labels;
+        return values;
+      }
+      // Labels are a set: the server sorts and de-duplicates them
+      // (normalizeLabels), so retyping "docs, web" as "web, docs" changes
+      // nothing. Comparing positionally would call that an edit, send it, and
+      // land the server's "update does not change task" verbatim in the form —
+      // the raw error the empty-diff guard exists to keep out of it.
+      function sameLabels(entered, rendered) {
+        const left = [...new Set(entered)].sort();
+        const right = [...new Set(rendered)].sort();
+        return left.length === right.length && left.every((label, at) => label === right[at]);
       }
       async function mutateTask(method, path, values) {
         // Every mutation names its JSON media type, body or not: the server
@@ -1459,7 +1533,10 @@
       function intentEntry(taskID, head) {
         let entry = pendingIntents.get(taskID);
         if (!entry) {
-          entry = { queue: [], inFlight: false, head: head || "" };
+          // draining says a loop owns this queue, which is not the same as a
+          // request being open: between two sends the loop still owns it. The
+          // distinction matters because the head is re-based between sends.
+          entry = { queue: [], draining: false, head: head || "" };
           pendingIntents.set(taskID, entry);
         }
         return entry;
@@ -1496,8 +1573,8 @@
       }
       async function drainIntents(taskID) {
         const entry = pendingIntents.get(taskID);
-        if (!entry || entry.inFlight) return;
-        entry.inFlight = true;
+        if (!entry || entry.draining) return;
+        entry.draining = true;
         try {
           while (entry.queue.length > 0) {
             const intent = entry.queue[0];
@@ -1513,16 +1590,41 @@
               // this queue exists to avoid. One that genuinely depended on the
               // failed intent is refused in turn and rolls back on its own.
               entry.queue.shift();
+              if (error && error.category === "stale-write") {
+                // The refusal means this queue is holding a head the server
+                // has moved past. Waiting for the refresh it forces and
+                // re-basing on it is what lets the intents behind this one
+                // retry against current truth; sending them against the head
+                // that was just refused would fail them identically, which is
+                // the clobbering the rollback above is trying to avoid.
+                const rebased = await refreshedTaskHead(taskID);
+                if (rebased) entry.head = rebased;
+              }
+              // Reported after that refresh rather than before it: a refresh
+              // that lands clears the banner, so reporting first would erase
+              // the report before it was ever drawn. It still only survives
+              // until the next one-second poll, which is a real gap and not one
+              // this ordering closes; a report that persists needs the per-card
+              // affordance the banner is standing in for.
               reportIntentFailure(error);
-              if (error && error.category === "stale-write") refresh();
+              withdrawFailedIntentFromOpenDetail(taskID, error);
             }
             rerender();
           }
         } finally {
-          entry.inFlight = false;
+          entry.draining = false;
           if (entry.queue.length === 0) pendingIntents.delete(taskID);
           rerender();
         }
+      }
+      // The head the server holds for a task once the refresh this caller
+      // forced has settled. A refresh superseded by a newer one is followed
+      // rather than trusted, so the answer is never older than the write that
+      // asked for it.
+      async function refreshedTaskHead(taskID) {
+        await currentRefreshResult(refresh());
+        const refreshed = latestTasks.find((candidate) => candidate.id === taskID);
+        return refreshed && refreshed.head || "";
       }
       // The indicator says what the next mutation will do, which is why it is
       // read from the server rather than assumed: a board set to defer still
@@ -1566,13 +1668,6 @@
         renderSyncState();
       }
       if (syncToggle) syncToggle.addEventListener("click", toggleSyncMode);
-      function adoptRefreshedHeads(tasks) {
-        if (pendingIntents.size === 0) return;
-        tasks.forEach((task) => {
-          const entry = pendingIntents.get(task.id);
-          if (entry && !entry.inFlight && task.head) entry.head = task.head;
-        });
-      }
       function reportIntentFailure(error) {
         const message = error && error.category === "stale-write"
           ? "That task changed elsewhere. Showing the latest board."
@@ -1580,8 +1675,36 @@
         text(stale, message);
         stale.dataset.visible = "true";
       }
+      // A pending intent can outlive the board view that queued it. When one
+      // fails while its task's detail form is open, that form is showing an
+      // optimistic value the server refused: leaving it there reads as saved
+      // state, and saving would persist the refused value as a real edit. So
+      // the route is rendered again from what the server actually holds.
+      //
+      // That also discards anything typed into the form since it opened, which
+      // is the trade taken deliberately: a form that keeps a value the server
+      // refused is lying about what is saved, and the message says why the
+      // field moved.
+      function withdrawFailedIntentFromOpenDetail(taskID, error) {
+        const current = route();
+        if (current.view !== "detail" || current.id !== taskID) return;
+        pendingTaskMessages.set(taskID, [error && error.category === "stale-write"
+          ? "That task changed elsewhere. This form now shows the version the server holds; the change made on the board was not applied."
+          : "Task update failed. This form now shows the version the server holds; the change made on the board was not applied."]);
+        renderRoute();
+      }
       function ownsDependencyController(controller) {
         return activeDependencyController === controller;
+      }
+      // A dependency edge is recorded on the dependent task. When that is the
+      // task whose form is open, the edge is a write to it and its head has
+      // moved; the form is told so it proposes the tip that now exists rather
+      // than the one it rendered. The mirrored direction writes to the other
+      // task and leaves this one alone, which is why the orientation is checked
+      // rather than assumed.
+      function adoptDependencyHead(controller, dependentID, document) {
+        if (dependentID !== controller.taskID) return;
+        controller.adoptTaskHead(document.task && document.task.head || "");
       }
       async function retryRelationshipDraft(name, relationship, draftMap, controller, group) {
         if (!ownsDependencyController(controller)) return;
@@ -1593,6 +1716,7 @@
         group.setMessage("");
         try {
           const document = await mutateTask("PUT", path);
+          adoptDependencyHead(controller, dependentID, document);
           const refreshed = await currentRefreshResult(refresh());
           if (!ownsDependencyController(controller)) return;
           draftMap.delete(relationship.id);
@@ -1629,6 +1753,7 @@
         group.setMessage("");
         try {
           const document = await mutateTask(method, path);
+          adoptDependencyHead(controller, dependentID, document);
           const messages = [];
           const warnings = Array.isArray(document.warnings) ? document.warnings : [];
           if (warnings.length) {
@@ -1838,12 +1963,11 @@
             latestPresentation = presentation;
             tasksLoaded = true;
             taskLoadFailed = false;
-            // A queue whose last request was refused is holding a head the
-            // server has moved past. Re-basing it here is what lets the intents
-            // behind the failed one retry against current truth instead of
-            // failing identically. A queue with a request in flight has already
-            // committed to its head and is left alone.
-            adoptRefreshedHeads(document.tasks);
+            // A poll deliberately does not touch a pending queue's head. The
+            // queue re-bases when a write is actually refused, where the answer
+            // is known to be newer than the head that failed; a poll that left
+            // before the last confirmation returned carries an older head, and
+            // adopting it would refuse the next intent for no reason.
             render(projectTasks(document.tasks), presentation); stale.dataset.visible = "false"; text(updated, "Updated " + new Date().toLocaleTimeString());
             let relationshipContext = { status: "not-applicable" };
             if (!wasLoaded) renderRoute();
