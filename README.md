@@ -1224,7 +1224,7 @@ origin-only task sharing including fetch, push, sync, and optional pre-push hook
 installation. Replay, cache reconstruction, both Git object formats, renderer
 parity, HTTP routes through the real serve wiring, installer behavior, and this
 document's alignment with the code are covered by the test suite, which runs on
-every push and pull request.
+every push to `main` and every pull request against it.
 
 Remote claims, automatic conflict resolution, multiple-remote support, packaged
 distribution, and optional adapters follow this collaborative POC.
