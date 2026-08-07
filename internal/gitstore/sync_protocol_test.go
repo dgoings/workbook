@@ -21,13 +21,16 @@ func TestParseRemoteTaskHeadsAcceptsFullSHA1AndSHA256Records(t *testing.T) {
 			output := []byte(objectID + "\trefs/workbook/tasks/" + firstTask + "\n" +
 				objectID + "\trefs/workbook/tasks/" + secondTask + "\n")
 
-			got, err := repository.parseRemoteTaskHeads(core.ProjectConfig{Key: "WB"}, output)
+			got, ignored, err := repository.parseRemoteTaskHeads(core.ProjectConfig{Key: "WB"}, output)
 			if err != nil {
 				t.Fatal(err)
 			}
 			want := map[string]string{firstTask: objectID, secondTask: objectID}
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("remote task heads = %#v, want %#v", got, want)
+			}
+			if len(ignored) != 0 {
+				t.Fatalf("ignored = %#v, want none for valid records", ignored)
 			}
 		})
 	}
@@ -43,22 +46,72 @@ func TestParseRemoteTaskHeadsRejectsInvalidRecords(t *testing.T) {
 	}{
 		{name: "unterminated", output: strings.TrimSuffix(valid, "\n")},
 		{name: "wrong prefix", output: objectID + "\trefs/heads/main\n"},
-		{name: "nested task", output: objectID + "\trefs/workbook/tasks/" + taskID + "/nested\n"},
 		{name: "duplicate task", output: valid + valid},
-		{name: "invalid task ID", output: objectID + "\trefs/workbook/tasks/not-a-workbook-task\n"},
 		{name: "abbreviated object ID", output: objectID[:38] + "\trefs/workbook/tasks/" + taskID + "\n"},
 		{name: "extra field", output: objectID + "\trefs/workbook/tasks/" + taskID + "\textra\n"},
 		{name: "symbolic record", output: "ref: refs/heads/main\trefs/workbook/tasks/" + taskID + "\n"},
-		{name: "peeled ref", output: objectID + "\trefs/workbook/tasks/" + taskID + "^{}\n"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			repository := &Repository{objectIDBytes: 20}
-			if _, err := repository.parseRemoteTaskHeads(
+			if _, _, err := repository.parseRemoteTaskHeads(
 				core.ProjectConfig{Key: "WB"},
 				[]byte(test.output),
 			); err == nil {
 				t.Fatalf("parseRemoteTaskHeads(%q) error = nil", test.output)
+			}
+		})
+	}
+}
+
+// A name on origin that this version cannot read as exactly one task is
+// reported and skipped. Origin's task namespace is writable by anyone with
+// push access, so failing the whole listing would let one ref stop every
+// clone from publishing.
+func TestParseRemoteTaskHeadsIgnoresUnreadableNamesAndKeepsValidHeads(t *testing.T) {
+	const taskID = "WB-01K0M6B8A4FTT8C39MXXYTW7D1"
+	objectID := strings.Repeat("a", 40)
+	valid := objectID + "\trefs/workbook/tasks/" + taskID + "\n"
+	tests := []struct {
+		name    string
+		output  string
+		wantRef string
+	}{
+		{
+			name:    "nested task",
+			output:  valid + objectID + "\trefs/workbook/tasks/" + taskID + "/nested\n",
+			wantRef: "refs/workbook/tasks/" + taskID + "/nested",
+		},
+		{
+			name:    "invalid task ID",
+			output:  valid + objectID + "\trefs/workbook/tasks/EVIL\n",
+			wantRef: "refs/workbook/tasks/EVIL",
+		},
+		{
+			name:    "peeled ref",
+			output:  valid + objectID + "\trefs/workbook/tasks/" + taskID + "^{}\n",
+			wantRef: "refs/workbook/tasks/" + taskID + "^{}",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repository := &Repository{objectIDBytes: 20}
+			heads, ignored, err := repository.parseRemoteTaskHeads(
+				core.ProjectConfig{Key: "WB"},
+				[]byte(test.output),
+			)
+			if err != nil {
+				t.Fatalf("parseRemoteTaskHeads(%q) error = %v", test.output, err)
+			}
+			want := map[string]string{taskID: objectID}
+			if !reflect.DeepEqual(heads, want) {
+				t.Fatalf("remote task heads = %#v, want the well-formed %#v", heads, want)
+			}
+			if len(ignored) != 1 || ignored[0].Ref != test.wantRef {
+				t.Fatalf("ignored = %#v, want one entry naming %q", ignored, test.wantRef)
+			}
+			if ignored[0].Reason == "" {
+				t.Fatalf("ignored[0].Reason is empty; the report must say why %q was skipped", test.wantRef)
 			}
 		})
 	}

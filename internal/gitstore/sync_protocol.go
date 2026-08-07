@@ -11,43 +11,53 @@ import (
 // parseRemoteTaskHeads accepts only the flat Workbook task refs emitted by a
 // wildcard `git ls-remote --refs` query. Object IDs are checked against the
 // repository format previously observed from local Git output.
+//
+// Every name here comes from origin, which anyone with push access can write
+// to, so a name this version does not recognize as exactly one task is
+// returned as an IgnoredRef rather than failing the query. Refusing the whole
+// listing would let one stray ref stop every clone from publishing. Records
+// that describe Git itself misbehaving — an unterminated or malformed line, a
+// bad object ID, a ref outside the namespace, a duplicate — still fail.
 func (r *Repository) parseRemoteTaskHeads(
 	config core.ProjectConfig,
 	output []byte,
-) (map[string]string, error) {
+) (map[string]string, []IgnoredRef, error) {
 	heads := make(map[string]string)
+	var ignored []IgnoredRef
 	if len(output) == 0 {
-		return heads, nil
+		return heads, nil, nil
 	}
 	if output[len(output)-1] != '\n' {
-		return nil, core.Errorf(core.CategoryOperational, "Git returned unterminated remote task heads")
+		return nil, nil, core.Errorf(core.CategoryOperational, "Git returned unterminated remote task heads")
 	}
 	for _, line := range bytes.Split(output[:len(output)-1], []byte{'\n'}) {
 		parts := bytes.Split(line, []byte{'\t'})
 		if len(parts) != 2 || len(parts[0]) == 0 || len(parts[1]) == 0 {
-			return nil, core.Errorf(core.CategoryOperational, "Git returned an invalid remote task-head record")
+			return nil, nil, core.Errorf(core.CategoryOperational, "Git returned an invalid remote task-head record")
 		}
 		objectID := string(parts[0])
 		if err := r.validateFullObjectID(objectID); err != nil {
-			return nil, core.Wrap(core.CategoryOperational, "Git returned an invalid remote task object ID", err)
+			return nil, nil, core.Wrap(core.CategoryOperational, "Git returned an invalid remote task object ID", err)
 		}
 		refName := string(parts[1])
 		if !strings.HasPrefix(refName, taskRefPrefix) {
-			return nil, core.Errorf(core.CategoryOperational, "Git returned remote ref outside %q", taskRefPrefix)
+			return nil, nil, core.Errorf(core.CategoryOperational, "Git returned remote ref outside %q", taskRefPrefix)
 		}
 		taskID := strings.TrimPrefix(refName, taskRefPrefix)
 		if taskID == "" || strings.Contains(taskID, "/") || strings.HasSuffix(taskID, "^{}") {
-			return nil, core.Errorf(core.CategoryOperational, "Git returned invalid remote task ref %q", refName)
+			ignored = append(ignored, IgnoredRef{Ref: refName, Reason: "ref does not name exactly one task"})
+			continue
 		}
 		if err := core.ValidateTaskID(config.Key, taskID); err != nil {
-			return nil, core.Wrap(core.CategoryCorruptData, "remote task ref ID is invalid", err)
+			ignored = append(ignored, IgnoredRef{Ref: refName, Reason: err.Error()})
+			continue
 		}
 		if _, duplicate := heads[taskID]; duplicate {
-			return nil, core.Errorf(core.CategoryOperational, "Git returned duplicate remote task ref %q", refName)
+			return nil, nil, core.Errorf(core.CategoryOperational, "Git returned duplicate remote task ref %q", refName)
 		}
 		heads[taskID] = objectID
 	}
-	return heads, nil
+	return heads, ignored, nil
 }
 
 // parsePushPorcelain produces one exact task outcome for each expected

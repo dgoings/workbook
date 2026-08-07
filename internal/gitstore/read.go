@@ -143,21 +143,40 @@ type taskRefRecord struct {
 	objectID string
 }
 
+// IgnoredRef names a ref under a shared Workbook task namespace that this
+// version could not read as exactly one task, together with why it was skipped.
+//
+// Only a namespace origin controls produces one. Anyone with push access can
+// write an arbitrary name under refs/workbook/tasks/, and refs/workbook/* is
+// not covered by branch protection on typical hosts, so one stray ref must not
+// deny synchronization to every clone. Reporting the ref rather than rejecting
+// the listing keeps the failure visible and lets a user prune it.
+type IgnoredRef struct {
+	Ref    string `json:"ref"`
+	Reason string `json:"reason"`
+}
+
 func (r *Repository) listTaskRefs(ctx context.Context) ([]taskRefRecord, error) {
 	config, err := r.LoadConfig()
 	if err != nil {
 		return nil, err
 	}
-	return r.listOwnedTaskRefs(ctx, config, taskRefPrefix)
+	// The canonical namespace is this tool's own; it never ignores a ref.
+	refs, _, err := r.listOwnedTaskRefs(ctx, config, taskRefPrefix)
+	return refs, err
 }
 
-func (r *Repository) listOwnedTaskRefs(ctx context.Context, config core.ProjectConfig, prefix string) ([]taskRefRecord, error) {
+func (r *Repository) listOwnedTaskRefs(
+	ctx context.Context,
+	config core.ProjectConfig,
+	prefix string,
+) ([]taskRefRecord, []IgnoredRef, error) {
 	contents, err := r.Git(ctx, nil, "for-each-ref", "--format="+taskRefFormat, prefix)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := r.rememberObjectIDWidthFromOwnedRefOutput(contents); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	return r.parseOwnedRefRecords(config, prefix, contents, "")
 }
@@ -174,7 +193,7 @@ func (r *Repository) taskRef(ctx context.Context, taskID string) (taskRefRecord,
 	if err := r.rememberObjectIDWidthFromOwnedRefOutput(contents); err != nil {
 		return taskRefRecord{}, false, err
 	}
-	refs, err := r.parseOwnedRefRecords(config, taskRefPrefix, contents, taskID)
+	refs, _, err := r.parseOwnedRefRecords(config, taskRefPrefix, contents, taskID)
 	if err != nil {
 		return taskRefRecord{}, false, err
 	}
@@ -206,65 +225,91 @@ func (r *Repository) rememberObjectIDWidthFromOwnedRefOutput(contents []byte) er
 	return nil
 }
 
+// parseOwnedRefRecords reads a for-each-ref listing of one Workbook task
+// namespace.
+//
+// The two namespaces deserve different strictness. The canonical namespace is
+// written only by this tool, so a name it does not recognize there is genuine
+// local corruption and stops the read. The tracking namespace mirrors origin,
+// where any collaborator can create a ref this version cannot interpret;
+// refusing the whole listing for one such name would hand any collaborator a
+// repository-wide denial of the sync path. Unrecognized names there are
+// returned as IgnoredRef instead, in the spirit of listParkedRefs.
+//
+// Only the interpretation of a ref's *name* is tolerated. A malformed record,
+// a symbolic ref, a bad object ID, or a duplicate still stops the read in both
+// namespaces: those describe Git or this client misbehaving rather than a
+// stranger choosing a name, and none of them is something a remote can cause.
 func (r *Repository) parseOwnedRefRecords(
 	config core.ProjectConfig,
 	prefix string,
 	contents []byte,
 	expectedTaskID string,
-) ([]taskRefRecord, error) {
+) ([]taskRefRecord, []IgnoredRef, error) {
 	if prefix != taskRefPrefix && prefix != trackingTaskRefPrefix {
-		return nil, core.Errorf(core.CategoryCorruptData, "unsupported Workbook task ref namespace %q", prefix)
+		return nil, nil, core.Errorf(core.CategoryCorruptData, "unsupported Workbook task ref namespace %q", prefix)
 	}
+	// Only origin's mirror tolerates a name this version does not recognize.
+	tolerateForeignNames := prefix == trackingTaskRefPrefix
 	if expectedTaskID != "" {
 		if err := core.ValidateTaskID(config.Key, expectedTaskID); err != nil {
-			return nil, core.Wrap(core.CategoryCorruptData, "expected task ref ID is invalid", err)
+			return nil, nil, core.Wrap(core.CategoryCorruptData, "expected task ref ID is invalid", err)
 		}
 	}
 	if len(contents) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if contents[len(contents)-1] != '\n' {
-		return nil, core.Errorf(core.CategoryCorruptData, "Git returned an unterminated task ref record")
+		return nil, nil, core.Errorf(core.CategoryCorruptData, "Git returned an unterminated task ref record")
 	}
 
 	lines := bytes.Split(contents[:len(contents)-1], []byte{'\n'})
 	refs := make([]taskRefRecord, 0, len(lines))
+	var ignored []IgnoredRef
 	seen := make(map[string]struct{}, len(lines))
 	for _, line := range lines {
 		parts := bytes.Split(line, []byte{0})
 		if len(parts) != 3 || len(parts[0]) == 0 || len(parts[1]) == 0 {
-			return nil, core.Errorf(core.CategoryCorruptData, "Git returned an invalid task ref record")
+			return nil, nil, core.Errorf(core.CategoryCorruptData, "Git returned an invalid task ref record")
 		}
 		refName, objectID, symbolicTarget := string(parts[0]), string(parts[1]), string(parts[2])
 		if !strings.HasPrefix(refName, prefix) {
-			return nil, core.Errorf(core.CategoryCorruptData, "Git returned a ref outside the task namespace")
+			return nil, nil, core.Errorf(core.CategoryCorruptData, "Git returned a ref outside the task namespace")
 		}
 		taskID := strings.TrimPrefix(refName, prefix)
 		if taskID == "" || strings.Contains(taskID, "/") {
-			return nil, core.Errorf(core.CategoryCorruptData, "task ref %q does not name one task", refName)
+			if tolerateForeignNames {
+				ignored = append(ignored, IgnoredRef{Ref: refName, Reason: "ref does not name exactly one task"})
+				continue
+			}
+			return nil, nil, core.Errorf(core.CategoryCorruptData, "task ref %q does not name one task", refName)
 		}
 		if err := core.ValidateTaskID(config.Key, taskID); err != nil {
-			return nil, core.Wrap(core.CategoryCorruptData, "task ref ID is invalid", err)
+			if tolerateForeignNames {
+				ignored = append(ignored, IgnoredRef{Ref: refName, Reason: err.Error()})
+				continue
+			}
+			return nil, nil, core.Wrap(core.CategoryCorruptData, "task ref ID is invalid", err)
 		}
 		if expectedTaskID != "" && taskID != expectedTaskID {
-			return nil, core.Errorf(core.CategoryCorruptData, "task ref %q has nested entries", prefix+expectedTaskID)
+			return nil, nil, core.Errorf(core.CategoryCorruptData, "task ref %q has nested entries", prefix+expectedTaskID)
 		}
 		if symbolicTarget != "" {
-			return nil, core.Errorf(core.CategoryCorruptData, "task ref %q must not be symbolic", refName)
+			return nil, nil, core.Errorf(core.CategoryCorruptData, "task ref %q must not be symbolic", refName)
 		}
 		if err := r.validateFullObjectID(objectID); err != nil {
-			return nil, core.Wrap(core.CategoryCorruptData, "task ref object ID is invalid", err)
+			return nil, nil, core.Wrap(core.CategoryCorruptData, "task ref object ID is invalid", err)
 		}
 		if err := r.rememberGitObjectID(objectID); err != nil {
-			return nil, core.Wrap(core.CategoryCorruptData, "task ref object ID is invalid", err)
+			return nil, nil, core.Wrap(core.CategoryCorruptData, "task ref object ID is invalid", err)
 		}
 		if _, duplicate := seen[taskID]; duplicate {
-			return nil, core.Errorf(core.CategoryCorruptData, "task ref %q was returned more than once", refName)
+			return nil, nil, core.Errorf(core.CategoryCorruptData, "task ref %q was returned more than once", refName)
 		}
 		seen[taskID] = struct{}{}
 		refs = append(refs, taskRefRecord{taskID: taskID, objectID: objectID})
 	}
-	return refs, nil
+	return refs, ignored, nil
 }
 
 func (r *Repository) readTip(ctx context.Context, config core.ProjectConfig, taskID, objectID string) (core.Snapshot, error) {

@@ -14,6 +14,99 @@ import (
 	"github.com/dgoings/workbook/internal/testrepo"
 )
 
+// Anyone with push access can write an arbitrary name under origin's task
+// namespace, and refs/workbook/* is not covered by branch protection on typical
+// hosts. One such ref must not deny fetch, push, and sync to every clone.
+func TestSyncToleratesUnrecognizedRefsUnderOriginsTaskNamespace(t *testing.T) {
+	first, second, config := syncRepositories(t)
+	shared := createSyncTask(t, first, config, "Shared task")
+	publishTaskRefs(t, first)
+
+	// Three names this version cannot read as exactly one task. The nested ref
+	// hangs off a task ID that owns no ref of its own, so origin accepts it.
+	const unownedTask = "WB-01K0M6B8A4FTT8C39MXXYTW7D1"
+	poisonRefs := []string{
+		taskRefPrefix + "EVIL",
+		taskRefPrefix + "WB-not-a-canonical-ulid",
+		taskRefPrefix + unownedTask + "/nested",
+	}
+	tip := refValue(t, first, taskRefPrefix+shared.ID)
+	for _, ref := range poisonRefs {
+		syncGit(t, first.Root, "push", "origin", tip+":"+ref)
+	}
+
+	local := createSyncTask(t, second, config, "Local task")
+
+	run, err := second.Sync(context.Background(), config)
+	if err != nil {
+		t.Fatalf("Sync() error = %v; result = %#v", err, run)
+	}
+	if got, want := run.Fetch.Status, SyncPhaseCompleted; got != want {
+		t.Fatalf("fetch status = %q, want %q; result = %#v", got, want, run.Fetch)
+	}
+	if got, want := run.Push.Status, SyncPhaseCompleted; got != want {
+		t.Fatalf("push status = %q, want %q; result = %#v", got, want, run.Push)
+	}
+
+	// Every well-formed task still synchronizes in both directions.
+	assertSyncOutcome(t, run.Fetch, shared.ID, SyncCreated)
+	assertSyncOutcome(t, run.Push, local.ID, SyncPublished)
+	if got, want := refValue(t, second, taskRefPrefix+shared.ID), tip; got != want {
+		t.Fatalf("fetched tip = %q, want origin's %q", got, want)
+	}
+	if !remoteRefExists(t, second, taskRefPrefix+local.ID) {
+		t.Fatalf("local task %s was not published to origin", local.ID)
+	}
+
+	// The report names each offending ref as it exists on origin, which is the
+	// name a user prunes, and says why it was skipped.
+	assertIgnoredRefs(t, run.Fetch, poisonRefs)
+
+	// A skipped ref never becomes a canonical ref in this clone.
+	for _, ref := range poisonRefs {
+		if refExists(t, second, ref) {
+			t.Fatalf("ignored ref %s was adopted into the canonical namespace", ref)
+		}
+	}
+
+	// The standalone commands tolerate it too; Push reads origin over ls-remote
+	// rather than the tracking namespace, so it is a separate parse path.
+	fetched, err := second.Fetch(context.Background(), config)
+	if err != nil {
+		t.Fatalf("Fetch() error = %v; result = %#v", err, fetched)
+	}
+	assertIgnoredRefs(t, fetched, poisonRefs)
+
+	pushed, err := second.Push(context.Background(), config)
+	if err != nil {
+		t.Fatalf("Push() error = %v; result = %#v", err, pushed)
+	}
+	if got, want := pushed.Status, SyncPhaseCompleted; got != want {
+		t.Fatalf("push status = %q, want %q; result = %#v", got, want, pushed)
+	}
+	assertIgnoredRefs(t, pushed, poisonRefs)
+}
+
+func assertIgnoredRefs(t *testing.T, result SyncResult, want []string) {
+	t.Helper()
+	got := make(map[string]string, len(result.Ignored))
+	for _, ignored := range result.Ignored {
+		got[ignored.Ref] = ignored.Reason
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ignored refs = %#v, want %d entries for %v", result.Ignored, len(want), want)
+	}
+	for _, ref := range want {
+		reason, reported := got[ref]
+		if !reported {
+			t.Fatalf("ignored refs = %#v, want an entry naming %q", result.Ignored, ref)
+		}
+		if reason == "" {
+			t.Fatalf("ignored ref %q has an empty reason; the report must say why it was skipped", ref)
+		}
+	}
+}
+
 func TestFetchDiscoversAndFastForwardsTasksWithoutOverwritingLocalWork(t *testing.T) {
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Shared task")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/dgoings/workbook/internal/core"
 )
@@ -105,10 +106,11 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 	if err != nil {
 		return failedPushTransport(result, refs, items, invalid, "push failed before completion", err)
 	}
-	remoteHeads, err := r.parseRemoteTaskHeads(config, remoteOutput)
+	remoteHeads, ignored, err := r.parseRemoteTaskHeads(config, remoteOutput)
 	if err != nil {
 		return failedPushTransport(result, refs, items, invalid, "push failed before completion", err)
 	}
+	result.Ignored = ignored
 	expected := make(map[string]string, len(valid))
 	for _, ref := range refs {
 		if _, ok := valid[ref.taskID]; !ok {
@@ -266,6 +268,12 @@ type SyncResult struct {
 	Status SyncPhaseStatus  `json:"status,omitempty"`
 	Detail string           `json:"detail,omitempty"`
 	Tasks  []SyncTaskResult `json:"tasks"`
+	// Ignored names refs under origin's Workbook task namespace that this
+	// version could not read as exactly one task. They are skipped rather than
+	// rejected so one stray ref cannot deny synchronization to every clone.
+	// Each is named as the ref on the remote, which is the one a user prunes;
+	// the local tracking mirror disappears on the next pruning fetch.
+	Ignored []IgnoredRef `json:"ignored,omitempty"`
 	// Conflicts travels with the phase that produced it but is not part of its
 	// JSON. Callers lift it to the result envelope's single conflict member so
 	// one command reports one list, whatever mix of phases produced it.
@@ -345,16 +353,20 @@ func (r *Repository) fetch(ctx context.Context, config core.ProjectConfig) (fetc
 		return state, result, err
 	}
 
-	canonicalRefs, err := r.listOwnedTaskRefs(ctx, config, taskRefPrefix)
+	canonicalRefs, _, err := r.listOwnedTaskRefs(ctx, config, taskRefPrefix)
 	if err != nil {
 		result, err = failedSyncPhase(result, "fetch failed before completion", err)
 		return state, result, err
 	}
-	trackingRefs, err := r.listOwnedTaskRefs(ctx, config, remoteTaskRefPrefix)
+	trackingRefs, ignoredTracking, err := r.listOwnedTaskRefs(ctx, config, remoteTaskRefPrefix)
 	if err != nil {
 		result, err = failedSyncPhase(result, "fetch failed before completion", err)
 		return state, result, err
 	}
+	// Report the refs as they exist on origin. The tracking namespace is a
+	// disposable mirror that a pruning fetch removes once origin's ref is gone,
+	// so origin's name is the one a user can act on.
+	result.Ignored = ignoredOriginRefs(ignoredTracking)
 
 	heads := make([]TaskHead, 0, len(canonicalRefs)+len(trackingRefs))
 	for _, ref := range canonicalRefs {
@@ -563,6 +575,23 @@ func fetchedDependencies(state fetchState, updates []canonicalRefUpdate, diverge
 	return dependencies
 }
 
+// ignoredOriginRefs restates tracking-namespace ref names as the origin refs
+// they mirror. The fetch refspec maps the two namespaces one to one, so the
+// translation is exact, and it is origin's ref a user must prune.
+func ignoredOriginRefs(ignored []IgnoredRef) []IgnoredRef {
+	if len(ignored) == 0 {
+		return nil
+	}
+	named := make([]IgnoredRef, 0, len(ignored))
+	for _, ref := range ignored {
+		named = append(named, IgnoredRef{
+			Ref:    taskRefPrefix + strings.TrimPrefix(ref.Ref, remoteTaskRefPrefix),
+			Reason: ref.Reason,
+		})
+	}
+	return named
+}
+
 func sortedSyncOutcomes(outcomes map[string]SyncTaskResult) []SyncTaskResult {
 	taskIDs := make([]string, 0, len(outcomes))
 	for taskID := range outcomes {
@@ -630,7 +659,7 @@ func (r *Repository) publishFetched(ctx context.Context, config core.ProjectConf
 		}
 	}
 
-	finalRefs, err := r.listOwnedTaskRefs(ctx, config, taskRefPrefix)
+	finalRefs, _, err := r.listOwnedTaskRefs(ctx, config, taskRefPrefix)
 	if err != nil {
 		return failedSyncPhase(result, "push failed before completion", err)
 	}

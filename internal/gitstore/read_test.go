@@ -209,12 +209,15 @@ func TestOwnedRefsValidateCanonicalAndTrackingNamespaces(t *testing.T) {
 
 	for _, prefix := range []string{taskRefPrefix, trackingTaskRefPrefix} {
 		t.Run(prefix, func(t *testing.T) {
-			refs, err := repository.parseOwnedRefRecords(config, prefix, validRecord(prefix), "")
+			refs, ignored, err := repository.parseOwnedRefRecords(config, prefix, validRecord(prefix), "")
 			if err != nil {
 				t.Fatal(err)
 			}
 			if !reflect.DeepEqual(refs, []taskRefRecord{{taskID: pack.TaskID, objectID: snapshot.Head}}) {
 				t.Fatalf("refs = %#v, want one validated record", refs)
+			}
+			if len(ignored) != 0 {
+				t.Fatalf("ignored = %#v, want none for a valid record", ignored)
 			}
 		})
 	}
@@ -231,11 +234,78 @@ func TestOwnedRefsValidateCanonicalAndTrackingNamespaces(t *testing.T) {
 		{name: "abbreviated object ID", contents: []byte(taskRefPrefix + pack.TaskID + "\x00" + snapshot.Head[:len(snapshot.Head)-2] + "\x00\n")},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := repository.parseOwnedRefRecords(config, taskRefPrefix, test.contents, "")
+			_, _, err := repository.parseOwnedRefRecords(config, taskRefPrefix, test.contents, "")
 			if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
 				t.Fatalf("parseOwnedRefRecords() category = %q, want %q; error = %v", got, want, err)
 			}
 		})
+	}
+}
+
+// The canonical and tracking namespaces deserve different strictness. A name
+// this version cannot read as exactly one task is genuine local corruption in
+// the canonical namespace, which only this tool writes, and an ordinary fact
+// about a namespace every collaborator can push to in the tracking mirror.
+func TestOwnedRefsIgnoreUnreadableTrackingNamesAndRejectCanonicalOnes(t *testing.T) {
+	repository, config := writeRepository(t)
+	snapshot, pack, _ := writeRoot(t, repository, config)
+	if err := repository.ensureGitObjectIDWidth(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	records := func(prefix string) []byte {
+		return []byte(
+			prefix + pack.TaskID + "\x00" + snapshot.Head + "\x00\n" +
+				prefix + "EVIL\x00" + snapshot.Head + "\x00\n" +
+				prefix + "WB-not-a-canonical-ulid\x00" + snapshot.Head + "\x00\n" +
+				prefix + pack.TaskID + "/nested\x00" + snapshot.Head + "\x00\n")
+	}
+
+	refs, ignored, err := repository.parseOwnedRefRecords(config, trackingTaskRefPrefix, records(trackingTaskRefPrefix), "")
+	if err != nil {
+		t.Fatalf("tracking namespace error = %v, want unreadable names ignored", err)
+	}
+	if !reflect.DeepEqual(refs, []taskRefRecord{{taskID: pack.TaskID, objectID: snapshot.Head}}) {
+		t.Fatalf("tracking refs = %#v, want only the well-formed record", refs)
+	}
+	wantIgnored := []string{
+		trackingTaskRefPrefix + "EVIL",
+		trackingTaskRefPrefix + "WB-not-a-canonical-ulid",
+		trackingTaskRefPrefix + pack.TaskID + "/nested",
+	}
+	if len(ignored) != len(wantIgnored) {
+		t.Fatalf("ignored = %#v, want %d entries", ignored, len(wantIgnored))
+	}
+	for index, want := range wantIgnored {
+		if ignored[index].Ref != want {
+			t.Fatalf("ignored[%d].Ref = %q, want %q", index, ignored[index].Ref, want)
+		}
+		if ignored[index].Reason == "" {
+			t.Fatalf("ignored[%d] has no reason; the report must say why %q was skipped", index, want)
+		}
+	}
+
+	_, _, err = repository.parseOwnedRefRecords(config, taskRefPrefix, records(taskRefPrefix), "")
+	if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
+		t.Fatalf("canonical namespace category = %q, want %q; error = %v", got, want, err)
+	}
+}
+
+// The canonical namespace keeps rejecting a malformed name on write, so
+// tolerating one on read never becomes a way to create one.
+func TestWriteRejectsAMalformedCanonicalTaskName(t *testing.T) {
+	repository, config := writeRepository(t)
+	pack := writeCreatePack()
+	state := writeState(t, nil, pack)
+	pack.TaskID = "EVIL"
+	state.TaskID = "EVIL"
+
+	_, err := repository.Write(context.Background(), config, nil, pack, state, "create task")
+	if got, want := core.CategoryOf(err), core.CategoryValidation; got != want {
+		t.Fatalf("Write(malformed task ID) category = %q, want %q; error = %v", got, want, err)
+	}
+	if refExists(t, repository, taskRefPrefix+"EVIL") {
+		t.Fatal("Write(malformed task ID) created a canonical ref")
 	}
 }
 
@@ -245,7 +315,7 @@ func TestOwnedRefsCannotLearnObjectIDWidthFromUntrustedRecords(t *testing.T) {
 	abbreviated := strings.Repeat("a", 38)
 	contents := []byte(taskRefPrefix + "WB-01K0M6B8A4FTT8C39MXXYTW7D1\x00" + abbreviated + "\x00\n")
 
-	_, err := repository.parseOwnedRefRecords(config, taskRefPrefix, contents, "")
+	_, _, err := repository.parseOwnedRefRecords(config, taskRefPrefix, contents, "")
 	if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
 		t.Fatalf("parseOwnedRefRecords() category = %q, want %q; error = %v", got, want, err)
 	}
@@ -265,7 +335,7 @@ func TestOwnedRefsUseOneEnumerationForCanonicalAndTrackingRefs(t *testing.T) {
 		commands = append(commands, append([]string(nil), args...))
 	}
 	for _, prefix := range []string{taskRefPrefix, trackingTaskRefPrefix} {
-		refs, err := repository.listOwnedTaskRefs(context.Background(), config, prefix)
+		refs, _, err := repository.listOwnedTaskRefs(context.Background(), config, prefix)
 		if err != nil {
 			t.Fatal(err)
 		}
