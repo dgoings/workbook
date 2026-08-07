@@ -215,6 +215,11 @@ head without moving the form's. The first save is then refused once and succeeds
 on the retry. That is the conflict path working rather than a lost update, and
 adopting confirmed heads into an open form belongs with the render work too.
 
+**Labels are compared as a set**, because the server stores them as one
+(`normalizeLabels` sorts and de-duplicates). A positional diff would call
+"web, docs" an edit to "docs, web", send it, and land the server's "update does
+not change task" in the form verbatim — the raw error the empty-diff guard
+exists to keep out of it.
 
 ## Auto-sync state in the UI
 
@@ -279,7 +284,8 @@ absent and drives a hand-written fake DOM (`handler_test.go:4173`):
 - a failed intent re-renders the detail form open on its task, so the form stops
   showing the value the server refused;
 - the detail form saves only the fields it changed, carrying the head it
-  rendered, and sends nothing at all when nothing changed;
+  rendered, and sends nothing at all when nothing changed — including a labels
+  field that was reordered rather than edited;
 - a refused save keeps its edits, re-bases, and applies only those fields on the
   retry;
 - a dependency edge written to the open task moves the head the form proposes,

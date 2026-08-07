@@ -1484,11 +1484,18 @@
         if (controls.status.value && controls.status.value !== task.status) values.status = controls.status.value;
         if (controls.priority.value !== task.priority) values.priority = controls.priority.value;
         const labels = labelValues(controls.labels);
-        const rendered = task.labels || [];
-        if (labels.length !== rendered.length || labels.some((label, at) => label !== rendered[at])) {
-          values.labels = labels;
-        }
+        if (!sameLabels(labels, task.labels || [])) values.labels = labels;
         return values;
+      }
+      // Labels are a set: the server sorts and de-duplicates them
+      // (normalizeLabels), so retyping "docs, web" as "web, docs" changes
+      // nothing. Comparing positionally would call that an edit, send it, and
+      // land the server's "update does not change task" verbatim in the form —
+      // the raw error the empty-diff guard exists to keep out of it.
+      function sameLabels(entered, rendered) {
+        const left = [...new Set(entered)].sort();
+        const right = [...new Set(rendered)].sort();
+        return left.length === right.length && left.every((label, at) => label === right[at]);
       }
       async function mutateTask(method, path, values) {
         const options = { method };

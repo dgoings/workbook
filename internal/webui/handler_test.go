@@ -5305,6 +5305,7 @@ func TestHandlerClientDetailFormSendsOnlyChangedFieldsWithTheObservedHead(t *tes
 	task := clientPlacementTask("WB-01J00000000000000000000054", "Detail task", core.StatusReady, core.PriorityMedium)
 	task.Head = "head-1"
 	task.Description = "Original."
+	task.Labels = []string{"docs", "web"}
 	confirmed := task
 	confirmed.Description = "Rewritten for the test."
 	confirmed.Head = "head-2"
@@ -5365,6 +5366,39 @@ setTimeout(async () => {
   }
   if (historyPaths[historyPaths.length - 1] !== "/") {
     throw new Error("a no-change save did not return to the board");
+  }
+
+  const reopen = async () => {
+    await documentEventListeners.click({
+      target: link, button: 0, defaultPrevented: false,
+      metaKey: false, ctrlKey: false, shiftKey: false, altKey: false,
+      preventDefault() {}
+    });
+    return findElement(main, (element) => element.tagName === "FORM");
+  };
+
+  // Labels are a set server-side, so reordering or repeating one is not a
+  // change and must not be sent: the server would find no operations in it
+  // and refuse the update outright.
+  const reordered = await reopen();
+  const labels = findElement(main, (element) => element.id === "task-labels");
+  if (!labels || labels.value !== "docs, web") {
+    throw new Error("the labels field did not render the stored set: " + JSON.stringify(labels && labels.value));
+  }
+  labels.value = "web, docs, web";
+  await reordered.eventListeners.submit({ preventDefault() {} });
+  if (bodies.length !== 1) {
+    throw new Error("a reordered-labels save reached the server: " + JSON.stringify(bodies[1]));
+  }
+
+  const relabeled = await reopen();
+  findElement(main, (element) => element.id === "task-labels").value = "web, docs, api";
+  await relabeled.eventListeners.submit({ preventDefault() {} });
+  if (bodies.length !== 2) {
+    throw new Error("an added label was not saved");
+  }
+  if (JSON.stringify(bodies[1].body) !== '{"labels":["web","docs","api"],"expectedHead":"head-1"}') {
+    throw new Error("the added label was not sent as entered with the observed head: " + JSON.stringify(bodies[1].body));
   }
 }, 0);
 `
