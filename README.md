@@ -469,6 +469,19 @@ reconcile in that run. Stale refs are pruned only from Workbook's
 isolated tracking namespace, allowing `sync` to republish an intact canonical
 task ref if its remote counterpart was removed externally.
 
+`origin`'s task namespace is shared, and `refs/workbook/*` is not covered by
+branch protection on typical hosts, so anyone with push access can leave a ref
+there that this version does not recognize. Such a ref is skipped rather than
+treated as corruption: a name that does not resolve to exactly one task is
+reported in the result's `ignored` list — named as it exists on the remote,
+which is the ref to prune — and every well-formed task still fetches and
+publishes. A fetched tip whose name is well formed but whose object is not
+Workbook history is still reported per task and still exits nonzero, but no
+longer prevents `sync` from publishing the tasks that did validate. This
+tolerance is confined to data `origin` controls. The canonical namespace is
+Workbook's own: it still refuses to write a malformed task name, and a name it
+cannot read there is reported as local corruption.
+
 `workbook push` publishes validated local `refs/workbook/tasks/*` refs to
 `origin` without force or deletion. One bounded, non-atomic publication retains
 per-ref outcomes, so an unrelated task can publish even when another task is
