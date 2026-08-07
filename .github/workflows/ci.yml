@@ -6,9 +6,16 @@ on:
   pull_request:
     branches: [main]
 
+# Pull request runs supersede each other: only a branch's newest commit needs
+# verifying, so they share a per-ref group and cancel the run they replace.
+# Push runs must never share a group. main is verified one commit at a time, and
+# GitHub cancels not just the in-progress run of a group but any run left
+# pending in it, so a burst of merges would discard earlier merges' runs and
+# leave commits on main that CI never executed. Keying pushes on the commit
+# gives every one of them a group of its own.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
