@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -899,45 +900,51 @@ func TestREADMEImplementedCommands(t *testing.T) {
 
 	implemented, proposed := readmeCommandSections(t, string(contents))
 	commandList := firstFencedCodeBlock(t, implemented)
-	var got []string
+	var lines []string
 	for _, line := range strings.Split(commandList, "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "workbook ") {
-			got = append(got, line)
+			lines = append(lines, line)
 		}
 	}
-	want := []string{
-		"workbook setup [--key <key>] [--no-docs] [--no-sync] [--skill-dir <dir>] [--no-skill] [--force] [--json]",
-		"workbook create",
-		"workbook list",
-		"workbook board [--wide | --narrow] [--json]",
-		"workbook show <task> [--history [--limit <n>] [--all]] [--compare <commit> <commit>] [--json]",
-		"workbook update",
-		"workbook delete",
-		"workbook restore",
-		"workbook move <task> (--before <task> | --after <task>) [--json]",
-		"workbook depend <task> <dependency> [--json]",
-		"workbook free <task> <dependency> [--json]",
-		"workbook next [--json]",
-		"workbook rebuild [--json]",
-		"workbook validate [--full] [--json]",
-		"workbook version [--json]",
-		"workbook fetch [--json]",
-		"workbook push [--json]",
-		"workbook sync [--watch [--interval <duration>]] [--status] [--json]",
-		"workbook config show [--json]",
-		"workbook config set <setting> <value> [--json]",
-		"workbook config unset <setting> [--json]",
-		"workbook docs install [--create <file>] [--skill-dir <dir>] [--no-skill] [--force] [--json]",
-		"workbook docs update [--skill-dir <dir>] [--no-skill] [--force] [--json]",
-		"workbook docs status [--skill-dir <dir>] [--no-skill] [--json]",
-		"workbook docs remove [--skill-dir <dir>] [--no-skill] [--force] [--json]",
-		"workbook hooks install [--json]",
-		"workbook serve [--addr 127.0.0.1:7331]",
-		"workbook help [command]",
+
+	// Expectations come from commandSchemas rather than a second hard-coded
+	// copy of the same strings. The old list pinned the README against itself,
+	// so a command that gained an option the README never learned about — every
+	// --no-sync and --json the block omitted — passed. Deriving them means the
+	// schema is the one place a new option is declared, and forgetting the
+	// README is a failure rather than a silent divergence.
+	got := make([]string, len(lines))
+	options := make(map[string][]string, len(lines))
+	for index, line := range lines {
+		path := readmeCommandPath(line)
+		got[index] = path
+		options[path] = readmeCommandOptions(line)
 	}
-	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+	want := schemaCommandPaths()
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("implemented commands = %q, want exactly %q", got, want)
+	}
+	for _, path := range want {
+		// `help` is answered by the help renderer rather than by a schema, so
+		// it is the one line with nothing to derive from.
+		if path == "help" {
+			continue
+		}
+		metadata, exists := commandMetadataFor(strings.Fields(path))
+		if !exists {
+			t.Fatalf("no schema for README command %q", path)
+		}
+		wantOptions := make([]string, 0, len(metadata.Options))
+		for _, option := range metadata.Options {
+			wantOptions = append(wantOptions, "--"+option.Name)
+		}
+		sort.Strings(wantOptions)
+		gotOptions := append([]string(nil), options[path]...)
+		sort.Strings(gotOptions)
+		if !reflect.DeepEqual(gotOptions, wantOptions) {
+			t.Errorf("README documents %q with options %q, want exactly the schema's %q", path, gotOptions, wantOptions)
+		}
 	}
 
 	for _, command := range []string{"workbook claim"} {
@@ -956,18 +963,97 @@ func TestREADMEImplementedCommands(t *testing.T) {
 		"PATCH /api/tasks/<id>/status",
 		"client-rendered form",
 		"shared new-task and detail form",
+		// The publication indicator and the optimistic queue changed what the
+		// board does with a mutation; both landed without touching the README.
+		"GET /api/sync",
+		"PUT /api/sync",
+		"per-task queue",
+		"Publishing:",
 	} {
 		if !strings.Contains(readme, required) {
 			t.Errorf("README web board documentation is missing %q", required)
 		}
 	}
+	// An agent-facing tool that documents no exit code leaves a caller parsing
+	// messages. Every code the CLI can return has to appear in one table.
+	assertREADMEDocumentsEveryExitCode(t, readme)
 	for _, stale := range []string{
 		"Workbook synchronizes only its own refs",
 		"automatically reconciles concurrent edits",
+		// Replay-based reconciliation is implemented and tested; the status
+		// note said otherwise while the section describing it said it worked.
+		"Conflict reconciliation remains proposed",
 	} {
 		if strings.Contains(readme, stale) {
 			t.Errorf("README contains stale present-tense claim %q", stale)
 		}
+	}
+}
+
+// schemaCommandPaths lists every command the CLI implements, subcommands
+// expanded, in the order help presents them, plus the `help` command itself.
+// It is the sequence the README's implemented block has to match.
+func schemaCommandPaths() []string {
+	paths := make([]string, 0, len(commandOrder)+8)
+	for _, name := range commandOrder {
+		metadata := commandSchemas[name]
+		if len(metadata.Subcommands) == 0 {
+			paths = append(paths, name)
+			continue
+		}
+		for _, subcommand := range metadata.SubcommandOrder {
+			paths = append(paths, name+" "+subcommand)
+		}
+	}
+	return append(paths, "help")
+}
+
+// readmeCommandPath reduces one README synopsis line to the command path it
+// documents, so the README stays free to name positionals as a reader thinks of
+// them — `<task>` rather than the schema's `<id-or-prefix>`.
+func readmeCommandPath(line string) string {
+	fields := strings.Fields(strings.TrimPrefix(line, "workbook "))
+	if len(fields) == 0 {
+		return ""
+	}
+	name := fields[0]
+	if metadata, exists := commandSchemas[name]; exists && len(fields) > 1 {
+		if _, isSubcommand := metadata.Subcommands[fields[1]]; isSubcommand {
+			return name + " " + fields[1]
+		}
+	}
+	return name
+}
+
+var readmeOptionPattern = regexp.MustCompile(`--[a-z][a-z0-9-]*`)
+
+func readmeCommandOptions(line string) []string {
+	return readmeOptionPattern.FindAllString(line, -1)
+}
+
+func assertREADMEDocumentsEveryExitCode(t *testing.T, readme string) {
+	t.Helper()
+	categories := map[int]core.Category{
+		1: core.CategoryOperational,
+		2: core.CategoryInvocation,
+		3: core.CategoryNotInitialized,
+		4: core.CategoryNotFound,
+		5: core.CategoryValidation,
+		6: core.CategoryStaleWrite,
+		7: core.CategoryCorruptData,
+		8: core.CategoryConflict,
+	}
+	for code, category := range categories {
+		if got := core.ExitCode(core.Errorf(category, "probe")); got != code {
+			t.Fatalf("core.ExitCode(%q) = %d, want %d; this table is stale", category, got, code)
+		}
+		row := fmt.Sprintf("| %d | `%s` |", code, category)
+		if !strings.Contains(readme, row) {
+			t.Errorf("README exit-code table is missing the row %q", row)
+		}
+	}
+	if !strings.Contains(readme, "| 0 |") {
+		t.Error("README exit-code table does not document success")
 	}
 }
 
@@ -1039,12 +1125,11 @@ func assertREADMECommandPolicy(t *testing.T, readme string) {
 }
 
 func readmeCommandPolicyViolations(readme string) []string {
-	implemented := map[string]bool{
-		"setup": true, "config": true, "docs": true, "create": true, "list": true, "board": true,
-		"show": true, "update": true, "delete": true, "restore": true, "fetch": true,
-		"push": true, "sync": true, "hooks": true, "serve": true, "move": true,
-		"depend": true, "free": true, "next": true, "rebuild": true, "validate": true, "version": true,
-		"help": true,
+	// Derived, so adding a command to the schema does not also require
+	// remembering this map before the README may mention it.
+	implemented := map[string]bool{"help": true}
+	for name := range commandSchemas {
+		implemented[name] = true
 	}
 	commandPattern := regexp.MustCompile(`\bworkbook ([a-z][a-z0-9-]*)\b`)
 	var h2, h3 string

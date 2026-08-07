@@ -1035,16 +1035,29 @@ func TestTaskOperationCommitsStayOutsideCheckedOutBranchHistory(t *testing.T) {
 
 func syncRepositories(t *testing.T) (*Repository, *Repository, core.ProjectConfig) {
 	t.Helper()
+	return syncRepositoriesWithObjectFormat(t, testrepo.FormatSHA1)
+}
+
+// syncRepositoriesWithObjectFormat builds the two-clones-and-a-bare-origin
+// fixture in the named Git object format. The origin has to be created in the
+// same format as the seed, because Git will not clone across object formats.
+func syncRepositoriesWithObjectFormat(t *testing.T, objectFormat string) (*Repository, *Repository, core.ProjectConfig) {
+	t.Helper()
+	testrepo.RequireObjectFormat(t, objectFormat)
 	ctx := context.Background()
 	bare := filepath.Join(t.TempDir(), "origin.git")
-	syncGit(t, t.TempDir(), "init", "--bare", "--quiet", bare)
+	bareArgs := []string{"init", "--bare", "--quiet"}
+	if objectFormat != testrepo.FormatSHA1 {
+		bareArgs = append(bareArgs, "--object-format="+objectFormat)
+	}
+	syncGit(t, t.TempDir(), append(bareArgs, bare)...)
 	// Background auto-gc spawned by receive-pack can outlive the test and race
 	// t.TempDir cleanup with "directory not empty" on slow runners.
 	syncGit(t, bare, "config", "receive.autogc", "false")
 	syncGit(t, bare, "config", "gc.auto", "0")
 	syncGit(t, bare, "config", "maintenance.auto", "false")
 
-	seedPath := testrepo.New(t)
+	seedPath := testrepo.New(t, testrepo.WithObjectFormat(objectFormat))
 	syncGit(t, seedPath, "branch", "-M", "main")
 	seed, err := Open(ctx, seedPath)
 	if err != nil {

@@ -12,7 +12,9 @@ SQLite materialized view accelerates normal task reads while Git remains canonic
 > drag-and-drop status changes, explicit origin-only task fetch/push/sync, and a
 > disposable SQLite task projection are implemented, along with clone bootstrap
 > through `workbook setup` and managed agent documentation through `workbook
-> docs`. Conflict reconciliation remains proposed. Workbook is published for
+> docs`. Divergent task histories are reconciled by replaying local operations
+> onto the fetched tip; the three concurrent situations Workbook will not decide
+> are reported rather than resolved for you. Workbook is published for
 > macOS and Linux through the `dgoings/homebrew-tap` Homebrew tap.
 
 ## Why Workbook?
@@ -71,8 +73,11 @@ An unreachable `origin` is a warning, not a failure: the change is recorded
 locally and the command still succeeds. Local work that `origin` does not have
 is replayed onto the fetched tip and published, so a task whose history diverged
 needs no separate reconciliation step. The three concurrent situations Workbook
-will not decide are reported instead, and exit `8`; see
-[Reconciling divergent histories](#reconciling-divergent-histories).
+will not decide are reported instead, and a mutation that met one exits `8`;
+`workbook next` reports them and still exits `0`, because a caller asking what
+to work on next is not the caller who has to resolve them. See
+[Reconciling divergent histories](#reconciling-divergent-histories) and
+[Machine-readable output and exit codes](#machine-readable-output-and-exit-codes).
 
 A ref on `origin` that fails validation is likewise no reason to stop
 publishing. Validation is per task, so a fetch that ran to completion isolates
@@ -253,17 +258,17 @@ both human-readable output and a versioned machine-readable result envelope:
 
 ```text
 workbook setup [--key <key>] [--no-docs] [--no-sync] [--skill-dir <dir>] [--no-skill] [--force] [--json]
-workbook create
-workbook list
+workbook create <title> [--description <text>] [--status <status>] [--priority <priority>] [--label <label>] [--no-sync] [--json]
+workbook list [--status <status>] [--priority <priority>] [--label <label>] [--all] [--json]
 workbook board [--wide | --narrow] [--json]
 workbook show <task> [--history [--limit <n>] [--all]] [--compare <commit> <commit>] [--json]
-workbook update
-workbook delete
-workbook restore
-workbook move <task> (--before <task> | --after <task>) [--json]
-workbook depend <task> <dependency> [--json]
-workbook free <task> <dependency> [--json]
-workbook next [--json]
+workbook update <task> [--title <title>] [--description <text>] [--status <status>] [--priority <priority>] [--label <label>] [--clear-labels] [--no-sync] [--json]
+workbook delete <task> [--no-sync] [--json]
+workbook restore <task> [--no-sync] [--json]
+workbook move <task> (--before <task> | --after <task>) [--no-sync] [--json]
+workbook depend <task> <dependency> [--no-sync] [--json]
+workbook free <task> <dependency> [--no-sync] [--json]
+workbook next [--no-sync] [--json]
 workbook rebuild [--json]
 workbook validate [--full] [--json]
 workbook version [--json]
@@ -278,7 +283,7 @@ workbook docs update [--skill-dir <dir>] [--no-skill] [--force] [--json]
 workbook docs status [--skill-dir <dir>] [--no-skill] [--json]
 workbook docs remove [--skill-dir <dir>] [--no-skill] [--force] [--json]
 workbook hooks install [--json]
-workbook serve [--addr 127.0.0.1:7331]
+workbook serve [--addr <address>]
 workbook help [command]
 ```
 
@@ -295,6 +300,41 @@ The Workbook skill is installed under the directory named by the user-global
 every project on a machine, `--skill-dir <dir>` overrides it for one project and
 `--no-skill` leaves the skill alone while still managing the guidelines. These
 flags are a stopgap until per-project configuration lands.
+
+### Machine-readable output and exit codes
+
+With `--json`, success is a single compact line carrying a versioned envelope,
+and failure is a single compact line on standard error:
+
+```text
+{"format":"workbook.result","version":1,"command":"create","data":{...}}
+{"format":"workbook.error","version":1,"error":{"category":"validation","message":"..."}}
+```
+
+The exit code names the error's category, so a caller can decide what to do
+without parsing a message:
+
+| Code | Category | What it means |
+| --- | --- | --- |
+| 0 | — | The command succeeded. |
+| 1 | `operational` | The environment or `origin` is at fault: an unreachable remote, a Git command that failed, a port already bound. |
+| 2 | `invalid-invocation` | The command line is wrong. Fix the arguments. |
+| 3 | `not-initialized` | This repository has no Workbook project. Run `workbook setup`. |
+| 4 | `not-found` | No such task, commit, or setting. |
+| 5 | `validation` | The input is well-formed but not allowed, such as an unknown status or restoring an active task. It fails the same way on every retry. |
+| 6 | `stale-write` | The task ref moved between read and write, so the compare-and-swap was refused. Retrying the identical command usually succeeds. |
+| 7 | `corrupt-data` | Stored data could not be read as Workbook wrote it. Read the message; repair or rebuild before continuing. |
+| 8 | `conflict` | Reconciliation stopped on a decision Workbook will not make. See [Reconciling divergent histories](#reconciling-divergent-histories). |
+
+Exit `6` is what a concurrent writer sees: two processes mutating one task, a
+push whose remote ref changed underneath it, a projection whose head drifted
+while it was being read, and a web save proposed against a tip the task has
+moved past all surface as `stale-write` rather than as silent overwriting.
+
+Reporting a conflict and failing over one are separate things. `workbook next`
+exits `0` while listing conflicts in its envelope, because a caller asking which
+task to pick up next is not the caller who has to resolve them; a mutation that
+could not replay past one exits `8`.
 
 ### User-global configuration
 
@@ -734,6 +774,8 @@ DELETE /api/tasks/<id>        tombstone a task
 POST /api/tasks/<id>/restore  restore a tombstoned task
 PUT /api/tasks/<id>/dependencies/<dependency>     add a prerequisite
 DELETE /api/tasks/<id>/dependencies/<dependency>  remove a prerequisite
+GET /api/sync                 versioned publication-mode JSON
+PUT /api/sync                 change this board's publication mode
 GET /healthz                  versioned health JSON
 ```
 
@@ -766,6 +808,36 @@ boundary, so dropping at the top or bottom of a column still has a clear result.
 The placement creates one normal Workbook operation commit on the moved task and
 returns a versioned JSON task-mutation document. The older status-only endpoint
 remains available for compatible clients.
+
+The board renders a change before it is durable and reconciles it afterwards.
+Each mutation becomes an intent held in a per-task queue: the card moves at
+once, and the intent is sent with the task tip the board rendered. One task's
+intents are sent one at a time, because each carries the head the one before it
+returned, while independent tasks publish concurrently, so a slow write to one
+card never stalls the rest of the board. A confirmed response replaces the
+projected task with what Git recorded. A refused one drops only the intent that
+failed and keeps the ones queued behind it, because those were separate
+decisions; a `stale-write` refusal re-bases the queue on the tip the server now
+holds so the intents behind it retry against current truth rather than failing
+identically. Optimism is confined to the display: HTTP success still means the
+operation commit exists in Git.
+
+A `Publishing:` indicator in the board header says what the *next* mutation will
+do with `origin`, and clicking it changes that for this server. Handed to
+watcher — the default — means a mutation returns as soon as the write is durable
+and a running `workbook sync --watch` publishes it just behind the response.
+Inline means the board attempts the push itself and answers afterwards, rather
+than handing the change to a watcher. Neither mode makes publication a condition
+of success. As on the CLI, an unreachable `origin` is a warning and not a
+failure, so an inline mutation whose push failed still answers `200` with the
+change recorded locally and an `auto-sync-incomplete` warning naming the error;
+a response says the operation commit exists in Git, never that `origin` has it.
+The indicator is read from `GET /api/sync` rather than assumed, because it
+reports what the next mutation will really do: a board set to defer publishes
+inline when no watcher answers, and a repository with no `origin` publishes
+nothing in either mode. The mode is a preference held in memory for the life of
+the server, not a project setting, which is why it is separate from
+`workbook config set auto-sync`.
 
 The executable embeds its HTML, CSS, and JavaScript, and the page polls
 `/api/tasks` every second. Each poll reconciles the board by task ID instead of
@@ -898,9 +970,10 @@ The following examples describe future coordination and are not implemented:
 workbook claim TASK-123 --remote-required --json
 ```
 
-Remote compare-and-swap claims, automatic conflict reconciliation, multiple
-remote selection, and a combined `workbook finish --commit HEAD --push` flow
-remain design proposals.
+Remote compare-and-swap claims, automatic resolution of the three reported
+conflicts, multiple remote selection, and a combined
+`workbook finish --commit HEAD --push` flow remain design proposals. Replaying
+divergent histories is implemented; deciding a contradiction for you is not.
 
 ## Architecture
 
@@ -1159,12 +1232,12 @@ The POC now has versioned operation and state documents, local Git object/ref
 CRUD, structured CLI output, repository initialization, terminal and web boards,
 web drag-and-drop status changes, task ordering and dependencies, and explicit
 origin-only task sharing including fetch, push, sync, and optional pre-push hook
-installation. Remaining POC work is:
+installation. Replay, cache reconstruction, both Git object formats, renderer
+parity, HTTP routes through the real serve wiring, installer behavior, and this
+document's alignment with the code are covered by the test suite, which runs on
+every push to `main` and every pull request against it.
 
-1. Complete replay, reconstruction, Git hash, renderer, HTTP, installer, and
-   documentation acceptance coverage.
-
-Remote claims, conflict reconciliation, multiple-remote support, packaged
+Remote claims, automatic conflict resolution, multiple-remote support, packaged
 distribution, and optional adapters follow this collaborative POC.
 
 ## Open questions

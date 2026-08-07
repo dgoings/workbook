@@ -960,11 +960,13 @@ func boardExposureWarning(address string) string {
 type boardPublisher struct {
 	repository *gitstore.Repository
 	config     core.ProjectConfig
-	// inline shifts the board to waiting for the push, so a successful
-	// response means origin has the change rather than that a watcher accepted
-	// it. It lives in memory for the life of this server: it is a preference
-	// about how this board behaves, not a project setting, and `workbook config
-	// set auto-sync` already means something different.
+	// inline shifts the board to attempting the push itself and answering
+	// afterwards, rather than handing the change to a watcher. It does not make
+	// publication a condition of success: publish below still turns a failed
+	// push into a warning, so neither mode lets a response promise that origin
+	// has the change. It lives in memory for the life of this server: it is a
+	// preference about how this board behaves, not a project setting, and
+	// `workbook config set auto-sync` already means something different.
 	inline atomic.Bool
 }
 
