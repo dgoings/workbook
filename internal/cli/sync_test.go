@@ -189,6 +189,82 @@ func TestRunSyncHumanOutputReportsConflictDetail(t *testing.T) {
 	}
 }
 
+// A ref under origin's task namespace that Workbook does not recognize is the
+// one poisoning anyone with push access can do by accident. Synchronization
+// keeps working for every well-formed task, and every command that talks to
+// origin names the stray ref so somebody prunes it.
+func TestRunSyncToleratesAndReportsUnrecognizedRemoteTaskRef(t *testing.T) {
+	first, second := cliSyncRepositories(t)
+	shared := cliCreateTask(t, first, "Shared task")
+	if code, _, stderr := run(t, first, "push"); code != 0 {
+		t.Fatalf("initial push code = %d; stderr = %q", code, stderr)
+	}
+	cliGit(t, first, "push", "origin", "HEAD:refs/workbook/tasks/EVIL")
+
+	local := cliCreateTask(t, second, "Local task")
+	code, stdout, stderr := run(t, second, "sync", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("poisoned sync code = %d, want 0; stderr = %q", code, stderr)
+	}
+	result := decodeSyncRunResult(t, stdout, "sync")
+	assertCLISyncStatus(t, result.Fetch, shared.ID, gitstore.SyncCreated)
+	assertCLISyncStatus(t, result.Push, local.ID, gitstore.SyncPublished)
+	assertCLIIgnoredRef(t, result.Fetch, "refs/workbook/tasks/EVIL")
+
+	code, stdout, stderr = run(t, second, "fetch", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("poisoned fetch code = %d, want 0; stderr = %q", code, stderr)
+	}
+	assertCLIIgnoredRef(t, decodeSyncResult(t, stdout, "fetch"), "refs/workbook/tasks/EVIL")
+
+	code, stdout, stderr = run(t, second, "push", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("poisoned push code = %d, want 0; stderr = %q", code, stderr)
+	}
+	assertCLIIgnoredRef(t, decodeSyncResult(t, stdout, "push"), "refs/workbook/tasks/EVIL")
+
+	// An ordinary mutation synchronizes inline, so it was breaking too.
+	code, stdout, stderr = run(t, second, "update", local.ID, "--priority", "high", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("poisoned update code = %d, want 0; stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stdout, `"status":"completed"`) {
+		t.Fatalf("poisoned update sync report = %q, want a completed synchronization", stdout)
+	}
+
+	code, stdout, stderr = run(t, second, "sync")
+	if code != 0 || stderr != "" {
+		t.Fatalf("human sync code = %d, want 0; stderr = %q", code, stderr)
+	}
+	for _, want := range []string{
+		"Ignored:\trefs/workbook/tasks/EVIL\t",
+		"prune with: git push origin --delete <ref>",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("human sync stdout = %q, want it to contain %q", stdout, want)
+		}
+	}
+
+	cliGit(t, second, "push", "origin", "--delete", "refs/workbook/tasks/EVIL")
+	code, stdout, stderr = run(t, second, "sync", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("pruned sync code = %d, want 0; stderr = %q", code, stderr)
+	}
+	if pruned := decodeSyncRunResult(t, stdout, "sync"); len(pruned.Fetch.Ignored) != 0 {
+		t.Fatalf("ignored refs after pruning = %#v, want none", pruned.Fetch.Ignored)
+	}
+}
+
+func assertCLIIgnoredRef(t *testing.T, result gitstore.SyncResult, ref string) {
+	t.Helper()
+	if len(result.Ignored) != 1 {
+		t.Fatalf("ignored refs = %#v, want exactly one for %s", result.Ignored, ref)
+	}
+	if got := result.Ignored[0]; got.Ref != ref || strings.TrimSpace(got.Reason) == "" {
+		t.Fatalf("ignored ref = %#v, want %q with a reason", got, ref)
+	}
+}
+
 func TestRunSyncJSONReportsFailedFetchWhenOriginIsMissing(t *testing.T) {
 	repository := initializedRepository(t)
 
