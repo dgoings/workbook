@@ -125,6 +125,19 @@ func (r *Repository) rememberGitObjectID(objectID string) error {
 	return nil
 }
 
+// objectIDWidth reports the repository's observed object ID width in bytes.
+// Callers that already validated every object ID against it use this instead of
+// decoding each ID a second time.
+func (r *Repository) objectIDWidth() (int, error) {
+	r.metadataMu.RLock()
+	objectIDBytes := r.objectIDBytes
+	r.metadataMu.RUnlock()
+	if objectIDBytes == 0 {
+		return 0, fmt.Errorf("repository object ID length has not been observed")
+	}
+	return objectIDBytes, nil
+}
+
 func (r *Repository) validateFullObjectID(objectID string) error {
 	decoded, err := decodeObjectID(objectID)
 	if err != nil {
