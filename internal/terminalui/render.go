@@ -32,10 +32,10 @@ func RenderList(w io.Writer, tasks []core.Task, width int) error {
 	for _, task := range tasks {
 		writeListRow(&output, idWidth, humanWidth, statusWidth, priorityWidth,
 			task.ID,
-			fit(task.Title, humanWidth),
+			fit(core.DisplayLine(task.Title), humanWidth),
 			string(task.Status),
 			string(task.Priority),
-			fit(strings.Join(task.Labels, ","), humanWidth),
+			fit(core.DisplayLine(strings.Join(task.Labels, ",")), humanWidth),
 		)
 	}
 	_, err := io.WriteString(w, output.String())
@@ -187,7 +187,11 @@ func writeWideRow(output *strings.Builder, columns []presentation.Column, conten
 
 func wideCardLines(task presentation.TaskView, width int) []string {
 	lines := wrapWideMetadata(task.IDPrefix, " ["+priorityMarker(task.Task.Priority)+"]", width)
-	lines = append(lines, fit(task.Task.Title, width), fit(strings.Join(task.Task.Labels, ","), width))
+	lines = append(
+		lines,
+		fit(core.DisplayLine(task.Task.Title), width),
+		fit(core.DisplayLine(strings.Join(task.Task.Labels, ",")), width),
+	)
 	return lines
 }
 
@@ -254,10 +258,10 @@ func writeUnknownSection(output *strings.Builder, tasks []presentation.TaskView,
 func writeNarrowTask(output *strings.Builder, task presentation.TaskView, width int) {
 	prefix := task.IDPrefix + " [" + string(task.Task.Priority) + "] "
 	output.WriteString(prefix)
-	output.WriteString(fit(task.Task.Title, max(1, width-len(prefix))))
+	output.WriteString(fit(core.DisplayLine(task.Task.Title), max(1, width-len(prefix))))
 	if len(task.Task.Labels) > 0 {
 		output.WriteString("\n  labels: ")
-		output.WriteString(fit(strings.Join(task.Task.Labels, ", "), max(1, width-len("  labels: "))))
+		output.WriteString(fit(core.DisplayLine(strings.Join(task.Task.Labels, ", ")), max(1, width-len("  labels: "))))
 	}
 }
 

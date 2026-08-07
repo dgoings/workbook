@@ -217,3 +217,57 @@ func TestRenderBoardShowsAllEmptyColumns(t *testing.T) {
 		t.Fatalf("RenderBoard() =\n%q\nwant\n%q", got, want)
 	}
 }
+
+func TestRenderListStripsControlCharactersFromTitlesAndLabels(t *testing.T) {
+	// Mutation caught: rendering stored bytes verbatim, so an ESC sequence in
+	// a title redraws the row into a forged task on a real terminal.
+	tasks := []core.Task{{
+		ID: "WB-01ARZ3NDEKTSV4RRFFQ69G5FAV",
+		TaskData: core.TaskData{
+			Title:    "benign\x1b[2K\x1b[1Gforged",
+			Status:   core.StatusBacklog,
+			Priority: core.PriorityHigh,
+			Labels:   []string{"git\x1b[2K", "ok"},
+		},
+	}}
+
+	var output bytes.Buffer
+	if err := RenderList(&output, tasks, 100); err != nil {
+		t.Fatalf("RenderList() error = %v", err)
+	}
+	got := output.String()
+	if strings.ContainsRune(got, 0x1b) {
+		t.Fatalf("RenderList() = %q, want no ESC bytes", got)
+	}
+	if !strings.Contains(got, "benign [2K [1Gforged") {
+		t.Fatalf("RenderList() = %q, want the sanitized title", got)
+	}
+}
+
+func TestRenderBoardStripsControlCharactersFromCards(t *testing.T) {
+	// Mutation caught: card lines rendering stored bytes verbatim in either
+	// layout.
+	board := presentation.NewBoard([]core.Task{{
+		ID: "WB-01ARZ3NDEKTSV4RRFFQ69G5FAV",
+		TaskData: core.TaskData{
+			Title:    "benign\x1b[2K\x1b[1Gforged",
+			Status:   core.StatusBacklog,
+			Priority: core.PriorityHigh,
+			Labels:   []string{"git\x1b[2K"},
+		},
+	}})
+
+	for name, layout := range map[string]Layout{"narrow": LayoutNarrow, "wide": LayoutWide} {
+		var output bytes.Buffer
+		if err := RenderBoard(&output, board, layout, 140); err != nil {
+			t.Fatalf("RenderBoard(%s) error = %v", name, err)
+		}
+		got := output.String()
+		if strings.ContainsRune(got, 0x1b) {
+			t.Fatalf("RenderBoard(%s) = %q, want no ESC bytes", name, got)
+		}
+		if !strings.Contains(got, "benign [2K [1Gforged") {
+			t.Fatalf("RenderBoard(%s) = %q, want the sanitized title", name, got)
+		}
+	}
+}
