@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/dgoings/workbook/internal/testenv"
 )
 
 func smallStorageFixtureSpec(objectFormat string, operations int) FixtureSpec {
@@ -138,7 +140,7 @@ func TestMeasureGitStorageSeparatesRawContentBytesFromOnDiskBytes(t *testing.T) 
 // breaks the cross-format logical equivalence this accounting relies on.
 func TestStorageFixturesCarryEquivalentLogicalDataAcrossObjectFormats(t *testing.T) {
 	if !supportsObjectFormat(t, "sha256") {
-		t.Skip("Git does not support SHA-256 repositories")
+		testenv.MissingCapability(t, "Git does not support SHA-256 repositories")
 	}
 	const operations = 4
 

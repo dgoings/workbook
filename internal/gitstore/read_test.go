@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/testenv"
 )
 
 func TestReadTaskHeadsBatchesCurrentTips(t *testing.T) {
@@ -1008,7 +1009,7 @@ func writeRepositoryWithObjectFormat(t *testing.T, objectFormat string) (*Reposi
 		"--object-format="+objectFormat,
 	); err != nil {
 		if objectFormat == "sha256" {
-			t.Skipf("Git does not support SHA-256 repositories: %v", err)
+			testenv.MissingCapability(t, "Git does not support SHA-256 repositories: %v", err)
 		}
 		t.Fatalf("git init --object-format=%s: %v", objectFormat, err)
 	}

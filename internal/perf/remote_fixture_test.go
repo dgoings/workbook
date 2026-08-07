@@ -13,13 +13,11 @@ import (
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
+	"github.com/dgoings/workbook/internal/testenv"
 )
 
 func TestBuildRemoteFixture(t *testing.T) {
-	formats := []string{"sha1"}
-	if supportsRemoteObjectFormat(t, "sha256") {
-		formats = append(formats, "sha256")
-	}
+	formats := []string{"sha1", "sha256"}
 
 	topologies := []RemoteTopology{
 		RemoteFreshCheckout,
@@ -33,6 +31,9 @@ func TestBuildRemoteFixture(t *testing.T) {
 	}
 	for _, objectFormat := range formats {
 		t.Run(objectFormat, func(t *testing.T) {
+			if objectFormat == "sha256" && !supportsRemoteObjectFormat(t, objectFormat) {
+				testenv.MissingCapability(t, "Git does not support SHA-256 repositories")
+			}
 			for _, topology := range topologies {
 				t.Run(string(topology), func(t *testing.T) {
 					fixture, err := BuildRemoteFixture(context.Background(), filepath.Join(t.TempDir(), "fixture"), FixtureSpec{
