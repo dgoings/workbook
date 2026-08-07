@@ -207,6 +207,36 @@ workbook version
 
 Help output is human-readable. Help itself has no JSON form.
 
+### Continuous integration
+
+`.github/workflows/ci.yml` runs on every push to `main` and every pull request
+against it, on `ubuntu-24.04` and `macos-15` because Workbook publishes darwin
+and linux archives. Each job verifies formatting with `gofmt -l .`, runs
+`go vet ./...`, and runs `go test ./...`.
+
+A suite that skips is the failure this workflow is built to prevent. The
+embedded web board tests execute the rendered client with `node`, and the
+cross-object-format tests need a Git that can create SHA-256 repositories;
+without either, those tests skip and the package still reports `ok`. Three
+things stop that:
+
+- `scripts/check-ci-capabilities.sh` runs before the suite and fails, naming
+  the tool, when node or SHA-256 Git support is absent.
+- `WORKBOOK_TEST_REQUIRE_CAPABILITIES=1` turns a missing capability into a test
+  failure. Tests report one through `internal/testenv.MissingCapability`
+  instead of `t.Skip`, which skips locally and fails wherever the variable is
+  set.
+- `scripts/skipreport` reads `go test -json`, replays the readable output, and
+  writes every skip and every missing-capability failure to the job summary, so
+  a shrinking suite is visible rather than green.
+
+Run the same report locally:
+
+```sh
+set -o pipefail
+go test ./... -json | go run ./scripts/skipreport
+```
+
 ## Implemented POC commands
 
 The current CLI implements these local commands. Commands marked `--json` support

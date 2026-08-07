@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        # Workbook publishes darwin and linux archives, so verify both.
+        os: [ubuntu-24.04, macos-15]
+    steps:
+      # Release tags must be present: scripts/setup_dev_env_test.go builds the
+      # newest one, and treats its absence as a missing capability.
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
+        with:
+          go-version: "1.26.5"
+
+      # The embedded web client behavior tests execute the rendered script with
+      # node. Without one they skip, and a skipped suite reports "ok".
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+
+      # Fail before the suite runs when a capability it depends on is absent,
+      # so the reason is a named missing tool rather than a shrunken run.
+      - name: Verify test capabilities
+        run: scripts/check-ci-capabilities.sh
+
+      - name: Check formatting
+        shell: bash
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "${unformatted}" ]; then
+            echo "gofmt reported unformatted files:" >&2
+            echo "${unformatted}" >&2
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      # WORKBOOK_TEST_REQUIRE_CAPABILITIES turns a missing-capability skip into
+      # a failure, and skipreport writes every skip to the job summary, so a
+      # suite that quietly stopped covering something cannot report success.
+      - name: Test
+        shell: bash
+        env:
+          WORKBOOK_TEST_REQUIRE_CAPABILITIES: "1"
+        run: |
+          set -o pipefail
+          go test ./... -json -timeout 45m | go run ./scripts/skipreport
