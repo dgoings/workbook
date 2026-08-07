@@ -73,8 +73,11 @@ An unreachable `origin` is a warning, not a failure: the change is recorded
 locally and the command still succeeds. Local work that `origin` does not have
 is replayed onto the fetched tip and published, so a task whose history diverged
 needs no separate reconciliation step. The three concurrent situations Workbook
-will not decide are reported instead, and exit `8`; see
-[Reconciling divergent histories](#reconciling-divergent-histories).
+will not decide are reported instead, and a mutation that met one exits `8`;
+`workbook next` reports them and still exits `0`, because a caller asking what
+to work on next is not the caller who has to resolve them. See
+[Reconciling divergent histories](#reconciling-divergent-histories) and
+[Machine-readable output and exit codes](#machine-readable-output-and-exit-codes).
 
 A ref on `origin` that fails validation is likewise no reason to stop
 publishing. Validation is per task, so a fetch that ran to completion isolates
