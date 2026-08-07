@@ -47,6 +47,11 @@ type taskSession struct {
 	report     syncReport
 	fetched    *gitstore.SyncResult
 	conflicts  []core.Conflict
+	// defects carries what a fetch that still ran to completion reported about
+	// refs it could not validate. Publication follows such a fetch, so this is
+	// a warning the caller hears alongside a synchronized change rather than
+	// the failure that used to stand in for it.
+	defects string
 	// deferred reports that a trustworthy watcher answered, so this command
 	// writes locally and hands publication to it.
 	deferred bool
@@ -162,6 +167,13 @@ func (session *taskSession) acknowledge(conflict core.Conflict) {
 // would defeat the local-first design. A conflict is different — the fetch
 // itself completed and advanced refs, so it is recorded and left for the caller
 // to act on.
+//
+// The same holds for any fetch that ran to completion while reporting per-task
+// failures, which is why the gate is the phase's status rather than the error's
+// category. Fetch isolates an invalid tip to its own task and advances every
+// other ref, so one task's malformed object is no reason to deny publication to
+// a mutation that did not touch it. What the fetch could not validate is
+// carried as a warning instead.
 func (session *taskSession) fetchBefore(ctx context.Context) {
 	if !session.report.Enabled {
 		return
@@ -183,13 +195,16 @@ func (session *taskSession) fetchBefore(ctx context.Context) {
 	result, err := session.repository.Fetch(ctx, session.config)
 	session.report.Fetch = &result
 	session.conflicts = result.Conflicts
-	if err != nil && core.CategoryOf(err) != core.CategoryConflict {
+	if err != nil && result.Status != gitstore.SyncPhaseCompleted {
 		session.report.Status = syncStatusFailed
 		session.report.Detail = "fetch failed: " + err.Error()
 		return
 	}
 	session.fetched = &result
 	session.report.Status = syncStatusCompleted
+	if err != nil && core.CategoryOf(err) != core.CategoryConflict {
+		session.defects = err.Error()
+	}
 }
 
 // publish sends exactly the ref the mutation changed.
@@ -278,10 +293,17 @@ func (session *taskSession) mutate(
 		return core.MutationResult{}, err
 	}
 	session.publish(ctx, result.Task.ID)
-	if session.report.Status == syncStatusFailed {
+	switch {
+	case session.report.Status == syncStatusFailed:
 		result.Warnings = append(result.Warnings, core.Warning{
 			Code:    core.WarningAutoSync,
 			Message: "the change was recorded locally, but " + session.report.Detail,
+		})
+	case session.defects != "":
+		result.Warnings = append(result.Warnings, core.Warning{
+			Code: core.WarningAutoSync,
+			Message: "the change synchronized, but origin holds task refs this fetch could not " +
+				"validate: " + session.defects,
 		})
 	}
 	return result, nil

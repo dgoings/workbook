@@ -105,10 +105,11 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 	if err != nil {
 		return failedPushTransport(result, refs, items, invalid, "push failed before completion", err)
 	}
-	remoteHeads, err := r.parseRemoteTaskHeads(config, remoteOutput)
+	remoteHeads, ignored, err := r.parseRemoteTaskHeads(config, remoteOutput)
 	if err != nil {
 		return failedPushTransport(result, refs, items, invalid, "push failed before completion", err)
 	}
+	result.Ignored = ignored
 	expected := make(map[string]string, len(valid))
 	for _, ref := range refs {
 		if _, ok := valid[ref.taskID]; !ok {
@@ -262,10 +263,14 @@ func (r *Repository) PushTask(ctx context.Context, config core.ProjectConfig, ta
 }
 
 type SyncResult struct {
-	Remote string           `json:"remote"`
-	Status SyncPhaseStatus  `json:"status,omitempty"`
-	Detail string           `json:"detail,omitempty"`
-	Tasks  []SyncTaskResult `json:"tasks"`
+	Remote string          `json:"remote"`
+	Status SyncPhaseStatus `json:"status,omitempty"`
+	Detail string          `json:"detail,omitempty"`
+	// Ignored names the refs under origin's task namespace that this version
+	// does not recognize as naming one task. They are skipped so a single stray
+	// ref cannot deny synchronization, and reported so a user can prune them.
+	Ignored []IgnoredRef     `json:"ignoredRefs,omitempty"`
+	Tasks   []SyncTaskResult `json:"tasks"`
 	// Conflicts travels with the phase that produced it but is not part of its
 	// JSON. Callers lift it to the result envelope's single conflict member so
 	// one command reports one list, whatever mix of phases produced it.
@@ -278,7 +283,10 @@ type SyncResult struct {
 //
 // Reconciliation and publication are per task. One task that needs a decision
 // leaves every other task fetched, replayed, and published, matching the
-// per-ref outcomes push already retains.
+// per-ref outcomes push already retains. That extends to a fetch that reports
+// per-task failures: it still ran to completion and advanced every ref it
+// could, so publication follows. Only a fetch that failed before completion
+// skips the push phase, because there is then no validated view to publish.
 func (r *Repository) Sync(ctx context.Context, config core.ProjectConfig) (SyncRunResult, error) {
 	result := SyncRunResult{
 		Remote: "origin",
@@ -288,7 +296,7 @@ func (r *Repository) Sync(ctx context.Context, config core.ProjectConfig) (SyncR
 
 	state, fetched, fetchErr := r.fetch(ctx, config)
 	result.Fetch = fetched
-	if fetchErr != nil && core.CategoryOf(fetchErr) != core.CategoryConflict {
+	if fetchErr != nil && fetched.Status != SyncPhaseCompleted {
 		result.Push = skippedSyncPhase("push skipped because fetch failed")
 		return result, fetchErr
 	}
@@ -345,16 +353,20 @@ func (r *Repository) fetch(ctx context.Context, config core.ProjectConfig) (fetc
 		return state, result, err
 	}
 
-	canonicalRefs, err := r.listOwnedTaskRefs(ctx, config, taskRefPrefix)
+	canonicalRefs, _, err := r.listOwnedTaskRefs(ctx, config, taskRefPrefix)
 	if err != nil {
 		result, err = failedSyncPhase(result, "fetch failed before completion", err)
 		return state, result, err
 	}
-	trackingRefs, err := r.listOwnedTaskRefs(ctx, config, remoteTaskRefPrefix)
+	trackingRefs, ignored, err := r.listOwnedTaskRefs(ctx, config, remoteTaskRefPrefix)
 	if err != nil {
 		result, err = failedSyncPhase(result, "fetch failed before completion", err)
 		return state, result, err
 	}
+	// The mirror was just pruned against origin, so this is exactly the set of
+	// unrecognized names origin holds right now. Recording it before the phases
+	// that can fail keeps the report available whatever happens next.
+	result.Ignored = ignored
 
 	heads := make([]TaskHead, 0, len(canonicalRefs)+len(trackingRefs))
 	for _, ref := range canonicalRefs {
@@ -579,7 +591,9 @@ func sortedSyncOutcomes(outcomes map[string]SyncTaskResult) []SyncTaskResult {
 // publishFetched publishes only the tips already inspected by fetch. Git's
 // normal non-fast-forward rule remains the remote race guard; a second remote
 // listing would both duplicate work and observe a different synchronization
-// boundary.
+// boundary. It therefore reports no ignored refs: the fetch phase of the same
+// run already named every one origin holds, and repeating them would say the
+// same thing twice about the same namespace.
 func (r *Repository) publishFetched(ctx context.Context, config core.ProjectConfig, state fetchState) (SyncResult, error) {
 	result := SyncResult{Remote: "origin", Tasks: []SyncTaskResult{}}
 	if err := r.verifyIdentity(ctx); err != nil {
@@ -630,7 +644,7 @@ func (r *Repository) publishFetched(ctx context.Context, config core.ProjectConf
 		}
 	}
 
-	finalRefs, err := r.listOwnedTaskRefs(ctx, config, taskRefPrefix)
+	finalRefs, _, err := r.listOwnedTaskRefs(ctx, config, taskRefPrefix)
 	if err != nil {
 		return failedSyncPhase(result, "push failed before completion", err)
 	}

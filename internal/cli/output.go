@@ -294,6 +294,9 @@ func writeSyncResult(output io.Writer, result gitstore.SyncResult) {
 			fmt.Fprintf(output, ": %s", result.Detail)
 		}
 		fmt.Fprintln(output)
+		// A phase that observed origin's namespace before failing later still
+		// knows which refs it skipped, and they may be why it is being read.
+		writeIgnoredRefs(output, result)
 		return
 	}
 	if result.Status == gitstore.SyncPhaseSkipped {
@@ -304,6 +307,7 @@ func writeSyncResult(output io.Writer, result gitstore.SyncResult) {
 		fmt.Fprintln(output)
 		return
 	}
+	writeIgnoredRefs(output, result)
 	if len(result.Tasks) == 0 {
 		fmt.Fprintf(output, "No task refs on %s.\n", result.Remote)
 		return
@@ -314,6 +318,18 @@ func writeSyncResult(output io.Writer, result gitstore.SyncResult) {
 			fmt.Fprintf(output, "\t%s", task.Detail)
 		}
 		fmt.Fprintln(output)
+	}
+}
+
+// writeIgnoredRefs names every ref the phase skipped and the one command that
+// removes it. Synchronization succeeded despite these refs, so the report is
+// the only thing standing between a poisoned namespace and nobody noticing.
+func writeIgnoredRefs(output io.Writer, result gitstore.SyncResult) {
+	for _, ignored := range result.Ignored {
+		fmt.Fprintf(output, "Ignored:\t%s\t%s\n", ignored.Ref, ignored.Reason)
+	}
+	if len(result.Ignored) != 0 {
+		fmt.Fprintf(output, "\tprune with: git push %s --delete <ref>\n", result.Remote)
 	}
 }
 

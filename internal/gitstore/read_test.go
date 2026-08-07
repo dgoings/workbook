@@ -210,16 +210,22 @@ func TestOwnedRefsValidateCanonicalAndTrackingNamespaces(t *testing.T) {
 
 	for _, prefix := range []string{taskRefPrefix, trackingTaskRefPrefix} {
 		t.Run(prefix, func(t *testing.T) {
-			refs, err := repository.parseOwnedRefRecords(config, prefix, validRecord(prefix), "")
+			refs, ignored, err := repository.parseOwnedRefRecords(config, prefix, validRecord(prefix), "")
 			if err != nil {
 				t.Fatal(err)
 			}
 			if !reflect.DeepEqual(refs, []taskRefRecord{{taskID: pack.TaskID, objectID: snapshot.Head}}) {
 				t.Fatalf("refs = %#v, want one validated record", refs)
 			}
+			if len(ignored) != 0 {
+				t.Fatalf("ignored = %#v, want none", ignored)
+			}
 		})
 	}
 
+	// A name that does not resolve to one task is corruption in the canonical
+	// namespace, which only this tool writes. Everything that is not a name
+	// stays fatal in both namespaces.
 	for _, test := range []struct {
 		name     string
 		contents []byte
@@ -232,7 +238,75 @@ func TestOwnedRefsValidateCanonicalAndTrackingNamespaces(t *testing.T) {
 		{name: "abbreviated object ID", contents: []byte(taskRefPrefix + pack.TaskID + "\x00" + snapshot.Head[:len(snapshot.Head)-2] + "\x00\n")},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := repository.parseOwnedRefRecords(config, taskRefPrefix, test.contents, "")
+			_, _, err := repository.parseOwnedRefRecords(config, taskRefPrefix, test.contents, "")
+			if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
+				t.Fatalf("parseOwnedRefRecords() category = %q, want %q; error = %v", got, want, err)
+			}
+		})
+	}
+}
+
+// The tracking namespace mirrors names every collaborator can write, so an
+// unrecognized one is skipped and reported under the prefix origin holds it at.
+// Anything Git itself got wrong still fails the whole listing there.
+func TestOwnedRefsSkipUnrecognizedNamesOnlyInTheTrackingNamespace(t *testing.T) {
+	repository, config := writeRepository(t)
+	snapshot, pack, _ := writeRoot(t, repository, config)
+	if err := repository.ensureGitObjectIDWidth(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	valid := []byte(trackingTaskRefPrefix + pack.TaskID + "\x00" + snapshot.Head + "\x00\n")
+
+	for _, test := range []struct {
+		name     string
+		record   string
+		wantRefs []string
+	}{
+		{
+			name:     "invalid task ID",
+			record:   trackingTaskRefPrefix + "EVIL\x00" + snapshot.Head + "\x00\n",
+			wantRefs: []string{taskRefPrefix + "EVIL"},
+		},
+		{
+			name:     "nested",
+			record:   trackingTaskRefPrefix + "team/EVIL\x00" + snapshot.Head + "\x00\n",
+			wantRefs: []string{taskRefPrefix + "team/EVIL"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			contents := append(append([]byte(nil), valid...), test.record...)
+			refs, ignored, err := repository.parseOwnedRefRecords(config, trackingTaskRefPrefix, contents, "")
+			if err != nil {
+				t.Fatalf("parseOwnedRefRecords() error = %v", err)
+			}
+			if !reflect.DeepEqual(refs, []taskRefRecord{{taskID: pack.TaskID, objectID: snapshot.Head}}) {
+				t.Fatalf("refs = %#v, want only the recognized record", refs)
+			}
+			names := make([]string, 0, len(ignored))
+			for _, entry := range ignored {
+				if strings.TrimSpace(entry.Reason) == "" {
+					t.Fatalf("ignored ref %q has no reason", entry.Ref)
+				}
+				names = append(names, entry.Ref)
+			}
+			if !reflect.DeepEqual(names, test.wantRefs) {
+				t.Fatalf("ignored refs = %#v, want %#v", names, test.wantRefs)
+			}
+		})
+	}
+
+	for _, test := range []struct {
+		name     string
+		contents []byte
+	}{
+		{name: "symbolic", contents: []byte(trackingTaskRefPrefix + pack.TaskID + "\x00" + snapshot.Head + "\x00refs/heads/main\n")},
+		{name: "duplicate", contents: append(append([]byte(nil), valid...), valid...)},
+		{name: "wrong prefix", contents: []byte("refs/heads/main\x00" + snapshot.Head + "\x00\n")},
+		{name: "abbreviated object ID", contents: []byte(trackingTaskRefPrefix + pack.TaskID + "\x00" + snapshot.Head[:len(snapshot.Head)-2] + "\x00\n")},
+		{name: "unterminated", contents: []byte(trackingTaskRefPrefix + pack.TaskID + "\x00" + snapshot.Head + "\x00")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, err := repository.parseOwnedRefRecords(config, trackingTaskRefPrefix, test.contents, "")
 			if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
 				t.Fatalf("parseOwnedRefRecords() category = %q, want %q; error = %v", got, want, err)
 			}
@@ -246,7 +320,7 @@ func TestOwnedRefsCannotLearnObjectIDWidthFromUntrustedRecords(t *testing.T) {
 	abbreviated := strings.Repeat("a", 38)
 	contents := []byte(taskRefPrefix + "WB-01K0M6B8A4FTT8C39MXXYTW7D1\x00" + abbreviated + "\x00\n")
 
-	_, err := repository.parseOwnedRefRecords(config, taskRefPrefix, contents, "")
+	_, _, err := repository.parseOwnedRefRecords(config, taskRefPrefix, contents, "")
 	if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
 		t.Fatalf("parseOwnedRefRecords() category = %q, want %q; error = %v", got, want, err)
 	}
@@ -266,9 +340,12 @@ func TestOwnedRefsUseOneEnumerationForCanonicalAndTrackingRefs(t *testing.T) {
 		commands = append(commands, append([]string(nil), args...))
 	}
 	for _, prefix := range []string{taskRefPrefix, trackingTaskRefPrefix} {
-		refs, err := repository.listOwnedTaskRefs(context.Background(), config, prefix)
+		refs, ignored, err := repository.listOwnedTaskRefs(context.Background(), config, prefix)
 		if err != nil {
 			t.Fatal(err)
+		}
+		if len(ignored) != 0 {
+			t.Fatalf("%s ignored = %#v, want none", prefix, ignored)
 		}
 		if !reflect.DeepEqual(refs, []taskRefRecord{{taskID: pack.TaskID, objectID: snapshot.Head}}) {
 			t.Fatalf("%s refs = %#v, want one task ref", prefix, refs)

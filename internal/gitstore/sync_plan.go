@@ -181,7 +181,7 @@ func (r *Repository) updateCanonicalRefs(
 	if len(updates) == 0 {
 		return nil
 	}
-	refs, err := r.listOwnedTaskRefs(ctx, config, taskRefPrefix)
+	refs, _, err := r.listOwnedTaskRefs(ctx, config, taskRefPrefix)
 	if err != nil {
 		return err
 	}

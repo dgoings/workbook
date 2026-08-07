@@ -21,13 +21,16 @@ func TestParseRemoteTaskHeadsAcceptsFullSHA1AndSHA256Records(t *testing.T) {
 			output := []byte(objectID + "\trefs/workbook/tasks/" + firstTask + "\n" +
 				objectID + "\trefs/workbook/tasks/" + secondTask + "\n")
 
-			got, err := repository.parseRemoteTaskHeads(core.ProjectConfig{Key: "WB"}, output)
+			got, ignored, err := repository.parseRemoteTaskHeads(core.ProjectConfig{Key: "WB"}, output)
 			if err != nil {
 				t.Fatal(err)
 			}
 			want := map[string]string{firstTask: objectID, secondTask: objectID}
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("remote task heads = %#v, want %#v", got, want)
+			}
+			if len(ignored) != 0 {
+				t.Fatalf("ignored refs = %#v, want none", ignored)
 			}
 		})
 	}
@@ -43,22 +46,59 @@ func TestParseRemoteTaskHeadsRejectsInvalidRecords(t *testing.T) {
 	}{
 		{name: "unterminated", output: strings.TrimSuffix(valid, "\n")},
 		{name: "wrong prefix", output: objectID + "\trefs/heads/main\n"},
-		{name: "nested task", output: objectID + "\trefs/workbook/tasks/" + taskID + "/nested\n"},
 		{name: "duplicate task", output: valid + valid},
-		{name: "invalid task ID", output: objectID + "\trefs/workbook/tasks/not-a-workbook-task\n"},
 		{name: "abbreviated object ID", output: objectID[:38] + "\trefs/workbook/tasks/" + taskID + "\n"},
 		{name: "extra field", output: objectID + "\trefs/workbook/tasks/" + taskID + "\textra\n"},
 		{name: "symbolic record", output: "ref: refs/heads/main\trefs/workbook/tasks/" + taskID + "\n"},
-		{name: "peeled ref", output: objectID + "\trefs/workbook/tasks/" + taskID + "^{}\n"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			repository := &Repository{objectIDBytes: 20}
-			if _, err := repository.parseRemoteTaskHeads(
+			if _, _, err := repository.parseRemoteTaskHeads(
 				core.ProjectConfig{Key: "WB"},
 				[]byte(test.output),
 			); err == nil {
 				t.Fatalf("parseRemoteTaskHeads(%q) error = nil", test.output)
+			}
+		})
+	}
+}
+
+// Origin's task namespace is writable by every collaborator, so a name this
+// version does not recognize is skipped and reported instead of failing the
+// listing that publication depends on.
+func TestParseRemoteTaskHeadsSkipsAndReportsUnrecognizedNames(t *testing.T) {
+	const taskID = "WB-01K0M6B8A4FTT8C39MXXYTW7D1"
+	objectID := strings.Repeat("a", 40)
+	valid := objectID + "\trefs/workbook/tasks/" + taskID + "\n"
+	tests := []struct {
+		name   string
+		output string
+		want   string
+	}{
+		{name: "nested task", output: objectID + "\trefs/workbook/tasks/" + taskID + "/nested\n", want: "refs/workbook/tasks/" + taskID + "/nested"},
+		{name: "invalid task ID", output: objectID + "\trefs/workbook/tasks/EVIL\n", want: "refs/workbook/tasks/EVIL"},
+		{name: "peeled ref", output: objectID + "\trefs/workbook/tasks/" + taskID + "^{}\n", want: "refs/workbook/tasks/" + taskID + "^{}"},
+		{name: "bare namespace", output: objectID + "\trefs/workbook/tasks/\n", want: "refs/workbook/tasks/"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repository := &Repository{objectIDBytes: 20}
+			heads, ignored, err := repository.parseRemoteTaskHeads(
+				core.ProjectConfig{Key: "WB"},
+				[]byte(valid+test.output),
+			)
+			if err != nil {
+				t.Fatalf("parseRemoteTaskHeads(%q) error = %v", test.output, err)
+			}
+			if want := map[string]string{taskID: objectID}; !reflect.DeepEqual(heads, want) {
+				t.Fatalf("remote task heads = %#v, want %#v", heads, want)
+			}
+			if len(ignored) != 1 || ignored[0].Ref != test.want {
+				t.Fatalf("ignored refs = %#v, want exactly %q", ignored, test.want)
+			}
+			if strings.TrimSpace(ignored[0].Reason) == "" {
+				t.Fatalf("ignored ref %q has no reason", ignored[0].Ref)
 			}
 		})
 	}
