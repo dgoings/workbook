@@ -1599,7 +1599,10 @@
               }
               // Reported after that refresh rather than before it: a refresh
               // that lands clears the banner, so reporting first would erase
-              // the report the user is meant to read.
+              // the report before it was ever drawn. It still only survives
+              // until the next one-second poll, which is a real gap and not one
+              // this ordering closes; a report that persists needs the per-card
+              // affordance the banner is standing in for.
               reportIntentFailure(error);
               withdrawFailedIntentFromOpenDetail(taskID, error);
             }

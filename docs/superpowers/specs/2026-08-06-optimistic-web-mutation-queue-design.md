@@ -177,10 +177,15 @@ the answer is known to be newer than the head that was just refused.
 Reporting stays on the existing board-level banner, worded to distinguish "that
 task changed elsewhere" from an ordinary failure, and written *after* the forced
 refresh rather than before it, because a refresh that lands clears the banner.
-Per-card reporting would be better and is deliberately not attempted here: the
-card has no message affordance today, `pendingTaskMessages` serves the detail
-view rather than the board, and inventing one is a UI design question that
-deserves its own attention rather than a corner of this change.
+That ordering only buys the report a chance to be drawn, not a chance to be
+read: the one-second poll clears the banner too, so a conflict report is gone
+within a second whether or not anyone was looking at it. Per-card reporting
+would be better and is deliberately not attempted here: the card has no message
+affordance today, `pendingTaskMessages` serves the detail view rather than the
+board, and inventing one is a UI design question that deserves its own attention
+rather than a corner of this change. It is the same missing affordance in both
+places, so the short-lived banner is filed with it rather than papered over with
+a timer.
 
 **A failure with the detail form open.** The detail route projects pending
 intents, so a form opened over a pending change shows the optimistic value. When
@@ -192,7 +197,11 @@ form.
 That re-render discards anything typed into the form since it opened. Keeping
 those edits and correcting only the projected fields would be better, and is
 left to the render work rather than done here; a form that lies about what is
-saved is the worse of the two.
+saved is the worse of the two. It also detaches a save that happens to be in
+flight, and the detached save reports nothing when it lands, so a user who was
+saving at that moment is told their board change failed and nothing about their
+save. That is a second reason the withdrawal wants the render work rather than
+another patch here.
 
 **A refused save from the form itself** is treated differently, and should be.
 The edits stay, the head is re-based from the same forced refresh, and the
