@@ -1340,6 +1340,10 @@ func TestRunServeMutatesDependenciesThroughWebRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A body-less mutation still names its media type: the board refuses a
+	// mutation that does not, because that is what a cross-site form POST
+	// looks like.
+	request.Header.Set("Content-Type", "application/json")
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatalf("PUT dependency: %v", err)
@@ -1375,6 +1379,7 @@ func TestRunServeMutatesDependenciesThroughWebRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	request.Header.Set("Content-Type", "application/json")
 	response, err = http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatalf("DELETE dependency: %v", err)
@@ -1595,6 +1600,223 @@ func TestRunServeUpdatesAllTaskFieldsThroughWebRoute(t *testing.T) {
 	}
 	if updated.Title != "After web update" || updated.Description != "All editable fields reached the core service." || updated.Status != core.StatusBlocked || updated.Priority != core.PriorityLow || !reflect.DeepEqual(updated.Labels, []string{"updated", "web"}) {
 		t.Fatalf("persisted task = %#v, want complete web update fields", updated)
+	}
+}
+
+// TestRunServeRefusesCrossSiteRequestsThroughTheRealListener drives the shapes
+// a hostile page can actually produce against the running board rather than
+// against a handler in a test: a rebound DNS name on a read, a form POST that
+// needs no preflight, and a mutation that admits its foreign Origin. None of
+// them may reach the Git-backed service, because a task the board writes
+// publishes to origin and is later read as instructions by coding agents.
+func TestRunServeRefusesCrossSiteRequestsThroughTheRealListener(t *testing.T) {
+	repository := initializedRepository(t)
+	code, stdout, stderr := run(t, repository, "create", "Only legitimate task", "--json")
+	if code != 0 {
+		t.Fatalf("create code = %d, want 0; stderr = %q", code, stderr)
+	}
+	seed := decodeMutationTask(t, stdout, "create")
+
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := probe.Addr().String()
+	if err := probe.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result := make(chan error, 1)
+	var serveStdout, serveStderr bytes.Buffer
+	go func() {
+		result <- runServe(ctx, []string{"--addr", addr}, repository, &serveStdout, &serveStderr)
+	}()
+	waitForHTTP(t, "http://"+addr+"/healthz")
+
+	tests := []struct {
+		name        string
+		method      string
+		path        string
+		host        string
+		origin      string
+		contentType string
+		body        string
+		wantStatus  int
+	}{
+		{
+			name:       "rebound DNS name reading every task",
+			method:     http.MethodGet,
+			path:       "/api/tasks",
+			host:       "evil.example",
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:        "form POST that needs no preflight",
+			method:      http.MethodPost,
+			path:        "/api/tasks",
+			contentType: "text/plain",
+			body:        `{"title":"CSRF TEXT PLAIN PWN"}`,
+			wantStatus:  http.StatusUnsupportedMediaType,
+		},
+		{
+			name:        "cross-origin create",
+			method:      http.MethodPost,
+			path:        "/api/tasks",
+			origin:      "https://evil.example",
+			contentType: "application/json",
+			body:        `{"title":"INJECTED VIA CROSS ORIGIN"}`,
+			wantStatus:  http.StatusForbidden,
+		},
+		{
+			name:        "cross-origin tombstone",
+			method:      http.MethodDelete,
+			path:        "/api/tasks/" + seed.ID,
+			origin:      "http://evil.example",
+			contentType: "application/json",
+			wantStatus:  http.StatusForbidden,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request, err := http.NewRequest(test.method, "http://"+addr+test.path, strings.NewReader(test.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Go sends Request.Host as the Host header while still dialing the
+			// URL's address, which is exactly what a rebound name looks like on
+			// the wire.
+			if test.host != "" {
+				request.Host = test.host
+			}
+			if test.origin != "" {
+				request.Header.Set("Origin", test.origin)
+			}
+			if test.contentType != "" {
+				request.Header.Set("Content-Type", test.contentType)
+			}
+			response, err := http.DefaultClient.Do(request)
+			if err != nil {
+				t.Fatalf("%s %s: %v", test.method, test.path, err)
+			}
+			body, readErr := io.ReadAll(response.Body)
+			response.Body.Close()
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if response.StatusCode != test.wantStatus {
+				t.Fatalf("%s %s = %d, want %d; body = %s", test.method, test.path, response.StatusCode, test.wantStatus, body)
+			}
+			var document struct {
+				Format string `json:"format"`
+				Error  struct {
+					Category string `json:"category"`
+					Message  string `json:"message"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(body, &document); err != nil {
+				t.Fatalf("decode rejection: %v; body = %s", err, body)
+			}
+			if document.Format != "workbook.error" || document.Error.Message == "" {
+				t.Fatalf("rejection body = %s, want a workbook.error document with a message", body)
+			}
+			if strings.Contains(string(body), seed.ID) {
+				t.Fatalf("rejection body leaked task data: %s", body)
+			}
+		})
+	}
+
+	cancel()
+	if err := <-result; err != nil {
+		t.Fatalf("runServe() error = %v; stderr = %q", err, serveStderr.String())
+	}
+	if strings.Contains(serveStderr.String(), "no authentication") {
+		t.Fatalf("serve warned about exposure on a loopback bind: %q", serveStderr.String())
+	}
+
+	code, stdout, stderr = run(t, repository, "list", "--all", "--json")
+	if code != 0 {
+		t.Fatalf("list code = %d, want 0; stderr = %q", code, stderr)
+	}
+	var tasks []core.Task
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "list").Data, &tasks); err != nil {
+		t.Fatalf("decode listed tasks: %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].ID != seed.ID || tasks[0].Deleted {
+		t.Fatalf("tasks after the refused requests = %#v, want only the live seed task", tasks)
+	}
+}
+
+func TestRunServeWarnsWhenTheBoardLeavesThisMachine(t *testing.T) {
+	repository := initializedRepository(t)
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, port, err := net.SplitHostPort(probe.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := probe.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result := make(chan error, 1)
+	var serveStdout, serveStderr bytes.Buffer
+	go func() {
+		result <- runServe(ctx, []string{"--addr", net.JoinHostPort("0.0.0.0", port)}, repository, &serveStdout, &serveStderr)
+	}()
+	waitForHTTP(t, "http://127.0.0.1:"+port+"/healthz")
+
+	cancel()
+	if err := <-result; err != nil {
+		t.Fatalf("runServe() error = %v; stderr = %q", err, serveStderr.String())
+	}
+	// The listener reports the wildcard address it actually bound, which is
+	// IPv4 or dual-stack depending on the host, so the warning is matched by
+	// the port it names rather than by the spelling of the wildcard.
+	var warning string
+	for _, line := range strings.Split(serveStderr.String(), "\n") {
+		if strings.HasPrefix(line, "Warning:") {
+			warning = line
+		}
+	}
+	if !strings.Contains(warning, "no authentication") || !strings.Contains(warning, ":"+port) {
+		t.Fatalf("serve stderr = %q, want a warning naming the exposed address and the missing authentication", serveStderr.String())
+	}
+	if serveStdout.Len() != 0 {
+		t.Fatalf("serve stdout = %q, want empty", serveStdout.String())
+	}
+}
+
+func TestBoardExposureWarning(t *testing.T) {
+	tests := []struct {
+		address string
+		warns   bool
+	}{
+		{address: "127.0.0.1:7331"},
+		{address: "127.0.0.2:7331"},
+		{address: "[::1]:7331"},
+		{address: "localhost:7331"},
+		{address: "0.0.0.0:7331", warns: true},
+		{address: "[::]:7331", warns: true},
+		{address: "192.168.1.5:7331", warns: true},
+		{address: "board.internal:7331", warns: true},
+		{address: "nonsense", warns: true},
+	}
+	for _, test := range tests {
+		t.Run(test.address, func(t *testing.T) {
+			warning := boardExposureWarning(test.address)
+			if warns := warning != ""; warns != test.warns {
+				t.Fatalf("boardExposureWarning(%q) = %q, want warning = %t", test.address, warning, test.warns)
+			}
+			if test.warns && !strings.Contains(warning, test.address) {
+				t.Fatalf("boardExposureWarning(%q) = %q, want it to name the address", test.address, warning)
+			}
+		})
 	}
 }
 
