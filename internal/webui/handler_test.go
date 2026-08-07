@@ -5036,6 +5036,263 @@ setTimeout(async () => {
 	}
 }
 
+// A failed intent is dropped while the intents queued behind it survive: those
+// were separate decisions, and discarding a later change because an earlier
+// one was refused is the clobbering the queue exists to avoid.
+func TestHandlerClientRollsBackAFailedIntentAndLeavesALaterOneStanding(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	moved := clientPlacementTask("WB-01J00000000000000000000051", "Moved", core.StatusReady, core.PriorityMedium)
+	moved.Head = "head-1"
+	confirmed := moved
+	confirmed.Status = core.StatusDone
+	confirmed.Head = "head-2"
+	tasks := []core.Task{moved}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/")
+	script := renderedClientScript(t, response.Body.String())
+	document := mustJSON(t, TasksDocument{
+		Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks),
+	})
+
+	program := clientDOMHarness("/", string(document)) + script + `
+setTimeout(async () => {
+  const ready = boardLists.find((list) => list.dataset.status === "ready");
+  const inProgress = boardLists.find((list) => list.dataset.status === "in-progress");
+  const done = boardLists.find((list) => list.dataset.status === "done");
+  const dataTransfer = { effectAllowed: "", dropEffect: "", setData() {} };
+
+  const boardFetch = globalThis.fetch;
+  const heads = [];
+  globalThis.fetch = async (url, options = {}) => {
+    if ((options.method || "GET") !== "GET") {
+      fetchCalls.push({ url, options });
+      heads.push(JSON.parse(options.body).expectedHead);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      if (heads.length === 1) {
+        return { ok: false, json: async () => ({
+          format: "workbook.error", version: 1,
+          error: { category: "validation", message: "that placement is not legal" }
+        }) };
+      }
+      return { ok: true, json: async () => ({
+        format: "workbook.task-mutation", version: 1, task: ` + string(mustJSON(t, confirmed)) + `
+      }) };
+    }
+    return boardFetch(url, options);
+  };
+
+  const first = ready.querySelectorAll(".task-card").find((item) => item.dataset.taskId === ` + strconv.Quote(moved.ID) + `);
+  first.rect = { top: 0, bottom: 80 };
+  documentEventListeners.dragstart({ target: first, dataTransfer });
+  const firstDrop = documentEventListeners.drop({ target: inProgress, clientY: 1, dataTransfer, preventDefault() {} });
+
+  const second = inProgress.querySelectorAll(".task-card").find((item) => item.dataset.taskId === ` + strconv.Quote(moved.ID) + `);
+  second.rect = { top: 0, bottom: 80 };
+  documentEventListeners.dragstart({ target: second, dataTransfer });
+  const secondDrop = documentEventListeners.drop({ target: done, clientY: 1, dataTransfer, preventDefault() {} });
+
+  await Promise.all([firstDrop, secondDrop]);
+  if (heads.length !== 2 || heads[1] !== "head-1") {
+    throw new Error("the later intent was not sent against the unmoved head: " + JSON.stringify(heads));
+  }
+  if (inProgress.querySelectorAll(".task-card").some((item) => item.dataset.taskId === ` + strconv.Quote(moved.ID) + `)) {
+    throw new Error("the failed intent did not roll back");
+  }
+  if (!done.querySelectorAll(".task-card").some((item) => item.dataset.taskId === ` + strconv.Quote(moved.ID) + `)) {
+    throw new Error("the later intent did not stay standing after the earlier failure");
+  }
+  if (stale.dataset.visible !== "true" || !stale.textContent.includes("Task update failed")) {
+    throw new Error("the failure was not reported: " + JSON.stringify(stale.textContent));
+  }
+}, 0);
+`
+	if output, err := exec.Command(node, "-e", program).CombinedOutput(); err != nil {
+		t.Fatalf("execute failed intent rollback behavior: %v\n%s", err, output)
+	}
+}
+
+// A stale write rolls the intent back, forces a refresh, and re-bases the
+// queue's head from that refresh so the intents behind it retry against
+// current truth instead of failing identically.
+func TestHandlerClientStaleWriteRollsBackRefreshesAndRebasesTheQueue(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	moved := clientPlacementTask("WB-01J00000000000000000000052", "Moved", core.StatusReady, core.PriorityMedium)
+	moved.Head = "head-1"
+	elsewhere := moved
+	elsewhere.Title = "Renamed elsewhere"
+	elsewhere.Head = "head-2"
+	confirmed := elsewhere
+	confirmed.Status = core.StatusDone
+	confirmed.Head = "head-3"
+	tasks := []core.Task{moved}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/")
+	script := renderedClientScript(t, response.Body.String())
+	document := mustJSON(t, TasksDocument{
+		Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks),
+	})
+	refreshed := mustJSON(t, TasksDocument{
+		Format: "workbook.tasks", Version: 1, Tasks: []core.Task{elsewhere}, Presentation: presentationForTasks([]core.Task{elsewhere}),
+	})
+
+	program := clientDOMHarness("/", string(document)) + script + `
+setTimeout(async () => {
+  const ready = boardLists.find((list) => list.dataset.status === "ready");
+  const inProgress = boardLists.find((list) => list.dataset.status === "in-progress");
+  const done = boardLists.find((list) => list.dataset.status === "done");
+  const dataTransfer = { effectAllowed: "", dropEffect: "", setData() {} };
+
+  const boardFetch = globalThis.fetch;
+  const heads = [];
+  globalThis.fetch = async (url, options = {}) => {
+    if ((options.method || "GET") !== "GET") {
+      fetchCalls.push({ url, options });
+      heads.push(JSON.parse(options.body).expectedHead);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      if (heads.length === 1) {
+        taskResponse = ` + string(refreshed) + `;
+        return { ok: false, json: async () => ({
+          format: "workbook.error", version: 1,
+          error: { category: "stale-write", message: "task has changed since head-1; reload and try again" }
+        }) };
+      }
+      return { ok: true, json: async () => ({
+        format: "workbook.task-mutation", version: 1, task: ` + string(mustJSON(t, confirmed)) + `
+      }) };
+    }
+    return boardFetch(url, options);
+  };
+
+  const first = ready.querySelectorAll(".task-card").find((item) => item.dataset.taskId === ` + strconv.Quote(moved.ID) + `);
+  first.rect = { top: 0, bottom: 80 };
+  documentEventListeners.dragstart({ target: first, dataTransfer });
+  const firstDrop = documentEventListeners.drop({ target: inProgress, clientY: 1, dataTransfer, preventDefault() {} });
+
+  const second = inProgress.querySelectorAll(".task-card").find((item) => item.dataset.taskId === ` + strconv.Quote(moved.ID) + `);
+  second.rect = { top: 0, bottom: 80 };
+  documentEventListeners.dragstart({ target: second, dataTransfer });
+  const secondDrop = documentEventListeners.drop({ target: done, clientY: 1, dataTransfer, preventDefault() {} });
+
+  await Promise.all([firstDrop, secondDrop]);
+  if (heads.length !== 2 || heads[1] !== "head-2") {
+    throw new Error("the queue did not re-base on the refreshed head: " + JSON.stringify(heads));
+  }
+  const firstMutation = fetchCalls.findIndex((call) => (call.options.method || "GET") !== "GET");
+  const refreshedAfterConflict = fetchCalls.slice(firstMutation + 1).some((call) =>
+    (call.options.method || "GET") === "GET" && call.url === "/api/tasks");
+  if (!refreshedAfterConflict) {
+    throw new Error("the stale write did not force a refresh");
+  }
+  if (inProgress.querySelectorAll(".task-card").some((item) => item.dataset.taskId === ` + strconv.Quote(moved.ID) + `)) {
+    throw new Error("the conflicted intent did not roll back");
+  }
+  if (!done.querySelectorAll(".task-card").some((item) => item.dataset.taskId === ` + strconv.Quote(moved.ID) + `)) {
+    throw new Error("the intent behind the conflict did not stay standing");
+  }
+  if (stale.dataset.visible !== "true" || !stale.textContent.includes("changed elsewhere")) {
+    throw new Error("the conflict was not reported as such: " + JSON.stringify(stale.textContent));
+  }
+}, 0);
+`
+	if output, err := exec.Command(node, "-e", program).CombinedOutput(); err != nil {
+		t.Fatalf("execute stale-write re-base behavior: %v\n%s", err, output)
+	}
+}
+
+// A pending intent can outlive the board view that queued it. If it fails
+// while the detail form for its task is open, the form must stop showing the
+// optimistic value the server refused: a form that kept showing it would read
+// as saved state, and saving it would persist the refused value as a real
+// edit.
+func TestHandlerClientReflectsAFailedPendingIntentInAnOpenDetailForm(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	moved := clientPlacementTask("WB-01J00000000000000000000053", "Moved", core.StatusReady, core.PriorityMedium)
+	moved.Head = "head-1"
+	elsewhere := moved
+	elsewhere.Description = "Rewritten elsewhere."
+	elsewhere.Head = "head-2"
+	tasks := []core.Task{moved}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/")
+	script := renderedClientScript(t, response.Body.String())
+	document := mustJSON(t, TasksDocument{
+		Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks),
+	})
+	truth := mustJSON(t, TasksDocument{
+		Format: "workbook.tasks", Version: 1, Tasks: []core.Task{elsewhere}, Presentation: presentationForTasks([]core.Task{elsewhere}),
+	})
+
+	program := clientDOMHarness("/", string(document)) + script + `
+setTimeout(async () => {
+  const ready = boardLists.find((list) => list.dataset.status === "ready");
+  const inProgress = boardLists.find((list) => list.dataset.status === "in-progress");
+  const dataTransfer = { effectAllowed: "", dropEffect: "", setData() {} };
+
+  const boardFetch = globalThis.fetch;
+  let releaseMutation;
+  globalThis.fetch = async (url, options = {}) => {
+    if ((options.method || "GET") !== "GET") {
+      fetchCalls.push({ url, options });
+      return new Promise((resolve) => {
+        releaseMutation = () => {
+          taskResponse = ` + string(truth) + `;
+          resolve({ ok: false, json: async () => ({
+            format: "workbook.error", version: 1,
+            error: { category: "stale-write", message: "task has changed since head-1; reload and try again" }
+          }) });
+        };
+      });
+    }
+    return boardFetch(url, options);
+  };
+
+  const card = ready.querySelectorAll(".task-card").find((item) => item.dataset.taskId === ` + strconv.Quote(moved.ID) + `);
+  card.rect = { top: 0, bottom: 80 };
+  documentEventListeners.dragstart({ target: card, dataTransfer });
+  const pending = documentEventListeners.drop({ target: inProgress, clientY: 1, dataTransfer, preventDefault() {} });
+  await Promise.resolve();
+
+  const link = new TestElement("a");
+  link.href = "/tasks/" + encodeURIComponent(` + strconv.Quote(moved.ID) + `);
+  await documentEventListeners.click({
+    target: link, button: 0, defaultPrevented: false,
+    metaKey: false, ctrlKey: false, shiftKey: false, altKey: false,
+    preventDefault() {}
+  });
+  const optimistic = findElement(main, (element) => element.id === "task-status");
+  if (!optimistic || optimistic.value !== "in-progress") {
+    throw new Error("the open form does not project the pending intent: " + JSON.stringify(optimistic && optimistic.value));
+  }
+
+  releaseMutation();
+  await pending;
+  const status = findElement(main, (element) => element.id === "task-status");
+  if (!status || status.value !== "ready") {
+    throw new Error("the form kept the refused optimistic status: " + JSON.stringify(status && status.value));
+  }
+  const message = findElement(main, (element) => Object.hasOwn(element.dataset, "saveStatus"));
+  if (!message || !message.textContent.includes("changed elsewhere")) {
+    throw new Error("the failure was not reported in the open form: " + JSON.stringify(message && message.textContent));
+  }
+}, 0);
+`
+	if output, err := exec.Command(node, "-e", program).CombinedOutput(); err != nil {
+		t.Fatalf("execute open detail form rollback behavior: %v\n%s", err, output)
+	}
+}
+
 func TestHandlerReportsAndShiftsThePublicationMode(t *testing.T) {
 	state := SyncState{Mode: SyncModeDeferred, Watcher: true}
 	handler := NewHandlerWithSyncControl(
