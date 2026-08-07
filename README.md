@@ -826,12 +826,18 @@ A `Publishing:` indicator in the board header says what the *next* mutation will
 do with `origin`, and clicking it changes that for this server. Handed to
 watcher — the default — means a mutation returns as soon as the write is durable
 and a running `workbook sync --watch` publishes it just behind the response.
-Inline means the board waits for the push, so a successful response means
-`origin` has the change. The indicator is read from `GET /api/sync` rather than
-assumed, because a board set to defer still publishes inline when no watcher
-answers and no `origin` is configured; the mode is a preference held in memory
-for the life of the server, not a project setting, which is why it is separate
-from `workbook config set auto-sync`.
+Inline means the board attempts the push itself and answers afterwards, rather
+than handing the change to a watcher. Neither mode makes publication a condition
+of success. As on the CLI, an unreachable `origin` is a warning and not a
+failure, so an inline mutation whose push failed still answers `200` with the
+change recorded locally and an `auto-sync-incomplete` warning naming the error;
+a response says the operation commit exists in Git, never that `origin` has it.
+The indicator is read from `GET /api/sync` rather than assumed, because it
+reports what the next mutation will really do: a board set to defer publishes
+inline when no watcher answers, and a repository with no `origin` publishes
+nothing in either mode. The mode is a preference held in memory for the life of
+the server, not a project setting, which is why it is separate from
+`workbook config set auto-sync`.
 
 The executable embeds its HTML, CSS, and JavaScript, and the page polls
 `/api/tasks` every second. The six canonical columns share the available width
