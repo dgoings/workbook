@@ -96,23 +96,43 @@ That matters because `decodeRequest` uses `DisallowUnknownFields`
 (`handler.go:526`), so the field has to exist server-side before any client
 sends it, and the two halves land in separate commits.
 
+Both of the client's editing paths send it: the board's drop sends the head the
+card was rendered from, and the detail form sends the head it rendered.
+
+**The detail form sends only the fields it changed.** Sending all five on every
+save is last-writer-wins even when the heads agree, because re-asserting a title
+the form merely displayed is indistinguishable from editing it, and a
+description-only save would revert a rename that landed beside it. Diffing
+against the values the form rendered is what makes `expectedHead` worth having
+on this route rather than a formality. A save that changes nothing is not sent
+at all: the server refuses an update with no operations, correctly, and an
+untouched form is finished rather than broken, so it returns to the board the
+way an accepted save does.
+
 The dependency routes are the exception. They require a completely empty body
 (`requireEmptyRequestBody`, `handler.go:515`), so they cannot carry a head
 without changing their shape. They stay as they are: a dependency edge is an
 `add`/`remove` on a set, which converges rather than conflicting, so the
 protection `expectedHead` buys does not apply to them. Saying so here is
 cheaper than a reader discovering the asymmetry and assuming it was an
-oversight.
+oversight. Delete and restore take no body either, and want none: a tombstone is
+not a field edit, and deleting a task someone else just changed is the thing the
+user asked for rather than an accident to catch.
 
 ## The queue
 
 ```js
 pendingIntents: Map<taskID, {
-  queue:   Intent[],   // unsent, in submission order
-  inFlight: Intent | null,
-  head:    string,     // head to send with the next request
+  queue:    Intent[],   // unsent, in submission order
+  draining: boolean,    // a drain loop owns this queue
+  head:     string,     // head to send with the next request
 }>
 ```
+
+`draining` marks the loop, not an open request. The distinction is not
+cosmetic: the head moves *between* sends — forward on a confirmation, sideways
+on a re-base — and a flag that meant "a request is open" would invite exactly
+the background head-adoption the conflict rule below rejects.
 
 An `Intent` is a field-level change plus the request that expresses it, so
 folding it over a task is a pure function and dropping one from the middle is
@@ -143,15 +163,48 @@ genuinely depends on the failed one — a position within a status the task neve
 reached — the server rejects it in turn and it rolls back on its own merits.
 
 **Conflict.** A `stale-write` category rolls the intent back, forces a refresh,
-and re-bases the queue's head from that refresh so the intents behind it retry
-against current truth instead of failing identically.
+*waits for it*, and re-bases the queue's head from it, so the intents behind it
+retry against current truth instead of failing identically. Waiting is the load-
+bearing part: a re-base that lands after the next request has already gone out
+is not a re-base, and the first shipped version proved it by firing the refresh
+and continuing, which dropped every intent behind a conflict.
+
+Nothing else moves the head. A poll is deliberately not allowed to: one that
+left before the last confirmation returned carries an older head, and adopting
+it would refuse the next intent for no reason at all. The re-base happens where
+the answer is known to be newer than the head that was just refused.
 
 Reporting stays on the existing board-level banner, worded to distinguish "that
-task changed elsewhere" from an ordinary failure. Per-card reporting would be
-better and is deliberately not attempted here: the card has no message affordance
-today, `pendingTaskMessages` serves the detail view rather than the board, and
-inventing one is a UI design question that deserves its own attention rather
-than a corner of this change.
+task changed elsewhere" from an ordinary failure, and written *after* the forced
+refresh rather than before it, because a refresh that lands clears the banner.
+Per-card reporting would be better and is deliberately not attempted here: the
+card has no message affordance today, `pendingTaskMessages` serves the detail
+view rather than the board, and inventing one is a UI design question that
+deserves its own attention rather than a corner of this change.
+
+**A failure with the detail form open.** The detail route projects pending
+intents, so a form opened over a pending change shows the optimistic value. When
+that intent fails, the form is showing a value the server refused: it reads as
+saved state, and saving it would persist the refusal as a real edit. So a failed
+intent re-renders the open detail route for its task and reports why in the
+form.
+
+That re-render discards anything typed into the form since it opened. Keeping
+those edits and correcting only the projected fields would be better, and is
+left to the render work rather than done here; a form that lies about what is
+saved is the worse of the two.
+
+**A refused save from the form itself** is treated differently, and should be.
+The edits stay, the head is re-based from the same forced refresh, and the
+baseline the form diffs against stays where it was, so a deliberate re-save
+applies the same fields to the version that now exists and the concurrent edit
+that caused the refusal survives it.
+
+One known edge remains: the form sends the head it rendered, and an intent for
+the same task confirming while the form is open moves the server's head without
+moving the form's. The first save is then refused once and succeeds on the
+retry. That is the conflict path working rather than a lost update, and adopting
+confirmed heads into an open form belongs with the render work too.
 
 ## Auto-sync state in the UI
 
@@ -211,7 +264,14 @@ absent and drives a hand-written fake DOM (`handler_test.go:4173`):
 - intents on different tasks are in flight together;
 - a failed intent rolls back and leaves a later intent for the same task
   standing;
-- a `stale-write` response rolls back, refreshes, and reports on the task.
+- a `stale-write` response rolls back, refreshes, reports, and re-bases the
+  queue's head so the intent behind it is sent against the refreshed head;
+- a failed intent re-renders the detail form open on its task, so the form stops
+  showing the value the server refused;
+- the detail form saves only the fields it changed, carrying the head it
+  rendered, and sends nothing at all when nothing changed;
+- a refused save keeps its edits, re-bases, and applies only those fields on the
+  retry.
 
 Integration coverage in `internal/cli`, following the existing `TestRunServe*`
 pattern of asserting Git state after a real HTTP call:
