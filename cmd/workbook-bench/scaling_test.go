@@ -320,7 +320,8 @@ func TestRunScalingBenchmarkMeasuresEveryRequestedPointEndToEnd(t *testing.T) {
 	if testing.Short() {
 		t.Skip("end-to-end scaling matrix run is slow")
 	}
-	workbookBinary := buildWorkbookBinary(t)
+	workbookBinary := filepath.Join(t.TempDir(), "workbook")
+	buildWorkbookBinaryWithCommit(t, workbookBinary, "0000000000000000000000000000000000000000")
 	outputRoot := t.TempDir()
 	var stdout, stderr bytes.Buffer
 
@@ -372,5 +373,59 @@ func TestRunScalingBenchmarkMeasuresEveryRequestedPointEndToEnd(t *testing.T) {
 		if slope.Axis != perf.ScalingAxisHistoryDepth {
 			t.Fatalf("slope axis = %q, want only history-depth segments for a single active population", slope.Axis)
 		}
+	}
+}
+
+// Mutation witness: leaving provenance to operator discipline lets a scaling
+// run publish slope evidence that names no source commit, which no later run
+// can be compared against.
+func TestRunScalingBenchmarkRejectsAnUnknownCommitBeforeFixtureConstruction(t *testing.T) {
+	binaryDirectory := t.TempDir()
+	gitPath := filepath.Join(binaryDirectory, "git")
+	goPath := filepath.Join(binaryDirectory, "go")
+	workbookPath := filepath.Join(binaryDirectory, "workbook")
+	writeExecutableScript(t, gitPath, "printf 'git version test\\n'")
+	writeExecutableScript(t, goPath, "printf 'go version test\\n'")
+	writeExecutableScript(t, workbookPath, `printf '%s\n' '{"format":"workbook.result","version":1,"command":"version","data":{"version":"dev","commit":"unknown"}}'`)
+	t.Setenv("PATH", binaryDirectory)
+
+	_, err := runScalingBenchmark(context.Background(), options{
+		workbookBinary: workbookPath,
+		samples:        1,
+		timeout:        time.Second,
+		objectFormat:   "sha1",
+		phase:          scalingPhase,
+		scalingPoints:  []perf.ScalingPointSpec{{ActiveTasks: 10, OperationsPerTask: 2}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "scaling requires a measured Workbook commit") {
+		t.Fatalf("runScalingBenchmark error = %v, want unknown measured commit rejection", err)
+	}
+}
+
+// Mutation witness: gating every phase on a measured commit would break the
+// ordinary baseline run, which is a development tool and not evidence.
+func TestRequireMeasuredCommitGatesOnlyThePublishedEvidencePhases(t *testing.T) {
+	unknown := perf.Environment{WorkbookCommit: unknownWorkbookCommit}
+	known := perf.Environment{WorkbookCommit: "725a2838adde83e20e9b73eb959820ca9871cb0c"}
+	for _, test := range []struct {
+		phase string
+		gated bool
+	}{
+		{phase: "baseline", gated: false},
+		{phase: "acceptance", gated: true},
+		{phase: scalingPhase, gated: true},
+	} {
+		t.Run(test.phase, func(t *testing.T) {
+			err := requireMeasuredCommit(test.phase, unknown)
+			if test.gated != (err != nil) {
+				t.Fatalf("requireMeasuredCommit(%q, unknown) = %v, gated = %t", test.phase, err, test.gated)
+			}
+			if err := requireMeasuredCommit(test.phase, known); err != nil {
+				t.Fatalf("requireMeasuredCommit(%q, known commit) = %v, want nil", test.phase, err)
+			}
+			if err := requireMeasuredCommit(test.phase, perf.Environment{}); test.gated != (err != nil) {
+				t.Fatalf("requireMeasuredCommit(%q, empty commit) = %v, gated = %t", test.phase, err, test.gated)
+			}
+		})
 	}
 }

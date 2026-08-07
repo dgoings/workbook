@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -231,14 +232,8 @@ func measureStorageResourceDepth(ctx context.Context, spec StorageResourceSpec, 
 	}
 
 	resources := make([]ResourceMeasurement, 0, 2)
-	for _, command := range []struct {
-		name string
-		args []string
-	}{
-		{name: ResourceCommandProjectionRebuild, args: []string{"rebuild", "--json"}},
-		{name: ResourceCommandFullValidation, args: []string{"validate", "--full", "--json"}},
-	} {
-		measurement, err := measureStorageResourceCommand(ctx, spec, root, command.name, command.args)
+	for _, command := range storageResourceCommands() {
+		measurement, err := measureStorageResourceCommand(ctx, spec, root, fixtureSpec, command)
 		if err != nil {
 			return StorageResourceDepth{}, fmt.Errorf("measure %d-operation %s: %w", operations, command.name, err)
 		}
@@ -273,12 +268,59 @@ func prepareStorageRepository(ctx context.Context, timeout time.Duration, root s
 	return nil
 }
 
+// storageResourceCommand is one measured command together with the literal
+// oracle its result must satisfy. A peak-memory number is only evidence about a
+// command that actually did the work it names, so every measured command is
+// checked on content and not on its exit code alone.
+type storageResourceCommand struct {
+	name   string
+	args   []string
+	verify func(FixtureSpec, []byte) error
+}
+
+func storageResourceCommands() []storageResourceCommand {
+	return []storageResourceCommand{
+		{
+			name: ResourceCommandProjectionRebuild,
+			args: []string{"rebuild", "--json"},
+			verify: func(fixture FixtureSpec, stdout []byte) error {
+				return verifyRebuildResultOutput(stdout, fixture.TotalTasks)
+			},
+		},
+		{
+			name: ResourceCommandFullValidation,
+			args: []string{"validate", "--full", "--json"},
+			verify: func(fixture FixtureSpec, stdout []byte) error {
+				return VerifyValidationResultOutput("validate-full-history", stdout, fixture)
+			},
+		},
+	}
+}
+
+func verifyRebuildResultOutput(stdout []byte, totalTasks int) error {
+	var envelope remoteResultEnvelope
+	if err := json.Unmarshal(stdout, &envelope); err != nil {
+		return fmt.Errorf("decode rebuild result: %w", err)
+	}
+	if envelope.Format != workbookResultFormat || envelope.Version != workbookJSONVersion || envelope.Command != "rebuild" {
+		return fmt.Errorf("unexpected rebuild result envelope")
+	}
+	var result rebuildProjectionResult
+	if err := json.Unmarshal(envelope.Data, &result); err != nil {
+		return fmt.Errorf("decode rebuild data: %w", err)
+	}
+	if result.TaskCount != totalTasks {
+		return fmt.Errorf("rebuild task count = %d, want %d", result.TaskCount, totalTasks)
+	}
+	return nil
+}
+
 func measureStorageResourceCommand(
 	ctx context.Context,
 	spec StorageResourceSpec,
 	root string,
-	name string,
-	args []string,
+	fixture FixtureSpec,
+	command storageResourceCommand,
 ) (ResourceMeasurement, error) {
 	before, err := directoryBytes(root)
 	if err != nil {
@@ -286,7 +328,7 @@ func measureStorageResourceCommand(
 	}
 	measurement := MeasureCommandResources(ctx, CommandSpec{
 		Binary:    spec.WorkbookBinary,
-		Args:      args,
+		Args:      command.args,
 		Directory: root,
 		Timeout:   spec.CommandTimeout,
 	})
@@ -294,13 +336,18 @@ func measureStorageResourceCommand(
 	if err != nil {
 		return ResourceMeasurement{}, err
 	}
-	measurement.Command = name
+	measurement.Command = command.name
 	measurement.RepositoryBytesDelta = after - before
 	if measurement.TimedOut {
-		return ResourceMeasurement{}, fmt.Errorf("%s timed out after %s: %s", name, spec.CommandTimeout, measurement.Error)
+		return ResourceMeasurement{}, fmt.Errorf("%s timed out after %s: %s", command.name, spec.CommandTimeout, measurement.Error)
 	}
 	if measurement.ExitCode != 0 || measurement.Error != "" {
-		return ResourceMeasurement{}, fmt.Errorf("%s failed with exit code %d: %s", name, measurement.ExitCode, measurement.Error)
+		return ResourceMeasurement{}, fmt.Errorf("%s failed with exit code %d: %s", command.name, measurement.ExitCode, measurement.Error)
+	}
+	if command.verify != nil {
+		if err := command.verify(fixture, measurement.Stdout); err != nil {
+			return ResourceMeasurement{}, fmt.Errorf("verify %s: %w", command.name, err)
+		}
 	}
 	measurement.Stdout = nil
 	measurement.Stderr = nil
