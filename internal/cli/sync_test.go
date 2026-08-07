@@ -107,9 +107,62 @@ func TestRunSyncReportsIgnoredForeignRefsAndStillSucceeds(t *testing.T) {
 	if !strings.Contains(stdout, "Ignored "+poison) {
 		t.Fatalf("human fetch output = %q, want it to name the ignored ref", stdout)
 	}
-	if !strings.Contains(stdout, "git push origin :"+poison) {
+	if !strings.Contains(stdout, "git push origin ':"+poison+"'") {
 		t.Fatalf("human fetch output = %q, want it to show how to prune the ref", stdout)
 	}
+}
+
+// Whoever pushed a ref chose its name, and Git's refname rules allow ';', '$',
+// '`', and '&'. The suggested prune command is meant to be pasted, so it must
+// prune exactly that ref and run nothing else.
+func TestRunFetchQuotesAnIgnoredRefNameInThePruneCommand(t *testing.T) {
+	first, second := cliSyncRepositories(t)
+	shared := cliCreateTask(t, first, "Shared task")
+	if code, _, stderr := run(t, first, "sync"); code != 0 {
+		t.Fatalf("initial sync code = %d; stderr = %q", code, stderr)
+	}
+
+	// $IFS stands in for the space Git refuses inside a ref name; a shell that
+	// splits the command would run `touch` and leave the marker behind.
+	const marker = ".workbook-prune-injection-marker"
+	poison := "refs/workbook/tasks/EVIL;touch$IFS" + marker
+	cliGit(t, first, "push", "origin", "refs/workbook/tasks/"+shared.ID+":"+poison)
+
+	code, stdout, stderr := run(t, second, "fetch")
+	if code != 0 || stderr != "" {
+		t.Fatalf("fetch = code %d, stderr %q", code, stderr)
+	}
+	prune := pruneCommand(t, stdout)
+
+	shell := exec.Command("sh", "-c", prune)
+	shell.Dir = second
+	if output, err := shell.CombinedOutput(); err != nil {
+		t.Fatalf("suggested prune command %q failed: %v\n%s", prune, err, output)
+	}
+
+	if _, err := os.Stat(filepath.Join(second, marker)); err == nil {
+		t.Fatalf("suggested prune command %q executed the ref name", prune)
+	}
+	remaining := remoteTaskRefs(t, second)
+	if strings.Contains(remaining, "EVIL") {
+		t.Fatalf("suggested prune command %q left the offending ref on origin:\n%s", prune, remaining)
+	}
+	if !strings.Contains(remaining, shared.ID) {
+		t.Fatalf("suggested prune command %q deleted the wrong ref; origin now holds:\n%s", prune, remaining)
+	}
+}
+
+// pruneCommand returns the command the ignored-ref report told the user to run.
+func pruneCommand(t *testing.T, output string) string {
+	t.Helper()
+	const marker = "Prune it with: "
+	for _, line := range strings.Split(output, "\n") {
+		if index := strings.Index(line, marker); index >= 0 {
+			return line[index+len(marker):]
+		}
+	}
+	t.Fatalf("output = %q, want a line suggesting how to prune the ignored ref", output)
+	return ""
 }
 
 func TestRunSyncReplaysDivergenceAndPublishesIt(t *testing.T) {
@@ -432,6 +485,18 @@ func remoteHasTaskRef(t *testing.T, repository, taskID string) bool {
 		t.Fatalf("git ls-remote task ref: %v\n%s", err, output)
 	}
 	return strings.TrimSpace(string(output)) != ""
+}
+
+// remoteTaskRefs lists origin's whole task namespace, including names this
+// version cannot read as a task ID.
+func remoteTaskRefs(t *testing.T, repository string) string {
+	t.Helper()
+	command := exec.Command("git", "-C", repository, "ls-remote", "--refs", "origin", "refs/workbook/tasks/*")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git ls-remote task refs: %v\n%s", err, output)
+	}
+	return strings.TrimSpace(string(output))
 }
 
 func cliGit(t *testing.T, directory string, args ...string) {

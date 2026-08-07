@@ -475,7 +475,10 @@ there that this version does not recognize. Such a ref is skipped rather than
 treated as corruption: a name that does not resolve to exactly one task is
 reported in the result's `ignored` list — named as it exists on the remote,
 which is the ref to prune — and every well-formed task still fetches and
-publishes. A fetched tip whose name is well formed but whose object is not
+publishes. Text output suggests the `git push` that removes it, with the name
+quoted as a single shell word: whoever pushed the ref chose its name, and Git
+permits characters such as `;` and `$` that a shell would otherwise act on.
+A fetched tip whose name is well formed but whose object is not
 Workbook history is still reported per task and still exits nonzero, but no
 longer prevents `sync` from publishing the tasks that did validate. This
 tolerance is confined to data `origin` controls. The canonical namespace is

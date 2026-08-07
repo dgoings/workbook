@@ -290,9 +290,11 @@ func writeMutation(output io.Writer, task core.Task) {
 func writeSyncResult(output io.Writer, result gitstore.SyncResult) {
 	// Ignored refs are reported before the phase outcome because they are true
 	// whatever the phase did, and because the reader needs the prune command.
+	// The remote is this tool's own constant; only the ref name came from
+	// origin, so only it is quoted.
 	for _, ignored := range result.Ignored {
-		fmt.Fprintf(output, "Ignored %s on %s: %s. Prune it with: git push %s :%s\n",
-			ignored.Ref, result.Remote, ignored.Reason, result.Remote, ignored.Ref)
+		fmt.Fprintf(output, "Ignored %s on %s: %s. Prune it with: git push %s %s\n",
+			ignored.Ref, result.Remote, ignored.Reason, result.Remote, shellWord(":"+ignored.Ref))
 	}
 	if result.Status == gitstore.SyncPhaseFailed {
 		fmt.Fprintf(output, "Failed on %s", result.Remote)
@@ -321,6 +323,20 @@ func writeSyncResult(output io.Writer, result gitstore.SyncResult) {
 		}
 		fmt.Fprintln(output)
 	}
+}
+
+// shellWord renders a value as one POSIX shell word so that a command this
+// tool invites the user to paste stays one command with one argument.
+//
+// A ref name under origin's task namespace is chosen by whoever pushed it.
+// Git's own refname rules ban control characters and spaces but allow ';',
+// '$', '`', '&', '|', and parentheses, so interpolating such a name unquoted
+// would both run whatever it says and prune the wrong ref. Single quotes
+// suppress every expansion, and an embedded quote is closed, escaped, and
+// reopened. Quoting is unconditional: deciding a name looks harmless is the
+// same judgment this function exists to avoid.
+func shellWord(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
 func writeSyncRunResult(output io.Writer, result gitstore.SyncRunResult) {
