@@ -409,13 +409,21 @@ func TestOpenCacheRebuildsMissingIncompatibleForeignAndCorruptCaches(t *testing.
 		{
 			name: "incompatible",
 			setup: func(t *testing.T, path string) {
-				writeCacheFixture(t, path, "2", config.ProjectID, taskID(1))
+				writeCacheFixture(t, path, "0", config.ProjectID, taskID(1))
 			},
 		},
 		{
 			name: "foreign project",
 			setup: func(t *testing.T, path string) {
-				writeCacheFixture(t, path, "1", "01K0M6B8A4FTT8C39MXXYTW7ZZ", taskID(1))
+				writeCacheFixture(t, path, schemaVersion, "01K0M6B8A4FTT8C39MXXYTW7ZZ", taskID(1))
+			},
+		},
+		{
+			// Production mutation: accepting a cache whose per-task index is
+			// absent silently restores the full-table DELETE scan.
+			name: "missing per-task index",
+			setup: func(t *testing.T, path string) {
+				writeCacheFixtureWithIndex(t, path, schemaVersion, config.ProjectID, taskID(1), false)
 			},
 		},
 		{
@@ -449,7 +457,7 @@ func TestOpenCacheRebuildsMissingIncompatibleForeignAndCorruptCaches(t *testing.
 			metadata = queryMetadata(t, cache)
 			if !reflect.DeepEqual(metadata, map[string]string{
 				"project_id":     config.ProjectID,
-				"schema_version": "1",
+				"schema_version": schemaVersion,
 			}) {
 				t.Fatalf("metadata = %#v, want fresh current cache", metadata)
 			}
@@ -773,7 +781,12 @@ func queryMetadata(t *testing.T, cache *Cache) map[string]string {
 	return result
 }
 
-func writeCacheFixture(t *testing.T, path, schemaVersion, projectID, staleTaskID string) {
+func writeCacheFixture(t *testing.T, path, version, projectID, staleTaskID string) {
+	t.Helper()
+	writeCacheFixtureWithIndex(t, path, version, projectID, staleTaskID, true)
+}
+
+func writeCacheFixtureWithIndex(t *testing.T, path, version, projectID, staleTaskID string, withTaskIndex bool) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
@@ -808,9 +821,16 @@ func writeCacheFixture(t *testing.T, path, schemaVersion, projectID, staleTaskID
 	`); err != nil {
 		t.Fatal(err)
 	}
+	if withTaskIndex {
+		if _, err := db.Exec(
+			`CREATE INDEX ` + validatedCommitsByTaskIndex + ` ON validated_commits (validator_version, task_id)`,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if _, err := db.Exec(
 		`INSERT INTO validation_meta (key, value) VALUES ('schema_version', ?), ('project_id', ?)`,
-		schemaVersion, projectID,
+		version, projectID,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -831,4 +851,46 @@ func runGit(t *testing.T, dir string, args ...string) {
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, output)
 	}
+}
+
+// TestRecordDeletesFullValidationCommitSetThroughATaskIndex pins the index that
+// keeps a full run's per-task DELETE from scanning the whole commit table. The
+// primary key leads with validator_version, so without a dedicated index every
+// task's DELETE visits every row recorded so far and a full run costs O(tasks^2
+// x depth) row visits.
+func TestRecordDeletesFullValidationCommitSetThroughATaskIndex(t *testing.T) {
+	// Production mutation: dropping the index restores the full-table scan that
+	// made the task-count axis superlinear.
+	ctx := context.Background()
+	cache := openTestCache(t, ctx, testConfig())
+
+	rows, err := cache.db.QueryContext(ctx,
+		`EXPLAIN QUERY PLAN DELETE FROM validated_commits WHERE validator_version = ? AND task_id = ?`,
+		ValidatorVersion, taskID(1),
+	)
+	if err != nil {
+		t.Fatalf("EXPLAIN QUERY PLAN error = %v", err)
+	}
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var id, parent, notUsed int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notUsed, &detail); err != nil {
+			t.Fatalf("scan query plan: %v", err)
+		}
+		plan = append(plan, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read query plan: %v", err)
+	}
+	if len(plan) == 0 {
+		t.Fatal("query plan is empty")
+	}
+	for _, detail := range plan {
+		if strings.Contains(detail, validatedCommitsByTaskIndex) {
+			return
+		}
+	}
+	t.Fatalf("DELETE query plan = %#v, want a search using %s", plan, validatedCommitsByTaskIndex)
 }

@@ -14,10 +14,14 @@ default to one tombstone. Supplying `--tombstones 0` is allowed for diagnostics,
 but not for acceptance evidence.
 
 Acceptance requires at least 500 total tasks, 25 tombstoned tasks, 20
-operations per task, and 10 active tasks. It also requires the measured
-`workbook version --json` result to name an exact source commit; `unknown` is
-rejected before fixture construction. Baseline runs retain their reported
-commit even when it is `unknown`.
+operations per task, and 10 active tasks.
+
+Both published evidence phases, `--phase acceptance` and `--phase scaling`,
+require the measured `workbook version --json` result to name an exact source
+commit; `unknown` is rejected before fixture construction. Provenance for
+published evidence is therefore a property of the phase rather than of operator
+discipline. Baseline runs are a development tool, not evidence, and retain their
+reported commit even when it is `unknown`.
 
 Each cold CLI sample rebuilds the SQLite projection with `workbook rebuild
 --json` before the timed command; that rebuild and its Trace2 Git-process work
@@ -581,6 +585,15 @@ row at all.
 
 Slopes are descriptive evidence. A wide slope is a reason to open a narrow,
 separately justified optimization story, not a failing benchmark.
+
+Prefer within-run slopes when comparing one revision to another. A slope is a
+ratio between two points measured minutes apart on one host, so a uniformly
+faster or slower machine largely cancels out of it, while comparing a raw
+millisecond figure across runs does not survive a different host or a different
+background load. The environment block records the OS, architecture, and tool
+versions, but not the CPU model or the host's load, so a cross-run millisecond
+comparison is only as good as the operator's account of the machine.
+
 ## Storage and peak resource growth
 
 `workbook-bench --storage-resources` measures durable Git storage by object
@@ -596,6 +609,18 @@ ascending order, and each depth gets its own freshly built fixture. `--tasks`
 and `--tombstones` keep their usual meaning and apply to every depth. Under
 `--phase acceptance` every depth must be at least 20 operations per task, in
 addition to the existing acceptance fixture minimums.
+
+Two depths give a ratio, not a shape. Evidence that argues about how a resource
+grows with history needs more than two points, so a growth claim should be
+measured with something like `--storage-operations 20,50,100,200` and read as a
+curve rather than as a single before-and-after pair.
+
+The scaling matrix and this measurement do not share a fixture shape at their
+nominally similar points. A `500`-active scaling point is 525 total refs, while
+`--tasks 500 --tombstones 25` is 500 total with 475 active. A slope from one
+family and a byte count from the other therefore describe different
+repositories; say which, or pass `--tasks 525` and accept that the result no
+longer compares to earlier 500-total evidence.
 
 ```sh
 go build -buildvcs=false -o /private/tmp/workbook-storage ./cmd/workbook
@@ -618,6 +643,13 @@ objects, measures `workbook rebuild --json` and `workbook validate --full
 --json`, and then sizes the two SQLite caches. Fixture construction and packing
 are outside every measured command. A failing or timed-out measured command
 aborts the run instead of producing a report.
+
+So does a measured command whose result does not match its literal oracle. A
+peak-memory number is only evidence about a command that did the work it names,
+so `rebuild` must report the fixture's exact task count and `validate --full`
+must match the same complete-audit oracle the scaling path asserts: every task
+checked, every commit checked, no cache hits, and no failures. Both are checked
+on the measured stdout, not on the exit code alone.
 
 These results are descriptive. They have no target, no budget, and no
 pass/fail outcome. A storage-only report runs no scenarios, so its `scenarios`
@@ -692,13 +724,20 @@ Resource measurements live under `depths[].resources`, always in the order
 | `voluntaryContextSwitches`, `involuntaryContextSwitches` | `ru_nvcsw` and `ru_nivcsw`. |
 | `repositoryBytesDelta` | Change in total on-disk bytes under the repository root across the command, sampled outside the timing window. A durable-write lower bound, not a syscall counter. |
 
-Two platform caveats matter when reading these numbers:
+Three caveats matter when reading these numbers:
 
 - Peak resident memory from `wait4` is a maximum, not a sum. It is the largest
   resident set observed for the measured process or any descendant it reaped, so
   a command that runs several `git` processes concurrently reports the largest
   single peak, not the concurrent total. Read it as a lower bound on whole-tree
-  peak memory.
+  peak memory. It also means a measured peak can belong to a `git` child rather
+  than to Workbook; attributing one to the product requires measuring the same
+  Git work on its own.
+- Peak resident memory is not run-deterministic. The fixtures are deterministic,
+  built from seeded identifiers and fixed timestamps, so a rerun measures the
+  same repository; allocator behavior, page-cache state, and host load still move
+  the byte count. Deterministic evidence here means a deterministic fixture plus
+  recorded provenance, not a reproducible byte count.
 - Darwin does not maintain `ru_inblock` or `ru_oublock`. On darwin those fields
   are zero and `blockIoCountersSupported` is false; a zero there is not evidence
   that no I/O happened. Use `majorPageFaults` and `repositoryBytesDelta`
@@ -708,6 +747,25 @@ Deliberately not measured: unreachable and dangling objects, non-Workbook refs
 and working-tree files including `.workbook/config.json`, reflog and
 `packed-refs` bytes, delta chain depth, concurrent whole-process-tree peak
 memory, cold-start page-cache behavior, and any latency budget.
+
+### 2026-08-07 bounded full validation evidence
+
+The 2026-07-30 evidence identified full history validation as the only measured
+path that did not scale, superlinear on both axes and the only one whose peak
+resident memory grew with history. Both families were re-measured after that was
+fixed. See the [build, environment, and measurement
+provenance](2026-08-07-bounded-validation-provenance.md), which records the
+frozen binary checksums, the shared-host caveat, and why the conclusions rest on
+within-run slopes and same-host pairs.
+
+| Family | Evidence | Outcome |
+| --- | --- | --- |
+| Scaling matrix | [SHA-1 JSON](2026-08-07-scaling-slopes-sha1.json), [Markdown](2026-08-07-scaling-slopes-sha1.md); [SHA-256 JSON](2026-08-07-scaling-slopes-sha256.json), [Markdown](2026-08-07-scaling-slopes-sha256.md) | `validate-full-history` within-run slopes fall below 1.0 on every axis pair in both formats: task-count 1.10 → 0.66 and 1.56 → 0.86 in SHA-1. This comparison is cross-run against 2026-07-30; the intended same-host baseline run did not complete, which the provenance record states. No other scenario regressed. Git processes stay at 7. |
+| Storage and peak resources | [SHA-1 JSON](2026-08-07-storage-resources-sha1.json), [Markdown](2026-08-07-storage-resources-sha1.md); [SHA-256 JSON](2026-08-07-storage-resources-sha256.json), [Markdown](2026-08-07-storage-resources-sha256.md); baselines [SHA-1](2026-08-07-storage-resources-baseline-sha1.json), [SHA-256](2026-08-07-storage-resources-baseline-sha256.json) | Four depths rather than two. Peak resident memory above the measured `git cat-file --batch` floor no longer grows with depth: 58.8 MB → 694.8 MB across a 10x depth increase before, 5.7 MB → 0.1 MB after. Full validation elapsed time falls 5.2x to 18.1x. |
+
+Both families were measured with one frozen `workbook-bench` against two product
+binaries, the change and its `main` parent, so the product under test is the
+only variable within each pair.
 
 ## Reading the reports
 

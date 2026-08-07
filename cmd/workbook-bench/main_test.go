@@ -905,8 +905,21 @@ func buildWorkbookBinary(t *testing.T) string {
 
 func buildWorkbookBinaryAt(t *testing.T, binary string) {
 	t.Helper()
+	buildWorkbookBinaryWithCommit(t, binary, "")
+}
+
+// buildWorkbookBinaryWithCommit mirrors the evidence build. An evidence phase
+// refuses to measure a binary that reports no commit, so a test that exercises
+// one has to embed a commit exactly as the documented build does.
+func buildWorkbookBinaryWithCommit(t *testing.T, binary, commit string) {
+	t.Helper()
 	root := filepath.Clean(filepath.Join("..", ".."))
-	command := exec.Command("go", "build", "-buildvcs=false", "-o", binary, "./cmd/workbook")
+	args := []string{"build", "-buildvcs=false"}
+	if commit != "" {
+		args = append(args, "-ldflags", "-X main.commit="+commit)
+	}
+	args = append(args, "-o", binary, "./cmd/workbook")
+	command := exec.Command("go", args...)
 	command.Dir = root
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build workbook: %v\n%s", err, output)

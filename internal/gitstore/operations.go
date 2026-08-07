@@ -292,7 +292,10 @@ func walkCommitChain(
 
 	var newestFirst []historyCandidate
 	boundaryReached := false
-	seenCommits := make(map[string]struct{}, len(graph))
+	// The cycle guard covers one chain, not the shared graph. Pre-sizing it to
+	// the graph zeroed one slot per commit in the whole corpus for every task,
+	// which is quadratic work nobody uses.
+	seenCommits := make(map[string]struct{})
 	current := request.Head.ObjectID
 	for {
 		if current == request.StopAt {

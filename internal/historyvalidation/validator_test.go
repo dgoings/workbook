@@ -348,6 +348,51 @@ func TestValidateCachesFiveChangedHeadsAcrossFiveHundredTasks(t *testing.T) {
 	}
 }
 
+func TestValidateRecordsEachTaskAtItsBoundaryBeforeReadingTheNext(t *testing.T) {
+	// Production mutation: collecting every task's history before folding any of
+	// them restores the peak memory that grows with the corpus. The observable
+	// consequence is that no completion reaches the cache until the last task's
+	// commits have been read.
+	ctx := context.Background()
+	cache := openTestCache(t, ctx, testConfig())
+	first := validationHistory(t, taskID(1), generationID(1), 160, 3)
+	second := validationHistory(t, taskID(2), generationID(2), 170, 3)
+	third := validationHistory(t, taskID(3), generationID(3), 180, 3)
+	source := &validatorSource{
+		heads: headsFor(first, second, third),
+		histories: map[string]gitstore.TaskHistoryResult{
+			taskID(1): historyResult(taskID(1), first[2].ObjectID, false, first),
+			taskID(2): historyResult(taskID(2), second[2].ObjectID, false, second),
+			taskID(3): historyResult(taskID(3), third[2].ObjectID, false, third),
+		},
+	}
+	order := []string{taskID(1), taskID(2), taskID(3)}
+	position := map[string]int{taskID(1): 0, taskID(2): 1, taskID(3): 2}
+	source.observeCommit = func(id string, _ gitstore.HistoryCommit) {
+		recorded, err := cache.Snapshot(ctx, order)
+		if err != nil {
+			t.Errorf("Snapshot() error = %v", err)
+			return
+		}
+		completed := 0
+		for _, task := range recorded {
+			if task.Status == StatusValid {
+				completed++
+			}
+		}
+		if completed != position[id] {
+			t.Errorf("while reading %s the cache held %d completed task(s), want %d recorded at earlier task boundaries", id, completed, position[id])
+		}
+	}
+	got, err := (&Validator{source: source, cache: cache, config: testConfig()}).Validate(ctx, true)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if got.TasksChecked != 3 || got.CommitsChecked != 9 || got.Valid != 3 {
+		t.Fatalf("streamed result = %#v, want 3 tasks, 9 commits, 3 valid", got)
+	}
+}
+
 func TestValidateRefRaceLeavesChangedTaskPendingAndReturnsStaleWrite(t *testing.T) {
 	// Production mutation: accepting the initial inventory after a ref race marks a stale head valid.
 	ctx := context.Background()
@@ -437,6 +482,7 @@ type validatorSource struct {
 	cancelOnListCall  int
 	cancel            context.CancelFunc
 	historyForRequest func(gitstore.TaskHistoryRequest) gitstore.TaskHistoryResult
+	observeCommit     func(string, gitstore.HistoryCommit)
 }
 
 func (s *validatorSource) ListTaskHeads(_ context.Context, _ core.ProjectConfig) ([]gitstore.TaskHead, error) {
@@ -459,22 +505,45 @@ func (s *validatorSource) ListTaskHeads(_ context.Context, _ core.ProjectConfig)
 	return heads, nil
 }
 
-func (s *validatorSource) ReadTaskHistories(_ context.Context, _ core.ProjectConfig, requests []gitstore.TaskHistoryRequest) ([]gitstore.TaskHistoryResult, error) {
+func (s *validatorSource) ReadTaskHistoriesStream(
+	_ context.Context,
+	_ core.ProjectConfig,
+	requests []gitstore.TaskHistoryRequest,
+	stream gitstore.TaskHistoryStream,
+) error {
 	s.reads++
 	s.lastRequests = append([]gitstore.TaskHistoryRequest(nil), requests...)
-	results := make([]gitstore.TaskHistoryResult, 0, len(requests))
 	for _, request := range requests {
+		history := s.histories[request.Head.TaskID]
 		if s.historyForRequest != nil {
-			results = append(results, s.historyForRequest(request))
-			continue
+			history = s.historyForRequest(request)
 		}
-		results = append(results, s.histories[request.Head.TaskID])
+		if err := stream.Begin(gitstore.TaskHistoryStart{
+			TaskID:          history.TaskID,
+			Head:            history.Head,
+			BoundaryReached: history.BoundaryReached,
+		}); err != nil {
+			return err
+		}
+		for _, commit := range history.Commits {
+			if s.observeCommit != nil {
+				s.observeCommit(history.TaskID, commit)
+			}
+			if err := stream.Commit(history.TaskID, commit); err != nil {
+				return err
+			}
+		}
+		summary := history
+		summary.Commits = nil
+		if err := stream.End(summary); err != nil {
+			return err
+		}
 	}
 	if s.cancelOnRead != nil {
 		s.cancelOnRead()
 		s.cancelOnRead = nil
 	}
-	return results, nil
+	return nil
 }
 
 func validationHistory(t *testing.T, id, generation string, base, count int) []gitstore.HistoryCommit {

@@ -195,8 +195,16 @@ func verifyValidationMeasurement(scenario string, measurement CommandMeasurement
 	if measurement.Sample.ExitCode != 0 || measurement.Sample.Error != "" {
 		return fmt.Errorf("command failed with exit code %d: %s", measurement.Sample.ExitCode, measurement.Sample.Error)
 	}
+	return verifyValidationResultOutput(scenario, measurement.Stdout, fixture)
+}
+
+// verifyValidationResultOutput checks one measured `workbook validate` result
+// against the scenario's exact literal oracle for the measured fixture. Every
+// measured validation, whatever family runs it, is held to this oracle: an exit
+// code alone cannot tell a complete audit from one that validated nothing.
+func verifyValidationResultOutput(scenario string, stdout []byte, fixture FixtureSpec) error {
 	var envelope validationResultEnvelope
-	if err := json.Unmarshal(measurement.Stdout, &envelope); err != nil {
+	if err := json.Unmarshal(stdout, &envelope); err != nil {
 		return fmt.Errorf("decode validate result: %w", err)
 	}
 	if envelope.Format != workbookResultFormat || envelope.Version != workbookJSONVersion || envelope.Command != "validate" {

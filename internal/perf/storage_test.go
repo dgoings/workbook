@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -638,4 +639,72 @@ func gitWithInput(t *testing.T, root string, input []byte, args ...string) strin
 		t.Fatalf("git %s: %v", strings.Join(args, " "), err)
 	}
 	return string(output)
+}
+
+func writeStorageStubBinary(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "workbook")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func storageCommandNamed(t *testing.T, name string) storageResourceCommand {
+	t.Helper()
+	for _, command := range storageResourceCommands() {
+		if command.name == name {
+			return command
+		}
+	}
+	t.Fatalf("no measured storage command named %q", name)
+	return storageResourceCommand{}
+}
+
+// Mutation witness: checking only the exit code lets a peak-memory number be
+// attributed to a command that audited nothing, which is exactly the number the
+// storage evidence exists to report.
+func TestMeasureStorageResourceCommandChecksResultContentNotOnlyTheExitCode(t *testing.T) {
+	const operations = 4
+	fixture := smallStorageFixtureSpec("sha1", operations)
+	commits := fixture.TotalTasks * operations
+	truthful := fmt.Sprintf(
+		`printf '%%s\n' '{"format":"workbook.result","version":1,"command":"validate","data":{"validatorVersion":1,"full":true,"taskCount":%d,"tasksChecked":%d,"commitsChecked":%d,"cacheHits":0,"valid":%d,"invalid":0,"pending":0,"cachePath":"","failures":[]}}'`,
+		fixture.TotalTasks, fixture.TotalTasks, commits, fixture.TotalTasks,
+	)
+	auditedNothing := `printf '%s\n' '{"format":"workbook.result","version":1,"command":"validate","data":{"validatorVersion":1,"full":true,"taskCount":0,"tasksChecked":0,"commitsChecked":0,"cacheHits":0,"valid":0,"invalid":0,"pending":0,"cachePath":"","failures":[]}}'`
+	rebuiltNothing := `printf '%s\n' '{"format":"workbook.result","version":1,"command":"rebuild","data":{"taskCount":0,"cachePath":""}}'`
+
+	for _, test := range []struct {
+		name    string
+		command string
+		body    string
+		want    string
+	}{
+		{name: "complete audit", command: ResourceCommandFullValidation, body: truthful},
+		{name: "audited nothing", command: ResourceCommandFullValidation, body: auditedNothing, want: "literal oracle"},
+		{name: "rebuilt nothing", command: ResourceCommandProjectionRebuild, body: rebuiltNothing, want: "rebuild task count = 0"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			measurement, err := measureStorageResourceCommand(
+				context.Background(),
+				StorageResourceSpec{WorkbookBinary: writeStorageStubBinary(t, test.body), CommandTimeout: 30 * time.Second},
+				t.TempDir(),
+				fixture,
+				storageCommandNamed(t, test.command),
+			)
+			if test.want == "" {
+				if err != nil {
+					t.Fatalf("measureStorageResourceCommand() error = %v, want the truthful result accepted", err)
+				}
+				if measurement.Stdout != nil || measurement.Stderr != nil {
+					t.Fatalf("measurement retained %d stdout and %d stderr bytes", len(measurement.Stdout), len(measurement.Stderr))
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("measureStorageResourceCommand() error = %v, want a rejection containing %q", err, test.want)
+			}
+		})
+	}
 }

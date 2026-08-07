@@ -26,7 +26,7 @@ type Result struct {
 
 type source interface {
 	ListTaskHeads(context.Context, core.ProjectConfig) ([]gitstore.TaskHead, error)
-	ReadTaskHistories(context.Context, core.ProjectConfig, []gitstore.TaskHistoryRequest) ([]gitstore.TaskHistoryResult, error)
+	ReadTaskHistoriesStream(context.Context, core.ProjectConfig, []gitstore.TaskHistoryRequest, gitstore.TaskHistoryStream) error
 }
 
 // Validator coordinates bounded Git history reads with the disposable cache.
@@ -107,36 +107,33 @@ func (v *Validator) Validate(ctx context.Context, full bool) (Result, error) {
 	}
 
 	if len(requests) > 0 {
-		histories, readErr := v.source.ReadTaskHistories(ctx, v.config, requests)
-		if readErr != nil {
+		fold := &historyFold{
+			validator:  v,
+			ctx:        ctx,
+			requests:   requests,
+			prepared:   prepared,
+			boundaries: boundaries,
+			full:       full,
+			result:     &result,
+		}
+		streamErr := v.source.ReadTaskHistoriesStream(ctx, v.config, requests, gitstore.TaskHistoryStream{
+			Begin:  fold.begin,
+			Commit: fold.commit,
+			End:    fold.end,
+		})
+		if streamErr != nil {
 			if contextErr := ctx.Err(); contextErr != nil {
 				return v.partialResult(ctx, initialHeads, result), contextErr
 			}
-			return v.partialResult(ctx, initialHeads, result), readErr
+			return v.partialResult(ctx, initialHeads, result), streamErr
 		}
-		if err := checkHistoryResults(requests, histories); err != nil {
-			return v.partialResult(ctx, initialHeads, result), err
-		}
-		for _, history := range histories {
-			if err := ctx.Err(); err != nil {
-				return v.partialResult(ctx, initialHeads, result), err
-			}
-			result.TasksChecked++
-			result.CommitsChecked += history.CheckedCommits
-			cached := prepared[history.TaskID]
-			completion, completionErr := v.evaluate(history, cached, boundaries[history.TaskID], full)
-			if completionErr != nil {
-				return v.partialResult(ctx, initialHeads, result), completionErr
-			}
-			if err := v.cache.Record(ctx, completion); err != nil {
-				if contextErr := ctx.Err(); contextErr != nil {
-					return v.partialResult(ctx, initialHeads, result), contextErr
-				}
-				return v.partialResult(ctx, initialHeads, result), err
-			}
-			if v.afterRecord != nil {
-				v.afterRecord()
-			}
+		if fold.completed != len(requests) {
+			return v.partialResult(ctx, initialHeads, result), core.Errorf(
+				core.CategoryCorruptData,
+				"task history read returned %d results for %d requests",
+				fold.completed,
+				len(requests),
+			)
 		}
 	}
 
@@ -167,50 +164,126 @@ func (v *Validator) Validate(ctx context.Context, full bool) (Result, error) {
 	return result, nil
 }
 
-func (v *Validator) evaluate(history gitstore.TaskHistoryResult, cached CachedTask, boundary *core.StateDocument, full bool) (Completion, error) {
-	completion := Completion{
-		TaskID:         history.TaskID,
-		ObservedHead:   history.Head,
+// historyFold turns the streamed history of every pending task into one
+// completion at a time. The audit is an incremental fold over each chain that
+// needs only the parent state and the current record, so nothing above one
+// task's accumulated completion is ever resident, and each completion is
+// recorded and dropped at its own task boundary.
+type historyFold struct {
+	validator  *Validator
+	ctx        context.Context
+	requests   []gitstore.TaskHistoryRequest
+	prepared   map[string]CachedTask
+	boundaries map[string]*core.StateDocument
+	full       bool
+	result     *Result
+
+	completed  int
+	open       bool
+	completion Completion
+	parent     *core.StateDocument
+	// lastValidState is encoded once at the task boundary. Encoding after every
+	// commit would repeat work whose result only the final commit keeps.
+	lastValidState *core.StateDocument
+	failed         bool
+}
+
+func (f *historyFold) begin(start gitstore.TaskHistoryStart) error {
+	if err := f.ctx.Err(); err != nil {
+		return err
+	}
+	if f.open || f.completed >= len(f.requests) {
+		return core.Errorf(core.CategoryCorruptData, "task history read returned an unexpected result")
+	}
+	request := f.requests[f.completed]
+	if start.TaskID != request.Head.TaskID || start.Head != request.Head.ObjectID {
+		return core.Errorf(
+			core.CategoryCorruptData,
+			"task history read result %d does not match requested task head",
+			f.completed,
+		)
+	}
+	cached := f.prepared[start.TaskID]
+	f.open = true
+	f.failed = false
+	f.parent = nil
+	f.lastValidState = nil
+	f.completion = Completion{
+		TaskID:         start.TaskID,
+		ObservedHead:   start.Head,
 		Status:         StatusValid,
 		LastValidState: []byte{},
 		// A retained boundary that Git cannot reach is no longer a safe
 		// prefix. Rebuilding this task's immutable-commit set avoids duplicate
 		// rows while preserving Record's duplicate-delivery guard.
-		Full: full || (!history.BoundaryReached && cached.LastValidCommit != ""),
+		Full: f.full || (!start.BoundaryReached && cached.LastValidCommit != ""),
 	}
-	var parent *core.StateDocument
-	if history.BoundaryReached && boundary != nil {
+	if boundary := f.boundaries[start.TaskID]; start.BoundaryReached && boundary != nil {
 		state := *boundary
-		parent = &state
-		completion.LastValidCommit = cached.LastValidCommit
-		completion.LastValidGeneration = cached.LastValidGeneration
-		completion.LastValidState = append([]byte(nil), cached.LastValidState...)
-		completion.ValidatedCommitCount = cached.ValidatedCommitCount
+		f.parent = &state
+		f.completion.LastValidCommit = cached.LastValidCommit
+		f.completion.LastValidGeneration = cached.LastValidGeneration
+		f.completion.LastValidState = append([]byte(nil), cached.LastValidState...)
+		f.completion.ValidatedCommitCount = cached.ValidatedCommitCount
 	}
+	f.result.TasksChecked++
+	return nil
+}
 
-	for _, record := range history.Commits {
-		if err := core.ValidateCheckpoint(parent, record.Operation, record.State, v.config.Key); err != nil {
-			completion.Status = StatusInvalid
-			completion.Failure = validationFailure(history.TaskID, record.ObjectID, err)
-			return completion, nil
-		}
-		encoded, err := core.EncodeDocument(record.State)
+func (f *historyFold) commit(taskID string, record gitstore.HistoryCommit) error {
+	if !f.open {
+		return core.Errorf(core.CategoryCorruptData, "task history read delivered a commit outside a task")
+	}
+	// The first semantic failure is the reported one. Later commits of the same
+	// task are still delivered, because the batch stream is shared, but they
+	// must not move the recorded boundary past the corruption.
+	if f.failed {
+		return nil
+	}
+	if err := core.ValidateCheckpoint(f.parent, record.Operation, record.State, f.validator.config.Key); err != nil {
+		f.completion.Status = StatusInvalid
+		f.completion.Failure = validationFailure(taskID, record.ObjectID, err)
+		f.failed = true
+		return nil
+	}
+	state := record.State
+	f.parent = &state
+	f.lastValidState = &state
+	f.completion.LastValidCommit = record.ObjectID
+	f.completion.LastValidGeneration = state.History.Generation
+	f.completion.ValidatedCommitCount++
+	f.completion.ValidatedCommitIDs = append(f.completion.ValidatedCommitIDs, record.ObjectID)
+	return nil
+}
+
+func (f *historyFold) end(history gitstore.TaskHistoryResult) error {
+	if !f.open {
+		return core.Errorf(core.CategoryCorruptData, "task history read ended a task it never began")
+	}
+	if f.lastValidState != nil {
+		encoded, err := core.EncodeDocument(*f.lastValidState)
 		if err != nil {
-			return Completion{}, err
+			return err
 		}
-		state := record.State
-		parent = &state
-		completion.LastValidCommit = record.ObjectID
-		completion.LastValidGeneration = record.State.History.Generation
-		completion.LastValidState = encoded
-		completion.ValidatedCommitCount++
-		completion.ValidatedCommitIDs = append(completion.ValidatedCommitIDs, record.ObjectID)
+		f.completion.LastValidState = encoded
 	}
-	if history.Failure != nil {
-		completion.Status = StatusInvalid
-		completion.Failure = validationFailure(history.TaskID, history.Failure.Commit, history.Failure.Err)
+	if !f.failed && history.Failure != nil {
+		f.completion.Status = StatusInvalid
+		f.completion.Failure = validationFailure(history.TaskID, history.Failure.Commit, history.Failure.Err)
 	}
-	return completion, nil
+	f.result.CommitsChecked += history.CheckedCommits
+	if err := f.validator.cache.Record(f.ctx, f.completion); err != nil {
+		return err
+	}
+	f.completed++
+	f.open = false
+	f.completion = Completion{}
+	f.parent = nil
+	f.lastValidState = nil
+	if f.validator.afterRecord != nil {
+		f.validator.afterRecord()
+	}
+	return nil
 }
 
 func cachedBoundary(cached CachedTask) (*core.StateDocument, bool) {
@@ -234,19 +307,6 @@ func validationFailure(taskID, commit string, err error) *Failure {
 		message = err.Error()
 	}
 	return &Failure{TaskID: taskID, Commit: commit, Category: string(category), Message: message}
-}
-
-func checkHistoryResults(requests []gitstore.TaskHistoryRequest, histories []gitstore.TaskHistoryResult) error {
-	if len(histories) != len(requests) {
-		return core.Errorf(core.CategoryCorruptData, "task history read returned %d results for %d requests", len(histories), len(requests))
-	}
-	for index, request := range requests {
-		result := histories[index]
-		if result.TaskID != request.Head.TaskID || result.Head != request.Head.ObjectID {
-			return core.Errorf(core.CategoryCorruptData, "task history read result %d does not match requested task head", index)
-		}
-	}
-	return nil
 }
 
 func (v *Validator) emptyResult(full bool) Result {

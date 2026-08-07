@@ -19,10 +19,18 @@ import (
 )
 
 const (
-	ValidatorVersion           = 1
-	schemaVersion              = "1"
+	ValidatorVersion = 1
+	// schemaVersion 2 adds validatedCommitsByTaskIndex. The cache is
+	// disposable, so a bump simply rebuilds it.
+	schemaVersion              = "2"
 	cacheFilename              = "validation.sqlite"
 	initializationLockFilename = cacheFilename + ".lock"
+
+	// validatedCommitsByTaskIndex serves Record's per-task DELETE. The primary
+	// key leads with validator_version, whose only usable prefix matches every
+	// row, so without this index each full-run task scans the whole table and a
+	// full run costs O(tasks^2 x depth) row visits.
+	validatedCommitsByTaskIndex = "validated_commits_by_task"
 )
 
 type Status string
@@ -95,6 +103,7 @@ CREATE TABLE validated_commits (
   history_generation TEXT NOT NULL,
   PRIMARY KEY (validator_version, commit_id)
 );
+CREATE INDEX ` + validatedCommitsByTaskIndex + ` ON validated_commits (validator_version, task_id);
 `
 
 const taskColumns = `
@@ -325,16 +334,25 @@ func (c *Cache) Record(ctx context.Context, completion Completion) error {
 			return cacheError("replace full validation commit set", err)
 		}
 	}
-	for _, commitID := range completion.ValidatedCommitIDs {
-		if strings.TrimSpace(commitID) == "" {
-			return core.Errorf(core.CategoryValidation, "validated commit ID must not be blank")
-		}
-		if _, err := tx.ExecContext(ctx, `
+	// One prepared insert serves the whole task. A deep history otherwise pays
+	// SQLite's parse and plan cost once per commit for an identical statement.
+	if len(completion.ValidatedCommitIDs) > 0 {
+		insert, err := tx.PrepareContext(ctx, `
 			INSERT INTO validated_commits (
 				validator_version, commit_id, task_id, history_generation
 			) VALUES (?, ?, ?, ?)
-		`, ValidatorVersion, commitID, completion.TaskID, completion.LastValidGeneration); err != nil {
-			return cacheError("record validated commit", err)
+		`)
+		if err != nil {
+			return cacheError("prepare validated commit insert", err)
+		}
+		defer insert.Close()
+		for _, commitID := range completion.ValidatedCommitIDs {
+			if strings.TrimSpace(commitID) == "" {
+				return core.Errorf(core.CategoryValidation, "validated commit ID must not be blank")
+			}
+			if _, err := insert.ExecContext(ctx, ValidatorVersion, commitID, completion.TaskID, completion.LastValidGeneration); err != nil {
+				return cacheError("record validated commit", err)
+			}
 		}
 	}
 
@@ -513,6 +531,13 @@ func openDatabase(path string) (*sql.DB, error) {
 	query := dsn.Query()
 	query.Add("_pragma", "busy_timeout(5000)")
 	query.Add("_pragma", "foreign_keys(1)")
+	// A full validation commits one transaction per task, which under the
+	// default rollback journal and synchronous FULL costs about two fsyncs per
+	// task. This cache is disposable and is rebuilt from Git whenever it is
+	// unusable, so durability across a host crash buys nothing that a rebuild
+	// does not already provide.
+	query.Add("_pragma", "journal_mode(WAL)")
+	query.Add("_pragma", "synchronous(NORMAL)")
 	query.Set("_txlock", "immediate")
 	dsn.RawQuery = query.Encode()
 	db, err := sql.Open("sqlite", dsn.String())
@@ -675,6 +700,14 @@ func databaseUsable(ctx context.Context, db *sql.DB, projectID string) bool {
 		if err := rows.Close(); err != nil {
 			return false
 		}
+	}
+	// The per-task index is what keeps a full run linear in task count, so a
+	// file that lost it is rebuilt rather than used slowly.
+	var indexName string
+	if err := db.QueryRowContext(ctx, `
+		SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?
+	`, validatedCommitsByTaskIndex).Scan(&indexName); err != nil || indexName != validatedCommitsByTaskIndex {
+		return false
 	}
 	return true
 }

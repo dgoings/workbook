@@ -119,6 +119,9 @@ func runScalingBenchmark(ctx context.Context, options options) (perf.ScalingRepo
 	if err != nil {
 		return perf.ScalingReport{}, err
 	}
+	if err := requireMeasuredCommit(options.phase, environment); err != nil {
+		return perf.ScalingReport{}, err
+	}
 	fixtureRoot, err := os.MkdirTemp("", "workbook-scaling-")
 	if err != nil {
 		return perf.ScalingReport{}, fmt.Errorf("create temporary scaling fixture root: %w", err)

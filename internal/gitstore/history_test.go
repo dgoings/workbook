@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -400,6 +401,143 @@ func TestReadTaskHistoriesRejectsInvalidRequestsBeforeTransport(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestReadTaskHistoriesStreamDeliversEachTaskContiguouslyOldestFirst(t *testing.T) {
+	// Mutation caught: buffering every task before delivering any of them, or
+	// repeating the delivered commits in the end record, both of which restore
+	// the whole-corpus residency streaming exists to remove.
+	repository, config := writeRepository(t)
+	first := writeHistoryForTask(t, repository, config, 2600, 3)
+	second := writeHistoryForTask(t, repository, config, 2700, 2)
+
+	var events []string
+	open := ""
+	err := repository.ReadTaskHistoriesStream(context.Background(), config, []TaskHistoryRequest{
+		{Head: TaskHead{TaskID: second[1].Operation.TaskID, ObjectID: second[1].Head}},
+		{Head: TaskHead{TaskID: first[2].Operation.TaskID, ObjectID: first[2].Head}},
+	}, TaskHistoryStream{
+		Begin: func(start TaskHistoryStart) error {
+			if open != "" {
+				t.Fatalf("Begin(%s) ran while %s was still open", start.TaskID, open)
+			}
+			open = start.TaskID
+			events = append(events, "begin "+start.TaskID)
+			return nil
+		},
+		Commit: func(taskID string, commit HistoryCommit) error {
+			if taskID != open {
+				t.Fatalf("commit for %s arrived while %s was open", taskID, open)
+			}
+			events = append(events, "commit "+commit.ObjectID)
+			return nil
+		},
+		End: func(result TaskHistoryResult) error {
+			if result.TaskID != open {
+				t.Fatalf("End(%s) ran while %s was open", result.TaskID, open)
+			}
+			if len(result.Commits) != 0 {
+				t.Fatalf("End(%s) repeated %d already delivered commits", result.TaskID, len(result.Commits))
+			}
+			events = append(events, fmt.Sprintf("end %s %d", result.TaskID, result.CheckedCommits))
+			open = ""
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("ReadTaskHistoriesStream() error = %v", err)
+	}
+	want := []string{
+		"begin " + second[1].Operation.TaskID,
+		"commit " + second[0].Head,
+		"commit " + second[1].Head,
+		fmt.Sprintf("end %s 2", second[1].Operation.TaskID),
+		"begin " + first[2].Operation.TaskID,
+		"commit " + first[0].Head,
+		"commit " + first[1].Head,
+		"commit " + first[2].Head,
+		fmt.Sprintf("end %s 3", first[2].Operation.TaskID),
+	}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("stream events = %#v, want %#v", events, want)
+	}
+}
+
+func TestReadTaskHistoriesStreamReturnsHandlerErrorsUnchangedAndReleasesItsBatch(t *testing.T) {
+	// Mutation caught: swallowing or rewrapping a handler's error loses the
+	// caller's category, and abandoning the batch process leaks a running Git
+	// child that later reads inherit.
+	repository, config := writeRepository(t)
+	first := writeHistoryForTask(t, repository, config, 2800, 4)
+	second := writeHistoryForTask(t, repository, config, 2900, 4)
+	requests := []TaskHistoryRequest{
+		{Head: TaskHead{TaskID: first[3].Operation.TaskID, ObjectID: first[3].Head}},
+		{Head: TaskHead{TaskID: second[3].Operation.TaskID, ObjectID: second[3].Head}},
+	}
+
+	stop := core.Errorf(core.CategoryStaleWrite, "caller stopped the audit")
+	delivered := 0
+	err := repository.ReadTaskHistoriesStream(context.Background(), config, requests, TaskHistoryStream{
+		Begin: func(TaskHistoryStart) error { return nil },
+		Commit: func(string, HistoryCommit) error {
+			delivered++
+			if delivered == 2 {
+				return stop
+			}
+			return nil
+		},
+		End: func(result TaskHistoryResult) error {
+			t.Fatalf("End(%s) ran after the handler stopped the read", result.TaskID)
+			return nil
+		},
+	})
+	if err != stop {
+		t.Fatalf("ReadTaskHistoriesStream() error = %v, want the handler's own error", err)
+	}
+	if delivered != 2 {
+		t.Fatalf("delivered %d commits, want the read to stop at the second", delivered)
+	}
+	if _, err := repository.ReadTaskHistories(context.Background(), config, requests); err != nil {
+		t.Fatalf("ReadTaskHistories() after an aborted stream error = %v", err)
+	}
+}
+
+func TestWalkCommitChainSizesItsCycleGuardToTheChainNotTheGraph(t *testing.T) {
+	// Mutation caught: pre-sizing the visited set to the shared parent graph,
+	// which zeroes one slot per corpus commit for every task walked and turns a
+	// linear read into quadratic allocation.
+	const graphSize = 20000
+	ids := make([]string, graphSize)
+	graph := make(map[string][]string, graphSize)
+	for index := range ids {
+		ids[index] = fmt.Sprintf("%040x", index)
+	}
+	graph[ids[0]] = nil
+	graph[ids[1]] = []string{ids[0]}
+	graph[ids[2]] = []string{ids[1]}
+	for index := 3; index < graphSize; index++ {
+		graph[ids[index]] = nil
+	}
+	request := TaskHistoryRequest{Head: TaskHead{TaskID: "WB-" + historyTestULID(1), ObjectID: ids[2]}}
+
+	const walks = 100
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	for range walks {
+		chain, _, err := walkCommitChain(graph, request, 0)
+		if err != nil || len(chain) != 3 {
+			t.Fatalf("walkCommitChain() chain = %d, error = %v; want a three-commit chain", len(chain), err)
+		}
+	}
+	runtime.ReadMemStats(&after)
+
+	perWalk := (after.TotalAlloc - before.TotalAlloc) / walks
+	// A guard pre-sized to a 20,000-entry graph costs hundreds of kilobytes per
+	// walk; a three-commit chain needs well under a kilobyte of map.
+	if perWalk > 8*1024 {
+		t.Fatalf("walkCommitChain allocated %d bytes per walk of a three-commit chain over a %d-entry graph", perWalk, graphSize)
 	}
 }
 

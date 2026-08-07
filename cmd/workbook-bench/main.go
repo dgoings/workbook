@@ -339,13 +339,31 @@ func storageOperationDepths(value, phase string) ([]int, error) {
 	return depths, nil
 }
 
+// unknownWorkbookCommit is what the product binary reports when it was built
+// without an embedded source commit.
+const unknownWorkbookCommit = "unknown"
+
+// requireMeasuredCommit rejects a run whose report could not name the source it
+// measured. Acceptance and scaling are the published evidence phases, and a
+// report nobody can trace back to a commit cannot be compared with a later one,
+// so the gate belongs to the phase rather than to operator discipline.
+func requireMeasuredCommit(phase string, environment perf.Environment) error {
+	if phase != "acceptance" && phase != scalingPhase {
+		return nil
+	}
+	if environment.WorkbookCommit == "" || environment.WorkbookCommit == unknownWorkbookCommit {
+		return fmt.Errorf("%s requires a measured Workbook commit", phase)
+	}
+	return nil
+}
+
 func runBenchmark(ctx context.Context, options options) (perf.Report, error) {
 	environment, err := benchmarkEnvironment(ctx, options.workbookBinary, options.timeout)
 	if err != nil {
 		return perf.Report{}, err
 	}
-	if options.phase == "acceptance" && environment.WorkbookCommit == "unknown" {
-		return perf.Report{}, fmt.Errorf("acceptance requires a measured Workbook commit")
+	if err := requireMeasuredCommit(options.phase, environment); err != nil {
+		return perf.Report{}, err
 	}
 	if options.storage {
 		return runStorageResourceBenchmark(ctx, options, environment)
