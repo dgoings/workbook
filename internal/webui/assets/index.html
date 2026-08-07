@@ -43,9 +43,8 @@
     .count { color: #2457d6; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .8rem; }
     .ref-label { display: block; overflow: hidden; margin-top: .45rem; color: #526b9b; font-size: .65rem; text-overflow: ellipsis; white-space: nowrap; }
     .new-task-link { display: inline-block; margin-top: .45rem; color: #2457d6; font-size: .73rem; font-weight: 750; text-decoration-thickness: 1px; text-underline-offset: .18em; }
-    /* overflow-anchor: none guards against browser scroll anchoring walking a scrolled column downward when a render rebuilds its cards (fresh nodes every poll). Keep it even if the renderer reuses nodes. */
+    /* overflow-anchor: none guards against browser scroll anchoring walking a scrolled column downward when a render rebuilds its cards. The renderer reconciles by task ID and reuses nodes, so nothing should churn here any more; keep the declaration anyway, so a future code path that rebuilds a column cannot silently reintroduce the drift. */
     .task-list { display: grid; align-content: start; gap: .55rem; min-height: 0; overflow-anchor: none; overflow-y: auto; padding: .55rem; }
-    .task-list.is-refreshing { opacity: .58; }
     .task-card { border: 1px solid #b9c6d8; border-radius: 4px; background: #fff; padding: .7rem; box-shadow: 0 1px 0 rgba(23,32,51,.05); cursor: grab; }
     .task-card:active { cursor: grabbing; }
     .task-card:focus-visible { outline: 3px solid #2457d6; outline-offset: 2px; }
@@ -266,6 +265,9 @@
       let pendingRelationshipRecoveryFocus = null;
 
       function text(element, value) { element.textContent = value || ""; return element; }
+      // The visible ID inside a copy control, so a card that survives a render
+      // can have a shortened prefix rewritten without rebuilding the control.
+      const copyIDText = new WeakMap();
       function taskIDCopyControl(taskID, visibleID) {
         const group = document.createElement("span");
         group.className = "task-id-copy-group";
@@ -284,6 +286,7 @@
         status.setAttribute("aria-live", "polite");
         status.setAttribute("aria-atomic", "true");
         group.append(control, status);
+        copyIDText.set(group, id);
         const activeFeedback = copyFeedback.get(taskID);
         if (activeFeedback) {
           activeFeedback.statuses.add(status);
@@ -335,14 +338,59 @@
           );
         }
       }
+      // A card is built once and then updated in place for the rest of its life.
+      // Node identity is the contract the board rests on: a card node that
+      // survives a poll keeps its keyboard focus, its drag state, and the
+      // browser's scroll anchor, and one that is destroyed and rebuilt loses all
+      // three. cardParts holds the handles an update needs plus a signature of
+      // everything the node was last drawn from, so an unchanged card costs one
+      // string comparison.
+      const cardParts = new WeakMap();
+      function cardSignature(task, view) {
+        return JSON.stringify([
+          task.title || "",
+          task.description || "",
+          task.priority || "",
+          task.status || "",
+          task.labels || [],
+          view.idPrefix || "",
+          view.dependenciesTotal || 0,
+          view.dependenciesComplete || 0,
+          Boolean(view.waitingOnDependencies)
+        ]);
+      }
       function card(task, view) {
-        const article = document.createElement("article"); article.className = "task-card"; article.tabIndex = 0; article.dataset.taskId = task.id; article.dataset.priority = task.priority; article.dataset.idPrefix = view.idPrefix; article.draggable = true; article.setAttribute("aria-label", "Move task " + task.title + " from " + task.status);
+        const article = document.createElement("article"); article.className = "task-card"; article.tabIndex = 0; article.dataset.taskId = task.id; article.draggable = true;
         const meta = document.createElement("div"); meta.className = "task-card__meta";
-        const priority = document.createElement("span"); priority.className = "priority priority--" + task.priority; text(priority, task.priority);
-        meta.append(taskIDCopyControl(task.id, view.idPrefix), priority); article.append(meta);
+        const priority = document.createElement("span");
+        const copyGroup = taskIDCopyControl(task.id, view.idPrefix);
+        meta.append(copyGroup, priority); article.append(meta);
         const title = document.createElement("h3");
-        const link = document.createElement("a"); link.href = "/tasks/" + encodeURIComponent(task.id); text(link, task.title);
+        const link = document.createElement("a"); link.href = "/tasks/" + encodeURIComponent(task.id);
         title.append(link); article.append(title);
+        cardParts.set(article, { priority, link, idText: copyIDText.get(copyGroup), signature: null });
+        applyCard(article, task, view);
+        return article;
+      }
+      // Everything a card can be redrawn from. The task ID never changes — it is
+      // the reconciliation key — so the copy control and the detail link are
+      // built once and only their visible text is rewritten.
+      function applyCard(article, task, view) {
+        const parts = cardParts.get(article);
+        if (!parts) return article;
+        const signature = cardSignature(task, view);
+        if (parts.signature === signature) return article;
+        parts.signature = signature;
+        article.dataset.priority = task.priority;
+        article.dataset.idPrefix = view.idPrefix;
+        article.setAttribute("aria-label", "Move task " + task.title + " from " + task.status);
+        if (parts.idText) text(parts.idText, view.idPrefix);
+        parts.priority.className = "priority priority--" + task.priority; text(parts.priority, task.priority);
+        text(parts.link, task.title);
+        // The optional sections are rebuilt together rather than patched
+        // individually, so their order stays fixed by construction instead of by
+        // the order in which they happened to appear.
+        [...article.children].slice(2).forEach((child) => child.remove());
         if (task.description) { const description = document.createElement("p"); text(description, task.description); article.append(description); }
         if (task.labels && task.labels.length) { const labels = document.createElement("div"); labels.className = "labels"; task.labels.forEach((label) => { const item = document.createElement("span"); item.className = "label"; text(item, label); labels.append(item); }); article.append(labels); }
         if (view.dependenciesTotal > 0) {
@@ -1924,19 +1972,87 @@
       function clearPlacement() {
         dropMarker.remove();
       }
+      function cardNodes(list) {
+        return [...list.children].filter((child) => child.dataset && child.dataset.taskId);
+      }
+      function findCardNode(taskID) {
+        for (const list of lists.values()) {
+          const node = cardNodes(list).find((candidate) => candidate.dataset.taskId === taskID);
+          if (node) return node;
+        }
+        return null;
+      }
+      // Reconcile one column against the entries it should hold, touching only
+      // what differs: new IDs are built, survivors are updated in place, and a
+      // survivor is moved only when its position is actually wrong. Survivors
+      // are looked up across the whole board rather than within this column, so
+      // a task that changed status moves its own node between columns instead of
+      // being destroyed in one and rebuilt in the other.
+      function reconcile(list, entries, survivors, claimed) {
+        const placed = cardNodes(list);
+        entries.forEach((entry, index) => {
+          const survivor = survivors.get(entry.task.id);
+          const node = survivor ? applyCard(survivor, entry.task, entry.view) : card(entry.task, entry.view);
+          claimed.add(entry.task.id);
+          if (placed[index] === node) return;
+          const at = placed.indexOf(node);
+          if (at >= 0) placed.splice(at, 1);
+          list.insertBefore(node, placed[index] || null);
+          placed.splice(index, 0, node);
+        });
+      }
+      function focusedCardID() {
+        const active = document.activeElement;
+        if (!active || typeof active.closest !== "function") return null;
+        const focused = active.closest(".task-card");
+        return focused ? focused.dataset.taskId : null;
+      }
+      // Reconciliation keeps a focused card's node, so this is a backstop rather
+      // than the mechanism. The guarantee should not depend on the diff being
+      // perfect: a card that did have to be rebuilt takes its focus with it.
+      function restoreCardFocus(taskID) {
+        if (!taskID || focusedCardID() === taskID) return;
+        const node = findCardNode(taskID);
+        if (node && typeof node.focus === "function") node.focus();
+      }
       function render(tasks, presentation) {
         const grouped = new Map([...lists.keys()].map((status) => [status, []]));
         tasks.forEach((task) => {
           const items = grouped.get(task.status);
           if (items) items.push(task);
         });
-        grouped.forEach((items, status) => {
-          const list = lists.get(status); list.classList.add("is-refreshing");
-          const fragment = document.createDocumentFragment(); items.forEach((task) => fragment.append(card(task, presentation.get(task.id))));
-          list.replaceChildren(fragment);
-          requestAnimationFrame(() => requestAnimationFrame(() => list.classList.remove("is-refreshing")));
-          text(counts.get(status), String(items.length));
+        const focusedID = focusedCardID();
+        // Every card node on the board, collected before a single column is
+        // touched, so a survivor can be claimed by whichever column now wants it.
+        // A node that predates this renderer — the server's initial HTML — has no
+        // builder record and cannot be updated in place, so it is dropped here
+        // and rebuilt once.
+        const survivors = new Map();
+        lists.forEach((list) => {
+          cardNodes(list).forEach((node) => {
+            const taskID = node.dataset.taskId;
+            if (survivors.has(taskID) || !cardParts.has(node)) { node.remove(); return; }
+            survivors.set(taskID, node);
+          });
         });
+        const claimed = new Set();
+        grouped.forEach((items, status) => {
+          const list = lists.get(status);
+          const entries = items.map((task) => ({ task, view: presentation.get(task.id) }));
+          reconcile(list, entries, survivors, claimed);
+          const count = counts.get(status);
+          const total = String(items.length);
+          if (count.textContent !== total) text(count, total);
+        });
+        survivors.forEach((node, taskID) => {
+          if (claimed.has(taskID)) return;
+          // The node the browser is dragging stays attached even when the model
+          // stops naming it, because detaching it mid-drag is exactly the defect
+          // this renderer exists to remove. The render after dragend collects it.
+          if (activeDrag && activeDrag.taskId === taskID) return;
+          node.remove();
+        });
+        restoreCardFocus(focusedID);
       }
       async function currentRefreshResult(operation) {
         let owner = operation;
