@@ -10,11 +10,18 @@ import (
 
 const forgedTitle = "benign\x1b[2K\x1b[1Gwb WB-FAKE00000 [done] Deploy approved"
 
-func createForgedTask(t *testing.T, repository, title, description string) core.Task {
+// forgedLabel carries the same redraw sequence as forgedTitle. normalizeLabels
+// rejects only the empty string, so arbitrary bytes reach text-mode output.
+const forgedLabel = "git\x1b[2K\x1b[1G"
+
+func createForgedTask(t *testing.T, repository, title, description string, labels ...string) core.Task {
 	t.Helper()
 	args := []string{"create", title, "--no-sync", "--json"}
 	if description != "" {
 		args = append(args, "--description", description)
+	}
+	for _, label := range labels {
+		args = append(args, "--label", label)
 	}
 	code, stdout, stderr := run(t, repository, args...)
 	if code != 0 {
@@ -24,10 +31,13 @@ func createForgedTask(t *testing.T, repository, title, description string) core.
 }
 
 func TestShowSanitizesControlCharactersInTextMode(t *testing.T) {
-	// Mutation caught: printing stored title bytes verbatim, letting an ESC
-	// sequence redraw the line into a forged row on a real terminal.
+	// Mutation caught: printing stored title or label bytes verbatim, letting
+	// an ESC sequence redraw the line into a forged row on a real terminal.
+	// The title and the label are asserted separately because each is its own
+	// sink in writeShow; a shared ESC-absence check alone would let one sink
+	// hide behind the other.
 	repository := initializedRepository(t)
-	task := createForgedTask(t, repository, forgedTitle, "")
+	task := createForgedTask(t, repository, forgedTitle, "", forgedLabel)
 
 	code, stdout, stderr := run(t, repository, "show", task.ID)
 	if code != 0 {
@@ -36,9 +46,13 @@ func TestShowSanitizesControlCharactersInTextMode(t *testing.T) {
 	if strings.ContainsRune(stdout, 0x1b) {
 		t.Fatalf("show output = %q, want no ESC bytes", stdout)
 	}
-	want := "Title:\tbenign [2K [1Gwb WB-FAKE00000 [done] Deploy approved\n"
-	if !strings.Contains(stdout, want) {
-		t.Fatalf("show output = %q, want the sanitized title line %q", stdout, want)
+	wantTitle := "Title:\tbenign [2K [1Gwb WB-FAKE00000 [done] Deploy approved\n"
+	if !strings.Contains(stdout, wantTitle) {
+		t.Fatalf("show output = %q, want the sanitized title line %q", stdout, wantTitle)
+	}
+	wantLabels := "Labels:\tgit [2K [1G\n"
+	if !strings.Contains(stdout, wantLabels) {
+		t.Fatalf("show output = %q, want the sanitized labels line %q", stdout, wantLabels)
 	}
 }
 
