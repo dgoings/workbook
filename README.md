@@ -768,7 +768,12 @@ returns a versioned JSON task-mutation document. The older status-only endpoint
 remains available for compatible clients.
 
 The executable embeds its HTML, CSS, and JavaScript, and the page polls
-`/api/tasks` every second. The six canonical columns share the available width
+`/api/tasks` every second. Each poll reconciles the board by task ID instead of
+rebuilding it: a card whose data did not change keeps its element, a changed one
+is updated in place, and only added, removed, and reordered cards are touched.
+Keyboard focus therefore stays on the card that had it, a drag that outlasts a
+poll stays intact, and a scrolled column stays where the reader left it. The six
+canonical columns share the available width
 on large screens, scroll horizontally on narrow screens, and keep dense task
 lists vertically scrollable within the viewport. Web cards show the actionable
 task-ID prefix, priority, title, up to six lines of an optional description, and
