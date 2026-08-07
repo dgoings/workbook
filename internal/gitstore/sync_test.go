@@ -87,6 +87,39 @@ func TestSyncToleratesUnrecognizedRefsUnderOriginsTaskNamespace(t *testing.T) {
 	assertIgnoredRefs(t, pushed, poisonRefs)
 }
 
+// A ref whose name is a valid task ID but whose object is not Workbook history
+// is the same denial one validation step later. Fetch already reports it per
+// task; publication must still run for every task that did validate.
+func TestSyncPublishesDespiteAWellNamedForeignTipOnOrigin(t *testing.T) {
+	first, second, config := syncRepositories(t)
+	shared := createSyncTask(t, first, config, "Shared task")
+	publishTaskRefs(t, first)
+
+	const foreignTask = "WB-01K0M6B8A4FTT8C39MXXYTW7D1"
+	code := syncGit(t, first.Root, "rev-parse", "--verify", "HEAD")
+	syncGit(t, first.Root, "push", "origin", code+":"+taskRefPrefix+foreignTask)
+
+	local := createSyncTask(t, second, config, "Local task")
+
+	run, err := second.Sync(context.Background(), config)
+	// The bad tip is still reported: it is visible, not silently dropped.
+	if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
+		t.Fatalf("Sync() category = %q, want %q; error = %v", got, want, err)
+	}
+	if got, want := run.Fetch.Status, SyncPhaseCompleted; got != want {
+		t.Fatalf("fetch status = %q, want %q; result = %#v", got, want, run.Fetch)
+	}
+	if got, want := run.Push.Status, SyncPhaseCompleted; got != want {
+		t.Fatalf("push status = %q, want %q; origin's foreign tip must not skip publication", got, want)
+	}
+	assertSyncOutcome(t, run.Fetch, foreignTask, SyncInvalid)
+	assertSyncOutcome(t, run.Fetch, shared.ID, SyncCreated)
+	assertSyncOutcome(t, run.Push, local.ID, SyncPublished)
+	if !remoteRefExists(t, second, taskRefPrefix+local.ID) {
+		t.Fatalf("local task %s was not published to origin", local.ID)
+	}
+}
+
 func assertIgnoredRefs(t *testing.T, result SyncResult, want []string) {
 	t.Helper()
 	got := make(map[string]string, len(result.Ignored))

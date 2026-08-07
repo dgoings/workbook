@@ -57,6 +57,12 @@ type fetchState struct {
 	Canonical map[string]core.Snapshot
 	Tracking  map[string]core.Snapshot
 	Outcomes  map[string]SyncTaskResult
+	// ForeignTipsOnly reports that fetch completed and the error it returned
+	// describes only tips origin controls. Those are not this clone's to
+	// repair, so Sync still publishes: a ref any collaborator can write must
+	// not stop this clone from publishing every other task. A local canonical
+	// ref or a failed replay is this clone's own problem and still stops it.
+	ForeignTipsOnly bool
 }
 
 // Push publishes validated local Workbook task refs to origin without force or
@@ -296,7 +302,7 @@ func (r *Repository) Sync(ctx context.Context, config core.ProjectConfig) (SyncR
 
 	state, fetched, fetchErr := r.fetch(ctx, config)
 	result.Fetch = fetched
-	if fetchErr != nil && core.CategoryOf(fetchErr) != core.CategoryConflict {
+	if fetchErr != nil && core.CategoryOf(fetchErr) != core.CategoryConflict && !state.ForeignTipsOnly {
 		result.Push = skippedSyncPhase("push skipped because fetch failed")
 		return result, fetchErr
 	}
@@ -521,6 +527,12 @@ func (r *Repository) fetch(ctx context.Context, config core.ProjectConfig) (fetc
 		return state, result, core.Errorf(core.CategoryCorruptData, "%d local task ref(s) failed validation", invalidCanonical)
 	}
 	if invalidTracking > 0 {
+		// A well-named ref on origin whose object is not Workbook history is
+		// the same denial as an unrecognized name, one validation step later:
+		// anyone with push access can write it, and no clone can repair it.
+		// Each bad tip is already reported as an invalid task above, so say so
+		// and let publication continue for every task that did validate.
+		state.ForeignTipsOnly = true
 		return state, result, core.Errorf(core.CategoryCorruptData, "%d fetched task ref(s) failed validation", invalidTracking)
 	}
 	if invalidReconciled > 0 {
