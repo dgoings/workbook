@@ -5293,6 +5293,178 @@ setTimeout(async () => {
 	}
 }
 
+// The detail form names the head it rendered and sends only the fields the
+// user changed, so an unrelated concurrent edit is neither silently
+// overwritten nor re-asserted away. A save that changes nothing is not sent
+// at all, because the server refuses an empty update.
+func TestHandlerClientDetailFormSendsOnlyChangedFieldsWithTheObservedHead(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	task := clientPlacementTask("WB-01J00000000000000000000054", "Detail task", core.StatusReady, core.PriorityMedium)
+	task.Head = "head-1"
+	task.Description = "Original."
+	confirmed := task
+	confirmed.Description = "Rewritten for the test."
+	confirmed.Head = "head-2"
+	tasks := []core.Task{task}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+task.ID)
+	script := renderedClientScript(t, response.Body.String())
+	document := mustJSON(t, TasksDocument{
+		Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks),
+	})
+
+	program := clientDOMHarness("/tasks/"+task.ID, string(document)) + script + `
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const boardFetch = globalThis.fetch;
+  const bodies = [];
+  globalThis.fetch = async (url, options = {}) => {
+    if ((options.method || "GET") !== "GET") {
+      fetchCalls.push({ url, options });
+      bodies.push({ url, body: JSON.parse(options.body) });
+      return { ok: true, json: async () => ({
+        format: "workbook.task-mutation", version: 1, task: ` + string(mustJSON(t, confirmed)) + `
+      }) };
+    }
+    return boardFetch(url, options);
+  };
+
+  const description = findElement(main, (element) => element.id === "task-description");
+  if (!description) throw new Error("the detail form did not render");
+  description.value = "Rewritten for the test.";
+  const form = findElement(main, (element) => element.tagName === "FORM");
+  await form.eventListeners.submit({ preventDefault() {} });
+  if (bodies.length !== 1) {
+    throw new Error("a one-field save sent " + bodies.length + " mutations");
+  }
+  if (bodies[0].url !== "/api/tasks/" + encodeURIComponent(` + strconv.Quote(task.ID) + `)) {
+    throw new Error("the save went to " + bodies[0].url);
+  }
+  if (JSON.stringify(bodies[0].body) !== '{"description":"Rewritten for the test.","expectedHead":"head-1"}') {
+    throw new Error("the save did not send only the changed field with the observed head: " + JSON.stringify(bodies[0].body));
+  }
+  if (historyPaths[historyPaths.length - 1] !== "/") {
+    throw new Error("a successful save did not return to the board");
+  }
+
+  const link = new TestElement("a");
+  link.href = "/tasks/" + encodeURIComponent(` + strconv.Quote(task.ID) + `);
+  await documentEventListeners.click({
+    target: link, button: 0, defaultPrevented: false,
+    metaKey: false, ctrlKey: false, shiftKey: false, altKey: false,
+    preventDefault() {}
+  });
+  const untouched = findElement(main, (element) => element.tagName === "FORM");
+  await untouched.eventListeners.submit({ preventDefault() {} });
+  if (bodies.length !== 1) {
+    throw new Error("a no-change save reached the server");
+  }
+  if (historyPaths[historyPaths.length - 1] !== "/") {
+    throw new Error("a no-change save did not return to the board");
+  }
+}, 0);
+`
+	if output, err := exec.Command(node, "-e", program).CombinedOutput(); err != nil {
+		t.Fatalf("execute changed-field save behavior: %v\n%s", err, output)
+	}
+}
+
+// A save whose head is stale is refused rather than clobbering. The refusal
+// keeps the user's edits, re-bases the form's head from the forced refresh,
+// and a deliberate re-save applies only the changed fields to the latest
+// version — the teammate's concurrent edit to an untouched field survives.
+func TestHandlerClientDetailFormRefusesAStaleSaveAndRetriesAgainstTheRefreshedHead(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	task := clientPlacementTask("WB-01J00000000000000000000055", "Detail task", core.StatusReady, core.PriorityMedium)
+	task.Head = "head-1"
+	task.Description = "Original."
+	elsewhere := task
+	elsewhere.Title = "Renamed elsewhere"
+	elsewhere.Head = "head-2"
+	confirmed := elsewhere
+	confirmed.Description = "Rewritten while stale."
+	confirmed.Head = "head-3"
+	tasks := []core.Task{task}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+task.ID)
+	script := renderedClientScript(t, response.Body.String())
+	document := mustJSON(t, TasksDocument{
+		Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks),
+	})
+	truth := mustJSON(t, TasksDocument{
+		Format: "workbook.tasks", Version: 1, Tasks: []core.Task{elsewhere}, Presentation: presentationForTasks([]core.Task{elsewhere}),
+	})
+
+	program := clientDOMHarness("/tasks/"+task.ID, string(document)) + script + `
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const boardFetch = globalThis.fetch;
+  const bodies = [];
+  globalThis.fetch = async (url, options = {}) => {
+    if ((options.method || "GET") !== "GET") {
+      fetchCalls.push({ url, options });
+      bodies.push(JSON.parse(options.body));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      if (bodies.length === 1) {
+        taskResponse = ` + string(truth) + `;
+        return { ok: false, json: async () => ({
+          format: "workbook.error", version: 1,
+          error: { category: "stale-write", message: "task has changed since head-1; reload and try again" }
+        }) };
+      }
+      return { ok: true, json: async () => ({
+        format: "workbook.task-mutation", version: 1, task: ` + string(mustJSON(t, confirmed)) + `
+      }) };
+    }
+    return boardFetch(url, options);
+  };
+
+  const description = findElement(main, (element) => element.id === "task-description");
+  if (!description) throw new Error("the detail form did not render");
+  description.value = "Rewritten while stale.";
+  const form = findElement(main, (element) => element.tagName === "FORM");
+  await form.eventListeners.submit({ preventDefault() {} });
+  if (JSON.stringify(bodies[0]) !== '{"description":"Rewritten while stale.","expectedHead":"head-1"}') {
+    throw new Error("the stale save did not carry the rendered head: " + JSON.stringify(bodies[0]));
+  }
+  if (historyPaths.length !== 0) {
+    throw new Error("a refused save navigated away");
+  }
+  if (description.value !== "Rewritten while stale.") {
+    throw new Error("the refusal discarded the user's edits");
+  }
+  const result = findElement(main, (element) => Object.hasOwn(element.dataset, "saveStatus"));
+  if (!result || !result.textContent.includes("changed elsewhere")) {
+    throw new Error("the refusal was not reported in the form: " + JSON.stringify(result && result.textContent));
+  }
+  const save = findElement(main, (element) => element.tagName === "BUTTON" && element.textContent === "Save");
+  if (save.disabled) throw new Error("the refusal left Save disabled");
+
+  await form.eventListeners.submit({ preventDefault() {} });
+  if (bodies.length !== 2) {
+    throw new Error("the retry did not reach the server; sent " + bodies.length + " mutations");
+  }
+  if (JSON.stringify(bodies[1]) !== '{"description":"Rewritten while stale.","expectedHead":"head-2"}') {
+    throw new Error("the retry did not re-base on the refreshed head or re-asserted untouched fields: " + JSON.stringify(bodies[1]));
+  }
+  if (historyPaths[historyPaths.length - 1] !== "/") {
+    throw new Error("the accepted retry did not return to the board");
+  }
+}, 0);
+`
+	if output, err := exec.Command(node, "-e", program).CombinedOutput(); err != nil {
+		t.Fatalf("execute stale save refusal behavior: %v\n%s", err, output)
+	}
+}
+
 func TestHandlerReportsAndShiftsThePublicationMode(t *testing.T) {
 	state := SyncState{Mode: SyncModeDeferred, Watcher: true}
 	handler := NewHandlerWithSyncControl(

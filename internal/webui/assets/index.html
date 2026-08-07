@@ -1313,16 +1313,27 @@
         form.append(editor, sidebar, footer);
 
         let taskWasCreated = false;
+        // The tip this form was rendered from. A save names it so a form opened
+        // before someone else's change is refused rather than reverting them,
+        // and a refusal re-bases it so a deliberate retry lands on the version
+        // that exists.
+        let expectedHead = isNew ? "" : task.head || "";
+        const controls = { title, description, status, priority, labels };
         form.addEventListener("submit", async (event) => {
           event.preventDefault();
           if (isNew && taskWasCreated) return;
-          const values = {
-            title: title.value,
-            description: description.value,
-            status: status.value,
-            priority: priority.value,
-            labels: labels.value.split(",").map((label) => label.trim()).filter(Boolean)
-          };
+          const values = isNew ? allTaskValues(controls) : changedTaskValues(task, controls);
+          if (!isNew) {
+            if (Object.keys(values).length === 0) {
+              // The server refuses an update that changes nothing, and it is
+              // right to: there is no operation to record. Saving an untouched
+              // form is not an error though, it is finished, so it leaves the
+              // way an accepted save does.
+              navigate("/");
+              return;
+            }
+            if (expectedHead) values.expectedHead = expectedHead;
+          }
           let createdDurably = false;
           save.disabled = true;
           if (isNew) relationshipController.setBusy(true);
@@ -1395,6 +1406,18 @@
             }
           } catch (error) {
             if (main.firstElementChild !== section) return;
+            if (!isNew && error && error.category === "stale-write") {
+              // The edits stay in the form. Re-rendering it from the refreshed
+              // task would discard the work the refusal just protected, and the
+              // baseline stays where it was so a retry still sends only the
+              // fields this user changed — the concurrent edit that caused the
+              // refusal survives it.
+              const rebased = await refreshedTaskHead(task.id);
+              if (main.firstElementChild !== section) return;
+              if (rebased) expectedHead = rebased;
+              text(result, "That task changed elsewhere. Your edits are kept; save again to apply them to the version the server holds.");
+              return;
+            }
             text(result, error instanceof Error
               ? error.message
               : isNew ? "Task creation failed." : "Task update failed.");
@@ -1425,6 +1448,38 @@
           );
         }
         return section;
+      }
+      function labelValues(control) {
+        return control.value.split(",").map((label) => label.trim()).filter(Boolean);
+      }
+      function allTaskValues(controls) {
+        return {
+          title: controls.title.value,
+          description: controls.description.value,
+          status: controls.status.value,
+          priority: controls.priority.value,
+          labels: labelValues(controls.labels)
+        };
+      }
+      // An update carries the fields this form changed and no others. Sending
+      // all five on every save is last-writer-wins even when the heads agree:
+      // re-asserting the title this form rendered is indistinguishable from
+      // editing it, so a description-only save would revert a teammate's rename
+      // that landed in between.
+      function changedTaskValues(task, controls) {
+        const values = {};
+        if (controls.title.value !== (task.title || "")) values.title = controls.title.value;
+        if (controls.description.value !== (task.description || "")) values.description = controls.description.value;
+        // A status the client does not know renders as an unselected
+        // placeholder. Leaving it alone is not a request to clear the status.
+        if (controls.status.value && controls.status.value !== task.status) values.status = controls.status.value;
+        if (controls.priority.value !== task.priority) values.priority = controls.priority.value;
+        const labels = labelValues(controls.labels);
+        const rendered = task.labels || [];
+        if (labels.length !== rendered.length || labels.some((label, at) => label !== rendered[at])) {
+          values.labels = labels;
+        }
+        return values;
       }
       async function mutateTask(method, path, values) {
         const options = { method };
