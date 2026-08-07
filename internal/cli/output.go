@@ -225,8 +225,11 @@ func writeConflicts(output io.Writer, conflicts []core.Conflict) {
 	}
 }
 
+// singleLine renders untrusted task text for one text-mode line. It shares
+// core.DisplayLine so an ESC sequence cannot redraw the row and a newline
+// cannot forge a structured field line; JSON output stays byte-exact.
 func singleLine(value string) string {
-	return strings.Join(strings.Fields(value), " ")
+	return core.DisplayLine(value)
 }
 
 // writeSyncReport prints one line only when synchronization was attempted.
@@ -284,7 +287,7 @@ func publicErrorMessage(err error) string {
 }
 
 func writeMutation(output io.Writer, task core.Task) {
-	fmt.Fprintf(output, "%s\t%s\t%s\t%s\n", task.ID, task.Status, task.Priority, task.Title)
+	fmt.Fprintf(output, "%s\t%s\t%s\t%s\n", task.ID, task.Status, task.Priority, singleLine(task.Title))
 }
 
 func writeSyncResult(output io.Writer, result gitstore.SyncResult) {
@@ -375,8 +378,8 @@ func writeChangeLog(output io.Writer, log core.ChangeLog) {
 			"%s\t%s\t%s\t%s\n",
 			change.Commit,
 			change.WallTime.Format(time.RFC3339),
-			change.Actor,
-			change.Summary,
+			singleLine(change.Actor),
+			singleLine(change.Summary),
 		)
 		writeFieldChanges(output, change.Fields)
 	}
@@ -446,11 +449,11 @@ func writeHistoryTruncation(output io.Writer, truncation *core.HistoryTruncation
 func writeShow(output io.Writer, task core.Task) {
 	fmt.Fprintf(output, "ID:\t%s\n", task.ID)
 	fmt.Fprintf(output, "Project ID:\t%s\n", task.ProjectID)
-	fmt.Fprintf(output, "Title:\t%s\n", task.Title)
-	fmt.Fprintf(output, "Description:\t%s\n", task.Description)
+	fmt.Fprintf(output, "Title:\t%s\n", singleLine(task.Title))
+	fmt.Fprintf(output, "Description:\t%s\n", singleLine(task.Description))
 	fmt.Fprintf(output, "Status:\t%s\n", task.Status)
 	fmt.Fprintf(output, "Priority:\t%s\n", task.Priority)
-	fmt.Fprintf(output, "Labels:\t%s\n", strings.Join(task.Labels, ","))
+	fmt.Fprintf(output, "Labels:\t%s\n", singleLine(strings.Join(task.Labels, ",")))
 	fmt.Fprintf(output, "Rank:\t%s\n", task.Rank)
 	fmt.Fprintf(output, "Dependencies:\t%s\n", strings.Join(task.Dependencies, ","))
 	fmt.Fprintf(output, "Created At:\t%s\n", task.CreatedAt.Format("2006-01-02T15:04:05.999999999Z07:00"))
