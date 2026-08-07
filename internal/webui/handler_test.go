@@ -5465,6 +5465,118 @@ setTimeout(async () => {
 	}
 }
 
+// A "Depends On" edge is stored on the dependent task, which is the task the
+// form is open on, so editing one from the form's own sidebar moves the head
+// the form proposes. The form has to adopt the head that write returned, or the
+// next Save is refused as a conflict with a change nobody else made. A "Blocks"
+// edge is stored on the other task and must not move it.
+func TestHandlerClientDetailFormAdoptsTheHeadItsOwnDependencyEditMoved(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the embedded client behavior")
+	}
+	current := clientPlacementTask("WB-01J00000000000000000000056", "Detail task", core.StatusReady, core.PriorityMedium)
+	current.Head = "head-1"
+	current.Description = "Original."
+	prerequisite := clientPlacementTask("WB-01J00000000000000000000057", "Prerequisite", core.StatusDone, core.PriorityHigh)
+	prerequisite.Head = "prerequisite-head-1"
+	blocked := clientPlacementTask("WB-01J00000000000000000000058", "Blocked task", core.StatusBacklog, core.PriorityLow)
+	blocked.Head = "blocked-head-1"
+
+	afterDependsAdd := current
+	afterDependsAdd.Dependencies = []string{prerequisite.ID}
+	afterDependsAdd.Head = "head-2"
+	blockedAfterAdd := blocked
+	blockedAfterAdd.Dependencies = []string{current.ID}
+	blockedAfterAdd.Head = "blocked-head-2"
+	afterDependsRemove := afterDependsAdd
+	afterDependsRemove.Dependencies = []string{}
+	afterDependsRemove.Head = "head-3"
+	saved := afterDependsRemove
+	saved.Description = "Rewritten after the dependency edits."
+	saved.Head = "head-4"
+
+	initialTasks := []core.Task{current, prerequisite, blocked}
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
+	script := renderedClientScript(t, response.Body.String())
+	documentJSON := func(tasks []core.Task) string {
+		t.Helper()
+		return string(mustJSON(t, TasksDocument{
+			Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks),
+		}))
+	}
+	emptyDeleted := documentJSON([]core.Task{})
+
+	program := clientDOMHarness("/tasks/"+current.ID, documentJSON(initialTasks)) + script + `
+deletedTaskResponse = ` + emptyDeleted + `;
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const groupFor = (headingText) => {
+    const heading = findElement(main, (element) => element.textContent === headingText);
+    if (!heading) throw new Error("missing " + headingText + " group");
+    return heading.parentElement;
+  };
+  const addCandidate = (group, candidateID) => {
+    const option = findElement(group, (element) => element.attributes.role === "option" && element.dataset.candidateId === candidateID);
+    if (!option || !option.eventListeners.click) throw new Error("candidate option is not selectable: " + candidateID);
+    option.eventListeners.click();
+    const add = findElement(group, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+    if (!add || add.disabled) throw new Error("selected candidate did not enable Add dependency");
+    return add.eventListeners.click();
+  };
+  const bodies = [];
+  let nextMutation = null;
+  const boardFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => {
+    if ((options.method || "GET") !== "GET") {
+      fetchCalls.push({ url, options });
+      if (options.body !== undefined) bodies.push(JSON.parse(options.body));
+      return { ok: true, json: async () => nextMutation };
+    }
+    return boardFetch(url, options);
+  };
+
+  nextMutation = { format: "workbook.task-mutation", version: 1, task: ` + documentJSON([]core.Task{afterDependsAdd}) + `.tasks[0] };
+  taskResponse = ` + documentJSON([]core.Task{afterDependsAdd, prerequisite, blocked}) + `;
+  await addCandidate(groupFor("Depends On"), ` + strconv.Quote(prerequisite.ID) + `);
+
+  nextMutation = { format: "workbook.task-mutation", version: 1, task: ` + documentJSON([]core.Task{blockedAfterAdd}) + `.tasks[0] };
+  taskResponse = ` + documentJSON([]core.Task{afterDependsAdd, prerequisite, blockedAfterAdd}) + `;
+  await addCandidate(groupFor("Blocks"), ` + strconv.Quote(blocked.ID) + `);
+
+  const row = findElement(groupFor("Depends On"), (element) => element.dataset.relationshipId === ` + strconv.Quote(prerequisite.ID) + `);
+  const remove = row && findElement(row, (element) => element.tagName === "BUTTON" && element.textContent === "Remove");
+  if (!remove) throw new Error("the added prerequisite is not removable");
+  nextMutation = { format: "workbook.task-mutation", version: 1, task: ` + documentJSON([]core.Task{afterDependsRemove}) + `.tasks[0] };
+  taskResponse = ` + documentJSON([]core.Task{afterDependsRemove, prerequisite, blockedAfterAdd}) + `;
+  await remove.eventListeners.click();
+
+  const description = findElement(main, (element) => element.id === "task-description");
+  if (!description || description.value !== "Original.") {
+    throw new Error("the relationship edits re-rendered the form: " + JSON.stringify(description && description.value));
+  }
+  description.value = "Rewritten after the dependency edits.";
+  nextMutation = { format: "workbook.task-mutation", version: 1, task: ` + documentJSON([]core.Task{saved}) + `.tasks[0] };
+  const form = findElement(main, (element) => element.tagName === "FORM");
+  await form.eventListeners.submit({ preventDefault() {} });
+  if (bodies.length !== 1) {
+    throw new Error("the save sent " + bodies.length + " bodies");
+  }
+  if (JSON.stringify(bodies[0]) !== '{"description":"Rewritten after the dependency edits.","expectedHead":"head-3"}') {
+    throw new Error("the save did not carry the head this form's own dependency edits moved to: " + JSON.stringify(bodies[0]));
+  }
+  if (historyPaths[historyPaths.length - 1] !== "/") {
+    throw new Error("the save was refused rather than applied");
+  }
+}, 0);
+`
+	if output, err := exec.Command(node, "-e", program).CombinedOutput(); err != nil {
+		t.Fatalf("execute dependency head adoption behavior: %v\n%s", err, output)
+	}
+}
+
 func TestHandlerReportsAndShiftsThePublicationMode(t *testing.T) {
 	state := SyncState{Mode: SyncModeDeferred, Watcher: true}
 	handler := NewHandlerWithSyncControl(

@@ -924,6 +924,10 @@
         region.append(status);
         controller = {
           region, status, groups, taskID, draftState, busy: false, recoveryActions: [],
+          // Replaced by the detail form so an edge written to this task can
+          // hand back the head it moved to. The sidebar is also mounted on the
+          // new-task form, which has no head to move, hence the default.
+          adoptTaskHead() {},
           setBusy(busy) {
             this.busy = busy;
             groups.forEach((group) => group.setBusy(busy));
@@ -1437,6 +1441,11 @@
           ? relationshipDrafts
           : pendingRelationshipDrafts.get(task.id) || null;
         const relationshipController = taskRelationships(isNew ? "" : task.id, failedDrafts);
+        // A "Depends On" edge is stored on the dependent, which is this task, so
+        // adding or removing one from this sidebar moves the very head this form
+        // proposes. Following it keeps the next save from being refused as a
+        // conflict with a change the user made here seconds earlier.
+        relationshipController.adoptTaskHead = (head) => { if (head) expectedHead = head; };
         relationshipMount.append(relationshipController.region);
         activeDependencyController = relationshipController;
         if (!isNew && pendingDetailRelationshipContextTaskID === task.id) {
@@ -1674,6 +1683,16 @@
       function ownsDependencyController(controller) {
         return activeDependencyController === controller;
       }
+      // A dependency edge is recorded on the dependent task. When that is the
+      // task whose form is open, the edge is a write to it and its head has
+      // moved; the form is told so it proposes the tip that now exists rather
+      // than the one it rendered. The mirrored direction writes to the other
+      // task and leaves this one alone, which is why the orientation is checked
+      // rather than assumed.
+      function adoptDependencyHead(controller, dependentID, document) {
+        if (dependentID !== controller.taskID) return;
+        controller.adoptTaskHead(document.task && document.task.head || "");
+      }
       async function retryRelationshipDraft(name, relationship, draftMap, controller, group) {
         if (!ownsDependencyController(controller)) return;
         const dependentID = name === "dependsOn" ? controller.taskID : relationship.id;
@@ -1684,6 +1703,7 @@
         group.setMessage("");
         try {
           const document = await mutateTask("PUT", path);
+          adoptDependencyHead(controller, dependentID, document);
           const refreshed = await currentRefreshResult(refresh());
           if (!ownsDependencyController(controller)) return;
           draftMap.delete(relationship.id);
@@ -1720,6 +1740,7 @@
         group.setMessage("");
         try {
           const document = await mutateTask(method, path);
+          adoptDependencyHead(controller, dependentID, document);
           const messages = [];
           const warnings = Array.isArray(document.warnings) ? document.warnings : [];
           if (warnings.length) {

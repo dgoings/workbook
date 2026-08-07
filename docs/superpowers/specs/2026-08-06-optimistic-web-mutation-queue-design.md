@@ -200,11 +200,21 @@ baseline the form diffs against stays where it was, so a deliberate re-save
 applies the same fields to the version that now exists and the concurrent edit
 that caused the refusal survives it.
 
-One known edge remains: the form sends the head it rendered, and an intent for
-the same task confirming while the form is open moves the server's head without
-moving the form's. The first save is then refused once and succeeds on the
-retry. That is the conflict path working rather than a lost update, and adopting
-confirmed heads into an open form belongs with the render work too.
+**The form follows its own writes.** The sidebar's dependency edges are the
+other thing that moves this task's head, and a "Depends On" edge is recorded on
+the dependent — which is the open task. Adding or removing a prerequisite is
+therefore a write to the task being edited, and a form that kept proposing the
+head it rendered would refuse the user's own next save and blame it on someone
+else. So a dependency mutation hands the confirmed head back to the form when,
+and only when, the edge was written to this task; the mirrored "Blocks"
+direction writes to the other task and leaves this one's head alone.
+
+One known edge remains: the form sends the head it rendered, and a *board*
+intent for the same task confirming while the form is open moves the server's
+head without moving the form's. The first save is then refused once and succeeds
+on the retry. That is the conflict path working rather than a lost update, and
+adopting confirmed heads into an open form belongs with the render work too.
+
 
 ## Auto-sync state in the UI
 
@@ -271,7 +281,9 @@ absent and drives a hand-written fake DOM (`handler_test.go:4173`):
 - the detail form saves only the fields it changed, carrying the head it
   rendered, and sends nothing at all when nothing changed;
 - a refused save keeps its edits, re-bases, and applies only those fields on the
-  retry.
+  retry;
+- a dependency edge written to the open task moves the head the form proposes,
+  and the mirrored direction does not.
 
 Integration coverage in `internal/cli`, following the existing `TestRunServe*`
 pattern of asserting Git state after a real HTTP call:
