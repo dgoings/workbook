@@ -283,7 +283,10 @@ type SyncResult struct {
 //
 // Reconciliation and publication are per task. One task that needs a decision
 // leaves every other task fetched, replayed, and published, matching the
-// per-ref outcomes push already retains.
+// per-ref outcomes push already retains. That extends to a fetch that reports
+// per-task failures: it still ran to completion and advanced every ref it
+// could, so publication follows. Only a fetch that failed before completion
+// skips the push phase, because there is then no validated view to publish.
 func (r *Repository) Sync(ctx context.Context, config core.ProjectConfig) (SyncRunResult, error) {
 	result := SyncRunResult{
 		Remote: "origin",
@@ -293,7 +296,7 @@ func (r *Repository) Sync(ctx context.Context, config core.ProjectConfig) (SyncR
 
 	state, fetched, fetchErr := r.fetch(ctx, config)
 	result.Fetch = fetched
-	if fetchErr != nil && core.CategoryOf(fetchErr) != core.CategoryConflict {
+	if fetchErr != nil && fetched.Status != SyncPhaseCompleted {
 		result.Push = skippedSyncPhase("push skipped because fetch failed")
 		return result, fetchErr
 	}

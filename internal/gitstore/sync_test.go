@@ -246,6 +246,34 @@ func assertIgnoredRefs(t *testing.T, result SyncResult, refs ...string) {
 	}
 }
 
+// A ref whose name is recognized but whose object is malformed is already
+// isolated per task. The sync it belongs to must still publish every canonical
+// tip that validated, for the same reason a stray name must not stop one.
+func TestSyncPublishesValidTasksWhenAnotherTrackingTipIsInvalid(t *testing.T) {
+	first, second, config := syncRepositories(t)
+	valid := createSyncTask(t, first, config, "Valid task")
+	invalid := createSyncTask(t, first, config, "Invalid task")
+	publishTaskRefs(t, first)
+	badTree := syncGit(t, first.Root, "mktree")
+	badCommit := syncGit(t, first.Root, "commit-tree", badTree, "-m", "invalid Workbook task")
+	syncGit(t, first.Root, "push", "--force", "origin", badCommit+":"+taskRefPrefix+invalid.ID)
+
+	local := createSyncTask(t, second, config, "Local task")
+	result, err := second.Sync(context.Background(), config)
+	if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
+		t.Fatalf("Sync(invalid tracking tip) category = %q, want %q; result = %#v; error = %v", got, want, result, err)
+	}
+	assertSyncOutcome(t, result.Fetch, invalid.ID, SyncInvalid)
+	assertSyncOutcome(t, result.Fetch, valid.ID, SyncCreated)
+	if result.Push.Status != SyncPhaseCompleted {
+		t.Fatalf("push status = %q, want %q; result = %#v", result.Push.Status, SyncPhaseCompleted, result)
+	}
+	assertSyncOutcome(t, result.Push, local.ID, SyncPublished)
+	if got, want := remoteRefValue(t, second, taskRefPrefix+local.ID), refValue(t, second, taskRefPrefix+local.ID); got != want {
+		t.Fatalf("published local tip = %q, want %q", got, want)
+	}
+}
+
 func TestFetchReconcilesValidRemoteTipWhenAnotherTrackingTipIsInvalid(t *testing.T) {
 	first, second, config := syncRepositories(t)
 	valid := createSyncTask(t, first, config, "Valid task")
