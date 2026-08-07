@@ -22,6 +22,13 @@ type ciWorkflow struct {
 			Branches []string `yaml:"branches"`
 		} `yaml:"pull_request"`
 	} `yaml:"on"`
+	Concurrency struct {
+		Group string `yaml:"group"`
+		// CancelInProgress is `any` because YAML reads a bare `true` as a bool
+		// and a `${{ }}` expression as a string, and the difference is the
+		// point of TestCIWorkflowNeverCancelsAPushVerification.
+		CancelInProgress any `yaml:"cancel-in-progress"`
+	} `yaml:"concurrency"`
 	Jobs map[string]ciJob `yaml:"jobs"`
 }
 
@@ -80,6 +87,55 @@ func TestCIWorkflowRunsOnPushAndPullRequestAgainstMain(t *testing.T) {
 	}
 	if got := workflow.On.PullRequest.Branches; len(got) != 1 || got[0] != "main" {
 		t.Errorf("pull_request branches = %v, want [main]", got)
+	}
+}
+
+// Production mutation: `cancel-in-progress: true` on a group keyed only by
+// github.ref makes every push to main share one group, so each merge discards
+// the previous merge's verification. That happened: of the six main pushes
+// following this workflow's own merge, five were cancelled during "Set up job"
+// having run no tests at all, and the one that survived failed -- proving main
+// can break from a merge even when every pull request run was green, which is
+// the entire reason the push trigger exists.
+//
+// Cancellation is not the only way a run is lost. GitHub also cancels a run
+// left *pending* in a group when a newer run queues behind the same group, so
+// pushes have to be keyed on the commit rather than merely opting out of
+// cancel-in-progress.
+func TestCIWorkflowNeverCancelsAPushVerification(t *testing.T) {
+	workflow := readCIWorkflow(t)
+	group := workflow.Concurrency.Group
+
+	if group == "" {
+		t.Fatal("workflow declares no concurrency group")
+	}
+	// A group that does not vary per commit puts consecutive main pushes in
+	// one group, where the newer run evicts the older one.
+	if !strings.Contains(group, "github.sha") {
+		t.Errorf("concurrency group %q does not vary per commit, so consecutive "+
+			"pushes to main share a group and evict each other", group)
+	}
+
+	switch cancel := workflow.Concurrency.CancelInProgress.(type) {
+	case nil:
+	case bool:
+		if cancel {
+			t.Error("cancel-in-progress is unconditionally true, so a merge to " +
+				"main cancels the previous merge's verification")
+		}
+	case string:
+		// The only safe form is one that turns cancellation off for pushes,
+		// which means deciding on the event.
+		if !strings.Contains(cancel, "github.event_name") {
+			t.Errorf("cancel-in-progress = %q, want an expression conditioned on "+
+				"github.event_name so pushes are never cancelled", cancel)
+		}
+		if !strings.Contains(cancel, "pull_request") {
+			t.Errorf("cancel-in-progress = %q, want cancellation limited to "+
+				"pull_request events", cancel)
+		}
+	default:
+		t.Errorf("cancel-in-progress has unexpected type %T (%v)", cancel, cancel)
 	}
 }
 
