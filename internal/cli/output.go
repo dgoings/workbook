@@ -288,6 +288,12 @@ func writeMutation(output io.Writer, task core.Task) {
 }
 
 func writeSyncResult(output io.Writer, result gitstore.SyncResult) {
+	// Ignored refs are reported before the phase outcome because they are true
+	// whatever the phase did, and because the reader needs the prune command.
+	for _, ignored := range result.Ignored {
+		fmt.Fprintf(output, "Ignored %s on %s: %s. Prune it with: git push %s :%s\n",
+			ignored.Ref, result.Remote, ignored.Reason, result.Remote, ignored.Ref)
+	}
 	if result.Status == gitstore.SyncPhaseFailed {
 		fmt.Fprintf(output, "Failed on %s", result.Remote)
 		if result.Detail != "" {

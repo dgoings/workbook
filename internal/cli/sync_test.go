@@ -73,6 +73,45 @@ func TestRunSyncFetchesThenPushesJSONAcrossClones(t *testing.T) {
 	assertCLISyncStatus(t, thirdResult.Fetch, secondTask.ID, gitstore.SyncCreated)
 }
 
+// A stray ref on origin is reported, not fatal, and the report tells the user
+// which ref to prune.
+func TestRunSyncReportsIgnoredForeignRefsAndStillSucceeds(t *testing.T) {
+	first, second := cliSyncRepositories(t)
+	shared := cliCreateTask(t, first, "Shared task")
+	if code, _, stderr := run(t, first, "sync"); code != 0 {
+		t.Fatalf("initial sync code = %d; stderr = %q", code, stderr)
+	}
+
+	const poison = "refs/workbook/tasks/EVIL"
+	cliGit(t, first, "push", "origin", "refs/workbook/tasks/"+shared.ID+":"+poison)
+
+	local := cliCreateTask(t, second, "Local task")
+	code, stdout, stderr := run(t, second, "sync", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("sync with a foreign ref on origin = code %d, stderr %q", code, stderr)
+	}
+	result := decodeSyncRunResult(t, stdout, "sync")
+	assertCLISyncStatus(t, result.Fetch, shared.ID, gitstore.SyncCreated)
+	assertCLISyncStatus(t, result.Push, local.ID, gitstore.SyncPublished)
+	if len(result.Fetch.Ignored) != 1 || result.Fetch.Ignored[0].Ref != poison {
+		t.Fatalf("fetch ignored = %#v, want one entry naming %q", result.Fetch.Ignored, poison)
+	}
+	if result.Fetch.Ignored[0].Reason == "" {
+		t.Fatalf("fetch ignored = %#v, want a reason", result.Fetch.Ignored)
+	}
+
+	code, stdout, stderr = run(t, second, "fetch")
+	if code != 0 || stderr != "" {
+		t.Fatalf("human fetch = code %d, stderr %q", code, stderr)
+	}
+	if !strings.Contains(stdout, "Ignored "+poison) {
+		t.Fatalf("human fetch output = %q, want it to name the ignored ref", stdout)
+	}
+	if !strings.Contains(stdout, "git push origin :"+poison) {
+		t.Fatalf("human fetch output = %q, want it to show how to prune the ref", stdout)
+	}
+}
+
 func TestRunSyncReplaysDivergenceAndPublishesIt(t *testing.T) {
 	first, second := cliSyncRepositories(t)
 	divergent := cliCreateTask(t, first, "Divergent sync task")
