@@ -35,6 +35,7 @@ jobs:
 
       - name: Check the label and the changelog agree
         env:
+          GH_TOKEN: ${{ github.token }}
           LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: |
           set -eu
@@ -43,8 +44,8 @@ jobs:
             echo "No release label; this pull request cuts no release."
             exit 0
           fi
-          version=$(scripts/resolve-release-version.sh --bump "${bump}")
-          scripts/check-release-changelog.sh --bump "${bump}" --version "${version}"
+          version=$(scripts/plan-release.sh --bump "${bump}" --repo "${GITHUB_REPOSITORY}")
+          echo "Merging this pull request would cut v${version}."
 
   # The pre-merge result can go stale: another release merging in between changes
   # the previous tag and therefore the version this one computes. What the tag is
@@ -59,6 +60,8 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      # Reading the check runs that decide whether the reviewed commit passed.
+      checks: read
     outputs:
       tag: ${{ steps.cut.outputs.tag }}
     steps:
@@ -74,7 +77,9 @@ jobs:
       - name: Resolve and tag the release
         id: cut
         env:
+          GH_TOKEN: ${{ github.token }}
           LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          REVIEWED_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -eu
           bump=$(printf '%s' "${LABELS}" | jq -r '.[]' | scripts/release-bump-label.sh)
@@ -82,8 +87,12 @@ jobs:
             echo "No release label; nothing to cut."
             exit 0
           fi
-          version=$(scripts/resolve-release-version.sh --bump "${bump}")
-          scripts/check-release-changelog.sh --bump "${bump}" --version "${version}"
+          # The commit CI actually verified is the pull request's head, which is
+          # what gated the merge. The merge commit's own run was queued seconds
+          # ago and waiting out a full suite here would hold the release open
+          # for as long as CI takes.
+          scripts/check-commit-verified.sh "${REVIEWED_SHA}" --repo "${GITHUB_REPOSITORY}"
+          version=$(scripts/plan-release.sh --bump "${bump}" --repo "${GITHUB_REPOSITORY}")
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag --annotate "v${version}" --message "Workbook v${version}"

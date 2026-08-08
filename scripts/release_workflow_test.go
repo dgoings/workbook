@@ -187,6 +187,69 @@ func TestCutWorkflowsCheckOutTheFullTagHistory(t *testing.T) {
 	}
 }
 
+// A tag outlives the run that created it and versions only order forward, so a
+// commit that fails its tests burns its version number. Both cut paths have to
+// require that CI already passed before they create one.
+func TestCutWorkflowsGateOnAVerifiedCommit(t *testing.T) {
+	for _, testCase := range []struct {
+		workflow string
+		job      string
+		// The commit each path can actually gate on: main's tip for a dispatch,
+		// and the reviewed head for a merge, whose own merge-commit run has only
+		// just been queued.
+		commit string
+	}{
+		{workflow: "cut-release.yml", job: "tag", commit: "GITHUB_SHA"},
+		{workflow: "release-pr.yml", job: "cut", commit: "REVIEWED_SHA"},
+	} {
+		t.Run(testCase.workflow, func(t *testing.T) {
+			workflow := readReleaseWorkflow(t, testCase.workflow)
+			job, ok := workflow.Jobs[testCase.job]
+			if !ok {
+				t.Fatalf("%s jobs = %v, want a %s job", testCase.workflow, keysOf(workflow.Jobs), testCase.job)
+			}
+
+			var gated bool
+			for _, step := range job.Steps {
+				if strings.Contains(step.Run, "check-commit-verified.sh") {
+					gated = true
+					if !strings.Contains(step.Run, testCase.commit) {
+						t.Errorf("gate runs %q, want it to check ${%s}", step.Run, testCase.commit)
+					}
+				}
+			}
+			if !gated {
+				t.Errorf("%s job %q creates a tag without requiring a verified commit", testCase.workflow, testCase.job)
+			}
+			// Reading check runs needs its own scope; without it the gate fails
+			// on permissions rather than on the commit's actual state.
+			if got := job.Permissions["checks"]; got != "read" {
+				t.Errorf("job %q checks permission = %q, want read", testCase.job, got)
+			}
+		})
+	}
+}
+
+// Both paths make the same decision, and making it in one place is what keeps
+// the pull request check and the post-merge cut from drifting apart.
+func TestCutWorkflowsPlanThroughOneScript(t *testing.T) {
+	for _, name := range []string{"cut-release.yml", "release-pr.yml"} {
+		t.Run(name, func(t *testing.T) {
+			contents := readReleaseWorkflowFile(t, name)
+			if !strings.Contains(contents, "plan-release.sh") {
+				t.Errorf("%s does not plan the release through plan-release.sh", name)
+			}
+			// Calling the pieces directly would skip the unpublished-previous
+			// check that plan-release.sh threads between them.
+			for _, bypassed := range []string{"resolve-release-version.sh", "check-release-changelog.sh"} {
+				if strings.Contains(contents, bypassed) {
+					t.Errorf("%s calls %s directly, bypassing plan-release.sh", name, bypassed)
+				}
+			}
+		})
+	}
+}
+
 // Production mutation: a floating action reference lets a third party change
 // what runs in a job holding write permission and the tap credential.
 func TestReleaseWorkflowsPinActionsAndRunners(t *testing.T) {

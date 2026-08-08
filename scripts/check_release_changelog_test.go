@@ -59,6 +59,68 @@ func TestCheckReleaseChangelogAppliesTheAgreementMatrix(t *testing.T) {
 	}
 }
 
+// A release that dies after its tag is pushed leaves the tag behind, and the
+// entry written for it then describes something nobody can download. Read as
+// the ordinary "newest entry is the last release's" case, a retry cuts the next
+// version, generates notes for it, and strands that entry in the file forever.
+//
+// Production mutation: this is the one disagreement the check would otherwise
+// pass over in silence, because every other mismatch fails loudly.
+func TestCheckReleaseChangelogRefusesAnEntryForATagThatNeverPublished(t *testing.T) {
+	for _, bump := range []string{"patch", "minor", "major"} {
+		t.Run(bump, func(t *testing.T) {
+			// v0.5.0 was tagged, the release failed, and its entry is newest.
+			path := writeChangelog(t, changelogForMinor)
+			version := map[string]string{"patch": "0.5.1", "minor": "0.6.0", "major": "1.0.0"}[bump]
+
+			output, err := runCheckReleaseChangelog(t,
+				"--bump", bump,
+				"--version", version,
+				"--previous", "v0.5.0",
+				"--previous-released", "no",
+				"--changelog", path)
+			if err == nil {
+				t.Fatalf("check cut past an orphaned entry:\n%s", output)
+			}
+			// Both repairs are legitimate and only the releaser knows which is
+			// wanted, so the message has to offer both rather than pick one.
+			if !strings.Contains(output, "delete-release-tag.sh 0.5.0") {
+				t.Errorf("output = %q, want the tag deletion repair named", output)
+			}
+			if !strings.Contains(output, "retitle") {
+				t.Errorf("output = %q, want the retitle repair named", output)
+			}
+		})
+	}
+}
+
+// The same shape with a released previous tag is the ordinary steady state and
+// has to keep working, or every patch release after a successful one breaks.
+func TestCheckReleaseChangelogAllowsAPatchAfterAPublishedRelease(t *testing.T) {
+	path := writeChangelog(t, changelogForMinor)
+
+	output, err := runCheckReleaseChangelog(t,
+		"--bump", "patch",
+		"--version", "0.5.1",
+		"--previous", "v0.5.0",
+		"--previous-released", "yes",
+		"--changelog", path)
+	if err != nil {
+		t.Fatalf("check refused an ordinary patch release: %v\n%s", err, output)
+	}
+}
+
+func TestCheckReleaseChangelogRejectsAnUnknownPreviousReleasedValue(t *testing.T) {
+	path := writeChangelog(t, changelogForPatch)
+
+	output, err := runCheckReleaseChangelog(t,
+		"--bump", "patch", "--version", "0.4.2", "--previous", "v0.4.1",
+		"--previous-released", "maybe", "--changelog", path)
+	if err == nil {
+		t.Fatalf("check accepted an unknown --previous-released value:\n%s", output)
+	}
+}
+
 // A missing changelog carries no entries, which is the state the repository is
 // in until the first release entry is written.
 func TestCheckReleaseChangelogTreatsAMissingFileAsNoEntries(t *testing.T) {

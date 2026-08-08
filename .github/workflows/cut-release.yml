@@ -33,6 +33,8 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      # Reading the check runs that decide whether this commit was verified.
+      checks: read
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
     steps:
@@ -51,15 +53,24 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Resolve the release version
+      # A tag outlives the run that created it, and versions only order forward,
+      # so a commit that fails its tests burns its version number. CI has
+      # already run this exact suite against this exact commit; requiring it to
+      # have passed closes most of that window without running it twice.
+      - name: Verify CI passed for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/check-commit-verified.sh "${GITHUB_SHA}" --repo "${GITHUB_REPOSITORY}"
+
+      - name: Plan the release
         id: resolve
         env:
+          GH_TOKEN: ${{ github.token }}
           BUMP: ${{ inputs.bump }}
           VERSION: ${{ inputs.version }}
         run: |
           set -eu
-          version=$(scripts/resolve-release-version.sh --bump "${BUMP}" --version "${VERSION}")
-          scripts/check-release-changelog.sh --bump "${BUMP}" --version "${version}"
+          version=$(scripts/plan-release.sh --bump "${BUMP}" --version "${VERSION}" --repo "${GITHUB_REPOSITORY}")
           printf 'tag=v%s\n' "${version}" >> "${GITHUB_OUTPUT}"
 
       - name: Tag the release

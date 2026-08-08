@@ -176,8 +176,16 @@ func runResolveReleaseVersionIn(t *testing.T, directory string, args ...string) 
 // directory.
 func runReleaseScript(t *testing.T, directory, name, stdin string, args ...string) (string, error) {
 	t.Helper()
+	return runReleaseScriptWithEnvironment(t, directory, name, stdin, nil, args...)
+}
+
+func runReleaseScriptWithEnvironment(t *testing.T, directory, name, stdin string, environment []string, args ...string) (string, error) {
+	t.Helper()
 	command := exec.Command(releaseScriptPath(t, name), args...)
 	command.Dir = directory
+	if environment != nil {
+		command.Env = environment
+	}
 	if stdin != "" {
 		command.Stdin = strings.NewReader(stdin)
 	}

@@ -567,10 +567,48 @@ the release workflow directly. A tag pushed from a checkout starts it through
 the `push` trigger as before. Publication has one implementation and three
 entrances.
 
-A release that fails after its tag exists leaves that tag behind. Because the
-workflow runs `go test ./...` before it builds anything, a broken commit fails
-before publishing, and the tag has to be deleted before that version can be cut
-again.
+#### When a release fails
+
+A tag has to exist before a release can be published against it, so both
+automated paths push one and then build. A run that dies after that leaves the
+tag behind, and because versions only order forward, that number cannot be
+released again while the tag stands.
+
+Two things narrow this. Both cut paths refuse to tag a commit CI has not already
+verified, which removes the likeliest cause: the dispatch path checks the tip of
+`main`, and the merge path checks the pull request's reviewed head, the commit
+that gated the merge. And `publish-release.sh` already unwinds its own work,
+reverting the tap commit and deleting only a draft that run created.
+
+What is left is the tag. Delete it and the version is free again:
+
+```sh
+./scripts/delete-release-tag.sh 0.5.0
+```
+
+It removes the tag on the remote first and then locally, and refuses outright if
+the tag has a published release, because Homebrew resolves its download URLs
+through the tag and deleting a live one breaks every install that followed it.
+`--dry-run` reports what it would do, `--delete-draft` also clears a draft left
+behind by the failed run, and `--force` overrides the published-release refusal.
+
+Either repair is fine: delete the tag and cut the same version again, or move on
+to the next version and delete the skipped tag so it stops standing in for a
+release that never existed.
+
+The one case worth knowing about is a release whose CHANGELOG entry was already
+written. Once `v0.5.0` is tagged, the newest entry naming `v0.5.0` looks exactly
+like the ordinary "the last release's entry, untouched" state, and a retry would
+otherwise cut `v0.5.1` with generated notes and strand that entry describing a
+release nobody can download. The cut checks whether the previous tag actually
+published, so it stops and names both repairs instead:
+
+```
+the newest CHANGELOG entry describes v0.5.0, whose tag exists but published no release.
+  Either delete that tag and cut v0.5.0 again:
+      scripts/delete-release-tag.sh 0.5.0
+  or retitle the entry to the version being cut now, v0.5.1.
+```
 
 This source repository intentionally does not track an installable
 `Formula/workbook.rb` with placeholder checksums. The workflow renders the real

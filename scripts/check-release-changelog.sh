@@ -21,17 +21,26 @@ set -eu
 # the previous release. That distinguishes "the author added an entry" from "the
 # newest entry is the last release's, untouched" without inspecting a diff, so
 # the same check works before a merge and after one.
+#
+# Those two are not the only ways the newest entry can equal the previous tag.
+# A release that failed after its tag was pushed leaves the tag behind, and the
+# entry written for it then describes a release nobody can download. Read as
+# "the last release's, untouched", a retry would cut the next patch, generate
+# notes for it, and orphan that entry in the file forever. --previous-released
+# is what tells the two apart, and an orphaned entry is refused rather than
+# skipped past.
 
 usage() {
 	cat <<'USAGE'
 usage: scripts/check-release-changelog.sh --bump KIND --version VERSION [options]
 
 Options:
-  --bump KIND        patch, minor, or major
-  --version VERSION  the MAJOR.MINOR.PATCH version the release would carry
-  --previous TAG     previous release tag (default: newest v* tag in this repository)
-  --changelog PATH   changelog to read (default: CHANGELOG.md beside this script's repository)
-  -h, --help         show this message
+  --bump KIND               patch, minor, or major
+  --version VERSION         the MAJOR.MINOR.PATCH version the release would carry
+  --previous TAG            previous release tag (default: newest v* tag in this repository)
+  --previous-released YESNO whether that tag published a release (default yes)
+  --changelog PATH          changelog to read (default: CHANGELOG.md beside this script's repository)
+  -h, --help                show this message
 USAGE
 }
 
@@ -44,6 +53,7 @@ requested_bump=
 requested_version=
 previous_tag=
 previous_given=no
+previous_released=yes
 changelog=
 
 while [ "$#" -gt 0 ]; do
@@ -73,6 +83,14 @@ while [ "$#" -gt 0 ]; do
 		--previous=*)
 			previous_tag=${1#--previous=}
 			previous_given=yes
+			;;
+		--previous-released)
+			[ "$#" -ge 2 ] || fail "--previous-released requires a value" 2
+			previous_released=$2
+			shift
+			;;
+		--previous-released=*)
+			previous_released=${1#--previous-released=}
 			;;
 		--changelog)
 			[ "$#" -ge 2 ] || fail "--changelog requires a value" 2
@@ -110,6 +128,13 @@ if [ -z "${requested_version}" ]; then
 	usage >&2
 	fail "--version is required" 2
 fi
+case ${previous_released} in
+	yes | no) ;;
+	*)
+		usage >&2
+		fail "--previous-released must be yes or no" 2
+		;;
+esac
 if [ -z "${changelog}" ]; then
 	repository_root=$(CDPATH='' cd -- "${script_directory}/.." && pwd -P)
 	changelog="${repository_root}/CHANGELOG.md"
@@ -135,7 +160,26 @@ else
 	newest_entry=
 fi
 
-if [ -z "${newest_entry}" ] || [ "${newest_entry}" = "${previous_number}" ]; then
+entry_state=absent
+if [ -n "${newest_entry}" ]; then
+	if [ "${newest_entry}" != "${previous_number}" ]; then
+		entry_state=present
+	elif [ "${previous_released}" = no ]; then
+		entry_state=orphaned
+	fi
+fi
+
+# The entry describes v${newest_entry}, whose tag exists but never published.
+# Cutting anything else strands it, so say which of the two repairs is wanted
+# rather than choosing one.
+if [ "${entry_state}" = orphaned ]; then
+	fail "the newest CHANGELOG entry describes v${newest_entry}, whose tag exists but published no release.
+  Either delete that tag and cut v${newest_entry} again:
+      scripts/delete-release-tag.sh ${newest_entry}
+  or retitle the entry to the version being cut now, v${requested_version}."
+fi
+
+if [ "${entry_state}" = absent ]; then
 	if [ "${requested_bump}" = patch ]; then
 		echo "release:patch cuts v${requested_version} with no changelog entry"
 		exit 0
