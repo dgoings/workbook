@@ -15,6 +15,9 @@ func TestSetupInstallsPublishedAndWorkingTreeBuildsSideBySide(t *testing.T) {
 	// Production mutation: installing both builds under one name or one
 	// directory removes the published fallback the moment the working tree
 	// stops building.
+	if testing.Short() {
+		t.Skip("builds the published tag and the working tree; skipped in -short mode")
+	}
 	root, script := setupPaths(t)
 	version := latestReleaseTag(t, root)
 	stablePrefix := filepath.Join(t.TempDir(), "stable")

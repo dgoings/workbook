@@ -77,6 +77,8 @@ When implementation begins, prioritize tests for:
 
 Prefer integration tests using temporary local bare remotes over mocks for important Git synchronization behavior. Unit-test operation projection and conflict semantics independently from Git transport.
 
+Run `go test -short ./...` for local iteration and for any parallel or multi-agent run. `-short` skips only the three builds that stay expensive even with a warm build cache: the release archive test (four cross-compile targets), the release determinism test (two builds against deliberately empty caches), and the setup test that compiles the published tag's whole source tree. Other tests still shell out to quick cache-warm `go build`s, so the first run on a cold cache pays real compilation once. The full suite without `-short` is the merge and release gate.
+
 ## Documentation discipline
 
 - Keep `README.md` aligned with implemented behavior.
