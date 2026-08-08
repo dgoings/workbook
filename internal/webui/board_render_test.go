@@ -3,7 +3,6 @@ package webui
 import (
 	"context"
 	"net/http"
-	"os/exec"
 	"strconv"
 	"testing"
 
@@ -56,7 +55,7 @@ func runBoardClientWithSetup(t *testing.T, purpose string, tasks []core.Task, se
 func runBoardClientAt(t *testing.T, purpose, url string, tasks []core.Task, setup, body string) {
 	t.Helper()
 	node := requireNode(t)
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 	response := request(t, handler, http.MethodGet, "/")
 	if response.Code != http.StatusOK {
 		t.Fatalf("GET / status = %d, want %d", response.Code, http.StatusOK)
@@ -70,7 +69,7 @@ setTimeout(async () => {
 ` + body + `
 }, 0);
 `
-	if output, err := exec.Command(node, "-e", program).CombinedOutput(); err != nil {
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute %s: %v\n%s", purpose, err, output)
 	}
 }

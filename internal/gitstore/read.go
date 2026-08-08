@@ -317,75 +317,16 @@ func ignoredTaskRef(prefix, refName, reason string) IgnoredRef {
 	return IgnoredRef{Ref: taskRefPrefix + strings.TrimPrefix(refName, prefix), Reason: reason}
 }
 
+// readTip reads one tip through the batch reader, which is deliberately the
+// only code in this package that reads object contents.
+//
+// A per-object reader used to sit beside it, pulling operation.json,
+// state.json, the raw commit, and the tree through `git show` and `git ls-tree`
+// into an uncapped buffer. Routing every content read through one reader is
+// what lets MaxObjectBytes bound them all; a second, unbounded path would leave
+// standing exactly the hazard that ceiling exists to close.
 func (r *Repository) readTip(ctx context.Context, config core.ProjectConfig, taskID, objectID string) (core.Snapshot, error) {
 	return r.ReadTaskHead(ctx, config, TaskHead{TaskID: taskID, ObjectID: objectID})
-}
-
-func (r *Repository) readTipAtRef(
-	ctx context.Context,
-	config core.ProjectConfig,
-	taskID string,
-	objectID string,
-	refName string,
-) (core.Snapshot, error) {
-	if err := core.ValidateTaskID(config.Key, taskID); err != nil {
-		return core.Snapshot{}, core.Wrap(core.CategoryCorruptData, "task ref ID is invalid", err)
-	}
-	if err := r.rejectSymbolicTaskRef(ctx, refName); err != nil {
-		return core.Snapshot{}, err
-	}
-	objectType, err := r.Git(ctx, nil, "cat-file", "-t", objectID)
-	if err != nil {
-		return core.Snapshot{}, core.Wrap(core.CategoryCorruptData, "cannot determine task ref object type", err)
-	}
-	typeName, err := gitSingleLine(objectType)
-	if err != nil {
-		return core.Snapshot{}, core.Wrap(core.CategoryCorruptData, "Git returned an invalid task object type", err)
-	}
-	if typeName != "commit" {
-		return core.Snapshot{}, core.Errorf(core.CategoryCorruptData, "task ref does not point directly to a commit")
-	}
-
-	if err := r.validateTaskTree(ctx, objectID); err != nil {
-		return core.Snapshot{}, err
-	}
-	operationBytes, err := r.Git(ctx, nil, "show", objectID+":operation.json")
-	if err != nil {
-		return core.Snapshot{}, core.Wrap(core.CategoryCorruptData, "cannot read task operation", err)
-	}
-	stateBytes, err := r.Git(ctx, nil, "show", objectID+":state.json")
-	if err != nil {
-		return core.Snapshot{}, core.Wrap(core.CategoryCorruptData, "cannot read task state", err)
-	}
-
-	pack, err := decodeCanonicalOperation(operationBytes)
-	if err != nil {
-		return core.Snapshot{}, err
-	}
-	if err := r.validateTipTopology(ctx, objectID, pack); err != nil {
-		return core.Snapshot{}, err
-	}
-	state, err := decodeCanonicalState(stateBytes)
-	if err != nil {
-		return core.Snapshot{}, err
-	}
-	if err := validateTipIdentity(config, taskID, pack, state); err != nil {
-		return core.Snapshot{}, err
-	}
-	if len(pack.Operations) == 1 && pack.Operations[0].Type == core.OperationTaskCreate {
-		if err := core.ValidateCheckpoint(nil, pack, state, config.Key); err != nil {
-			return core.Snapshot{}, err
-		}
-	}
-	return core.Snapshot{Head: objectID, Operation: pack, State: state}, nil
-}
-
-func (r *Repository) validateTipTopology(ctx context.Context, objectID string, pack core.OperationPack) error {
-	contents, err := r.Git(ctx, nil, "cat-file", "commit", objectID)
-	if err != nil {
-		return core.Wrap(core.CategoryCorruptData, "cannot read raw task commit", err)
-	}
-	return validateTipTopologyBytes(contents, pack)
 }
 
 func validateTipTopologyBytes(contents []byte, pack core.OperationPack) error {
@@ -436,40 +377,6 @@ func (r *Repository) rejectSymbolicTaskRef(ctx context.Context, refName string) 
 		}
 		return core.Wrap(core.CategoryCorruptData, "cannot determine whether task ref is symbolic", err)
 	}
-}
-
-func (r *Repository) validateTaskTree(ctx context.Context, objectID string) error {
-	contents, err := r.Git(ctx, nil, "ls-tree", objectID)
-	if err != nil {
-		return core.Wrap(core.CategoryCorruptData, "cannot read task tree", err)
-	}
-	if len(contents) == 0 || contents[len(contents)-1] != '\n' {
-		return core.Errorf(core.CategoryCorruptData, "task tree has invalid entries")
-	}
-	lines := strings.Split(strings.TrimSuffix(string(contents), "\n"), "\n")
-	if len(lines) != 2 {
-		return core.Errorf(core.CategoryCorruptData, "task tree must contain exactly operation.json and state.json")
-	}
-
-	entries := make(map[string]struct{}, 2)
-	for _, line := range lines {
-		parts := strings.SplitN(line, "\t", 2)
-		if len(parts) != 2 || (parts[1] != "operation.json" && parts[1] != "state.json") {
-			return core.Errorf(core.CategoryCorruptData, "task tree has an unexpected entry")
-		}
-		fields := strings.Fields(parts[0])
-		if len(fields) != 3 || fields[0] != "100644" || fields[1] != "blob" {
-			return core.Errorf(core.CategoryCorruptData, "task tree entry %q is not a regular blob", parts[1])
-		}
-		if _, exists := entries[parts[1]]; exists {
-			return core.Errorf(core.CategoryCorruptData, "task tree contains duplicate entry %q", parts[1])
-		}
-		entries[parts[1]] = struct{}{}
-	}
-	if len(entries) != 2 {
-		return core.Errorf(core.CategoryCorruptData, "task tree must contain exactly operation.json and state.json")
-	}
-	return nil
 }
 
 func decodeCanonicalOperation(contents []byte) (core.OperationPack, error) {

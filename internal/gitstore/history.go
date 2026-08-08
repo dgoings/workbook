@@ -210,7 +210,7 @@ func (r *Repository) ReadTaskHistoriesStream(
 			// because the response stream is shared with every later task.
 			objects, err := readBatchObjects(batch.Reader())
 			if err != nil {
-				return core.Wrap(core.CategoryCorruptData, "cannot read task objects from Git batch", err)
+				return batch.ReadFailure("cannot read task objects from Git batch", err)
 			}
 			if result.Failure != nil {
 				continue

@@ -8,11 +8,25 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 
 	"github.com/dgoings/workbook/internal/core"
 )
+
+// MaxObjectBytes is the largest Git object Workbook will read into memory.
+//
+// Every object Workbook reads is one commit, one task tree, or one Workbook
+// document, and core's field ceilings — title, description, labels, rank and
+// dependencies, every field a task document holds — bound the largest one this
+// version can write to roughly 80 KiB. This ceiling sits about fifty times
+// above that so it never fires on a document a Workbook wrote, and stays low
+// enough that a hand-built object pushed by a collaborator cannot exhaust
+// memory in a clone that fetches it. It is checked against the size in Git's
+// batch header, before the object is allocated, so an absurd claim costs one
+// comparison rather than the memory it names.
+const MaxObjectBytes = 4 << 20
 
 // HeadAdvance pairs a previously validated snapshot with a newly observed
 // current task head.
@@ -112,32 +126,37 @@ func (r *Repository) readTaskHeadsPartialBatch(
 		return results, nil
 	}
 
-	output, err := r.Git(ctx, input.Bytes(), "cat-file", "--batch")
+	// Responses are streamed rather than buffered. Buffering the whole batch
+	// holds every requested object resident at once, which makes List's cost
+	// additive across tasks and leaves the per-object ceiling with nothing left
+	// to protect: the memory is already spent by the time a header is parsed.
+	batch, err := r.startObjectBatch(ctx, func(writer io.Writer) error {
+		_, err := writer.Write(input.Bytes())
+		return err
+	})
 	if err != nil {
-		return nil, core.Wrap(core.CategoryCorruptData, "cannot read task tips", err)
+		return nil, err
 	}
-	reader := bufio.NewReader(bytes.NewReader(output))
-	for _, batch := range validRequests {
-		objects, err := readBatchObjects(reader)
+	defer batch.Close()
+
+	for _, request := range validRequests {
+		objects, err := readBatchObjects(batch.Reader())
 		if err != nil {
-			return nil, core.Wrap(core.CategoryCorruptData, "cannot read task objects from Git batch", err)
+			return nil, batch.ReadFailure("cannot read task objects from Git batch", err)
 		}
-		snapshot, err := validateBatchSnapshot(objects, config, batch.head, batch.objectIDBytes)
+		snapshot, err := validateBatchSnapshot(objects, config, request.head, request.objectIDBytes)
 		if err != nil {
-			results[batch.index].Err = err
+			results[request.index].Err = err
 			continue
 		}
 		if err := r.rememberGitObjectID(snapshot.Head); err != nil {
-			results[batch.index].Err = core.Wrap(core.CategoryCorruptData, "Git returned an invalid task object ID", err)
+			results[request.index].Err = core.Wrap(core.CategoryCorruptData, "Git returned an invalid task object ID", err)
 			continue
 		}
-		results[batch.index].Snapshot = snapshot
+		results[request.index].Snapshot = snapshot
 	}
-	if _, err := reader.ReadByte(); !errors.Is(err, io.EOF) {
-		if err != nil {
-			return nil, core.Wrap(core.CategoryCorruptData, "cannot finish reading Git object batch", err)
-		}
-		return nil, core.Errorf(core.CategoryCorruptData, "Git returned unexpected trailing batch data")
+	if err := batch.Finish(); err != nil {
+		return nil, err
 	}
 	return results, nil
 }
@@ -147,6 +166,25 @@ type batchObject struct {
 	kind     string
 	contents []byte
 	missing  bool
+	// refused holds the reason an object present in the response stream was not
+	// read into memory. The record was still consumed in full, so the stream is
+	// synchronized and the failure belongs to the one request that asked for it.
+	refused error
+}
+
+// batchReadError categorizes a batch-reader failure for a caller.
+//
+// The reader states framing failures as plain errors, which need both a
+// category and the context of what was being read. It states a refused object
+// as a categorized error that already names the object and the ceiling, and
+// error reporting shows only the outermost message, so re-wrapping that one
+// would replace the only sentence that explains the failure with a generic one.
+func batchReadError(context string, err error) error {
+	var typed *core.Error
+	if errors.As(err, &typed) {
+		return typed
+	}
+	return core.Wrap(core.CategoryCorruptData, context, err)
 }
 
 func readBatchObjects(reader *bufio.Reader) ([4]batchObject, error) {
@@ -169,6 +207,9 @@ func validateBatchSnapshot(
 ) (core.Snapshot, error) {
 	commit, tree, operationBlob, stateBlob := objects[0], objects[1], objects[2], objects[3]
 	for _, object := range objects {
+		if object.refused != nil {
+			return core.Snapshot{}, object.refused
+		}
 		if object.missing {
 			return core.Snapshot{}, core.Errorf(core.CategoryCorruptData, "requested task object %q is missing", object.objectID)
 		}
@@ -237,9 +278,33 @@ func readBatchObject(reader *bufio.Reader) (batchObject, error) {
 	if _, err := decodeObjectID(fields[0]); err != nil {
 		return batchObject{}, fmt.Errorf("invalid Git batch object ID: %w", err)
 	}
+	// A size no object could have is framing rather than a record: it names no
+	// span this reader could skip, so nothing after it can be trusted. Bounding
+	// it here is also what lets the refusal below add one to it safely.
 	size, err := strconv.ParseUint(fields[2], 10, 64)
-	if err != nil || size > uint64(^uint(0)>>1) {
+	if err != nil || size >= math.MaxInt64 {
 		return batchObject{}, fmt.Errorf("invalid Git batch object size")
+	}
+	// The header is Git's claim about an object this process has not read yet,
+	// and on a fetched ref it originates with whoever pushed it. Refusing here
+	// is the whole point: allocating first and validating afterwards would spend
+	// the memory the ceiling exists to withhold.
+	//
+	// The record is still consumed, because Git stated its exact length and a
+	// skipped record costs no memory. That keeps the response stream usable, so
+	// one over-ceiling object fails the task that owns it instead of every task
+	// sharing the batch. The alternative trades a memory exhaustion for a worse
+	// availability failure: one pushed ref that no command can read past.
+	if size > MaxObjectBytes {
+		refused := core.Errorf(
+			core.CategoryCorruptData,
+			"Git object %s is %d bytes, over Workbook's %d byte object ceiling",
+			fields[0], size, MaxObjectBytes,
+		)
+		if _, err := io.CopyN(io.Discard, reader, int64(size)+1); err != nil {
+			return batchObject{}, err
+		}
+		return batchObject{objectID: fields[0], kind: fields[1], refused: refused}, nil
 	}
 	contents := make([]byte, int(size))
 	if _, err := io.ReadFull(reader, contents); err != nil {
