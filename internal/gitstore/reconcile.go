@@ -1,10 +1,10 @@
 package gitstore
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"sort"
 	"strconv"
 	"strings"
@@ -437,15 +437,25 @@ func (r *Repository) readCommitSubjects(ctx context.Context, heads []TaskHead) (
 		fmt.Fprintln(&input, head.ObjectID)
 	}
 
-	output, err := r.Git(ctx, input.Bytes(), "cat-file", "--batch")
+	// Streamed rather than buffered, so one commit is resident at a time and the
+	// per-object ceiling bounds this read instead of merely describing memory
+	// already spent.
+	batch, err := r.startObjectBatch(ctx, func(writer io.Writer) error {
+		_, err := writer.Write(input.Bytes())
+		return err
+	})
 	if err != nil {
-		return nil, core.Wrap(core.CategoryCorruptData, "cannot read task commit messages", err)
+		return nil, err
 	}
-	reader := bufio.NewReader(bytes.NewReader(output))
+	defer batch.Close()
+
 	for _, objectID := range ordered {
-		object, err := readBatchObject(reader)
+		object, err := readBatchObject(batch.Reader())
 		if err != nil {
-			return nil, core.Wrap(core.CategoryCorruptData, "cannot read task commit messages", err)
+			return nil, batch.ReadFailure("cannot read task commit messages", err)
+		}
+		if object.refused != nil {
+			return nil, object.refused
 		}
 		if object.missing || object.kind != "commit" || object.objectID != objectID {
 			return nil, core.Errorf(core.CategoryCorruptData, "Git returned an unexpected object for commit %q", objectID)
@@ -455,6 +465,9 @@ func (r *Repository) readCommitSubjects(ctx context.Context, heads []TaskHead) (
 			return nil, core.Errorf(core.CategoryCorruptData, "task commit %q has no header terminator", objectID)
 		}
 		subjects[objectID] = strings.TrimRight(string(object.contents[headerEnd+2:]), "\n")
+	}
+	if err := batch.Finish(); err != nil {
+		return nil, err
 	}
 	return subjects, nil
 }
