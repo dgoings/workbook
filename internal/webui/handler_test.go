@@ -2042,7 +2042,6 @@ setTimeout(async () => {
     return findElement(group, (element) =>
       element.tagName === "BUTTON" && element.textContent === "Add dependency").eventListeners.click();
   };
-  const createdID = ` + strconv.Quote(createdID) + `;
   let createCalls = 0;
   let activeRefreshCalls = 0;
   let deletedRefreshCalls = 0;
@@ -2115,9 +2114,7 @@ setTimeout(async () => {
     throw new Error("second programmatic submit created a duplicate task");
   }
   await retry.eventListeners.click();
-  if (deletedRefreshCalls !== 1 ||
-      historyPaths.at(-1) === "/tasks/" + createdID ||
-      retry.disabled) {
+  if (deletedRefreshCalls !== 1 || historyPaths.length !== 0 || retry.disabled) {
     throw new Error("deleted-context refresh failure did not remain recoverable");
   }
   await retry.eventListeners.click();
@@ -2127,8 +2124,10 @@ setTimeout(async () => {
   if (deletedRefreshCalls !== 2) {
     throw new Error("deleted-context refresh retry did not recover");
   }
-  if (historyPaths.at(-1) !== "/tasks/" + createdID) {
-    throw new Error("refresh retry did not open the created task");
+  // The create reported nothing, so the recovered save lands where an
+  // uneventful one does: on the board, not on the task just written.
+  if (historyPaths.length !== 1 || historyPaths[0] !== "/") {
+    throw new Error("refresh retry did not return to the board");
   }
 }, 0);
 `
@@ -4362,9 +4361,14 @@ globalThis.window = {
 	  }
 };
 const historyPaths = [];
+const historyReplacements = [];
 globalThis.history = {
   pushState(_state, _title, path) {
     historyPaths.push(path);
+    window.location.href = new URL(path, window.location.href).href;
+  },
+  replaceState(_state, _title, path) {
+    historyReplacements.push(path);
     window.location.href = new URL(path, window.location.href).href;
   }
 };
