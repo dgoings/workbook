@@ -4260,6 +4260,10 @@ class TestElement {
   querySelector(selector) {
     if (selector === "[data-stale]") return stale;
     if (selector === "[data-copy-status]") return findElement(this, (element) => Object.prototype.hasOwnProperty.call(element.dataset, "copyStatus"));
+    if (selector.startsWith("#")) {
+      const id = selector.slice(1);
+      return findElement(this, (element) => element.id === id);
+    }
     return null;
   }
   querySelectorAll(selector) {

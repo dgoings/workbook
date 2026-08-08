@@ -95,6 +95,12 @@ setTimeout(async () => {
   if (!secondToggle || !secondToggle.checked) {
     throw new Error("Create more did not survive the save it caused");
   }
+  // The save destroyed the node the user was on, which blurs it. Re-arming a
+  // form for rapid entry and dropping focus to the body would make every task
+  // after the first start with a reach for the mouse.
+  if (document.activeElement !== title) {
+    throw new Error("Create more did not put the caret in the re-armed title");
+  }
 
   title.value = "Second task";
   await secondForm.eventListeners.submit({ preventDefault() {} });

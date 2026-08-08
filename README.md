@@ -972,8 +972,10 @@ stack in that order.
 
 Saving a new task returns to the board, and a **Create more** toggle on the New
 Task form re-arms a clean form filed under the same column instead, so a run of
-tasks can be entered without a round trip. Either way the saved task's own form
-is left behind. A create that has something to report is the exception: a
+tasks can be entered without a round trip; the re-armed form takes the caret,
+because the save it followed destroyed the control the user was on. Either way
+the saved task's own form is left behind. A create that has something to
+report is the exception: a
 warning, or a relationship the client could not write, opens that task's detail
 page, because that is the only place its message and retry actions exist.
 

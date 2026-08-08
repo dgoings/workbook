@@ -270,6 +270,9 @@
       // a save rebuilds the route it is drawn on: state held by the form would
       // be discarded by the very save it is supposed to describe.
       let createMoreTasks = false;
+      // Staged by a save that re-arms the New Task form, consumed by the render
+      // that re-arms it.
+      let pendingNewTaskFocus = false;
 
       function text(element, value) { element.textContent = value || ""; return element; }
       // The visible ID inside a copy control, so a card that survives a render
@@ -547,9 +550,20 @@
           return { path: taskPath(recovery.taskID), stageRecovery: true, replace: false };
         }
         if (createMoreTasks) {
-          return { path: newTaskPath(recovery.status), stageRecovery: false, replace: true };
+          return { path: newTaskPath(recovery.status), stageRecovery: false, replace: true, focusTitle: true };
         }
         return { path: "/", stageRecovery: false, replace: false };
+      }
+      // A save that re-arms the New Task form destroys the node the user was
+      // standing on, and a browser blurs an element on its way out of the
+      // document. The replacement claims the caret so a run of tasks stays on
+      // the keyboard. A New Task route the user opened themselves is left
+      // alone: nothing was taken from them there.
+      function focusRearmedNewTask(form) {
+        if (!pendingNewTaskFocus) return;
+        pendingNewTaskFocus = false;
+        const title = form.querySelector("#task-title");
+        if (title && typeof title.focus === "function") title.focus();
       }
       // The single exit from a durable create. Everything before it decides what
       // happened; this decides where that leaves the user, so a save path that
@@ -558,6 +572,9 @@
         const landing = createdTaskLanding(recovery);
         if (landing.stageRecovery) applyCreatedTaskRecovery(recovery);
         createdTaskRecovery = null;
+        // Staged before the navigation, because the render it triggers is what
+        // holds the new control.
+        pendingNewTaskFocus = Boolean(landing.focusTitle);
         navigate(landing.path, { replace: landing.replace });
       }
       function focusPendingRelationshipRecovery(taskID, controller, generation) {
@@ -1959,7 +1976,9 @@
         }
         if (current.view === "new") {
           document.title = "New task · Workbook";
-          main.replaceChildren(taskForm("new", { title: "", description: "", status: current.status, priority: "medium", labels: [] }));
+          const form = taskForm("new", { title: "", description: "", status: current.status, priority: "medium", labels: [] });
+          main.replaceChildren(form);
+          focusRearmedNewTask(form);
           return;
         }
         // The detail view projects pending intents too. Opening a card right
