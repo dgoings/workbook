@@ -94,6 +94,9 @@
     .form-actions { display: flex; align-items: center; justify-content: space-between; gap: .85rem; width: 100%; padding-top: .1rem; }
     .form-primary-actions { display: flex; align-items: center; gap: .85rem; }
     .form-danger { margin-left: auto; }
+    .create-more { display: inline-flex; align-items: center; gap: .4rem; margin-left: auto; color: #34425a; cursor: pointer; font-size: .82rem; font-weight: 700; }
+    .create-more input { width: .95rem; height: .95rem; margin: 0; accent-color: #2457d6; cursor: pointer; }
+    .create-more input:focus-visible { outline: 3px solid rgba(36,87,214,.28); outline-offset: 2px; }
     .save-button { border: 1px solid #173f9e; border-radius: 4px; background: #2457d6; color: #fff; cursor: pointer; font: inherit; font-size: .86rem; font-weight: 750; padding: .62rem .95rem; }
     .save-button:hover { background: #1d49b7; }
     .save-button:focus-visible { outline: 3px solid rgba(36,87,214,.28); outline-offset: 2px; }
@@ -263,6 +266,16 @@
       const pendingTaskMessages = new Map();
       let createdTaskRecovery = null;
       let pendingRelationshipRecoveryFocus = null;
+      // The New Task form's "Create more" preference. It lives out here because
+      // a save rebuilds the route it is drawn on: state held by the form would
+      // be discarded by the very save it is supposed to describe.
+      let createMoreTasks = false;
+      // Staged by a save that re-arms the New Task form, consumed by the render
+      // that re-arms it.
+      let pendingNewTaskFocus = false;
+      // The same staging for a save that lands on the board: the ID of the card
+      // that should hold the caret once the board is back on screen.
+      let pendingBoardFocusTaskID = null;
 
       function text(element, value) { element.textContent = value || ""; return element; }
       // The visible ID inside a copy control, so a card that survives a render
@@ -421,8 +434,21 @@
         try { return { view: "detail", id: decodeURIComponent(match[1]) }; }
         catch (_) { return { view: "unknown" }; }
       }
-      function navigate(path) {
-        history.pushState({}, "", path);
+      function taskPath(taskID) {
+        return "/tasks/" + encodeURIComponent(taskID);
+      }
+      function newTaskPath(status) {
+        return statuses.has(status)
+          ? "/tasks/new?status=" + encodeURIComponent(status)
+          : "/tasks/new";
+      }
+      // replace is for a destination that supersedes the entry it leaves rather
+      // than following it: re-arming the New Task form is the same route with a
+      // spent form behind it, and pushing those would make Back walk backwards
+      // through every task the user just created.
+      function navigate(path, { replace = false } = {}) {
+        if (replace) history.replaceState({}, "", path);
+        else history.pushState({}, "", path);
         renderRoute();
       }
       function field(labelText, control, wide = false, modifier = "") {
@@ -512,6 +538,65 @@
           pendingTaskMessages.set(recovery.taskID, recovery.warnings);
         }
         pendingDetailRelationshipContextTaskID = recovery.taskID;
+      }
+      // Where a finished create leaves the user, and what has to be staged for
+      // the route it lands on. Saving a new task returns to the board, or
+      // re-arms a clean New Task form when "Create more" is on; either way the
+      // task that was just saved is behind the user, not in front of them.
+      //
+      // The exception is a create that has something to report: a warning, or a
+      // relationship the client could not write. Those messages and their retry
+      // actions only exist on the task's own detail route, so that create opens
+      // the task instead of dropping what it has to say.
+      function createdTaskLanding(recovery) {
+        if (recovery.warnings.length || hasRelationshipDrafts(recovery.failures)) {
+          return { path: taskPath(recovery.taskID), stageRecovery: true, replace: false };
+        }
+        if (createMoreTasks) {
+          return { path: newTaskPath(recovery.status), stageRecovery: false, replace: true, focusTitle: true };
+        }
+        return { path: "/", stageRecovery: false, replace: false, focusTaskID: recovery.taskID };
+      }
+      // A save that re-arms the New Task form destroys the node the user was
+      // standing on, and a browser blurs an element on its way out of the
+      // document. The replacement claims the caret so a run of tasks stays on
+      // the keyboard. A New Task route the user opened themselves is left
+      // alone: nothing was taken from them there.
+      function focusRearmedNewTask(form) {
+        if (!pendingNewTaskFocus) return;
+        pendingNewTaskFocus = false;
+        const title = form.querySelector("#task-title");
+        if (title && typeof title.focus === "function") title.focus();
+      }
+      // The board landing loses the caret the same way, and has less to fall
+      // back on: the form is gone, no card was focused before the create, and
+      // restoreCardFocus only returns focus to a card that already had it. So a
+      // keyboard user would land on the document body and have to tab in from
+      // the top. The card that was just created takes the caret instead, which
+      // is also the only confirmation this path gives a screen reader: the card
+      // announces the task's title and column. A board the user reached any
+      // other way is left alone.
+      function focusCreatedCard() {
+        const taskID = pendingBoardFocusTaskID;
+        if (!taskID) return;
+        pendingBoardFocusTaskID = null;
+        const node = findCardNode(taskID);
+        if (node && typeof node.focus === "function") node.focus();
+      }
+      // The single exit from a durable create. Everything before it decides what
+      // happened; this decides where that leaves the user, so a save path that
+      // learns to run optimistically moves the call rather than the rule.
+      function finishCreatedTask(recovery) {
+        const landing = createdTaskLanding(recovery);
+        if (landing.stageRecovery) applyCreatedTaskRecovery(recovery);
+        createdTaskRecovery = null;
+        // Staged before the navigation, because the render it triggers is what
+        // holds the new control. Written on every landing, not only the ones
+        // that want focus, so a landing that does not cannot inherit a request
+        // an earlier create left behind.
+        pendingNewTaskFocus = Boolean(landing.focusTitle);
+        pendingBoardFocusTaskID = landing.focusTaskID || null;
+        navigate(landing.path, { replace: landing.replace });
       }
       function focusPendingRelationshipRecovery(taskID, controller, generation) {
         const request = pendingRelationshipRecoveryFocus;
@@ -1298,6 +1383,22 @@
         load();
         return section;
       }
+      // "Create more" is read when a save finishes rather than when it starts,
+      // so a user who changes their mind while the create is in flight gets the
+      // answer they left the box on.
+      function createMoreToggle() {
+        const wrapper = document.createElement("label");
+        wrapper.className = "create-more";
+        const control = document.createElement("input");
+        control.type = "checkbox";
+        control.id = "task-create-more";
+        control.checked = createMoreTasks;
+        control.addEventListener("change", () => { createMoreTasks = control.checked; });
+        const caption = document.createElement("span");
+        text(caption, "Create more");
+        wrapper.append(control, caption);
+        return wrapper;
+      }
       function taskForm(mode, task) {
         const isNew = mode === "new";
         const relationshipDrafts = isNew
@@ -1334,6 +1435,7 @@
         const save = document.createElement("button"); save.className = "save-button"; save.type = "submit"; text(save, "Save");
         const back = document.createElement("a"); back.className = "board-link"; back.href = "/"; text(back, "Back");
         primaryActions.append(save, back); actions.append(primaryActions);
+        if (isNew) actions.append(createMoreToggle());
 		if (!isNew) {
 		  const danger = document.createElement("div"); danger.className = "form-danger";
 		  const remove = document.createElement("button"); remove.className = "delete-button"; remove.type = "button"; text(remove, "Delete");
@@ -1405,6 +1507,7 @@
               relationshipDrafts.blocks.clear();
               const recovery = {
                 taskID,
+                status: document.task.status,
                 failures: relationshipOutcome.failures,
                 warnings: [
                   ...mutationWarnings(document),
@@ -1435,10 +1538,7 @@
                     retried.relationshipContext.status !== "applied") {
                   return;
                 }
-                applyCreatedTaskRecovery(recovery);
-                const recoveredID = recovery.taskID;
-                createdTaskRecovery = null;
-                navigate("/tasks/" + encodeURIComponent(recoveredID));
+                finishCreatedTask(recovery);
               };
               const refreshed = await currentRefreshResult(refresh());
               if (!ownsCreation()) {
@@ -1450,9 +1550,7 @@
                 showCreatedTaskRefreshFailure(result, retryCreatedTaskRefresh);
                 return;
               }
-              applyCreatedTaskRecovery(recovery);
-              createdTaskRecovery = null;
-              navigate("/tasks/" + encodeURIComponent(taskID));
+              finishCreatedTask(recovery);
             } else {
               navigate("/");
               await refresh();
@@ -1875,6 +1973,7 @@
         if (current.view === "board") {
           document.title = "Workbook board";
           if (main.firstElementChild !== boardView) main.replaceChildren(boardView);
+          focusCreatedCard();
           return;
         }
         if (current.view === "unknown") {
@@ -1899,7 +1998,9 @@
         }
         if (current.view === "new") {
           document.title = "New task · Workbook";
-          main.replaceChildren(taskForm("new", { title: "", description: "", status: current.status, priority: "medium", labels: [] }));
+          const form = taskForm("new", { title: "", description: "", status: current.status, priority: "medium", labels: [] });
+          main.replaceChildren(form);
+          focusRearmedNewTask(form);
           return;
         }
         // The detail view projects pending intents too. Opening a card right
