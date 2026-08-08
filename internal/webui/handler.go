@@ -220,8 +220,14 @@ func NewHandlerWithSyncControl(list TaskLister, create TaskCreator, update TaskU
 // pageFuncs give the page template the one fact a presentation.TaskView does
 // not carry: whether this build has a column for the status the task holds. A
 // card in the unknown-status region cannot be dragged anywhere, so it must not
-// announce itself as movable; the client script decides the same thing from the
-// same status set, which is why neither side reads it off the containing list.
+// announce itself as movable.
+//
+// The client script answers the same question on every poll, and answers it
+// from the columns this function rendered — it reads the emitted [data-status]
+// nodes rather than a status list of its own — so the two cannot disagree about
+// a card even while the page is being served by a build the script does not
+// match. Neither side reads it off the containing list, so a card that changes
+// status carries the right answer with it as it moves.
 var pageFuncs = template.FuncMap{"knownStatus": knownStatus}
 
 func knownStatus(status core.Status) bool {

@@ -434,10 +434,16 @@
         article.dataset.idPrefix = view.idPrefix;
         // A card in the unknown-status region has no column to be dragged out of
         // and none to be dropped into, so it neither offers the drag nor
-        // announces one. The status is what decides that, not the list the node
-        // happens to sit in, so a card carries the right answer with it when a
-        // poll moves it between the region and a column.
-        const movable = statuses.has(task.status);
+        // announces one. This asks `lists` — the columns the server actually
+        // rendered — rather than the hardcoded `statuses` above, because `lists`
+        // is already what decides which region the card lands in, and the two
+        // answers have to be the same answer. Reading a second, duplicate status
+        // set would let a board whose columns differ from that constant (a
+        // removed default status, a per-project column set) strand a card here
+        // and then tell the reader it can be moved out. The status decides, not
+        // the node's current parent, so a card carries the right answer with it
+        // when a poll moves it between the region and a column.
+        const movable = lists.has(task.status);
         article.draggable = movable;
         article.setAttribute("aria-label", movable
           ? "Move task " + task.title + " from " + task.status
@@ -2240,7 +2246,10 @@
       });
       document.addEventListener("dragover", (event) => {
         const target = dropTarget(event);
-        if (!target || !activeDrag || !statuses.has(target.dataset.dropStatus)) return;
+        // Same set as the one that decides `movable`: a card is draggable out of
+        // exactly the columns the server rendered, so those are exactly the
+        // columns it may be dropped into.
+        if (!target || !activeDrag || !lists.has(target.dataset.dropStatus)) return;
         const placement = placementFor(target, event.clientY);
         showPlacement(target, placement);
         event.preventDefault();
@@ -2252,7 +2261,7 @@
       });
       document.addEventListener("drop", async (event) => {
         const target = dropTarget(event);
-        if (!target || !activeDrag || !statuses.has(target.dataset.dropStatus)) return;
+        if (!target || !activeDrag || !lists.has(target.dataset.dropStatus)) return;
         event.preventDefault();
         const taskId = activeDrag.taskId;
         const sourceStatus = activeDrag.sourceStatus;

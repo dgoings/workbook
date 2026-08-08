@@ -55,14 +55,7 @@ func TestHandlerServesBoardTasksAndHealth(t *testing.T) {
 	}
 	// The unknown region is not a seventh status: nothing may treat it as a
 	// status a task can be moved to.
-	for _, fragment := range []string{
-		`data-status="unknown"`,
-		`data-drop-status="unknown"`,
-	} {
-		if strings.Contains(board.Body.String(), fragment) {
-			t.Errorf("GET / body unexpectedly contains %q", fragment)
-		}
-	}
+	assertBoardStatusMarkersMatchColumns(t, board.Body.String())
 	if !strings.Contains(board.Body.String(), `aria-label="Task Future status task has the unrecognized status future-status"`) {
 		t.Error("GET / body does not label the unknown-status card as unmovable")
 	}
@@ -3897,7 +3890,10 @@ setTimeout(async () => {
   if (stranded.getAttribute("aria-label") !== "Task Future status task has the unrecognized status future-status") {
     throw new Error("the unknown-status card announces itself as movable: " + stranded.getAttribute("aria-label"));
   }
-  if (boardUnknownList.dataset.dropStatus !== undefined) throw new Error("the unknown-status region accepts drops");
+  // Whether the region carries data-drop-status is a fact about the server
+  // template, and this harness builds its own region node, so checking it here
+  // would only confirm the harness against itself. It is asserted against the
+  // rendered page in assertBoardStatusMarkersMatchColumns instead.
   if (stale.dataset.visible !== "false") throw new Error("unknown-status task triggered the stale state");
 
   // Giving the task a status this build knows moves the very same node into that
@@ -3924,6 +3920,80 @@ setTimeout(async () => {
 	command := exec.Command(node, "-e", program)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("execute rendered unknown-status board region: %v\n%s", err, output)
+	}
+}
+
+// Which region a card lands in and whether it can be dragged are the same
+// question, so they have to be answered from the same set: the columns the
+// server actually rendered.
+//
+// This board is missing the Blocked column — what dropping the default Blocked
+// status produces, and what a per-project column set produces routinely — while
+// the script still carries "blocked" in its own hardcoded status list. A client
+// that reads that list instead of the rendered columns puts the card in the
+// unknown-status region and then tells the reader it can be moved out of it.
+func TestHandlerClientDragsOnlyOutOfRenderedColumns(t *testing.T) {
+	node := requireNode(t)
+	tasks := boardTasks()
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	documentJSON, err := json.Marshal(TasksDocument{
+		Format:       "workbook.tasks",
+		Version:      1,
+		Tasks:        tasks,
+		Presentation: taskPresentation(tasks),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Take the Blocked column out of the rendered board before the script reads
+	// it, and leave the script itself alone. That is the drift: the page the
+	// server emitted and the constant the client ships no longer agree.
+	withoutBlockedColumn := `
+const blockedColumn = boardStatuses.indexOf("blocked");
+boardStatuses.splice(blockedColumn, 1);
+boardLists.splice(blockedColumn, 1);
+boardCounts.splice(blockedColumn, 1);
+`
+
+	program := clientDOMHarness("/", string(documentJSON)) + withoutBlockedColumn + script + `
+setTimeout(async () => {
+  const blockedID = ` + strconv.Quote(tasks[1].ID) + `;
+  if (boardLists.some((list) => list.dataset.status === "blocked")) {
+    throw new Error("the harness still renders a Blocked column, so nothing is being tested");
+  }
+  const inColumn = boardLists.map((list) => findElement(list, (element) => element.dataset.taskId === blockedID)).find(Boolean);
+  if (inColumn) throw new Error("a task landed in a column this board does not render");
+  const stranded = findElement(boardUnknownList, (element) => element.dataset.taskId === blockedID);
+  if (!stranded) throw new Error("a task whose column the board does not render vanished from the board");
+  if (stranded.draggable !== false) {
+    throw new Error("a card in the unknown-status region offers a drag that has nowhere to land");
+  }
+  if (stranded.getAttribute("aria-label") !== "Task Blocked task has the unrecognized status blocked") {
+    throw new Error("a card in the unknown-status region announces itself as movable: " + stranded.getAttribute("aria-label"));
+  }
+  if (boardUnknownCount.textContent !== "2") {
+    throw new Error("unknown-status count = " + boardUnknownCount.textContent + ", want 2");
+  }
+  // The cards in the columns the board does render are unaffected.
+  const ready = boardLists.find((list) => list.dataset.status === "ready");
+  const readyCard = findElement(ready, (element) => element.dataset.taskId === ` + strconv.Quote(tasks[0].ID) + `);
+  if (!readyCard) throw new Error("a rendered column lost its card");
+  if (readyCard.draggable !== true) throw new Error("a card in a rendered column stopped being draggable");
+  if (readyCard.getAttribute("aria-label") !== "Move task Ready task from ready") {
+    throw new Error("a card in a rendered column stopped announcing its move: " + readyCard.getAttribute("aria-label"));
+  }
+}, 0);
+`
+	command := exec.Command(node, "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute rendered column-derived drag behavior: %v\n%s", err, output)
 	}
 }
 
@@ -4897,8 +4967,53 @@ func TestHandlerServesDragAndDropBoardControls(t *testing.T) {
 			t.Errorf("GET / body does not contain %q", fragment)
 		}
 	}
-	if strings.Contains(body, `data-drop-status="unknown"`) {
-		t.Error("unknown status list must not be a status drop target")
+	assertBoardStatusMarkersMatchColumns(t, body)
+}
+
+// assertBoardStatusMarkersMatchColumns pins the unknown-status region to being
+// a display rather than a seventh status: the two attributes that make a list
+// draggable-out-of and droppable-into appear once per column and nowhere else.
+//
+// Naming a status here would assert nothing. The stranded fixture holds
+// "future-status", so a check for the absence of `data-status="unknown"` passes
+// whatever the template emits — including a template that hands the region a
+// real status and makes it a genuine seventh column. Counting the markers is
+// the falsifiable form: it fails for any status a regression reaches for.
+func assertBoardStatusMarkersMatchColumns(t *testing.T, body string) {
+	t.Helper()
+	columns := len(core.WorkflowStatuses())
+	for _, marker := range []string{`data-status="`, `data-drop-status="`} {
+		if got := strings.Count(body, marker); got != columns {
+			t.Errorf("GET / body has %d %s markers, want %d: one per column and none on the unknown-status region", got, marker, columns)
+		}
+	}
+}
+
+// The board no longer reads the client's own status list — placement and drag
+// both come from the columns the server rendered — but the task form still
+// builds its status select from it and still validates /tasks/new?status=
+// against it. Those need labels, which the rendered columns do not carry, so
+// the constant stays; what it may not do is drift from the set core accepts,
+// because a form offering a status core rejects is a save that fails after the
+// reader has already filled it in.
+func TestHandlerClientStatusListMatchesWorkflowStatuses(t *testing.T) {
+	handler := NewHandler(func(context.Context) ([]core.Task, error) { return boardTasks(), nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+
+	response := request(t, handler, http.MethodGet, "/")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d, want %d", response.Code, http.StatusOK)
+	}
+	declaration := regexp.MustCompile(`(?s)const statusDefinitions = \[(.*?)\];`).FindStringSubmatch(response.Body.String())
+	if declaration == nil {
+		t.Fatal("GET / body does not declare the client status list")
+	}
+	pairs := regexp.MustCompile(`\["([^"]*)", "([^"]*)"\]`).FindAllStringSubmatch(declaration[1], -1)
+	got := make([]core.StatusDefinition, len(pairs))
+	for i, pair := range pairs {
+		got[i] = core.StatusDefinition{Status: core.Status(pair[1]), Label: pair[2]}
+	}
+	if want := core.WorkflowStatuses(); !reflect.DeepEqual(got, want) {
+		t.Errorf("client statusDefinitions = %v, want core.WorkflowStatuses() = %v", got, want)
 	}
 }
 
