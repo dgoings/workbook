@@ -1,0 +1,101 @@
+name: Release PR
+
+# A release pull request documents in CHANGELOG.md what the release contains and
+# carries a release:patch, release:minor, or release:major label. Merging it cuts
+# the release.
+#
+# The label is the trigger and the changelog is the corroboration: an edit to the
+# file carrying no label releases nothing, so an erroneous edit is inert, and a
+# label claiming a minor or major release must be backed by prose describing it.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, closed]
+
+permissions:
+  contents: read
+
+jobs:
+  # Runs on every pull request, not only labelled ones, so it can be marked a
+  # required check without leaving ordinary pull requests pending forever. One
+  # carrying no release label passes without validating anything.
+  validate:
+    if: github.event.action != 'closed'
+    name: Validate release label and changelog
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    concurrency:
+      group: release-pr-validate-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - name: Check out the merge result
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Check the label and the changelog agree
+        env:
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -eu
+          bump=$(printf '%s' "${LABELS}" | jq -r '.[]' | scripts/release-bump-label.sh)
+          if [ -z "${bump}" ]; then
+            echo "No release label; this pull request cuts no release."
+            exit 0
+          fi
+          version=$(scripts/resolve-release-version.sh --bump "${bump}")
+          scripts/check-release-changelog.sh --bump "${bump}" --version "${version}"
+
+  # The pre-merge result can go stale: another release merging in between changes
+  # the previous tag and therefore the version this one computes. What the tag is
+  # actually based on is this second run, against the merged commit.
+  cut:
+    if: >-
+      github.event.action == 'closed' &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    name: Cut the release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.cut.outputs.tag }}
+    steps:
+      # The merge commit, not the tip of main. Another pull request merging a
+      # moment later is a separate release, and the changelog entry here
+      # describes the repository as of this merge.
+      - name: Check out the merge commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+
+      - name: Resolve and tag the release
+        id: cut
+        env:
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -eu
+          bump=$(printf '%s' "${LABELS}" | jq -r '.[]' | scripts/release-bump-label.sh)
+          if [ -z "${bump}" ]; then
+            echo "No release label; nothing to cut."
+            exit 0
+          fi
+          version=$(scripts/resolve-release-version.sh --bump "${bump}")
+          scripts/check-release-changelog.sh --bump "${bump}" --version "${version}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag --annotate "v${version}" --message "Workbook v${version}"
+          git push origin "refs/tags/v${version}"
+          printf 'tag=v%s\n' "${version}" >> "${GITHUB_OUTPUT}"
+
+  publish:
+    needs: cut
+    if: needs.cut.outputs.tag != ''
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.cut.outputs.tag }}
+    secrets: inherit

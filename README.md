@@ -475,7 +475,56 @@ release is a periodic version bump that gathers whatever has landed since the
 last tag. Merging does not publish anything, so work can accumulate on `main`
 until a group of it is worth releasing.
 
-Cutting a release is one command:
+Every release is a version tag on `main`. Three things can create one, and all
+three end in the same publication.
+
+#### A release pull request
+
+The usual path. Open a pull request that adds a `CHANGELOG.md` entry describing
+the release, and label it `release:patch`, `release:minor`, or `release:major`.
+Merging it cuts the release.
+
+```markdown
+## v0.5.0 — 2026-08-08
+
+### Added
+- board reconcile rendering
+```
+
+The label and the changelog heading are two independent statements of the same
+intent, and the release proceeds only when they agree. A changelog edit carrying
+no label releases nothing, so an erroneous edit to the file is inert. A
+`release:minor` or `release:major` label must be backed by an entry for the
+version it implies. `release:patch` may be cut without one, for a fix that does
+not warrant prose.
+
+The check runs on the pull request itself, so a disagreement blocks the merge
+rather than failing after it. It runs again against the merged commit before
+tagging, because another release landing in between changes which version comes
+next.
+
+The three labels have to exist on the repository before this works:
+
+```sh
+gh label create release:patch --description "Merging cuts a patch release"
+gh label create release:minor --description "Merging cuts a minor release"
+gh label create release:major --description "Merging cuts a major release"
+```
+
+#### The Actions button
+
+For a patch that needs no prose, run **Cut Release** from the Actions tab, or:
+
+```sh
+gh workflow run cut-release.yml -f bump=patch
+```
+
+Pick `patch`, `minor`, or `major` and the version is computed from the newest
+tag; fill in the optional exact version to override it. The same changelog rule
+applies, so a `minor` or `major` cut this way still needs an entry. Releases are
+cut from `main`, and a run on any other branch is refused.
+
+#### From a checkout
 
 ```sh
 ./scripts/cut-release.sh 0.3.0
@@ -485,8 +534,7 @@ It refuses to publish anything until the release is one that can be reproduced:
 the version is strict `MAJOR.MINOR.PATCH` and orders after the latest release,
 `HEAD` is on `main` with nothing uncommitted, `main` matches the remote, and the
 tag is unused both locally and on the remote. It then runs `go test ./...`,
-creates the annotated tag, and pushes only that tag. Pushing the tag is what
-starts the release; nothing else needs to be run by hand.
+creates the annotated tag, and pushes only that tag.
 
 Check a release without publishing it with `--dry-run`, which runs every check
 and stops before tagging:
@@ -496,18 +544,33 @@ and stops before tagging:
 ```
 
 `--skip-tests` skips the test run, and `--remote` and `--branch` override the
-`origin` and `main` defaults.
+`origin` and `main` defaults. This path does not consult the changelog: it takes
+an exact version and trusts the person typing it.
 
 #### What the workflow publishes
 
-Pushing a version tag such as `v0.1.0` runs the release workflow. It revalidates
-the strict SemVer tag, publishes the four archives and checksums to GitHub
-Releases, and updates the `dgoings/homebrew-tap` formula from those generated
-checksums. The protected release environment exposes a credential scoped only to
-that tap repository after validation. New assets are staged in a draft, the tap
-update is pushed first, and the draft is published last. A rerun verifies
-existing assets byte-for-byte and never overwrites them; a failed final
-publication reverts the tap update and removes only a draft created by that run.
+A version tag such as `v0.1.0` runs the release workflow. It revalidates the
+strict SemVer tag, publishes the four archives and checksums to GitHub Releases,
+and updates the `dgoings/homebrew-tap` formula from those generated checksums.
+The protected release environment exposes a credential scoped only to that tap
+repository after validation. New assets are staged in a draft, the tap update is
+pushed first, and the draft is published last. A rerun verifies existing assets
+byte-for-byte and never overwrites them; a failed final publication reverts the
+tap update and removes only a draft created by that run.
+
+The release notes are the `CHANGELOG.md` entry when the version has one, and
+generated from the commit log when it does not.
+
+A tag pushed by a workflow using the default `GITHUB_TOKEN` does not start
+another workflow run, so the two automated paths push their tag and then call
+the release workflow directly. A tag pushed from a checkout starts it through
+the `push` trigger as before. Publication has one implementation and three
+entrances.
+
+A release that fails after its tag exists leaves that tag behind. Because the
+workflow runs `go test ./...` before it builds anything, a broken commit fails
+before publishing, and the tag has to be deleted before that version can be cut
+again.
 
 This source repository intentionally does not track an installable
 `Formula/workbook.rb` with placeholder checksums. The workflow renders the real

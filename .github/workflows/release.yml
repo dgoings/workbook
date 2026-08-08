@@ -1,15 +1,31 @@
 name: Release
 
+# Three paths reach this workflow, and only one of them arrives by pushing a
+# tag. A tag pushed with the default GITHUB_TOKEN does not create a new workflow
+# run, so the two cut workflows push their tag and then call this workflow
+# directly. Publishing therefore has one implementation and three entrances,
+# rather than a second copy reachable only from Actions.
 on:
   push:
     tags: ["v*"]
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag to publish, such as v0.5.0
+        required: true
+        type: string
+    secrets:
+      HOMEBREW_TAP_TOKEN:
+        required: true
 
+# A called run's github.ref is the caller's branch, so keying on it would group
+# every called release together and let one wait on an unrelated one.
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   REPOSITORY: dgoings/workbook
@@ -19,16 +35,20 @@ jobs:
   release:
     environment: release
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - name: Check out release tag
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          ref: ${{ github.ref }}
+          ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
 
       - name: Validate release tag
         run: |
-          VERSION=$(scripts/validate-release-tag.sh "${GITHUB_REF_NAME}")
+          VERSION=$(scripts/validate-release-tag.sh "${RELEASE_TAG}")
           printf 'VERSION=%s\n' "${VERSION}" >> "${GITHUB_ENV}"
 
       - name: Set up Go
@@ -52,4 +72,4 @@ jobs:
       - name: Publish release and Homebrew formula
         env:
           GH_TOKEN: ${{ github.token }}
-        run: scripts/publish-release.sh "${GITHUB_REF_NAME}" dist homebrew-tap "${REPOSITORY}"
+        run: scripts/publish-release.sh "${RELEASE_TAG}" dist homebrew-tap "${REPOSITORY}"
