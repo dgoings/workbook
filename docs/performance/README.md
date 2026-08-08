@@ -1131,13 +1131,25 @@ outlier. 117 is 9 × 13. The subtraction that derives the per-tick cost is
 therefore reading a structural constant rather than smoothing noise, and it is
 the sturdiest number in this section: process counts carry no host-load variance.
 
-**A watcher at the product's default interval costs roughly 7% of one core,
-continuously.** The control window shows what merely being alive costs — about
-1% of a core for startup and the two bracketing synchronizations — so the
-scheduled ticks are the rest. At a 5-second interval that is about 300–340 ms of
-CPU every 5 seconds, or roughly four minutes of CPU per hour of wall clock on a
-525-task board. That is the number to weigh before telling a beta user to leave
-one running all day, and it is a real cost rather than a rounding error.
+**A watcher at the product's default interval costs roughly 6–7% of one core,
+continuously.** Read the `CPU (% of one core)` column as a ceiling rather than a
+rate: its numerator is whole-lifetime CPU and its denominator is the window
+alone, so each figure carries the untimed startup synchronization that ran before
+the clock started. Subtracting one tick's cost from the control leaves that fixed
+prefix at about 320 ms of CPU in SHA-1 and 280 ms in SHA-256, which puts the
+in-window steady rate near 6.3–7.1% and 5.7–6.3% against the 6.78–7.64% and
+6.16–6.71% printed. Those corrections are estimates — they assume the opening
+synchronization costs about what a scheduled one does — while the printed
+ceilings are measured, which is why the table reports the measurement.
+
+Either way the conclusion holds and does not depend on the correction. The
+control window shows what merely being alive costs — around 1% of a core, itself
+a ceiling — so the scheduled ticks are the rest, and the per-tick cost is derived
+by subtraction and immune to this scope: the control pays the same startup and it
+cancels. At a 5-second interval that is about 300–340 ms of CPU every 5 seconds,
+or roughly four minutes of CPU per hour of wall clock on a 525-task board. That
+is the number to weigh before telling a beta user to leave one running all day,
+and it is a real cost rather than a rounding error.
 
 **Nothing durable is written, and the peak does not obviously grow.** The
 repository shrinks by 94 to 95 bytes in every window, control and steady alike,
@@ -1178,8 +1190,8 @@ Per window:
 | `observedMilliseconds` | Measured wall clock of the window, which may exceed the requested length. |
 | `synchronizations` | `git fetch` invocations recorded inside the window, one per completed synchronization. It includes the shutdown synchronization that follows the interrupt, because that work is inside the observed process lifetime; the control counts the same one and subtracts it. |
 | `gitProcesses` | Trace2 process starts inside the window. |
-| `userMilliseconds`, `systemMilliseconds`, `cpuMilliseconds` | Kernel-reported CPU time for the watcher and every descendant it reaped. |
-| `cpuPercentOfOneCore` | `cpuMilliseconds` over `observedMilliseconds`, as a percentage of a single core. |
+| `userMilliseconds`, `systemMilliseconds`, `cpuMilliseconds` | Kernel-reported CPU time for the watcher and every descendant it reaped. These are whole-lifetime totals, so like `maxResidentBytes` they also cover the untimed startup synchronization before the window. |
+| `cpuPercentOfOneCore` | `cpuMilliseconds` over `observedMilliseconds`, as a percentage of a single core. The numerator is whole-lifetime and the denominator is window-only, so this is an **upper bound** on the rate inside the window, not the rate itself. Read `perSynchronization` for the comparable figure. |
 | `maxResidentRaw`, `maxResidentRawUnit`, `maxResidentBytes` | `ru_maxrss` as the kernel reported it, its unit, and the normalized byte value. This is a whole-lifetime peak, so it also covers the untimed startup synchronization before the window. |
 | `minorPageFaults`, `majorPageFaults` | `ru_minflt` and `ru_majflt`. On darwin these are the usable I/O pressure signal. |
 | `voluntaryContextSwitches`, `involuntaryContextSwitches` | `ru_nvcsw` and `ru_nivcsw`. |
@@ -1191,7 +1203,21 @@ added, the `cpuMillisecondsPerSynchronization`,
 derived from them, a `maxResidentByteDelta` between the two windows, and a
 `description` naming both intervals and the window length.
 
-Three caveats carry over from the storage measurements and matter here too. Peak
+One caveat belongs to the CPU fields specifically. The kernel accounts a
+process's CPU only when it exits, so `wait4` reports the whole lifetime and there
+is no portable way to read the counter at the window boundaries. Every CPU number
+in the block therefore includes process start and the untimed opening
+synchronization, while `observedMilliseconds` covers the window alone.
+`cpuPercentOfOneCore` is consequently a ceiling: the true in-window rate is
+lower, and the gap is whatever startup cost. Two consequences are worth stating.
+A release that made startup more expensive would raise the field for the *steady*
+window without any tick getting slower, so it is not a regression signal on its
+own; and the fixed cost has to be subtracted before the number means anything
+about steady state, which is exactly what `perSynchronization` does. The Git
+process count and the repository byte delta are the window-scoped fields, and
+they carry no such caveat.
+
+Three more caveats carry over from the storage measurements and matter here too. Peak
 resident memory from `wait4` is a maximum rather than a sum, so a watcher running
 several `git` processes concurrently reports the largest single peak and the
 number may belong to a `git` child rather than to Workbook. It is not

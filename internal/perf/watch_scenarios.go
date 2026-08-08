@@ -66,9 +66,23 @@ type WatcherWindow struct {
 	Synchronizations int `json:"synchronizations"`
 	GitProcesses     int `json:"gitProcesses"`
 
-	UserMilliseconds    float64 `json:"userMilliseconds"`
-	SystemMilliseconds  float64 `json:"systemMilliseconds"`
-	CPUMilliseconds     float64 `json:"cpuMilliseconds"`
+	// UserMilliseconds, SystemMilliseconds, and CPUMilliseconds are the
+	// `wait4` totals for the whole process, so like MaxResidentBytes they also
+	// cover the untimed startup synchronization before the window opened.
+	UserMilliseconds   float64 `json:"userMilliseconds"`
+	SystemMilliseconds float64 `json:"systemMilliseconds"`
+	CPUMilliseconds    float64 `json:"cpuMilliseconds"`
+
+	// CPUPercentOfOneCore divides that whole-lifetime CPU by the window-only
+	// ObservedMilliseconds, so it is an upper bound on the rate inside the
+	// window rather than the rate itself. The kernel accounts CPU only when a
+	// process exits, so there is no portable way to read it at the window
+	// boundaries; the field is reported as measured and bounded here instead of
+	// being corrected by an assumption about what startup cost.
+	//
+	// Read it as a ceiling, and read PerSynchronization for the comparable
+	// number: the control pays the same fixed startup and the subtraction
+	// removes it, so the derived per-tick cost is unaffected by this scope.
 	CPUPercentOfOneCore float64 `json:"cpuPercentOfOneCore"`
 
 	// MaxResidentBytes is the process's whole-lifetime peak, so it also covers
@@ -316,6 +330,11 @@ func medianFloat(values []float64) float64 {
 // readiness line, and completing the opening synchronization. The Trace2 cursor
 // opens at the same moment the clock starts, so the counted Git work belongs to
 // the window and to the shutdown synchronization that follows it.
+//
+// The kernel's accounting does not honor that boundary. `wait4` reports CPU and
+// peak resident set for the whole process and only once it has exited, so those
+// fields cover the setup too; the Git process count and the repository byte
+// delta are the window-scoped ones. WatcherWindow records which is which.
 func observeWatcherWindow(ctx context.Context, spec watcherWindowSpec) (WatcherWindow, error) {
 	if spec.Window <= 0 {
 		return WatcherWindow{}, fmt.Errorf("watcher observation window must be positive")
