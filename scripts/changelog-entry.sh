@@ -34,11 +34,21 @@ if ! grep -Eq "${heading_pattern}" "${changelog}"; then
 	exit 1
 fi
 
+# awk processes escape sequences when it assigns a -v variable, so passing the
+# pattern in would turn every \. back into a bare dot: gawk warns about it and
+# then matches any character, which is the behaviour the escaping exists to
+# prevent. Comparing the heading literally needs no pattern at all.
+#
 # Command substitution strips trailing newlines, so only the blank lines between
 # the heading and the first line of prose need removing.
-body=$(awk -v pattern="${heading_pattern}" '
-	!found && $0 ~ pattern { found = 1; next }
-	found && /^## / { exit }
+heading="## v${version}"
+body=$(awk -v heading="${heading}" '
+	!found && index($0, heading) == 1 &&
+		(length($0) == length(heading) || substr($0, length(heading) + 1, 1) == " ") {
+		found = 1
+		next
+	}
+	found && index($0, "## ") == 1 { exit }
 	found { print }
 ' "${changelog}" | sed -e '/./,$!d')
 

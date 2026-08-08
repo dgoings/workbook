@@ -92,6 +92,36 @@ func TestChangelogEntryTreatsDotsLiterally(t *testing.T) {
 	}
 }
 
+// A heading is matched literally and has to end where the version ends, or
+// v0.5.0 would take the body written for v0.5.01.
+func TestChangelogEntryDoesNotMatchALongerVersion(t *testing.T) {
+	path := writeChangelog(t, "# Changelog\n\n## v0.5.01\n\n- longer version\n\n## v0.5.0\n\n- exact\n")
+
+	output, err := runChangelogEntry(t, "0.5.0", path)
+	if err != nil {
+		t.Fatalf("changelog entry: %v\n%s", err, output)
+	}
+	if output != "- exact\n" {
+		t.Errorf("entry = %q, want the body of the exact version", output)
+	}
+}
+
+// gawk processes escape sequences when it assigns a -v variable and warns on
+// stdout's neighbour while doing it, so a pattern passed in that way both
+// polluted the extracted body and quietly lost its escaping. Nothing the script
+// hands awk may contain a backslash.
+func TestChangelogEntryEmitsNothingButTheBody(t *testing.T) {
+	path := writeChangelog(t, sampleChangelog)
+
+	output, err := runChangelogEntry(t, "0.5.0", path)
+	if err != nil {
+		t.Fatalf("changelog entry: %v\n%s", err, output)
+	}
+	if strings.Contains(output, "warning") || strings.Contains(output, "awk") {
+		t.Errorf("entry = %q, want no tool diagnostics mixed into the release notes", output)
+	}
+}
+
 func TestChangelogEntryRejectsAnEmptyBody(t *testing.T) {
 	path := writeChangelog(t, "# Changelog\n\n## v0.5.0\n\n## v0.4.1\n\n- old\n")
 
