@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -99,9 +100,13 @@ func TestNewHandlerRoutesEveryOptionToItsOwnRoute(t *testing.T) {
 }
 
 // A capability the board was not given is reported rather than assumed, so a
-// zero Options value still answers every route.
+// zero Options value still answers every route. Every mutating route belongs in
+// this table: an unguarded one does not return a 500, it panics, and a panic is
+// a torn-down connection and a server stack trace rather than the error
+// document the rest of the surface returns.
 func TestNewHandlerReportsUnconfiguredCapabilities(t *testing.T) {
 	task := boardTasks()[0]
+	dependencyPath := "/api/tasks/" + task.ID + "/dependencies/" + boardTasks()[1].ID
 	handler := NewHandler(Options{List: func(context.Context) ([]core.Task, error) { return nil, nil }})
 	tests := []struct {
 		name   string
@@ -111,9 +116,12 @@ func TestNewHandlerReportsUnconfiguredCapabilities(t *testing.T) {
 	}{
 		{name: "create", method: http.MethodPost, target: "/api/tasks", body: `{"title":"New"}`},
 		{name: "update", method: http.MethodPatch, target: "/api/tasks/" + task.ID, body: `{"title":"Renamed"}`},
+		{name: "status", method: http.MethodPatch, target: "/api/tasks/" + task.ID + "/status", body: `{"status":"ready"}`},
 		{name: "position", method: http.MethodPatch, target: "/api/tasks/" + task.ID + "/position", body: `{"status":"ready"}`},
 		{name: "delete", method: http.MethodDelete, target: "/api/tasks/" + task.ID},
 		{name: "restore", method: http.MethodPost, target: "/api/tasks/" + task.ID + "/restore"},
+		{name: "depend", method: http.MethodPut, target: dependencyPath},
+		{name: "free", method: http.MethodDelete, target: dependencyPath},
 		{name: "history", method: http.MethodGet, target: "/api/tasks/" + task.ID + "/history"},
 		{name: "sync state", method: http.MethodGet, target: "/api/sync"},
 		{name: "sync mode", method: http.MethodPut, target: "/api/sync", body: `{"mode":"inline"}`},
@@ -123,6 +131,13 @@ func TestNewHandlerReportsUnconfiguredCapabilities(t *testing.T) {
 			response := requestJSON(t, handler, test.method, test.target, test.body)
 			if response.Code != http.StatusInternalServerError {
 				t.Fatalf("%s %s = %d, want %d; body = %s", test.method, test.target, response.Code, http.StatusInternalServerError, response.Body.String())
+			}
+			var document ErrorDocument
+			if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+				t.Fatalf("decode %s %s error: %v; body = %s", test.method, test.target, err, response.Body.String())
+			}
+			if !strings.HasSuffix(document.Error.Message, "is not configured") {
+				t.Fatalf("%s %s error = %#v, want an unconfigured-capability report", test.method, test.target, document.Error)
 			}
 		})
 	}

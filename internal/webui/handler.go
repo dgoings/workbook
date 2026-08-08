@@ -553,6 +553,10 @@ func (handler *handler) updateTaskStatus(writer http.ResponseWriter, request *ht
 		handler.writeError(writer, core.Wrap(core.CategoryInvocation, "decode status update", err))
 		return
 	}
+	if handler.UpdateStatus == nil {
+		handler.writeError(writer, core.Errorf(core.CategoryOperational, "task status updating is not configured"))
+		return
+	}
 	result, err := handler.UpdateStatus(request.Context(), id, input.Status, input.ExpectedHead)
 	if err != nil {
 		handler.writeError(writer, err)
