@@ -273,6 +273,9 @@
       // Staged by a save that re-arms the New Task form, consumed by the render
       // that re-arms it.
       let pendingNewTaskFocus = false;
+      // The same staging for a save that lands on the board: the ID of the card
+      // that should hold the caret once the board is back on screen.
+      let pendingBoardFocusTaskID = null;
 
       function text(element, value) { element.textContent = value || ""; return element; }
       // The visible ID inside a copy control, so a card that survives a render
@@ -552,7 +555,7 @@
         if (createMoreTasks) {
           return { path: newTaskPath(recovery.status), stageRecovery: false, replace: true, focusTitle: true };
         }
-        return { path: "/", stageRecovery: false, replace: false };
+        return { path: "/", stageRecovery: false, replace: false, focusTaskID: recovery.taskID };
       }
       // A save that re-arms the New Task form destroys the node the user was
       // standing on, and a browser blurs an element on its way out of the
@@ -565,6 +568,21 @@
         const title = form.querySelector("#task-title");
         if (title && typeof title.focus === "function") title.focus();
       }
+      // The board landing loses the caret the same way, and has less to fall
+      // back on: the form is gone, no card was focused before the create, and
+      // restoreCardFocus only returns focus to a card that already had it. So a
+      // keyboard user would land on the document body and have to tab in from
+      // the top. The card that was just created takes the caret instead, which
+      // is also the only confirmation this path gives a screen reader: the card
+      // announces the task's title and column. A board the user reached any
+      // other way is left alone.
+      function focusCreatedCard() {
+        const taskID = pendingBoardFocusTaskID;
+        if (!taskID) return;
+        pendingBoardFocusTaskID = null;
+        const node = findCardNode(taskID);
+        if (node && typeof node.focus === "function") node.focus();
+      }
       // The single exit from a durable create. Everything before it decides what
       // happened; this decides where that leaves the user, so a save path that
       // learns to run optimistically moves the call rather than the rule.
@@ -573,8 +591,11 @@
         if (landing.stageRecovery) applyCreatedTaskRecovery(recovery);
         createdTaskRecovery = null;
         // Staged before the navigation, because the render it triggers is what
-        // holds the new control.
+        // holds the new control. Written on every landing, not only the ones
+        // that want focus, so a landing that does not cannot inherit a request
+        // an earlier create left behind.
         pendingNewTaskFocus = Boolean(landing.focusTitle);
+        pendingBoardFocusTaskID = landing.focusTaskID || null;
         navigate(landing.path, { replace: landing.replace });
       }
       function focusPendingRelationshipRecovery(taskID, controller, generation) {
@@ -1952,6 +1973,7 @@
         if (current.view === "board") {
           document.title = "Workbook board";
           if (main.firstElementChild !== boardView) main.replaceChildren(boardView);
+          focusCreatedCard();
           return;
         }
         if (current.view === "unknown") {

@@ -26,6 +26,9 @@ setTimeout(async () => {
 
   findElement(main, (element) => element.id === "task-title").value = ` + strconv.Quote(created.Title) + `;
   const form = findElement(main, (element) => element.tagName === "FORM");
+  // A keyboard user submits from the Save button, so that is where the caret
+  // stands when the save begins and the form is destroyed under it.
+  findElement(form, (element) => hasClassToken(element, "save-button")).focus();
   await form.eventListeners.submit({ preventDefault() {} });
 
   if (createCalls !== 1) throw new Error("Save did not create exactly one task");
@@ -38,6 +41,19 @@ setTimeout(async () => {
   if (main.firstElementChild !== boardView) throw new Error("Save did not land on the board");
   if (findElement(main, (element) => element.id === "task-title")) {
     throw new Error("the saved task's form is still on screen");
+  }
+
+  // The board landing has the same blur the re-armed form does: the save
+  // destroyed the node the user was standing on. Landing with nothing focused
+  // makes a keyboard user tab from the top of the document, and tells a screen
+  // reader nothing about the create having worked. The new card carries both.
+  const createdCard = boardLists
+    .map((list) => list.querySelectorAll(".task-card")
+      .find((node) => node.dataset.taskId === ` + strconv.Quote(created.ID) + `))
+    .find(Boolean);
+  if (!createdCard) throw new Error("the board landing does not carry the created card");
+  if (document.activeElement !== createdCard) {
+    throw new Error("the board landing dropped the caret instead of handing it to the created card");
   }
 }, 0);
 `
