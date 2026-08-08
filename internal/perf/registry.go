@@ -12,12 +12,15 @@ var scenarioRegistry = []string{
 	"cli-free",
 	"cli-list",
 	"cli-move",
+	"cli-next",
 	"cli-restore",
+	"cli-show",
 	"cli-update",
 	"cli-update-autosync",
 	"cli-update-watched",
 	"cli-burst-independent-10",
 	"cli-burst-same-task-10",
+	"api-tasks",
 	"api-update",
 	"api-burst-independent-10",
 	"api-burst-same-task-10",
@@ -39,6 +42,7 @@ var scenarioRegistry = []string{
 	"validate-full-history",
 	"validate-cached-unchanged",
 	"validate-five-changed",
+	"watch-steady-state",
 }
 
 // ScenarioNames returns the complete ordered benchmark scenario registry.

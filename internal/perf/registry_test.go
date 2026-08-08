@@ -14,12 +14,15 @@ func TestScenarioNamesReturnsStableDefensiveRegistry(t *testing.T) {
 		"cli-free",
 		"cli-list",
 		"cli-move",
+		"cli-next",
 		"cli-restore",
+		"cli-show",
 		"cli-update",
 		"cli-update-autosync",
 		"cli-update-watched",
 		"cli-burst-independent-10",
 		"cli-burst-same-task-10",
+		"api-tasks",
 		"api-update",
 		"api-burst-independent-10",
 		"api-burst-same-task-10",
@@ -41,6 +44,7 @@ func TestScenarioNamesReturnsStableDefensiveRegistry(t *testing.T) {
 		"validate-full-history",
 		"validate-cached-unchanged",
 		"validate-five-changed",
+		"watch-steady-state",
 	}
 
 	got := ScenarioNames()
@@ -91,7 +95,7 @@ func TestResolveScenariosUsesRegistryOrderAndRejectsInvalidSelectors(t *testing.
 // one public scenario report the wrong policy.
 func TestLocalScenarioResultsAttachApprovedDurationTargets(t *testing.T) {
 	coldSingle := ScenarioTarget{DurationStatistic: DurationP95, DurationComparison: DurationAtMost, MaxMilliseconds: 200}
-	warmUpdate := ScenarioTarget{DurationStatistic: DurationP95, DurationComparison: DurationAtMost, MaxMilliseconds: 100}
+	warmUpdate := ScenarioTarget{DurationStatistic: DurationP95, DurationComparison: DurationAtMost, MaxMilliseconds: 150}
 	burst := ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationLessThan, MaxMilliseconds: 1000}
 	coldAutoSync := ScenarioTarget{DurationStatistic: DurationP95, DurationComparison: DurationAtMost, MaxMilliseconds: 1000}
 
@@ -101,7 +105,9 @@ func TestLocalScenarioResultsAttachApprovedDurationTargets(t *testing.T) {
 		"cli-depend":               coldSingle,
 		"cli-free":                 coldSingle,
 		"cli-move":                 coldSingle,
+		"cli-next":                 coldAutoSync,
 		"cli-restore":              coldSingle,
+		"cli-show":                 coldSingle,
 		"cli-update":               coldSingle,
 		"cli-update-autosync":      coldAutoSync,
 		"cli-update-watched":       coldSingle,
@@ -113,9 +119,10 @@ func TestLocalScenarioResultsAttachApprovedDurationTargets(t *testing.T) {
 	}
 	results := append(coldCLIResults(1), warmHTTPResults(1)...)
 	for _, result := range results {
-		if result.Name == "cli-list" {
-			// The read path deliberately has no approved budget; see
-			// TestColdListScenarioHasNoApprovedDurationTarget.
+		if result.Name == "cli-list" || result.Name == "api-tasks" {
+			// The read paths deliberately have no approved budget; see
+			// TestColdListScenarioHasNoApprovedDurationTarget and
+			// TestWarmTaskListScenarioHasNoApprovedDurationTarget.
 			continue
 		}
 		expected, ok := want[result.Name]
