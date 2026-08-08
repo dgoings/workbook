@@ -4311,6 +4311,7 @@ const boardCounts = boardStatuses.map((status) => {
   return element;
 });
 boardView.querySelectorAll = (selector) => selector === "[data-status]" ? boardLists : boardCounts;
+const descriptionToggle = new TestElement("button");
 const documentEventListeners = {};
 	globalThis.document = {
 	  title: "",
@@ -4319,6 +4320,7 @@ const documentEventListeners = {};
     if (selector === "main") return main;
     if (selector === "[data-board-view]") return boardView;
     if (selector === "[data-updated]") return updated;
+    if (selector === "[data-description-toggle]") return descriptionToggle;
     return null;
   },
   querySelectorAll() { return []; },
@@ -4344,9 +4346,18 @@ const documentEventListeners = {};
 	}, configurable: true });
 	const windowTimeouts = [];
 	let nextWindowTimeoutID = 1;
+	// What the browser remembers between visits. A test seeds it to state what
+	// the reader chose last time, and reads it to state what this visit stored.
+	const storedPreferences = new Map();
+	const preferenceStorage = {
+	  getItem(key) { return storedPreferences.has(key) ? storedPreferences.get(key) : null; },
+	  setItem(key, value) { storedPreferences.set(key, String(value)); },
+	  removeItem(key) { storedPreferences.delete(key); }
+	};
 globalThis.window = {
 	  innerHeight: 900,
 	  innerWidth: 1440,
+	  localStorage: preferenceStorage,
 	  location: { href: initialURL.href, origin: initialURL.origin },
 	  addEventListener() {},
 	  removeEventListener() {},
