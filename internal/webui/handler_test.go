@@ -42,19 +42,29 @@ func TestHandlerServesBoardTasksAndHealth(t *testing.T) {
 		"Task refresh failed",
 		"1 of 2 prerequisites complete",
 		"Waiting on dependencies",
+		// A status this build has no column for is named rather than dropped,
+		// under its own heading, matching the terminal board's UNKNOWN STATUS
+		// section. See internal/presentation/parity_test.go for the decision.
+		"data-unknown-list",
+		"Unknown status",
+		"Future status task",
 	} {
 		if !strings.Contains(board.Body.String(), fragment) {
 			t.Errorf("GET / body does not contain %q", fragment)
 		}
 	}
+	// The unknown region is not a seventh status: nothing may treat it as a
+	// status a task can be moved to.
 	for _, fragment := range []string{
 		`data-status="unknown"`,
-		"Unrecognized status",
-		"Future status task",
+		`data-drop-status="unknown"`,
 	} {
 		if strings.Contains(board.Body.String(), fragment) {
 			t.Errorf("GET / body unexpectedly contains %q", fragment)
 		}
+	}
+	if !strings.Contains(board.Body.String(), `aria-label="Task Future status task has the unrecognized status future-status"`) {
+		t.Error("GET / body does not label the unknown-status card as unmovable")
 	}
 
 	tasksResponse := request(t, handler, http.MethodGet, "/api/tasks")
@@ -3833,7 +3843,13 @@ setTimeout(async () => {
 	}
 }
 
-func TestHandlerClientBoardIgnoresUnknownStatuses(t *testing.T) {
+// A task whose status matches no column is shown under its own heading rather
+// than dropped, which is what the terminal board has always done. See
+// internal/presentation/parity_test.go for why the two boards owe each other
+// that. The region is a display, not a seventh status: it takes no drops, its
+// cards do not drag, and a status the board does know pulls the card back into
+// the column that owns it.
+func TestHandlerClientBoardSurfacesUnknownStatuses(t *testing.T) {
 	node := requireNode(t)
 	tasks := boardTasks()
 	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
@@ -3855,10 +3871,9 @@ func TestHandlerClientBoardIgnoresUnknownStatuses(t *testing.T) {
 	}
 
 	program := clientDOMHarness("/", string(documentJSON)) + script + `
-setTimeout(() => {
+setTimeout(async () => {
   const ready = boardLists.find((list) => list.dataset.status === "ready");
   const card = findElement(ready, (element) => element.dataset.taskId === ` + strconv.Quote(tasks[0].ID) + `);
-  const unknownCard = boardLists.map((list) => findElement(list, (element) => element.dataset.taskId === ` + strconv.Quote(tasks[2].ID) + `)).find(Boolean);
   if (!card) throw new Error("canonical task did not render when an unknown-status task was present");
   const progress = findElement(card, (element) => Object.hasOwn(element.dataset, "dependencyProgress"));
   const count = progress && findElement(progress, (element) => element.tagName === "SPAN" && element.textContent === "1 of 2 prerequisites complete");
@@ -3870,13 +3885,45 @@ setTimeout(() => {
   if (!dependencyFree || findElement(dependencyFree, (element) => Object.hasOwn(element.dataset, "dependencyProgress"))) {
     throw new Error("dependency-free refreshed card rendered dependency progress");
   }
-  if (unknownCard) throw new Error("unknown-status task rendered in a canonical list");
+
+  const inColumn = boardLists.map((list) => findElement(list, (element) => element.dataset.taskId === ` + strconv.Quote(tasks[2].ID) + `)).find(Boolean);
+  if (inColumn) throw new Error("unknown-status task rendered in a status column, which would misreport its status");
+  const stranded = findElement(boardUnknownList, (element) => element.dataset.taskId === ` + strconv.Quote(tasks[2].ID) + `);
+  if (!stranded) throw new Error("unknown-status task did not render anywhere on the board");
+  if (!stranded.textContent.includes("Future status task")) throw new Error("the unknown-status card does not name its task");
+  if (boardUnknownCount.textContent !== "1") throw new Error("unknown-status count = " + boardUnknownCount.textContent + ", want 1");
+  if (boardUnknownSection.dataset.visible !== "true") throw new Error("the unknown-status region stayed hidden while holding a task");
+  if (stranded.draggable !== false) throw new Error("an unknown-status card offers a drag that has nowhere to land");
+  if (stranded.getAttribute("aria-label") !== "Task Future status task has the unrecognized status future-status") {
+    throw new Error("the unknown-status card announces itself as movable: " + stranded.getAttribute("aria-label"));
+  }
+  if (boardUnknownList.dataset.dropStatus !== undefined) throw new Error("the unknown-status region accepts drops");
   if (stale.dataset.visible !== "false") throw new Error("unknown-status task triggered the stale state");
+
+  // Giving the task a status this build knows moves the very same node into that
+  // column, so the recovery keeps focus, and empties the region again.
+  taskResponse = {
+    format: "workbook.tasks",
+    version: 1,
+    tasks: taskDocument.tasks.map((task) => task.id !== ` + strconv.Quote(tasks[2].ID) + ` ? task : Object.assign({}, task, { status: "done" })),
+    presentation: taskDocument.presentation
+  };
+  await intervalCallback();
+  const done = boardLists.find((list) => list.dataset.status === "done");
+  if (findElement(done, (element) => element.dataset.taskId === ` + strconv.Quote(tasks[2].ID) + `) !== stranded) {
+    throw new Error("a recognized status rebuilt the card instead of moving the one already rendered");
+  }
+  if (findElement(boardUnknownList, (element) => element.dataset.taskId === ` + strconv.Quote(tasks[2].ID) + `)) {
+    throw new Error("the card stayed in the unknown-status region after its status became known");
+  }
+  if (stranded.draggable !== true) throw new Error("a recovered card did not become draggable again");
+  if (boardUnknownCount.textContent !== "0") throw new Error("the emptied region still counts " + boardUnknownCount.textContent);
+  if (boardUnknownSection.dataset.visible !== "false") throw new Error("the emptied unknown-status region stayed visible");
 }, 0);
 `
 	command := exec.Command(node, "-e", program)
 	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("execute rendered canonical board filtering: %v\n%s", err, output)
+		t.Fatalf("execute rendered unknown-status board region: %v\n%s", err, output)
 	}
 }
 
@@ -4301,8 +4348,23 @@ const boardLists = boardStatuses.map((status) => {
   element.dataset.dropStatus = status;
   return element;
 });
+// The region that holds tasks whose status matches no column. It is always in
+// the document and hidden while empty, because the status that strands a task
+// arrives on a poll rather than on the first paint, and a region the server
+// only emits when it is already occupied could never take the first arrival.
+const boardUnknownSection = new TestElement("section");
+boardUnknownSection.dataset.unknownSection = "";
+boardUnknownSection.dataset.visible = "false";
+const boardUnknownCount = new TestElement("span");
+boardUnknownCount.dataset.unknownCount = "";
+const boardUnknownList = new TestElement("div");
+boardUnknownList.dataset.unknownList = "";
+boardUnknownSection.append(boardUnknownCount, boardUnknownList);
 boardView.querySelector = (selector) => {
   if (selector === "[data-stale]") return stale;
+  if (selector === "[data-unknown-section]") return boardUnknownSection;
+  if (selector === "[data-unknown-count]") return boardUnknownCount;
+  if (selector === "[data-unknown-list]") return boardUnknownList;
   return null;
 };
 const boardCounts = boardStatuses.map((status) => {
@@ -4782,11 +4844,13 @@ func TestHandlerInitialCardPrefixesMatchRefreshPresentation(t *testing.T) {
 		t.Fatalf("GET / status = %d, want %d", initial.Code, http.StatusOK)
 	}
 	cards := initialCardPrefixes(initial.Body.String())
-	if len(cards) != 3 {
-		t.Fatalf("initial rendered cards = %#v, want the three canonical-status tasks", cards)
+	if len(cards) != len(tasks) {
+		t.Fatalf("initial rendered cards = %#v, want one per task", cards)
 	}
-	if _, exists := cards[tasks[2].ID]; exists {
-		t.Fatalf("initial rendered cards include unknown-status task %q", tasks[2].ID)
+	// The unknown-status card is rendered from the same presentation as the rest,
+	// so its prefix has to agree with the refresh document exactly as theirs do.
+	if _, exists := cards[tasks[2].ID]; !exists {
+		t.Fatalf("initial rendered cards omit unknown-status task %q", tasks[2].ID)
 	}
 
 	refreshed := request(t, handler, http.MethodGet, "/api/tasks")

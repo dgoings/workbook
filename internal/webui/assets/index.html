@@ -1,5 +1,5 @@
 {{ define "task" }}
-<article class="task-card" tabindex="0" data-task-id="{{ .Task.ID }}" data-priority="{{ .Task.Priority }}" data-id-prefix="{{ .IDPrefix }}" draggable="true" aria-label="Move task {{ .Task.Title }} from {{ .Task.Status }}">
+<article class="task-card" tabindex="0" data-task-id="{{ .Task.ID }}" data-priority="{{ .Task.Priority }}" data-id-prefix="{{ .IDPrefix }}" draggable="{{ if knownStatus .Task.Status }}true{{ else }}false{{ end }}" aria-label="{{ if knownStatus .Task.Status }}Move task {{ .Task.Title }} from {{ .Task.Status }}{{ else }}Task {{ .Task.Title }} has the unrecognized status {{ .Task.Status }}{{ end }}">
   <div class="task-card__meta"><span class="task-id-copy-group"><button type="button" class="task-id-copy" data-copy-task-id="{{ .Task.ID }}" aria-label="Copy full task ID {{ .Task.ID }}"><code>{{ .IDPrefix }}</code></button><span class="copy-status" data-copy-status role="status" aria-live="polite" aria-atomic="true"></span></span><span class="priority priority--{{ .Task.Priority }}">{{ .Task.Priority }}</span></div>
   <h3><a href="/tasks/{{ .Task.ID }}">{{ .Task.Title }}</a></h3>
   {{ if .Task.Description }}<p>{{ .Task.Description }}</p>{{ end }}
@@ -35,8 +35,22 @@
     main { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 1.25rem; }
     .stale { display: none; margin: 0 0 1rem; padding: .55rem .7rem; border-left: 3px solid #b45309; background: #fff6e8; color: #7c3b08; font-size: .875rem; }
     .stale[data-visible="true"] { display: block; }
-    .board-view { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100%; min-height: 0; }
+    /* Rows are assigned rather than auto-placed, so the board keeps the flexible
+       row whether or not the stale banner and the unknown-status region are
+       showing. Both of those appear only in trouble, and the board must not
+       resize under the reader when they do. */
+    .board-view { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; height: 100%; min-height: 0; }
+    .stale { grid-row: 1; }
+    .board { grid-row: 2; }
+    .unknown-status { grid-row: 3; }
     .board { display: grid; grid-template-columns: repeat(6, minmax(12rem, 1fr)); gap: .8rem; min-height: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: .25rem; }
+    .unknown-status { display: none; margin-top: .8rem; border: 1px solid #e0b483; border-top: 3px solid #b45309; background: #fff6e8; }
+    .unknown-status[data-visible="true"] { display: block; }
+    .unknown-status__header { padding: .7rem .75rem .1rem; }
+    .unknown-status__heading { display: flex; align-items: baseline; gap: .5rem; margin: 0; color: #7c3b08; font-size: .92rem; }
+    .unknown-status__heading .count { color: #7c3b08; }
+    .unknown-status__note { max-width: 62ch; margin: .3rem 0 0; color: #7c3b08; font-size: .76rem; line-height: 1.4; }
+    .unknown-status__list { grid-auto-columns: minmax(12rem, 18rem); grid-auto-flow: column; max-height: 15rem; overflow-x: auto; overflow-y: auto; }
     .column { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); min-width: 12rem; min-height: 0; border: 1px solid #b9c6d8; background: rgba(255,255,255,.36); }
     .column__header { min-height: 5.45rem; padding: .7rem .75rem .6rem; border-top: 3px solid #2457d6; border-bottom: 1px solid #b9c6d8; background: #f8faff; }
     .column__heading { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; margin: 0; font-size: .92rem; }
@@ -47,6 +61,8 @@
     .task-list { display: grid; align-content: start; gap: .55rem; min-height: 0; overflow-anchor: none; overflow-y: auto; padding: .55rem; }
     .task-card { border: 1px solid #b9c6d8; border-radius: 4px; background: #fff; padding: .7rem; box-shadow: 0 1px 0 rgba(23,32,51,.05); cursor: grab; }
     .task-card:active { cursor: grabbing; }
+    /* An unknown-status card has no column to leave and none to enter, so it must not offer the grab cursor a drag would promise. draggable is a reflected attribute, so the selector tracks the property the client sets. */
+    .task-card[draggable="false"], .task-card[draggable="false"]:active { cursor: default; }
     .task-card:focus-visible { outline: 3px solid #2457d6; outline-offset: 2px; }
     .task-card.is-dragging { opacity: .5; }
     .task-card__meta { display: flex; align-items: center; justify-content: space-between; gap: .5rem; color: #526075; font-size: .7rem; }
@@ -218,6 +234,33 @@
         </section>
         {{ end }}
       </section>
+      <!--
+        Tasks whose status matches no column above, which the terminal board
+        prints as its UNKNOWN STATUS section. The region is always in the
+        document and hidden while empty: the status that strands a task usually
+        arrives on a poll, from a clone running a Workbook that knows a status
+        this one does not, and a region the server emitted only when it was
+        already occupied could never take the first arrival.
+
+        It is a display, not a seventh status. It carries no data-status and no
+        data-drop-status, so nothing can drop a task into it and no card inside
+        it can be dragged.
+
+        Nor is the drag the only thing unavailable: core rejects any write whose
+        projected task fails normalizeCanonicalTask, so this build cannot edit a
+        task holding a status it does not know from the web board or the CLI
+        (`workbook update` on one exits 7, corrupt-data). The note says so
+        rather than offering a recovery that would fail on save. Showing the
+        task is still the whole point — an uneditable task the reader can see is
+        a much smaller problem than one that looks deleted.
+      -->
+      <section class="unknown-status" data-unknown-section data-visible="{{ if .Board.UnknownTasks }}true{{ else }}false{{ end }}" aria-label="Tasks with an unrecognized status">
+        <header class="unknown-status__header">
+          <h2 class="unknown-status__heading">Unknown status <span class="count" data-unknown-count>{{ len .Board.UnknownTasks }}</span></h2>
+          <p class="unknown-status__note">These tasks hold a status this board has no column for, most likely written by a newer Workbook. They are listed here so they are not mistaken for deleted work. This build cannot edit them; update Workbook, or use the clone that wrote the status, to change one.</p>
+        </header>
+        <div class="task-list unknown-status__list" data-unknown-list>{{ range .Board.UnknownTasks }}{{ template "task" . }}{{ end }}</div>
+      </section>
     </div>
   </main>
   <script>
@@ -240,6 +283,12 @@
       const lists = new Map([...boardView.querySelectorAll("[data-status]")].map((element) => [element.dataset.status, element]));
       const counts = new Map([...boardView.querySelectorAll("[data-count]")].map((element) => [element.dataset.count, element]));
       const stale = boardView.querySelector("[data-stale]");
+      // The region for tasks whose status matches no column. It is part of the
+      // page whether or not it currently holds anything, because the status
+      // that strands a task arrives on a poll rather than on the first paint.
+      const unknownSection = boardView.querySelector("[data-unknown-section]");
+      const unknownList = boardView.querySelector("[data-unknown-list]");
+      const unknownCount = boardView.querySelector("[data-unknown-count]");
       const updated = document.querySelector("[data-updated]");
       const syncToggle = document.querySelector("[data-sync-toggle]");
       let syncState = null;
@@ -360,7 +409,7 @@
         ]);
       }
       function card(task, view) {
-        const article = document.createElement("article"); article.className = "task-card"; article.tabIndex = 0; article.dataset.taskId = task.id; article.draggable = true;
+        const article = document.createElement("article"); article.className = "task-card"; article.tabIndex = 0; article.dataset.taskId = task.id;
         const meta = document.createElement("div"); meta.className = "task-card__meta";
         const priority = document.createElement("span");
         const copyGroup = taskIDCopyControl(task.id, view.idPrefix);
@@ -383,7 +432,16 @@
         parts.signature = signature;
         article.dataset.priority = task.priority;
         article.dataset.idPrefix = view.idPrefix;
-        article.setAttribute("aria-label", "Move task " + task.title + " from " + task.status);
+        // A card in the unknown-status region has no column to be dragged out of
+        // and none to be dropped into, so it neither offers the drag nor
+        // announces one. The status is what decides that, not the list the node
+        // happens to sit in, so a card carries the right answer with it when a
+        // poll moves it between the region and a column.
+        const movable = statuses.has(task.status);
+        article.draggable = movable;
+        article.setAttribute("aria-label", movable
+          ? "Move task " + task.title + " from " + task.status
+          : "Task " + task.title + " has the unrecognized status " + task.status);
         if (parts.idText) text(parts.idText, view.idPrefix);
         parts.priority.className = "priority priority--" + task.priority; text(parts.priority, task.priority);
         text(parts.link, task.title);
@@ -1975,8 +2033,15 @@
       function cardNodes(list) {
         return [...list.children].filter((child) => child.dataset && child.dataset.taskId);
       }
+      // Every list a card can be in, columns and the unknown-status region
+      // alike. A card there is as real as any other and has to be found by the
+      // same lookups, or focus restoration and reconciliation would treat it as
+      // a node that no longer exists.
+      function cardLists() {
+        return [...lists.values(), unknownList];
+      }
       function findCardNode(taskID) {
-        for (const list of lists.values()) {
+        for (const list of cardLists()) {
           const node = cardNodes(list).find((candidate) => candidate.dataset.taskId === taskID);
           if (node) return node;
         }
@@ -2015,11 +2080,22 @@
         const node = findCardNode(taskID);
         if (node && typeof node.focus === "function") node.focus();
       }
+      function entriesFor(tasks, presentation) {
+        return tasks.map((task) => ({ task, view: presentation.get(task.id) }));
+      }
       function render(tasks, presentation) {
         const grouped = new Map([...lists.keys()].map((status) => [status, []]));
+        // A task whose status matches no column is shown under its own heading
+        // rather than dropped. The terminal board has always printed an UNKNOWN
+        // STATUS section, and the presentation layer computes the set for both;
+        // a task that is invisible reads as a task that was deleted, which is a
+        // worse lie than a task that is merely unsorted. Two clones on different
+        // Workbook versions produce this on their own. See
+        // internal/presentation/parity_test.go for the standing decision.
+        const stranded = [];
         tasks.forEach((task) => {
           const items = grouped.get(task.status);
-          if (items) items.push(task);
+          if (items) items.push(task); else stranded.push(task);
         });
         const focusedID = focusedCardID();
         // Every card node on the board, collected before a single column is
@@ -2028,7 +2104,7 @@
         // builder record and cannot be updated in place, so it is dropped here
         // and rebuilt once.
         const survivors = new Map();
-        lists.forEach((list) => {
+        cardLists().forEach((list) => {
           cardNodes(list).forEach((node) => {
             const taskID = node.dataset.taskId;
             if (survivors.has(taskID) || !cardParts.has(node)) { node.remove(); return; }
@@ -2038,12 +2114,18 @@
         const claimed = new Set();
         grouped.forEach((items, status) => {
           const list = lists.get(status);
-          const entries = items.map((task) => ({ task, view: presentation.get(task.id) }));
-          reconcile(list, entries, survivors, claimed);
+          reconcile(list, entriesFor(items, presentation), survivors, claimed);
           const count = counts.get(status);
           const total = String(items.length);
           if (count.textContent !== total) text(count, total);
         });
+        // Reconciled from the same survivor pool as the columns, so a status
+        // that becomes recognized — or stops being — moves the card the reader
+        // is already looking at instead of destroying it and building a stranger.
+        reconcile(unknownList, entriesFor(stranded, presentation), survivors, claimed);
+        const strandedTotal = String(stranded.length);
+        if (unknownCount.textContent !== strandedTotal) text(unknownCount, strandedTotal);
+        unknownSection.dataset.visible = stranded.length > 0 ? "true" : "false";
         survivors.forEach((node, taskID) => {
           if (claimed.has(taskID)) return;
           // The node the browser is dragging stays attached even when the model

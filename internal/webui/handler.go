@@ -217,8 +217,24 @@ func NewHandlerWithSyncControl(list TaskLister, create TaskCreator, update TaskU
 	return newHandler(list, create, update, updateStatus, position, delete, restore, depend, free, history, syncState, setSyncMode)
 }
 
+// pageFuncs give the page template the one fact a presentation.TaskView does
+// not carry: whether this build has a column for the status the task holds. A
+// card in the unknown-status region cannot be dragged anywhere, so it must not
+// announce itself as movable; the client script decides the same thing from the
+// same status set, which is why neither side reads it off the containing list.
+var pageFuncs = template.FuncMap{"knownStatus": knownStatus}
+
+func knownStatus(status core.Status) bool {
+	for _, definition := range core.WorkflowStatuses() {
+		if definition.Status == status {
+			return true
+		}
+	}
+	return false
+}
+
 func newHandler(list TaskLister, create TaskCreator, update TaskUpdater, updateStatus TaskStatusUpdater, position TaskPositionUpdater, delete TaskDeleter, restore TaskRestorer, depend TaskDependencyAdder, free TaskDependencyRemover, history TaskHistoryReader, syncState SyncStateReporter, setSyncMode SyncModeSetter) http.Handler {
-	page := template.Must(template.New("index.html").ParseFS(assets, "assets/index.html"))
+	page := template.Must(template.New("index.html").Funcs(pageFuncs).ParseFS(assets, "assets/index.html"))
 	handler := &handler{list: list, create: create, update: update, updateStatus: updateStatus, position: position, delete: delete, restore: restore, depend: depend, free: free, history: history, syncState: syncState, setSyncMode: setSyncMode, page: page, mux: http.NewServeMux()}
 	handler.mux.HandleFunc("GET /{$}", handler.serveBoard)
 	handler.mux.HandleFunc("GET /deleted", handler.serveBoard)

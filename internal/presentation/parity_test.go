@@ -6,6 +6,21 @@
 // deriving a fact for itself — recomputing an ID prefix, counting dependencies
 // again, formatting a priority from its own table — would agree with its own
 // tests while the two boards showed a user different things about one task.
+//
+// The standing decision this file exists to hold: every task in the set a board
+// is handed appears somewhere on that board, on both boards. A status this
+// build has no column for is a presentation problem, never a reason to stop
+// naming a task — Board.UnknownTasks is computed once here for exactly that,
+// and a renderer that consumes Board.Columns without also consuming
+// Board.UnknownTasks silently deletes tasks from the reader's view. Two Ready
+// changes make that routine rather than exotic: per-project custom status
+// columns, and removing the default Blocked status. Both leave one clone
+// holding a status another clone does not know.
+//
+// So a new renderer, or a new column source, keeps the two rules
+// TestBothBoardsNameATaskWhoseStatusHasNoColumn asserts: the unknown set is
+// rendered, and it is rendered under its own heading rather than folded into a
+// column that would misreport the task's status.
 package presentation_test
 
 import (
@@ -128,14 +143,17 @@ func TestBothBoardsPresentTheSameFactsAboutOneTaskSet(t *testing.T) {
 	}
 }
 
-// The two boards genuinely disagree about a task whose status is not canonical:
-// the terminal prints an UNKNOWN STATUS section, and the web board hands the
-// client a task no column claims, which its column loop drops. That divergence
-// is being removed under a separate ticket that has not landed, so this asserts
-// today's behavior; when the divergence goes, this test is the one that says so.
-func TestBoardsDivergeOnUnknownStatusesUntilThatIsCorrected(t *testing.T) {
+// A status neither board has a column for is the one case where "render the
+// columns" and "render every task" come apart, and it is the case a beta
+// produces on its own: two clones on different Workbook versions, one holding a
+// status the other has never heard of. Both boards name the task, under a
+// heading that says the status was not recognized, rather than one of them
+// quietly dropping it — a task that is invisible reads as a task that was
+// deleted, which is a worse lie than a task that is merely unsorted.
+func TestBothBoardsNameATaskWhoseStatusHasNoColumn(t *testing.T) {
+	const strandedID = "WB-01J0000000000000000000EE"
 	tasks := append(parityTasks(), core.Task{
-		ID: "WB-01J0000000000000000000EE",
+		ID: strandedID,
 		TaskData: core.TaskData{
 			Title: "Status from a newer Workbook", Status: core.Status("archived"),
 			Priority: core.PriorityMedium, Rank: "5",
@@ -143,57 +161,94 @@ func TestBoardsDivergeOnUnknownStatusesUntilThatIsCorrected(t *testing.T) {
 	})
 	board := presentation.NewBoard(tasks)
 
-	if len(board.UnknownTasks) != 1 || board.UnknownTasks[0].Task.ID != "WB-01J0000000000000000000EE" {
+	if len(board.UnknownTasks) != 1 || board.UnknownTasks[0].Task.ID != strandedID {
 		t.Fatalf("unknown-status tasks = %#v, want exactly the archived task", board.UnknownTasks)
 	}
 	for _, column := range board.Columns {
 		for _, view := range column.Tasks {
-			if view.Task.ID == "WB-01J0000000000000000000EE" {
+			if view.Task.ID == strandedID {
 				t.Fatalf("archived task landed in canonical column %q", column.Label)
 			}
 		}
 	}
+	prefix := board.UnknownTasks[0].IDPrefix
 
-	narrow := renderTerminalBoard(t, board, terminalui.LayoutNarrow)
-	if !strings.Contains(narrow, "UNKNOWN STATUS (1)") {
-		t.Fatalf("terminal board did not name the unknown status:\n%s", narrow)
+	for _, layout := range []struct {
+		name   string
+		layout terminalui.Layout
+	}{{"wide", terminalui.LayoutWide}, {"narrow", terminalui.LayoutNarrow}} {
+		rendered := renderTerminalBoard(t, board, layout.layout)
+		if !strings.Contains(rendered, "UNKNOWN STATUS (1)") {
+			t.Errorf("terminal %s board did not name the unknown status:\n%s", layout.name, rendered)
+		}
+		assertRenders(t, layout.name, rendered, prefix, "Status from a newer Workbook")
 	}
-	assertRenders(t, "narrow", narrow, "Status from a newer Workbook")
 
-	// The web side carries it in both arrays with the same derived prefix, so
-	// the divergence is the client's column loop rather than a difference in
-	// the facts the two boards were given.
+	// The web side carries it in both arrays with the same derived prefix, so a
+	// client that renders the document has the same facts the terminal printed.
 	document := webBoardDocument(t, tasks)
 	var served *webui.TaskPresentation
 	for index, entry := range document.Presentation {
-		if entry.TaskID == "WB-01J0000000000000000000EE" {
+		if entry.TaskID == strandedID {
 			served = &document.Presentation[index]
 		}
 	}
 	if served == nil {
 		t.Fatalf("web presentation omits the unknown-status task: %#v", document.Presentation)
 	}
-	if served.IDPrefix != board.UnknownTasks[0].IDPrefix {
-		t.Fatalf("unknown-status prefix: terminal %q, web %q", board.UnknownTasks[0].IDPrefix, served.IDPrefix)
+	if served.IDPrefix != prefix {
+		t.Fatalf("unknown-status prefix: terminal %q, web %q", prefix, served.IDPrefix)
+	}
+
+	// And the page the server renders before any script runs shows it too, in a
+	// region of its own rather than inside one of the status columns.
+	page := webBoardPage(t, tasks)
+	region := strings.Index(page, "data-unknown-list")
+	if region < 0 {
+		t.Fatalf("web board page has no unknown-status region:\n%s", page)
+	}
+	card := strings.Index(page, `data-task-id="`+strandedID+`"`)
+	if card < 0 {
+		t.Fatalf("web board page omits the unknown-status task %s", strandedID)
+	}
+	if card < region {
+		t.Fatalf("web board page rendered %s inside a status column, at %d before the unknown region at %d", strandedID, card, region)
+	}
+	if !strings.Contains(page, `data-id-prefix="`+prefix+`"`) {
+		t.Errorf("web board page does not show the terminal's ID prefix %q", prefix)
+	}
+	if !strings.Contains(page, "Unknown status") {
+		t.Errorf("web board page does not label the unknown-status region:\n%s", page)
 	}
 }
 
 func webBoardDocument(t *testing.T, tasks []core.Task) webui.TasksDocument {
+	t.Helper()
+	recorder := webBoardResponse(t, tasks, "/api/tasks")
+	var document webui.TasksDocument
+	if err := json.Unmarshal(recorder.Body.Bytes(), &document); err != nil {
+		t.Fatalf("decode tasks document: %v; body = %s", err, recorder.Body.String())
+	}
+	return document
+}
+
+func webBoardPage(t *testing.T, tasks []core.Task) string {
+	t.Helper()
+	return webBoardResponse(t, tasks, "/").Body.String()
+}
+
+func webBoardResponse(t *testing.T, tasks []core.Task, path string) *httptest.ResponseRecorder {
 	t.Helper()
 	handler := webui.NewHandler(
 		func(context.Context) ([]core.Task, error) { return tasks, nil },
 		nil, nil, nil,
 	)
 	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/tasks", nil))
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
 	if recorder.Code != http.StatusOK {
-		t.Fatalf("GET /api/tasks = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+		t.Fatalf("GET %s = %d, want %d; body = %s", path, recorder.Code, http.StatusOK, recorder.Body.String())
 	}
-	var document webui.TasksDocument
-	if err := json.Unmarshal(recorder.Body.Bytes(), &document); err != nil {
-		t.Fatalf("decode tasks document: %v; body = %s", err, recorder.Body.String())
-	}
-	return document
+	return recorder
 }
 
 func renderTerminalBoard(t *testing.T, board presentation.Board, layout terminalui.Layout) string {
