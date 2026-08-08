@@ -4311,7 +4311,11 @@ const boardCounts = boardStatuses.map((status) => {
   return element;
 });
 boardView.querySelectorAll = (selector) => selector === "[data-status]" ? boardLists : boardCounts;
+// The page ships this control hidden and renderRoute() reveals it on the board,
+// so the harness has to start it hidden too. Starting it visible would let a
+// renderRoute() that never touched it look like it had revealed it.
 const descriptionToggle = new TestElement("button");
+descriptionToggle.hidden = true;
 const documentEventListeners = {};
 	globalThis.document = {
 	  title: "",
