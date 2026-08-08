@@ -970,6 +970,13 @@ remain durable while failed relationships remain available to retry or remove.
 On narrow screens, the task editor, Properties, Relationships, and actions
 stack in that order.
 
+Labels are a set, and the form edits them as one chiclet per label rather than
+as a line of commas. The input holds only the label being typed; Enter or a
+comma commits it and clears the input, each chiclet carries a named remove
+control, and Backspace in an empty input removes the last one. A label left
+half-typed is still sent when the form is saved, and the payload the API sees
+is the same array of strings it always was.
+
 Missing prerequisite IDs remain visible and removable. Tombstoned
 prerequisites are also removable because the active dependent owns that edge;
 deleted blocked tasks remain read-only because tombstones cannot be changed.
