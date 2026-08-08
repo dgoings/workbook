@@ -13,6 +13,9 @@ import (
 // creates $HOME/.local/bin when it does not exist, and that it says how to put
 // that directory on PATH when it is not already there.
 func TestInstallCreatesTheDefaultDestinationAndReportsThePATHExport(t *testing.T) {
+	if testing.Short() {
+		t.Skip("shells out to go build; skipped in -short mode")
+	}
 	root, script := paths(t)
 	home := t.TempDir()
 	physicalHome, err := filepath.EvalSymlinks(home)
@@ -51,6 +54,9 @@ func TestInstallCreatesTheDefaultDestinationAndReportsThePATHExport(t *testing.T
 // And it has to stay quiet when the hint would be wrong: a destination already
 // on PATH that printed an export line would teach the reader to duplicate it.
 func TestInstallOmitsThePATHExportWhenTheDestinationIsAlreadyOnPATH(t *testing.T) {
+	if testing.Short() {
+		t.Skip("shells out to go build; skipped in -short mode")
+	}
 	root, script := paths(t)
 	destinationRoot := t.TempDir()
 	physicalRoot, err := filepath.EvalSymlinks(destinationRoot)
@@ -79,17 +85,17 @@ func TestInstallOmitsThePATHExportWhenTheDestinationIsAlreadyOnPATH(t *testing.T
 
 // buildEnvironment gives the installer a Go toolchain that does not depend on
 // the HOME this test replaced: with HOME pointed at a temporary directory, the
-// default module cache and build cache move with it and the build would either
-// re-download the world or fail offline.
+// default module, build, and download caches move with it and the build would
+// either re-download the world or recompile it from scratch.
 func buildEnvironment(t *testing.T, entries ...string) []string {
 	t.Helper()
 	environment := append([]string(nil), entries...)
-	for _, name := range []string{"GOPATH", "GOMODCACHE"} {
+	for _, name := range []string{"GOPATH", "GOMODCACHE", "GOCACHE"} {
 		output, err := exec.Command("go", "env", name).Output()
 		if err != nil {
 			t.Fatalf("go env %s: %v", name, err)
 		}
 		environment = append(environment, name+"="+strings.TrimSpace(string(output)))
 	}
-	return append(environment, "GOCACHE="+filepath.Join(t.TempDir(), "gocache"))
+	return environment
 }

@@ -243,6 +243,9 @@ func TestRenderFormulaRejectsUnsafeVersions(t *testing.T) {
 }
 
 func TestCompiledBinaryReportsLinkerInjectedVersion(t *testing.T) {
+	if testing.Short() {
+		t.Skip("shells out to go build; skipped in -short mode")
+	}
 	root, _ := releasePaths(t)
 	binary := filepath.Join(t.TempDir(), "workbook")
 	build := exec.Command(
@@ -254,7 +257,6 @@ func TestCompiledBinaryReportsLinkerInjectedVersion(t *testing.T) {
 		"./cmd/workbook",
 	)
 	build.Dir = root
-	build.Env = environmentWith(os.Environ(), "GOCACHE="+filepath.Join(t.TempDir(), "gocache"))
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build linker-injected workbook: %v\n%s", err, output)
 	}
@@ -289,7 +291,6 @@ func TestReleaseScriptRejectsUnsafeVersionsBeforeCreatingArtifacts(t *testing.T)
 			outputDirectory := filepath.Join(t.TempDir(), "dist")
 			command := exec.Command(script, version, outputDirectory)
 			command.Dir = root
-			command.Env = environmentWith(os.Environ(), "GOCACHE="+filepath.Join(t.TempDir(), "gocache"))
 			output, err := command.CombinedOutput()
 			if err == nil {
 				t.Fatalf("release script accepted unsafe version %q; output = %q", version, output)
@@ -310,11 +311,13 @@ func TestReleaseScriptRejectsUnsafeVersionsBeforeCreatingArtifacts(t *testing.T)
 func TestReleaseScriptCreatesVerifiedPlatformArchives(t *testing.T) {
 	// Production mutation: building only darwin archives leaves the Homebrew
 	// formula pointing at Linux downloads that were never published.
+	if testing.Short() {
+		t.Skip("cross-compiles four platform archives; skipped in -short mode")
+	}
 	root, script := releasePaths(t)
 	outputDirectory := t.TempDir()
 	command := exec.Command(script, "0.1.0", outputDirectory)
 	command.Dir = root
-	command.Env = append(os.Environ(), "GOCACHE="+filepath.Join(t.TempDir(), "gocache"))
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("release script: %v\n%s", err, output)
 	}
@@ -366,6 +369,9 @@ func TestReleaseScriptCreatesVerifiedPlatformArchives(t *testing.T) {
 }
 
 func TestReleaseScriptProducesDeterministicArtifacts(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs the release script twice against empty build caches; skipped in -short mode")
+	}
 	root, script := releasePaths(t)
 	firstOutputDirectory := t.TempDir()
 	secondOutputDirectory := t.TempDir()
@@ -376,6 +382,9 @@ func TestReleaseScriptProducesDeterministicArtifacts(t *testing.T) {
 			t.Fatalf("write hostile %s: %v", name, err)
 		}
 	}
+	// The disjoint empty GOCACHEs are the point of this test: a shared or warm
+	// cache would let the second build return byte-identical artifacts through
+	// cache hits instead of proving the build is reproducible from scratch.
 	environments := [][]string{
 		environmentWith(os.Environ(),
 			"GOCACHE="+filepath.Join(t.TempDir(), "gocache"),
