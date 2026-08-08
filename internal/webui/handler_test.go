@@ -3184,7 +3184,8 @@ setTimeout(async () => {
 `
 	commandContext, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	command := exec.CommandContext(commandContext, node, "-e", program)
+	command := exec.CommandContext(commandContext, node, "-")
+	command.Stdin = strings.NewReader(program)
 	if output, err := command.CombinedOutput(); err != nil {
 		if commandContext.Err() == context.DeadlineExceeded {
 			t.Fatalf("dependency mutation did not settle after controller-only supersession")
