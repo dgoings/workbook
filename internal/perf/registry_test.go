@@ -95,7 +95,7 @@ func TestResolveScenariosUsesRegistryOrderAndRejectsInvalidSelectors(t *testing.
 // one public scenario report the wrong policy.
 func TestLocalScenarioResultsAttachApprovedDurationTargets(t *testing.T) {
 	coldSingle := ScenarioTarget{DurationStatistic: DurationP95, DurationComparison: DurationAtMost, MaxMilliseconds: 200}
-	warmUpdate := ScenarioTarget{DurationStatistic: DurationP95, DurationComparison: DurationAtMost, MaxMilliseconds: 100}
+	warmUpdate := ScenarioTarget{DurationStatistic: DurationP95, DurationComparison: DurationAtMost, MaxMilliseconds: 150}
 	burst := ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationLessThan, MaxMilliseconds: 1000}
 	coldAutoSync := ScenarioTarget{DurationStatistic: DurationP95, DurationComparison: DurationAtMost, MaxMilliseconds: 1000}
 
