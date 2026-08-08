@@ -38,7 +38,7 @@ case $0 in
 	*/*) script_directory=${0%/*} ;;
 	*) script_directory=. ;;
 esac
-repository_root=$(CDPATH= cd -- "${script_directory}/.." && pwd)
+repository_root=$(CDPATH='' cd -- "${script_directory}/.." && pwd)
 
 # Stamp the build so a source install reports which commit it came from. A
 # leading "v" distinguishes these from released artifacts, which report a bare
@@ -47,7 +47,7 @@ version=$(git -C "${repository_root}" describe --tags --always --dirty 2>/dev/nu
 commit=$(git -C "${repository_root}" rev-parse HEAD 2>/dev/null || echo unknown)
 
 mkdir -p -- "${destination}"
-destination=$(CDPATH= cd -- "${destination}" && pwd -P)
+destination=$(CDPATH='' cd -- "${destination}" && pwd -P)
 (
 	cd -- "${repository_root}"
 	go build -trimpath \
