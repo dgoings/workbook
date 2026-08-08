@@ -847,6 +847,12 @@
         // before click, so a press that blurred the input would let the
         // dismissal below hide the option out from under the click that was
         // about to select it.
+        //
+        // This stays blanket rather than skipping the scrollbar gutter. A
+        // scrollbar keeps dragging through a cancelled mousedown, so exempting
+        // the gutter buys nothing; it only hands the press back its default,
+        // which blurs the input and dismisses the popup out from under the drag
+        // that was about to scroll it.
         listbox.addEventListener("mousedown", (event) => { event.preventDefault(); });
         // focusout rather than blur, because it bubbles: the popup survives
         // focus moving anywhere inside this editor and collapses the moment
