@@ -36,16 +36,18 @@ func TestMutatingRoutesRejectAnOversizedRequestBody(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			handler := NewHandlerWithSyncControl(
-				func(context.Context) ([]core.Task, error) { return nil, nil },
-				unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
-				unexpectedTaskPosition(t), nil, nil, nil, nil, nil,
-				func(context.Context) SyncState { return SyncState{Mode: SyncModeInline} },
-				func(context.Context, string) (SyncState, error) {
+			handler := NewHandler(Options{
+				List:         func(context.Context) ([]core.Task, error) { return nil, nil },
+				Create:       unexpectedTaskCreate(t),
+				Update:       unexpectedTaskUpdate(t),
+				UpdateStatus: unexpectedStatusUpdate(t),
+				Position:     unexpectedTaskPosition(t),
+				SyncState:    func(context.Context) SyncState { return SyncState{Mode: SyncModeInline} },
+				SetSyncMode: func(context.Context, string) (SyncState, error) {
 					t.Fatal("unexpected publication mode change")
 					return SyncState{}, nil
 				},
-			)
+			})
 
 			response := requestJSON(t, handler, test.method, test.target, test.body)
 			if response.Code != http.StatusBadRequest {
@@ -72,14 +74,15 @@ func TestMutatingRoutesAcceptABodyUnderTheCeiling(t *testing.T) {
 	// Production mutation: a ceiling set below what the board itself sends would
 	// break saving an ordinary task through the UI.
 	var created core.CreateInput
-	handler := NewHandler(
-		func(context.Context) ([]core.Task, error) { return nil, nil },
-		func(_ context.Context, input core.CreateInput) (core.MutationResult, error) {
+	handler := NewHandler(Options{
+		List: func(context.Context) ([]core.Task, error) { return nil, nil },
+		Create: func(_ context.Context, input core.CreateInput) (core.MutationResult, error) {
 			created = input
 			return core.MutationResult{Task: core.Task{ID: "WB-01K0M6B8A4FTT8C39MXXYTW7C3"}}, nil
 		},
-		unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
-	)
+		Update:       unexpectedTaskUpdate(t),
+		UpdateStatus: unexpectedStatusUpdate(t),
+	})
 
 	description := strings.Repeat("d", core.MaxDescriptionBytes)
 	body, err := json.Marshal(map[string]any{"title": "Task", "description": description})

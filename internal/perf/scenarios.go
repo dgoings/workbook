@@ -1006,10 +1006,15 @@ var coldAutoSyncTarget = ScenarioTarget{
 	MaxMilliseconds:    1000,
 }
 
+// warmUpdateTarget holds api-update to p95 ≤ 150 ms, approved 2026-08-08 from
+// the eight-measurement derivation in docs/performance/README.md: bounded
+// below by the worst quiet-host observation plus margin (134.16 ms + 12%) and
+// above by staying 25% under the 200 ms cold local budget, so a regression
+// that erased the warm path's advantage over a process start could not pass.
 var warmUpdateTarget = ScenarioTarget{
 	DurationStatistic:  DurationP95,
 	DurationComparison: DurationAtMost,
-	MaxMilliseconds:    100,
+	MaxMilliseconds:    150,
 }
 
 var burstTarget = ScenarioTarget{

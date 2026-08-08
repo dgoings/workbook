@@ -326,12 +326,13 @@ provenance](2026-07-29-local-acceptance-provenance.md).
 These valid target misses are retained as the one-shot evidence. The binaries
 were not rebuilt, and neither invocation was tuned or replaced.
 
-## Proposed `api-update` target: 150 ms, pending sign-off
+## `api-update` target: 150 ms (approved 2026-08-08)
 
-**Status: proposed, not applied.** The harness still evaluates `api-update`
-against 100 ms and still reports it as a `miss`. Nothing in this section changes
-a target; changing one needs the project owner's sign-off, and this is the
-evidence that decision should be made on.
+**Status: approved and applied.** The project owner approved this target on
+2026-08-08 and the harness now evaluates `api-update` against p95 ≤ 150 ms
+(`warmUpdateTarget` in `internal/perf/scenarios.go`). The derivation below is
+the evidence the decision was made on, kept as the record of why 150 and not
+another number.
 
 `api-update` has missed its 100 ms inclusive p95 target in every acceptance set
 recorded since 2026-07-29 — eight independent measurements across four dates and
