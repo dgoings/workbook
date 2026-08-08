@@ -40,7 +40,7 @@ func reconcileBoardTasks() []core.Task {
 func runBoardClient(t *testing.T, purpose string, tasks []core.Task, body string) {
 	t.Helper()
 	node := requireNode(t)
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 	response := request(t, handler, http.MethodGet, "/")
 	if response.Code != http.StatusOK {
 		t.Fatalf("GET / status = %d, want %d", response.Code, http.StatusOK)

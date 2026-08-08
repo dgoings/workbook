@@ -19,18 +19,18 @@ func guardedHandler(t *testing.T, boundAddr string) (http.Handler, *int, *int) {
 	lists := new(int)
 	creates := new(int)
 	created := boardTasks()[0]
-	handler := NewHandler(
-		func(context.Context) ([]core.Task, error) {
+	handler := NewHandler(Options{
+		List: func(context.Context) ([]core.Task, error) {
 			*lists++
 			return boardTasks(), nil
 		},
-		func(context.Context, core.CreateInput) (core.MutationResult, error) {
+		Create: func(context.Context, core.CreateInput) (core.MutationResult, error) {
 			*creates++
 			return core.MutationResult{Task: created}, nil
 		},
-		unexpectedTaskUpdate(t),
-		unexpectedStatusUpdate(t),
-	)
+		Update:       unexpectedTaskUpdate(t),
+		UpdateStatus: unexpectedStatusUpdate(t),
+	})
 	return GuardSameOrigin(handler, boundAddr), lists, creates
 }
 
@@ -213,20 +213,21 @@ func TestGuardRequiresJSONMediaTypeOnBodyLessMutations(t *testing.T) {
 	dependent := boardTasks()[0]
 	prerequisite := boardTasks()[1]
 	dependencyCalls := 0
-	inner := NewHandlerWithTaskMutations(
-		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
-		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
-		unexpectedTaskPosition(t), nil, nil,
-		func(context.Context, string, string) (core.MutationResult, error) {
+	inner := NewHandler(Options{
+		List:         func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		Create:       unexpectedTaskCreate(t),
+		Update:       unexpectedTaskUpdate(t),
+		UpdateStatus: unexpectedStatusUpdate(t),
+		Position:     unexpectedTaskPosition(t),
+		Depend: func(context.Context, string, string) (core.MutationResult, error) {
 			dependencyCalls++
 			return core.MutationResult{Task: dependent}, nil
 		},
-		func(context.Context, string, string) (core.MutationResult, error) {
+		Free: func(context.Context, string, string) (core.MutationResult, error) {
 			dependencyCalls++
 			return core.MutationResult{Task: dependent}, nil
 		},
-		nil,
-	)
+	})
 	handler := GuardSameOrigin(inner, "127.0.0.1:7331")
 	path := "/api/tasks/" + dependent.ID + "/dependencies/" + prerequisite.ID
 

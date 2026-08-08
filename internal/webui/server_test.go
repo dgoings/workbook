@@ -22,12 +22,12 @@ func TestServeStopsCleanlyWhenContextIsCancelled(t *testing.T) {
 	defer cancel()
 	result := make(chan error, 1)
 	go func() {
-		result <- Serve(ctx, listener, NewHandler(
-			func(context.Context) ([]core.Task, error) { return nil, nil },
-			unexpectedTaskCreate(t),
-			unexpectedTaskUpdate(t),
-			unexpectedStatusUpdate(t),
-		))
+		result <- Serve(ctx, listener, NewHandler(Options{
+			List:         func(context.Context) ([]core.Task, error) { return nil, nil },
+			Create:       unexpectedTaskCreate(t),
+			Update:       unexpectedTaskUpdate(t),
+			UpdateStatus: unexpectedStatusUpdate(t),
+		}))
 	}()
 
 	response, err := http.Get("http://" + listener.Addr().String() + "/healthz")
@@ -59,12 +59,12 @@ func TestServeReturnsUnexpectedHTTPFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = Serve(context.Background(), listener, NewHandler(
-		func(context.Context) ([]core.Task, error) { return nil, nil },
-		unexpectedTaskCreate(t),
-		unexpectedTaskUpdate(t),
-		unexpectedStatusUpdate(t),
-	))
+	err = Serve(context.Background(), listener, NewHandler(Options{
+		List:         func(context.Context) ([]core.Task, error) { return nil, nil },
+		Create:       unexpectedTaskCreate(t),
+		Update:       unexpectedTaskUpdate(t),
+		UpdateStatus: unexpectedStatusUpdate(t),
+	}))
 	if err == nil {
 		t.Fatal("Serve() error = nil, want closed-listener failure")
 	}
