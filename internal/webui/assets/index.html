@@ -64,7 +64,15 @@
     .task-card h3 a { color: #172033; text-decoration-color: #a9b7ca; text-decoration-thickness: 1px; text-underline-offset: .16em; }
     .task-card h3 a:hover { color: #2457d6; text-decoration-color: currentcolor; }
     .task-card h3 a:focus-visible, .new-task-link:focus-visible, .board-link:focus-visible { outline: 3px solid #2457d6; outline-offset: 2px; }
-    .task-card p { display: -webkit-box; max-height: calc(1.36em * 6); overflow: hidden; margin: 0; color: #56647a; font-size: .8rem; line-height: 1.36; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 6; }
+    /* A card is an ID, a title, and its labels. The description is the one field
+       with no length the column can rely on, so six clamped lines of it push the
+       next card off the screen; the board hides it and the header setting brings
+       it back. The text stays in the card and only this rule decides whether it
+       is seen, which keeps the setting out of the renderer entirely: showing
+       descriptions flips one attribute on the board instead of rebuilding every
+       card, and the poll that reconciles cards by ID has nothing to reset. */
+    .task-card p { display: none; max-height: calc(1.36em * 6); overflow: hidden; margin: 0; color: #56647a; font-size: .8rem; line-height: 1.36; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 6; }
+    .board-view[data-descriptions="shown"] .task-card p { display: -webkit-box; }
     .labels { display: flex; flex-wrap: wrap; gap: .25rem; margin-top: .65rem; }
     .label { max-width: 100%; overflow: hidden; padding: .14rem .28rem; border: 1px solid #d5deea; border-radius: 3px; color: #4e5d73; font-size: .64rem; text-overflow: ellipsis; white-space: nowrap; }
     .dependency-progress { display: grid; gap: .18rem; margin-top: .65rem; color: #4e5d73; font-size: .72rem; }
@@ -208,7 +216,7 @@
   <a class="skip-link" href="#board">Skip to task board</a>
   <header class="app-header">
     <div><p class="eyebrow">Repository workbench</p><h1>Workbook board</h1></div>
-    <div class="header-links"><a class="header-link" href="/">Board</a><a class="header-link" href="/deleted">Deleted tasks</a><p class="updated" data-updated>Loaded from this checkout</p><button type="button" class="header-link" data-sync-toggle hidden></button></div>
+    <div class="header-links"><a class="header-link" href="/">Board</a><a class="header-link" href="/deleted">Deleted tasks</a><p class="updated" data-updated>Loaded from this checkout</p><button type="button" class="header-link" data-description-toggle hidden>Descriptions: hidden</button><button type="button" class="header-link" data-sync-toggle hidden></button></div>
   </header>
   <main id="board" tabindex="-1">
     <div class="board-view" data-board-view>
@@ -245,6 +253,7 @@
       const stale = boardView.querySelector("[data-stale]");
       const updated = document.querySelector("[data-updated]");
       const syncToggle = document.querySelector("[data-sync-toggle]");
+      const descriptionToggle = document.querySelector("[data-description-toggle]");
       let syncState = null;
       let activeDrag = null;
       const copyFeedback = new Map();
@@ -278,6 +287,49 @@
       let pendingBoardFocusTaskID = null;
 
       function text(element, value) { element.textContent = value || ""; return element; }
+      // Card descriptions are hidden by default and this setting brings them
+      // back. It is a browser preference rather than project state: it says how
+      // one reader wants this board drawn, so it is remembered per browser and
+      // never published to the repository the way a task edit is. Storage can be
+      // refused outright — a Safari private window throws on the first read — and
+      // a board that cannot remember the choice still has to draw, so every
+      // access is guarded and an unreadable preference simply means the default.
+      const descriptionPreferenceKey = "workbook.board.descriptions";
+      let descriptionsShown = false;
+      function rememberedDescriptionPreference() {
+        try {
+          return window.localStorage ? window.localStorage.getItem(descriptionPreferenceKey) : null;
+        } catch (_) {
+          return null;
+        }
+      }
+      function rememberDescriptionPreference(value) {
+        try {
+          if (window.localStorage) window.localStorage.setItem(descriptionPreferenceKey, value);
+        } catch (_) {
+        }
+      }
+      // The button's name is the whole announcement, and deliberately the only
+      // one: a name that changes with the state and an aria-pressed beside it
+      // state the same thing twice and in opposite directions, so "Descriptions:
+      // hidden, toggle button, not pressed" reads as the opposite of what just
+      // happened. A toggle keeps a fixed name when aria-pressed speaks for it;
+      // this one keeps the speaking name, like the publishing control beside it.
+      function renderDescriptionPreference() {
+        boardView.dataset.descriptions = descriptionsShown ? "shown" : "hidden";
+        if (!descriptionToggle) return;
+        text(descriptionToggle, descriptionsShown ? "Descriptions: shown" : "Descriptions: hidden");
+        descriptionToggle.title = descriptionsShown
+          ? "Cards show the first lines of their description. Click to hide them."
+          : "Cards show titles only. Click to show the first lines of each description.";
+      }
+      descriptionsShown = rememberedDescriptionPreference() === "shown";
+      renderDescriptionPreference();
+      if (descriptionToggle) descriptionToggle.addEventListener("click", () => {
+        descriptionsShown = !descriptionsShown;
+        rememberDescriptionPreference(descriptionsShown ? "shown" : "hidden");
+        renderDescriptionPreference();
+      });
       // The visible ID inside a copy control, so a card that survives a render
       // can have a shortened prefix rewritten without rebuilding the control.
       const copyIDText = new WeakMap();
@@ -1970,6 +2022,13 @@
         if (current.view !== "detail" && current.view !== "new") {
           activeDependencyController = null;
         }
+        // The description setting draws cards, and only the board draws cards.
+        // Beside the deleted list or a task's own page it would be a control
+        // that visibly does nothing, so it travels with the route it acts on.
+        // The markup ships it hidden and this reveals it, so a page that never
+        // runs this script offers no setting rather than a dead one that lies
+        // about the state of a board it can no longer change.
+        if (descriptionToggle) descriptionToggle.hidden = current.view !== "board";
         if (current.view === "board") {
           document.title = "Workbook board";
           if (main.firstElementChild !== boardView) main.replaceChildren(boardView);
