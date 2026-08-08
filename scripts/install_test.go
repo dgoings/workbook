@@ -22,7 +22,6 @@ func TestInstallBuildsRunnableWorkbookInDestination(t *testing.T) {
 
 	command := exec.Command(script, destination)
 	command.Dir = root
-	command.Env = append(os.Environ(), "GOCACHE="+filepath.Join(t.TempDir(), "gocache"))
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("install: %v\n%s", err, output)
@@ -70,7 +69,6 @@ func TestInstallResolvesRelativeDestinationFromCallerDirectory(t *testing.T) {
 
 	command := exec.Command(script, relativeDestination)
 	command.Dir = callerDirectory
-	command.Env = append(os.Environ(), "GOCACHE="+filepath.Join(t.TempDir(), "gocache"))
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("install: %v\n%s", err, output)
@@ -146,7 +144,6 @@ func TestInstallStampsVersionAndCommit(t *testing.T) {
 
 	command := exec.Command(script, destination)
 	command.Dir = root
-	command.Env = append(os.Environ(), "GOCACHE="+filepath.Join(t.TempDir(), "gocache"))
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("install: %v\n%s", err, output)
 	}
@@ -182,7 +179,6 @@ func TestInstallAcceptsAnAlternateBinaryName(t *testing.T) {
 
 	command := exec.Command(script, destination, "workbook-dev")
 	command.Dir = root
-	command.Env = append(os.Environ(), "GOCACHE="+filepath.Join(t.TempDir(), "gocache"))
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("install: %v\n%s", err, output)
