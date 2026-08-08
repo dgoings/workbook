@@ -301,6 +301,63 @@ every project on a machine, `--skill-dir <dir>` overrides it for one project and
 `--no-skill` leaves the skill alone while still managing the guidelines. These
 flags are a stopgap until per-project configuration lands.
 
+### What a task may hold
+
+A task ref is shared history. Every clone that fetches, synchronizes, or runs an
+auto-syncing mutation reads every task tip into memory, so an unbounded field is
+not one collaborator's problem but the whole team's. Workbook therefore bounds
+what a task document may contain and how much of one it will read back:
+
+| Limit | Value | Applies to |
+| --- | --- | --- |
+| Title | 500 bytes | The title after surrounding whitespace is trimmed. |
+| Description | 65,536 bytes (64 KiB) | The description as stored. |
+| Label | 100 bytes | Each individual label. |
+| Labels per task | 50 | Distinct labels, counted after duplicates are dropped. |
+| Rank | 4,096 bytes | The `numerator/denominator` ordering key. |
+| Dependencies per task | 100 | Distinct dependencies, counted after duplicates are dropped. |
+| Git object | 4,194,304 bytes (4 MiB) | Any single object Workbook reads: a commit, a task tree, or a stored document. |
+| Web request body | 1,048,576 bytes (1 MiB) | One request to `workbook serve`. |
+
+Lengths are counted in bytes rather than characters, because bytes are what a
+reader has to allocate. A field over its limit never reaches storage: the CLI
+answers with a `validation` error (exit `5`) naming the size and the ceiling,
+and the board answers `400` carrying the same document. The same check runs
+when a stored document is read back, where
+an over-limit field describes data that is already written rather than input
+that can be corrected, and is reported as `corrupt-data` (exit `7`).
+
+The limits are set far above ordinary use: a title is a headline, a description
+is prose and short code fences, and labels are vocabulary. A description that
+approaches 64 KiB is a document, and a document belongs in the repository with
+the task linking to it.
+
+The rank limit bounds work rather than storage. A rank is an exact rational, it
+is parsed every time a task is read and again on every comparison that orders a
+board, and converting a long digit string costs more than linear time — so an
+unbounded rank is a cheaper denial of service than an unbounded description,
+even though it is far smaller. Ordinary ranks are a few bytes: placing a task
+between two neighbours halves the gap, which adds about one byte for every three
+placements into the same shrinking gap.
+
+The object ceiling is checked against the size Git reports before the object is
+read, so an object claiming to be a gigabyte costs a comparison rather than a
+gigabyte. It sits roughly fifty times above the largest task document the field
+limits above allow, so it never fires on anything Workbook produced; it exists
+so that an object hand-built and pushed by a collaborator cannot exhaust memory
+in every clone that fetches it. An object over it is reported as `corrupt-data`
+(exit `7`) against the one task that holds it: the record is skipped rather than
+read, so a single oversized object marks that task unreadable instead of
+stopping every command that reads the project.
+
+Objects are also read one at a time rather than by buffering a whole batch of
+Git's output, so reading a project costs one object at a time instead of every
+task tip at once.
+
+Treat these numbers as part of the storage format. Raising one is a compatible
+change — an older clone rejects a document a newer one accepted. Lowering one is
+not, because a task already stored at the old size stops reading.
+
 ### Machine-readable output and exit codes
 
 With `--json`, success is a single compact line carrying a versioned envelope,
@@ -819,6 +876,28 @@ sections for narrow or noninteractive output; `--wide` and `--narrow` force the
 respective layouts. The task-ID prefixes in human output are accepted anywhere a
 task ID is accepted.
 
+### Statuses a build does not recognize
+
+A task can hold a status the build reading it has no column for, which is what
+two clones on different Workbook versions produce on their own. Both boards show
+that task rather than dropping it, under a heading that says the status was not
+recognized: the terminal board prints an `UNKNOWN STATUS` section below its
+columns, and the web board shows an "Unknown status" region below its own. A
+task that is invisible reads as a task that was deleted, which is a worse
+report than a task that is merely unsorted.
+
+The region is a display, not an extra status. Its cards cannot be dragged and
+nothing can be dropped into it, because there is no column the status belongs
+to. This build also cannot edit such a task: every write validates the projected
+task, so `workbook update` on one exits `7` (`corrupt-data`) and the board's
+save fails the same way. Update Workbook, or use the clone that wrote the
+status, to change one.
+
+Both boards read this split from one place — `presentation.Board` separates
+`Columns` from `UnknownTasks` — so a renderer that consumes only `Columns`
+silently deletes tasks from the reader's view. `internal/presentation/parity_test.go`
+asserts both boards against the same task set and is what keeps them aligned.
+
 ### Text-mode output safety
 
 Task titles, descriptions, and labels are authored by whoever can push to the
@@ -897,6 +976,16 @@ A refused request is answered with a versioned `workbook.error` document and
 never reaches task storage: `403` for a foreign `Host` or `Origin`, and `415`
 for a mutation that does not declare JSON.
 
+Every request body is bounded at 1 MiB before any route sees it, and a body over
+that is answered `400` naming the ceiling. The bound is well above the largest
+task the field limits above allow, and it applies to routes that ignore their
+body as well, so no route can read an unbounded one by forgetting to ask for a
+limit. The server also bounds how long a connection may hold a header
+incomplete, a request body unfinished, or a keep-alive idle, so a client that
+opens a connection and stops talking is closed rather than holding a goroutine
+until `serve` exits. There is no response deadline: a mutation publishing inline
+waits on `origin`, and that has no honest bound.
+
 Binding `--addr` to anything other than a loopback address makes the board
 reachable by whoever shares the network, and those checks cannot tell a
 teammate from a stranger. `workbook serve` prints a warning naming the address
@@ -949,10 +1038,22 @@ poll stays intact, and a scrolled column stays where the reader left it. The six
 canonical columns share the available width
 on large screens, scroll horizontally on narrow screens, and keep dense task
 lists vertically scrollable within the viewport. Web cards show the actionable
-task-ID prefix, priority, title, up to six lines of an optional description, and
-labels; each title links to its full-ID task-detail URL, where the complete
-description remains available. Every status column has a New Task link that
-preselects that column's canonical status.
+task-ID prefix, priority, title, and labels; each title links to its full-ID
+task-detail URL, where the complete description remains available. Every status
+column has a New Task link that preselects that column's canonical status.
+
+A description is the one card field with no length a column can rely on, so the
+board hides it and a `Descriptions:` toggle in the header puts up to six clamped
+lines of it back on every card. The choice says how one reader wants this board
+drawn rather than anything about the project, so the browser remembers it and
+nothing is published to `origin`; two people reading the same board can read it
+differently, and a browser that refuses storage simply gets the default. The
+text stays in the card either way and only the stylesheet decides whether it is
+shown, which keeps the setting out of the renderer: turning it on reveals what
+the page already holds rather than rebuilding cards or waiting for the next
+poll, and the reconciling poll has no preference to reset. The toggle
+accompanies the board alone; the deleted list and task pages draw no cards for
+it to act on and so do not offer it.
 
 Cards with prerequisites show completed versus total dependency progress.
 Ready cards whose prerequisites are not all active and Done also say
@@ -995,6 +1096,13 @@ names what was refused and offers **Restore draft**, which reopens the New Task
 form holding every value that was typed and the reason the server gave. Reports
 stack and are cleared by a click rather than by the next poll, because one of
 them can be holding the only copy of a task that was never saved.
+
+Labels are a set, and the form edits them as one chiclet per label rather than
+as a line of commas. The input holds only the label being typed; Enter or a
+comma commits it and clears the input, each chiclet carries a named remove
+control, and Backspace in an empty input removes the last one. A label left
+half-typed is still sent when the form is saved, and the payload the API sees
+is the same array of strings it always was.
 
 Missing prerequisite IDs remain visible and removable. Tombstoned
 prerequisites are also removable because the active dependent owns that edge;

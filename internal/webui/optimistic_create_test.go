@@ -3,7 +3,6 @@ package webui
 import (
 	"context"
 	"net/http"
-	"os/exec"
 	"strconv"
 	"strings"
 	"testing"
@@ -108,7 +107,7 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	if output, err := exec.Command(node, "-e", program).CombinedOutput(); err != nil {
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute optimistic task creation: %v\n%s", err, output)
 	}
 }
@@ -156,7 +155,10 @@ setTimeout(async () => {
   description.value = "Unsaved description";
   status.children.forEach((option) => { option.selected = option.value === "in-review"; });
   priority.children.forEach((option) => { option.selected = option.value === "high"; });
-  labels.value = "review, recovery";
+  labels.value = "review";
+  labels.eventListeners.keydown({ key: "Enter", preventDefault() {} });
+  labels.value = "recovery";
+  labels.eventListeners.keydown({ key: "Enter", preventDefault() {} });
   await form.eventListeners.submit({ preventDefault() {} });
 
   if (createCalls !== 1) throw new Error("Save did not attempt exactly one create");
@@ -187,12 +189,13 @@ setTimeout(async () => {
   const restoredDescription = findElement(restored, (element) => element.id === "task-description");
   const restoredStatus = findElement(restored, (element) => element.id === "task-status");
   const restoredPriority = findElement(restored, (element) => element.id === "task-priority");
-  const restoredLabels = findElement(restored, (element) => element.id === "task-labels");
+  const restoredLabels = findElements(restored, (element) =>
+    Object.hasOwn(element.dataset, "label")).map((chiclet) => chiclet.dataset.label);
   if (restoredTitle.value !== "Unsaved title" ||
       restoredDescription.value !== "Unsaved description" ||
       restoredStatus.value !== "in-review" ||
       restoredPriority.value !== "high" ||
-      restoredLabels.value !== "review, recovery") {
+      JSON.stringify(restoredLabels) !== '["review","recovery"]') {
     throw new Error("Restore draft lost what the refused create was carrying");
   }
   const feedback = findElement(restored, (element) =>
@@ -201,7 +204,7 @@ setTimeout(async () => {
   if (!createNotice.hidden) throw new Error("Restore draft left the failure report standing");
 }, 0);
 `
-	if output, err := exec.Command(node, "-e", program).CombinedOutput(); err != nil {
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute refused optimistic creation: %v\n%s", err, output)
 	}
 }
@@ -268,7 +271,7 @@ setTimeout(async () => {
   if (createNotice.hidden) throw new Error("a standing report was hidden with the one restored");
 }, 0);
 `
-	if output, err := exec.Command(node, "-e", program).CombinedOutput(); err != nil {
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute stacked create refusals: %v\n%s", err, output)
 	}
 }
@@ -313,7 +316,7 @@ setTimeout(async () => {
   if (!open) throw new Error("the warning report does not open the task it is about");
 }, 0);
 `
-	if output, err := exec.Command(node, "-e", program).CombinedOutput(); err != nil {
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute reported optimistic creation: %v\n%s", err, output)
 	}
 }
@@ -362,7 +365,11 @@ setTimeout(async () => {
   // refusal of the last one is read.
   findElement(main, (element) => element.id === "task-title").value = "Still being typed";
   findElement(main, (element) => element.id === "task-description").value = "Half a description";
-  findElement(main, (element) => element.id === "task-labels").value = "web, later";
+  const halfLabels = findElement(main, (element) => element.id === "task-labels");
+  halfLabels.value = "web";
+  halfLabels.eventListeners.keydown({ key: "Enter", preventDefault() {} });
+  halfLabels.value = "later";
+  halfLabels.eventListeners.keydown({ key: "Enter", preventDefault() {} });
   findElement(createNotice, (element) =>
     element.tagName === "BUTTON" && element.textContent === "Restore draft")
     .eventListeners.click();
@@ -388,13 +395,14 @@ setTimeout(async () => {
     throw new Error("the displaced draft did not come back");
   }
   if (findElement(main, (element) => element.id === "task-description").value !== "Half a description" ||
-      findElement(main, (element) => element.id === "task-labels").value !== "web, later") {
+      JSON.stringify(findElements(main, (element) =>
+        Object.hasOwn(element.dataset, "label")).map((chiclet) => chiclet.dataset.label)) !== '["web","later"]') {
     throw new Error("the displaced draft came back missing what was typed into it");
   }
   if (document.activeElement !== back) throw new Error("a restored draft did not take the caret");
 }, 0);
 `
-	if output, err := exec.Command(node, "-e", program).CombinedOutput(); err != nil {
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute displaced draft preservation: %v\n%s", err, output)
 	}
 }
@@ -448,7 +456,7 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	if output, err := exec.Command(node, "-e", program).CombinedOutput(); err != nil {
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute refused create focus: %v\n%s", err, output)
 	}
 }
@@ -491,9 +499,11 @@ setTimeout(async () => {
   const form = findElement(main, (element) => element.tagName === "FORM");
   findElement(form, (element) => element.id === "task-title").value = ` + strconv.Quote(created.Title) + `;
   findElement(form, (element) => element.id === "task-description").value = ` + strconv.Quote(created.Description) + `;
-  // Typed the way a person types them, so the match has to survive the
-  // normalization the server applies on the way in.
-  findElement(form, (element) => element.id === "task-labels").value = "web, later, web";
+  const raceLabels = findElement(form, (element) => element.id === "task-labels");
+  raceLabels.value = "web";
+  raceLabels.eventListeners.keydown({ key: "Enter", preventDefault() {} });
+  raceLabels.value = "later";
+  raceLabels.eventListeners.keydown({ key: "Enter", preventDefault() {} });
   const settled = form.eventListeners.submit({ preventDefault() {} });
 
   // The task is committed and readable; the POST is still open.
@@ -524,7 +534,7 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	if output, err := exec.Command(node, "-e", program).CombinedOutput(); err != nil {
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute poll that outran a create: %v\n%s", err, output)
 	}
 }
@@ -536,10 +546,7 @@ setTimeout(async () => {
 // itself never scrolls, so there is nothing to scroll back to it with. The cap
 // is style, so it is asserted as style: no script restores it.
 func TestHandlerCreateNoticeCannotCrowdOutTheRoute(t *testing.T) {
-	handler := NewHandler(
-		func(context.Context) ([]core.Task, error) { return nil, nil },
-		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
-	)
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return nil, nil })
 	response := request(t, handler, http.MethodGet, "/")
 	if response.Code != http.StatusOK {
 		t.Fatalf("GET / status = %d, want %d", response.Code, http.StatusOK)
@@ -629,7 +636,7 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	if output, err := exec.Command(node, "-e", program).CombinedOutput(); err != nil {
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute create matching a standing task: %v\n%s", err, output)
 	}
 }

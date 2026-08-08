@@ -3,7 +3,6 @@ package webui
 import (
 	"context"
 	"net/http"
-	"os/exec"
 	"strconv"
 	"testing"
 
@@ -57,7 +56,7 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("execute New Task save navigation: %v\n%s", err, output)
 	}
@@ -126,7 +125,7 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("execute Create more save behavior: %v\n%s", err, output)
 	}
@@ -202,7 +201,7 @@ setTimeout(async () => {
   if (!feedback) throw new Error("the created task's detail did not carry the create's warning");
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("execute reported create landing: %v\n%s", err, output)
 	}
@@ -213,10 +212,7 @@ setTimeout(async () => {
 // rather than a copy of it.
 func newTaskClientScript(t *testing.T, path string) string {
 	t.Helper()
-	handler := NewHandler(
-		func(context.Context) ([]core.Task, error) { return nil, nil },
-		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
-	)
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return nil, nil })
 	response := request(t, handler, http.MethodGet, path)
 	if response.Code != http.StatusOK {
 		t.Fatalf("GET %s status = %d, want %d", path, response.Code, http.StatusOK)

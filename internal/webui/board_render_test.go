@@ -3,7 +3,6 @@ package webui
 import (
 	"context"
 	"net/http"
-	"os/exec"
 	"strconv"
 	"testing"
 
@@ -39,8 +38,24 @@ func reconcileBoardTasks() []core.Task {
 // fake DOM, and then runs body with the board already painted.
 func runBoardClient(t *testing.T, purpose string, tasks []core.Task, body string) {
 	t.Helper()
+	runBoardClientWithSetup(t, purpose, tasks, "", body)
+}
+
+// runBoardClientWithSetup is runBoardClient with JavaScript that runs against
+// the fake DOM before the client script does, which is where a test states what
+// the browser already held when the page loaded.
+func runBoardClientWithSetup(t *testing.T, purpose string, tasks []core.Task, setup, body string) {
+	t.Helper()
+	runBoardClientAt(t, purpose, "/", tasks, setup, body)
+}
+
+// runBoardClientAt is runBoardClientWithSetup for a board opened at some URL
+// other than the board itself, which is how a test states what the header does
+// on a route that is not the board.
+func runBoardClientAt(t *testing.T, purpose, url string, tasks []core.Task, setup, body string) {
+	t.Helper()
 	node := requireNode(t)
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 	response := request(t, handler, http.MethodGet, "/")
 	if response.Code != http.StatusOK {
 		t.Fatalf("GET / status = %d, want %d", response.Code, http.StatusOK)
@@ -49,12 +64,12 @@ func runBoardClient(t *testing.T, purpose string, tasks []core.Task, body string
 	document := mustJSON(t, TasksDocument{
 		Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks),
 	})
-	program := clientDOMHarness("/", string(document)) + script + boardReconcilePrelude + `
+	program := clientDOMHarness(url, string(document)) + setup + script + boardReconcilePrelude + `
 setTimeout(async () => {
 ` + body + `
 }, 0);
 `
-	if output, err := exec.Command(node, "-e", program).CombinedOutput(); err != nil {
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute %s: %v\n%s", purpose, err, output)
 	}
 }

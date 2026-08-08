@@ -15,14 +15,13 @@ import (
 	"github.com/dgoings/workbook/internal/webui"
 )
 
-// runServe hands twelve function literals to the handler positionally, so a
-// mis-ordered pair compiles and every handler-level test keeps passing against
-// its own injected fakes. Delete, restore, and history were the three routes
-// with no test through the real wiring; backlog task
-// WB-01KZBM37EZJXV0ZBC53SJ4NVVC records that swapping the delete and restore
-// literals leaves the whole suite green while board deletion is broken. These
-// exercise the wiring the board actually runs on; reshaping that argument list
-// into an options struct is the other half of that fix and belongs to it.
+// runServe hands the handler twelve function literals. They are named fields
+// now rather than a positional list, which makes a transposed pair visible, but
+// naming cannot make it impossible: Delete and Restore still share a signature,
+// so a swap between those two fields compiles, and every handler-level test
+// keeps passing against its own injected fakes. Only a test through the real
+// wiring fails. These are those tests for delete, restore, and history; the
+// dependency pair is covered by TestRunServeMutatesDependenciesThroughWebRoutes.
 func TestRunServeDeletesAndRestoresThroughWebRoutes(t *testing.T) {
 	repository := initializedRepository(t)
 	code, stdout, stderr := run(t, repository, "create", "Deleted through the board", "--json")
