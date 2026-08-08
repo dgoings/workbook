@@ -143,6 +143,34 @@ func TestReleasePullRequestCutIsGuarded(t *testing.T) {
 	}
 }
 
+// Most merges are not releases, and a runner started only to report that it has
+// nothing to do is a cost paid on every one of them. The label is checked in the
+// condition so the job never starts, and again in the step because the condition
+// matches a substring and cannot enforce the exactly-one-label rule.
+func TestReleasePullRequestCutSkipsMergesWithNoReleaseLabel(t *testing.T) {
+	workflow := readReleaseWorkflow(t, "release-pr.yml")
+	cut, ok := workflow.Jobs["cut"]
+	if !ok {
+		t.Fatalf("release-pr jobs = %v, want a cut job", keysOf(workflow.Jobs))
+	}
+
+	if !strings.Contains(cut.If, "labels") || !strings.Contains(cut.If, "release:") {
+		t.Errorf("cut job condition %q does not gate on a release label", cut.If)
+	}
+	// The strict rule stays in the script: the condition cannot tell one release
+	// label from two, and picking between two would cut a release of a size
+	// nobody asked for.
+	var checksLabelInStep bool
+	for _, step := range cut.Steps {
+		if strings.Contains(step.Run, "release-bump-label.sh") {
+			checksLabelInStep = true
+		}
+	}
+	if !checksLabelInStep {
+		t.Error("cut job relies on its condition alone to choose a bump kind")
+	}
+}
+
 // The check runs on every pull request so it can be marked required. Restricting
 // it to labelled ones would leave every ordinary pull request waiting on a check
 // that never reports.

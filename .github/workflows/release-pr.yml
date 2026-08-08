@@ -50,10 +50,18 @@ jobs:
   # The pre-merge result can go stale: another release merging in between changes
   # the previous tag and therefore the version this one computes. What the tag is
   # actually based on is this second run, against the merged commit.
+  #
+  # The label appears in the condition as well as in the step so that an
+  # ordinary merge does not start a runner only to have it exit. Substring
+  # matching is deliberately the loose half of the test: a label merely
+  # containing "release:" starts the job, and release-bump-label.sh then rejects
+  # anything that is not exactly one of the three. Being too permissive here
+  # costs one short job, while being too strict would silently skip a release.
   cut:
     if: >-
       github.event.action == 'closed' &&
       github.event.pull_request.merged == true &&
+      contains(join(github.event.pull_request.labels.*.name, ' '), 'release:') &&
       github.event.pull_request.base.ref == 'main' &&
       github.event.pull_request.head.repo.full_name == github.repository
     name: Cut the release
