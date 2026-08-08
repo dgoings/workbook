@@ -1034,15 +1034,27 @@ with repeatable `--scenario` flags and use at least 500 total tasks with 20
 operations per task. In the benchmark CLI, `--tasks` counts total refs; omitted
 `--tombstones` produces 25 tombstones at 500 or more total tasks and one in
 smaller diagnostics, while an explicit zero is diagnostic-only. Cold CLI
-rebuilds and warm HTTP task-list loads are untimed setup. Local CLI p95 targets
-are 200 ms, warm-update p95 is 100 ms, and every burst must be below 1 second;
-local scenarios have no Git-process target. Version-2 reports include the
+rebuilds and each warm HTTP sample's preparatory task-list load are untimed
+setup; the `api-tasks` read scenario times a second, warm load of its own. Local
+CLI p95 targets are 200 ms, warm-update p95 is 100 ms, and every burst must be
+below 1 second; the whole-board read scenarios `cli-list` and `api-tasks` have no
+approved duration target and report `not-evaluated`, and local scenarios have no
+Git-process target. Version-2 reports include the
 SHA-256 of the resolved measured binary and acceptance rejects an `unknown`
 measured commit before it builds a fixture. Reports evaluate each topology as
 `pass`, `miss`, `timeout`, or `failed` against a time and Git-process reference
 budget; `not-evaluated` means that scenario has no target. Baseline budgets and
 outcomes are evidence, not achieved-performance guarantees; in particular, a
 timeout is only lower-bound elapsed-time evidence.
+
+The three commands an agent runs continuously — `next` to acquire work, `show`
+to read its context, `update` to record progress — are all measured. `cli-next`
+carries the 1,000 ms synchronized target rather than the 200 ms local one,
+because `next` fetches before answering so two agents cannot claim the same
+task, and that fetch is priced rather than hidden. The `watch-steady-state`
+selector observes a live `workbook sync --watch` with nothing pending and
+reports its CPU, peak resident memory, and per-tick cost descriptively; it is
+measured in its own invocation and carries no target.
 
 ### Project identity across worktrees
 

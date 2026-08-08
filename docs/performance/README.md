@@ -123,6 +123,111 @@ the measured delta even against a local bare origin, where connections are
 cheap. A real remote adds its connection latency on top. The 1,000 ms budget
 accommodates both, and the measured delta belongs to the fetch half.
 
+A hot loop run is an ordinary local acceptance invocation with the scenarios
+named explicitly. It carries the same 20-sample minimum every `cli-*` and `api-*`
+acceptance run does. Naming the two anchors alongside the three new scenarios is
+what makes the run readable: `cli-update` fixes the local class and
+`cli-update-autosync` fixes the synchronized one, so `cli-show` and `cli-next`
+are classified against scenarios measured minutes apart on the same host rather
+than against numbers from another date.
+
+```sh
+go build -buildvcs=false \
+  -ldflags "-X main.version=<version> -X main.commit=<commit>" \
+  -o /private/tmp/workbook-hotloop ./cmd/workbook
+go build -buildvcs=false -o /private/tmp/workbook-hotloop-bench ./cmd/workbook-bench
+
+/private/tmp/workbook-hotloop-bench \
+  --workbook /private/tmp/workbook-hotloop \
+  --tasks 525 \
+  --tombstones 25 \
+  --operations 20 \
+  --samples 20 \
+  --timeout 60s \
+  --object-format sha1 \
+  --phase acceptance \
+  --scenario cli-next \
+  --scenario cli-show \
+  --scenario api-tasks \
+  --scenario api-update \
+  --scenario cli-update \
+  --scenario cli-update-autosync \
+  --scenario cli-list \
+  --output-json docs/performance/2026-08-08-agent-hot-loop-sha1.json \
+  --output-markdown docs/performance/2026-08-08-agent-hot-loop-sha1.md
+```
+
+Repeat once with `--object-format sha256`.
+
+### 2026-08-08 agent hot loop and read-side evidence
+
+The agent hot loop was measured once per supported Git object format with
+the same frozen product and harness binaries, using 525 total tasks (500 active
+and 25 tombstoned), 20 operations per task, 20 samples per scenario, a 60-second
+command timeout, and the seven scenarios listed above. See the shared [build,
+checksum, and host-load provenance](2026-08-08-agent-loop-and-watcher-provenance.md).
+
+| Format | Evidence | Outcome |
+| --- | --- | --- |
+| SHA-1 | [JSON](2026-08-08-agent-hot-loop-sha1.json), [Markdown](2026-08-08-agent-hot-loop-sha1.md) | All 140 samples completed without timeout or product failure. `cli-show` passed. `cli-next`, `api-update`, `cli-update`, and `cli-update-autosync` missed their duration targets. `cli-list` and `api-tasks` have no target. |
+| SHA-256 | [JSON](2026-08-08-agent-hot-loop-sha256.json), [Markdown](2026-08-08-agent-hot-loop-sha256.md) | All 140 samples completed without timeout or product failure. `cli-next` and `cli-show` passed. `api-update`, `cli-update`, and `cli-update-autosync` missed their duration targets. `cli-list` and `api-tasks` have no target. |
+
+**Read the outcome column with the host in mind, and prefer the ratios below.**
+`cli-update` and `cli-update-autosync` are unchanged by this branch and both
+passed comfortably on 2026-08-05 — 174.63 ms against 200 ms, and 706.97 ms
+against 1,000 ms — yet both miss here, `cli-update` by 71% and
+`cli-update-autosync` by 109%. That is the signature of a contended measuring
+host, not of a regression: nothing in this branch touches either path. The
+absolute values are therefore upper bounds, and every claim below rests on
+scenarios compared *within* one run.
+
+| Scenario | SHA-1 min / median / p95 | SHA-256 min / median / p95 | Target | Git processes |
+| --- | ---: | ---: | ---: | ---: |
+| `api-tasks` | 28.62 / 30.75 / 33.16 ms | 31.51 / 35.54 / 45.79 ms | none | 1 |
+| `cli-show` | 52.70 / 70.05 / 119.20 ms | 52.15 / 63.59 / 138.71 ms | 200 ms | 3 |
+| `cli-list` | 58.21 / 79.32 / 165.18 ms | 55.32 / 69.38 / 124.08 ms | none | 3 |
+| `api-update` | 106.59 / 114.67 / 121.98 ms | 110.79 / 125.34 / 179.88 ms | 100 ms | 8 |
+| `cli-update` (`--no-sync`) | 137.41 / 191.84 / 299.40 ms | 133.17 / 154.93 / 265.59 ms | 200 ms | 10 |
+| `cli-next` | 401.19 / 652.73 / 1149.70 ms | 404.26 / 483.72 / 912.81 ms | 1,000 ms | 10 |
+| `cli-update-autosync` | 602.78 / 906.65 / 1480.54 ms | 645.25 / 765.37 / 1528.82 ms | 1,000 ms | 26 |
+
+**`cli-next` belongs in the synchronized class, and this run says so two
+independent ways.** First, its cheapest sample — the one least touched by host
+load — is 401.19 ms in SHA-1 and 404.26 ms in SHA-256. A command whose *best*
+observed sample is twice the 200 ms local budget cannot be classified as local,
+and that single number settles the target choice without needing a quiet host.
+Second, it tracks `cli-update-autosync` rather than `cli-update` at every
+statistic: 63–78% of the synchronized scenario's p95 and 63–72% of its median,
+where `cli-update` sits at roughly a fifth. `next` is cheaper than a
+synchronized mutation, because it fetches but never pushes or replays, and it is
+plainly in the same class.
+
+**The fetch does not show up in the process count, which is why it needed
+measuring.** `cli-next` spawns 10 Git processes — exactly what local
+`cli-update --no-sync` spawns — while taking three to four times as long.
+Elsewhere these documents lean on Git-process counts as the sturdier half of the
+evidence because they carry no network variance, and this scenario is the
+exception worth naming: a single broad fetch that enumerates and validates 525
+task refs is one process and most of the wall clock. Counting processes would
+have priced `next` as a local command. Only timing it finds the fetch.
+
+**`cli-show` is comfortably local.** It passed the 200 ms budget in both formats
+on a host where `cli-update` — the class it is being compared against — missed
+in both, and it costs 36–52% of that mutation at 3 Git processes against 10.
+Reading one task is strictly less work than mutating one, and the measurement
+holds even under contention.
+
+**The board's read side is the cheapest thing measured.** `api-tasks` answers the
+whole 500-task collection in 33.16 ms and 45.79 ms at p95 through a single Git
+process, roughly a quarter of the warm mutation on the same server in the same
+run. `cli-show` and `cli-list` also sit side by side for the first time, and the
+distinction the budget rules rest on is not yet visible at this size: the
+whole-board read costs about 10% more than the single-task one at the median, and
+the two p95 values disagree in direction between the formats. That is a statement
+about 525 tasks rather than a general one — the population is simply not where a
+whole-board read starts to hurt — and it is exactly why neither read carries a
+target.
+
 ### 2026-08-05 sync watcher local acceptance evidence
 
 The sync watcher branch was exercised once per supported Git object format with
@@ -220,6 +325,93 @@ provenance](2026-07-29-local-acceptance-provenance.md).
 
 These valid target misses are retained as the one-shot evidence. The binaries
 were not rebuilt, and neither invocation was tuned or replaced.
+
+## Proposed `api-update` target: 150 ms, pending sign-off
+
+**Status: proposed, not applied.** The harness still evaluates `api-update`
+against 100 ms and still reports it as a `miss`. Nothing in this section changes
+a target; changing one needs the project owner's sign-off, and this is the
+evidence that decision should be made on.
+
+`api-update` has missed its 100 ms inclusive p95 target in every acceptance set
+recorded since 2026-07-29 — eight independent measurements across four dates and
+both object formats, with no measurement on either side of the line:
+
+| Date | Format | p95 | Median | Outcome | In derivation |
+| --- | --- | ---: | ---: | --- | --- |
+| 2026-07-29 | SHA-1 | 134.16 ms | 97.39 ms | miss | yes |
+| 2026-07-29 | SHA-256 | 102.85 ms | 98.54 ms | miss | yes |
+| 2026-08-02 | SHA-1 | 114.06 ms | 107.25 ms | miss | yes |
+| 2026-08-02 | SHA-256 | 108.91 ms | 105.82 ms | miss | yes |
+| 2026-08-05 | SHA-1 | 121.37 ms | 119.31 ms | miss | yes |
+| 2026-08-05 | SHA-256 | 121.49 ms | 119.27 ms | miss | yes |
+| 2026-08-08 | SHA-1 | 121.98 ms | 114.67 ms | miss | no — contended host |
+| 2026-08-08 | SHA-256 | 179.88 ms | 125.34 ms | miss | no — contended host |
+
+Eight for eight is the important number. A target missed occasionally describes
+a noisy scenario; a target missed by every measurement ever taken of it describes
+a budget that was never achievable on this workload, and continuing to report it
+as a defect trains readers to skip the miss list.
+
+The proposal is derived from the six quiet-host measurements only. The
+2026-08-08 pair is discussed as corroboration at the end of this section, along
+with the reason one of its two points argues against the number proposed here.
+
+The proposal is **p95 ≤ 150 ms**, and it is bounded from both directions rather
+than picked for comfort:
+
+- **Below, by the measurements.** The worst of the six p95 values is 134.16 ms,
+  and the other five sit between 102.85 ms and 121.49 ms. A target under about
+  135 ms would keep failing on evidence that shows no defect. 150 ms clears the
+  worst observed value by 12%, which is roughly the spread the six points
+  already show between quiet hosts.
+- **Above, by the approved local budget.** `api-update` performs the same
+  single-task mutation as `cli-update --no-sync`, which is approved at 200 ms
+  and has measured 153.74–179.76 ms across the same six runs. The warm HTTP path
+  does that mutation without paying for a process start or for opening the
+  projection, so it must stay meaningfully cheaper than the cold CLI path. Any
+  target at or above 200 ms would permit a regression that erased the warm
+  path's entire advantage and still report a pass. 150 ms is 25% under the cold
+  budget, so it still fails that regression.
+
+What the number prices is a Git object write, not HTTP framing. The warm server
+holds the projection open and the fixture repository has no origin, so the sample
+synchronizes nothing; the handful of Git processes each sample records — six on
+2026-07-29, seven on 2026-08-05, eight on 2026-08-08 — are that local write. The
+six quiet-host runs agree it costs roughly 100–135 ms at p95 on a 525-task board,
+and the count creeping upward is worth watching on its own. The original 100 ms
+budget assumed a warm server would bring a mutation into double digits, and the
+measurements say the write floor alone sits at about that value before any
+variance is added.
+
+Re-approving rather than optimizing is a deliberate choice and worth stating as
+one. The alternative — making the write cheaper — is real work with its own
+design questions, and nothing in the evidence suggests a user-visible problem at
+120 ms in a browser form save. Recording the achievable number is the honest
+move before beta; if the write is later made cheaper, the target can come back
+down against evidence rather than against an aspiration.
+
+Two limits on this proposal:
+
+- It is a single fixture point. 150 ms describes a 525-task board and says
+  nothing about how the warm write grows with the population. Those fixture
+  points should be coordinated with the field-size bounding work so both
+  re-measure against the same board.
+- The 2026-08-08 agent hot loop evidence re-measured `api-update` on a
+  contended host and is **not** part of this derivation. It is cited only as
+  corroboration that the miss is structural — eight for eight now, across four
+  dates. A loaded host cannot make a command faster, so those two points confirm
+  the floor without moving it.
+
+  One of them is worth surfacing rather than burying, because it argues against
+  the proposal: the 2026-08-08 SHA-256 `api-update` p95 is **179.88 ms**, above
+  the 150 ms being proposed. It is excluded because `cli-update` missed its own
+  long-standing budget by 52% in that same run, which prices the host rather
+  than the product — but a reader who thinks a target should hold on a developer
+  machine running several agents at once should know that 150 ms would not have
+  held in that run, and that a target which does hold there is a larger number
+  answering a different question. That is a call for the project owner, and it
+  is the reason this section proposes rather than decides.
 
 ## Bounded baseline
 
@@ -904,6 +1096,69 @@ go build -buildvcs=false -o /private/tmp/workbook-watcher-bench ./cmd/workbook-b
 ```
 
 Repeat once with `--object-format sha256`.
+
+### 2026-08-08 sync watcher steady-state evidence
+
+The family was observed once per supported Git object format with the same frozen
+product and harness binaries as the hot loop pair, using 525 total tasks (500
+active and 25 tombstoned), 20 operations per task, three observations, and a
+60-second command timeout. See the shared [build, checksum, and host-load
+provenance](2026-08-08-agent-loop-and-watcher-provenance.md).
+
+| Format | Evidence |
+| --- | --- |
+| SHA-1 | [JSON](2026-08-08-watcher-steady-state-sha1.json), [Markdown](2026-08-08-watcher-steady-state-sha1.md) |
+| SHA-256 | [JSON](2026-08-08-watcher-steady-state-sha256.json), [Markdown](2026-08-08-watcher-steady-state-sha256.md) |
+
+| Window | Format | Synchronizations | Git processes | CPU (% of one core) | Peak resident | Major faults | Repository bytes |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `idle-control` | SHA-1 | 1 | 9 | 0.90–1.28% | 32.6–33.4 MB | 148 | −95 |
+| `steady-interval` | SHA-1 | 13 | 117 | 6.78–7.64% | 33.5–34.9 MB | 952 | −95 |
+| `idle-control` | SHA-256 | 1 | 9 | 0.91–1.40% | 31.2–33.7 MB | 144 | −95 |
+| `steady-interval` | SHA-256 | 13 | 117 | 6.16–6.71% | 34.1–34.6 MB | 924 | −94 to −95 |
+
+| Derived | SHA-1 | SHA-256 |
+| --- | ---: | ---: |
+| CPU per synchronization | 338.54 ms | 300.79 ms |
+| Git processes per synchronization | 9.00 | 9.00 |
+| Repository bytes per synchronization | 0 | 0 |
+| Peak resident delta, steady vs control | 1,654,784 B | 1,851,392 B |
+
+**A tick is exactly nine Git processes, and the count is not an estimate.** All
+six steady windows recorded 13 synchronizations and 117 Git processes, and all
+six control windows recorded 1 and 9, in both object formats without a single
+outlier. 117 is 9 × 13. The subtraction that derives the per-tick cost is
+therefore reading a structural constant rather than smoothing noise, and it is
+the sturdiest number in this section: process counts carry no host-load variance.
+
+**A watcher at the product's default interval costs roughly 7% of one core,
+continuously.** The control window shows what merely being alive costs — about
+1% of a core for startup and the two bracketing synchronizations — so the
+scheduled ticks are the rest. At a 5-second interval that is about 300–340 ms of
+CPU every 5 seconds, or roughly four minutes of CPU per hour of wall clock on a
+525-task board. That is the number to weigh before telling a beta user to leave
+one running all day, and it is a real cost rather than a rounding error.
+
+**Nothing durable is written, and the peak does not obviously grow.** The
+repository shrinks by 94 to 95 bytes in every window, control and steady alike,
+which makes it a fixed effect of the process lifetime rather than something ticks
+do; per-synchronization durable bytes are 0. Peak resident memory
+sits near 33 MB and the steady window's peak is under 2 MB above the control's.
+Per the caveats below that delta is a difference between two maxima and not a
+measured allocation, so read it as "twelve ticks did not obviously grow the
+peak" — which is the useful claim for a process left running for hours.
+
+**Ticks are not free of I/O.** Major page faults rise from 148 to 952 in SHA-1
+and from 144 to 924 in SHA-256 — 65 to 67 per tick. On darwin this is the usable
+I/O-pressure signal, and it is where the per-tip reads show up.
+
+One thing this evidence does **not** establish is the shape of that cost against
+board size. It is a single 525-task fixture point, measured at one interval. The
+concern that motivated the family — that every tick reads each canonical and
+tracking tip through a fully buffering Git helper, so per-tick work should grow
+with the task population — is consistent with 9 processes and 300–340 ms per tick
+at this size, but consistency is not evidence of a slope. Establishing one needs
+the same observation repeated at two or more populations.
 
 ### Reading the watcher block
 
