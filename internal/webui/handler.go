@@ -249,6 +249,12 @@ func writeSecurityHeaders(writer http.ResponseWriter) {
 
 func (handler *handler) serveHTTP(writer http.ResponseWriter, request *http.Request) {
 	writeSecurityHeaders(writer)
+	// Bounded here rather than at each route so no handler, present or future,
+	// can read an unbounded body by forgetting to ask for a limit. A route that
+	// never reads its body is covered too, and http.MaxBytesReader is given the
+	// ResponseWriter so a sender that ignores the limit loses its connection
+	// rather than keeping it to try again.
+	request.Body = http.MaxBytesReader(writer, request.Body, MaxRequestBodyBytes)
 	if malformedTaskDependencyRequestPath(request.URL.Path, request.URL.EscapedPath()) {
 		http.NotFound(writer, request)
 		return
@@ -537,7 +543,7 @@ func (handler *handler) updateTaskStatus(writer http.ResponseWriter, request *ht
 	}
 	var input updateStatusRequest
 	if err := decodeRequest(request.Body, &input); err != nil {
-		handler.writeError(writer, core.Wrap(core.CategoryInvocation, "decode status update", err))
+		handler.writeError(writer, decodeRequestError("decode status update", err))
 		return
 	}
 	result, err := handler.updateStatus(request.Context(), id, input.Status, input.ExpectedHead)
@@ -555,7 +561,7 @@ func (handler *handler) positionTask(writer http.ResponseWriter, request *http.R
 	}
 	var body positionTaskRequest
 	if err := decodeRequest(request.Body, &body); err != nil {
-		handler.writeError(writer, core.Wrap(core.CategoryInvocation, "decode task position", err))
+		handler.writeError(writer, decodeRequestError("decode task position", err))
 		return
 	}
 	result, err := handler.position(
@@ -573,7 +579,7 @@ func (handler *handler) positionTask(writer http.ResponseWriter, request *http.R
 func (handler *handler) createTask(writer http.ResponseWriter, request *http.Request) {
 	var body createTaskRequest
 	if err := decodeRequest(request.Body, &body); err != nil {
-		handler.writeError(writer, core.Wrap(core.CategoryInvocation, "decode task create", err))
+		handler.writeError(writer, decodeRequestError("decode task create", err))
 		return
 	}
 	if handler.create == nil {
@@ -591,7 +597,7 @@ func (handler *handler) createTask(writer http.ResponseWriter, request *http.Req
 func (handler *handler) updateTask(writer http.ResponseWriter, request *http.Request) {
 	var body updateTaskRequest
 	if err := decodeRequest(request.Body, &body); err != nil {
-		handler.writeError(writer, core.Wrap(core.CategoryInvocation, "decode task update", err))
+		handler.writeError(writer, decodeRequestError("decode task update", err))
 		return
 	}
 	if handler.update == nil {
@@ -681,6 +687,18 @@ func requireEmptyRequestBody(body io.Reader) error {
 	return err
 }
 
+// MaxRequestBodyBytes bounds one request body.
+//
+// The largest task this version can store is a title, a description, and a
+// label set at core's ceilings — under 70 KiB of task text. JSON escaping can
+// expand that severalfold in the worst case, so this sits an order of magnitude
+// above the largest body the board could honestly send while still refusing a
+// client that means to stream indefinitely. A request over it is the sender's
+// mistake, so it reads as an invocation failure rather than a validation one.
+const MaxRequestBodyBytes = 1 << 20
+
+// decodeRequest reads exactly one JSON value from the request body, which
+// serveHTTP has already bounded.
 func decodeRequest(body io.Reader, value any) error {
 	decoder := json.NewDecoder(body)
 	decoder.DisallowUnknownFields()
@@ -694,6 +712,25 @@ func decodeRequest(body io.Reader, value any) error {
 		return err
 	}
 	return nil
+}
+
+// decodeRequestError categorizes a body-decoding failure for a client.
+//
+// Only the outermost message reaches the response, so a body stopped by the
+// ceiling is reported as itself rather than wrapped in the route's context: the
+// route's "decode task create" alone would leave the sender to guess whether
+// its JSON was malformed or merely too large, which is the one decode failure a
+// client can act on without seeing the body.
+func decodeRequestError(context string, err error) error {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		return core.Errorf(
+			core.CategoryInvocation,
+			"request body must not exceed %d bytes",
+			MaxRequestBodyBytes,
+		)
+	}
+	return core.Wrap(core.CategoryInvocation, context, err)
 }
 
 func (handler *handler) writeTaskMutation(writer http.ResponseWriter, result core.MutationResult) {
@@ -735,7 +772,7 @@ func (handler *handler) updateSyncMode(writer http.ResponseWriter, request *http
 	}
 	var body syncModeRequest
 	if err := decodeRequest(request.Body, &body); err != nil {
-		handler.writeError(writer, core.Wrap(core.CategoryInvocation, "decode publication mode", err))
+		handler.writeError(writer, decodeRequestError("decode publication mode", err))
 		return
 	}
 	state, err := handler.setSyncMode(request.Context(), body.Mode)

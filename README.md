@@ -301,6 +301,51 @@ every project on a machine, `--skill-dir <dir>` overrides it for one project and
 `--no-skill` leaves the skill alone while still managing the guidelines. These
 flags are a stopgap until per-project configuration lands.
 
+### What a task may hold
+
+A task ref is shared history. Every clone that fetches, synchronizes, or runs an
+auto-syncing mutation reads every task tip into memory, so an unbounded field is
+not one collaborator's problem but the whole team's. Workbook therefore bounds
+what a task document may contain and how much of one it will read back:
+
+| Limit | Value | Applies to |
+| --- | --- | --- |
+| Title | 500 bytes | The title after surrounding whitespace is trimmed. |
+| Description | 65,536 bytes (64 KiB) | The description as stored. |
+| Label | 100 bytes | Each individual label. |
+| Labels per task | 50 | Distinct labels, counted after duplicates are dropped. |
+| Git object | 4,194,304 bytes (4 MiB) | Any single object Workbook reads: a commit, a task tree, or a stored document. |
+| Web request body | 1,048,576 bytes (1 MiB) | One request to `workbook serve`. |
+
+Lengths are counted in bytes rather than characters, because bytes are what a
+reader has to allocate. A field over its limit never reaches storage: the CLI
+answers with a `validation` error (exit `5`) naming the size and the ceiling,
+and the board answers `400` carrying the same document. The same check runs
+when a stored document is read back, where
+an over-limit field describes data that is already written rather than input
+that can be corrected, and is reported as `corrupt-data` (exit `7`).
+
+The limits are set far above ordinary use: a title is a headline, a description
+is prose and short code fences, and labels are vocabulary. A description that
+approaches 64 KiB is a document, and a document belongs in the repository with
+the task linking to it.
+
+The object ceiling is checked against the size Git reports before the object is
+read, so an object claiming to be a gigabyte costs a comparison rather than a
+gigabyte. It sits roughly sixty times above the largest task document the field
+limits above allow, so it never fires on anything Workbook produced; it exists
+so that an object hand-built and pushed by a collaborator cannot exhaust memory
+in every clone that fetches it. An object over it is reported as `corrupt-data`
+(exit `7`).
+
+Objects are also read one at a time rather than by buffering a whole batch of
+Git's output, so reading a project costs one object at a time instead of every
+task tip at once.
+
+Treat these numbers as part of the storage format. Raising one is a compatible
+change — an older clone rejects a document a newer one accepted. Lowering one is
+not, because a task already stored at the old size stops reading.
+
 ### Machine-readable output and exit codes
 
 With `--json`, success is a single compact line carrying a versioned envelope,
@@ -896,6 +941,16 @@ checks stand in for them and every route is subject to all three:
 A refused request is answered with a versioned `workbook.error` document and
 never reaches task storage: `403` for a foreign `Host` or `Origin`, and `415`
 for a mutation that does not declare JSON.
+
+Every request body is bounded at 1 MiB before any route sees it, and a body over
+that is answered `400` naming the ceiling. The bound is well above the largest
+task the field limits above allow, and it applies to routes that ignore their
+body as well, so no route can read an unbounded one by forgetting to ask for a
+limit. The server also bounds how long a connection may hold a header
+incomplete, a request body unfinished, or a keep-alive idle, so a client that
+opens a connection and stops talking is closed rather than holding a goroutine
+until `serve` exits. There is no response deadline: a mutation publishing inline
+waits on `origin`, and that has no honest bound.
 
 Binding `--addr` to anything other than a loopback address makes the board
 reachable by whoever shares the network, and those checks cannot tell a

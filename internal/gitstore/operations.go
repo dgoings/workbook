@@ -1,10 +1,8 @@
 package gitstore
 
 import (
-	"bufio"
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 
@@ -366,15 +364,22 @@ func (r *Repository) readOperationPacks(ctx context.Context, heads []TaskHead) (
 	for _, head := range heads {
 		fmt.Fprintf(&input, "%s:operation.json\n", head.ObjectID)
 	}
-	output, err := r.Git(ctx, input.Bytes(), "cat-file", "--batch")
+	// Streamed rather than buffered, so one operation document is resident at a
+	// time and the per-object ceiling bounds this read instead of merely
+	// describing memory already spent.
+	batch, err := r.startObjectBatch(ctx, func(writer io.Writer) error {
+		_, err := writer.Write(input.Bytes())
+		return err
+	})
 	if err != nil {
-		return nil, core.Wrap(core.CategoryCorruptData, "cannot read task operations", err)
+		return nil, err
 	}
-	reader := bufio.NewReader(bytes.NewReader(output))
+	defer batch.Close()
+
 	for index := range heads {
-		object, err := readBatchObject(reader)
+		object, err := readBatchObject(batch.Reader())
 		if err != nil {
-			return nil, core.Wrap(core.CategoryCorruptData, "cannot read task operations from Git batch", err)
+			return nil, batchReadError("cannot read task operations from Git batch", err)
 		}
 		switch {
 		case object.missing:
@@ -385,11 +390,8 @@ func (r *Repository) readOperationPacks(ctx context.Context, heads []TaskHead) (
 			results[index].pack, results[index].err = core.DecodeOperationPack(object.contents)
 		}
 	}
-	if _, err := reader.ReadByte(); !errors.Is(err, io.EOF) {
-		if err != nil {
-			return nil, core.Wrap(core.CategoryCorruptData, "cannot finish reading Git object batch", err)
-		}
-		return nil, core.Errorf(core.CategoryCorruptData, "Git returned unexpected trailing batch data")
+	if err := batch.Finish(); err != nil {
+		return nil, err
 	}
 	return results, nil
 }

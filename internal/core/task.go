@@ -186,6 +186,9 @@ func NormalizeTask(projectKey string, task TaskData) (TaskData, error) {
 	}
 	task.Labels = labels
 	task.Dependencies = dependencies
+	if err := validateTaskFieldSizes(task); err != nil {
+		return TaskData{}, err
+	}
 	return task, nil
 }
 
