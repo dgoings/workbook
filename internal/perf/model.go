@@ -114,6 +114,9 @@ type Report struct {
 	// StorageResources is the descriptive storage and peak-resource
 	// accounting. It is absent from runs that did not measure it.
 	StorageResources *StorageResourceReport `json:"storageResources,omitempty"`
+	// WatcherSteadyState is the descriptive account of a running
+	// `workbook sync --watch`. It is absent from runs that did not observe one.
+	WatcherSteadyState *WatcherSteadyStateReport `json:"watcherSteadyState,omitempty"`
 }
 
 func Summarize(samples []Sample) Summary {
@@ -192,7 +195,10 @@ func (r Report) WriteMarkdown(w io.Writer) error {
 			return err
 		}
 	}
-	return writeStorageResourceMarkdown(w, r.StorageResources)
+	if err := writeStorageResourceMarkdown(w, r.StorageResources); err != nil {
+		return err
+	}
+	return writeWatcherMarkdown(w, r.WatcherSteadyState)
 }
 
 func (r Report) normalized() Report {

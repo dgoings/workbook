@@ -274,6 +274,12 @@ func validateOptions(flags *flag.FlagSet, options *options) error {
 		if containsValidationScenario(scenarios) && (options.tasks < 500 || options.operations < 20) {
 			return fmt.Errorf("validation scenarios require at least 500 tasks and 20 operations per task")
 		}
+		// Every watcher tick reads each canonical and tracking tip, so its cost
+		// scales with the project's task count. A per-tick number measured on a
+		// tiny fixture would describe no board anyone runs.
+		if selectsWatcherScenario(scenarios) && (options.tasks < 500 || options.operations < 20) {
+			return fmt.Errorf("watcher scenarios require at least 500 tasks and 20 operations per task")
+		}
 		if err := perf.RequireProjectionRefreshFixture(scenarios, perf.FixtureSpec{
 			TotalTasks:        options.tasks,
 			ActiveTasks:       options.tasks - options.tombstones,
@@ -467,6 +473,14 @@ func runBenchmark(ctx context.Context, options options) (perf.Report, error) {
 		}
 		scenarios = append(scenarios, validation...)
 	}
+	var watcherSteadyState *perf.WatcherSteadyStateReport
+	if selectsWatcherScenario(options.scenarios) {
+		observed, err := perf.RunWatcherSteadyState(ctx, runSpec, filepath.Join(fixtureRoot, "watcher"))
+		if err != nil {
+			return perf.Report{}, fmt.Errorf("observe sync watcher steady state: %w", err)
+		}
+		watcherSteadyState = &observed
+	}
 	return perf.Report{
 		Format:      perf.ReportFormat,
 		Version:     perf.ReportVersion,
@@ -479,9 +493,10 @@ func runBenchmark(ctx context.Context, options options) (perf.Report, error) {
 			ColdP95Milliseconds: 200,
 			BurstMilliseconds:   1000,
 		},
-		Scenarios:         scenarios,
-		Repository:        repositoryMetrics,
-		ProjectionRefresh: projectionRefresh,
+		Scenarios:          scenarios,
+		Repository:         repositoryMetrics,
+		ProjectionRefresh:  projectionRefresh,
+		WatcherSteadyState: watcherSteadyState,
 	}, nil
 }
 
@@ -599,6 +614,17 @@ func selectedScenarioResults(results []perf.ScenarioResult, selected []string) [
 		}
 	}
 	return filtered
+}
+
+// selectsWatcherScenario reports whether the selection asked for the sync
+// watcher steady-state observation.
+func selectsWatcherScenario(scenarios []string) bool {
+	for _, scenario := range scenarios {
+		if scenario == perf.WatcherScenario {
+			return true
+		}
+	}
+	return false
 }
 
 func containsRemoteScenario(scenarios []string) bool {

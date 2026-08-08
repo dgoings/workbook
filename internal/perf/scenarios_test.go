@@ -53,11 +53,11 @@ func TestRunColdCLIIsolatesSelectedScenarioSamplesAndPreparesProjection(t *testi
 			mutex.Unlock()
 			return nil
 		},
-		measureCommand: func(_ context.Context, spec CommandSpec) Sample {
+		measureCommand: func(_ context.Context, spec CommandSpec) CommandMeasurement {
 			mutex.Lock()
 			events = append(events, "measure "+filepath.Base(spec.Directory))
 			mutex.Unlock()
-			return Sample{ExitCode: 0, GitProcesses: 1}
+			return CommandMeasurement{Sample: Sample{ExitCode: 0, GitProcesses: 1}}
 		},
 		cleanupFixture: func(root string) error {
 			mutex.Lock()
@@ -157,9 +157,9 @@ func TestRunColdCLICleansFixtureOnSetupAndMeasurementErrors(t *testing.T) {
 					events = append(events, "prepare")
 					return test.prepareErr
 				},
-				measureCommand: func(context.Context, CommandSpec) Sample {
+				measureCommand: func(context.Context, CommandSpec) CommandMeasurement {
 					events = append(events, "measure")
-					return Sample{ExitCode: 0}
+					return CommandMeasurement{Sample: Sample{ExitCode: 0}}
 				},
 				cleanupFixture: func(string) error {
 					events = append(events, "cleanup")
@@ -201,9 +201,9 @@ func TestRunColdCLISelectsOnlyRequestedScenario(t *testing.T) {
 			prepares = append(prepares, filepath.Base(command.Directory))
 			return nil
 		},
-		measureCommand: func(_ context.Context, command CommandSpec) Sample {
+		measureCommand: func(_ context.Context, command CommandSpec) CommandMeasurement {
 			measures = append(measures, filepath.Base(command.Directory))
-			return Sample{ExitCode: 0}
+			return CommandMeasurement{Sample: Sample{ExitCode: 0}}
 		},
 	}
 	spec := RunSpec{WorkbookBinary: "workbook", Fixture: FixtureSpec{TotalTasks: 11, ActiveTasks: 10, TombstonedTasks: 1, OperationsPerTask: 4, ObjectFormat: "sha1"}, Samples: 1, CommandTimeout: time.Second}
@@ -229,9 +229,9 @@ func TestRunColdCLIUsesFixtureTombstoneAndDirectDependency(t *testing.T) {
 			return fixture, nil
 		},
 		prepareProjection: func(context.Context, CommandSpec, int) error { return nil },
-		measureCommand: func(_ context.Context, command CommandSpec) Sample {
+		measureCommand: func(_ context.Context, command CommandSpec) CommandMeasurement {
 			commands = append(commands, command)
-			return Sample{ExitCode: 0}
+			return CommandMeasurement{Sample: Sample{ExitCode: 0}}
 		},
 	}
 	spec := RunSpec{WorkbookBinary: "workbook", Fixture: FixtureSpec{TotalTasks: 11, ActiveTasks: 10, TombstonedTasks: 1, OperationsPerTask: 4, ObjectFormat: "sha1"}, Samples: 1, CommandTimeout: time.Second}
@@ -820,6 +820,133 @@ func TestWarmHTTPServerPrepareProjection(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestWarmTaskListDeadlineReturnsTimedOutSample holds the board's read side to
+// the same harness contract every other measured surface obeys: a command that
+// reached its timeout is a `timeout` sample, not a reason to discard the samples
+// the run already collected. A slow GET on sample 7 of a 20-sample acceptance
+// run must still leave a report behind.
+func TestWarmTaskListDeadlineReturnsTimedOutSample(t *testing.T) {
+	release := make(chan struct{})
+	httpServer := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		<-release
+	}))
+	defer httpServer.Close()
+	defer close(release)
+
+	server := warmHTTPServer{
+		baseURL:   httpServer.URL,
+		tracePath: emptyTraceFile(t),
+		client:    httpServer.Client(),
+	}
+	sample, err := server.measureTaskList(context.Background(), 2, 20*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sample.TimedOut || sample.ExitCode != -1 || !strings.Contains(sample.Error, context.DeadlineExceeded.Error()) {
+		t.Fatalf("deadline sample = %#v, want retained timeout", sample)
+	}
+}
+
+// TestWarmTaskListNonOKResponseReturnsMeasuredSample records a server error as a
+// `failed` sample the same way api-update does, rather than aborting the run.
+func TestWarmTaskListNonOKResponseReturnsMeasuredSample(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{name: "server error", status: http.StatusInternalServerError, body: "projection is unavailable"},
+		{name: "service unavailable", status: http.StatusServiceUnavailable, body: "temporarily unavailable"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			httpServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				http.Error(writer, test.body, test.status)
+			}))
+			defer httpServer.Close()
+
+			server := warmHTTPServer{
+				baseURL:   httpServer.URL,
+				tracePath: emptyTraceFile(t),
+				client:    httpServer.Client(),
+			}
+			sample, err := server.measureTaskList(context.Background(), 2, time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if sample.ExitCode != test.status || sample.TimedOut || sample.Duration <= 0 {
+				t.Fatalf("HTTP %d sample = %#v, want retained nonzero measured outcome", test.status, sample)
+			}
+			if !strings.Contains(sample.Error, fmt.Sprintf("HTTP %d", test.status)) ||
+				!strings.Contains(sample.Error, test.body) {
+				t.Fatalf("HTTP %d sample error = %q, want status and body evidence", test.status, sample.Error)
+			}
+		})
+	}
+}
+
+// TestWarmTaskListMalformedAnswerAndCallerCancellationRemainFatal keeps the
+// population oracle. A 200 that answered with the wrong envelope or an empty
+// board is not a measurable outcome — it is a fast read of nothing — so it stops
+// the run rather than being published as the board's read latency. A cancelled
+// caller stays fatal too, because it is the harness shutting down and not a
+// command reaching its own timeout.
+func TestWarmTaskListMalformedAnswerAndCallerCancellationRemainFatal(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    string
+		wantErr string
+	}{
+		{name: "malformed HTTP 200", body: "{", wantErr: "decode task list response"},
+		{
+			name:    "wrong envelope",
+			body:    `{"format":"workbook.result","version":1,"tasks":[{"id":"WB-1"},{"id":"WB-2"}]}`,
+			wantErr: "want workbook.tasks v1",
+		},
+		{
+			name:    "empty board",
+			body:    `{"format":"workbook.tasks","version":1,"tasks":[]}`,
+			wantErr: "task count = 0, want 2",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			httpServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				writer.WriteHeader(http.StatusOK)
+				_, _ = io.WriteString(writer, test.body)
+			}))
+			defer httpServer.Close()
+
+			server := warmHTTPServer{
+				baseURL:   httpServer.URL,
+				tracePath: emptyTraceFile(t),
+				client:    httpServer.Client(),
+			}
+			_, err := server.measureTaskList(context.Background(), 2, time.Second)
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("error = %v, want a fatal %q", err, test.wantErr)
+			}
+		})
+	}
+
+	t.Run("caller cancellation", func(t *testing.T) {
+		httpServer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+		defer httpServer.Close()
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		server := warmHTTPServer{
+			baseURL:   httpServer.URL,
+			tracePath: emptyTraceFile(t),
+			client:    httpServer.Client(),
+		}
+		_, err := server.measureTaskList(ctx, 2, time.Second)
+		if err == nil || !errors.Is(err, context.Canceled) {
+			t.Fatalf("caller cancellation error = %v, want fatal context cancellation", err)
+		}
+	})
 }
 
 func TestWarmStatusDeadlineReturnsTimedOutSample(t *testing.T) {
@@ -1691,6 +1818,16 @@ func (server *recordingWarmScenarioServer) prepareProjection(_ context.Context, 
 	return server.prepareErr
 }
 
+func (server *recordingWarmScenarioServer) measureTaskList(
+	_ context.Context,
+	_ int,
+	_ time.Duration,
+) (Sample, error) {
+	server.t.Helper()
+	server.t.Fatalf("role %q measured a task list read it did not select", server.role)
+	return Sample{}, nil
+}
+
 func (server *recordingWarmScenarioServer) measureStatus(
 	_ context.Context,
 	taskID string,
@@ -1796,10 +1933,10 @@ func TestColdAutoSyncScenarioMeasuresSynchronizedUpdate(t *testing.T) {
 			return fixture, nil
 		},
 		prepareProjection: func(context.Context, CommandSpec, int) error { return nil },
-		measureCommand: func(_ context.Context, command CommandSpec) Sample {
+		measureCommand: func(_ context.Context, command CommandSpec) CommandMeasurement {
 			commands = append(commands, command)
 			originAtMeasure = gitConfigValue(t, command.Directory, "remote.origin.url")
-			return Sample{ExitCode: 0}
+			return CommandMeasurement{Sample: Sample{ExitCode: 0}}
 		},
 	}
 	spec := RunSpec{

@@ -2813,6 +2813,148 @@ setTimeout(() => {
 	}
 }
 
+func TestHandlerClientDependencyComboboxDismissesOnLostFocus(t *testing.T) {
+	node := requireNode(t)
+	current := clientPlacementTask("WB-01J00000000000000000000090", "Current task", core.StatusReady, core.PriorityMedium)
+	first := clientPlacementTask("WB-01J00000000000000000000091", "First candidate", core.StatusDone, core.PriorityHigh)
+	second := clientPlacementTask("WB-01J00000000000000000000092", "Second candidate", core.StatusBacklog, core.PriorityLow)
+	tasks := []core.Task{current, first, second}
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/<id> status = %d, want %d", response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	document, err := json.Marshal(TasksDocument{Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := clientDOMHarness("/tasks/"+current.ID, string(document)) + script + `
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const partsFor = (headingText) => {
+    const heading = findElement(main, (element) => element.textContent === headingText);
+    if (!heading) throw new Error("missing " + headingText + " group");
+    const group = heading.parentElement;
+    const input = findElement(group, (element) => element.tagName === "INPUT" && element.attributes.role === "combobox");
+    const listbox = findElement(group, (element) => element.attributes.role === "listbox");
+    const add = findElement(group, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency");
+    return { group, input, listbox, add, region: input.parentElement };
+  };
+  const assertOpen = (parts, label) => {
+    if (parts.listbox.hidden || parts.input.attributes["aria-expanded"] !== "true") {
+      throw new Error(label + " did not leave the popup open");
+    }
+  };
+  const assertClosed = (parts, label) => {
+    if (!parts.listbox.hidden || parts.input.attributes["aria-expanded"] !== "false") {
+      throw new Error(label + " left the popup covering the rest of the page");
+    }
+  };
+
+  const outside = findElement(main, (element) => element.id === "task-title");
+  if (!outside) throw new Error("missing a field outside the relationship editor");
+
+  ["Depends On", "Blocks"].forEach((headingText) => {
+    const parts = partsFor(headingText);
+    if (parts.listbox.parentElement !== parts.region) {
+      throw new Error(headingText + " listbox is not mounted inside the combobox region");
+    }
+    if (typeof parts.region.eventListeners.focusout !== "function") {
+      throw new Error(headingText + " combobox does not watch for lost focus");
+    }
+
+    parts.input.eventListeners.focus();
+    parts.input.eventListeners.keydown({ key: "ArrowDown", preventDefault() {} });
+    assertOpen(parts, headingText + " focus");
+    if (!parts.input.attributes["aria-activedescendant"]) {
+      throw new Error(headingText + " did not activate a candidate before losing focus");
+    }
+    parts.region.eventListeners.focusout({ relatedTarget: outside });
+    assertClosed(parts, headingText + " focus moving to another field");
+    if (Object.prototype.hasOwnProperty.call(parts.input.attributes, "aria-activedescendant")) {
+      throw new Error(headingText + " kept an active descendant after losing focus");
+    }
+    if (documentEventListeners.scroll) {
+      throw new Error(headingText + " kept repositioning a dismissed popup on scroll");
+    }
+
+    // A press on the still focused input fires no focus event, so the popup
+    // has to reopen from the click itself or it can never be reopened.
+    parts.input.eventListeners.click();
+    assertOpen(parts, headingText + " clicking the already focused input");
+
+    parts.region.eventListeners.focusout({ relatedTarget: null });
+    assertClosed(parts, headingText + " focus leaving for nothing focusable");
+
+    parts.input.eventListeners.focus();
+    parts.region.eventListeners.focusout({ relatedTarget: parts.add });
+    assertOpen(parts, headingText + " focus moving to Add dependency");
+    parts.region.eventListeners.focusout({ relatedTarget: parts.listbox });
+    assertOpen(parts, headingText + " focus moving into the popup itself");
+
+    // Escape has to be claimed whether or not the popup is open. This is a
+    // search field, so the browser's default is to clear it, and the input
+    // event that fires reopens the popup: unclaimed, a second Escape summons
+    // back the very popup the first one dismissed.
+    parts.input.value = "Second";
+    parts.input.eventListeners.input();
+    assertOpen(parts, headingText + " typing a query");
+    let escapePrevented = false;
+    parts.input.eventListeners.keydown({ key: "Escape", preventDefault() { escapePrevented = true; } });
+    assertClosed(parts, headingText + " Escape");
+    if (!escapePrevented) {
+      throw new Error(headingText + " left Escape to the search field's native clear, which reopens the popup");
+    }
+    if (parts.input.value !== "Second") {
+      throw new Error(headingText + " threw the query away on the Escape that only had to close the popup");
+    }
+    escapePrevented = false;
+    parts.input.eventListeners.keydown({ key: "Escape", preventDefault() { escapePrevented = true; } });
+    if (!escapePrevented) {
+      throw new Error(headingText + " left the second Escape to the native clear, whose input event reopens the popup");
+    }
+    if (parts.input.value !== "") {
+      throw new Error(headingText + " claimed Escape without clearing the query the native default would have");
+    }
+    assertClosed(parts, headingText + " Escape on an already dismissed popup");
+    // Nothing left to clear, so the key is nobody's business but the browser's.
+    escapePrevented = false;
+    parts.input.eventListeners.keydown({ key: "Escape", preventDefault() { escapePrevented = true; } });
+    if (escapePrevented) {
+      throw new Error(headingText + " swallowed Escape with no popup open and no query to clear");
+    }
+
+    parts.input.eventListeners.click();
+    assertOpen(parts, headingText + " reopening after Escape");
+
+    // A pointer press inside the popup must not blur the input, because blur
+    // runs before click and would hide the option out from under the very
+    // click that selects it.
+    let prevented = false;
+    parts.listbox.eventListeners.mousedown({ preventDefault() { prevented = true; } });
+    if (!prevented) {
+      throw new Error(headingText + " popup lets a pointer press blur the input before the click lands");
+    }
+    const option = findElement(parts.listbox, (element) => element.attributes.role === "option");
+    if (!option) throw new Error(headingText + " popup rendered no options to select");
+    const chosen = taskDocument.tasks.find((task) => task.id === option.dataset.candidateId);
+    option.eventListeners.click();
+    if (parts.input.value !== chosen.title || parts.add.disabled) {
+      throw new Error(headingText + " pointer selection did not survive lost-focus dismissal");
+    }
+    assertClosed(parts, headingText + " selecting an option");
+  });
+}, 0);
+`
+	command := nodeCommand(node, program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("execute dependency combobox lost-focus dismissal: %v\n%s", err, output)
+	}
+}
+
 func TestHandlerClientDependencyMutationOrientationAndRefresh(t *testing.T) {
 	node := requireNode(t)
 	current := clientPlacementTask("WB-01J00000000000000000000051", "Current task", core.StatusReady, core.PriorityMedium)
@@ -3184,7 +3326,8 @@ setTimeout(async () => {
 `
 	commandContext, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	command := exec.CommandContext(commandContext, node, "-e", program)
+	command := exec.CommandContext(commandContext, node, "-")
+	command.Stdin = strings.NewReader(program)
 	if output, err := command.CombinedOutput(); err != nil {
 		if commandContext.Err() == context.DeadlineExceeded {
 			t.Fatalf("dependency mutation did not settle after controller-only supersession")
@@ -4472,6 +4615,10 @@ const boardCounts = boardStatuses.map((status) => {
   return element;
 });
 boardView.querySelectorAll = (selector) => selector === "[data-status]" ? boardLists : boardCounts;
+// The create report sits outside the board view, because it has to be readable
+// from whatever route the save left the user on.
+const createNotice = new TestElement("div");
+createNotice.hidden = true;
 // The page ships this control hidden and renderRoute() reveals it on the board,
 // so the harness has to start it hidden too. Starting it visible would let a
 // renderRoute() that never touched it look like it had revealed it.
@@ -4485,6 +4632,7 @@ const documentEventListeners = {};
     if (selector === "main") return main;
     if (selector === "[data-board-view]") return boardView;
     if (selector === "[data-updated]") return updated;
+    if (selector === "[data-create-notice]") return createNotice;
     if (selector === "[data-description-toggle]") return descriptionToggle;
     return null;
   },

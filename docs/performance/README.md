@@ -29,13 +29,24 @@ are deliberately untimed. Each warm HTTP sample starts its own server and makes
 an untimed `/api/tasks` load that verifies the active-task population before the
 timed mutation. Fixture construction is also outside every sample.
 
-Local single-operation CLI mutation scenarios use an inclusive p95 target of
+Local single-operation CLI scenarios use an inclusive p95 target of
 200 ms; the warm `api-update` scenario uses an inclusive p95 target of 100 ms;
 and each ten-operation burst sample must be strictly below 1,000 ms. The
-`cli-list` read scenario has no approved duration target and is reported
-descriptively. Local scenarios have no Git-process target. Reports use format version 2 and record the SHA-256
+whole-board read scenarios `cli-list` and `api-tasks` have no approved duration
+target and are reported descriptively. Local scenarios have no Git-process
+target. Reports use format version 2 and record the SHA-256
 of the resolved measured executable in
 `environment.workbookBinarySha256`, alongside its reported version and commit.
+
+The line between a budgeted and a descriptive scenario is the shape of the work,
+not reading against writing. The 200 ms local class covers a command whose cost
+is bounded by one task, which is why `cli-show` carries it: reading a single task
+is strictly less work than the single-task mutations the class was approved for,
+on the same surface and with no round trip, so the approved envelope is a valid
+upper bound rather than an invented threshold. `cli-list` and `api-tasks` answer
+with the whole board, so their cost grows with the task population and the
+single-operation envelope says nothing about them. No whole-board read budget has
+been approved, so both are reported `not-evaluated`.
 
 Every local `cli-*` mutation scenario passes `--no-sync`, so those budgets
 measure the local mutation path alone. `cli-update-autosync` measures the same
@@ -44,6 +55,53 @@ already holds the fixture's task refs, and carries an inclusive p95 target of
 1,000 ms. Creating that origin and publishing the starting refs is setup,
 outside the measured sample. Separating the two budgets keeps a local regression
 from hiding inside network variance.
+
+### The agent hot loop
+
+`cli-next`, `cli-show`, and `cli-update` are the three commands an agent runs
+continuously: acquire work, read its context, record progress. All three are
+measured, because a latency surprise in this loop is the one beta users driving
+agents will meet first and most often.
+
+`cli-next` deliberately does not pass `--no-sync`. `workbook next` fetches before
+answering so two agents cannot claim the same task, and that fetch is the point
+of the scenario: measuring it with `--no-sync` would report a local read no agent
+ever performs. It therefore runs against a local bare origin that already holds
+the fixture's task refs, exactly as `cli-update-autosync` does, and carries the
+same inclusive p95 target of 1,000 ms.
+
+Its setup does three untimed things, in this order, and each earns its place.
+First it moves one active task to `ready`: `next` only ever selects a task in
+that status, and the fixture's deterministic generator never leaves one there, so
+without this the board would hold nothing to acquire and the scenario would
+report the agent's acquire step while measuring a search that always comes up
+empty. Then it publishes origin, so the measured fetch meets an
+already-synchronized remote and reconciles nothing — publishing first would leave
+the local task ahead and price a replay the scenario does not claim to measure.
+Finally it re-settles the projection with an untimed `workbook rebuild --json`,
+because the setup mutation left one head stale and refreshing a single changed
+head costs tens of milliseconds at acceptance size; every other cold scenario's
+projection is current when its command starts, and this keeps the sample
+comparable. A setup mutation that fails aborts the scenario rather than
+producing a sample.
+
+Pricing `next` in the synchronized class rather than the local one is the
+deliberate choice this scenario exists to record. Its fetch is the same broad
+fetch that dominates `cli-update-autosync`, so a 200 ms local budget would
+classify a command that cannot meet it by design, and the round trip would be
+read as a regression instead of as the cost of not letting two agents claim the
+same task. The target accounts for the fetch instead of hiding it.
+
+`cli-show` performs no synchronization at all — `workbook show` has no
+`--no-sync` flag because it never fetches — so it sits in the 200 ms local class
+described above.
+
+`api-tasks` is the read side of the board. Every warm HTTP sample already makes
+an untimed `/api/tasks` load to verify the active-task population; `api-tasks`
+times a second one, so the sample is a warm read against a server that has
+already opened the projection and answered the same query once. The timed read
+verifies the same population before it is reported, so a server that answered
+with an empty board could not be recorded as a fast read.
 
 `cli-update-watched` measures that same synchronized update with a
 `workbook sync --watch` process running, and is held to the **200 ms local**
@@ -64,6 +122,111 @@ enumerates and validates every task ref, and at 500 tasks that work dominates
 the measured delta even against a local bare origin, where connections are
 cheap. A real remote adds its connection latency on top. The 1,000 ms budget
 accommodates both, and the measured delta belongs to the fetch half.
+
+A hot loop run is an ordinary local acceptance invocation with the scenarios
+named explicitly. It carries the same 20-sample minimum every `cli-*` and `api-*`
+acceptance run does. Naming the two anchors alongside the three new scenarios is
+what makes the run readable: `cli-update` fixes the local class and
+`cli-update-autosync` fixes the synchronized one, so `cli-show` and `cli-next`
+are classified against scenarios measured minutes apart on the same host rather
+than against numbers from another date.
+
+```sh
+go build -buildvcs=false \
+  -ldflags "-X main.version=<version> -X main.commit=<commit>" \
+  -o /private/tmp/workbook-hotloop ./cmd/workbook
+go build -buildvcs=false -o /private/tmp/workbook-hotloop-bench ./cmd/workbook-bench
+
+/private/tmp/workbook-hotloop-bench \
+  --workbook /private/tmp/workbook-hotloop \
+  --tasks 525 \
+  --tombstones 25 \
+  --operations 20 \
+  --samples 20 \
+  --timeout 60s \
+  --object-format sha1 \
+  --phase acceptance \
+  --scenario cli-next \
+  --scenario cli-show \
+  --scenario api-tasks \
+  --scenario api-update \
+  --scenario cli-update \
+  --scenario cli-update-autosync \
+  --scenario cli-list \
+  --output-json docs/performance/2026-08-08-agent-hot-loop-sha1.json \
+  --output-markdown docs/performance/2026-08-08-agent-hot-loop-sha1.md
+```
+
+Repeat once with `--object-format sha256`.
+
+### 2026-08-08 agent hot loop and read-side evidence
+
+The agent hot loop was measured once per supported Git object format with
+the same frozen product and harness binaries, using 525 total tasks (500 active
+and 25 tombstoned), 20 operations per task, 20 samples per scenario, a 60-second
+command timeout, and the seven scenarios listed above. See the shared [build,
+checksum, and host-load provenance](2026-08-08-agent-loop-and-watcher-provenance.md).
+
+| Format | Evidence | Outcome |
+| --- | --- | --- |
+| SHA-1 | [JSON](2026-08-08-agent-hot-loop-sha1.json), [Markdown](2026-08-08-agent-hot-loop-sha1.md) | All 140 samples completed without timeout or product failure. `cli-show` passed. `cli-next`, `api-update`, `cli-update`, and `cli-update-autosync` missed their duration targets. `cli-list` and `api-tasks` have no target. |
+| SHA-256 | [JSON](2026-08-08-agent-hot-loop-sha256.json), [Markdown](2026-08-08-agent-hot-loop-sha256.md) | All 140 samples completed without timeout or product failure. `cli-next` and `cli-show` passed. `api-update`, `cli-update`, and `cli-update-autosync` missed their duration targets. `cli-list` and `api-tasks` have no target. |
+
+**Read the outcome column with the host in mind, and prefer the ratios below.**
+`cli-update` and `cli-update-autosync` are unchanged by this branch and both
+passed comfortably on 2026-08-05 — 174.63 ms against 200 ms, and 706.97 ms
+against 1,000 ms — yet both miss here, `cli-update` by 71% and
+`cli-update-autosync` by 109%. That is the signature of a contended measuring
+host, not of a regression: nothing in this branch touches either path. The
+absolute values are therefore upper bounds, and every claim below rests on
+scenarios compared *within* one run.
+
+| Scenario | SHA-1 min / median / p95 | SHA-256 min / median / p95 | Target | Git processes |
+| --- | ---: | ---: | ---: | ---: |
+| `api-tasks` | 28.62 / 30.75 / 33.16 ms | 31.51 / 35.54 / 45.79 ms | none | 1 |
+| `cli-show` | 52.70 / 70.05 / 119.20 ms | 52.15 / 63.59 / 138.71 ms | 200 ms | 3 |
+| `cli-list` | 58.21 / 79.32 / 165.18 ms | 55.32 / 69.38 / 124.08 ms | none | 3 |
+| `api-update` | 106.59 / 114.67 / 121.98 ms | 110.79 / 125.34 / 179.88 ms | 100 ms | 8 |
+| `cli-update` (`--no-sync`) | 137.41 / 191.84 / 299.40 ms | 133.17 / 154.93 / 265.59 ms | 200 ms | 10 |
+| `cli-next` | 401.19 / 652.73 / 1149.70 ms | 404.26 / 483.72 / 912.81 ms | 1,000 ms | 10 |
+| `cli-update-autosync` | 602.78 / 906.65 / 1480.54 ms | 645.25 / 765.37 / 1528.82 ms | 1,000 ms | 26 |
+
+**`cli-next` belongs in the synchronized class, and this run says so two
+independent ways.** First, its cheapest sample — the one least touched by host
+load — is 401.19 ms in SHA-1 and 404.26 ms in SHA-256. A command whose *best*
+observed sample is twice the 200 ms local budget cannot be classified as local,
+and that single number settles the target choice without needing a quiet host.
+Second, it tracks `cli-update-autosync` rather than `cli-update` at every
+statistic: 63–78% of the synchronized scenario's p95 and 63–72% of its median,
+where `cli-update` sits at roughly a fifth. `next` is cheaper than a
+synchronized mutation, because it fetches but never pushes or replays, and it is
+plainly in the same class.
+
+**The fetch does not show up in the process count, which is why it needed
+measuring.** `cli-next` spawns 10 Git processes — exactly what local
+`cli-update --no-sync` spawns — while taking three to four times as long.
+Elsewhere these documents lean on Git-process counts as the sturdier half of the
+evidence because they carry no network variance, and this scenario is the
+exception worth naming: a single broad fetch that enumerates and validates 525
+task refs is one process and most of the wall clock. Counting processes would
+have priced `next` as a local command. Only timing it finds the fetch.
+
+**`cli-show` is comfortably local.** It passed the 200 ms budget in both formats
+on a host where `cli-update` — the class it is being compared against — missed
+in both, and it costs 36–52% of that mutation at 3 Git processes against 10.
+Reading one task is strictly less work than mutating one, and the measurement
+holds even under contention.
+
+**The board's read side is the cheapest thing measured.** `api-tasks` answers the
+whole 500-task collection in 33.16 ms and 45.79 ms at p95 through a single Git
+process, roughly a quarter of the warm mutation on the same server in the same
+run. `cli-show` and `cli-list` also sit side by side for the first time, and the
+distinction the budget rules rest on is not yet visible at this size: the
+whole-board read costs about 10% more than the single-task one at the median, and
+the two p95 values disagree in direction between the formats. That is a statement
+about 525 tasks rather than a general one — the population is simply not where a
+whole-board read starts to hurt — and it is exactly why neither read carries a
+target.
 
 ### 2026-08-05 sync watcher local acceptance evidence
 
@@ -162,6 +325,94 @@ provenance](2026-07-29-local-acceptance-provenance.md).
 
 These valid target misses are retained as the one-shot evidence. The binaries
 were not rebuilt, and neither invocation was tuned or replaced.
+
+## `api-update` target: 150 ms (approved 2026-08-08)
+
+**Status: approved and applied.** The project owner approved this target on
+2026-08-08 and the harness now evaluates `api-update` against p95 ≤ 150 ms
+(`warmUpdateTarget` in `internal/perf/scenarios.go`). The derivation below is
+the evidence the decision was made on, kept as the record of why 150 and not
+another number.
+
+`api-update` has missed its 100 ms inclusive p95 target in every acceptance set
+recorded since 2026-07-29 — eight independent measurements across four dates and
+both object formats, with no measurement on either side of the line:
+
+| Date | Format | p95 | Median | Outcome | In derivation |
+| --- | --- | ---: | ---: | --- | --- |
+| 2026-07-29 | SHA-1 | 134.16 ms | 97.39 ms | miss | yes |
+| 2026-07-29 | SHA-256 | 102.85 ms | 98.54 ms | miss | yes |
+| 2026-08-02 | SHA-1 | 114.06 ms | 107.25 ms | miss | yes |
+| 2026-08-02 | SHA-256 | 108.91 ms | 105.82 ms | miss | yes |
+| 2026-08-05 | SHA-1 | 121.37 ms | 119.31 ms | miss | yes |
+| 2026-08-05 | SHA-256 | 121.49 ms | 119.27 ms | miss | yes |
+| 2026-08-08 | SHA-1 | 121.98 ms | 114.67 ms | miss | no — contended host |
+| 2026-08-08 | SHA-256 | 179.88 ms | 125.34 ms | miss | no — contended host |
+
+Eight for eight is the important number. A target missed occasionally describes
+a noisy scenario; a target missed by every measurement ever taken of it describes
+a budget that was never achievable on this workload, and continuing to report it
+as a defect trains readers to skip the miss list.
+
+The proposal is derived from the six quiet-host measurements only. The
+2026-08-08 pair is discussed as corroboration at the end of this section, along
+with the reason one of its two points argues against the number proposed here.
+
+The proposal is **p95 ≤ 150 ms**, and it is bounded from both directions rather
+than picked for comfort:
+
+- **Below, by the measurements.** The worst of the six p95 values is 134.16 ms,
+  and the other five sit between 102.85 ms and 121.49 ms. A target under about
+  135 ms would keep failing on evidence that shows no defect. 150 ms clears the
+  worst observed value by 12%, which is roughly the spread the six points
+  already show between quiet hosts.
+- **Above, by the approved local budget.** `api-update` performs the same
+  single-task mutation as `cli-update --no-sync`, which is approved at 200 ms
+  and has measured 153.74–179.76 ms across the same six runs. The warm HTTP path
+  does that mutation without paying for a process start or for opening the
+  projection, so it must stay meaningfully cheaper than the cold CLI path. Any
+  target at or above 200 ms would permit a regression that erased the warm
+  path's entire advantage and still report a pass. 150 ms is 25% under the cold
+  budget, so it still fails that regression.
+
+What the number prices is a Git object write, not HTTP framing. The warm server
+holds the projection open and the fixture repository has no origin, so the sample
+synchronizes nothing; the handful of Git processes each sample records — six on
+2026-07-29, seven on 2026-08-05, eight on 2026-08-08 — are that local write. The
+six quiet-host runs agree it costs roughly 100–135 ms at p95 on a 525-task board,
+and the count creeping upward is worth watching on its own. The original 100 ms
+budget assumed a warm server would bring a mutation into double digits, and the
+measurements say the write floor alone sits at about that value before any
+variance is added.
+
+Re-approving rather than optimizing is a deliberate choice and worth stating as
+one. The alternative — making the write cheaper — is real work with its own
+design questions, and nothing in the evidence suggests a user-visible problem at
+120 ms in a browser form save. Recording the achievable number is the honest
+move before beta; if the write is later made cheaper, the target can come back
+down against evidence rather than against an aspiration.
+
+Two limits on this proposal:
+
+- It is a single fixture point. 150 ms describes a 525-task board and says
+  nothing about how the warm write grows with the population. Those fixture
+  points should be coordinated with the field-size bounding work so both
+  re-measure against the same board.
+- The 2026-08-08 agent hot loop evidence re-measured `api-update` on a
+  contended host and is **not** part of this derivation. It is cited only as
+  corroboration that the miss is structural — eight for eight now, across four
+  dates. A loaded host cannot make a command faster, so those two points confirm
+  the floor without moving it.
+
+  One of them is worth surfacing rather than burying, because it argues against
+  the proposal: the 2026-08-08 SHA-256 `api-update` p95 is **179.88 ms**, above
+  the 150 ms being proposed. It is excluded because `cli-update` missed its own
+  long-standing budget by 52% in that same run, which prices the host rather
+  than the product — but a reader who thinks a target should hold on a developer
+  machine running several agents at once should know that 150 ms would not have
+  held in that run, and that a target which does hold there is a larger number
+  answering a different question. That is a call for the project owner, and it
+  is the reason this section proposes rather than decides.
 
 ## Bounded baseline
 
@@ -319,6 +570,12 @@ names are rejected before fixture construction. Omitting `--scenario` includes
 the existing local scenarios and every registered remote synchronization
 scenario. Selected scenarios run in the harness's stable registry order, not
 the order of the flags.
+
+An omitted `--scenario` also selects `watch-steady-state`, which spends two
+62.5-second windows per sample. At the 20 samples local acceptance requires that
+is over forty minutes of wall clock on its own, so run the watcher family in its
+own invocation with a small `--samples` value, as its section below describes,
+rather than letting a whole-registry run drag it along.
 
 Every remote scenario requires at least 500 total tasks and 20 operations per
 task, even for a baseline run. The seven remote selectors are:
@@ -766,6 +1023,217 @@ within-run slopes and same-host pairs.
 Both families were measured with one frozen `workbook-bench` against two product
 binaries, the change and its `main` parent, so the product under test is the
 only variable within each pair.
+
+## Sync watcher steady state
+
+`workbook sync --watch` is the one Workbook process a beta user leaves running
+for hours, and until now nothing measured it. `cli-update-watched` runs a watcher
+with a one-hour interval precisely so it never synchronizes during the sample:
+that scenario measures the mutation hand-off and deliberately not the daemon.
+
+The `watch-steady-state` selector measures the daemon itself. It observes a live
+`workbook sync --watch` against an already-synchronized origin with nothing
+pending, which is the state such a process spends nearly all of its life in, and
+reports CPU, peak resident memory, Git processes, and durable bytes over a
+bounded window.
+
+One window cannot separate the cost of a scheduled tick from the cost of merely
+having the process alive, because a watcher synchronizes once when it starts and
+once when it is interrupted whatever its interval is. So each observation runs
+two windows of identical wall-clock length against the same fixture:
+
+| Window | Interval | What it prices |
+| --- | --- | --- |
+| `idle-control` | 1 hour | The fixed costs: process startup, the opening synchronization, the shutdown synchronization, and simply being alive for the window. No tick is scheduled inside it. |
+| `steady-interval` | 5 seconds — the product's own default | The same fixed costs plus every scheduled tick. |
+
+The observation window is 62.5 seconds, twelve steady intervals plus a
+half-interval margin, so the scheduled tick count is unambiguous even when a tick
+runs long. The control runs first in every observation, so a steady window is
+never the first thing a cold page cache sees. Subtracting the control's medians
+from the steady window's leaves the marginal cost of the ticks and nothing else,
+reported under `perSynchronization`.
+
+Ticks are counted from Trace2 `cmd_name` events rather than from raw process
+starts. `Repository.Sync` runs exactly one `git fetch` per call, so counting
+fetches counts synchronizations without the harness assuming how many other Git
+processes a tick spawns. A run whose steady window observed no more
+synchronizations than its control is refused rather than reported: it measured
+nothing about ticking, and dividing by that difference would invent evidence.
+
+Everything before a window opens is setup — binding the socket, printing the
+readiness line, and completing the opening synchronization — and the Trace2
+cursor opens at the moment the clock starts. Both windows pay for exactly one
+`workbook sync --status` probe, taken as the window closes to confirm the watcher
+was still running and still trustworthy when it was measured.
+
+The family is descriptive. It has no duration, memory, or Git-process target, it
+contributes no row to the scenario table, and its results appear in their own
+report block instead. Every watcher tick reads each canonical and tracking tip,
+so the harness rejects a watcher run below 500 tasks and 20 operations per task:
+a per-tick number measured on a tiny fixture would describe no board anyone runs.
+
+Because each observation costs two 62.5-second windows, the family is measured in
+its own invocation with a small `--samples` value rather than the 20 that local
+acceptance requires. Twenty observations would be well over an hour of wall clock
+per object format and would not sharpen a median.
+
+```sh
+go build -buildvcs=false -o /private/tmp/workbook-watcher ./cmd/workbook
+go build -buildvcs=false -o /private/tmp/workbook-watcher-bench ./cmd/workbook-bench
+
+/private/tmp/workbook-watcher-bench \
+  --workbook /private/tmp/workbook-watcher \
+  --tasks 525 \
+  --tombstones 25 \
+  --operations 20 \
+  --samples 3 \
+  --timeout 60s \
+  --object-format sha1 \
+  --phase acceptance \
+  --scenario watch-steady-state \
+  --output-json docs/performance/2026-08-08-watcher-steady-state-sha1.json \
+  --output-markdown docs/performance/2026-08-08-watcher-steady-state-sha1.md
+```
+
+Repeat once with `--object-format sha256`.
+
+### 2026-08-08 sync watcher steady-state evidence
+
+The family was observed once per supported Git object format with the same frozen
+product and harness binaries as the hot loop pair, using 525 total tasks (500
+active and 25 tombstoned), 20 operations per task, three observations, and a
+60-second command timeout. See the shared [build, checksum, and host-load
+provenance](2026-08-08-agent-loop-and-watcher-provenance.md).
+
+| Format | Evidence |
+| --- | --- |
+| SHA-1 | [JSON](2026-08-08-watcher-steady-state-sha1.json), [Markdown](2026-08-08-watcher-steady-state-sha1.md) |
+| SHA-256 | [JSON](2026-08-08-watcher-steady-state-sha256.json), [Markdown](2026-08-08-watcher-steady-state-sha256.md) |
+
+| Window | Format | Synchronizations | Git processes | CPU (% of one core) | Peak resident | Major faults | Repository bytes |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `idle-control` | SHA-1 | 1 | 9 | 0.90–1.28% | 32.6–33.4 MB | 148 | −95 |
+| `steady-interval` | SHA-1 | 13 | 117 | 6.78–7.64% | 33.5–34.9 MB | 952 | −95 |
+| `idle-control` | SHA-256 | 1 | 9 | 0.91–1.40% | 31.2–33.7 MB | 144 | −95 |
+| `steady-interval` | SHA-256 | 13 | 117 | 6.16–6.71% | 34.1–34.6 MB | 924 | −94 to −95 |
+
+| Derived | SHA-1 | SHA-256 |
+| --- | ---: | ---: |
+| CPU per synchronization | 338.54 ms | 300.79 ms |
+| Git processes per synchronization | 9.00 | 9.00 |
+| Repository bytes per synchronization | 0 | 0 |
+| Peak resident delta, steady vs control | 1,654,784 B | 1,851,392 B |
+
+**A tick is exactly nine Git processes, and the count is not an estimate.** All
+six steady windows recorded 13 synchronizations and 117 Git processes, and all
+six control windows recorded 1 and 9, in both object formats without a single
+outlier. 117 is 9 × 13. The subtraction that derives the per-tick cost is
+therefore reading a structural constant rather than smoothing noise, and it is
+the sturdiest number in this section: process counts carry no host-load variance.
+
+**A watcher at the product's default interval costs roughly 6–7% of one core,
+continuously.** Read the `CPU (% of one core)` column as a ceiling rather than a
+rate: its numerator is whole-lifetime CPU and its denominator is the window
+alone, so each figure carries the untimed startup synchronization that ran before
+the clock started. Subtracting one tick's cost from the control leaves that fixed
+prefix at about 320 ms of CPU in SHA-1 and 280 ms in SHA-256, which puts the
+in-window steady rate near 6.3–7.1% and 5.7–6.3% against the 6.78–7.64% and
+6.16–6.71% printed. Those corrections are estimates — they assume the opening
+synchronization costs about what a scheduled one does — while the printed
+ceilings are measured, which is why the table reports the measurement.
+
+Either way the conclusion holds and does not depend on the correction. The
+control window shows what merely being alive costs — around 1% of a core, itself
+a ceiling — so the scheduled ticks are the rest, and the per-tick cost is derived
+by subtraction and immune to this scope: the control pays the same startup and it
+cancels. At a 5-second interval that is about 300–340 ms of CPU every 5 seconds,
+or roughly four minutes of CPU per hour of wall clock on a 525-task board. That
+is the number to weigh before telling a beta user to leave one running all day,
+and it is a real cost rather than a rounding error.
+
+**Nothing durable is written, and the peak does not obviously grow.** The
+repository shrinks by 94 to 95 bytes in every window, control and steady alike,
+which makes it a fixed effect of the process lifetime rather than something ticks
+do; per-synchronization durable bytes are 0. Peak resident memory
+sits near 33 MB and the steady window's peak is under 2 MB above the control's.
+Per the caveats below that delta is a difference between two maxima and not a
+measured allocation, so read it as "twelve ticks did not obviously grow the
+peak" — which is the useful claim for a process left running for hours.
+
+**Ticks are not free of I/O.** Major page faults rise from 148 to 952 in SHA-1
+and from 144 to 924 in SHA-256 — 65 to 67 per tick. On darwin this is the usable
+I/O-pressure signal, and it is where the per-tip reads show up.
+
+One thing this evidence does **not** establish is the shape of that cost against
+board size. It is a single 525-task fixture point, measured at one interval. The
+concern that motivated the family — that every tick reads each canonical and
+tracking tip through a fully buffering Git helper, so per-tick work should grow
+with the task population — is consistent with 9 processes and 300–340 ms per tick
+at this size, but consistency is not evidence of a slope. Establishing one needs
+the same observation repeated at two or more populations.
+
+### Reading the watcher block
+
+The JSON report gains a `watcherSteadyState` object
+(`workbook.watcher-steady-state` version 1) and the Markdown report gains a "Sync
+watcher steady state" section. Runs that did not observe a watcher omit both.
+
+The block records `platform`, `maxResidentRawUnit`, the measured `fixture`, the
+number of `observations`, the `windowMilliseconds` each one ran for, the `idle`
+and `steady` window arrays, and the derived `perSynchronization` cost.
+
+Per window:
+
+| Field | Meaning |
+| --- | --- |
+| `name`, `intervalMilliseconds` | Which window this is and the `--interval` it ran with. |
+| `observedMilliseconds` | Measured wall clock of the window, which may exceed the requested length. |
+| `synchronizations` | `git fetch` invocations recorded inside the window, one per completed synchronization. It includes the shutdown synchronization that follows the interrupt, because that work is inside the observed process lifetime; the control counts the same one and subtracts it. |
+| `gitProcesses` | Trace2 process starts inside the window. |
+| `userMilliseconds`, `systemMilliseconds`, `cpuMilliseconds` | Kernel-reported CPU time for the watcher and every descendant it reaped. These are whole-lifetime totals, so like `maxResidentBytes` they also cover the untimed startup synchronization before the window. |
+| `cpuPercentOfOneCore` | `cpuMilliseconds` over `observedMilliseconds`, as a percentage of a single core. The numerator is whole-lifetime and the denominator is window-only, so this is an **upper bound** on the rate inside the window, not the rate itself. Read `perSynchronization` for the comparable figure. |
+| `maxResidentRaw`, `maxResidentRawUnit`, `maxResidentBytes` | `ru_maxrss` as the kernel reported it, its unit, and the normalized byte value. This is a whole-lifetime peak, so it also covers the untimed startup synchronization before the window. |
+| `minorPageFaults`, `majorPageFaults` | `ru_minflt` and `ru_majflt`. On darwin these are the usable I/O pressure signal. |
+| `voluntaryContextSwitches`, `involuntaryContextSwitches` | `ru_nvcsw` and `ru_nivcsw`. |
+| `repositoryBytesDelta` | Change in on-disk bytes under the repository root across the window, sampled outside the CPU accounting. It answers whether an idle daemon writes durable bytes every tick. |
+
+`perSynchronization` reports the marginal `synchronizations` the steady window
+added, the `cpuMillisecondsPerSynchronization`,
+`gitProcessesPerSynchronization`, and `repositoryBytesPerSynchronization`
+derived from them, a `maxResidentByteDelta` between the two windows, and a
+`description` naming both intervals and the window length.
+
+One caveat belongs to the CPU fields specifically. The kernel accounts a
+process's CPU only when it exits, so `wait4` reports the whole lifetime and there
+is no portable way to read the counter at the window boundaries. Every CPU number
+in the block therefore includes process start and the untimed opening
+synchronization, while `observedMilliseconds` covers the window alone.
+`cpuPercentOfOneCore` is consequently a ceiling: the true in-window rate is
+lower, and the gap is whatever startup cost. Two consequences are worth stating.
+A release that made startup more expensive would raise the field for the *steady*
+window without any tick getting slower, so it is not a regression signal on its
+own; and the fixed cost has to be subtracted before the number means anything
+about steady state, which is exactly what `perSynchronization` does. The Git
+process count and the repository byte delta are the window-scoped fields, and
+they carry no such caveat.
+
+Three more caveats carry over from the storage measurements and matter here too. Peak
+resident memory from `wait4` is a maximum rather than a sum, so a watcher running
+several `git` processes concurrently reports the largest single peak and the
+number may belong to a `git` child rather than to Workbook. It is not
+run-deterministic: the fixture is, but allocator behavior, page-cache state, and
+host load move the byte count. And `maxResidentByteDelta` is a difference between
+two such peaks, so read a small value as "the steady window did not obviously
+grow the peak", not as a measured allocation.
+
+One more limit is worth stating plainly. This family measures a single fixture
+point, so it prices what a tick costs on a 525-task board and says nothing about
+how that cost grows with the board. Every tick reads each canonical and tracking
+tip through a fully buffering Git helper, so per-tick allocation is expected to
+scale with the total task count even when nothing changed; establishing that
+shape needs the same observation repeated at two or more task populations, which
+is a separate measurement rather than a reading of this one.
 
 ## Reading the reports
 

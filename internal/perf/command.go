@@ -34,6 +34,16 @@ type TraceCursor struct {
 type traceEvent struct {
 	Event string   `json:"event"`
 	Argv  []string `json:"argv"`
+	Name  string   `json:"name"`
+}
+
+// TraceCounts summarizes the Git work a Trace2 event file recorded since a
+// cursor last read it. Commands tallies Trace2's own `cmd_name` events, which
+// name the Git subcommand each process ran, so a caller can price a unit of work
+// by the command that defines it rather than by a raw process total.
+type TraceCounts struct {
+	GitProcesses int
+	Commands     map[string]int
 }
 
 const commandWaitDelay = 100 * time.Millisecond
@@ -55,33 +65,40 @@ func OpenTraceCursor(path string) (*TraceCursor, error) {
 // CountNewGitProcesses returns the number of Trace2 start events written
 // since the cursor's last count.
 func (cursor *TraceCursor) CountNewGitProcesses() (int, error) {
+	counts, err := cursor.CountNew()
+	return counts.GitProcesses, err
+}
+
+// CountNew returns the Git process starts and per-subcommand tallies written
+// since the cursor's last count, and advances the cursor past them.
+func (cursor *TraceCursor) CountNew() (TraceCounts, error) {
+	counts := TraceCounts{Commands: map[string]int{}}
 	file, err := os.Open(cursor.path)
 	if err != nil {
-		return 0, fmt.Errorf("open Trace2 event file: %w", err)
+		return TraceCounts{}, fmt.Errorf("open Trace2 event file: %w", err)
 	}
 	defer file.Close()
 
 	info, err := file.Stat()
 	if err != nil {
-		return 0, fmt.Errorf("stat Trace2 event file: %w", err)
+		return TraceCounts{}, fmt.Errorf("stat Trace2 event file: %w", err)
 	}
 	if info.Size() < cursor.offset {
 		cursor.offset = 0
 	}
 	if _, err := file.Seek(cursor.offset, io.SeekStart); err != nil {
-		return 0, fmt.Errorf("seek Trace2 event file: %w", err)
+		return TraceCounts{}, fmt.Errorf("seek Trace2 event file: %w", err)
 	}
 
 	data, err := io.ReadAll(file)
 	if err != nil {
-		return 0, fmt.Errorf("read Trace2 event file: %w", err)
+		return TraceCounts{}, fmt.Errorf("read Trace2 event file: %w", err)
 	}
 	lastNewline := bytes.LastIndexByte(data, '\n')
 	if lastNewline < 0 {
-		return 0, nil
+		return counts, nil
 	}
 	data = data[:lastNewline+1]
-	count := 0
 	for _, line := range bytes.Split(data, []byte{'\n'}) {
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
@@ -89,14 +106,17 @@ func (cursor *TraceCursor) CountNewGitProcesses() (int, error) {
 		}
 		var event traceEvent
 		if err := json.Unmarshal(line, &event); err != nil {
-			return 0, fmt.Errorf("parse Trace2 event: %w", err)
+			return TraceCounts{}, fmt.Errorf("parse Trace2 event: %w", err)
 		}
-		if event.Event == "start" && len(event.Argv) > 0 {
-			count++
+		switch {
+		case event.Event == "start" && len(event.Argv) > 0:
+			counts.GitProcesses++
+		case event.Event == "cmd_name" && event.Name != "":
+			counts.Commands[event.Name]++
 		}
 	}
 	cursor.offset += int64(len(data))
-	return count, nil
+	return counts, nil
 }
 
 // CommandMeasurement preserves a command's measurement and its output streams.

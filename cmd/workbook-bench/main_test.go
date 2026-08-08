@@ -1102,3 +1102,92 @@ func TestValidateOptionsRejectsProjectionRefreshFixtureShortfallBeforeAnyWork(t 
 		})
 	}
 }
+
+// TestWatcherScenarioSelectionIsExclusive keeps the long observation family out
+// of every run that did not ask for it, and keeps a run that did ask for it from
+// dragging unrelated scenario families along.
+//
+// Mutation witness: matching the selector by prefix, or ignoring it entirely,
+// would either run the watcher for two minutes on an unrelated selection or
+// silently drop the only measurement the selection requested.
+func TestWatcherScenarioSelectionIsExclusive(t *testing.T) {
+	if !selectsWatcherScenario([]string{"cli-update", perf.WatcherScenario}) {
+		t.Fatal("watcher selector was not recognized alongside another scenario")
+	}
+	for _, selection := range [][]string{
+		nil,
+		{"cli-update"},
+		{"sync-already-synchronized", "validate-full-history"},
+	} {
+		if selectsWatcherScenario(selection) {
+			t.Fatalf("selection %#v was routed to the watcher family", selection)
+		}
+	}
+	if names := selectedColdScenarioNames([]string{perf.WatcherScenario}); len(names) != 0 {
+		t.Fatalf("cold scenarios for a watcher-only selection = %#v, want none", names)
+	}
+	if names := selectedWarmScenarioNames([]string{perf.WatcherScenario}); len(names) != 0 {
+		t.Fatalf("warm scenarios for a watcher-only selection = %#v, want none", names)
+	}
+	if hasRepositoryScenario([]string{perf.WatcherScenario}) {
+		t.Fatal("a watcher-only selection was routed to the repository family")
+	}
+}
+
+// TestValidateOptionsRejectsWatcherFixtureShortfall keeps the steady-state
+// evidence honest. Every synchronization tick reads each canonical and tracking
+// tip, so its cost scales with the project's task count; measuring it on a tiny
+// fixture would publish a per-tick number that describes no real board.
+func TestValidateOptionsRejectsWatcherFixtureShortfall(t *testing.T) {
+	workbook := buildWorkbookBinary(t)
+	for _, test := range []struct {
+		name       string
+		tasks      string
+		operations string
+		want       string
+	}{
+		{
+			name:       "task population below minimum",
+			tasks:      "499",
+			operations: "20",
+			want:       "watcher scenarios require at least 500 tasks and 20 operations per task",
+		},
+		{
+			name:       "history depth below minimum",
+			tasks:      "500",
+			operations: "19",
+			want:       "watcher scenarios require at least 500 tasks and 20 operations per task",
+		},
+		{
+			name:       "acceptance fixture is accepted",
+			tasks:      "500",
+			operations: "20",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			outputRoot := t.TempDir()
+			var stderr bytes.Buffer
+			flags, options := newFlagSet(&stderr)
+			if err := flags.Parse([]string{
+				"--workbook", workbook,
+				"--tasks", test.tasks,
+				"--operations", test.operations,
+				"--scenario", perf.WatcherScenario,
+				"--output-json", filepath.Join(outputRoot, "report.json"),
+				"--output-markdown", filepath.Join(outputRoot, "report.md"),
+			}); err != nil {
+				t.Fatal(err)
+			}
+			err := validateOptions(flags, options)
+			if test.want == "" {
+				if err != nil {
+					t.Fatalf("validate sufficient watcher fixture: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("watcher fixture shortfall error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}

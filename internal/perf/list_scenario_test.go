@@ -25,10 +25,10 @@ func TestColdListScenarioRebuildsProjectionBeforeTheTimedListCommand(t *testing.
 			prepareArgs = command.Args
 			return nil
 		},
-		measureCommand: func(_ context.Context, command CommandSpec) Sample {
+		measureCommand: func(_ context.Context, command CommandSpec) CommandMeasurement {
 			events = append(events, "measure")
 			measureArgs = command.Args
-			return Sample{ExitCode: 0}
+			return CommandMeasurement{Sample: Sample{ExitCode: 0}}
 		},
 		cleanupFixture: func(string) error {
 			events = append(events, "cleanup")

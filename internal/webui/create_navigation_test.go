@@ -131,25 +131,65 @@ setTimeout(async () => {
 	}
 }
 
+// A create that staged relationships waits for the server, because its second
+// phase needs the ID the server assigns and the sidebar reports what that phase
+// could not write. That create still opens the task it made when it has
+// something to say, and Create more still yields to it. A create that staged
+// nothing reports without moving the user; that rule is covered by
+// TestHandlerClientOptimisticCreateReportsWarningsWhereTheUserStands.
 func TestHandlerClientCreateMoreYieldsToACreateThatNeedsAttention(t *testing.T) {
 	node := requireNode(t)
+	prerequisite := clientPlacementTask("WB-01J000000000000000000000B4", "Prerequisite", core.StatusDone, core.PriorityHigh)
 	created := clientPlacementTask("WB-01J000000000000000000000B3", "Created task", core.StatusReady, core.PriorityMedium)
+	created.Dependencies = []string{prerequisite.ID}
 	script := newTaskClientScript(t, "/tasks/new?status=ready")
-	refreshed := tasksDocumentJSON(t, []core.Task{created})
+	initial := tasksDocumentJSON(t, []core.Task{prerequisite})
+	refreshed := tasksDocumentJSON(t, []core.Task{created, prerequisite})
 	mutation := taskMutationJSON(refreshed, "Task creation projection needs repair.")
 
-	program := clientDOMHarness("/tasks/new?status=ready", tasksDocumentJSON(t, nil)) + script + `
+	program := clientDOMHarness("/tasks/new?status=ready", initial) + script + `
 setTimeout(async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
-` + createFetchStub(mutation, refreshed) + `
+  const createdID = ` + strconv.Quote(created.ID) + `;
+  const prerequisiteID = ` + strconv.Quote(prerequisite.ID) + `;
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if (url === "/api/tasks" && options.method === "POST") {
+      return { ok: true, json: async () => (` + mutation + `) };
+    }
+    if (options.method === "PUT" &&
+        url === "/api/tasks/" + encodeURIComponent(createdID) +
+          "/dependencies/" + encodeURIComponent(prerequisiteID)) {
+      return { ok: true, json: async () => ({
+        format: "workbook.task-mutation", version: 1, task: (` + refreshed + `).tasks[0]
+      }) };
+    }
+    if (url === "/api/tasks?deleted=true") {
+      return { ok: true, json: async () => ({ format: "workbook.tasks", version: 1, tasks: [] }) };
+    }
+    if (url === "/api/tasks" && (options.method || "GET") === "GET") {
+      return { ok: true, json: async () => (` + refreshed + `) };
+    }
+    throw new Error("unexpected fetch: " + (options.method || "GET") + " " + url);
+  };
+
   const toggle = findElement(main, (element) => element.id === "task-create-more");
   toggle.checked = true;
   toggle.eventListeners.change();
   findElement(main, (element) => element.id === "task-title").value = ` + strconv.Quote(created.Title) + `;
+  const dependsGroup = findElement(main, (element) => element.textContent === "Depends On").parentElement;
+  const combobox = findElement(dependsGroup, (element) => element.attributes.role === "combobox");
+  combobox.value = ` + strconv.Quote(prerequisite.Title) + `;
+  combobox.eventListeners.input();
+  findElement(dependsGroup, (element) => element.attributes.role === "option" &&
+    element.dataset.candidateId === prerequisiteID).eventListeners.click();
+  await findElement(dependsGroup, (element) =>
+    element.tagName === "BUTTON" && element.textContent === "Add dependency").eventListeners.click();
+
   await findElement(main, (element) => element.tagName === "FORM")
     .eventListeners.submit({ preventDefault() {} });
 
-  const wantPath = "/tasks/" + encodeURIComponent(` + strconv.Quote(created.ID) + `);
+  const wantPath = "/tasks/" + encodeURIComponent(createdID);
   if (historyPaths.length !== 1 || historyPaths[0] !== wantPath) {
     throw new Error("a create with something to report landed at " + JSON.stringify(historyPaths));
   }
@@ -207,8 +247,8 @@ func taskMutationJSON(tasksJSON, warning string) string {
 }
 
 // createFetchStub answers the three requests one create makes: the POST, the
-// active refresh, and the deleted-task refresh that the relationship sidebar
-// needs before the client will leave the form.
+// active refresh that follows it, and the deleted-task refresh the relationship
+// sidebar asks for on whatever route the create landed on.
 func createFetchStub(mutationJSON, refreshedTasksJSON string) string {
 	return `
   let createCalls = 0;
