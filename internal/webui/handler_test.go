@@ -2819,7 +2819,7 @@ func TestHandlerClientDependencyComboboxDismissesOnLostFocus(t *testing.T) {
 	first := clientPlacementTask("WB-01J00000000000000000000091", "First candidate", core.StatusDone, core.PriorityHigh)
 	second := clientPlacementTask("WB-01J00000000000000000000092", "Second candidate", core.StatusBacklog, core.PriorityLow)
 	tasks := []core.Task{current, first, second}
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
 	if response.Code != http.StatusOK {
@@ -2949,7 +2949,7 @@ setTimeout(async () => {
   });
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("execute dependency combobox lost-focus dismissal: %v\n%s", err, output)
 	}
@@ -3326,7 +3326,8 @@ setTimeout(async () => {
 `
 	commandContext, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	command := exec.CommandContext(commandContext, node, "-e", program)
+	command := exec.CommandContext(commandContext, node, "-")
+	command.Stdin = strings.NewReader(program)
 	if output, err := command.CombinedOutput(); err != nil {
 		if commandContext.Err() == context.DeadlineExceeded {
 			t.Fatalf("dependency mutation did not settle after controller-only supersession")
