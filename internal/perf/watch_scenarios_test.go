@@ -202,10 +202,14 @@ func TestRunWatcherSteadyStatePropagatesObservationFailures(t *testing.T) {
 // measures a live `workbook sync --watch` rather than a mock: the counted
 // synchronizations have to grow with the interval, and the kernel has to report
 // CPU and a peak resident set for the process.
+//
+// It deliberately carries no `-short` guard. `-short` skips exactly three
+// build-heavy release and setup tests, and every other live-process test in this
+// package runs under it; hiding the one test that distinguishes a real daemon
+// from a mock would leave `go test -short ./...` unable to catch a watcher
+// observation that measures nothing. Its two 1.5-second windows are the whole
+// cost, against a package that already spends minutes building fixtures.
 func TestObserveWatcherWindowMeasuresARunningDaemon(t *testing.T) {
-	if testing.Short() {
-		t.Skip("observing a live watcher takes seconds")
-	}
 	binary := buildWorkbookBinary(t)
 	root := filepath.Join(t.TempDir(), "fixture")
 	fixture, err := BuildFixture(context.Background(), root, FixtureSpec{
