@@ -9,7 +9,8 @@ SQLite materialized view accelerates normal task reads while Git remains canonic
 
 > **Status:** initial collaborative POC. Repository initialization, local task
 > CRUD, task ordering and dependencies, terminal and web boards, web
-> drag-and-drop status changes, explicit origin-only task fetch/push/sync, and a
+> drag-and-drop status changes, optimistic task creation, documented task field
+> and object size limits, explicit origin-only task fetch/push/sync, and a
 > disposable SQLite task projection are implemented, along with clone bootstrap
 > through `workbook setup` and managed agent documentation through `workbook
 > docs`. Divergent task histories are reconciled by replaying local operations
