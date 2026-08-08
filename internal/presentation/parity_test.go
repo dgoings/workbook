@@ -239,10 +239,9 @@ func webBoardPage(t *testing.T, tasks []core.Task) string {
 
 func webBoardResponse(t *testing.T, tasks []core.Task, path string) *httptest.ResponseRecorder {
 	t.Helper()
-	handler := webui.NewHandler(
-		func(context.Context) ([]core.Task, error) { return tasks, nil },
-		nil, nil, nil,
-	)
+	handler := webui.NewHandler(webui.Options{
+		List: func(context.Context) ([]core.Task, error) { return tasks, nil },
+	})
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
 	if recorder.Code != http.StatusOK {
