@@ -33,7 +33,11 @@
     .header-links { display: flex; align-items: center; gap: .8rem; }
     .header-link { color: #34425a; font-size: .82rem; font-weight: 750; text-underline-offset: .18em; }
     main { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 1.25rem; }
-    .notice { display: grid; flex: 0 0 auto; gap: .4rem; padding: .6rem 1.25rem; border-bottom: 1px solid #d5deea; background: #fff; font-size: .85rem; }
+    /* Reports leave only by being dismissed, so the notice has to be able to run
+       out of room rather than out of page: it shares a viewport-height flex
+       column with main, and the body never scrolls. The cap keeps the route
+       underneath reachable while a run of refusals stacks up inside it. */
+    .notice { display: grid; flex: 0 1 auto; gap: .4rem; max-height: 40vh; overflow: auto; padding: .6rem 1.25rem; border-bottom: 1px solid #d5deea; background: #fff; font-size: .85rem; }
     .notice[hidden] { display: none; }
     .notice__report { display: flex; align-items: baseline; gap: .75rem; padding: .35rem .6rem; border-left: 3px solid currentcolor; background: #fff6e8; color: #7c3b08; }
     .notice__report[data-kind="error"] { background: #fdecea; color: #8f1d1d; }
@@ -295,10 +299,19 @@
       // by the provisional ID their card is drawn under.
       const pendingCreations = new Map();
       let creationSequence = 0;
+      // The stand-in that was retired while it held the caret, and the card that
+      // replaced it. Written by the retirement and consumed by the render that
+      // drops the node, which is the only pair of moments that know both halves.
+      let retiredCreationHeir = null;
       // What a New Task form should open holding: the values of a refused
       // create, and the reason it was refused.
       let pendingNewTaskDraft = null;
       let pendingNewTaskMessage = "";
+      // Reads the values the New Task form on screen is holding, or null when
+      // the route on screen is not one. Set by the render that builds the form,
+      // because a restore replaces that node and has to lift what was typed
+      // into it out first.
+      let readOpenNewTaskValues = null;
 
       function text(element, value) { element.textContent = value || ""; return element; }
       // The visible ID inside a copy control, so a card that survives a render
@@ -668,7 +681,17 @@
       // is still open, so a create costs a render rather than a round trip.
       function createOptimistically(values) {
         const key = "pending-create-" + (++creationSequence);
-        const creation = { key, values, task: optimisticCreationTask(key, values), taskID: "" };
+        const creation = {
+          key,
+          values,
+          task: optimisticCreationTask(key, values),
+          taskID: "",
+          // The board as it stood before this create. A task that was already
+          // here cannot be the one this create is making, however exactly it
+          // matches — someone saving a second copy of a task they already have
+          // still gets a card of their own to watch.
+          priorIDs: new Set(latestTasks.map((task) => task.id))
+        };
         pendingCreations.set(key, creation);
         // Drawn before the navigation: the board landing hands the caret to this
         // card, and it can only be given to a card that exists.
@@ -693,9 +716,17 @@
           if (heldCaret) restoreCardFocus(creation.taskID);
           if (warnings.length) reportCreatedTaskWarnings(creation.taskID, warnings);
         } catch (error) {
+          // Read before the stand-in leaves the document, for the same reason
+          // the durable path reads it: a card that is removed takes the caret
+          // with it, and here there is no replacement card to hand it to.
+          const heldCaret = focusedCardID() === creation.key;
           pendingCreations.delete(creation.key);
           rerender();
-          reportRefusedCreation(creation, error);
+          const restore = reportRefusedCreation(creation, error);
+          // The report is now the only copy of what was typed, so the keyboard
+          // lands on the control that gets it back rather than on the document
+          // body, a full tab run away from it.
+          if (heldCaret && restore && typeof restore.focus === "function") restore.focus();
         }
       }
       function reportCreatedTaskWarnings(taskID, warnings) {
@@ -709,26 +740,64 @@
         showCreateNotice("warning", "Task created. " + warnings.join(" "), open);
       }
       function reportRefusedCreation(creation, error) {
+        return reportRecoverableDraft("error",
+          nameDraft(creation.values) + " was not saved. " + creationFailureMessage(error),
+          creation.values,
+          creationFailureMessage(error));
+      }
+      // A draft the user is still writing, set aside so a restore could have the
+      // route. Nothing failed here, which is why it is reported as a warning and
+      // says where the draft went rather than why it stopped.
+      function reportDisplacedDraft(values) {
+        reportRecoverableDraft("warning",
+          nameDraft(values) + " was set aside to restore another draft.",
+          values,
+          "");
+      }
+      // A report that holds a draft: the message, and the one control that puts
+      // the values back into a form. Returns that control, because a caller that
+      // took the caret away to build this has to give it somewhere to land.
+      function reportRecoverableDraft(kind, message, values, formMessage) {
         const restore = document.createElement("button");
         restore.type = "button";
         text(restore, "Restore draft");
-        // The title is what the user recognizes the draft by, and a create the
-        // server refused for having none still has to be named something.
-        const named = creation.values.title ? "“" + creation.values.title + "”" : "The task";
-        const report = showCreateNotice("error", named + " was not saved. " +
-          creationFailureMessage(error), restore);
+        const report = showCreateNotice(kind, message, restore);
         restore.addEventListener("click", () => {
           dismissCreateNotice(report);
-          restoreRefusedCreation(creation, error);
+          restoreDraft(values, formMessage);
         });
+        return restore;
+      }
+      // The title is what the user recognizes a draft by, and a create the
+      // server refused for having none still has to be named something.
+      function nameDraft(values) {
+        return values.title ? "“" + values.title + "”" : "The task";
       }
       // A refusal costs nothing that was typed: the values go back into a New
       // Task form, which is where the message about them belongs too.
       function restoreRefusedCreation(creation, error) {
-        pendingNewTaskDraft = creation.values;
-        pendingNewTaskMessage = creationFailureMessage(error);
+        restoreDraft(creation.values, creationFailureMessage(error));
+      }
+      // Restoring renders a New Task form over the current route, and a route
+      // render replaces that node whole. With Create more on, the node it
+      // replaces is usually the next task being typed, so what is in it is
+      // lifted into a report of its own first: a restore that destroyed a draft
+      // would only move the loss these reports exist to prevent.
+      function restoreDraft(values, message) {
+        preserveOpenNewTaskDraft();
+        pendingNewTaskDraft = values;
+        pendingNewTaskMessage = message;
         pendingNewTaskFocus = true;
-        navigate(newTaskPath(creation.values.status));
+        navigate(newTaskPath(values.status));
+      }
+      function preserveOpenNewTaskDraft() {
+        if (!readOpenNewTaskValues) return;
+        const values = readOpenNewTaskValues();
+        // A form carrying only the status and priority it opened with is the
+        // empty form, not a draft: reporting it would be noise standing between
+        // the user and the reports that do hold something.
+        if (!values.title && !values.description && values.labels.length === 0) return;
+        reportDisplacedDraft(values);
       }
       function creationFailureMessage(error) {
         return error instanceof Error ? error.message : "Task creation failed.";
@@ -1642,6 +1711,10 @@
         // that exists.
         let expectedHead = isNew ? "" : task.head || "";
         const controls = { title, description, status, priority, labels };
+        // Published for the length of this render, so a restore that is about to
+        // replace this form can save what is in it. renderRoute clears it, so
+        // the reader never outlives the node it reads from.
+        if (isNew) readOpenNewTaskValues = () => allTaskValues(controls);
         form.addEventListener("submit", async (event) => {
           event.preventDefault();
           if (isNew && taskWasCreated) return;
@@ -1880,15 +1953,56 @@
       // makes a failed refresh harmless — the next poll finishes the job.
       function pendingCreationTasks(tasks) {
         const landed = new Set(tasks.map((task) => task.id));
+        // One task retires at most one stand-in, so two identical creates in
+        // flight keep a card each until the board carries both.
+        const claimed = new Set();
         const drawn = [];
         pendingCreations.forEach((creation, key) => {
-          if (creation.taskID && landed.has(creation.taskID)) {
-            pendingCreations.delete(key);
+          const arrived = creationArrival(creation, tasks, landed, claimed);
+          if (!arrived) {
+            drawn.push(creation.task);
             return;
           }
-          drawn.push(creation.task);
+          claimed.add(arrived);
+          pendingCreations.delete(key);
+          // The node this retirement drops is often the one holding the caret,
+          // and render() captures focus before it goes. Only the retirement
+          // knows which card replaced it, so it is what names the heir.
+          if (focusedCardID() === key) retiredCreationHeir = { key, taskID: arrived };
         });
         return drawn;
+      }
+      // The ID of the task a stand-in is now standing in for, or "" while it is
+      // still the only thing drawing the create.
+      function creationArrival(creation, tasks, landed, claimed) {
+        if (creation.taskID) return landed.has(creation.taskID) ? creation.taskID : "";
+        // The POST has not named the task yet and the board can already carry
+        // it: the server commits a create and then publishes it, and a poll that
+        // lands in between reads the committed task straight out of the
+        // repository. What the two have in common is the values, so a task that
+        // arrived after this create started carrying exactly what was typed
+        // retires the stand-in instead of being drawn beside it and counted
+        // twice.
+        const arrival = tasks.find((task) =>
+          !claimed.has(task.id) &&
+          !creation.priorIDs.has(task.id) &&
+          matchesCreatedValues(task, creation.values));
+        return arrival ? arrival.id : "";
+      }
+      // Compared the way the server stores them: a title is trimmed on the way
+      // in and labels are deduplicated and sorted, so an untrimmed title or a
+      // repeated label would otherwise never match the task it made.
+      function matchesCreatedValues(task, values) {
+        return task.title === values.title.trim() &&
+          task.status === values.status &&
+          task.priority === values.priority &&
+          (task.description || "") === (values.description || "") &&
+          canonicalLabels(task.labels) === canonicalLabels(values.labels);
+      }
+      // Joined on a character the label input cannot hold, so no two label
+      // sets can flatten to the same string.
+      function canonicalLabels(labels) {
+        return [...new Set(labels || [])].sort().join("\n");
       }
       // What the board knows about a task the server has not answered for: none
       // of what the server derives. pending is what draws the card as a
@@ -2185,6 +2299,11 @@
         if (current.view !== "detail" && current.view !== "new") {
           activeDependencyController = null;
         }
+        // Whatever New Task form was on screen is about to be replaced, so its
+        // reader is retired here and re-published only by a render that builds
+        // one. Anything that had to be saved out of it was saved before the
+        // navigation that led here.
+        readOpenNewTaskValues = null;
         if (current.view === "board") {
           document.title = "Workbook board";
           if (main.firstElementChild !== boardView) main.replaceChildren(boardView);
@@ -2378,7 +2497,12 @@
           if (activeDrag && activeDrag.taskId === taskID) return;
           node.remove();
         });
-        restoreCardFocus(focusedID);
+        // A card that was standing in for a create is gone from this render, so
+        // the caret it was holding follows the task rather than falling to the
+        // document body.
+        const heir = retiredCreationHeir;
+        retiredCreationHeir = null;
+        restoreCardFocus(heir && heir.key === focusedID ? heir.taskID : focusedID);
       }
       async function currentRefreshResult(operation) {
         let owner = operation;
