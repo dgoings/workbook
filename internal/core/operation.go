@@ -448,8 +448,12 @@ func validateFieldSetOperation(operation Operation) error {
 			return corrupt("field.set priority %q is invalid", operation.Value)
 		}
 	case "rank":
+		// The value is not quoted here. parseRank names it when it is small
+		// enough to name, and a stored operation document is bounded only by the
+		// object ceiling, so formatting one into an error message would spend the
+		// cost the rank ceiling withholds.
 		if _, err := parseRank(operation.Value); err != nil {
-			return corrupt("field.set rank %q is invalid", operation.Value)
+			return Wrap(CategoryCorruptData, "field.set rank is invalid", err)
 		}
 	default:
 		return corrupt("field.set does not support field %q", operation.Field)

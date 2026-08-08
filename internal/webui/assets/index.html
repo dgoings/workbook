@@ -1,5 +1,5 @@
 {{ define "task" }}
-<article class="task-card" tabindex="0" data-task-id="{{ .Task.ID }}" data-priority="{{ .Task.Priority }}" data-id-prefix="{{ .IDPrefix }}" draggable="true" aria-label="Move task {{ .Task.Title }} from {{ .Task.Status }}">
+<article class="task-card" tabindex="0" data-task-id="{{ .Task.ID }}" data-priority="{{ .Task.Priority }}" data-id-prefix="{{ .IDPrefix }}" draggable="{{ if knownStatus .Task.Status }}true{{ else }}false{{ end }}" aria-label="{{ if knownStatus .Task.Status }}Move task {{ .Task.Title }} from {{ .Task.Status }}{{ else }}Task {{ .Task.Title }} has the unrecognized status {{ .Task.Status }}{{ end }}">
   <div class="task-card__meta"><span class="task-id-copy-group"><button type="button" class="task-id-copy" data-copy-task-id="{{ .Task.ID }}" aria-label="Copy full task ID {{ .Task.ID }}"><code>{{ .IDPrefix }}</code></button><span class="copy-status" data-copy-status role="status" aria-live="polite" aria-atomic="true"></span></span><span class="priority priority--{{ .Task.Priority }}">{{ .Task.Priority }}</span></div>
   <h3><a href="/tasks/{{ .Task.ID }}">{{ .Task.Title }}</a></h3>
   {{ if .Task.Description }}<p>{{ .Task.Description }}</p>{{ end }}
@@ -26,7 +26,7 @@
     .skip-link { position: fixed; left: 1rem; top: -4rem; z-index: 2; background: #172033; color: #fff; padding: .55rem .75rem; border-radius: 4px; }
     .skip-link:focus { top: 1rem; }
     .app-header { display: flex; flex: 0 0 auto; align-items: end; justify-content: space-between; gap: 1.25rem; padding: 1.25rem; border-bottom: 1px solid #b9c6d8; background: #fff; }
-    .eyebrow, code, .priority, .label, .ref-label, .updated { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
+    .eyebrow, code, .priority, .label, .label-chip, .ref-label, .updated { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
     .eyebrow { margin: 0 0 .2rem; color: #2457d6; font-size: .7rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
     h1 { margin: 0; font-size: clamp(1.25rem, 2vw, 1.65rem); letter-spacing: -.03em; }
     .updated { margin: 0; color: #56647a; font-size: .75rem; text-align: right; }
@@ -35,8 +35,22 @@
     main { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 1.25rem; }
     .stale { display: none; margin: 0 0 1rem; padding: .55rem .7rem; border-left: 3px solid #b45309; background: #fff6e8; color: #7c3b08; font-size: .875rem; }
     .stale[data-visible="true"] { display: block; }
-    .board-view { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100%; min-height: 0; }
+    /* Rows are assigned rather than auto-placed, so the board keeps the flexible
+       row whether or not the stale banner and the unknown-status region are
+       showing. Both of those appear only in trouble, and the board must not
+       resize under the reader when they do. */
+    .board-view { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; height: 100%; min-height: 0; }
+    .stale { grid-row: 1; }
+    .board { grid-row: 2; }
+    .unknown-status { grid-row: 3; }
     .board { display: grid; grid-template-columns: repeat(6, minmax(12rem, 1fr)); gap: .8rem; min-height: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: .25rem; }
+    .unknown-status { display: none; margin-top: .8rem; border: 1px solid #e0b483; border-top: 3px solid #b45309; background: #fff6e8; }
+    .unknown-status[data-visible="true"] { display: block; }
+    .unknown-status__header { padding: .7rem .75rem .1rem; }
+    .unknown-status__heading { display: flex; align-items: baseline; gap: .5rem; margin: 0; color: #7c3b08; font-size: .92rem; }
+    .unknown-status__heading .count { color: #7c3b08; }
+    .unknown-status__note { max-width: 62ch; margin: .3rem 0 0; color: #7c3b08; font-size: .76rem; line-height: 1.4; }
+    .unknown-status__list { grid-auto-columns: minmax(12rem, 18rem); grid-auto-flow: column; max-height: 15rem; overflow-x: auto; overflow-y: auto; }
     .column { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); min-width: 12rem; min-height: 0; border: 1px solid #b9c6d8; background: rgba(255,255,255,.36); }
     .column__header { min-height: 5.45rem; padding: .7rem .75rem .6rem; border-top: 3px solid #2457d6; border-bottom: 1px solid #b9c6d8; background: #f8faff; }
     .column__heading { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; margin: 0; font-size: .92rem; }
@@ -47,6 +61,8 @@
     .task-list { display: grid; align-content: start; gap: .55rem; min-height: 0; overflow-anchor: none; overflow-y: auto; padding: .55rem; }
     .task-card { border: 1px solid #b9c6d8; border-radius: 4px; background: #fff; padding: .7rem; box-shadow: 0 1px 0 rgba(23,32,51,.05); cursor: grab; }
     .task-card:active { cursor: grabbing; }
+    /* An unknown-status card has no column to leave and none to enter, so it must not offer the grab cursor a drag would promise. draggable is a reflected attribute, so the selector tracks the property the client sets. */
+    .task-card[draggable="false"], .task-card[draggable="false"]:active { cursor: default; }
     .task-card:focus-visible { outline: 3px solid #2457d6; outline-offset: 2px; }
     .task-card.is-dragging { opacity: .5; }
     .task-card__meta { display: flex; align-items: center; justify-content: space-between; gap: .5rem; color: #526075; font-size: .7rem; }
@@ -64,7 +80,15 @@
     .task-card h3 a { color: #172033; text-decoration-color: #a9b7ca; text-decoration-thickness: 1px; text-underline-offset: .16em; }
     .task-card h3 a:hover { color: #2457d6; text-decoration-color: currentcolor; }
     .task-card h3 a:focus-visible, .new-task-link:focus-visible, .board-link:focus-visible { outline: 3px solid #2457d6; outline-offset: 2px; }
-    .task-card p { display: -webkit-box; max-height: calc(1.36em * 6); overflow: hidden; margin: 0; color: #56647a; font-size: .8rem; line-height: 1.36; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 6; }
+    /* A card is an ID, a title, and its labels. The description is the one field
+       with no length the column can rely on, so six clamped lines of it push the
+       next card off the screen; the board hides it and the header setting brings
+       it back. The text stays in the card and only this rule decides whether it
+       is seen, which keeps the setting out of the renderer entirely: showing
+       descriptions flips one attribute on the board instead of rebuilding every
+       card, and the poll that reconciles cards by ID has nothing to reset. */
+    .task-card p { display: none; max-height: calc(1.36em * 6); overflow: hidden; margin: 0; color: #56647a; font-size: .8rem; line-height: 1.36; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 6; }
+    .board-view[data-descriptions="shown"] .task-card p { display: -webkit-box; }
     .labels { display: flex; flex-wrap: wrap; gap: .25rem; margin-top: .65rem; }
     .label { max-width: 100%; overflow: hidden; padding: .14rem .28rem; border: 1px solid #d5deea; border-radius: 3px; color: #4e5d73; font-size: .64rem; text-overflow: ellipsis; white-space: nowrap; }
     .dependency-progress { display: grid; gap: .18rem; margin-top: .65rem; color: #4e5d73; font-size: .72rem; }
@@ -90,10 +114,30 @@
     .field textarea { min-height: 8rem; resize: vertical; line-height: 1.45; }
     .field--description textarea { height: 100%; min-height: 0; overflow-y: auto; resize: none; }
     .field input:focus, .field textarea:focus, .field select:focus { border-color: #2457d6; outline: 3px solid rgba(36,87,214,.18); }
+    .label-editor { display: grid; gap: .35rem; }
+    .label-chips { display: flex; flex-wrap: wrap; gap: .3rem; margin: 0; padding: 0; list-style: none; }
+    .label-chips:empty { display: none; }
+    .label-chip { display: inline-flex; align-items: center; gap: .2rem; max-width: 100%; padding: 0 .1rem 0 .44rem; border: 1px solid #b9c6d8; border-radius: 999px; background: #edf3ff; color: #34425a; font-size: .7rem; }
+    .label-chip__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* 1.5rem square, because removal is immediate and has no undo: a 24px
+       target is what WCAG 2.2 asks for, and the chiclets wrap too tightly for
+       the spacing exception to cover anything smaller. */
+    .label-chip__remove { display: inline-flex; align-items: center; justify-content: center; width: 1.5rem; height: 1.5rem; padding: 0; border: 0; border-radius: 999px; background: transparent; color: #526b9b; cursor: pointer; font: inherit; font-size: .85rem; line-height: 1; }
+    .label-chip__remove:hover { background: #d3e0fa; color: #172033; }
+    .label-chip__remove:focus-visible { outline: 2px solid #2457d6; outline-offset: 1px; }
+    .label-editor__hint, .label-editor__status { margin: 0; color: #56647a; font-size: .72rem; }
+    /* Reserved rather than hidden while empty, like .form-status below: an
+       unrendered element is not in the accessibility tree, and a live region
+       that appears in the same frame as its first message does not announce
+       it — which would cost exactly the first add or remove. */
+    .label-editor__status { min-height: 1.15rem; }
     .form-status { min-height: 1.35rem; margin: 0; color: #9c2f25; font-size: .82rem; }
     .form-actions { display: flex; align-items: center; justify-content: space-between; gap: .85rem; width: 100%; padding-top: .1rem; }
     .form-primary-actions { display: flex; align-items: center; gap: .85rem; }
     .form-danger { margin-left: auto; }
+    .create-more { display: inline-flex; align-items: center; gap: .4rem; margin-left: auto; color: #34425a; cursor: pointer; font-size: .82rem; font-weight: 700; }
+    .create-more input { width: .95rem; height: .95rem; margin: 0; accent-color: #2457d6; cursor: pointer; }
+    .create-more input:focus-visible { outline: 3px solid rgba(36,87,214,.28); outline-offset: 2px; }
     .save-button { border: 1px solid #173f9e; border-radius: 4px; background: #2457d6; color: #fff; cursor: pointer; font: inherit; font-size: .86rem; font-weight: 750; padding: .62rem .95rem; }
     .save-button:hover { background: #1d49b7; }
     .save-button:focus-visible { outline: 3px solid rgba(36,87,214,.28); outline-offset: 2px; }
@@ -205,7 +249,7 @@
   <a class="skip-link" href="#board">Skip to task board</a>
   <header class="app-header">
     <div><p class="eyebrow">Repository workbench</p><h1>Workbook board</h1></div>
-    <div class="header-links"><a class="header-link" href="/">Board</a><a class="header-link" href="/deleted">Deleted tasks</a><p class="updated" data-updated>Loaded from this checkout</p><button type="button" class="header-link" data-sync-toggle hidden></button></div>
+    <div class="header-links"><a class="header-link" href="/">Board</a><a class="header-link" href="/deleted">Deleted tasks</a><p class="updated" data-updated>Loaded from this checkout</p><button type="button" class="header-link" data-description-toggle hidden>Descriptions: hidden</button><button type="button" class="header-link" data-sync-toggle hidden></button></div>
   </header>
   <main id="board" tabindex="-1">
     <div class="board-view" data-board-view>
@@ -217,6 +261,33 @@
           <div class="task-list" data-status="{{ .Status }}" data-drop-status="{{ .Status }}">{{ range .Tasks }}{{ template "task" . }}{{ end }}</div>
         </section>
         {{ end }}
+      </section>
+      <!--
+        Tasks whose status matches no column above, which the terminal board
+        prints as its UNKNOWN STATUS section. The region is always in the
+        document and hidden while empty: the status that strands a task usually
+        arrives on a poll, from a clone running a Workbook that knows a status
+        this one does not, and a region the server emitted only when it was
+        already occupied could never take the first arrival.
+
+        It is a display, not a seventh status. It carries no data-status and no
+        data-drop-status, so nothing can drop a task into it and no card inside
+        it can be dragged.
+
+        Nor is the drag the only thing unavailable: core rejects any write whose
+        projected task fails normalizeCanonicalTask, so this build cannot edit a
+        task holding a status it does not know from the web board or the CLI
+        (`workbook update` on one exits 7, corrupt-data). The note says so
+        rather than offering a recovery that would fail on save. Showing the
+        task is still the whole point — an uneditable task the reader can see is
+        a much smaller problem than one that looks deleted.
+      -->
+      <section class="unknown-status" data-unknown-section data-visible="{{ if .Board.UnknownTasks }}true{{ else }}false{{ end }}" aria-label="Tasks with an unrecognized status">
+        <header class="unknown-status__header">
+          <h2 class="unknown-status__heading">Unknown status <span class="count" data-unknown-count>{{ len .Board.UnknownTasks }}</span></h2>
+          <p class="unknown-status__note">These tasks hold a status this board has no column for, most likely written by a newer Workbook. They are listed here so they are not mistaken for deleted work. This build cannot edit them; update Workbook, or use the clone that wrote the status, to change one.</p>
+        </header>
+        <div class="task-list unknown-status__list" data-unknown-list>{{ range .Board.UnknownTasks }}{{ template "task" . }}{{ end }}</div>
       </section>
     </div>
   </main>
@@ -240,8 +311,15 @@
       const lists = new Map([...boardView.querySelectorAll("[data-status]")].map((element) => [element.dataset.status, element]));
       const counts = new Map([...boardView.querySelectorAll("[data-count]")].map((element) => [element.dataset.count, element]));
       const stale = boardView.querySelector("[data-stale]");
+      // The region for tasks whose status matches no column. It is part of the
+      // page whether or not it currently holds anything, because the status
+      // that strands a task arrives on a poll rather than on the first paint.
+      const unknownSection = boardView.querySelector("[data-unknown-section]");
+      const unknownList = boardView.querySelector("[data-unknown-list]");
+      const unknownCount = boardView.querySelector("[data-unknown-count]");
       const updated = document.querySelector("[data-updated]");
       const syncToggle = document.querySelector("[data-sync-toggle]");
+      const descriptionToggle = document.querySelector("[data-description-toggle]");
       let syncState = null;
       let activeDrag = null;
       const copyFeedback = new Map();
@@ -263,8 +341,61 @@
       const pendingTaskMessages = new Map();
       let createdTaskRecovery = null;
       let pendingRelationshipRecoveryFocus = null;
+      // The New Task form's "Create more" preference. It lives out here because
+      // a save rebuilds the route it is drawn on: state held by the form would
+      // be discarded by the very save it is supposed to describe.
+      let createMoreTasks = false;
+      // Staged by a save that re-arms the New Task form, consumed by the render
+      // that re-arms it.
+      let pendingNewTaskFocus = false;
+      // The same staging for a save that lands on the board: the ID of the card
+      // that should hold the caret once the board is back on screen.
+      let pendingBoardFocusTaskID = null;
 
       function text(element, value) { element.textContent = value || ""; return element; }
+      // Card descriptions are hidden by default and this setting brings them
+      // back. It is a browser preference rather than project state: it says how
+      // one reader wants this board drawn, so it is remembered per browser and
+      // never published to the repository the way a task edit is. Storage can be
+      // refused outright — a Safari private window throws on the first read — and
+      // a board that cannot remember the choice still has to draw, so every
+      // access is guarded and an unreadable preference simply means the default.
+      const descriptionPreferenceKey = "workbook.board.descriptions";
+      let descriptionsShown = false;
+      function rememberedDescriptionPreference() {
+        try {
+          return window.localStorage ? window.localStorage.getItem(descriptionPreferenceKey) : null;
+        } catch (_) {
+          return null;
+        }
+      }
+      function rememberDescriptionPreference(value) {
+        try {
+          if (window.localStorage) window.localStorage.setItem(descriptionPreferenceKey, value);
+        } catch (_) {
+        }
+      }
+      // The button's name is the whole announcement, and deliberately the only
+      // one: a name that changes with the state and an aria-pressed beside it
+      // state the same thing twice and in opposite directions, so "Descriptions:
+      // hidden, toggle button, not pressed" reads as the opposite of what just
+      // happened. A toggle keeps a fixed name when aria-pressed speaks for it;
+      // this one keeps the speaking name, like the publishing control beside it.
+      function renderDescriptionPreference() {
+        boardView.dataset.descriptions = descriptionsShown ? "shown" : "hidden";
+        if (!descriptionToggle) return;
+        text(descriptionToggle, descriptionsShown ? "Descriptions: shown" : "Descriptions: hidden");
+        descriptionToggle.title = descriptionsShown
+          ? "Cards show the first lines of their description. Click to hide them."
+          : "Cards show titles only. Click to show the first lines of each description.";
+      }
+      descriptionsShown = rememberedDescriptionPreference() === "shown";
+      renderDescriptionPreference();
+      if (descriptionToggle) descriptionToggle.addEventListener("click", () => {
+        descriptionsShown = !descriptionsShown;
+        rememberDescriptionPreference(descriptionsShown ? "shown" : "hidden");
+        renderDescriptionPreference();
+      });
       // The visible ID inside a copy control, so a card that survives a render
       // can have a shortened prefix rewritten without rebuilding the control.
       const copyIDText = new WeakMap();
@@ -360,7 +491,7 @@
         ]);
       }
       function card(task, view) {
-        const article = document.createElement("article"); article.className = "task-card"; article.tabIndex = 0; article.dataset.taskId = task.id; article.draggable = true;
+        const article = document.createElement("article"); article.className = "task-card"; article.tabIndex = 0; article.dataset.taskId = task.id;
         const meta = document.createElement("div"); meta.className = "task-card__meta";
         const priority = document.createElement("span");
         const copyGroup = taskIDCopyControl(task.id, view.idPrefix);
@@ -383,7 +514,22 @@
         parts.signature = signature;
         article.dataset.priority = task.priority;
         article.dataset.idPrefix = view.idPrefix;
-        article.setAttribute("aria-label", "Move task " + task.title + " from " + task.status);
+        // A card in the unknown-status region has no column to be dragged out of
+        // and none to be dropped into, so it neither offers the drag nor
+        // announces one. This asks `lists` — the columns the server actually
+        // rendered — rather than the hardcoded `statuses` above, because `lists`
+        // is already what decides which region the card lands in, and the two
+        // answers have to be the same answer. Reading a second, duplicate status
+        // set would let a board whose columns differ from that constant (a
+        // removed default status, a per-project column set) strand a card here
+        // and then tell the reader it can be moved out. The status decides, not
+        // the node's current parent, so a card carries the right answer with it
+        // when a poll moves it between the region and a column.
+        const movable = lists.has(task.status);
+        article.draggable = movable;
+        article.setAttribute("aria-label", movable
+          ? "Move task " + task.title + " from " + task.status
+          : "Task " + task.title + " has the unrecognized status " + task.status);
         if (parts.idText) text(parts.idText, view.idPrefix);
         parts.priority.className = "priority priority--" + task.priority; text(parts.priority, task.priority);
         text(parts.link, task.title);
@@ -421,8 +567,21 @@
         try { return { view: "detail", id: decodeURIComponent(match[1]) }; }
         catch (_) { return { view: "unknown" }; }
       }
-      function navigate(path) {
-        history.pushState({}, "", path);
+      function taskPath(taskID) {
+        return "/tasks/" + encodeURIComponent(taskID);
+      }
+      function newTaskPath(status) {
+        return statuses.has(status)
+          ? "/tasks/new?status=" + encodeURIComponent(status)
+          : "/tasks/new";
+      }
+      // replace is for a destination that supersedes the entry it leaves rather
+      // than following it: re-arming the New Task form is the same route with a
+      // spent form behind it, and pushing those would make Back walk backwards
+      // through every task the user just created.
+      function navigate(path, { replace = false } = {}) {
+        if (replace) history.replaceState({}, "", path);
+        else history.pushState({}, "", path);
         renderRoute();
       }
       function field(labelText, control, wide = false, modifier = "") {
@@ -430,9 +589,165 @@
         if (wide) classes.push("field--wide");
         if (modifier) classes.push(modifier);
         const wrapper = document.createElement("div"); wrapper.className = classes.join(" ");
-        const label = document.createElement("label"); label.htmlFor = control.id; text(label, labelText);
+        const label = document.createElement("label");
+        // A composite control is a region with no id a caption can point at, so
+        // it names the focusable element inside it and clicking the caption
+        // still lands the caret where typing goes.
+        label.htmlFor = control.dataset.fieldFor || control.id;
+        text(label, labelText);
         wrapper.append(label, control);
         return wrapper;
+      }
+      // Labels are a set, so the form edits them as one chiclet per label
+      // rather than as a line of commas: the input holds only the label being
+      // typed, each entry carries its own remove control, and nothing has to be
+      // re-read out of a sentence the author stopped proofreading three labels
+      // ago. What the server sees is unchanged — an array of strings.
+      function labelEditor(initial) {
+        const values = [];
+        const region = document.createElement("div");
+        region.className = "label-editor";
+        const chiclets = document.createElement("ul");
+        chiclets.className = "label-chips";
+        // A flex list is not a list to a screen reader unless it says so.
+        chiclets.setAttribute("role", "list");
+        // Deliberately unnamed: this input holds the label being typed, not the
+        // field's value, and the set it belongs to is read from the chiclets.
+        const input = document.createElement("input");
+        input.id = "task-labels";
+        input.placeholder = "Add a label";
+        input.setAttribute("aria-describedby", "task-labels-hint");
+        region.dataset.fieldFor = input.id;
+        const hint = document.createElement("p");
+        hint.id = "task-labels-hint";
+        hint.className = "label-editor__hint";
+        text(hint, "Press Enter or comma to add a label.");
+        const announcement = document.createElement("p");
+        announcement.className = "label-editor__status";
+        announcement.setAttribute("role", "status");
+        announcement.setAttribute("aria-live", "polite");
+        // Saved chiclets sit below the input: the eye rests where typing
+        // happens, and the set grows downward away from the caret.
+        region.append(input, chiclets, hint, announcement);
+
+        // Chiclets are reconciled, never rebuilt. Pressing a remove control
+        // blurs the input, and the blur commits pending text and re-renders
+        // before the click lands; a render that replaced every node would
+        // detach the very button the press started on, the click would go to
+        // the surviving list instead, and the removal would be silently
+        // dropped. Shift+Tab out of an input holding text loses focus the same
+        // way. Values only ever arrive at the end and leave in place, so
+        // appending the new ones keeps the DOM in the order of the set.
+        const chicletsByLabel = new Map();
+        function renderChiclets() {
+          chicletsByLabel.forEach((chiclet, label) => {
+            if (values.includes(label)) return;
+            chiclet.remove();
+            chicletsByLabel.delete(label);
+          });
+          values.forEach((label) => {
+            if (chicletsByLabel.has(label)) return;
+            const chiclet = document.createElement("li");
+            chiclet.className = "label-chip";
+            chiclet.dataset.label = label;
+            const name = document.createElement("span");
+            name.className = "label-chip__name";
+            text(name, label);
+            const remove = document.createElement("button");
+            remove.type = "button";
+            remove.className = "label-chip__remove";
+            remove.dataset.removeLabel = label;
+            // The visible × is not a name, and "button" is not one either.
+            remove.setAttribute("aria-label", "Remove label " + label);
+            text(remove, "×");
+            remove.addEventListener("click", () => removeLabel(label));
+            chiclet.append(name, remove);
+            chicletsByLabel.set(label, chiclet);
+            chiclets.append(chiclet);
+          });
+        }
+        function addLabel(candidate) {
+          const label = String(candidate).trim();
+          if (!label) return false;
+          if (values.includes(label)) {
+            text(announcement, "Label " + label + " is already on this task.");
+            return false;
+          }
+          values.push(label);
+          renderChiclets();
+          text(announcement, "Added label " + label + ".");
+          return true;
+        }
+        function removeLabel(label) {
+          const at = values.indexOf(label);
+          if (at < 0) return;
+          values.splice(at, 1);
+          renderChiclets();
+          text(announcement, "Removed label " + label + ".");
+          // The button that took the click no longer exists. Without this the
+          // focus falls to the document body and a keyboard user loses the
+          // control they were working in.
+          input.focus();
+        }
+        // Enter, a comma, and Save all mean the same thing about the text in
+        // the input: it is a label, or several.
+        function commitInput() {
+          const entered = input.value;
+          input.value = "";
+          entered.split(",").forEach(addLabel);
+        }
+        input.addEventListener("input", () => {
+          // Everything before the last comma is finished; the tail is still
+          // being typed. A paste of "web, docs, api" lands as two chiclets and
+          // a word in progress.
+          if (!input.value.includes(",")) return;
+          const parts = input.value.split(",");
+          const tail = parts.pop();
+          parts.forEach(addLabel);
+          input.value = tail;
+        });
+        input.addEventListener("keydown", (event) => {
+          // An IME delivers the Enter that confirms a candidate, and the
+          // Backspace that edits one, as keydown with isComposing set. Reading
+          // either as a label would commit the unconverted reading — the kana
+          // rather than the word — and no amount of retyping would ever get
+          // the converted label in.
+          if (event.isComposing) return;
+          if (event.key === "Enter") {
+            // Enter here adds a label. Letting it through would submit the
+            // form instead, which is the one thing the user did not ask for.
+            event.preventDefault();
+            commitInput();
+            return;
+          }
+          if (event.key === "Backspace" && !input.value && values.length) {
+            event.preventDefault();
+            removeLabel(values[values.length - 1]);
+          }
+        });
+        // Leaving the field is as much a commit as pressing Enter, so the
+        // chiclets always show what a save would send.
+        input.addEventListener("blur", () => { commitInput(); });
+
+        (initial || []).forEach((label) => {
+          const value = String(label).trim();
+          if (value && !values.includes(value)) values.push(value);
+        });
+        renderChiclets();
+        return {
+          region,
+          // A label typed but never committed is still a label the user
+          // entered. Saving folds it in rather than discarding their last
+          // keystrokes for want of an Enter.
+          values() {
+            const entered = [...values];
+            input.value.split(",").forEach((part) => {
+              const label = part.trim();
+              if (label && !entered.includes(label)) entered.push(label);
+            });
+            return entered;
+          }
+        };
       }
       function select(name, options, value) {
         const control = document.createElement("select"); control.id = "task-" + name; control.name = name;
@@ -512,6 +827,65 @@
           pendingTaskMessages.set(recovery.taskID, recovery.warnings);
         }
         pendingDetailRelationshipContextTaskID = recovery.taskID;
+      }
+      // Where a finished create leaves the user, and what has to be staged for
+      // the route it lands on. Saving a new task returns to the board, or
+      // re-arms a clean New Task form when "Create more" is on; either way the
+      // task that was just saved is behind the user, not in front of them.
+      //
+      // The exception is a create that has something to report: a warning, or a
+      // relationship the client could not write. Those messages and their retry
+      // actions only exist on the task's own detail route, so that create opens
+      // the task instead of dropping what it has to say.
+      function createdTaskLanding(recovery) {
+        if (recovery.warnings.length || hasRelationshipDrafts(recovery.failures)) {
+          return { path: taskPath(recovery.taskID), stageRecovery: true, replace: false };
+        }
+        if (createMoreTasks) {
+          return { path: newTaskPath(recovery.status), stageRecovery: false, replace: true, focusTitle: true };
+        }
+        return { path: "/", stageRecovery: false, replace: false, focusTaskID: recovery.taskID };
+      }
+      // A save that re-arms the New Task form destroys the node the user was
+      // standing on, and a browser blurs an element on its way out of the
+      // document. The replacement claims the caret so a run of tasks stays on
+      // the keyboard. A New Task route the user opened themselves is left
+      // alone: nothing was taken from them there.
+      function focusRearmedNewTask(form) {
+        if (!pendingNewTaskFocus) return;
+        pendingNewTaskFocus = false;
+        const title = form.querySelector("#task-title");
+        if (title && typeof title.focus === "function") title.focus();
+      }
+      // The board landing loses the caret the same way, and has less to fall
+      // back on: the form is gone, no card was focused before the create, and
+      // restoreCardFocus only returns focus to a card that already had it. So a
+      // keyboard user would land on the document body and have to tab in from
+      // the top. The card that was just created takes the caret instead, which
+      // is also the only confirmation this path gives a screen reader: the card
+      // announces the task's title and column. A board the user reached any
+      // other way is left alone.
+      function focusCreatedCard() {
+        const taskID = pendingBoardFocusTaskID;
+        if (!taskID) return;
+        pendingBoardFocusTaskID = null;
+        const node = findCardNode(taskID);
+        if (node && typeof node.focus === "function") node.focus();
+      }
+      // The single exit from a durable create. Everything before it decides what
+      // happened; this decides where that leaves the user, so a save path that
+      // learns to run optimistically moves the call rather than the rule.
+      function finishCreatedTask(recovery) {
+        const landing = createdTaskLanding(recovery);
+        if (landing.stageRecovery) applyCreatedTaskRecovery(recovery);
+        createdTaskRecovery = null;
+        // Staged before the navigation, because the render it triggers is what
+        // holds the new control. Written on every landing, not only the ones
+        // that want focus, so a landing that does not cannot inherit a request
+        // an earlier create left behind.
+        pendingNewTaskFocus = Boolean(landing.focusTitle);
+        pendingBoardFocusTaskID = landing.focusTaskID || null;
+        navigate(landing.path, { replace: landing.replace });
       }
       function focusPendingRelationshipRecovery(taskID, controller, generation) {
         const request = pendingRelationshipRecoveryFocus;
@@ -1340,6 +1714,22 @@
         load();
         return section;
       }
+      // "Create more" is read when a save finishes rather than when it starts,
+      // so a user who changes their mind while the create is in flight gets the
+      // answer they left the box on.
+      function createMoreToggle() {
+        const wrapper = document.createElement("label");
+        wrapper.className = "create-more";
+        const control = document.createElement("input");
+        control.type = "checkbox";
+        control.id = "task-create-more";
+        control.checked = createMoreTasks;
+        control.addEventListener("change", () => { createMoreTasks = control.checked; });
+        const caption = document.createElement("span");
+        text(caption, "Create more");
+        wrapper.append(control, caption);
+        return wrapper;
+      }
       function taskForm(mode, task) {
         const isNew = mode === "new";
         const relationshipDrafts = isNew
@@ -1362,7 +1752,7 @@
         const status = select("status", statusOptions, knownStatus ? task.status : ""); status.required = true;
         if (!knownStatus) status.firstElementChild.disabled = true;
         const priority = select("priority", [["high", "High"], ["medium", "Medium"], ["low", "Low"]], task.priority);
-        const labels = document.createElement("input"); labels.id = "task-labels"; labels.name = "labels"; labels.value = (task.labels || []).join(", "); labels.placeholder = "web, docs, release";
+        const labels = labelEditor(task.labels || []);
         // Named, because the relationship region carries a form-status of its
         // own and "the first .form-status in the route" is the wrong element
         // as often as it is the right one.
@@ -1376,6 +1766,7 @@
         const save = document.createElement("button"); save.className = "save-button"; save.type = "submit"; text(save, "Save");
         const back = document.createElement("a"); back.className = "board-link"; back.href = "/"; text(back, "Back");
         primaryActions.append(save, back); actions.append(primaryActions);
+        if (isNew) actions.append(createMoreToggle());
 		if (!isNew) {
 		  const danger = document.createElement("div"); danger.className = "form-danger";
 		  const remove = document.createElement("button"); remove.className = "delete-button"; remove.type = "button"; text(remove, "Delete");
@@ -1399,7 +1790,7 @@
           propertiesHeading,
           field("Status", status),
           field("Priority", priority),
-          field("Labels", labels, true)
+          field("Labels", labels.region, true)
         );
         const relationshipMount = document.createElement("div"); relationshipMount.dataset.relationshipMount = "";
         sidebar.append(properties, relationshipMount);
@@ -1447,6 +1838,7 @@
               relationshipDrafts.blocks.clear();
               const recovery = {
                 taskID,
+                status: document.task.status,
                 failures: relationshipOutcome.failures,
                 warnings: [
                   ...mutationWarnings(document),
@@ -1477,10 +1869,7 @@
                     retried.relationshipContext.status !== "applied") {
                   return;
                 }
-                applyCreatedTaskRecovery(recovery);
-                const recoveredID = recovery.taskID;
-                createdTaskRecovery = null;
-                navigate("/tasks/" + encodeURIComponent(recoveredID));
+                finishCreatedTask(recovery);
               };
               const refreshed = await currentRefreshResult(refresh());
               if (!ownsCreation()) {
@@ -1492,9 +1881,7 @@
                 showCreatedTaskRefreshFailure(result, retryCreatedTaskRefresh);
                 return;
               }
-              applyCreatedTaskRecovery(recovery);
-              createdTaskRecovery = null;
-              navigate("/tasks/" + encodeURIComponent(taskID));
+              finishCreatedTask(recovery);
             } else {
               navigate("/");
               await refresh();
@@ -1549,16 +1936,13 @@
         }
         return section;
       }
-      function labelValues(control) {
-        return control.value.split(",").map((label) => label.trim()).filter(Boolean);
-      }
       function allTaskValues(controls) {
         return {
           title: controls.title.value,
           description: controls.description.value,
           status: controls.status.value,
           priority: controls.priority.value,
-          labels: labelValues(controls.labels)
+          labels: controls.labels.values()
         };
       }
       // An update carries the fields this form changed and no others. Sending
@@ -1574,7 +1958,7 @@
         // placeholder. Leaving it alone is not a request to clear the status.
         if (controls.status.value && controls.status.value !== task.status) values.status = controls.status.value;
         if (controls.priority.value !== task.priority) values.priority = controls.priority.value;
-        const labels = labelValues(controls.labels);
+        const labels = controls.labels.values();
         if (!sameLabels(labels, task.labels || [])) values.labels = labels;
         return values;
       }
@@ -1914,9 +2298,17 @@
         if (current.view !== "detail" && current.view !== "new") {
           activeDependencyController = null;
         }
+        // The description setting draws cards, and only the board draws cards.
+        // Beside the deleted list or a task's own page it would be a control
+        // that visibly does nothing, so it travels with the route it acts on.
+        // The markup ships it hidden and this reveals it, so a page that never
+        // runs this script offers no setting rather than a dead one that lies
+        // about the state of a board it can no longer change.
+        if (descriptionToggle) descriptionToggle.hidden = current.view !== "board";
         if (current.view === "board") {
           document.title = "Workbook board";
           if (main.firstElementChild !== boardView) main.replaceChildren(boardView);
+          focusCreatedCard();
           return;
         }
         if (current.view === "unknown") {
@@ -1941,7 +2333,9 @@
         }
         if (current.view === "new") {
           document.title = "New task · Workbook";
-          main.replaceChildren(taskForm("new", { title: "", description: "", status: current.status, priority: "medium", labels: [] }));
+          const form = taskForm("new", { title: "", description: "", status: current.status, priority: "medium", labels: [] });
+          main.replaceChildren(form);
+          focusRearmedNewTask(form);
           return;
         }
         // The detail view projects pending intents too. Opening a card right
@@ -2017,8 +2411,15 @@
       function cardNodes(list) {
         return [...list.children].filter((child) => child.dataset && child.dataset.taskId);
       }
+      // Every list a card can be in, columns and the unknown-status region
+      // alike. A card there is as real as any other and has to be found by the
+      // same lookups, or focus restoration and reconciliation would treat it as
+      // a node that no longer exists.
+      function cardLists() {
+        return [...lists.values(), unknownList];
+      }
       function findCardNode(taskID) {
-        for (const list of lists.values()) {
+        for (const list of cardLists()) {
           const node = cardNodes(list).find((candidate) => candidate.dataset.taskId === taskID);
           if (node) return node;
         }
@@ -2057,11 +2458,22 @@
         const node = findCardNode(taskID);
         if (node && typeof node.focus === "function") node.focus();
       }
+      function entriesFor(tasks, presentation) {
+        return tasks.map((task) => ({ task, view: presentation.get(task.id) }));
+      }
       function render(tasks, presentation) {
         const grouped = new Map([...lists.keys()].map((status) => [status, []]));
+        // A task whose status matches no column is shown under its own heading
+        // rather than dropped. The terminal board has always printed an UNKNOWN
+        // STATUS section, and the presentation layer computes the set for both;
+        // a task that is invisible reads as a task that was deleted, which is a
+        // worse lie than a task that is merely unsorted. Two clones on different
+        // Workbook versions produce this on their own. See
+        // internal/presentation/parity_test.go for the standing decision.
+        const stranded = [];
         tasks.forEach((task) => {
           const items = grouped.get(task.status);
-          if (items) items.push(task);
+          if (items) items.push(task); else stranded.push(task);
         });
         const focusedID = focusedCardID();
         // Every card node on the board, collected before a single column is
@@ -2070,7 +2482,7 @@
         // builder record and cannot be updated in place, so it is dropped here
         // and rebuilt once.
         const survivors = new Map();
-        lists.forEach((list) => {
+        cardLists().forEach((list) => {
           cardNodes(list).forEach((node) => {
             const taskID = node.dataset.taskId;
             if (survivors.has(taskID) || !cardParts.has(node)) { node.remove(); return; }
@@ -2080,12 +2492,18 @@
         const claimed = new Set();
         grouped.forEach((items, status) => {
           const list = lists.get(status);
-          const entries = items.map((task) => ({ task, view: presentation.get(task.id) }));
-          reconcile(list, entries, survivors, claimed);
+          reconcile(list, entriesFor(items, presentation), survivors, claimed);
           const count = counts.get(status);
           const total = String(items.length);
           if (count.textContent !== total) text(count, total);
         });
+        // Reconciled from the same survivor pool as the columns, so a status
+        // that becomes recognized — or stops being — moves the card the reader
+        // is already looking at instead of destroying it and building a stranger.
+        reconcile(unknownList, entriesFor(stranded, presentation), survivors, claimed);
+        const strandedTotal = String(stranded.length);
+        if (unknownCount.textContent !== strandedTotal) text(unknownCount, strandedTotal);
+        unknownSection.dataset.visible = stranded.length > 0 ? "true" : "false";
         survivors.forEach((node, taskID) => {
           if (claimed.has(taskID)) return;
           // The node the browser is dragging stays attached even when the model
@@ -2200,7 +2618,10 @@
       });
       document.addEventListener("dragover", (event) => {
         const target = dropTarget(event);
-        if (!target || !activeDrag || !statuses.has(target.dataset.dropStatus)) return;
+        // Same set as the one that decides `movable`: a card is draggable out of
+        // exactly the columns the server rendered, so those are exactly the
+        // columns it may be dropped into.
+        if (!target || !activeDrag || !lists.has(target.dataset.dropStatus)) return;
         const placement = placementFor(target, event.clientY);
         showPlacement(target, placement);
         event.preventDefault();
@@ -2212,7 +2633,7 @@
       });
       document.addEventListener("drop", async (event) => {
         const target = dropTarget(event);
-        if (!target || !activeDrag || !statuses.has(target.dataset.dropStatus)) return;
+        if (!target || !activeDrag || !lists.has(target.dataset.dropStatus)) return;
         event.preventDefault();
         const taskId = activeDrag.taskId;
         const sourceStatus = activeDrag.sourceStatus;
