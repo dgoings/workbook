@@ -1691,6 +1691,16 @@ func (server *recordingWarmScenarioServer) prepareProjection(_ context.Context, 
 	return server.prepareErr
 }
 
+func (server *recordingWarmScenarioServer) measureTaskList(
+	_ context.Context,
+	_ int,
+	_ time.Duration,
+) (Sample, error) {
+	server.t.Helper()
+	server.t.Fatalf("role %q measured a task list read it did not select", server.role)
+	return Sample{}, nil
+}
+
 func (server *recordingWarmScenarioServer) measureStatus(
 	_ context.Context,
 	taskID string,

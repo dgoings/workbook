@@ -50,6 +50,7 @@ type warmHTTPTasks struct {
 
 type warmScenarioServer interface {
 	prepareProjection(context.Context, int, time.Duration) error
+	measureTaskList(context.Context, int, time.Duration) (Sample, error)
 	measureStatus(context.Context, string, string, time.Duration) (Sample, error)
 	measureIndependentBurst(context.Context, []string, string, time.Duration) (Sample, error)
 	measureSameTaskBurst(context.Context, string, int, time.Duration) (Sample, error)
@@ -170,7 +171,9 @@ var coldScenarioDefinitions = []coldScenarioDefinition{
 	{name: "cli-free", measure: measureColdFree},
 	{name: "cli-list", measure: measureColdList},
 	{name: "cli-move", measure: measureColdMove},
+	{name: "cli-next", measure: measureColdNext},
 	{name: "cli-restore", measure: measureColdRestore},
+	{name: "cli-show", measure: measureColdShow},
 	{name: "cli-update", measure: measureColdUpdate},
 	{name: "cli-update-autosync", measure: measureColdUpdateAutoSync},
 	{name: "cli-update-watched", measure: measureColdUpdateWatched},
@@ -242,6 +245,70 @@ func measureColdRestore(ctx context.Context, dependencies scenarioDependencies, 
 		return Sample{}, fmt.Errorf("fixture has no tombstoned tasks")
 	}
 	return measureColdCLICommand(ctx, dependencies, spec, fixture.Root, []string{"restore", fixture.TombstonedTaskIDs[0], "--no-sync", "--json"}), nil
+}
+
+// measureColdNext measures the command an agent runs to acquire work.
+//
+// It deliberately leaves automatic synchronization enabled. `workbook next`
+// fetches before answering so two agents cannot claim the same task, and that
+// fetch is the point of the scenario: measuring it with --no-sync would report a
+// local read that no agent ever performs. The origin is published as setup so
+// the sample covers the steady-state fetch rather than an initial publication,
+// exactly as cli-update-autosync does for the mutation path.
+//
+// The setup order matters and each step earns its place:
+//
+//   - `next` only ever selects a task whose status is `ready`, and the fixture's
+//     deterministic generator never leaves one there. Without the first step the
+//     board holds nothing to acquire, and the scenario would report the agent's
+//     acquire step while measuring a search that always comes up empty.
+//   - Origin is published after that mutation, so the measured fetch meets an
+//     already-synchronized remote and reconciles nothing. Publishing first would
+//     leave the local task ahead and price a replay this scenario does not claim
+//     to measure.
+//   - The mutation leaves the projection one head stale, and refreshing a single
+//     changed head is tens of milliseconds at acceptance size. Re-settling it
+//     untimed keeps the sample comparable with every other cold scenario, whose
+//     projection is current when its command starts.
+func measureColdNext(ctx context.Context, dependencies scenarioDependencies, spec RunSpec, fixture Fixture, _ int) (Sample, error) {
+	taskIDs, err := fixtureActiveTask(fixture, 1)
+	if err != nil {
+		return Sample{}, err
+	}
+	// This sample is deliberately discarded: the mutation is setup, not the
+	// measurement. Its exit code is still checked, because a board with nothing
+	// acquirable would answer fast and mean nothing.
+	setup := measureColdCLICommand(ctx, dependencies, spec, fixture.Root, []string{
+		"update", taskIDs[0], "--status", "ready", "--no-sync", "--json",
+	})
+	if setup.ExitCode != 0 {
+		return Sample{}, fmt.Errorf(
+			"prepare an acquirable task: exit code %d: %s", setup.ExitCode, setup.Error,
+		)
+	}
+	if err := publishFixtureToLocalOrigin(ctx, spec.CommandTimeout, fixture.Root); err != nil {
+		return Sample{}, err
+	}
+	if err := dependencies.prepareProjection(ctx, CommandSpec{
+		Binary:    spec.WorkbookBinary,
+		Args:      []string{"rebuild", "--json"},
+		Directory: fixture.Root,
+		Timeout:   spec.CommandTimeout,
+	}, spec.Fixture.TotalTasks); err != nil {
+		return Sample{}, fmt.Errorf("re-settle the projection after preparing an acquirable task: %w", err)
+	}
+	return measureColdCLICommand(ctx, dependencies, spec, fixture.Root, []string{"next", "--json"}), nil
+}
+
+// measureColdShow measures the command an agent runs to read a task's context.
+// It reads one task through a read-only service and synchronizes nothing, so it
+// belongs to the local class and needs no origin.
+func measureColdShow(ctx context.Context, dependencies scenarioDependencies, spec RunSpec, fixture Fixture, _ int) (Sample, error) {
+	taskID, err := fixtureActiveTask(fixture, 1)
+	if err != nil {
+		return Sample{}, err
+	}
+	return measureColdCLICommand(ctx, dependencies, spec, fixture.Root, []string{"show", taskID[0], "--json"}), nil
 }
 
 func measureColdUpdate(ctx context.Context, dependencies scenarioDependencies, spec RunSpec, fixture Fixture, _ int) (Sample, error) {
@@ -580,6 +647,7 @@ type warmHTTPScenarioDefinition struct {
 }
 
 var warmHTTPScenarioDefinitions = []warmHTTPScenarioDefinition{
+	{name: "api-tasks", measure: measureWarmTaskList},
 	{name: "api-update", measure: measureWarmUpdate},
 	{name: "api-burst-independent-10", measure: measureWarmIndependentBurst},
 	{name: "api-burst-same-task-10", measure: measureWarmSameTaskBurst},
@@ -601,6 +669,15 @@ func selectedWarmHTTPScenarios(selected []string) ([]warmHTTPScenarioDefinition,
 		return nil, fmt.Errorf("unknown warm HTTP scenario %q", name)
 	}
 	return definitions, nil
+}
+
+// measureWarmTaskList measures the board's read side: a GET of the whole task
+// collection against an already-warmed server holding the populated fixture.
+// The untimed preparation load has already verified the same population, so this
+// sample measures a warm read rather than a first read that also opens the
+// projection.
+func measureWarmTaskList(ctx context.Context, server warmScenarioServer, fixture Fixture, timeout time.Duration) (Sample, error) {
+	return server.measureTaskList(ctx, len(fixture.ActiveTaskIDs), timeout)
 }
 
 func measureWarmUpdate(ctx context.Context, server warmScenarioServer, fixture Fixture, timeout time.Duration) (Sample, error) {
@@ -906,7 +983,10 @@ func coldCLIResult(name string, samples int) ScenarioResult {
 	switch name {
 	case "cli-burst-independent-10", "cli-burst-same-task-10":
 		target = &burstTarget
-	case "cli-update-autosync":
+	case "cli-update-autosync", "cli-next":
+		// `next` fetches before answering, so it is priced in the
+		// synchronized class rather than held to a local budget it cannot
+		// meet by design.
 		target = &coldAutoSyncTarget
 	case "cli-list":
 		// The read path has no approved duration budget, so it is reported
@@ -918,8 +998,14 @@ func coldCLIResult(name string, samples int) ScenarioResult {
 
 func warmHTTPResult(name string, samples int) ScenarioResult {
 	target := &warmUpdateTarget
-	if name == "api-burst-independent-10" || name == "api-burst-same-task-10" {
+	switch name {
+	case "api-burst-independent-10", "api-burst-same-task-10":
 		target = &burstTarget
+	case "api-tasks":
+		// The 100 ms warm budget was approved for a single mutation. The read
+		// path has no approved budget, so it is reported descriptively rather
+		// than classified against an invented threshold.
+		target = nil
 	}
 	return ScenarioResult{
 		Name:    name,
@@ -1190,23 +1276,52 @@ func waitForWarmHealth(ctx context.Context, client *http.Client, baseURL string,
 }
 
 func (server *warmHTTPServer) prepareProjection(ctx context.Context, activeTasks int, timeout time.Duration) error {
+	_, err := server.loadTaskList(ctx, activeTasks, timeout)
+	return err
+}
+
+// measureTaskList times one warm GET of the board's task collection and holds it
+// to the same population oracle the untimed preparation load uses. A read that
+// answered with an empty board would be fast and worthless, so the count is
+// checked before the sample is reported.
+func (server *warmHTTPServer) measureTaskList(ctx context.Context, activeTasks int, timeout time.Duration) (Sample, error) {
+	cursor, err := OpenTraceCursor(server.tracePath)
+	if err != nil {
+		return Sample{}, err
+	}
+	duration, err := server.loadTaskList(ctx, activeTasks, timeout)
+	if err != nil {
+		return Sample{}, err
+	}
+	gitProcesses, err := cursor.CountNewGitProcesses()
+	if err != nil {
+		return Sample{}, err
+	}
+	return Sample{Duration: duration, ExitCode: 0, GitProcesses: gitProcesses}, nil
+}
+
+// loadTaskList performs one GET /api/tasks, verifies the versioned document and
+// its active-task population, and returns the elapsed request time.
+func (server *warmHTTPServer) loadTaskList(ctx context.Context, activeTasks int, timeout time.Duration) (time.Duration, error) {
 	requestContext, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	request, err := http.NewRequestWithContext(requestContext, http.MethodGet, server.baseURL+"/api/tasks", nil)
 	if err != nil {
-		return fmt.Errorf("build task list request: %w", err)
+		return 0, fmt.Errorf("build task list request: %w", err)
 	}
+	startedAt := time.Now()
 	response, err := server.client.Do(request)
 	if err != nil {
-		return fmt.Errorf("send task list request: %w", err)
+		return 0, fmt.Errorf("send task list request: %w", err)
 	}
 	body, readErr := io.ReadAll(response.Body)
 	closeErr := response.Body.Close()
+	duration := time.Since(startedAt)
 	if readErr != nil {
-		return fmt.Errorf("read task list response: %w", readErr)
+		return 0, fmt.Errorf("read task list response: %w", readErr)
 	}
 	if closeErr != nil {
-		return fmt.Errorf("close task list response: %w", closeErr)
+		return 0, fmt.Errorf("close task list response: %w", closeErr)
 	}
 	if response.StatusCode != http.StatusOK {
 		evidence := conciseHTTPBody(body)
@@ -1214,7 +1329,7 @@ func (server *warmHTTPServer) prepareProjection(ctx context.Context, activeTasks
 		if evidence != "" {
 			message += ": " + evidence
 		}
-		return errors.New(message)
+		return 0, errors.New(message)
 	}
 	var document struct {
 		Format  string            `json:"format"`
@@ -1222,18 +1337,18 @@ func (server *warmHTTPServer) prepareProjection(ctx context.Context, activeTasks
 		Tasks   []json.RawMessage `json:"tasks"`
 	}
 	if err := json.Unmarshal(body, &document); err != nil {
-		return fmt.Errorf("decode task list response: %w", err)
+		return 0, fmt.Errorf("decode task list response: %w", err)
 	}
 	if document.Format != "workbook.tasks" || document.Version != 1 {
-		return fmt.Errorf(
+		return 0, fmt.Errorf(
 			"task list response = %q v%d, want workbook.tasks v1",
 			document.Format, document.Version,
 		)
 	}
 	if len(document.Tasks) != activeTasks {
-		return fmt.Errorf("task list response task count = %d, want %d", len(document.Tasks), activeTasks)
+		return 0, fmt.Errorf("task list response task count = %d, want %d", len(document.Tasks), activeTasks)
 	}
-	return nil
+	return duration, nil
 }
 
 func (server *warmHTTPServer) measureStatus(ctx context.Context, taskID, status string, timeout time.Duration) (Sample, error) {
