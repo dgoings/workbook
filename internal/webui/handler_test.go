@@ -22,7 +22,7 @@ const contentSecurityPolicy = "default-src 'none'; style-src 'unsafe-inline'; sc
 
 func TestHandlerServesBoardTasksAndHealth(t *testing.T) {
 	tasks := boardTasks()
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
 	board := request(t, handler, http.MethodGet, "/")
 	if board.Code != http.StatusOK {
@@ -108,14 +108,14 @@ func TestHandlerReturnsMutationWarningAfterDurableWrite(t *testing.T) {
 			Message: "cache update failed",
 		}},
 	}
-	handler := NewHandler(
-		func(context.Context) ([]core.Task, error) { return nil, nil },
-		func(context.Context, core.CreateInput) (core.MutationResult, error) {
+	handler := NewHandler(Options{
+		List: func(context.Context) ([]core.Task, error) { return nil, nil },
+		Create: func(context.Context, core.CreateInput) (core.MutationResult, error) {
 			return result, nil
 		},
-		unexpectedTaskUpdate(t),
-		unexpectedStatusUpdate(t),
-	)
+		Update:       unexpectedTaskUpdate(t),
+		UpdateStatus: unexpectedStatusUpdate(t),
+	})
 
 	response := requestJSON(t, handler, http.MethodPost, "/api/tasks", `{"title":"Durable","status":"ready","priority":"high"}`)
 	if response.Code != http.StatusOK {
@@ -151,7 +151,7 @@ func TestHandlerRendersInReviewTasks(t *testing.T) {
 			Priority: core.PriorityMedium,
 		},
 	})
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/")
 	if response.Code != http.StatusOK {
@@ -169,23 +169,22 @@ func TestHandlerDeletesRestoresAndListsTombstonedTasks(t *testing.T) {
 	deleted := boardTasks()[1]
 	deleted.Deleted = true
 	var deletedID, restoredID string
-	handler := NewHandlerWithTaskMutations(
-		func(context.Context) ([]core.Task, error) { return []core.Task{active, deleted}, nil },
-		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
-		unexpectedTaskPosition(t),
-		func(_ context.Context, id string) (core.MutationResult, error) {
+	handler := NewHandler(Options{
+		List:         func(context.Context) ([]core.Task, error) { return []core.Task{active, deleted}, nil },
+		Create:       unexpectedTaskCreate(t),
+		Update:       unexpectedTaskUpdate(t),
+		UpdateStatus: unexpectedStatusUpdate(t),
+		Position:     unexpectedTaskPosition(t),
+		Delete: func(_ context.Context, id string) (core.MutationResult, error) {
 			deletedID = id
 			return core.MutationResult{Task: deleted}, nil
 		},
-		func(_ context.Context, id string) (core.MutationResult, error) {
+		Restore: func(_ context.Context, id string) (core.MutationResult, error) {
 			restoredID = id
 			deleted.Deleted = false
 			return core.MutationResult{Task: deleted}, nil
 		},
-		nil,
-		nil,
-		nil,
-	)
+	})
 
 	deletedResponse := request(t, handler, http.MethodGet, "/api/tasks?deleted=true")
 	if deletedResponse.Code != http.StatusOK {
@@ -216,7 +215,7 @@ func TestHandlerClientRestoreFollowsSupersedingRefreshBeforeNavigation(t *testin
 	deleted.Deleted = true
 	restored := deleted
 	restored.Deleted = false
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return nil, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return nil, nil })
 
 	response := request(t, handler, http.MethodGet, "/deleted")
 	if response.Code != http.StatusOK {
@@ -327,7 +326,7 @@ func TestHandlerClientNamesJSONMediaTypeOnEveryMutation(t *testing.T) {
 	deleted.Deleted = true
 	restored := deleted
 	restored.Deleted = false
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return nil, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return nil, nil })
 
 	response := request(t, handler, http.MethodGet, "/deleted")
 	if response.Code != http.StatusOK {
@@ -389,20 +388,21 @@ func TestHandlerAddsAndRemovesTaskDependencies(t *testing.T) {
 	prerequisite := boardTasks()[1]
 	var calls []string
 	warning := core.Warning{Code: core.WarningProjectionUpdate, Message: "cache update failed"}
-	handler := NewHandlerWithTaskMutations(
-		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
-		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
-		unexpectedTaskPosition(t), nil, nil,
-		func(_ context.Context, id, dependency string) (core.MutationResult, error) {
+	handler := NewHandler(Options{
+		List:         func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		Create:       unexpectedTaskCreate(t),
+		Update:       unexpectedTaskUpdate(t),
+		UpdateStatus: unexpectedStatusUpdate(t),
+		Position:     unexpectedTaskPosition(t),
+		Depend: func(_ context.Context, id, dependency string) (core.MutationResult, error) {
 			calls = append(calls, "add:"+id+":"+dependency)
 			return core.MutationResult{Task: dependent, Warnings: []core.Warning{warning}}, nil
 		},
-		func(_ context.Context, id, dependency string) (core.MutationResult, error) {
+		Free: func(_ context.Context, id, dependency string) (core.MutationResult, error) {
 			calls = append(calls, "remove:"+id+":"+dependency)
 			return core.MutationResult{Task: dependent}, nil
 		},
-		nil,
-	)
+	})
 	path := "/api/tasks/" + dependent.ID + "/dependencies/" + prerequisite.ID
 
 	add := request(t, handler, http.MethodPut, path)
@@ -434,20 +434,21 @@ func TestHandlerDependencyMutationsRequireEmptyRequestBodies(t *testing.T) {
 	dependent := boardTasks()[0]
 	prerequisite := boardTasks()[1]
 	dependencyCalls := 0
-	handler := NewHandlerWithTaskMutations(
-		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
-		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
-		unexpectedTaskPosition(t), nil, nil,
-		func(context.Context, string, string) (core.MutationResult, error) {
+	handler := NewHandler(Options{
+		List:         func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		Create:       unexpectedTaskCreate(t),
+		Update:       unexpectedTaskUpdate(t),
+		UpdateStatus: unexpectedStatusUpdate(t),
+		Position:     unexpectedTaskPosition(t),
+		Depend: func(context.Context, string, string) (core.MutationResult, error) {
 			dependencyCalls++
 			return core.MutationResult{Task: dependent}, nil
 		},
-		func(context.Context, string, string) (core.MutationResult, error) {
+		Free: func(context.Context, string, string) (core.MutationResult, error) {
 			dependencyCalls++
 			return core.MutationResult{Task: dependent}, nil
 		},
-		nil,
-	)
+	})
 	path := "/api/tasks/" + dependent.ID + "/dependencies/" + prerequisite.ID
 	tests := []struct {
 		name                 string
@@ -491,12 +492,13 @@ func TestHandlerDependencyMutationsRequireEmptyRequestBodies(t *testing.T) {
 		})
 	}
 
-	unconfigured := NewHandlerWithTaskMutations(
-		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
-		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
-		unexpectedTaskPosition(t), nil, nil, nil, nil,
-		nil,
-	)
+	unconfigured := NewHandler(Options{
+		List:         func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		Create:       unexpectedTaskCreate(t),
+		Update:       unexpectedTaskUpdate(t),
+		UpdateStatus: unexpectedStatusUpdate(t),
+		Position:     unexpectedTaskPosition(t),
+	})
 	response := requestJSON(t, unconfigured, http.MethodPut, path, `{"unexpected":true}`)
 	var document ErrorDocument
 	if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
@@ -510,16 +512,16 @@ func TestHandlerDependencyMutationsRequireEmptyRequestBodies(t *testing.T) {
 func TestHandlerReturnsDependencyMutationErrors(t *testing.T) {
 	dependent := boardTasks()[0]
 	prerequisite := boardTasks()[1]
-	handler := NewHandlerWithTaskMutations(
-		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
-		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
-		unexpectedTaskPosition(t), nil, nil,
-		func(context.Context, string, string) (core.MutationResult, error) {
+	handler := NewHandler(Options{
+		List:         func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		Create:       unexpectedTaskCreate(t),
+		Update:       unexpectedTaskUpdate(t),
+		UpdateStatus: unexpectedStatusUpdate(t),
+		Position:     unexpectedTaskPosition(t),
+		Depend: func(context.Context, string, string) (core.MutationResult, error) {
 			return core.MutationResult{}, core.Errorf(core.CategoryValidation, "dependency would create a cycle")
 		},
-		nil,
-		nil,
-	)
+	})
 	response := request(t, handler, http.MethodPut, "/api/tasks/"+dependent.ID+"/dependencies/"+prerequisite.ID)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("PUT dependency error status = %d, want %d", response.Code, http.StatusBadRequest)
@@ -538,20 +540,21 @@ func TestHandlerRejectsWrongDependencyMethodsAndMalformedPaths(t *testing.T) {
 	dependent := boardTasks()[0]
 	prerequisite := boardTasks()[1]
 	dependencyCalls := 0
-	handler := NewHandlerWithTaskMutations(
-		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
-		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
-		unexpectedTaskPosition(t), nil, nil,
-		func(context.Context, string, string) (core.MutationResult, error) {
+	handler := NewHandler(Options{
+		List:         func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		Create:       unexpectedTaskCreate(t),
+		Update:       unexpectedTaskUpdate(t),
+		UpdateStatus: unexpectedStatusUpdate(t),
+		Position:     unexpectedTaskPosition(t),
+		Depend: func(context.Context, string, string) (core.MutationResult, error) {
 			dependencyCalls++
 			return core.MutationResult{}, nil
 		},
-		func(context.Context, string, string) (core.MutationResult, error) {
+		Free: func(context.Context, string, string) (core.MutationResult, error) {
 			dependencyCalls++
 			return core.MutationResult{}, nil
 		},
-		nil,
-	)
+	})
 	path := "/api/tasks/" + dependent.ID + "/dependencies/" + prerequisite.ID
 	response := request(t, handler, http.MethodPost, path)
 	if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != "PUT, DELETE" {
@@ -588,20 +591,20 @@ func TestHandlerRejectsEncodedDependencyPathAliases(t *testing.T) {
 	dependent := boardTasks()[0]
 	prerequisite := boardTasks()[1]
 	dependencyCalls := 0
-	handler := NewHandlerWithTaskMutations(
-		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
-		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
-		unexpectedTaskPosition(t), nil, nil,
-		func(_ context.Context, id, dependency string) (core.MutationResult, error) {
+	handler := NewHandler(Options{
+		List:         func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		Create:       unexpectedTaskCreate(t),
+		Update:       unexpectedTaskUpdate(t),
+		UpdateStatus: unexpectedStatusUpdate(t),
+		Position:     unexpectedTaskPosition(t),
+		Depend: func(_ context.Context, id, dependency string) (core.MutationResult, error) {
 			dependencyCalls++
 			if id != dependent.ID || dependency != prerequisite.ID {
 				t.Fatalf("dependency callback IDs = %q/%q, want %q/%q", id, dependency, dependent.ID, prerequisite.ID)
 			}
 			return core.MutationResult{Task: dependent}, nil
 		},
-		nil,
-		nil,
-	)
+	})
 	canonicalPath := "/api/tasks/" + dependent.ID + "/dependencies/" + prerequisite.ID
 	tests := []struct {
 		name       string
@@ -648,7 +651,7 @@ func TestHandlerRejectsEncodedDependencyPathAliases(t *testing.T) {
 
 func TestHandlerServesTaskRouteShell(t *testing.T) {
 	tasks := boardTasks()
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
 	for _, path := range []string{
 		"/tasks/new",
@@ -678,7 +681,7 @@ func TestHandlerServesTaskRouteShell(t *testing.T) {
 }
 
 func TestHandlerServesDeletedRouteAndHeaderNavigation(t *testing.T) {
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return boardTasks(), nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return boardTasks(), nil })
 	for _, path := range []string{"/", "/deleted"} {
 		response := request(t, handler, http.MethodGet, path)
 		if response.Code != http.StatusOK {
@@ -695,7 +698,7 @@ func TestHandlerServesDeletedRouteAndHeaderNavigation(t *testing.T) {
 
 func TestHandlerRendersTaskAndNewTaskLinks(t *testing.T) {
 	tasks := boardTasks()
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/")
 	if response.Code != http.StatusOK {
@@ -718,7 +721,7 @@ func TestHandlerRendersTaskAndNewTaskLinks(t *testing.T) {
 
 func TestHandlerRendersTextLikeCopyableTaskIDControls(t *testing.T) {
 	tasks := boardTasks()
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/")
 	if response.Code != http.StatusOK {
@@ -769,7 +772,7 @@ func TestHandlerRequiresCanonicalStatusChoiceForUnknownTask(t *testing.T) {
 	node := requireNode(t)
 	tasks := boardTasks()
 	unknown := tasks[2]
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/tasks/"+unknown.ID)
 	if response.Code != http.StatusOK {
@@ -810,7 +813,7 @@ setTimeout(() => {
 func TestHandlerClientMarksDescriptionAsFlexibleField(t *testing.T) {
 	node := requireNode(t)
 	task := boardTasks()[0]
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return []core.Task{task}, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return []core.Task{task}, nil })
 
 	response := request(t, handler, http.MethodGet, "/tasks/"+task.ID)
 	if response.Code != http.StatusOK {
@@ -846,7 +849,7 @@ setTimeout(() => {
 func TestHandlerClientUsesSharedTaskSidebarLayout(t *testing.T) {
 	node := requireNode(t)
 	task := boardTasks()[0]
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return []core.Task{task}, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return []core.Task{task}, nil })
 
 	response := request(t, handler, http.MethodGet, "/tasks/new")
 	if response.Code != http.StatusOK {
@@ -942,7 +945,7 @@ func TestHandlerClientSidebarAccessibilityAndMobileOrder(t *testing.T) {
 	current := clientPlacementTask("WB-01J00000000000000000000072", "Current task", core.StatusReady, core.PriorityMedium)
 	candidate := clientPlacementTask("WB-01J00000000000000000000073", "Candidate task", core.StatusDone, core.PriorityHigh)
 	tasks := []core.Task{current, candidate}
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/tasks/new")
 	if response.Code != http.StatusOK {
@@ -1044,7 +1047,7 @@ setTimeout(() => {
 
 func TestHandlerClientClampsRelationshipListboxPlacement(t *testing.T) {
 	node := requireNode(t)
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return nil, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return nil, nil })
 	response := request(t, handler, http.MethodGet, "/tasks/new")
 	if response.Code != http.StatusOK {
 		t.Fatalf("GET /tasks/new status = %d, want %d", response.Code, http.StatusOK)
@@ -1097,7 +1100,7 @@ func TestHandlerClientStagesNewTaskRelationshipsWithoutMutating(t *testing.T) {
 	dependsCandidate := clientPlacementTask("WB-01J00000000000000000000072", "Depends on candidate", core.StatusDone, core.PriorityHigh)
 	blocksCandidate := clientPlacementTask("WB-01J00000000000000000000073", "Blocks candidate", core.StatusBacklog, core.PriorityLow)
 	tasks := []core.Task{dependsCandidate, blocksCandidate}
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/tasks/new")
 	if response.Code != http.StatusOK {
@@ -1234,7 +1237,7 @@ func TestHandlerClientRefreshesMountedNewTaskRelationshipCandidates(t *testing.T
 	deletedAfterPoll := becomesDeleted
 	deletedAfterPoll.Deleted = true
 	afterPollActive := []core.Task{restoredActive, stableCandidate, draftCandidate}
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialActive, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return initialActive, nil })
 
 	response := request(t, handler, http.MethodGet, "/tasks/new")
 	if response.Code != http.StatusOK {
@@ -1408,7 +1411,7 @@ func TestHandlerClientCreatesTaskWithBothRelationshipDirections(t *testing.T) {
 	refreshedBlockedTask.Dependencies = []string{createdID}
 	initialTasks := []core.Task{prerequisite, blockedTask, lateCandidate}
 	refreshedTasks := []core.Task{created, prerequisite, refreshedBlockedTask, lateCandidate}
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return initialTasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/tasks/new")
 	if response.Code != http.StatusOK {
@@ -1617,7 +1620,7 @@ func TestHandlerClientPreservesNewTaskRelationshipDraftsWhenCreateFails(t *testi
 	pendingPrerequisite := clientPlacementTask("WB-01J0000000000000000000007F", "Pending prerequisite", core.StatusReady, core.PriorityMedium)
 	pendingBlockedTask := clientPlacementTask("WB-01J0000000000000000000007G", "Pending blocked task", core.StatusInProgress, core.PriorityHigh)
 	tasks := []core.Task{prerequisite, blockedTask, pendingPrerequisite, pendingBlockedTask}
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/tasks/new")
 	if response.Code != http.StatusOK {
@@ -1773,7 +1776,7 @@ func TestHandlerClientRetainsFailedRelationshipDraftsAfterCreate(t *testing.T) {
 	afterRetryBlocked := blockedTask
 	afterRetryBlocked.Dependencies = []string{createdID}
 	afterRetry := []core.Task{created, prerequisite, afterRetryBlocked}
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return initialTasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/tasks/new")
 	if response.Code != http.StatusOK {
@@ -2012,7 +2015,7 @@ func TestHandlerClientDoesNotDuplicateCreatedTaskWhenRefreshFails(t *testing.T) 
 	created := clientPlacementTask(createdID, "Created task", core.StatusReady, core.PriorityMedium)
 	initialTasks := []core.Task{prerequisite, blockedTask}
 	refreshedTasks := []core.Task{created, prerequisite, blockedTask}
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return initialTasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/tasks/new")
 	if response.Code != http.StatusOK {
@@ -2145,7 +2148,7 @@ func TestHandlerClientCreatedTaskRefreshDoesNotNavigateDetachedRoute(t *testing.
 	created := clientPlacementTask(createdID, "Created task", core.StatusReady, core.PriorityHigh)
 	initialTasks := []core.Task{blockedTask, otherTask}
 	refreshedTasks := []core.Task{created, blockedTask, otherTask}
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return initialTasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/tasks/new")
 	if response.Code != http.StatusOK {
@@ -2297,7 +2300,7 @@ setTimeout(async () => {
 func TestHandlerShowsRecoverableErrorWhenInitialTaskLoadFails(t *testing.T) {
 	node := requireNode(t)
 	task := boardTasks()[0]
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return []core.Task{task}, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return []core.Task{task}, nil })
 
 	response := request(t, handler, http.MethodGet, "/tasks/"+task.ID)
 	if response.Code != http.StatusOK {
@@ -2353,7 +2356,7 @@ func TestHandlerClientRendersDependencyRelationships(t *testing.T) {
 	activeBlocked.Dependencies = []string{current.ID}
 	activeTasks := []core.Task{current, activeDependency, activeBlocked}
 	deletedTasks := []core.Task{deletedDependency}
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return activeTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return activeTasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
 	if response.Code != http.StatusOK {
@@ -2474,7 +2477,7 @@ func TestHandlerClientMountsCompactRelationshipsInSidebar(t *testing.T) {
 	deletedBlocked.Dependencies = []string{current.ID}
 	activeTasks := []core.Task{current, activeDependency, activeBlocked}
 	deletedTasks := []core.Task{deletedDependency, deletedBlocked}
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return activeTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return activeTasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
 	if response.Code != http.StatusOK {
@@ -2555,7 +2558,7 @@ func TestHandlerClientFiltersDependencyComboboxCandidates(t *testing.T) {
 	alreadyBlocked.Dependencies = []string{current.ID}
 	deletedCandidate.Deleted = true
 	tasks := []core.Task{current, existingDependency, alreadyBlocked, firstCandidate, secondCandidate, deletedCandidate}
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
 	if response.Code != http.StatusOK {
@@ -2642,7 +2645,7 @@ func TestHandlerClientDependencySnapshotPrefersTombstones(t *testing.T) {
 	deletedCandidate.Title = "Deleted candidate copy"
 	deletedCandidate.Deleted = true
 	deletedTasks := []core.Task{deletedDependency, deletedBlocked, deletedCandidate}
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return activeTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return activeTasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
 	if response.Code != http.StatusOK {
@@ -2699,7 +2702,7 @@ func TestHandlerClientDependencyComboboxSelectionCollapseIsCoherent(t *testing.T
 	pointerCandidate := clientPlacementTask("WB-01J0000000000000000000004C", "Pointer candidate", core.StatusDone, core.PriorityHigh)
 	keyboardCandidate := clientPlacementTask("WB-01J0000000000000000000004D", "Keyboard candidate", core.StatusBacklog, core.PriorityLow)
 	tasks := []core.Task{current, pointerCandidate, keyboardCandidate}
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
 	if response.Code != http.StatusOK {
@@ -2763,7 +2766,7 @@ func TestHandlerClientDependencyComboboxScrollsKeyboardOptionIntoView(t *testing
 	third := clientPlacementTask("WB-01J0000000000000000000004H", "Third candidate", core.StatusBlocked, core.PriorityMedium)
 	fourth := clientPlacementTask("WB-01J0000000000000000000004J", "Fourth candidate", core.StatusInProgress, core.PriorityHigh)
 	tasks := []core.Task{current, first, second, third, fourth}
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
 	if response.Code != http.StatusOK {
@@ -2809,7 +2812,7 @@ func TestHandlerClientDependencyMutationOrientationAndRefresh(t *testing.T) {
 	current.Dependencies = []string{existingDependency.ID}
 	existingBlocked.Dependencies = []string{current.ID}
 	initialTasks := []core.Task{current, existingDependency, existingBlocked, dependsCandidate, blocksCandidate}
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return initialTasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
 	if response.Code != http.StatusOK {
@@ -2963,7 +2966,7 @@ func TestHandlerClientDependencyMutationFollowsSupersedingRefresh(t *testing.T) 
 	updatedCurrent := current
 	updatedCurrent.Dependencies = []string{candidate.ID}
 	updatedTasks := []core.Task{updatedCurrent, candidate}
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return initialTasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
 	if response.Code != http.StatusOK {
@@ -3058,7 +3061,7 @@ func TestHandlerClientDependencyMutationSettlesAfterControllerSupersession(t *te
 	updatedCurrent := current
 	updatedCurrent.Dependencies = []string{candidate.ID}
 	updatedTasks := []core.Task{updatedCurrent, candidate}
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return initialTasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
 	if response.Code != http.StatusOK {
@@ -3187,7 +3190,7 @@ func TestHandlerClientDependencyMutationDoesNotWriteDetachedGroupAfterNewerPoll(
 	updatedCurrent := current
 	updatedCurrent.Dependencies = []string{candidate.ID}
 	updatedTasks := []core.Task{updatedCurrent, candidate}
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return initialTasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
 	if response.Code != http.StatusOK {
@@ -3312,7 +3315,7 @@ func TestHandlerClientDependencyMutationErrorDoesNotWriteDetachedGroup(t *testin
 	current := clientPlacementTask("WB-01J0000000000000000000005E", "Current task", core.StatusReady, core.PriorityMedium)
 	candidate := clientPlacementTask("WB-01J0000000000000000000005F", "Candidate task", core.StatusDone, core.PriorityHigh)
 	tasks := []core.Task{current, candidate}
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
 	if response.Code != http.StatusOK {
@@ -3403,7 +3406,7 @@ func TestHandlerClientDependencyMutationReportsDeletedContextFailure(t *testing.
 	updatedCurrent := current
 	updatedCurrent.Dependencies = []string{candidate.ID}
 	updatedTasks := []core.Task{updatedCurrent, candidate}
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return initialTasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
 	if response.Code != http.StatusOK {
@@ -3488,7 +3491,7 @@ func TestHandlerClientDependencyFailureRecoveryAndKeyboard(t *testing.T) {
 	alpha := clientPlacementTask("WB-01J00000000000000000000062", "Alpha prerequisite", core.StatusDone, core.PriorityHigh)
 	beta := clientPlacementTask("WB-01J00000000000000000000063", "Beta blocked task", core.StatusBacklog, core.PriorityLow)
 	initialTasks := []core.Task{current, alpha, beta}
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return initialTasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
 	if response.Code != http.StatusOK {
@@ -3647,7 +3650,7 @@ setTimeout(async () => {
 func TestHandlerInterceptsOrdinarySameOriginNavigation(t *testing.T) {
 	node := requireNode(t)
 	task := boardTasks()[0]
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return []core.Task{task}, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return []core.Task{task}, nil })
 
 	response := request(t, handler, http.MethodGet, "/")
 	if response.Code != http.StatusOK {
@@ -3719,7 +3722,7 @@ func TestHandlerClientCopiesFullTaskIDsAndSeparatesDrag(t *testing.T) {
 	node := requireNode(t)
 	tasks := boardTasks()[:1]
 	task := tasks[0]
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/")
 	if response.Code != http.StatusOK {
@@ -3835,7 +3838,7 @@ setTimeout(async () => {
 func TestHandlerClientBoardIgnoresUnknownStatuses(t *testing.T) {
 	node := requireNode(t)
 	tasks := boardTasks()
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/")
 	if response.Code != http.StatusOK {
@@ -3882,7 +3885,7 @@ setTimeout(() => {
 func TestHandlerClientPollsEverySecond(t *testing.T) {
 	node := requireNode(t)
 	tasks := boardTasks()[:1]
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/")
 	if response.Code != http.StatusOK {
@@ -3915,7 +3918,7 @@ func TestHandlerClientPlacementClampsSameColumnPointerGapsToSamePriorityPeers(t 
 	firstMedium := clientPlacementTask("WB-01J00000000000000000000013", "First medium", core.StatusReady, core.PriorityMedium)
 	low := clientPlacementTask("WB-01J00000000000000000000014", "Low", core.StatusReady, core.PriorityLow)
 	tasks := []core.Task{high, moved, firstMedium, low}
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/")
 	if response.Code != http.StatusOK {
@@ -4004,7 +4007,7 @@ func TestHandlerClientSendsAtomicClampedPlacementRequests(t *testing.T) {
 	doneHigh := clientPlacementTask("WB-01J00000000000000000000024", "Done high", core.StatusDone, core.PriorityHigh)
 	doneLow := clientPlacementTask("WB-01J00000000000000000000025", "Done low", core.StatusDone, core.PriorityLow)
 	tasks := []core.Task{moved, destinationHigh, destinationMedium, doneHigh, doneLow}
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/")
 	if response.Code != http.StatusOK {
@@ -4106,13 +4109,18 @@ func TestHandlerRefreshesTasksOnEveryAPIRequest(t *testing.T) {
 	second := append([]core.Task(nil), first...)
 	second[0].Title = "Updated without restarting"
 	calls := 0
-	handler := NewHandler(func(context.Context) ([]core.Task, error) {
-		calls++
-		if calls == 1 {
-			return first, nil
-		}
-		return second, nil
-	}, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := NewHandler(Options{
+		List: func(context.Context) ([]core.Task, error) {
+			calls++
+			if calls == 1 {
+				return first, nil
+			}
+			return second, nil
+		},
+		Create:       unexpectedTaskCreate(t),
+		Update:       unexpectedTaskUpdate(t),
+		UpdateStatus: unexpectedStatusUpdate(t),
+	})
 
 	for _, want := range []string{"Ready task", "Updated without restarting"} {
 		response := request(t, handler, http.MethodGet, "/api/tasks")
@@ -4431,16 +4439,16 @@ func TestHandlerUpdatesTaskStatus(t *testing.T) {
 	var gotStatus core.Status
 	updated := boardTasks()[0]
 	updated.Status = core.StatusInProgress
-	handler := NewHandler(
-		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
-		unexpectedTaskCreate(t),
-		unexpectedTaskUpdate(t),
-		func(_ context.Context, id string, status core.Status, _ string) (core.MutationResult, error) {
+	handler := NewHandler(Options{
+		List:   func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		Create: unexpectedTaskCreate(t),
+		Update: unexpectedTaskUpdate(t),
+		UpdateStatus: func(_ context.Context, id string, status core.Status, _ string) (core.MutationResult, error) {
 			gotID = id
 			gotStatus = status
 			return core.MutationResult{Task: updated}, nil
 		},
-	)
+	})
 
 	response := requestJSON(t, handler, http.MethodPatch, "/api/tasks/WB-01J00000000000000000000001/status", `{"status":"in-progress"}`)
 	if response.Code != http.StatusOK {
@@ -4473,17 +4481,17 @@ func TestHandlerCreatesTask(t *testing.T) {
 		Priority:    created.Priority,
 		Labels:      created.Labels,
 	}
-	handler := NewHandler(
-		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
-		func(_ context.Context, input core.CreateInput) (core.MutationResult, error) {
+	handler := NewHandler(Options{
+		List: func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		Create: func(_ context.Context, input core.CreateInput) (core.MutationResult, error) {
 			if !reflect.DeepEqual(input, want) {
 				t.Fatalf("create input = %#v, want %#v", input, want)
 			}
 			return core.MutationResult{Task: created}, nil
 		},
-		unexpectedTaskUpdate(t),
-		unexpectedStatusUpdate(t),
-	)
+		Update:       unexpectedTaskUpdate(t),
+		UpdateStatus: unexpectedStatusUpdate(t),
+	})
 
 	response := requestJSON(t, handler, http.MethodPost, "/api/tasks", `{"title":"Create a detail view","description":"Expose every editable field.","status":"in-review","priority":"low","labels":["web","forms"]}`)
 	if response.Code != http.StatusOK {
@@ -4506,10 +4514,10 @@ func TestHandlerUpdatesAllTaskFields(t *testing.T) {
 		Priority:    &updated.Priority,
 		Labels:      &updated.Labels,
 	}
-	handler := NewHandler(
-		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
-		unexpectedTaskCreate(t),
-		func(_ context.Context, id string, input core.UpdateInput) (core.MutationResult, error) {
+	handler := NewHandler(Options{
+		List:   func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		Create: unexpectedTaskCreate(t),
+		Update: func(_ context.Context, id string, input core.UpdateInput) (core.MutationResult, error) {
 			if id != "WB-01J00000000000000000000001" {
 				t.Fatalf("update id = %q", id)
 			}
@@ -4518,8 +4526,8 @@ func TestHandlerUpdatesAllTaskFields(t *testing.T) {
 			}
 			return core.MutationResult{Task: updated}, nil
 		},
-		unexpectedStatusUpdate(t),
-	)
+		UpdateStatus: unexpectedStatusUpdate(t),
+	})
 
 	response := requestJSON(t, handler, http.MethodPatch, "/api/tasks/WB-01J00000000000000000000001", `{"title":"Edit every task field","description":"Explicit empty values must remain possible.","status":"done","priority":"low","labels":["finished"]}`)
 	if response.Code != http.StatusOK {
@@ -4534,22 +4542,17 @@ func TestHandlerPositionsTask(t *testing.T) {
 	want.Rank = "3/1"
 	var gotID string
 	var gotInput core.PlaceInput
-	handler := NewHandlerWithTaskMutations(
-		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
-		unexpectedTaskCreate(t),
-		unexpectedTaskUpdate(t),
-		unexpectedStatusUpdate(t),
-		func(_ context.Context, id string, input core.PlaceInput) (core.MutationResult, error) {
+	handler := NewHandler(Options{
+		List:         func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		Create:       unexpectedTaskCreate(t),
+		Update:       unexpectedTaskUpdate(t),
+		UpdateStatus: unexpectedStatusUpdate(t),
+		Position: func(_ context.Context, id string, input core.PlaceInput) (core.MutationResult, error) {
 			gotID = id
 			gotInput = input
 			return core.MutationResult{Task: want}, nil
 		},
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-	)
+	})
 
 	response := requestJSON(
 		t,
@@ -4586,20 +4589,15 @@ func TestHandlerPositionsTask(t *testing.T) {
 
 func TestHandlerValidatesPositionRequests(t *testing.T) {
 	const taskID = "WB-01J00000000000000000000001"
-	handler := NewHandlerWithTaskMutations(
-		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
-		unexpectedTaskCreate(t),
-		unexpectedTaskUpdate(t),
-		unexpectedStatusUpdate(t),
-		func(context.Context, string, core.PlaceInput) (core.MutationResult, error) {
+	handler := NewHandler(Options{
+		List:         func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		Create:       unexpectedTaskCreate(t),
+		Update:       unexpectedTaskUpdate(t),
+		UpdateStatus: unexpectedStatusUpdate(t),
+		Position: func(context.Context, string, core.PlaceInput) (core.MutationResult, error) {
 			return core.MutationResult{}, core.Errorf(core.CategoryValidation, "placement accepts at most one anchor direction")
 		},
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-	)
+	})
 
 	response := requestJSON(t, handler, http.MethodPatch, "/api/tasks/"+taskID+"/position",
 		`{"status":"ready","before":"WB-A","after":"WB-B"}`)
@@ -4614,18 +4612,13 @@ func TestHandlerValidatesPositionRequests(t *testing.T) {
 		t.Fatalf("ambiguous position error document = %#v, want workbook.error v1 validation", document)
 	}
 
-	handler = NewHandlerWithTaskMutations(
-		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
-		unexpectedTaskCreate(t),
-		unexpectedTaskUpdate(t),
-		unexpectedStatusUpdate(t),
-		unexpectedTaskPosition(t),
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-	)
+	handler = NewHandler(Options{
+		List:         func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		Create:       unexpectedTaskCreate(t),
+		Update:       unexpectedTaskUpdate(t),
+		UpdateStatus: unexpectedStatusUpdate(t),
+		Position:     unexpectedTaskPosition(t),
+	})
 	response = requestJSON(t, handler, http.MethodPatch, "/api/tasks/"+taskID+"/position",
 		`{"status":"ready","rank":"1/1"}`)
 	if response.Code != http.StatusBadRequest {
@@ -4640,12 +4633,12 @@ func TestHandlerValidatesPositionRequests(t *testing.T) {
 }
 
 func TestHandlerRejectsInvalidTaskMutationRequests(t *testing.T) {
-	handler := NewHandler(
-		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
-		unexpectedTaskCreate(t),
-		unexpectedTaskUpdate(t),
-		unexpectedStatusUpdate(t),
-	)
+	handler := NewHandler(Options{
+		List:         func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		Create:       unexpectedTaskCreate(t),
+		Update:       unexpectedTaskUpdate(t),
+		UpdateStatus: unexpectedStatusUpdate(t),
+	})
 	for _, test := range []struct {
 		name   string
 		method string
@@ -4677,15 +4670,15 @@ func TestHandlerRejectsInvalidTaskMutationRequests(t *testing.T) {
 
 func TestHandlerPreservesStatusMutationRoute(t *testing.T) {
 	called := false
-	handler := NewHandler(
-		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
-		unexpectedTaskCreate(t),
-		unexpectedTaskUpdate(t),
-		func(context.Context, string, core.Status, string) (core.MutationResult, error) {
+	handler := NewHandler(Options{
+		List:   func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		Create: unexpectedTaskCreate(t),
+		Update: unexpectedTaskUpdate(t),
+		UpdateStatus: func(context.Context, string, core.Status, string) (core.MutationResult, error) {
 			called = true
 			return core.MutationResult{Task: boardTasks()[0]}, nil
 		},
-	)
+	})
 
 	response := requestJSON(t, handler, http.MethodPatch, "/api/tasks/WB-01J00000000000000000000001/status", `{"status":"ready"}`)
 	if response.Code != http.StatusOK {
@@ -4697,12 +4690,12 @@ func TestHandlerPreservesStatusMutationRoute(t *testing.T) {
 }
 
 func TestHandlerRejectsWrongMethods(t *testing.T) {
-	handler := NewHandler(
-		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
-		unexpectedTaskCreate(t),
-		unexpectedTaskUpdate(t),
-		unexpectedStatusUpdate(t),
-	)
+	handler := NewHandler(Options{
+		List:         func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		Create:       unexpectedTaskCreate(t),
+		Update:       unexpectedTaskUpdate(t),
+		UpdateStatus: unexpectedStatusUpdate(t),
+	})
 	for _, test := range []struct {
 		method    string
 		path      string
@@ -4723,14 +4716,14 @@ func TestHandlerRejectsWrongMethods(t *testing.T) {
 }
 
 func TestHandlerMapsStatusUpdateErrorsToVersionedErrorDocuments(t *testing.T) {
-	handler := NewHandler(
-		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
-		unexpectedTaskCreate(t),
-		unexpectedTaskUpdate(t),
-		func(context.Context, string, core.Status, string) (core.MutationResult, error) {
+	handler := NewHandler(Options{
+		List:   func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		Create: unexpectedTaskCreate(t),
+		Update: unexpectedTaskUpdate(t),
+		UpdateStatus: func(context.Context, string, core.Status, string) (core.MutationResult, error) {
 			return core.MutationResult{}, core.Errorf(core.CategoryValidation, "invalid task status")
 		},
-	)
+	})
 
 	response := requestJSON(t, handler, http.MethodPatch, "/api/tasks/WB-01J00000000000000000000001/status", `{"status":"future-status"}`)
 	if response.Code != http.StatusBadRequest {
@@ -4749,7 +4742,7 @@ func TestHandlerProvidesActionablePrefixesForRefresh(t *testing.T) {
 	tasks := boardTasks()
 	tasks[0].ID = "WB-01J0000A1111111111111111111"
 	tasks[1].ID = "WB-01J0000B2222222222222222222"
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/api/tasks")
 	if response.Code != http.StatusOK {
@@ -4798,7 +4791,7 @@ func TestHandlerInitialCardPrefixesMatchRefreshPresentation(t *testing.T) {
 	tasks := boardTasks()
 	tasks[0].ID = "WB-01J0000A1111111111111111111"
 	tasks[1].ID = "WB-01J0000B2222222222222222222"
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
 	initial := request(t, handler, http.MethodGet, "/")
 	if initial.Code != http.StatusOK {
@@ -4832,7 +4825,7 @@ func TestHandlerInitialCardPrefixesMatchRefreshPresentation(t *testing.T) {
 }
 
 func TestHandlerServesDragAndDropBoardControls(t *testing.T) {
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return boardTasks(), nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return boardTasks(), nil })
 
 	response := request(t, handler, http.MethodGet, "/")
 	if response.Code != http.StatusOK {
@@ -4873,7 +4866,7 @@ func initialCardPrefixes(body string) map[string]string {
 }
 
 func TestHandlerRejectsUnknownRoutesAndMutationMethods(t *testing.T) {
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return boardTasks(), nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return boardTasks(), nil })
 
 	unknown := request(t, handler, http.MethodGet, "/missing")
 	if unknown.Code != http.StatusNotFound {
@@ -4917,7 +4910,7 @@ func TestHandlerClientRendersAPlacementBeforeItsResponseAndSurvivesAPoll(t *test
 	settled.Status = core.StatusInProgress
 	settled.Head = "head-2"
 	tasks := []core.Task{moved}
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/")
 	script := renderedClientScript(t, response.Body.String())
@@ -4992,7 +4985,7 @@ func TestHandlerClientSendsOneTasksIntentsSeriallyThreadingTheHead(t *testing.T)
 	moved := clientPlacementTask("WB-01J00000000000000000000041", "Moved", core.StatusReady, core.PriorityMedium)
 	moved.Head = "head-1"
 	tasks := []core.Task{moved}
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/")
 	script := renderedClientScript(t, response.Body.String())
@@ -5069,7 +5062,7 @@ func TestHandlerClientRollsBackAFailedIntentAndLeavesALaterOneStanding(t *testin
 	confirmed.Status = core.StatusDone
 	confirmed.Head = "head-2"
 	tasks := []core.Task{moved}
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/")
 	script := renderedClientScript(t, response.Body.String())
@@ -5151,7 +5144,7 @@ func TestHandlerClientStaleWriteRollsBackRefreshesAndRebasesTheQueue(t *testing.
 	confirmed.Status = core.StatusDone
 	confirmed.Head = "head-3"
 	tasks := []core.Task{moved}
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/")
 	script := renderedClientScript(t, response.Body.String())
@@ -5242,7 +5235,7 @@ func TestHandlerClientReflectsAFailedPendingIntentInAnOpenDetailForm(t *testing.
 	elsewhere.Description = "Rewritten elsewhere."
 	elsewhere.Head = "head-2"
 	tasks := []core.Task{moved}
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/")
 	script := renderedClientScript(t, response.Body.String())
@@ -5329,7 +5322,7 @@ func TestHandlerClientDetailFormSendsOnlyChangedFieldsWithTheObservedHead(t *tes
 	confirmed.Description = "Rewritten for the test."
 	confirmed.Head = "head-2"
 	tasks := []core.Task{task}
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/tasks/"+task.ID)
 	script := renderedClientScript(t, response.Body.String())
@@ -5445,7 +5438,7 @@ func TestHandlerClientDetailFormRefusesAStaleSaveAndRetriesAgainstTheRefreshedHe
 	confirmed.Description = "Rewritten while stale."
 	confirmed.Head = "head-3"
 	tasks := []core.Task{task}
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/tasks/"+task.ID)
 	script := renderedClientScript(t, response.Body.String())
@@ -5550,7 +5543,7 @@ func TestHandlerClientDetailFormAdoptsTheHeadItsOwnDependencyEditMoved(t *testin
 	saved.Head = "head-4"
 
 	initialTasks := []core.Task{current, prerequisite, blocked}
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return initialTasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return initialTasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/tasks/"+current.ID)
 	script := renderedClientScript(t, response.Body.String())
@@ -5632,19 +5625,20 @@ setTimeout(async () => {
 
 func TestHandlerReportsAndShiftsThePublicationMode(t *testing.T) {
 	state := SyncState{Mode: SyncModeDeferred, Watcher: true}
-	handler := NewHandlerWithSyncControl(
-		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
-		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
-		nil, nil, nil, nil, nil, nil,
-		func(context.Context) SyncState { return state },
-		func(_ context.Context, mode string) (SyncState, error) {
+	handler := NewHandler(Options{
+		List:         func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		Create:       unexpectedTaskCreate(t),
+		Update:       unexpectedTaskUpdate(t),
+		UpdateStatus: unexpectedStatusUpdate(t),
+		SyncState:    func(context.Context) SyncState { return state },
+		SetSyncMode: func(_ context.Context, mode string) (SyncState, error) {
 			if mode != SyncModeInline && mode != SyncModeDeferred {
 				return SyncState{}, core.Errorf(core.CategoryValidation, "bad mode")
 			}
 			state = SyncState{Mode: mode, Watcher: true}
 			return state, nil
 		},
-	)
+	})
 
 	response := request(t, handler, http.MethodGet, "/api/sync")
 	if response.Code != http.StatusOK {
@@ -5675,13 +5669,15 @@ func TestHandlerReportsAndShiftsThePublicationMode(t *testing.T) {
 	}
 }
 
-// A board with no sync control configured must still serve, because the
-// four-argument constructor is what most callers use.
+// A board with no sync control configured must still serve, because leaving
+// those two options nil is what most callers do.
 func TestHandlerReportsSyncControlIsNotConfigured(t *testing.T) {
-	handler := NewHandler(
-		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
-		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
-	)
+	handler := NewHandler(Options{
+		List:         func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		Create:       unexpectedTaskCreate(t),
+		Update:       unexpectedTaskUpdate(t),
+		UpdateStatus: unexpectedStatusUpdate(t),
+	})
 	if response := request(t, handler, http.MethodGet, "/api/sync"); response.Code != http.StatusInternalServerError {
 		t.Fatalf("GET /api/sync without sync control = %d, want 500", response.Code)
 	}
@@ -5692,15 +5688,15 @@ func TestHandlerForwardsTheExpectedHeadOnEveryRequestThatCarriesIt(t *testing.T)
 
 	t.Run("status", func(t *testing.T) {
 		var got string
-		handler := NewHandler(
-			func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
-			unexpectedTaskCreate(t),
-			unexpectedTaskUpdate(t),
-			func(_ context.Context, _ string, _ core.Status, expectedHead string) (core.MutationResult, error) {
+		handler := NewHandler(Options{
+			List:   func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+			Create: unexpectedTaskCreate(t),
+			Update: unexpectedTaskUpdate(t),
+			UpdateStatus: func(_ context.Context, _ string, _ core.Status, expectedHead string) (core.MutationResult, error) {
 				got = expectedHead
 				return core.MutationResult{Task: updated}, nil
 			},
-		)
+		})
 		requestJSON(t, handler, http.MethodPatch,
 			"/api/tasks/WB-01J00000000000000000000001/status",
 			`{"status":"in-progress","expectedHead":"head-from-the-board"}`)
@@ -5711,15 +5707,15 @@ func TestHandlerForwardsTheExpectedHeadOnEveryRequestThatCarriesIt(t *testing.T)
 
 	t.Run("update", func(t *testing.T) {
 		var got core.UpdateInput
-		handler := NewHandler(
-			func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
-			unexpectedTaskCreate(t),
-			func(_ context.Context, _ string, input core.UpdateInput) (core.MutationResult, error) {
+		handler := NewHandler(Options{
+			List:   func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+			Create: unexpectedTaskCreate(t),
+			Update: func(_ context.Context, _ string, input core.UpdateInput) (core.MutationResult, error) {
 				got = input
 				return core.MutationResult{Task: updated}, nil
 			},
-			unexpectedStatusUpdate(t),
-		)
+			UpdateStatus: unexpectedStatusUpdate(t),
+		})
 		requestJSON(t, handler, http.MethodPatch,
 			"/api/tasks/WB-01J00000000000000000000001",
 			`{"title":"Renamed","expectedHead":"head-from-the-board"}`)
@@ -5730,15 +5726,16 @@ func TestHandlerForwardsTheExpectedHeadOnEveryRequestThatCarriesIt(t *testing.T)
 
 	t.Run("position", func(t *testing.T) {
 		var got core.PlaceInput
-		handler := NewHandlerWithTaskMutations(
-			func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
-			unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
-			func(_ context.Context, _ string, input core.PlaceInput) (core.MutationResult, error) {
+		handler := NewHandler(Options{
+			List:         func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+			Create:       unexpectedTaskCreate(t),
+			Update:       unexpectedTaskUpdate(t),
+			UpdateStatus: unexpectedStatusUpdate(t),
+			Position: func(_ context.Context, _ string, input core.PlaceInput) (core.MutationResult, error) {
 				got = input
 				return core.MutationResult{Task: updated}, nil
 			},
-			nil, nil, nil, nil, nil,
-		)
+		})
 		requestJSON(t, handler, http.MethodPatch,
 			"/api/tasks/WB-01J00000000000000000000001/position",
 			`{"status":"ready","expectedHead":"head-from-the-board"}`)
@@ -5749,15 +5746,15 @@ func TestHandlerForwardsTheExpectedHeadOnEveryRequestThatCarriesIt(t *testing.T)
 
 	t.Run("omitted stays empty", func(t *testing.T) {
 		var got core.UpdateInput
-		handler := NewHandler(
-			func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
-			unexpectedTaskCreate(t),
-			func(_ context.Context, _ string, input core.UpdateInput) (core.MutationResult, error) {
+		handler := NewHandler(Options{
+			List:   func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+			Create: unexpectedTaskCreate(t),
+			Update: func(_ context.Context, _ string, input core.UpdateInput) (core.MutationResult, error) {
 				got = input
 				return core.MutationResult{Task: updated}, nil
 			},
-			unexpectedStatusUpdate(t),
-		)
+			UpdateStatus: unexpectedStatusUpdate(t),
+		})
 		requestJSON(t, handler, http.MethodPatch,
 			"/api/tasks/WB-01J00000000000000000000001", `{"title":"Renamed"}`)
 		if got.ExpectedHead != "" {
@@ -5783,7 +5780,7 @@ func TestHandlerMapsTaskErrorsToVersionedErrorDocuments(t *testing.T) {
 		{name: "operational includes cause", err: core.Wrap(core.CategoryOperational, "list tasks", errors.New("permission denied")), wantStatus: http.StatusInternalServerError, wantBody: "list tasks: permission denied"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			handler := NewHandler(func(context.Context) ([]core.Task, error) { return nil, test.err }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+			handler := listHandler(t, func(context.Context) ([]core.Task, error) { return nil, test.err })
 			response := request(t, handler, http.MethodGet, "/api/tasks")
 			if response.Code != test.wantStatus {
 				t.Fatalf("GET /api/tasks status = %d, want %d", response.Code, test.wantStatus)
@@ -5807,7 +5804,7 @@ func TestHandlerEscapesHostileTaskContent(t *testing.T) {
 	tasks := boardTasks()
 	tasks[0].Title = `<img src=x onerror=alert(1)>`
 	tasks[0].Description = `<script>alert("pwned")</script>`
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return tasks, nil }, unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
 
 	response := request(t, handler, http.MethodGet, "/")
 	if response.Code != http.StatusOK {
@@ -5828,8 +5825,7 @@ func TestHandlerClientRendersTaskHistoryLaneRowsAndComparisons(t *testing.T) {
 	node := requireNode(t)
 	detail := historyDetail()
 	task := detail.Task
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return []core.Task{task}, nil },
-		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return []core.Task{task}, nil })
 
 	response := request(t, handler, http.MethodGet, "/tasks/"+task.ID)
 	if response.Code != http.StatusOK {
@@ -6006,10 +6002,12 @@ func TestHandlerServesTaskHistoryWithItsLifecycleLane(t *testing.T) {
 }
 
 func TestHandlerRejectsUnconfiguredAndMistypedTaskHistoryRequests(t *testing.T) {
-	unconfigured := NewHandler(
-		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
-		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
-	)
+	unconfigured := NewHandler(Options{
+		List:         func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		Create:       unexpectedTaskCreate(t),
+		Update:       unexpectedTaskUpdate(t),
+		UpdateStatus: unexpectedStatusUpdate(t),
+	})
 	response := request(t, unconfigured, http.MethodGet, "/api/tasks/WB-01J00000000000000000000001/history")
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("unconfigured history status = %d, want %d", response.Code, http.StatusInternalServerError)
@@ -6052,12 +6050,14 @@ func assertErrorDocument(t *testing.T, response *httptest.ResponseRecorder, cate
 
 func historyHandler(t *testing.T, read TaskHistoryReader) http.Handler {
 	t.Helper()
-	return NewHandlerWithTaskMutations(
-		func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
-		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
-		unexpectedTaskPosition(t), nil, nil, nil, nil,
-		read,
-	)
+	return NewHandler(Options{
+		List:         func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+		Create:       unexpectedTaskCreate(t),
+		Update:       unexpectedTaskUpdate(t),
+		UpdateStatus: unexpectedStatusUpdate(t),
+		Position:     unexpectedTaskPosition(t),
+		History:      read,
+	})
 }
 
 // historyDetail is one task whose chain creates it, moves it twice, and
@@ -6125,6 +6125,19 @@ func requestJSON(t *testing.T, handler http.Handler, method, target, body string
 	request.Header.Set("Content-Type", "application/json")
 	handler.ServeHTTP(response, request)
 	return response
+}
+
+// listHandler builds the read-only board most of these tests want: it renders
+// and lists what the given lister returns, and fails the test if any mutation
+// route is reached.
+func listHandler(t *testing.T, list TaskLister) http.Handler {
+	t.Helper()
+	return NewHandler(Options{
+		List:         list,
+		Create:       unexpectedTaskCreate(t),
+		Update:       unexpectedTaskUpdate(t),
+		UpdateStatus: unexpectedStatusUpdate(t),
+	})
 }
 
 func unexpectedStatusUpdate(t *testing.T) TaskStatusUpdater {
