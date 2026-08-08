@@ -314,6 +314,8 @@ what a task document may contain and how much of one it will read back:
 | Description | 65,536 bytes (64 KiB) | The description as stored. |
 | Label | 100 bytes | Each individual label. |
 | Labels per task | 50 | Distinct labels, counted after duplicates are dropped. |
+| Rank | 4,096 bytes | The `numerator/denominator` ordering key. |
+| Dependencies per task | 100 | Distinct dependencies, counted after duplicates are dropped. |
 | Git object | 4,194,304 bytes (4 MiB) | Any single object Workbook reads: a commit, a task tree, or a stored document. |
 | Web request body | 1,048,576 bytes (1 MiB) | One request to `workbook serve`. |
 
@@ -330,13 +332,23 @@ is prose and short code fences, and labels are vocabulary. A description that
 approaches 64 KiB is a document, and a document belongs in the repository with
 the task linking to it.
 
+The rank limit bounds work rather than storage. A rank is an exact rational, it
+is parsed every time a task is read and again on every comparison that orders a
+board, and converting a long digit string costs more than linear time — so an
+unbounded rank is a cheaper denial of service than an unbounded description,
+even though it is far smaller. Ordinary ranks are a few bytes: placing a task
+between two neighbours halves the gap, which adds about one byte for every three
+placements into the same shrinking gap.
+
 The object ceiling is checked against the size Git reports before the object is
 read, so an object claiming to be a gigabyte costs a comparison rather than a
-gigabyte. It sits roughly sixty times above the largest task document the field
+gigabyte. It sits roughly fifty times above the largest task document the field
 limits above allow, so it never fires on anything Workbook produced; it exists
 so that an object hand-built and pushed by a collaborator cannot exhaust memory
 in every clone that fetches it. An object over it is reported as `corrupt-data`
-(exit `7`).
+(exit `7`) against the one task that holds it: the record is skipped rather than
+read, so a single oversized object marks that task unreadable instead of
+stopping every command that reads the project.
 
 Objects are also read one at a time rather than by buffering a whole batch of
 Git's output, so reading a project costs one object at a time instead of every

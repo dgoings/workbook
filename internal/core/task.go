@@ -193,6 +193,13 @@ func NormalizeTask(projectKey string, task TaskData) (TaskData, error) {
 }
 
 func parseRank(rank string) (*big.Rat, error) {
+	// Checked first, and reported without quoting the value: the rest of this
+	// function converts the digit string to arbitrary precision and formats it
+	// back, and echoing a rejected megabyte into an error message would spend
+	// the same cost the ceiling exists to withhold.
+	if err := validateRankSize(rank); err != nil {
+		return nil, err
+	}
 	if !rankPattern.MatchString(rank) {
 		return nil, Errorf(CategoryValidation, "rank %q must be a positive reduced rational", rank)
 	}

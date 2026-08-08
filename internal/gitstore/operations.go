@@ -379,9 +379,11 @@ func (r *Repository) readOperationPacks(ctx context.Context, heads []TaskHead) (
 	for index := range heads {
 		object, err := readBatchObject(batch.Reader())
 		if err != nil {
-			return nil, batchReadError("cannot read task operations from Git batch", err)
+			return nil, batch.ReadFailure("cannot read task operations from Git batch", err)
 		}
 		switch {
+		case object.refused != nil:
+			results[index].err = object.refused
 		case object.missing:
 			results[index].err = core.Errorf(core.CategoryCorruptData, "task commit has no operation document")
 		case object.kind != "blob":

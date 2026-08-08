@@ -452,7 +452,10 @@ func (r *Repository) readCommitSubjects(ctx context.Context, heads []TaskHead) (
 	for _, objectID := range ordered {
 		object, err := readBatchObject(batch.Reader())
 		if err != nil {
-			return nil, batchReadError("cannot read task commit messages", err)
+			return nil, batch.ReadFailure("cannot read task commit messages", err)
+		}
+		if object.refused != nil {
+			return nil, object.refused
 		}
 		if object.missing || object.kind != "commit" || object.objectID != objectID {
 			return nil, core.Errorf(core.CategoryCorruptData, "Git returned an unexpected object for commit %q", objectID)

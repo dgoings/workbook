@@ -129,13 +129,41 @@ func (b *objectBatch) Finish() error {
 		return core.Errorf(core.CategoryCorruptData, "Git returned unexpected trailing batch data")
 	}
 	if err := b.wait(); err != nil {
-		return core.Wrap(
-			core.CategoryOperational,
-			fmt.Sprintf("git %s failed", strings.Join(b.args, " ")),
-			b.errorWithStderr(err),
-		)
+		return b.commandError(err)
 	}
 	return nil
+}
+
+// ReadFailure explains a failure to read the response stream.
+//
+// A stream that ends because the batch process died reports io.EOF, which names
+// nothing: an unreadable object database, a killed process and a repository too
+// broken to answer all look identical. Git's exit status and stderr are the only
+// text that says which, and the buffered command this reader replaced reported
+// them, so a read failure reaps the process before deciding what to say.
+//
+// Reaping is safe exactly on this path. Draining the request writer while Git
+// still runs can deadlock, because Git stops reading stdin while it is blocked
+// writing stdout; a process whose stdout has ended is not running. Every other
+// read failure is one this reader diagnosed itself, with Git alive and its own
+// message the useful one, so those are reported unchanged.
+func (b *objectBatch) ReadFailure(context string, readErr error) error {
+	if !errors.Is(readErr, io.EOF) && !errors.Is(readErr, io.ErrUnexpectedEOF) {
+		return batchReadError(context, readErr)
+	}
+	_ = b.writeOutcome()
+	if waitErr := b.wait(); waitErr != nil {
+		return b.commandError(waitErr)
+	}
+	return batchReadError(context, readErr)
+}
+
+func (b *objectBatch) commandError(err error) error {
+	return core.Wrap(
+		core.CategoryOperational,
+		fmt.Sprintf("git %s failed", strings.Join(b.args, " ")),
+		b.errorWithStderr(err),
+	)
 }
 
 // Close terminates the batch and releases its writer goroutine and child

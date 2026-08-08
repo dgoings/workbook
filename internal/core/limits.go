@@ -30,6 +30,23 @@ const (
 	MaxLabelBytes = 100
 	// MaxLabelCount bounds how many distinct labels one task may carry.
 	MaxLabelCount = 50
+	// MaxRankBytes bounds a task rank.
+	//
+	// A rank is a reduced rational, and this ceiling is unlike the others: it
+	// bounds work rather than storage. Decimal conversion of a digit string
+	// costs more than linear time, every stored rank is parsed on every read,
+	// and ordering parses each one again per comparison, so an unbounded rank is
+	// a cheaper denial of service than an unbounded document — 4,000,000 digits
+	// is well under one Git object and takes seconds to parse.
+	//
+	// Ordinary ranks are a few bytes. Placing a task between two neighbours
+	// halves the gap, which adds about one byte for every three placements into
+	// the same shrinking gap, so this leaves room for thousands of them.
+	MaxRankBytes = 4096
+	// MaxDependencyCount bounds how many distinct dependencies one task may
+	// declare. Dependency edges are walked for cycles across the whole project,
+	// so this bounds that graph as well as the document.
+	MaxDependencyCount = 100
 )
 
 // validateTaskFieldSizes rejects a task whose normalized fields exceed the
@@ -67,6 +84,31 @@ func validateTaskFieldSizes(task TaskData) error {
 				len(label), MaxLabelBytes,
 			)
 		}
+	}
+	if len(task.Dependencies) > MaxDependencyCount {
+		return Errorf(
+			CategoryValidation,
+			"task has %d dependencies and must not exceed %d",
+			len(task.Dependencies), MaxDependencyCount,
+		)
+	}
+	return validateRankSize(task.Rank)
+}
+
+// validateRankSize bounds a rank before anything parses it.
+//
+// It is called from parseRank rather than from validateTaskFieldSizes, because
+// every other ceiling guards memory a caller has already spent, while this one
+// guards work that has not happened yet: NormalizeTask parses the rank before it
+// checks any field size, and a stored operation document reaches parseRank
+// without passing through NormalizeTask at all. Both paths run on every read.
+func validateRankSize(rank string) error {
+	if len(rank) > MaxRankBytes {
+		return Errorf(
+			CategoryValidation,
+			"task rank is %d bytes and must not exceed %d",
+			len(rank), MaxRankBytes,
+		)
 	}
 	return nil
 }
