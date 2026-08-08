@@ -32,10 +32,15 @@ esac
 
 checksum_for() {
 	archive_name=$1
+	# The length is checked separately rather than as a {64} interval, because
+	# mawk does not implement interval expressions and silently matches nothing
+	# when it meets one. That is Debian's and Ubuntu's default awk, so a formula
+	# rendered anywhere but a runner image carrying gawk would reject every
+	# checksum it was given.
 	awk -v archive_name="${archive_name}" '
 		$2 == archive_name { count++; checksum = $1 }
 		END {
-			if (count != 1 || checksum !~ /^[[:xdigit:]]{64}$/) {
+			if (count != 1 || length(checksum) != 64 || checksum !~ /^[[:xdigit:]]+$/) {
 				exit 1
 			}
 			print tolower(checksum)
