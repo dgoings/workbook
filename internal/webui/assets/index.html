@@ -1400,10 +1400,15 @@
           showListbox();
           renderOptions();
         });
-        input.addEventListener("focus", () => {
+        function openListbox() {
           showListbox();
           renderOptions();
-        });
+        }
+        input.addEventListener("focus", openListbox);
+        // A press on an already focused input fires no focus event, and pointer
+        // selection deliberately leaves focus in the input, so without this the
+        // popup could only be reopened by first clicking somewhere else.
+        input.addEventListener("click", openListbox);
         input.addEventListener("keydown", (event) => {
           const options = matchingCandidates();
           if (event.key === "ArrowDown") {
@@ -1420,6 +1425,20 @@
               selectCandidate(options[state.activeIndex]);
             }
           } else if (event.key === "Escape") {
+            // Escape belongs to the combobox whether or not the popup is open.
+            // This is a search field, so the native default is to clear it, and
+            // that fires an input event whose handler reopens the popup: left
+            // to the browser, a second Escape summons back the very popup the
+            // first one dismissed. Claiming the key and clearing here keeps the
+            // field and the combobox in step. preventDefault does not stop
+            // propagation, so nothing else on the page loses Escape.
+            if (listbox.hidden && !input.value) return;
+            event.preventDefault();
+            if (listbox.hidden) {
+              state.query = "";
+              state.selectedID = "";
+              input.value = "";
+            }
             state.activeIndex = -1;
             hideListbox();
           } else {
@@ -1431,6 +1450,29 @@
           if (config.isBusy()) return;
           const candidate = selectedCandidate();
           if (candidate) return config.onAdd(candidate.id);
+        });
+        // A pointer press inside the popup must not move focus. mousedown runs
+        // before click, so a press that blurred the input would let the
+        // dismissal below hide the option out from under the click that was
+        // about to select it.
+        //
+        // This stays blanket rather than skipping the scrollbar gutter. A
+        // scrollbar keeps dragging through a cancelled mousedown, so exempting
+        // the gutter buys nothing; it only hands the press back its default,
+        // which blurs the input and dismisses the popup out from under the drag
+        // that was about to scroll it.
+        listbox.addEventListener("mousedown", (event) => { event.preventDefault(); });
+        // focusout rather than blur, because it bubbles: the popup survives
+        // focus moving anywhere inside this editor and collapses the moment
+        // focus leaves it, which is what clicking elsewhere on the page or
+        // tabbing away looks like. It floats over the sidebar, so leaving it
+        // open once it is no longer being used hides the rest of the task.
+        region.addEventListener("focusout", (event) => {
+          const next = event.relatedTarget;
+          if (next && region.contains(next)) return;
+          state.activeIndex = -1;
+          hideListbox();
+          renderOptions();
         });
 
         const controller = {
