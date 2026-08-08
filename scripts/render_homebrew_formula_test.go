@@ -175,8 +175,8 @@ func TestReleaseWorkflowIsTagOnlyAndPublishesFormula(t *testing.T) {
 		"scripts/publish-release.sh",
 		"HOMEBREW_TAP_TOKEN",
 		"dgoings/homebrew-tap",
-		"actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
-		"actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c",
+		"actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+		"actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e",
 	} {
 		if !strings.Contains(contents, want) {
 			t.Errorf("workflow missing %q:\n%s", want, contents)
