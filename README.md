@@ -876,6 +876,28 @@ sections for narrow or noninteractive output; `--wide` and `--narrow` force the
 respective layouts. The task-ID prefixes in human output are accepted anywhere a
 task ID is accepted.
 
+### Statuses a build does not recognize
+
+A task can hold a status the build reading it has no column for, which is what
+two clones on different Workbook versions produce on their own. Both boards show
+that task rather than dropping it, under a heading that says the status was not
+recognized: the terminal board prints an `UNKNOWN STATUS` section below its
+columns, and the web board shows an "Unknown status" region below its own. A
+task that is invisible reads as a task that was deleted, which is a worse
+report than a task that is merely unsorted.
+
+The region is a display, not an extra status. Its cards cannot be dragged and
+nothing can be dropped into it, because there is no column the status belongs
+to. This build also cannot edit such a task: every write validates the projected
+task, so `workbook update` on one exits `7` (`corrupt-data`) and the board's
+save fails the same way. Update Workbook, or use the clone that wrote the
+status, to change one.
+
+Both boards read this split from one place — `presentation.Board` separates
+`Columns` from `UnknownTasks` — so a renderer that consumes only `Columns`
+silently deletes tasks from the reader's view. `internal/presentation/parity_test.go`
+asserts both boards against the same task set and is what keeps them aligned.
+
 ### Text-mode output safety
 
 Task titles, descriptions, and labels are authored by whoever can push to the

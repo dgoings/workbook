@@ -214,13 +214,35 @@ type updateTaskRequest struct {
 	ExpectedHead string         `json:"expectedHead"`
 }
 
+// pageFuncs give the page template the one fact a presentation.TaskView does
+// not carry: whether this build has a column for the status the task holds. A
+// card in the unknown-status region cannot be dragged anywhere, so it must not
+// announce itself as movable.
+//
+// The client script answers the same question on every poll, and answers it
+// from the columns this function rendered — it reads the emitted [data-status]
+// nodes rather than a status list of its own — so the two cannot disagree about
+// a card even while the page is being served by a build the script does not
+// match. Neither side reads it off the containing list, so a card that changes
+// status carries the right answer with it as it moves.
+var pageFuncs = template.FuncMap{"knownStatus": knownStatus}
+
+func knownStatus(status core.Status) bool {
+	for _, definition := range core.WorkflowStatuses() {
+		if definition.Status == status {
+			return true
+		}
+	}
+	return false
+}
+
 // NewHandler builds the board from the capabilities it is given. It is the only
 // constructor: the tiered NewHandlerWithTaskMutations and
 // NewHandlerWithSyncControl existed to append capabilities to a positional list
 // without renaming every earlier call, and a named field expresses the same
 // tier by being set or left nil.
 func NewHandler(options Options) http.Handler {
-	page := template.Must(template.New("index.html").ParseFS(assets, "assets/index.html"))
+	page := template.Must(template.New("index.html").Funcs(pageFuncs).ParseFS(assets, "assets/index.html"))
 	handler := &handler{Options: options, page: page, mux: http.NewServeMux()}
 	handler.mux.HandleFunc("GET /{$}", handler.serveBoard)
 	handler.mux.HandleFunc("GET /deleted", handler.serveBoard)

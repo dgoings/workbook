@@ -20,6 +20,22 @@ type Column struct {
 	Tasks  []TaskView
 }
 
+// Board is the split every renderer works from. Columns holds the tasks this
+// build has a status column for; UnknownTasks holds the rest, and the two
+// together are always the whole set the board was handed.
+//
+// A renderer must consume both. Rendering Columns alone silently deletes tasks
+// from the reader's view, and a task that is invisible reads as a task that was
+// deleted rather than one that is merely unsorted. Both renderers therefore
+// give UnknownTasks its own labeled region — the terminal an UNKNOWN STATUS
+// section, the web board an "Unknown status" area below the columns — rather
+// than folding it into a column that would misreport the status. Keeping it out
+// of the columns matters as much as showing it: the region is a display, not a
+// seventh status, so it takes no drops and its cards do not drag.
+//
+// This is routine rather than exotic, because two clones on different Workbook
+// versions produce it on their own. internal/presentation/parity_test.go holds
+// the decision and asserts it against both renderers at once.
 type Board struct {
 	Columns      []Column
 	UnknownTasks []TaskView
