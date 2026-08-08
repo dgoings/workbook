@@ -33,6 +33,14 @@
     .header-links { display: flex; align-items: center; gap: .8rem; }
     .header-link { color: #34425a; font-size: .82rem; font-weight: 750; text-underline-offset: .18em; }
     main { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 1.25rem; }
+    .notice { display: grid; flex: 0 0 auto; gap: .4rem; padding: .6rem 1.25rem; border-bottom: 1px solid #d5deea; background: #fff; font-size: .85rem; }
+    .notice[hidden] { display: none; }
+    .notice__report { display: flex; align-items: baseline; gap: .75rem; padding: .35rem .6rem; border-left: 3px solid currentcolor; background: #fff6e8; color: #7c3b08; }
+    .notice__report[data-kind="error"] { background: #fdecea; color: #8f1d1d; }
+    .notice p { flex: 1 1 auto; margin: 0; }
+    .notice a { color: inherit; font-weight: 750; text-underline-offset: .18em; }
+    .notice button { border: 1px solid currentcolor; border-radius: 4px; background: transparent; color: inherit; cursor: pointer; font: inherit; font-size: .8rem; font-weight: 700; padding: .25rem .6rem; }
+    .notice button:focus-visible, .notice a:focus-visible { outline: 3px solid #2457d6; outline-offset: 2px; }
     .stale { display: none; margin: 0 0 1rem; padding: .55rem .7rem; border-left: 3px solid #b45309; background: #fff6e8; color: #7c3b08; font-size: .875rem; }
     .stale[data-visible="true"] { display: block; }
     .board-view { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100%; min-height: 0; }
@@ -49,6 +57,8 @@
     .task-card:active { cursor: grabbing; }
     .task-card:focus-visible { outline: 3px solid #2457d6; outline-offset: 2px; }
     .task-card.is-dragging { opacity: .5; }
+    .task-card[data-pending-create] { border-style: dashed; cursor: default; }
+    .task-card__pending { color: #7c3b08; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-weight: 800; }
     .task-card__meta { display: flex; align-items: center; justify-content: space-between; gap: .5rem; color: #526075; font-size: .7rem; }
     .task-card code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .task-id-copy-group { position: relative; display: inline-flex; align-items: baseline; min-width: 0; }
@@ -210,6 +220,10 @@
     <div><p class="eyebrow">Repository workbench</p><h1>Workbook board</h1></div>
     <div class="header-links"><a class="header-link" href="/">Board</a><a class="header-link" href="/deleted">Deleted tasks</a><p class="updated" data-updated>Loaded from this checkout</p><button type="button" class="header-link" data-sync-toggle hidden></button></div>
   </header>
+  <!-- What a save that already returned has to say. It sits outside main so it
+       is readable from whatever route the save left the user on, and it is
+       cleared by a person rather than by the next poll. -->
+  <div class="notice" data-create-notice role="status" aria-live="polite" hidden></div>
   <main id="board" tabindex="-1">
     <div class="board-view" data-board-view>
       <p class="stale" data-stale role="status">Task refresh failed. Showing the last successful board.</p>
@@ -244,6 +258,7 @@
       const counts = new Map([...boardView.querySelectorAll("[data-count]")].map((element) => [element.dataset.count, element]));
       const stale = boardView.querySelector("[data-stale]");
       const updated = document.querySelector("[data-updated]");
+      const createNotice = document.querySelector("[data-create-notice]");
       const syncToggle = document.querySelector("[data-sync-toggle]");
       let syncState = null;
       let activeDrag = null;
@@ -276,6 +291,14 @@
       // The same staging for a save that lands on the board: the ID of the card
       // that should hold the caret once the board is back on screen.
       let pendingBoardFocusTaskID = null;
+      // Creates the board is drawing before the server has accepted them, keyed
+      // by the provisional ID their card is drawn under.
+      const pendingCreations = new Map();
+      let creationSequence = 0;
+      // What a New Task form should open holding: the values of a refused
+      // create, and the reason it was refused.
+      let pendingNewTaskDraft = null;
+      let pendingNewTaskMessage = "";
 
       function text(element, value) { element.textContent = value || ""; return element; }
       // The visible ID inside a copy control, so a card that survives a render
@@ -373,15 +396,30 @@
         ]);
       }
       function card(task, view) {
-        const article = document.createElement("article"); article.className = "task-card"; article.tabIndex = 0; article.dataset.taskId = task.id; article.draggable = true;
+        const article = document.createElement("article"); article.className = "task-card"; article.tabIndex = 0; article.dataset.taskId = task.id; article.draggable = !view.pending;
         const meta = document.createElement("div"); meta.className = "task-card__meta";
         const priority = document.createElement("span");
-        const copyGroup = taskIDCopyControl(task.id, view.idPrefix);
-        meta.append(copyGroup, priority); article.append(meta);
+        let idText = null;
+        if (view.pending) {
+          // A task the server has not accepted yet has no ID to copy and no
+          // detail route to open, so its card offers neither. It is not
+          // draggable either: a placement request would have to name it.
+          article.dataset.pendingCreate = "true";
+          const saving = document.createElement("span");
+          saving.className = "task-card__pending";
+          text(saving, "Saving…");
+          meta.append(saving, priority);
+        } else {
+          const copyGroup = taskIDCopyControl(task.id, view.idPrefix);
+          idText = copyIDText.get(copyGroup);
+          meta.append(copyGroup, priority);
+        }
+        article.append(meta);
         const title = document.createElement("h3");
-        const link = document.createElement("a"); link.href = "/tasks/" + encodeURIComponent(task.id);
+        const link = document.createElement(view.pending ? "span" : "a");
+        if (!view.pending) link.href = "/tasks/" + encodeURIComponent(task.id);
         title.append(link); article.append(title);
-        cardParts.set(article, { priority, link, idText: copyIDText.get(copyGroup), signature: null });
+        cardParts.set(article, { priority, link, idText, signature: null });
         applyCard(article, task, view);
         return article;
       }
@@ -396,7 +434,9 @@
         parts.signature = signature;
         article.dataset.priority = task.priority;
         article.dataset.idPrefix = view.idPrefix;
-        article.setAttribute("aria-label", "Move task " + task.title + " from " + task.status);
+        article.setAttribute("aria-label", view.pending
+          ? "Task " + task.title + ", saving"
+          : "Move task " + task.title + " from " + task.status);
         if (parts.idText) text(parts.idText, view.idPrefix);
         parts.priority.className = "priority priority--" + task.priority; text(parts.priority, task.priority);
         text(parts.link, task.title);
@@ -584,12 +624,14 @@
         if (node && typeof node.focus === "function") node.focus();
       }
       // The single exit from a durable create. Everything before it decides what
-      // happened; this decides where that leaves the user, so a save path that
-      // learns to run optimistically moves the call rather than the rule.
+      // happened; this decides where that leaves the user.
       function finishCreatedTask(recovery) {
         const landing = createdTaskLanding(recovery);
         if (landing.stageRecovery) applyCreatedTaskRecovery(recovery);
         createdTaskRecovery = null;
+        leaveForLanding(landing);
+      }
+      function leaveForLanding(landing) {
         // Staged before the navigation, because the render it triggers is what
         // holds the new control. Written on every landing, not only the ones
         // that want focus, so a landing that does not cannot inherit a request
@@ -597,6 +639,127 @@
         pendingNewTaskFocus = Boolean(landing.focusTitle);
         pendingBoardFocusTaskID = landing.focusTaskID || null;
         navigate(landing.path, { replace: landing.replace });
+      }
+      // An optimistic create leaves before anything is known about it, so it
+      // takes the landing createdTaskLanding gives a create with nothing to
+      // report. What it turns out to have to say is reported where the user
+      // ends up rather than by moving them again.
+      function optimisticCreateLanding(creation) {
+        if (createMoreTasks) {
+          return { path: newTaskPath(creation.task.status), replace: true, focusTitle: true };
+        }
+        return { path: "/", replace: false, focusTaskID: creation.key };
+      }
+      // The task a create draws before the server has named one. It carries no
+      // head and no relationships, because those are the server's answers.
+      function optimisticCreationTask(key, values) {
+        return {
+          id: key,
+          title: values.title,
+          description: values.description,
+          status: values.status,
+          priority: values.priority,
+          labels: values.labels,
+          dependencies: [],
+          deleted: false
+        };
+      }
+      // Save now, land now. The task is drawn from what was typed while the POST
+      // is still open, so a create costs a render rather than a round trip.
+      function createOptimistically(values) {
+        const key = "pending-create-" + (++creationSequence);
+        const creation = { key, values, task: optimisticCreationTask(key, values), taskID: "" };
+        pendingCreations.set(key, creation);
+        // Drawn before the navigation: the board landing hands the caret to this
+        // card, and it can only be given to a card that exists.
+        rerender();
+        leaveForLanding(optimisticCreateLanding(creation));
+        return settleCreation(creation);
+      }
+      // The returned promise settles once the create is durable and the board
+      // has been read back from the server. Nothing in the browser awaits it —
+      // that is the entire point — but it is the seam the client tests use to
+      // observe a settled create.
+      async function settleCreation(creation) {
+        try {
+          const document = await mutateTask("POST", "/api/tasks", creation.values);
+          creation.taskID = document.task.id;
+          const warnings = mutationWarnings(document);
+          // Read before the refresh, because the refresh is what retires the
+          // stand-in card, and a card that leaves the document takes the
+          // caret with it.
+          const heldCaret = focusedCardID() === creation.key;
+          await currentRefreshResult(refresh());
+          if (heldCaret) restoreCardFocus(creation.taskID);
+          if (warnings.length) reportCreatedTaskWarnings(creation.taskID, warnings);
+        } catch (error) {
+          pendingCreations.delete(creation.key);
+          rerender();
+          reportRefusedCreation(creation, error);
+        }
+      }
+      function reportCreatedTaskWarnings(taskID, warnings) {
+        // Staged as well as reported: the task's own form is where these
+        // messages belong, and the notice is how someone who is no longer
+        // standing there learns to go and read them.
+        pendingTaskMessages.set(taskID, warnings);
+        const open = document.createElement("a");
+        open.href = taskPath(taskID);
+        text(open, "Open task");
+        showCreateNotice("warning", "Task created. " + warnings.join(" "), open);
+      }
+      function reportRefusedCreation(creation, error) {
+        const restore = document.createElement("button");
+        restore.type = "button";
+        text(restore, "Restore draft");
+        // The title is what the user recognizes the draft by, and a create the
+        // server refused for having none still has to be named something.
+        const named = creation.values.title ? "“" + creation.values.title + "”" : "The task";
+        const report = showCreateNotice("error", named + " was not saved. " +
+          creationFailureMessage(error), restore);
+        restore.addEventListener("click", () => {
+          dismissCreateNotice(report);
+          restoreRefusedCreation(creation, error);
+        });
+      }
+      // A refusal costs nothing that was typed: the values go back into a New
+      // Task form, which is where the message about them belongs too.
+      function restoreRefusedCreation(creation, error) {
+        pendingNewTaskDraft = creation.values;
+        pendingNewTaskMessage = creationFailureMessage(error);
+        pendingNewTaskFocus = true;
+        navigate(newTaskPath(creation.values.status));
+      }
+      function creationFailureMessage(error) {
+        return error instanceof Error ? error.message : "Task creation failed.";
+      }
+      // A save that has already returned to the board has no form left to report
+      // into, and the stale banner is cleared by the next poll a second later.
+      // This is the surface that outlives both: it sits outside the routed
+      // region, and only a person clears it.
+      //
+      // Reports stack rather than replace, because one of them can be holding
+      // the only copy of a refused task. Nothing but a click removes that.
+      function showCreateNotice(kind, message, action) {
+        if (!createNotice) return null;
+        const report = document.createElement("div");
+        report.className = "notice__report";
+        report.dataset.kind = kind;
+        const copy = document.createElement("p");
+        text(copy, message);
+        const dismiss = document.createElement("button");
+        dismiss.type = "button";
+        text(dismiss, "Dismiss");
+        dismiss.addEventListener("click", () => dismissCreateNotice(report));
+        report.append(...(action ? [copy, action, dismiss] : [copy, dismiss]));
+        createNotice.append(report);
+        createNotice.hidden = false;
+        return report;
+      }
+      function dismissCreateNotice(report) {
+        if (!createNotice || !report) return;
+        report.remove();
+        if (createNotice.children.length === 0) createNotice.hidden = true;
       }
       function focusPendingRelationshipRecovery(taskID, controller, generation) {
         const request = pendingRelationshipRecoveryFocus;
@@ -1430,6 +1593,11 @@
           text(result, pendingTaskMessages.get(task.id).join(" "));
           pendingTaskMessages.delete(task.id);
         }
+        // A form opened to carry a refused create's values says why it is back.
+        if (isNew && pendingNewTaskMessage) {
+          text(result, pendingNewTaskMessage);
+          pendingNewTaskMessage = "";
+        }
         const actions = document.createElement("div"); actions.className = "form-actions";
         const primaryActions = document.createElement("div"); primaryActions.className = "form-primary-actions";
         const save = document.createElement("button"); save.className = "save-button"; save.type = "submit"; text(save, "Save");
@@ -1488,6 +1656,15 @@
               return;
             }
             if (expectedHead) values.expectedHead = expectedHead;
+          }
+          // A create that staged no relationships is answered by the board
+          // rather than by this form, and leaves immediately. One that did stage
+          // them waits: those writes need the ID the server has not assigned
+          // yet, and the sidebar that reports and retries their failures is
+          // destroyed by an instant landing.
+          if (isNew && !hasRelationshipDrafts(relationshipDrafts)) {
+            taskWasCreated = true;
+            return createOptimistically(values);
           }
           let createdDurably = false;
           save.disabled = true;
@@ -1688,16 +1865,54 @@
         return entry;
       }
       function projectTasks(tasks) {
-        if (pendingIntents.size === 0) return tasks;
-        return tasks.map((task) => {
+        const projected = pendingIntents.size === 0 ? tasks : tasks.map((task) => {
           const entry = pendingIntents.get(task.id);
           if (!entry || entry.queue.length === 0) return task;
           return entry.queue.reduce((current, intent) => intent.apply(current), task);
         });
+        if (pendingCreations.size === 0) return projected;
+        return projected.concat(pendingCreationTasks(projected));
+      }
+      // A create is drawn until the board actually carries the task it made. The
+      // POST returning is not enough: the model is replaced wholesale by every
+      // poll, and one that left before the create landed would take the card
+      // away again. Retiring on arrival rather than on confirmation is also what
+      // makes a failed refresh harmless — the next poll finishes the job.
+      function pendingCreationTasks(tasks) {
+        const landed = new Set(tasks.map((task) => task.id));
+        const drawn = [];
+        pendingCreations.forEach((creation, key) => {
+          if (creation.taskID && landed.has(creation.taskID)) {
+            pendingCreations.delete(key);
+            return;
+          }
+          drawn.push(creation.task);
+        });
+        return drawn;
+      }
+      // What the board knows about a task the server has not answered for: none
+      // of what the server derives. pending is what draws the card as a
+      // stand-in rather than as a task.
+      const pendingCreationView = {
+        idPrefix: "",
+        dependenciesTotal: 0,
+        dependenciesComplete: 0,
+        waitingOnDependencies: false,
+        pending: true
+      };
+      function projectPresentation(presentation) {
+        if (pendingCreations.size === 0) return presentation;
+        const projected = new Map(presentation);
+        pendingCreations.forEach((_creation, key) => projected.set(key, pendingCreationView));
+        return projected;
       }
       function rerender() {
         if (!tasksLoaded) return;
-        render(projectTasks(latestTasks), latestPresentation);
+        // projectTasks runs first and retires the creations the board now
+        // carries, so the presentation it is paired with names exactly the
+        // stand-ins that survived.
+        const tasks = projectTasks(latestTasks);
+        render(tasks, projectPresentation(latestPresentation));
       }
       function replaceProjectedTask(task) {
         const index = latestTasks.findIndex((candidate) => candidate.id === task.id);
@@ -1998,7 +2213,13 @@
         }
         if (current.view === "new") {
           document.title = "New task · Workbook";
-          const form = taskForm("new", { title: "", description: "", status: current.status, priority: "medium", labels: [] });
+          // A refused create's values are handed to the next New Task render
+          // and consumed by it, so a Back or a reload opens an empty form
+          // rather than resurrecting a draft the user already dealt with.
+          const draft = pendingNewTaskDraft;
+          pendingNewTaskDraft = null;
+          const form = taskForm("new", draft ||
+            { title: "", description: "", status: current.status, priority: "medium", labels: [] });
           main.replaceChildren(form);
           focusRearmedNewTask(form);
           return;
@@ -2027,8 +2248,12 @@
         return event.target.closest("[data-drop-status]");
       }
       function placementFor(list, clientY) {
+        // A card the server has not accepted yet is not a placement neighbour:
+        // naming it in a before/after would ask the server to order against a
+        // task it has never heard of.
         const cards = [...list.querySelectorAll(".task-card")]
-          .filter((item) => item.dataset.taskId !== activeDrag.taskId);
+          .filter((item) => item.dataset.taskId !== activeDrag.taskId &&
+            item.dataset.pendingCreate !== "true");
         let intended = cards.findIndex((item) => {
           const bounds = item.getBoundingClientRect();
           return clientY < (bounds.top + bounds.bottom) / 2;
@@ -2185,7 +2410,8 @@
             // is known to be newer than the head that failed; a poll that left
             // before the last confirmation returned carries an older head, and
             // adopting it would refuse the next intent for no reason.
-            render(projectTasks(document.tasks), presentation); stale.dataset.visible = "false"; text(updated, "Updated " + new Date().toLocaleTimeString());
+            const projected = projectTasks(document.tasks);
+            render(projected, projectPresentation(presentation)); stale.dataset.visible = "false"; text(updated, "Updated " + new Date().toLocaleTimeString());
             let relationshipContext = { status: "not-applicable" };
             if (!wasLoaded) renderRoute();
             else if (activeDependencyController) {
@@ -2237,6 +2463,9 @@
         const item = event.target.closest(".task-card");
         const source = item && item.closest("[data-status]");
         if (!item || !source || !source.dataset.dropStatus) return;
+        // The card is marked undraggable, so this is the belt to that brace: a
+        // task with no ID has nothing a placement could be recorded against.
+        if (item.dataset.pendingCreate === "true") return;
         activeDrag = { taskId: item.dataset.taskId, priority: item.dataset.priority, sourceStatus: source.dataset.status };
         copySuppressedTaskID = item.dataset.taskId;
         event.dataTransfer.effectAllowed = "move";

@@ -4314,6 +4314,10 @@ const boardCounts = boardStatuses.map((status) => {
   return element;
 });
 boardView.querySelectorAll = (selector) => selector === "[data-status]" ? boardLists : boardCounts;
+// The create report sits outside the board view, because it has to be readable
+// from whatever route the save left the user on.
+const createNotice = new TestElement("div");
+createNotice.hidden = true;
 const documentEventListeners = {};
 	globalThis.document = {
 	  title: "",
@@ -4322,6 +4326,7 @@ const documentEventListeners = {};
     if (selector === "main") return main;
     if (selector === "[data-board-view]") return boardView;
     if (selector === "[data-updated]") return updated;
+    if (selector === "[data-create-notice]") return createNotice;
     return null;
   },
   querySelectorAll() { return []; },

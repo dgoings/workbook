@@ -974,10 +974,27 @@ Saving a new task returns to the board, and a **Create more** toggle on the New
 Task form re-arms a clean form filed under the same column instead, so a run of
 tasks can be entered without a round trip; the re-armed form takes the caret,
 because the save it followed destroyed the control the user was on. Either way
-the saved task's own form is left behind. A create that has something to
-report is the exception: a
-warning, or a relationship the client could not write, opens that task's detail
-page, because that is the only place its message and retry actions exist.
+the saved task's own form is left behind.
+
+A save that staged no relationships lands immediately rather than waiting for
+Git. The board draws the task from what was typed and hands it the caret while
+the create is still open, the same way a dragged card lands before its placement
+is durable. The stand-in card offers no ID to copy, no detail link, and no drag,
+because none of those exist until the server answers, and it is retired by the
+refresh that brings the task itself rather than by the response, so a poll that
+left first cannot take it away again. A save that staged Depends On or Blocks
+still waits: those writes need the ID the server assigns, and the sidebar that
+reports and retries them is destroyed by an instant landing. That create still
+opens the task's detail page when it has a warning or an edge it could not
+write, because that is the only place its retry actions exist.
+
+What an instant save turns out to have to say is reported in a notice above the
+board rather than by moving the user again, who is by then reading the board or
+typing the next task. A warning names the task and links to it. A refused create
+names what was refused and offers **Restore draft**, which reopens the New Task
+form holding every value that was typed and the reason the server gave. Reports
+stack and are cleared by a click rather than by the next poll, because one of
+them can be holding the only copy of a task that was never saved.
 
 Missing prerequisite IDs remain visible and removable. Tombstoned
 prerequisites are also removable because the active dependent owns that edge;
