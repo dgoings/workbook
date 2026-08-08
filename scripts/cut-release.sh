@@ -137,13 +137,14 @@ if [ "${local_head}" != "${remote_head}" ]; then
 fi
 
 # Version numbers only ever move forward, so catch a bump that would order
-# below a release that already shipped.
+# below a release that already shipped. Resolving through the shared script
+# rather than repeating the comparison here keeps this path and the two cut
+# workflows from disagreeing about which version follows which. It reports its
+# own refusal, so there is nothing to add to it.
 previous_tag=$(git_command tag --list 'v[0-9]*' --sort=-v:refname | head -n 1)
-if [ -n "${previous_tag}" ]; then
-	newest=$(printf '%s\n%s\n' "${previous_tag#v}" "${version}" | sort -V | tail -n 1)
-	if [ "${newest}" != "${version}" ] || [ "${previous_tag#v}" = "${version}" ]; then
-		fail "version ${version} does not come after the latest release ${previous_tag}"
-	fi
+if ! "${script_directory}/resolve-release-version.sh" \
+	--version "${version}" --previous "${previous_tag}" >/dev/null; then
+	exit 1
 fi
 
 echo "Releasing ${tag} from ${branch} at ${local_head}"

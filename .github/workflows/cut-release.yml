@@ -1,0 +1,93 @@
+name: Cut Release
+
+# The escape hatch: a release cut from the Actions tab, a phone, or `gh workflow
+# run`, without a clean checkout of main anywhere nearby. A patch needs no
+# changelog entry, which is what makes this worth having; a minor or major
+# release is held to the same standard as one cut by a release pull request, so
+# a release that reshapes anything still arrives with prose describing it.
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump applied to the previous release
+        type: choice
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+      version:
+        description: Exact version such as 0.5.0, overriding the bump when set
+        type: string
+        required: false
+
+concurrency:
+  group: cut-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  tag:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      # Reading the check runs that decide whether this commit was verified.
+      checks: read
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      # workflow_dispatch lets the runner pick any branch. Releases come from
+      # the trunk, the same rule scripts/cut-release.sh enforces locally.
+      - name: Refuse a branch other than main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "workbook release: releases are cut from main, but this run is on ${GITHUB_REF}" >&2
+          exit 1
+
+      # Resolving the next version and reading the changelog both need the full
+      # tag list, which a shallow checkout does not carry.
+      - name: Check out main
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      # A tag outlives the run that created it, and versions only order forward,
+      # so a commit that fails its tests burns its version number. CI has
+      # already run this exact suite against this exact commit; requiring it to
+      # have passed closes most of that window without running it twice.
+      - name: Verify CI passed for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/check-commit-verified.sh "${GITHUB_SHA}" --repo "${GITHUB_REPOSITORY}"
+
+      - name: Plan the release
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUMP: ${{ inputs.bump }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -eu
+          version=$(scripts/plan-release.sh --bump "${BUMP}" --version "${VERSION}" --repo "${GITHUB_REPOSITORY}")
+          printf 'tag=v%s\n' "${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Tag the release
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          set -eu
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag --annotate "${TAG}" --message "Workbook ${TAG}"
+          git push origin "refs/tags/${TAG}"
+
+  publish:
+    needs: tag
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.tag.outputs.tag }}
+    secrets: inherit

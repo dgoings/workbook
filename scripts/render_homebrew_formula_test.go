@@ -164,7 +164,7 @@ func TestReleaseWorkflowIsTagOnlyAndPublishesFormula(t *testing.T) {
 	for _, want := range []string{
 		"push:",
 		"tags: [\"v*\"]",
-		"group: release-${{ github.ref }}",
+		"group: release-${{ inputs.tag || github.ref_name }}",
 		"cancel-in-progress: false",
 		"environment: release",
 		"runs-on: ubuntu-24.04",
@@ -187,7 +187,7 @@ func TestReleaseWorkflowIsTagOnlyAndPublishesFormula(t *testing.T) {
 			t.Errorf("workflow contains unpinned or destructive release behavior %q:\n%s", forbidden, contents)
 		}
 	}
-	if err := validateTagOnlyPushTrigger(workflow); err != nil {
+	if err := validateReleaseTriggers(workflow); err != nil {
 		t.Errorf("workflow trigger: %v", err)
 	}
 	if err := validateReleaseConcurrency(workflow); err != nil {
@@ -197,8 +197,18 @@ func TestReleaseWorkflowIsTagOnlyAndPublishesFormula(t *testing.T) {
 	if bytes.Equal(mutatedWorkflow, workflow) {
 		t.Fatal("could not add a branches trigger to workflow fixture")
 	}
-	if err := validateTagOnlyPushTrigger(mutatedWorkflow); err == nil {
-		t.Error("tag-only trigger validation accepted push.branches alongside push.tags")
+	if err := validateReleaseTriggers(mutatedWorkflow); err == nil {
+		t.Error("trigger validation accepted push.branches alongside push.tags")
+	}
+	// workflow_call is the one trigger added beside the tag push. Anything that
+	// can be provoked by a contributor rather than a releaser must still be
+	// refused, since this workflow holds the tap credential.
+	mutatedWorkflow = bytes.Replace(workflow, []byte("  workflow_call:"), []byte("  pull_request:\n  workflow_call:"), 1)
+	if bytes.Equal(mutatedWorkflow, workflow) {
+		t.Fatal("could not add a pull_request trigger to workflow fixture")
+	}
+	if err := validateReleaseTriggers(mutatedWorkflow); err == nil {
+		t.Error("trigger validation accepted a pull_request trigger on the release workflow")
 	}
 	mutatedWorkflow = bytes.Replace(workflow, []byte("cancel-in-progress: false"), []byte("cancel-in-progress: true"), 1)
 	if bytes.Equal(mutatedWorkflow, workflow) {
@@ -226,15 +236,22 @@ func TestRepositoryDoesNotShipPlaceholderHomebrewFormula(t *testing.T) {
 	}
 }
 
-func validateTagOnlyPushTrigger(workflow []byte) error {
+// validateReleaseTriggers holds the release workflow to the two ways it may be
+// entered: a pushed version tag, and a call from a cut workflow that has already
+// pushed one. Every other trigger is refused, so nothing a contributor can
+// provoke reaches the job holding the tap credential.
+func validateReleaseTriggers(workflow []byte) error {
 	var document struct {
 		On map[string]yaml.Node `yaml:"on"`
 	}
 	if err := yaml.Unmarshal(workflow, &document); err != nil {
 		return fmt.Errorf("parse YAML: %w", err)
 	}
-	if len(document.On) != 1 {
-		return fmt.Errorf("triggers = %#v, want only push.tags [v*]", document.On)
+	if len(document.On) != 2 {
+		return fmt.Errorf("triggers = %#v, want only push.tags [v*] and workflow_call", document.On)
+	}
+	if _, ok := document.On["workflow_call"]; !ok {
+		return fmt.Errorf("triggers = %#v, want a workflow_call trigger", document.On)
 	}
 	push, ok := document.On["push"]
 	if !ok {
@@ -279,8 +296,10 @@ func validateReleaseConcurrency(workflow []byte) error {
 	if err := groupNode.Decode(&group); err != nil {
 		return fmt.Errorf("decode concurrency group: %w", err)
 	}
-	if group != "release-${{ github.ref }}" {
-		return fmt.Errorf("concurrency group = %q, want release-${{ github.ref }}", group)
+	// A called run's github.ref is the caller's branch, so the group has to key
+	// on the tag being published or every called release shares one group.
+	if group != "release-${{ inputs.tag || github.ref_name }}" {
+		return fmt.Errorf("concurrency group = %q, want release-${{ inputs.tag || github.ref_name }}", group)
 	}
 	cancelNode, ok := document.Concurrency["cancel-in-progress"]
 	if !ok {

@@ -104,7 +104,7 @@ case $0 in
 	*/*) script_directory=${0%/*} ;;
 	*) script_directory=. ;;
 esac
-repository_root=$(CDPATH= cd -- "${script_directory}/.." && pwd -P)
+repository_root=$(CDPATH='' cd -- "${script_directory}/.." && pwd -P)
 
 if [ "${install_stable}" = yes ] && [ "${stable_method}" = auto ]; then
 	# The formula serves macOS and Linux, so Homebrew is the published route
@@ -136,7 +136,7 @@ fi
 
 absolute_directory() {
 	mkdir -p -- "$1"
-	CDPATH= cd -- "$1" && pwd -P
+	CDPATH='' cd -- "$1" && pwd -P
 }
 
 stable_prefix=${WORKBOOK_STABLE_PREFIX:-${HOME}/.local/share/workbook/stable}
@@ -226,7 +226,7 @@ fi
 # rebuilding one side does not drop the other from the shell profile.
 existing_bin_directory() {
 	if [ -d "$1/bin" ]; then
-		CDPATH= cd -- "$1/bin" && pwd -P
+		CDPATH='' cd -- "$1/bin" && pwd -P
 	fi
 }
 
