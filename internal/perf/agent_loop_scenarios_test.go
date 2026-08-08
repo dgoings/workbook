@@ -49,11 +49,11 @@ func TestColdNextScenarioMeasuresTheFetchItPerformsBeforeAnswering(t *testing.T)
 			}
 			return nil
 		},
-		measureCommand: func(_ context.Context, command CommandSpec) Sample {
+		measureCommand: func(_ context.Context, command CommandSpec) CommandMeasurement {
 			events = append(events, "measure")
 			commands = append(commands, command)
 			originAtMeasure = gitConfigValue(t, command.Directory, "remote.origin.url")
-			return Sample{ExitCode: 0}
+			return CommandMeasurement{Sample: Sample{ExitCode: 0}, Stdout: acquiredNextStdout("WB-acquired")}
 		},
 	}
 	spec := RunSpec{
@@ -104,9 +104,9 @@ func TestColdNextScenarioFailsWhenNoTaskCanBeAcquired(t *testing.T) {
 			return fixture, nil
 		},
 		prepareProjection: func(context.Context, CommandSpec, int) error { return nil },
-		measureCommand: func(_ context.Context, command CommandSpec) Sample {
+		measureCommand: func(_ context.Context, command CommandSpec) CommandMeasurement {
 			measured++
-			return Sample{ExitCode: 5, Error: "status is not a recognized value"}
+			return CommandMeasurement{Sample: Sample{ExitCode: 5, Error: "status is not a recognized value"}}
 		},
 	}
 	spec := RunSpec{
@@ -123,6 +123,112 @@ func TestColdNextScenarioFailsWhenNoTaskCanBeAcquired(t *testing.T) {
 	if measured != 1 {
 		t.Fatalf("commands run = %d, want the scenario to stop after the failed setup", measured)
 	}
+}
+
+// TestColdNextScenarioRefusesASampleThatAcquiredNothing checks the measured
+// command's answer rather than only the setup mutation's exit code.
+//
+// `workbook next` exits 0 and writes a null result when nothing is eligible, so
+// a successful exit proves only that the search ran, not that it found work.
+// The setup mutation succeeding does not close that gap either: `Next` also
+// requires every dependency to be done, so a fixture generator that gave the
+// selected task a dependency — or an eligibility rule that grew a condition —
+// would leave the timed command searching an empty board while every exit code
+// stayed 0. That sample is a whole-board scan, and publishing it as the agent's
+// acquire latency is the failure this test forbids.
+func TestColdNextScenarioRefusesASampleThatAcquiredNothing(t *testing.T) {
+	fixture := testColdCLIFixture()
+	measured := 0
+	dependencies := scenarioDependencies{
+		buildFixture: func(_ context.Context, root string, _ FixtureSpec) (Fixture, error) {
+			if err := initBenchmarkWorktree(t, root); err != nil {
+				return Fixture{}, err
+			}
+			fixture.Root = root
+			return fixture, nil
+		},
+		prepareProjection: func(context.Context, CommandSpec, int) error { return nil },
+		measureCommand: func(_ context.Context, command CommandSpec) CommandMeasurement {
+			measured++
+			if command.Args[0] != "next" {
+				return CommandMeasurement{Sample: Sample{ExitCode: 0}}
+			}
+			return CommandMeasurement{
+				Sample: Sample{ExitCode: 0, Duration: 3 * time.Millisecond},
+				Stdout: []byte(`{"format":"workbook.result","version":1,"command":"next","data":null}` + "\n"),
+			}
+		},
+	}
+	spec := RunSpec{
+		WorkbookBinary: "workbook",
+		Fixture:        FixtureSpec{TotalTasks: 11, ActiveTasks: 10, TombstonedTasks: 1, OperationsPerTask: 4, ObjectFormat: "sha1"},
+		Samples:        1,
+		CommandTimeout: 10 * time.Second,
+	}
+
+	_, err := runColdCLI(context.Background(), spec, t.TempDir(), []string{"cli-next"}, dependencies)
+	if err == nil || !strings.Contains(err.Error(), "acquired no task") {
+		t.Fatalf("error = %v, want a refusal to publish an empty acquire as a sample", err)
+	}
+	if measured != 2 {
+		t.Fatalf("commands run = %d, want the setup update and the measured next", measured)
+	}
+}
+
+// TestColdNextScenarioReportsAFailedAcquireAsASample keeps the answer check from
+// swallowing the outcomes the report exists to carry. A `next` that timed out or
+// exited non-zero produced no answer to inspect, and the harness records those
+// as `timeout` and `failed` samples rather than aborting a run that has already
+// collected evidence.
+func TestColdNextScenarioReportsAFailedAcquireAsASample(t *testing.T) {
+	tests := []struct {
+		name   string
+		sample Sample
+	}{
+		{name: "timeout", sample: Sample{ExitCode: -1, TimedOut: true, Error: "signal: killed"}},
+		{name: "product failure", sample: Sample{ExitCode: 1, Error: "origin rejected the fetch"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := testColdCLIFixture()
+			dependencies := scenarioDependencies{
+				buildFixture: func(_ context.Context, root string, _ FixtureSpec) (Fixture, error) {
+					if err := initBenchmarkWorktree(t, root); err != nil {
+						return Fixture{}, err
+					}
+					fixture.Root = root
+					return fixture, nil
+				},
+				prepareProjection: func(context.Context, CommandSpec, int) error { return nil },
+				measureCommand: func(_ context.Context, command CommandSpec) CommandMeasurement {
+					if command.Args[0] != "next" {
+						return CommandMeasurement{Sample: Sample{ExitCode: 0}}
+					}
+					return CommandMeasurement{Sample: test.sample}
+				},
+			}
+			spec := RunSpec{
+				WorkbookBinary: "workbook",
+				Fixture:        FixtureSpec{TotalTasks: 11, ActiveTasks: 10, TombstonedTasks: 1, OperationsPerTask: 4, ObjectFormat: "sha1"},
+				Samples:        1,
+				CommandTimeout: 10 * time.Second,
+			}
+
+			results, err := runColdCLI(context.Background(), spec, t.TempDir(), []string{"cli-next"}, dependencies)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := results[0].Samples[0]; got != test.sample {
+				t.Fatalf("cli-next sample = %#v, want the retained %#v", got, test.sample)
+			}
+		})
+	}
+}
+
+// acquiredNextStdout renders the JSON `workbook next` writes when it selected a
+// task: the result envelope's data member is the task itself.
+func acquiredNextStdout(taskID string) []byte {
+	return []byte(`{"format":"workbook.result","version":1,"command":"next","data":{"id":"` + taskID + `","status":"ready"}}` + "\n")
 }
 
 // TestColdNextScenarioCarriesTheSynchronizedBudget records the deliberate target
@@ -161,10 +267,10 @@ func TestColdShowScenarioMeasuresOneLocalTaskRead(t *testing.T) {
 			events = append(events, "prepare")
 			return nil
 		},
-		measureCommand: func(_ context.Context, command CommandSpec) Sample {
+		measureCommand: func(_ context.Context, command CommandSpec) CommandMeasurement {
 			events = append(events, "measure")
 			measured = command
-			return Sample{ExitCode: 0}
+			return CommandMeasurement{Sample: Sample{ExitCode: 0}}
 		},
 		cleanupFixture: func(string) error {
 			events = append(events, "cleanup")

@@ -38,7 +38,7 @@ type RunSpec struct {
 type scenarioDependencies struct {
 	buildFixture      func(context.Context, string, FixtureSpec) (Fixture, error)
 	prepareProjection func(context.Context, CommandSpec, int) error
-	measureCommand    func(context.Context, CommandSpec) Sample
+	measureCommand    func(context.Context, CommandSpec) CommandMeasurement
 	cleanupFixture    func(string) error
 }
 
@@ -86,7 +86,7 @@ func RunColdCLI(ctx context.Context, spec RunSpec, fixtureRoot string, selected 
 			return buildFixtureWithinTimeout(ctx, root, fixture, spec.CommandTimeout)
 		},
 		prepareProjection: prepareProjection,
-		measureCommand:    MeasureCommand,
+		measureCommand:    MeasureCommandOutput,
 		cleanupFixture:    os.RemoveAll,
 	})
 }
@@ -270,6 +270,10 @@ func measureColdRestore(ctx context.Context, dependencies scenarioDependencies, 
 //     changed head is tens of milliseconds at acceptance size. Re-settling it
 //     untimed keeps the sample comparable with every other cold scenario, whose
 //     projection is current when its command starts.
+//
+// The measured command's own answer is then checked. A successful setup does not
+// prove the board held work when the timed command ran, and `next` reports an
+// empty search by exiting 0 with a null result rather than by failing.
 func measureColdNext(ctx context.Context, dependencies scenarioDependencies, spec RunSpec, fixture Fixture, _ int) (Sample, error) {
 	taskIDs, err := fixtureActiveTask(fixture, 1)
 	if err != nil {
@@ -297,7 +301,51 @@ func measureColdNext(ctx context.Context, dependencies scenarioDependencies, spe
 	}, spec.Fixture.TotalTasks); err != nil {
 		return Sample{}, fmt.Errorf("re-settle the projection after preparing an acquirable task: %w", err)
 	}
-	return measureColdCLICommand(ctx, dependencies, spec, fixture.Root, []string{"next", "--json"}), nil
+	measured := measureColdCLIOutput(ctx, dependencies, spec, fixture.Root, []string{"next", "--json"})
+	if err := verifyAcquiredTask(measured); err != nil {
+		return Sample{}, err
+	}
+	return measured.Sample, nil
+}
+
+// verifyAcquiredTask refuses a cli-next sample that acquired nothing.
+//
+// `workbook next` answers an empty board by exiting 0 and writing a null result,
+// so the exit code proves only that the search ran. Selection also requires
+// every dependency to be done, which the fixture's chain satisfies for exactly
+// one task today; a change to the generator, to which task the scenario makes
+// ready, or to the eligibility rules would silently turn the sample into a timed
+// whole-board scan published as the agent's acquire latency.
+//
+// A sample that timed out or exited non-zero is left alone. It produced no
+// answer to inspect, and the harness records those as `timeout` and `failed`
+// outcomes rather than discarding a run's collected evidence.
+func verifyAcquiredTask(measurement CommandMeasurement) error {
+	if measurement.Sample.TimedOut || measurement.Sample.ExitCode != 0 {
+		return nil
+	}
+	var envelope remoteResultEnvelope
+	if err := json.Unmarshal(measurement.Stdout, &envelope); err != nil {
+		return fmt.Errorf("decode next result: %w", err)
+	}
+	if envelope.Format != workbookResultFormat || envelope.Version != workbookJSONVersion || envelope.Command != "next" {
+		return fmt.Errorf(
+			"next result = %q v%d command %q, want %q v%d command next",
+			envelope.Format, envelope.Version, envelope.Command, workbookResultFormat, workbookJSONVersion,
+		)
+	}
+	var acquired struct {
+		ID string `json:"id"`
+	}
+	if len(envelope.Data) > 0 && string(envelope.Data) != "null" {
+		if err := json.Unmarshal(envelope.Data, &acquired); err != nil {
+			return fmt.Errorf("decode next data: %w", err)
+		}
+	}
+	if acquired.ID == "" {
+		return fmt.Errorf("next acquired no task: the board held nothing eligible when the measured command ran")
+	}
+	return nil
 }
 
 // measureColdShow measures the command an agent runs to read a task's context.
@@ -1058,6 +1106,18 @@ func measureColdCLICommand(
 	directory string,
 	args []string,
 ) Sample {
+	return measureColdCLIOutput(ctx, dependencies, spec, directory, args).Sample
+}
+
+// measureColdCLIOutput keeps the measured command's streams, which a scenario
+// needs when the exit code alone does not prove the measured work happened.
+func measureColdCLIOutput(
+	ctx context.Context,
+	dependencies scenarioDependencies,
+	spec RunSpec,
+	directory string,
+	args []string,
+) CommandMeasurement {
 	return dependencies.measureCommand(ctx, CommandSpec{
 		Binary:    spec.WorkbookBinary,
 		Args:      args,
@@ -1280,16 +1340,49 @@ func (server *warmHTTPServer) prepareProjection(ctx context.Context, activeTasks
 	return err
 }
 
+// taskListRequestError reports a GET /api/tasks that reached its own timeout or
+// answered with a non-OK status. Both are outcomes the report can carry, so a
+// caller that is measuring translates one into a sample; a caller that is only
+// preparing a fixture treats it as the fatal error it already was.
+type taskListRequestError struct {
+	Duration   time.Duration
+	StatusCode int
+	TimedOut   bool
+	Message    string
+}
+
+func (err *taskListRequestError) Error() string { return err.Message }
+
+// sample renders the failure the way performStatus renders its own: a timeout
+// keeps the harness's -1 exit code, and a server error keeps the HTTP status.
+func (err *taskListRequestError) sample() Sample {
+	exitCode := err.StatusCode
+	if err.TimedOut {
+		exitCode = -1
+	}
+	return Sample{
+		Duration: err.Duration,
+		ExitCode: exitCode,
+		TimedOut: err.TimedOut,
+		Error:    err.Message,
+	}
+}
+
 // measureTaskList times one warm GET of the board's task collection and holds it
 // to the same population oracle the untimed preparation load uses. A read that
 // answered with an empty board would be fast and worthless, so the count is
 // checked before the sample is reported.
+//
+// A read that timed out or that the server refused is reported as a sample
+// instead, exactly as measureStatus reports one. Those are the outcomes
+// `timeout` and `failed` exist for, and aborting the run on sample 7 of 20 would
+// discard every measurement already collected and write no report at all.
 func (server *warmHTTPServer) measureTaskList(ctx context.Context, activeTasks int, timeout time.Duration) (Sample, error) {
 	cursor, err := OpenTraceCursor(server.tracePath)
 	if err != nil {
 		return Sample{}, err
 	}
-	duration, err := server.loadTaskList(ctx, activeTasks, timeout)
+	sample, err := server.performTaskList(ctx, activeTasks, timeout)
 	if err != nil {
 		return Sample{}, err
 	}
@@ -1297,11 +1390,30 @@ func (server *warmHTTPServer) measureTaskList(ctx context.Context, activeTasks i
 	if err != nil {
 		return Sample{}, err
 	}
-	return Sample{Duration: duration, ExitCode: 0, GitProcesses: gitProcesses}, nil
+	sample.GitProcesses = gitProcesses
+	return sample, nil
+}
+
+// performTaskList runs the measured read and keeps the failures the report is
+// built to carry. Anything else — a malformed answer, the wrong envelope, an
+// unpopulated board, a cancelled caller — stays fatal, because none of those is
+// a measurement of the board's read cost.
+func (server *warmHTTPServer) performTaskList(ctx context.Context, activeTasks int, timeout time.Duration) (Sample, error) {
+	duration, err := server.loadTaskList(ctx, activeTasks, timeout)
+	if err != nil {
+		var requestErr *taskListRequestError
+		if errors.As(err, &requestErr) {
+			return requestErr.sample(), nil
+		}
+		return Sample{}, err
+	}
+	return Sample{Duration: duration, ExitCode: 0}, nil
 }
 
 // loadTaskList performs one GET /api/tasks, verifies the versioned document and
-// its active-task population, and returns the elapsed request time.
+// its active-task population, and returns the elapsed request time. A request
+// that reached its own timeout or that the server refused is reported as a
+// *taskListRequestError so a measuring caller can classify it.
 func (server *warmHTTPServer) loadTaskList(ctx context.Context, activeTasks int, timeout time.Duration) (time.Duration, error) {
 	requestContext, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -1312,12 +1424,26 @@ func (server *warmHTTPServer) loadTaskList(ctx context.Context, activeTasks int,
 	startedAt := time.Now()
 	response, err := server.client.Do(request)
 	if err != nil {
+		duration := time.Since(startedAt)
+		message := fmt.Sprintf("send task list request: %v", err)
+		// A cancelled caller is the harness shutting down rather than the
+		// command reaching its own deadline, so it stays fatal.
+		if ctx.Err() == nil && errors.Is(requestContext.Err(), context.DeadlineExceeded) {
+			return 0, &taskListRequestError{Duration: duration, TimedOut: true, Message: message}
+		}
 		return 0, fmt.Errorf("send task list request: %w", err)
 	}
 	body, readErr := io.ReadAll(response.Body)
 	closeErr := response.Body.Close()
 	duration := time.Since(startedAt)
 	if readErr != nil {
+		if ctx.Err() == nil && errors.Is(requestContext.Err(), context.DeadlineExceeded) {
+			return 0, &taskListRequestError{
+				Duration: duration,
+				TimedOut: true,
+				Message:  fmt.Sprintf("read task list response: %v", readErr),
+			}
+		}
 		return 0, fmt.Errorf("read task list response: %w", readErr)
 	}
 	if closeErr != nil {
@@ -1329,7 +1455,11 @@ func (server *warmHTTPServer) loadTaskList(ctx context.Context, activeTasks int,
 		if evidence != "" {
 			message += ": " + evidence
 		}
-		return 0, errors.New(message)
+		return 0, &taskListRequestError{
+			Duration:   duration,
+			StatusCode: response.StatusCode,
+			Message:    message,
+		}
 	}
 	var document struct {
 		Format  string            `json:"format"`
