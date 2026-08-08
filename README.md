@@ -949,10 +949,22 @@ poll stays intact, and a scrolled column stays where the reader left it. The six
 canonical columns share the available width
 on large screens, scroll horizontally on narrow screens, and keep dense task
 lists vertically scrollable within the viewport. Web cards show the actionable
-task-ID prefix, priority, title, up to six lines of an optional description, and
-labels; each title links to its full-ID task-detail URL, where the complete
-description remains available. Every status column has a New Task link that
-preselects that column's canonical status.
+task-ID prefix, priority, title, and labels; each title links to its full-ID
+task-detail URL, where the complete description remains available. Every status
+column has a New Task link that preselects that column's canonical status.
+
+A description is the one card field with no length a column can rely on, so the
+board hides it and a `Descriptions:` toggle in the header puts up to six clamped
+lines of it back on every card. The choice says how one reader wants this board
+drawn rather than anything about the project, so the browser remembers it and
+nothing is published to `origin`; two people reading the same board can read it
+differently, and a browser that refuses storage simply gets the default. The
+text stays in the card either way and only the stylesheet decides whether it is
+shown, which keeps the setting out of the renderer: turning it on reveals what
+the page already holds rather than rebuilding cards or waiting for the next
+poll, and the reconciling poll has no preference to reset. The toggle
+accompanies the board alone; the deleted list and task pages draw no cards for
+it to act on and so do not offer it.
 
 Cards with prerequisites show completed versus total dependency progress.
 Ready cards whose prerequisites are not all active and Done also say
@@ -976,6 +988,15 @@ comma commits it and clears the input, each chiclet carries a named remove
 control, and Backspace in an empty input removes the last one. A label left
 half-typed is still sent when the form is saved, and the payload the API sees
 is the same array of strings it always was.
+
+Saving a new task returns to the board, and a **Create more** toggle on the New
+Task form re-arms a clean form filed under the same column instead, so a run of
+tasks can be entered without a round trip; the re-armed form takes the caret,
+because the save it followed destroyed the control the user was on. Either way
+the saved task's own form is left behind. A create that has something to
+report is the exception: a warning, or a relationship the client could not write,
+opens that task's detail page, because that is the only place its message and retry
+actions exist.
 
 Missing prerequisite IDs remain visible and removable. Tombstoned
 prerequisites are also removable because the active dependent owns that edge;

@@ -180,10 +180,9 @@ func TestBoardsDivergeOnUnknownStatusesUntilThatIsCorrected(t *testing.T) {
 
 func webBoardDocument(t *testing.T, tasks []core.Task) webui.TasksDocument {
 	t.Helper()
-	handler := webui.NewHandler(
-		func(context.Context) ([]core.Task, error) { return tasks, nil },
-		nil, nil, nil,
-	)
+	handler := webui.NewHandler(webui.Options{
+		List: func(context.Context) ([]core.Task, error) { return tasks, nil },
+	})
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/tasks", nil))
 	if recorder.Code != http.StatusOK {
