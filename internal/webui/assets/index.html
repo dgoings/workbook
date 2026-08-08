@@ -93,13 +93,20 @@
     .label-editor { display: grid; gap: .35rem; }
     .label-chips { display: flex; flex-wrap: wrap; gap: .3rem; margin: 0; padding: 0; list-style: none; }
     .label-chips:empty { display: none; }
-    .label-chip { display: inline-flex; align-items: center; gap: .2rem; max-width: 100%; padding: .12rem .16rem .12rem .44rem; border: 1px solid #b9c6d8; border-radius: 999px; background: #edf3ff; color: #34425a; font-size: .7rem; }
+    .label-chip { display: inline-flex; align-items: center; gap: .2rem; max-width: 100%; padding: 0 .1rem 0 .44rem; border: 1px solid #b9c6d8; border-radius: 999px; background: #edf3ff; color: #34425a; font-size: .7rem; }
     .label-chip__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .label-chip__remove { display: inline-flex; align-items: center; justify-content: center; width: 1.1rem; height: 1.1rem; padding: 0; border: 0; border-radius: 999px; background: transparent; color: #526b9b; cursor: pointer; font: inherit; font-size: .85rem; line-height: 1; }
+    /* 1.5rem square, because removal is immediate and has no undo: a 24px
+       target is what WCAG 2.2 asks for, and the chiclets wrap too tightly for
+       the spacing exception to cover anything smaller. */
+    .label-chip__remove { display: inline-flex; align-items: center; justify-content: center; width: 1.5rem; height: 1.5rem; padding: 0; border: 0; border-radius: 999px; background: transparent; color: #526b9b; cursor: pointer; font: inherit; font-size: .85rem; line-height: 1; }
     .label-chip__remove:hover { background: #d3e0fa; color: #172033; }
     .label-chip__remove:focus-visible { outline: 2px solid #2457d6; outline-offset: 1px; }
     .label-editor__hint, .label-editor__status { margin: 0; color: #56647a; font-size: .72rem; }
-    .label-editor__status:empty { display: none; }
+    /* Reserved rather than hidden while empty, like .form-status below: an
+       unrendered element is not in the accessibility tree, and a live region
+       that appears in the same frame as its first message does not announce
+       it — which would cost exactly the first add or remove. */
+    .label-editor__status { min-height: 1.15rem; }
     .form-status { min-height: 1.35rem; margin: 0; color: #9c2f25; font-size: .82rem; }
     .form-actions { display: flex; align-items: center; justify-content: space-between; gap: .85rem; width: 100%; padding-top: .1rem; }
     .form-primary-actions { display: flex; align-items: center; gap: .85rem; }
@@ -479,8 +486,23 @@
         announcement.setAttribute("aria-live", "polite");
         region.append(chiclets, input, hint, announcement);
 
+        // Chiclets are reconciled, never rebuilt. Pressing a remove control
+        // blurs the input, and the blur commits pending text and re-renders
+        // before the click lands; a render that replaced every node would
+        // detach the very button the press started on, the click would go to
+        // the surviving list instead, and the removal would be silently
+        // dropped. Shift+Tab out of an input holding text loses focus the same
+        // way. Values only ever arrive at the end and leave in place, so
+        // appending the new ones keeps the DOM in the order of the set.
+        const chicletsByLabel = new Map();
         function renderChiclets() {
-          chiclets.replaceChildren(...values.map((label) => {
+          chicletsByLabel.forEach((chiclet, label) => {
+            if (values.includes(label)) return;
+            chiclet.remove();
+            chicletsByLabel.delete(label);
+          });
+          values.forEach((label) => {
+            if (chicletsByLabel.has(label)) return;
             const chiclet = document.createElement("li");
             chiclet.className = "label-chip";
             chiclet.dataset.label = label;
@@ -496,8 +518,9 @@
             text(remove, "×");
             remove.addEventListener("click", () => removeLabel(label));
             chiclet.append(name, remove);
-            return chiclet;
-          }));
+            chicletsByLabel.set(label, chiclet);
+            chiclets.append(chiclet);
+          });
         }
         function addLabel(candidate) {
           const label = String(candidate).trim();
@@ -540,6 +563,12 @@
           input.value = tail;
         });
         input.addEventListener("keydown", (event) => {
+          // An IME delivers the Enter that confirms a candidate, and the
+          // Backspace that edits one, as keydown with isComposing set. Reading
+          // either as a label would commit the unconverted reading — the kana
+          // rather than the word — and no amount of retyping would ever get
+          // the converted label in.
+          if (event.isComposing) return;
           if (event.key === "Enter") {
             // Enter here adds a label. Letting it through would submit the
             // form instead, which is the one thing the user did not ask for.

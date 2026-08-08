@@ -5505,6 +5505,46 @@ setTimeout(async () => {
     throw new Error("a comma did not separate labels: " + JSON.stringify(chips()));
   }
 
+  // A pointer press on a remove control blurs the input before the click
+  // lands, and the blur commits whatever was typed. The commit has to
+  // reconcile the chiclets rather than rebuild them: the browser delivers the
+  // click to the button the press started on only while that button is still
+  // in the document, and a Shift+Tab into the list is lost the same way.
+  const removeDocs = findElement(main, (element) => element.dataset.removeLabel === "docs");
+  input.value = "sdk";
+  input.eventListeners.blur();
+  if (JSON.stringify(chips()) !== '["docs","web","api","cli","sdk"]') {
+    throw new Error("leaving the field did not commit the typed label: " + JSON.stringify(chips()));
+  }
+  if (!main.contains(removeDocs)) {
+    throw new Error("committing on blur detached a chiclet that was already on screen");
+  }
+  findElement(main, (element) => element.dataset.removeLabel === "sdk").eventListeners.click();
+  if (JSON.stringify(chips()) !== '["docs","web","api","cli"]') {
+    throw new Error("the chiclet committed on blur did not remove: " + JSON.stringify(chips()));
+  }
+  if (!main.contains(removeDocs)) {
+    throw new Error("removing one chiclet detached its surviving siblings");
+  }
+
+  // An IME delivers the Enter that confirms a candidate as a keydown with
+  // isComposing set. Consuming it commits the unconverted reading and leaves
+  // the label the user is actually typing permanently unreachable.
+  input.value = "どきゅ";
+  let composingPrevented = false;
+  input.eventListeners.keydown({ key: "Enter", isComposing: true, preventDefault() { composingPrevented = true; } });
+  if (composingPrevented || input.value !== "どきゅ") {
+    throw new Error("Enter mid-composition was consumed as a label commit");
+  }
+  if (JSON.stringify(chips()) !== '["docs","web","api","cli"]') {
+    throw new Error("an unconverted IME reading became a chiclet: " + JSON.stringify(chips()));
+  }
+  input.value = "";
+  input.eventListeners.keydown({ key: "Backspace", isComposing: true, preventDefault() {} });
+  if (JSON.stringify(chips()) !== '["docs","web","api","cli"]') {
+    throw new Error("Backspace mid-composition deleted a chiclet: " + JSON.stringify(chips()));
+  }
+
   const removeWeb = findElement(main, (element) => element.dataset.removeLabel === "web");
   if (!removeWeb || removeWeb.tagName !== "BUTTON" ||
       !(removeWeb.attributes["aria-label"] || "").includes("web")) {
