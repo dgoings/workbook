@@ -243,9 +243,6 @@ func TestRenderFormulaRejectsUnsafeVersions(t *testing.T) {
 }
 
 func TestCompiledBinaryReportsLinkerInjectedVersion(t *testing.T) {
-	if testing.Short() {
-		t.Skip("shells out to go build; skipped in -short mode")
-	}
 	root, _ := releasePaths(t)
 	binary := filepath.Join(t.TempDir(), "workbook")
 	build := exec.Command(
@@ -385,14 +382,21 @@ func TestReleaseScriptProducesDeterministicArtifacts(t *testing.T) {
 	// The disjoint empty GOCACHEs are the point of this test: a shared or warm
 	// cache would let the second build return byte-identical artifacts through
 	// cache hits instead of proving the build is reproducible from scratch.
+	// GOCACHEPROG must be cleared for the same reason, since it overrides the
+	// on-disk GOCACHE with one external store both runs would share, and GOFLAGS
+	// so ambient flags cannot alter what either build compiles.
 	environments := [][]string{
 		environmentWith(os.Environ(),
 			"GOCACHE="+filepath.Join(t.TempDir(), "gocache"),
+			"GOCACHEPROG=",
+			"GOFLAGS=",
 			"TZ=America/Detroit",
 			"SOURCE_DATE_EPOCH=1712345678",
 		),
 		environmentWith(os.Environ(),
 			"GOCACHE="+filepath.Join(t.TempDir(), "gocache"),
+			"GOCACHEPROG=",
+			"GOFLAGS=",
 			"TZ=Asia/Tokyo",
 			"SOURCE_DATE_EPOCH=946684800",
 			"PATH="+hostileToolDirectory+string(os.PathListSeparator)+os.Getenv("PATH"),

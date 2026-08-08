@@ -1,6 +1,7 @@
 package scripts_test
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,9 +14,6 @@ import (
 // creates $HOME/.local/bin when it does not exist, and that it says how to put
 // that directory on PATH when it is not already there.
 func TestInstallCreatesTheDefaultDestinationAndReportsThePATHExport(t *testing.T) {
-	if testing.Short() {
-		t.Skip("shells out to go build; skipped in -short mode")
-	}
 	root, script := paths(t)
 	home := t.TempDir()
 	physicalHome, err := filepath.EvalSymlinks(home)
@@ -54,9 +52,6 @@ func TestInstallCreatesTheDefaultDestinationAndReportsThePATHExport(t *testing.T
 // And it has to stay quiet when the hint would be wrong: a destination already
 // on PATH that printed an export line would teach the reader to duplicate it.
 func TestInstallOmitsThePATHExportWhenTheDestinationIsAlreadyOnPATH(t *testing.T) {
-	if testing.Short() {
-		t.Skip("shells out to go build; skipped in -short mode")
-	}
 	root, script := paths(t)
 	destinationRoot := t.TempDir()
 	physicalRoot, err := filepath.EvalSymlinks(destinationRoot)
@@ -83,19 +78,39 @@ func TestInstallOmitsThePATHExportWhenTheDestinationIsAlreadyOnPATH(t *testing.T
 	}
 }
 
+// toolchainDirectories resolves GOPATH, GOMODCACHE, and GOCACHE at package
+// initialization, before any TestMain could replace HOME process-wide. All
+// three default to paths under HOME, and internal/cli/main_test.go documents
+// how `go env` run after such a swap reports the temporary paths instead of
+// the developer's real toolchain. This package has no TestMain today; the
+// snapshot keeps these tests correct on the day one appears.
+var toolchainDirectories, toolchainDirectoriesErr = resolveToolchainDirectories()
+
+func resolveToolchainDirectories() ([]string, error) {
+	names := []string{"GOPATH", "GOMODCACHE", "GOCACHE"}
+	output, err := exec.Command("go", append([]string{"env"}, names...)...).Output()
+	if err != nil {
+		return nil, err
+	}
+	values := strings.Split(strings.TrimRight(string(output), "\n"), "\n")
+	if len(values) != len(names) {
+		return nil, fmt.Errorf("go env %s reported %d values", strings.Join(names, " "), len(values))
+	}
+	directories := make([]string, 0, len(names))
+	for index, name := range names {
+		directories = append(directories, name+"="+values[index])
+	}
+	return directories, nil
+}
+
 // buildEnvironment gives the installer a Go toolchain that does not depend on
 // the HOME this test replaced: with HOME pointed at a temporary directory, the
 // default module, build, and download caches move with it and the build would
 // either re-download the world or recompile it from scratch.
 func buildEnvironment(t *testing.T, entries ...string) []string {
 	t.Helper()
-	environment := append([]string(nil), entries...)
-	for _, name := range []string{"GOPATH", "GOMODCACHE", "GOCACHE"} {
-		output, err := exec.Command("go", "env", name).Output()
-		if err != nil {
-			t.Fatalf("go env %s: %v", name, err)
-		}
-		environment = append(environment, name+"="+strings.TrimSpace(string(output)))
+	if toolchainDirectoriesErr != nil {
+		t.Fatalf("resolve toolchain directories: %v", toolchainDirectoriesErr)
 	}
-	return environment
+	return append(append([]string(nil), entries...), toolchainDirectories...)
 }

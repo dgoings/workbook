@@ -66,9 +66,6 @@ func TestSetupInstallsPublishedAndWorkingTreeBuildsSideBySide(t *testing.T) {
 func TestSetupKeepsTheSkippedBuildOnPath(t *testing.T) {
 	// Production mutation: rewriting the profile from only the current run drops
 	// the published build from PATH whenever the working tree is rebuilt alone.
-	if testing.Short() {
-		t.Skip("shells out to go build; skipped in -short mode")
-	}
 	root, script := setupPaths(t)
 	stablePrefix := filepath.Join(t.TempDir(), "stable")
 	devPrefix := filepath.Join(t.TempDir(), "dev")
