@@ -3,7 +3,6 @@ package webui
 import (
 	"context"
 	"net/http"
-	"os/exec"
 	"strconv"
 	"testing"
 
@@ -70,7 +69,7 @@ setTimeout(async () => {
 ` + body + `
 }, 0);
 `
-	if output, err := exec.Command(node, "-e", program).CombinedOutput(); err != nil {
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute %s: %v\n%s", purpose, err, output)
 	}
 }

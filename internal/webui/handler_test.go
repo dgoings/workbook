@@ -314,7 +314,7 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("execute superseding restore refresh behavior: %v\n%s", err, output)
 	}
@@ -380,7 +380,7 @@ setTimeout(async () => {
   asserted = true;
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("execute mutation media type behavior: %v\n%s", err, output)
 	}
@@ -806,7 +806,7 @@ setTimeout(() => {
   }
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("execute rendered client for unknown status: %v\n%s", err, output)
@@ -842,7 +842,7 @@ setTimeout(() => {
   }
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("execute rendered client for flexible Description: %v\n%s", err, output)
@@ -936,7 +936,7 @@ setTimeout(async () => {
   assertSharedLayout("detail");
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("execute rendered client for shared task sidebar layout: %v\n%s", err, output)
@@ -1041,7 +1041,7 @@ setTimeout(() => {
 `
 	program = strings.Replace(program, "candidateTask.id", strconv.Quote(candidate.ID), 1)
 	program = strings.Replace(program, "candidateTask", string(candidateJSON), 1)
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("execute rendered client for sidebar accessibility: %v\n%s", err, output)
@@ -1091,7 +1091,7 @@ for (const testCase of cases) {
   }
 }
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("execute relationship listbox placement: %v\n%s", err, output)
@@ -1221,7 +1221,7 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("execute staged New Task relationship behavior: %v\n%s", err, output)
 	}
@@ -1396,7 +1396,7 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("execute mounted New Task relationship polling: %v\n%s", err, output)
 	}
@@ -1610,7 +1610,7 @@ setTimeout(async () => {
   if (!feedback) throw new Error("created task detail did not receive durable mutation warnings");
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("execute created task relationship persistence: %v\n%s", err, output)
 	}
@@ -1769,7 +1769,7 @@ setTimeout(async () => {
   if (!feedback || save.disabled) throw new Error("create failure did not restore the current form");
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("execute failed task creation recovery: %v\n%s", err, output)
 	}
@@ -2012,7 +2012,7 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("execute partial relationship creation recovery: %v\n%s", err, output)
 	}
@@ -2145,7 +2145,7 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("execute durable create refresh recovery: %v\n%s", err, output)
 	}
@@ -2302,7 +2302,7 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("execute detached created-task final refresh: %v\n%s", err, output)
 	}
@@ -2348,7 +2348,7 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("execute rendered client for initial load recovery: %v\n%s", err, output)
@@ -2467,7 +2467,7 @@ setTimeout(async () => {
   if (!localError) throw new Error("deleted-context failure did not render a relationship-local error");
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("execute rendered dependency relationships: %v\n%s", err, output)
 	}
@@ -2551,7 +2551,7 @@ setTimeout(async () => {
   if (!sameForm) throw new Error("relationship refresh replaced the task form");
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("execute rendered compact sidebar relationships: %v\n%s", err, output)
 	}
@@ -2631,7 +2631,7 @@ setTimeout(() => {
   ], "Blocks");
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("execute dependency combobox candidate filtering: %v\n%s", err, output)
 	}
@@ -2701,7 +2701,7 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("execute conflicting relationship snapshot behavior: %v\n%s", err, output)
 	}
@@ -2763,7 +2763,7 @@ setTimeout(() => {
   assertCollapsedSelection(blocksGroup, blocksInput, taskDocument.tasks[2], "keyboard selection");
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("execute coherent dependency combobox collapse: %v\n%s", err, output)
 	}
@@ -2807,7 +2807,7 @@ setTimeout(() => {
   }
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("execute dependency keyboard option scrolling: %v\n%s", err, output)
 	}
@@ -2963,7 +2963,7 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("execute dependency mutation orientation and refresh: %v\n%s", err, output)
 	}
@@ -3058,7 +3058,7 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("execute superseding dependency refresh behavior: %v\n%s", err, output)
 	}
@@ -3315,7 +3315,7 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("execute detached dependency mutation with newer poll: %v\n%s", err, output)
 	}
@@ -3403,7 +3403,7 @@ setTimeout(async () => {
   if (main.firstElementChild !== boardView) throw new Error("mutation-error recovery replaced the current route");
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("execute detached dependency mutation error: %v\n%s", err, output)
 	}
@@ -3490,7 +3490,7 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("execute deleted-context dependency mutation feedback: %v\n%s", err, output)
 	}
@@ -3652,7 +3652,7 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("execute dependency failure recovery and keyboard behavior: %v\n%s", err, output)
 	}
@@ -3722,7 +3722,7 @@ setTimeout(() => {
   if (newTabPrevented || historyPaths.length !== 3) throw new Error("new-tab navigation was intercepted");
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("execute rendered client navigation behavior: %v\n%s", err, output)
@@ -3839,7 +3839,7 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("execute rendered client copy behavior: %v\n%s", err, output)
@@ -3927,7 +3927,7 @@ setTimeout(async () => {
   if (boardUnknownSection.dataset.visible !== "false") throw new Error("the emptied unknown-status region stayed visible");
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("execute rendered unknown-status board region: %v\n%s", err, output)
 	}
@@ -4001,7 +4001,7 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("execute rendered column-derived drag behavior: %v\n%s", err, output)
 	}
@@ -4030,7 +4030,7 @@ func TestHandlerClientPollsEverySecond(t *testing.T) {
 	program := clientDOMHarness("/", string(document)) + script + `
 if (intervalDelay !== 1000) throw new Error("polling interval = " + intervalDelay + ", want 1000");
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("execute rendered polling behavior: %v\n%s", err, output)
 	}
@@ -4118,7 +4118,7 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("execute rendered same-column placement behavior: %v\n%s", err, output)
 	}
@@ -4223,7 +4223,7 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("execute rendered atomic placement behavior: %v\n%s", err, output)
 	}
@@ -4275,6 +4275,16 @@ func requireNode(t *testing.T) string {
 		testenv.MissingCapability(t, "node is required to execute the embedded client behavior")
 	}
 	return node
+}
+
+// nodeCommand feeds the program to node over stdin rather than as an argument.
+// The client programs embed assets/index.html, and Linux caps one argv string
+// at 128 KiB (MAX_ARG_STRLEN), a ceiling the largest programs have outgrown;
+// stdin has no such limit and behaves identically on every platform CI runs.
+func nodeCommand(node, program string) *exec.Cmd {
+	command := exec.Command(node, "-")
+	command.Stdin = strings.NewReader(program)
+	return command
 }
 
 func renderedClientScript(t *testing.T, body string) string {
@@ -5159,7 +5169,7 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	if output, err := exec.Command(node, "-e", program).CombinedOutput(); err != nil {
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute optimistic placement behavior: %v\n%s", err, output)
 	}
 }
@@ -5230,7 +5240,7 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	if output, err := exec.Command(node, "-e", program).CombinedOutput(); err != nil {
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute serial intent behavior: %v\n%s", err, output)
 	}
 }
@@ -5309,7 +5319,7 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	if output, err := exec.Command(node, "-e", program).CombinedOutput(); err != nil {
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute failed intent rollback behavior: %v\n%s", err, output)
 	}
 }
@@ -5401,7 +5411,7 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	if output, err := exec.Command(node, "-e", program).CombinedOutput(); err != nil {
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute stale-write re-base behavior: %v\n%s", err, output)
 	}
 }
@@ -5487,7 +5497,7 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	if output, err := exec.Command(node, "-e", program).CombinedOutput(); err != nil {
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute open detail form rollback behavior: %v\n%s", err, output)
 	}
 }
@@ -5612,7 +5622,7 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	if output, err := exec.Command(node, "-e", program).CombinedOutput(); err != nil {
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute changed-field save behavior: %v\n%s", err, output)
 	}
 }
@@ -5772,7 +5782,7 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	if output, err := exec.Command(node, "-e", program).CombinedOutput(); err != nil {
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute label chiclet editing: %v\n%s", err, output)
 	}
 }
@@ -5864,7 +5874,7 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	if output, err := exec.Command(node, "-e", program).CombinedOutput(); err != nil {
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute stale save refusal behavior: %v\n%s", err, output)
 	}
 }
@@ -5976,7 +5986,7 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	if output, err := exec.Command(node, "-e", program).CombinedOutput(); err != nil {
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute dependency head adoption behavior: %v\n%s", err, output)
 	}
 }
@@ -6303,7 +6313,7 @@ setTimeout(async () => {
   }
 }, 0);
 `
-	command := exec.Command(node, "-e", program)
+	command := nodeCommand(node, program)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("execute rendered client for task history: %v\n%s", err, output)
 	}
