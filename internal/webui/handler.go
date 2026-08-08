@@ -142,21 +142,37 @@ type ErrorDocument struct {
 	Error   ErrorBody `json:"error"`
 }
 
+// Options names every capability a board can be built with. A nil field is a
+// capability this board does not have, and its route says so rather than
+// pretending: that is what lets a read-only board and the full one come from
+// the same constructor.
+//
+// The list is named rather than positional because Delete and Restore share a
+// signature, as do Depend and Free. Passed positionally, a transposed pair
+// compiles and silently inverts the semantics; named, the same mistake is
+// visible in the call site itself.
+type Options struct {
+	List         TaskLister
+	Create       TaskCreator
+	Update       TaskUpdater
+	UpdateStatus TaskStatusUpdater
+	Position     TaskPositionUpdater
+	Delete       TaskDeleter
+	Restore      TaskRestorer
+	Depend       TaskDependencyAdder
+	Free         TaskDependencyRemover
+	History      TaskHistoryReader
+	SyncState    SyncStateReporter
+	SetSyncMode  SyncModeSetter
+}
+
+// handler embeds Options rather than copying it field by field, so there is no
+// second list to keep in step and no assignment that could cross two
+// capabilities on the way in.
 type handler struct {
-	list         TaskLister
-	create       TaskCreator
-	update       TaskUpdater
-	updateStatus TaskStatusUpdater
-	position     TaskPositionUpdater
-	delete       TaskDeleter
-	restore      TaskRestorer
-	depend       TaskDependencyAdder
-	free         TaskDependencyRemover
-	history      TaskHistoryReader
-	syncState    SyncStateReporter
-	setSyncMode  SyncModeSetter
-	page         *template.Template
-	mux          *http.ServeMux
+	Options
+	page *template.Template
+	mux  *http.ServeMux
 }
 
 type pageData struct {
@@ -198,28 +214,36 @@ type updateTaskRequest struct {
 	ExpectedHead string         `json:"expectedHead"`
 }
 
-func NewHandler(list TaskLister, create TaskCreator, update TaskUpdater, updateStatus TaskStatusUpdater) http.Handler {
-	return newHandler(list, create, update, updateStatus, nil, nil, nil, nil, nil, nil, nil, nil)
-}
-
-func NewHandlerWithTaskMutations(list TaskLister, create TaskCreator, update TaskUpdater, updateStatus TaskStatusUpdater, position TaskPositionUpdater, delete TaskDeleter, restore TaskRestorer, depend TaskDependencyAdder, free TaskDependencyRemover, history TaskHistoryReader) http.Handler {
-	return newHandler(list, create, update, updateStatus, position, delete, restore, depend, free, history, nil, nil)
-}
-
-// NewHandlerWithSyncControl adds the publication indicator and its toggle on
-// top of the full mutation surface.
+// pageFuncs give the page template the one fact a presentation.TaskView does
+// not carry: whether this build has a column for the status the task holds. A
+// card in the unknown-status region cannot be dragged anywhere, so it must not
+// announce itself as movable.
 //
-// This positional list is past comfortable at twelve, and each addition makes a
-// mis-ordered call easier to write and harder to see. Reshaping it into an
-// options struct is worth doing, and is deliberately not bundled into the
-// change that happened to be the twelfth.
-func NewHandlerWithSyncControl(list TaskLister, create TaskCreator, update TaskUpdater, updateStatus TaskStatusUpdater, position TaskPositionUpdater, delete TaskDeleter, restore TaskRestorer, depend TaskDependencyAdder, free TaskDependencyRemover, history TaskHistoryReader, syncState SyncStateReporter, setSyncMode SyncModeSetter) http.Handler {
-	return newHandler(list, create, update, updateStatus, position, delete, restore, depend, free, history, syncState, setSyncMode)
+// The client script answers the same question on every poll, and answers it
+// from the columns this function rendered — it reads the emitted [data-status]
+// nodes rather than a status list of its own — so the two cannot disagree about
+// a card even while the page is being served by a build the script does not
+// match. Neither side reads it off the containing list, so a card that changes
+// status carries the right answer with it as it moves.
+var pageFuncs = template.FuncMap{"knownStatus": knownStatus}
+
+func knownStatus(status core.Status) bool {
+	for _, definition := range core.WorkflowStatuses() {
+		if definition.Status == status {
+			return true
+		}
+	}
+	return false
 }
 
-func newHandler(list TaskLister, create TaskCreator, update TaskUpdater, updateStatus TaskStatusUpdater, position TaskPositionUpdater, delete TaskDeleter, restore TaskRestorer, depend TaskDependencyAdder, free TaskDependencyRemover, history TaskHistoryReader, syncState SyncStateReporter, setSyncMode SyncModeSetter) http.Handler {
-	page := template.Must(template.New("index.html").ParseFS(assets, "assets/index.html"))
-	handler := &handler{list: list, create: create, update: update, updateStatus: updateStatus, position: position, delete: delete, restore: restore, depend: depend, free: free, history: history, syncState: syncState, setSyncMode: setSyncMode, page: page, mux: http.NewServeMux()}
+// NewHandler builds the board from the capabilities it is given. It is the only
+// constructor: the tiered NewHandlerWithTaskMutations and
+// NewHandlerWithSyncControl existed to append capabilities to a positional list
+// without renaming every earlier call, and a named field expresses the same
+// tier by being set or left nil.
+func NewHandler(options Options) http.Handler {
+	page := template.Must(template.New("index.html").Funcs(pageFuncs).ParseFS(assets, "assets/index.html"))
+	handler := &handler{Options: options, page: page, mux: http.NewServeMux()}
 	handler.mux.HandleFunc("GET /{$}", handler.serveBoard)
 	handler.mux.HandleFunc("GET /deleted", handler.serveBoard)
 	handler.mux.HandleFunc("GET /tasks/new", handler.serveBoard)
@@ -249,6 +273,12 @@ func writeSecurityHeaders(writer http.ResponseWriter) {
 
 func (handler *handler) serveHTTP(writer http.ResponseWriter, request *http.Request) {
 	writeSecurityHeaders(writer)
+	// Bounded here rather than at each route so no handler, present or future,
+	// can read an unbounded body by forgetting to ask for a limit. A route that
+	// never reads its body is covered too, and http.MaxBytesReader is given the
+	// ResponseWriter so a sender that ignores the limit loses its connection
+	// rather than keeping it to try again.
+	request.Body = http.MaxBytesReader(writer, request.Body, MaxRequestBodyBytes)
 	if malformedTaskDependencyRequestPath(request.URL.Path, request.URL.EscapedPath()) {
 		http.NotFound(writer, request)
 		return
@@ -437,7 +467,7 @@ func taskHistoryPathID(path string) string {
 }
 
 func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Request) {
-	tasks, err := handler.list(request.Context())
+	tasks, err := handler.listTasks(request)
 	if err != nil {
 		handler.writeError(writer, err)
 		return
@@ -448,8 +478,19 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 	}
 }
 
+// listTasks reads the board's tasks, reporting a board built without a lister
+// the way every other route reports a capability it was not given. Listing was
+// mandatory by signature while the constructor was positional; a named field
+// can be left out, so the check has to exist.
+func (handler *handler) listTasks(request *http.Request) ([]core.Task, error) {
+	if handler.List == nil {
+		return nil, core.Errorf(core.CategoryOperational, "task listing is not configured")
+	}
+	return handler.List(request.Context())
+}
+
 func (handler *handler) serveTasks(writer http.ResponseWriter, request *http.Request) {
-	tasks, err := handler.list(request.Context())
+	tasks, err := handler.listTasks(request)
 	if err != nil {
 		handler.writeError(writer, err)
 		return
@@ -468,7 +509,7 @@ func (handler *handler) serveTasks(writer http.ResponseWriter, request *http.Req
 }
 
 func (handler *handler) serveTaskHistory(writer http.ResponseWriter, request *http.Request) {
-	if handler.history == nil {
+	if handler.History == nil {
 		handler.writeError(writer, core.Errorf(core.CategoryOperational, "task history is not configured"))
 		return
 	}
@@ -476,7 +517,7 @@ func (handler *handler) serveTaskHistory(writer http.ResponseWriter, request *ht
 	if id == "" {
 		id = taskHistoryPathID(request.URL.Path)
 	}
-	detail, err := handler.history(request.Context(), id)
+	detail, err := handler.History(request.Context(), id)
 	if err != nil {
 		handler.writeError(writer, err)
 		return
@@ -537,10 +578,14 @@ func (handler *handler) updateTaskStatus(writer http.ResponseWriter, request *ht
 	}
 	var input updateStatusRequest
 	if err := decodeRequest(request.Body, &input); err != nil {
-		handler.writeError(writer, core.Wrap(core.CategoryInvocation, "decode status update", err))
+		handler.writeError(writer, decodeRequestError("decode status update", err))
 		return
 	}
-	result, err := handler.updateStatus(request.Context(), id, input.Status, input.ExpectedHead)
+	if handler.UpdateStatus == nil {
+		handler.writeError(writer, core.Errorf(core.CategoryOperational, "task status updating is not configured"))
+		return
+	}
+	result, err := handler.UpdateStatus(request.Context(), id, input.Status, input.ExpectedHead)
 	if err != nil {
 		handler.writeError(writer, err)
 		return
@@ -549,16 +594,16 @@ func (handler *handler) updateTaskStatus(writer http.ResponseWriter, request *ht
 }
 
 func (handler *handler) positionTask(writer http.ResponseWriter, request *http.Request) {
-	if handler.position == nil {
+	if handler.Position == nil {
 		handler.writeError(writer, core.Errorf(core.CategoryOperational, "task positioning is not configured"))
 		return
 	}
 	var body positionTaskRequest
 	if err := decodeRequest(request.Body, &body); err != nil {
-		handler.writeError(writer, core.Wrap(core.CategoryInvocation, "decode task position", err))
+		handler.writeError(writer, decodeRequestError("decode task position", err))
 		return
 	}
-	result, err := handler.position(
+	result, err := handler.Position(
 		request.Context(),
 		request.PathValue("id"),
 		core.PlaceInput{Status: body.Status, Before: body.Before, After: body.After, ExpectedHead: body.ExpectedHead},
@@ -573,14 +618,14 @@ func (handler *handler) positionTask(writer http.ResponseWriter, request *http.R
 func (handler *handler) createTask(writer http.ResponseWriter, request *http.Request) {
 	var body createTaskRequest
 	if err := decodeRequest(request.Body, &body); err != nil {
-		handler.writeError(writer, core.Wrap(core.CategoryInvocation, "decode task create", err))
+		handler.writeError(writer, decodeRequestError("decode task create", err))
 		return
 	}
-	if handler.create == nil {
+	if handler.Create == nil {
 		handler.writeError(writer, core.Errorf(core.CategoryOperational, "task creation is not configured"))
 		return
 	}
-	result, err := handler.create(request.Context(), core.CreateInput(body))
+	result, err := handler.Create(request.Context(), core.CreateInput(body))
 	if err != nil {
 		handler.writeError(writer, err)
 		return
@@ -591,10 +636,10 @@ func (handler *handler) createTask(writer http.ResponseWriter, request *http.Req
 func (handler *handler) updateTask(writer http.ResponseWriter, request *http.Request) {
 	var body updateTaskRequest
 	if err := decodeRequest(request.Body, &body); err != nil {
-		handler.writeError(writer, core.Wrap(core.CategoryInvocation, "decode task update", err))
+		handler.writeError(writer, decodeRequestError("decode task update", err))
 		return
 	}
-	if handler.update == nil {
+	if handler.Update == nil {
 		handler.writeError(writer, core.Errorf(core.CategoryOperational, "task updating is not configured"))
 		return
 	}
@@ -602,7 +647,7 @@ func (handler *handler) updateTask(writer http.ResponseWriter, request *http.Req
 	if id == "" {
 		id = taskPathID(request.URL.Path)
 	}
-	result, err := handler.update(request.Context(), id, core.UpdateInput(body))
+	result, err := handler.Update(request.Context(), id, core.UpdateInput(body))
 	if err != nil {
 		handler.writeError(writer, err)
 		return
@@ -611,11 +656,11 @@ func (handler *handler) updateTask(writer http.ResponseWriter, request *http.Req
 }
 
 func (handler *handler) deleteTask(writer http.ResponseWriter, request *http.Request) {
-	if handler.delete == nil {
+	if handler.Delete == nil {
 		handler.writeError(writer, core.Errorf(core.CategoryOperational, "task deletion is not configured"))
 		return
 	}
-	result, err := handler.delete(request.Context(), request.PathValue("id"))
+	result, err := handler.Delete(request.Context(), request.PathValue("id"))
 	if err != nil {
 		handler.writeError(writer, err)
 		return
@@ -624,11 +669,11 @@ func (handler *handler) deleteTask(writer http.ResponseWriter, request *http.Req
 }
 
 func (handler *handler) restoreTask(writer http.ResponseWriter, request *http.Request) {
-	if handler.restore == nil {
+	if handler.Restore == nil {
 		handler.writeError(writer, core.Errorf(core.CategoryOperational, "task restoration is not configured"))
 		return
 	}
-	result, err := handler.restore(request.Context(), request.PathValue("id"))
+	result, err := handler.Restore(request.Context(), request.PathValue("id"))
 	if err != nil {
 		handler.writeError(writer, err)
 		return
@@ -641,11 +686,11 @@ func (handler *handler) addTaskDependency(writer http.ResponseWriter, request *h
 		handler.writeError(writer, core.Wrap(core.CategoryInvocation, "validate dependency request", err))
 		return
 	}
-	if handler.depend == nil {
+	if handler.Depend == nil {
 		handler.writeError(writer, core.Errorf(core.CategoryOperational, "task dependency addition is not configured"))
 		return
 	}
-	result, err := handler.depend(request.Context(), request.PathValue("id"), request.PathValue("dependency"))
+	result, err := handler.Depend(request.Context(), request.PathValue("id"), request.PathValue("dependency"))
 	if err != nil {
 		handler.writeError(writer, err)
 		return
@@ -658,11 +703,11 @@ func (handler *handler) removeTaskDependency(writer http.ResponseWriter, request
 		handler.writeError(writer, core.Wrap(core.CategoryInvocation, "validate dependency request", err))
 		return
 	}
-	if handler.free == nil {
+	if handler.Free == nil {
 		handler.writeError(writer, core.Errorf(core.CategoryOperational, "task dependency removal is not configured"))
 		return
 	}
-	result, err := handler.free(request.Context(), request.PathValue("id"), request.PathValue("dependency"))
+	result, err := handler.Free(request.Context(), request.PathValue("id"), request.PathValue("dependency"))
 	if err != nil {
 		handler.writeError(writer, err)
 		return
@@ -681,6 +726,18 @@ func requireEmptyRequestBody(body io.Reader) error {
 	return err
 }
 
+// MaxRequestBodyBytes bounds one request body.
+//
+// The largest task this version can store is a title, a description, and a
+// label set at core's ceilings — under 70 KiB of task text. JSON escaping can
+// expand that severalfold in the worst case, so this sits an order of magnitude
+// above the largest body the board could honestly send while still refusing a
+// client that means to stream indefinitely. A request over it is the sender's
+// mistake, so it reads as an invocation failure rather than a validation one.
+const MaxRequestBodyBytes = 1 << 20
+
+// decodeRequest reads exactly one JSON value from the request body, which
+// serveHTTP has already bounded.
 func decodeRequest(body io.Reader, value any) error {
 	decoder := json.NewDecoder(body)
 	decoder.DisallowUnknownFields()
@@ -694,6 +751,25 @@ func decodeRequest(body io.Reader, value any) error {
 		return err
 	}
 	return nil
+}
+
+// decodeRequestError categorizes a body-decoding failure for a client.
+//
+// Only the outermost message reaches the response, so a body stopped by the
+// ceiling is reported as itself rather than wrapped in the route's context: the
+// route's "decode task create" alone would leave the sender to guess whether
+// its JSON was malformed or merely too large, which is the one decode failure a
+// client can act on without seeing the body.
+func decodeRequestError(context string, err error) error {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		return core.Errorf(
+			core.CategoryInvocation,
+			"request body must not exceed %d bytes",
+			MaxRequestBodyBytes,
+		)
+	}
+	return core.Wrap(core.CategoryInvocation, context, err)
 }
 
 func (handler *handler) writeTaskMutation(writer http.ResponseWriter, result core.MutationResult) {
@@ -721,24 +797,24 @@ func taskPresentation(tasks []core.Task) []TaskPresentation {
 }
 
 func (handler *handler) serveSyncState(writer http.ResponseWriter, request *http.Request) {
-	if handler.syncState == nil {
+	if handler.SyncState == nil {
 		handler.writeError(writer, core.Errorf(core.CategoryOperational, "publication state is not configured"))
 		return
 	}
-	writeJSON(writer, http.StatusOK, SyncDocument{Format: "workbook.sync", Version: 1, Sync: handler.syncState(request.Context())})
+	writeJSON(writer, http.StatusOK, SyncDocument{Format: "workbook.sync", Version: 1, Sync: handler.SyncState(request.Context())})
 }
 
 func (handler *handler) updateSyncMode(writer http.ResponseWriter, request *http.Request) {
-	if handler.setSyncMode == nil {
+	if handler.SetSyncMode == nil {
 		handler.writeError(writer, core.Errorf(core.CategoryOperational, "publication mode is not configured"))
 		return
 	}
 	var body syncModeRequest
 	if err := decodeRequest(request.Body, &body); err != nil {
-		handler.writeError(writer, core.Wrap(core.CategoryInvocation, "decode publication mode", err))
+		handler.writeError(writer, decodeRequestError("decode publication mode", err))
 		return
 	}
-	state, err := handler.setSyncMode(request.Context(), body.Mode)
+	state, err := handler.SetSyncMode(request.Context(), body.Mode)
 	if err != nil {
 		handler.writeError(writer, err)
 		return

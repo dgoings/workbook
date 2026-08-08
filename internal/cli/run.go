@@ -864,51 +864,51 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 		return err
 	}
 	publisher := &boardPublisher{repository: repository, config: service.Config}
-	handler := webui.NewHandlerWithSyncControl(
-		func(requestContext context.Context) ([]core.Task, error) {
+	handler := webui.NewHandler(webui.Options{
+		List: func(requestContext context.Context) ([]core.Task, error) {
 			return service.List(requestContext, core.ListFilter{All: true})
 		},
-		func(requestContext context.Context, input core.CreateInput) (core.MutationResult, error) {
+		Create: func(requestContext context.Context, input core.CreateInput) (core.MutationResult, error) {
 			result, err := service.CreateMutation(requestContext, input)
 			return publisher.publish(requestContext, result, err)
 		},
-		func(requestContext context.Context, id string, input core.UpdateInput) (core.MutationResult, error) {
+		Update: func(requestContext context.Context, id string, input core.UpdateInput) (core.MutationResult, error) {
 			result, err := service.UpdateMutation(requestContext, id, input)
 			return publisher.publish(requestContext, result, err)
 		},
-		func(requestContext context.Context, id string, status core.Status, expectedHead string) (core.MutationResult, error) {
+		UpdateStatus: func(requestContext context.Context, id string, status core.Status, expectedHead string) (core.MutationResult, error) {
 			result, err := service.UpdateMutation(requestContext, id, core.UpdateInput{Status: &status, ExpectedHead: expectedHead})
 			return publisher.publish(requestContext, result, err)
 		},
-		func(requestContext context.Context, id string, input core.PlaceInput) (core.MutationResult, error) {
+		Position: func(requestContext context.Context, id string, input core.PlaceInput) (core.MutationResult, error) {
 			result, err := service.PlaceMutation(requestContext, id, input)
 			return publisher.publish(requestContext, result, err)
 		},
-		func(requestContext context.Context, id string) (core.MutationResult, error) {
+		Delete: func(requestContext context.Context, id string) (core.MutationResult, error) {
 			result, err := service.DeleteMutation(requestContext, id)
 			return publisher.publish(requestContext, result, err)
 		},
-		func(requestContext context.Context, id string) (core.MutationResult, error) {
+		Restore: func(requestContext context.Context, id string) (core.MutationResult, error) {
 			result, err := service.RestoreMutation(requestContext, id)
 			return publisher.publish(requestContext, result, err)
 		},
-		func(requestContext context.Context, id, dependency string) (core.MutationResult, error) {
+		Depend: func(requestContext context.Context, id, dependency string) (core.MutationResult, error) {
 			result, err := service.DependMutation(requestContext, id, dependency)
 			return publisher.publish(requestContext, result, err)
 		},
-		func(requestContext context.Context, id, dependency string) (core.MutationResult, error) {
+		Free: func(requestContext context.Context, id, dependency string) (core.MutationResult, error) {
 			result, err := service.FreeMutation(requestContext, id, dependency)
 			return publisher.publish(requestContext, result, err)
 		},
 		// The board's detail view shows history by default and derives a status
 		// lane that reaches back to the task's creation, so it reads the whole
 		// chain rather than the CLI's ten-change default window.
-		func(requestContext context.Context, id string) (core.TaskDetail, error) {
+		History: func(requestContext context.Context, id string) (core.TaskDetail, error) {
 			return service.ShowDetail(requestContext, id, core.ShowOptions{History: true, All: true})
 		},
-		publisher.state,
-		publisher.setMode,
-	)
+		SyncState:   publisher.state,
+		SetSyncMode: publisher.setMode,
+	})
 	listener, err := openBoardListener(*addr, addrChosen)
 	if err != nil {
 		return err
