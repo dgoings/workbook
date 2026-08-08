@@ -10,6 +10,58 @@ import (
 	"testing"
 )
 
+// A release someone wrote notes for publishes those notes. Generating notes
+// beside prose written for the same version puts two descriptions of one
+// release on the page, and the one nobody wrote wins the reader's attention.
+func TestPublishReleasePublishesTheChangelogEntryAsTheReleaseNotes(t *testing.T) {
+	root, _ := renderFormulaPaths(t)
+	dist := writeReleaseFixture(t, "0.1.0")
+	tap, _ := newTapRepository(t)
+	fakeBin, fakeGitHub := newFakeGitHubCLI(t)
+	changelog := writeChangelog(t, "# Changelog\n\n## v0.1.0 — 2026-08-08\n\n### Added\n- the first release\n")
+
+	output, err := runPublishReleaseWithChangelog(root, fakeBin, fakeGitHub, tap, dist, changelog, nil)
+	if err != nil {
+		t.Fatalf("publish release: %v\n%s", err, output)
+	}
+
+	logContents := readFakeGitHubLog(t, fakeGitHub)
+	if !strings.Contains(logContents, "--notes-file") {
+		t.Errorf("gh log = %q, want the changelog entry supplied as notes", logContents)
+	}
+	if strings.Contains(logContents, "--generate-notes") {
+		t.Errorf("gh log = %q, want no generated notes alongside a written entry", logContents)
+	}
+	// The notes file is a body, not a release asset. Uploading it would leave
+	// the release with an asset the rerun check refuses to recognise.
+	if _, err := os.Stat(filepath.Join(fakeGitHub, "assets", "notes.md")); err == nil {
+		t.Error("notes file was uploaded as a release asset")
+	}
+}
+
+// A release with no entry has nothing to publish, so the generated notes stay.
+func TestPublishReleaseGeneratesNotesWithoutAChangelogEntry(t *testing.T) {
+	root, _ := renderFormulaPaths(t)
+	dist := writeReleaseFixture(t, "0.1.0")
+	tap, _ := newTapRepository(t)
+	fakeBin, fakeGitHub := newFakeGitHubCLI(t)
+	// An entry for a different release, which this one must not borrow.
+	changelog := writeChangelog(t, "# Changelog\n\n## v0.2.0\n\n- a later release\n")
+
+	output, err := runPublishReleaseWithChangelog(root, fakeBin, fakeGitHub, tap, dist, changelog, nil)
+	if err != nil {
+		t.Fatalf("publish release: %v\n%s", err, output)
+	}
+
+	logContents := readFakeGitHubLog(t, fakeGitHub)
+	if !strings.Contains(logContents, "--generate-notes") {
+		t.Errorf("gh log = %q, want generated notes for a release with no entry", logContents)
+	}
+	if strings.Contains(logContents, "--notes-file") {
+		t.Errorf("gh log = %q, want no notes file for a release with no entry", logContents)
+	}
+}
+
 func TestPublishReleaseCreatesAssetsOnceAndRejectsMismatchedRerun(t *testing.T) {
 	root, _ := renderFormulaPaths(t)
 	dist := writeReleaseFixture(t, "0.1.0")
@@ -258,10 +310,17 @@ case "${command}" in
 	create)
 		shift
 		mkdir -p "${FAKE_GH_ROOT}/assets"
-		for argument in "$@"; do
-			if [ -f "${argument}" ]; then
-				cp "${argument}" "${FAKE_GH_ROOT}/assets/"
+		while [ "$#" -gt 0 ]; do
+			# gh reads the notes body out of this file rather than uploading it.
+			# Copying it would add a sixth asset the rerun check would reject.
+			if [ "$1" = --notes-file ] && [ "$#" -ge 2 ]; then
+				shift 2
+				continue
 			fi
+			if [ -f "$1" ]; then
+				cp "$1" "${FAKE_GH_ROOT}/assets/"
+			fi
+			shift
 		done
 		echo draft > "${FAKE_GH_ROOT}/state"
 		;;
@@ -294,6 +353,15 @@ esac
 	return fakeBin, stateRoot
 }
 
+func readFakeGitHubLog(t *testing.T, fakeGitHub string) string {
+	t.Helper()
+	contents, err := os.ReadFile(filepath.Join(fakeGitHub, "commands.log"))
+	if err != nil {
+		t.Fatalf("read fake gh log: %v", err)
+	}
+	return string(contents)
+}
+
 func runPublishRelease(t *testing.T, root, fakeBin, fakeGitHub, tap, dist string, extraEnvironment []string) {
 	t.Helper()
 	if output, err := runPublishReleaseCommand(root, fakeBin, fakeGitHub, tap, dist, extraEnvironment); err != nil {
@@ -302,12 +370,24 @@ func runPublishRelease(t *testing.T, root, fakeBin, fakeGitHub, tap, dist string
 }
 
 func runPublishReleaseCommand(root, fakeBin, fakeGitHub, tap, dist string, extraEnvironment []string) ([]byte, error) {
+	// Pointing at a changelog that does not exist keeps these cases on the
+	// generated-notes path regardless of what the repository's own CHANGELOG.md
+	// happens to contain. Notes selection is covered on its own below.
+	return runPublishReleaseWithChangelog(
+		root, fakeBin, fakeGitHub, tap, dist,
+		filepath.Join(root, "scripts", "testdata-absent-changelog.md"),
+		extraEnvironment,
+	)
+}
+
+func runPublishReleaseWithChangelog(root, fakeBin, fakeGitHub, tap, dist, changelog string, extraEnvironment []string) ([]byte, error) {
 	command := exec.Command(
 		filepath.Join(root, "scripts", "publish-release.sh"),
 		"v0.1.0",
 		dist,
 		tap,
 		"dgoings/workbook",
+		changelog,
 	)
 	command.Dir = root
 	command.Env = environmentWithValues(

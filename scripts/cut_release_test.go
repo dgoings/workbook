@@ -198,7 +198,7 @@ func newReleaseRepository(t *testing.T) (string, string) {
 	if err := os.Mkdir(filepath.Join(clone, "scripts"), 0o755); err != nil {
 		t.Fatalf("create scripts directory: %v", err)
 	}
-	for _, name := range []string{"cut-release.sh", "release-version.sh"} {
+	for _, name := range []string{"cut-release.sh", "release-version.sh", "resolve-release-version.sh"} {
 		contents, err := os.ReadFile(filepath.Join(root, "scripts", name))
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)

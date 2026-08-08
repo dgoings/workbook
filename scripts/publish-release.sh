@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-if [ "$#" -ne 4 ]; then
-	echo "usage: scripts/publish-release.sh <tag> <dist-dir> <tap-dir> <repository>" >&2
+if [ "$#" -lt 4 ] || [ "$#" -gt 5 ]; then
+	echo "usage: scripts/publish-release.sh <tag> <dist-dir> <tap-dir> <repository> [changelog]" >&2
 	exit 2
 fi
 
@@ -15,6 +15,9 @@ tag=$1
 distribution_directory=$2
 tap_directory=$3
 repository=$4
+# The changelog is optional so the four-argument form keeps working. A release
+# with no entry falls back to generated notes.
+changelog=${5:-${script_directory}/../CHANGELOG.md}
 version=$("${script_directory}/validate-release-tag.sh" "${tag}")
 
 distribution_directory=$(CDPATH='' cd -- "${distribution_directory}" && pwd -P)
@@ -128,12 +131,21 @@ else
 	for asset_name in ${asset_names}; do
 		set -- "$@" "${distribution_directory}/${asset_name}"
 	done
+	# A hand-written entry is the release's notes. Publishing generated notes
+	# beside prose someone wrote for this version is the divergence that makes a
+	# changelog stop being worth reading; a release with no entry has nothing to
+	# diverge from and keeps the generated ones.
+	notes_file="${temporary_directory}/notes.md"
+	if "${script_directory}/changelog-entry.sh" "${version}" "${changelog}" > "${notes_file}" 2>/dev/null; then
+		set -- "$@" --notes-file "${notes_file}"
+	else
+		set -- "$@" --generate-notes
+	fi
 	gh release create "${tag}" \
 		"$@" \
 		--repo "${repository}" \
 		--verify-tag \
 		--draft \
-		--generate-notes \
 		--title "Workbook ${tag}"
 	created_release=1
 	release_is_draft=true
