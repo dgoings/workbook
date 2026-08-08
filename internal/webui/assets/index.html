@@ -26,7 +26,7 @@
     .skip-link { position: fixed; left: 1rem; top: -4rem; z-index: 2; background: #172033; color: #fff; padding: .55rem .75rem; border-radius: 4px; }
     .skip-link:focus { top: 1rem; }
     .app-header { display: flex; flex: 0 0 auto; align-items: end; justify-content: space-between; gap: 1.25rem; padding: 1.25rem; border-bottom: 1px solid #b9c6d8; background: #fff; }
-    .eyebrow, code, .priority, .label, .ref-label, .updated { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
+    .eyebrow, code, .priority, .label, .label-chip, .ref-label, .updated { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
     .eyebrow { margin: 0 0 .2rem; color: #2457d6; font-size: .7rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
     h1 { margin: 0; font-size: clamp(1.25rem, 2vw, 1.65rem); letter-spacing: -.03em; }
     .updated { margin: 0; color: #56647a; font-size: .75rem; text-align: right; }
@@ -98,6 +98,23 @@
     .field textarea { min-height: 8rem; resize: vertical; line-height: 1.45; }
     .field--description textarea { height: 100%; min-height: 0; overflow-y: auto; resize: none; }
     .field input:focus, .field textarea:focus, .field select:focus { border-color: #2457d6; outline: 3px solid rgba(36,87,214,.18); }
+    .label-editor { display: grid; gap: .35rem; }
+    .label-chips { display: flex; flex-wrap: wrap; gap: .3rem; margin: 0; padding: 0; list-style: none; }
+    .label-chips:empty { display: none; }
+    .label-chip { display: inline-flex; align-items: center; gap: .2rem; max-width: 100%; padding: 0 .1rem 0 .44rem; border: 1px solid #b9c6d8; border-radius: 999px; background: #edf3ff; color: #34425a; font-size: .7rem; }
+    .label-chip__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* 1.5rem square, because removal is immediate and has no undo: a 24px
+       target is what WCAG 2.2 asks for, and the chiclets wrap too tightly for
+       the spacing exception to cover anything smaller. */
+    .label-chip__remove { display: inline-flex; align-items: center; justify-content: center; width: 1.5rem; height: 1.5rem; padding: 0; border: 0; border-radius: 999px; background: transparent; color: #526b9b; cursor: pointer; font: inherit; font-size: .85rem; line-height: 1; }
+    .label-chip__remove:hover { background: #d3e0fa; color: #172033; }
+    .label-chip__remove:focus-visible { outline: 2px solid #2457d6; outline-offset: 1px; }
+    .label-editor__hint, .label-editor__status { margin: 0; color: #56647a; font-size: .72rem; }
+    /* Reserved rather than hidden while empty, like .form-status below: an
+       unrendered element is not in the accessibility tree, and a live region
+       that appears in the same frame as its first message does not announce
+       it — which would cost exactly the first add or remove. */
+    .label-editor__status { min-height: 1.15rem; }
     .form-status { min-height: 1.35rem; margin: 0; color: #9c2f25; font-size: .82rem; }
     .form-actions { display: flex; align-items: center; justify-content: space-between; gap: .85rem; width: 100%; padding-top: .1rem; }
     .form-primary-actions { display: flex; align-items: center; gap: .85rem; }
@@ -508,9 +525,165 @@
         if (wide) classes.push("field--wide");
         if (modifier) classes.push(modifier);
         const wrapper = document.createElement("div"); wrapper.className = classes.join(" ");
-        const label = document.createElement("label"); label.htmlFor = control.id; text(label, labelText);
+        const label = document.createElement("label");
+        // A composite control is a region with no id a caption can point at, so
+        // it names the focusable element inside it and clicking the caption
+        // still lands the caret where typing goes.
+        label.htmlFor = control.dataset.fieldFor || control.id;
+        text(label, labelText);
         wrapper.append(label, control);
         return wrapper;
+      }
+      // Labels are a set, so the form edits them as one chiclet per label
+      // rather than as a line of commas: the input holds only the label being
+      // typed, each entry carries its own remove control, and nothing has to be
+      // re-read out of a sentence the author stopped proofreading three labels
+      // ago. What the server sees is unchanged — an array of strings.
+      function labelEditor(initial) {
+        const values = [];
+        const region = document.createElement("div");
+        region.className = "label-editor";
+        const chiclets = document.createElement("ul");
+        chiclets.className = "label-chips";
+        // A flex list is not a list to a screen reader unless it says so.
+        chiclets.setAttribute("role", "list");
+        // Deliberately unnamed: this input holds the label being typed, not the
+        // field's value, and the set it belongs to is read from the chiclets.
+        const input = document.createElement("input");
+        input.id = "task-labels";
+        input.placeholder = "Add a label";
+        input.setAttribute("aria-describedby", "task-labels-hint");
+        region.dataset.fieldFor = input.id;
+        const hint = document.createElement("p");
+        hint.id = "task-labels-hint";
+        hint.className = "label-editor__hint";
+        text(hint, "Press Enter or comma to add a label.");
+        const announcement = document.createElement("p");
+        announcement.className = "label-editor__status";
+        announcement.setAttribute("role", "status");
+        announcement.setAttribute("aria-live", "polite");
+        // Saved chiclets sit below the input: the eye rests where typing
+        // happens, and the set grows downward away from the caret.
+        region.append(input, chiclets, hint, announcement);
+
+        // Chiclets are reconciled, never rebuilt. Pressing a remove control
+        // blurs the input, and the blur commits pending text and re-renders
+        // before the click lands; a render that replaced every node would
+        // detach the very button the press started on, the click would go to
+        // the surviving list instead, and the removal would be silently
+        // dropped. Shift+Tab out of an input holding text loses focus the same
+        // way. Values only ever arrive at the end and leave in place, so
+        // appending the new ones keeps the DOM in the order of the set.
+        const chicletsByLabel = new Map();
+        function renderChiclets() {
+          chicletsByLabel.forEach((chiclet, label) => {
+            if (values.includes(label)) return;
+            chiclet.remove();
+            chicletsByLabel.delete(label);
+          });
+          values.forEach((label) => {
+            if (chicletsByLabel.has(label)) return;
+            const chiclet = document.createElement("li");
+            chiclet.className = "label-chip";
+            chiclet.dataset.label = label;
+            const name = document.createElement("span");
+            name.className = "label-chip__name";
+            text(name, label);
+            const remove = document.createElement("button");
+            remove.type = "button";
+            remove.className = "label-chip__remove";
+            remove.dataset.removeLabel = label;
+            // The visible × is not a name, and "button" is not one either.
+            remove.setAttribute("aria-label", "Remove label " + label);
+            text(remove, "×");
+            remove.addEventListener("click", () => removeLabel(label));
+            chiclet.append(name, remove);
+            chicletsByLabel.set(label, chiclet);
+            chiclets.append(chiclet);
+          });
+        }
+        function addLabel(candidate) {
+          const label = String(candidate).trim();
+          if (!label) return false;
+          if (values.includes(label)) {
+            text(announcement, "Label " + label + " is already on this task.");
+            return false;
+          }
+          values.push(label);
+          renderChiclets();
+          text(announcement, "Added label " + label + ".");
+          return true;
+        }
+        function removeLabel(label) {
+          const at = values.indexOf(label);
+          if (at < 0) return;
+          values.splice(at, 1);
+          renderChiclets();
+          text(announcement, "Removed label " + label + ".");
+          // The button that took the click no longer exists. Without this the
+          // focus falls to the document body and a keyboard user loses the
+          // control they were working in.
+          input.focus();
+        }
+        // Enter, a comma, and Save all mean the same thing about the text in
+        // the input: it is a label, or several.
+        function commitInput() {
+          const entered = input.value;
+          input.value = "";
+          entered.split(",").forEach(addLabel);
+        }
+        input.addEventListener("input", () => {
+          // Everything before the last comma is finished; the tail is still
+          // being typed. A paste of "web, docs, api" lands as two chiclets and
+          // a word in progress.
+          if (!input.value.includes(",")) return;
+          const parts = input.value.split(",");
+          const tail = parts.pop();
+          parts.forEach(addLabel);
+          input.value = tail;
+        });
+        input.addEventListener("keydown", (event) => {
+          // An IME delivers the Enter that confirms a candidate, and the
+          // Backspace that edits one, as keydown with isComposing set. Reading
+          // either as a label would commit the unconverted reading — the kana
+          // rather than the word — and no amount of retyping would ever get
+          // the converted label in.
+          if (event.isComposing) return;
+          if (event.key === "Enter") {
+            // Enter here adds a label. Letting it through would submit the
+            // form instead, which is the one thing the user did not ask for.
+            event.preventDefault();
+            commitInput();
+            return;
+          }
+          if (event.key === "Backspace" && !input.value && values.length) {
+            event.preventDefault();
+            removeLabel(values[values.length - 1]);
+          }
+        });
+        // Leaving the field is as much a commit as pressing Enter, so the
+        // chiclets always show what a save would send.
+        input.addEventListener("blur", () => { commitInput(); });
+
+        (initial || []).forEach((label) => {
+          const value = String(label).trim();
+          if (value && !values.includes(value)) values.push(value);
+        });
+        renderChiclets();
+        return {
+          region,
+          // A label typed but never committed is still a label the user
+          // entered. Saving folds it in rather than discarding their last
+          // keystrokes for want of an Enter.
+          values() {
+            const entered = [...values];
+            input.value.split(",").forEach((part) => {
+              const label = part.trim();
+              if (label && !entered.includes(label)) entered.push(label);
+            });
+            return entered;
+          }
+        };
       }
       function select(name, options, value) {
         const control = document.createElement("select"); control.id = "task-" + name; control.name = name;
@@ -1473,7 +1646,7 @@
         const status = select("status", statusOptions, knownStatus ? task.status : ""); status.required = true;
         if (!knownStatus) status.firstElementChild.disabled = true;
         const priority = select("priority", [["high", "High"], ["medium", "Medium"], ["low", "Low"]], task.priority);
-        const labels = document.createElement("input"); labels.id = "task-labels"; labels.name = "labels"; labels.value = (task.labels || []).join(", "); labels.placeholder = "web, docs, release";
+        const labels = labelEditor(task.labels || []);
         // Named, because the relationship region carries a form-status of its
         // own and "the first .form-status in the route" is the wrong element
         // as often as it is the right one.
@@ -1511,7 +1684,7 @@
           propertiesHeading,
           field("Status", status),
           field("Priority", priority),
-          field("Labels", labels, true)
+          field("Labels", labels.region, true)
         );
         const relationshipMount = document.createElement("div"); relationshipMount.dataset.relationshipMount = "";
         sidebar.append(properties, relationshipMount);
@@ -1657,16 +1830,13 @@
         }
         return section;
       }
-      function labelValues(control) {
-        return control.value.split(",").map((label) => label.trim()).filter(Boolean);
-      }
       function allTaskValues(controls) {
         return {
           title: controls.title.value,
           description: controls.description.value,
           status: controls.status.value,
           priority: controls.priority.value,
-          labels: labelValues(controls.labels)
+          labels: controls.labels.values()
         };
       }
       // An update carries the fields this form changed and no others. Sending
@@ -1682,7 +1852,7 @@
         // placeholder. Leaving it alone is not a request to clear the status.
         if (controls.status.value && controls.status.value !== task.status) values.status = controls.status.value;
         if (controls.priority.value !== task.priority) values.priority = controls.priority.value;
-        const labels = labelValues(controls.labels);
+        const labels = controls.labels.values();
         if (!sameLabels(labels, task.labels || [])) values.labels = labels;
         return values;
       }

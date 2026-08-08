@@ -21,8 +21,7 @@ import (
 const descriptionPreferenceKey = "workbook.board.descriptions"
 
 func TestHandlerHidesCardDescriptionsUntilTheBoardIsAskedForThem(t *testing.T) {
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
-		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return boardTasks(), nil })
 
 	response := request(t, handler, http.MethodGet, "/")
 	if response.Code != http.StatusOK {
@@ -58,8 +57,7 @@ func TestHandlerHidesCardDescriptionsUntilTheBoardIsAskedForThem(t *testing.T) {
 // hidden makes that degraded page one with no control rather than one with a
 // control that lies.
 func TestHandlerShipsTheDescriptionSettingHiddenUntilItsRouteRevealsIt(t *testing.T) {
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
-		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return boardTasks(), nil })
 
 	for _, path := range []string{"/", "/deleted", "/tasks/new"} {
 		response := request(t, handler, http.MethodGet, path)
@@ -81,8 +79,7 @@ func TestHandlerShipsTheDescriptionSettingHiddenUntilItsRouteRevealsIt(t *testin
 // one keeps the speaking name, the same choice the publishing control beside it
 // makes.
 func TestHandlerLeavesTheDescriptionSettingStateToItsNameAlone(t *testing.T) {
-	handler := NewHandler(func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
-		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t))
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return boardTasks(), nil })
 
 	response := request(t, handler, http.MethodGet, "/")
 	if response.Code != http.StatusOK {

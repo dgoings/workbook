@@ -1663,6 +1663,7 @@ setTimeout(async () => {
   status.children.forEach((option) => { option.selected = option.value === "in-review"; });
   priority.children.forEach((option) => { option.selected = option.value === "high"; });
   labels.value = "review, recovery";
+  labels.eventListeners.keydown({ key: "Enter", preventDefault() {} });
   const selectPending = (group, candidateID, candidateTitle) => {
     const input = findElement(group, (element) => element.attributes.role === "combobox");
     input.value = candidateTitle;
@@ -1689,10 +1690,12 @@ setTimeout(async () => {
   );
   let createCalls = 0;
   let dependencyCalls = 0;
+  let createdLabels = null;
   globalThis.fetch = async (url, options = {}) => {
     fetchCalls.push({ url, options });
     if (url === "/api/tasks" && options.method === "POST") {
       createCalls += 1;
+      createdLabels = JSON.parse(options.body).labels;
       return {
         ok: false,
         json: async () => ({
@@ -1718,10 +1721,15 @@ setTimeout(async () => {
       description.value !== unsavedDescription) {
     throw new Error("task fields were discarded after create failure");
   }
+  if (JSON.stringify(createdLabels) !== '["review","recovery"]') {
+    throw new Error("the create payload did not carry the label chiclets: " + JSON.stringify(createdLabels));
+  }
+  const chiclets = findElements(main, (element) =>
+    Object.hasOwn(element.dataset, "label")).map((chiclet) => chiclet.dataset.label);
   if (status.value !== "in-review" ||
       priority.value !== "high" ||
-      labels.value !== "review, recovery") {
-    throw new Error("task properties were discarded after create failure");
+      JSON.stringify(chiclets) !== '["review","recovery"]') {
+    throw new Error("task properties were discarded after create failure: " + JSON.stringify(chiclets));
   }
   const pendingDependsOption = findElement(dependsGroup, (element) =>
     element.attributes.role === "option" &&
@@ -5392,30 +5400,201 @@ setTimeout(async () => {
   // Labels are a set server-side, so reordering or repeating one is not a
   // change and must not be sent: the server would find no operations in it
   // and refuse the update outright.
+  const chiclets = () => findElements(main, (element) =>
+    Object.hasOwn(element.dataset, "label")).map((chiclet) => chiclet.dataset.label);
+  const addLabel = (value) => {
+    const input = findElement(main, (element) => element.id === "task-labels");
+    input.value = value;
+    input.eventListeners.keydown({ key: "Enter", preventDefault() {} });
+  };
   const reordered = await reopen();
-  const labels = findElement(main, (element) => element.id === "task-labels");
-  if (!labels || labels.value !== "docs, web") {
-    throw new Error("the labels field did not render the stored set: " + JSON.stringify(labels && labels.value));
+  if (JSON.stringify(chiclets()) !== '["docs","web"]') {
+    throw new Error("the labels field did not render the stored set: " + JSON.stringify(chiclets()));
   }
-  labels.value = "web, docs, web";
+  findElement(main, (element) => element.dataset.removeLabel === "docs").eventListeners.click();
+  addLabel("docs");
+  addLabel("web");
+  if (JSON.stringify(chiclets()) !== '["web","docs"]') {
+    throw new Error("re-adding a removed label did not reorder the set: " + JSON.stringify(chiclets()));
+  }
   await reordered.eventListeners.submit({ preventDefault() {} });
   if (bodies.length !== 1) {
     throw new Error("a reordered-labels save reached the server: " + JSON.stringify(bodies[1]));
   }
 
   const relabeled = await reopen();
-  findElement(main, (element) => element.id === "task-labels").value = "web, docs, api";
+  addLabel("api");
   await relabeled.eventListeners.submit({ preventDefault() {} });
   if (bodies.length !== 2) {
     throw new Error("an added label was not saved");
   }
-  if (JSON.stringify(bodies[1].body) !== '{"labels":["web","docs","api"],"expectedHead":"head-1"}') {
+  if (JSON.stringify(bodies[1].body) !== '{"labels":["docs","web","api"],"expectedHead":"head-1"}') {
     throw new Error("the added label was not sent as entered with the observed head: " + JSON.stringify(bodies[1].body));
   }
 }, 0);
 `
 	if output, err := exec.Command(node, "-e", program).CombinedOutput(); err != nil {
 		t.Fatalf("execute changed-field save behavior: %v\n%s", err, output)
+	}
+}
+
+// Labels are a set, and the form edits them as one chiclet per label rather
+// than as a line of commas: the input holds only the label being typed, Enter
+// and comma commit it, every chiclet carries its own remove control, and the
+// payload the server sees is the same array of strings it always was.
+func TestHandlerClientTaskFormEditsLabelsAsRemovableChiclets(t *testing.T) {
+	node := requireNode(t)
+	task := clientPlacementTask("WB-01J0000000000000000000005A", "Detail task", core.StatusReady, core.PriorityMedium)
+	task.Head = "head-1"
+	task.Labels = []string{"docs", "web"}
+	saved := task
+	saved.Head = "head-2"
+	tasks := []core.Task{task}
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+task.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/%s status = %d, want %d", task.ID, response.Code, http.StatusOK)
+	}
+	script := renderedClientScript(t, response.Body.String())
+	document := mustJSON(t, TasksDocument{
+		Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks),
+	})
+
+	program := clientDOMHarness("/tasks/"+task.ID, string(document)) + script + `
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const boardFetch = globalThis.fetch;
+  const bodies = [];
+  globalThis.fetch = async (url, options = {}) => {
+    if ((options.method || "GET") !== "GET") {
+      fetchCalls.push({ url, options });
+      bodies.push({ url, body: JSON.parse(options.body) });
+      return { ok: true, json: async () => ({
+        format: "workbook.task-mutation", version: 1, task: ` + string(mustJSON(t, saved)) + `
+      }) };
+    }
+    return boardFetch(url, options);
+  };
+
+  const chips = () => findElements(main, (element) =>
+    Object.hasOwn(element.dataset, "label")).map((chip) => chip.dataset.label);
+  const input = findElement(main, (element) => element.id === "task-labels");
+  if (!input || input.tagName !== "INPUT") {
+    throw new Error("the labels field is not a single-label input");
+  }
+  if (input.value !== "") {
+    throw new Error("the labels input rendered stored labels as text: " + JSON.stringify(input.value));
+  }
+  if (JSON.stringify(chips()) !== '["docs","web"]') {
+    throw new Error("stored labels did not render as chiclets: " + JSON.stringify(chips()));
+  }
+  const caption = findElement(main, (element) =>
+    element.tagName === "LABEL" && element.textContent === "Labels");
+  if (!caption || caption.htmlFor !== "task-labels") {
+    throw new Error("the Labels caption does not focus the label input");
+  }
+
+  // Enter adds what was typed and clears the input, and must not submit the
+  // form on its way there.
+  let prevented = false;
+  input.value = "api";
+  input.eventListeners.keydown({ key: "Enter", preventDefault() { prevented = true; } });
+  if (!prevented) throw new Error("Enter in the labels input was left to submit the form");
+  if (input.value !== "") throw new Error("adding a label did not clear the input");
+  if (JSON.stringify(chips()) !== '["docs","web","api"]') {
+    throw new Error("Enter did not add a chiclet: " + JSON.stringify(chips()));
+  }
+
+  // A label already on the task is not a second chiclet.
+  input.value = "api";
+  input.eventListeners.keydown({ key: "Enter", preventDefault() {} });
+  if (JSON.stringify(chips()) !== '["docs","web","api"]') {
+    throw new Error("a repeated label added a duplicate chiclet: " + JSON.stringify(chips()));
+  }
+
+  // A comma is a separator too, so pasted or typed lists still work.
+  input.value = "cli,";
+  input.eventListeners.input();
+  if (input.value !== "") throw new Error("a comma-terminated label was left in the input");
+  if (JSON.stringify(chips()) !== '["docs","web","api","cli"]') {
+    throw new Error("a comma did not separate labels: " + JSON.stringify(chips()));
+  }
+
+  // A pointer press on a remove control blurs the input before the click
+  // lands, and the blur commits whatever was typed. The commit has to
+  // reconcile the chiclets rather than rebuild them: the browser delivers the
+  // click to the button the press started on only while that button is still
+  // in the document, and a Shift+Tab into the list is lost the same way.
+  const removeDocs = findElement(main, (element) => element.dataset.removeLabel === "docs");
+  input.value = "sdk";
+  input.eventListeners.blur();
+  if (JSON.stringify(chips()) !== '["docs","web","api","cli","sdk"]') {
+    throw new Error("leaving the field did not commit the typed label: " + JSON.stringify(chips()));
+  }
+  if (!main.contains(removeDocs)) {
+    throw new Error("committing on blur detached a chiclet that was already on screen");
+  }
+  findElement(main, (element) => element.dataset.removeLabel === "sdk").eventListeners.click();
+  if (JSON.stringify(chips()) !== '["docs","web","api","cli"]') {
+    throw new Error("the chiclet committed on blur did not remove: " + JSON.stringify(chips()));
+  }
+  if (!main.contains(removeDocs)) {
+    throw new Error("removing one chiclet detached its surviving siblings");
+  }
+
+  // An IME delivers the Enter that confirms a candidate as a keydown with
+  // isComposing set. Consuming it commits the unconverted reading and leaves
+  // the label the user is actually typing permanently unreachable.
+  input.value = "どきゅ";
+  let composingPrevented = false;
+  input.eventListeners.keydown({ key: "Enter", isComposing: true, preventDefault() { composingPrevented = true; } });
+  if (composingPrevented || input.value !== "どきゅ") {
+    throw new Error("Enter mid-composition was consumed as a label commit");
+  }
+  if (JSON.stringify(chips()) !== '["docs","web","api","cli"]') {
+    throw new Error("an unconverted IME reading became a chiclet: " + JSON.stringify(chips()));
+  }
+  input.value = "";
+  input.eventListeners.keydown({ key: "Backspace", isComposing: true, preventDefault() {} });
+  if (JSON.stringify(chips()) !== '["docs","web","api","cli"]') {
+    throw new Error("Backspace mid-composition deleted a chiclet: " + JSON.stringify(chips()));
+  }
+
+  const removeWeb = findElement(main, (element) => element.dataset.removeLabel === "web");
+  if (!removeWeb || removeWeb.tagName !== "BUTTON" ||
+      !(removeWeb.attributes["aria-label"] || "").includes("web")) {
+    throw new Error("a chiclet does not offer a named remove control");
+  }
+  removeWeb.eventListeners.click();
+  if (JSON.stringify(chips()) !== '["docs","api","cli"]') {
+    throw new Error("removing a chiclet removed the wrong labels: " + JSON.stringify(chips()));
+  }
+  if (globalThis.activeElement !== input) {
+    throw new Error("removing a chiclet dropped keyboard focus");
+  }
+
+  // Backspace in an empty input reaches back into the chiclets.
+  input.eventListeners.keydown({ key: "Backspace", preventDefault() {} });
+  if (JSON.stringify(chips()) !== '["docs","api"]') {
+    throw new Error("Backspace did not remove the last chiclet: " + JSON.stringify(chips()));
+  }
+
+  // Text left in the input is a label the user typed and meant, so saving
+  // carries it rather than dropping it.
+  input.value = "typed";
+  const form = findElement(main, (element) => element.tagName === "FORM");
+  await form.eventListeners.submit({ preventDefault() {} });
+  if (bodies.length !== 1) {
+    throw new Error("the labels save sent " + bodies.length + " mutations");
+  }
+  if (JSON.stringify(bodies[0].body) !== '{"labels":["docs","api","typed"],"expectedHead":"head-1"}') {
+    throw new Error("the saved payload is not the edited label set: " + JSON.stringify(bodies[0].body));
+  }
+}, 0);
+`
+	if output, err := exec.Command(node, "-e", program).CombinedOutput(); err != nil {
+		t.Fatalf("execute label chiclet editing: %v\n%s", err, output)
 	}
 }
 

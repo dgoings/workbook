@@ -173,10 +173,7 @@ setTimeout(async () => {
 // rather than a copy of it.
 func newTaskClientScript(t *testing.T, path string) string {
 	t.Helper()
-	handler := NewHandler(
-		func(context.Context) ([]core.Task, error) { return nil, nil },
-		unexpectedTaskCreate(t), unexpectedTaskUpdate(t), unexpectedStatusUpdate(t),
-	)
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return nil, nil })
 	response := request(t, handler, http.MethodGet, path)
 	if response.Code != http.StatusOK {
 		t.Fatalf("GET %s status = %d, want %d", path, response.Code, http.StatusOK)
