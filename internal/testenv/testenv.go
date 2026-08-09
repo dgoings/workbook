@@ -4,9 +4,10 @@
 // recognizable marker, and an environment that must run the whole suite can
 // turn them into failures so coverage cannot shrink silently.
 //
-// The marker only helps where it is used, so this package's own tests scan
-// every _test.go file in the module and fail when one probes for a tool with
-// exec.LookPath and disposes of the result with a bare t.Skip.
+// The marker only helps where it is used, so this package's own tests scan the
+// module's Go sources -- test files and the helper packages that take a
+// *testing.T -- and fail when a function probes for a tool with exec.LookPath
+// and disposes of the result with a bare t.Skip.
 package testenv
 
 import (
