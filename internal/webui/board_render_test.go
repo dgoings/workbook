@@ -126,6 +126,211 @@ func TestHandlerClientKeepsUnchangedCardNodesAcrossAPoll(t *testing.T) {
 `)
 }
 
+// Alpha waits on prerequisites, so its card carries all three of the sections
+// applyCard() rebuilds — a description, labels, and dependency progress — and a
+// card that is redrawn needlessly has all three to lose.
+const reconcileAlphaDependencies = `
+taskDocument.presentation = taskDocument.presentation.map((view) => view.taskId !== "` + reconcileAlphaID + `"
+  ? view
+  : Object.assign({}, view, { dependenciesTotal: 2, dependenciesComplete: 1, waitingOnDependencies: true }));
+`
+
+// The test above watches the column, and proves a poll neither moves nor detaches
+// an unchanged card. It cannot see inside one. applyCard() rebuilds a card's
+// description, labels and dependency progress from scratch and rewrites its
+// title, its priority and its attributes without touching either the column or
+// the article, so a card that lost `+"`if (parts.signature === signature)`"+` would churn
+// its whole contents on every poll and still satisfy every assertion there — the
+// reader's selection inside a description would be dropped once a second. This
+// test watches one card from the inside instead: it holds the card's sections,
+// counts every write the card takes, and then changes the task to prove the
+// instruments can see a write at all.
+func TestHandlerClientWritesNothingInsideAnUnchangedCardAcrossAPoll(t *testing.T) {
+	runBoardClientWithSetup(t, "unchanged card contents", reconcileBoardTasks(), reconcileAlphaDependencies, `
+  const ready = listFor("ready");
+  const alpha = cardIn(ready, `+strconv.Quote(reconcileAlphaID)+`);
+  if (!alpha) throw new Error("board did not render the Alpha card");
+  const description = findElement(alpha, (element) => element.tagName === "P");
+  const labels = findElement(alpha, (element) => element.className === "labels");
+  const progress = findElement(alpha, (element) => hasDataKey(element, "dependencyProgress"));
+  if (!description || !labels || !progress) {
+    throw new Error("the card rendered no description, labels or dependency progress to hold on to");
+  }
+  const sections = [...alpha.children];
+
+  // Every write applyCard() can make to a card that already exists: a section
+  // detached or added, and — on the card and on every node already inside it, not
+  // just the card itself — a text, class, attribute or data attribute rewritten.
+  // Descendants have to be watched because applyCard() writes to them directly:
+  // it sets the failure region's data-visible without going through the article.
+  // The card's draggable flag is watched separately, being the one thing
+  // applyCard() writes that is a plain property rather than one of those. Nodes
+  // built after this point are new sections, and the addition count sees those.
+  let removals = 0;
+  let additions = 0;
+  const writes = [];
+  sections.forEach((node) => {
+    const detach = node.remove.bind(node);
+    node.remove = () => { removals += 1; return detach(); };
+  });
+  const append = alpha.append.bind(alpha);
+  alpha.append = (...children) => { additions += 1; return append(...children); };
+  let draggable = alpha.draggable;
+  Object.defineProperty(alpha, "draggable", {
+    configurable: true,
+    get() { return draggable; },
+    set(value) { writes.push("ARTICLE.draggable"); draggable = value; }
+  });
+  findElements(alpha, () => true).forEach((element, index) => {
+    const label = element.tagName + "[" + index + "]";
+    const setAttribute = element.setAttribute.bind(element);
+    element.setAttribute = (name, value) => { writes.push(label + "@" + name); return setAttribute(name, value); };
+    element.dataset = new Proxy(element.dataset, {
+      set(target, key, value) { writes.push(label + ".data-" + String(key)); target[key] = value; return true; }
+    });
+    const written = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), "textContent");
+    Object.defineProperty(element, "textContent", {
+      configurable: true,
+      get() { return written.get.call(element); },
+      set(value) { writes.push(label + ".textContent"); written.set.call(element, value); }
+    });
+    let className = element.className;
+    Object.defineProperty(element, "className", {
+      configurable: true,
+      get() { return className; },
+      set(value) { writes.push(label + ".className"); className = value; }
+    });
+  });
+
+  await intervalCallback();
+
+  if (cardIn(ready, `+strconv.Quote(reconcileAlphaID)+`) !== alpha) throw new Error("a poll rebuilt the unchanged card");
+  const after = [...alpha.children];
+  if (after.length !== sections.length) throw new Error("a poll changed the unchanged card's section count: " + after.length);
+  sections.forEach((node, index) => {
+    if (after[index] !== node) throw new Error("a poll replaced section " + index + " of the unchanged card");
+  });
+  if (findElement(alpha, (element) => element.tagName === "P") !== description) throw new Error("a poll rebuilt the unchanged card's description");
+  if (findElement(alpha, (element) => element.className === "labels") !== labels) throw new Error("a poll rebuilt the unchanged card's labels");
+  if (findElement(alpha, (element) => hasDataKey(element, "dependencyProgress")) !== progress) {
+    throw new Error("a poll rebuilt the unchanged card's dependency progress");
+  }
+  if (removals !== 0 || additions !== 0) {
+    throw new Error("a poll that changed nothing still removed " + removals + " and added " + additions + " card sections");
+  }
+  if (writes.length !== 0) throw new Error("a poll that changed nothing still wrote to the card: " + writes.join(", "));
+
+  // The watch is worth nothing if it cannot see a write, so a poll that really
+  // does change the task has to trip every instrument the unchanged poll left
+  // silent. This is also the churn the signature spares every other card.
+  serve(initialTasks.map((task) => task.id !== `+strconv.Quote(reconcileAlphaID)+` ? task : Object.assign({}, task, { title: "Alpha renamed" })));
+  await intervalCallback();
+  if (cardIn(ready, `+strconv.Quote(reconcileAlphaID)+`) !== alpha) throw new Error("a changed task was rebuilt instead of updated in place");
+  if (description.parentElement) throw new Error("a changed card kept its old description attached");
+  if (findElement(alpha, (element) => element.tagName === "P") === description) throw new Error("a changed card kept its old description node");
+  if (removals === 0 || additions === 0) throw new Error("a changed card did not rebuild its sections");
+  if (!writes.length) throw new Error("the write watch saw nothing when the card really changed");
+  // Named rather than counted, because these three are the instruments a reader
+  // would most reasonably assume are there without checking: the write applyCard()
+  // makes to a node inside the card rather than to the card, the card's plain
+  // draggable property, and an attribute set through setAttribute().
+  if (!writes.some((entry) => entry.endsWith(".data-visible"))) {
+    throw new Error("the watch missed the data attribute applyCard() writes inside the card: " + writes.join(", "));
+  }
+  if (!writes.includes("ARTICLE.draggable")) {
+    throw new Error("the watch missed the card's draggable flag: " + writes.join(", "));
+  }
+  if (!writes.some((entry) => entry.endsWith("@aria-label"))) {
+    throw new Error("the watch missed the card's aria-label: " + writes.join(", "));
+  }
+`)
+}
+
+// The guard is a claim about both directions: it must return early when nothing
+// the card draws has changed, and it must stop returning early the moment
+// something has. The test above covers the first direction, and on its own it
+// leaves the second one open — seven of the ten inputs to cardSignature() could
+// be deleted with the whole package still green, which is the failure that
+// actually loses a reader's data: a description-only, labels-only or
+// dependency-progress-only edit made in another clone would never reach the
+// board, and nothing would say so.
+//
+// So this walks the signature one input at a time. Each step changes exactly one
+// of them on top of the state the board was last served, which is what makes a
+// failure name its own field: a poll that differs in one input redraws the card
+// or the guard swallowed that input. The tenth input, the card's failure report,
+// is the one a poll cannot deliver — it comes from a refused mutation, and
+// board_failure_report_test.go drives it.
+func TestHandlerClientRedrawsACardForEverySignatureFieldThatChanges(t *testing.T) {
+	runBoardClientWithSetup(t, "changed card signature fields", reconcileBoardTasks(), reconcileAlphaDependencies, `
+  const alpha = boardCard(`+strconv.Quote(reconcileAlphaID)+`);
+  if (!alpha) throw new Error("board did not render the Alpha card");
+  const visibleID = () => {
+    const code = findElement(alpha, (element) => element.tagName === "CODE");
+    return code ? code.textContent : "";
+  };
+
+  // What the board is drawing Alpha from right now. A step edits one field of
+  // one of these and serves both again, so consecutive polls differ by exactly
+  // the field under test and by nothing else.
+  let task = taskByID(`+strconv.Quote(reconcileAlphaID)+`);
+  let view = taskDocument.presentation.find((entry) => entry.taskId === `+strconv.Quote(reconcileAlphaID)+`);
+  const serveAlpha = () => {
+    taskResponse = {
+      format: "workbook.tasks",
+      version: 1,
+      tasks: initialTasks.map((entry) => entry.id === `+strconv.Quote(reconcileAlphaID)+` ? task : entry),
+      presentation: taskDocument.presentation.map((entry) =>
+        entry.taskId === `+strconv.Quote(reconcileAlphaID)+` ? view : entry)
+    };
+  };
+  const changeTask = (fields) => { task = Object.assign({}, task, fields); serveAlpha(); };
+  const changeView = (fields) => { view = Object.assign({}, view, fields); serveAlpha(); };
+
+  const steps = [
+    { field: "task.title",
+      change: () => changeTask({ title: "Alpha renamed" }),
+      drawn: () => alpha.textContent.includes("Alpha renamed") },
+    { field: "task.description",
+      change: () => changeTask({ description: "Only the description moved." }),
+      drawn: () => alpha.textContent.includes("Only the description moved.") },
+    { field: "task.priority",
+      change: () => changeTask({ priority: "low" }),
+      drawn: () => alpha.dataset.priority === "low" && alpha.textContent.includes("low") },
+    { field: "task.labels",
+      change: () => changeTask({ labels: ["web", "accessibility"] }),
+      drawn: () => alpha.textContent.includes("accessibility") },
+    // The prefix shortens when the task that forced a longer one goes away.
+    { field: "view.idPrefix",
+      change: () => changeView({ idPrefix: "WB-01J00000" }),
+      drawn: () => visibleID() === "WB-01J00000" && alpha.dataset.idPrefix === "WB-01J00000" },
+    { field: "view.dependenciesComplete",
+      change: () => changeView({ dependenciesComplete: 2 }),
+      drawn: () => alpha.textContent.includes("2 of 2 prerequisites complete") },
+    { field: "view.dependenciesTotal",
+      change: () => changeView({ dependenciesTotal: 3 }),
+      drawn: () => alpha.textContent.includes("2 of 3 prerequisites complete") },
+    { field: "view.waitingOnDependencies",
+      change: () => changeView({ waitingOnDependencies: false }),
+      drawn: () => !alpha.textContent.includes("Waiting on dependencies") },
+    { field: "task.status",
+      change: () => changeTask({ status: "in-progress" }),
+      drawn: () => alpha.parentElement === listFor("in-progress") }
+  ];
+
+  for (const step of steps) {
+    step.change();
+    await intervalCallback();
+    if (boardCard(`+strconv.Quote(reconcileAlphaID)+`) !== alpha) {
+      throw new Error("changing " + step.field + " rebuilt the card instead of redrawing it");
+    }
+    if (!step.drawn()) {
+      throw new Error("changing " + step.field + " left the card drawn from the old value: " + alpha.textContent);
+    }
+  }
+`)
+}
+
 func TestHandlerClientUpdatesAChangedCardInPlace(t *testing.T) {
 	runBoardClient(t, "in-place card update", reconcileBoardTasks(), `
   const ready = listFor("ready");
