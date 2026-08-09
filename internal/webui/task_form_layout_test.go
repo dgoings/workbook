@@ -94,3 +94,62 @@ func TestHandlerClientTopAlignsTheLabelsCaption(t *testing.T) {
 		}
 	}
 }
+
+// "Create more" says what the next Save does, so it belongs in the reader's
+// path to that button rather than in the opposite corner of the footer, level
+// with a Delete it has nothing to do with.
+func TestHandlerClientPlacesCreateMoreAboveTheSaveButton(t *testing.T) {
+	runTaskFormClient(t, "Create more placement", `
+  const footer = findElement(form, (element) => classTokens(element).includes("task-actions"));
+  const actionBar = footer && findElement(footer, (element) => classTokens(element).includes("form-actions"));
+  const save = actionBar && findElement(actionBar, (element) =>
+    element.tagName === "BUTTON" && element.textContent === "Save");
+  if (!footer || !actionBar || !save) throw new Error("the New Task footer lost its action bar");
+
+  const toggle = findElement(form, (element) => element.id === "task-create-more");
+  if (!toggle) throw new Error("the New Task form does not offer a Create more toggle");
+  const wrapper = toggle.parentElement;
+  if (!wrapper || !classTokens(wrapper).includes("create-more")) {
+    throw new Error("the Create more checkbox lost the label that names it");
+  }
+  if (wrapper.parentElement !== footer) {
+    throw new Error("Create more is not a row of the footer");
+  }
+  if (actionBar.contains(wrapper)) {
+    throw new Error("Create more is still inside the action bar beside Save");
+  }
+  if (footer.children.indexOf(wrapper) >= footer.children.indexOf(actionBar)) {
+    throw new Error("Create more is drawn below the Save button it governs");
+  }
+  // The feedback line still leads the footer: a save that has something to say
+  // says it above everything the reader could press next.
+  const status = findElement(footer, (element) => classTokens(element).includes("form-status"));
+  if (footer.children.indexOf(status) !== 0) {
+    throw new Error("the footer no longer opens with its feedback line");
+  }
+  // Changing it is still what arms the next save.
+  toggle.checked = true;
+  toggle.eventListeners.change();
+  const rearmed = findElement(main, (element) => element.id === "task-create-more");
+  if (!rearmed.checked) throw new Error("the relocated toggle stopped recording the choice");
+`)
+	body := newTaskPage(t)
+	for _, fragment := range []string{
+		// Slimmer than the page section it was padded like: the footer holds one
+		// line of feedback and one row of buttons.
+		`.task-actions { display: grid; grid-column: 1 / -1; gap: .4rem; padding: .5rem 1.15rem .6rem;`,
+		`justify-self: start`,
+	} {
+		if !strings.Contains(body, fragment) {
+			t.Errorf("task footer styling does not contain %q", fragment)
+		}
+	}
+	for _, stale := range []string{
+		`padding: .85rem 1.15rem 1.15rem`,
+		`.create-more { display: inline-flex; align-items: center; gap: .4rem; margin-left: auto`,
+	} {
+		if strings.Contains(body, stale) {
+			t.Errorf("task footer styling still contains %q", stale)
+		}
+	}
+}

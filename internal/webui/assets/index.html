@@ -134,7 +134,10 @@
     .task-editor { display: grid; grid-template-rows: auto minmax(8rem, 1fr); gap: 1rem; min-width: 0; min-height: 0; padding: 1.15rem; }
     .task-sidebar { min-width: 0; min-height: 0; overflow-y: auto; padding: 1.15rem; border-left: 1px solid #d5deea; background: #fafbfd; }
     .task-properties { display: grid; gap: .85rem; }
-    .task-actions { display: grid; grid-column: 1 / -1; gap: .75rem; padding: .85rem 1.15rem 1.15rem; border-top: 1px solid #d5deea; }
+    /* The footer is a rule, a line of feedback, and a row of buttons. It was
+       padded like a page section and stood a finger tall on a laptop, taking
+       the height from the description it sits under. */
+    .task-actions { display: grid; grid-column: 1 / -1; gap: .4rem; padding: .5rem 1.15rem .6rem; border-top: 1px solid #d5deea; }
     .field { display: grid; gap: .35rem; }
     .field--wide { grid-column: 1 / -1; }
     .field--description { grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
@@ -161,10 +164,14 @@
        it — which would cost exactly the first add or remove. */
     .label-editor__status { min-height: 1.15rem; }
     .form-status { min-height: 1.35rem; margin: 0; color: #9c2f25; font-size: .82rem; }
-    .form-actions { display: flex; align-items: center; justify-content: space-between; gap: .85rem; width: 100%; padding-top: .1rem; }
+    .form-actions { display: flex; align-items: center; justify-content: space-between; gap: .85rem; width: 100%; }
     .form-primary-actions { display: flex; align-items: center; gap: .85rem; }
     .form-danger { margin-left: auto; }
-    .create-more { display: inline-flex; align-items: center; gap: .4rem; margin-left: auto; color: #34425a; cursor: pointer; font-size: .82rem; font-weight: 700; }
+    /* justify-self, because a grid item stretches across its row by default and
+       a label is clickable everywhere it is drawn: without this the checkbox's
+       caption would reach the far side of the footer and a click meant for the
+       empty space beside it would toggle the box. */
+    .create-more { display: inline-flex; align-items: center; justify-self: start; gap: .4rem; color: #34425a; cursor: pointer; font-size: .82rem; font-weight: 700; }
     .create-more input { width: .95rem; height: .95rem; margin: 0; accent-color: #2457d6; cursor: pointer; }
     .create-more input:focus-visible { outline: 3px solid rgba(36,87,214,.28); outline-offset: 2px; }
     .save-button { border: 1px solid #173f9e; border-radius: 4px; background: #2457d6; color: #fff; cursor: pointer; font: inherit; font-size: .86rem; font-weight: 750; padding: .62rem .95rem; }
@@ -2031,7 +2038,6 @@
         const save = document.createElement("button"); save.className = "save-button"; save.type = "submit"; text(save, "Save");
         const back = document.createElement("a"); back.className = "board-link"; back.href = "/"; text(back, "Back");
         primaryActions.append(save, back); actions.append(primaryActions);
-        if (isNew) actions.append(createMoreToggle());
 		if (!isNew) {
 		  const danger = document.createElement("div"); danger.className = "form-danger";
 		  const remove = document.createElement("button"); remove.className = "delete-button"; remove.type = "button"; text(remove, "Delete");
@@ -2060,7 +2066,14 @@
         const relationshipMount = document.createElement("div"); relationshipMount.dataset.relationshipMount = "";
         sidebar.append(properties, relationshipMount);
         const footer = document.createElement("footer"); footer.className = "task-actions";
-        footer.append(result, actions);
+        // "Create more" is a setting on the Save beneath it, not an action of
+        // its own, so it stands on its own row directly above the button it
+        // changes. Off in the footer's right corner it was read after the save
+        // it governs, if at all, and it sat level with a Delete it has nothing
+        // to do with.
+        footer.append(result);
+        if (isNew) footer.append(createMoreToggle());
+        footer.append(actions);
         form.append(editor, sidebar, footer);
 
         let taskWasCreated = false;
