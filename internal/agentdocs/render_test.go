@@ -134,6 +134,45 @@ func TestSkillDocumentSeparatesMachineIDsFromHumanTitles(t *testing.T) {
 	}
 }
 
+func TestSkillDocumentResolvesDependencyTitlesThroughTheCLI(t *testing.T) {
+	// Production mutation: telling agents to name blockers by title without
+	// telling them where a title comes from, or without saying that bad news
+	// is announced by title like everything else. The show envelope carries
+	// dependencies as bare IDs. In the run recorded under
+	// docs/superpowers/evidence/2026-08-08-skill-titles-over-ids-behavior.md an
+	// agent reading the shipped skill resolved the dependency on its own
+	// initiative and still led with both ULIDs; one that had skipped that
+	// unprompted second read would have had no title to lead with at all.
+	document, err := skillDocument("0.2.0")
+	if err != nil {
+		t.Fatalf("skillDocument() error = %v", err)
+	}
+
+	for _, want := range []string{
+		// The field that holds only IDs.
+		"`data.dependencies`",
+		// The command that turns one of those IDs into a title.
+		"`workbook show <dependency-id> --json`",
+		// The member of that second envelope the title comes from.
+		"`data.title`",
+		// The failure mode the resolution step exists to prevent.
+		"never invent one",
+		// A dependency this clone cannot read does not abort the task.
+		"keep working rather than stopping",
+		// Bad news is announced by title too: the scenario that failed
+		// against the shipped skill. Do not weaken this to "blocked",
+		// which the lifecycle section already contains.
+		"Bad news is not an exception",
+		"is blocked by",
+		// The same rule restated where agents look for it.
+		"before naming the blocker",
+	} {
+		if !strings.Contains(document.Body, want) {
+			t.Errorf("skill body missing %q:\n%s", want, document.Body)
+		}
+	}
+}
+
 func TestSkillDocumentRendersFrontmatterOnLineOne(t *testing.T) {
 	document, err := skillDocument("0.2.0")
 	if err != nil {

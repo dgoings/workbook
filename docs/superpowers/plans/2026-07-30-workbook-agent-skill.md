@@ -315,3 +315,35 @@ git commit -m "feat: add Workbook agent skill"
 
 Do not push, open a pull request, merge, update the live Workbook task queue, or
 remove the worktree without explicit authorization.
+
+---
+
+## Later applications of this protocol
+
+Steps 1, 2, 7, and 8 are the reusable part of this plan: any later edit to
+`skills/workbook/SKILL.md` that claims to change agent behavior is validated by
+running fresh agents against throwaway repositories before and after the edit,
+not by asserting that its wording is present. Runs performed after the skill
+shipped:
+
+- [`docs/superpowers/evidence/2026-08-08-skill-titles-over-ids-behavior.md`](../evidence/2026-08-08-skill-titles-over-ids-behavior.md)
+  — the "IDs are for commands, titles are for humans" section and the
+  dependency-title resolution step.
+
+Step 8's package validation and word count run with each such edit. For the run
+above:
+
+```text
+PYTHONPATH=<tmp> python3 <skill-creator>/scripts/quick_validate.py skills/workbook
+Skill is valid!
+
+wc -w skills/workbook/SKILL.md
+763          # 638 before this change
+```
+
+Step 6's "under 500 words" was an estimate made before the skill existed, and
+the skill has never met it: it shipped at 638 words. The number to hold is that
+shipped size, not the estimate. Record the count with every edit so growth is
+visible in the moment rather than discovered later — this change runs 125 words
+over it — and prefer replacing text over appending it, since the only way back
+under a budget is deleting a sentence the agents turned out not to need.

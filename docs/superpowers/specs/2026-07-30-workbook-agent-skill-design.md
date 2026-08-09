@@ -50,6 +50,44 @@ Workbook is unavailable or uninitialized, or either command fails, the agent
 reports that result and stops rather than guessing or editing task storage
 directly.
 
+## Dependency Titles
+
+Human-facing prose names tasks by title, including the tasks a blocked task
+waits on. `data.dependencies` in a result envelope is a list of canonical task
+IDs and nothing else, so the skill instructs the agent to resolve each entry
+with:
+
+```sh
+workbook show <dependency-id> --json
+```
+
+and to take the blocker's name from that result's `data.title`. A dependency
+has no title until it is read, so an agent that skips the resolution step has
+nothing to name the blocker with; the anticipated outcomes are an invented
+title or the ULID. Only the ULID fallback has been observed. In the recorded
+run the agent reading the shipped skill resolved the dependency on its own
+initiative and still led with both ULIDs, which is behavior the skill cannot
+depend on being repeated.
+
+An unresolvable dependency is a read this clone cannot perform, not a broken
+task. `show` on an ID whose ref has not been fetched exits 4, which is reachable
+offline, with `autoSync` false, or under `--no-sync`, so the skill carves that
+case out of its otherwise unconditional stop-on-read-failure rule: report the
+dependency by ID as unresolved and continue rather than abandoning a task the
+agent could start.
+
+The alternative of carrying dependency titles in the `show` envelope was
+considered and rejected. `show` serializes the same `Task` shape that `create`,
+`update`, `list`, `next`, `board`, and the web API return, so a new member
+either changes every one of those envelopes or makes one command's rendering of
+a task differ from the rest — a worse deal for machine consumers than one extra
+read. A title is also mutable display metadata owned by the dependency's own
+task ref; copying it into a second task's envelope creates a stale-able
+duplicate of a value that has a canonical home, and forces a shape decision for
+tombstoned or unresolvable dependencies. The extra round trip is one cheap
+projection read per dependency, paid only when an agent is about to describe
+one.
+
 ## Status Lifecycle
 
 Before implementation begins, the agent records active work with:
@@ -137,3 +175,8 @@ Creation follows a skill-oriented RED/GREEN validation:
 
 No validation scenario mutates the live Workbook task queue or publishes task
 refs.
+
+Later edits to the skill's guidance are validated the same way rather than by
+substring assertions alone. The run behind the titles-over-IDs section and the
+dependency-resolution step is recorded in
+[`docs/superpowers/evidence/2026-08-08-skill-titles-over-ids-behavior.md`](../evidence/2026-08-08-skill-titles-over-ids-behavior.md).
