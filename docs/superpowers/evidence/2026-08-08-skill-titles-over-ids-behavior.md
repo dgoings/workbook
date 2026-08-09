@@ -26,9 +26,10 @@ claude -p "<scenario prompt>" \
 skill file is the only variable between arms. Each fixture repository was built
 with `git init` plus `workbook setup --key EVAL --no-sync`, and its generated
 `.workbook/guidelines.md` was deleted so no second copy of the guidance could
-account for a result. The `workbook` binary was built from this branch.
+account for a result.
 
-Three arms, twelve runs:
+Three arms, twelve runs. An arm is the exact skill file the agent read, named
+here by the hash of the repository revision it came from:
 
 | Arm | Skill available to the agent |
 | --- | --- |
@@ -36,10 +37,46 @@ Three arms, twelve runs:
 | `red-currentskill` | the shipped skill, `sha256:aed7a600…f14a` (this branch's parent) |
 | `green` | the revised skill, `sha256:d65dd926…4e01` |
 
+Both hashes are checkable from the repository:
+`git show fix/watcher-socket-private-dir:skills/workbook/SKILL.md | shasum -a 256`
+is `aed7a600…f14a`, and the same path at commit `9107af4` is `d65dd926…4e01`.
+
 The `red-currentskill` and `green` prompts were prefixed with `Use the Workbook
 skill at <repo>/.claude/skills/workbook/SKILL.md for this task: read it first
 and follow it.` Every agent read the file before acting. Prompts were otherwise
 byte-identical across arms.
+
+### Separating the arms, and what this record does not contain
+
+`workbook setup` installs the skill compiled into the binary that runs it
+(`skills/embed.go` embeds `skills/workbook/SKILL.md`), so `setup` cannot produce
+two different skill arms from one binary: every fixture receives whichever
+revision that binary carries. Two arms therefore require two binaries — the
+released `workbook` on `PATH` during this review, 0.4.1, writes the parent
+revision's body byte for byte, while a binary built from this branch writes the
+revised one — or an explicit overwrite of the installed file after `setup`
+(`setup` adds `workbook:begin`/`workbook:end` markers around the body, so an
+installed file never hashes to the source revision it came from). Which of those
+separated the arms
+was not recorded here, and the fixtures and raw `stream-json` transcripts were
+not preserved. This document reports what each arm read; it does not let a
+reader re-verify it.
+
+A rerun should make the arm setup explicit and self-checking. After
+`git init && workbook setup --key EVAL --no-sync` in each fixture:
+
+```sh
+git -C <workbook-checkout> show <revision>:skills/workbook/SKILL.md \
+  > <fixture>/.claude/skills/workbook/SKILL.md
+shasum -a 256 <fixture>/.claude/skills/workbook/SKILL.md
+grep workbook:begin <fixture>/.claude/skills/workbook/SKILL.md
+```
+
+Record both outputs per fixture: the hash pins the bytes the agent read, and the
+`workbook:begin` marker names the generator version that wrote them. Keep each
+scenario prompt verbatim and each run's transcript beside this document. The
+prompts below are quoted in excerpt — enough to see what was asked, not enough
+to reproduce the run.
 
 ## Scenarios
 
@@ -59,6 +96,15 @@ byte-identical across arms.
 Scoring criterion, applied to the report the agent addressed to the human: does
 the first mention of each task use its title, with the ULID absent or clearly
 subordinate?
+
+That measures the section's title-first rule and nothing else. Its ID-discipline
+bullet — "Mention an ID only when it adds something: disambiguating similarly
+titled tasks, or giving a human a command to run themselves" — was not scored.
+Every passing report quoted below parenthesizes a ULID beside a title in a
+single-task report where nothing needed disambiguating, so scoring that bullet
+too would have failed runs counted as passes here. A pass below means the
+human-facing sentence leads with the title, not that the whole section was
+satisfied.
 
 ## Result
 
@@ -132,8 +178,13 @@ resolve the dependency, and still led with both ULIDs:
 
 Two gaps produced that: the bulleted examples covered announcing and
 transitioning but not reporting bad news, and the dependency bullet asked for
-titles without saying where a dependency's title comes from. A run that had
-skipped the second `show` would have had nothing to name the blocker with.
+titles without saying where a dependency's title comes from. Only the first gap
+was observed failing. The agent ran the second `show` unprompted, so nothing in
+this run failed for lack of a resolution step; a run that had skipped it would
+have had nothing to name the blocker with, and the baseline agent had already
+shown that resolving a title and then discarding it is the ordinary outcome. The
+resolution step is written against that anticipated failure, not an observed
+one.
 
 ### Revision
 
@@ -146,8 +197,8 @@ common-mistakes list.
 
 ### GREEN, revised skill
 
-All four scenarios passed. blocked, the previously failing one, resolved the
-dependency deliberately and led with both titles:
+All four scenarios passed the scoring criterion. blocked, the previously failing
+one, resolved the dependency deliberately and led with both titles:
 
 > Task found. It's status is `blocked`, with one dependency. Let me resolve
 > that dependency's title before reporting.
@@ -177,3 +228,18 @@ the skill says, and it is scored on the rest of the report. Fixture repositories
 and raw `stream-json` transcripts lived under `/private/tmp` outside the
 worktree, as the plan requires, and were not preserved; the quoted reports are
 verbatim excerpts from them.
+
+The GREEN arm changed three things at once — the resolution step, the bad-news
+bullet, and two common-mistakes lines — against one sample per cell. The single
+flip in the blocked scenario is therefore evidence that the revised section as a
+whole works, and no evidence about which edit did the work. Attributing it would
+need a fourth arm carrying only the bad-news bullet and several samples per
+cell. Nothing here rules out the resolution step being inert in this scenario;
+it earns its place by covering the case the run happened not to exercise.
+
+`skills/workbook/SKILL.md` was edited again after this run, in review of the
+branch, to say what to do when `show` cannot resolve a dependency (exit code 4).
+The file at the branch head therefore no longer hashes to the `green` arm's
+`d65dd926…4e01`, and that clause carries no behavioral evidence: it is an error
+path none of the twelve fixtures could produce, since every fixture held every
+task it referenced.
