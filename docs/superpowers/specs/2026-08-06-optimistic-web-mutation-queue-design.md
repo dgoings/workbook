@@ -271,10 +271,21 @@ the caret alone: a field the save would not send is one nobody has touched and
 follows the task the board now holds, a field the save would send is an edit in
 progress and stays as typed, and the baseline the diff is measured against moves
 with the display, so the next save carries exactly this reader's own edits
-against the head that now exists. One exception keeps that safe: a correction
-the control cannot display — a status this client has no option for — leaves the
-baseline where it was, because moving it under a control still showing the
-refused value is the one thing that would turn that value into an edit.
+against the head that now exists.
+
+Two fields are asked that question in their own way. A status this client has no
+option for — one a newer Workbook wrote — is displayed the way the form displays
+it on a first render, by growing the disabled placeholder that names it, so the
+correction is shown rather than skipped. Labels are the reverse: a save folds the
+text still in the label input into the set, so the diff calls the field edited as
+soon as a reader types a letter, and a reader partway through a word has decided
+nothing about the set. Their chiclets are what decides it, and the word in
+progress stays in the input either way. Underneath both is one rule the
+correction never breaks: a control that goes on displaying the refused value
+keeps the baseline it was measured against, because moving the baseline under it
+is the one thing that would turn that value into an edit the next save sends —
+and moving it under an *untouched* label set would send a set the reader was
+never shown, silently dropping a label another clone had added.
 
 A task the board has stopped carrying, which is what a refusal from another
 clone's deletion looks like, has nothing to correct the form against. The form
@@ -387,6 +398,10 @@ absent and drives a hand-written fake DOM (`handler_test.go:4173`):
 - a board refusal arriving while a save from that form is open leaves the save
   attached, so it still reports into the form when it lands; one arriving after
   the task has left the board leaves the form and the text in it standing;
+- the two fields with a correction of their own: a status this client has no
+  option for is named by the placeholder rather than left showing the refused
+  one, and a label set nobody has touched follows the server while the word
+  half-typed into the input stays where it is and the save carries both;
 - the detail form saves only the fields it changed, carrying the head it
   rendered, and sends nothing at all when nothing changed — including a labels
   field that was reordered rather than edited;
