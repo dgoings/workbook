@@ -76,7 +76,9 @@ func TestCheckCICapabilitiesFailsWhenGitCannotCreateSHA256Repositories(t *testin
 // needs, so a capability can be removed from the environment without touching
 // the machine running the test. Entries in stubs replace the real tool with the
 // given shell script; every other tool is linked from the real PATH when it
-// exists, and is simply absent when it does not.
+// exists, and is simply absent when it does not. A machine missing one of the
+// tools it links reports a missing capability rather than a bare skip, so the
+// preflight's own tests are covered by the guard they exercise.
 func capabilityProbePATH(t *testing.T, stubs map[string]string) string {
 	t.Helper()
 	directory := t.TempDir()
@@ -95,7 +97,7 @@ func capabilityProbePATH(t *testing.T, stubs map[string]string) string {
 		}
 		resolved, err := exec.LookPath(tool)
 		if err != nil {
-			t.Skipf("%s is not available to build a capability probe PATH: %v", tool, err)
+			testenv.MissingCapability(t, "%s is not available to build a capability probe PATH: %v", tool, err)
 		}
 		if err := os.Symlink(resolved, target); err != nil {
 			t.Fatalf("link %s: %v", tool, err)
