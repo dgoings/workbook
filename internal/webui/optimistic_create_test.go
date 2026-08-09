@@ -165,20 +165,20 @@ setTimeout(async () => {
   if (main.firstElementChild !== boardView) throw new Error("Save did not land on the board");
   const drawn = boardLists.flatMap((list) => list.querySelectorAll(".task-card"));
   if (drawn.length !== 0) throw new Error("a refused create left a card standing on the board");
-  if (createNotice.hidden) throw new Error("a refused create reported nothing");
-  if (!createNotice.textContent.includes("title is not valid") ||
-      !createNotice.textContent.includes("Unsaved title")) {
-    throw new Error("the failure report does not name the task or the reason: " + createNotice.textContent);
+  if (notice.hidden) throw new Error("a refused create reported nothing");
+  if (!notice.textContent.includes("title is not valid") ||
+      !notice.textContent.includes("Unsaved title")) {
+    throw new Error("the failure report does not name the task or the reason: " + notice.textContent);
   }
 
   // The stale banner is cleared by every successful poll, which is why the
   // report does not live there.
   await intervalCallback();
-  if (createNotice.hidden || !createNotice.textContent.includes("title is not valid")) {
+  if (notice.hidden || !notice.textContent.includes("title is not valid")) {
     throw new Error("a poll erased the create failure report");
   }
 
-  const restore = findElement(createNotice, (element) =>
+  const restore = findElement(notice, (element) =>
     element.tagName === "BUTTON" && element.textContent === "Restore draft");
   if (!restore) throw new Error("the failure report offers no way back to the draft");
   restore.eventListeners.click();
@@ -201,7 +201,7 @@ setTimeout(async () => {
   const feedback = findElement(restored, (element) =>
     element.className === "form-status" && element.textContent.includes("title is not valid"));
   if (!feedback) throw new Error("the restored form does not say why it is back");
-  if (!createNotice.hidden) throw new Error("Restore draft left the failure report standing");
+  if (!notice.hidden) throw new Error("Restore draft left the failure report standing");
 }, 0);
 `
 	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
@@ -250,7 +250,7 @@ setTimeout(async () => {
   await save("First refused");
   await save("Second refused");
 
-  const reports = findElements(createNotice, (element) =>
+  const reports = findElements(notice, (element) =>
     hasClassToken(element, "notice__report"));
   if (reports.length !== 2) {
     throw new Error("two refused creates left " + reports.length + " reports, want 2");
@@ -264,11 +264,11 @@ setTimeout(async () => {
   if (!restored || restored.value !== "First refused") {
     throw new Error("Restore draft opened the wrong draft");
   }
-  const left = findElements(createNotice, (element) => hasClassToken(element, "notice__report"));
+  const left = findElements(notice, (element) => hasClassToken(element, "notice__report"));
   if (left.length !== 1 || !left[0].textContent.includes("Second refused")) {
     throw new Error("restoring one draft disturbed the other report");
   }
-  if (createNotice.hidden) throw new Error("a standing report was hidden with the one restored");
+  if (notice.hidden) throw new Error("a standing report was hidden with the one restored");
 }, 0);
 `
 	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
@@ -307,11 +307,11 @@ setTimeout(async () => {
   const rearmed = findElement(main, (element) => element.id === "task-title");
   if (!rearmed || rearmed.value !== "") throw new Error("the re-armed form is not clean");
   if (document.activeElement !== rearmed) throw new Error("the re-armed form lost the caret");
-  if (createNotice.hidden ||
-      !createNotice.textContent.includes("Task creation projection needs repair.")) {
-    throw new Error("the create's warning was dropped: " + createNotice.textContent);
+  if (notice.hidden ||
+      !notice.textContent.includes("Task creation projection needs repair.")) {
+    throw new Error("the create's warning was dropped: " + notice.textContent);
   }
-  const open = findElement(createNotice, (element) =>
+  const open = findElement(notice, (element) =>
     element.tagName === "A" && element.href === "/tasks/" + encodeURIComponent(` + strconv.Quote(created.ID) + `));
   if (!open) throw new Error("the warning report does not open the task it is about");
 }, 0);
@@ -370,7 +370,7 @@ setTimeout(async () => {
   halfLabels.eventListeners.keydown({ key: "Enter", preventDefault() {} });
   halfLabels.value = "later";
   halfLabels.eventListeners.keydown({ key: "Enter", preventDefault() {} });
-  findElement(createNotice, (element) =>
+  findElement(notice, (element) =>
     element.tagName === "BUTTON" && element.textContent === "Restore draft")
     .eventListeners.click();
 
@@ -378,14 +378,14 @@ setTimeout(async () => {
   if (!restored || restored.value !== "Refused first") {
     throw new Error("Restore draft did not open the refused draft");
   }
-  const reports = findElements(createNotice, (element) => hasClassToken(element, "notice__report"));
+  const reports = findElements(notice, (element) => hasClassToken(element, "notice__report"));
   if (reports.length !== 1) {
     throw new Error("restoring one draft left " + reports.length + " reports, want the displaced draft's");
   }
-  if (createNotice.hidden) throw new Error("the displaced draft was reported into a hidden notice");
+  if (notice.hidden) throw new Error("the displaced draft was reported into a hidden notice");
   const kept = reports.find((report) => report.textContent.includes("Still being typed"));
   if (!kept) {
-    throw new Error("Restore draft destroyed the form being typed into: " + createNotice.textContent);
+    throw new Error("Restore draft destroyed the form being typed into: " + notice.textContent);
   }
   findElement(kept, (element) =>
     element.tagName === "BUTTON" && element.textContent === "Restore draft")
@@ -448,7 +448,7 @@ setTimeout(async () => {
   }
   await settled;
 
-  const restore = findElement(createNotice, (element) =>
+  const restore = findElement(notice, (element) =>
     element.tagName === "BUTTON" && element.textContent === "Restore draft");
   if (!restore) throw new Error("a refused create offered no way back to the draft");
   if (document.activeElement !== restore) {

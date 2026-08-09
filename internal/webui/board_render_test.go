@@ -75,7 +75,9 @@ setTimeout(async () => {
 }
 
 // The presentation for a task the board already knows is reused verbatim, so a
-// poll that changes nothing really does change nothing.
+// poll that changes nothing really does change nothing. Looking a card up by ID
+// wherever it currently sits is the harness's own boardCard, which searches the
+// unknown-status region as well as the six columns.
 const boardReconcilePrelude = `
 const initialTasks = taskDocument.tasks;
 const taskByID = (id) => initialTasks.find((task) => task.id === id);
@@ -93,7 +95,6 @@ const listFor = (status) => boardLists.find((list) => list.dataset.status === st
 const cardsIn = (list) => list.querySelectorAll(".task-card");
 const cardIn = (list, id) => cardsIn(list).find((node) => node.dataset.taskId === id);
 const idsIn = (list) => cardsIn(list).map((node) => node.dataset.taskId);
-const boardCard = (id) => boardLists.map((list) => cardIn(list, id)).find(Boolean);
 `
 
 func TestHandlerClientKeepsUnchangedCardNodesAcrossAPoll(t *testing.T) {

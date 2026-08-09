@@ -4617,8 +4617,8 @@ const boardCounts = boardStatuses.map((status) => {
 boardView.querySelectorAll = (selector) => selector === "[data-status]" ? boardLists : boardCounts;
 // The create report sits outside the board view, because it has to be readable
 // from whatever route the save left the user on.
-const createNotice = new TestElement("div");
-createNotice.hidden = true;
+const notice = new TestElement("div");
+notice.hidden = true;
 // The page ships this control hidden and renderRoute() reveals it on the board,
 // so the harness has to start it hidden too. Starting it visible would let a
 // renderRoute() that never touched it look like it had revealed it.
@@ -4632,7 +4632,7 @@ const documentEventListeners = {};
     if (selector === "main") return main;
     if (selector === "[data-board-view]") return boardView;
     if (selector === "[data-updated]") return updated;
-    if (selector === "[data-create-notice]") return createNotice;
+    if (selector === "[data-notice]") return notice;
     if (selector === "[data-description-toggle]") return descriptionToggle;
     return null;
   },
@@ -4728,6 +4728,32 @@ function findElements(root, predicate, matches = []) {
   if (predicate(root)) matches.push(root);
   for (const child of root.children || []) findElements(child, predicate, matches);
   return matches;
+}
+function hasDataKey(element, key) {
+  return Object.prototype.hasOwnProperty.call(element.dataset || {}, key);
+}
+// The card the board is drawing for a task, wherever it currently sits: a
+// column, or the region that holds the statuses no column matches.
+function boardCard(taskID) {
+  for (const list of boardLists.concat([boardUnknownList])) {
+    const found = list.querySelectorAll(".task-card").find((item) => item.dataset.taskId === taskID);
+    if (found) return found;
+  }
+  return null;
+}
+// What a card is reporting about a refused change, or "" when it is reporting
+// nothing. The region is part of every card and empty on almost all of them, so
+// the visibility flag is read as well as the text.
+function cardFailureMessage(card) {
+  const region = card && findElement(card, (element) => hasDataKey(element, "taskFailure"));
+  if (!region || region.dataset.visible !== "true") return "";
+  const message = findElement(region, (element) => hasDataKey(element, "taskFailureMessage"));
+  return message ? message.textContent : "";
+}
+function cardFailureDismiss(card) {
+  const region = card && findElement(card, (element) => hasDataKey(element, "taskFailure"));
+  if (!region || region.dataset.visible !== "true") return null;
+  return findElement(region, (element) => hasDataKey(element, "taskFailureDismiss"));
 }
 `
 }
@@ -5462,8 +5488,12 @@ setTimeout(async () => {
   if (!done.querySelectorAll(".task-card").some((item) => item.dataset.taskId === ` + strconv.Quote(moved.ID) + `)) {
     throw new Error("the later intent did not stay standing after the earlier failure");
   }
-  if (stale.dataset.visible !== "true" || !stale.textContent.includes("Task update failed")) {
-    throw new Error("the failure was not reported: " + JSON.stringify(stale.textContent));
+  const reported = cardFailureMessage(boardCard(` + strconv.Quote(moved.ID) + `));
+  if (!reported.includes("Task update failed")) {
+    throw new Error("the failure was not reported on the card: " + JSON.stringify(reported));
+  }
+  if (stale.dataset.visible === "true") {
+    throw new Error("the refusal was written to the banner every successful poll clears");
   }
 }, 0);
 `
@@ -5554,8 +5584,12 @@ setTimeout(async () => {
   if (!done.querySelectorAll(".task-card").some((item) => item.dataset.taskId === ` + strconv.Quote(moved.ID) + `)) {
     throw new Error("the intent behind the conflict did not stay standing");
   }
-  if (stale.dataset.visible !== "true" || !stale.textContent.includes("changed elsewhere")) {
-    throw new Error("the conflict was not reported as such: " + JSON.stringify(stale.textContent));
+  const reported = cardFailureMessage(boardCard(` + strconv.Quote(moved.ID) + `));
+  if (!reported.includes("changed elsewhere")) {
+    throw new Error("the conflict was not reported as such on the card: " + JSON.stringify(reported));
+  }
+  if (stale.dataset.visible === "true") {
+    throw new Error("the conflict was written to the banner every successful poll clears");
   }
 }, 0);
 `
