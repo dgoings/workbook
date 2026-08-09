@@ -250,6 +250,14 @@
       .task-properties h3 { margin: 0 0 .15rem; }
       .task-properties .field { grid-template-columns: 4.5rem minmax(0, 1fr); align-items: center; gap: .45rem; }
       .task-properties .field input, .task-properties .field select { padding: .5rem .58rem; }
+      /* Status and Priority are one control each, so centring their captions
+         against them is right. Labels is a column — an input with its chiclets,
+         hint, and announcements stacked underneath — and centring left the
+         caption floating halfway down beside the chiclets, naming nothing. It
+         sits on the input's line instead, which is the part it names; the rest
+         of the control is additive and grows downward away from it. */
+      .task-properties .field--labels { align-items: start; }
+      .task-properties .field--labels > label { padding-top: .65rem; }
       .task-relationships { gap: .65rem; padding-top: .7rem; }
       .relationship-group { padding-top: .7rem; }
       .relationship-list { gap: .35rem; margin: .45rem 0; }
@@ -2047,7 +2055,7 @@
           propertiesHeading,
           field("Status", status),
           field("Priority", priority),
-          field("Labels", labels.region, true)
+          field("Labels", labels.region, true, "field--labels")
         );
         const relationshipMount = document.createElement("div"); relationshipMount.dataset.relationshipMount = "";
         sidebar.append(properties, relationshipMount);
