@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -146,7 +147,7 @@ func TestUserTempDirRefusesADirectoryItDoesNotOwn(t *testing.T) {
 	useTempRoot(t, t.TempDir())
 	useUID(t, os.Getuid()+1)
 
-	if _, err := userTempDir(); err == nil {
+	if _, err := userTempDir(""); err == nil {
 		t.Fatal("userTempDir(owned by another user) error = nil, want a rejection")
 	}
 }
@@ -155,7 +156,7 @@ func TestUserTempDirRefusesADirectoryThatIsNotPrivate(t *testing.T) {
 	root := t.TempDir()
 	useTempRoot(t, root)
 
-	directory, err := userTempDir()
+	directory, err := userTempDir("")
 	if err != nil {
 		t.Fatalf("userTempDir() error = %v", err)
 	}
@@ -170,8 +171,51 @@ func TestUserTempDirRefusesADirectoryThatIsNotPrivate(t *testing.T) {
 	if err := os.Chmod(directory, 0o755); err != nil {
 		t.Fatalf("Chmod() error = %v", err)
 	}
-	if _, err := userTempDir(); err == nil {
+	if _, err := userTempDir(""); err == nil {
 		t.Fatal("userTempDir(loosened) error = nil, want a rejection")
+	}
+}
+
+// One squatted name must not be the end of it. /tmp/workbook-<uid> is derived
+// from nothing but the uid, so a local user can take it before this user's
+// first watcher ever runs and keep it: a sticky /tmp refuses this process the
+// rmdir. With os.TempDir() being /tmp itself on Linux and the repository
+// fallback over 100 bytes on a deep checkout, that one fixed name would
+// otherwise deny the watcher permanently.
+func TestSocketPathTriesASecondPrivateDirectoryWhenTheFirstIsTaken(t *testing.T) {
+	root := shortTempDir(t)
+	useTempRoot(t, root)
+	taken := filepath.Join(root, "workbook-"+strconv.Itoa(os.Getuid()))
+	if err := os.Mkdir(taken, 0o700); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	// Loose permissions stand in for a foreign owner: userTempDir refuses both,
+	// and only one of them a test can create.
+	if err := os.Chmod(taken, 0o777); err != nil {
+		t.Fatalf("Chmod() error = %v", err)
+	}
+	open := shortTempDir(t)
+	if err := os.Chmod(open, 0o777); err != nil {
+		t.Fatalf("Chmod() error = %v", err)
+	}
+	t.Setenv("TMPDIR", open)
+
+	path, err := socketPath(t.TempDir())
+	if err != nil {
+		t.Fatalf("socketPath() error = %v", err)
+	}
+	directory := filepath.Dir(path)
+	if directory == taken {
+		t.Fatalf("socketPath() = %q, want a directory other than the squatted %q", path, taken)
+	}
+	if parent := filepath.Dir(directory); parent != root {
+		t.Fatalf("socketPath() = %q, want a second private directory under %q", path, root)
+	}
+	if err := usableSocketDir(directory); err != nil {
+		t.Fatalf("socketPath() chose a directory another user can interfere with: %v", err)
+	}
+	if len(path) > maxSocketPath {
+		t.Fatalf("socketPath() = %q (%d bytes), want at most %d", path, len(path), maxSocketPath)
 	}
 }
 

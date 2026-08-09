@@ -150,9 +150,20 @@ So the watcher binds a short path in a directory only this user can write to,
 and publishes the absolute result in `<common-git-dir>/workbook/watcher.json` —
 beside `cache.sqlite` and `validation.sqlite`, and shared across linked
 worktrees for the same reason those are. The candidates are `/tmp/workbook-<uid>/`
-first, created `0700`, then `os.TempDir()`, then `<common-git-dir>/workbook/`,
-and the first one that yields a path under 100 bytes and passes the directory
-check wins.
+first, created `0700`, then `/tmp/workbook-<uid>-<hash>/`, then `os.TempDir()`,
+then `<common-git-dir>/workbook/`, and the first one that yields a path under
+100 bytes and passes the directory check wins.
+
+The second private directory is there because the first one's name is derived
+from nothing but the uid. That is a single fixed target: a local user who
+creates `/tmp/workbook-<uid>` as their own before this user's first watcher runs
+disqualifies it forever, since a sticky `/tmp` also refuses this process the
+`rmdir`. `os.TempDir()` is then `/tmp` itself on Linux, which is refused too,
+and the repository fallback is `len(common-git-dir)+22` bytes, so a checkout
+deeper than 78 bytes — an ordinary CI path — leaves no candidate at all and the
+watcher refuses to start. Naming the second directory after the repository as
+well puts the squatter back where they started: they have to guess the
+repository path, which is what the socket name already assumes.
 
 `os.TempDir()` must not come first, which it originally did. It is the per-user
 `$TMPDIR` on darwin, but plain world-writable `/tmp` on Linux, and the socket

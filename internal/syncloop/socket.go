@@ -125,15 +125,29 @@ func socketPath(commonGitDir string) (string, error) {
 		absolute = resolved
 	}
 	sum := sha256.Sum256([]byte(absolute))
-	name := "wb-" + hex.EncodeToString(sum[:8]) + ".sock"
+	digest := hex.EncodeToString(sum[:8])
+	name := "wb-" + digest + ".sock"
 
-	// Each candidate resolves its directory lazily, so the repository fallback
-	// is not created unless a temporary directory has already been ruled out.
+	// Each candidate resolves its directory lazily, so neither the second
+	// private directory nor the repository fallback is created unless the one
+	// before it has already been ruled out.
+	//
+	// The second private directory exists because the first one's name is
+	// derived from nothing but the uid: it is a single fixed target, and a local
+	// user who creates /tmp/workbook-<uid> as their own before this user's first
+	// watcher runs disqualifies it forever, since a sticky /tmp also refuses
+	// this process the rmdir. os.TempDir() is then /tmp itself on Linux, which
+	// is refused too, and the repository fallback is len(commonGitDir)+22 bytes,
+	// so a checkout deeper than 78 bytes leaves no path at all and the watcher
+	// refuses to start. Naming the second one after the repository as well puts
+	// the squatter back where they started: they have to guess the repository
+	// path, which is the assumption the socket name already rests on.
 	candidates := []struct {
 		directory func() (string, error)
 		name      string
 	}{
-		{directory: userTempDir, name: name},
+		{directory: func() (string, error) { return userTempDir("") }, name: name},
+		{directory: func() (string, error) { return userTempDir(digest) }, name: name},
 		{directory: func() (string, error) { return os.TempDir(), nil }, name: name},
 		{directory: func() (string, error) { return repositorySocketDir(commonGitDir) }, name: socketFilename},
 	}
@@ -196,8 +210,15 @@ var currentUID = os.Getuid
 // refusing one that is not exactly what it should be. The root is
 // world-writable, so a symlink, a foreign owner, or loose permissions means
 // somebody else could place the socket a command then trusts.
-func userTempDir() (string, error) {
-	dir := filepath.Join(userTempRoot, fmt.Sprintf("workbook-%d", currentUID()))
+//
+// suffix distinguishes the second candidate from the first, so one squatted
+// name is not the end of it. Empty names the shared per-user directory.
+func userTempDir(suffix string) (string, error) {
+	name := fmt.Sprintf("workbook-%d", currentUID())
+	if suffix != "" {
+		name += "-" + suffix
+	}
+	dir := filepath.Join(userTempRoot, name)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
