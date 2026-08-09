@@ -3015,12 +3015,11 @@
       // are looked up across the whole board rather than within this column, so
       // a task that changed status moves its own node between columns instead of
       // being destroyed in one and rebuilt in the other.
-      function reconcile(list, entries, survivors, claimed) {
+      function reconcile(list, entries, survivors) {
         const placed = cardNodes(list);
         entries.forEach((entry, index) => {
           const survivor = survivors.get(entry.task.id);
           const node = survivor ? applyCard(survivor, entry.task, entry.view) : card(entry.task, entry.view);
-          claimed.add(entry.task.id);
           if (placed[index] === node) return;
           const at = placed.indexOf(node);
           if (at >= 0) placed.splice(at, 1);
@@ -3073,10 +3072,36 @@
             survivors.set(taskID, node);
           });
         });
-        const claimed = new Set();
+        // Where the new model puts every card it still names, resolved before a
+        // single column is reconciled so that a card which has left one can be
+        // detached from it first. reconcile() compares each entry with the node
+        // standing at that index, so a card still attached to a column that has
+        // stopped naming it — moved to another column, or deleted outright —
+        // pushes every card below it one index down and costs each of them an
+        // insertBefore to correct an offset the model never asked for. A browser
+        // blurs a node it re-inserts, so on a long column that is a
+        // focusout/focusin for every reader parked below the card that left, over
+        // a change that did not concern their card. Sweeping first makes a
+        // departure cost its neighbours nothing; the departing node is re-inserted
+        // by whichever column now wants it, exactly as before.
+        const destinations = new Map();
         grouped.forEach((items, status) => {
           const list = lists.get(status);
-          reconcile(list, entriesFor(items, presentation), survivors, claimed);
+          items.forEach((task) => destinations.set(task.id, list));
+        });
+        stranded.forEach((task) => destinations.set(task.id, unknownList));
+        survivors.forEach((node, taskID) => {
+          // The node the browser is dragging is left exactly where it is, because
+          // detaching it mid-drag is the defect this renderer exists to remove.
+          // Reconciliation still moves it to a column the model has moved it to,
+          // and the render after dragend collects one the model has dropped.
+          if (activeDrag && activeDrag.taskId === taskID) return;
+          if (destinations.get(taskID) === node.parentElement) return;
+          node.remove();
+        });
+        grouped.forEach((items, status) => {
+          const list = lists.get(status);
+          reconcile(list, entriesFor(items, presentation), survivors);
           const count = counts.get(status);
           const total = String(items.length);
           if (count.textContent !== total) text(count, total);
@@ -3084,18 +3109,10 @@
         // Reconciled from the same survivor pool as the columns, so a status
         // that becomes recognized — or stops being — moves the card the reader
         // is already looking at instead of destroying it and building a stranger.
-        reconcile(unknownList, entriesFor(stranded, presentation), survivors, claimed);
+        reconcile(unknownList, entriesFor(stranded, presentation), survivors);
         const strandedTotal = String(stranded.length);
         if (unknownCount.textContent !== strandedTotal) text(unknownCount, strandedTotal);
         unknownSection.dataset.visible = stranded.length > 0 ? "true" : "false";
-        survivors.forEach((node, taskID) => {
-          if (claimed.has(taskID)) return;
-          // The node the browser is dragging stays attached even when the model
-          // stops naming it, because detaching it mid-drag is exactly the defect
-          // this renderer exists to remove. The render after dragend collects it.
-          if (activeDrag && activeDrag.taskId === taskID) return;
-          node.remove();
-        });
         // A report whose card the board no longer draws has nowhere left to be
         // read, and letting it go with the card would put the reader back where
         // this started. The likeliest way to get here is also the one that most
@@ -3105,9 +3122,9 @@
         // when someone dismisses it, in the wording that names the task rather
         // than the wording that pointed at the card.
         taskFailureReports.forEach((report, taskID) => {
-          if (claimed.has(taskID)) return;
-          // A dragged node is still on the board even though no column claimed
-          // it, exactly as the loop above just decided. Lifting its report
+          if (destinations.has(taskID)) return;
+          // A dragged node is still on the board even though the model stopped
+          // naming it, exactly as the sweep above decided. Lifting its report
           // would print the same sentence twice — once on the card under the
           // cursor and once in the notice — and the render after dragend does
           // this properly.
