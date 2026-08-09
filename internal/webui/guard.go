@@ -32,9 +32,11 @@ const defaultHTTPPort = "80"
 // checked here rather than trusted:
 //
 //   - The Host header must name the address the board is bound to. A hostile
-//     page that rebinds its own DNS name to 127.0.0.1 reaches the listener with
-//     a foreign Host, and without this check the browser treats the answer as
-//     same-origin with the attacker.
+//     page that rebinds its own DNS name to the board's address reaches the
+//     listener with a foreign Host, and without this check the browser treats
+//     the answer as same-origin with the attacker. A loopback bind is named by
+//     any loopback host and an explicit bind by that address alone; a wildcard
+//     bind is the one case with no host to pin, and pins only the port.
 //   - An Origin header, when the browser sends one, must name the board itself.
 //     Cross-site requests that carry one are refused whatever their method.
 //   - A mutating request must declare application/json, which no cross-site
@@ -69,6 +71,19 @@ func BoundToLoopback(address string) bool {
 	return loopbackHost(host)
 }
 
+// BoundToWildcard reports whether a listener address is the one bind whose Host
+// header the guard cannot pin. A wildcard listener answers every address this
+// machine has, under every name that resolves to one of them, so a page that
+// points its own name here is addressing the board as legitimately as a
+// teammate is and the two are indistinguishable from the header.
+func BoundToWildcard(address string) bool {
+	host, _, ok := splitAuthority(address)
+	if !ok {
+		return false
+	}
+	return wildcardHost(host)
+}
+
 // originGuard holds the decision the bound address settles once, so no request
 // re-parses it.
 type originGuard struct {
@@ -76,12 +91,20 @@ type originGuard struct {
 	address string
 	// port every acceptable Host and Origin must name.
 	port string
+	// host is the single address the listener answers on, which every Host and
+	// Origin must then name. It is empty for the two binds that answer more than
+	// one address, distinguished by the fields below.
+	host string
 	// loopback is true when the board is reachable from this machine only, in
 	// which case any loopback name is the board and a name that is not loopback
-	// cannot be. A board bound to a wildcard or a routable address cannot know
-	// which names reach it, so it pins the port and requires an Origin to
-	// repeat the authority the browser addressed.
+	// cannot be.
 	loopback bool
+	// wildcard is true when the board answers every address this machine has. It
+	// cannot know which of them, or which name for one, a browser used, so it
+	// pins the port and requires an Origin to repeat the authority the browser
+	// addressed. That is the guard's one remaining gap and is documented as such
+	// in README.md and named by the warning serve prints.
+	wildcard bool
 	// unusable is set when the bound address could not be parsed at all. The
 	// guard then refuses everything rather than guess which requests are safe.
 	unusable bool
@@ -92,7 +115,16 @@ func newOriginGuard(boundAddr string) *originGuard {
 	if !ok {
 		return &originGuard{address: boundAddr, unusable: true}
 	}
-	return &originGuard{address: boundAddr, port: port, loopback: loopbackHost(host)}
+	guard := &originGuard{address: boundAddr, port: port}
+	switch {
+	case loopbackHost(host):
+		guard.loopback = true
+	case wildcardHost(host):
+		guard.wildcard = true
+	default:
+		guard.host = host
+	}
+	return guard
 }
 
 // reject answers with the HTTP status and message a refused request deserves,
@@ -102,7 +134,7 @@ func (guard *originGuard) reject(request *http.Request) (int, string) {
 		return http.StatusForbidden, fmt.Sprintf("the board could not read its own address %q, so it refuses every request", guard.address)
 	}
 	host, port, ok := splitAuthority(request.Host)
-	if !ok || port != guard.port || (guard.loopback && !loopbackHost(host)) {
+	if !ok || port != guard.port || !guard.hostIsBoard(host) {
 		return http.StatusForbidden, fmt.Sprintf("Host %q is not this board at %q", request.Host, guard.address)
 	}
 	if origin := request.Header.Get("Origin"); origin != "" && !guard.originIsBoard(origin, host) {
@@ -114,9 +146,26 @@ func (guard *originGuard) reject(request *http.Request) (int, string) {
 	return 0, ""
 }
 
+// hostIsBoard reports whether the host half of an authority names this board.
+// Callers check the port themselves, having split it off already.
+func (guard *originGuard) hostIsBoard(host string) bool {
+	switch {
+	case guard.loopback:
+		return loopbackHost(host)
+	case guard.wildcard:
+		// Every address this machine has is the board, and every name that
+		// resolves to one of them addresses it, so there is nothing to compare
+		// the host with. The port is all this bind can pin.
+		return true
+	default:
+		return sameHost(guard.host, host)
+	}
+}
+
 // originIsBoard reports whether an Origin header names the board the browser
 // just addressed. requestHost is the already-accepted host from the Host
-// header, which is what a board with no fixed name compares against.
+// header, which is what a wildcard bind — the one with no address of its own to
+// compare against — falls back to.
 func (guard *originGuard) originIsBoard(origin, requestHost string) bool {
 	parsed, err := url.Parse(origin)
 	// An origin is a scheme, a host, and a port; anything else in the header —
@@ -130,10 +179,13 @@ func (guard *originGuard) originIsBoard(origin, requestHost string) bool {
 	if !ok || port != guard.port {
 		return false
 	}
-	if guard.loopback {
-		return loopbackHost(host)
+	if guard.wildcard {
+		// No name belongs to a wildcard bind, so the strongest test left is that
+		// the Origin repeats the authority the browser addressed. A rebound name
+		// satisfies it by matching itself; nothing else here can tell them apart.
+		return sameHost(host, requestHost)
 	}
-	return strings.EqualFold(trimRootDot(host), trimRootDot(requestHost))
+	return guard.hostIsBoard(host)
 }
 
 // splitAuthority separates an authority into a host and the port it means. An
@@ -160,6 +212,28 @@ func splitAuthority(authority string) (string, string, bool) {
 		return "", "", false
 	}
 	return authority, defaultHTTPPort, true
+}
+
+// sameHost reports whether two hosts name the same address. Two IP literals are
+// compared as addresses, so 192.168.1.5 and ::ffff:192.168.1.5 are one host and
+// an IPv6 address keeps its meaning however it is abbreviated. Anything else is
+// a name, compared case-insensitively and without the trailing dot a browser may
+// send. An IP and a name are never the same host: the guard pins the address a
+// listener reports, and a name that resolves to it is exactly what a rebinding
+// page sends.
+func sameHost(left, right string) bool {
+	left, right = trimRootDot(left), trimRootDot(right)
+	if leftIP, rightIP := net.ParseIP(left), net.ParseIP(right); leftIP != nil && rightIP != nil {
+		return leftIP.Equal(rightIP)
+	}
+	return strings.EqualFold(left, right)
+}
+
+// wildcardHost reports whether a bind address names every address this machine
+// has, which 0.0.0.0 and :: do and a routable address does not.
+func wildcardHost(host string) bool {
+	ip := net.ParseIP(trimRootDot(host))
+	return ip != nil && ip.IsUnspecified()
 }
 
 // loopbackHost reports whether a host names this machine. A name that merely

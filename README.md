@@ -1000,9 +1000,19 @@ GET /healthz                  versioned health JSON
 The board answers only its own pages. It has no accounts and no tokens, so three
 checks stand in for them and every route is subject to all three:
 
-- The `Host` header must name the address the listener bound. A page that
-  rebinds its own DNS name to the loopback address reaches the port with a
-  foreign `Host` and is refused, so it never gains same-origin access.
+- The `Host` header must name the address the listener bound — except on a
+  wildcard bind, which has no one address to name and pins only the port, as
+  described below — and its port in every case. Where the host is pinned, a page
+  that rebinds its own DNS name to the board's address reaches the port with a
+  foreign `Host` and is refused, so it never gains same-origin access. A loopback
+  bind is named by any loopback host — `localhost`, `127.0.0.1`, `[::1]` —
+  because they all mean this machine. A bind to one address, such as
+  `--addr 192.168.1.5:7331`, is named by that address alone: a DNS name is
+  refused even when it resolves there, because a name that resolves to the board
+  is exactly what a rebinding page sends. That covers a name given to `--addr`
+  itself, which binds the address it resolves to and is then pinned to that
+  address, so reach such a board at the address `serve` prints rather than by
+  the name.
 - An `Origin` header, when a browser sends one, must name the board itself. A
   cross-site request that carries one is refused whatever its method.
 - `POST`, `PUT`, `PATCH`, and `DELETE` must send `Content-Type: application/json`,
@@ -1028,6 +1038,19 @@ Binding `--addr` to anything other than a loopback address makes the board
 reachable by whoever shares the network, and those checks cannot tell a
 teammate from a stranger. `workbook serve` prints a warning naming the address
 and the missing authentication when it does.
+
+A wildcard bind — `--addr 0.0.0.0:7331` or `--addr [::]:7331` — is the one case
+the `Host` check cannot close, and it is worse than network reach. Such a
+listener answers every address this machine has, under every name that resolves
+to one of them, so there is no host to pin: the `Host` check falls back to the
+port alone, and the `Origin` check falls back to requiring the header to repeat
+the authority the browser addressed, which a rebound name satisfies by matching
+itself. Any page on the web can therefore point its own DNS name at this
+machine and hold same-origin read *and write* on the board through the browser
+of whoever opens it — including writes that publish to `origin` and are later
+read as agent instructions — without ever being on the network. `workbook
+serve` says so in the warning it prints for a wildcard bind. Bind the one
+address you mean instead, and the `Host` is pinned to it.
 
 Drag a task card within a column to reorder it or into another canonical status
 column to change status and position together. Workbook keeps the task's priority

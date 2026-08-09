@@ -1884,13 +1884,18 @@ func TestBoardExposureWarning(t *testing.T) {
 	tests := []struct {
 		address string
 		warns   bool
+		// driveBy is set for the binds whose Host header the guard cannot pin,
+		// which are exposed to any page on the web rather than only to the
+		// network. The warning has to say so, because the difference is what
+		// decides whether the bind is acceptable.
+		driveBy bool
 	}{
 		{address: "127.0.0.1:7331"},
 		{address: "127.0.0.2:7331"},
 		{address: "[::1]:7331"},
 		{address: "localhost:7331"},
-		{address: "0.0.0.0:7331", warns: true},
-		{address: "[::]:7331", warns: true},
+		{address: "0.0.0.0:7331", warns: true, driveBy: true},
+		{address: "[::]:7331", warns: true, driveBy: true},
 		{address: "192.168.1.5:7331", warns: true},
 		{address: "board.internal:7331", warns: true},
 		{address: "nonsense", warns: true},
@@ -1903,6 +1908,9 @@ func TestBoardExposureWarning(t *testing.T) {
 			}
 			if test.warns && !strings.Contains(warning, test.address) {
 				t.Fatalf("boardExposureWarning(%q) = %q, want it to name the address", test.address, warning)
+			}
+			if names := strings.Contains(warning, "any page on the web"); names != test.driveBy {
+				t.Fatalf("boardExposureWarning(%q) = %q, want it to name drive-by access = %t", test.address, warning, test.driveBy)
 			}
 		})
 	}
