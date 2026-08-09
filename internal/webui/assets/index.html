@@ -19,14 +19,22 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Workbook board</title>
   <style>
-    :root { color-scheme: light; font-family: ui-rounded, "Avenir Next", system-ui, sans-serif; color: #172033; background: #e9eef5; }
+    /* The narrowest a status column is allowed to be drawn. Six columns sharing
+       whatever the window happens to be gave a 1280-wide browser 12rem of card:
+       a title broke over four lines and the labels under it wrapped one per row.
+       The board would rather be scrolled than read like that, so the columns
+       hold this width and the board scrolls sideways once the window cannot
+       give every one of them that much. One custom property, because the track
+       size and the column's own minimum have to be the same number — they
+       disagreed the last time each carried its own copy. */
+    :root { --board-column-min: 16rem; color-scheme: light; font-family: ui-rounded, "Avenir Next", system-ui, sans-serif; color: #172033; background: #e9eef5; }
     * { box-sizing: border-box; }
     html, body { height: 100%; }
     body { display: flex; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden; margin: 0; min-width: 20rem; background: #e9eef5; }
     .skip-link { position: fixed; left: 1rem; top: -4rem; z-index: 2; background: #172033; color: #fff; padding: .55rem .75rem; border-radius: 4px; }
     .skip-link:focus { top: 1rem; }
     .app-header { display: flex; flex: 0 0 auto; align-items: end; justify-content: space-between; gap: 1.25rem; padding: 1.25rem; border-bottom: 1px solid #b9c6d8; background: #fff; }
-    .eyebrow, code, .priority, .label, .label-chip, .ref-label, .updated { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
+    .eyebrow, code, .priority, .label, .label-chip, .updated { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
     .eyebrow { margin: 0 0 .2rem; color: #2457d6; font-size: .7rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
     h1 { margin: 0; font-size: clamp(1.25rem, 2vw, 1.65rem); letter-spacing: -.03em; }
     .updated { margin: 0; color: #56647a; font-size: .75rem; text-align: right; }
@@ -55,19 +63,30 @@
     .stale { grid-row: 1; }
     .board { grid-row: 2; }
     .unknown-status { grid-row: 3; }
-    .board { display: grid; grid-template-columns: repeat(6, minmax(12rem, 1fr)); gap: .8rem; min-height: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: .25rem; }
+    .board { display: grid; grid-template-columns: repeat(6, minmax(var(--board-column-min), 1fr)); gap: .8rem; min-height: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: .25rem; }
     .unknown-status { display: none; margin-top: .8rem; border: 1px solid #e0b483; border-top: 3px solid #b45309; background: #fff6e8; }
     .unknown-status[data-visible="true"] { display: block; }
     .unknown-status__header { padding: .7rem .75rem .1rem; }
     .unknown-status__heading { display: flex; align-items: baseline; gap: .5rem; margin: 0; color: #7c3b08; font-size: .92rem; }
     .unknown-status__heading .count { color: #7c3b08; }
     .unknown-status__note { max-width: 62ch; margin: .3rem 0 0; color: #7c3b08; font-size: .76rem; line-height: 1.4; }
-    .unknown-status__list { grid-auto-columns: minmax(12rem, 18rem); grid-auto-flow: column; max-height: 15rem; overflow-x: auto; overflow-y: auto; }
-    .column { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); min-width: 12rem; min-height: 0; border: 1px solid #b9c6d8; background: rgba(255,255,255,.36); }
-    .column__header { min-height: 5.45rem; padding: .7rem .75rem .6rem; border-top: 3px solid #2457d6; border-bottom: 1px solid #b9c6d8; background: #f8faff; }
+    /* The strip draws the same cards the columns do, so it holds them to the
+       same minimum: eight of them in a 1280-wide window fell to 12rem tracks,
+       which is the width the board minimum exists to prevent. It scrolls
+       sideways already, and 18rem stays its maximum so a strip of one or two
+       does not stretch a card across the page. */
+    .unknown-status__list { grid-auto-columns: minmax(var(--board-column-min), 18rem); grid-auto-flow: column; max-height: 15rem; overflow-x: auto; overflow-y: auto; }
+    .column { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); min-width: var(--board-column-min); min-height: 0; border: 1px solid #b9c6d8; background: rgba(255,255,255,.36); }
+    /* No min-height: the header holds a heading and the New Task link, the same
+       two lines in all six columns, so they are the same height without being
+       told to be. The declaration that used to sit here reserved the row the
+       ref path occupied, and once that left it was below the natural height and
+       applied to nothing. A floor could not have squared the headers up anyway
+       — it can only raise a header that is short, never pull five of them up to
+       one that grew. */
+    .column__header { padding: .7rem .75rem .6rem; border-top: 3px solid #2457d6; border-bottom: 1px solid #b9c6d8; background: #f8faff; }
     .column__heading { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; margin: 0; font-size: .92rem; }
     .count { color: #2457d6; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .8rem; }
-    .ref-label { display: block; overflow: hidden; margin-top: .45rem; color: #526b9b; font-size: .65rem; text-overflow: ellipsis; white-space: nowrap; }
     .new-task-link { display: inline-block; margin-top: .45rem; color: #2457d6; font-size: .73rem; font-weight: 750; text-decoration-thickness: 1px; text-underline-offset: .18em; }
     /* overflow-anchor: none guards against browser scroll anchoring walking a scrolled column downward when a render rebuilds its cards. The renderer reconciles by task ID and reuses nodes, so nothing should churn here any more; keep the declaration anyway, so a future code path that rebuilds a column cannot silently reintroduce the drift. */
     .task-list { display: grid; align-content: start; gap: .55rem; min-height: 0; overflow-anchor: none; overflow-y: auto; padding: .55rem; }
@@ -91,8 +110,13 @@
     .priority { flex: 0 0 auto; font-size: .64rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
     .priority--high { color: #b42318; } .priority--medium { color: #b45309; } .priority--low { color: #2457d6; }
     .task-card h3 { margin: .55rem 0 .3rem; font-size: .9rem; line-height: 1.24; overflow-wrap: anywhere; }
-    .task-card h3 a { color: #172033; text-decoration-color: #a9b7ca; text-decoration-thickness: 1px; text-underline-offset: .16em; }
-    .task-card h3 a:hover { color: #2457d6; text-decoration-color: currentcolor; }
+    /* A card title is a heading, not a link inside a sentence: every card is one
+       link and the whole card is focusable, so nothing here depends on an
+       underline to be told apart from the text around it. It carries none, and
+       hover turns it blue — which the keyboard reaches too, because focus draws
+       the card's own outline. */
+    .task-card h3 a { color: #172033; text-decoration: none; }
+    .task-card h3 a:hover { color: #2457d6; }
     .task-card h3 a:focus-visible, .new-task-link:focus-visible, .board-link:focus-visible { outline: 3px solid #2457d6; outline-offset: 2px; }
     /* A card is an ID, a title, and its labels. The description is the one field
        with no length the column can rely on, so six clamped lines of it push the
@@ -119,7 +143,10 @@
     .task-editor { display: grid; grid-template-rows: auto minmax(8rem, 1fr); gap: 1rem; min-width: 0; min-height: 0; padding: 1.15rem; }
     .task-sidebar { min-width: 0; min-height: 0; overflow-y: auto; padding: 1.15rem; border-left: 1px solid #d5deea; background: #fafbfd; }
     .task-properties { display: grid; gap: .85rem; }
-    .task-actions { display: grid; grid-column: 1 / -1; gap: .75rem; padding: .85rem 1.15rem 1.15rem; border-top: 1px solid #d5deea; }
+    /* The footer is a rule, a line of feedback, and a row of buttons. It was
+       padded like a page section and stood a finger tall on a laptop, taking
+       the height from the description it sits under. */
+    .task-actions { display: grid; grid-column: 1 / -1; gap: .4rem; padding: .5rem 1.15rem .6rem; border-top: 1px solid #d5deea; }
     .field { display: grid; gap: .35rem; }
     .field--wide { grid-column: 1 / -1; }
     .field--description { grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
@@ -140,16 +167,27 @@
     .label-chip__remove:hover { background: #d3e0fa; color: #172033; }
     .label-chip__remove:focus-visible { outline: 2px solid #2457d6; outline-offset: 1px; }
     .label-editor__hint, .label-editor__status { margin: 0; color: #56647a; font-size: .72rem; }
-    /* Reserved rather than hidden while empty, like .form-status below: an
+    /* Drawn while empty rather than created when there is something to say: an
        unrendered element is not in the accessibility tree, and a live region
        that appears in the same frame as its first message does not announce
-       it — which would cost exactly the first add or remove. */
+       it — which would cost exactly the first add or remove. It keeps the row
+       it reserves, because a label add or remove reports every single time and
+       the reader is looking at the chiclets it would push.
+       .form-status below is the other case: it speaks only when a save fails,
+       so it stands in the document at no height until it does. Reserving it
+       cost the footer a blank line — 22px of the "extra padding around the
+       buttons" this footer was asked to lose. */
     .label-editor__status { min-height: 1.15rem; }
     .form-status { min-height: 1.35rem; margin: 0; color: #9c2f25; font-size: .82rem; }
-    .form-actions { display: flex; align-items: center; justify-content: space-between; gap: .85rem; width: 100%; padding-top: .1rem; }
+    .form-status:empty { min-height: 0; }
+    .form-actions { display: flex; align-items: center; justify-content: space-between; gap: .85rem; width: 100%; }
     .form-primary-actions { display: flex; align-items: center; gap: .85rem; }
     .form-danger { margin-left: auto; }
-    .create-more { display: inline-flex; align-items: center; gap: .4rem; margin-left: auto; color: #34425a; cursor: pointer; font-size: .82rem; font-weight: 700; }
+    /* justify-self, because a grid item stretches across its row by default and
+       a label is clickable everywhere it is drawn: without this the checkbox's
+       caption would reach the far side of the footer and a click meant for the
+       empty space beside it would toggle the box. */
+    .create-more { display: inline-flex; align-items: center; justify-self: start; gap: .4rem; color: #34425a; cursor: pointer; font-size: .82rem; font-weight: 700; }
     .create-more input { width: .95rem; height: .95rem; margin: 0; accent-color: #2457d6; cursor: pointer; }
     .create-more input:focus-visible { outline: 3px solid rgba(36,87,214,.28); outline-offset: 2px; }
     .save-button { border: 1px solid #173f9e; border-radius: 4px; background: #2457d6; color: #fff; cursor: pointer; font: inherit; font-size: .86rem; font-weight: 750; padding: .62rem .95rem; }
@@ -167,10 +205,10 @@
     .deleted-card { border: 1px solid #b9c6d8; border-radius: 4px; background: #fff; padding: .8rem; }
     .deleted-card__meta { display: flex; align-items: center; justify-content: space-between; gap: .5rem; color: #526075; font-size: .7rem; }
     .deleted-card__description { display: -webkit-box; overflow: hidden; margin: .5rem 0 .75rem; color: #56647a; font-size: .82rem; line-height: 1.36; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-    .task-relationships { display: grid; gap: 1rem; padding: 1rem 0 0; }
-    .relationship-group { border-top: 1px solid #d5deea; padding-top: 1rem; }
+    .task-relationships { display: grid; gap: .7rem; padding: .7rem 0 0; }
+    .relationship-group { border-top: 1px solid #d5deea; padding-top: .7rem; }
     .relationship-group h3 { margin: 0; font-size: .88rem; }
-    .relationship-list { display: grid; gap: .55rem; margin: .75rem 0; }
+    .relationship-list { display: grid; gap: .35rem; margin: .45rem 0 .5rem; }
     .relationship-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .35rem .75rem; border: 1px solid #d5deea; border-radius: 4px; padding: .7rem; }
     .relationship-row h4, .relationship-row p { margin: 0; }
     .relationship-row h4 { font-size: .84rem; overflow-wrap: anywhere; }
@@ -179,15 +217,21 @@
     .relationship-row__metadata, .relationship-row__note { color: #56647a; font-size: .75rem; overflow-wrap: anywhere; }
     .relationship-remove { align-self: center; grid-column: 2; grid-row: 1 / span 2; }
     .relationship-state { color: #9c2f25; font-size: .75rem; }
-    .relationship-editor { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .4rem .55rem; align-items: end; }
-    .relationship-editor label { grid-column: 1 / -1; color: #34425a; font-size: .75rem; font-weight: 750; }
+    .relationship-editor { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .3rem .45rem; align-items: end; }
+    /* The caption used to hold a row of the sidebar to itself, in each of the
+       two groups, to repeat what the heading above the input and the
+       placeholder inside it already say. It is clipped rather than removed or
+       display: none'd, because it is what gives the combobox its accessible
+       name; the placeholder repeats that name exactly, so what is seen and what
+       is announced stay the same words. */
+    .relationship-editor__label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
     .relationship-editor input { min-width: 0; width: 100%; border: 1px solid #9eafc5; border-radius: 4px; background: #fff; color: #172033; font: inherit; padding: .55rem .62rem; }
     .relationship-editor input:focus { border-color: #2457d6; outline: 3px solid rgba(36,87,214,.18); }
     .relationship-editor button { border: 1px solid #173f9e; border-radius: 4px; background: #2457d6; color: #fff; cursor: pointer; font: inherit; font-size: .78rem; font-weight: 750; padding: .58rem .75rem; }
     .relationship-editor button:disabled { cursor: default; opacity: .52; }
     .relationship-listbox { position: fixed; z-index: 20; max-height: 18rem; overflow-y: auto; border: 1px solid #9eafc5; border-radius: 4px; background: #fff; box-shadow: 0 8px 20px rgba(23,32,51,.12); }
     .relationship-listbox[hidden] { display: none; }
-    .relationship-row--compact { grid-template-columns: minmax(0, 1fr) auto; gap: .22rem .45rem; padding: .48rem 0; border: 0; border-top: 1px solid #e1e7f0; border-radius: 0; }
+    .relationship-row--compact { grid-template-columns: minmax(0, 1fr) auto; gap: .16rem .45rem; padding: .38rem 0; border: 0; border-top: 1px solid #e1e7f0; border-radius: 0; }
     .relationship-option { display: grid; gap: .18rem; padding: .55rem .62rem; border-bottom: 1px solid #e1e7f0; cursor: pointer; }
     .relationship-option:last-child { border-bottom: 0; }
     .relationship-option[aria-selected="true"], .relationship-option.is-active { background: #edf3ff; }
@@ -195,6 +239,21 @@
     .relationship-option span { color: #56647a; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .68rem; overflow-wrap: anywhere; }
     .relationship-empty { grid-column: 1 / -1; min-height: 1rem; margin: 0; color: #56647a; font-size: .75rem; }
     .relationship-message { min-height: 1rem; margin: .45rem 0 0; color: #9c2f25; font-size: .78rem; }
+    /* Both of these are live regions and both stay in the document whatever
+       they hold — an element the renderer creates in the same frame as its
+       first message never announces it. What they no longer keep is a reserved
+       row apiece: four blank lines stood in the sidebar permanently so that a
+       message could arrive without moving anything. Higher specificity than the
+       rules above and the ones in the media query, so it decides the height
+       wherever it applies.
+       .relationship-message reports a failed add or remove and is rare, so it
+       moves the group down when it comes. "No matching tasks." is not rare: it
+       is written on every keystroke the filter matches nothing on, so the row
+       under an open combobox is reserved for as long as the reader is in it.
+       That trades a jump per keystroke for one when the box takes focus, and
+       the listbox opens over the space it happens in. */
+    .relationship-empty:empty, .relationship-message:empty { min-height: 0; margin: 0; }
+    .relationship-editor:focus-within .relationship-empty:empty { min-height: 1rem; }
     .task-route--history { height: auto; min-height: 100%; }
     .task-route--history .task-layout { min-height: min(60vh, 34rem); }
     .task-history { display: grid; gap: .8rem; padding: 1.15rem; border-top: 1px solid #d5deea; background: #fafbfd; }
@@ -225,17 +284,30 @@
     .field-change del { background: #fdeceb; color: #8f1d1d; text-decoration-thickness: 1px; }
     .field-change ins { background: #e8f4ec; color: #14663c; text-decoration: none; }
     @media (prefers-reduced-motion: no-preference) { .task-list { transition: opacity 120ms ease; } }
-    @media (max-width: 900px) { .app-header { align-items: start; flex-direction: column; } .updated { text-align: left; } .board { grid-template-columns: repeat(6, minmax(min(18rem, calc(100vw - 2.5rem)), 1fr)); } .column { min-width: min(18rem, calc(100vw - 2.5rem)); } }
+    /* A phone gets a wider column than a desktop, not a narrower one: 18rem of
+       card with the edge of the next one showing beside it, and the reader
+       swipes between them. On a 390px screen that is 288px of column against
+       350px of board. The min() only decides anything below about 328px, where
+       18rem would be wider than the window and the column becomes the page. */
+    @media (max-width: 900px) { :root { --board-column-min: min(18rem, calc(100vw - 2.5rem)); } .app-header { align-items: start; flex-direction: column; } .updated { text-align: left; } }
     @media (min-width: 761px) {
       .task-sidebar { padding: .9rem 1rem; }
       .task-properties { gap: .55rem; }
       .task-properties h3 { margin: 0 0 .15rem; }
       .task-properties .field { grid-template-columns: 4.5rem minmax(0, 1fr); align-items: center; gap: .45rem; }
       .task-properties .field input, .task-properties .field select { padding: .5rem .58rem; }
-      .task-relationships { gap: .65rem; padding-top: .7rem; }
-      .relationship-group { padding-top: .7rem; }
-      .relationship-list { gap: .35rem; margin: .45rem 0; }
-      .relationship-editor { gap: .3rem .45rem; }
+      /* Status and Priority are one control each, so centring their captions
+         against them is right. Labels is a column — an input with its chiclets,
+         hint, and announcements stacked underneath — and centring left the
+         caption floating halfway down beside the chiclets, naming nothing. It
+         sits on the input's line instead, which is the part it names; the rest
+         of the control is additive and grows downward away from it. */
+      .task-properties .field--labels { align-items: start; }
+      .task-properties .field--labels > label { padding-top: .65rem; }
+      .task-relationships { gap: .5rem; padding-top: .55rem; }
+      .relationship-group { padding-top: .55rem; }
+      .relationship-list { gap: .25rem; margin: .3rem 0 .35rem; }
+      .relationship-editor { gap: .25rem .4rem; }
       .relationship-editor input { padding: .45rem .55rem; }
       .relationship-editor button { padding: .48rem .62rem; }
       .relationship-message { min-height: .75rem; margin-top: .25rem; }
@@ -275,7 +347,7 @@
       <section class="board" aria-label="Task status board">
         {{ range .Board.Columns }}
         <section class="column">
-          <header class="column__header"><h2 class="column__heading">{{ .Label }} <span class="count" data-count="{{ .Status }}">{{ len .Tasks }}</span></h2><a class="new-task-link" href="/tasks/new?status={{ .Status }}">New Task</a><code class="ref-label">refs/workbook/status/{{ .Status }}</code></header>
+          <header class="column__header"><h2 class="column__heading">{{ .Label }} <span class="count" data-count="{{ .Status }}">{{ len .Tasks }}</span></h2><a class="new-task-link" href="/tasks/new?status={{ .Status }}">New Task</a></header>
           <div class="task-list" data-status="{{ .Status }}" data-drop-status="{{ .Status }}">{{ range .Tasks }}{{ template "task" . }}{{ end }}</div>
         </section>
         {{ end }}
@@ -1259,12 +1331,26 @@
         const state = { query: "", selectedID: "", activeIndex: -1, candidates: [] };
         const region = document.createElement("div");
         region.className = "relationship-editor";
+        // The caption is the input's accessible name and is drawn clipped: the
+        // group heading directly above it already says which set is being added
+        // to, and the placeholder says it again inside the box, so nothing
+        // visible is lost by not spending a row of the sidebar on it. Kept as a
+        // real label rather than replaced by an aria-label, so the name stays
+        // in the markup where the input is.
+        //
+        // The placeholder is the short form of the caption and a substring of
+        // it, which is what WCAG's label-in-name asks: someone who says "click
+        // prerequisite" names a control the page answers to. Spelling the
+        // caption out in full here would only be truncated — the box shares its
+        // row with the Add button.
         const label = document.createElement("label");
+        label.className = "relationship-editor__label";
         label.htmlFor = config.id + "-input";
         text(label, config.label);
         const input = document.createElement("input");
         input.type = "search";
         input.id = config.id + "-input";
+        input.placeholder = config.placeholder;
         input.setAttribute("role", "combobox");
         input.setAttribute("aria-autocomplete", "list");
         input.setAttribute("aria-controls", config.id + "-listbox");
@@ -1575,9 +1661,9 @@
         const groups = new Map();
         let controller;
         [
-          ["dependsOn", "depends-on", "Depends On", "No prerequisites.", "Find a prerequisite"],
-          ["blocks", "blocks", "Blocks", "No tasks are blocked by this task.", "Find a task to block"]
-        ].forEach(([name, direction, headingText, emptyText, labelText]) => {
+          ["dependsOn", "depends-on", "Depends On", "No prerequisites.", "Find a prerequisite", "Prerequisite"],
+          ["blocks", "blocks", "Blocks", "No tasks are blocked by this task.", "Find a task to block", "Task to block"]
+        ].forEach(([name, direction, headingText, emptyText, labelText, placeholderText]) => {
           const group = document.createElement("section");
           group.className = "relationship-group";
           const heading = document.createElement("h3");
@@ -1600,6 +1686,7 @@
           groupController.combobox = dependencyCombobox({
             id: "dependency-" + direction,
             label: labelText,
+            placeholder: placeholderText,
             isBusy: () => groupController.busy,
             onAdd: (selectedID) => {
               if (controller.busy) return;
@@ -2005,7 +2092,6 @@
         const save = document.createElement("button"); save.className = "save-button"; save.type = "submit"; text(save, "Save");
         const back = document.createElement("a"); back.className = "board-link"; back.href = "/"; text(back, "Back");
         primaryActions.append(save, back); actions.append(primaryActions);
-        if (isNew) actions.append(createMoreToggle());
 		if (!isNew) {
 		  const danger = document.createElement("div"); danger.className = "form-danger";
 		  const remove = document.createElement("button"); remove.className = "delete-button"; remove.type = "button"; text(remove, "Delete");
@@ -2029,12 +2115,19 @@
           propertiesHeading,
           field("Status", status),
           field("Priority", priority),
-          field("Labels", labels.region, true)
+          field("Labels", labels.region, true, "field--labels")
         );
         const relationshipMount = document.createElement("div"); relationshipMount.dataset.relationshipMount = "";
         sidebar.append(properties, relationshipMount);
         const footer = document.createElement("footer"); footer.className = "task-actions";
-        footer.append(result, actions);
+        // "Create more" is a setting on the Save beneath it, not an action of
+        // its own, so it stands on its own row directly above the button it
+        // changes. Off in the footer's right corner it was read after the save
+        // it governs, if at all, and it sat level with a Delete it has nothing
+        // to do with.
+        footer.append(result);
+        if (isNew) footer.append(createMoreToggle());
+        footer.append(actions);
         form.append(editor, sidebar, footer);
 
         let taskWasCreated = false;

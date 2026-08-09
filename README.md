@@ -1036,9 +1036,10 @@ rebuilding it: a card whose data did not change keeps its element, a changed one
 is updated in place, and only added, removed, and reordered cards are touched.
 Keyboard focus therefore stays on the card that had it, a drag that outlasts a
 poll stays intact, and a scrolled column stays where the reader left it. The six
-canonical columns share the available width
-on large screens, scroll horizontally on narrow screens, and keep dense task
-lists vertically scrollable within the viewport. Web cards show the actionable
+canonical columns share the available width on large screens but never go below
+a readable minimum: a window too narrow to give all six that much scrolls
+horizontally instead of squeezing them, and each column keeps a dense task list
+vertically scrollable within the viewport. Web cards show the actionable
 task-ID prefix, priority, title, and labels; each title links to its full-ID
 task-detail URL, where the complete description remains available. Every status
 column has a New Task link that preselects that column's canonical status.

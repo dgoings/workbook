@@ -1,0 +1,121 @@
+package webui
+
+import (
+	"context"
+	"net/http"
+	"strings"
+	"testing"
+
+	"github.com/dgoings/workbook/internal/core"
+)
+
+// The board's own chrome — what a column header carries and how the stylesheet
+// sizes and decorates it. None of it is drawn by the client, so it is asserted
+// against the served page rather than through the Node harness: the page is the
+// only artifact that exists, and a fake DOM with no layout engine could not read
+// a rule out of it anyway.
+
+// boardPage renders the board with the standard task set and returns its HTML.
+func boardPage(t *testing.T) string {
+	t.Helper()
+	tasks := boardTasks()
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
+	response := request(t, handler, http.MethodGet, "/")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	return response.Body.String()
+}
+
+// A column header names a status a reader recognizes. The Git ref that status
+// is stored under is an implementation detail of the tool, not something the
+// reader can act on, and printing six copies of it cost a whole row of every
+// header for no decision anyone makes from the board.
+func TestHandlerBoardColumnsOmitWorkbookRefPaths(t *testing.T) {
+	body := boardPage(t)
+	for _, definition := range core.WorkflowStatuses() {
+		if want := "refs/workbook/status/" + string(definition.Status); strings.Contains(body, want) {
+			t.Errorf("GET / body still prints the ref path %q in a column header", want)
+		}
+	}
+	if strings.Contains(body, "ref-label") {
+		t.Error("GET / body still carries the ref-path element or its styling")
+	}
+	// The header is otherwise unchanged: the label, the count, and the link that
+	// files a new task under this column all remain.
+	for _, fragment := range []string{
+		`class="column__header"`,
+		`class="count" data-count="ready"`,
+		`href="/tasks/new?status=ready"`,
+	} {
+		if !strings.Contains(body, fragment) {
+			t.Errorf("GET / body does not contain %q", fragment)
+		}
+	}
+}
+
+// Six columns of underlined titles read as a page of rules. The underline is
+// carrying nothing here — a card is one link and the card itself takes focus —
+// so the title is plain text that turns blue under the pointer.
+func TestHandlerBoardCardTitlesAreNotUnderlined(t *testing.T) {
+	body := boardPage(t)
+	for _, fragment := range []string{
+		`.task-card h3 a { color: #172033; text-decoration: none; }`,
+		`.task-card h3 a:hover { color: #2457d6; }`,
+	} {
+		if !strings.Contains(body, fragment) {
+			t.Errorf("card title styling does not contain %q", fragment)
+		}
+	}
+	if strings.Contains(body, `.task-card h3 a { color: #172033; text-decoration-color`) {
+		t.Error("card titles still draw an underline")
+	}
+}
+
+// Six columns dividing whatever the window is wide gave an ordinary desktop
+// browser a column too narrow to read a task in. The columns keep a minimum
+// width instead and the board scrolls sideways when they do not all fit, which
+// is the same behavior the narrow-screen rules already relied on.
+func TestHandlerBoardColumnsHoldAMinimumWidthAndScroll(t *testing.T) {
+	body := boardPage(t)
+	for _, fragment := range []string{
+		`--board-column-min: 16rem;`,
+		`grid-template-columns: repeat(6, minmax(var(--board-column-min), 1fr))`,
+		`min-width: var(--board-column-min)`,
+		`overflow-x: auto`,
+		// The phone layout still widens the column to the viewport rather than
+		// inheriting the desktop minimum.
+		`--board-column-min: min(18rem, calc(100vw - 2.5rem));`,
+		// The unknown-status strip draws the same cards, so it takes the same
+		// floor: eight of them fell to 12rem tracks while the columns held 16rem.
+		`grid-auto-columns: minmax(var(--board-column-min), 18rem)`,
+	} {
+		if !strings.Contains(body, fragment) {
+			t.Errorf("board column styling does not contain %q", fragment)
+		}
+	}
+	// Every place a card is given a minimum width reads the one property. A
+	// literal left behind in any of them is how they could disagree again, so
+	// the guard covers the shape of the declaration rather than one spelling of
+	// it — `minmax(12rem` catches both the old track size and the strip's.
+	for _, stale := range []string{`minmax(12rem`, `min-width: 12rem`, `min-width: min(18rem`} {
+		if strings.Contains(body, stale) {
+			t.Errorf("a board card still carries the hardcoded minimum width %q", stale)
+		}
+	}
+}
+
+// A column header is a heading and a link in all six columns, so the six are
+// the same height without a floor under them. The floor that used to be here
+// reserved the ref path's row, sat below the natural height once that left, and
+// could not have levelled the headers anyway: min-height raises a short header,
+// it never pulls the other five up to one that wrapped.
+func TestHandlerBoardColumnHeadersCarryNoInertMinimumHeight(t *testing.T) {
+	body := boardPage(t)
+	if !strings.Contains(body, `.column__header { padding: .7rem .75rem .6rem;`) {
+		t.Error("the column header rule no longer opens with its padding")
+	}
+	if strings.Contains(body, `.column__header { min-height:`) {
+		t.Error("the column header reserves a height again")
+	}
+}
