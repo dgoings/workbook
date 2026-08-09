@@ -1050,6 +1050,18 @@ holds so the intents behind it retry against current truth rather than failing
 identically. Optimism is confined to the display: HTTP success still means the
 operation commit exists in Git.
 
+A refusal is reported on the card it concerns, in wording that distinguishes a
+task someone else changed from an ordinary failure, and the report stays there
+until a **Dismiss** button on the card clears it or a later write to that task
+is accepted. It survives every poll: the board is current again after one, but
+the conflict still happened, and a report cleared a second after it appeared is
+one nobody on a shared board ever reads. The stale banner keeps its own single
+subject — a refresh that failed — because *this board is behind* is a condition
+a successful poll ends and *your change was refused* is an event only a person
+can acknowledge. If the card itself goes, which is what happens when the change
+was refused because another clone deleted the task, the report moves to the
+notice above the board naming the task it was about.
+
 A `Publishing:` indicator in the board header says what the *next* mutation will
 do with `origin`, and clicking it changes that for this server. Handed to
 watcher — the default — means a mutation returns as soon as the write is durable
@@ -1077,7 +1089,8 @@ canonical columns share the available width on large screens but never go below
 a readable minimum: a window too narrow to give all six that much scrolls
 horizontally instead of squeezing them, and each column keeps a dense task list
 vertically scrollable within the viewport. Web cards show the actionable
-task-ID prefix, priority, title, and labels; each title links to its full-ID
+task-ID prefix, priority, title, and labels, plus the report of a refused change
+described above while one is standing; each title links to its full-ID
 task-detail URL, where the complete description remains available. Every status
 column has a New Task link that preselects that column's canonical status.
 
@@ -1132,9 +1145,10 @@ What an instant save turns out to have to say is reported in a notice above the
 board rather than by moving the user again, who is by then reading the board or
 typing the next task. A warning names the task and links to it. A refused create
 names what was refused and offers **Restore draft**, which reopens the New Task
-form holding every value that was typed and the reason the server gave. Reports
-stack and are cleared by a click rather than by the next poll, because one of
-them can be holding the only copy of a task that was never saved.
+form holding every value that was typed and the reason the server gave. The same
+notice carries a board refusal whose card has left the board. Reports stack and
+are cleared by a click rather than by the next poll, because one of them can be
+holding the only copy of a task that was never saved.
 
 Labels are a set, and the form edits them as one chiclet per label rather than
 as a line of commas. The input holds only the label being typed; Enter or a
