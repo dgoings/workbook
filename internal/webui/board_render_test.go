@@ -158,8 +158,14 @@ func TestHandlerClientWritesNothingInsideAnUnchangedCardAcrossAPoll(t *testing.T
   }
   const sections = [...alpha.children];
 
-  // Every write the card can take: a section detached or added, an attribute or
-  // data attribute rewritten, and any text or class written anywhere inside it.
+  // Every write applyCard() can make to a card that already exists: a section
+  // detached or added, and — on the card and on every node already inside it, not
+  // just the card itself — a text, class, attribute or data attribute rewritten.
+  // Descendants have to be watched because applyCard() writes to them directly:
+  // it sets the failure region's data-visible without going through the article.
+  // The card's draggable flag is watched separately, being the one thing
+  // applyCard() writes that is a plain property rather than one of those. Nodes
+  // built after this point are new sections, and the addition count sees those.
   let removals = 0;
   let additions = 0;
   const writes = [];
@@ -169,13 +175,19 @@ func TestHandlerClientWritesNothingInsideAnUnchangedCardAcrossAPoll(t *testing.T
   });
   const append = alpha.append.bind(alpha);
   alpha.append = (...children) => { additions += 1; return append(...children); };
-  const setAttribute = alpha.setAttribute.bind(alpha);
-  alpha.setAttribute = (name, value) => { writes.push("@" + name); return setAttribute(name, value); };
-  alpha.dataset = new Proxy(alpha.dataset, {
-    set(target, key, value) { writes.push("data-" + String(key)); target[key] = value; return true; }
+  let draggable = alpha.draggable;
+  Object.defineProperty(alpha, "draggable", {
+    configurable: true,
+    get() { return draggable; },
+    set(value) { writes.push("ARTICLE.draggable"); draggable = value; }
   });
   findElements(alpha, () => true).forEach((element, index) => {
     const label = element.tagName + "[" + index + "]";
+    const setAttribute = element.setAttribute.bind(element);
+    element.setAttribute = (name, value) => { writes.push(label + "@" + name); return setAttribute(name, value); };
+    element.dataset = new Proxy(element.dataset, {
+      set(target, key, value) { writes.push(label + ".data-" + String(key)); target[key] = value; return true; }
+    });
     const written = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), "textContent");
     Object.defineProperty(element, "textContent", {
       configurable: true,
@@ -218,6 +230,19 @@ func TestHandlerClientWritesNothingInsideAnUnchangedCardAcrossAPoll(t *testing.T
   if (findElement(alpha, (element) => element.tagName === "P") === description) throw new Error("a changed card kept its old description node");
   if (removals === 0 || additions === 0) throw new Error("a changed card did not rebuild its sections");
   if (!writes.length) throw new Error("the write watch saw nothing when the card really changed");
+  // Named rather than counted, because these three are the instruments a reader
+  // would most reasonably assume are there without checking: the write applyCard()
+  // makes to a node inside the card rather than to the card, the card's plain
+  // draggable property, and an attribute set through setAttribute().
+  if (!writes.some((entry) => entry.endsWith(".data-visible"))) {
+    throw new Error("the watch missed the data attribute applyCard() writes inside the card: " + writes.join(", "));
+  }
+  if (!writes.includes("ARTICLE.draggable")) {
+    throw new Error("the watch missed the card's draggable flag: " + writes.join(", "));
+  }
+  if (!writes.some((entry) => entry.endsWith("@aria-label"))) {
+    throw new Error("the watch missed the card's aria-label: " + writes.join(", "));
+  }
 `)
 }
 
