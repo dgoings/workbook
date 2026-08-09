@@ -466,9 +466,20 @@ func writeShow(output io.Writer, task core.Task) {
 // writeDescription prints a description over as many lines as it was written
 // with. Every line is sanitized on its own by singleLine, so no line can carry
 // an escape sequence, and every line after the first is indented with a tab.
-// That indent is what keeps a description from forging a field: writeShow's
-// own fields all begin at column zero, so "Status: done" written into a
+// That indent is what keeps a description out of writeShow's field block: every
+// field it prints begins at column zero, so "Status: done" written into a
 // description renders as "\tStatus: done" and reads as description text.
+//
+// The indent buys nothing against the detail sections. writeFieldChanges and
+// writeConflicts mark their structured lines with the same tab, and once a
+// terminal expands the tabs a description line reading "Status: backlog → done"
+// is indistinguishable from a real change-log line. What fences those sections
+// off is the column-zero header each one opens with, which a description cannot
+// reach for the same reason it cannot forge a field.
+//
+// Only the line breaks survive. singleLine drops each line's leading
+// indentation, so nested lists and indented code blocks still flatten; --json
+// is the interface for a description whose indentation carries meaning.
 func writeDescription(output io.Writer, description string) {
 	lines := descriptionLines(description)
 	fmt.Fprintf(output, "Description:\t%s\n", lines[0])

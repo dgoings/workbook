@@ -923,9 +923,18 @@ Description:	The first line sits beside the field name.
 Status:	in-progress
 ```
 
-The indent is what replaces the collapse: `show` writes its own fields at column
-zero, so an indented line cannot be read as one, and a description that ends
-with a newline still leaves no blank line before the next field.
+The indent is what replaces the collapse, and the guarantee it buys covers the
+field block: `show` writes its own fields at column zero, so no description line
+can be read as one, and a description that ends with a newline still leaves no
+blank line before the next field. It says nothing about the detail sections.
+`--history`, `--compare`, and the conflict detail `workbook next` prints all
+indent their own structured lines with the same tab, so a description line can
+render exactly like one of theirs. Those sections are fenced by the column-zero
+header each of them opens with, which a description cannot forge either.
+
+Line breaks are all that survives. Every line is still collapsed on its own, so
+leading indentation is dropped and interior whitespace runs become one space:
+nested list items, indented code blocks, and aligned tables lose their shape.
 
 This is a rendering rule, not a validation rule. Stored task data keeps the
 bytes it was written with, and JSON output reproduces them exactly, because
