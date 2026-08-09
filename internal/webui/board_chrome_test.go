@@ -71,3 +71,31 @@ func TestHandlerBoardCardTitlesAreNotUnderlined(t *testing.T) {
 		t.Error("card titles still draw an underline")
 	}
 }
+
+// Six columns dividing whatever the window is wide gave an ordinary desktop
+// browser a column too narrow to read a task in. The columns keep a minimum
+// width instead and the board scrolls sideways when they do not all fit, which
+// is the same behavior the narrow-screen rules already relied on.
+func TestHandlerBoardColumnsHoldAMinimumWidthAndScroll(t *testing.T) {
+	body := boardPage(t)
+	for _, fragment := range []string{
+		`--board-column-min: 16rem;`,
+		`grid-template-columns: repeat(6, minmax(var(--board-column-min), 1fr))`,
+		`min-width: var(--board-column-min)`,
+		`overflow-x: auto`,
+		// The phone layout still widens the column to the viewport rather than
+		// inheriting the desktop minimum.
+		`--board-column-min: min(18rem, calc(100vw - 2.5rem));`,
+	} {
+		if !strings.Contains(body, fragment) {
+			t.Errorf("board column styling does not contain %q", fragment)
+		}
+	}
+	// The track size and the column's own minimum are one number now. A literal
+	// left behind in either place is how the two could disagree again.
+	for _, stale := range []string{`minmax(12rem, 1fr)`, `min-width: 12rem`, `min-width: min(18rem`} {
+		if strings.Contains(body, stale) {
+			t.Errorf("a board column still carries the hardcoded minimum width %q", stale)
+		}
+	}
+}

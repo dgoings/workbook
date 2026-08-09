@@ -19,7 +19,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Workbook board</title>
   <style>
-    :root { color-scheme: light; font-family: ui-rounded, "Avenir Next", system-ui, sans-serif; color: #172033; background: #e9eef5; }
+    /* The narrowest a status column is allowed to be drawn. Six columns sharing
+       whatever the window happens to be gave a 1280-wide browser 12rem of card:
+       a title broke over four lines and the labels under it wrapped one per row.
+       The board would rather be scrolled than read like that, so the columns
+       hold this width and the board scrolls sideways once the window cannot
+       give every one of them that much. One custom property, because the track
+       size and the column's own minimum have to be the same number — they
+       disagreed the last time each carried its own copy. */
+    :root { --board-column-min: 16rem; color-scheme: light; font-family: ui-rounded, "Avenir Next", system-ui, sans-serif; color: #172033; background: #e9eef5; }
     * { box-sizing: border-box; }
     html, body { height: 100%; }
     body { display: flex; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden; margin: 0; min-width: 20rem; background: #e9eef5; }
@@ -55,7 +63,7 @@
     .stale { grid-row: 1; }
     .board { grid-row: 2; }
     .unknown-status { grid-row: 3; }
-    .board { display: grid; grid-template-columns: repeat(6, minmax(12rem, 1fr)); gap: .8rem; min-height: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: .25rem; }
+    .board { display: grid; grid-template-columns: repeat(6, minmax(var(--board-column-min), 1fr)); gap: .8rem; min-height: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: .25rem; }
     .unknown-status { display: none; margin-top: .8rem; border: 1px solid #e0b483; border-top: 3px solid #b45309; background: #fff6e8; }
     .unknown-status[data-visible="true"] { display: block; }
     .unknown-status__header { padding: .7rem .75rem .1rem; }
@@ -63,7 +71,7 @@
     .unknown-status__heading .count { color: #7c3b08; }
     .unknown-status__note { max-width: 62ch; margin: .3rem 0 0; color: #7c3b08; font-size: .76rem; line-height: 1.4; }
     .unknown-status__list { grid-auto-columns: minmax(12rem, 18rem); grid-auto-flow: column; max-height: 15rem; overflow-x: auto; overflow-y: auto; }
-    .column { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); min-width: 12rem; min-height: 0; border: 1px solid #b9c6d8; background: rgba(255,255,255,.36); }
+    .column { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); min-width: var(--board-column-min); min-height: 0; border: 1px solid #b9c6d8; background: rgba(255,255,255,.36); }
     /* The minimum keeps the six headers on one line with each other when one of
        them wraps; it is what the header holds — a heading and the New Task link —
        and no longer reserves the row the ref path used to occupy. */
@@ -232,7 +240,10 @@
     .field-change del { background: #fdeceb; color: #8f1d1d; text-decoration-thickness: 1px; }
     .field-change ins { background: #e8f4ec; color: #14663c; text-decoration: none; }
     @media (prefers-reduced-motion: no-preference) { .task-list { transition: opacity 120ms ease; } }
-    @media (max-width: 900px) { .app-header { align-items: start; flex-direction: column; } .updated { text-align: left; } .board { grid-template-columns: repeat(6, minmax(min(18rem, calc(100vw - 2.5rem)), 1fr)); } .column { min-width: min(18rem, calc(100vw - 2.5rem)); } }
+    /* On a phone the column is the page: it takes the viewport less the board's
+       padding, and the reader swipes between them. The clamp keeps that from
+       exceeding the window on a screen narrower than 18rem. */
+    @media (max-width: 900px) { :root { --board-column-min: min(18rem, calc(100vw - 2.5rem)); } .app-header { align-items: start; flex-direction: column; } .updated { text-align: left; } }
     @media (min-width: 761px) {
       .task-sidebar { padding: .9rem 1rem; }
       .task-properties { gap: .55rem; }
