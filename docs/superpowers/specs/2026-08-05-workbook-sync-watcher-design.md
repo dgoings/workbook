@@ -146,13 +146,43 @@ CLI never looks. The CLI would then fall back to the inline path forever, and
 the entire performance win would vanish with no diagnostic. A silent failure
 mode is a worse trade than a tail risk.
 
-So the watcher binds a short path under `os.TempDir()`, falling back to
-`/tmp/workbook-<uid>/` and then `<common-git-dir>/workbook/` if a candidate
-exceeds 100 bytes, and publishes the absolute result in
-`<common-git-dir>/workbook/watcher.json` — beside `cache.sqlite` and
-`validation.sqlite`, and shared across linked worktrees for the same reason
-those are. A `/tmp` fallback directory is created `0700` and then rejected if it
-is a symlink, is not owned by the caller, or is not `0700`.
+So the watcher binds a short path in a directory only this user can write to,
+and publishes the absolute result in `<common-git-dir>/workbook/watcher.json` —
+beside `cache.sqlite` and `validation.sqlite`, and shared across linked
+worktrees for the same reason those are. The candidates are `/tmp/workbook-<uid>/`
+first, created `0700`, then `/tmp/workbook-<uid>-<hash>/`, then `os.TempDir()`,
+then `<common-git-dir>/workbook/`, and the first one that yields a path under
+100 bytes and passes the directory check wins.
+
+The second private directory is there because the first one's name is derived
+from nothing but the uid. That is a single fixed target: a local user who
+creates `/tmp/workbook-<uid>` as their own before this user's first watcher runs
+disqualifies it forever, since a sticky `/tmp` also refuses this process the
+`rmdir`. `os.TempDir()` is then `/tmp` itself on Linux, which is refused too,
+and the repository fallback is `len(common-git-dir)+22` bytes, so a checkout
+deeper than 78 bytes — an ordinary CI path — leaves no candidate at all and the
+watcher refuses to start. Naming the second directory after the repository as
+well puts the squatter back where they started: they have to guess the
+repository path, which is what the socket name already assumes.
+
+`os.TempDir()` must not come first, which it originally did. It is the per-user
+`$TMPDIR` on darwin, but plain world-writable `/tmp` on Linux, and the socket
+name is `sha256(abs(common-git-dir))[:8]` — derived, so guessable. Another local
+user who guesses the repository path can bind `/tmp/wb-<hash>.sock` before the
+watcher does, and since a watcher dials before binding and reads anything that
+answers as a live watcher, `sync --watch` and `serve` would refuse to start with
+*a Workbook watcher already owns this repository*, permanently: a sticky `/tmp`
+also refuses this process the unlink. That is a durable denial of the whole
+optimization behind a misleading error, not a takeover — the rendezvous is the
+pointer file, which the squatter cannot write.
+
+So every candidate directory is rejected unless it is a real directory, not a
+symlink, owned by the caller, and writable by neither group nor other; the
+per-user directory is additionally required to be exactly `0700`. The socket
+itself is created under a `0177` umask and chmodded `0600` afterwards. The chmod
+alone was not enough: under the usual `umask 022` the interim mode denies
+connect, but under `umask 0` the socket was briefly world-connectable, and
+anything that connects can read `status` or drop a recorded conflict with `ack`.
 
 The CLI reads one file. When no watcher is running that is a single `ENOENT`,
 which is what keeps the unwatched path honestly unchanged.
@@ -161,7 +191,32 @@ A stale pointer file after `SIGKILL` is harmless: the dial fails and the CLI
 falls back. Before binding, a watcher dials the recorded socket and unlinks only
 if nothing answers.
 
-Three request types, newline-delimited JSON:
+Dialing the recorded socket, rather than only the one this version computes, is
+what makes exclusivity survive a change of path. Moving the preferred path into
+the private directory means a watcher started before that change answers
+somewhere a newer one would never look: it would find nothing, bind, overwrite
+the pointer, and run a second loop against the same refs while the first held a
+conflict set nobody would ever read. The pointer is the rendezvous every client
+already trusts, so the older watcher keeps ownership across the upgrade and
+across any later change of candidate.
+
+Three request types, newline-delimited JSON. Both ends bound the line they read
+as well as holding a five-second deadline. The deadline bounds how long a peer
+may take, not how much it may send, so without a bound a peer that never writes
+a newline grows the other end's buffer until the process dies. A request is a
+command and a task ID, so 64 KiB; a response has to clear the largest honest
+status, which is a description conflict per task carrying three descriptions of
+`core.MaxDescriptionBytes` each, so twenty of those plus room for the JSON
+framing around them — sized to the descriptions alone, the bound refuses the
+twentieth.
+
+The watcher bounds what it serializes below what the client accepts, so a
+healthy watcher can never reach the client's limit. If it could, the failure
+would sustain itself: the client refuses the status, so it never trusts the
+watcher, so it never acknowledges a conflict, so the set that made the answer
+too large never drains, and the watcher answers every dial while `sync
+--status` reports it as not running. Past the budget the conflict list is
+served as a prefix, in task-ID order, and drains the ordinary way.
 
 ```
 {"status":{}}                             -> Status

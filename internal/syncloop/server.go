@@ -43,10 +43,24 @@ func bind(commonGitDir string) (net.Listener, string, error) {
 		_ = conn.Close()
 		return nil, "", ErrWatcherLive
 	}
+	// The recorded socket is dialed too, because exclusivity cannot rest on two
+	// processes computing the same path. This change moved the preferred path
+	// from os.TempDir() into a private directory, so a watcher started before it
+	// answers somewhere this one would never look; a candidate directory that
+	// becomes usable again moves it the same way. Either way the older watcher
+	// still owns the repository, and without this a second loop would start and
+	// overwrite its pointer. The pointer is the rendezvous every client already
+	// trusts, so trusting it here costs one os.ReadFile and no new assumption.
+	if published, err := readPointer(commonGitDir); err == nil && published.Socket != path {
+		if conn, err := net.DialTimeout("unix", published.Socket, time.Second); err == nil {
+			_ = conn.Close()
+			return nil, "", ErrWatcherLive
+		}
+	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, "", core.Wrap(core.CategoryOperational, "clear the stale watcher socket", err)
 	}
-	listener, err := net.Listen("unix", path)
+	listener, err := listenPrivate(path)
 	if err != nil {
 		return nil, "", core.Wrap(core.CategoryOperational, "bind the watcher socket", err)
 	}
@@ -73,8 +87,11 @@ func (s *server) handle(_ context.Context, conn net.Conn) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(handlerDeadline))
 
-	line, err := bufio.NewReader(conn).ReadBytes('\n')
+	line, err := readLine(bufio.NewReader(conn), maxRequestBytes)
 	if err != nil {
+		if errors.Is(err, errLineTooLong) {
+			s.reply(conn, response{Error: "request is too long"})
+		}
 		return
 	}
 	var message request
@@ -98,10 +115,12 @@ func (s *server) handle(_ context.Context, conn net.Conn) {
 }
 
 // status composes the timing snapshot with the live conflict set, so an
-// acknowledgement is visible immediately rather than at the next publish.
+// acknowledgement is visible immediately rather than at the next publish. The
+// set is bounded on the way out, because an answer the client refuses would
+// leave this watcher unusable and its conflicts undrainable.
 func (s *server) status() *Status {
 	current := *s.snapshot.Load()
-	current.Conflicts = s.conflicts.list()
+	current.Conflicts = boundConflicts(s.conflicts.list())
 	return &current
 }
 

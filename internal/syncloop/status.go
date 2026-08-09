@@ -1,6 +1,9 @@
 package syncloop
 
 import (
+	"bufio"
+	"encoding/json"
+	"errors"
 	"sort"
 	"sync"
 	"time"
@@ -148,6 +151,33 @@ func (c *conflictSet) list() []ConflictEntry {
 	return entries
 }
 
+// boundConflicts drops the entries past maxConflictBytes, so a status response
+// always fits the bound the client enforces.
+//
+// Without it the bound is reachable from the inside and the failure is
+// self-sustaining: a client that refuses the answer never learns the watcher is
+// trustworthy, so it never acknowledges anything, so the set that made the
+// answer too large is never drained and every mutation takes the inline path
+// with `sync --status` reporting a live watcher as not running. Serving a
+// prefix instead keeps the watcher usable and lets the set drain the ordinary
+// way. The prefix is the same one every time, because list sorts by task ID, so
+// the conflicts that are visible stay visible until they are acknowledged.
+func boundConflicts(entries []ConflictEntry) []ConflictEntry {
+	total := 0
+	for index, entry := range entries {
+		encoded, err := json.Marshal(entry)
+		if err != nil {
+			return entries[:index]
+		}
+		// The comma that joins this entry to the previous one.
+		total += len(encoded) + 1
+		if total > maxConflictBytes {
+			return entries[:index]
+		}
+	}
+	return entries
+}
+
 // request is the newline-delimited command a client sends. Exactly one member
 // is populated.
 type request struct {
@@ -170,4 +200,54 @@ type response struct {
 	OK     bool    `json:"ok"`
 	Status *Status `json:"status,omitempty"`
 	Error  string  `json:"error,omitempty"`
+}
+
+const (
+	// maxRequestBytes, maxConflictBytes, and maxResponseBytes bound one
+	// protocol line. The handler deadline bounds how long a peer may take, not
+	// how much it may send, so without these a peer that never writes a newline
+	// makes the other end grow a buffer until the process dies.
+	//
+	// A request is a command and a task ID, so it is bounded tightly. A status
+	// response carries the conflicts the watcher is still holding, and a
+	// description conflict reports three descriptions of up to
+	// core.MaxDescriptionBytes each, so the budget has to clear about 192 KiB
+	// per conflict. Twenty maximum-sized ones is already far past what a
+	// repository can accumulate before somebody notices.
+	//
+	// The three are layered so a healthy watcher can never reach the client's
+	// bound: maxConflictBytes budgets what the server serializes, and each
+	// layer above adds room for the JSON framing the layer below does not
+	// count — the per-entry framing of twenty conflicts, then the status
+	// document around them. Sizing the response at exactly twenty conflicts'
+	// descriptions would have refused twenty of them, since it left nothing
+	// for the framing.
+	maxRequestBytes  = 64 << 10
+	maxConflictBytes = 20*3*core.MaxDescriptionBytes + 64<<10
+	maxResponseBytes = maxConflictBytes + 64<<10
+)
+
+// errLineTooLong reports a protocol line that outgrew its bound.
+var errLineTooLong = errors.New("watcher protocol line is too long")
+
+// readLine reads one newline-terminated message, refusing one longer than
+// limit. bufio.Reader.ReadBytes accumulates without bound, so the limit has to
+// be enforced while reading rather than checked afterwards.
+func readLine(reader *bufio.Reader, limit int) ([]byte, error) {
+	var line []byte
+	for {
+		chunk, err := reader.ReadSlice('\n')
+		if len(line)+len(chunk) > limit {
+			return nil, errLineTooLong
+		}
+		// ReadSlice returns the reader's own buffer, valid only until the next
+		// read, so the copy is not optional.
+		line = append(line, chunk...)
+		if err == nil {
+			return line, nil
+		}
+		if !errors.Is(err, bufio.ErrBufferFull) {
+			return nil, err
+		}
+	}
 }
