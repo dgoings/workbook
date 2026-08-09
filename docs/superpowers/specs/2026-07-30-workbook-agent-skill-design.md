@@ -62,8 +62,19 @@ workbook show <dependency-id> --json
 ```
 
 and to take the blocker's name from that result's `data.title`. A dependency
-has no title until it is read, and an agent that skips the resolution step
-either invents one or falls back to the ULID.
+has no title until it is read, so an agent that skips the resolution step has
+nothing to name the blocker with; the anticipated outcomes are an invented
+title or the ULID. Only the ULID fallback has been observed. In the recorded
+run the agent reading the shipped skill resolved the dependency on its own
+initiative and still led with both ULIDs, which is behavior the skill cannot
+depend on being repeated.
+
+An unresolvable dependency is a read this clone cannot perform, not a broken
+task. `show` on an ID whose ref has not been fetched exits 4, which is reachable
+offline, with `autoSync` false, or under `--no-sync`, so the skill carves that
+case out of its otherwise unconditional stop-on-read-failure rule: report the
+dependency by ID as unresolved and continue rather than abandoning a task the
+agent could start.
 
 The alternative of carrying dependency titles in the `show` envelope was
 considered and rejected. `show` serializes the same `Task` shape that `create`,

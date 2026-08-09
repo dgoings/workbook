@@ -22,7 +22,9 @@ SQLite projections, or configuration directly.
    acceptance context before editing files.
 6. `data.dependencies` carries bare IDs. Before saying anything about a
    dependency or a blocker, run `workbook show <dependency-id> --json` for each
-   entry and keep its `data.title`; never invent one.
+   entry and keep its `data.title`; never invent one. Exit code 4 there is not
+   the step 3 stop: this clone cannot resolve that one dependency, so name it
+   by ID, say it is unresolved, and keep working rather than stopping.
 
 ## IDs are for commands, titles are for humans
 
