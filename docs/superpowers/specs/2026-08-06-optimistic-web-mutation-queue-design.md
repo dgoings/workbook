@@ -174,18 +174,47 @@ left before the last confirmation returned carries an older head, and adopting
 it would refuse the next intent for no reason at all. The re-base happens where
 the answer is known to be newer than the head that was just refused.
 
-Reporting stays on the existing board-level banner, worded to distinguish "that
-task changed elsewhere" from an ordinary failure, and written *after* the forced
-refresh rather than before it, because a refresh that lands clears the banner.
-That ordering only buys the report a chance to be drawn, not a chance to be
-read: the one-second poll clears the banner too, so a conflict report is gone
-within a second whether or not anyone was looking at it. Per-card reporting
-would be better and is deliberately not attempted here: the card has no message
-affordance today, `pendingTaskMessages` serves the detail view rather than the
-board, and inventing one is a UI design question that deserves its own attention
-rather than a corner of this change. It is the same missing affordance in both
-places, so the short-lived banner is filed with it rather than papered over with
-a timer.
+**Reporting** happens on the card the refusal concerns, worded to distinguish
+"this task changed elsewhere" from an ordinary failure, and written *after* the
+forced refresh rather than before it, so the report is written against the board
+the reader ends up looking at.
+
+The first shipped version reported on the board-level stale banner and did not
+survive contact with the poll. That banner says the board is showing state older
+than the server's, and a successful refresh clears it — correctly, because the
+board is current again. A refusal parked there was therefore erased within a
+second whether or not anyone had looked at that corner of the screen, which on a
+shared board means the conflict the queue exists to surface was never surfaced.
+Ordering the write after the forced refresh bought the report a chance to be
+drawn and no chance at all to be read.
+
+A card report is held in `taskFailureReports`, keyed by task ID, for the same
+reason a pending intent is held outside the model: every poll replaces
+`latestTasks` wholesale, so a report written into a task would be erased by the
+next one. It is folded in at render time, takes part in the card signature so an
+unchanged report costs one string comparison, and is built once with the card
+rather than rebuilt beside the description and the labels — the region holds a
+control, and a rebuild would drop the Dismiss button out from under the caret.
+Dismissing leaves the caret on the card.
+
+One report per card, newest wins. A refused *create* stacks its reports because
+each can hold the only copy of what was typed; a refused intent holds nothing —
+it rolled back, and the card shows what the server holds — so a second report on
+one card is the same news twice.
+
+The banner keeps its original job and its original single writer: a refresh that
+failed. That separation is the point. "This board is stale" is a condition a
+successful poll ends, and "your change was refused" is an event only a person
+can acknowledge.
+
+**A report whose card leaves the board.** The likeliest reason a change is
+refused is also a reason the card is about to go: another clone deleted the
+task, and the next poll takes the card with it. A render that finds a report
+whose task it no longer draws moves it to the notice — the surface above `main`
+that outlives every route and is cleared only by a person — rather than letting
+it leave with the card, which would put the reader back where the banner left
+them. `pendingTaskMessages` still serves the detail view; the two surfaces
+report to two different readers.
 
 **A failure with the detail form open.** The detail route projects pending
 intents, so a form opened over a pending change shows the optimistic value. When
@@ -290,6 +319,11 @@ absent and drives a hand-written fake DOM (`handler_test.go:4173`):
   standing;
 - a `stale-write` response rolls back, refreshes, reports, and re-bases the
   queue's head so the intent behind it is sent against the refreshed head;
+- a refusal is reported on the card it concerns, survives repeated poll ticks
+  driven through the captured interval callback, and leaves only when it is
+  dismissed — the report the banner could not keep;
+- a report whose card the board stops drawing moves to the notice exactly once
+  rather than leaving with the card;
 - a failed intent re-renders the detail form open on its task, so the form stops
   showing the value the server refused;
 - the detail form saves only the fields it changed, carrying the head it
