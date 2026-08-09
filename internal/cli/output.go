@@ -324,15 +324,36 @@ func writeSyncResult(output io.Writer, result gitstore.SyncResult) {
 	}
 }
 
-// writeIgnoredRefs names every ref the phase skipped and the one command that
-// removes it. Synchronization succeeded despite these refs, so the report is
-// the only thing standing between a poisoned namespace and nobody noticing.
+// writeIgnoredRefs names every ref the phase skipped, why it was skipped, and —
+// only for a name no project's ID format can produce — the command that removes
+// it. Synchronization succeeded despite these refs, so the report is the only
+// thing standing between a poisoned namespace and nobody noticing.
+//
+// It is also the only place Workbook suggests deleting anything from a shared
+// remote, and shared task history is append-only. A name this build does not
+// recognize can still be a task written by a newer version or under a second
+// project's key, so such a ref is reported with a warning instead of a command,
+// and even the command that is offered is phrased as a decision the reader
+// makes about a specific ref rather than a step to take.
 func writeIgnoredRefs(output io.Writer, result gitstore.SyncResult) {
+	if len(result.Ignored) == 0 {
+		return
+	}
+	removable := 0
 	for _, ignored := range result.Ignored {
 		fmt.Fprintf(output, "Ignored:\t%s\t%s\n", ignored.Ref, ignored.Reason)
+		if !ignored.PlausibleTask {
+			removable++
+		}
 	}
-	if len(result.Ignored) != 0 {
-		fmt.Fprintf(output, "\tprune with: git push %s --delete <ref>\n", result.Remote)
+	fmt.Fprintf(output, "\tkept on %s; Workbook deletes no ref there.\n", result.Remote)
+	if removable < len(result.Ignored) {
+		fmt.Fprint(output, "\ta name above may be a task of a newer Workbook or another project key;"+
+			" deleting one would destroy shared history.\n")
+	}
+	if removable > 0 {
+		fmt.Fprintf(output, "\tif a name above is no project's task, remove it with: git push %s --delete <ref>\n",
+			result.Remote)
 	}
 }
 
