@@ -315,3 +315,17 @@ git commit -m "feat: add Workbook agent skill"
 
 Do not push, open a pull request, merge, update the live Workbook task queue, or
 remove the worktree without explicit authorization.
+
+---
+
+## Later applications of this protocol
+
+Steps 1, 2, 7, and 8 are the reusable part of this plan: any later edit to
+`skills/workbook/SKILL.md` that claims to change agent behavior is validated by
+running fresh agents against throwaway repositories before and after the edit,
+not by asserting that its wording is present. Runs performed after the skill
+shipped:
+
+- [`docs/superpowers/evidence/2026-08-08-skill-titles-over-ids-behavior.md`](../evidence/2026-08-08-skill-titles-over-ids-behavior.md)
+  — the "IDs are for commands, titles are for humans" section and the
+  dependency-title resolution step.

@@ -164,3 +164,8 @@ Creation follows a skill-oriented RED/GREEN validation:
 
 No validation scenario mutates the live Workbook task queue or publishes task
 refs.
+
+Later edits to the skill's guidance are validated the same way rather than by
+substring assertions alone. The run behind the titles-over-IDs section and the
+dependency-resolution step is recorded in
+[`docs/superpowers/evidence/2026-08-08-skill-titles-over-ids-behavior.md`](../evidence/2026-08-08-skill-titles-over-ids-behavior.md).
