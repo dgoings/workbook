@@ -128,16 +128,18 @@ type processOutcome struct {
 	stderr string
 }
 
-// projectionContentionMessages are the three ways the shared SQLite projection
+// projectionContentionMessages are the four ways the shared SQLite projection
 // reports that another process moved task refs, or replaced the cache file,
-// while this one was trying to read it: the rebuild that lost twice
-// (internal/projection/store.go:180), the recovery that could not activate a
-// cache afterwards (:372), and the incremental refresh that kept finding the
-// cache changed underneath it (:145).
+// while this one was using it: the rebuild that lost twice
+// (internal/projection/store.go:177), the recovery that could not activate a
+// cache afterwards (:391), the incremental refresh that kept finding the
+// cache changed underneath it (:142), and the write redo that kept finding
+// the cache file replaced underneath its handle (:446).
 var projectionContentionMessages = []string{
 	"task refs changed during projection rebuild",
 	"activate projection cache after rebuild",
 	"refresh projection cache after a concurrent update",
+	"redo a projection write after the cache was replaced",
 }
 
 // assertRefusedUnderContention accepts the ways a process is allowed to lose
@@ -152,9 +154,9 @@ var projectionContentionMessages = []string{
 //     designed answer. The category blames the environment for something that
 //     is neither the environment's nor the caller's fault; the advice names
 //     `workbook rebuild` when the command that failed was `create`; and the
-//     three separate wordings are one phenomenon. It is pinned here rather than
+//     four separate wordings are one phenomenon. It is pinned here rather than
 //     tolerated silently, so that smoothing it has to change this test, and a
-//     fourth wording fails rather than passing quietly.
+//     fifth wording fails rather than passing quietly.
 func assertRefusedUnderContention(t *testing.T, outcome processOutcome, what string) {
 	t.Helper()
 	if outcome.stdout != "" {

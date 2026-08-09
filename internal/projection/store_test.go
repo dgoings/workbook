@@ -1835,3 +1835,142 @@ func writeIncompleteProjectionDatabase(path, projectID string) error {
 	_, err = db.Exec(`INSERT INTO projection_meta (key, value) VALUES ('schema_version', ?), ('project_id', ?)`, schemaVersion, projectID)
 	return err
 }
+
+// A rebuild in another process replaces the cache file while this process is
+// mid-refresh: lockActiveDatabase's usability check has already passed, so the
+// replacement stays invisible until the refresh transaction's first write,
+// which SQLite refuses with SQLITE_READONLY_DBMOVED. That verdict means
+// "reopen the replacement and redo this", not "tell a human to run rebuild" —
+// the replacement is a complete, valid projection, and the write never
+// committed anywhere.
+func TestStoreRefreshRedoesItsWriteWhenAnotherProcessReplacesTheCache(t *testing.T) {
+	ctx := context.Background()
+	repository, config := initializeWorkbook(t, testrepo.New(t))
+	writer, err := Open(ctx, repository, config)
+	if err != nil {
+		t.Fatalf("Open(writer) error = %v", err)
+	}
+	if _, err := writer.Rebuild(ctx); err != nil {
+		t.Fatalf("Rebuild(writer) error = %v", err)
+	}
+	replacer, err := Open(ctx, repository, config)
+	if err != nil {
+		t.Fatalf("Open(replacer) error = %v", err)
+	}
+
+	created := createTask(t, repository, config, "Created while the cache moves")
+
+	source := newGitListBarrierSource(repository)
+	t.Cleanup(source.release)
+	writer.source = source
+	renames := 0
+	writer.rename = func(oldPath, newPath string) error {
+		renames++
+		return os.Rename(oldPath, newPath)
+	}
+	refreshDone := make(chan error, 1)
+	go func() {
+		refreshDone <- writer.Refresh(ctx)
+	}()
+	<-source.listed
+	if _, err := replacer.Rebuild(ctx); err != nil {
+		t.Fatalf("Rebuild(replacer) error = %v", err)
+	}
+	source.release()
+
+	if err := <-refreshDone; err != nil {
+		t.Fatalf("Refresh() error = %v, want nil after redoing against the replacement", err)
+	}
+	if renames != 0 {
+		t.Fatalf("the redo renamed %d files into place, want the replacement reopened, not rebuilt over", renames)
+	}
+	cached, found, err := writer.querySnapshot(ctx, created.ID)
+	if err != nil || !found {
+		t.Fatalf("querySnapshot() = found %t, %v, want the created task visible through the redone handle", found, err)
+	}
+	if cached.State.Task.Title != "Created while the cache moves" {
+		t.Fatalf("projected title = %q, want the concurrently created task", cached.State.Task.Title)
+	}
+}
+
+// The stat openStore records can itself lose the race: the handle opens the
+// original file, another process renames a replacement into place, and only
+// then is the stat taken — so the bookkeeping describes the replacement while
+// the handle holds the unlinked original. No stat comparison can detect this
+// state; only SQLite's SQLITE_READONLY_DBMOVED verdict at the next write can,
+// so recovery must trust the verdict over the bookkeeping and reopen
+// unconditionally.
+func TestStoreAdvanceRedoesItsWriteWhenTheRecordedStatDescribesTheReplacement(t *testing.T) {
+	ctx := context.Background()
+	repository, config := initializeWorkbook(t, testrepo.New(t))
+	writer, err := Open(ctx, repository, config)
+	if err != nil {
+		t.Fatalf("Open(writer) error = %v", err)
+	}
+	if _, err := writer.Rebuild(ctx); err != nil {
+		t.Fatalf("Rebuild(writer) error = %v", err)
+	}
+	replacer, err := Open(ctx, repository, config)
+	if err != nil {
+		t.Fatalf("Open(replacer) error = %v", err)
+	}
+	// Hold a warm pooled connection to the original file; a cold pool would
+	// simply open the replacement and never see the moved verdict.
+	if _, _, err := writer.querySnapshot(ctx, "WB-000000000000000000000000"); err != nil {
+		t.Fatalf("querySnapshot(warm the pool) error = %v", err)
+	}
+	if _, err := replacer.Rebuild(ctx); err != nil {
+		t.Fatalf("Rebuild(replacer) error = %v", err)
+	}
+	writer.dbInfo, _ = writer.cacheStat()
+	renames := 0
+	writer.rename = func(oldPath, newPath string) error {
+		renames++
+		return os.Rename(oldPath, newPath)
+	}
+
+	created := createTask(t, repository, config, "Created after the stat lost the race")
+	written, err := repository.Get(ctx, config, created.ID)
+	if err != nil {
+		t.Fatalf("Get(created) error = %v", err)
+	}
+	applied, err := writer.Advance(ctx, config, "", written)
+	if err != nil || !applied {
+		t.Fatalf("Advance() = %t, %v, want true, nil after reopening the replacement", applied, err)
+	}
+	if !writer.cacheUsable(ctx) {
+		t.Fatal("writer is not bound to the live cache file after the redo")
+	}
+	if renames != 0 {
+		t.Fatalf("the redo renamed %d files into place, want the replacement reopened, not rebuilt over", renames)
+	}
+	cached, found, err := writer.querySnapshot(ctx, created.ID)
+	if err != nil || !found || cached.Head != written.Head {
+		t.Fatalf("querySnapshot() = %#v, found %t, %v, want the advanced head %q", cached, found, err, written.Head)
+	}
+}
+
+// The read lock must survive a panicking body: workbook serve runs one shared
+// store behind net/http, which recovers handler panics, so a leaked read lock
+// would wedge the next Rebuild and, behind its waiting writer, every later
+// request — permanently.
+func TestStoreWithActiveDatabaseReleasesTheLockWhenBodyPanics(t *testing.T) {
+	ctx := context.Background()
+	repository, config := initializeWorkbook(t, testrepo.New(t))
+	store, err := Open(ctx, repository, config)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("the body's panic did not propagate")
+			}
+		}()
+		_ = store.withActiveDatabase(ctx, func(context.Context) error { panic("body failed") })
+	}()
+	if !store.rebuildMu.TryLock() {
+		t.Fatal("rebuildMu is still held after a panicking body")
+	}
+	store.rebuildMu.Unlock()
+}
