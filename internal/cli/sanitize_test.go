@@ -56,15 +56,22 @@ func TestShowSanitizesControlCharactersInTextMode(t *testing.T) {
 	}
 }
 
-func TestShowKeepsMultiLineDescriptionsOnOneLine(t *testing.T) {
+func TestShowIndentsMultiLineDescriptionsSoTheyCannotForgeFields(t *testing.T) {
 	// Mutation caught: printing description newlines verbatim, letting a
-	// description line parse as a forged top-level field.
+	// description line parse as a forged top-level field. The description keeps
+	// its line structure, so the protection is the tab every continuation line
+	// carries rather than the collapse onto one line it replaced. Each line is
+	// still sanitized on its own, which the ESC in the third line checks.
 	repository := initializedRepository(t)
-	task := createForgedTask(t, repository, "innocuous", "ok\nStatus: done\nHead: deadbeef")
+	description := "ok\nStatus: done\n\nsecond \x1b[2Kparagraph\nHead: deadbeef"
+	task := createForgedTask(t, repository, "innocuous", description)
 
 	code, stdout, stderr := run(t, repository, "show", task.ID)
 	if code != 0 {
 		t.Fatalf("show code = %d, want 0; stderr = %q", code, stderr)
+	}
+	if strings.ContainsRune(stdout, 0x1b) {
+		t.Fatalf("show output = %q, want no ESC bytes", stdout)
 	}
 
 	var statusLines, headLines []string
@@ -82,8 +89,9 @@ func TestShowKeepsMultiLineDescriptionsOnOneLine(t *testing.T) {
 	if len(headLines) != 1 || headLines[0] != "Head:\t"+task.Head {
 		t.Fatalf("head lines = %q, want only the real field", headLines)
 	}
-	if !strings.Contains(stdout, "Description:\tok Status: done Head: deadbeef\n") {
-		t.Fatalf("show output = %q, want the description collapsed onto its own line", stdout)
+	want := "Description:\tok\n\tStatus: done\n\n\tsecond [2Kparagraph\n\tHead: deadbeef\n"
+	if !strings.Contains(stdout, want) {
+		t.Fatalf("show output = %q, want the indented description block %q", stdout, want)
 	}
 }
 
