@@ -116,3 +116,64 @@ func TestValidateTaskIDRejectsNonCanonicalULIDBody(t *testing.T) {
 		})
 	}
 }
+
+// PlausibleTaskID is the gate in front of advice to delete a ref from a shared
+// remote, so it must keep saying yes to the two names that a stranger's junk is
+// easily mistaken for: a task written under this project's key in an ID format
+// this build predates, and a task of a second project sharing the namespace.
+func TestPlausibleTaskIDAcceptsNamesThisBuildCannotOwn(t *testing.T) {
+	const id = "WB-01K0M6B8A4FTT8C39MXXYTW7C2"
+
+	for name, candidate := range map[string]string{
+		"canonical ID":                     id,
+		"non-canonical body":               "WB-01k0m6b8a4ftt8c39mxxytw7c2",
+		"unparsable body under our key":    "WB-NEXT-FORMAT",
+		"empty body under our key":         "WB-",
+		"nested under our key":             id + "/attachment",
+		"peeled under our key":             id + "^{}",
+		"another project's key":            "OPS-01K0M6B8A4FTT8C39MXXYTW7C2",
+		"another project's lowercase body": "OPS-01k0m6b8a4ftt8c39mxxytw7c2",
+		"nested under another key":         "OPS-01K0M6B8A4FTT8C39MXXYTW7C2/attachment",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if !PlausibleTaskID("WB", candidate) {
+				t.Fatalf("PlausibleTaskID(%q) = false, want true", candidate)
+			}
+		})
+	}
+}
+
+// Only a name that carries neither this project's key prefix nor the
+// <KEY>-<ULID> shape names nobody's task, and only such a name may be offered
+// for deletion.
+func TestPlausibleTaskIDRejectsNamesNoProjectCanOwn(t *testing.T) {
+	for name, candidate := range map[string]string{
+		"empty":                             "",
+		"bare word":                         "EVIL",
+		"nested bare word":                  "team/EVIL",
+		"key with no body":                  "OPS-",
+		"short body":                        "OPS-01K0M6B8A4FTT8C39MXXYTW7C",
+		"long body":                         "OPS-01K0M6B8A4FTT8C39MXXYTW7C22",
+		"lowercase key":                     "ops-01K0M6B8A4FTT8C39MXXYTW7C2",
+		"body outside Crockford's alphabet": "OPS-01K0M6B8A4FTT8C39MXXYTW7CI",
+		"our key without its separator":     "WB01K0M6B8A4FTT8C39MXXYTW7C2",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if PlausibleTaskID("WB", candidate) {
+				t.Fatalf("PlausibleTaskID(%q) = true, want false", candidate)
+			}
+		})
+	}
+}
+
+// A key this build cannot use disables only the rule that depends on it. The
+// name is still judged against every valid project key's shape, because a
+// misconfigured clone must not start recommending deletions.
+func TestPlausibleTaskIDToleratesAnInvalidProjectKey(t *testing.T) {
+	if !PlausibleTaskID("bad key", "OPS-01K0M6B8A4FTT8C39MXXYTW7C2") {
+		t.Fatalf("PlausibleTaskID() = false for a well-shaped foreign task ID, want true")
+	}
+	if PlausibleTaskID("bad key", "bad key-EVIL") {
+		t.Fatalf("PlausibleTaskID() = true for an invalid key's own name, want false")
+	}
+}
