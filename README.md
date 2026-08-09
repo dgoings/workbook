@@ -232,7 +232,7 @@ and linux archives. Each job verifies formatting with `gofmt -l .`, runs
 A suite that skips is the failure this workflow is built to prevent. The
 embedded web board tests execute the rendered client with `node`, and the
 cross-object-format tests need a Git that can create SHA-256 repositories;
-without either, those tests skip and the package still reports `ok`. Three
+without either, those tests skip and the package still reports `ok`. Four
 things stop that:
 
 - `scripts/check-ci-capabilities.sh` runs before the suite and fails, naming
@@ -241,12 +241,14 @@ things stop that:
   failure. Tests report one through `internal/testenv.MissingCapability`
   instead of `t.Skip`, which skips locally and fails wherever the variable is
   set.
-- A guard test in `internal/testenv` parses every `_test.go` file in the module
-  and fails when a function probes for a tool with `exec.LookPath` and then
-  calls a bare `t.Skip`, because neither the variable above nor the skip report
-  below can see such a skip. A function that skips for an unrelated reason is
-  named in that test's `bareSkipExceptions` list with the reason, and an entry
-  that stops matching fails as stale.
+- A guard test in `internal/testenv` parses the module's Go sources — test
+  files and the helper packages that take a `*testing.T` — and fails when a
+  function probes for a tool with `exec.LookPath` and then calls a bare
+  `t.Skip`. The variable above cannot see such a skip at all, and the report
+  below lists it without failing the run, so nothing else makes it fatal. A
+  function that skips for an unrelated reason is named in that test's
+  `bareSkipExceptions` list with the reason, and an entry that stops matching
+  fails as stale.
 - `scripts/skipreport` reads `go test -json`, replays the readable output, and
   writes every skip and every missing-capability failure to the job summary, so
   a shrinking suite is visible rather than green.
