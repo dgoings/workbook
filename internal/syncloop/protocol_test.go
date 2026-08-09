@@ -180,7 +180,7 @@ func TestStatusDropsConflictsPastTheServerBound(t *testing.T) {
 // trusted either: the pointer file names a socket, and whatever answers it can
 // reply with as much as it likes.
 func TestClientRefusesAnOversizedResponse(t *testing.T) {
-	directory := t.TempDir()
+	directory := shortTempDir(t)
 	socket := filepath.Join(directory, "s.sock")
 	listener, err := net.Listen("unix", socket)
 	if err != nil {

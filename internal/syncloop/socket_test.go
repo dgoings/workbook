@@ -43,7 +43,7 @@ func TestSocketPathChoosesADirectoryOnlyThisUserCanWrite(t *testing.T) {
 // A world-writable temporary directory is skipped rather than trusted, even
 // when the path fits comfortably.
 func TestSocketPathSkipsAWorldWritableTemporaryDirectory(t *testing.T) {
-	open := filepath.Join(t.TempDir(), "open")
+	open := filepath.Join(shortTempDir(t), "open")
 	if err := os.Mkdir(open, 0o700); err != nil {
 		t.Fatalf("Mkdir() error = %v", err)
 	}
@@ -58,7 +58,7 @@ func TestSocketPathSkipsAWorldWritableTemporaryDirectory(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	gitDir := t.TempDir()
+	gitDir := shortTempDir(t)
 	path, err := socketPath(gitDir)
 	if err != nil {
 		t.Fatalf("socketPath() error = %v", err)
@@ -227,7 +227,7 @@ func TestSocketPathFallsBackWhenTheCandidateIsTooLong(t *testing.T) {
 	t.Setenv("TMPDIR", long)
 	useTempRoot(t, long)
 
-	gitDir := t.TempDir()
+	gitDir := shortTempDir(t)
 	path, err := socketPath(gitDir)
 	if err != nil {
 		t.Fatalf("socketPath() error = %v", err)
@@ -251,7 +251,7 @@ func TestListenPrivateCreatesASocketNobodyElseCanConnectTo(t *testing.T) {
 	previous := syscall.Umask(0)
 	defer syscall.Umask(previous)
 
-	path := filepath.Join(t.TempDir(), "w.sock")
+	path := filepath.Join(shortTempDir(t), "w.sock")
 	listener, err := listenPrivate(path)
 	if err != nil {
 		t.Fatalf("listenPrivate() error = %v", err)
