@@ -241,6 +241,12 @@ things stop that:
   failure. Tests report one through `internal/testenv.MissingCapability`
   instead of `t.Skip`, which skips locally and fails wherever the variable is
   set.
+- A guard test in `internal/testenv` parses every `_test.go` file in the module
+  and fails when a function probes for a tool with `exec.LookPath` and then
+  calls a bare `t.Skip`, because neither the variable above nor the skip report
+  below can see such a skip. A function that skips for an unrelated reason is
+  named in that test's `bareSkipExceptions` list with the reason, and an entry
+  that stops matching fails as stale.
 - `scripts/skipreport` reads `go test -json`, replays the readable output, and
   writes every skip and every missing-capability failure to the job summary, so
   a shrinking suite is visible rather than green.
