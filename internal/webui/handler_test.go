@@ -5591,9 +5591,15 @@ setTimeout(async () => {
 
 // A pending intent can outlive the board view that queued it. If it fails
 // while the detail form for its task is open, the form must stop showing the
-// optimistic value the server refused: a form that kept showing it would read
-// as saved state, and saving it would persist the refused value as a real
-// edit.
+// optimistic value the server refused, because it reads as saved state.
+//
+// What is at stake there is display accuracy rather than safety: a save from
+// this form sends only the fields that differ from the ones it rendered
+// (changedTaskValues), so an untouched control could never have carried the
+// refused value into one. That is why the value is corrected where it stands
+// instead of by a re-render, which would buy the accuracy with every keystroke
+// typed into the form since it opened. detail_withdrawal_test.go covers what
+// the correction keeps; this covers the path from the board drag to the form.
 func TestHandlerClientReflectsAFailedPendingIntentInAnOpenDetailForm(t *testing.T) {
 	node := requireNode(t)
 	moved := clientPlacementTask("WB-01J00000000000000000000053", "Moved", core.StatusReady, core.PriorityMedium)

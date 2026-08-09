@@ -491,6 +491,12 @@
       // because a restore replaces that node and has to lift what was typed
       // into it out first.
       let readOpenNewTaskValues = null;
+      // The detail form on screen, or null when the route on screen is not one.
+      // Set by the render that builds the form and retired by renderRoute, so a
+      // late arrival — a board intent refused seconds after the form opened —
+      // corrects the form the reader is looking at or nothing at all, and never
+      // a node that has already left the document.
+      let openDetailForm = null;
 
       function text(element, value) { element.textContent = value || ""; return element; }
       // Card descriptions are hidden by default and this setting brings them
@@ -838,8 +844,12 @@
         // detach the very button the press started on, the click would go to
         // the surviving list instead, and the removal would be silently
         // dropped. Shift+Tab out of an input holding text loses focus the same
-        // way. Values only ever arrive at the end and leave in place, so
-        // appending the new ones keeps the DOM in the order of the set.
+        // way. So a chiclet already on screen is never moved, only removed
+        // where it stands, and a new one is appended. The row reads in the
+        // order its labels reached this form rather than in the order of the
+        // set: labels the reader typed appear in the order they typed them, and
+        // a set replaced by a correction keeps the survivors ahead of whatever
+        // the correction brought in. Only the order of `values` reaches a save.
         const chicletsByLabel = new Map();
         function renderChiclets() {
           chicletsByLabel.forEach((chiclet, label) => {
@@ -931,11 +941,15 @@
         // chiclets always show what a save would send.
         input.addEventListener("blur", () => { commitInput(); });
 
-        (initial || []).forEach((label) => {
-          const value = String(label).trim();
-          if (value && !values.includes(value)) values.push(value);
-        });
-        renderChiclets();
+        function replaceValues(next) {
+          values.splice(0, values.length);
+          (next || []).forEach((label) => {
+            const value = String(label).trim();
+            if (value && !values.includes(value)) values.push(value);
+          });
+          renderChiclets();
+        }
+        replaceValues(initial);
         return {
           region,
           // A label typed but never committed is still a label the user
@@ -948,8 +962,62 @@
               if (label && !entered.includes(label)) entered.push(label);
             });
             return entered;
-          }
+          },
+          // The set the chiclets are showing, with nothing folded in from the
+          // input. It answers a different question than values(): not "what
+          // would a save send" but "has the reader decided anything about this
+          // set", which three letters on the way to a word have not.
+          committed() { return [...values]; },
+          // Puts a different set on screen without disturbing the input. It is
+          // how a form corrects a label set it is displaying on someone else's
+          // authority; the label being typed is the reader's and is left alone.
+          replace: replaceValues
         };
+      }
+      // Makes a select show a value, or reports that it cannot. A select only
+      // shows values it has an option for, so the answer is returned rather
+      // than assumed: a value with no option of its own would otherwise leave
+      // the control displaying whatever it displayed before.
+      function showSelected(control, value) {
+        const options = [...control.children];
+        const wanted = options.find((option) => option.value === value);
+        if (!wanted) return false;
+        options.forEach((option) => { option.selected = false; });
+        wanted.selected = true;
+        return true;
+      }
+      // The status a task carries can be one this client has no option for —
+      // written by a newer Workbook, or by a project that added a status —
+      // which is exactly the value showSelected cannot show. The list grows a
+      // disabled placeholder naming it, so the field reports the status the
+      // server holds instead of displaying a canonical neighbour that would
+      // read as saved state. Selecting the placeholder sends nothing: an
+      // untouched control the client cannot render is not a request to change
+      // the status (changedTaskValues).
+      function statusPlaceholder() {
+        const option = document.createElement("option");
+        option.value = "";
+        option.disabled = true;
+        return option;
+      }
+      // Makes a status select show a status, whether or not this client knows
+      // it, so it is also how a select already on screen adopts one. The
+      // placeholder is added and removed as the status needs it, because one
+      // naming a status the task has since left is a worse label than none.
+      function showStatus(control, status) {
+        const first = control.firstElementChild;
+        let placeholder = first && first.value === "" ? first : null;
+        if (statuses.has(status)) {
+          if (placeholder) placeholder.remove();
+          showSelected(control, status);
+          return;
+        }
+        if (!placeholder) {
+          placeholder = statusPlaceholder();
+          control.insertBefore(placeholder, control.firstElementChild);
+        }
+        text(placeholder, "Choose a canonical status (current: " + status + ")");
+        showSelected(control, "");
       }
       function select(name, options, value) {
         const control = document.createElement("select"); control.id = "task-" + name; control.name = name;
@@ -2156,10 +2224,8 @@
         const form = document.createElement("form"); form.className = "task-layout";
         const title = document.createElement("input"); title.id = "task-title"; title.name = "title"; title.required = true; title.value = task.title || "";
         const description = document.createElement("textarea"); description.id = "task-description"; description.name = "description"; description.value = task.description || "";
-        const knownStatus = statuses.has(task.status);
-        const statusOptions = knownStatus ? statusDefinitions : [["", "Choose a canonical status (current: " + task.status + ")"], ...statusDefinitions];
-        const status = select("status", statusOptions, knownStatus ? task.status : ""); status.required = true;
-        if (!knownStatus) status.firstElementChild.disabled = true;
+        const status = select("status", statusDefinitions, task.status); status.required = true;
+        showStatus(status, task.status);
         const priority = select("priority", [["high", "High"], ["medium", "Medium"], ["low", "Low"]], task.priority);
         const labels = labelEditor(task.labels || []);
         // Named, because the relationship region carries a form-status of its
@@ -2229,6 +2295,61 @@
         // replace this form can save what is in it. renderRoute clears it, so
         // the reader never outlives the node it reads from.
         if (isNew) readOpenNewTaskValues = () => allTaskValues(controls);
+        // Re-reads this form against the task the board now holds, in place. A
+        // field the save would not send is a field the reader has not been near:
+        // it is displaying exactly what this form rendered, so it follows the
+        // board. A field the save would send is an edit in progress and stays
+        // as typed, down to the caret.
+        //
+        // The baseline moves either way, so the next save still carries only
+        // the fields this reader changed — now measured against the version
+        // that exists rather than against one the server refused.
+        function reviseAgainstTask(held) {
+          const edited = changedTaskValues(task, controls);
+          const adopted = Object.assign({}, held);
+          if (!("title" in edited)) title.value = held.title || "";
+          if (!("description" in edited)) description.value = held.description || "";
+          // Labels are asked a different question than the rest. A save folds
+          // the text still in the input into the set, so changedTaskValues
+          // calls the field edited the moment a reader types a letter into it —
+          // and a reader partway through a word has decided nothing about the
+          // set. Left at that, an untouched set would keep the refused value
+          // while the baseline moved to the server's, and the next save would
+          // delete a label this reader was never shown. The chiclets are what
+          // they have actually decided; the word in progress stays in the
+          // input either way.
+          if (sameLabels(labels.committed(), task.labels || [])) labels.replace(held.labels || []);
+          // The heading names the task and so does the browser tab. Both are a
+          // rendering of the task rather than of this form's draft — neither
+          // has ever followed the title field's keystrokes — so they follow the
+          // task the board holds even while the field carries an edit.
+          text(heading, held.title || "");
+          document.title = (held.title || "") + " · Workbook";
+          if (!("status" in edited)) showStatus(controls.status, held.status);
+          // A correction that cannot be shown must not move the baseline with
+          // it. The control would still be displaying the value this form
+          // rendered while the baseline said otherwise, which is the one thing
+          // that would turn a refused value into an edit the next save sends.
+          // Status is always showable — showStatus builds an option for a
+          // status this client does not know — so what is left here is a
+          // priority from outside this client's three, which nothing in the
+          // board renders either.
+          if (!("priority" in edited) && !showSelected(controls.priority, held.priority)) {
+            adopted.priority = task.priority;
+          }
+          task = adopted;
+          // Re-based the way a refused save re-bases this form: it proposes the
+          // tip that now exists, so the reader's next save applies their edits
+          // to it instead of being refused for naming a head that has moved on.
+          expectedHead = held.head || "";
+        }
+        if (!isNew) {
+          openDetailForm = {
+            taskID: task.id,
+            revise: reviseAgainstTask,
+            report: (message) => text(result, message)
+          };
+        }
         form.addEventListener("submit", async (event) => {
           event.preventDefault();
           if (isNew && taskWasCreated) return;
@@ -2719,22 +2840,42 @@
         if (node && typeof node.focus === "function") node.focus();
       }
       // A pending intent can outlive the board view that queued it. When one
-      // fails while its task's detail form is open, that form is showing an
-      // optimistic value the server refused: leaving it there reads as saved
-      // state, and saving would persist the refused value as a real edit. So
-      // the route is rendered again from what the server actually holds.
+      // fails while its task's detail form is open, that form is displaying an
+      // optimistic value the server refused, so the fields still displaying it
+      // are corrected where they stand and the form says why they moved.
       //
-      // That also discards anything typed into the form since it opened, which
-      // is the trade taken deliberately: a form that keeps a value the server
-      // refused is lying about what is saved, and the message says why the
-      // field moved.
+      // What that buys is display accuracy, not safety. A save from this form
+      // sends only the fields that differ from the ones it rendered
+      // (changedTaskValues), and a control nobody has touched does not differ
+      // from them, so the refused value was never reachable by a save either
+      // way. The form was simply reading as saved state while showing a value
+      // the server had thrown away.
+      //
+      // Corrected rather than re-rendered, because a rebuilt form would pay for
+      // that accuracy with everything typed into it since it opened, and would
+      // detach a save in flight — a detached save reports nothing when it
+      // lands, so a reader who was saving at that moment would hear only that
+      // their board change failed. The correction skips the fields being edited
+      // and leaves the node, its listeners, and the caret exactly where they
+      // are.
+      //
+      // A task the board has stopped carrying — the likeliest refusal of all is
+      // one another clone deleted — has nothing to correct the form against.
+      // The form stays as it is and says so, because a reader mid-sentence
+      // needs their sentence more than they need a "task not found" page.
       function withdrawFailedIntentFromOpenDetail(taskID, error) {
-        const current = route();
-        if (current.view !== "detail" || current.id !== taskID) return;
-        pendingTaskMessages.set(taskID, [error && error.category === "stale-write"
-          ? "That task changed elsewhere. This form now shows the version the server holds; the change made on the board was not applied."
-          : "Task update failed. This form now shows the version the server holds; the change made on the board was not applied."]);
-        renderRoute();
+        const open = openDetailForm;
+        if (!open || open.taskID !== taskID) return;
+        // The same view the detail route renders from, so the form keeps
+        // agreeing with the board: an intent still queued behind the failed one
+        // is projected here exactly as it is drawn there.
+        const held = projectTasks(latestTasks).find((candidate) => candidate.id === taskID);
+        if (held) open.revise(held);
+        open.report((error && error.category === "stale-write"
+          ? "That task changed elsewhere."
+          : "Task update failed.") + (held
+          ? " The fields you have not edited now show the version the server holds, and your edits are kept; the change made on the board was not applied."
+          : " The board no longer carries it, so the change made there was not applied. Your edits are kept here."));
       }
       function ownsDependencyController(controller) {
         return activeDependencyController === controller;
@@ -2870,8 +3011,10 @@
         // Whatever New Task form was on screen is about to be replaced, so its
         // reader is retired here and re-published only by a render that builds
         // one. Anything that had to be saved out of it was saved before the
-        // navigation that led here.
+        // navigation that led here. The detail form's handle is retired for the
+        // same reason: the node it writes into is about to go.
         readOpenNewTaskValues = null;
+        openDetailForm = null;
         // The description setting draws cards, and only the board draws cards.
         // Beside the deleted list or a task's own page it would be a control
         // that visibly does nothing, so it travels with the route it acts on.
