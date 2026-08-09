@@ -43,6 +43,20 @@ func bind(commonGitDir string) (net.Listener, string, error) {
 		_ = conn.Close()
 		return nil, "", ErrWatcherLive
 	}
+	// The recorded socket is dialed too, because exclusivity cannot rest on two
+	// processes computing the same path. This change moved the preferred path
+	// from os.TempDir() into a private directory, so a watcher started before it
+	// answers somewhere this one would never look; a candidate directory that
+	// becomes usable again moves it the same way. Either way the older watcher
+	// still owns the repository, and without this a second loop would start and
+	// overwrite its pointer. The pointer is the rendezvous every client already
+	// trusts, so trusting it here costs one os.ReadFile and no new assumption.
+	if published, err := readPointer(commonGitDir); err == nil && published.Socket != path {
+		if conn, err := net.DialTimeout("unix", published.Socket, time.Second); err == nil {
+			_ = conn.Close()
+			return nil, "", ErrWatcherLive
+		}
+	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, "", core.Wrap(core.CategoryOperational, "clear the stale watcher socket", err)
 	}

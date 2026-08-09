@@ -180,6 +180,15 @@ A stale pointer file after `SIGKILL` is harmless: the dial fails and the CLI
 falls back. Before binding, a watcher dials the recorded socket and unlinks only
 if nothing answers.
 
+Dialing the recorded socket, rather than only the one this version computes, is
+what makes exclusivity survive a change of path. Moving the preferred path into
+the private directory means a watcher started before that change answers
+somewhere a newer one would never look: it would find nothing, bind, overwrite
+the pointer, and run a second loop against the same refs while the first held a
+conflict set nobody would ever read. The pointer is the rendezvous every client
+already trusts, so the older watcher keeps ownership across the upgrade and
+across any later change of candidate.
+
 Three request types, newline-delimited JSON. Both ends bound the line they read
 as well as holding a five-second deadline. The deadline bounds how long a peer
 may take, not how much it may send, so without a bound a peer that never writes

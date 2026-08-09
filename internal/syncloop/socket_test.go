@@ -1,6 +1,8 @@
 package syncloop
 
 import (
+	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -249,6 +251,60 @@ func TestBindCreatesASocketOnlyTheOwnerCanConnectTo(t *testing.T) {
 	}
 }
 
+// A watcher that already owns the repository keeps it even when it listens
+// somewhere this version would never choose. Moving the preferred path into a
+// private directory would otherwise let a new watcher start beside a
+// pre-upgrade one, overwrite its pointer, and run a second loop against the
+// same refs — with README still promising that an external watcher keeps
+// ownership.
+func TestBindRefusesWhenTheRecordedSocketAnswersElsewhere(t *testing.T) {
+	directory := t.TempDir()
+	legacy := filepath.Join(shortTempDir(t), "wb-legacy.sock")
+	listener, err := net.Listen("unix", legacy)
+	if err != nil {
+		t.Fatalf("Listen(%q) error = %v", legacy, err)
+	}
+	defer listener.Close()
+
+	published := pointer{Format: PointerFormat, Version: PointerVersion, Socket: legacy, PID: os.Getpid()}
+	if err := writePointer(directory, published); err != nil {
+		t.Fatalf("writePointer() error = %v", err)
+	}
+
+	chosen, err := socketPath(directory)
+	if err != nil {
+		t.Fatalf("socketPath() error = %v", err)
+	}
+	if chosen == legacy {
+		t.Fatalf("socketPath() = %q, want a path other than the recorded one", chosen)
+	}
+	if _, _, err := bind(directory); !errors.Is(err, ErrWatcherLive) {
+		t.Fatalf("bind() error = %v, want ErrWatcherLive", err)
+	}
+}
+
+// A pointer left behind by SIGKILL names a socket nothing answers, which is the
+// ordinary restart. It must not keep the next watcher out.
+func TestBindProceedsWhenTheRecordedSocketIsDead(t *testing.T) {
+	directory := t.TempDir()
+	published := pointer{
+		Format:  PointerFormat,
+		Version: PointerVersion,
+		Socket:  filepath.Join(directory, "absent.sock"),
+		PID:     os.Getpid(),
+	}
+	if err := writePointer(directory, published); err != nil {
+		t.Fatalf("writePointer() error = %v", err)
+	}
+
+	listener, path, err := bind(directory)
+	if err != nil {
+		t.Fatalf("bind() error = %v", err)
+	}
+	_ = listener.Close()
+	_ = os.Remove(path)
+}
+
 // --- helpers ---
 
 func useTempRoot(t *testing.T, root string) {
@@ -256,6 +312,18 @@ func useTempRoot(t *testing.T, root string) {
 	previous := userTempRoot
 	userTempRoot = root
 	t.Cleanup(func() { userTempRoot = previous })
+}
+
+// shortTempDir is a temporary directory short enough to hold a bound socket.
+// t.TempDir() names itself after the test, and sun_path is 104 bytes.
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "wb")
+	if err != nil {
+		t.Fatalf("MkdirTemp() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
 }
 
 // useUID makes this process report a uid it does not have, which is how a test
