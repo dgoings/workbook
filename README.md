@@ -1093,6 +1093,15 @@ can acknowledge. If the card itself goes, which is what happens when the change
 was refused because another clone deleted the task, the report moves to the
 notice above the board naming the task it was about.
 
+A task's detail form can be open when its board change is refused, in which case
+the form is showing the value the server just refused. It is corrected where it
+stands rather than rebuilt: fields you have not edited follow the version the
+server holds, everything you have typed stays exactly as typed, a save already
+in flight keeps reporting into the form, and a message says which change was not
+applied. Saving afterwards sends only your own edits, against the version that
+now exists. If the task has left the board entirely, the form and your unsaved
+text stay put and say so.
+
 A `Publishing:` indicator in the board header says what the *next* mutation will
 do with `origin`, and clicking it changes that for this server. Handed to
 watcher — the default — means a mutation returns as soon as the write is durable
