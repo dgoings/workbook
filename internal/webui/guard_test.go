@@ -315,8 +315,9 @@ func TestGuardAllowsTheBoundExplicitAddress(t *testing.T) {
 }
 
 func TestGuardRejectsForeignOriginsOnExplicitNonLoopbackBind(t *testing.T) {
-	// The Host is pinned, so the Origin is compared with the bound address too
-	// rather than with whatever the browser addressed.
+	// A foreign Origin is refused whether the Origin is compared with the bound
+	// address or with the Host the browser sent; the case that separates those
+	// two rules is in TestGuardComparesOriginWithTheBoundAddress below.
 	for _, origin := range []string{"http://evil.example:7331", "https://192.168.1.5:7331", "http://192.168.1.6:7331", "null"} {
 		t.Run(origin, func(t *testing.T) {
 			handler, lists, creates := guardedHandler(t, "192.168.1.5:7331")
@@ -326,6 +327,27 @@ func TestGuardRejectsForeignOriginsOnExplicitNonLoopbackBind(t *testing.T) {
 				t.Fatalf("service callbacks ran (%d lists, %d creates) for Origin %q", *lists, *creates, origin)
 			}
 		})
+	}
+}
+
+func TestGuardComparesOriginWithTheBoundAddress(t *testing.T) {
+	// On an explicit bind the Origin is measured against the address the
+	// listener bound, not against the authority the browser happened to send.
+	// The two rules differ only when one address is spelled two ways, so that is
+	// what holds them apart: an IPv4-mapped Host and a dotted-quad Origin are
+	// the same board, and the guard says so, where comparing the two headers as
+	// text would refuse the pair. Both spellings are already accepted as a Host
+	// by TestGuardAllowsTheBoundExplicitAddress, so neither is a stranger.
+	handler, lists, creates := guardedHandler(t, "192.168.1.5:7331")
+
+	read := guardedRequest(t, handler, http.MethodGet, "/api/tasks", "[::ffff:192.168.1.5]:7331", "http://192.168.1.5:7331", "", "")
+	if read.Code != http.StatusOK || *lists != 1 {
+		t.Fatalf("status/lists = %d/%d, want %d/1; body = %s", read.Code, *lists, http.StatusOK, read.Body.String())
+	}
+
+	write := guardedRequest(t, handler, http.MethodPost, "/api/tasks", "[::ffff:192.168.1.5]:7331", "http://192.168.1.5:7331", "application/json", `{"title":"self"}`)
+	if write.Code != http.StatusOK || *creates != 1 {
+		t.Fatalf("status/creates = %d/%d, want %d/1; body = %s", write.Code, *creates, http.StatusOK, write.Body.String())
 	}
 }
 
