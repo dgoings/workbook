@@ -321,10 +321,7 @@ setTimeout(async () => {
 }
 
 func TestHandlerClientNamesJSONMediaTypeOnEveryMutation(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	deleted := clientPlacementTask("WB-01J00000000000000000000070", "Body-less restore", core.StatusReady, core.PriorityMedium)
 	deleted.Deleted = true
 	restored := deleted
@@ -5423,10 +5420,7 @@ setTimeout(async () => {
 // were separate decisions, and discarding a later change because an earlier
 // one was refused is the clobbering the queue exists to avoid.
 func TestHandlerClientRollsBackAFailedIntentAndLeavesALaterOneStanding(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	moved := clientPlacementTask("WB-01J00000000000000000000051", "Moved", core.StatusReady, core.PriorityMedium)
 	moved.Head = "head-1"
 	confirmed := moved
@@ -5506,10 +5500,7 @@ setTimeout(async () => {
 // queue's head from that refresh so the intents behind it retry against
 // current truth instead of failing identically.
 func TestHandlerClientStaleWriteRollsBackRefreshesAndRebasesTheQueue(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	moved := clientPlacementTask("WB-01J00000000000000000000052", "Moved", core.StatusReady, core.PriorityMedium)
 	moved.Head = "head-1"
 	elsewhere := moved
@@ -5604,10 +5595,7 @@ setTimeout(async () => {
 // as saved state, and saving it would persist the refused value as a real
 // edit.
 func TestHandlerClientReflectsAFailedPendingIntentInAnOpenDetailForm(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	moved := clientPlacementTask("WB-01J00000000000000000000053", "Moved", core.StatusReady, core.PriorityMedium)
 	moved.Head = "head-1"
 	elsewhere := moved
@@ -5689,10 +5677,7 @@ setTimeout(async () => {
 // overwritten nor re-asserted away. A save that changes nothing is not sent
 // at all, because the server refuses an empty update.
 func TestHandlerClientDetailFormSendsOnlyChangedFieldsWithTheObservedHead(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	task := clientPlacementTask("WB-01J00000000000000000000054", "Detail task", core.StatusReady, core.PriorityMedium)
 	task.Head = "head-1"
 	task.Description = "Original."
@@ -5974,10 +5959,7 @@ setTimeout(async () => {
 // and a deliberate re-save applies only the changed fields to the latest
 // version — the teammate's concurrent edit to an untouched field survives.
 func TestHandlerClientDetailFormRefusesAStaleSaveAndRetriesAgainstTheRefreshedHead(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	task := clientPlacementTask("WB-01J00000000000000000000055", "Detail task", core.StatusReady, core.PriorityMedium)
 	task.Head = "head-1"
 	task.Description = "Original."
@@ -6067,10 +6049,7 @@ setTimeout(async () => {
 // next Save is refused as a conflict with a change nobody else made. A "Blocks"
 // edge is stored on the other task and must not move it.
 func TestHandlerClientDetailFormAdoptsTheHeadItsOwnDependencyEditMoved(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is required to execute the embedded client behavior")
-	}
+	node := requireNode(t)
 	current := clientPlacementTask("WB-01J00000000000000000000056", "Detail task", core.StatusReady, core.PriorityMedium)
 	current.Head = "head-1"
 	current.Description = "Original."
