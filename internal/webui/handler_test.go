@@ -6048,9 +6048,10 @@ setTimeout(async () => {
 // the form proposes. The form has to adopt the head that write returned, or the
 // next Save is refused as a conflict with a change nobody else made. A "Blocks"
 // edge is stored on the other task and must not move it, which is read from a
-// save the server refuses between the two edits: the head is a closure variable,
-// and the removal that follows moves it again for a reason of its own, so the
-// final save's body cannot tell a held guard from a broken one.
+// save the server refuses after that edge is written and before the removal
+// below: the head is a closure variable, and that removal moves it again for a
+// reason of its own, so the final save's body cannot tell a held guard from a
+// broken one.
 func TestHandlerClientDetailFormAdoptsTheHeadItsOwnDependencyEditMoved(t *testing.T) {
 	node := requireNode(t)
 	current := clientPlacementTask("WB-01J00000000000000000000056", "Detail task", core.StatusReady, core.PriorityMedium)
@@ -6134,6 +6135,17 @@ setTimeout(async () => {
   nextMutation = { format: "workbook.task-mutation", version: 1, task: ` + documentJSON([]core.Task{blockedAfterAdd}) + `.tasks[0] };
   taskResponse = ` + documentJSON([]core.Task{afterDependsAdd, prerequisite, blockedAfterAdd}) + `;
   await addCandidate(groupFor("Blocks"), ` + strconv.Quote(blocked.ID) + `);
+  // Dependency writes are bodyless, so they never reach "bodies". Nothing below
+  // would notice an add that silently stopped writing the edge, and the head it
+  // must not move is "head-2" whether the edge was written or not, so pin the
+  // premise here: without this the guard assertion is vacuous.
+  const blocksAdd = fetchCalls.find((call) =>
+    call.options.method === "PUT" &&
+    call.url === "/api/tasks/" + encodeURIComponent(` + strconv.Quote(blocked.ID) + `) +
+      "/dependencies/" + encodeURIComponent(` + strconv.Quote(current.ID) + `));
+  if (!blocksAdd || Object.prototype.hasOwnProperty.call(blocksAdd.options, "body")) {
+    throw new Error("the \"Blocks\" add did not write the mirrored edge, so the head below proves nothing");
+  }
 
   // The head the form proposes lives in a closure, so the only way to read it is
   // to make the form send it. A save the server refuses sends the head and
