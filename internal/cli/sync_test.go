@@ -247,9 +247,13 @@ func TestRunSyncToleratesAndReportsUnrecognizedRemoteTaskRef(t *testing.T) {
 	if code != 0 || stderr != "" {
 		t.Fatalf("human sync code = %d, want 0; stderr = %q", code, stderr)
 	}
+	// The shipped report mixes both kinds, so each name has to carry its own
+	// verdict: the deletion command below names a placeholder, and the only
+	// thing telling the reader which of these two refs it may be filled with is
+	// the verdict on the ref's line.
 	for _, want := range []string{
-		"Ignored:\trefs/workbook/tasks/EVIL\t",
-		"Ignored:\t" + foreignRef + "\t",
+		"Ignored:\trefs/workbook/tasks/EVIL\t" + ignoredRefRemovable + "\t",
+		"Ignored:\t" + foreignRef + "\t" + ignoredRefPlausible + "\t",
 		removalAdvice,
 		keepWarning,
 	} {

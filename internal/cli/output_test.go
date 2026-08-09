@@ -9,15 +9,31 @@ import (
 )
 
 const (
-	removalAdvice = "remove it with: git push origin --delete <ref>"
-	keepWarning   = "may be a task of a newer Workbook or another project key"
+	removalAdvice = `remove a "no project's task" ref with: git push origin --delete <ref>`
+	keepWarning   = `deleting a "may be another Workbook's task" ref would destroy`
 )
+
+// ignoredRefLine is the whole line the report writes for one ref, so a test
+// that matches it proves the verdict sits on that name's own line rather than
+// somewhere in the report.
+func ignoredRefLine(ignored gitstore.IgnoredRef) string {
+	verdict := ignoredRefRemovable
+	if ignored.PlausibleTask {
+		verdict = ignoredRefPlausible
+	}
+	return "Ignored:\t" + ignored.Ref + "\t" + verdict + "\t" + ignored.Reason + "\n"
+}
 
 // The ignored-ref report is the only advice Workbook gives to delete something
 // from a shared remote, so the command appears for a name no project's ID
 // format can produce and for nothing else. A name a newer version or a second
 // project's key would produce is real append-only history to everyone but this
 // build, and gets a warning in place of a command.
+//
+// The verdict rides on each ref's own line. A mixed list is the case that
+// matters: two names, one deletable and one not, and a footer for each. Without
+// a per-line verdict the reader would have to guess which name the deletion
+// command meant, and guessing wrong destroys shared history.
 func TestWriteIgnoredRefsOffersRemovalOnlyForNamesNoProjectCanOwn(t *testing.T) {
 	junk := gitstore.IgnoredRef{
 		Ref:    "refs/workbook/tasks/EVIL",
@@ -57,8 +73,8 @@ func TestWriteIgnoredRefsOffersRemovalOnlyForNamesNoProjectCanOwn(t *testing.T) 
 				return
 			}
 			for _, ignored := range test.ignored {
-				if want := "Ignored:\t" + ignored.Ref + "\t" + ignored.Reason + "\n"; !strings.Contains(got, want) {
-					t.Fatalf("output = %q, want it to contain %q", got, want)
+				if want := ignoredRefLine(ignored); !strings.Contains(got, want) {
+					t.Fatalf("output = %q, want it to contain the line %q", got, want)
 				}
 			}
 			if want := "kept on origin"; !strings.Contains(got, want) {

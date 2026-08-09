@@ -734,8 +734,11 @@ project's key sharing the namespace both land in the same report while naming
 real append-only history. Each entry therefore carries a `plausibleTask`
 boolean, true when the name still fits some Workbook's task ID — this project's
 `WB-` prefix, or any valid project key followed by a ULID-shaped body, including
-a ref nested under either. Only a name that fits neither is offered for removal,
-with `git push origin --delete <ref>`; an entry that may be another project's or
+a ref nested under either or a peeled name pointing at one. Human output states
+that verdict on each ref's own line, as `no project's task` or `may be another
+Workbook's task`, so a mixed report never leaves a reader matching advice to a
+name by guesswork. Only a name that fits neither is offered for removal, with
+`git push origin --delete <ref>`; an entry that may be another project's or
 another version's task is reported as kept, together with what deleting it would
 cost. Judge such a ref yourself before removing it.
 
