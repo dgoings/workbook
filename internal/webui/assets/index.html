@@ -158,12 +158,19 @@
     .label-chip__remove:hover { background: #d3e0fa; color: #172033; }
     .label-chip__remove:focus-visible { outline: 2px solid #2457d6; outline-offset: 1px; }
     .label-editor__hint, .label-editor__status { margin: 0; color: #56647a; font-size: .72rem; }
-    /* Reserved rather than hidden while empty, like .form-status below: an
+    /* Drawn while empty rather than created when there is something to say: an
        unrendered element is not in the accessibility tree, and a live region
        that appears in the same frame as its first message does not announce
-       it — which would cost exactly the first add or remove. */
+       it — which would cost exactly the first add or remove. It keeps the row
+       it reserves, because a label add or remove reports every single time and
+       the reader is looking at the chiclets it would push.
+       .form-status below is the other case: it speaks only when a save fails,
+       so it stands in the document at no height until it does. Reserving it
+       cost the footer a blank line — 22px of the "extra padding around the
+       buttons" this footer was asked to lose. */
     .label-editor__status { min-height: 1.15rem; }
     .form-status { min-height: 1.35rem; margin: 0; color: #9c2f25; font-size: .82rem; }
+    .form-status:empty { min-height: 0; }
     .form-actions { display: flex; align-items: center; justify-content: space-between; gap: .85rem; width: 100%; }
     .form-primary-actions { display: flex; align-items: center; gap: .85rem; }
     .form-danger { margin-left: auto; }
@@ -226,12 +233,18 @@
     /* Both of these are live regions and both stay in the document whatever
        they hold — an element the renderer creates in the same frame as its
        first message never announces it. What they no longer keep is a reserved
-       row apiece: four blank lines stood in the sidebar permanently so that the
-       rare message could arrive without moving anything. The message moves the
-       group down now, which is a page the reader is looking at when it happens.
-       Higher specificity than the rules above and the ones in the media query,
-       so it decides the height wherever it applies. */
+       row apiece: four blank lines stood in the sidebar permanently so that a
+       message could arrive without moving anything. Higher specificity than the
+       rules above and the ones in the media query, so it decides the height
+       wherever it applies.
+       .relationship-message reports a failed add or remove and is rare, so it
+       moves the group down when it comes. "No matching tasks." is not rare: it
+       is written on every keystroke the filter matches nothing on, so the row
+       under an open combobox is reserved for as long as the reader is in it.
+       That trades a jump per keystroke for one when the box takes focus, and
+       the listbox opens over the space it happens in. */
     .relationship-empty:empty, .relationship-message:empty { min-height: 0; margin: 0; }
+    .relationship-editor:focus-within .relationship-empty:empty { min-height: 1rem; }
     .task-route--history { height: auto; min-height: 100%; }
     .task-route--history .task-layout { min-height: min(60vh, 34rem); }
     .task-history { display: grid; gap: .8rem; padding: 1.15rem; border-top: 1px solid #d5deea; background: #fafbfd; }

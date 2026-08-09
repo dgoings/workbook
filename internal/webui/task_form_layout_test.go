@@ -139,6 +139,12 @@ func TestHandlerClientPlacesCreateMoreAboveTheSaveButton(t *testing.T) {
 		// line of feedback and one row of buttons.
 		`.task-actions { display: grid; grid-column: 1 / -1; gap: .4rem; padding: .5rem 1.15rem .6rem;`,
 		`justify-self: start`,
+		// Moving Create more into the footer put back exactly what the padding
+		// cut took out, so the New Task footer came out of that change no
+		// shorter than it went in. The blank feedback line is the rest of it:
+		// 22px the footer spends saying nothing. It still stands in the
+		// document while empty, so it can still announce.
+		`.form-status:empty { min-height: 0; }`,
 	} {
 		if !strings.Contains(body, fragment) {
 			t.Errorf("task footer styling does not contain %q", fragment)
@@ -210,6 +216,10 @@ func TestHandlerClientCompactsTheRelationshipGroups(t *testing.T) {
 	for _, fragment := range []string{
 		`.relationship-editor__label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }`,
 		`.relationship-empty:empty, .relationship-message:empty { min-height: 0; margin: 0; }`,
+		// "No matching tasks." is written on every keystroke that matches
+		// nothing, so the combobox the reader is typing in keeps the row it
+		// would appear on rather than growing one under their cursor.
+		`.relationship-editor:focus-within .relationship-empty:empty { min-height: 1rem; }`,
 		`.task-relationships { display: grid; gap: .7rem; padding: .7rem 0 0; }`,
 		`.relationship-group { border-top: 1px solid #d5deea; padding-top: .7rem; }`,
 	} {
