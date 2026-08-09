@@ -17,7 +17,8 @@ import (
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 const (
@@ -120,11 +121,7 @@ func (s *Store) CachePath() string {
 // Refresh validates task-ref tips, applying only changed tip checkpoints to
 // the cache. Git remains the canonical source for every changed task.
 func (s *Store) Refresh(ctx context.Context) error {
-	if err := s.lockActiveDatabase(ctx); err != nil {
-		return err
-	}
-	defer s.rebuildMu.RUnlock()
-	return s.refreshActive(ctx)
+	return s.withActiveDatabase(ctx, s.refreshActive)
 }
 
 func (s *Store) refreshActive(ctx context.Context) error {
@@ -185,14 +182,19 @@ func (s *Store) List(ctx context.Context, config core.ProjectConfig) ([]core.Sna
 	if err := s.validateConfig(config); err != nil {
 		return nil, err
 	}
-	if err := s.lockActiveDatabase(ctx); err != nil {
-		return nil, err
-	}
-	defer s.rebuildMu.RUnlock()
-	if err := s.refreshActive(ctx); err != nil {
-		return nil, err
-	}
-	return s.querySnapshots(ctx)
+	var snapshots []core.Snapshot
+	err := s.withActiveDatabase(ctx, func(ctx context.Context) error {
+		if err := s.refreshActive(ctx); err != nil {
+			return err
+		}
+		listed, err := s.querySnapshots(ctx)
+		if err != nil {
+			return err
+		}
+		snapshots = listed
+		return nil
+	})
+	return snapshots, err
 }
 
 // Get returns one SQLite-projected checkpoint after inspecting its exact Git ref.
@@ -203,11 +205,16 @@ func (s *Store) Get(ctx context.Context, config core.ProjectConfig, taskID strin
 	if err := core.ValidateTaskID(config.Key, taskID); err != nil {
 		return core.Snapshot{}, core.Wrap(core.CategoryValidation, "task ID is invalid", err)
 	}
-	if err := s.lockActiveDatabase(ctx); err != nil {
-		return core.Snapshot{}, err
-	}
-	defer s.rebuildMu.RUnlock()
-	return s.getExactActive(ctx, taskID)
+	var snapshot core.Snapshot
+	err := s.withActiveDatabase(ctx, func(ctx context.Context) error {
+		exact, err := s.getExactActive(ctx, taskID)
+		if err != nil {
+			return err
+		}
+		snapshot = exact
+		return nil
+	})
+	return snapshot, err
 }
 
 // TaskHistory returns one task's recorded operation packs, oldest first along
@@ -219,23 +226,26 @@ func (s *Store) TaskHistory(ctx context.Context, config core.ProjectConfig, task
 	if err := core.ValidateTaskID(config.Key, taskID); err != nil {
 		return core.TaskHistory{}, core.Wrap(core.CategoryValidation, "task ID is invalid", err)
 	}
-	if err := s.lockActiveDatabase(ctx); err != nil {
-		return core.TaskHistory{}, err
-	}
-	defer s.rebuildMu.RUnlock()
-
-	snapshot, err := s.getExactActive(ctx, taskID)
-	if err != nil {
-		return core.TaskHistory{}, err
-	}
-	history, found, err := s.readProjectedHistory(ctx, taskID, "")
-	if err != nil {
-		return core.TaskHistory{}, err
-	}
-	if found {
-		return history, nil
-	}
-	return s.gitHistory(ctx, taskID, snapshot.Head)
+	var history core.TaskHistory
+	err := s.withActiveDatabase(ctx, func(ctx context.Context) error {
+		snapshot, err := s.getExactActive(ctx, taskID)
+		if err != nil {
+			return err
+		}
+		projected, found, err := s.readProjectedHistory(ctx, taskID, "")
+		if err != nil {
+			return err
+		}
+		if !found {
+			projected, err = s.gitHistory(ctx, taskID, snapshot.Head)
+			if err != nil {
+				return err
+			}
+		}
+		history = projected
+		return nil
+	})
+	return history, err
 }
 
 // CommitHistory returns the chain ending at one named commit object.
@@ -251,22 +261,25 @@ func (s *Store) CommitHistory(ctx context.Context, config core.ProjectConfig, ta
 	if err := core.ValidateTaskID(config.Key, taskID); err != nil {
 		return core.TaskHistory{}, core.Wrap(core.CategoryValidation, "task ID is invalid", err)
 	}
-	if err := s.lockActiveDatabase(ctx); err != nil {
-		return core.TaskHistory{}, err
-	}
-	defer s.rebuildMu.RUnlock()
-
-	if _, err := s.getExactActive(ctx, taskID); err != nil {
-		return core.TaskHistory{}, err
-	}
-	history, found, err := s.readProjectedHistory(ctx, taskID, commit)
-	if err != nil {
-		return core.TaskHistory{}, err
-	}
-	if found {
-		return history, nil
-	}
-	return s.gitHistory(ctx, taskID, commit)
+	var history core.TaskHistory
+	err := s.withActiveDatabase(ctx, func(ctx context.Context) error {
+		if _, err := s.getExactActive(ctx, taskID); err != nil {
+			return err
+		}
+		projected, found, err := s.readProjectedHistory(ctx, taskID, commit)
+		if err != nil {
+			return err
+		}
+		if !found {
+			projected, err = s.gitHistory(ctx, taskID, commit)
+			if err != nil {
+				return err
+			}
+		}
+		history = projected
+		return nil
+	})
+	return history, err
 }
 
 // Resolve returns a canonical full task ID for an unambiguous case-insensitive prefix.
@@ -277,32 +290,35 @@ func (s *Store) Resolve(ctx context.Context, config core.ProjectConfig, prefix s
 	if strings.TrimSpace(prefix) == "" {
 		return "", core.Errorf(core.CategoryValidation, "task ID prefix must not be blank")
 	}
-	if err := s.lockActiveDatabase(ctx); err != nil {
-		return "", err
-	}
-	defer s.rebuildMu.RUnlock()
-	if err := s.refreshActive(ctx); err != nil {
-		return "", err
-	}
-	rows, err := s.db.QueryContext(ctx, `SELECT task_id FROM tasks ORDER BY task_id`)
-	if err != nil {
-		return "", s.databaseError("query projected task IDs", err)
-	}
-	defer rows.Close()
-
-	needle := strings.ToLower(prefix)
 	var matches []string
-	for rows.Next() {
-		var taskID string
-		if err := rows.Scan(&taskID); err != nil {
-			return "", s.databaseError("read projected task ID", err)
+	err := s.withActiveDatabase(ctx, func(ctx context.Context) error {
+		if err := s.refreshActive(ctx); err != nil {
+			return err
 		}
-		if strings.HasPrefix(strings.ToLower(taskID), needle) {
-			matches = append(matches, taskID)
+		rows, err := s.db.QueryContext(ctx, `SELECT task_id FROM tasks ORDER BY task_id`)
+		if err != nil {
+			return s.databaseError("query projected task IDs", err)
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return "", s.databaseError("read projected task IDs", err)
+		defer rows.Close()
+
+		needle := strings.ToLower(prefix)
+		matches = nil
+		for rows.Next() {
+			var taskID string
+			if err := rows.Scan(&taskID); err != nil {
+				return s.databaseError("read projected task ID", err)
+			}
+			if strings.HasPrefix(strings.ToLower(taskID), needle) {
+				matches = append(matches, taskID)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return s.databaseError("read projected task IDs", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
 	}
 	switch len(matches) {
 	case 0:
@@ -319,11 +335,16 @@ func (s *Store) Advance(ctx context.Context, config core.ProjectConfig, expected
 	if err := s.validateConfig(config); err != nil {
 		return false, err
 	}
-	if err := s.lockActiveDatabase(ctx); err != nil {
-		return false, err
-	}
-	defer s.rebuildMu.RUnlock()
-	return s.advanceActive(ctx, expectedParent, snapshot, nil)
+	var advanced bool
+	err := s.withActiveDatabase(ctx, func(ctx context.Context) error {
+		applied, err := s.advanceActive(ctx, expectedParent, snapshot, nil)
+		if err != nil {
+			return err
+		}
+		advanced = applied
+		return nil
+	})
+	return advanced, err
 }
 
 // Invalidate removes one projected task only when it still names an expected head.
@@ -331,11 +352,9 @@ func (s *Store) Invalidate(ctx context.Context, config core.ProjectConfig, taskI
 	if err := s.validateConfig(config); err != nil {
 		return err
 	}
-	if err := s.lockActiveDatabase(ctx); err != nil {
-		return err
-	}
-	defer s.rebuildMu.RUnlock()
-	return s.invalidateActive(ctx, taskID, expectedParent, writtenHead)
+	return s.withActiveDatabase(ctx, func(ctx context.Context) error {
+		return s.invalidateActive(ctx, taskID, expectedParent, writtenHead)
+	})
 }
 
 func (s *Store) validateConfig(config core.ProjectConfig) error {
@@ -390,6 +409,94 @@ func (s *Store) recoverLocked(ctx context.Context) error {
 	}
 	_, err := s.rebuildLocked(ctx)
 	return err
+}
+
+// withActiveDatabase runs body with rebuildMu read-held and the active
+// database validated, redoing body when SQLite reports the cache file was
+// replaced underneath the open handle. lockActiveDatabase stats the path
+// before body runs, so a rebuild in another process can still rename a fresh
+// cache into place mid-write, and the held handle then fails with
+// SQLITE_READONLY_DBMOVED. The replacement is a complete, valid projection
+// and the refused write never committed anywhere, so the recovery is to
+// reopen the replacement and redo body rather than surface an operational
+// error for a race the tool can absorb.
+func (s *Store) withActiveDatabase(ctx context.Context, body func(context.Context) error) error {
+	// Three attempts bound the pathological case of a replacement landing
+	// inside every redo's window; one redo settles the race in practice.
+	const attempts = 3
+	for attempt := 1; ; attempt++ {
+		detached := false
+		err := func() error {
+			if err := s.lockActiveDatabase(ctx); err != nil {
+				return err
+			}
+			// Deferred so a panicking body cannot leave rebuildMu read-held:
+			// workbook serve runs one shared store behind net/http, which
+			// recovers handler panics, and a leaked read lock would wedge
+			// the next Rebuild and every request queued behind it.
+			defer s.rebuildMu.RUnlock()
+			err := body(ctx)
+			detached = err != nil && databaseDetached(err)
+			return err
+		}()
+		if err == nil || !detached {
+			return err
+		}
+		if attempt == attempts {
+			return cacheError("redo a projection write after the cache was replaced", err)
+		}
+		if recoverErr := func() error {
+			s.rebuildMu.Lock()
+			defer s.rebuildMu.Unlock()
+			return s.reopenReplacedLocked(ctx)
+		}(); recoverErr != nil {
+			return recoverErr
+		}
+	}
+}
+
+// reopenReplacedLocked trusts SQLite's moved verdict over the recorded stat.
+// The stat itself can describe the replacement — the rename can win the race
+// against openStore's bookkeeping — so unlike recoverLocked there is no
+// boundTo gate: the handle is reopened unconditionally, and a replacement
+// that is not a usable projection is rebuilt.
+func (s *Store) reopenReplacedLocked(ctx context.Context) error {
+	if err := s.reopenDatabase(ctx); err != nil {
+		return err
+	}
+	if s.cacheUsable(ctx) {
+		return nil
+	}
+	_, err := s.rebuildLocked(ctx)
+	return err
+}
+
+// databaseDetached reports the SQLite verdicts that mean this handle is no
+// longer operating on the live cache file, which is how another process's
+// atomic cache replacement reaches the holder of the original.
+func databaseDetached(err error) bool {
+	var sqliteError *sqlite.Error
+	if !errors.As(err, &sqliteError) {
+		return false
+	}
+	switch sqliteError.Code() {
+	case sqlite3.SQLITE_READONLY_DBMOVED:
+		// SQLite's own file-identity check: the database under this
+		// connection was renamed or unlinked after it was opened. The
+		// recorded stat can itself have lost the race that produces this,
+		// so the verdict needs no confirmation.
+		return true
+	case sqlite3.SQLITE_IOERR_DELETE_NOENT:
+		// A rollback journal vanished between stat and unlink. Database
+		// locks live on inodes while the journal path is shared, so once
+		// the cache file is replaced, handles on the old and the new file
+		// race each other over one journal name — and either side can be
+		// the one that finds it gone. An unlink that finds no file is
+		// another process having removed it, not a failing disk; a disk
+		// fault reports SQLITE_IOERR_DELETE instead.
+		return true
+	}
+	return false
 }
 
 func (s *Store) cacheUsable(ctx context.Context) bool {
