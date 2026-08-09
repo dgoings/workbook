@@ -59,19 +59,28 @@ func ValidateProjectKey(key string) error {
 // of advice and rejecting one too few costs somebody's history.
 var ulidShapePattern = regexp.MustCompile(`(?i)^[0-9A-HJKMNP-TV-Z]{26}$`)
 
+// peeledRefSuffix is what git ls-remote appends to the extra record naming the
+// object an annotated tag points at. Such a record never names a task Workbook
+// will read, but the name inside it is still a task's name, and the gate in
+// front of destructive advice has to answer for the name it is given.
+const peeledRefSuffix = "^{}"
+
 // PlausibleTaskID reports whether name could be some Workbook's task ID even
 // though ValidateTaskID rejects it for key. Two names qualify: one carrying
 // this project's own key prefix, which a version writing an ID format this
 // build predates would produce, and one shaped like <KEY>-<ULID> under any
 // valid project key, which a second project sharing a remote's task namespace
 // produces. A name nested under either is judged by the segment it hangs from,
-// so a child ref is as protected as its parent.
+// so a child ref is as protected as its parent, and Git's peeled-tag suffix is
+// dropped before either rule runs, so a peeled name is judged as the task it
+// points at under any key rather than only under this project's.
 //
 // It exists to gate destructive advice, never to widen what Workbook reads as a
 // task: a true answer means only "do not offer to delete this". Every name that
 // fails both rules belongs to no project's ID format and can be named as
 // removable; ValidateTaskID remains the sole authority on what is a task ID.
 func PlausibleTaskID(key, name string) bool {
+	name = strings.TrimSuffix(name, peeledRefSuffix)
 	if ValidateProjectKey(key) == nil && strings.HasPrefix(name, key+"-") {
 		return true
 	}

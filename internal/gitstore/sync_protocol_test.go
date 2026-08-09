@@ -84,6 +84,10 @@ func TestParseRemoteTaskHeadsSkipsAndReportsUnrecognizedNames(t *testing.T) {
 		{name: "peeled ref", output: objectID + "\trefs/workbook/tasks/" + taskID + "^{}\n", want: "refs/workbook/tasks/" + taskID + "^{}", wantPlausible: true},
 		{name: "bare namespace", output: objectID + "\trefs/workbook/tasks/\n", want: "refs/workbook/tasks/"},
 		{name: "another project's key", output: objectID + "\trefs/workbook/tasks/" + foreignTaskID + "\n", want: "refs/workbook/tasks/" + foreignTaskID, wantPlausible: true},
+		// This branch is the one place a peeled name reaches the report, and a
+		// second project's history must survive it exactly as this project's
+		// does.
+		{name: "peeled ref under another project's key", output: objectID + "\trefs/workbook/tasks/" + foreignTaskID + "^{}\n", want: "refs/workbook/tasks/" + foreignTaskID + "^{}", wantPlausible: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

@@ -134,6 +134,11 @@ func TestPlausibleTaskIDAcceptsNamesThisBuildCannotOwn(t *testing.T) {
 		"another project's key":            "OPS-01K0M6B8A4FTT8C39MXXYTW7C2",
 		"another project's lowercase body": "OPS-01k0m6b8a4ftt8c39mxxytw7c2",
 		"nested under another key":         "OPS-01K0M6B8A4FTT8C39MXXYTW7C2/attachment",
+		// A peeled name is judged by the task it points at under any key. It
+		// answered for this project's key and not another's while the suffix
+		// counted as part of the ID body, which made a second project's history
+		// the one shape the gate would have offered for deletion.
+		"peeled under another key": "OPS-01K0M6B8A4FTT8C39MXXYTW7C2^{}",
 	} {
 		t.Run(name, func(t *testing.T) {
 			if !PlausibleTaskID("WB", candidate) {
