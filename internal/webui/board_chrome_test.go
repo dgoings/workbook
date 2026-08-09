@@ -53,3 +53,21 @@ func TestHandlerBoardColumnsOmitWorkbookRefPaths(t *testing.T) {
 		}
 	}
 }
+
+// Six columns of underlined titles read as a page of rules. The underline is
+// carrying nothing here — a card is one link and the card itself takes focus —
+// so the title is plain text that turns blue under the pointer.
+func TestHandlerBoardCardTitlesAreNotUnderlined(t *testing.T) {
+	body := boardPage(t)
+	for _, fragment := range []string{
+		`.task-card h3 a { color: #172033; text-decoration: none; }`,
+		`.task-card h3 a:hover { color: #2457d6; }`,
+	} {
+		if !strings.Contains(body, fragment) {
+			t.Errorf("card title styling does not contain %q", fragment)
+		}
+	}
+	if strings.Contains(body, `.task-card h3 a { color: #172033; text-decoration-color`) {
+		t.Error("card titles still draw an underline")
+	}
+}

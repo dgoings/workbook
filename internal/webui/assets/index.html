@@ -93,8 +93,13 @@
     .priority { flex: 0 0 auto; font-size: .64rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
     .priority--high { color: #b42318; } .priority--medium { color: #b45309; } .priority--low { color: #2457d6; }
     .task-card h3 { margin: .55rem 0 .3rem; font-size: .9rem; line-height: 1.24; overflow-wrap: anywhere; }
-    .task-card h3 a { color: #172033; text-decoration-color: #a9b7ca; text-decoration-thickness: 1px; text-underline-offset: .16em; }
-    .task-card h3 a:hover { color: #2457d6; text-decoration-color: currentcolor; }
+    /* A card title is a heading, not a link inside a sentence: every card is one
+       link and the whole card is focusable, so nothing here depends on an
+       underline to be told apart from the text around it. It carries none, and
+       hover turns it blue — which the keyboard reaches too, because focus draws
+       the card's own outline. */
+    .task-card h3 a { color: #172033; text-decoration: none; }
+    .task-card h3 a:hover { color: #2457d6; }
     .task-card h3 a:focus-visible, .new-task-link:focus-visible, .board-link:focus-visible { outline: 3px solid #2457d6; outline-offset: 2px; }
     /* A card is an ID, a title, and its labels. The description is the one field
        with no length the column can rely on, so six clamped lines of it push the
