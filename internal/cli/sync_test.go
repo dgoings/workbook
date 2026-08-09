@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -192,14 +193,24 @@ func TestRunSyncHumanOutputReportsConflictDetail(t *testing.T) {
 // A ref under origin's task namespace that Workbook does not recognize is the
 // one poisoning anyone with push access can do by accident. Synchronization
 // keeps working for every well-formed task, and every command that talks to
-// origin names the stray ref so somebody prunes it.
+// origin names the stray ref so somebody can deal with it.
+//
+// A second project's key sharing the namespace is unrecognized for the same
+// reason while being somebody's real history, so it travels with the flag that
+// keeps removal advice away from it.
 func TestRunSyncToleratesAndReportsUnrecognizedRemoteTaskRef(t *testing.T) {
+	const foreignRef = "refs/workbook/tasks/OPS-01K0M6B8A4FTT8C39MXXYTW7D9"
 	first, second := cliSyncRepositories(t)
 	shared := cliCreateTask(t, first, "Shared task")
 	if code, _, stderr := run(t, first, "push"); code != 0 {
 		t.Fatalf("initial push code = %d; stderr = %q", code, stderr)
 	}
 	cliGit(t, first, "push", "origin", "HEAD:refs/workbook/tasks/EVIL")
+	cliGit(t, first, "push", "origin", "HEAD:"+foreignRef)
+	wantIgnored := map[string]bool{
+		"refs/workbook/tasks/EVIL": false,
+		foreignRef:                 true,
+	}
 
 	local := cliCreateTask(t, second, "Local task")
 	code, stdout, stderr := run(t, second, "sync", "--json")
@@ -209,19 +220,19 @@ func TestRunSyncToleratesAndReportsUnrecognizedRemoteTaskRef(t *testing.T) {
 	result := decodeSyncRunResult(t, stdout, "sync")
 	assertCLISyncStatus(t, result.Fetch, shared.ID, gitstore.SyncCreated)
 	assertCLISyncStatus(t, result.Push, local.ID, gitstore.SyncPublished)
-	assertCLIIgnoredRef(t, result.Fetch, "refs/workbook/tasks/EVIL")
+	assertCLIIgnoredRefs(t, result.Fetch, wantIgnored)
 
 	code, stdout, stderr = run(t, second, "fetch", "--json")
 	if code != 0 || stderr != "" {
 		t.Fatalf("poisoned fetch code = %d, want 0; stderr = %q", code, stderr)
 	}
-	assertCLIIgnoredRef(t, decodeSyncResult(t, stdout, "fetch"), "refs/workbook/tasks/EVIL")
+	assertCLIIgnoredRefs(t, decodeSyncResult(t, stdout, "fetch"), wantIgnored)
 
 	code, stdout, stderr = run(t, second, "push", "--json")
 	if code != 0 || stderr != "" {
 		t.Fatalf("poisoned push code = %d, want 0; stderr = %q", code, stderr)
 	}
-	assertCLIIgnoredRef(t, decodeSyncResult(t, stdout, "push"), "refs/workbook/tasks/EVIL")
+	assertCLIIgnoredRefs(t, decodeSyncResult(t, stdout, "push"), wantIgnored)
 
 	// An ordinary mutation synchronizes inline, so it was breaking too.
 	code, stdout, stderr = run(t, second, "update", local.ID, "--priority", "high", "--json")
@@ -236,16 +247,22 @@ func TestRunSyncToleratesAndReportsUnrecognizedRemoteTaskRef(t *testing.T) {
 	if code != 0 || stderr != "" {
 		t.Fatalf("human sync code = %d, want 0; stderr = %q", code, stderr)
 	}
+	// The shipped report mixes both kinds, so each name has to carry its own
+	// verdict: the deletion command below names a placeholder, and the only
+	// thing telling the reader which of these two refs it may be filled with is
+	// the verdict on the ref's line.
 	for _, want := range []string{
-		"Ignored:\trefs/workbook/tasks/EVIL\t",
-		"prune with: git push origin --delete <ref>",
+		"Ignored:\trefs/workbook/tasks/EVIL\t" + ignoredRefRemovable + "\t",
+		"Ignored:\t" + foreignRef + "\t" + ignoredRefPlausible + "\t",
+		removalAdvice,
+		keepWarning,
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("human sync stdout = %q, want it to contain %q", stdout, want)
 		}
 	}
 
-	cliGit(t, second, "push", "origin", "--delete", "refs/workbook/tasks/EVIL")
+	cliGit(t, second, "push", "origin", "--delete", "refs/workbook/tasks/EVIL", foreignRef)
 	code, stdout, stderr = run(t, second, "sync", "--json")
 	if code != 0 || stderr != "" {
 		t.Fatalf("pruned sync code = %d, want 0; stderr = %q", code, stderr)
@@ -255,13 +272,19 @@ func TestRunSyncToleratesAndReportsUnrecognizedRemoteTaskRef(t *testing.T) {
 	}
 }
 
-func assertCLIIgnoredRef(t *testing.T, result gitstore.SyncResult, ref string) {
+// assertCLIIgnoredRefs requires exactly the named refs in the envelope, each
+// with a reason and with the flag that decides whether removal may be advised.
+func assertCLIIgnoredRefs(t *testing.T, result gitstore.SyncResult, want map[string]bool) {
 	t.Helper()
-	if len(result.Ignored) != 1 {
-		t.Fatalf("ignored refs = %#v, want exactly one for %s", result.Ignored, ref)
+	got := make(map[string]bool, len(result.Ignored))
+	for _, ignored := range result.Ignored {
+		if strings.TrimSpace(ignored.Reason) == "" {
+			t.Fatalf("ignored ref %q has no reason", ignored.Ref)
+		}
+		got[ignored.Ref] = ignored.PlausibleTask
 	}
-	if got := result.Ignored[0]; got.Ref != ref || strings.TrimSpace(got.Reason) == "" {
-		t.Fatalf("ignored ref = %#v, want %q with a reason", got, ref)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ignored refs = %#v, want %#v", got, want)
 	}
 }
 

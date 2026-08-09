@@ -246,9 +246,16 @@ func TestOwnedRefsValidateCanonicalAndTrackingNamespaces(t *testing.T) {
 	}
 }
 
+// foreignTaskID is a well-formed task ID of a second project sharing origin's
+// task namespace. This build cannot read it as one of its own tasks, and it is
+// exactly the history a prune suggestion must never name.
+const foreignTaskID = "OPS-01K0M6B8A4FTT8C39MXXYTW7D9"
+
 // The tracking namespace mirrors names every collaborator can write, so an
 // unrecognized one is skipped and reported under the prefix origin holds it at.
-// Anything Git itself got wrong still fails the whole listing there.
+// Anything Git itself got wrong still fails the whole listing there. Each
+// report also says whether the name could belong to another Workbook, because
+// that is what separates junk from history a caller must not offer to delete.
 func TestOwnedRefsSkipUnrecognizedNamesOnlyInTheTrackingNamespace(t *testing.T) {
 	repository, config := writeRepository(t)
 	snapshot, pack, _ := writeRoot(t, repository, config)
@@ -258,9 +265,10 @@ func TestOwnedRefsSkipUnrecognizedNamesOnlyInTheTrackingNamespace(t *testing.T) 
 	valid := []byte(trackingTaskRefPrefix + pack.TaskID + "\x00" + snapshot.Head + "\x00\n")
 
 	for _, test := range []struct {
-		name     string
-		record   string
-		wantRefs []string
+		name          string
+		record        string
+		wantRefs      []string
+		wantPlausible bool
 	}{
 		{
 			name:     "invalid task ID",
@@ -271,6 +279,18 @@ func TestOwnedRefsSkipUnrecognizedNamesOnlyInTheTrackingNamespace(t *testing.T) 
 			name:     "nested",
 			record:   trackingTaskRefPrefix + "team/EVIL\x00" + snapshot.Head + "\x00\n",
 			wantRefs: []string{taskRefPrefix + "team/EVIL"},
+		},
+		{
+			name:          "another project's key",
+			record:        trackingTaskRefPrefix + foreignTaskID + "\x00" + snapshot.Head + "\x00\n",
+			wantRefs:      []string{taskRefPrefix + foreignTaskID},
+			wantPlausible: true,
+		},
+		{
+			name:          "nested under this project's key",
+			record:        trackingTaskRefPrefix + pack.TaskID + "/attachment\x00" + snapshot.Head + "\x00\n",
+			wantRefs:      []string{taskRefPrefix + pack.TaskID + "/attachment"},
+			wantPlausible: true,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -286,6 +306,9 @@ func TestOwnedRefsSkipUnrecognizedNamesOnlyInTheTrackingNamespace(t *testing.T) 
 			for _, entry := range ignored {
 				if strings.TrimSpace(entry.Reason) == "" {
 					t.Fatalf("ignored ref %q has no reason", entry.Ref)
+				}
+				if entry.PlausibleTask != test.wantPlausible {
+					t.Fatalf("ignored ref %q plausible = %t, want %t", entry.Ref, entry.PlausibleTask, test.wantPlausible)
 				}
 				names = append(names, entry.Ref)
 			}
