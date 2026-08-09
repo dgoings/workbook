@@ -820,9 +820,13 @@ const defaultServeAddr = "127.0.0.1:7331"
 // itself is a parameter so a test can present outcomes a test process cannot
 // provoke for real, that permission denial among them.
 //
-// The second result reports whether the returned listener is the fallback. The
-// caller cannot infer that by comparing addresses, because a requested
-// "localhost:7331" resolves to a bound "127.0.0.1:7331" that never moved.
+// The second result reports whether the returned listener is the fallback, so
+// the caller states a decision this function already made rather than
+// re-deriving it. Comparing the requested and bound addresses would agree
+// today only because the one address that can move is the literal
+// defaultServeAddr, which binds to itself; the comparison would start lying
+// the moment a name that resolves elsewhere, such as a "localhost:7331" bound
+// as "127.0.0.1:7331", could reach the fallback path.
 func openBoardListenerWith(listen func(network, address string) (net.Listener, error), addr string, explicit bool) (net.Listener, bool, error) {
 	listener, err := listen("tcp", addr)
 	if err == nil {
