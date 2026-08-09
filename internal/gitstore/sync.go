@@ -268,7 +268,11 @@ type SyncResult struct {
 	Detail string          `json:"detail,omitempty"`
 	// Ignored names the refs under origin's task namespace that this version
 	// does not recognize as naming one task. They are skipped so a single stray
-	// ref cannot deny synchronization, and reported so a user can prune them.
+	// ref cannot deny synchronization, and reported so a user can see what this
+	// clone is not reading. A report is not an instruction to remove anything:
+	// shared task history is append-only, and an entry whose PlausibleTask is
+	// set names history some other Workbook can read. Only an entry no
+	// project's ID format could have produced may be offered for removal.
 	Ignored []IgnoredRef     `json:"ignoredRefs,omitempty"`
 	Tasks   []SyncTaskResult `json:"tasks"`
 	// Conflicts travels with the phase that produced it but is not part of its
