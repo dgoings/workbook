@@ -1,6 +1,8 @@
 package syncloop
 
 import (
+	"bufio"
+	"errors"
 	"sort"
 	"sync"
 	"time"
@@ -170,4 +172,47 @@ type response struct {
 	OK     bool    `json:"ok"`
 	Status *Status `json:"status,omitempty"`
 	Error  string  `json:"error,omitempty"`
+}
+
+const (
+	// maxRequestBytes and maxResponseBytes bound one protocol line. The handler
+	// deadline bounds how long a peer may take, not how much it may send, so
+	// without these a peer that never writes a newline makes the other end grow
+	// a buffer until the process dies.
+	//
+	// A request is a command and a task ID, so it is bounded tightly. A status
+	// response carries every conflict the watcher is still holding, and a
+	// description conflict reports three descriptions of up to
+	// core.MaxDescriptionBytes each, so the response bound has to clear about
+	// 192 KiB per conflict with room to spare. Twenty maximum-sized ones is
+	// already far past what a repository can accumulate before somebody
+	// notices, and a client that refuses a larger answer simply synchronizes
+	// inline, which is the same fallback every other unusable watcher gets.
+	maxRequestBytes  = 64 << 10
+	maxResponseBytes = 20 * 3 * core.MaxDescriptionBytes
+)
+
+// errLineTooLong reports a protocol line that outgrew its bound.
+var errLineTooLong = errors.New("watcher protocol line is too long")
+
+// readLine reads one newline-terminated message, refusing one longer than
+// limit. bufio.Reader.ReadBytes accumulates without bound, so the limit has to
+// be enforced while reading rather than checked afterwards.
+func readLine(reader *bufio.Reader, limit int) ([]byte, error) {
+	var line []byte
+	for {
+		chunk, err := reader.ReadSlice('\n')
+		if len(line)+len(chunk) > limit {
+			return nil, errLineTooLong
+		}
+		// ReadSlice returns the reader's own buffer, valid only until the next
+		// read, so the copy is not optional.
+		line = append(line, chunk...)
+		if err == nil {
+			return line, nil
+		}
+		if !errors.Is(err, bufio.ErrBufferFull) {
+			return nil, err
+		}
+	}
 }

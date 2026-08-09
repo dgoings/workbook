@@ -180,7 +180,13 @@ A stale pointer file after `SIGKILL` is harmless: the dial fails and the CLI
 falls back. Before binding, a watcher dials the recorded socket and unlinks only
 if nothing answers.
 
-Three request types, newline-delimited JSON:
+Three request types, newline-delimited JSON. Both ends bound the line they read
+as well as holding a five-second deadline. The deadline bounds how long a peer
+may take, not how much it may send, so without a bound a peer that never writes
+a newline grows the other end's buffer until the process dies. A request is a
+command and a task ID, so 64 KiB; a response has to clear the largest honest
+status, which is a description conflict per task carrying three descriptions of
+`core.MaxDescriptionBytes` each, so twenty of those.
 
 ```
 {"status":{}}                             -> Status

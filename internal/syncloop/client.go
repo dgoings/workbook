@@ -86,7 +86,7 @@ func (c *Client) exchange(message request) (response, error) {
 	if _, err := c.conn.Write(append(encoded, '\n')); err != nil {
 		return response{}, core.Wrap(core.CategoryOperational, "send the watcher request", err)
 	}
-	line, err := c.reader.ReadBytes('\n')
+	line, err := readLine(c.reader, maxResponseBytes)
 	if err != nil {
 		return response{}, core.Wrap(core.CategoryOperational, "read the watcher response", err)
 	}

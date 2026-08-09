@@ -73,8 +73,11 @@ func (s *server) handle(_ context.Context, conn net.Conn) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(handlerDeadline))
 
-	line, err := bufio.NewReader(conn).ReadBytes('\n')
+	line, err := readLine(bufio.NewReader(conn), maxRequestBytes)
 	if err != nil {
+		if errors.Is(err, errLineTooLong) {
+			s.reply(conn, response{Error: "request is too long"})
+		}
 		return
 	}
 	var message request
