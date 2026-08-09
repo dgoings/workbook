@@ -366,7 +366,10 @@ absent and drives a hand-written fake DOM (`handler_test.go:4173`):
 - a refused save keeps its edits, re-bases, and applies only those fields on the
   retry;
 - a dependency edge written to the open task moves the head the form proposes,
-  and the mirrored direction does not.
+  and the mirrored direction does not — the second read from a save the server
+  refuses after the mirrored edge is written and before the removal that
+  legitimately moves the head, because that removal would hide a wrong adoption
+  from the final save.
 
 Integration coverage in `internal/cli`, following the existing `TestRunServe*`
 pattern of asserting Git state after a real HTTP call:

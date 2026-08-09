@@ -6047,7 +6047,11 @@ setTimeout(async () => {
 // form is open on, so editing one from the form's own sidebar moves the head
 // the form proposes. The form has to adopt the head that write returned, or the
 // next Save is refused as a conflict with a change nobody else made. A "Blocks"
-// edge is stored on the other task and must not move it.
+// edge is stored on the other task and must not move it, which is read from a
+// save the server refuses after that edge is written and before the removal
+// below: the head is a closure variable, and that removal moves it again for a
+// reason of its own, so the final save's body cannot tell a held guard from a
+// broken one.
 func TestHandlerClientDetailFormAdoptsTheHeadItsOwnDependencyEditMoved(t *testing.T) {
 	node := requireNode(t)
 	current := clientPlacementTask("WB-01J00000000000000000000056", "Detail task", core.StatusReady, core.PriorityMedium)
@@ -6103,14 +6107,25 @@ setTimeout(async () => {
   };
   const bodies = [];
   let nextMutation = null;
+  let nextRefusal = null;
   const boardFetch = globalThis.fetch;
   globalThis.fetch = async (url, options = {}) => {
     if ((options.method || "GET") !== "GET") {
       fetchCalls.push({ url, options });
       if (options.body !== undefined) bodies.push(JSON.parse(options.body));
+      if (nextRefusal) {
+        const refusal = nextRefusal;
+        nextRefusal = null;
+        return { ok: false, json: async () => refusal };
+      }
       return { ok: true, json: async () => nextMutation };
     }
     return boardFetch(url, options);
+  };
+  const detailForm = () => {
+    const form = findElement(main, (element) => element.tagName === "FORM");
+    if (!form) throw new Error("the detail form is gone");
+    return form;
   };
 
   nextMutation = { format: "workbook.task-mutation", version: 1, task: ` + documentJSON([]core.Task{afterDependsAdd}) + `.tasks[0] };
@@ -6120,6 +6135,43 @@ setTimeout(async () => {
   nextMutation = { format: "workbook.task-mutation", version: 1, task: ` + documentJSON([]core.Task{blockedAfterAdd}) + `.tasks[0] };
   taskResponse = ` + documentJSON([]core.Task{afterDependsAdd, prerequisite, blockedAfterAdd}) + `;
   await addCandidate(groupFor("Blocks"), ` + strconv.Quote(blocked.ID) + `);
+  // Dependency writes are bodyless, so they never reach "bodies". Nothing below
+  // would notice an add that silently stopped writing the edge, and the head it
+  // must not move is "head-2" whether the edge was written or not, so pin the
+  // premise here: without this the guard assertion is vacuous.
+  const blocksAdd = fetchCalls.find((call) =>
+    call.options.method === "PUT" &&
+    call.url === "/api/tasks/" + encodeURIComponent(` + strconv.Quote(blocked.ID) + `) +
+      "/dependencies/" + encodeURIComponent(` + strconv.Quote(current.ID) + `));
+  if (!blocksAdd || Object.prototype.hasOwnProperty.call(blocksAdd.options, "body")) {
+    throw new Error("the \"Blocks\" add did not write the mirrored edge, so the head below proves nothing");
+  }
+
+  // The head the form proposes lives in a closure, so the only way to read it is
+  // to make the form send it. A save the server refuses sends the head and
+  // changes nothing else, which is what this needs: it observes the head while
+  // the "Blocks" write is the newest one. Asserting only the final save cannot
+  // see a wrong adoption here, because the "Depends On" removal below moves the
+  // head again for a legitimate reason and overwrites it either way.
+  const title = findElement(main, (element) => element.id === "task-title");
+  if (!title) throw new Error("the detail form did not render a title field");
+  const renderedTitle = title.value;
+  title.value = "Probed while the Blocks edge is the newest write.";
+  nextRefusal = {
+    format: "workbook.error", version: 1,
+    error: { category: "validation", message: "Probe refused." }
+  };
+  await detailForm().eventListeners.submit({ preventDefault() {} });
+  if (bodies.length !== 1) {
+    throw new Error("the probing save sent " + bodies.length + " bodies");
+  }
+  if (bodies[0].expectedHead !== "head-2") {
+    throw new Error("the \"Blocks\" edge is stored on the other task and must not move this form's head: " + JSON.stringify(bodies[0]));
+  }
+  if (historyPaths.length !== 0) {
+    throw new Error("the probing save was applied rather than refused");
+  }
+  title.value = renderedTitle;
 
   const row = findElement(groupFor("Depends On"), (element) => element.dataset.relationshipId === ` + strconv.Quote(prerequisite.ID) + `);
   const remove = row && findElement(row, (element) => element.tagName === "BUTTON" && element.textContent === "Remove");
@@ -6134,13 +6186,12 @@ setTimeout(async () => {
   }
   description.value = "Rewritten after the dependency edits.";
   nextMutation = { format: "workbook.task-mutation", version: 1, task: ` + documentJSON([]core.Task{saved}) + `.tasks[0] };
-  const form = findElement(main, (element) => element.tagName === "FORM");
-  await form.eventListeners.submit({ preventDefault() {} });
-  if (bodies.length !== 1) {
-    throw new Error("the save sent " + bodies.length + " bodies");
+  await detailForm().eventListeners.submit({ preventDefault() {} });
+  if (bodies.length !== 2) {
+    throw new Error("the save sent " + (bodies.length - 1) + " bodies");
   }
-  if (JSON.stringify(bodies[0]) !== '{"description":"Rewritten after the dependency edits.","expectedHead":"head-3"}') {
-    throw new Error("the save did not carry the head this form's own dependency edits moved to: " + JSON.stringify(bodies[0]));
+  if (JSON.stringify(bodies[1]) !== '{"description":"Rewritten after the dependency edits.","expectedHead":"head-3"}') {
+    throw new Error("the save did not carry the head this form's own dependency edits moved to: " + JSON.stringify(bodies[1]));
   }
   if (historyPaths[historyPaths.length - 1] !== "/") {
     throw new Error("the save was refused rather than applied");
