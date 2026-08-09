@@ -126,6 +126,101 @@ func TestHandlerClientKeepsUnchangedCardNodesAcrossAPoll(t *testing.T) {
 `)
 }
 
+// Alpha waits on prerequisites, so its card carries all three of the sections
+// applyCard() rebuilds — a description, labels, and dependency progress — and a
+// card that is redrawn needlessly has all three to lose.
+const reconcileAlphaDependencies = `
+taskDocument.presentation = taskDocument.presentation.map((view) => view.taskId !== "` + reconcileAlphaID + `"
+  ? view
+  : Object.assign({}, view, { dependenciesTotal: 2, dependenciesComplete: 1, waitingOnDependencies: true }));
+`
+
+// The test above watches the column, and proves a poll neither moves nor detaches
+// an unchanged card. It cannot see inside one. applyCard() rebuilds a card's
+// description, labels and dependency progress from scratch and rewrites its
+// title, its priority and its attributes without touching either the column or
+// the article, so a card that lost `+"`if (parts.signature === signature)`"+` would churn
+// its whole contents on every poll and still satisfy every assertion there — the
+// reader's selection inside a description would be dropped once a second. This
+// test watches one card from the inside instead: it holds the card's sections,
+// counts every write the card takes, and then changes the task to prove the
+// instruments can see a write at all.
+func TestHandlerClientWritesNothingInsideAnUnchangedCardAcrossAPoll(t *testing.T) {
+	runBoardClientWithSetup(t, "unchanged card contents", reconcileBoardTasks(), reconcileAlphaDependencies, `
+  const ready = listFor("ready");
+  const alpha = cardIn(ready, `+strconv.Quote(reconcileAlphaID)+`);
+  if (!alpha) throw new Error("board did not render the Alpha card");
+  const description = findElement(alpha, (element) => element.tagName === "P");
+  const labels = findElement(alpha, (element) => element.className === "labels");
+  const progress = findElement(alpha, (element) => hasDataKey(element, "dependencyProgress"));
+  if (!description || !labels || !progress) {
+    throw new Error("the card rendered no description, labels or dependency progress to hold on to");
+  }
+  const sections = [...alpha.children];
+
+  // Every write the card can take: a section detached or added, an attribute or
+  // data attribute rewritten, and any text or class written anywhere inside it.
+  let removals = 0;
+  let additions = 0;
+  const writes = [];
+  sections.forEach((node) => {
+    const detach = node.remove.bind(node);
+    node.remove = () => { removals += 1; return detach(); };
+  });
+  const append = alpha.append.bind(alpha);
+  alpha.append = (...children) => { additions += 1; return append(...children); };
+  const setAttribute = alpha.setAttribute.bind(alpha);
+  alpha.setAttribute = (name, value) => { writes.push("@" + name); return setAttribute(name, value); };
+  alpha.dataset = new Proxy(alpha.dataset, {
+    set(target, key, value) { writes.push("data-" + String(key)); target[key] = value; return true; }
+  });
+  findElements(alpha, () => true).forEach((element, index) => {
+    const label = element.tagName + "[" + index + "]";
+    const written = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), "textContent");
+    Object.defineProperty(element, "textContent", {
+      configurable: true,
+      get() { return written.get.call(element); },
+      set(value) { writes.push(label + ".textContent"); written.set.call(element, value); }
+    });
+    let className = element.className;
+    Object.defineProperty(element, "className", {
+      configurable: true,
+      get() { return className; },
+      set(value) { writes.push(label + ".className"); className = value; }
+    });
+  });
+
+  await intervalCallback();
+
+  if (cardIn(ready, `+strconv.Quote(reconcileAlphaID)+`) !== alpha) throw new Error("a poll rebuilt the unchanged card");
+  const after = [...alpha.children];
+  if (after.length !== sections.length) throw new Error("a poll changed the unchanged card's section count: " + after.length);
+  sections.forEach((node, index) => {
+    if (after[index] !== node) throw new Error("a poll replaced section " + index + " of the unchanged card");
+  });
+  if (findElement(alpha, (element) => element.tagName === "P") !== description) throw new Error("a poll rebuilt the unchanged card's description");
+  if (findElement(alpha, (element) => element.className === "labels") !== labels) throw new Error("a poll rebuilt the unchanged card's labels");
+  if (findElement(alpha, (element) => hasDataKey(element, "dependencyProgress")) !== progress) {
+    throw new Error("a poll rebuilt the unchanged card's dependency progress");
+  }
+  if (removals !== 0 || additions !== 0) {
+    throw new Error("a poll that changed nothing still removed " + removals + " and added " + additions + " card sections");
+  }
+  if (writes.length !== 0) throw new Error("a poll that changed nothing still wrote to the card: " + writes.join(", "));
+
+  // The watch is worth nothing if it cannot see a write, so a poll that really
+  // does change the task has to trip every instrument the unchanged poll left
+  // silent. This is also the churn the signature spares every other card.
+  serve(initialTasks.map((task) => task.id !== `+strconv.Quote(reconcileAlphaID)+` ? task : Object.assign({}, task, { title: "Alpha renamed" })));
+  await intervalCallback();
+  if (cardIn(ready, `+strconv.Quote(reconcileAlphaID)+`) !== alpha) throw new Error("a changed task was rebuilt instead of updated in place");
+  if (description.parentElement) throw new Error("a changed card kept its old description attached");
+  if (findElement(alpha, (element) => element.tagName === "P") === description) throw new Error("a changed card kept its old description node");
+  if (removals === 0 || additions === 0) throw new Error("a changed card did not rebuild its sections");
+  if (!writes.length) throw new Error("the write watch saw nothing when the card really changed");
+`)
+}
+
 func TestHandlerClientUpdatesAChangedCardInPlace(t *testing.T) {
 	runBoardClient(t, "in-place card update", reconcileBoardTasks(), `
   const ready = listFor("ready");
