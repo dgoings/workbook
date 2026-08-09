@@ -113,7 +113,43 @@ func TestUsableSocketDirRejectsDirectoriesOtherUsersCanWrite(t *testing.T) {
 	}
 }
 
+// The owner comparison is the only check that stands between the fix and the
+// attack this hardening exists to stop: another local user who pre-creates the
+// directory 0700 passes the symlink, is-a-directory, and group-or-other-write
+// checks, and is caught by nothing else. No test can chown a directory to a
+// second user, so the reported uid is what moves instead.
+func TestUsableSocketDirRefusesADirectoryItDoesNotOwn(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "private")
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	if err := usableSocketDir(directory); err != nil {
+		t.Fatalf("usableSocketDir(owned) error = %v", err)
+	}
+
+	useUID(t, os.Getuid()+1)
+	err := usableSocketDir(directory)
+	if err == nil {
+		t.Fatal("usableSocketDir(owned by another user) error = nil, want a rejection")
+	}
+	if !strings.Contains(err.Error(), "another user") {
+		t.Fatalf("usableSocketDir(owned by another user) error = %v, want it to name the owner", err)
+	}
+}
+
+// The same check guards the private directory, where it matters most: a 0700
+// directory somebody else created first is indistinguishable from ours by mode
+// alone, and MkdirAll accepts it.
 func TestUserTempDirRefusesADirectoryItDoesNotOwn(t *testing.T) {
+	useTempRoot(t, t.TempDir())
+	useUID(t, os.Getuid()+1)
+
+	if _, err := userTempDir(); err == nil {
+		t.Fatal("userTempDir(owned by another user) error = nil, want a rejection")
+	}
+}
+
+func TestUserTempDirRefusesADirectoryThatIsNotPrivate(t *testing.T) {
 	root := t.TempDir()
 	useTempRoot(t, root)
 
@@ -220,4 +256,13 @@ func useTempRoot(t *testing.T, root string) {
 	previous := userTempRoot
 	userTempRoot = root
 	t.Cleanup(func() { userTempRoot = previous })
+}
+
+// useUID makes this process report a uid it does not have, which is how a test
+// reaches the foreign-owner rejection without a second user account.
+func useUID(t *testing.T, uid int) {
+	t.Helper()
+	previous := currentUID
+	currentUID = func() int { return uid }
+	t.Cleanup(func() { currentUID = previous })
 }

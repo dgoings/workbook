@@ -186,12 +186,18 @@ func listenPrivate(path string) (net.Listener, error) {
 // variable only so a test can point it at a root it controls.
 var userTempRoot = "/tmp"
 
+// currentUID reports the user a socket directory must belong to. It is a
+// variable only so a test can exercise the foreign-owner rejection, which is
+// the one check no fixture can otherwise reach: a test process cannot chown a
+// directory to a second user, so the reported uid is what has to move.
+var currentUID = os.Getuid
+
 // userTempDir returns a private per-user directory under userTempRoot,
 // refusing one that is not exactly what it should be. The root is
 // world-writable, so a symlink, a foreign owner, or loose permissions means
 // somebody else could place the socket a command then trusts.
 func userTempDir() (string, error) {
-	dir := filepath.Join(userTempRoot, fmt.Sprintf("workbook-%d", os.Getuid()))
+	dir := filepath.Join(userTempRoot, fmt.Sprintf("workbook-%d", currentUID()))
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
@@ -239,7 +245,7 @@ func socketDirInfo(dir string) (os.FileInfo, error) {
 		return nil, fmt.Errorf("%s is writable by other users", dir)
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || int(stat.Uid) != os.Getuid() {
+	if !ok || int(stat.Uid) != currentUID() {
 		return nil, fmt.Errorf("%s belongs to another user", dir)
 	}
 	return info, nil
