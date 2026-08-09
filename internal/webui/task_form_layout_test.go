@@ -153,3 +153,71 @@ func TestHandlerClientPlacesCreateMoreAboveTheSaveButton(t *testing.T) {
 		}
 	}
 }
+
+// Depends On and Blocks are two thirds of the sidebar, and most of that was
+// air: a caption on a row of its own repeating the heading above it, and two
+// permanently reserved lines per group for messages that are almost never
+// there. What each group still owes the reader is unchanged — a name for its
+// combobox, and live regions that exist before they have anything to announce.
+func TestHandlerClientCompactsTheRelationshipGroups(t *testing.T) {
+	runTaskFormClient(t, "relationship group compaction", `
+  const sidebar = findElement(form, (element) => classTokens(element).includes("task-sidebar"));
+  const groups = findElements(sidebar, (element) => classTokens(element).includes("relationship-group"));
+  if (groups.length !== 2) throw new Error("the sidebar does not render both relationship groups: " + groups.length);
+
+  const captions = [];
+  groups.forEach((group) => {
+    const heading = group.children[0];
+    if (!heading || heading.tagName !== "H3") throw new Error("a relationship group lost its heading");
+    const name = heading.textContent;
+    const editor = findElement(group, (element) => classTokens(element).includes("relationship-editor"));
+    const caption = editor && findElement(editor, (element) => element.tagName === "LABEL");
+    const input = editor && findElement(editor, (element) => element.attributes.role === "combobox");
+    if (!editor || !caption || !input) throw new Error(name + " lost its combobox");
+    if (caption.htmlFor !== input.id) throw new Error(name + " no longer names its combobox");
+    if (!classTokens(caption).includes("relationship-editor__label")) {
+      throw new Error(name + " still spends a row of the sidebar on its caption");
+    }
+    if (!caption.textContent) throw new Error(name + " combobox has no accessible name");
+    // The placeholder is what a sighted reader has left to go on, so it has to
+    // be part of the name the control answers to: a speech user saying "click
+    // prerequisite" reaches a box that says "Prerequisite" only while the two
+    // strings still overlap.
+    if (!input.placeholder) throw new Error(name + " combobox says nothing inside the box");
+    if (!caption.textContent.toLowerCase().includes(input.placeholder.toLowerCase())) {
+      throw new Error(name + " placeholder " + JSON.stringify(input.placeholder) +
+        " is not part of its accessible name " + JSON.stringify(caption.textContent));
+    }
+    if (!findElement(editor, (element) => element.tagName === "BUTTON" && element.textContent === "Add dependency")) {
+      throw new Error(name + " lost its Add dependency button");
+    }
+    // Both live regions are still in the document while empty. Only the height
+    // they reserved is gone, and that is the stylesheet's business: a region
+    // created in the same frame as its first message never announces it.
+    const empty = findElement(editor, (element) => classTokens(element).includes("relationship-empty"));
+    const message = findElement(group, (element) => classTokens(element).includes("relationship-message"));
+    for (const region of [empty, message]) {
+      if (!region || region.attributes.role !== "status" || region.attributes["aria-live"] !== "polite") {
+        throw new Error(name + " no longer keeps its announcements in the document");
+      }
+      if (region.textContent !== "") throw new Error(name + " opens with a message it has no reason to have");
+    }
+    captions.push(caption.textContent);
+  });
+  if (captions[0] === captions[1]) throw new Error("both groups ask for the same thing: " + captions[0]);
+`)
+	body := newTaskPage(t)
+	for _, fragment := range []string{
+		`.relationship-editor__label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }`,
+		`.relationship-empty:empty, .relationship-message:empty { min-height: 0; margin: 0; }`,
+		`.task-relationships { display: grid; gap: .7rem; padding: .7rem 0 0; }`,
+		`.relationship-group { border-top: 1px solid #d5deea; padding-top: .7rem; }`,
+	} {
+		if !strings.Contains(body, fragment) {
+			t.Errorf("relationship group styling does not contain %q", fragment)
+		}
+	}
+	if strings.Contains(body, `.relationship-editor label { grid-column: 1 / -1;`) {
+		t.Error("the combobox caption still claims a row of its own")
+	}
+}

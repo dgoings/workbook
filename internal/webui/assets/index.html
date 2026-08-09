@@ -189,10 +189,10 @@
     .deleted-card { border: 1px solid #b9c6d8; border-radius: 4px; background: #fff; padding: .8rem; }
     .deleted-card__meta { display: flex; align-items: center; justify-content: space-between; gap: .5rem; color: #526075; font-size: .7rem; }
     .deleted-card__description { display: -webkit-box; overflow: hidden; margin: .5rem 0 .75rem; color: #56647a; font-size: .82rem; line-height: 1.36; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-    .task-relationships { display: grid; gap: 1rem; padding: 1rem 0 0; }
-    .relationship-group { border-top: 1px solid #d5deea; padding-top: 1rem; }
+    .task-relationships { display: grid; gap: .7rem; padding: .7rem 0 0; }
+    .relationship-group { border-top: 1px solid #d5deea; padding-top: .7rem; }
     .relationship-group h3 { margin: 0; font-size: .88rem; }
-    .relationship-list { display: grid; gap: .55rem; margin: .75rem 0; }
+    .relationship-list { display: grid; gap: .35rem; margin: .45rem 0 .5rem; }
     .relationship-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .35rem .75rem; border: 1px solid #d5deea; border-radius: 4px; padding: .7rem; }
     .relationship-row h4, .relationship-row p { margin: 0; }
     .relationship-row h4 { font-size: .84rem; overflow-wrap: anywhere; }
@@ -201,15 +201,21 @@
     .relationship-row__metadata, .relationship-row__note { color: #56647a; font-size: .75rem; overflow-wrap: anywhere; }
     .relationship-remove { align-self: center; grid-column: 2; grid-row: 1 / span 2; }
     .relationship-state { color: #9c2f25; font-size: .75rem; }
-    .relationship-editor { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .4rem .55rem; align-items: end; }
-    .relationship-editor label { grid-column: 1 / -1; color: #34425a; font-size: .75rem; font-weight: 750; }
+    .relationship-editor { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .3rem .45rem; align-items: end; }
+    /* The caption used to hold a row of the sidebar to itself, in each of the
+       two groups, to repeat what the heading above the input and the
+       placeholder inside it already say. It is clipped rather than removed or
+       display: none'd, because it is what gives the combobox its accessible
+       name; the placeholder repeats that name exactly, so what is seen and what
+       is announced stay the same words. */
+    .relationship-editor__label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
     .relationship-editor input { min-width: 0; width: 100%; border: 1px solid #9eafc5; border-radius: 4px; background: #fff; color: #172033; font: inherit; padding: .55rem .62rem; }
     .relationship-editor input:focus { border-color: #2457d6; outline: 3px solid rgba(36,87,214,.18); }
     .relationship-editor button { border: 1px solid #173f9e; border-radius: 4px; background: #2457d6; color: #fff; cursor: pointer; font: inherit; font-size: .78rem; font-weight: 750; padding: .58rem .75rem; }
     .relationship-editor button:disabled { cursor: default; opacity: .52; }
     .relationship-listbox { position: fixed; z-index: 20; max-height: 18rem; overflow-y: auto; border: 1px solid #9eafc5; border-radius: 4px; background: #fff; box-shadow: 0 8px 20px rgba(23,32,51,.12); }
     .relationship-listbox[hidden] { display: none; }
-    .relationship-row--compact { grid-template-columns: minmax(0, 1fr) auto; gap: .22rem .45rem; padding: .48rem 0; border: 0; border-top: 1px solid #e1e7f0; border-radius: 0; }
+    .relationship-row--compact { grid-template-columns: minmax(0, 1fr) auto; gap: .16rem .45rem; padding: .38rem 0; border: 0; border-top: 1px solid #e1e7f0; border-radius: 0; }
     .relationship-option { display: grid; gap: .18rem; padding: .55rem .62rem; border-bottom: 1px solid #e1e7f0; cursor: pointer; }
     .relationship-option:last-child { border-bottom: 0; }
     .relationship-option[aria-selected="true"], .relationship-option.is-active { background: #edf3ff; }
@@ -217,6 +223,15 @@
     .relationship-option span { color: #56647a; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .68rem; overflow-wrap: anywhere; }
     .relationship-empty { grid-column: 1 / -1; min-height: 1rem; margin: 0; color: #56647a; font-size: .75rem; }
     .relationship-message { min-height: 1rem; margin: .45rem 0 0; color: #9c2f25; font-size: .78rem; }
+    /* Both of these are live regions and both stay in the document whatever
+       they hold — an element the renderer creates in the same frame as its
+       first message never announces it. What they no longer keep is a reserved
+       row apiece: four blank lines stood in the sidebar permanently so that the
+       rare message could arrive without moving anything. The message moves the
+       group down now, which is a page the reader is looking at when it happens.
+       Higher specificity than the rules above and the ones in the media query,
+       so it decides the height wherever it applies. */
+    .relationship-empty:empty, .relationship-message:empty { min-height: 0; margin: 0; }
     .task-route--history { height: auto; min-height: 100%; }
     .task-route--history .task-layout { min-height: min(60vh, 34rem); }
     .task-history { display: grid; gap: .8rem; padding: 1.15rem; border-top: 1px solid #d5deea; background: #fafbfd; }
@@ -265,10 +280,10 @@
          of the control is additive and grows downward away from it. */
       .task-properties .field--labels { align-items: start; }
       .task-properties .field--labels > label { padding-top: .65rem; }
-      .task-relationships { gap: .65rem; padding-top: .7rem; }
-      .relationship-group { padding-top: .7rem; }
-      .relationship-list { gap: .35rem; margin: .45rem 0; }
-      .relationship-editor { gap: .3rem .45rem; }
+      .task-relationships { gap: .5rem; padding-top: .55rem; }
+      .relationship-group { padding-top: .55rem; }
+      .relationship-list { gap: .25rem; margin: .3rem 0 .35rem; }
+      .relationship-editor { gap: .25rem .4rem; }
       .relationship-editor input { padding: .45rem .55rem; }
       .relationship-editor button { padding: .48rem .62rem; }
       .relationship-message { min-height: .75rem; margin-top: .25rem; }
@@ -1292,12 +1307,26 @@
         const state = { query: "", selectedID: "", activeIndex: -1, candidates: [] };
         const region = document.createElement("div");
         region.className = "relationship-editor";
+        // The caption is the input's accessible name and is drawn clipped: the
+        // group heading directly above it already says which set is being added
+        // to, and the placeholder says it again inside the box, so nothing
+        // visible is lost by not spending a row of the sidebar on it. Kept as a
+        // real label rather than replaced by an aria-label, so the name stays
+        // in the markup where the input is.
+        //
+        // The placeholder is the short form of the caption and a substring of
+        // it, which is what WCAG's label-in-name asks: someone who says "click
+        // prerequisite" names a control the page answers to. Spelling the
+        // caption out in full here would only be truncated — the box shares its
+        // row with the Add button.
         const label = document.createElement("label");
+        label.className = "relationship-editor__label";
         label.htmlFor = config.id + "-input";
         text(label, config.label);
         const input = document.createElement("input");
         input.type = "search";
         input.id = config.id + "-input";
+        input.placeholder = config.placeholder;
         input.setAttribute("role", "combobox");
         input.setAttribute("aria-autocomplete", "list");
         input.setAttribute("aria-controls", config.id + "-listbox");
@@ -1608,9 +1637,9 @@
         const groups = new Map();
         let controller;
         [
-          ["dependsOn", "depends-on", "Depends On", "No prerequisites.", "Find a prerequisite"],
-          ["blocks", "blocks", "Blocks", "No tasks are blocked by this task.", "Find a task to block"]
-        ].forEach(([name, direction, headingText, emptyText, labelText]) => {
+          ["dependsOn", "depends-on", "Depends On", "No prerequisites.", "Find a prerequisite", "Prerequisite"],
+          ["blocks", "blocks", "Blocks", "No tasks are blocked by this task.", "Find a task to block", "Task to block"]
+        ].forEach(([name, direction, headingText, emptyText, labelText, placeholderText]) => {
           const group = document.createElement("section");
           group.className = "relationship-group";
           const heading = document.createElement("h3");
@@ -1633,6 +1662,7 @@
           groupController.combobox = dependencyCombobox({
             id: "dependency-" + direction,
             label: labelText,
+            placeholder: placeholderText,
             isBusy: () => groupController.busy,
             onAdd: (selectedID) => {
               if (controller.busy) return;
