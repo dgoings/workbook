@@ -101,10 +101,12 @@ func (s *server) handle(_ context.Context, conn net.Conn) {
 }
 
 // status composes the timing snapshot with the live conflict set, so an
-// acknowledgement is visible immediately rather than at the next publish.
+// acknowledgement is visible immediately rather than at the next publish. The
+// set is bounded on the way out, because an answer the client refuses would
+// leave this watcher unusable and its conflicts undrainable.
 func (s *server) status() *Status {
 	current := *s.snapshot.Load()
-	current.Conflicts = s.conflicts.list()
+	current.Conflicts = boundConflicts(s.conflicts.list())
 	return &current
 }
 

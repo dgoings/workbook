@@ -186,7 +186,17 @@ may take, not how much it may send, so without a bound a peer that never writes
 a newline grows the other end's buffer until the process dies. A request is a
 command and a task ID, so 64 KiB; a response has to clear the largest honest
 status, which is a description conflict per task carrying three descriptions of
-`core.MaxDescriptionBytes` each, so twenty of those.
+`core.MaxDescriptionBytes` each, so twenty of those plus room for the JSON
+framing around them — sized to the descriptions alone, the bound refuses the
+twentieth.
+
+The watcher bounds what it serializes below what the client accepts, so a
+healthy watcher can never reach the client's limit. If it could, the failure
+would sustain itself: the client refuses the status, so it never trusts the
+watcher, so it never acknowledges a conflict, so the set that made the answer
+too large never drains, and the watcher answers every dial while `sync
+--status` reports it as not running. Past the budget the conflict list is
+served as a prefix, in task-ID order, and drains the ordinary way.
 
 ```
 {"status":{}}                             -> Status

@@ -3,6 +3,7 @@ package syncloop
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -90,8 +91,12 @@ func TestWatcherRefusesARequestLineWithoutEnd(t *testing.T) {
 // them up to core.MaxDescriptionBytes, so a bound chosen for a typical status
 // line would refuse a watcher that is doing exactly what it should and send
 // every mutation down the inline path.
+//
+// Twenty is the documented figure, so twenty is what this asserts. A bound of
+// exactly twenty conflicts' descriptions left nothing for the JSON framing and
+// refused the twentieth by 3,477 bytes.
 func TestStatusCarryingMaximumDescriptionConflictsStillFits(t *testing.T) {
-	const conflicting = 6
+	const conflicting = 20
 	description := strings.Repeat("d", core.MaxDescriptionBytes)
 	conflicts := make([]core.Conflict, 0, conflicting)
 	heads := make(map[string]string, conflicting)
@@ -118,6 +123,56 @@ func TestStatusCarryingMaximumDescriptionConflictsStillFits(t *testing.T) {
 
 	if entries := readStatus(t, directory).Conflicts; len(entries) != conflicting {
 		t.Fatalf("conflicts = %d, want %d", len(entries), conflicting)
+	}
+}
+
+// A watcher must not be able to outgrow the bound its own clients enforce. If
+// it could, the client would refuse the status, never trust the watcher, never
+// acknowledge anything, and the set that made the answer too large would never
+// drain: the watcher would be wedged out of the deferral path for good while
+// still answering every dial.
+func TestStatusDropsConflictsPastTheServerBound(t *testing.T) {
+	description := strings.Repeat("d", core.MaxDescriptionBytes)
+	entries := make([]ConflictEntry, 0, 64)
+	for index := range 64 {
+		entries = append(entries, ConflictEntry{
+			Conflict: core.Conflict{
+				TaskID: fmt.Sprintf("WB-01K0M6B8A4FTT8C39MXXYTW%03d", index),
+				Type:   core.ConflictDescription,
+				Description: &core.DescriptionConflict{
+					Base:   description,
+					Ours:   description,
+					Theirs: description,
+				},
+			},
+			Head: strings.Repeat("a", 40),
+		})
+	}
+
+	bounded := boundConflicts(entries)
+	if len(bounded) == len(entries) {
+		t.Fatalf("boundConflicts() kept all %d entries, want the tail dropped", len(entries))
+	}
+	if len(bounded) < 20 {
+		t.Fatalf("boundConflicts() kept %d entries, want at least the documented twenty", len(bounded))
+	}
+	for index := range bounded {
+		if bounded[index].TaskID != entries[index].TaskID {
+			t.Fatalf("boundConflicts() entry %d = %q, want the sorted prefix %q", index, bounded[index].TaskID, entries[index].TaskID)
+		}
+	}
+
+	answer := response{OK: true, Status: &Status{
+		Format:    StatusFormat,
+		Version:   StatusVersion,
+		Conflicts: bounded,
+	}}
+	encoded, err := json.Marshal(answer)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if len(encoded)+1 > maxResponseBytes {
+		t.Fatalf("bounded status marshalled to %d bytes, want at most the client's %d", len(encoded)+1, maxResponseBytes)
 	}
 }
 
