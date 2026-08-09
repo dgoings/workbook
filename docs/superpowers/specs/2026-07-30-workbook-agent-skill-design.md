@@ -50,6 +50,33 @@ Workbook is unavailable or uninitialized, or either command fails, the agent
 reports that result and stops rather than guessing or editing task storage
 directly.
 
+## Dependency Titles
+
+Human-facing prose names tasks by title, including the tasks a blocked task
+waits on. `data.dependencies` in a result envelope is a list of canonical task
+IDs and nothing else, so the skill instructs the agent to resolve each entry
+with:
+
+```sh
+workbook show <dependency-id> --json
+```
+
+and to take the blocker's name from that result's `data.title`. A dependency
+has no title until it is read, and an agent that skips the resolution step
+either invents one or falls back to the ULID.
+
+The alternative of carrying dependency titles in the `show` envelope was
+considered and rejected. `show` serializes the same `Task` shape that `create`,
+`update`, `list`, `next`, `board`, and the web API return, so a new member
+either changes every one of those envelopes or makes one command's rendering of
+a task differ from the rest — a worse deal for machine consumers than one extra
+read. A title is also mutable display metadata owned by the dependency's own
+task ref; copying it into a second task's envelope creates a stale-able
+duplicate of a value that has a canonical home, and forces a shape decision for
+tombstoned or unresolvable dependencies. The extra round trip is one cheap
+projection read per dependency, paid only when an agent is about to describe
+one.
+
 ## Status Lifecycle
 
 Before implementation begins, the agent records active work with:

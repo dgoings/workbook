@@ -134,6 +134,35 @@ func TestSkillDocumentSeparatesMachineIDsFromHumanTitles(t *testing.T) {
 	}
 }
 
+func TestSkillDocumentResolvesDependencyTitlesThroughTheCLI(t *testing.T) {
+	// Production mutation: telling agents to name blockers by title without
+	// telling them where a title comes from. The show envelope carries
+	// dependencies as bare IDs, so an agent with no resolution step either
+	// invents a plausible title or falls back to the ULID the same section
+	// tells it not to lead with.
+	document, err := skillDocument("0.2.0")
+	if err != nil {
+		t.Fatalf("skillDocument() error = %v", err)
+	}
+
+	for _, want := range []string{
+		// The field that holds only IDs.
+		"`data.dependencies`",
+		// The command that turns one of those IDs into a title.
+		"`workbook show <dependency-id> --json`",
+		// The member of that second envelope the title comes from.
+		"`data.title`",
+		// The failure mode the resolution step exists to prevent.
+		"never invent one",
+		// Bad news is still reported by title.
+		"blocked",
+	} {
+		if !strings.Contains(document.Body, want) {
+			t.Errorf("skill body missing %q:\n%s", want, document.Body)
+		}
+	}
+}
+
 func TestSkillDocumentRendersFrontmatterOnLineOne(t *testing.T) {
 	document, err := skillDocument("0.2.0")
 	if err != nil {

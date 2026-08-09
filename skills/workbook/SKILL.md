@@ -20,6 +20,9 @@ SQLite projections, or configuration directly.
 4. Use the resolved full ID for every later Workbook command.
 5. Read the full title, description, status, dependencies, labels, and
    acceptance context before editing files.
+6. `data.dependencies` carries bare IDs. Before saying anything about a
+   dependency or a blocker, run `workbook show <dependency-id> --json` for each
+   entry and keep its `data.title`; never invent one.
 
 ## IDs are for commands, titles are for humans
 
@@ -32,7 +35,11 @@ the task title.
   workflow".`, not `Taking WB-01KYD730XZ9S88N1GGGSSG2CJ5.`
 - Report lifecycle transitions the same way: `"Add remote claim and lease
   workflow" is ready for review.`
-- Describe dependencies and blockers by the titles of the tasks involved.
+- Bad news is not an exception. A blocked task, a failed command, or a task you
+  will not start is still announced by title: `"Add remote claim and lease
+  workflow" is blocked by "Define the lease renewal protocol".`
+- Describe dependencies and blockers by the titles of the tasks involved,
+  resolved through step 6 above.
 - Mention an ID only when it adds something: disambiguating similarly titled
   tasks, or giving a human a command to run themselves.
 
@@ -84,6 +91,8 @@ asked, or to reconcile after exit code 6.
 
 - Use canonical `in-progress` and `in-review`, not display labels.
 - Keep using the resolved full task ID after selection.
-- Lead with task titles, not raw IDs, when reporting to a human.
+- Lead with task titles, not raw IDs, when reporting to a human, including when
+  reporting a blocker or a failure.
+- Resolve a dependency ID with `workbook show` before naming the blocker.
 - Check every JSON command result; do not assume a mutation succeeded.
 - Do not claim that Workbook creates branches, pull requests, or merges code.
