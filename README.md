@@ -1000,16 +1000,19 @@ GET /healthz                  versioned health JSON
 The board answers only its own pages. It has no accounts and no tokens, so three
 checks stand in for them and every route is subject to all three:
 
-- The `Host` header must name the address the listener bound, and its port in
-  every case. A page that rebinds its own DNS name to the board's address
-  reaches the port with a foreign `Host` and is refused, so it never gains
-  same-origin access. A loopback bind is named by any loopback host —
-  `localhost`, `127.0.0.1`, `[::1]` — because they all mean this machine. A bind
-  to one address, such as `--addr 192.168.1.5:7331`, is named by that address
-  alone: a DNS name is refused even when it resolves there, because a name that
-  resolves to the board is exactly what a rebinding page sends. Reach such a
-  board by the address it is bound to. A wildcard bind is the exception
-  described below.
+- The `Host` header must name the address the listener bound — except on a
+  wildcard bind, which has no one address to name and pins only the port, as
+  described below — and its port in every case. Where the host is pinned, a page
+  that rebinds its own DNS name to the board's address reaches the port with a
+  foreign `Host` and is refused, so it never gains same-origin access. A loopback
+  bind is named by any loopback host — `localhost`, `127.0.0.1`, `[::1]` —
+  because they all mean this machine. A bind to one address, such as
+  `--addr 192.168.1.5:7331`, is named by that address alone: a DNS name is
+  refused even when it resolves there, because a name that resolves to the board
+  is exactly what a rebinding page sends. That covers a name given to `--addr`
+  itself, which binds the address it resolves to and is then pinned to that
+  address, so reach such a board at the address `serve` prints rather than by
+  the name.
 - An `Origin` header, when a browser sends one, must name the board itself. A
   cross-site request that carries one is refused whatever its method.
 - `POST`, `PUT`, `PATCH`, and `DELETE` must send `Content-Type: application/json`,
