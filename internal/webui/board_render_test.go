@@ -246,6 +246,91 @@ func TestHandlerClientWritesNothingInsideAnUnchangedCardAcrossAPoll(t *testing.T
 `)
 }
 
+// The guard is a claim about both directions: it must return early when nothing
+// the card draws has changed, and it must stop returning early the moment
+// something has. The test above covers the first direction, and on its own it
+// leaves the second one open — seven of the ten inputs to cardSignature() could
+// be deleted with the whole package still green, which is the failure that
+// actually loses a reader's data: a description-only, labels-only or
+// dependency-progress-only edit made in another clone would never reach the
+// board, and nothing would say so.
+//
+// So this walks the signature one input at a time. Each step changes exactly one
+// of them on top of the state the board was last served, which is what makes a
+// failure name its own field: a poll that differs in one input redraws the card
+// or the guard swallowed that input. The tenth input, the card's failure report,
+// is the one a poll cannot deliver — it comes from a refused mutation, and
+// board_failure_report_test.go drives it.
+func TestHandlerClientRedrawsACardForEverySignatureFieldThatChanges(t *testing.T) {
+	runBoardClientWithSetup(t, "changed card signature fields", reconcileBoardTasks(), reconcileAlphaDependencies, `
+  const alpha = boardCard(`+strconv.Quote(reconcileAlphaID)+`);
+  if (!alpha) throw new Error("board did not render the Alpha card");
+  const visibleID = () => {
+    const code = findElement(alpha, (element) => element.tagName === "CODE");
+    return code ? code.textContent : "";
+  };
+
+  // What the board is drawing Alpha from right now. A step edits one field of
+  // one of these and serves both again, so consecutive polls differ by exactly
+  // the field under test and by nothing else.
+  let task = taskByID(`+strconv.Quote(reconcileAlphaID)+`);
+  let view = taskDocument.presentation.find((entry) => entry.taskId === `+strconv.Quote(reconcileAlphaID)+`);
+  const serveAlpha = () => {
+    taskResponse = {
+      format: "workbook.tasks",
+      version: 1,
+      tasks: initialTasks.map((entry) => entry.id === `+strconv.Quote(reconcileAlphaID)+` ? task : entry),
+      presentation: taskDocument.presentation.map((entry) =>
+        entry.taskId === `+strconv.Quote(reconcileAlphaID)+` ? view : entry)
+    };
+  };
+  const changeTask = (fields) => { task = Object.assign({}, task, fields); serveAlpha(); };
+  const changeView = (fields) => { view = Object.assign({}, view, fields); serveAlpha(); };
+
+  const steps = [
+    { field: "task.title",
+      change: () => changeTask({ title: "Alpha renamed" }),
+      drawn: () => alpha.textContent.includes("Alpha renamed") },
+    { field: "task.description",
+      change: () => changeTask({ description: "Only the description moved." }),
+      drawn: () => alpha.textContent.includes("Only the description moved.") },
+    { field: "task.priority",
+      change: () => changeTask({ priority: "low" }),
+      drawn: () => alpha.dataset.priority === "low" && alpha.textContent.includes("low") },
+    { field: "task.labels",
+      change: () => changeTask({ labels: ["web", "accessibility"] }),
+      drawn: () => alpha.textContent.includes("accessibility") },
+    // The prefix shortens when the task that forced a longer one goes away.
+    { field: "view.idPrefix",
+      change: () => changeView({ idPrefix: "WB-01J00000" }),
+      drawn: () => visibleID() === "WB-01J00000" && alpha.dataset.idPrefix === "WB-01J00000" },
+    { field: "view.dependenciesComplete",
+      change: () => changeView({ dependenciesComplete: 2 }),
+      drawn: () => alpha.textContent.includes("2 of 2 prerequisites complete") },
+    { field: "view.dependenciesTotal",
+      change: () => changeView({ dependenciesTotal: 3 }),
+      drawn: () => alpha.textContent.includes("2 of 3 prerequisites complete") },
+    { field: "view.waitingOnDependencies",
+      change: () => changeView({ waitingOnDependencies: false }),
+      drawn: () => !alpha.textContent.includes("Waiting on dependencies") },
+    { field: "task.status",
+      change: () => changeTask({ status: "in-progress" }),
+      drawn: () => alpha.parentElement === listFor("in-progress") }
+  ];
+
+  for (const step of steps) {
+    step.change();
+    await intervalCallback();
+    if (boardCard(`+strconv.Quote(reconcileAlphaID)+`) !== alpha) {
+      throw new Error("changing " + step.field + " rebuilt the card instead of redrawing it");
+    }
+    if (!step.drawn()) {
+      throw new Error("changing " + step.field + " left the card drawn from the old value: " + alpha.textContent);
+    }
+  }
+`)
+}
+
 func TestHandlerClientUpdatesAChangedCardInPlace(t *testing.T) {
 	runBoardClient(t, "in-place card update", reconcileBoardTasks(), `
   const ready = listFor("ready");
