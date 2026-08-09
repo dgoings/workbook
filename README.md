@@ -722,12 +722,22 @@ is not covered by branch protection on typical hosts, so a name Workbook does
 not recognize there is not treated as corruption. `fetch`, `push`, and `sync`
 skip such a ref and complete for every well-formed task, then report it: an
 `ignoredRefs` entry in JSON and an `Ignored:` line in human output, named as
-`origin` holds it so it can be pruned with
-`git push origin --delete <ref>`. One stray ref would otherwise deny the whole
-synchronization path to every clone. The local canonical namespace keeps
-rejecting an unrecognized name outright, because only this tool writes it.
-Anything that is not a name — Git's own record framing, object IDs, symbolic
-refs, or the same task returned twice — stays fatal in both namespaces.
+`origin` holds it. One stray ref would otherwise deny the whole synchronization
+path to every clone. The local canonical namespace keeps rejecting an
+unrecognized name outright, because only this tool writes it. Anything that is
+not a name — Git's own record framing, object IDs, symbolic refs, or the same
+task returned twice — stays fatal in both namespaces.
+
+Workbook never deletes a ref on `origin`, and being unreadable to this build is
+not evidence that a ref is junk: a newer version's task ID format and a second
+project's key sharing the namespace both land in the same report while naming
+real append-only history. Each entry therefore carries a `plausibleTask`
+boolean, true when the name still fits some Workbook's task ID — this project's
+`WB-` prefix, or any valid project key followed by a ULID-shaped body, including
+a ref nested under either. Only a name that fits neither is offered for removal,
+with `git push origin --delete <ref>`; an entry that may be another project's or
+another version's task is reported as kept, together with what deleting it would
+cost. Judge such a ref yourself before removing it.
 
 `workbook push` publishes validated local `refs/workbook/tasks/*` refs to
 `origin` without force or deletion. One bounded, non-atomic publication retains
