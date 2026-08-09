@@ -301,25 +301,6 @@ func TestPointerRoundTripsThroughTheRepositoryDirectory(t *testing.T) {
 	}
 }
 
-func TestSocketPathFallsBackWhenTheCandidateIsTooLong(t *testing.T) {
-	long := filepath.Join(t.TempDir(), strings.Repeat("d", 90))
-	if err := os.MkdirAll(long, 0o700); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	t.Setenv("TMPDIR", long)
-
-	path, err := socketPath(t.TempDir())
-	if err != nil {
-		t.Fatalf("socketPath() error = %v", err)
-	}
-	if len(path) > maxSocketPath {
-		t.Fatalf("socketPath() = %q (%d bytes), want at most %d", path, len(path), maxSocketPath)
-	}
-	if strings.HasPrefix(path, long) {
-		t.Fatalf("socketPath() = %q, want a fallback outside the oversized temporary directory", path)
-	}
-}
-
 // --- helpers ---
 
 func watcherConfig() core.ProjectConfig {

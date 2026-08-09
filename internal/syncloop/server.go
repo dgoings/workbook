@@ -46,7 +46,7 @@ func bind(commonGitDir string) (net.Listener, string, error) {
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, "", core.Wrap(core.CategoryOperational, "clear the stale watcher socket", err)
 	}
-	listener, err := net.Listen("unix", path)
+	listener, err := listenPrivate(path)
 	if err != nil {
 		return nil, "", core.Wrap(core.CategoryOperational, "bind the watcher socket", err)
 	}

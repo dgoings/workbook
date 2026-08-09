@@ -146,13 +146,32 @@ CLI never looks. The CLI would then fall back to the inline path forever, and
 the entire performance win would vanish with no diagnostic. A silent failure
 mode is a worse trade than a tail risk.
 
-So the watcher binds a short path under `os.TempDir()`, falling back to
-`/tmp/workbook-<uid>/` and then `<common-git-dir>/workbook/` if a candidate
-exceeds 100 bytes, and publishes the absolute result in
-`<common-git-dir>/workbook/watcher.json` — beside `cache.sqlite` and
-`validation.sqlite`, and shared across linked worktrees for the same reason
-those are. A `/tmp` fallback directory is created `0700` and then rejected if it
-is a symlink, is not owned by the caller, or is not `0700`.
+So the watcher binds a short path in a directory only this user can write to,
+and publishes the absolute result in `<common-git-dir>/workbook/watcher.json` —
+beside `cache.sqlite` and `validation.sqlite`, and shared across linked
+worktrees for the same reason those are. The candidates are `/tmp/workbook-<uid>/`
+first, created `0700`, then `os.TempDir()`, then `<common-git-dir>/workbook/`,
+and the first one that yields a path under 100 bytes and passes the directory
+check wins.
+
+`os.TempDir()` must not come first, which it originally did. It is the per-user
+`$TMPDIR` on darwin, but plain world-writable `/tmp` on Linux, and the socket
+name is `sha256(abs(common-git-dir))[:8]` — derived, so guessable. Another local
+user who guesses the repository path can bind `/tmp/wb-<hash>.sock` before the
+watcher does, and since a watcher dials before binding and reads anything that
+answers as a live watcher, `sync --watch` and `serve` would refuse to start with
+*a Workbook watcher already owns this repository*, permanently: a sticky `/tmp`
+also refuses this process the unlink. That is a durable denial of the whole
+optimization behind a misleading error, not a takeover — the rendezvous is the
+pointer file, which the squatter cannot write.
+
+So every candidate directory is rejected unless it is a real directory, not a
+symlink, owned by the caller, and writable by neither group nor other; the
+per-user directory is additionally required to be exactly `0700`. The socket
+itself is created under a `0177` umask and chmodded `0600` afterwards. The chmod
+alone was not enough: under the usual `umask 022` the interim mode denies
+connect, but under `umask 0` the socket was briefly world-connectable, and
+anything that connects can read `status` or drop a recorded conflict with `ack`.
 
 The CLI reads one file. When no watcher is running that is a single `ENOENT`,
 which is what keeps the unwatched path honestly unchanged.
