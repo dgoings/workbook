@@ -813,21 +813,16 @@ func writeValidationResult(output io.Writer, result historyvalidation.Result) {
 // dying. An explicit --addr is a contract and never falls back.
 const defaultServeAddr = "127.0.0.1:7331"
 
-// openBoardListener binds the board's listener. The fallback triggers only
+// openBoardListenerWith binds the board's listener. The fallback triggers only
 // for an unchosen default address that is already in use; every other bind
 // failure, such as permission denied on a privileged port, stays a loud
-// operational error because moving to another port would not cure it.
+// operational error because moving to another port would not cure it. The bind
+// itself is a parameter so a test can present outcomes a test process cannot
+// provoke for real, that permission denial among them.
 //
 // The second result reports whether the returned listener is the fallback. The
 // caller cannot infer that by comparing addresses, because a requested
 // "localhost:7331" resolves to a bound "127.0.0.1:7331" that never moved.
-func openBoardListener(addr string, explicit bool) (net.Listener, bool, error) {
-	return openBoardListenerWith(net.Listen, addr, explicit)
-}
-
-// openBoardListenerWith takes the bind as a parameter so a test can reproduce
-// failures a test process cannot provoke for real, such as permission denied
-// on a privileged port.
 func openBoardListenerWith(listen func(network, address string) (net.Listener, error), addr string, explicit bool) (net.Listener, bool, error) {
 	listener, err := listen("tcp", addr)
 	if err == nil {
@@ -850,6 +845,16 @@ func openBoardListenerWith(listen func(network, address string) (net.Listener, e
 }
 
 func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, stderr io.Writer) error {
+	return runServeWith(ctx, net.Listen, args, cwd, stdout, stderr)
+}
+
+// runServeWith takes the bind as a parameter for the same reason
+// openBoardListenerWith does, one step further out: whether serve announces a
+// collision depends on what the bind did, and a test cannot ask the OS for the
+// interesting answers. Binding the real default port would make the
+// no-collision case race every other board on the machine, so a test that
+// wants a free 127.0.0.1:7331 says so here instead.
+func runServeWith(ctx context.Context, listen func(network, address string) (net.Listener, error), args []string, cwd string, stdout io.Writer, stderr io.Writer) error {
 	flags := newFlagSet("serve")
 	addr := flags.String("addr", defaultServeAddr, "listener address (default "+defaultServeAddr+", or a free port when that one is taken)")
 	if err := parseFlags(flags, args); err != nil {
@@ -913,7 +918,7 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 		SyncState:   publisher.state,
 		SetSyncMode: publisher.setMode,
 	})
-	listener, fellBack, err := openBoardListener(*addr, addrChosen)
+	listener, fellBack, err := openBoardListenerWith(listen, *addr, addrChosen)
 	if err != nil {
 		return err
 	}

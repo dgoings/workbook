@@ -1939,16 +1939,16 @@ func TestOpenBoardListenerKeepsRequestedAddressWhenFree(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	listener, fellBack, err := openBoardListener(addr, false)
+	listener, fellBack, err := openBoardListenerWith(net.Listen, addr, false)
 	if err != nil {
-		t.Fatalf("openBoardListener(%q, false) error = %v, want nil", addr, err)
+		t.Fatalf("openBoardListenerWith(net.Listen, %q, false) error = %v, want nil", addr, err)
 	}
 	defer listener.Close()
 	if got := listener.Addr().String(); got != addr {
-		t.Fatalf("openBoardListener(%q, false) bound %q, want the requested address", addr, got)
+		t.Fatalf("openBoardListenerWith(net.Listen, %q, false) bound %q, want the requested address", addr, got)
 	}
 	if fellBack {
-		t.Fatalf("openBoardListener(%q, false) reported a fallback, want none for an address it bound", addr)
+		t.Fatalf("openBoardListenerWith(net.Listen, %q, false) reported a fallback, want none for an address it bound", addr)
 	}
 }
 
@@ -1964,13 +1964,13 @@ func TestOpenBoardListenerFallsBackWhenDefaultAddressTaken(t *testing.T) {
 	defer blocker.Close()
 	taken := blocker.Addr().String()
 
-	listener, fellBack, err := openBoardListener(taken, false)
+	listener, fellBack, err := openBoardListenerWith(net.Listen, taken, false)
 	if err != nil {
-		t.Fatalf("openBoardListener(%q, false) error = %v, want ephemeral fallback", taken, err)
+		t.Fatalf("openBoardListenerWith(net.Listen, %q, false) error = %v, want ephemeral fallback", taken, err)
 	}
 	defer listener.Close()
 	if !fellBack {
-		t.Fatalf("openBoardListener(%q, false) reported no fallback, want the move signalled to the caller", taken)
+		t.Fatalf("openBoardListenerWith(net.Listen, %q, false) reported no fallback, want the move signalled to the caller", taken)
 	}
 
 	host, port, err := net.SplitHostPort(listener.Addr().String())
@@ -1997,19 +1997,19 @@ func TestOpenBoardListenerNeverFallsBackForExplicitAddress(t *testing.T) {
 	defer blocker.Close()
 	taken := blocker.Addr().String()
 
-	listener, fellBack, err := openBoardListener(taken, true)
+	listener, fellBack, err := openBoardListenerWith(net.Listen, taken, true)
 	if listener != nil {
 		listener.Close()
-		t.Fatalf("openBoardListener(%q, true) bound %q, want a failure for the occupied explicit address", taken, listener.Addr())
+		t.Fatalf("openBoardListenerWith(net.Listen, %q, true) bound %q, want a failure for the occupied explicit address", taken, listener.Addr())
 	}
 	if fellBack {
-		t.Fatalf("openBoardListener(%q, true) reported a fallback, want none for an explicit address", taken)
+		t.Fatalf("openBoardListenerWith(net.Listen, %q, true) reported a fallback, want none for an explicit address", taken)
 	}
 	if core.CategoryOf(err) != core.CategoryOperational {
-		t.Fatalf("openBoardListener(%q, true) category = %q, want %q; error = %v", taken, core.CategoryOf(err), core.CategoryOperational, err)
+		t.Fatalf("openBoardListenerWith(net.Listen, %q, true) category = %q, want %q; error = %v", taken, core.CategoryOf(err), core.CategoryOperational, err)
 	}
 	if !strings.Contains(err.Error(), "listen tcp") {
-		t.Fatalf("openBoardListener(%q, true) error = %q, want listener cause", taken, err)
+		t.Fatalf("openBoardListenerWith(net.Listen, %q, true) error = %q, want listener cause", taken, err)
 	}
 }
 
@@ -2178,17 +2178,23 @@ func TestRunServeFallsBackWhenDefaultAddressTaken(t *testing.T) {
 	}
 }
 
-func TestRunServeSaysNothingAboutAFallbackThatDidNotHappen(t *testing.T) {
-	// A notice on every start would train the reader to ignore it, which is
-	// exactly the reader a squatted default port needs to reach.
+func TestRunServeSaysNothingWhenTheDefaultAddressIsFree(t *testing.T) {
+	// The ordinary start, and the one the notice must stay out of: a notice on
+	// every default-port start would train the reader to ignore it, which is
+	// exactly the reader a squatted default port needs to reach. Nothing here
+	// passes --addr, so the notice is decided by what the bind did rather than
+	// by whether the user chose an address.
 	repository := initializedRepository(t)
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := probe.Addr().String()
-	if err := probe.Close(); err != nil {
-		t.Fatal(err)
+	// Stand in for a free 127.0.0.1:7331. Binding the real one would make this
+	// test fight every other board on the machine, including the fallback test
+	// above, for the outcome it needs.
+	var requested []string
+	listen := func(network, address string) (net.Listener, error) {
+		requested = append(requested, address)
+		if address != defaultServeAddr {
+			return nil, fmt.Errorf("unexpected bind of %q", address)
+		}
+		return net.Listen(network, "127.0.0.1:0")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2197,18 +2203,37 @@ func TestRunServeSaysNothingAboutAFallbackThatDidNotHappen(t *testing.T) {
 	var serveStdout bytes.Buffer
 	serveStderr := &lockedWriter{}
 	go func() {
-		result <- runServe(ctx, []string{"--addr", addr}, repository, &serveStdout, serveStderr)
+		result <- runServeWith(ctx, listen, nil, repository, &serveStdout, serveStderr)
 	}()
-	waitForHTTP(t, "http://"+addr+"/healthz")
+
+	banner := regexp.MustCompile(`Workbook board: http://(\S+)`)
+	var boundAddr string
+	deadline := time.Now().Add(5 * time.Second)
+	for boundAddr == "" {
+		select {
+		case err := <-result:
+			t.Fatalf("runServeWith() exited early: %v; stderr = %q", err, serveStderr.String())
+		default:
+		}
+		if match := banner.FindStringSubmatch(serveStderr.String()); match != nil {
+			boundAddr = match[1]
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for the board banner; stderr = %q", serveStderr.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	waitForHTTP(t, "http://"+boundAddr+"/healthz")
 
 	cancel()
 	if err := <-result; err != nil {
-		t.Fatalf("runServe() error = %v; stderr = %q", err, serveStderr.String())
+		t.Fatalf("runServeWith() error = %v; stderr = %q", err, serveStderr.String())
+	}
+	if len(requested) != 1 || requested[0] != defaultServeAddr {
+		t.Fatalf("serve asked to bind %q, want a single bind of the default address", requested)
 	}
 	got := serveStderr.String()
-	if banner := fmt.Sprintf("Workbook board: http://%s\n", addr); !strings.Contains(got, banner) {
-		t.Fatalf("serve stderr = %q, want the banner %q", got, banner)
-	}
 	if strings.Contains(got, "in use") {
 		t.Fatalf("serve stderr = %q, want no fallback notice for an address it bound", got)
 	}
