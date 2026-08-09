@@ -247,19 +247,40 @@ thing left to act on.
 
 **A failure with the detail form open.** The detail route projects pending
 intents, so a form opened over a pending change shows the optimistic value. When
-that intent fails, the form is showing a value the server refused: it reads as
-saved state, and saving it would persist the refusal as a real edit. So a failed
-intent re-renders the open detail route for its task and reports why in the
-form.
+that intent fails, the form is displaying a value the server refused, so the
+fields still displaying it are corrected where they stand and the form says why
+they moved.
 
-That re-render discards anything typed into the form since it opened. Keeping
-those edits and correcting only the projected fields would be better, and is
-left to the render work rather than done here; a form that lies about what is
-saved is the worse of the two. It also detaches a save that happens to be in
-flight, and the detached save reports nothing when it lands, so a user who was
-saving at that moment is told their board change failed and nothing about their
-save. That is a second reason the withdrawal wants the render work rather than
-another patch here.
+What the correction buys is display accuracy, not safety. A save from this form
+sends only the fields that differ from the ones it rendered
+(`changedTaskValues`), and a control nobody has touched does not differ from
+them, so the refused value was never reachable by a save either way. What was
+wrong was narrower: the form read as saved state while showing a value the
+server had thrown away. This section used to justify the withdrawal by saying a
+save would persist the refusal as a real edit, which stopped being true the
+moment the form began diffing against what it rendered; the code comment carried
+the same stale reason, and both are corrected here alongside the behavior.
+
+Corrected in place rather than re-rendered, because a rebuilt form pays for that
+accuracy with everything typed into it since it opened — a long description is
+exactly the edit that takes long enough for a board intent to fail underneath it
+— and detaches a save in flight along with it. A detached save reports nothing
+when it lands, so a reader who was saving at that moment would hear only that
+their board change failed. The correction leaves the node, its listeners, and
+the caret alone: a field the save would not send is one nobody has touched and
+follows the task the board now holds, a field the save would send is an edit in
+progress and stays as typed, and the baseline the diff is measured against moves
+with the display, so the next save carries exactly this reader's own edits
+against the head that now exists. One exception keeps that safe: a correction
+the control cannot display — a status this client has no option for — leaves the
+baseline where it was, because moving it under a control still showing the
+refused value is the one thing that would turn that value into an edit.
+
+A task the board has stopped carrying, which is what a refusal from another
+clone's deletion looks like, has nothing to correct the form against. The form
+and its unsaved text stay exactly as they are and say the board no longer
+carries the task: a reader mid-sentence needs their sentence more than they need
+a "task not found" page.
 
 **A refused save from the form itself** is treated differently, and should be.
 The edits stay, the head is re-based from the same forced refresh, and the
@@ -358,8 +379,14 @@ absent and drives a hand-written fake DOM (`handler_test.go:4173`):
   from the model;
 - changing a card again clears the refusal standing on it, while an intent that
   was already queued confirming does not;
-- a failed intent re-renders the detail form open on its task, so the form stops
-  showing the value the server refused;
+- a failed intent corrects the detail form open on its task where it stands: the
+  refused value goes and the fields nobody touched follow the version the server
+  holds, while the unsaved edits, the caret, and the node itself stay, and the
+  save afterwards carries exactly those edits against the head the refusal
+  established;
+- a board refusal arriving while a save from that form is open leaves the save
+  attached, so it still reports into the form when it lands; one arriving after
+  the task has left the board leaves the form and the text in it standing;
 - the detail form saves only the fields it changed, carrying the head it
   rendered, and sends nothing at all when nothing changed — including a labels
   field that was reordered rather than edited;
