@@ -921,8 +921,18 @@ authored text should read `--json`.
 `http://127.0.0.1:7331` by default. That port is a preference rather than a
 requirement: when it is already taken — a second project's board on the same
 machine is an expected setup — serve binds a free port instead and prints the
-address it chose, so the second board simply starts. Only an address already in
-use is treated this way; any other bind failure, such as permission denied on a
+address it chose, so the second board simply starts. The move is never silent:
+serve names the collision first, as in
+
+```text
+127.0.0.1:7331 is in use; serving on http://127.0.0.1:53321 instead. If you did not start another board, check what is holding that address.
+Workbook board: http://127.0.0.1:53321
+```
+
+because a process squatting the default port to serve a look-alike board looks
+exactly like a second project's board from the outside, and only the person who
+started this one can tell the two apart. Only an address already in use is
+treated this way; any other bind failure, such as permission denied on a
 privileged port, still fails with an operational error. An address given with
 `--addr` is a contract and never moves: serve fails rather than silently
 listening somewhere the user did not ask for. In fish, run it in the foreground

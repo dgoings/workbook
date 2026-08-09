@@ -813,39 +813,52 @@ func writeValidationResult(output io.Writer, result historyvalidation.Result) {
 // dying. An explicit --addr is a contract and never falls back.
 const defaultServeAddr = "127.0.0.1:7331"
 
-// openBoardListener binds the board's listener. The fallback triggers only
+// openBoardListenerWith binds the board's listener. The fallback triggers only
 // for an unchosen default address that is already in use; every other bind
 // failure, such as permission denied on a privileged port, stays a loud
-// operational error because moving to another port would not cure it.
-func openBoardListener(addr string, explicit bool) (net.Listener, error) {
-	return openBoardListenerWith(net.Listen, addr, explicit)
-}
-
-// openBoardListenerWith takes the bind as a parameter so a test can reproduce
-// failures a test process cannot provoke for real, such as permission denied
-// on a privileged port.
-func openBoardListenerWith(listen func(network, address string) (net.Listener, error), addr string, explicit bool) (net.Listener, error) {
+// operational error because moving to another port would not cure it. The bind
+// itself is a parameter so a test can present outcomes a test process cannot
+// provoke for real, that permission denial among them.
+//
+// The second result reports whether the returned listener is the fallback, so
+// the caller states a decision this function already made rather than
+// re-deriving it. Comparing the requested and bound addresses would agree
+// today only because the one address that can move is the literal
+// defaultServeAddr, which binds to itself; the comparison would start lying
+// the moment a name that resolves elsewhere, such as a "localhost:7331" bound
+// as "127.0.0.1:7331", could reach the fallback path.
+func openBoardListenerWith(listen func(network, address string) (net.Listener, error), addr string, explicit bool) (net.Listener, bool, error) {
 	listener, err := listen("tcp", addr)
 	if err == nil {
-		return listener, nil
+		return listener, false, nil
 	}
 	if explicit || !errors.Is(err, syscall.EADDRINUSE) {
-		return nil, core.Wrap(core.CategoryOperational, "open board listener", err)
+		return nil, false, core.Wrap(core.CategoryOperational, "open board listener", err)
 	}
 	host, _, splitErr := net.SplitHostPort(addr)
 	if splitErr != nil {
-		return nil, core.Wrap(core.CategoryOperational, "open board listener", err)
+		return nil, false, core.Wrap(core.CategoryOperational, "open board listener", err)
 	}
 	// Port 0 hands the choice to the OS, and the caller prints the resolved
 	// address, so the user learns where the board actually is.
 	fallback, fallbackErr := listen("tcp", net.JoinHostPort(host, "0"))
 	if fallbackErr != nil {
-		return nil, core.Wrap(core.CategoryOperational, "open board listener", fallbackErr)
+		return nil, false, core.Wrap(core.CategoryOperational, "open board listener", fallbackErr)
 	}
-	return fallback, nil
+	return fallback, true, nil
 }
 
 func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, stderr io.Writer) error {
+	return runServeWith(ctx, net.Listen, args, cwd, stdout, stderr)
+}
+
+// runServeWith takes the bind as a parameter for the same reason
+// openBoardListenerWith does, one step further out: whether serve announces a
+// collision depends on what the bind did, and a test cannot ask the OS for the
+// interesting answers. Binding the real default port would make the
+// no-collision case race every other board on the machine, so a test that
+// wants a free 127.0.0.1:7331 says so here instead.
+func runServeWith(ctx context.Context, listen func(network, address string) (net.Listener, error), args []string, cwd string, stdout io.Writer, stderr io.Writer) error {
 	flags := newFlagSet("serve")
 	addr := flags.String("addr", defaultServeAddr, "listener address (default "+defaultServeAddr+", or a free port when that one is taken)")
 	if err := parseFlags(flags, args); err != nil {
@@ -909,9 +922,16 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 		SyncState:   publisher.state,
 		SetSyncMode: publisher.setMode,
 	})
-	listener, err := openBoardListener(*addr, addrChosen)
+	listener, fellBack, err := openBoardListenerWith(listen, *addr, addrChosen)
 	if err != nil {
 		return err
+	}
+	// The reason precedes the banner rather than replacing it: the banner is the
+	// line other tools scan for — the benchmark harness waits on its exact
+	// prefix — and the address a person copies, so a fallback adds a line
+	// instead of reshaping one.
+	if fellBack {
+		fmt.Fprintln(stderr, boardFallbackNotice(*addr, listener.Addr().String()))
 	}
 	fmt.Fprintf(stderr, "Workbook board: http://%s\n", listener.Addr())
 	if warning := boardExposureWarning(listener.Addr().String()); warning != "" {
@@ -931,6 +951,22 @@ func runServe(ctx context.Context, args []string, cwd string, stdout io.Writer, 
 		return core.Wrap(core.CategoryOperational, "serve board", err)
 	}
 	return nil
+}
+
+// boardFallbackNotice says why the board is not at the address the user
+// expects it at.
+//
+// The move itself is deliberate and usually dull: a second project's board on
+// the same machine should start rather than die. What the move must not be is
+// silent, because a squatter that binds the default port to serve a look-alike
+// board is indistinguishable from that dull case once the real board is quietly
+// somewhere else — the habitual bookmark still answers, with someone else's
+// page. Naming the collision costs one line and makes a squat something the
+// person who started the board can notice.
+func boardFallbackNotice(requested string, bound string) string {
+	return fmt.Sprintf(
+		"%s is in use; serving on http://%s instead. If you did not start another board, check what is holding that address.",
+		requested, bound)
 }
 
 // boardExposureWarning names what a board off this machine gives away.
