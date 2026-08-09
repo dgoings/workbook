@@ -903,17 +903,35 @@ asserts both boards against the same task set and is what keeps them aligned.
 
 Task titles, descriptions, and labels are authored by whoever can push to the
 shared refs, so text-mode rendering treats them as untrusted. Every control rune
-becomes a space and whitespace runs collapse, which means one stored value
-always renders as one line: an escape sequence in a title cannot redraw the row
-into a task that does not exist, and a newline in a description cannot introduce
-a line that reads as a top-level `workbook show` field. The same rule already
-shaped Git commit subjects and now applies to `list`, `board`, `show`, its
-history and comparison output, conflict detail, and the line a mutation prints.
+becomes a space and whitespace runs collapse, so a stored value renders on one
+line and an escape sequence in a title cannot redraw the row into a task that
+does not exist. The same rule already shaped Git commit subjects and now applies
+to `list`, `board`, `show`, its history and comparison output, conflict detail,
+and the line a mutation prints.
+
+The description `workbook show` prints is the one place where structure is worth
+keeping — most descriptions are several paragraphs, and collapsing them makes
+the main human-facing read command hard to read — so it is sanitized a line at a
+time and keeps its line breaks. Every line after the first is indented with a
+tab:
+
+```text
+Title:	Preserve description structure
+Description:	The first line sits beside the field name.
+	Later lines are indented, blank lines stay blank, and
+	Status: done is description text, not a field.
+Status:	in-progress
+```
+
+The indent is what replaces the collapse: `show` writes its own fields at column
+zero, so an indented line cannot be read as one, and a description that ends
+with a newline still leaves no blank line before the next field.
 
 This is a rendering rule, not a validation rule. Stored task data keeps the
 bytes it was written with, and JSON output reproduces them exactly, because
 `encoding/json` escapes every byte below `0x20`. A consumer that wants the
-authored text should read `--json`.
+authored text, or one that would rather not reassemble a description from its
+printed lines, should read `--json`.
 
 ### Local web board
 
