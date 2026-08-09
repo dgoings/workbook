@@ -22,6 +22,8 @@ const (
 	withdrawalEditsTaskID    = "WB-01J0000000000000000000WD01"
 	withdrawalInFlightTaskID = "WB-01J0000000000000000000WD02"
 	withdrawalDepartedTaskID = "WB-01J0000000000000000000WD03"
+	withdrawalStatusTaskID   = "WB-01J0000000000000000000WD04"
+	withdrawalLabelsTaskID   = "WB-01J0000000000000000000WD05"
 )
 
 // The reader is typing when their board change is refused. Everything they
@@ -146,6 +148,16 @@ setTimeout(async () => {
   }
   if (shown.title.value !== "Renamed elsewhere") {
     throw new Error("an untouched field did not follow the server: " + JSON.stringify(shown.title.value));
+  }
+  // The heading is the accessible name of the whole route and the tab is how
+  // the task is found among a dozen open ones. Neither is a control, so both
+  // name the task the board holds rather than anything typed into the form.
+  const heading = findElement(main, (element) => element.id === "task-form-title");
+  if (heading.textContent !== "Renamed elsewhere") {
+    throw new Error("the heading kept a title the server had moved past: " + JSON.stringify(heading.textContent));
+  }
+  if (document.title !== "Renamed elsewhere · Workbook") {
+    throw new Error("the browser tab kept the old title: " + JSON.stringify(document.title));
   }
   if (shown.form !== form || shown.description !== description) {
     throw new Error("the withdrawal rebuilt the form instead of correcting it");
@@ -362,5 +374,242 @@ setTimeout(async () => {
 `
 	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute withdrawal departed-task behavior: %v\n%s", err, output)
+	}
+}
+
+// The version the board holds can carry a status this client has no option for:
+// a newer Workbook wrote it, and this one is reading forward. A correction it
+// cannot display is the one case where the refused value would otherwise stay on
+// screen — under a message saying the field now shows what the server holds — so
+// the field grows the same disabled placeholder a first render gives it and
+// names the status instead. An untouched placeholder still sends nothing.
+func TestHandlerClientWithdrawalNamesAStatusItCannotDisplay(t *testing.T) {
+	node := requireNode(t)
+	moved := clientPlacementTask(withdrawalStatusTaskID, "Moved", core.StatusReady, core.PriorityMedium)
+	moved.Description = "Original."
+	moved.Head = "head-1"
+	// What the board holds by the time the refusal lands. The drop never
+	// applied, and the status that did is one this client cannot draw.
+	elsewhere := moved
+	elsewhere.Status = core.Status("future-status")
+	elsewhere.Head = "head-2"
+	saved := elsewhere
+	saved.Head = "head-3"
+	tasks := []core.Task{moved}
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
+
+	response := request(t, handler, http.MethodGet, "/")
+	script := renderedClientScript(t, response.Body.String())
+	document := mustJSON(t, TasksDocument{
+		Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks),
+	})
+	truth := mustJSON(t, TasksDocument{
+		Format: "workbook.tasks", Version: 1,
+		Tasks:        []core.Task{elsewhere},
+		Presentation: presentationForTasks([]core.Task{elsewhere}),
+	})
+
+	program := clientDOMHarness("/", string(document)) + script + `
+const typed = "Half a paragraph the reader is still in the middle of.";
+setTimeout(async () => {
+  const inProgress = boardLists.find((list) => list.dataset.status === "in-progress");
+  const dataTransfer = { effectAllowed: "", dropEffect: "", setData() {} };
+
+  const boardFetch = globalThis.fetch;
+  const bodies = [];
+  let releaseIntent;
+  let refuseIntent = true;
+  globalThis.fetch = async (url, options = {}) => {
+    if ((options.method || "GET") !== "GET") {
+      fetchCalls.push({ url, options });
+      if (refuseIntent) {
+        return new Promise((resolve) => {
+          releaseIntent = () => {
+            taskResponse = ` + string(truth) + `;
+            resolve({ ok: false, json: async () => ({
+              format: "workbook.error", version: 1,
+              error: { category: "stale-write", message: "task has changed since head-1; reload and try again" }
+            }) });
+          };
+        });
+      }
+      bodies.push({ url, body: JSON.parse(options.body) });
+      return { ok: true, json: async () => ({
+        format: "workbook.task-mutation", version: 1, task: ` + string(mustJSON(t, saved)) + `
+      }) };
+    }
+    return boardFetch(url, options);
+  };
+
+  const card = boardCard(` + strconv.Quote(moved.ID) + `);
+  card.rect = { top: 0, bottom: 80 };
+  documentEventListeners.dragstart({ target: card, dataTransfer });
+  const pending = documentEventListeners.drop({ target: inProgress, clientY: 1, dataTransfer, preventDefault() {} });
+  await Promise.resolve();
+  documentEventListeners.dragend({ target: card });
+
+  const link = new TestElement("a");
+  link.href = "/tasks/" + encodeURIComponent(` + strconv.Quote(moved.ID) + `);
+  await documentEventListeners.click({
+    target: link, button: 0, defaultPrevented: false,
+    metaKey: false, ctrlKey: false, shiftKey: false, altKey: false,
+    preventDefault() {}
+  });
+  const form = findElement(main, (element) => element.tagName === "FORM");
+  const status = findElement(main, (element) => element.id === "task-status");
+  const description = findElement(main, (element) => element.id === "task-description");
+  if (status.value !== "in-progress") {
+    throw new Error("the open form does not project the pending intent: " + JSON.stringify(status.value));
+  }
+  description.value = typed;
+  description.focus();
+
+  releaseIntent();
+  await pending;
+
+  const shown = findElement(main, (element) => element.id === "task-status");
+  if (shown !== status) {
+    throw new Error("the withdrawal rebuilt the form instead of correcting it");
+  }
+  if (shown.value !== "") {
+    throw new Error("the field kept the refused optimistic status: " + JSON.stringify(shown.value));
+  }
+  const placeholder = shown.firstElementChild;
+  if (!placeholder.disabled || !placeholder.textContent.includes("future-status")) {
+    throw new Error("the field does not name the status the server holds: " + JSON.stringify(placeholder.textContent));
+  }
+  if (shown.children.filter((option) => option.value === "in-progress").length !== 1) {
+    throw new Error("the canonical statuses did not survive the correction");
+  }
+  if (findElement(main, (element) => element.id === "task-description").value !== typed) {
+    throw new Error("the withdrawal destroyed the unsaved description");
+  }
+
+  // The placeholder is a report, not a choice: the save carries the field the
+  // reader was typing in and says nothing about the status.
+  refuseIntent = false;
+  await form.eventListeners.submit({ preventDefault() {} });
+  if (JSON.stringify(bodies[0].body) !== JSON.stringify({ description: typed, expectedHead: "head-2" })) {
+    throw new Error("the save did not carry exactly the reader's edits: " + JSON.stringify(bodies[0].body));
+  }
+}, 0);
+`
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute withdrawal unknown-status behavior: %v\n%s", err, output)
+	}
+}
+
+// A label half typed into the input is folded into a save, because losing a
+// reader's last keystrokes for want of an Enter is worse than sending them. It
+// is not a decision about the set, though, and the correction must not read it
+// as one: a set the reader has not touched follows the board while the word in
+// progress stays in the input. Reading it as an edit would leave the set showing
+// the version the refusal produced while the baseline moved to the server's, and
+// the next save would delete a label another clone had added and this reader was
+// never shown.
+func TestHandlerClientWithdrawalCorrectsALabelSetTheReaderIsStillTypingInto(t *testing.T) {
+	node := requireNode(t)
+	moved := clientPlacementTask(withdrawalLabelsTaskID, "Moved", core.StatusReady, core.PriorityMedium)
+	moved.Labels = []string{"docs"}
+	moved.Head = "head-1"
+	elsewhere := moved
+	elsewhere.Labels = []string{"docs", "web"}
+	elsewhere.Head = "head-2"
+	saved := elsewhere
+	saved.Head = "head-3"
+	tasks := []core.Task{moved}
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
+
+	response := request(t, handler, http.MethodGet, "/")
+	script := renderedClientScript(t, response.Body.String())
+	document := mustJSON(t, TasksDocument{
+		Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks),
+	})
+	truth := mustJSON(t, TasksDocument{
+		Format: "workbook.tasks", Version: 1,
+		Tasks:        []core.Task{elsewhere},
+		Presentation: presentationForTasks([]core.Task{elsewhere}),
+	})
+
+	program := clientDOMHarness("/", string(document)) + script + `
+setTimeout(async () => {
+  const inProgress = boardLists.find((list) => list.dataset.status === "in-progress");
+  const dataTransfer = { effectAllowed: "", dropEffect: "", setData() {} };
+
+  const boardFetch = globalThis.fetch;
+  const bodies = [];
+  let releaseIntent;
+  let refuseIntent = true;
+  globalThis.fetch = async (url, options = {}) => {
+    if ((options.method || "GET") !== "GET") {
+      fetchCalls.push({ url, options });
+      if (refuseIntent) {
+        return new Promise((resolve) => {
+          releaseIntent = () => {
+            taskResponse = ` + string(truth) + `;
+            resolve({ ok: false, json: async () => ({
+              format: "workbook.error", version: 1,
+              error: { category: "stale-write", message: "task has changed since head-1; reload and try again" }
+            }) });
+          };
+        });
+      }
+      bodies.push({ url, body: JSON.parse(options.body) });
+      return { ok: true, json: async () => ({
+        format: "workbook.task-mutation", version: 1, task: ` + string(mustJSON(t, saved)) + `
+      }) };
+    }
+    return boardFetch(url, options);
+  };
+
+  const card = boardCard(` + strconv.Quote(moved.ID) + `);
+  card.rect = { top: 0, bottom: 80 };
+  documentEventListeners.dragstart({ target: card, dataTransfer });
+  const pending = documentEventListeners.drop({ target: inProgress, clientY: 1, dataTransfer, preventDefault() {} });
+  await Promise.resolve();
+  documentEventListeners.dragend({ target: card });
+
+  const link = new TestElement("a");
+  link.href = "/tasks/" + encodeURIComponent(` + strconv.Quote(moved.ID) + `);
+  await documentEventListeners.click({
+    target: link, button: 0, defaultPrevented: false,
+    metaKey: false, ctrlKey: false, shiftKey: false, altKey: false,
+    preventDefault() {}
+  });
+  const form = findElement(main, (element) => element.tagName === "FORM");
+  const labelInput = findElement(main, (element) => element.id === "task-labels");
+  const docsChiclet = findElement(main, (element) => element.dataset.label === "docs");
+  // Three letters on the way to "api", with no Enter behind them.
+  labelInput.value = "ap";
+  labelInput.focus();
+
+  releaseIntent();
+  await pending;
+
+  const chiclets = findElements(main, (element) =>
+    Object.hasOwn(element.dataset, "label")).map((chiclet) => chiclet.dataset.label);
+  if (JSON.stringify(chiclets) !== '["docs","web"]') {
+    throw new Error("a set the reader had not touched did not follow the server: " + JSON.stringify(chiclets));
+  }
+  if (labelInput.value !== "ap" || document.activeElement !== labelInput) {
+    throw new Error("the correction disturbed the label being typed: " + JSON.stringify(labelInput.value));
+  }
+  if (findElement(main, (element) => element.dataset.label === "docs") !== docsChiclet) {
+    throw new Error("the correction rebuilt a chiclet that had not changed");
+  }
+
+  // The save carries the corrected set plus the word the reader was typing —
+  // the concurrent label among them, because it was on screen to be seen.
+  refuseIntent = false;
+  await form.eventListeners.submit({ preventDefault() {} });
+  if (JSON.stringify(bodies[0].body) !== JSON.stringify({
+    labels: ["docs", "web", "ap"], expectedHead: "head-2"
+  })) {
+    throw new Error("the save did not carry the corrected set: " + JSON.stringify(bodies[0].body));
+  }
+}, 0);
+`
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute withdrawal typed-label behavior: %v\n%s", err, output)
 	}
 }

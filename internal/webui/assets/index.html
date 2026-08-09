@@ -844,8 +844,12 @@
         // detach the very button the press started on, the click would go to
         // the surviving list instead, and the removal would be silently
         // dropped. Shift+Tab out of an input holding text loses focus the same
-        // way. Values only ever arrive at the end and leave in place, so
-        // appending the new ones keeps the DOM in the order of the set.
+        // way. So a chiclet already on screen is never moved, only removed
+        // where it stands, and a new one is appended. The row reads in the
+        // order its labels reached this form rather than in the order of the
+        // set: labels the reader typed appear in the order they typed them, and
+        // a set replaced by a correction keeps the survivors ahead of whatever
+        // the correction brought in. Only the order of `values` reaches a save.
         const chicletsByLabel = new Map();
         function renderChiclets() {
           chicletsByLabel.forEach((chiclet, label) => {
@@ -959,6 +963,11 @@
             });
             return entered;
           },
+          // The set the chiclets are showing, with nothing folded in from the
+          // input. It answers a different question than values(): not "what
+          // would a save send" but "has the reader decided anything about this
+          // set", which three letters on the way to a word have not.
+          committed() { return [...values]; },
           // Puts a different set on screen without disturbing the input. It is
           // how a form corrects a label set it is displaying on someone else's
           // authority; the label being typed is the reader's and is left alone.
@@ -966,9 +975,9 @@
         };
       }
       // Makes a select show a value, or reports that it cannot. A select only
-      // shows values it has an option for, and a status this client does not
-      // know is precisely the value it has none for, so the answer is returned
-      // rather than assumed.
+      // shows values it has an option for, so the answer is returned rather
+      // than assumed: a value with no option of its own would otherwise leave
+      // the control displaying whatever it displayed before.
       function showSelected(control, value) {
         const options = [...control.children];
         const wanted = options.find((option) => option.value === value);
@@ -976,6 +985,39 @@
         options.forEach((option) => { option.selected = false; });
         wanted.selected = true;
         return true;
+      }
+      // The status a task carries can be one this client has no option for —
+      // written by a newer Workbook, or by a project that added a status —
+      // which is exactly the value showSelected cannot show. The list grows a
+      // disabled placeholder naming it, so the field reports the status the
+      // server holds instead of displaying a canonical neighbour that would
+      // read as saved state. Selecting the placeholder sends nothing: an
+      // untouched control the client cannot render is not a request to change
+      // the status (changedTaskValues).
+      function statusPlaceholder() {
+        const option = document.createElement("option");
+        option.value = "";
+        option.disabled = true;
+        return option;
+      }
+      // Makes a status select show a status, whether or not this client knows
+      // it, so it is also how a select already on screen adopts one. The
+      // placeholder is added and removed as the status needs it, because one
+      // naming a status the task has since left is a worse label than none.
+      function showStatus(control, status) {
+        const first = control.firstElementChild;
+        let placeholder = first && first.value === "" ? first : null;
+        if (statuses.has(status)) {
+          if (placeholder) placeholder.remove();
+          showSelected(control, status);
+          return;
+        }
+        if (!placeholder) {
+          placeholder = statusPlaceholder();
+          control.insertBefore(placeholder, control.firstElementChild);
+        }
+        text(placeholder, "Choose a canonical status (current: " + status + ")");
+        showSelected(control, "");
       }
       function select(name, options, value) {
         const control = document.createElement("select"); control.id = "task-" + name; control.name = name;
@@ -2182,10 +2224,8 @@
         const form = document.createElement("form"); form.className = "task-layout";
         const title = document.createElement("input"); title.id = "task-title"; title.name = "title"; title.required = true; title.value = task.title || "";
         const description = document.createElement("textarea"); description.id = "task-description"; description.name = "description"; description.value = task.description || "";
-        const knownStatus = statuses.has(task.status);
-        const statusOptions = knownStatus ? statusDefinitions : [["", "Choose a canonical status (current: " + task.status + ")"], ...statusDefinitions];
-        const status = select("status", statusOptions, knownStatus ? task.status : ""); status.required = true;
-        if (!knownStatus) status.firstElementChild.disabled = true;
+        const status = select("status", statusDefinitions, task.status); status.required = true;
+        showStatus(status, task.status);
         const priority = select("priority", [["high", "High"], ["medium", "Medium"], ["low", "Low"]], task.priority);
         const labels = labelEditor(task.labels || []);
         // Named, because the relationship region carries a form-status of its
@@ -2269,15 +2309,34 @@
           const adopted = Object.assign({}, held);
           if (!("title" in edited)) title.value = held.title || "";
           if (!("description" in edited)) description.value = held.description || "";
-          if (!("labels" in edited)) labels.replace(held.labels || []);
+          // Labels are asked a different question than the rest. A save folds
+          // the text still in the input into the set, so changedTaskValues
+          // calls the field edited the moment a reader types a letter into it —
+          // and a reader partway through a word has decided nothing about the
+          // set. Left at that, an untouched set would keep the refused value
+          // while the baseline moved to the server's, and the next save would
+          // delete a label this reader was never shown. The chiclets are what
+          // they have actually decided; the word in progress stays in the
+          // input either way.
+          if (sameLabels(labels.committed(), task.labels || [])) labels.replace(held.labels || []);
+          // The heading names the task and so does the browser tab. Both are a
+          // rendering of the task rather than of this form's draft — neither
+          // has ever followed the title field's keystrokes — so they follow the
+          // task the board holds even while the field carries an edit.
+          text(heading, held.title || "");
+          document.title = (held.title || "") + " · Workbook";
+          if (!("status" in edited)) showStatus(controls.status, held.status);
           // A correction that cannot be shown must not move the baseline with
           // it. The control would still be displaying the value this form
           // rendered while the baseline said otherwise, which is the one thing
           // that would turn a refused value into an edit the next save sends.
-          ["status", "priority"].forEach((name) => {
-            if (name in edited) return;
-            if (!showSelected(controls[name], held[name])) adopted[name] = task[name];
-          });
+          // Status is always showable — showStatus builds an option for a
+          // status this client does not know — so what is left here is a
+          // priority from outside this client's three, which nothing in the
+          // board renders either.
+          if (!("priority" in edited) && !showSelected(controls.priority, held.priority)) {
+            adopted.priority = task.priority;
+          }
           task = adopted;
           // Re-based the way a refused save re-bases this form: it proposes the
           // tip that now exists, so the reader's next save applies their edits
