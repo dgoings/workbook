@@ -131,6 +131,17 @@
     .label { max-width: 100%; overflow: hidden; padding: .14rem .28rem; border: 1px solid #d5deea; border-radius: 3px; color: #4e5d73; font-size: .64rem; text-overflow: ellipsis; white-space: nowrap; }
     .dependency-progress { display: grid; gap: .18rem; margin-top: .65rem; color: #4e5d73; font-size: .72rem; }
     .dependency-progress strong { color: #9c2f25; font-size: .72rem; }
+    /* A refused board change is reported here, on the card it concerns, and it
+       leaves only when the reader dismisses it. The board-level banner this
+       replaced was cleared by the next successful poll — under a second later —
+       so a conflict report was drawn and erased before anyone could read it.
+       The message is a span rather than a paragraph because .task-card p is the
+       card description, which the board hides by default. */
+    .task-card__failure { display: none; align-items: baseline; gap: .5rem; margin-top: .65rem; padding: .3rem .4rem; border-left: 3px solid currentcolor; background: #fff6e8; color: #7c3b08; font-size: .72rem; }
+    .task-card__failure[data-visible="true"] { display: flex; }
+    .task-card__failure span { flex: 1 1 auto; line-height: 1.35; overflow-wrap: anywhere; }
+    .task-card__failure button { flex: 0 0 auto; border: 1px solid currentcolor; border-radius: 3px; background: transparent; color: inherit; cursor: pointer; font: inherit; font-size: .66rem; font-weight: 800; padding: .08rem .32rem; }
+    .task-card__failure button:focus-visible { outline: 3px solid #2457d6; outline-offset: 2px; }
     .drop-marker { height: 0; margin: -.1rem 0; border-top: 3px solid #2457d6; border-radius: 3px; pointer-events: none; }
     .task-route { display: flex; flex-direction: column; height: 100%; min-height: 0; width: min(100%, 84rem); margin: 0 auto; border: 1px solid #b9c6d8; background: #fff; box-shadow: 0 12px 32px rgba(23,32,51,.08); }
     .task-route__header { padding: 1rem 1.15rem; border-top: 3px solid #2457d6; border-bottom: 1px solid #d5deea; background: #f8faff; }
@@ -337,10 +348,12 @@
     <div><p class="eyebrow">Repository workbench</p><h1>Workbook board</h1></div>
     <div class="header-links"><a class="header-link" href="/">Board</a><a class="header-link" href="/deleted">Deleted tasks</a><p class="updated" data-updated>Loaded from this checkout</p><button type="button" class="header-link" data-description-toggle hidden>Descriptions: hidden</button><button type="button" class="header-link" data-sync-toggle hidden></button></div>
   </header>
-  <!-- What a save that already returned has to say. It sits outside main so it
-       is readable from whatever route the save left the user on, and it is
-       cleared by a person rather than by the next poll. -->
-  <div class="notice" data-create-notice role="status" aria-live="polite" hidden></div>
+  <!-- What the board has to say to a reader who has moved on: a save that
+       already returned, or a refused change whose card the board has since
+       stopped drawing. It sits outside main so it is readable from whatever
+       route the user is on, and it is cleared by a person rather than by the
+       next poll. -->
+  <div class="notice" data-notice role="status" aria-live="polite" hidden></div>
   <main id="board" tabindex="-1">
     <div class="board-view" data-board-view>
       <p class="stale" data-stale role="status">Task refresh failed. Showing the last successful board.</p>
@@ -408,7 +421,7 @@
       const unknownList = boardView.querySelector("[data-unknown-list]");
       const unknownCount = boardView.querySelector("[data-unknown-count]");
       const updated = document.querySelector("[data-updated]");
-      const createNotice = document.querySelector("[data-create-notice]");
+      const notice = document.querySelector("[data-notice]");
       const syncToggle = document.querySelector("[data-sync-toggle]");
       const descriptionToggle = document.querySelector("[data-description-toggle]");
       let syncState = null;
@@ -420,6 +433,25 @@
       let latestTasks = [];
       let latestPresentation = new Map();
       const pendingIntents = new Map();
+      // What a refused board change has to say, keyed by the task it concerns.
+      //
+      // It lives out here for the same reason a pending intent does: the model
+      // is replaced wholesale by every poll, so a report written into a task
+      // would be erased a second later. Kept here and folded in at render time,
+      // it outlives every poll and leaves only when the reader dismisses it or
+      // the board stops carrying the card it belongs to.
+      //
+      // One report per card, newest wins, and the reader's next change to that
+      // card takes it away: a refused intent holds nothing — it rolled back,
+      // and the card shows what the server holds — so a second one is the same
+      // news about the same card, and changing the card again is the answer to
+      // the news. A refused create's report stacks instead, because each one
+      // can hold the only copy of what was typed.
+      //
+      // Each entry holds two wordings of the same event: `card`, which speaks
+      // about the card it sits on, and `notice`, which has to name the task
+      // because it is read after the board has stopped drawing it.
+      const taskFailureReports = new Map();
       let tasksLoaded = false;
       let taskLoadFailed = false;
       let latestDeletedTasks = [];
@@ -585,7 +617,7 @@
       // everything the node was last drawn from, so an unchanged card costs one
       // string comparison.
       const cardParts = new WeakMap();
-      function cardSignature(task, view) {
+      function cardSignature(task, view, report) {
         return JSON.stringify([
           task.title || "",
           task.description || "",
@@ -595,8 +627,40 @@
           view.idPrefix || "",
           view.dependenciesTotal || 0,
           view.dependenciesComplete || 0,
-          Boolean(view.waitingOnDependencies)
+          Boolean(view.waitingOnDependencies),
+          report || ""
         ]);
+      }
+      // The card's report of a refused change. It is built with the card and
+      // kept for its whole life rather than rebuilt beside the description and
+      // the labels, because it is the one part of a card that holds a control:
+      // a rebuild would drop the Dismiss button out from under the caret, and
+      // its live region has to be in the document before the text arrives for
+      // the text to be announced at all.
+      function cardFailureReport(taskID) {
+        const region = document.createElement("div");
+        region.className = "task-card__failure";
+        region.dataset.taskFailure = "";
+        region.dataset.visible = "false";
+        const message = document.createElement("span");
+        message.dataset.taskFailureMessage = "";
+        message.setAttribute("role", "status");
+        message.setAttribute("aria-live", "polite");
+        message.setAttribute("aria-atomic", "true");
+        const dismiss = document.createElement("button");
+        dismiss.type = "button";
+        dismiss.dataset.taskFailureDismiss = "";
+        text(dismiss, "Dismiss");
+        // Every card can hold one of these, so a reader moving between buttons
+        // needs to hear which card this one clears, the same way the copy
+        // control names the ID it copies.
+        dismiss.setAttribute("aria-label", "Dismiss the report on task " + taskID);
+        // The task ID is the reconciliation key and never changes for a node,
+        // so one listener bound at build time stays correct for every card this
+        // node goes on to draw.
+        dismiss.addEventListener("click", () => dismissTaskFailure(taskID));
+        region.append(message, dismiss);
+        return { region, message };
       }
       function card(task, view) {
         const article = document.createElement("article"); article.className = "task-card"; article.tabIndex = 0; article.dataset.taskId = task.id;
@@ -622,7 +686,9 @@
         const link = document.createElement(view.pending ? "span" : "a");
         if (!view.pending) link.href = "/tasks/" + encodeURIComponent(task.id);
         title.append(link); article.append(title);
-        cardParts.set(article, { priority, link, idText, signature: null });
+        const failure = cardFailureReport(task.id);
+        article.append(failure.region);
+        cardParts.set(article, { priority, link, idText, failure, signature: null });
         applyCard(article, task, view);
         return article;
       }
@@ -632,7 +698,13 @@
       function applyCard(article, task, view) {
         const parts = cardParts.get(article);
         if (!parts) return article;
-        const signature = cardSignature(task, view);
+        // The report is part of what the card is drawn from, so it takes part in
+        // the signature: a poll that changes neither the task nor its report
+        // still costs one string comparison, and one that clears the report
+        // redraws exactly this card.
+        const held = taskFailureReports.get(task.id);
+        const report = held ? held.card : "";
+        const signature = cardSignature(task, view, report);
         if (parts.signature === signature) return article;
         parts.signature = signature;
         article.dataset.priority = task.priority;
@@ -660,10 +732,13 @@
         if (parts.idText) text(parts.idText, view.idPrefix);
         parts.priority.className = "priority priority--" + task.priority; text(parts.priority, task.priority);
         text(parts.link, task.title);
+        text(parts.failure.message, report);
+        parts.failure.region.dataset.visible = report ? "true" : "false";
         // The optional sections are rebuilt together rather than patched
         // individually, so their order stays fixed by construction instead of by
-        // the order in which they happened to appear.
-        [...article.children].slice(2).forEach((child) => child.remove());
+        // the order in which they happened to appear. They start after the meta
+        // row, the title, and the failure report, which are all built once.
+        [...article.children].slice(3).forEach((child) => child.remove());
         if (task.description) { const description = document.createElement("p"); text(description, task.description); article.append(description); }
         if (task.labels && task.labels.length) { const labels = document.createElement("div"); labels.className = "labels"; task.labels.forEach((label) => { const item = document.createElement("span"); item.className = "label"; text(item, label); labels.append(item); }); article.append(labels); }
         if (view.dependenciesTotal > 0) {
@@ -1100,7 +1175,7 @@
         const open = document.createElement("a");
         open.href = taskPath(taskID);
         text(open, "Open task");
-        showCreateNotice("warning", "Task created. " + warnings.join(" "), open);
+        showNotice("warning", "Task created. " + warnings.join(" "), open);
       }
       function reportRefusedCreation(creation, error) {
         return reportRecoverableDraft("error",
@@ -1124,9 +1199,9 @@
         const restore = document.createElement("button");
         restore.type = "button";
         text(restore, "Restore draft");
-        const report = showCreateNotice(kind, message, restore);
+        const report = showNotice(kind, message, restore);
         restore.addEventListener("click", () => {
-          dismissCreateNotice(report);
+          dismissNotice(report);
           restoreDraft(values, formMessage);
         });
         return restore;
@@ -1165,15 +1240,23 @@
       function creationFailureMessage(error) {
         return error instanceof Error ? error.message : "Task creation failed.";
       }
-      // A save that has already returned to the board has no form left to report
-      // into, and the stale banner is cleared by the next poll a second later.
-      // This is the surface that outlives both: it sits outside the routed
-      // region, and only a person clears it.
+      // The report of last resort. A save that has already returned to the board
+      // has no form left to report into, and a refused board change whose card
+      // the board no longer draws has no card left to report on. This surface
+      // outlives both: it sits outside the routed region, and only a person
+      // clears it.
       //
       // Reports stack rather than replace, because one of them can be holding
       // the only copy of a refused task. Nothing but a click removes that.
-      function showCreateNotice(kind, message, action) {
-        if (!createNotice) return null;
+      //
+      // Each report's own Dismiss button is kept beside it rather than returned
+      // with it, so a caller that has to hand the caret somewhere can find it
+      // without every other caller learning a new return shape: a report
+      // written because the node holding the caret was removed has to have
+      // somewhere to put that caret.
+      const noticeDismissControls = new WeakMap();
+      function showNotice(kind, message, action) {
+        if (!notice) return null;
         const report = document.createElement("div");
         report.className = "notice__report";
         report.dataset.kind = kind;
@@ -1182,16 +1265,21 @@
         const dismiss = document.createElement("button");
         dismiss.type = "button";
         text(dismiss, "Dismiss");
-        dismiss.addEventListener("click", () => dismissCreateNotice(report));
+        dismiss.addEventListener("click", () => dismissNotice(report));
         report.append(...(action ? [copy, action, dismiss] : [copy, dismiss]));
-        createNotice.append(report);
-        createNotice.hidden = false;
+        notice.append(report);
+        notice.hidden = false;
+        noticeDismissControls.set(report, dismiss);
         return report;
       }
-      function dismissCreateNotice(report) {
-        if (!createNotice || !report) return;
+      function focusNoticeReport(report) {
+        const dismiss = report && noticeDismissControls.get(report);
+        if (dismiss && typeof dismiss.focus === "function") dismiss.focus();
+      }
+      function dismissNotice(report) {
+        if (!notice || !report) return;
         report.remove();
-        if (createNotice.children.length === 0) createNotice.hidden = true;
+        if (notice.children.length === 0) notice.hidden = true;
       }
       function focusPendingRelationshipRecovery(taskID, controller, generation) {
         const request = pendingRelationshipRecoveryFocus;
@@ -2466,6 +2554,18 @@
       function queueIntent(taskID, head, intent) {
         const entry = intentEntry(taskID, head);
         entry.queue.push(intent);
+        // The reader has answered a standing refusal by changing this card
+        // again, so the refusal goes: the report says the card shows the
+        // version the server holds, which stops being true the moment this
+        // intent draws an optimistic one over it. If this change is refused in
+        // turn, it comes back saying so.
+        //
+        // It is the reader's next decision that clears a report, not the next
+        // confirmation. An intent already queued when the refusal arrived was
+        // never an answer to it — a placement refused as illegal while a second
+        // placement of the same card succeeds is still news — so a confirmation
+        // leaves the report alone.
+        taskFailureReports.delete(taskID);
         rerender();
         return drainIntents(taskID);
       }
@@ -2488,6 +2588,11 @@
               // this queue exists to avoid. One that genuinely depended on the
               // failed intent is refused in turn and rolls back on its own.
               entry.queue.shift();
+              // Read before the refresh below rather than inside the report:
+              // the likeliest refusal is a task another clone deleted, and that
+              // refresh is what takes it out of the model. A report that has to
+              // name a task it can no longer look up names nothing.
+              const subject = nameTask(taskID);
               if (error && error.category === "stale-write") {
                 // The refusal means this queue is holding a head the server
                 // has moved past. Waiting for the refresh it forces and
@@ -2498,13 +2603,13 @@
                 const rebased = await refreshedTaskHead(taskID);
                 if (rebased) entry.head = rebased;
               }
-              // Reported after that refresh rather than before it: a refresh
-              // that lands clears the banner, so reporting first would erase
-              // the report before it was ever drawn. It still only survives
-              // until the next one-second poll, which is a real gap and not one
-              // this ordering closes; a report that persists needs the per-card
-              // affordance the banner is standing in for.
-              reportIntentFailure(error);
+              // Reported after that refresh rather than before it, so the
+              // report is written against the board the reader ends up looking
+              // at. The report itself survives every refresh and every poll
+              // after it: it is held outside the model and drawn on the card,
+              // and only a dismissal or the reader's next change to that card
+              // takes it away.
+              reportIntentFailure(taskID, subject, error);
               withdrawFailedIntentFromOpenDetail(taskID, error);
             }
             rerender();
@@ -2566,12 +2671,52 @@
         renderSyncState();
       }
       if (syncToggle) syncToggle.addEventListener("click", toggleSyncMode);
-      function reportIntentFailure(error) {
-        const message = error && error.category === "stale-write"
-          ? "That task changed elsewhere. Showing the latest board."
-          : "Task update failed. Showing the latest board.";
-        text(stale, message);
-        stale.dataset.visible = "true";
+      // A refused change is reported on the card it concerns, which is both
+      // where the reader is looking and somewhere the report can stay.
+      //
+      // It is deliberately no longer written to the stale banner. That banner
+      // says the board is showing state older than the server's, and a
+      // successful poll clears it a second later — correctly, because the board
+      // is current again. A conflict report parked there was erased inside a
+      // second whether or not anyone had looked at it, which on a shared board
+      // is the whole event going unnoticed.
+      //
+      // Two wordings are built here rather than one. The card's copy can point
+      // at the card, because it is on it. The notice's copy is read after the
+      // board has stopped drawing that card — the likeliest refusal is a task
+      // another clone deleted — so it names the task instead of pointing at
+      // something that is no longer there, and says the board no longer carries
+      // it. `subject` is the caller's, because by the time a refusal is reported
+      // the refresh it forced can already have taken the task out of the model.
+      function reportIntentFailure(taskID, subject, error) {
+        const changedElsewhere = Boolean(error && error.category === "stale-write");
+        taskFailureReports.set(taskID, {
+          card: changedElsewhere
+            ? "This task changed elsewhere. The card shows the version the server holds."
+            : "Task update failed. The card shows the version the server holds.",
+          notice: changedElsewhere
+            ? "Task " + subject + " changed elsewhere and is no longer on the board. The change made here was not applied."
+            : "Task " + subject + " could not be updated and is no longer on the board. The change made here was not applied."
+        });
+        rerender();
+      }
+      // What to call a task in a report that has outlived the card it was drawn
+      // on. The ID prefix is what the card showed and what every other control
+      // names a task by; the title is what the reader recognizes it as.
+      function nameTask(taskID) {
+        const view = latestPresentation.get(taskID);
+        const task = latestTasks.find((candidate) => candidate.id === taskID);
+        const prefix = (view && view.idPrefix) || taskID;
+        return task && task.title ? prefix + " “" + task.title + "”" : prefix;
+      }
+      function dismissTaskFailure(taskID) {
+        if (!taskFailureReports.delete(taskID)) return;
+        rerender();
+        // The control that was just clicked is hidden now, and the caret would
+        // go to the document body with it. The card the report was about is the
+        // nearest thing that still exists, so the caret lands there.
+        const node = findCardNode(taskID);
+        if (node && typeof node.focus === "function") node.focus();
       }
       // A pending intent can outlive the board view that queued it. When one
       // fails while its task's detail form is open, that form is showing an
@@ -2950,6 +3095,30 @@
           // this renderer exists to remove. The render after dragend collects it.
           if (activeDrag && activeDrag.taskId === taskID) return;
           node.remove();
+        });
+        // A report whose card the board no longer draws has nowhere left to be
+        // read, and letting it go with the card would put the reader back where
+        // this started. The likeliest way to get here is also the one that most
+        // needs saying: another clone deleted the task, this board's change was
+        // refused because of it, and the next poll takes the card away. So the
+        // report moves to the notice, which outlives every route and leaves only
+        // when someone dismisses it, in the wording that names the task rather
+        // than the wording that pointed at the card.
+        taskFailureReports.forEach((report, taskID) => {
+          if (claimed.has(taskID)) return;
+          // A dragged node is still on the board even though no column claimed
+          // it, exactly as the loop above just decided. Lifting its report
+          // would print the same sentence twice — once on the card under the
+          // cursor and once in the notice — and the render after dragend does
+          // this properly.
+          if (activeDrag && activeDrag.taskId === taskID) return;
+          taskFailureReports.delete(taskID);
+          const lifted = showNotice("warning", report.notice);
+          // The card that was holding the caret has just been removed, and the
+          // caret went to the document body with it. The report that outlived
+          // the card is what the reader has left to act on, so it takes the
+          // caret, the same way a refused create hands it to Restore draft.
+          if (focusedID === taskID) focusNoticeReport(lifted);
         });
         // A card that was standing in for a create is gone from this render, so
         // the caret it was holding follows the task rather than falling to the
