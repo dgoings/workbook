@@ -147,10 +147,17 @@ type taskRefRecord struct {
 // version does not recognize as naming exactly one task, together with why.
 // Ref is always stated under the canonical prefix origin holds it at, even when
 // the ref was observed through the local tracking mirror, because that is the
-// name a user must prune.
+// name a user would have to act on.
 type IgnoredRef struct {
 	Ref    string `json:"ref"`
 	Reason string `json:"reason"`
+	// PlausibleTask reports that the name could still be some Workbook's task
+	// ref — this project's key with an ID format this build predates, or a
+	// second project's key sharing origin's namespace — even though this build
+	// does not read it as one. Shared task history is append-only, so a caller
+	// must never suggest deleting such a ref; only a name no project's format
+	// can produce is safe to offer for removal.
+	PlausibleTask bool `json:"plausibleTask"`
 }
 
 func (r *Repository) listTaskRefs(ctx context.Context) ([]taskRefRecord, error) {
@@ -276,14 +283,14 @@ func (r *Repository) parseOwnedRefRecords(
 		taskID := strings.TrimPrefix(refName, prefix)
 		if taskID == "" || strings.Contains(taskID, "/") {
 			if tolerateUnrecognizedNames {
-				ignored = append(ignored, ignoredTaskRef(prefix, refName, "the ref does not name one task"))
+				ignored = append(ignored, ignoredTaskRef(config, prefix, refName, "the ref does not name one task"))
 				continue
 			}
 			return nil, nil, core.Errorf(core.CategoryCorruptData, "task ref %q does not name one task", refName)
 		}
 		if err := core.ValidateTaskID(config.Key, taskID); err != nil {
 			if tolerateUnrecognizedNames {
-				ignored = append(ignored, ignoredTaskRef(prefix, refName, err.Error()))
+				ignored = append(ignored, ignoredTaskRef(config, prefix, refName, err.Error()))
 				continue
 			}
 			return nil, nil, core.Wrap(core.CategoryCorruptData, "task ref ID is invalid", err)
@@ -310,11 +317,20 @@ func (r *Repository) parseOwnedRefRecords(
 }
 
 // ignoredTaskRef restates a ref observed in the local tracking mirror under the
-// canonical prefix origin holds it at. Pruning is a push to origin, so naming
-// the local mirror would name a ref the user must not, and cannot usefully,
-// delete: the next fetch prunes it once origin's copy is gone.
-func ignoredTaskRef(prefix, refName, reason string) IgnoredRef {
-	return IgnoredRef{Ref: taskRefPrefix + strings.TrimPrefix(refName, prefix), Reason: reason}
+// canonical prefix origin holds it at. Removing one is a push to origin, so
+// naming the local mirror would name a ref the user must not, and cannot
+// usefully, delete: the next fetch prunes it once origin's copy is gone.
+//
+// It also records whether the name could still be another Workbook's task, so
+// no caller has to re-derive that from the reason text before deciding what to
+// advise.
+func ignoredTaskRef(config core.ProjectConfig, prefix, refName, reason string) IgnoredRef {
+	name := strings.TrimPrefix(refName, prefix)
+	return IgnoredRef{
+		Ref:           taskRefPrefix + name,
+		Reason:        reason,
+		PlausibleTask: core.PlausibleTaskID(config.Key, name),
+	}
 }
 
 // readTip reads one tip through the batch reader, which is deliberately the

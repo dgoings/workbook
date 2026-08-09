@@ -45,11 +45,11 @@ func (r *Repository) parseRemoteTaskHeads(
 		}
 		taskID := strings.TrimPrefix(refName, taskRefPrefix)
 		if taskID == "" || strings.Contains(taskID, "/") || strings.HasSuffix(taskID, "^{}") {
-			ignored = append(ignored, IgnoredRef{Ref: refName, Reason: "the ref does not name one task"})
+			ignored = append(ignored, ignoredTaskRef(config, taskRefPrefix, refName, "the ref does not name one task"))
 			continue
 		}
 		if err := core.ValidateTaskID(config.Key, taskID); err != nil {
-			ignored = append(ignored, IgnoredRef{Ref: refName, Reason: err.Error()})
+			ignored = append(ignored, ignoredTaskRef(config, taskRefPrefix, refName, err.Error()))
 			continue
 		}
 		if _, duplicate := heads[taskID]; duplicate {

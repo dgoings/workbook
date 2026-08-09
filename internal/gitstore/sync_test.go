@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -170,13 +169,22 @@ func TestFetchKeepsInvalidRemoteTipIsolated(t *testing.T) {
 // Anyone with push access can write an arbitrary name under origin's task
 // namespace, deliberately or by accident. One stray ref there must not deny
 // fetch, push, and sync to every clone, so it is skipped and reported by the
-// name it holds on origin, which is where a user prunes it.
+// name it holds on origin, which is where a user would act on it.
+//
+// A second project's key is unrecognized for the same reason and is not junk at
+// all, so every phase reports it as a name another Workbook could own.
 func TestSyncToleratesUnrecognizedRefUnderOriginTaskNamespace(t *testing.T) {
 	first, second, config := syncRepositories(t)
 	shared := createSyncTask(t, first, config, "Shared task")
 	publishTaskRefs(t, first)
 	syncGit(t, first.Root, "push", "origin", "HEAD:"+taskRefPrefix+"EVIL")
 	syncGit(t, first.Root, "push", "origin", "HEAD:"+taskRefPrefix+"team/EVIL")
+	syncGit(t, first.Root, "push", "origin", "HEAD:"+taskRefPrefix+foreignTaskID)
+	wantIgnored := map[string]bool{
+		taskRefPrefix + "EVIL":        false,
+		taskRefPrefix + "team/EVIL":   false,
+		taskRefPrefix + foreignTaskID: true,
+	}
 
 	local := createSyncTask(t, second, config, "Local task")
 	result, err := second.Sync(context.Background(), config)
@@ -185,7 +193,7 @@ func TestSyncToleratesUnrecognizedRefUnderOriginTaskNamespace(t *testing.T) {
 	}
 	assertSyncOutcome(t, result.Fetch, shared.ID, SyncCreated)
 	assertSyncOutcome(t, result.Push, local.ID, SyncPublished)
-	assertIgnoredRefs(t, result.Fetch, taskRefPrefix+"EVIL", taskRefPrefix+"team/EVIL")
+	assertIgnoredRefs(t, result.Fetch, wantIgnored)
 	if refExists(t, second, taskRefPrefix+"EVIL") {
 		t.Fatalf("foreign ref reached canonical ref %s", taskRefPrefix+"EVIL")
 	}
@@ -200,7 +208,7 @@ func TestSyncToleratesUnrecognizedRefUnderOriginTaskNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Fetch(foreign ref) error = %v; result = %#v", err, fetched)
 	}
-	assertIgnoredRefs(t, fetched, taskRefPrefix+"EVIL", taskRefPrefix+"team/EVIL")
+	assertIgnoredRefs(t, fetched, wantIgnored)
 
 	// Push reads origin's namespace directly rather than the mirror, so it
 	// needs the same tolerance to publish anything at all.
@@ -208,10 +216,11 @@ func TestSyncToleratesUnrecognizedRefUnderOriginTaskNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Push(foreign ref) error = %v; result = %#v", err, pushed)
 	}
-	assertIgnoredRefs(t, pushed, taskRefPrefix+"EVIL", taskRefPrefix+"team/EVIL")
+	assertIgnoredRefs(t, pushed, wantIgnored)
 
-	// Pruning the refs on origin clears both the report and the local mirror.
-	syncGit(t, second.Root, "push", "origin", "--delete", taskRefPrefix+"EVIL", taskRefPrefix+"team/EVIL")
+	// Removing the refs on origin clears both the report and the local mirror.
+	syncGit(t, second.Root, "push", "origin", "--delete",
+		taskRefPrefix+"EVIL", taskRefPrefix+"team/EVIL", taskRefPrefix+foreignTaskID)
 	cleaned, err := second.Sync(context.Background(), config)
 	if err != nil {
 		t.Fatalf("Sync(pruned) error = %v; result = %#v", err, cleaned)
@@ -225,22 +234,20 @@ func TestSyncToleratesUnrecognizedRefUnderOriginTaskNamespace(t *testing.T) {
 }
 
 // assertIgnoredRefs requires exactly the named refs, each reported under the
-// namespace it occupies on origin and each carrying a reason a user can act on.
-func assertIgnoredRefs(t *testing.T, result SyncResult, refs ...string) {
+// namespace it occupies on origin, each carrying a reason a user can act on,
+// and each classified by whether another Workbook could own the name.
+func assertIgnoredRefs(t *testing.T, result SyncResult, want map[string]bool) {
 	t.Helper()
-	got := make([]string, 0, len(result.Ignored))
+	got := make(map[string]bool, len(result.Ignored))
 	for _, ignored := range result.Ignored {
-		got = append(got, ignored.Ref)
 		if !strings.HasPrefix(ignored.Ref, taskRefPrefix) {
 			t.Fatalf("ignored ref = %q, want it named under %q as origin holds it", ignored.Ref, taskRefPrefix)
 		}
 		if strings.TrimSpace(ignored.Reason) == "" {
 			t.Fatalf("ignored ref %q has no reason", ignored.Ref)
 		}
+		got[ignored.Ref] = ignored.PlausibleTask
 	}
-	sort.Strings(got)
-	want := append([]string(nil), refs...)
-	sort.Strings(want)
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ignored refs = %#v, want %#v", got, want)
 	}

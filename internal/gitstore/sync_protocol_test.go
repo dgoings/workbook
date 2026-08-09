@@ -66,20 +66,24 @@ func TestParseRemoteTaskHeadsRejectsInvalidRecords(t *testing.T) {
 
 // Origin's task namespace is writable by every collaborator, so a name this
 // version does not recognize is skipped and reported instead of failing the
-// listing that publication depends on.
+// listing that publication depends on. The report separates a name no project
+// can own from one a newer version or a second project's key would produce,
+// because only the first may ever be offered for deletion.
 func TestParseRemoteTaskHeadsSkipsAndReportsUnrecognizedNames(t *testing.T) {
 	const taskID = "WB-01K0M6B8A4FTT8C39MXXYTW7D1"
 	objectID := strings.Repeat("a", 40)
 	valid := objectID + "\trefs/workbook/tasks/" + taskID + "\n"
 	tests := []struct {
-		name   string
-		output string
-		want   string
+		name          string
+		output        string
+		want          string
+		wantPlausible bool
 	}{
-		{name: "nested task", output: objectID + "\trefs/workbook/tasks/" + taskID + "/nested\n", want: "refs/workbook/tasks/" + taskID + "/nested"},
+		{name: "nested task", output: objectID + "\trefs/workbook/tasks/" + taskID + "/nested\n", want: "refs/workbook/tasks/" + taskID + "/nested", wantPlausible: true},
 		{name: "invalid task ID", output: objectID + "\trefs/workbook/tasks/EVIL\n", want: "refs/workbook/tasks/EVIL"},
-		{name: "peeled ref", output: objectID + "\trefs/workbook/tasks/" + taskID + "^{}\n", want: "refs/workbook/tasks/" + taskID + "^{}"},
+		{name: "peeled ref", output: objectID + "\trefs/workbook/tasks/" + taskID + "^{}\n", want: "refs/workbook/tasks/" + taskID + "^{}", wantPlausible: true},
 		{name: "bare namespace", output: objectID + "\trefs/workbook/tasks/\n", want: "refs/workbook/tasks/"},
+		{name: "another project's key", output: objectID + "\trefs/workbook/tasks/" + foreignTaskID + "\n", want: "refs/workbook/tasks/" + foreignTaskID, wantPlausible: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -99,6 +103,9 @@ func TestParseRemoteTaskHeadsSkipsAndReportsUnrecognizedNames(t *testing.T) {
 			}
 			if strings.TrimSpace(ignored[0].Reason) == "" {
 				t.Fatalf("ignored ref %q has no reason", ignored[0].Ref)
+			}
+			if ignored[0].PlausibleTask != test.wantPlausible {
+				t.Fatalf("ignored ref %q plausible = %t, want %t", ignored[0].Ref, ignored[0].PlausibleTask, test.wantPlausible)
 			}
 		})
 	}
