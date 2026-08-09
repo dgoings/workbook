@@ -409,6 +409,61 @@ func TestHandlerClientAddsAndRemovesCardsWithoutDisturbingTheirNeighbours(t *tes
 `)
 }
 
+// The test above proves the neighbours of an added or removed card keep their
+// nodes. Keeping the node is not the whole cost: reconcile() compares each entry
+// with whatever node stands at that index, so a card still attached to a column
+// the model has stopped naming pushes every card below it one index down, and
+// each of them takes an insertBefore to correct an offset nothing asked for. The
+// node survives, but a browser blurs a node it re-inserts, so on a long column
+// that is a focusout/focusin once for every reader parked below the card that
+// left. This test instruments the column a card leaves — first by changing
+// status, then by being deleted — and requires that its neighbours cost nothing,
+// while the column that gains the card pays the one move it really needs.
+func TestHandlerClientLeavesNeighboursAloneWhenACardLeavesAColumn(t *testing.T) {
+	runBoardClient(t, "departed card sweep", reconcileBoardTasks(), `
+  const ready = listFor("ready");
+  const done = listFor("done");
+  const alpha = cardIn(ready, `+strconv.Quote(reconcileAlphaID)+`);
+  const bravo = cardIn(ready, `+strconv.Quote(reconcileBravoID)+`);
+  const charlie = cardIn(ready, `+strconv.Quote(reconcileCharlieID)+`);
+  if (!alpha || !bravo || !charlie) throw new Error("board did not render the Ready cards");
+
+  let readyMoves = 0;
+  let doneMoves = 0;
+  const insertReady = ready.insertBefore.bind(ready);
+  ready.insertBefore = (child, reference) => { readyMoves += 1; return insertReady(child, reference); };
+  const insertDone = done.insertBefore.bind(done);
+  done.insertBefore = (child, reference) => { doneMoves += 1; return insertDone(child, reference); };
+
+  // Another clone moves the top card out of the column. Bravo and Charlie did
+  // not move relative to the model and must not be touched.
+  serve(initialTasks.map((task) => task.id !== `+strconv.Quote(reconcileAlphaID)+` ? task : Object.assign({}, task, { status: "done" })));
+  await intervalCallback();
+
+  if (cardIn(done, `+strconv.Quote(reconcileAlphaID)+`) !== alpha) throw new Error("the departed card was rebuilt in its new column");
+  if (cardIn(ready, `+strconv.Quote(reconcileBravoID)+`) !== bravo) throw new Error("a departing card rebuilt the card after it");
+  if (cardIn(ready, `+strconv.Quote(reconcileCharlieID)+`) !== charlie) throw new Error("a departing card rebuilt the card below it");
+  if (JSON.stringify(idsIn(ready)) !== JSON.stringify([bravo.dataset.taskId, charlie.dataset.taskId])) {
+    throw new Error("the surviving cards are out of order: " + idsIn(ready).join(", "));
+  }
+  if (readyMoves !== 0) throw new Error("a card leaving the column re-inserted " + readyMoves + " of its neighbours");
+  // The instrument can see a move: the column that gained the card pays exactly
+  // one, so the count above is a fact about the column and not a dead counter.
+  if (doneMoves !== 1) throw new Error("the receiving column took " + doneMoves + " moves for one arriving card");
+
+  // A deletion is the same departure without a destination.
+  readyMoves = 0;
+  serve(initialTasks
+    .filter((task) => task.id !== `+strconv.Quote(reconcileBravoID)+`)
+    .map((task) => task.id !== `+strconv.Quote(reconcileAlphaID)+` ? task : Object.assign({}, task, { status: "done" })));
+  await intervalCallback();
+
+  if (bravo.parentElement) throw new Error("a deleted card stayed attached to the board");
+  if (cardIn(ready, `+strconv.Quote(reconcileCharlieID)+`) !== charlie) throw new Error("a deleted card rebuilt the card below it");
+  if (readyMoves !== 0) throw new Error("a deleted card re-inserted " + readyMoves + " of its neighbours");
+`)
+}
+
 func TestHandlerClientReordersAColumnByMovingItsExistingNodes(t *testing.T) {
 	runBoardClient(t, "column reordering", reconcileBoardTasks(), `
   const ready = listFor("ready");
