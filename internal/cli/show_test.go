@@ -218,6 +218,39 @@ func TestShowCompareKeepsJSONModeAfterItsTwoValues(t *testing.T) {
 	assertJSONError(t, stderr, core.CategoryNotFound, "")
 }
 
+func TestShowRendersTheDescriptionAsItWasWritten(t *testing.T) {
+	// Mutation caught: reprinting the description as one collapsed line, or
+	// turning its trailing newline into a blank line that reads as the end of
+	// the field. writeShow is called directly because the shape of the block
+	// between "Description:" and the next field is the whole assertion.
+	tests := []struct {
+		name        string
+		description string
+		want        string
+	}{
+		{name: "empty", description: "", want: "Description:\t\n"},
+		{name: "one line", description: "one line", want: "Description:\tone line\n"},
+		{name: "paragraphs", description: "first\n\nsecond", want: "Description:\tfirst\n\n\tsecond\n"},
+		{name: "trailing newlines", description: "first\n\n", want: "Description:\tfirst\n"},
+		{name: "carriage returns", description: "first\r\nsecond", want: "Description:\tfirst\n\tsecond\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var output strings.Builder
+			writeShow(&output, core.Task{TaskData: core.TaskData{Description: test.description}})
+			rendered := output.String()
+			start := strings.Index(rendered, "Description:")
+			end := strings.Index(rendered, "Status:")
+			if start < 0 || end < start {
+				t.Fatalf("show output = %q, want a description field followed by a status field", rendered)
+			}
+			if got := rendered[start:end]; got != test.want {
+				t.Fatalf("description block = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func createShowTask(t *testing.T, repository string) core.Task {
 	t.Helper()
 	code, stdout, stderr := run(

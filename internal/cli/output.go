@@ -450,7 +450,7 @@ func writeShow(output io.Writer, task core.Task) {
 	fmt.Fprintf(output, "ID:\t%s\n", task.ID)
 	fmt.Fprintf(output, "Project ID:\t%s\n", task.ProjectID)
 	fmt.Fprintf(output, "Title:\t%s\n", singleLine(task.Title))
-	fmt.Fprintf(output, "Description:\t%s\n", singleLine(task.Description))
+	writeDescription(output, task.Description)
 	fmt.Fprintf(output, "Status:\t%s\n", task.Status)
 	fmt.Fprintf(output, "Priority:\t%s\n", task.Priority)
 	fmt.Fprintf(output, "Labels:\t%s\n", singleLine(strings.Join(task.Labels, ",")))
@@ -461,4 +461,39 @@ func writeShow(output io.Writer, task core.Task) {
 	fmt.Fprintf(output, "Deleted:\t%t\n", task.Deleted)
 	fmt.Fprintf(output, "History Generation:\t%s\n", task.HistoryGeneration)
 	fmt.Fprintf(output, "Head:\t%s\n", task.Head)
+}
+
+// writeDescription prints a description over as many lines as it was written
+// with. Every line is sanitized on its own by singleLine, so no line can carry
+// an escape sequence, and every line after the first is indented with a tab.
+// That indent is what keeps a description from forging a field: writeShow's
+// own fields all begin at column zero, so "Status: done" written into a
+// description renders as "\tStatus: done" and reads as description text.
+func writeDescription(output io.Writer, description string) {
+	lines := descriptionLines(description)
+	fmt.Fprintf(output, "Description:\t%s\n", lines[0])
+	for _, line := range lines[1:] {
+		// A blank line separates paragraphs. It is printed empty rather than as
+		// a lone tab because trailing whitespace serves nobody, and an empty
+		// line cannot be read as a field either.
+		if line == "" {
+			fmt.Fprintln(output)
+			continue
+		}
+		fmt.Fprintf(output, "\t%s\n", line)
+	}
+}
+
+// descriptionLines sanitizes a description into the lines to print, always at
+// least one. Trailing blank lines are dropped: a description that ends with a
+// newline should not push a blank line between it and the next field.
+func descriptionLines(description string) []string {
+	lines := strings.Split(description, "\n")
+	for i, line := range lines {
+		lines[i] = singleLine(line)
+	}
+	for len(lines) > 1 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
 }
