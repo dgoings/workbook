@@ -977,14 +977,27 @@ func boardFallbackNotice(requested string, bound string) string {
 // a person at this machine; it cannot tell a teammate from a stranger on the
 // same network. A non-loopback bind is therefore a deliberate exposure and is
 // said out loud rather than left to be discovered.
+//
+// A wildcard bind gives away more than network reach, and gets a second
+// sentence for it. The guard pins the Host header to the address the listener
+// reports, which a wildcard bind does not have, so it falls back to the port
+// alone. Any page on the web can then point its own DNS name at this machine
+// and hold same-origin read and write on the board through the browser of
+// whoever opens it — an exposure that does not need the attacker on the
+// network at all. Naming the fix in the same breath keeps the warning
+// actionable rather than merely alarming.
 func boardExposureWarning(address string) string {
 	if webui.BoundToLoopback(address) {
 		return ""
 	}
-	return fmt.Sprintf(
+	warning := fmt.Sprintf(
 		"Warning: the board at %s is reachable beyond this machine and has no authentication. Anyone who can open that address can read and change every task.",
 		address,
 	)
+	if webui.BoundToWildcard(address) {
+		warning += " A wildcard bind also cannot pin the Host header, so any page on the web can point its own name at this machine and read and change tasks through the browser of whoever opens it. Bind the one address you mean instead."
+	}
+	return warning
 }
 
 // boardPublisher publishes what a web mutation wrote.
