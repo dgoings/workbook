@@ -70,12 +70,21 @@
     .unknown-status__heading { display: flex; align-items: baseline; gap: .5rem; margin: 0; color: #7c3b08; font-size: .92rem; }
     .unknown-status__heading .count { color: #7c3b08; }
     .unknown-status__note { max-width: 62ch; margin: .3rem 0 0; color: #7c3b08; font-size: .76rem; line-height: 1.4; }
-    .unknown-status__list { grid-auto-columns: minmax(12rem, 18rem); grid-auto-flow: column; max-height: 15rem; overflow-x: auto; overflow-y: auto; }
+    /* The strip draws the same cards the columns do, so it holds them to the
+       same minimum: eight of them in a 1280-wide window fell to 12rem tracks,
+       which is the width the board minimum exists to prevent. It scrolls
+       sideways already, and 18rem stays its maximum so a strip of one or two
+       does not stretch a card across the page. */
+    .unknown-status__list { grid-auto-columns: minmax(var(--board-column-min), 18rem); grid-auto-flow: column; max-height: 15rem; overflow-x: auto; overflow-y: auto; }
     .column { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); min-width: var(--board-column-min); min-height: 0; border: 1px solid #b9c6d8; background: rgba(255,255,255,.36); }
-    /* The minimum keeps the six headers on one line with each other when one of
-       them wraps; it is what the header holds — a heading and the New Task link —
-       and no longer reserves the row the ref path used to occupy. */
-    .column__header { min-height: 4.2rem; padding: .7rem .75rem .6rem; border-top: 3px solid #2457d6; border-bottom: 1px solid #b9c6d8; background: #f8faff; }
+    /* No min-height: the header holds a heading and the New Task link, the same
+       two lines in all six columns, so they are the same height without being
+       told to be. The declaration that used to sit here reserved the row the
+       ref path occupied, and once that left it was below the natural height and
+       applied to nothing. A floor could not have squared the headers up anyway
+       — it can only raise a header that is short, never pull five of them up to
+       one that grew. */
+    .column__header { padding: .7rem .75rem .6rem; border-top: 3px solid #2457d6; border-bottom: 1px solid #b9c6d8; background: #f8faff; }
     .column__heading { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; margin: 0; font-size: .92rem; }
     .count { color: #2457d6; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .8rem; }
     .new-task-link { display: inline-block; margin-top: .45rem; color: #2457d6; font-size: .73rem; font-weight: 750; text-decoration-thickness: 1px; text-underline-offset: .18em; }
@@ -275,9 +284,11 @@
     .field-change del { background: #fdeceb; color: #8f1d1d; text-decoration-thickness: 1px; }
     .field-change ins { background: #e8f4ec; color: #14663c; text-decoration: none; }
     @media (prefers-reduced-motion: no-preference) { .task-list { transition: opacity 120ms ease; } }
-    /* On a phone the column is the page: it takes the viewport less the board's
-       padding, and the reader swipes between them. The clamp keeps that from
-       exceeding the window on a screen narrower than 18rem. */
+    /* A phone gets a wider column than a desktop, not a narrower one: 18rem of
+       card with the edge of the next one showing beside it, and the reader
+       swipes between them. On a 390px screen that is 288px of column against
+       350px of board. The min() only decides anything below about 328px, where
+       18rem would be wider than the window and the column becomes the page. */
     @media (max-width: 900px) { :root { --board-column-min: min(18rem, calc(100vw - 2.5rem)); } .app-header { align-items: start; flex-direction: column; } .updated { text-align: left; } }
     @media (min-width: 761px) {
       .task-sidebar { padding: .9rem 1rem; }

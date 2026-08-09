@@ -86,16 +86,36 @@ func TestHandlerBoardColumnsHoldAMinimumWidthAndScroll(t *testing.T) {
 		// The phone layout still widens the column to the viewport rather than
 		// inheriting the desktop minimum.
 		`--board-column-min: min(18rem, calc(100vw - 2.5rem));`,
+		// The unknown-status strip draws the same cards, so it takes the same
+		// floor: eight of them fell to 12rem tracks while the columns held 16rem.
+		`grid-auto-columns: minmax(var(--board-column-min), 18rem)`,
 	} {
 		if !strings.Contains(body, fragment) {
 			t.Errorf("board column styling does not contain %q", fragment)
 		}
 	}
-	// The track size and the column's own minimum are one number now. A literal
-	// left behind in either place is how the two could disagree again.
-	for _, stale := range []string{`minmax(12rem, 1fr)`, `min-width: 12rem`, `min-width: min(18rem`} {
+	// Every place a card is given a minimum width reads the one property. A
+	// literal left behind in any of them is how they could disagree again, so
+	// the guard covers the shape of the declaration rather than one spelling of
+	// it — `minmax(12rem` catches both the old track size and the strip's.
+	for _, stale := range []string{`minmax(12rem`, `min-width: 12rem`, `min-width: min(18rem`} {
 		if strings.Contains(body, stale) {
-			t.Errorf("a board column still carries the hardcoded minimum width %q", stale)
+			t.Errorf("a board card still carries the hardcoded minimum width %q", stale)
 		}
+	}
+}
+
+// A column header is a heading and a link in all six columns, so the six are
+// the same height without a floor under them. The floor that used to be here
+// reserved the ref path's row, sat below the natural height once that left, and
+// could not have levelled the headers anyway: min-height raises a short header,
+// it never pulls the other five up to one that wrapped.
+func TestHandlerBoardColumnHeadersCarryNoInertMinimumHeight(t *testing.T) {
+	body := boardPage(t)
+	if !strings.Contains(body, `.column__header { padding: .7rem .75rem .6rem;`) {
+		t.Error("the column header rule no longer opens with its padding")
+	}
+	if strings.Contains(body, `.column__header { min-height:`) {
+		t.Error("the column header reserves a height again")
 	}
 }
