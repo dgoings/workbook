@@ -116,7 +116,7 @@ func runConfigSet(ctx context.Context, args []string, cwd string, stdout io.Writ
 	if enabled {
 		setting = core.AutoSyncEnabled
 	}
-	return writeProjectSetting(ctx, cwd, stdout, setting, strconv.FormatBool(enabled), *jsonMode)
+	return writeProjectSetting(ctx, cwd, stdout, "config set", setting, strconv.FormatBool(enabled), *jsonMode)
 }
 
 func runConfigUnset(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
@@ -132,16 +132,18 @@ func runConfigUnset(ctx context.Context, args []string, cwd string, stdout io.Wr
 	if values[0] != autoSyncSettingName {
 		return core.Errorf(core.CategoryInvocation, "unknown project setting %q", values[0])
 	}
-	return writeProjectSetting(ctx, cwd, stdout, core.AutoSyncUnset, "unset", *jsonMode)
+	return writeProjectSetting(ctx, cwd, stdout, "config unset", core.AutoSyncUnset, "unset", *jsonMode)
 }
 
 // writeProjectSetting records a policy and reports whether doing so also
 // upgraded the document, because that is what makes the project unreadable to
-// an older Workbook binary.
+// an older Workbook binary. Both writing verbs share this body, so the caller
+// names itself: a result envelope has to report the command that was run.
 func writeProjectSetting(
 	ctx context.Context,
 	cwd string,
 	stdout io.Writer,
+	command string,
 	setting core.AutoSyncSetting,
 	display string,
 	jsonMode bool,
@@ -163,7 +165,7 @@ func writeProjectSetting(
 		Upgraded: before.Version != updated.Version,
 	}
 	if jsonMode {
-		writeResult(stdout, "config set", result)
+		writeResult(stdout, command, result)
 		return nil
 	}
 	fmt.Fprintf(stdout, "%s\t%s\t%s\n", result.Setting, result.Value, result.Path)

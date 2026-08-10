@@ -145,6 +145,28 @@ func TestConfigSetAutoSyncControlsTheProjectPolicy(t *testing.T) {
 	}
 }
 
+// Both writing paths share one result writer, so assert each verb's envelope
+// here: an agent keying on the command member has to see the command it ran,
+// and a single shared assertion would let the two drift back together.
+func TestConfigWriteResultsReportTheirOwnCommand(t *testing.T) {
+	repository := testrepo.New(t)
+	if code, _, stderr := run(t, repository, "setup", "--no-docs"); code != 0 {
+		t.Fatalf("setup = code %d, stderr %q", code, stderr)
+	}
+
+	code, stdout, stderr := run(t, repository, "config", "set", "auto-sync", "false", "--json")
+	if code != 0 {
+		t.Fatalf("config set = code %d, stderr %q", code, stderr)
+	}
+	assertJSONResult(t, stdout, "config set")
+
+	code, stdout, stderr = run(t, repository, "config", "unset", "auto-sync", "--json")
+	if code != 0 {
+		t.Fatalf("config unset = code %d, stderr %q", code, stderr)
+	}
+	assertJSONResult(t, stdout, "config unset")
+}
+
 func TestConfigShowReportsTheResolvedPolicyAndItsSource(t *testing.T) {
 	repository := testrepo.New(t)
 	if code, _, stderr := run(t, repository, "setup", "--no-docs"); code != 0 {
