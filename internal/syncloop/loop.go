@@ -218,13 +218,19 @@ func (l *loop) syncOnce(ctx context.Context) {
 		// Nothing to synchronize with. This is the ordinary state of a clone
 		// with no remote, so it reports success and stays silent rather than
 		// printing an error every tick.
-		l.publish(true, "")
+		l.publish(true, "", nil)
 		return
 	}
 
 	result, err := l.options.Repository.Sync(ctx, l.options.Config)
 	conflicts := append(append([]core.Conflict{}, result.Fetch.Conflicts...), result.Push.Conflicts...)
 	l.recordConflicts(ctx, conflicts)
+	// Both phases read origin's namespace, so the run's merged report is what
+	// travels. It is bounded before it is announced or published so the two
+	// always agree, and so a poisoned origin cannot grow a status document past
+	// what a client will read.
+	ignored := boundIgnoredRefs(result.IgnoredRefs())
+	l.announceIgnored(result.Remote, ignored)
 
 	// A conflict is not a failed synchronization. The fetch completed, refs
 	// advanced, and everything that replayed cleanly was published; one task
@@ -246,10 +252,10 @@ func (l *loop) syncOnce(ctx context.Context) {
 	}
 
 	if failure != nil {
-		l.publish(false, failure.Error())
+		l.publish(false, failure.Error(), ignored)
 		return
 	}
-	l.publish(true, "")
+	l.publish(true, "", ignored)
 }
 
 // recordConflicts remembers each conflict against the task's current tip and
@@ -265,6 +271,34 @@ func (l *loop) recordConflicts(ctx context.Context, conflicts []core.Conflict) {
 		if l.conflicts.add(entry) {
 			fmt.Fprintf(l.options.Stderr, "workbook: conflict on %s: %s\n", conflict.TaskID, core.ConflictDetail(conflict))
 		}
+	}
+}
+
+// announceIgnored names each newly skipped ref on the watcher's terminal, for
+// the reason a conflict is announced: the watcher synchronizes with nobody
+// present, and its terminal is the only channel by which a person learns that
+// origin holds a name this build does not read.
+//
+// The previously published snapshot is the memory, so a ref is announced once
+// while origin keeps it and again if it returns after being removed. The line
+// names the ref and why it was skipped and stops there. Such a name may be a
+// newer version's or a second project's real history, so this is a report and
+// never an instruction to remove anything; the full verdict and the one command
+// Workbook is willing to suggest belong to `sync --status` and the foreground
+// fetch, where a person is present to weigh them.
+func (l *loop) announceIgnored(remote string, ignored []gitstore.IgnoredRef) {
+	if len(ignored) == 0 {
+		return
+	}
+	announced := make(map[string]struct{})
+	for _, entry := range l.snapshot.Load().IgnoredRefs {
+		announced[entry.Ref] = struct{}{}
+	}
+	for _, entry := range ignored {
+		if _, found := announced[entry.Ref]; found {
+			continue
+		}
+		fmt.Fprintf(l.options.Stderr, "workbook: ignored ref %s on %s: %s\n", entry.Ref, remote, entry.Reason)
 	}
 }
 
@@ -286,16 +320,17 @@ func (l *loop) expireConflicts(ctx context.Context) {
 	l.conflicts.expire(moved)
 }
 
-func (l *loop) publish(ok bool, message string) {
+func (l *loop) publish(ok bool, message string, ignored []gitstore.IgnoredRef) {
 	l.snapshot.Store(&Status{
-		Format:     StatusFormat,
-		Version:    StatusVersion,
-		PID:        os.Getpid(),
-		IntervalMS: l.options.Interval.Milliseconds(),
-		StartedAt:  l.started,
-		LastSyncAt: l.options.Now(),
-		LastSyncOK: ok,
-		LastError:  message,
+		Format:      StatusFormat,
+		Version:     StatusVersion,
+		PID:         os.Getpid(),
+		IntervalMS:  l.options.Interval.Milliseconds(),
+		StartedAt:   l.started,
+		LastSyncAt:  l.options.Now(),
+		LastSyncOK:  ok,
+		LastError:   message,
+		IgnoredRefs: ignored,
 	})
 }
 

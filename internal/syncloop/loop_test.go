@@ -238,6 +238,72 @@ func TestWatcherReportsEachConflictToItsTerminalOnce(t *testing.T) {
 	}
 }
 
+// A ref origin holds that this build cannot read is skipped on every tick, and
+// the watcher recorded nothing about it, so `sync --status` reported a healthy
+// watcher and no reason to look. The set is the one the last synchronization
+// observed rather than an accumulating memory: the tracking mirror is pruned
+// against origin each fetch, so a ref that is gone from origin is gone here.
+func TestStatusCarriesTheIgnoredRefsTheLastSyncObserved(t *testing.T) {
+	const strayRef = "refs/workbook/tasks/EVIL"
+	syncer := &fakeSyncer{
+		origin:  true,
+		ignored: []gitstore.IgnoredRef{{Ref: strayRef, Reason: "the ref does not name one task"}},
+	}
+	directory, output := startWatcher(t, syncer, func(options *Options) {
+		options.Interval = time.Hour
+		options.Quiet = 10 * time.Millisecond
+	})
+	waitForOutput(t, output, ReadyPrefix)
+	waitForSyncs(t, syncer, 1)
+
+	// Both phases of a run see origin's namespace, so the same ref arrives
+	// twice and has to be reported once.
+	entries := readStatus(t, directory).IgnoredRefs
+	if len(entries) != 1 || entries[0].Ref != strayRef {
+		t.Fatalf("ignored refs after the reporting sync = %#v, want one entry for %s", entries, strayRef)
+	}
+	if entries[0].Reason == "" {
+		t.Fatalf("ignored ref %#v carries no reason", entries[0])
+	}
+
+	syncer.setIgnored(nil)
+	nudge(t, directory)
+	waitForSyncs(t, syncer, 2)
+
+	if entries := readStatus(t, directory).IgnoredRefs; len(entries) != 0 {
+		t.Fatalf("ignored refs after origin no longer holds one = %#v, want none", entries)
+	}
+}
+
+// The same argument that makes a watcher announce a conflict applies here: it
+// synchronizes with nobody present, so its terminal is the only channel by
+// which a person learns what origin holds. The line names the ref and why it
+// was skipped and stops there, because such a ref may be a newer version's or
+// another project's real history.
+func TestWatcherReportsEachIgnoredRefToItsTerminalOnce(t *testing.T) {
+	const strayRef = "refs/workbook/tasks/EVIL"
+	syncer := &fakeSyncer{
+		origin:  true,
+		ignored: []gitstore.IgnoredRef{{Ref: strayRef, Reason: "the ref does not name one task"}},
+	}
+	directory, output := startWatcher(t, syncer, func(options *Options) {
+		options.Interval = time.Hour
+		options.Quiet = 10 * time.Millisecond
+	})
+	waitForOutput(t, output, ReadyPrefix)
+	waitForOutput(t, output, strayRef)
+
+	nudge(t, directory)
+	waitForSyncs(t, syncer, 2)
+
+	if got := strings.Count(output.String(), strayRef); got != 1 {
+		t.Fatalf("ignored ref reported %d times, want once; wrote %q", got, output.String())
+	}
+	if strings.Contains(output.String(), "--delete") {
+		t.Fatalf("watcher advised deleting a ref on origin: %q", output.String())
+	}
+}
+
 func TestSecondWatcherReportsTheRepositoryIsAlreadyOwned(t *testing.T) {
 	syncer := &fakeSyncer{origin: true}
 	directory, output := startWatcher(t, syncer, func(options *Options) {
@@ -409,6 +475,7 @@ type fakeSyncer struct {
 	block          chan struct{}
 	heads          map[string]string
 	conflicts      []core.Conflict
+	ignored        []gitstore.IgnoredRef
 	err            error
 	lastContextErr error
 }
@@ -419,6 +486,7 @@ func (f *fakeSyncer) Sync(ctx context.Context, _ core.ProjectConfig) (gitstore.S
 	f.lastContextErr = ctx.Err()
 	blocker := f.block
 	conflicts := append([]core.Conflict{}, f.conflicts...)
+	ignored := append([]gitstore.IgnoredRef{}, f.ignored...)
 	err := f.err
 	f.mu.Unlock()
 
@@ -426,10 +494,17 @@ func (f *fakeSyncer) Sync(ctx context.Context, _ core.ProjectConfig) (gitstore.S
 		<-blocker
 	}
 
+	// Both phases read origin's namespace, so a stray ref there is reported by
+	// each of them, exactly as a real run reports it.
 	result := gitstore.SyncRunResult{
 		Remote: "origin",
-		Fetch:  gitstore.SyncResult{Remote: "origin", Status: gitstore.SyncPhaseCompleted, Conflicts: conflicts},
-		Push:   gitstore.SyncResult{Remote: "origin", Status: gitstore.SyncPhaseCompleted},
+		Fetch: gitstore.SyncResult{
+			Remote:    "origin",
+			Status:    gitstore.SyncPhaseCompleted,
+			Conflicts: conflicts,
+			Ignored:   ignored,
+		},
+		Push: gitstore.SyncResult{Remote: "origin", Status: gitstore.SyncPhaseCompleted, Ignored: ignored},
 	}
 	if len(conflicts) > 0 && err == nil {
 		err = core.ConflictError(conflicts)
@@ -470,6 +545,12 @@ func (f *fakeSyncer) setConflicts(conflicts []core.Conflict) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.conflicts = conflicts
+}
+
+func (f *fakeSyncer) setIgnored(ignored []gitstore.IgnoredRef) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ignored = ignored
 }
 
 func (f *fakeSyncer) setHead(taskID, head string) {

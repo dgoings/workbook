@@ -283,6 +283,11 @@ func runSync(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	return syncErr
 }
 
+// watcherRemote names the remote a watcher synchronizes with. Its status
+// carries the refs it skipped but no remote of its own, and the collaborative
+// POC supports only origin.
+const watcherRemote = "origin"
+
 // watcherStatusResult reports what `sync --status` found. It answers even when
 // no watcher is running, because "nothing is running" is the ordinary state and
 // a caller has to be able to tell it from a failure to look.
@@ -294,6 +299,10 @@ type watcherStatusResult struct {
 	LastSyncOK bool            `json:"lastSyncOk,omitempty"`
 	LastError  string          `json:"lastSyncError,omitempty"`
 	Conflicts  []core.Conflict `json:"conflicts,omitempty"`
+	// IgnoredRefs carries what the watcher's last synchronization skipped under
+	// origin's task namespace, so asking a watcher what it has been doing
+	// reports it the same way a foreground fetch does.
+	IgnoredRefs []gitstore.IgnoredRef `json:"ignoredRefs,omitempty"`
 }
 
 func runSyncStatus(repository *gitstore.Repository, stdout io.Writer, jsonMode bool) error {
@@ -308,6 +317,7 @@ func runSyncStatus(repository *gitstore.Repository, stdout io.Writer, jsonMode b
 			result.LastSyncAt = status.LastSyncAt.Format(time.RFC3339)
 			result.LastSyncOK = status.LastSyncOK
 			result.LastError = status.LastError
+			result.IgnoredRefs = status.IgnoredRefs
 			for _, entry := range status.Conflicts {
 				result.Conflicts = append(result.Conflicts, entry.Conflict)
 			}
@@ -328,6 +338,10 @@ func runSyncStatus(repository *gitstore.Repository, stdout io.Writer, jsonMode b
 	} else {
 		fmt.Fprintf(stdout, "Last synchronization failed: %s\n", result.LastError)
 	}
+	// What the watcher skipped is reported the way a foreground fetch reports
+	// it, because asking a watcher what it has been doing is the only way to
+	// hear about a poisoned namespace nobody was present for.
+	writeIgnoredRefs(stdout, watcherRemote, result.IgnoredRefs)
 	if len(result.Conflicts) > 0 {
 		writeConflicts(stdout, result.Conflicts)
 	}

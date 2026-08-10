@@ -73,6 +73,43 @@ func TestSyncStatusReportsALiveWatcher(t *testing.T) {
 	}
 }
 
+// A watcher synchronizes with nobody present, so its terminal and `sync
+// --status` are the only two places a person can learn that origin holds a ref
+// this build does not read. Both stayed silent while the watcher was skipping
+// it on every tick.
+func TestWatcherAndSyncStatusNameTheIgnoredRefsItObserved(t *testing.T) {
+	const strayRef = "refs/workbook/tasks/EVIL"
+	first, second := cliSyncRepositories(t)
+	cliGit(t, first, "push", "origin", "HEAD:"+strayRef)
+
+	output := startCLIWatcher(t, second, "1h")
+
+	if got := strings.Count(output.String(), strayRef); got != 1 {
+		t.Fatalf("watcher named %s %d times on its terminal, want once; wrote %q", strayRef, got, output.String())
+	}
+
+	result := watcherStatus(t, second)
+	if len(result.IgnoredRefs) != 1 || result.IgnoredRefs[0].Ref != strayRef {
+		t.Fatalf("watcher status ignored refs = %#v, want one entry for %s", result.IgnoredRefs, strayRef)
+	}
+	if result.IgnoredRefs[0].PlausibleTask {
+		t.Fatalf("ignored ref %#v was reported as another Workbook's task", result.IgnoredRefs[0])
+	}
+
+	code, stdout, stderr := run(t, second, "sync", "--status")
+	if code != 0 || stderr != "" {
+		t.Fatalf("sync --status = code %d, stderr %q", code, stderr)
+	}
+	for _, want := range []string{
+		"Ignored:\t" + strayRef + "\t" + ignoredRefRemovable + "\t",
+		removalAdvice,
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("sync --status stdout = %q, want it to contain %q", stdout, want)
+		}
+	}
+}
+
 // The whole point of a watcher: another clone's work arrives without anyone
 // running a command here.
 func TestSyncWatchObservesAnotherClonePushWithNoLocalCommand(t *testing.T) {

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/gitstore"
 )
 
 func TestReadLineRefusesALineOverTheLimit(t *testing.T) {
@@ -173,6 +174,53 @@ func TestStatusDropsConflictsPastTheServerBound(t *testing.T) {
 	}
 	if len(encoded)+1 > maxResponseBytes {
 		t.Fatalf("bounded status marshalled to %d bytes, want at most the client's %d", len(encoded)+1, maxResponseBytes)
+	}
+}
+
+// The ignored-ref report is the second thing in a status document that grows
+// with what origin holds rather than with what this clone did, and anyone with
+// push access can grow it. It is bounded for the same reason the conflict set
+// is: an answer past the client's limit is refused, so the watcher would be
+// wedged out of the deferral path while still answering every dial.
+//
+// Its budget is the headroom the conflict budget does not claim, so a status
+// carrying the most of both still fits.
+func TestStatusDropsIgnoredRefsPastTheServerBound(t *testing.T) {
+	name := strings.Repeat("n", 512)
+	entries := make([]gitstore.IgnoredRef, 0, 1024)
+	for index := range 1024 {
+		entries = append(entries, gitstore.IgnoredRef{
+			Ref:    fmt.Sprintf("refs/workbook/tasks/%s%04d", name, index),
+			Reason: "the ref does not name one task",
+		})
+	}
+
+	bounded := boundIgnoredRefs(entries)
+	if len(bounded) == len(entries) {
+		t.Fatalf("boundIgnoredRefs() kept all %d entries, want the tail dropped", len(entries))
+	}
+	if len(bounded) == 0 {
+		t.Fatal("boundIgnoredRefs() kept nothing, want the prefix a reader can act on")
+	}
+	for index := range bounded {
+		if bounded[index].Ref != entries[index].Ref {
+			t.Fatalf("boundIgnoredRefs() entry %d = %q, want the sorted prefix %q",
+				index, bounded[index].Ref, entries[index].Ref)
+		}
+	}
+
+	answer := response{OK: true, Status: &Status{
+		Format:      StatusFormat,
+		Version:     StatusVersion,
+		IgnoredRefs: bounded,
+	}}
+	encoded, err := json.Marshal(answer)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if room := maxResponseBytes - maxConflictBytes; len(encoded)+1 > room {
+		t.Fatalf("bounded ignored refs marshalled to %d bytes, want at most the %d the conflict budget leaves",
+			len(encoded)+1, room)
 	}
 }
 

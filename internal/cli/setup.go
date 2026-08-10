@@ -170,6 +170,13 @@ func runSetup(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 		fmt.Fprintf(stdout, "\t%s", result.Sync.Detail)
 	}
 	fmt.Fprintln(stdout)
+	// setup is the one bootstrap command a fresh clone runs, so it is where a
+	// person first meets an origin holding a ref this build cannot read. The run
+	// completed despite it, and without this the report reached only a caller
+	// who asked for JSON.
+	if result.Sync.Result != nil {
+		writeIgnoredRefs(stdout, result.Sync.Result.Remote, result.Sync.Result.IgnoredRefs())
+	}
 	fmt.Fprintf(stdout, "Tasks:\t%d\n", result.TaskCount)
 	writeConflicts(stdout, conflicts)
 	return syncErr

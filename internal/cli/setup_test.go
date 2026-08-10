@@ -456,3 +456,40 @@ func TestSetupReportsConflictsAndFinishesBootstrapping(t *testing.T) {
 	}
 	assertJSONError(t, stderr, core.CategoryConflict, "")
 }
+
+// setup is the one bootstrap command a fresh clone runs, so it is where a
+// person first meets an origin holding a ref this build cannot read. It
+// synchronized, reported "completed", and named nothing, while `setup --json`
+// carried the report all along.
+//
+// Both phases of the run observe the same stray ref, and it is one ref, so the
+// human report names it once.
+func TestSetupNamesTheRefsItsSynchronizationIgnored(t *testing.T) {
+	const foreignRef = "refs/workbook/tasks/OPS-01K0M6B8A4FTT8C39MXXYTW7D9"
+	first, second := cliSyncRepositories(t)
+	cliCreateTask(t, first, "Shared task")
+	if code, _, stderr := run(t, first, "push"); code != 0 {
+		t.Fatalf("initial push code = %d; stderr = %q", code, stderr)
+	}
+	cliGit(t, first, "push", "origin", "HEAD:refs/workbook/tasks/EVIL")
+	cliGit(t, first, "push", "origin", "HEAD:"+foreignRef)
+
+	code, stdout, stderr := run(t, second, "setup")
+	if code != 0 || stderr != "" {
+		t.Fatalf("poisoned setup code = %d, want 0; stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	for _, want := range []string{
+		"Sync:\tcompleted",
+		"Ignored:\trefs/workbook/tasks/EVIL\t" + ignoredRefRemovable + "\t",
+		"Ignored:\t" + foreignRef + "\t" + ignoredRefPlausible + "\t",
+		removalAdvice,
+		keepWarning,
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("poisoned setup stdout = %q, want it to contain %q", stdout, want)
+		}
+	}
+	if got := strings.Count(stdout, "Ignored:\t"+foreignRef); got != 1 {
+		t.Fatalf("setup named %s %d times, want once for a run that fetches and pushes", foreignRef, got)
+	}
+}

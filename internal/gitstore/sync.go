@@ -49,6 +49,30 @@ type SyncRunResult struct {
 	Push   SyncResult `json:"push"`
 }
 
+// IgnoredRefs merges what the two phases skipped under origin's task namespace,
+// naming each ref once. Fetch reads the pruned tracking mirror and push reads
+// origin directly, so one stray ref is ordinarily reported by both, and a
+// caller that reports a whole run should not name it twice. The order is by ref
+// name so one run's report reads the same as the next.
+func (r SyncRunResult) IgnoredRefs() []IgnoredRef {
+	merged := make([]IgnoredRef, 0, len(r.Fetch.Ignored)+len(r.Push.Ignored))
+	seen := make(map[string]struct{}, cap(merged))
+	for _, phase := range [][]IgnoredRef{r.Fetch.Ignored, r.Push.Ignored} {
+		for _, ignored := range phase {
+			if _, found := seen[ignored.Ref]; found {
+				continue
+			}
+			seen[ignored.Ref] = struct{}{}
+			merged = append(merged, ignored)
+		}
+	}
+	if len(merged) == 0 {
+		return nil
+	}
+	sort.Slice(merged, func(i, j int) bool { return merged[i].Ref < merged[j].Ref })
+	return merged
+}
+
 // fetchState is the single validated view that Fetch produces for Sync. It is
 // deliberately private: callers receive the stable SyncResult while Sync can
 // reuse the canonical and tracking tips without inspecting them again.

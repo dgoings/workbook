@@ -234,6 +234,11 @@ func singleLine(value string) string {
 
 // writeSyncReport prints one line only when synchronization was attempted.
 // A command the user deliberately kept local should not gain output saying so.
+//
+// A fetch that skipped a ref under origin's task namespace names it here too.
+// Synchronization succeeded despite that ref, so this line is otherwise the
+// whole account a mutation gives of what it saw on origin, and the JSON
+// envelope was the only place the report reached anyone.
 func writeSyncReport(output io.Writer, sync *syncReport) {
 	if sync == nil || !sync.Enabled {
 		return
@@ -243,6 +248,9 @@ func writeSyncReport(output io.Writer, sync *syncReport) {
 		fmt.Fprintf(output, "\t%s", sync.Detail)
 	}
 	fmt.Fprintln(output)
+	if sync.Fetch != nil {
+		writeIgnoredRefs(output, sync.Fetch.Remote, sync.Fetch.Ignored)
+	}
 }
 
 func writeSyncedResult(output io.Writer, command string, data any, sync *syncReport, conflicts []core.Conflict) {
@@ -299,7 +307,7 @@ func writeSyncResult(output io.Writer, result gitstore.SyncResult) {
 		fmt.Fprintln(output)
 		// A phase that observed origin's namespace before failing later still
 		// knows which refs it skipped, and they may be why it is being read.
-		writeIgnoredRefs(output, result)
+		writeIgnoredRefs(output, result.Remote, result.Ignored)
 		return
 	}
 	if result.Status == gitstore.SyncPhaseSkipped {
@@ -310,7 +318,7 @@ func writeSyncResult(output io.Writer, result gitstore.SyncResult) {
 		fmt.Fprintln(output)
 		return
 	}
-	writeIgnoredRefs(output, result)
+	writeIgnoredRefs(output, result.Remote, result.Ignored)
 	if len(result.Tasks) == 0 {
 		fmt.Fprintf(output, "No task refs on %s.\n", result.Remote)
 		return
@@ -334,11 +342,14 @@ const (
 	ignoredRefPlausible = "may be another Workbook's task"
 )
 
-// writeIgnoredRefs names every ref the phase skipped, whether any project's ID
-// format could produce that name, why it was skipped, and — only when some name
-// no project can own is listed — the command that removes one. Synchronization
+// writeIgnoredRefs names every skipped ref, whether any project's ID format
+// could produce that name, why it was skipped, and — only when some name no
+// project can own is listed — the command that removes one. Synchronization
 // succeeded despite these refs, so the report is the only thing standing
 // between a poisoned namespace and nobody noticing.
+//
+// It takes the refs rather than a phase because the same report is written for
+// one phase, for a whole run, and for what a watcher last observed.
 //
 // It is also the only place Workbook suggests deleting anything from a shared
 // remote, and shared task history is append-only. A name this build does not
@@ -347,12 +358,12 @@ const (
 // for the command on the ones that may be history, and even the command that is
 // offered is phrased as a decision the reader makes about a specific ref rather
 // than a step to take.
-func writeIgnoredRefs(output io.Writer, result gitstore.SyncResult) {
-	if len(result.Ignored) == 0 {
+func writeIgnoredRefs(output io.Writer, remote string, refs []gitstore.IgnoredRef) {
+	if len(refs) == 0 {
 		return
 	}
 	removable := 0
-	for _, ignored := range result.Ignored {
+	for _, ignored := range refs {
 		verdict := ignoredRefPlausible
 		if !ignored.PlausibleTask {
 			verdict = ignoredRefRemovable
@@ -360,14 +371,14 @@ func writeIgnoredRefs(output io.Writer, result gitstore.SyncResult) {
 		}
 		fmt.Fprintf(output, "Ignored:\t%s\t%s\t%s\n", ignored.Ref, verdict, ignored.Reason)
 	}
-	fmt.Fprintf(output, "\tkept on %s; Workbook deletes no ref there.\n", result.Remote)
-	if removable < len(result.Ignored) {
+	fmt.Fprintf(output, "\tkept on %s; Workbook deletes no ref there.\n", remote)
+	if removable < len(refs) {
 		fmt.Fprintf(output, "\tdeleting a %q ref would destroy a newer Workbook's or another project's history.\n",
 			ignoredRefPlausible)
 	}
 	if removable > 0 {
 		fmt.Fprintf(output, "\tremove a %q ref with: git push %s --delete <ref>\n",
-			ignoredRefRemovable, result.Remote)
+			ignoredRefRemovable, remote)
 	}
 }
 
