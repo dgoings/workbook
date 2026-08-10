@@ -346,10 +346,11 @@ func TestWarmTaskListScenarioReadsThePopulatedBoard(t *testing.T) {
 	}
 }
 
-// TestWarmTaskListScenarioHasNoApprovedDurationTarget keeps the new read
-// surface descriptive. The 100 ms warm budget was approved for a mutation, and
-// attaching it to a whole-board read would publish a pass/fail classification
-// nobody approved.
+// TestWarmTaskListScenarioHasNoApprovedDurationTarget keeps the warm read
+// surface descriptive. The read-path target policy that budgets `cli-list` and
+// `cli-show` covers the cold CLI surface; the warm budget was approved for a
+// mutation, and attaching it to a warm read would publish a pass/fail
+// classification nobody approved.
 func TestWarmTaskListScenarioHasNoApprovedDurationTarget(t *testing.T) {
 	for _, result := range warmHTTPResults(1) {
 		if result.Name != "api-tasks" {

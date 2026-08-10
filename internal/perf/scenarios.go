@@ -999,6 +999,11 @@ func measureLocalBareSync(
 	return results, nil
 }
 
+// coldSingleTarget budgets a local command that performs no round trip. It
+// covers reads as well as mutations, approved 2026-08-10: `cli-list` and
+// `cli-show` answer from the local projection, so the local class is theirs
+// too, and a read that fetches first belongs in coldAutoSyncTarget instead.
+// docs/performance/README.md records the policy.
 var coldSingleTarget = ScenarioTarget{
 	DurationStatistic:  DurationP95,
 	DurationComparison: DurationAtMost,
@@ -1049,10 +1054,6 @@ func coldCLIResult(name string, samples int) ScenarioResult {
 		// synchronized class rather than held to a local budget it cannot
 		// meet by design.
 		target = &coldAutoSyncTarget
-	case "cli-list":
-		// The read path has no approved duration budget, so it is reported
-		// descriptively rather than classified against an invented threshold.
-		target = nil
 	}
 	return ScenarioResult{Name: name, Surface: "cold-cli", Target: target, Samples: make([]Sample, samples)}
 }
@@ -1063,9 +1064,10 @@ func warmHTTPResult(name string, samples int) ScenarioResult {
 	case "api-burst-independent-10", "api-burst-same-task-10":
 		target = &burstTarget
 	case "api-tasks":
-		// The 100 ms warm budget was approved for a single mutation. The read
-		// path has no approved budget, so it is reported descriptively rather
-		// than classified against an invented threshold.
+		// The read-path target policy covers the cold CLI surface. The warm
+		// budget was approved for a single mutation and no warm read budget
+		// has been approved, so this one is still reported descriptively
+		// rather than classified against an invented threshold.
 		target = nil
 	}
 	return ScenarioResult{

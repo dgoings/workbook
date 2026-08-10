@@ -60,15 +60,23 @@ func TestColdListScenarioRebuildsProjectionBeforeTheTimedListCommand(t *testing.
 	}
 }
 
-// Mutation witness: attaching the approved 200 ms single-mutation budget to the
-// new read path would publish a pass/fail classification nobody approved.
-func TestColdListScenarioHasNoApprovedDurationTarget(t *testing.T) {
+// TestColdListScenarioCarriesTheApprovedLocalBudget records the approved read
+// path target. `workbook list` answers from the local projection and never
+// fetches, so it belongs to the same 200 ms local class as `cli-show` and the
+// single-task mutations; leaving it descriptive would report the cheapest
+// measured cold command as the one nothing classifies.
+//
+// Mutation witness: restoring the nil target, or pricing the local read in the
+// 1,000 ms synchronized class, would stop reporting a regression this scenario
+// exists to catch.
+func TestColdListScenarioCarriesTheApprovedLocalBudget(t *testing.T) {
+	want := ScenarioTarget{DurationStatistic: DurationP95, DurationComparison: DurationAtMost, MaxMilliseconds: 200}
 	for _, result := range coldCLIResults(1) {
 		if result.Name != "cli-list" {
 			continue
 		}
-		if result.Target != nil {
-			t.Fatalf("cli-list target = %#v, want no approved target", result.Target)
+		if result.Target == nil || *result.Target != want {
+			t.Fatalf("cli-list target = %#v, want the local budget %#v", result.Target, want)
 		}
 		return
 	}
