@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -86,6 +87,126 @@ func TestSetupBootstrapsNarrowedClones(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A checkout that predates a project's Workbook adoption has no tracked
+// configuration in its working tree, but the project already exists: its
+// configuration is committed on origin's default branch. Setup must join that
+// project rather than mint a second identity whose private guard then rejects
+// the real configuration on every later command.
+func TestSetupJoinsExistingOriginProjectFromPreWorkbookBranch(t *testing.T) {
+	_, seed, stale := originAdoptedAfterClone(t)
+
+	if code, _, stderr := run(t, seed, "setup"); code != 0 {
+		t.Fatalf("seed setup code = %d, want 0; stderr = %q", code, stderr)
+	}
+	cliGit(t, seed, "add", ".workbook/config.json")
+	cliGit(t, seed, "commit", "--quiet", "-m", "Initialize Workbook")
+	cliGit(t, seed, "push", "--quiet", "origin", "main")
+	seeded := []string{
+		cliCreateTask(t, seed, "Shared before the stale checkout ran setup").ID,
+		cliCreateTask(t, seed, "Also shared before the stale checkout ran setup").ID,
+	}
+	if code, _, stderr := run(t, seed, "push"); code != 0 {
+		t.Fatalf("seed push code = %d, want 0; stderr = %q", code, stderr)
+	}
+
+	if code, _, stderr := run(t, stale, "setup"); code != 0 {
+		t.Fatalf("stale setup code = %d, want 0; stderr = %q", code, stderr)
+	}
+	if got, want := projectIDOf(t, stale), projectIDOf(t, seed); got != want {
+		t.Fatalf("stale checkout adopted project %q, want origin's %q", got, want)
+	}
+	if code, _, stderr := run(t, stale, "sync"); code != 0 {
+		t.Fatalf("stale sync code = %d, want 0; stderr = %q", code, stderr)
+	}
+	if got := listedTaskIDs(t, stale); !sameIDs(got, seeded) {
+		t.Fatalf("adopted tasks = %v, want %v", got, seeded)
+	}
+}
+
+// When origin holds Workbook task refs but its default branch never gained the
+// tracked configuration, setup cannot know which project the tasks belong to.
+// Minting a fresh identity would wedge the repository behind a guard mismatch
+// the moment the real configuration arrives, so setup must refuse and leave no
+// identity behind.
+func TestSetupRefusesToMintWhenOriginHasTasksButNoCommittedConfig(t *testing.T) {
+	_, seed, stale := originAdoptedAfterClone(t)
+
+	if code, _, stderr := run(t, seed, "setup"); code != 0 {
+		t.Fatalf("seed setup code = %d, want 0; stderr = %q", code, stderr)
+	}
+	cliCreateTask(t, seed, "Published without committing the configuration")
+	if code, _, stderr := run(t, seed, "push"); code != 0 {
+		t.Fatalf("seed push code = %d, want 0; stderr = %q", code, stderr)
+	}
+
+	code, _, stderr := run(t, stale, "setup")
+	if code == 0 {
+		t.Fatal("stale setup code = 0, want a refusal to mint a second project")
+	}
+	if !strings.Contains(stderr, ".workbook/config.json") {
+		t.Fatalf("stale setup stderr %q does not tell the user what origin is missing", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(stale, ".workbook", "config.json")); !os.IsNotExist(err) {
+		t.Fatalf("refused setup left a tracked configuration behind (stat error = %v)", err)
+	}
+	if _, err := os.Stat(filepath.Join(stale, ".git", "workbook", "project.json")); !os.IsNotExist(err) {
+		t.Fatalf("refused setup published a project guard (stat error = %v)", err)
+	}
+}
+
+// --no-sync keeps bootstrap fully local, so it must keep working when origin
+// cannot even be reached — it is the escape hatch the origin probe's failure
+// message recommends.
+func TestSetupNoSyncSkipsOriginProbe(t *testing.T) {
+	repo := testrepo.New(t)
+	cliGit(t, repo, "remote", "add", "origin", filepath.Join(t.TempDir(), "missing.git"))
+	if code, _, stderr := run(t, repo, "setup", "--no-sync"); code != 0 {
+		t.Fatalf("setup --no-sync code = %d, want 0; stderr = %q", code, stderr)
+	}
+}
+
+func projectIDOf(t *testing.T, repository string) string {
+	t.Helper()
+	contents, err := os.ReadFile(filepath.Join(repository, ".workbook", "config.json"))
+	if err != nil {
+		t.Fatalf("read tracked configuration: %v", err)
+	}
+	var config core.ProjectConfig
+	if err := json.Unmarshal(contents, &config); err != nil {
+		t.Fatalf("decode tracked configuration: %v", err)
+	}
+	return config.ProjectID
+}
+
+// originAdoptedAfterClone builds a bare origin, a seed clone that will adopt
+// Workbook, and a second clone taken before that adoption whose checkout
+// therefore lacks the tracked configuration.
+func originAdoptedAfterClone(t *testing.T) (string, string, string) {
+	t.Helper()
+	bare := filepath.Join(t.TempDir(), "origin.git")
+	cliGit(t, t.TempDir(), "init", "--bare", "--quiet", bare)
+	cliGit(t, bare, "config", "receive.autogc", "false")
+	cliGit(t, bare, "config", "gc.auto", "0")
+	cliGit(t, bare, "config", "maintenance.auto", "false")
+
+	seed := testrepo.New(t)
+	cliGit(t, seed, "branch", "-M", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cliGit(t, seed, "add", "README.md")
+	cliGit(t, seed, "commit", "--quiet", "-m", "Before Workbook")
+	cliGit(t, seed, "remote", "add", "origin", bare)
+	cliGit(t, seed, "push", "--quiet", "-u", "origin", "main")
+	cliGit(t, bare, "symbolic-ref", "HEAD", "refs/heads/main")
+
+	stale := filepath.Join(t.TempDir(), "stale")
+	cliGit(t, t.TempDir(), "clone", "--quiet", bare, stale)
+	cliGit(t, stale, "config", "user.name", "Workbook Test")
+	cliGit(t, stale, "config", "user.email", "workbook@example.test")
+	return bare, seed, stale
 }
 
 func listedTaskIDs(t *testing.T, repository string) []string {

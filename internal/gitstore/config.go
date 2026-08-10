@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/oklog/ulid/v2"
@@ -48,7 +49,7 @@ func (r *Repository) Init(ctx context.Context, key string, ids core.IDSource) (c
 	switch {
 	case trackedExists && guardExists:
 		if !tracked.SameIdentity(guard) {
-			return core.ProjectConfig{}, false, core.Errorf(core.CategoryCorruptData, "tracked Workbook configuration does not match common project guard")
+			return core.ProjectConfig{}, false, r.guardMismatch(tracked, guard)
 		}
 		if err := validateRequestedProjectKey(key, tracked); err != nil {
 			return core.ProjectConfig{}, false, err
@@ -105,6 +106,117 @@ func (r *Repository) Init(ctx context.Context, key string, ids core.IDSource) (c
 	return r.rememberConfig(persisted), published, nil
 }
 
+// AdoptOriginProject joins the Workbook project that origin already carries.
+//
+// A checkout that predates a project's Workbook adoption has no tracked
+// configuration for Init to find, and minting a fresh identity there splits
+// the repository into two projects: the common guard records the minted
+// identity and then rejects the real configuration the moment Git delivers
+// it. So before Init may mint, bootstrap asks origin. A configuration
+// committed on origin's default branch is adopted into the working tree;
+// task refs on origin without any such configuration stop bootstrap, because
+// the tasks prove a project exists that this probe cannot name.
+//
+// The probe runs only when neither the tracked configuration nor the guard
+// exists; callers skip it entirely when the user asked for --no-sync.
+func (r *Repository) AdoptOriginProject(ctx context.Context, key string) (core.ProjectConfig, bool, error) {
+	if err := r.verifyIdentity(ctx); err != nil {
+		return core.ProjectConfig{}, false, err
+	}
+	if err := core.ValidateProjectKey(key); err != nil {
+		return core.ProjectConfig{}, false, err
+	}
+	if _, exists, err := r.readConfig(); err != nil || exists {
+		return core.ProjectConfig{}, false, err
+	}
+	if _, exists, err := r.readProjectGuard(); err != nil || exists {
+		return core.ProjectConfig{}, false, err
+	}
+	if _, err := r.Git(ctx, nil, "remote", "get-url", "origin"); err != nil {
+		return core.ProjectConfig{}, false, nil
+	}
+
+	listing, err := r.Git(ctx, nil, "ls-remote", "origin", "HEAD", taskRefPrefix+"*")
+	if err != nil {
+		return core.ProjectConfig{}, false, core.Wrap(core.CategoryOperational,
+			"cannot ask origin whether a Workbook project already exists; use --no-sync to bootstrap without consulting origin", err)
+	}
+	head, tasks := parseOriginProbe(listing)
+	if !head && !tasks {
+		return core.ProjectConfig{}, false, nil
+	}
+
+	var discovered core.ProjectConfig
+	found := false
+	if head {
+		discovered, found, err = r.readOriginHeadConfig(ctx)
+		if err != nil {
+			return core.ProjectConfig{}, false, err
+		}
+	}
+	if !found {
+		if tasks {
+			return core.ProjectConfig{}, false, core.Errorf(core.CategoryOperational,
+				"origin already has Workbook task refs, but its default branch has no .workbook/config.json naming their project; check out or merge the branch that adds .workbook/config.json, then rerun workbook setup")
+		}
+		return core.ProjectConfig{}, false, nil
+	}
+	if discovered.Key != key {
+		return core.ProjectConfig{}, false, core.Errorf(core.CategoryValidation,
+			"origin already has a Workbook project with key %q; rerun workbook setup --key %q to join it", discovered.Key, discovered.Key)
+	}
+	if err := r.writeConfig(discovered); err != nil {
+		return core.ProjectConfig{}, false, err
+	}
+	return discovered, true, nil
+}
+
+// parseOriginProbe reads one ls-remote listing of origin's HEAD and Workbook
+// task namespace.
+func parseOriginProbe(listing []byte) (head, tasks bool) {
+	for _, line := range strings.Split(string(listing), "\n") {
+		_, refname, ok := strings.Cut(line, "\t")
+		if !ok {
+			continue
+		}
+		if refname == "HEAD" {
+			head = true
+		}
+		if strings.HasPrefix(refname, taskRefPrefix) {
+			tasks = true
+		}
+	}
+	return head, tasks
+}
+
+// readOriginHeadConfig fetches origin's default branch and decodes the
+// tracked Workbook configuration it carries, if any. It reports absence
+// rather than failure when the branch has no configuration: a plain project
+// adopting Workbook for the first time looks exactly like that.
+func (r *Repository) readOriginHeadConfig(ctx context.Context) (core.ProjectConfig, bool, error) {
+	if _, err := r.Git(ctx, nil, "fetch", "--no-tags", "--no-auto-maintenance", "origin", "HEAD"); err != nil {
+		return core.ProjectConfig{}, false, core.Wrap(core.CategoryOperational, "cannot fetch origin's default branch", err)
+	}
+	oid, err := r.Git(ctx, nil, "rev-parse", "--verify", "--quiet", "FETCH_HEAD:"+configPath)
+	if err != nil {
+		return core.ProjectConfig{}, false, nil
+	}
+	blob, err := gitSingleLine(oid)
+	if err != nil {
+		return core.ProjectConfig{}, false, core.Errorf(core.CategoryOperational, "cannot resolve origin's Workbook configuration: %v", err)
+	}
+	contents, err := r.Git(ctx, nil, "cat-file", "blob", blob)
+	if err != nil {
+		return core.ProjectConfig{}, false, err
+	}
+	config, err := decodeConfig(contents)
+	if err != nil {
+		return core.ProjectConfig{}, false, core.Wrap(core.CategoryCorruptData,
+			"origin's default branch carries a Workbook configuration this version cannot adopt", err)
+	}
+	return config, true, nil
+}
+
 // LoadConfig returns the repository's validated Workbook configuration.
 func (r *Repository) LoadConfig() (core.ProjectConfig, error) {
 	r.metadataMu.Lock()
@@ -126,7 +238,7 @@ func (r *Repository) LoadConfig() (core.ProjectConfig, error) {
 	}
 	if guardExists {
 		if !tracked.SameIdentity(guard) {
-			return core.ProjectConfig{}, core.Errorf(core.CategoryCorruptData, "tracked Workbook configuration does not match common project guard")
+			return core.ProjectConfig{}, r.guardMismatch(tracked, guard)
 		}
 		r.config = tracked
 		r.configLoaded = true
@@ -220,6 +332,17 @@ func (r *Repository) rememberConfig(config core.ProjectConfig) core.ProjectConfi
 		r.configLoaded = true
 	}
 	return r.config
+}
+
+// guardMismatch reports a tracked configuration and common project guard that
+// name different projects. The guard lives inside the common Git directory,
+// out of reach of any working-tree cleanup, so the error itself must name the
+// file and the way out.
+func (r *Repository) guardMismatch(tracked, guard core.ProjectConfig) error {
+	return core.Errorf(core.CategoryCorruptData,
+		"tracked Workbook configuration does not match common project guard: %s names project %s (key %s) but %s names project %s (key %s); if the tracked configuration is this repository's project, delete the guard file and rerun the command — Workbook republishes the guard from the tracked configuration",
+		filepath.Join(r.Root, configPath), tracked.ProjectID, tracked.Key,
+		filepath.Join(r.CommonGitDir, "workbook", projectGuard), guard.ProjectID, guard.Key)
 }
 
 func (r *Repository) readConfig() (core.ProjectConfig, bool, error) {

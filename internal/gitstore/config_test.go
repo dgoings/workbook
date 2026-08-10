@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -888,6 +889,41 @@ func TestLoadConfigStillRejectsProjectIdentityMismatch(t *testing.T) {
 	}
 	if _, err := fresh.LoadConfig(); err == nil || core.CategoryOf(err) != core.CategoryCorruptData {
 		t.Fatalf("LoadConfig() error = %v, want corrupt-data for a swapped project identity", err)
+	}
+}
+
+// The mismatch error must carry its own way out. The guard lives inside the
+// common Git directory where no working-tree cleanup reaches it, so an error
+// that names neither the file nor the recovery leaves the repository unusable.
+func TestLoadConfigGuardMismatchNamesGuardPathAndRecovery(t *testing.T) {
+	ctx := context.Background()
+	repoDir := testrepo.New(t)
+	repo, err := Open(ctx, repoDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, _, err := repo.Init(ctx, "WB", fixedIDs())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	foreign := config
+	foreign.ProjectID = "01K0M65GBZ8F5ZQX0VC1J8H3TQ"
+	writeProjectConfigFile(t, filepath.Join(repoDir, configPath), foreign)
+
+	fresh, err := Open(ctx, repoDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = fresh.LoadConfig()
+	if err == nil {
+		t.Fatal("LoadConfig() error = nil, want a guard mismatch")
+	}
+	guardPath := filepath.Join(fresh.CommonGitDir, "workbook", projectGuard)
+	for _, want := range []string{guardPath, config.ProjectID, foreign.ProjectID, "delete"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("LoadConfig() error %q does not contain %q", err, want)
+		}
 	}
 }
 

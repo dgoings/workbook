@@ -65,6 +65,15 @@ func runSetup(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 	if err != nil {
 		return err
 	}
+	// A checkout that predates the project's Workbook adoption carries no
+	// tracked configuration, so Init alone would mint a second identity for a
+	// project origin already has. Ask origin first; --no-sync keeps bootstrap
+	// fully local.
+	if !*noSync {
+		if _, _, err := repository.AdoptOriginProject(ctx, *key); err != nil {
+			return err
+		}
+	}
 	config, _, err := repository.Init(ctx, *key, core.CryptoULIDSource{})
 	if err != nil {
 		return err
