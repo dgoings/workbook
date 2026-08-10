@@ -20,9 +20,15 @@ import (
 // separates "the server is gone" from "the server refused this write and the
 // board cannot see what it holds instead".
 
+// The third test is the other side of that line: a refresh whose read of the
+// board landed and whose *relationship* context was then overtaken. It answers
+// "superseded" like a refresh that never read anything, and treating the two
+// alike calls a board that is showing the server's version an outage.
+
 const (
 	refusedRefreshBoardTaskID  = "WB-01J0000000000000000000RR01"
 	refusedRefreshDetailTaskID = "WB-01J0000000000000000000RR02"
+	refusedRefreshSupersededID = "WB-01J0000000000000000000RR03"
 )
 
 // A stale write whose forced refresh fails leaves the queue holding a head the
@@ -291,5 +297,165 @@ setTimeout(async () => {
 `
 	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute refused save behavior when the forced refresh fails: %v\n%s", err, output)
+	}
+}
+
+// A forced refresh reads the board, replaces the model with it and clears the
+// stale banner, and *then* refreshes the relationship context of whatever
+// detail route is open. When that second half is overtaken — an ordinary route
+// render is enough, because rendering one drops the controller the refresh is
+// holding — the whole refresh answers "superseded", the same word a refresh
+// that never reached the server answers with.
+//
+// The queue must not read that as an outage. The board it is looking at is the
+// server's, the banner above it says so, and the head it holds is the one the
+// refused write needs. Dropping the intents behind the conflict there would
+// re-open the bug this whole change closes, and report an outage over a board
+// that is current.
+//
+// The route change is driven where the reviewer found it: while the relationship
+// half of the forced refresh is waiting on its deleted-task read.
+func TestHandlerClientStaleWriteRebasesWhenOnlyTheRelationshipContextIsSuperseded(t *testing.T) {
+	node := requireNode(t)
+	moved := clientPlacementTask(refusedRefreshSupersededID, "Moved", core.StatusReady, core.PriorityMedium)
+	moved.Head = "head-1"
+	elsewhere := moved
+	elsewhere.Title = "Renamed elsewhere"
+	elsewhere.Head = "head-2"
+	confirmed := elsewhere
+	confirmed.Status = core.StatusDone
+	confirmed.Head = "head-3"
+	tasks := []core.Task{moved}
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
+
+	response := request(t, handler, http.MethodGet, "/")
+	script := renderedClientScript(t, response.Body.String())
+	document := mustJSON(t, TasksDocument{
+		Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks),
+	})
+	refreshed := mustJSON(t, TasksDocument{
+		Format: "workbook.tasks", Version: 1,
+		Tasks: []core.Task{elsewhere}, Presentation: presentationForTasks([]core.Task{elsewhere}),
+	})
+
+	program := clientDOMHarness("/", string(document)) + script + `
+setTimeout(async () => {
+  const ready = boardLists.find((list) => list.dataset.status === "ready");
+  const inProgress = boardLists.find((list) => list.dataset.status === "in-progress");
+  const done = boardLists.find((list) => list.dataset.status === "done");
+  const dataTransfer = { effectAllowed: "", dropEffect: "", setData() {} };
+  const linkTo = (path) => {
+    const link = new TestElement("a");
+    link.href = path;
+    return {
+      target: link, button: 0, defaultPrevented: false,
+      metaKey: false, ctrlKey: false, shiftKey: false, altKey: false,
+      preventDefault() {}
+    };
+  };
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  const boardFetch = globalThis.fetch;
+  const heads = [];
+  let releaseMutation = null;
+  let releaseDeletedRead = null;
+  // Held only for the read the *forced* refresh makes. The one the detail route
+  // makes when it opens has to land, or the route change below would be
+  // superseding a refresh that was never waiting on anything.
+  let holdDeletedRead = false;
+  globalThis.fetch = async (url, options = {}) => {
+    if ((options.method || "GET") !== "GET") {
+      fetchCalls.push({ url, options });
+      const body = JSON.parse(options.body);
+      heads.push(body.expectedHead);
+      if (heads.length === 1) {
+        return new Promise((resolve) => {
+          releaseMutation = () => {
+            // The server has moved to head-2, and the refresh the refusal
+            // forces is going to read exactly that.
+            taskResponse = ` + string(refreshed) + `;
+            resolve({ ok: false, json: async () => ({
+              format: "workbook.error", version: 1,
+              error: { category: "stale-write", message: "task has changed since head-1; reload and try again" }
+            }) });
+          };
+        });
+      }
+      await settle();
+      if (body.expectedHead !== "head-2") {
+        return { ok: false, json: async () => ({
+          format: "workbook.error", version: 1,
+          error: { category: "stale-write", message: "task has changed since " + body.expectedHead + "; reload and try again" }
+        }) };
+      }
+      return { ok: true, json: async () => ({
+        format: "workbook.task-mutation", version: 1, task: ` + string(mustJSON(t, confirmed)) + `
+      }) };
+    }
+    if (url === "/api/tasks?deleted=true" && holdDeletedRead) {
+      fetchCalls.push({ url, options });
+      return new Promise((resolve) => {
+        releaseDeletedRead = () => resolve({ ok: true, json: async () => deletedTaskResponse });
+      });
+    }
+    return boardFetch(url, options);
+  };
+
+  const first = ready.querySelectorAll(".task-card").find((item) => item.dataset.taskId === ` + strconv.Quote(moved.ID) + `);
+  first.rect = { top: 0, bottom: 80 };
+  documentEventListeners.dragstart({ target: first, dataTransfer });
+  const firstDrop = documentEventListeners.drop({ target: inProgress, clientY: 1, dataTransfer, preventDefault() {} });
+  await settle();
+  if (!releaseMutation) throw new Error("the first intent never reached the server");
+
+  const second = inProgress.querySelectorAll(".task-card").find((item) => item.dataset.taskId === ` + strconv.Quote(moved.ID) + `);
+  second.rect = { top: 0, bottom: 80 };
+  documentEventListeners.dragstart({ target: second, dataTransfer });
+  const secondDrop = documentEventListeners.drop({ target: done, clientY: 1, dataTransfer, preventDefault() {} });
+
+  // The reader opens the task's page while that write is still in flight, which
+  // is what gives the forced refresh a relationship context to refresh at all.
+  await documentEventListeners.click(linkTo("/tasks/" + encodeURIComponent(` + strconv.Quote(moved.ID) + `)));
+  await settle();
+
+  holdDeletedRead = true;
+  releaseMutation();
+  await settle();
+  if (!releaseDeletedRead) {
+    throw new Error("the forced refresh never reached the relationship half a route change could supersede");
+  }
+  // The board read has already landed by now: the model and the banner are the
+  // server's, and only the relationship half is still waiting.
+  if (stale.dataset.visible === "true") {
+    throw new Error("the forced refresh did not read the board before its relationship half waited");
+  }
+
+  // Back to the board. renderRoute drops the controller the in-flight
+  // relationship refresh is holding, so that refresh — and with it the whole
+  // forced refresh — answers "superseded".
+  await documentEventListeners.click(linkTo("/"));
+  releaseDeletedRead();
+  await Promise.all([firstDrop, secondDrop]);
+
+  if (heads.length !== 2 || heads[1] !== "head-2") {
+    throw new Error("the queue did not re-base on a refresh that had read the board: " + JSON.stringify(heads));
+  }
+  if (!done.querySelectorAll(".task-card").some((item) => item.dataset.taskId === ` + strconv.Quote(moved.ID) + `)) {
+    throw new Error("the intent behind the conflict did not land against the refreshed head");
+  }
+  const reported = cardFailureMessage(boardCard(` + strconv.Quote(moved.ID) + `));
+  if (!reported.includes("changed elsewhere")) {
+    throw new Error("the conflict was not reported as such on the card: " + JSON.stringify(reported));
+  }
+  if (reported.includes("could not be refreshed")) {
+    throw new Error("an outage was reported over a board showing the server's version: " + JSON.stringify(reported));
+  }
+  if (stale.dataset.visible === "true") {
+    throw new Error("the banner called a board it had just read stale");
+  }
+}, 0);
+`
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute stale-write behavior when only the relationship context is superseded: %v\n%s", err, output)
 	}
 }

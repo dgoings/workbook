@@ -2451,16 +2451,17 @@
               const rebase = await refreshedTaskHead(task.id);
               if (main.firstElementChild !== section) return;
               if (rebase.head) expectedHead = rebase.head;
-              // Only a refresh that landed can invite the retry. Without one
-              // this form is still proposing the head the server just refused,
-              // and "save again to apply them to the version the server holds"
-              // would be sending the reader into the identical refusal on the
-              // strength of a version nobody has read. What it says instead is
-              // what is true: the version to save against has not been read
-              // yet. The poll is already working on that, and the banner says
-              // so while it is; the next refusal that lands re-bases the form
-              // and brings the invitation back with it.
-              text(result, rebase.applied
+              // Only a refresh that read the board can invite the retry.
+              // Without one this form is still proposing the head the server
+              // just refused, and "save again to apply them to the version the
+              // server holds" would be sending the reader into the identical
+              // refusal on the strength of a version nobody has read. What it
+              // says instead is what is true: the version to save against has
+              // not been read yet. The poll is already working on that, and the
+              // banner says so while it is; the next refusal whose refresh
+              // reads the board re-bases the form and brings the invitation
+              // back with it.
+              text(result, rebase.boardRead
                 ? "That task changed elsewhere. Your edits are kept; save again to apply them to the version the server holds."
                 : "That task changed elsewhere, and the latest version could not be loaded. Your edits are kept; save again once the board is current.");
               return;
@@ -2726,9 +2727,9 @@
               // name a task it can no longer look up names nothing.
               const subject = nameTask(taskID);
               // Whether the board this report is written against is the
-              // server's. Only a refresh that landed makes it so, and only a
+              // server's. Only a refresh that read it makes it so, and only a
               // stale write forces one.
-              let refreshApplied = true;
+              let boardRead = true;
               if (error && error.category === "stale-write") {
                 // The refusal means this queue is holding a head the server
                 // has moved past. Waiting for the refresh it forces and
@@ -2738,23 +2739,28 @@
                 // the clobbering the rollback above is trying to avoid.
                 const rebase = await refreshedTaskHead(taskID);
                 if (rebase.head) entry.head = rebase.head;
-                if (!rebase.applied) {
-                  // A refresh that never landed leaves this queue holding the
-                  // refused head with nothing newer to put in its place, and
-                  // the two ways to carry on are both worse than stopping.
-                  // Sending the intents behind this one against that head is
-                  // the identical failure the re-base exists to prevent;
-                  // sending them unguarded would overwrite the change that
-                  // caused the refusal, which is the whole reason the guard is
-                  // there. So they are refused here instead — the same answer
-                  // the server would give them, without the round trip — and
-                  // the report below says the board could not be read rather
-                  // than claiming the card shows what the server holds.
+                if (!rebase.boardRead) {
+                  // A refresh that never read the board leaves this queue
+                  // holding the refused head with nothing newer to put in its
+                  // place, and the two ways to carry on are both worse than
+                  // stopping. Sending the next intent against that head is the
+                  // identical failure the re-base exists to prevent; sending it
+                  // unguarded would overwrite the change that caused the
+                  // refusal, which is the whole reason the guard is there.
                   //
-                  // Nothing is stranded by that. The poll goes on running, the
-                  // model converges as soon as one gets through, and the
+                  // The intents after that next one are a real trade rather
+                  // than a free one. Each refusal forces a refresh of its own,
+                  // so a one-request outage could have ended in time for the
+                  // third intent to land. They are dropped anyway: the outage
+                  // is reported and the board rolls back to what it read, so
+                  // the loss is visible and re-doable, which is worth more than
+                  // a queue that keeps writing while it cannot see the board it
+                  // is writing to.
+                  //
+                  // Nothing is stranded either way. The poll goes on running,
+                  // the model converges as soon as one gets through, and the
                   // reader's next change is queued against the head it read.
-                  refreshApplied = false;
+                  boardRead = false;
                   entry.queue.length = 0;
                 }
               }
@@ -2764,7 +2770,7 @@
               // after it: it is held outside the model and drawn on the card,
               // and only a dismissal or the reader's next change to that card
               // takes it away.
-              reportIntentFailure(taskID, subject, error, refreshApplied);
+              reportIntentFailure(taskID, subject, error, boardRead);
               withdrawFailedIntentFromOpenDetail(taskID, error);
             }
             rerender();
@@ -2777,24 +2783,29 @@
       }
       // What a refused write can re-base onto: the head the server holds for a
       // task once the refresh this caller forced has settled, and whether that
-      // refresh is what the answer came from. A refresh superseded by a newer
-      // one is followed rather than trusted, so the answer is never older than
-      // the write that asked for it.
+      // refresh read the board at all. A refresh superseded by a newer one is
+      // followed rather than trusted, so the answer is never older than the
+      // write that asked for it.
       //
-      // Only a refresh that applied can answer at all. One that failed leaves
+      // Only a refresh that read the board can answer. One that did not leaves
       // the model at the last successful poll, whose head for this task is the
       // one the server has just refused — answering from it would re-base a
       // write onto the very head it was refused for, and the retry that
-      // invites is refused identically. A superseded one is a refresh whose own
-      // answer never reached the model either. Both report no head, so no
-      // caller can mistake the board's last reading for the server's current
-      // one, and `applied` is what separates "the server holds nothing for this
-      // task any more" from "this board has not been able to ask".
+      // invites is refused identically.
+      //
+      // It is the read that is asked about rather than the status, because the
+      // status also carries the fate of the relationship context refreshed
+      // after it, and a board that has just been replaced with the server's
+      // version is not an outage however that second half ended. What is left
+      // in `boardRead` is the one question a re-base turns on: is what the
+      // model now holds something this refresh read from the server. `head`
+      // separately distinguishes "the server holds nothing for this task any
+      // more" from "this board has not been able to ask".
       async function refreshedTaskHead(taskID) {
         const result = await currentRefreshResult(refresh());
-        if (result.status !== "applied") return { applied: false, head: "" };
+        if (!result.boardRead) return { boardRead: false, head: "" };
         const refreshed = latestTasks.find((candidate) => candidate.id === taskID);
-        return { applied: true, head: refreshed && refreshed.head || "" };
+        return { boardRead: true, head: refreshed && refreshed.head || "" };
       }
       // The indicator says what the next mutation will do, which is why it is
       // read from the server rather than assumed: a board set to defer still
@@ -2856,19 +2867,22 @@
       // it. `subject` is the caller's, because by the time a refusal is reported
       // the refresh it forced can already have taken the task out of the model.
       //
-      // A conflict whose forced refresh failed is a third thing to say. "The
-      // card shows the version the server holds" is exactly what that card
-      // cannot claim — the request that would have fetched that version is the
-      // one that failed — and the queue behind the refusal stopped rather than
-      // send against a head the server had already refused, so the report says
-      // both. The lifted wording is left alone: a report is only lifted once a
-      // poll has succeeded and stopped drawing the card, and by then the board
-      // being unreadable is no longer what the reader is looking at.
-      function reportIntentFailure(taskID, subject, error, refreshApplied) {
+      // A conflict whose forced refresh never read the board is a third thing
+      // to say. "The card shows the version the server holds" is exactly what
+      // that card cannot claim — the request that would have fetched that
+      // version is the one that failed — and the queue behind the refusal
+      // stopped rather than send against a head the server had already refused,
+      // so the report says both. It is the read that decides this and not the
+      // refresh's status, so the sentence is never printed over a board that
+      // was successfully replaced with the server's version. The lifted wording
+      // is left alone: a report is only lifted once a poll has succeeded and
+      // stopped drawing the card, and by then the board being unreadable is no
+      // longer what the reader is looking at.
+      function reportIntentFailure(taskID, subject, error, boardRead) {
         const changedElsewhere = Boolean(error && error.category === "stale-write");
         taskFailureReports.set(taskID, {
           card: changedElsewhere
-            ? (refreshApplied
+            ? (boardRead
               ? "This task changed elsewhere. The card shows the version the server holds."
               : "This task changed elsewhere and the board could not be refreshed. The card may be out of date, and changes made here were not applied.")
             : "Task update failed. The card shows the version the server holds.",
@@ -3344,6 +3358,12 @@
         retiredCreationHeir = null;
         restoreCardFocus(heir && heir.key === focusedID ? heir.taskID : focusedID);
       }
+      // The outcome of the newest refresh that has superseded the one this
+      // caller started, which is what waiting on your own refresh is actually
+      // asking for: an answer no older than the write that asked for it.
+      // Everything the result says is that newest refresh's, `boardRead`
+      // included — so a caller handed a failed one is being told the board
+      // could not be read *now*, which is also what the banner is saying.
       async function currentRefreshResult(operation) {
         let owner = operation;
         let result = await owner;
@@ -3358,17 +3378,33 @@
         const wasLoaded = tasksLoaded;
         const generation = ++taskRefreshGeneration;
         const operation = (async () => {
+          // Whether this refresh's read of the board reached the model, carried
+          // beside the status because the two answer different questions. The
+          // status is about the refresh as a whole, and a refresh that read the
+          // board, replaced the model with it and cleared the banner still
+          // answers "superseded" when the relationship context it goes on to
+          // refresh below is overtaken — which an ordinary route render is
+          // enough to do, because rendering one drops the controller this is
+          // holding. Folded into one word, that reads to a caller as "the
+          // server could not be reached", over a board that is showing exactly
+          // what the server holds. So the read reports for itself, and every
+          // consumer of the status keeps reading the status.
+          let boardRead = false;
           try {
             const response = await fetch("/api/tasks", { cache: "no-store" });
             const document = await response.json();
             if (!response.ok || document.format !== "workbook.tasks" || document.version !== 1 || !Array.isArray(document.tasks) || !Array.isArray(document.presentation)) throw new Error("invalid task document");
             const presentation = new Map(document.presentation.map((view) => [view.taskId, view]));
             if (presentation.size !== document.tasks.length || document.tasks.some((task) => !presentation.has(task.id))) throw new Error("invalid task presentation");
-            if (generation !== taskRefreshGeneration) return { status: "superseded" };
+            if (generation !== taskRefreshGeneration) return { status: "superseded", boardRead };
             latestTasks = document.tasks;
             latestPresentation = presentation;
             tasksLoaded = true;
             taskLoadFailed = false;
+            // Set with the assignment it describes, and after the generation
+            // check above: a refresh that lost the race never touches the
+            // model, so it never has a read to report.
+            boardRead = true;
             // A poll deliberately does not touch a pending queue's head. The
             // queue re-bases when a write is actually refused, where the answer
             // is known to be newer than the head that failed; a poll that left
@@ -3382,17 +3418,17 @@
               const controller = activeDependencyController;
               controller.update();
               relationshipContext = await refreshRelationshipContext(controller, ++relationshipRefreshGeneration);
-              if (relationshipContext.status === "superseded") return { status: "superseded" };
+              if (relationshipContext.status === "superseded") return { status: "superseded", boardRead };
             }
-            return { status: "applied", relationshipContext };
+            return { status: "applied", boardRead, relationshipContext };
           } catch (_) {
-            if (generation !== taskRefreshGeneration) return { status: "superseded" };
+            if (generation !== taskRefreshGeneration) return { status: "superseded", boardRead };
             text(stale, "Task refresh failed. Showing the last successful board."); stale.dataset.visible = "true";
             if (!tasksLoaded) {
               taskLoadFailed = true;
               renderRoute();
             }
-            return { status: "failed" };
+            return { status: "failed", boardRead };
           }
         })();
         currentTaskRefresh = operation;
