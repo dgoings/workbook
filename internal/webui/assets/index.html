@@ -2448,10 +2448,21 @@
               // baseline stays where it was so a retry still sends only the
               // fields this user changed — the concurrent edit that caused the
               // refusal survives it.
-              const rebased = await refreshedTaskHead(task.id);
+              const rebase = await refreshedTaskHead(task.id);
               if (main.firstElementChild !== section) return;
-              if (rebased) expectedHead = rebased;
-              text(result, "That task changed elsewhere. Your edits are kept; save again to apply them to the version the server holds.");
+              if (rebase.head) expectedHead = rebase.head;
+              // Only a refresh that landed can invite the retry. Without one
+              // this form is still proposing the head the server just refused,
+              // and "save again to apply them to the version the server holds"
+              // would be sending the reader into the identical refusal on the
+              // strength of a version nobody has read. What it says instead is
+              // what is true: the version to save against has not been read
+              // yet. The poll is already working on that, and the banner says
+              // so while it is; the next refusal that lands re-bases the form
+              // and brings the invitation back with it.
+              text(result, rebase.applied
+                ? "That task changed elsewhere. Your edits are kept; save again to apply them to the version the server holds."
+                : "That task changed elsewhere, and the latest version could not be loaded. Your edits are kept; save again once the board is current.");
               return;
             }
             text(result, error instanceof Error
@@ -2714,6 +2725,10 @@
               // refresh is what takes it out of the model. A report that has to
               // name a task it can no longer look up names nothing.
               const subject = nameTask(taskID);
+              // Whether the board this report is written against is the
+              // server's. Only a refresh that landed makes it so, and only a
+              // stale write forces one.
+              let refreshApplied = true;
               if (error && error.category === "stale-write") {
                 // The refusal means this queue is holding a head the server
                 // has moved past. Waiting for the refresh it forces and
@@ -2721,8 +2736,27 @@
                 // retry against current truth; sending them against the head
                 // that was just refused would fail them identically, which is
                 // the clobbering the rollback above is trying to avoid.
-                const rebased = await refreshedTaskHead(taskID);
-                if (rebased) entry.head = rebased;
+                const rebase = await refreshedTaskHead(taskID);
+                if (rebase.head) entry.head = rebase.head;
+                if (!rebase.applied) {
+                  // A refresh that never landed leaves this queue holding the
+                  // refused head with nothing newer to put in its place, and
+                  // the two ways to carry on are both worse than stopping.
+                  // Sending the intents behind this one against that head is
+                  // the identical failure the re-base exists to prevent;
+                  // sending them unguarded would overwrite the change that
+                  // caused the refusal, which is the whole reason the guard is
+                  // there. So they are refused here instead — the same answer
+                  // the server would give them, without the round trip — and
+                  // the report below says the board could not be read rather
+                  // than claiming the card shows what the server holds.
+                  //
+                  // Nothing is stranded by that. The poll goes on running, the
+                  // model converges as soon as one gets through, and the
+                  // reader's next change is queued against the head it read.
+                  refreshApplied = false;
+                  entry.queue.length = 0;
+                }
               }
               // Reported after that refresh rather than before it, so the
               // report is written against the board the reader ends up looking
@@ -2730,7 +2764,7 @@
               // after it: it is held outside the model and drawn on the card,
               // and only a dismissal or the reader's next change to that card
               // takes it away.
-              reportIntentFailure(taskID, subject, error);
+              reportIntentFailure(taskID, subject, error, refreshApplied);
               withdrawFailedIntentFromOpenDetail(taskID, error);
             }
             rerender();
@@ -2741,14 +2775,26 @@
           rerender();
         }
       }
-      // The head the server holds for a task once the refresh this caller
-      // forced has settled. A refresh superseded by a newer one is followed
-      // rather than trusted, so the answer is never older than the write that
-      // asked for it.
+      // What a refused write can re-base onto: the head the server holds for a
+      // task once the refresh this caller forced has settled, and whether that
+      // refresh is what the answer came from. A refresh superseded by a newer
+      // one is followed rather than trusted, so the answer is never older than
+      // the write that asked for it.
+      //
+      // Only a refresh that applied can answer at all. One that failed leaves
+      // the model at the last successful poll, whose head for this task is the
+      // one the server has just refused — answering from it would re-base a
+      // write onto the very head it was refused for, and the retry that
+      // invites is refused identically. A superseded one is a refresh whose own
+      // answer never reached the model either. Both report no head, so no
+      // caller can mistake the board's last reading for the server's current
+      // one, and `applied` is what separates "the server holds nothing for this
+      // task any more" from "this board has not been able to ask".
       async function refreshedTaskHead(taskID) {
-        await currentRefreshResult(refresh());
+        const result = await currentRefreshResult(refresh());
+        if (result.status !== "applied") return { applied: false, head: "" };
         const refreshed = latestTasks.find((candidate) => candidate.id === taskID);
-        return refreshed && refreshed.head || "";
+        return { applied: true, head: refreshed && refreshed.head || "" };
       }
       // The indicator says what the next mutation will do, which is why it is
       // read from the server rather than assumed: a board set to defer still
@@ -2809,11 +2855,22 @@
       // something that is no longer there, and says the board no longer carries
       // it. `subject` is the caller's, because by the time a refusal is reported
       // the refresh it forced can already have taken the task out of the model.
-      function reportIntentFailure(taskID, subject, error) {
+      //
+      // A conflict whose forced refresh failed is a third thing to say. "The
+      // card shows the version the server holds" is exactly what that card
+      // cannot claim — the request that would have fetched that version is the
+      // one that failed — and the queue behind the refusal stopped rather than
+      // send against a head the server had already refused, so the report says
+      // both. The lifted wording is left alone: a report is only lifted once a
+      // poll has succeeded and stopped drawing the card, and by then the board
+      // being unreadable is no longer what the reader is looking at.
+      function reportIntentFailure(taskID, subject, error, refreshApplied) {
         const changedElsewhere = Boolean(error && error.category === "stale-write");
         taskFailureReports.set(taskID, {
           card: changedElsewhere
-            ? "This task changed elsewhere. The card shows the version the server holds."
+            ? (refreshApplied
+              ? "This task changed elsewhere. The card shows the version the server holds."
+              : "This task changed elsewhere and the board could not be refreshed. The card may be out of date, and changes made here were not applied.")
             : "Task update failed. The card shows the version the server holds.",
           notice: changedElsewhere
             ? "Task " + subject + " changed elsewhere and is no longer on the board. The change made here was not applied."

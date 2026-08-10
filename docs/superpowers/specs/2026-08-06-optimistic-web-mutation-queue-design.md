@@ -174,6 +174,20 @@ left before the last confirmation returned carries an older head, and adopting
 it would refuse the next intent for no reason at all. The re-base happens where
 the answer is known to be newer than the head that was just refused.
 
+That knowledge is exactly what a forced refresh that *fails* does not deliver,
+and it is the one case the re-base cannot cover. A failed refresh leaves the
+model at the last successful poll, whose head for this task is the head the
+server has just refused, so the head it offers is the refused one under another
+name. The queue therefore takes no head from it and sends nothing more: the
+intents behind the refusal are refused where they stand, with the same rollback,
+and one report says the board could not be read instead of claiming the card
+shows what the server holds. The two ways to carry on are both worse. Sending
+them against the refused head fails them identically, which is the failure the
+re-base exists to prevent; sending them unguarded overwrites the change that
+caused the refusal, which is what the guard is for. Nothing is stranded by
+stopping: the poll keeps running, the model converges on the first one that gets
+through, and the reader's next change is queued against the head it read.
+
 **Reporting** happens on the card the refusal concerns, worded to distinguish
 "this task changed elsewhere" from an ordinary failure, and written *after* the
 forced refresh rather than before it, so the report is written against the board
@@ -299,6 +313,14 @@ baseline the form diffs against stays where it was, so a deliberate re-save
 applies the same fields to the version that now exists and the concurrent edit
 that caused the refusal survives it.
 
+When that refresh does not land, the form keeps the head it rendered and says
+the latest version could not be loaded rather than asking for a re-save. The
+message is the whole point: "save again to apply them to the version the server
+holds" is an invitation to a refusal, because no version was read and the head
+the form is proposing is the one the server has just refused. The banner already
+says the board is behind while that lasts, and the next refusal whose refresh
+lands re-bases the form and brings the invitation back with it.
+
 **The form follows its own writes.** The sidebar's dependency edges are the
 other thing that moves this task's head, and a "Depends On" edge is recorded on
 the dependent — which is the open task. Adding or removing a prerequisite is
@@ -380,6 +402,11 @@ absent and drives a hand-written fake DOM (`handler_test.go:4173`):
   standing;
 - a `stale-write` response rolls back, refreshes, reports, and re-bases the
   queue's head so the intent behind it is sent against the refreshed head;
+- a `stale-write` whose forced refresh fails re-bases nothing: the intent behind
+  it is never sent against the head the server refused, the card says the board
+  could not be refreshed rather than that it shows the server's version, and the
+  first poll that gets through both converges the board and takes the reader's
+  next change against the head it read;
 - a refusal is reported on the card it concerns, survives repeated poll ticks
   driven through the captured interval callback, and leaves only when it is
   dismissed — the report the banner could not keep;
@@ -407,6 +434,10 @@ absent and drives a hand-written fake DOM (`handler_test.go:4173`):
   field that was reordered rather than edited;
 - a refused save keeps its edits, re-bases, and applies only those fields on the
   retry;
+- a refused save whose forced refresh fails keeps the head the form rendered
+  rather than the one the last poll left in the model, says the latest version
+  could not be loaded instead of inviting a re-save, and re-bases as soon as a
+  later refusal's refresh lands;
 - a dependency edge written to the open task moves the head the form proposes,
   and the mirrored direction does not — the second read from a save the server
   refuses after the mirrored edge is written and before the removal that
