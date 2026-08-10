@@ -515,8 +515,12 @@ func TestReadTaskHistoriesStreamHoldsOneCommitNotTheWholeCorpus(t *testing.T) {
 	// holding every candidate resident costs at least
 	// tasks*commitsPerTask*descriptionBytes, about 1.4 MiB, while one resident
 	// commit costs about one description. The ceiling sits between them with
-	// room on both sides, and it is measured as live heap after a forced
-	// collection so accumulated garbage cannot be mistaken for retention.
+	// room on both sides.
+	//
+	// The measurement is live heap after a collection, not the cumulative
+	// TotalAlloc the cycle-guard test below uses, because buffering and
+	// streaming allocate nearly the same bytes in total: what separates them is
+	// how long those bytes stay reachable, and only a live-heap sample sees it.
 	const (
 		tasks            = 5
 		commitsPerTask   = 6
@@ -541,19 +545,34 @@ func TestReadTaskHistoriesStreamHoldsOneCommitNotTheWholeCorpus(t *testing.T) {
 	}
 
 	var baseline, sample runtime.MemStats
-	var peak uint64
+	// Two collections, not one. One forced collection leaves floating garbage
+	// the collector has not finished accounting for, and the fixture's 48 KiB
+	// documents make that residue larger than the difference being measured: a
+	// baseline read after a single GC swung across a 366 KB range run to run,
+	// which is most of the ceiling. A second collection settles it to about a
+	// tenth of that, so what the samples below report is retention rather than
+	// whatever the collector had not yet caught up with.
+	settledHeap := func(stats *runtime.MemStats) uint64 {
+		runtime.GC()
+		runtime.GC()
+		runtime.ReadMemStats(stats)
+		return stats.HeapAlloc
+	}
+	// The peak is absolute live heap rather than growth over the baseline. A
+	// growth measure has to floor at zero, and a floored zero passes any
+	// ceiling while proving nothing, so the comparison below adds the ceiling
+	// to the baseline instead of subtracting the baseline from each sample.
+	//
 	// The handlers keep nothing but counters, which is the incremental caller
 	// the streaming contract is written for. Anything resident at these points
 	// is held by the read itself.
+	var peak uint64
 	measure := func() {
-		runtime.GC()
-		runtime.ReadMemStats(&sample)
-		if sample.HeapAlloc > baseline.HeapAlloc && sample.HeapAlloc-baseline.HeapAlloc > peak {
-			peak = sample.HeapAlloc - baseline.HeapAlloc
+		if live := settledHeap(&sample); live > peak {
+			peak = live
 		}
 	}
-	runtime.GC()
-	runtime.ReadMemStats(&baseline)
+	baselineHeap := settledHeap(&baseline)
 
 	delivered := 0
 	err := repository.ReadTaskHistoriesStream(context.Background(), config, requests, TaskHistoryStream{
@@ -584,11 +603,22 @@ func TestReadTaskHistoriesStreamHoldsOneCommitNotTheWholeCorpus(t *testing.T) {
 	if want := tasks * commitsPerTask; delivered != want {
 		t.Fatalf("delivered %d commits, want %d", delivered, want)
 	}
-	if peak > ceilingBytes {
+	// Logged because the numbers, not the pass, are what a later reader needs
+	// to tell a healthy margin from one that has quietly eroded.
+	t.Logf(
+		"peak live heap %d bytes, pre-read baseline %d bytes, growth %d bytes, ceiling %d bytes",
+		peak,
+		baselineHeap,
+		int64(peak)-int64(baselineHeap),
+		ceilingBytes,
+	)
+	if peak > baselineHeap+ceilingBytes {
 		t.Fatalf(
-			"ReadTaskHistoriesStream held %d bytes of live heap over its pre-read baseline, above the %d byte ceiling; "+
-				"%d commits carrying %d document bytes each are resident at once rather than one",
+			"ReadTaskHistoriesStream held %d bytes of live heap, %d over its %d byte pre-read baseline and above the "+
+				"%d byte ceiling; %d commits carrying %d document bytes each are resident at once rather than one",
 			peak,
+			int64(peak)-int64(baselineHeap),
+			baselineHeap,
 			ceilingBytes,
 			delivered,
 			descriptionBytes,
