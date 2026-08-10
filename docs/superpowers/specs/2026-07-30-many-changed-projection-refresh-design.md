@@ -175,10 +175,17 @@ repository-surface scenario allocates that many samples:
   initial-publication and already-synchronized topology rather than degenerating
   into a second unchanged sync. The harness also clears any fetched tracking ref
   first, so the starting topology does not depend on the measured product still
-  pruning stale tracking refs during its own fetch; against the current
-  implementation that clear is a no-op. An integration test asserts each
-  sample's origin ends up holding exactly the canonical task refs. All of this
-  reset work is plain Git work outside both measured samples.
+  pruning stale tracking refs during its own fetch. This design originally
+  called that clear a no-op against the current implementation; 2026-08-10
+  measurements corrected it. Each sample's already-synchronized measurement
+  leaves a full tracking namespace behind, so from the second sample onward the
+  clear removes real refs, and leaving them in place inflates
+  `sync-initial-local-bare` by roughly a quarter on the default 500-task
+  fixture: the previous sample's namespace is still present in the ref store
+  while the command is measured, and it is pruned inside that command.
+  `docs/performance/README.md` records the measurement. An integration test
+  asserts each sample's origin ends up holding exactly the canonical task refs.
+  All of this reset work is plain Git work outside both measured samples.
 - The projection refresh family builds a fresh fixture per `(point, sample)` and
   applies the settle, mutate, and verify sequence above to each one.
 
