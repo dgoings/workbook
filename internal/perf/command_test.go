@@ -29,12 +29,35 @@ func TestMeasureCommandCountsGitProcesses(t *testing.T) {
 
 func TestMeasureCommandRecordsTimeout(t *testing.T) {
 	sample := MeasureCommand(context.Background(), CommandSpec{
-		Binary: "/bin/sh", Args: []string{"-c", "while :; do :; done"},
+		Binary: "/bin/sh", Args: []string{"-c", busyLoopWhileTestBinaryLives()},
 		Directory: t.TempDir(), Timeout: 20 * time.Millisecond,
 	})
 	if !sample.TimedOut || sample.ExitCode == 0 {
 		t.Fatalf("sample = %#v", sample)
 	}
+}
+
+// testBinaryAlive returns a shell condition, built only from shell builtins so
+// it adds no process churn to a loop, that succeeds while the process running
+// these tests is still alive.
+func testBinaryAlive() string {
+	return "kill -0 " + strconv.Itoa(os.Getpid()) + " 2>/dev/null"
+}
+
+// busyLoopWhileTestBinaryLives returns a shell loop that spins a core until the
+// process running these tests exits.
+//
+// These helpers have to burn CPU until the code under test terminates them, but
+// a plain `while :; do :; done` outlives an interrupted run. MeasureCommandOutput
+// deliberately gives the measured command its own process group, so a signal
+// aimed at the test runner's process group - a terminal interrupt, a CI job
+// wrapper signalling the group it started, a supervisor killing the run - never
+// reaches the helper. The test binary dies before it can cancel the measurement,
+// the helper is reparented to init, and it spins a core until somebody notices.
+// Ending the loop when the process that started it is gone bounds the damage to
+// one loop iteration no matter how the run dies.
+func busyLoopWhileTestBinaryLives() string {
+	return "while " + testBinaryAlive() + "; do :; done"
 }
 
 func TestMeasureCommandRecordsExitCodeAndSingleLineStderr(t *testing.T) {
@@ -76,10 +99,13 @@ func TestMeasureCommandPassesCallerEnvironment(t *testing.T) {
 
 func TestMeasureCommandTerminatesTimedOutDescendant(t *testing.T) {
 	childPIDPath := filepath.Join(t.TempDir(), "child.pid")
+	reapRecordedProcessGroup(t, childPIDPath)
 	sample := MeasureCommand(context.Background(), CommandSpec{
 		Binary: "/bin/sh", Args: []string{
 			"-c",
-			"sh -c 'echo $$ > \"$1\"; while :; do :; done' sh \"$1\" & while [ ! -s \"$1\" ]; do :; done; while :; do :; done",
+			"sh -c 'echo $$ > \"$1\"; " + busyLoopWhileTestBinaryLives() + "' sh \"$1\" & " +
+				"while [ ! -s \"$1\" ] && " + testBinaryAlive() + "; do :; done; " +
+				busyLoopWhileTestBinaryLives(),
 			"sh",
 			childPIDPath,
 		},
@@ -88,19 +114,99 @@ func TestMeasureCommandTerminatesTimedOutDescendant(t *testing.T) {
 	if !sample.TimedOut {
 		t.Fatalf("sample = %#v", sample)
 	}
-	pidText, err := os.ReadFile(childPIDPath)
+	requireDescendantTerminated(t, childPIDPath)
+}
+
+// TestMeasureCommandReapsDescendantOfCommandThatExits covers the other way a
+// measured command leaves a descendant behind: the command itself finishes, so
+// the timeout cancellation that kills the process group never runs, and a
+// background descendant it started keeps burning a core after the measurement
+// reported a clean exit.
+func TestMeasureCommandReapsDescendantOfCommandThatExits(t *testing.T) {
+	childPIDPath := filepath.Join(t.TempDir(), "child.pid")
+	reapRecordedProcessGroup(t, childPIDPath)
+	sample := MeasureCommand(context.Background(), CommandSpec{
+		Binary: "/bin/sh", Args: []string{
+			"-c",
+			// The descendant drops the inherited output pipes so the leader's
+			// exit is the only thing this measures.
+			"sh -c 'echo $$ > \"$1\"; " + busyLoopWhileTestBinaryLives() + "' sh \"$1\" >/dev/null 2>&1 & " +
+				"while [ ! -s \"$1\" ] && " + testBinaryAlive() + "; do :; done",
+			"sh",
+			childPIDPath,
+		},
+		Directory: t.TempDir(), Timeout: 30 * time.Second,
+	})
+	if sample.ExitCode != 0 || sample.TimedOut || sample.Error != "" {
+		t.Fatalf("sample = %#v", sample)
+	}
+	requireDescendantTerminated(t, childPIDPath)
+}
+
+// reapRecordedProcessGroup kills whatever a helper recorded in pidPath once the
+// test ends, however it ends. Registering it before the measurement runs keeps
+// the reap independent of the test body, so a failed assertion or a panic still
+// leaves a dead helper behind rather than a spinning one, and it never trusts
+// the code under test to have done the killing.
+func reapRecordedProcessGroup(t *testing.T, pidPath string) {
+	t.Helper()
+	t.Cleanup(func() {
+		pid, ok := recordedHelperPID(pidPath)
+		if !ok {
+			return
+		}
+		// A recorded pid is only safe to signal while it still names the helper
+		// itself: the helper is normally already dead by now, and the operating
+		// system is free to hand its pid to an unrelated process. The pid file
+		// lives in this test's temporary directory, so its path appears in the
+		// helper's arguments and nowhere else.
+		if !strings.Contains(processCommandLine(pid), pidPath) {
+			return
+		}
+		// Signal the helper's whole process group first, so a descendant it
+		// spawned dies with it, then the process itself in case its group is
+		// already gone.
+		if pgid, err := syscall.Getpgid(pid); err == nil && pgid > 0 {
+			_ = syscall.Kill(-pgid, syscall.SIGKILL)
+		}
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+	})
+}
+
+func recordedHelperPID(pidPath string) (int, bool) {
+	pidText, err := os.ReadFile(pidPath)
 	if err != nil {
-		t.Fatal(err)
+		return 0, false
 	}
 	pid, err := strconv.Atoi(strings.TrimSpace(string(pidText)))
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || pid <= 0 {
+		return 0, false
 	}
-	// MeasureCommand kills the whole process group, but a terminated
-	// descendant stays visible to kill(2) until the init process it was
-	// reparented to reaps it. Poll instead of sampling once. This cannot mask a
-	// descendant that genuinely survived, because that descendant busy-loops
-	// forever and never reaches a terminated state.
+	return pid, true
+}
+
+// processCommandLine returns a process's arguments, or an empty string when the
+// process is gone or cannot be inspected.
+func processCommandLine(pid int) string {
+	output, err := exec.Command("ps", "-o", "command=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return ""
+	}
+	return string(output)
+}
+
+// requireDescendantTerminated fails unless the descendant a helper recorded has
+// stopped running. MeasureCommand kills the whole process group, but a
+// terminated descendant stays visible to kill(2) until the init process it was
+// reparented to reaps it, so poll instead of sampling once. Polling cannot mask
+// a descendant that genuinely survived, because that descendant busy-loops for
+// as long as this process lives and never reaches a terminated state.
+func requireDescendantTerminated(t *testing.T, pidPath string) {
+	t.Helper()
+	pid, ok := recordedHelperPID(pidPath)
+	if !ok {
+		t.Fatalf("helper recorded no usable pid in %s", pidPath)
+	}
 	deadline := time.Now().Add(30 * time.Second)
 	for !descendantTerminated(pid) {
 		if time.Now().After(deadline) {

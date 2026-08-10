@@ -174,6 +174,7 @@ func MeasureCommandOutput(ctx context.Context, spec CommandSpec) CommandMeasurem
 
 	startedAt := time.Now()
 	err = command.Run()
+	reapProcessGroup(command.Process)
 	measurement.Stdout = append([]byte(nil), stdout.Bytes()...)
 	measurement.Stderr = append([]byte(nil), stderr.Bytes()...)
 	measurement.Sample.Duration = time.Since(startedAt)
@@ -197,6 +198,30 @@ func MeasureCommandOutput(ctx context.Context, spec CommandSpec) CommandMeasurem
 	}
 	measurement.Sample.GitProcesses = gitProcesses
 	return measurement
+}
+
+// reapProcessGroup kills everything left in a finished command's process group.
+//
+// SysProcAttr.Setpgid puts a measured command in a process group of its own, and
+// cancelling the measurement signals that whole group, but cancellation is not
+// the only way a measurement ends with descendants still running. A command that
+// exits on its own leaves a background descendant behind, os/exec's WaitDelay
+// kill reaches only the leader and not the group, and a descendant forked while
+// the cancellation signal was already in flight can miss it. Every one of those
+// escapes a bounded measurement as a process that outlives the run, and a stray
+// busy process silently skews every later measurement on the same host.
+//
+// Waiting on the command already reaped the leader, so its pid could in
+// principle name a different process by now. It cannot name a different process
+// *group* while any of these descendants survive: neither darwin nor Linux
+// allocates a pid that is still in use as a process group id, and the group
+// stays in use for as long as it has a member. When the group is empty the
+// signal fails with ESRCH and there was nothing to kill.
+func reapProcessGroup(process *os.Process) {
+	if process == nil || process.Pid <= 0 {
+		return
+	}
+	_ = syscall.Kill(-process.Pid, syscall.SIGKILL)
 }
 
 // MeasureCommand preserves the original sample-only measurement API.
