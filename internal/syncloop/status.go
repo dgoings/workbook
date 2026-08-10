@@ -191,8 +191,10 @@ func boundConflicts(entries []ConflictEntry) []ConflictEntry {
 // grow it. An answer past the client's bound is refused, which would leave a
 // healthy watcher untrusted and every mutation on the inline path.
 //
-// The prefix is stable because the loop publishes the refs sorted by name, so
-// the ones a reader can see stay visible until origin loses them.
+// The prefix is the same one every time an unchanged namespace is listed,
+// because the fetch reports the refs in the order Git lists them, by name. A
+// name arriving earlier in that order can push the tail out of view, which is
+// the ordinary cost of serving a prefix rather than refusing the answer.
 func boundIgnoredRefs(entries []gitstore.IgnoredRef) []gitstore.IgnoredRef {
 	total := 0
 	for index, entry := range entries {

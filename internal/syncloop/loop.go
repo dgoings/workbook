@@ -225,11 +225,12 @@ func (l *loop) syncOnce(ctx context.Context) {
 	result, err := l.options.Repository.Sync(ctx, l.options.Config)
 	conflicts := append(append([]core.Conflict{}, result.Fetch.Conflicts...), result.Push.Conflicts...)
 	l.recordConflicts(ctx, conflicts)
-	// Both phases read origin's namespace, so the run's merged report is what
-	// travels. It is bounded before it is announced or published so the two
-	// always agree, and so a poisoned origin cannot grow a status document past
-	// what a client will read.
-	ignored := boundIgnoredRefs(result.IgnoredRefs())
+	// The fetch phase is the whole report: it lists origin's namespace, and the
+	// push phase that follows it repeats none of that. It is bounded before it
+	// is announced or published so the terminal and the status always agree, and
+	// so a poisoned origin cannot grow a status document past what a client will
+	// read.
+	ignored := boundIgnoredRefs(result.Fetch.Ignored)
 	l.announceIgnored(result.Remote, ignored)
 
 	// A conflict is not a failed synchronization. The fetch completed, refs

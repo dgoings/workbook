@@ -256,8 +256,6 @@ func TestStatusCarriesTheIgnoredRefsTheLastSyncObserved(t *testing.T) {
 	waitForOutput(t, output, ReadyPrefix)
 	waitForSyncs(t, syncer, 1)
 
-	// Both phases of a run see origin's namespace, so the same ref arrives
-	// twice and has to be reported once.
 	entries := readStatus(t, directory).IgnoredRefs
 	if len(entries) != 1 || entries[0].Ref != strayRef {
 		t.Fatalf("ignored refs after the reporting sync = %#v, want one entry for %s", entries, strayRef)
@@ -494,8 +492,9 @@ func (f *fakeSyncer) Sync(ctx context.Context, _ core.ProjectConfig) (gitstore.S
 		<-blocker
 	}
 
-	// Both phases read origin's namespace, so a stray ref there is reported by
-	// each of them, exactly as a real run reports it.
+	// Only the fetch phase names what origin's namespace holds, which is the
+	// shape a real run has: the push phase of a run publishes tips fetch already
+	// inspected and lists that namespace no second time.
 	result := gitstore.SyncRunResult{
 		Remote: "origin",
 		Fetch: gitstore.SyncResult{
@@ -504,7 +503,7 @@ func (f *fakeSyncer) Sync(ctx context.Context, _ core.ProjectConfig) (gitstore.S
 			Conflicts: conflicts,
 			Ignored:   ignored,
 		},
-		Push: gitstore.SyncResult{Remote: "origin", Status: gitstore.SyncPhaseCompleted, Ignored: ignored},
+		Push: gitstore.SyncResult{Remote: "origin", Status: gitstore.SyncPhaseCompleted},
 	}
 	if len(conflicts) > 0 && err == nil {
 		err = core.ConflictError(conflicts)

@@ -461,9 +461,6 @@ func TestSetupReportsConflictsAndFinishesBootstrapping(t *testing.T) {
 // person first meets an origin holding a ref this build cannot read. It
 // synchronized, reported "completed", and named nothing, while `setup --json`
 // carried the report all along.
-//
-// Both phases of the run observe the same stray ref, and it is one ref, so the
-// human report names it once.
 func TestSetupNamesTheRefsItsSynchronizationIgnored(t *testing.T) {
 	const foreignRef = "refs/workbook/tasks/OPS-01K0M6B8A4FTT8C39MXXYTW7D9"
 	first, second := cliSyncRepositories(t)
@@ -489,7 +486,11 @@ func TestSetupNamesTheRefsItsSynchronizationIgnored(t *testing.T) {
 			t.Fatalf("poisoned setup stdout = %q, want it to contain %q", stdout, want)
 		}
 	}
-	if got := strings.Count(stdout, "Ignored:\t"+foreignRef); got != 1 {
-		t.Fatalf("setup named %s %d times, want once for a run that fetches and pushes", foreignRef, got)
+	// One line per skipped ref and one report: setup renders what its
+	// synchronization returned once, rather than a block per phase or a block
+	// per place the run's result is read.
+	if got := strings.Count(stdout, "Ignored:\t"); got != 2 {
+		t.Fatalf("setup wrote %d ignored-ref lines, want one for each of the two refs origin holds:\n%s",
+			got, stdout)
 	}
 }
