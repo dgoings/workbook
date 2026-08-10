@@ -304,6 +304,17 @@ refreshes managed agent documentation, and synchronizes shared task refs with
 solo local project needs no remote. Use `--no-sync` to bootstrap without
 exchanging refs and `--no-docs` to create project identity alone.
 
+A checkout whose working tree has no `.workbook/config.json` does not
+necessarily mean the project is new: a branch cut before the project adopted
+Workbook looks exactly like that. Before minting a fresh identity, setup
+therefore asks `origin`. A configuration committed on origin's default branch
+is adopted into the working tree, so running setup from a pre-Workbook branch
+joins the existing project instead of splitting the repository into two. When
+origin holds Workbook task refs but no committed configuration names their
+project, setup stops rather than guessing; and when origin cannot be reached,
+setup reports that rather than minting blind — `--no-sync` remains the
+deliberate way to bootstrap without consulting origin.
+
 The Workbook skill is installed under the directory named by the user-global
 `skillDir` setting, `.claude/skills` by default. Because that setting applies to
 every project on a machine, `--skill-dir <dir>` overrides it for one project and
@@ -1309,11 +1320,15 @@ all linked worktrees. The first successful configuration load for each opened
 repository compares the portable configuration with the common guard, then caches
 that validated configuration for the repository session. Reopening the repository
 observes later tracked or guard changes and rejects use when the tracked and common
-identities do not match. For repositories initialized before the guard was
-introduced, the first configuration load or repeated `workbook setup` atomically
-backfills the missing guard from `.workbook/config.json`. Concurrent first users
-must either publish that same identity or observe and validate the identity another
-user published.
+identities do not match; the rejection names both files and their identities, and
+deleting the guard file republishes it from the tracked configuration on the next
+command. For repositories initialized before the guard was introduced, the first
+configuration load or repeated `workbook setup` atomically backfills the missing
+guard from `.workbook/config.json`. Concurrent first users must either publish
+that same identity or observe and validate the identity another user published;
+`workbook setup` also consults `origin` before minting, so a checkout that
+predates the project's Workbook adoption joins the published identity instead of
+minting a second one.
 
 ## Proposed post-POC commands
 
