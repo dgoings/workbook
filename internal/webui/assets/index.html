@@ -2938,23 +2938,30 @@
       // The conflict is described rather than quoted. The server's sentence
       // names the head the request carried, which is this client's bookkeeping;
       // what the reader needs is that someone else changed the task.
+      //
+      // Every other refusal is quoted, and quoted last. A server message is a
+      // Go error — lower case, unpunctuated, written for a log — and spliced
+      // between two sentences of this client's own it runs straight into the
+      // one after it: "was not saved. cannot update a tombstoned task The save
+      // was still open…". At the end it is a sentence the reader can stop at,
+      // which is where a refused create puts its reason too.
       function reportDetachedSaveFailure(taskID, error) {
         const reason = error && error.category === "stale-write"
-          ? "It changed elsewhere, so the save was refused."
+          ? "The task changed elsewhere, so the save was refused."
           : (error instanceof Error ? error.message : "Task update failed.");
         // Appended rather than assigned: a created task's warnings can already
         // be staged on this form, and they are as unread as this is.
         const staged = pendingTaskMessages.get(taskID) || [];
         pendingTaskMessages.set(taskID, staged.concat([
           "A save from this form was still open when you left it, and it was not applied. " +
-            reason + " The edits it carried were not saved."
+            "The edits it carried were not saved. " + reason
         ]));
         const open = document.createElement("a");
         open.href = taskPath(taskID);
         text(open, "Open task");
         showNotice("error",
-          "Task " + nameTask(taskID) + " was not saved. " + reason +
-            " The save was still open when you left the form, and the edits it carried are gone.",
+          "Task " + nameTask(taskID) + " was not saved. The save was still open when you left " +
+            "the form, and the edits it carried are gone. " + reason,
           open);
       }
       // What to call a task in a report that has outlived the card it was drawn
@@ -2989,11 +2996,13 @@
       //
       // Corrected rather than re-rendered, because a rebuilt form would pay for
       // that accuracy with everything typed into it since it opened, and would
-      // detach a save in flight — a detached save reports nothing when it
-      // lands, so a reader who was saving at that moment would hear only that
-      // their board change failed. The correction skips the fields being edited
-      // and leaves the node, its listeners, and the caret exactly where they
-      // are.
+      // detach a save in flight — a detached save can only report from outside
+      // the form it was made in (reportDetachedSaveFailure), so a reader who
+      // was saving at that moment would read about their board change on the
+      // form they are standing at and about their own save somewhere else
+      // entirely, with the edits that save carried gone either way. The
+      // correction skips the fields being edited and leaves the node, its
+      // listeners, and the caret exactly where they are.
       //
       // A task the board has stopped carrying — the likeliest refusal of all is
       // one another clone deleted — has nothing to correct the form against.

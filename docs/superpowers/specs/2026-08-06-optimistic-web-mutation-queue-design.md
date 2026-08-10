@@ -360,7 +360,11 @@ read from wherever the reader ended up, so it names the task and offers the way
 back to it; the task's own form says the same thing the next time that task is
 opened, because that is where a message about a save belongs. A conflict is
 described rather than quoted — the server's sentence names the head the request
-carried, which is this client's bookkeeping — and the edits are named as lost
+carried, which is this client's bookkeeping — while every other refusal is
+quoted, and quoted last: a server message is a Go error, lower case and
+unpunctuated, and spliced between two sentences of this client's own it runs
+straight into the one after it, which is why a refused create ends on its reason
+too. The edits are named as lost
 rather than held anywhere, since they went with the node the moment the route
 changed and a report offering to restore them would promise something this
 client cannot do.

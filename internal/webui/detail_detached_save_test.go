@@ -88,15 +88,18 @@ setTimeout(async () => {
   if (notice.hidden || reports.length !== 1) {
     throw new Error("the detached save reported nothing anywhere: " + JSON.stringify(notice.textContent));
   }
-  const copy = reports[0].textContent;
+  const copy = findElement(reports[0], (element) => element.tagName === "P").textContent;
   if (!copy.includes(` + strconv.Quote(task.ID) + `) || !copy.includes("Slow to save")) {
     throw new Error("the report does not name the task it is about: " + JSON.stringify(copy));
   }
-  if (!copy.includes("The server refused this save.")) {
-    throw new Error("the report does not say why the save failed: " + JSON.stringify(copy));
-  }
   if (!copy.includes("not saved")) {
     throw new Error("the report does not say the save did not happen: " + JSON.stringify(copy));
+  }
+  // The server's sentence is a Go error: lower case and unpunctuated. Spliced
+  // between two sentences of this client's own it runs into the one after it,
+  // so it is quoted at the end, where the reader can stop.
+  if (!copy.endsWith("The server refused this save.")) {
+    throw new Error("the server's message is not the last word of the report: " + JSON.stringify(copy));
   }
   if (reports[0].dataset.kind !== "error") {
     throw new Error("a refusal was reported as something other than an error: " + JSON.stringify(reports[0].dataset.kind));
@@ -114,8 +117,8 @@ setTimeout(async () => {
     preventDefault() {}
   });
   const message = findElement(main, (element) => Object.hasOwn(element.dataset, "saveStatus"));
-  if (!message || !message.textContent.includes("The server refused this save.") ||
-      !message.textContent.includes("not saved")) {
+  if (!message || !message.textContent.includes("were not saved") ||
+      !message.textContent.endsWith("The server refused this save.")) {
     throw new Error("the re-opened form says nothing about the save it lost: " + JSON.stringify(message && message.textContent));
   }
   // Said once. A staged message that survived its own reading would greet the
@@ -208,9 +211,14 @@ setTimeout(async () => {
   if (notice.hidden || reports.length !== 1) {
     throw new Error("the detached conflict reported nothing anywhere: " + JSON.stringify(notice.textContent));
   }
-  const copy = reports[0].textContent;
-  if (!copy.includes("changed elsewhere") || !copy.includes("not saved")) {
-    throw new Error("the report does not say a conflict lost the save: " + JSON.stringify(copy));
+  const copy = findElement(reports[0], (element) => element.tagName === "P").textContent;
+  if (!copy.includes("not saved")) {
+    throw new Error("the report does not say the save did not happen: " + JSON.stringify(copy));
+  }
+  // Described rather than quoted, and last either way: the reason is the last
+  // sentence of the report whether it is this client's or the server's.
+  if (!copy.endsWith("The task changed elsewhere, so the save was refused.")) {
+    throw new Error("the report does not end on why the save was lost: " + JSON.stringify(copy));
   }
   // The raw refusal names a head, which is a fact about this client's
   // bookkeeping rather than about the reader's task.
