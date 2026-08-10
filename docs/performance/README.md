@@ -558,9 +558,19 @@ measurements; the family still has no pass threshold.
 Repository-surface scenarios now honor `--samples`. `projection-rebuild` repeats
 its independent rebuild, and each local-bare sync sample receives its own fresh
 empty bare origin so it measures the same initial-publication and
-already-synchronized topology every time. The harness also clears any fetched
-tracking ref before each sync sample, so that starting topology does not depend
-on the measured product still pruning stale tracking refs itself.
+already-synchronized topology every time. The harness also clears the tracking
+refs the previous sample's already-synchronized measurement fetched before each
+sync sample.
+
+That clearing is load-bearing from the second sample onward rather than a
+defensive no-op. The product does prune stale tracking refs, but it prunes them
+inside the measured fetch, so an uncleared sample charges its initial
+publication for deleting the previous sample's whole tracking namespace.
+Measured 2026-08-10 on the default 500-task fixture over six alternating
+cleared/uncleared pairs, `sync-initial-local-bare` averaged 647 ms cleared
+against 807 ms uncleared, a 25% inflation whose two ranges do not overlap
+(613-673 ms against 790-837 ms), while the Git process count stayed at 15
+either way.
 
 ## Remote synchronization topologies
 

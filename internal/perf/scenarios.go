@@ -927,9 +927,14 @@ func measureLocalBareSyncAgainstNewOrigin(
 	)
 }
 
-// deleteTrackingTaskRefs clears any fetched tracking ref so a sample's
-// unpublished starting topology does not depend on the measured product still
-// pruning stale tracking refs during its own fetch. It is normally a no-op.
+// deleteTrackingTaskRefs clears the tracking refs the previous sample's
+// already-synchronized measurement fetched, so every sample measures the same
+// unpublished starting topology. It is empty work only on the first sample, and
+// it is not redundant with the product's own pruning fetch: the product prunes
+// stale tracking refs inside the measured command, so an uncleared sample
+// charges its initial publication for deleting the previous sample's whole
+// tracking namespace. Measured 2026-08-10 on the default 500-task fixture,
+// sync-initial-local-bare averaged 647 ms cleared against 807 ms uncleared.
 func deleteTrackingTaskRefs(ctx context.Context, commandTimeout time.Duration, fixtureRoot string) error {
 	output, _, err := runRepositoryGit(
 		ctx, commandTimeout, fixtureRoot, "for-each-ref", "--format=delete %(refname)", "refs/workbook/remotes/",

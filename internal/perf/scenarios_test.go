@@ -1555,6 +1555,111 @@ func TestMeasureLocalBareSyncPublishesEverySampleToItsOwnOrigin(t *testing.T) {
 	}
 }
 
+func TestDeleteTrackingTaskRefsClearsStaleTrackingRefs(t *testing.T) {
+	fixture, err := BuildFixture(context.Background(), filepath.Join(t.TempDir(), "fixture"), FixtureSpec{
+		TotalTasks: 3, ActiveTasks: 3,
+		OperationsPerTask: 2,
+		ObjectFormat:      "sha1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical := fixtureRefMap(t, fixture.Root, "refs/workbook/tasks/")
+	if len(canonical) != 3 {
+		t.Fatalf("canonical task refs = %d, want 3", len(canonical))
+	}
+	for taskID, objectID := range canonical {
+		runGit(t, fixture.Root, "update-ref", "refs/workbook/remotes/origin/tasks/"+taskID, objectID)
+	}
+	seeded := fixtureRefMap(t, fixture.Root, "refs/workbook/remotes/origin/tasks/")
+	if !reflect.DeepEqual(seeded, canonical) {
+		t.Fatalf("seeded tracking refs = %#v, want %#v", seeded, canonical)
+	}
+
+	if err := deleteTrackingTaskRefs(context.Background(), time.Minute, fixture.Root); err != nil {
+		t.Fatal(err)
+	}
+	if tracking := fixtureRefMap(t, fixture.Root, "refs/workbook/remotes/"); len(tracking) != 0 {
+		t.Fatalf("tracking refs after clearing = %#v, want none", tracking)
+	}
+	if got := fixtureRefMap(t, fixture.Root, "refs/workbook/tasks/"); !reflect.DeepEqual(got, canonical) {
+		t.Fatalf("canonical task refs after clearing = %#v, want %#v", got, canonical)
+	}
+
+	// The first sample of a run finds the namespace already empty.
+	if err := deleteTrackingTaskRefs(context.Background(), time.Minute, fixture.Root); err != nil {
+		t.Fatalf("clearing an already empty tracking namespace: %v", err)
+	}
+	if tracking := fixtureRefMap(t, fixture.Root, "refs/workbook/remotes/"); len(tracking) != 0 {
+		t.Fatalf("tracking refs after clearing an empty namespace = %#v, want none", tracking)
+	}
+}
+
+func TestMeasureLocalBareSyncAgainstNewOriginStartsEverySampleWithoutTrackingRefs(t *testing.T) {
+	binary := buildWorkbookBinary(t)
+	fixture, err := BuildFixture(context.Background(), filepath.Join(t.TempDir(), "fixture"), FixtureSpec{
+		TotalTasks: 10, ActiveTasks: 10,
+		OperationsPerTask: 2,
+		ObjectFormat:      "sha1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const samples = 2
+	type observation struct {
+		before int
+		after  int
+	}
+	observed := make([]observation, 0, samples*2)
+	results, err := measureLocalBareSyncAgainstNewOrigin(
+		context.Background(), binary, fixture.Root, t.TempDir(), samples, time.Minute,
+		func(ctx context.Context, spec CommandSpec) Sample {
+			before := len(fixtureRefMap(t, fixture.Root, "refs/workbook/remotes/"))
+			sample := MeasureCommand(ctx, spec)
+			observed = append(observed, observation{
+				before: before,
+				after:  len(fixtureRefMap(t, fixture.Root, "refs/workbook/remotes/")),
+			})
+			return sample
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, result := range results {
+		for index, sample := range result.Samples {
+			if !sampleSucceeded(sample) {
+				t.Fatalf("%s sample %d = %#v, want success", result.Name, index+1, sample)
+			}
+		}
+	}
+	if len(observed) != samples*2 {
+		t.Fatalf("measured commands = %d, want %d", len(observed), samples*2)
+	}
+
+	// Every measured sync must start from an unpublished topology. A sample that
+	// still held the previous sample's tracking refs would additionally charge
+	// the measured fetch for pruning them.
+	for index, sample := range observed {
+		if sample.before != 0 {
+			t.Errorf("measured command %d began with %d tracking refs, want none", index+1, sample.before)
+		}
+	}
+	// The clearing step is only meaningful because the product really does leave
+	// tracking refs behind between samples, so pin that it cleared a non-empty
+	// namespace rather than passing vacuously.
+	cleared := false
+	for index := 1; index < len(observed); index++ {
+		if observed[index-1].after > 0 && observed[index].before == 0 {
+			cleared = true
+		}
+	}
+	if !cleared {
+		t.Errorf("no measured command left tracking refs for a later sample to clear: %#v", observed)
+	}
+}
+
 func TestMeasureProjectionScenariosRetainMeasuredProductMissesForEverySample(t *testing.T) {
 	repository := t.TempDir()
 	samples := []Sample{
