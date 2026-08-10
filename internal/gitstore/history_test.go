@@ -503,6 +503,129 @@ func TestReadTaskHistoriesStreamReturnsHandlerErrorsUnchangedAndReleasesItsBatch
 	}
 }
 
+func TestReadTaskHistoriesStreamHoldsOneCommitNotTheWholeCorpus(t *testing.T) {
+	// Mutation caught: reading every candidate's objects into a buffer before
+	// the delivery loop and replaying it. Delivery order and handler errors are
+	// identical either way, so only residency separates the two, and buffering
+	// is what returns a full audit's memory to the corpus-sized cost the
+	// streamed read exists to remove.
+	//
+	// The corpus is sized so the difference is unmistakable rather than
+	// marginal: each checkpoint's state.json carries a padded description, so
+	// holding every candidate resident costs at least
+	// tasks*commitsPerTask*descriptionBytes, about 1.4 MiB, while one resident
+	// commit costs about one description. The ceiling sits between them with
+	// room on both sides.
+	//
+	// The measurement is live heap after a collection, not the cumulative
+	// TotalAlloc the cycle-guard test below uses, because buffering and
+	// streaming allocate nearly the same bytes in total: what separates them is
+	// how long those bytes stay reachable, and only a live-heap sample sees it.
+	const (
+		tasks            = 5
+		commitsPerTask   = 6
+		descriptionBytes = 48 << 10 // Well under core.MaxDescriptionBytes.
+		ceilingBytes     = 512 << 10
+	)
+	repository, config := writeRepository(t)
+	requests := make([]TaskHistoryRequest, 0, tasks)
+	for task := range tasks {
+		history := writePaddedHistoryForTask(
+			t,
+			repository,
+			config,
+			3000+task*100,
+			commitsPerTask,
+			descriptionBytes,
+		)
+		head := history[len(history)-1]
+		requests = append(requests, TaskHistoryRequest{
+			Head: TaskHead{TaskID: head.Operation.TaskID, ObjectID: head.Head},
+		})
+	}
+
+	var baseline, sample runtime.MemStats
+	// Two collections, not one. One forced collection leaves floating garbage
+	// the collector has not finished accounting for, and the fixture's 48 KiB
+	// documents make that residue larger than the difference being measured: a
+	// baseline read after a single GC swung across a 366 KB range run to run,
+	// which is most of the ceiling. A second collection settles it to about a
+	// tenth of that, so what the samples below report is retention rather than
+	// whatever the collector had not yet caught up with.
+	settledHeap := func(stats *runtime.MemStats) uint64 {
+		runtime.GC()
+		runtime.GC()
+		runtime.ReadMemStats(stats)
+		return stats.HeapAlloc
+	}
+	// The peak is absolute live heap rather than growth over the baseline. A
+	// growth measure has to floor at zero, and a floored zero passes any
+	// ceiling while proving nothing, so the comparison below adds the ceiling
+	// to the baseline instead of subtracting the baseline from each sample.
+	//
+	// The handlers keep nothing but counters, which is the incremental caller
+	// the streaming contract is written for. Anything resident at these points
+	// is held by the read itself.
+	var peak uint64
+	measure := func() {
+		if live := settledHeap(&sample); live > peak {
+			peak = live
+		}
+	}
+	baselineHeap := settledHeap(&baseline)
+
+	delivered := 0
+	err := repository.ReadTaskHistoriesStream(context.Background(), config, requests, TaskHistoryStream{
+		Begin: func(TaskHistoryStart) error {
+			measure()
+			return nil
+		},
+		Commit: func(string, HistoryCommit) error {
+			delivered++
+			measure()
+			return nil
+		},
+		End: func(result TaskHistoryResult) error {
+			measure()
+			if result.Failure != nil {
+				t.Fatalf("task %s failure = %v", result.TaskID, result.Failure.Err)
+			}
+			if result.CheckedCommits != commitsPerTask {
+				t.Fatalf("task %s checked commits = %d, want %d", result.TaskID, result.CheckedCommits, commitsPerTask)
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("ReadTaskHistoriesStream() error = %v", err)
+	}
+	// A read that delivered less than the whole corpus would meet any ceiling.
+	if want := tasks * commitsPerTask; delivered != want {
+		t.Fatalf("delivered %d commits, want %d", delivered, want)
+	}
+	// Logged because the numbers, not the pass, are what a later reader needs
+	// to tell a healthy margin from one that has quietly eroded.
+	t.Logf(
+		"peak live heap %d bytes, pre-read baseline %d bytes, growth %d bytes, ceiling %d bytes",
+		peak,
+		baselineHeap,
+		int64(peak)-int64(baselineHeap),
+		ceilingBytes,
+	)
+	if peak > baselineHeap+ceilingBytes {
+		t.Fatalf(
+			"ReadTaskHistoriesStream held %d bytes of live heap, %d over its %d byte pre-read baseline and above the "+
+				"%d byte ceiling; %d commits carrying %d document bytes each are resident at once rather than one",
+			peak,
+			int64(peak)-int64(baselineHeap),
+			baselineHeap,
+			ceilingBytes,
+			delivered,
+			descriptionBytes,
+		)
+	}
+}
+
 func TestWalkCommitChainSizesItsCycleGuardToTheChainNotTheGraph(t *testing.T) {
 	// Mutation caught: pre-sizing the visited set to the shared parent graph,
 	// which zeroes one slot per corpus commit for every task walked and turns a
@@ -563,17 +686,68 @@ func writeHistoryForTask(
 	if operationCount < 1 {
 		t.Fatalf("operation count = %d, want at least 1", operationCount)
 	}
-	taskID := config.Key + "-" + historyTestULID(idBase)
-	generationID := historyTestULID(idBase + 1)
 	root, _, state := writeRootForTask(
 		t,
 		repository,
 		config,
-		taskID,
-		generationID,
+		config.Key+"-"+historyTestULID(idBase),
+		historyTestULID(idBase+1),
 		historyTestULID(idBase+2),
 		fmt.Sprintf("History task %d", idBase),
 	)
+	return advanceHistoryForTask(t, repository, config, idBase, operationCount, root, state)
+}
+
+// writePaddedHistoryForTask writes the same linear history with a padded task
+// description. Every checkpoint in the chain carries it, because state.json
+// holds the whole task document, so the padding sizes the corpus rather than
+// only its root: it is how a memory test builds commits whose document bytes
+// dominate the per-commit bookkeeping a read keeps either way.
+func writePaddedHistoryForTask(
+	t *testing.T,
+	repository *Repository,
+	config core.ProjectConfig,
+	idBase int,
+	operationCount int,
+	descriptionBytes int,
+) []core.Snapshot {
+	t.Helper()
+	if operationCount < 1 {
+		t.Fatalf("operation count = %d, want at least 1", operationCount)
+	}
+	taskID := config.Key + "-" + historyTestULID(idBase)
+	generationID := historyTestULID(idBase + 1)
+	pack := writeCreatePack()
+	pack.TaskID = taskID
+	pack.HistoryGeneration = generationID
+	pack.Operations[0].ID = historyTestULID(idBase + 2)
+	pack.Operations[0].Task.Title = fmt.Sprintf("History task %d", idBase)
+	pack.Operations[0].Task.Description = strings.Repeat("d", descriptionBytes)
+	state := writeState(t, nil, pack)
+	root, err := repository.Write(
+		context.Background(),
+		config,
+		nil,
+		pack,
+		state,
+		fmt.Sprintf("create padded history %d", idBase),
+	)
+	if err != nil {
+		t.Fatalf("Write(padded history root %d) error = %v", idBase, err)
+	}
+	return advanceHistoryForTask(t, repository, config, idBase, operationCount, root, state)
+}
+
+func advanceHistoryForTask(
+	t *testing.T,
+	repository *Repository,
+	config core.ProjectConfig,
+	idBase int,
+	operationCount int,
+	root core.Snapshot,
+	state core.StateDocument,
+) []core.Snapshot {
+	t.Helper()
 	history := []core.Snapshot{root}
 	for operation := 1; operation < operationCount; operation++ {
 		pack := writeAddLabelPack(
@@ -581,8 +755,8 @@ func writeHistoryForTask(
 			historyTestULID(idBase+2+operation),
 			fmt.Sprintf("history-%d-%d", idBase, operation),
 		)
-		pack.TaskID = taskID
-		pack.HistoryGeneration = generationID
+		pack.TaskID = root.Operation.TaskID
+		pack.HistoryGeneration = root.Operation.HistoryGeneration
 		nextState := writeState(t, &state, pack)
 		parent := history[len(history)-1]
 		next, err := repository.Write(
