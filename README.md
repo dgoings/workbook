@@ -1298,9 +1298,10 @@ smaller diagnostics, while an explicit zero is diagnostic-only. Cold CLI
 rebuilds and each warm HTTP sample's preparatory task-list load are untimed
 setup; the `api-tasks` read scenario times a second, warm load of its own. Local
 CLI p95 targets are 200 ms, warm-update p95 is 100 ms, and every burst must be
-below 1 second; the whole-board read scenarios `cli-list` and `api-tasks` have no
-approved duration target and report `not-evaluated`, and local scenarios have no
-Git-process target. Version-2 reports include the
+below 1 second; read scenarios are budgeted on the same rule as mutations, so the
+local reads `cli-list` and `cli-show` carry the 200 ms local target while the
+warm `api-tasks` read has no approved budget and reports `not-evaluated`, and
+local scenarios have no Git-process target. Version-2 reports include the
 SHA-256 of the resolved measured binary and acceptance rejects an `unknown`
 measured commit before it builds a fixture. Reports evaluate each topology as
 `pass`, `miss`, `timeout`, or `failed` against a time and Git-process reference
@@ -1312,10 +1313,13 @@ The three commands an agent runs continuously — `next` to acquire work, `show`
 to read its context, `update` to record progress — are all measured. `cli-next`
 carries the 1,000 ms synchronized target rather than the 200 ms local one,
 because `next` fetches before answering so two agents cannot claim the same
-task, and that fetch is priced rather than hidden. The `watch-steady-state`
-selector observes a live `workbook sync --watch` with nothing pending and
-reports its CPU, peak resident memory, and per-tick cost descriptively; it is
-measured in its own invocation and carries no target.
+task, and that fetch is priced rather than hidden. That is the general rule for
+read scenarios: a read answered from the local projection takes the 200 ms local
+budget, and a read that fetches first takes the 1,000 ms synchronized one.
+
+The `watch-steady-state` selector observes a live `workbook sync --watch` with
+nothing pending and reports its CPU, peak resident memory, and per-tick cost
+descriptively; it is measured in its own invocation and carries no target.
 
 ### Project identity across worktrees
 

@@ -104,6 +104,7 @@ func TestLocalScenarioResultsAttachApprovedDurationTargets(t *testing.T) {
 		"cli-delete":               coldSingle,
 		"cli-depend":               coldSingle,
 		"cli-free":                 coldSingle,
+		"cli-list":                 coldSingle,
 		"cli-move":                 coldSingle,
 		"cli-next":                 coldAutoSync,
 		"cli-restore":              coldSingle,
@@ -119,10 +120,11 @@ func TestLocalScenarioResultsAttachApprovedDurationTargets(t *testing.T) {
 	}
 	results := append(coldCLIResults(1), warmHTTPResults(1)...)
 	for _, result := range results {
-		if result.Name == "cli-list" || result.Name == "api-tasks" {
-			// The read paths deliberately have no approved budget; see
-			// TestColdListScenarioHasNoApprovedDurationTarget and
-			// TestWarmTaskListScenarioHasNoApprovedDurationTarget.
+		if result.Name == "api-tasks" {
+			// The warm whole-board read still has no approved budget; see
+			// TestWarmTaskListScenarioHasNoApprovedDurationTarget. The cold
+			// read `cli-list` carries the local budget, so it is in the map
+			// above rather than skipped here.
 			continue
 		}
 		expected, ok := want[result.Name]

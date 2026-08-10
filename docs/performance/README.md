@@ -29,24 +29,26 @@ are deliberately untimed. Each warm HTTP sample starts its own server and makes
 an untimed `/api/tasks` load that verifies the active-task population before the
 timed mutation. Fixture construction is also outside every sample.
 
-Local single-operation CLI scenarios use an inclusive p95 target of
-200 ms; the warm `api-update` scenario uses an inclusive p95 target of 100 ms;
-and each ten-operation burst sample must be strictly below 1,000 ms. The
-whole-board read scenarios `cli-list` and `api-tasks` have no approved duration
-target and are reported descriptively. Local scenarios have no Git-process
-target. Reports use format version 2 and record the SHA-256
-of the resolved measured executable in
+CLI scenarios that make no round trip use an inclusive p95 target of 200 ms; the
+warm `api-update` scenario uses an inclusive p95 target of 100 ms; and each
+ten-operation burst sample must be strictly below 1,000 ms. Read-path CLI
+scenarios carry targets on the same rule as mutations — see [read-path duration
+targets](#read-path-duration-targets-approved-2026-08-10) — so `cli-list` and
+`cli-show` are held to the 200 ms local budget and `cli-next` to the 1,000 ms
+synchronized one. The warm `api-tasks` read is the only local `cli-*` or `api-*`
+scenario still reported descriptively. Local scenarios have no Git-process
+target. Reports use format version 2 and record the SHA-256 of the resolved
+measured executable in
 `environment.workbookBinarySha256`, alongside its reported version and commit.
 
-The line between a budgeted and a descriptive scenario is the shape of the work,
-not reading against writing. The 200 ms local class covers a command whose cost
-is bounded by one task, which is why `cli-show` carries it: reading a single task
-is strictly less work than the single-task mutations the class was approved for,
-on the same surface and with no round trip, so the approved envelope is a valid
-upper bound rather than an invented threshold. `cli-list` and `api-tasks` answer
-with the whole board, so their cost grows with the task population and the
-single-operation envelope says nothing about them. No whole-board read budget has
-been approved, so both are reported `not-evaluated`.
+The line between the local and the synchronized class is whether the command
+makes a round trip, not reading against writing. The 200 ms local class covers a
+command answered from the local projection, which is why `cli-show` and
+`cli-list` carry it: reading is strictly less work than the mutations the class
+was approved for, on the same surface and with no round trip, so the approved
+envelope is a valid upper bound rather than an invented threshold. `cli-next`
+fetches before answering, so it is priced in the 1,000 ms synchronized class
+instead.
 
 Every local `cli-*` mutation scenario passes `--no-sync`, so those budgets
 measure the local mutation path alone. `cli-update-autosync` measures the same
@@ -221,12 +223,14 @@ holds even under contention.
 whole 500-task collection in 33.16 ms and 45.79 ms at p95 through a single Git
 process, roughly a quarter of the warm mutation on the same server in the same
 run. `cli-show` and `cli-list` also sit side by side for the first time, and the
-distinction the budget rules rest on is not yet visible at this size: the
-whole-board read costs about 10% more than the single-task one at the median, and
-the two p95 values disagree in direction between the formats. That is a statement
-about 525 tasks rather than a general one — the population is simply not where a
-whole-board read starts to hurt — and it is exactly why neither read carries a
-target.
+whole-board/single-task distinction the budget rules once rested on is not
+visible at this size: the whole-board read costs about 10% more than the
+single-task one at the median, and the two p95 values disagree in direction
+between the formats. Both rows are reported `not-evaluated` here because this run
+predates the decision; that two reads this close together were classified
+differently is part of what [the read-path target
+policy](#read-path-duration-targets-approved-2026-08-10) settled, and `cli-list`
+now carries the same 200 ms budget `cli-show` passed in this run.
 
 ### 2026-08-05 sync watcher local acceptance evidence
 
@@ -413,6 +417,68 @@ Two limits on this proposal:
   held in that run, and that a target which does hold there is a larger number
   answering a different question. That is a call for the project owner, and it
   is the reason this section proposes rather than decides.
+
+## Read-path duration targets (approved 2026-08-10)
+
+**Status: approved and applied.** Read-path scenarios carry duration targets.
+The project owner approved this on 2026-08-10, and it is the policy every future
+read scenario adopts rather than re-deciding:
+
+- A read answered from the local projection carries the **200 ms local budget**,
+  the same one approved for local mutations. `cli-list` and `cli-show` are held
+  to it today.
+- A read that fetches before answering carries the **1,000 ms synchronized
+  budget** instead. `cli-next` is held to it today, and any future fetch-first
+  read — a `show` that synchronizes, an acquire variant — takes the same one.
+- The classifying question is the round trip, not the whole-board shape and not
+  reading against writing. A new read scenario picks its class by answering
+  whether the measured command talks to a remote, cites this section, and does
+  not open a fresh target decision.
+
+The warm HTTP read `api-tasks` remains descriptive, and this decision does not
+change that: the warm class's own budget covers `api-update` alone, so there is
+no approved warm envelope for a read to inherit. That is a separate decision on
+a separate surface, not an exception carved out of this one.
+
+The earlier position was that `cli-list` should stay descriptive because a
+whole-board read grows with the task population while the 200 ms class was
+approved for work bounded by one task. The measurements answer that objection
+rather than dismissing it. The 2026-08-07 scaling matrix took `cli-list` across
+a tenfold change in board size at a fixed 3 Git processes:
+
+| Point | SHA-1 median / p95 | SHA-256 median / p95 |
+| --- | ---: | ---: |
+| `active-100-depth-20` | 60.58 / 66.50 ms | 59.00 / 60.45 ms |
+| `active-500-depth-20` | 77.38 / 103.00 ms | 69.22 / 71.01 ms |
+| `active-500-depth-100` | 70.92 / 85.38 ms | 69.89 / 71.81 ms |
+| `active-1000-depth-20` | 85.18 / 88.76 ms | 83.57 / 86.23 ms |
+
+Growth is real and strongly sublinear. Across both scaling runs and both object
+formats, five times the active tasks multiplies the median by 1.16 to 1.28, and
+the doubling after it by 1.10 to 1.24 — the population grows by a factor and the
+read grows by a fraction. The decisive number is the matrix's largest measured
+point rather than an extrapolation from it: at 1,000 active tasks, twice the
+acceptance population, `cli-list` p95 is at most 89.18 ms across both scaling
+runs and both formats, or 45% of the budget. The single-operation envelope is
+therefore a measured upper bound for this read at every size on the matrix, and
+the population-growth argument earns a re-measurement trigger rather than
+permanent descriptiveness.
+
+The margin at acceptance size is wide. `cli-list` p95 on the four quiet-host
+acceptance runs is 75.27, 72.18, 72.56, and 71.70 ms — the worst of them is 38%
+of the budget, where `cli-update`'s worst is 90% of the same budget in the same
+runs. Even on the contended 2026-08-08 host, where `cli-update` missed at
+299.40 ms and 265.59 ms, `cli-list` came in at 165.18 ms and 124.08 ms and would
+have passed in both formats. A scenario that would have been classified `pass` in
+every acceptance run ever recorded of it was being reported `not-evaluated`, and
+that is the concrete cost of leaving it unclassified: the cheapest cold command
+measured was the one nothing watched.
+
+Re-derive this policy if a whole-board read's p95 reaches 150 ms at an acceptance
+point, or if the scaling matrix's task-count median ratio for `cli-list` exceeds
+1.5 between adjacent points. Either would mean the measurements above stopped
+describing the read, and the answer then is a whole-board budget of its own
+rather than a silent miss.
 
 ## Bounded baseline
 
@@ -800,8 +866,9 @@ Nine scenarios are measured at each point: `cli-create`, `cli-depend`,
 `sync-small-changed-ref-set`, `validate-full-history`, and
 `validate-cached-unchanged`. `cli-list` is a cold read scenario; like every
 other cold scenario it runs an untimed `workbook rebuild --json` before the
-timed `workbook list --json`, and it has no duration target because no read-path
-budget has been approved.
+timed `workbook list --json`. It carries the 200 ms local budget at acceptance
+size, but no scaling point evaluates it: the phase strips every duration budget,
+for the reason given below.
 
 Run the default matrix with:
 
