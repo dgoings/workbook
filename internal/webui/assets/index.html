@@ -2436,12 +2436,36 @@
                 return;
               }
               finishCreatedTask(recovery);
+            } else if (main.firstElementChild !== section) {
+              // The save landed after the reader had gone somewhere else.
+              // Returning them to the board now would take away the route they
+              // deliberately chose while this request was open, and an accepted
+              // save has never been announced in this client anyway: the board
+              // showing the new value is the report. So this only makes sure it
+              // is showing it.
+              await refresh();
             } else {
               navigate("/");
               await refresh();
             }
           } catch (error) {
-            if (main.firstElementChild !== section) return;
+            // A save can outlive the form it was made in: the reader stops
+            // waiting on a slow request and goes back to the board, or a
+            // restore renders a New Task form over this route. The node this
+            // handler reports into is gone by then, and returning quietly is
+            // how the entire outcome used to disappear — the reader left
+            // believing a save was on its way and nothing ever contradicted
+            // them. It follows them instead, to the two surfaces that outlive a
+            // route.
+            //
+            // A create is left alone. Navigating away from a New Task form
+            // discards its draft whatever the server answers, so the loss there
+            // is the navigation rather than the refusal, and the create's own
+            // reporting path is the one that hands drafts back.
+            if (main.firstElementChild !== section) {
+              if (!isNew) reportDetachedSaveFailure(task.id, error);
+              return;
+            }
             if (!isNew && error && error.category === "stale-write") {
               // The edits stay in the form. Re-rendering it from the refreshed
               // task would discard the work the refusal just protected, and the
@@ -2449,7 +2473,14 @@
               // fields this user changed — the concurrent edit that caused the
               // refusal survives it.
               const rebase = await refreshedTaskHead(task.id);
-              if (main.firstElementChild !== section) return;
+              // The form can go while that refresh is in flight, and a re-base
+              // has nothing left to re-base. The outcome still has somewhere to
+              // be, so it goes there rather than being dropped one await later
+              // than it would have been above.
+              if (main.firstElementChild !== section) {
+                reportDetachedSaveFailure(task.id, error);
+                return;
+              }
               if (rebase.head) expectedHead = rebase.head;
               // Only a refresh that read the board can invite the retry.
               // Without one this form is still proposing the head the server
@@ -2891,6 +2922,40 @@
             : "Task " + subject + " could not be updated and is no longer on the board. The change made here was not applied."
         });
         rerender();
+      }
+      // A save from the detail form that was refused after its form left the
+      // document. The form is where this belongs and the form is gone, so it is
+      // said in the two places that outlive a route: the notice, which is read
+      // from wherever the reader ended up, and the task's own form, which says
+      // it again the next time that task is opened. A reader who navigated away
+      // mid-save is the one reader who cannot see a refusal coming, and silence
+      // here reads to them as a save that landed.
+      //
+      // The edits are named as lost rather than held anywhere. They went with
+      // the node the moment the route changed, and a report offering to restore
+      // them would be promising something this client cannot do.
+      //
+      // The conflict is described rather than quoted. The server's sentence
+      // names the head the request carried, which is this client's bookkeeping;
+      // what the reader needs is that someone else changed the task.
+      function reportDetachedSaveFailure(taskID, error) {
+        const reason = error && error.category === "stale-write"
+          ? "It changed elsewhere, so the save was refused."
+          : (error instanceof Error ? error.message : "Task update failed.");
+        // Appended rather than assigned: a created task's warnings can already
+        // be staged on this form, and they are as unread as this is.
+        const staged = pendingTaskMessages.get(taskID) || [];
+        pendingTaskMessages.set(taskID, staged.concat([
+          "A save from this form was still open when you left it, and it was not applied. " +
+            reason + " The edits it carried were not saved."
+        ]));
+        const open = document.createElement("a");
+        open.href = taskPath(taskID);
+        text(open, "Open task");
+        showNotice("error",
+          "Task " + nameTask(taskID) + " was not saved. " + reason +
+            " The save was still open when you left the form, and the edits it carried are gone.",
+          open);
       }
       // What to call a task in a report that has outlived the card it was drawn
       // on. The ID prefix is what the card showed and what every other control
