@@ -733,11 +733,17 @@ is not covered by branch protection on typical hosts, so a name Workbook does
 not recognize there is not treated as corruption. `fetch`, `push`, and `sync`
 skip such a ref and complete for every well-formed task, then report it: an
 `ignoredRefs` entry in JSON and an `Ignored:` line in human output, named as
-`origin` holds it. One stray ref would otherwise deny the whole synchronization
-path to every clone. The local canonical namespace keeps rejecting an
-unrecognized name outright, because only this tool writes it. Anything that is
-not a name — Git's own record framing, object IDs, symbolic refs, or the same
-task returned twice — stays fatal in both namespaces.
+`origin` holds it. Hearing about it does not depend on running one of those
+three in the foreground: `workbook setup` names what its bootstrap
+synchronization skipped, a mutation that synchronizes inline names it beneath
+its `Sync:` line, and a watcher names each newly skipped ref on its terminal and
+carries the current set in `workbook sync --status`. A mutation that defers to a
+running watcher does not repeat the report; the watcher's own two surfaces carry
+it. One stray ref would otherwise deny the whole synchronization path to every
+clone. The local canonical namespace keeps rejecting an unrecognized name
+outright, because only this tool writes it. Anything that is not a name — Git's
+own record framing, object IDs, symbolic refs, or the same task returned twice —
+stays fatal in both namespaces.
 
 Workbook never deletes a ref on `origin`, and being unreadable to this build is
 not evidence that a ref is junk: a newer version's task ID format and a second
@@ -808,9 +814,13 @@ reach `origin` knows it, and deferring would swallow the warning that says the
 work is local-only.
 
 `workbook sync --status` reports whether a watcher is running, what it last did,
-and any conflicts it is holding. `workbook serve` runs the same loop, so the
-board reflects other clones' work without anyone running a command; an external
-watcher already running keeps ownership and the board runs no second loop.
+any conflicts it is holding, and the refs its last synchronization skipped under
+`origin`'s task namespace. That last set is what the watcher observed rather
+than an accumulating memory: the tracking namespace is pruned against `origin`
+on every fetch, so a name `origin` no longer holds leaves the report on the next
+synchronization. `workbook serve` runs the same loop, so the board reflects
+other clones' work without anyone running a command; an external watcher already
+running keeps ownership and the board runs no second loop.
 
 Reconciliation is what makes this safe. A mutation applied to a tip a few
 seconds stale is no longer a case worth a network round trip to prevent; it is

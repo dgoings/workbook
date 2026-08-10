@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/gitstore"
 )
 
 const (
@@ -37,6 +38,12 @@ type Status struct {
 	LastSyncOK bool            `json:"lastSyncOk"`
 	LastError  string          `json:"lastSyncError,omitempty"`
 	Conflicts  []ConflictEntry `json:"conflicts"`
+	// IgnoredRefs names the refs under origin's task namespace the last
+	// synchronization skipped. It is the set that synchronization observed
+	// rather than an accumulating memory: the tracking mirror is pruned against
+	// origin on every fetch, so a name that is gone from origin is gone here on
+	// the next tick. A report is not an instruction to remove anything.
+	IgnoredRefs []gitstore.IgnoredRef `json:"ignoredRefs,omitempty"`
 }
 
 // ConflictEntry is one conflict the watcher observed and no command has
@@ -178,6 +185,32 @@ func boundConflicts(entries []ConflictEntry) []ConflictEntry {
 	return entries
 }
 
+// boundIgnoredRefs drops the entries past maxIgnoredBytes, for the reason
+// boundConflicts bounds the conflict set: this list grows with what origin
+// holds rather than with what this clone did, and anyone with push access can
+// grow it. An answer past the client's bound is refused, which would leave a
+// healthy watcher untrusted and every mutation on the inline path.
+//
+// The prefix is the same one every time an unchanged namespace is listed,
+// because the fetch reports the refs in the order Git lists them, by name. A
+// name arriving earlier in that order can push the tail out of view, which is
+// the ordinary cost of serving a prefix rather than refusing the answer.
+func boundIgnoredRefs(entries []gitstore.IgnoredRef) []gitstore.IgnoredRef {
+	total := 0
+	for index, entry := range entries {
+		encoded, err := json.Marshal(entry)
+		if err != nil {
+			return entries[:index]
+		}
+		// The comma that joins this entry to the previous one.
+		total += len(encoded) + 1
+		if total > maxIgnoredBytes {
+			return entries[:index]
+		}
+	}
+	return entries
+}
+
 // request is the newline-delimited command a client sends. Exactly one member
 // is populated.
 type request struct {
@@ -215,16 +248,23 @@ const (
 	// per conflict. Twenty maximum-sized ones is already far past what a
 	// repository can accumulate before somebody notices.
 	//
-	// The three are layered so a healthy watcher can never reach the client's
-	// bound: maxConflictBytes budgets what the server serializes, and each
-	// layer above adds room for the JSON framing the layer below does not
-	// count — the per-entry framing of twenty conflicts, then the status
-	// document around them. Sizing the response at exactly twenty conflicts'
-	// descriptions would have refused twenty of them, since it left nothing
-	// for the framing.
+	// A status response also names the refs origin holds that this build does
+	// not read, which grows with what a poisoned namespace contains rather than
+	// with anything this clone did, so maxIgnoredBytes gives that report its own
+	// budget. Ref names and their reasons are short, so 64 KiB is hundreds of
+	// them: far past the point where the first few already made the case.
+	//
+	// The bounds are layered so a healthy watcher can never reach the client's
+	// bound: maxConflictBytes and maxIgnoredBytes budget what the server
+	// serializes, and each layer above adds room for the JSON framing the layer
+	// below does not count — the per-entry framing of twenty conflicts, then the
+	// status document around them. Sizing the response at exactly twenty
+	// conflicts' descriptions would have refused twenty of them, since it left
+	// nothing for the framing.
 	maxRequestBytes  = 64 << 10
 	maxConflictBytes = 20*3*core.MaxDescriptionBytes + 64<<10
-	maxResponseBytes = maxConflictBytes + 64<<10
+	maxIgnoredBytes  = 64 << 10
+	maxResponseBytes = maxConflictBytes + maxIgnoredBytes + 64<<10
 )
 
 // errLineTooLong reports a protocol line that outgrew its bound.

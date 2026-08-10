@@ -63,7 +63,7 @@ func TestWriteIgnoredRefsOffersRemovalOnlyForNamesNoProjectCanOwn(t *testing.T) 
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var output bytes.Buffer
-			writeIgnoredRefs(&output, gitstore.SyncResult{Remote: "origin", Ignored: test.ignored})
+			writeIgnoredRefs(&output, "origin", test.ignored)
 			got := output.String()
 
 			if len(test.ignored) == 0 {
@@ -92,17 +92,57 @@ func TestWriteIgnoredRefsOffersRemovalOnlyForNamesNoProjectCanOwn(t *testing.T) 
 	}
 }
 
+// A mutation that synchronizes inline prints one sync line, and that line was
+// the whole report: the fetch behind it had already skipped a ref origin holds,
+// and said so only in the JSON envelope. The names travel rather than a count,
+// because a reader can act on a report only if it says which ref it is about.
+func TestWriteSyncReportNamesTheRefsItsFetchIgnored(t *testing.T) {
+	ignored := gitstore.IgnoredRef{
+		Ref:    "refs/workbook/tasks/EVIL",
+		Reason: "the ref does not name one task",
+	}
+	var output bytes.Buffer
+	writeSyncReport(&output, &syncReport{
+		Enabled: true,
+		Status:  syncStatusCompleted,
+		Fetch:   &gitstore.SyncResult{Remote: "origin", Ignored: []gitstore.IgnoredRef{ignored}},
+	})
+
+	got := output.String()
+	if want := "Sync:\t" + syncStatusCompleted + "\n"; !strings.HasPrefix(got, want) {
+		t.Fatalf("output = %q, want it to start with %q", got, want)
+	}
+	if want := ignoredRefLine(ignored); !strings.Contains(got, want) {
+		t.Fatalf("output = %q, want it to contain the line %q", got, want)
+	}
+	if !strings.Contains(got, removalAdvice) {
+		t.Fatalf("output = %q, want the removal advice for a name no project can own", got)
+	}
+}
+
+// The report is additive: a fetch that skipped nothing must print exactly what
+// it printed before, because a line saying so on every mutation is noise.
+func TestWriteSyncReportStaysOneLineWithoutIgnoredRefs(t *testing.T) {
+	var output bytes.Buffer
+	writeSyncReport(&output, &syncReport{
+		Enabled: true,
+		Status:  syncStatusCompleted,
+		Fetch:   &gitstore.SyncResult{Remote: "origin"},
+	})
+
+	if want := "Sync:\t" + syncStatusCompleted + "\n"; output.String() != want {
+		t.Fatalf("output = %q, want exactly %q", output.String(), want)
+	}
+}
+
 // The command names a placeholder, never the ref itself: a ref name is not
 // shell-quoted here, and the reader has to choose which ref they mean anyway.
 func TestWriteIgnoredRefsNeverInterpolatesARefIntoTheCommand(t *testing.T) {
 	var output bytes.Buffer
-	writeIgnoredRefs(&output, gitstore.SyncResult{
-		Remote: "origin",
-		Ignored: []gitstore.IgnoredRef{{
-			Ref:    "refs/workbook/tasks/$(rm -rf ~)",
-			Reason: "the ref does not name one task",
-		}},
-	})
+	writeIgnoredRefs(&output, "origin", []gitstore.IgnoredRef{{
+		Ref:    "refs/workbook/tasks/$(rm -rf ~)",
+		Reason: "the ref does not name one task",
+	}})
 
 	got := output.String()
 	if !strings.Contains(got, removalAdvice) {

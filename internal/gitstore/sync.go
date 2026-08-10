@@ -43,6 +43,11 @@ type SyncTaskResult struct {
 	Detail string     `json:"detail,omitempty"`
 }
 
+// SyncRunResult carries both phases of one synchronization. Only Fetch reports
+// ignored refs: the run's push phase publishes tips fetch already inspected and
+// deliberately lists origin's namespace no second time, so a caller reporting a
+// whole run reads Fetch.Ignored. The order is the one Git lists refs in, by ref
+// name, so one run's report reads the same as the next.
 type SyncRunResult struct {
 	Remote string     `json:"remote"`
 	Fetch  SyncResult `json:"fetch"`
