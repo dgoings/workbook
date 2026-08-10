@@ -301,9 +301,11 @@ the same stale reason, and both are corrected here alongside the behavior.
 Corrected in place rather than re-rendered, because a rebuilt form pays for that
 accuracy with everything typed into it since it opened — a long description is
 exactly the edit that takes long enough for a board intent to fail underneath it
-— and detaches a save in flight along with it. A detached save reports nothing
-when it lands, so a reader who was saving at that moment would hear only that
-their board change failed. The correction leaves the node, its listeners, and
+— and detaches a save in flight along with it. A detached save can only report
+from outside the form it was made in (below), so a reader who was saving at that
+moment would read about their board change on the form they are standing at and
+about their own save somewhere else entirely, with the edits that save carried
+gone either way. The correction leaves the node, its listeners, and
 the caret alone: a field the save would not send is one nobody has touched and
 follows the task the board now holds, a field the save would send is an edit in
 progress and stays as typed, and the baseline the diff is measured against moves
@@ -344,6 +346,40 @@ read and the head the form is proposing is the one the server has just refused.
 The banner already says the board is behind while that lasts, and the next
 refusal whose refresh does read the board re-bases the form and brings the
 invitation back with it.
+
+**A save detached while it is in flight** still reports its outcome. The reader
+can stop waiting on a slow request and go back to the board, or a draft restore
+can render a New Task form over the route, and the request is still open when
+the node this form reports into leaves the document. The handler used to return
+without a word at exactly that point, which is the worst moment to say nothing:
+the reader walked away believing a save was on its way, and nothing on screen
+ever contradicted them.
+
+The refusal goes to the two surfaces that outlive a route instead. The notice is
+read from wherever the reader ended up, so it names the task and offers the way
+back to it; the task's own form says the same thing the next time that task is
+opened, because that is where a message about a save belongs. A conflict is
+described rather than quoted — the server's sentence names the head the request
+carried, which is this client's bookkeeping — while every other refusal is
+quoted, and quoted last: a server message is a Go error, lower case and
+unpunctuated, and spliced between two sentences of this client's own it runs
+straight into the one after it, which is why a refused create ends on its reason
+too. The edits are named as lost
+rather than held anywhere, since they went with the node the moment the route
+changed and a report offering to restore them would promise something this
+client cannot do.
+
+A save that lands after its form is detached is the same question answered the
+other way. Nothing is announced, because an accepted save is never announced
+here — returning to the board is the whole report — but the return itself is
+dropped, so the route the reader deliberately went to while waiting is not taken
+away from them a second later. The refresh behind it still runs, which is the
+part that had to keep happening.
+
+A create is deliberately left out of this. Navigating away from a New Task form
+discards its draft whatever the server answers, so the loss there is the
+navigation rather than the refusal, and the create's own reporting path is the
+one that hands drafts back.
 
 **The form follows its own writes.** The sidebar's dependency edges are the
 other thing that moves this task's head, and a "Depends On" edge is recorded on
@@ -463,6 +499,12 @@ absent and drives a hand-written fake DOM (`handler_test.go:4173`):
   field that was reordered rather than edited;
 - a refused save keeps its edits, re-bases, and applies only those fields on the
   retry;
+- a save refused after its form was detached reports in the notice rather than
+  returning silently: it names the task, offers the route back to it, says why
+  the save was lost without repeating the server's head sentence, and stages the
+  same message on the task's form, which reads it exactly once;
+- a save that lands after its form was detached leaves the reader on the route
+  they went to instead of returning them to the board;
 - a refused save whose forced refresh fails keeps the head the form rendered
   rather than the one the last poll left in the model, says the latest version
   could not be loaded instead of inviting a re-save, and re-bases as soon as a
