@@ -174,10 +174,12 @@ func MeasureCommandOutput(ctx context.Context, spec CommandSpec) CommandMeasurem
 
 	startedAt := time.Now()
 	err = command.Run()
-	reapProcessGroup(command.Process)
 	measurement.Stdout = append([]byte(nil), stdout.Bytes()...)
 	measurement.Stderr = append([]byte(nil), stderr.Bytes()...)
 	measurement.Sample.Duration = time.Since(startedAt)
+	// Reap only once the duration is stamped. This is a measurement harness, so
+	// the kill(2) belongs to the harness rather than to the command it prices.
+	reapProcessGroup(command.Process)
 	if err == nil {
 		measurement.Sample.ExitCode = 0
 	} else {
@@ -212,11 +214,19 @@ func MeasureCommandOutput(ctx context.Context, spec CommandSpec) CommandMeasurem
 // busy process silently skews every later measurement on the same host.
 //
 // Waiting on the command already reaped the leader, so its pid could in
-// principle name a different process by now. It cannot name a different process
-// *group* while any of these descendants survive: neither darwin nor Linux
-// allocates a pid that is still in use as a process group id, and the group
-// stays in use for as long as it has a member. When the group is empty the
-// signal fails with ESRCH and there was nothing to kill.
+// principle name a different process by now. Three cases follow. While any
+// descendant survives, the pid cannot name a different process group at all:
+// neither darwin nor Linux allocates a pid that is still in use as a process
+// group id, and the group stays in use for as long as it has a member. When the
+// group is empty and the pid is still unused, the signal fails with ESRCH and
+// there was nothing to kill. The remaining case is the only hazard: the group is
+// empty, the pid has been reused, and its new owner made itself a group leader
+// through setsid or setpgid, so this would signal a stranger. Reaching it takes
+// the allocator wrapping the whole pid space and the winner becoming a group
+// leader in the microseconds between Wait reaping the leader and the next
+// statement issuing the signal. Closing it would mean signalling the group
+// before the leader is reaped, which Cmd.Run offers no hook for, so the case is
+// named and accepted rather than guarded.
 func reapProcessGroup(process *os.Process) {
 	if process == nil || process.Pid <= 0 {
 		return
