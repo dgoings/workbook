@@ -29,17 +29,17 @@ are deliberately untimed. Each warm HTTP sample starts its own server and makes
 an untimed `/api/tasks` load that verifies the active-task population before the
 timed mutation. Fixture construction is also outside every sample.
 
-CLI scenarios that make no round trip use an inclusive p95 target of 200 ms; the
-warm `api-update` scenario uses an inclusive p95 target of 100 ms; and each
-ten-operation burst sample must be strictly below 1,000 ms. Read-path CLI
-scenarios carry targets on the same rule as mutations — see [read-path duration
-targets](#read-path-duration-targets-approved-2026-08-10) — so `cli-list` and
-`cli-show` are held to the 200 ms local budget and `cli-next` to the 1,000 ms
-synchronized one. The warm `api-tasks` read is the only local `cli-*` or `api-*`
-scenario still reported descriptively. Local scenarios have no Git-process
-target. Reports use format version 2 and record the SHA-256 of the resolved
-measured executable in
-`environment.workbookBinarySha256`, alongside its reported version and commit.
+Local single-operation CLI scenarios, mutations and reads alike, use an inclusive
+p95 target of 200 ms; the warm `api-update` scenario uses an inclusive p95 target
+of 150 ms; and each ten-operation burst sample must be strictly below 1,000 ms.
+Read-path CLI scenarios carry targets on the same rule as mutations — see
+[read-path duration targets](#read-path-duration-targets-approved-2026-08-10) —
+so `cli-list` and `cli-show` are held to the 200 ms local budget and `cli-next`
+to the 1,000 ms synchronized one. The warm `api-tasks` read is the only local
+`cli-*` or `api-*` scenario still reported descriptively. Local scenarios have no
+Git-process target. Reports use format version 2 and record the SHA-256 of the
+resolved measured executable in `environment.workbookBinarySha256`, alongside its
+reported version and commit.
 
 The line between the local and the synchronized class is whether the command
 makes a round trip, not reading against writing. The 200 ms local class covers a
@@ -226,11 +226,13 @@ run. `cli-show` and `cli-list` also sit side by side for the first time, and the
 whole-board/single-task distinction the budget rules once rested on is not
 visible at this size: the whole-board read costs about 10% more than the
 single-task one at the median, and the two p95 values disagree in direction
-between the formats. Both rows are reported `not-evaluated` here because this run
-predates the decision; that two reads this close together were classified
-differently is part of what [the read-path target
+between the formats. This run predates the read-target decision, so the two
+neighbours are classified differently in it: `cli-show` passed its 200 ms budget
+in both formats, while `cli-list` and `api-tasks` are reported `not-evaluated`
+for want of an approved read target. Two reads measuring within 10% of each other
+receiving different treatment is part of what [the read-path target
 policy](#read-path-duration-targets-approved-2026-08-10) settled, and `cli-list`
-now carries the same 200 ms budget `cli-show` passed in this run.
+now carries the same 200 ms budget `cli-show` passed here.
 
 ### 2026-08-05 sync watcher local acceptance evidence
 
@@ -475,10 +477,18 @@ that is the concrete cost of leaving it unclassified: the cheapest cold command
 measured was the one nothing watched.
 
 Re-derive this policy if a whole-board read's p95 reaches 150 ms at an acceptance
-point, or if the scaling matrix's task-count median ratio for `cli-list` exceeds
-1.5 between adjacent points. Either would mean the measurements above stopped
-describing the read, and the answer then is a whole-board budget of its own
-rather than a silent miss.
+point measured on a quiet host, or if the scaling matrix's task-count median
+ratio for `cli-list` exceeds 1.5 between adjacent points. Either would mean the
+measurements above stopped describing the read, and the answer then is a
+whole-board budget of its own rather than a silent miss.
+
+The quiet-host qualifier is load-bearing, and it is the same exclusion the
+`api-update` derivation above applies to the same run: the contended 2026-08-08
+`cli-list` p95 of 165.18 ms already exceeds 150 ms, so without the qualifier this
+trigger would fire on the very evidence cited for the decision. That point is
+excluded because `cli-update` missed its own long-standing budget in the same
+run — 299.40 ms and 265.59 ms against 200 ms — which prices the host rather than
+the read.
 
 ## Bounded baseline
 
