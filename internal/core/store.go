@@ -43,7 +43,24 @@ type Warning struct {
 	Message string `json:"message"`
 }
 
+// StatusCorrection reports that a mutation rewrote a task's stored status to
+// the live status it already resolved to.
+//
+// It is deliberately not a Warning. A warning says something went wrong and
+// asks the reader to consider acting; this says the opposite — a task that had
+// been carrying a stale token because no clone could rewrite it from outside
+// finally got written to, and the write took the opportunity to settle it.
+// Filing that under warnings would train people to ignore warnings.
+type StatusCorrection struct {
+	From Status `json:"from"`
+	To   Status `json:"to"`
+}
+
 type MutationResult struct {
-	Task     Task      `json:"task"`
-	Warnings []Warning `json:"warnings,omitempty"`
+	Task Task `json:"task"`
+	// StatusCorrected is set when this mutation also settled a stale stored
+	// status. It is a pointer so that the common case adds nothing to the
+	// JSON envelope.
+	StatusCorrected *StatusCorrection `json:"statusCorrected,omitempty"`
+	Warnings        []Warning         `json:"warnings,omitempty"`
 }

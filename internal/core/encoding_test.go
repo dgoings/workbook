@@ -125,8 +125,11 @@ func TestDecodeOperationPackRejectsInvalidOperations(t *testing.T) {
 		"unsupported field": func(pack *OperationPack) {
 			pack.Operations[0] = Operation{ID: operationID1, Type: OperationFieldSet, Field: "labels", Value: "git"}
 		},
-		"invalid status value": func(pack *OperationPack) {
-			pack.Operations[0] = Operation{ID: operationID1, Type: OperationFieldSet, Field: "status", Value: "later"}
+		// "later" now decodes: a stored status is checked for shape, not for
+		// membership in this build's vocabulary. A value that is not a status
+		// token remains corrupt data.
+		"malformed status value": func(pack *OperationPack) {
+			pack.Operations[0] = Operation{ID: operationID1, Type: OperationFieldSet, Field: "status", Value: "Later Maybe"}
 		},
 		"empty set label": func(pack *OperationPack) {
 			pack.Operations[0] = Operation{ID: operationID1, Type: OperationSetAdd, Field: "labels", Value: ""}

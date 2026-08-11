@@ -54,17 +54,17 @@ func TestNormalizeTaskAcceptsEveryStatusAndPriority(t *testing.T) {
 	}
 }
 
-func TestWorkflowStatusesReturnsCanonicalOrder(t *testing.T) {
+func TestDefaultVocabularyReturnsCanonicalOrder(t *testing.T) {
 	want := []StatusDefinition{
-		{Status: StatusBacklog, Label: "Backlog"},
-		{Status: StatusReady, Label: "Ready"},
-		{Status: StatusBlocked, Label: "Blocked"},
-		{Status: StatusInProgress, Label: "In Progress"},
-		{Status: StatusInReview, Label: "In Review"},
-		{Status: StatusDone, Label: "Done"},
+		{Status: StatusBacklog, Label: "Backlog", Rank: "1/1", Tags: []StatusTag{StatusTagDefault}},
+		{Status: StatusReady, Label: "Ready", Rank: "2/1", Tags: []StatusTag{StatusTagNext}},
+		{Status: StatusBlocked, Label: "Blocked", Rank: "3/1", Tags: []StatusTag{}},
+		{Status: StatusInProgress, Label: "In Progress", Rank: "4/1", Tags: []StatusTag{}},
+		{Status: StatusInReview, Label: "In Review", Rank: "5/1", Tags: []StatusTag{}},
+		{Status: StatusDone, Label: "Done", Rank: "6/1", Tags: []StatusTag{StatusTagDone}},
 	}
-	if got := WorkflowStatuses(); !reflect.DeepEqual(got, want) {
-		t.Fatalf("WorkflowStatuses() = %#v, want %#v", got, want)
+	if got := DefaultVocabulary().Definitions(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("DefaultVocabulary().Definitions() = %#v, want %#v", got, want)
 	}
 }
 
@@ -88,8 +88,13 @@ func TestNormalizeTaskRejectsInvalidValues(t *testing.T) {
 			task: TaskData{Title: " \t", Status: StatusReady, Priority: PriorityMedium, Rank: "1/1"},
 		},
 		{
-			name: "unknown status",
-			task: TaskData{Title: "Task", Status: "unknown", Priority: PriorityMedium, Rank: "1/1"},
+			// Not "unknown": a well-formed token this build does not recognize
+			// is now something NormalizeTask must accept, because a teammate's
+			// project may define it. What it still rejects is a value that is
+			// not a status token — here, the display label somebody typed
+			// instead of the machine value.
+			name: "malformed status",
+			task: TaskData{Title: "Task", Status: "In Progress", Priority: PriorityMedium, Rank: "1/1"},
 		},
 		{
 			name: "unknown priority",

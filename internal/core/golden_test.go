@@ -2,6 +2,7 @@ package core
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 )
 
@@ -221,5 +222,44 @@ func TestValidateFieldSetOperationOnlyRejects(t *testing.T) {
 		if err != nil && CategoryOf(err) != CategoryCorruptData {
 			t.Fatalf("validateFieldSetOperation(%q) category = %q, want %q", status, CategoryOf(err), CategoryCorruptData)
 		}
+	}
+}
+
+// A stored status this build has never heard of has to read.
+//
+// It is the ordinary consequence of a per-project vocabulary: a teammate adds
+// "awaiting-review", creates a task in it, and pushes. Every clone that has not
+// yet fetched the configuration still has to fetch, fold, validate and render
+// that task, because the alternative is a repository that reads on one machine
+// and reports corruption on another. Only the shape is enforced, and this
+// fixture is the built-in "create backlog" ref with its status substituted, so
+// nothing else about the document varies.
+func TestAStoredStatusOutsideEveryVocabularyStillReads(t *testing.T) {
+	const unknown = `"status":"awaiting-review"`
+	operation := strings.ReplaceAll(goldenTaskRefs[0].operation, `"status":"backlog"`, unknown)
+	state := strings.ReplaceAll(goldenTaskRefs[0].state, `"status":"backlog"`, unknown)
+	if operation == goldenTaskRefs[0].operation || state == goldenTaskRefs[0].state {
+		t.Fatal("the fixture substitution matched nothing; the golden table changed shape")
+	}
+
+	pack, err := DecodeOperationPack([]byte(operation))
+	if err != nil {
+		t.Fatalf("DecodeOperationPack() error = %v", err)
+	}
+	if got, err := EncodeDocument(pack); err != nil {
+		t.Fatalf("EncodeDocument(pack) error = %v", err)
+	} else if !bytes.Equal(got, []byte(operation)) {
+		t.Fatalf("EncodeDocument(pack) = %s, want %s", got, operation)
+	}
+
+	decoded, err := DecodeStateDocument([]byte(state))
+	if err != nil {
+		t.Fatalf("DecodeStateDocument() error = %v", err)
+	}
+	if got := decoded.Task.Status; got != "awaiting-review" {
+		t.Fatalf("decoded status = %q, want it preserved", got)
+	}
+	if err := ValidateCheckpoint(nil, pack, decoded, goldenProjectKey); err != nil {
+		t.Fatalf("ValidateCheckpoint() error = %v", err)
 	}
 }

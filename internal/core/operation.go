@@ -440,8 +440,14 @@ func validateFieldSetOperation(operation Operation) error {
 		}
 	case "description":
 	case "status":
-		if !isValidStatus(Status(operation.Value)) {
-			return corrupt("field.set status %q is invalid", operation.Value)
+		// Structural, not membership. This gate runs during replay, over
+		// operations another clone already committed; refusing one because this
+		// clone's vocabulary does not contain its status would turn a fetched
+		// history into corrupt data, which is a claim about the repository
+		// rather than about the configuration. What it still refuses is a value
+		// that is not a status token at all, because no build ever wrote one.
+		if err := validateStatusToken(Status(operation.Value)); err != nil {
+			return Wrap(CategoryCorruptData, "field.set status is invalid", err)
 		}
 	case "priority":
 		if !isValidPriority(Priority(operation.Value)) {

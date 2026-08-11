@@ -135,24 +135,6 @@ const (
 	StatusDone       Status = "done"
 )
 
-type StatusDefinition struct {
-	Status Status
-	Label  string
-}
-
-var workflowStatuses = [...]StatusDefinition{
-	{Status: StatusBacklog, Label: "Backlog"},
-	{Status: StatusReady, Label: "Ready"},
-	{Status: StatusBlocked, Label: "Blocked"},
-	{Status: StatusInProgress, Label: "In Progress"},
-	{Status: StatusInReview, Label: "In Review"},
-	{Status: StatusDone, Label: "Done"},
-}
-
-func WorkflowStatuses() []StatusDefinition {
-	return append([]StatusDefinition(nil), workflowStatuses[:]...)
-}
-
 type Priority string
 
 const (
@@ -189,10 +171,27 @@ type TaskData struct {
 	Deleted      bool      `json:"deleted"`
 }
 
+// Task is a projected task: the stored document plus the identifiers a caller
+// needs to act on it.
+//
+// Status is the resolved status — the live status the stored value means under
+// the project's vocabulary today, not necessarily the token stored in the ref.
+// Resolution happens once, in Project, so that no consumer has to remember to
+// do it and none of them can disagree about the answer.
 type Task struct {
 	ID        string `json:"id"`
 	ProjectID string `json:"projectId"`
 	TaskData
+	// StoredStatus is the status the task's ref actually holds, populated only
+	// when it differs from the resolved Status.
+	//
+	// It is the visible half of a distributed rename. A clone that renames a
+	// status cannot rewrite other clones' task refs — history is append-only,
+	// and those clones may be offline — so a task keeps its old token until
+	// something writes to it. Reporting both values is what keeps that honest:
+	// the board shows the column the task belongs in, and a caller that needs
+	// to explain why can say what is actually on disk.
+	StoredStatus      Status `json:"storedStatus,omitempty"`
 	HistoryGeneration string `json:"historyGeneration"`
 	Head              string `json:"head"`
 }
@@ -206,8 +205,14 @@ func NormalizeTask(projectKey string, task TaskData) (TaskData, error) {
 	if task.Title == "" {
 		return TaskData{}, Errorf(CategoryValidation, "task title must not be blank")
 	}
-	if !isValidStatus(task.Status) {
-		return TaskData{}, Errorf(CategoryValidation, "invalid task status %q", task.Status)
+	// A stored status is checked for shape, not for membership. NormalizeTask
+	// runs on every read of every ref, including refs written by a clone whose
+	// project configuration this one has not fetched yet, so asking "is this
+	// one of the statuses I know about?" here would make a teammate's task
+	// unreadable rather than merely unfamiliar. Membership is asked at the
+	// mutation boundary, in Service, where a person is choosing a value.
+	if err := validateStatusToken(task.Status); err != nil {
+		return TaskData{}, err
 	}
 	if !isValidPriority(task.Priority) {
 		return TaskData{}, Errorf(CategoryValidation, "invalid task priority %q", task.Priority)
@@ -261,15 +266,6 @@ func parseRank(rank string) (*big.Rat, error) {
 
 func formatRank(rank *big.Rat) string {
 	return rank.Num().String() + "/" + rank.Denom().String()
-}
-
-func isValidStatus(status Status) bool {
-	for _, definition := range workflowStatuses {
-		if status == definition.Status {
-			return true
-		}
-	}
-	return false
 }
 
 func isValidPriority(priority Priority) bool {

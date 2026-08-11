@@ -90,7 +90,7 @@ func createsTask(change core.Change) bool {
 // value for a status this build does not know, so a lane never hides a status a
 // newer Workbook recorded.
 func statusLabel(status core.Status) string {
-	for _, definition := range core.WorkflowStatuses() {
+	for _, definition := range core.DefaultVocabulary().Definitions() {
 		if definition.Status == status {
 			return definition.Label
 		}

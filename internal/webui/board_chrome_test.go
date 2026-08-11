@@ -33,7 +33,7 @@ func boardPage(t *testing.T) string {
 // header for no decision anyone makes from the board.
 func TestHandlerBoardColumnsOmitWorkbookRefPaths(t *testing.T) {
 	body := boardPage(t)
-	for _, definition := range core.WorkflowStatuses() {
+	for _, definition := range core.DefaultVocabulary().Definitions() {
 		if want := "refs/workbook/status/" + string(definition.Status); strings.Contains(body, want) {
 			t.Errorf("GET / body still prints the ref path %q in a column header", want)
 		}
