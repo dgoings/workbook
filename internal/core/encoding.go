@@ -26,6 +26,16 @@ func EncodeDocument(value any) ([]byte, error) {
 			return nil, err
 		}
 		document = typed
+	case ConfigOperationPack:
+		if err := validateConfigOperationPackDocument(typed); err != nil {
+			return nil, err
+		}
+		document = typed
+	case ConfigStateDocument:
+		if err := validateConfigStateDocument(typed); err != nil {
+			return nil, err
+		}
+		document = typed
 	default:
 		return nil, Errorf(CategoryValidation, "cannot encode unsupported document type %T", value)
 	}
@@ -71,6 +81,33 @@ func DecodeProjectIdentity(data []byte) (ProjectIdentity, error) {
 		return ProjectIdentity{}, err
 	}
 	return identity, nil
+}
+
+// DecodeConfigOperationPack strictly decodes a persisted configuration
+// operation pack.
+func DecodeConfigOperationPack(data []byte) (ConfigOperationPack, error) {
+	var pack ConfigOperationPack
+	if err := decodeOneJSON(data, &pack); err != nil {
+		return ConfigOperationPack{}, err
+	}
+	if err := validateConfigOperationPackDocument(pack); err != nil {
+		return ConfigOperationPack{}, err
+	}
+	return pack, nil
+}
+
+// DecodeConfigStateDocument strictly decodes a persisted configuration
+// checkpoint. A document that decodes here is canonical, which is what lets
+// every Vocabulary accessor built from one be total.
+func DecodeConfigStateDocument(data []byte) (ConfigStateDocument, error) {
+	var state ConfigStateDocument
+	if err := decodeOneJSON(data, &state); err != nil {
+		return ConfigStateDocument{}, err
+	}
+	if err := validateConfigStateDocument(state); err != nil {
+		return ConfigStateDocument{}, err
+	}
+	return state, nil
 }
 
 func validateProjectIdentityDocument(identity ProjectIdentity) error {

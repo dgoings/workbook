@@ -70,7 +70,10 @@ func TaskViews(tasks []core.Task) []TaskView {
 }
 
 func NewBoard(tasks []core.Task) Board {
-	definitions := core.WorkflowStatuses()
+	// The built-in vocabulary, not the project's: a board that reads the
+	// configured columns is a later change in this series, and naming the
+	// default explicitly keeps this one's output identical until then.
+	definitions := core.DefaultVocabulary().Definitions()
 	board := Board{Columns: make([]Column, 0, len(definitions))}
 	for _, definition := range definitions {
 		board.Columns = append(board.Columns, Column{Status: definition.Status, Label: definition.Label})

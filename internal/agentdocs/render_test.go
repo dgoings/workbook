@@ -21,7 +21,7 @@ func TestRenderGuidelinesStatesEveryCanonicalStatus(t *testing.T) {
 	// from core would let generated documentation drift from CLI validation.
 	guidelines := RenderGuidelines(testProject())
 
-	for _, definition := range core.WorkflowStatuses() {
+	for _, definition := range core.DefaultVocabulary().Definitions() {
 		if !strings.Contains(guidelines, string(definition.Status)) {
 			t.Errorf("guidelines missing status %q:\n%s", definition.Status, guidelines)
 		}

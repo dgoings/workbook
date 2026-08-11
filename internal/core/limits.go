@@ -1,5 +1,10 @@
 package core
 
+import (
+	"regexp"
+	"strings"
+)
+
 // Ceilings on what one task document may hold.
 //
 // A task ref is shared history: every clone that fetches, synchronizes, or runs
@@ -47,7 +52,121 @@ const (
 	// declare. Dependency edges are walked for cycles across the whole project,
 	// so this bounds that graph as well as the document.
 	MaxDependencyCount = 100
+	// MaxStatusNameBytes bounds one status name. A name is a machine token, not
+	// prose: it is typed as a flag value, matched in a filter, and written into
+	// a commit subject, so the ceiling is set where a name stops being
+	// typeable rather than where storage starts to hurt.
+	MaxStatusNameBytes = 40
+	// MaxStatusLabelBytes bounds one status display label. A label is a column
+	// heading; anything longer stops fitting a terminal board column.
+	MaxStatusLabelBytes = 60
+	// MaxStatusCount bounds how many live statuses one project may define.
+	//
+	// This one is a usability ceiling as much as a storage ceiling: every live
+	// status is a board column, and a board nobody can read on one screen has
+	// stopped being a board.
+	MaxStatusCount = 24
+	// MaxStatusAliasCount bounds how many rename aliases the ledger may carry,
+	// and MaxStatusRetiredCount how many retirements.
+	//
+	// These two stand in for a compaction pass that does not exist yet. An
+	// alias and a retirement are both permanent forwarding pointers: they are
+	// what lets a clone that has not fetched a rename still resolve a task
+	// stored under the old name, so nothing may drop them while any unsynced
+	// clone might still hold the old value. Until a compaction operation can
+	// declare a prefix of the ledger settled and fold the chains away, the
+	// ceiling is the only thing bounding them, and a project that reaches it
+	// has renamed and removed statuses hundreds of times.
+	MaxStatusAliasCount   = 256
+	MaxStatusRetiredCount = 256
 )
+
+// The three status ceilings above are unlike every other ceiling in this file,
+// and the difference is worth stating where somebody raising one will read it.
+//
+// A task ceiling is a property of one document, decided by whoever wrote it: a
+// title is 500 bytes or it is not, and the clone that wrote an oversized one is
+// the clone that erred. The status ceilings are properties of a project that
+// several clones edit concurrently, so no single author decides them. Two
+// people adding a status on the same afternoon can carry a project past
+// MaxStatusCount without either one being told anything — there is no operation
+// either could have written differently.
+//
+// So these three are checked when a pack is authored (validateVocabularyGrowth,
+// reached from ValidateConfigAuthoring) and never when one is folded. A fold
+// that could fail on a count would let that pair of ordinary edits produce a
+// history no clone can ever read, and append-only means there is no repair: the
+// removal that would bring the project back under the ceiling sits behind the
+// fold that already failed. A folded state may therefore exceed one of these,
+// and nothing reports that yet: PR-B will surface it as a historyvalidation
+// advisory, and PR-C's status list will say so where a person can act on it.
+
+// statusTokenPattern is the one rule for a status name, everywhere.
+//
+// Lowercase kebab-case is not a style preference. A status name is a bare word
+// in four different grammars at once, and this charset is the intersection that
+// needs no escaping in any of them:
+//
+//   - a shell token, typed as `--status in-progress` with no quoting;
+//   - an HTML attribute value, emitted as data-status="in-progress" by the web
+//     board, where a quote or an angle bracket would be an injection;
+//   - a Git commit subject, written as "status backlog → in-progress", where a
+//     newline would end the subject line;
+//   - a SQLite TEXT column and a JSON object value in the projection.
+//
+// Case folding is settled the same way: allowing "Done" and "done" to name
+// different statuses would make a filter's behavior depend on a shift key, and
+// allowing them to name the same one would require every consumer to agree on a
+// folding rule. Forbidding uppercase settles it once. Display casing lives in
+// the label, which is free text.
+//
+// All six built-in statuses conform, so this is a rule the vocabulary work
+// adopts rather than one it introduces.
+var statusTokenPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+
+// validateStatusToken reports whether a status is well formed as a token. It is
+// deliberately not a membership check: a stored status names whatever the clone
+// that wrote it had configured, and a build that rejected an unknown-but-well-
+// formed name would refuse to read a repository a teammate can read. Membership
+// belongs at the mutation boundary, where a person is choosing a value and can
+// be told which ones exist.
+func validateStatusToken(status Status) error {
+	if status == "" {
+		return Errorf(CategoryValidation, "status must not be blank")
+	}
+	if len(status) > MaxStatusNameBytes {
+		return Errorf(
+			CategoryValidation,
+			"status is %d bytes and must not exceed %d",
+			len(status), MaxStatusNameBytes,
+		)
+	}
+	if !statusTokenPattern.MatchString(string(status)) {
+		return Errorf(
+			CategoryValidation,
+			"status %q must be lowercase letters and digits separated by single hyphens",
+			status,
+		)
+	}
+	return nil
+}
+
+// validateStatusLabel bounds a status display label. A blank label is rejected
+// rather than defaulted: a column with no heading is a rendering bug that would
+// otherwise reach every consumer before anyone noticed.
+func validateStatusLabel(label string) error {
+	if strings.TrimSpace(label) == "" {
+		return Errorf(CategoryValidation, "status label must not be blank")
+	}
+	if len(label) > MaxStatusLabelBytes {
+		return Errorf(
+			CategoryValidation,
+			"status label is %d bytes and must not exceed %d",
+			len(label), MaxStatusLabelBytes,
+		)
+	}
+	return nil
+}
 
 // validateTaskFieldSizes rejects a task whose normalized fields exceed the
 // documented ceilings. Messages state the offending size and the ceiling so a

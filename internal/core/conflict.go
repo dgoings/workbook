@@ -86,6 +86,86 @@ func ConflictDetail(conflict Conflict) string {
 	}
 }
 
+// ConfigConflictType discriminates the concurrent configuration situations
+// Workbook refuses to decide on its own.
+//
+// This is a second, separate union rather than four more members on
+// ConflictType, and deliberately so. The task union names situations that stop
+// one task's replay and are reported against a task ID; these name situations
+// that stop the project's configuration replay and are reported against a
+// status. Merging them would give every consumer of a task conflict a member
+// that can never be populated for it, and would make the task union — which is
+// documented as closed and small — open.
+type ConfigConflictType string
+
+const (
+	// ConfigConflictStatusRename reports two renames of the same status to
+	// different tokens. The fold keeps whichever applied first and leaves the
+	// other's token unclaimed, which converges but discards an intent.
+	ConfigConflictStatusRename ConfigConflictType = "status-rename"
+	// ConfigConflictStatusRetired reports a status removed on both sides into
+	// different destinations, or an operation whose subject the fetched
+	// history had already retired. Where a task's tasks land is not something
+	// a tiebreak should decide.
+	ConfigConflictStatusRetired ConfigConflictType = "status-retired"
+	// ConfigConflictStatusDefinition reports two definitions of the same
+	// status name that disagree — most often two clones adding the same status
+	// with different labels. The fold keeps the first; this reports the
+	// discarded one so the label is not lost silently.
+	ConfigConflictStatusDefinition ConfigConflictType = "status-definition"
+	// ConfigConflictStatusArity reports a replay whose result violates an arity
+	// rule the author's clone would have refused. ApplyConfig normalizes it so
+	// the project stays usable; this names what was normalized, because the
+	// repair picked a status by position and nobody chose it.
+	ConfigConflictStatusArity ConfigConflictType = "status-arity"
+)
+
+// ConfigConflict names one status whose configuration replay needs a decision.
+//
+// Ours and Theirs carry the two competing values in whatever form the type
+// implies — two rename targets, two destinations, two labels — as strings,
+// because a caller renders them rather than acting on them, and a union of
+// detail structs would be four types to carry one pair each.
+type ConfigConflict struct {
+	Type   ConfigConflictType `json:"type"`
+	Status Status             `json:"status"`
+	Ours   string             `json:"ours,omitempty"`
+	Theirs string             `json:"theirs,omitempty"`
+	Detail string             `json:"detail,omitempty"`
+}
+
+// ConfigConflictError summarizes a configuration conflict list as the command's
+// failure.
+func ConfigConflictError(conflicts []ConfigConflict) error {
+	if len(conflicts) == 1 {
+		return Errorf(CategoryConflict, "status %s: %s", conflicts[0].Status, ConfigConflictDetail(conflicts[0]))
+	}
+	return Errorf(
+		CategoryConflict,
+		"%d status change(s) need a decision before the project configuration can be replayed",
+		len(conflicts),
+	)
+}
+
+// ConfigConflictDetail renders one configuration conflict as a single line.
+func ConfigConflictDetail(conflict ConfigConflict) string {
+	if conflict.Detail != "" {
+		return conflict.Detail
+	}
+	switch conflict.Type {
+	case ConfigConflictStatusRename:
+		return "this status was renamed to " + conflict.Ours + " here and to " + conflict.Theirs + " on origin"
+	case ConfigConflictStatusRetired:
+		return "this status was removed into " + conflict.Ours + " here and into " + conflict.Theirs + " on origin"
+	case ConfigConflictStatusDefinition:
+		return "this status was defined as " + conflict.Ours + " here and as " + conflict.Theirs + " on origin"
+	case ConfigConflictStatusArity:
+		return "replaying this change left the project without a required status role"
+	default:
+		return string(conflict.Type)
+	}
+}
+
 // DependencyClosingPath returns the existing dependency path that adding the
 // edge from -> to would close into a cycle, or nil when the edge is safe. The
 // returned path starts at to and ends at from.

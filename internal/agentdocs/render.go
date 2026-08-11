@@ -30,7 +30,11 @@ func RenderGuidelines(project core.ProjectConfig) string {
 	builder.WriteString("## Canonical statuses\n\n")
 	builder.WriteString("Pass the machine value, never the display label.\n\n")
 	builder.WriteString("| Machine value | Display label |\n| --- | --- |\n")
-	for _, definition := range core.WorkflowStatuses() {
+	// The built-in vocabulary, not the project's. Rendering the configured one
+	// is what makes these guidelines true for a project that customized its
+	// statuses, and that is a later change in this series; naming the default
+	// explicitly here keeps the output identical until then.
+	for _, definition := range core.DefaultVocabulary().Definitions() {
 		builder.WriteString("| `" + string(definition.Status) + "` | " + definition.Label + " |\n")
 	}
 	builder.WriteString("\nWrite `--status in-progress`, not `In Progress`. The same applies to\n")

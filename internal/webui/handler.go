@@ -228,7 +228,10 @@ type updateTaskRequest struct {
 var pageFuncs = template.FuncMap{"knownStatus": knownStatus}
 
 func knownStatus(status core.Status) bool {
-	for _, definition := range core.WorkflowStatuses() {
+	// The built-in vocabulary, not the project's. Serving the configured
+	// columns is a later change in this series; naming the default explicitly
+	// keeps the rendered page identical until then.
+	for _, definition := range core.DefaultVocabulary().Definitions() {
 		if definition.Status == status {
 			return true
 		}

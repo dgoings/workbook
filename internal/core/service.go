@@ -11,7 +11,14 @@ import (
 )
 
 type Service struct {
-	Config     ProjectConfig
+	Config ProjectConfig
+	// Vocabulary is the project's status configuration. The zero value means
+	// "not configured", and every accessor substitutes DefaultVocabulary for
+	// it, so a Service built the way every caller built one before per-project
+	// statuses existed keeps exactly its previous behavior without being
+	// edited. A caller that has read the project's configuration ledger sets
+	// this; PR-B wires that read.
+	Vocabulary Vocabulary
 	Reader     TaskReader
 	Writer     CanonicalTaskWriter
 	Projection ProjectionUpdater
@@ -19,6 +26,32 @@ type Service struct {
 	IDs        IDSource
 	Now        func() time.Time
 	Actor      string
+}
+
+// vocabulary returns the configured vocabulary, or the built-in default when
+// none was configured.
+func (s Service) vocabulary() Vocabulary {
+	if s.Vocabulary.IsZero() {
+		return DefaultVocabulary()
+	}
+	return s.Vocabulary
+}
+
+// requireStatusMember rejects a status the project does not define.
+//
+// This is the mutation boundary the vocabulary check moved to, and the reason
+// it belongs here rather than in NormalizeTask: at this point a person or an
+// agent is choosing a value and can be told it does not exist, whereas
+// NormalizeTask also runs over documents that were written elsewhere and are
+// not anybody's to choose.
+func (s Service) requireStatusMember(status Status) error {
+	if err := validateStatusToken(status); err != nil {
+		return err
+	}
+	if !s.vocabulary().Has(status) {
+		return Errorf(CategoryValidation, "invalid task status %q", status)
+	}
+	return nil
 }
 
 type CreateInput struct {
@@ -65,7 +98,10 @@ type ListFilter struct {
 func (s Service) CreateMutation(ctx context.Context, input CreateInput) (MutationResult, error) {
 	status := input.Status
 	if status == "" {
-		status = StatusBacklog
+		status = s.vocabulary().Default()
+	}
+	if err := s.requireStatusMember(status); err != nil {
+		return MutationResult{}, err
 	}
 	priority := input.Priority
 	if priority == "" {
@@ -122,8 +158,22 @@ func (s Service) CreateMutation(ctx context.Context, input CreateInput) (Mutatio
 	return s.persistMutation(ctx, nil, pack, state, createCommitSubject(taskID, taskData))
 }
 
+// List returns the project's tasks, filtered and ordered.
+//
+// A status filter outside the vocabulary is still rejected, exactly as it was
+// before per-project statuses existed, and deliberately so.
+//
+// Relaxing it is the right end state: under a distributed vocabulary, naming a
+// status this clone has not fetched yet is an ordinary thing to type, and
+// failing tells the caller their repository is broken when it is merely behind.
+// But an empty table and a zero exit status is a worse answer than a clear
+// refusal — a script that greps the output would silently start finding
+// nothing. The relaxation is only honest once the result envelope can carry
+// "no such status here; the configuration may be behind", and that surface is
+// the CLI's warning path, which this PR does not touch. PR-C relaxes this check
+// and adds the warning in the same change.
 func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
-	if filter.Status != nil && !isValidStatus(*filter.Status) {
+	if filter.Status != nil && !s.vocabulary().Has(*filter.Status) {
 		return nil, Errorf(CategoryValidation, "invalid task status %q", *filter.Status)
 	}
 	if filter.Priority != nil && !isValidPriority(*filter.Priority) {
@@ -133,9 +183,10 @@ func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
 	if err != nil {
 		return nil, err
 	}
+	vocabulary := s.vocabulary()
 	tasks := make([]Task, 0, len(snapshots))
 	for _, snapshot := range snapshots {
-		task := Project(snapshot)
+		task := s.Project(snapshot)
 		if !filter.All && task.Deleted {
 			continue
 		}
@@ -151,18 +202,23 @@ func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
 		tasks = append(tasks, task)
 	}
 	sort.Slice(tasks, func(i, j int) bool {
-		return compareTasks(tasks[i], tasks[j]) < 0
+		return compareTasks(vocabulary, tasks[i], tasks[j]) < 0
 	})
 	return tasks, nil
 }
 
-// Next returns the highest-priority ready task whose dependencies are all
-// active done tasks. It returns nil when no task is eligible.
+// Next returns the highest-priority task in a status tagged next whose
+// dependencies are all active tasks in a status tagged done. It returns nil
+// when no task is eligible.
+//
+// Both questions are asked of the resolved status, not the stored one, so a
+// task still carrying a token a rename replaced is still eligible.
 func (s Service) Next(ctx context.Context) (*Task, error) {
 	snapshots, err := s.Reader.List(ctx, s.Config)
 	if err != nil {
 		return nil, err
 	}
+	vocabulary := s.vocabulary()
 
 	active := make(map[string]TaskData, len(snapshots))
 	for _, snapshot := range snapshots {
@@ -176,14 +232,15 @@ func (s Service) Next(ctx context.Context) (*Task, error) {
 	var selectedRank *big.Rat
 	for _, snapshot := range snapshots {
 		task := snapshot.State.Task
-		if task.Deleted || task.Status != StatusReady || !dependenciesDone(task.Dependencies, active) {
+		resolved, _ := vocabulary.Resolve(task.Status)
+		if task.Deleted || !vocabulary.IsNext(resolved) || !dependenciesDone(vocabulary, task.Dependencies, active) {
 			continue
 		}
 		rank, err := parseRank(task.Rank)
 		if err != nil {
 			return nil, Errorf(CategoryCorruptData, "task %q has invalid rank %q", snapshot.State.TaskID, task.Rank)
 		}
-		projected := Project(snapshot)
+		projected := s.Project(snapshot)
 		if selected == nil || priorityOrder(projected.Priority) < priorityOrder(selected.Priority) ||
 			(priorityOrder(projected.Priority) == priorityOrder(selected.Priority) &&
 				(rank.Cmp(selectedRank) < 0 || (rank.Cmp(selectedRank) == 0 && projected.ID < selected.ID))) {
@@ -199,7 +256,7 @@ func (s Service) Show(ctx context.Context, idOrPrefix string) (Task, error) {
 	if err != nil {
 		return Task{}, err
 	}
-	return Project(snapshot), nil
+	return s.Project(snapshot), nil
 }
 
 // ShowOptions selects the opt-in history views. Plain show requests neither.
@@ -230,7 +287,7 @@ func (s Service) ShowDetail(ctx context.Context, idOrPrefix string, options Show
 	if err != nil {
 		return TaskDetail{}, err
 	}
-	detail := TaskDetail{Task: Project(snapshot)}
+	detail := TaskDetail{Task: s.Project(snapshot)}
 	if !options.requested() {
 		return detail, nil
 	}
@@ -299,6 +356,9 @@ func (s Service) UpdateMutation(ctx context.Context, idOrPrefix string, input Up
 		next.Description = *input.Description
 	}
 	if input.Status != nil {
+		if err := s.requireStatusMember(*input.Status); err != nil {
+			return MutationResult{}, err
+		}
 		next.Status = *input.Status
 	}
 	if input.Priority != nil {
@@ -316,10 +376,53 @@ func (s Service) UpdateMutation(ctx context.Context, idOrPrefix string, input Up
 	if len(operations) == 0 {
 		return MutationResult{}, Errorf(CategoryValidation, "update does not change task")
 	}
+	// The emptiness check comes first on purpose: a correction rides along with
+	// a pack that was going to be written anyway, and must not turn an update
+	// that changes nothing into a write the caller did not ask for.
+	var corrected *StatusCorrection
+	if input.Status == nil {
+		if correction := s.statusCorrection(parent.State.Task); correction != nil {
+			corrected = correction
+			next.Status = correction.To
+			operations = append(operations, Operation{
+				Type: OperationFieldSet, Field: "status", Value: string(correction.To),
+			})
+		}
+	}
 	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
 		return MutationResult{}, err
 	}
-	return s.writeMutation(ctx, &parent, operations, updateCommitSubject(parent.State.TaskID, parent.State.Task, next))
+	result, err := s.writeMutation(ctx, &parent, operations, updateCommitSubject(parent.State.TaskID, parent.State.Task, next))
+	if err != nil {
+		return MutationResult{}, err
+	}
+	result.StatusCorrected = corrected
+	return result, nil
+}
+
+// statusCorrection reports the implicit status write a pack should carry, or
+// nil when there is nothing to settle.
+//
+// This is the "correct on touch" rule. A rename cannot rewrite tasks: history
+// is append-only, and the clones holding those tasks may be offline for weeks.
+// So a task keeps its old token, resolution covers for it on every read, and
+// the stored value is settled the next time something writes to the task
+// anyway. Nothing sweeps; a task nobody touches keeps resolving forever, which
+// is correct and costs nothing.
+//
+// It is refused in the two cases where it would be a guess rather than a
+// settlement: a tombstoned task, whose ref must not gain edits, and a status
+// whose chain does not terminate at a live status, where there is no answer to
+// write.
+func (s Service) statusCorrection(task TaskData) *StatusCorrection {
+	if task.Deleted {
+		return nil
+	}
+	resolved, live := s.vocabulary().Resolve(task.Status)
+	if !live || resolved == task.Status {
+		return nil
+	}
+	return &StatusCorrection{From: task.Status, To: resolved}
 }
 
 func (s Service) DeleteMutation(ctx context.Context, idOrPrefix string) (MutationResult, error) {
@@ -389,7 +492,7 @@ func (s Service) MoveMutation(ctx context.Context, idOrPrefix string, input Move
 		return MutationResult{}, err
 	}
 	if rank == parent.State.Task.Rank {
-		return MutationResult{Task: Project(parent)}, nil
+		return MutationResult{Task: s.Project(parent)}, nil
 	}
 	operations := []Operation{{Type: OperationFieldSet, Field: "rank", Value: rank}}
 	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
@@ -399,8 +502,8 @@ func (s Service) MoveMutation(ctx context.Context, idOrPrefix string, input Move
 }
 
 func (s Service) PlaceMutation(ctx context.Context, idOrPrefix string, input PlaceInput) (MutationResult, error) {
-	if !isValidStatus(input.Status) {
-		return MutationResult{}, Errorf(CategoryValidation, "invalid task status %q", input.Status)
+	if err := s.requireStatusMember(input.Status); err != nil {
+		return MutationResult{}, err
 	}
 	if input.Before != "" && input.After != "" {
 		return MutationResult{}, Errorf(CategoryValidation, "placement accepts at most one anchor direction")
@@ -455,19 +558,33 @@ func (s Service) PlaceMutation(ctx context.Context, idOrPrefix string, input Pla
 	}
 
 	operations := make([]Operation, 0, 2)
+	// A placement always names its destination, so the status operation this
+	// writes is already the settlement a correction would have appended —
+	// which is why there is no second one. What still has to be reported is
+	// when the write settles a stale token rather than moving the task: the
+	// resolved status is unchanged, only the stored one moves.
+	var corrected *StatusCorrection
 	if parent.State.Task.Status != input.Status {
 		operations = append(operations, Operation{Type: OperationFieldSet, Field: "status", Value: string(input.Status)})
+		if resolved, live := s.vocabulary().Resolve(parent.State.Task.Status); live && resolved == input.Status {
+			corrected = &StatusCorrection{From: parent.State.Task.Status, To: input.Status}
+		}
 	}
 	if parent.State.Task.Rank != rank {
 		operations = append(operations, Operation{Type: OperationFieldSet, Field: "rank", Value: rank})
 	}
 	if len(operations) == 0 {
-		return MutationResult{Task: Project(parent)}, nil
+		return MutationResult{Task: s.Project(parent)}, nil
 	}
 	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
 		return MutationResult{}, err
 	}
-	return s.writeMutation(ctx, &parent, operations, "place task")
+	result, err := s.writeMutation(ctx, &parent, operations, "place task")
+	if err != nil {
+		return MutationResult{}, err
+	}
+	result.StatusCorrected = corrected
+	return result, nil
 }
 
 func (s Service) DependMutation(ctx context.Context, idOrPrefix, dependencyOrPrefix string) (MutationResult, error) {
@@ -486,7 +603,7 @@ func (s Service) DependMutation(ctx context.Context, idOrPrefix, dependencyOrPre
 		return MutationResult{}, Errorf(CategoryValidation, "a task cannot depend on itself")
 	}
 	if hasDependency(parent.State.Task.Dependencies, dependency.State.TaskID) {
-		return MutationResult{Task: Project(parent)}, nil
+		return MutationResult{Task: s.Project(parent)}, nil
 	}
 	snapshots, err := s.Reader.List(ctx, s.Config)
 	if err != nil {
@@ -520,7 +637,7 @@ func (s Service) FreeMutation(ctx context.Context, idOrPrefix, dependencyOrPrefi
 		dependencyID = dependency.State.TaskID
 	}
 	if !hasDependency(parent.State.Task.Dependencies, dependencyID) {
-		return MutationResult{Task: Project(parent)}, nil
+		return MutationResult{Task: s.Project(parent)}, nil
 	}
 	operations := []Operation{{Type: OperationSetRemove, Field: "dependencies", Value: dependencyID}}
 	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
@@ -529,14 +646,27 @@ func (s Service) FreeMutation(ctx context.Context, idOrPrefix, dependencyOrPrefi
 	return s.writeMutation(ctx, &parent, operations, "remove dependency")
 }
 
-func Project(snapshot Snapshot) Task {
-	return Task{
+// Project turns a stored snapshot into the task a caller sees, and is the one
+// place a stored status is resolved.
+//
+// Resolution has to happen exactly once, and this is the only constructor of a
+// Task, so this is where. Doing it in each consumer would let a board and a
+// filter disagree about which column a task is in; doing it in the fold would
+// bake one clone's configuration into shared history, which is precisely what
+// the forwarding chains exist to avoid.
+func (s Service) Project(snapshot Snapshot) Task {
+	task := Task{
 		ID:                snapshot.State.TaskID,
 		ProjectID:         snapshot.State.ProjectID,
 		TaskData:          snapshot.State.Task,
 		HistoryGeneration: snapshot.State.History.Generation,
 		Head:              snapshot.Head,
 	}
+	if resolved, live := s.vocabulary().Resolve(task.Status); live && resolved != task.Status {
+		task.StoredStatus = task.Status
+		task.Status = resolved
+	}
+	return task
 }
 
 // requireExpectedHead reports a stale write when the caller named a tip that is
@@ -604,7 +734,7 @@ func (s Service) persistMutation(
 		return MutationResult{}, err
 	}
 
-	result := MutationResult{Task: Project(written)}
+	result := MutationResult{Task: s.Project(written)}
 	if s.Projection == nil {
 		return result, nil
 	}
@@ -914,18 +1044,22 @@ func hasDependency(dependencies []string, wanted string) bool {
 	return false
 }
 
-func dependenciesDone(dependencies []string, active map[string]TaskData) bool {
+func dependenciesDone(vocabulary Vocabulary, dependencies []string, active map[string]TaskData) bool {
 	for _, dependency := range dependencies {
 		task, ok := active[dependency]
-		if !ok || task.Status != StatusDone {
+		if !ok {
+			return false
+		}
+		resolved, _ := vocabulary.Resolve(task.Status)
+		if !vocabulary.IsDone(resolved) {
 			return false
 		}
 	}
 	return true
 }
 
-func compareTasks(left, right Task) int {
-	if compare := statusOrder(left.Status) - statusOrder(right.Status); compare != 0 {
+func compareTasks(vocabulary Vocabulary, left, right Task) int {
+	if compare := vocabulary.Order(left.Status) - vocabulary.Order(right.Status); compare != 0 {
 		return compare
 	}
 	if compare := priorityOrder(left.Priority) - priorityOrder(right.Priority); compare != 0 {
@@ -944,15 +1078,6 @@ func compareTasks(left, right Task) int {
 		return 1
 	}
 	return strings.Compare(left.ID, right.ID)
-}
-
-func statusOrder(status Status) int {
-	for index, definition := range workflowStatuses {
-		if status == definition.Status {
-			return index
-		}
-	}
-	return len(workflowStatuses)
 }
 
 func priorityOrder(priority Priority) int {

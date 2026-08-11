@@ -190,6 +190,81 @@ func TestNormalizeTaskCountsLabelsAfterDeduplication(t *testing.T) {
 	}
 }
 
+// A status ceiling that shifted by one would narrow what a project has already
+// stored, so the boundary is pinned on both sides.
+func TestStatusCeilingsAcceptExactlyTheirLimit(t *testing.T) {
+	name := Status(strings.Repeat("a", MaxStatusNameBytes))
+	if err := validateStatusToken(name); err != nil {
+		t.Fatalf("validateStatusToken(%d bytes) error = %v", len(name), err)
+	}
+	if err := validateStatusToken(name + "a"); err == nil {
+		t.Fatalf("validateStatusToken(%d bytes) error = nil, want a rejection", len(name)+1)
+	}
+
+	label := strings.Repeat("L", MaxStatusLabelBytes)
+	if err := validateStatusLabel(label); err != nil {
+		t.Fatalf("validateStatusLabel(%d bytes) error = %v", len(label), err)
+	}
+	if err := validateStatusLabel(label + "L"); err == nil {
+		t.Fatalf("validateStatusLabel(%d bytes) error = nil, want a rejection", len(label)+1)
+	}
+
+	// The count ceilings are authoring rules, so the boundary is pinned on the
+	// authoring check rather than on the constructor.
+	none := VocabularyDocument{}
+	if err := validateVocabularyGrowth(none, VocabularyDocument{Statuses: manyStatuses(MaxStatusCount)}); err != nil {
+		t.Fatalf("authoring %d statuses error = %v", MaxStatusCount, err)
+	}
+	if err := validateVocabularyGrowth(none, VocabularyDocument{Statuses: manyStatuses(MaxStatusCount + 1)}); err == nil {
+		t.Fatalf("authoring %d statuses error = nil, want a refusal", MaxStatusCount+1)
+	}
+	if err := validateVocabularyGrowth(none, VocabularyDocument{Aliases: manyAliases(MaxStatusAliasCount)}); err != nil {
+		t.Fatalf("authoring %d aliases error = %v", MaxStatusAliasCount, err)
+	}
+	if err := validateVocabularyGrowth(none, VocabularyDocument{Aliases: manyAliases(MaxStatusAliasCount + 1)}); err == nil {
+		t.Fatalf("authoring %d aliases error = nil, want a refusal", MaxStatusAliasCount+1)
+	}
+	if err := validateVocabularyGrowth(none, VocabularyDocument{Retired: manyRetirements(MaxStatusRetiredCount)}); err != nil {
+		t.Fatalf("authoring %d retirements error = %v", MaxStatusRetiredCount, err)
+	}
+	if err := validateVocabularyGrowth(none, VocabularyDocument{Retired: manyRetirements(MaxStatusRetiredCount + 1)}); err == nil {
+		t.Fatalf("authoring %d retirements error = nil, want a refusal", MaxStatusRetiredCount+1)
+	}
+}
+
+// Every built-in status has to satisfy the token rule, or the rule would be one
+// this repository's own data cannot meet.
+func TestBuiltInStatusesSatisfyTheTokenRule(t *testing.T) {
+	for _, definition := range DefaultVocabulary().Definitions() {
+		if err := validateStatusToken(definition.Status); err != nil {
+			t.Errorf("validateStatusToken(%q) error = %v", definition.Status, err)
+		}
+		if err := validateStatusLabel(definition.Label); err != nil {
+			t.Errorf("validateStatusLabel(%q) error = %v", definition.Label, err)
+		}
+	}
+}
+
+// The charset is the intersection of a bare shell token, an HTML attribute
+// value, a commit subject line, and a SQLite TEXT column. These are values that
+// would need escaping, quoting or a case rule in at least one of them.
+func TestStatusTokenRuleRejectsValuesThatWouldNeedEscaping(t *testing.T) {
+	for _, status := range []Status{
+		"", " ", "In Progress", "in progress", "In-Progress", "DONE",
+		"-leading", "trailing-", "double--dash", "under_score", "dot.separated",
+		`quote"d`, "<script>", "semi;colon", "new\nline", "tab\there", "sla/sh", "star*", "Ünicode", "emoji🙂",
+	} {
+		if err := validateStatusToken(status); err == nil {
+			t.Errorf("validateStatusToken(%q) error = nil, want a rejection", status)
+		}
+	}
+	for _, status := range []Status{"a", "0", "done", "in-progress", "a1-b2-c3", "awaiting-review"} {
+		if err := validateStatusToken(status); err != nil {
+			t.Errorf("validateStatusToken(%q) error = %v, want it accepted", status, err)
+		}
+	}
+}
+
 func sizedTask(apply func(*TaskData)) TaskData {
 	task := TaskData{Title: "Task", Status: StatusReady, Priority: PriorityMedium, Rank: "1/1"}
 	apply(&task)

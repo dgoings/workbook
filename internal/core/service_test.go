@@ -716,7 +716,7 @@ func TestServicePlaceWithoutAnchorReturnsExistingSoleBucketTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PlaceMutation() error = %v", err)
 	}
-	if got, want := result.Task, Project(moved); !reflect.DeepEqual(got, want) {
+	if got, want := result.Task, service.Project(moved); !reflect.DeepEqual(got, want) {
 		t.Fatalf("PlaceMutation() task = %#v, want existing %#v", got, want)
 	}
 	if got, want := ids.calls, 0; got != want {
@@ -921,7 +921,7 @@ func TestServiceMoveReturnsExistingTaskWhenEquivalentPlacementKeepsRank(t *testi
 		t.Fatalf("MoveMutation() error = %v", err)
 	}
 	task := result.Task
-	if got, want := task, Project(moved); !reflect.DeepEqual(got, want) {
+	if got, want := task, service.Project(moved); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Move() task = %#v, want existing %#v", got, want)
 	}
 	if got, want := len(store.writes), 0; got != want {

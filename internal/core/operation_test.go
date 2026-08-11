@@ -200,7 +200,11 @@ func TestApplyValidatesOperationFieldsAndValues(t *testing.T) {
 		op   Operation
 	}{
 		{"field set unknown field", Operation{ID: operationID2, Type: OperationFieldSet, Field: "labels", Value: "git"}},
-		{"field set invalid status", Operation{ID: operationID2, Type: OperationFieldSet, Field: "status", Value: "later"}},
+		// "later" would now be accepted: the replay gate checks a status's
+		// shape, not this build's vocabulary, because the operation was written
+		// by a clone whose configuration this one may not have fetched. A value
+		// that is not a status token at all is still corrupt data.
+		{"field set malformed status", Operation{ID: operationID2, Type: OperationFieldSet, Field: "status", Value: "Later Maybe"}},
 		{"field set invalid priority", Operation{ID: operationID2, Type: OperationFieldSet, Field: "priority", Value: "urgent"}},
 		{"field set blank title", Operation{ID: operationID2, Type: OperationFieldSet, Field: "title", Value: "  "}},
 		{"field set malformed rank", Operation{ID: operationID2, Type: OperationFieldSet, Field: "rank", Value: "2/2"}},

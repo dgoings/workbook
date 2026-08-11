@@ -705,7 +705,7 @@ func TestHandlerRendersTaskAndNewTaskLinks(t *testing.T) {
 		t.Fatalf("GET / status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
 	}
 	body := response.Body.String()
-	for _, definition := range core.WorkflowStatuses() {
+	for _, definition := range core.DefaultVocabulary().Definitions() {
 		want := `href="/tasks/new?status=` + string(definition.Status) + `"`
 		if !strings.Contains(body, want) {
 			t.Errorf("GET / body does not contain canonical %q New Task link %q", definition.Label, want)
@@ -5186,7 +5186,7 @@ func TestHandlerServesDragAndDropBoardControls(t *testing.T) {
 // the falsifiable form: it fails for any status a regression reaches for.
 func assertBoardStatusMarkersMatchColumns(t *testing.T, body string) {
 	t.Helper()
-	columns := len(core.WorkflowStatuses())
+	columns := len(core.DefaultVocabulary().Definitions())
 	for _, marker := range []string{`data-status="`, `data-drop-status="`} {
 		if got := strings.Count(body, marker); got != columns {
 			t.Errorf("GET / body has %d %s markers, want %d: one per column and none on the unknown-status region", got, marker, columns)
@@ -5217,8 +5217,16 @@ func TestHandlerClientStatusListMatchesWorkflowStatuses(t *testing.T) {
 	for i, pair := range pairs {
 		got[i] = core.StatusDefinition{Status: core.Status(pair[1]), Label: pair[2]}
 	}
-	if want := core.WorkflowStatuses(); !reflect.DeepEqual(got, want) {
-		t.Errorf("client statusDefinitions = %v, want core.WorkflowStatuses() = %v", got, want)
+	// The client list carries a status and a label and nothing else, so the
+	// comparison is against that projection of core's definitions. A rank or a
+	// tag differing is not drift the form can suffer from; a status or a label
+	// differing is.
+	want := core.DefaultVocabulary().Definitions()
+	for i := range want {
+		want[i] = core.StatusDefinition{Status: want[i].Status, Label: want[i].Label}
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("client statusDefinitions = %v, want core.DefaultVocabulary().Definitions() = %v", got, want)
 	}
 }
 
