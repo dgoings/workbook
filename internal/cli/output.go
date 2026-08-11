@@ -107,8 +107,14 @@ type ResultEnvelope struct {
 	// on several of them, and it lives on the envelope so one command reports
 	// one list whatever mix of phases produced it.
 	Conflict []core.Conflict `json:"conflict,omitempty"`
-	Warnings []core.Warning  `json:"warnings,omitempty"`
-	Sync     *syncReport     `json:"sync,omitempty"`
+	// ConfigConflict lists every status change whose local operations could not
+	// be replayed. It is a second list rather than more members on the first
+	// because a task conflict is reported against a task ID and a
+	// configuration conflict against a status, and merging them would give
+	// every consumer of one a member that can never be populated for it.
+	ConfigConflict []core.ConfigConflict `json:"configConflict,omitempty"`
+	Warnings       []core.Warning        `json:"warnings,omitempty"`
+	Sync           *syncReport           `json:"sync,omitempty"`
 }
 
 type ErrorBody struct {
@@ -139,18 +145,61 @@ func writeSyncPhaseResult(
 	jsonMode bool,
 	renderText func(io.Writer),
 ) {
+	writeSyncPhaseResultWithConfig(output, command, data, conflicts, nil, jsonMode, renderText)
+}
+
+func writeSyncPhaseResultWithConfig(
+	output io.Writer,
+	command string,
+	data any,
+	conflicts []core.Conflict,
+	configConflicts []core.ConfigConflict,
+	jsonMode bool,
+	renderText func(io.Writer),
+) {
 	if jsonMode {
 		_ = json.NewEncoder(output).Encode(ResultEnvelope{
-			Format:   "workbook.result",
-			Version:  1,
-			Command:  command,
-			Data:     data,
-			Conflict: conflicts,
+			Format:         "workbook.result",
+			Version:        1,
+			Command:        command,
+			Data:           data,
+			Conflict:       conflicts,
+			ConfigConflict: configConflicts,
 		})
 		return
 	}
 	renderText(output)
 	writeConflicts(output, conflicts)
+	writeConfigConflicts(output, configConflicts)
+}
+
+// writeConfigConflicts renders the same list the JSON envelope carries. Every
+// line names the status rather than a task, because that is what the two
+// intents disagreed about and what a person has to decide.
+func writeConfigConflicts(output io.Writer, conflicts []core.ConfigConflict) {
+	for _, conflict := range conflicts {
+		fmt.Fprintf(output, "Config conflict:\t%s\t%s\t%s\n",
+			conflict.Status, conflict.Type, core.ConfigConflictDetail(conflict))
+		if conflict.Ours != "" || conflict.Theirs != "" {
+			fmt.Fprintf(output, "\tours:\t%s\n", singleLine(conflict.Ours))
+			fmt.Fprintf(output, "\ttheirs:\t%s\n", singleLine(conflict.Theirs))
+		}
+	}
+}
+
+// writeConfigWarning states what a command could not settle about the project
+// configuration, on the same channel every other warning uses. It is the
+// configuration ledger's half of the reporting the identity ref established: a
+// push that origin accepts while refusing the ledger beside it exits zero, and
+// that is exactly the state that leaves teammates rendering columns nothing
+// explains.
+func writeConfigWarning(stderr io.Writer, result *gitstore.SyncConfigResult) {
+	if result == nil {
+		return
+	}
+	if detail, found := result.Warning(); found {
+		fmt.Fprintf(stderr, "workbook: warning: %s\n", detail)
+	}
 }
 
 func writeMutationResult(
@@ -161,15 +210,20 @@ func writeMutationResult(
 	conflicts []core.Conflict,
 	jsonMode bool,
 ) {
+	var configConflicts []core.ConfigConflict
+	if sync != nil {
+		configConflicts = sync.configConflicts
+	}
 	if jsonMode {
 		_ = json.NewEncoder(stdout).Encode(ResultEnvelope{
-			Format:   "workbook.result",
-			Version:  1,
-			Command:  command,
-			Data:     result.Task,
-			Conflict: conflicts,
-			Warnings: result.Warnings,
-			Sync:     sync,
+			Format:         "workbook.result",
+			Version:        1,
+			Command:        command,
+			Data:           result.Task,
+			Conflict:       conflicts,
+			ConfigConflict: configConflicts,
+			Warnings:       result.Warnings,
+			Sync:           sync,
 		})
 		return
 	}
@@ -177,11 +231,13 @@ func writeMutationResult(
 	writeMutation(stdout, result.Task)
 	writeSyncReport(stdout, sync)
 	writeConflicts(stdout, conflicts)
+	writeConfigConflicts(stdout, configConflicts)
 	for _, warning := range result.Warnings {
 		fmt.Fprintf(stderr, "workbook: warning: %s\n", warning.Message)
 	}
 	if sync != nil {
 		writeIdentityWarning(stderr, sync.Identity)
+		writeConfigWarning(stderr, sync.Config)
 	}
 }
 

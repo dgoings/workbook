@@ -557,3 +557,42 @@ func (f *fakeSyncer) setHead(taskID, head string) {
 	defer f.mu.Unlock()
 	f.heads[taskID] = head
 }
+
+// TestChangedRefsCountsTheConfigurationStage keeps the projection refresh gate
+// honest about the second ref a synchronization can move. Only the outcomes
+// that write the local ledger count: local-ahead and published say origin
+// moved, unchanged says nothing did, and invalid says the stage declined to
+// touch anything.
+func TestChangedRefsCountsTheConfigurationStage(t *testing.T) {
+	quiet := gitstore.SyncRunResult{
+		Fetch: gitstore.SyncResult{Tasks: []gitstore.SyncTaskResult{{Status: gitstore.SyncUnchanged}}},
+		Push:  gitstore.SyncResult{Tasks: []gitstore.SyncTaskResult{{Status: gitstore.SyncUpToDate}}},
+	}
+	if changedRefs(quiet) {
+		t.Fatal("changedRefs() = true for a run that moved nothing")
+	}
+	for _, status := range []gitstore.SyncConfigStatus{
+		gitstore.SyncConfigCreated,
+		gitstore.SyncConfigFastForwarded,
+		gitstore.SyncConfigReconciled,
+		gitstore.SyncConfigConflicted,
+	} {
+		moved := quiet
+		moved.Config = &gitstore.SyncConfigResult{Status: status}
+		if !changedRefs(moved) {
+			t.Fatalf("changedRefs() = false for configuration status %q, which moved the local ref", status)
+		}
+	}
+	for _, status := range []gitstore.SyncConfigStatus{
+		gitstore.SyncConfigUnchanged,
+		gitstore.SyncConfigLocalAhead,
+		gitstore.SyncConfigPublished,
+		gitstore.SyncConfigInvalid,
+	} {
+		still := quiet
+		still.Config = &gitstore.SyncConfigResult{Status: status}
+		if changedRefs(still) {
+			t.Fatalf("changedRefs() = true for configuration status %q, which leaves the local ref alone", status)
+		}
+	}
+}

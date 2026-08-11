@@ -41,6 +41,15 @@ type syncReport struct {
 	// mutation is the most common way a project publishes anything, so it is
 	// also where a remote that refuses the identity ref has to be reported.
 	Identity *gitstore.SyncIdentityResult `json:"identity,omitempty"`
+	// Config reports what this command did about the project's configuration
+	// ledger, on the same terms. A mutation publishes the vocabulary its own
+	// status was written against, so a remote that refuses the ledger while
+	// accepting the task ref is reported here.
+	Config *gitstore.SyncConfigResult `json:"config,omitempty"`
+	// configConflicts travels with the report but is not part of it: the
+	// envelope carries the list, exactly as it carries the task conflict list,
+	// so one command reports one list of each kind.
+	configConflicts []core.ConfigConflict
 }
 
 // taskSession carries the repository, service, and resolved synchronization
@@ -82,11 +91,18 @@ func openTaskSession(ctx context.Context, cwd string, noSync, withWriter bool, s
 	if err != nil {
 		return nil, err
 	}
+	// The session opens on the vocabulary this clone currently holds, and
+	// refreshes it after the fetch; see refreshVocabulary.
+	vocabulary, err := repository.LoadVocabulary(ctx)
+	if err != nil {
+		return nil, err
+	}
 	service := core.Service{
-		Config: config,
-		Reader: store,
-		IDs:    core.CryptoULIDSource{},
-		Now:    time.Now,
+		Config:     config,
+		Vocabulary: vocabulary,
+		Reader:     store,
+		IDs:        core.CryptoULIDSource{},
+		Now:        time.Now,
 	}
 	if withWriter {
 		actor, err := repository.Actor(ctx)
@@ -200,6 +216,12 @@ func (session *taskSession) fetchBefore(ctx context.Context) {
 	}
 	result, err := session.repository.Fetch(ctx, session.config)
 	session.report.Fetch = &result
+	session.report.Config = result.Config
+	// A configuration conflict never blocks the mutation. The two clones
+	// disagree about a status, not about this task's history, and the mutation
+	// is validated against the vocabulary the fetch did settle on — so it is
+	// carried to the caller rather than raised in their way.
+	session.report.configConflicts = result.ConfigConflicts
 	session.conflicts = result.Conflicts
 	if err != nil && result.Status != gitstore.SyncPhaseCompleted {
 		session.report.Status = syncStatusFailed
@@ -246,12 +268,37 @@ func (session *taskSession) pushInline(ctx context.Context, taskID string) {
 	pushed, err := session.repository.PushTask(ctx, session.config, taskID)
 	session.report.Push = &pushed
 	session.report.Identity, _ = session.repository.IdentityReport()
+	if published, found := session.repository.ConfigReport(); found {
+		session.report.Config = published
+	}
 	if err != nil {
 		session.report.Status = syncStatusFailed
 		session.report.Detail = "push failed: " + err.Error()
 		return
 	}
 	session.report.Status = syncStatusCompleted
+}
+
+// refreshVocabulary re-reads the project's statuses after the fetch that may
+// have changed them.
+//
+// A mutation must be validated against the vocabulary this command ends up
+// writing into, not the one it started with. A teammate who renamed `ready` to
+// `todo` an hour ago means that `--status todo` typed here should be accepted
+// and that a task still stored under `ready` should be settled on this write.
+// Both of those are properties of the fetched configuration, and the fetch
+// happens after the session was opened.
+//
+// It costs nothing when nothing changed: the repository memoizes the
+// vocabulary, and the fetch's configuration stage replaced the memoized value
+// in place when it moved the ledger.
+func (session *taskSession) refreshVocabulary(ctx context.Context) error {
+	vocabulary, err := session.repository.LoadVocabulary(ctx)
+	if err != nil {
+		return err
+	}
+	session.service.Vocabulary = vocabulary
+	return nil
 }
 
 // conflictFor reports whether this command's own task is one the fetch could
@@ -291,6 +338,9 @@ func (session *taskSession) mutate(
 	apply func(context.Context) (core.MutationResult, error),
 ) (core.MutationResult, error) {
 	session.fetchBefore(ctx)
+	if err := session.refreshVocabulary(ctx); err != nil {
+		return core.MutationResult{}, err
+	}
 	if conflict := session.conflictFor(ctx, target); conflict != nil {
 		session.acknowledge(*conflict)
 		return core.MutationResult{}, core.ConflictError([]core.Conflict{*conflict})

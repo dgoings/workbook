@@ -56,8 +56,29 @@ type Repository struct {
 	originIdentity originIdentityState
 	// identityReport carries what establishing that agreement cost, or could
 	// not achieve, for a caller whose own result is task shaped.
-	identityReport  *SyncIdentityResult
-	identityDrift   string
+	identityReport *SyncIdentityResult
+	identityDrift  string
+	// vocabularyLoaded and the two fields below memoize the project's status
+	// configuration, exactly as configLoaded does for the tracked file. Reading
+	// it costs a ref enumeration and, for a project that has one, an object
+	// read; doing that once per opened repository is what keeps it off the per
+	// task path.
+	vocabularyLoaded bool
+	vocabulary       core.Vocabulary
+	// The four fields below record what this command last saw of the
+	// configuration ledger on each side. The synchronization stage sets both
+	// from the ref listing it already makes, and Push sets the remote side from
+	// the remote listing it already makes, so the publication paths decide
+	// whether origin is behind without asking Git a second time. The two sides
+	// are tracked separately because the paths that learn them differ: a fetch
+	// learns both at once, a push learns origin's first.
+	configLocalKnown  bool
+	configLocalHead   string
+	configRemoteKnown bool
+	configRemoteHead  string
+	// configReport carries what publication established about origin's copy of
+	// the ledger, for a caller whose own result is task shaped.
+	configReport    *SyncConfigResult
 	objectIDBytes   int
 	actorOnce       sync.Once
 	actor           string

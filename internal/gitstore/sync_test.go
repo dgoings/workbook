@@ -522,16 +522,26 @@ func TestPushUsesOneBoundedPublication(t *testing.T) {
 	if got := countCommand(commands, "cat-file", "--batch"); got != 1 {
 		t.Fatalf("tip batches = %d, want 1; commands = %v", got, commands)
 	}
-	// One listing answers both questions Push has to ask origin: which task tips
-	// it already holds, and which project it is.
-	if got := countCommand(commands, "ls-remote", "--refs", "origin", taskRefPrefix+"*", identityRef); got != 1 {
+	// One listing answers all three questions Push has to ask origin: which
+	// task tips it already holds, which project it is, and whether it has this
+	// project's configuration ledger.
+	if got := countCommand(commands, "ls-remote", "--refs", "origin", taskRefPrefix+"*", identityRef, configRef); got != 1 {
 		t.Fatalf("wildcard remote probes = %d, want 1; commands = %v", got, commands)
 	}
 	for _, command := range commands {
 		if len(command) > 0 && command[0] == "ls-remote" &&
-			(len(command) != 5 || command[3] != taskRefPrefix+"*" || command[4] != identityRef) {
+			(len(command) != 6 || command[3] != taskRefPrefix+"*" || command[4] != identityRef || command[5] != configRef) {
 			t.Fatalf("Push() ran a per-task remote probe: %v", command)
 		}
+	}
+	// Push learns origin's ledger head from that listing and its own from one
+	// local enumeration. A project with no ledger publishes nothing, so this is
+	// the whole cost the configuration stage adds to a push.
+	if got := countCommand(commands, "for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)", configRef, remoteConfigRef); got != 1 {
+		t.Fatalf("configuration ref enumerations = %d, want 1; commands = %v", got, commands)
+	}
+	if got := countPushesTargeting(commands, ":"+configRef); got != 0 {
+		t.Fatalf("configuration push commands = %d, want none when the project has no ledger; commands = %v", got, commands)
 	}
 	if got := countTaskPushes(commands); got != 1 {
 		t.Fatalf("task push commands = %d, want 1; commands = %v", got, commands)
@@ -727,14 +737,19 @@ func TestSyncReusesFetchedTipsWithoutRepeatedInspection(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Sync() error = %v; result = %#v", err, result)
 			}
-			// One fetch carries both namespaces. The identity ref rides the
-			// refspec list rather than adding a round trip of its own.
+			// One fetch carries all three namespaces. Both singleton refs ride
+			// the refspec list rather than adding a round trip of their own.
 			if got := countCommand(commands, "fetch", "--no-tags", "--prune", "--no-auto-maintenance", "origin",
-				"+"+taskRefPrefix+"*:"+remoteTaskRefPrefix+"*", identityFetchRefspec); got != 1 {
+				"+"+taskRefPrefix+"*:"+remoteTaskRefPrefix+"*", identityFetchRefspec, configFetchRefspec); got != 1 {
 				t.Fatalf("fetch commands = %d, want 1; commands = %v", got, commands)
 			}
 			if got := countCommandPrefix(commands, "fetch"); got != 1 {
-				t.Fatalf("fetch invocations = %d, want exactly one for both namespaces; commands = %v", got, commands)
+				t.Fatalf("fetch invocations = %d, want exactly one for all three namespaces; commands = %v", got, commands)
+			}
+			// The configuration stage enumerates both of its refs once, and the
+			// push phase reuses that observation rather than asking again.
+			if got := countCommand(commands, "for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)", configRef, remoteConfigRef); got != 1 {
+				t.Fatalf("configuration ref enumerations = %d, want 1; commands = %v", got, commands)
 			}
 			if got := countCommand(commands, "cat-file", "--batch"); got != 1 {
 				t.Fatalf("tip batches = %d, want 1; commands = %v", got, commands)
@@ -785,6 +800,12 @@ func TestSyncReusesFetchedTipsWithoutRepeatedInspection(t *testing.T) {
 			}
 			if result.Identity != nil {
 				t.Fatalf("synchronized Sync reported identity work %#v, want nothing new", result.Identity)
+			}
+			// A project with no configuration ledger reports nothing at all,
+			// which is what keeps a steady-state run's JSON exactly what it was
+			// before the configuration stage existed.
+			if result.Config != nil {
+				t.Fatalf("synchronized Sync reported configuration work %#v, want nothing new", result.Config)
 			}
 			for _, command := range commands {
 				if commandHasPrefix(command, "merge-base", "--is-ancestor") ||

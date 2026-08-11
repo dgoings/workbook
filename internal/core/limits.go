@@ -81,6 +81,57 @@ const (
 	MaxStatusRetiredCount = 256
 )
 
+// Bounds on how much configuration history one process is willing to fold.
+//
+// These two are a third kind of ceiling, and the distinction matters more than
+// the numbers. A task ceiling says what a document may contain. The status
+// ceilings above say what a project may be authored into. These say what this
+// process will spend on somebody else's history — and nothing more. Exceeding
+// one is never a statement that a checkpoint is wrong: the pack is somebody's
+// recorded history, it folds perfectly well on a clone willing to spend the
+// time, and calling it corrupt would take a repository away from a whole team
+// because one of them scripted a large change. So a pack over one of these is
+// refused as an operational failure that names the bound, the local canonical
+// ref is left exactly where it was, and the next run with a raised bound
+// succeeds. Nothing here may ever produce CategoryCorruptData.
+//
+// They are not enforced by validateConfigOperationPackDocument, deliberately,
+// for the reason normalizeVocabularyDocument records at length: a rule inside
+// the fold that can fail on a count can be made to fail forever by two clones
+// each doing something they were allowed to do. These are asked by the reader
+// and by reconciliation, which can decline without deciding anything about the
+// data.
+//
+// The numbers are set against the measured cost of the fold, which is
+// quadratic in the ledger's accumulated forwarding chains: every operation
+// resolves its subject through them, and every rename adds one, so a ledger of
+// 10,000 renames folds in about 2.7 seconds. One reconciliation folds at most
+// MaxConfigOperationsPerPack × MaxConfigLedgerReplayCommits = 8,192
+// operations, which is 0.82 of that measurement's size and therefore about
+// 0.67 of its time — under two seconds for the worst pack a peer can
+// construct, and microseconds for every pack a Workbook command writes.
+const (
+	// MaxConfigOperationsPerPack bounds how many configuration operations one
+	// commit's pack may carry.
+	//
+	// Every configuration command writes one operation; the largest batch a
+	// Workbook command can author is a reorder of every live status, which
+	// MaxStatusCount holds to 24. Sixty-four therefore leaves a factor of two
+	// and a half over anything this version can produce, while keeping a
+	// hand-built pack from turning one fold into an unbounded one.
+	MaxConfigOperationsPerPack = 64
+	// MaxConfigLedgerReplayCommits bounds how many local-only configuration
+	// commits one reconciliation will replay onto a fetched tip.
+	//
+	// A local-only configuration commit is one status change made while this
+	// clone could not reach origin, so 128 of them is weeks of offline
+	// configuration work by one person. The shared prefix both clones already
+	// hold is not folded and is not bounded here: replay starts at the fetched
+	// tip's stored checkpoint, so the cost of a reconciliation depends on how
+	// far this clone has drifted, not on how old the project is.
+	MaxConfigLedgerReplayCommits = 128
+)
+
 // The three status ceilings above are unlike every other ceiling in this file,
 // and the difference is worth stating where somebody raising one will read it.
 //

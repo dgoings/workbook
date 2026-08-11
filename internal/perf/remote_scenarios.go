@@ -92,12 +92,26 @@ type remoteScenarioContract struct {
 // (measured 21, two), and already-synchronized 10 → 13 (measured 12, one — the
 // same single-process margin that limit already carried). The remaining three
 // keep the limits they had.
+//
+// Remeasured on the same fixture after the configuration ledger: fresh-checkout
+// 13, initial-publication 24, already-synchronized 13, small-changed-ref-set 22,
+// divergent-tips 29, malformed-local-tip 10, malformed-remote-tip 12. Every
+// scenario gained exactly one process and no scenario gained more, which is
+// what the stage's shape predicts: the ledger's refspec rides the one fetch, so
+// the whole cost is one ref enumeration — the configuration stage's on a fetch,
+// and the publication path's local one on a push. A project with no ledger
+// reads no objects beyond that.
+//
+// One budget was raised as a result, by exactly the one process measured:
+// already-synchronized 13 → 14, keeping the single-process margin that limit
+// has carried since it was set. The other five stayed where they were because
+// their measurements still fit.
 var remoteScenarioDefinitions = []remoteScenarioDefinition{
 	{name: "sync-fresh-checkout", topology: RemoteFreshCheckout, command: "fetch", target: &ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 5000, MaxGitProcesses: 20}},
 	// A push into an origin that has no identity ref publishes one first, which
 	// is what makes task refs on a remote imply an identity beside them.
 	{name: "sync-initial-publication", topology: RemoteInitialPublication, command: "push", target: &ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 5000, MaxGitProcesses: 25}},
-	{name: "sync-already-synchronized", topology: RemoteAlreadySynchronized, command: "sync", target: &ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 1000, MaxGitProcesses: 13}},
+	{name: "sync-already-synchronized", topology: RemoteAlreadySynchronized, command: "sync", target: &ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 1000, MaxGitProcesses: 14}},
 	{name: "sync-small-changed-ref-set", topology: RemoteSmallChangedRefSet, command: "sync", target: &ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 2000, MaxGitProcesses: 23}},
 	// Reconciliation replays local history rather than refusing to publish it,
 	// so this scenario now measures work the earlier contract never did. It

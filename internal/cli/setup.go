@@ -170,8 +170,10 @@ func runSetup(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 		return syncErr
 	}
 	var conflicts []core.Conflict
+	var configConflicts []core.ConfigConflict
 	if result.Sync.Result != nil {
 		conflicts = result.Sync.Result.Fetch.Conflicts
+		configConflicts = result.Sync.Result.Fetch.ConfigConflicts
 	}
 
 	tasks, err := repository.List(ctx, config)
@@ -181,7 +183,7 @@ func runSetup(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 	result.TaskCount = len(tasks)
 
 	if *jsonMode {
-		writeSyncPhaseResult(stdout, "setup", result, conflicts, true, func(io.Writer) {})
+		writeSyncPhaseResultWithConfig(stdout, "setup", result, conflicts, configConflicts, true, func(io.Writer) {})
 		return syncErr
 	}
 	fmt.Fprintf(stdout, "Repository:\t%s\n", result.Repository)
@@ -222,9 +224,18 @@ func runSetup(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 				fmt.Fprintf(stdout, "Identity:\t%s\n", detail)
 			}
 		}
+		// The same holds for the configuration ledger: a clone that joins a
+		// project whose statuses this remote will not hand over renders columns
+		// nothing explains.
+		if result.Sync.Result.Config != nil {
+			if detail, found := result.Sync.Result.Config.Warning(); found {
+				fmt.Fprintf(stdout, "Config:\t%s\n", detail)
+			}
+		}
 	}
 	fmt.Fprintf(stdout, "Tasks:\t%d\n", result.TaskCount)
 	writeConflicts(stdout, conflicts)
+	writeConfigConflicts(stdout, configConflicts)
 	return syncErr
 }
 

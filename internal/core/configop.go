@@ -152,6 +152,47 @@ func (state ConfigStateDocument) Vocabulary() Vocabulary {
 	return newVocabularyFromCanonical(state.Config.Vocabulary)
 }
 
+// NewConfigOperationPack stamps one authored batch of configuration operations
+// with the durable format this version writes, and refuses a batch that is not
+// a well formed pack.
+//
+// It is exported because the configuration ledger lives outside this package,
+// unlike the task ledger: a task pack is built by Service, three functions
+// away from the format constant, while a configuration pack is built by the
+// Git-backed ledger that owns the singleton ref. Handing that caller the
+// format and version constants instead would put two copies of the durable
+// header in the tree, and a durable header with two authors eventually has two
+// values.
+//
+// The clock and the history generation come from the caller because only the
+// caller knows the parent: a root pack carries clock 1 and a fresh generation,
+// and every later pack carries its parent's generation and one more than its
+// clock. Both are checked again by applyConfigOperations, so a caller that gets
+// them wrong is refused rather than recorded.
+func NewConfigOperationPack(
+	projectID string,
+	historyGeneration string,
+	actor string,
+	logicalClock uint64,
+	wallTime time.Time,
+	operations []ConfigOperation,
+) (ConfigOperationPack, error) {
+	pack := ConfigOperationPack{
+		Format:            configOperationPackFormat,
+		Version:           documentVersion,
+		ProjectID:         projectID,
+		HistoryGeneration: historyGeneration,
+		Actor:             Actor{ID: actor},
+		LogicalClock:      logicalClock,
+		WallTime:          wallTime,
+		Operations:        append([]ConfigOperation(nil), operations...),
+	}
+	if err := validateConfigOperationPackDocument(pack); err != nil {
+		return ConfigOperationPack{}, err
+	}
+	return pack, nil
+}
+
 // ApplyConfig applies one immutable configuration pack to a configuration
 // state.
 //

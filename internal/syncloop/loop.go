@@ -350,5 +350,24 @@ func changedRefs(result gitstore.SyncRunResult) bool {
 			return true
 		}
 	}
-	return false
+	return configRefChanged(result.Config)
+}
+
+// configRefChanged reports whether the configuration stage moved the local
+// ledger ref. Only the four outcomes that write it count: local-ahead and
+// published say origin moved or did not, unchanged says nothing did, and
+// invalid says the stage declined to touch anything.
+func configRefChanged(result *gitstore.SyncConfigResult) bool {
+	if result == nil {
+		return false
+	}
+	switch result.Status {
+	case gitstore.SyncConfigCreated,
+		gitstore.SyncConfigFastForwarded,
+		gitstore.SyncConfigReconciled,
+		gitstore.SyncConfigConflicted:
+		return true
+	default:
+		return false
+	}
 }
