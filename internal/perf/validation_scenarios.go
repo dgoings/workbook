@@ -263,6 +263,9 @@ func runValidationSetupCommand(ctx context.Context, spec CommandSpec) CommandMea
 	measurement.Stdout = stdout
 	measurement.Stderr = stderr
 	measurement.Sample.Duration = time.Since(startedAt)
+	// Reap only once the duration is stamped, and before the successful return,
+	// so a setup command that exits cleanly still gives up its descendants.
+	ReapProcessGroup(command.Process)
 	if err == nil {
 		measurement.Sample.ExitCode = 0
 		return measurement

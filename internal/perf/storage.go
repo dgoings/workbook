@@ -758,6 +758,9 @@ func runStorageGit(ctx context.Context, timeout time.Duration, root string, inpu
 	command.Stdout = &stdout
 	command.Stderr = &stderr
 	err := command.Run()
+	// This helper reports no duration, so the reap has no stamp to follow and
+	// runs as soon as the command is waited on.
+	ReapProcessGroup(command.Process)
 	if commandContext.Err() == context.DeadlineExceeded {
 		return nil, fmt.Errorf("git %s timed out after %s", strings.Join(args, " "), timeout)
 	}

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/dgoings/workbook/internal/gitstore"
+	"github.com/dgoings/workbook/internal/perf/proctest"
 )
 
 func TestRunColdCLIIsolatesSelectedScenarioSamplesAndPreparesProjection(t *testing.T) {
@@ -2091,4 +2092,19 @@ func gitConfigValue(t *testing.T, directory, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(output))
+}
+
+// TestRunRepositoryGitReapsDescendantOfGitThatExits covers the repository
+// helper's exec site the same way the storage helper's is covered: a git that
+// exits while a descendant it backgrounded is still running leaves that
+// descendant behind, because nothing cancels a command that exits on its own
+// and so nothing signals the process group the site created for it.
+func TestRunRepositoryGitReapsDescendantOfGitThatExits(t *testing.T) {
+	childPIDPath := filepath.Join(t.TempDir(), "child.pid")
+	proctest.ReapRecordedProcessGroup(t, childPIDPath)
+	t.Setenv("PATH", proctest.ExitingLeaderShimPATH(t, "git", childPIDPath))
+	if _, _, err := runRepositoryGit(context.Background(), 30*time.Second, t.TempDir(), "count-objects", "-v"); err != nil {
+		t.Fatal(err)
+	}
+	proctest.RequireDescendantTerminated(t, childPIDPath)
 }

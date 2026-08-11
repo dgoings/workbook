@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/dgoings/workbook/internal/perf/proctest"
 )
 
 // Mutation witness: sharing a fixture or measuring setup commands would let
@@ -253,4 +255,21 @@ func buildValidationScenarioWorkbook(t *testing.T) string {
 		t.Fatalf("build workbook: %v\n%s", err, output)
 	}
 	return binary
+}
+
+// TestRunValidationSetupCommandReapsDescendantOfCommandThatExits holds fixture
+// preparation to the same rule as a measured command: a setup command that
+// exits normally must not leave a background descendant spinning behind it,
+// where nothing cancels the command and so nothing signals its process group.
+func TestRunValidationSetupCommandReapsDescendantOfCommandThatExits(t *testing.T) {
+	childPIDPath := filepath.Join(t.TempDir(), "child.pid")
+	proctest.ReapRecordedProcessGroup(t, childPIDPath)
+	measurement := runValidationSetupCommand(context.Background(), CommandSpec{
+		Binary: proctest.Shell, Args: proctest.ExitingLeaderArgs(childPIDPath),
+		Directory: t.TempDir(), Timeout: 30 * time.Second,
+	})
+	if measurement.Sample.ExitCode != 0 || measurement.Sample.TimedOut || measurement.Sample.Error != "" {
+		t.Fatalf("measurement = %#v", measurement)
+	}
+	proctest.RequireDescendantTerminated(t, childPIDPath)
 }

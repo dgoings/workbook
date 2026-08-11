@@ -1738,6 +1738,9 @@ func runRepositoryGit(ctx context.Context, timeout time.Duration, directory stri
 	startedAt := time.Now()
 	output, err := command.CombinedOutput()
 	duration := time.Since(startedAt)
+	// Reap only once the duration is stamped: this duration is reported as a
+	// measurement, so the kill(2) must not be priced into it.
+	ReapProcessGroup(command.Process)
 	if commandContext.Err() == context.DeadlineExceeded {
 		return nil, duration, fmt.Errorf("git %s timed out after %s", strings.Join(commandArgs, " "), timeout)
 	}

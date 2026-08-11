@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dgoings/workbook/internal/perf/proctest"
 	"github.com/dgoings/workbook/internal/testenv"
 )
 
@@ -707,4 +708,20 @@ func TestMeasureStorageResourceCommandChecksResultContentNotOnlyTheExitCode(t *t
 			}
 		})
 	}
+}
+
+// TestRunStorageGitReapsDescendantOfGitThatExits covers the storage helper's
+// exec site. That site runs a fixed program, so the leak is staged by putting a
+// git that backgrounds a descendant ahead of the real one on PATH: git forks
+// background work of its own, an automatic gc among it, and a git that exits
+// while such a descendant runs leaves it behind because a command that never
+// times out is never cancelled and so its process group is never signalled.
+func TestRunStorageGitReapsDescendantOfGitThatExits(t *testing.T) {
+	childPIDPath := filepath.Join(t.TempDir(), "child.pid")
+	proctest.ReapRecordedProcessGroup(t, childPIDPath)
+	t.Setenv("PATH", proctest.ExitingLeaderShimPATH(t, "git", childPIDPath))
+	if _, err := runStorageGit(context.Background(), 30*time.Second, t.TempDir(), nil, "count-objects", "-v"); err != nil {
+		t.Fatal(err)
+	}
+	proctest.RequireDescendantTerminated(t, childPIDPath)
 }
