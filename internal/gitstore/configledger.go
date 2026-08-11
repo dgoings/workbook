@@ -143,6 +143,48 @@ func (r *Repository) LoadVocabulary(ctx context.Context) (core.Vocabulary, error
 	return r.rememberVocabulary(record.State.Vocabulary()), nil
 }
 
+// VocabularyState is a read of the project's statuses together with where they
+// came from.
+//
+// LoadVocabulary answers the question every command asks — what are this
+// project's statuses — and deliberately says nothing about provenance, because
+// no command should behave differently for a project that has never configured
+// one. The status verbs are the exception: `status list` has to be able to say
+// "these are the built-in statuses, and nothing has been recorded yet", which
+// is a different statement from the same six statuses read out of a ledger.
+type VocabularyState struct {
+	// Head is the configuration ledger's tip, empty for a project with none.
+	Head string
+	// Seeded reports that the project has a configuration ledger. A false
+	// value means the statuses below are the fallback this build supplies, not
+	// a recorded decision.
+	Seeded     bool
+	Vocabulary core.Vocabulary
+}
+
+// LoadVocabularyState reads the project's statuses and reports whether a ledger
+// supplied them.
+//
+// It reads no network, exactly as LoadVocabulary does not: whether this clone's
+// ledger is current is synchronization's business. It also does not consult the
+// memoized vocabulary, because the memo does not record the head — one ref
+// enumeration is what that costs, and only the status verbs pay it.
+func (r *Repository) LoadVocabularyState(ctx context.Context, config core.ProjectConfig) (VocabularyState, error) {
+	listing, err := r.listConfigRefs(ctx, configRef)
+	if err != nil {
+		return VocabularyState{}, unreadableConfigLedger(err)
+	}
+	head, found := listing.Heads[configRef]
+	if !found {
+		return VocabularyState{Vocabulary: core.LegacyVocabulary()}, nil
+	}
+	record, err := r.readConfigRecordAt(ctx, config, configRef, head)
+	if err != nil {
+		return VocabularyState{}, unreadableConfigLedger(err)
+	}
+	return VocabularyState{Head: head, Seeded: true, Vocabulary: record.State.Vocabulary()}, nil
+}
+
 // unreadableConfigLedger names the ref and the command that diagnoses it.
 //
 // Failing here rather than degrading to the legacy vocabulary is deliberate: a

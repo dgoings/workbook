@@ -38,6 +38,16 @@ const WarningProjectionUpdate = "projection-update-failed"
 // behind, such as a ref on origin it could not validate.
 const WarningAutoSync = "auto-sync-incomplete"
 
+// WarningStatusFilter reports that a status filter did not name a live status
+// of this project: either nothing at all, or a value that had to be forwarded
+// through a rename or a removal to select anything.
+//
+// It is a warning rather than a refusal because a filter authors nothing, and a
+// warning rather than silence because the result it accompanies is usually
+// empty, and an empty table with a zero exit status is exactly the answer a
+// script cannot tell from "there is genuinely nothing here".
+const WarningStatusFilter = "status-filter-unresolved"
+
 type Warning struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`

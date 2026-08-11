@@ -284,6 +284,15 @@ workbook version [--json]
 workbook fetch [--json]
 workbook push [--json]
 workbook sync [--watch [--interval <duration>]] [--status] [--json]
+workbook status list [--json]
+workbook status add <status> [--label <label>] [--before <status> | --after <status>] [--tag <tag>]... [--no-sync] [--json]
+workbook status rename <status> <new-status> [--label <label>] [--no-sync] [--json]
+workbook status label <status> <display-label> [--no-sync] [--json]
+workbook status move <status> (--before <status> | --after <status>) [--no-sync] [--json]
+workbook status tag <status> ([--tag <tag>]... | --clear-tags) [--no-sync] [--json]
+workbook status untag <status> <tag> [--no-sync] [--json]
+workbook status delete <status> --into <status> [--no-sync] [--json]
+workbook status log [--limit <n>] [--all] [--json]
 workbook config show [--json]
 workbook config set <setting> <value> [--json]
 workbook config unset <setting> [--json]
@@ -445,18 +454,53 @@ suitable for `git log`, while canonical data remains in the operation and state
 blobs.
 Tombstoned tasks reject every mutation except `workbook restore`, which records
 an explicit append-only restore operation.
-List and show read the current task checkpoint from each task ref's tip. Task
-statuses follow this canonical order: Backlog, Ready, Blocked, In Progress, In
-Review, and Done. `move` orders a task inside its status-and-priority bucket with
+List and show read the current task checkpoint from each task ref's tip. A new
+project's statuses are Backlog, Ready, Blocked, In Progress, In Review, and
+Done, in that order; a project may change them with `workbook status` (see
+[Project statuses](#project-statuses)). `move` orders a task inside its status-and-priority bucket with
 an exact rational rank; it changes only that task. `depend` adds a prerequisite
 edge and rejects cycles; `free` removes one prerequisite edge and is idempotent.
-`next` chooses the first Ready task whose dependencies are all active and Done,
-sorting by priority, rank, and task ID; it reports no eligible task when none
-qualify. `board` uses the same core task order and presents an actionable,
+`next` chooses the first task in a status tagged `next` whose dependencies are
+all active and in a status tagged `done`, sorting by priority, rank, and task
+ID; it reports no eligible task when none qualify. `board` uses the same core task order and presents an actionable,
 unambiguous task-ID prefix with each card's priority, title, and labels. Its JSON
 output retains full task IDs, descriptions, and the rest of the task data. Normal
 `list`, `show`, `board`, and `next` reads use the local SQLite projection.
 Claims and implementation links remain future work.
+
+### Project statuses
+
+A project's statuses are configuration, not a constant. `workbook status list`
+shows them with the tasks in each; `add`, `rename`, `label`, `move`, `tag`,
+`untag`, and `delete` change them; and `workbook status log` lists what has been
+changed, oldest first, with the command that reverses each entry. There is no
+undo verb: an inverse that is sometimes exact and sometimes not is worth less
+than a printed command whose limits are stated beside it.
+
+A status has a machine value — the lowercase token typed as `--status
+in-progress` — a display label, a position, and any of three tags. `default` is
+where a new task lands, `next` is what `workbook next` may return, and `done` is
+what satisfies a dependency. Exactly one status carries `default`, so giving it
+to another status takes it away in the same operation; at least one must carry
+each of `next` and `done`, and a command that would leave none is refused with
+the command that fixes it.
+
+Changing a status never rewrites a task. History is append-only and other clones
+may be offline for weeks, so a rename or a removal leaves a forwarding pointer:
+tasks stored under the old value keep resolving to the right column everywhere,
+and each one settles the next time something writes to it. `workbook status
+delete` therefore requires `--into`, naming where the removed status's tasks
+belong, and reports how many tasks that moves.
+
+The configuration lives in its own synchronized ref, `refs/workbook/config`,
+seeded the first time anybody changes a status and published wherever a task is
+published. A project that has never changed a status has no ledger at all, which
+`workbook status list --json` reports as `"seeded": false`.
+
+Reading with a status this project does not have is not an error: `workbook list
+--status <value>` returns what it selects and warns that the value names no
+status here, because a clone that has not fetched a teammate's rename is behind
+rather than broken.
 
 ### Task change history
 

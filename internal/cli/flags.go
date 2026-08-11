@@ -104,7 +104,12 @@ func commandInvocationMetadata(args []string) (commandMetadata, []string, bool) 
 			name := optionArgs[0]
 			optionArgs = optionArgs[1:]
 			if metadata, exists := commandMetadataFor([]string{args[0], name}); exists {
-				return metadata, optionArgs, true
+				// A subcommand's own positionals are skipped exactly as a
+				// top-level command's are. Leaving them in stopped the scan at
+				// the first one, so `workbook config set a b --json` and every
+				// `workbook status <verb> <status> --json` reported its failure
+				// in human text to a caller that had asked for JSON.
+				return metadata, trimPositionals(metadata, optionArgs), true
 			}
 		}
 		// The subcommand is missing or unknown, but recognizing options still
@@ -112,15 +117,19 @@ func commandInvocationMetadata(args []string) (commandMetadata, []string, bool) 
 		// every option any subcommand accepts.
 		return subcommandUnion(root), optionArgs, true
 	}
+	return root, trimPositionals(root, args[1:]), true
+}
 
-	optionArgs := args[1:]
-	for range root.Positionals {
-		if len(optionArgs) == 0 || !isRequiredFirstArgument(optionArgs[0]) {
+// trimPositionals drops the leading arguments a command takes as positionals,
+// leaving the options behind for a scan that only understands options.
+func trimPositionals(metadata commandMetadata, args []string) []string {
+	for range metadata.Positionals {
+		if len(args) == 0 || !isRequiredFirstArgument(args[0]) {
 			break
 		}
-		optionArgs = optionArgs[1:]
+		args = args[1:]
 	}
-	return root, optionArgs, true
+	return args
 }
 
 var commandSchemas = map[string]commandMetadata{
@@ -164,6 +173,119 @@ var commandSchemas = map[string]commandMetadata{
 				Description: "Clear a project setting so the user configuration decides.",
 				Positionals: []string{"<setting>"},
 				Options:     []optionMetadata{{Name: "json", Kind: boolFlag, Description: "emit JSON"}},
+			},
+		},
+	},
+	"status": {
+		Name:     "status",
+		Synopsis: "workbook status <command> [options]",
+		Description: "Inspect and change this project's status columns.\n\n" +
+			"Statuses are project configuration, recorded in their own synchronized\n" +
+			"history and shared with everyone who fetches. A status has a machine value\n" +
+			"typed as `--status in-progress`, a display label, a position, and any of\n" +
+			"three tags: `default` for where a new task lands, `next` for what `workbook\n" +
+			"next` may return, and `done` for what satisfies a dependency.\n\n" +
+			"Renaming or removing a status never rewrites a task. Stored values keep\n" +
+			"resolving through the change, and each task settles the next time something\n" +
+			"writes to it.",
+		Positionals:     []string{"<command>"},
+		SubcommandOrder: []string{"list", "add", "rename", "label", "move", "tag", "untag", "delete", "log"},
+		Subcommands: map[string]commandMetadata{
+			"list": {
+				Name:        "list",
+				Synopsis:    "workbook status list [--json]",
+				Description: "List this project's statuses, with the tasks in each.",
+				Options:     []optionMetadata{{Name: "json", Kind: boolFlag, Description: "emit JSON"}},
+			},
+			"add": {
+				Name:        "add",
+				Synopsis:    "workbook status add <status> [--label <label>] [--before <status> | --after <status>] [--tag <tag>]... [--no-sync] [--json]",
+				Description: "Define a status.\n\nIt is added last unless --before or --after names where it goes, and its\nlabel is derived from its name unless --label gives one.",
+				Positionals: []string{"<status>"},
+				Options: []optionMetadata{
+					{Name: "label", Kind: stringFlag, Value: "<label>", Description: "display label (default: derived from the status)"},
+					{Name: "before", Kind: stringFlag, Value: "<status>", Description: "place before this status"},
+					{Name: "after", Kind: stringFlag, Value: "<status>", Description: "place after this status"},
+					{Name: "tag", Kind: stringFlag, Value: "<tag>", Description: "role to give it: default, next, or done (repeatable)"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
+			"rename": {
+				Name:        "rename",
+				Synopsis:    "workbook status rename <status> <new-status> [--label <label>] [--no-sync] [--json]",
+				Description: "Give a status a new machine value.\n\nTasks stored under the old value keep resolving to this status. The display\nlabel follows the new name when it was the one the old name implied, and is\nkept when somebody chose it.",
+				Positionals: []string{"<status>", "<new-status>"},
+				Options: []optionMetadata{
+					{Name: "label", Kind: stringFlag, Value: "<label>", Description: "display label to set with the rename"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
+			"label": {
+				Name:        "label",
+				Synopsis:    "workbook status label <status> <display-label> [--no-sync] [--json]",
+				Description: "Change a status's display label. Nothing else changes.",
+				Positionals: []string{"<status>", "<display-label>"},
+				Options: []optionMetadata{
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
+			"move": {
+				Name:        "move",
+				Synopsis:    "workbook status move <status> (--before <status> | --after <status>) [--no-sync] [--json]",
+				Description: "Move a status among its peers.",
+				Positionals: []string{"<status>"},
+				Options: []optionMetadata{
+					{Name: "before", Kind: stringFlag, Value: "<status>", Description: "move before this status"},
+					{Name: "after", Kind: stringFlag, Value: "<status>", Description: "move after this status"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
+			"tag": {
+				Name:        "tag",
+				Synopsis:    "workbook status tag <status> ([--tag <tag>]... | --clear-tags) [--no-sync] [--json]",
+				Description: "Replace a status's roles with the ones given.\n\nRepeated --tag values are the whole new set, so a tag left out is taken away.\nGiving a status the default tag takes it from whichever status held it, in one\noperation, because a project is never without a default.",
+				Positionals: []string{"<status>"},
+				Options: []optionMetadata{
+					{Name: "tag", Kind: stringFlag, Value: "<tag>", Description: "role to give it: default, next, or done (repeatable)"},
+					{Name: "clear-tags", Kind: boolFlag, Description: "replace its roles with an empty set"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
+			"untag": {
+				Name:        "untag",
+				Synopsis:    "workbook status untag <status> <tag> [--no-sync] [--json]",
+				Description: "Take one role away from a status.",
+				Positionals: []string{"<status>", "<tag>"},
+				Options: []optionMetadata{
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
+			"delete": {
+				Name:        "delete",
+				Synopsis:    "workbook status delete <status> --into <status> [--no-sync] [--json]",
+				Description: "Remove a status and forward its tasks.\n\n--into is required and never guessed: every task in the removed status reads\nas being in the status it names, on every clone, including the ones that have\nnot fetched the removal yet.",
+				Positionals: []string{"<status>"},
+				Options: []optionMetadata{
+					{Name: "into", Kind: stringFlag, Value: "<status>", Description: "where the removed status's tasks belong"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
+			"log": {
+				Name:        "log",
+				Synopsis:    "workbook status log [--limit <n>] [--all] [--json]",
+				Description: "List the recorded status changes, oldest first, with the command that\nreverses each one.",
+				Options: []optionMetadata{
+					{Name: "limit", Kind: stringFlag, Value: "<n>", Description: "show this many recent changes (default 10)"},
+					{Name: "all", Kind: boolFlag, Description: "show every change"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
 			},
 		},
 	},
@@ -414,7 +536,7 @@ var commandSchemas = map[string]commandMetadata{
 }
 
 var commandOrder = []string{
-	"setup", "create", "list", "board", "show", "update", "delete", "restore", "move", "depend", "free", "next", "rebuild", "validate", "version", "fetch", "push", "sync", "config", "docs", "hooks", "serve",
+	"setup", "create", "list", "board", "show", "update", "delete", "restore", "move", "depend", "free", "next", "rebuild", "validate", "version", "fetch", "push", "sync", "status", "config", "docs", "hooks", "serve",
 }
 
 type commandFlagSet struct {

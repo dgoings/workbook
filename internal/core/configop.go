@@ -860,12 +860,12 @@ func validateConfigOperationDocument(operation ConfigOperation) error {
 		if token == "" {
 			continue
 		}
-		if err := validateStatusToken(token); err != nil {
+		if err := ValidateStatusToken(token); err != nil {
 			return Wrap(CategoryCorruptData, string(operation.Type)+" names an invalid status", err)
 		}
 	}
 	if operation.Label != "" {
-		if err := validateStatusLabel(operation.Label); err != nil {
+		if err := ValidateStatusLabel(operation.Label); err != nil {
 			return Wrap(CategoryCorruptData, string(operation.Type)+" carries an invalid label", err)
 		}
 	}
@@ -875,12 +875,12 @@ func validateConfigOperationDocument(operation ConfigOperation) error {
 		}
 	}
 	if operation.Tag != "" {
-		if err := validateStatusTag(operation.Tag); err != nil {
+		if err := ValidateStatusTag(operation.Tag); err != nil {
 			return Wrap(CategoryCorruptData, string(operation.Type)+" carries an invalid tag", err)
 		}
 	}
 	for _, tag := range operation.Tags {
-		if err := validateStatusTag(tag); err != nil {
+		if err := ValidateStatusTag(tag); err != nil {
 			return Wrap(CategoryCorruptData, string(operation.Type)+" carries an invalid tag", err)
 		}
 	}

@@ -211,7 +211,7 @@ func NormalizeTask(projectKey string, task TaskData) (TaskData, error) {
 	// one of the statuses I know about?" here would make a teammate's task
 	// unreadable rather than merely unfamiliar. Membership is asked at the
 	// mutation boundary, in Service, where a person is choosing a value.
-	if err := validateStatusToken(task.Status); err != nil {
+	if err := ValidateStatusToken(task.Status); err != nil {
 		return TaskData{}, err
 	}
 	if !isValidPriority(task.Priority) {

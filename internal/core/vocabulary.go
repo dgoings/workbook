@@ -37,7 +37,20 @@ const (
 // one answer, not a good one.
 var statusTags = [...]StatusTag{StatusTagDefault, StatusTagDone, StatusTagNext}
 
-func validateStatusTag(tag StatusTag) error {
+// StatusTags returns every tag a status may carry, in the canonical order a
+// document stores them. It exists so that a command refusing an unknown tag can
+// list the ones that exist without keeping a second copy of the set.
+func StatusTags() []StatusTag {
+	tags := make([]StatusTag, len(statusTags))
+	copy(tags, statusTags[:])
+	return tags
+}
+
+// ValidateStatusTag reports whether a tag is one of the three roles a project
+// may assign. It is exported for the same reason ValidateStatusToken is: a word
+// somebody typed has to be refused as a typo before it becomes a member of a
+// durable operation, where the same check reports corrupt data.
+func ValidateStatusTag(tag StatusTag) error {
 	for _, known := range statusTags {
 		if tag == known {
 			return nil
@@ -255,6 +268,150 @@ func (vocabulary Vocabulary) Label(status Status) string {
 	return string(status)
 }
 
+// Forwarding reports the one hop a retired status takes, and how it was
+// retired, so a caller can say "renamed to" or "removed into" rather than the
+// vaguer "resolves to".
+//
+// It answers about the first hop only, deliberately. A chain's later hops are
+// somebody else's later decisions, and the message a person needs names what
+// happened to the value they typed.
+func (vocabulary Vocabulary) Forwarding(status Status) (Status, ConfigOperationType, bool) {
+	for _, alias := range vocabulary.aliases {
+		if alias.From == status {
+			return alias.To, ConfigStatusRename, true
+		}
+	}
+	for _, entry := range vocabulary.retired {
+		if entry.Status == status {
+			return entry.Destination, ConfigStatusRemove, true
+		}
+	}
+	return "", "", false
+}
+
+// DerivedStatusLabel is the display label a status name implies: hyphens become
+// spaces and every word is title-cased.
+//
+// It reproduces all six built-in labels from their tokens, and that is the
+// property that makes it usable as a rule rather than a convenience. A rename
+// can then ask whether the current label is still the one the old name implied,
+// and re-derive only in that case — so a project that never chose a label keeps
+// getting sensible ones, and a project that chose "Next Up" keeps it.
+func DerivedStatusLabel(status Status) string {
+	words := strings.Split(string(status), "-")
+	for index, word := range words {
+		if word == "" {
+			continue
+		}
+		words[index] = strings.ToUpper(word[:1]) + word[1:]
+	}
+	return strings.Join(words, " ")
+}
+
+// AppendRank returns the rank a status added after every existing one takes.
+// It is nextRank's rule for statuses: one past the highest, so appending never
+// has to renumber anything.
+//
+// Ranks in a constructed vocabulary have already been parsed by
+// normalizeVocabularyDocument, so an unparseable one cannot reach here; one
+// that somehow did is skipped rather than allowed to fail a total function.
+func (vocabulary Vocabulary) AppendRank() string {
+	maximum := new(big.Rat)
+	for _, definition := range vocabulary.definitions {
+		rank, err := parseRank(definition.Rank)
+		if err != nil {
+			continue
+		}
+		if rank.Cmp(maximum) > 0 {
+			maximum = rank
+		}
+	}
+	return formatRank(new(big.Rat).Add(maximum, big.NewRat(1, 1)))
+}
+
+// InsertRank returns the rank that places a status immediately before or after
+// an anchor, leaving every other status where it is.
+//
+// It is movedRank's rule for statuses, and it is the same rule for the same
+// reason: a rational always has room between two neighbours, so two clones can
+// insert into the same gap without coordinating and without renumbering a
+// column somebody else is looking at. moved names the status being placed and
+// is empty when a new one is being added; it is excluded from the neighbour
+// search so that moving a status one place does not measure the gap against
+// itself.
+//
+// Statuses sort by rank and then by name, so an exhausted gap is decided the
+// same way: two statuses may share a rank, and the insertion is representable
+// only when the names already fall in the order the caller asked for.
+func (vocabulary Vocabulary) InsertRank(moved, anchor Status, before bool) (string, error) {
+	index, live := vocabulary.byStatus[anchor]
+	if !live {
+		return "", Errorf(CategoryValidation, "status %q is not defined by this project", anchor)
+	}
+	anchorRank, err := parseRank(vocabulary.definitions[index].Rank)
+	if err != nil {
+		return "", Wrap(CategoryCorruptData, "status rank is invalid", err)
+	}
+
+	var neighbor *big.Rat
+	var neighborStatus Status
+	for _, definition := range vocabulary.definitions {
+		if definition.Status == moved || definition.Status == anchor {
+			continue
+		}
+		rank, err := parseRank(definition.Rank)
+		if err != nil {
+			return "", Wrap(CategoryCorruptData, "status rank is invalid", err)
+		}
+		anchorComparison := rank.Cmp(anchorRank)
+		if anchorComparison == 0 {
+			anchorComparison = strings.Compare(string(definition.Status), string(anchor))
+		}
+		neighborComparison := 0
+		if neighbor != nil {
+			neighborComparison = rank.Cmp(neighbor)
+			if neighborComparison == 0 {
+				neighborComparison = strings.Compare(string(definition.Status), string(neighborStatus))
+			}
+		}
+		if before {
+			if anchorComparison < 0 && (neighbor == nil || neighborComparison > 0) {
+				neighbor, neighborStatus = rank, definition.Status
+			}
+			continue
+		}
+		if anchorComparison > 0 && (neighbor == nil || neighborComparison < 0) {
+			neighbor, neighborStatus = rank, definition.Status
+		}
+	}
+
+	if neighbor == nil {
+		if before {
+			return formatRank(new(big.Rat).Quo(anchorRank, big.NewRat(2, 1))), nil
+		}
+		next := new(big.Int).Quo(anchorRank.Num(), anchorRank.Denom())
+		next.Add(next, big.NewInt(1))
+		return formatRank(new(big.Rat).SetInt(next)), nil
+	}
+	if neighbor.Cmp(anchorRank) == 0 {
+		representable := strings.Compare(string(neighborStatus), string(moved)) < 0 &&
+			strings.Compare(string(moved), string(anchor)) < 0
+		if !before {
+			representable = strings.Compare(string(anchor), string(moved)) < 0 &&
+				strings.Compare(string(moved), string(neighborStatus)) < 0
+		}
+		if !representable {
+			return "", Errorf(
+				CategoryValidation,
+				"statuses %q and %q share a rank, so %q cannot be placed between them; move one of them first",
+				neighborStatus, anchor, moved,
+			)
+		}
+		return formatRank(anchorRank), nil
+	}
+	return formatRank(new(big.Rat).Quo(new(big.Rat).Add(anchorRank, neighbor), big.NewRat(2, 1))), nil
+}
+
 // Resolve follows a stored status through the rename and retirement chains to
 // the live status it now means, reporting whether the walk terminated at one.
 //
@@ -371,7 +528,7 @@ func validateVocabularyGrowth(before, after VocabularyDocument) error {
 		return Errorf(
 			CategoryValidation,
 			"the project would define %d statuses and must not exceed %d; "+
-				"remove one first: workbook status remove <status> --into <status>",
+				"remove one first: workbook status delete <status> --into <status>",
 			len(after.Statuses), MaxStatusCount,
 		)
 	}
@@ -480,10 +637,10 @@ func normalizeVocabularyDocument(document VocabularyDocument) (VocabularyDocumen
 	ranks := make(map[Status]*big.Rat, len(document.Statuses))
 	seen := make(map[Status]struct{}, len(document.Statuses))
 	for _, definition := range document.Statuses {
-		if err := validateStatusToken(definition.Status); err != nil {
+		if err := ValidateStatusToken(definition.Status); err != nil {
 			return VocabularyDocument{}, err
 		}
-		if err := validateStatusLabel(definition.Label); err != nil {
+		if err := ValidateStatusLabel(definition.Label); err != nil {
 			return VocabularyDocument{}, err
 		}
 		rank, err := parseRank(definition.Rank)
@@ -571,7 +728,7 @@ func forwardTerminates(forward map[Status]Status, source Status) error {
 func normalizeStatusTags(tags []StatusTag) ([]StatusTag, error) {
 	present := make(map[StatusTag]struct{}, len(tags))
 	for _, tag := range tags {
-		if err := validateStatusTag(tag); err != nil {
+		if err := ValidateStatusTag(tag); err != nil {
 			return nil, err
 		}
 		present[tag] = struct{}{}
@@ -592,10 +749,10 @@ func normalizeStatusTags(tags []StatusTag) ([]StatusTag, error) {
 func normalizeStatusAliases(aliases []StatusAlias) ([]StatusAlias, error) {
 	normalized := make([]StatusAlias, 0, len(aliases))
 	for _, alias := range aliases {
-		if err := validateStatusToken(alias.From); err != nil {
+		if err := ValidateStatusToken(alias.From); err != nil {
 			return nil, err
 		}
-		if err := validateStatusToken(alias.To); err != nil {
+		if err := ValidateStatusToken(alias.To); err != nil {
 			return nil, err
 		}
 		if alias.From == alias.To {
@@ -613,10 +770,10 @@ func normalizeStatusAliases(aliases []StatusAlias) ([]StatusAlias, error) {
 func normalizeRetiredStatuses(retired []RetiredStatus) ([]RetiredStatus, error) {
 	normalized := make([]RetiredStatus, 0, len(retired))
 	for _, entry := range retired {
-		if err := validateStatusToken(entry.Status); err != nil {
+		if err := ValidateStatusToken(entry.Status); err != nil {
 			return nil, err
 		}
-		if err := validateStatusToken(entry.Destination); err != nil {
+		if err := ValidateStatusToken(entry.Destination); err != nil {
 			return nil, err
 		}
 		if entry.Status == entry.Destination {

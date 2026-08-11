@@ -194,19 +194,19 @@ func TestNormalizeTaskCountsLabelsAfterDeduplication(t *testing.T) {
 // stored, so the boundary is pinned on both sides.
 func TestStatusCeilingsAcceptExactlyTheirLimit(t *testing.T) {
 	name := Status(strings.Repeat("a", MaxStatusNameBytes))
-	if err := validateStatusToken(name); err != nil {
-		t.Fatalf("validateStatusToken(%d bytes) error = %v", len(name), err)
+	if err := ValidateStatusToken(name); err != nil {
+		t.Fatalf("ValidateStatusToken(%d bytes) error = %v", len(name), err)
 	}
-	if err := validateStatusToken(name + "a"); err == nil {
-		t.Fatalf("validateStatusToken(%d bytes) error = nil, want a rejection", len(name)+1)
+	if err := ValidateStatusToken(name + "a"); err == nil {
+		t.Fatalf("ValidateStatusToken(%d bytes) error = nil, want a rejection", len(name)+1)
 	}
 
 	label := strings.Repeat("L", MaxStatusLabelBytes)
-	if err := validateStatusLabel(label); err != nil {
-		t.Fatalf("validateStatusLabel(%d bytes) error = %v", len(label), err)
+	if err := ValidateStatusLabel(label); err != nil {
+		t.Fatalf("ValidateStatusLabel(%d bytes) error = %v", len(label), err)
 	}
-	if err := validateStatusLabel(label + "L"); err == nil {
-		t.Fatalf("validateStatusLabel(%d bytes) error = nil, want a rejection", len(label)+1)
+	if err := ValidateStatusLabel(label + "L"); err == nil {
+		t.Fatalf("ValidateStatusLabel(%d bytes) error = nil, want a rejection", len(label)+1)
 	}
 
 	// The count ceilings are authoring rules, so the boundary is pinned on the
@@ -236,11 +236,11 @@ func TestStatusCeilingsAcceptExactlyTheirLimit(t *testing.T) {
 // this repository's own data cannot meet.
 func TestBuiltInStatusesSatisfyTheTokenRule(t *testing.T) {
 	for _, definition := range DefaultVocabulary().Definitions() {
-		if err := validateStatusToken(definition.Status); err != nil {
-			t.Errorf("validateStatusToken(%q) error = %v", definition.Status, err)
+		if err := ValidateStatusToken(definition.Status); err != nil {
+			t.Errorf("ValidateStatusToken(%q) error = %v", definition.Status, err)
 		}
-		if err := validateStatusLabel(definition.Label); err != nil {
-			t.Errorf("validateStatusLabel(%q) error = %v", definition.Label, err)
+		if err := ValidateStatusLabel(definition.Label); err != nil {
+			t.Errorf("ValidateStatusLabel(%q) error = %v", definition.Label, err)
 		}
 	}
 }
@@ -254,13 +254,13 @@ func TestStatusTokenRuleRejectsValuesThatWouldNeedEscaping(t *testing.T) {
 		"-leading", "trailing-", "double--dash", "under_score", "dot.separated",
 		`quote"d`, "<script>", "semi;colon", "new\nline", "tab\there", "sla/sh", "star*", "Ünicode", "emoji🙂",
 	} {
-		if err := validateStatusToken(status); err == nil {
-			t.Errorf("validateStatusToken(%q) error = nil, want a rejection", status)
+		if err := ValidateStatusToken(status); err == nil {
+			t.Errorf("ValidateStatusToken(%q) error = nil, want a rejection", status)
 		}
 	}
 	for _, status := range []Status{"a", "0", "done", "in-progress", "a1-b2-c3", "awaiting-review"} {
-		if err := validateStatusToken(status); err != nil {
-			t.Errorf("validateStatusToken(%q) error = %v, want it accepted", status, err)
+		if err := ValidateStatusToken(status); err != nil {
+			t.Errorf("ValidateStatusToken(%q) error = %v, want it accepted", status, err)
 		}
 	}
 }

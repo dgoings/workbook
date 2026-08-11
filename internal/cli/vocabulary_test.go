@@ -46,7 +46,7 @@ func TestCommandsReadTheProjectsOwnVocabulary(t *testing.T) {
 	}
 	writeProjectStatusRename(t, repository, "ready", "todo")
 
-	// The renamed token is accepted; the retired one is not.
+	// The renamed token is accepted; the retired one is explained.
 	code, stdout, stderr := run(t, repository, "show", task.ID, "--json")
 	if code != 0 || stderr != "" {
 		t.Fatalf("show = code %d, stderr %q", code, stderr)
@@ -66,9 +66,22 @@ func TestCommandsReadTheProjectsOwnVocabulary(t *testing.T) {
 	if code != 0 || stderr != "" {
 		t.Fatalf("list --status todo = code %d, stderr %q", code, stderr)
 	}
-	code, _, _ = run(t, repository, "list", "--status", "ready", "--json")
-	if code == 0 {
-		t.Fatal("list --status ready succeeded, want the retired token refused")
+	// The retired token is followed rather than refused, and the warning says
+	// so; see the List relaxation this PR completes.
+	code, stdout, stderr = run(t, repository, "list", "--status", "ready", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("list --status ready = code %d, stderr %q", code, stderr)
+	}
+	listed := assertJSONResult(t, stdout, "list")
+	var filtered []core.Task
+	if err := json.Unmarshal(listed.Data, &filtered); err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered) != 1 || filtered[0].ID != task.ID {
+		t.Fatalf("list --status ready = %#v, want the renamed status's task", filtered)
+	}
+	if len(listed.Warnings) != 1 || listed.Warnings[0].Code != core.WarningStatusFilter {
+		t.Fatalf("list --status ready warnings = %#v, want the rename explained", listed.Warnings)
 	}
 
 	// Creating with the new token works, and the old one is refused with a

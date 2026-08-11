@@ -42,6 +42,66 @@ func RenderList(w io.Writer, tasks []core.Task, width int) error {
 	return err
 }
 
+// StatusRow is one line of the status table: a project's status as `workbook
+// status list` presents it.
+//
+// It is a rendering shape rather than a core type on purpose. The column order
+// is a presentation decision, Tasks is a count this package never computes, and
+// Position is the 1-based place a person reads rather than the rational rank
+// that produces it.
+type StatusRow struct {
+	Position int
+	Status   string
+	Label    string
+	Tags     string
+	Tasks    string
+}
+
+// RenderStatusList writes the status table in RenderList's style: padded
+// columns separated by two spaces, headings in capitals, and nothing truncated.
+//
+// Nothing is truncated because every column here is bounded by a ceiling that
+// already keeps it typeable — a status name at 40 bytes and a label at 60 — so
+// the width a task title has to be fitted into is not a constraint this table
+// has. The parameter is kept for symmetry with the other renderers and because
+// a future column may need it.
+func RenderStatusList(w io.Writer, rows []StatusRow, _ int) error {
+	positionWidth := len("#")
+	statusWidth := len("STATUS")
+	labelWidth := len("LABEL")
+	tagsWidth := len("TAGS")
+	positions := make([]string, len(rows))
+	for index, row := range rows {
+		positions[index] = itoa(row.Position)
+		positionWidth = max(positionWidth, len(positions[index]))
+		statusWidth = max(statusWidth, len(row.Status))
+		labelWidth = max(labelWidth, len(row.Label))
+		tagsWidth = max(tagsWidth, len(row.Tags))
+	}
+
+	var output strings.Builder
+	writeStatusRow(&output, positionWidth, statusWidth, labelWidth, tagsWidth, "#", "STATUS", "LABEL", "TAGS", "TASKS")
+	for index, row := range rows {
+		writeStatusRow(&output, positionWidth, statusWidth, labelWidth, tagsWidth,
+			positions[index], row.Status, row.Label, row.Tags, row.Tasks)
+	}
+	_, err := io.WriteString(w, output.String())
+	return err
+}
+
+func writeStatusRow(output *strings.Builder, positionWidth, statusWidth, labelWidth, tagsWidth int, position, status, label, tags, tasks string) {
+	output.WriteString(pad(position, positionWidth))
+	output.WriteString("  ")
+	output.WriteString(pad(status, statusWidth))
+	output.WriteString("  ")
+	output.WriteString(pad(label, labelWidth))
+	output.WriteString("  ")
+	output.WriteString(pad(tags, tagsWidth))
+	output.WriteString("  ")
+	output.WriteString(tasks)
+	output.WriteByte('\n')
+}
+
 func RenderBoard(w io.Writer, board presentation.Board, layout Layout, width int) error {
 	switch layout {
 	case LayoutWide:

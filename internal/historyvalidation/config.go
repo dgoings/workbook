@@ -109,18 +109,25 @@ func (v *Validator) validateConfig(ctx context.Context) (*ConfigValidation, []Ad
 	if !validation.Valid {
 		return validation, nil, nil
 	}
-	return validation, statusCeilingAdvisories(latest.Config.Vocabulary), nil
+	return validation, StatusCeilingAdvisories(latest.Config.Vocabulary), nil
 }
 
-// statusCeilingAdvisories reports a folded vocabulary over one of the authoring
+// StatusCeilingAdvisories reports a folded vocabulary over one of the authoring
 // ceilings.
+//
+// It is exported because `workbook validate` is not the only place the
+// condition should be visible. A folded state over a ceiling is a state
+// somebody has to shrink, and the command that lists the statuses is where a
+// person is already looking at the thing they would shrink; `workbook status
+// list` calls this rather than restating the three comparisons and drifting
+// from these messages.
 //
 // Reaching one of these is never anybody's mistake and never makes the
 // checkpoint wrong: validateVocabularyGrowth refuses the pack that would push a
 // project over a ceiling, but only on the clone authoring it, and two clones
 // authoring concurrently are each refused nothing. Shrinkage is always allowed,
 // so the way back is always open — which is exactly what these messages say.
-func statusCeilingAdvisories(document core.VocabularyDocument) []Advisory {
+func StatusCeilingAdvisories(document core.VocabularyDocument) []Advisory {
 	advisories := make([]Advisory, 0, 3)
 	if count := len(document.Statuses); count > core.MaxStatusCount {
 		advisories = append(advisories, Advisory{
