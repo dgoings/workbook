@@ -65,6 +65,13 @@ type StatusRow struct {
 // the width a task title has to be fitted into is not a constraint this table
 // has. The parameter is kept for symmetry with the other renderers and because
 // a future column may need it.
+//
+// Padding counts bytes, not display cells, which is RenderList's behavior and
+// is wrong the same way: a label with non-ASCII characters pads short and its
+// row's later columns sit a few cells left of the heading. It is left
+// consistent rather than fixed here, because fixing it for one table would make
+// two tables in the same output disagree about what a column is; the whole
+// package wants one width measure, and that is a change of its own.
 func RenderStatusList(w io.Writer, rows []StatusRow, _ int) error {
 	positionWidth := len("#")
 	statusWidth := len("STATUS")

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"regexp"
@@ -308,7 +309,7 @@ func runStatusList(ctx context.Context, args []string, cwd string, stdout, stder
 	// the walk entirely — and has nothing retired to date anyway.
 	var retiredAt map[core.Status]time.Time
 	if state.Seeded {
-		ledger, _, _, err := readConfigLedger(ctx, repository, config)
+		ledger, err := readConfigLedgerWindow(ctx, repository, config, maxDatedConfigCommits)
 		if err != nil {
 			return err
 		}
@@ -322,6 +323,18 @@ func runStatusList(ctx context.Context, args []string, cwd string, stdout, stder
 	}
 	return writeStatusList(stdout, result)
 }
+
+// maxDatedConfigCommits bounds how far back `status list` reads to date a
+// retirement.
+//
+// The date is a courtesy — it turns "it was renamed" into something a person can
+// place among their own weeks — and a courtesy must not make a listing cost the
+// whole history of a project that has been configured for a year. Reading the
+// newest commits answers it for every recent change, which is the only kind
+// anybody is confused about; a retirement older than this reports no date rather
+// than a wrong one, and the listing says nothing where the clause would have
+// been.
+const maxDatedConfigCommits = 64
 
 // statusReadService builds a read-only service on a repository that is already
 // open, so a status command holds one projection handle rather than two.
@@ -432,32 +445,49 @@ func runStatusLog(ctx context.Context, args []string, cwd string, stdout, stderr
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
-	window := 0
-	if *limit != "" {
+	// The window is decided before anything is read, because it is what bounds
+	// the read. --limit is checked for having been given at all rather than for
+	// being non-empty: `--limit=` sets it to the empty string, which used to
+	// slip past the conflict check and let --all win silently.
+	window := core.DefaultChangeLimit
+	limited := false
+	var offending error
+	flags.Visit(func(visited *flag.Flag) {
+		if visited.Name == "limit" {
+			limited = true
+		}
+	})
+	if limited {
+		if *all {
+			return core.Errorf(core.CategoryInvocation, "cannot use --limit with --all")
+		}
 		parsed, err := strconv.Atoi(*limit)
 		if err != nil || parsed < 1 {
 			return core.Errorf(core.CategoryInvocation, "status log --limit must be a positive whole number")
 		}
-		if *all {
-			return core.Errorf(core.CategoryInvocation, "cannot use --limit with --all")
-		}
 		window = parsed
+	}
+	if offending != nil {
+		return offending
+	}
+	if *all {
+		window = 0
 	}
 
 	repository, config, err := openRepository(ctx, cwd, stderr)
 	if err != nil {
 		return err
 	}
-	ledger, truncation, found, err := readConfigLedger(ctx, repository, config)
+	ledger, err := readConfigLedgerWindow(ctx, repository, config, window)
 	if err != nil {
 		return err
 	}
-	result := buildStatusLog(ledger, truncation, window, *all)
+	result := buildStatusLog(ledger)
 	if *jsonMode {
 		writeResult(stdout, "status log", result)
 		return nil
 	}
-	writeStatusLog(stdout, result, found)
+	writeStatusLog(stdout, result, ledger.Found)
 	return nil
 }
 
@@ -469,26 +499,55 @@ type configLedgerCommit struct {
 	Before core.Vocabulary
 }
 
-// readConfigLedger folds the whole configuration ledger, oldest commit first.
+// configLedgerWindow is what one bounded read of the ledger saw: the commits it
+// delivered, and how much history it did not.
+type configLedgerWindow struct {
+	// Found reports that the project has a ledger at all.
+	Found bool
+	// Commits are the delivered commits, oldest first, each carrying the
+	// vocabulary its parent held.
+	Commits []configLedgerCommit
+	// Total is the ledger's whole length in commits, however few were read.
+	Total      int
+	Truncation *core.HistoryTruncation
+}
+
+// readConfigLedgerWindow reads the newest commits of the configuration ledger,
+// oldest of them first, and reports how long the whole ledger is.
+//
+// window bounds the commits delivered; zero or less reads everything. One extra
+// commit is always requested and then dropped, because an inverse is read
+// against the vocabulary its commit found, and for the oldest commit in a window
+// that vocabulary is the one the commit before it produced. Bounding matters
+// because the per-commit cost is two documents decoded and re-encoded to compare
+// canonical bytes, so an unbounded read makes a ten-line log cost the whole
+// history of a project that has been configured for a year.
 //
 // A project with no ledger returns nothing and no error: the ledger is seeded
 // lazily, so its absence is the ordinary state and not something to report as a
 // failure. A ledger that stops validating partway returns the prefix that did
 // validate plus the truncation, exactly as a task history does — the recorded
-// changes before the bad commit are still the project's history, and refusing
-// to show them would withhold the only context somebody has for repairing it.
-func readConfigLedger(
+// changes before the bad commit are still the project's history, and refusing to
+// show them would withhold the only context somebody has for repairing it.
+func readConfigLedgerWindow(
 	ctx context.Context,
 	repository *gitstore.Repository,
 	config core.ProjectConfig,
-) ([]configLedgerCommit, *core.HistoryTruncation, bool, error) {
-	var commits []configLedgerCommit
+	window int,
+) (configLedgerWindow, error) {
+	requested := 0
+	if window > 0 {
+		requested = window + 1
+	}
+	result := configLedgerWindow{}
 	var previous core.Vocabulary
-	var truncation *core.HistoryTruncation
-	found, err := repository.ReadConfigHistoryStream(ctx, config, gitstore.ConfigHistoryStream{
-		Begin: func(gitstore.ConfigHistoryStart) error { return nil },
+	found, err := repository.ReadConfigHistoryTail(ctx, config, requested, gitstore.ConfigHistoryStream{
+		Begin: func(start gitstore.ConfigHistoryStart) error {
+			result.Total = start.Commits
+			return nil
+		},
 		Commit: func(commit gitstore.ConfigHistoryCommit) error {
-			commits = append(commits, configLedgerCommit{
+			result.Commits = append(result.Commits, configLedgerCommit{
 				Commit: commit.ObjectID,
 				Pack:   commit.Operation,
 				Before: previous,
@@ -496,20 +555,29 @@ func readConfigLedger(
 			previous = commit.State.Vocabulary()
 			return nil
 		},
-		End: func(result gitstore.ConfigHistoryResult) error {
-			if result.Failure != nil {
-				truncation = &core.HistoryTruncation{
-					Commit:  result.Failure.Commit,
-					Message: result.Failure.Err.Error(),
+		End: func(outcome gitstore.ConfigHistoryResult) error {
+			if outcome.Failure != nil {
+				result.Truncation = &core.HistoryTruncation{
+					Commit:  outcome.Failure.Commit,
+					Message: outcome.Failure.Err.Error(),
 				}
 			}
 			return nil
 		},
 	})
 	if err != nil {
-		return nil, nil, false, err
+		return configLedgerWindow{}, err
 	}
-	return commits, truncation, found, nil
+	result.Found = found
+	// The extra commit was read for its checkpoint alone, and the window is
+	// applied here rather than being assumed from what came back: a ledger
+	// shorter than the window returns every commit it has, and trimming to the
+	// window is what keeps `--limit 1` showing one change whether the project
+	// has two commits or two hundred.
+	if window > 0 && len(result.Commits) > window {
+		result.Commits = result.Commits[len(result.Commits)-window:]
+	}
+	return result, nil
 }
 
 // forwardingTimes records when each retired value stopped being live.
@@ -517,9 +585,9 @@ func readConfigLedger(
 // The last recorded forwarding wins, because a value can be retired more than
 // once: adding a name back deletes its forwarding pointer, and retiring it
 // again writes a new one.
-func forwardingTimes(ledger []configLedgerCommit) map[core.Status]time.Time {
+func forwardingTimes(ledger configLedgerWindow) map[core.Status]time.Time {
 	times := make(map[core.Status]time.Time)
-	for _, commit := range ledger {
+	for _, commit := range ledger.Commits {
 		for _, operation := range commit.Pack.Operations {
 			switch operation.Type {
 			case core.ConfigStatusRename:
@@ -532,59 +600,39 @@ func forwardingTimes(ledger []configLedgerCommit) map[core.Status]time.Time {
 	return times
 }
 
-// buildStatusLog windows the ledger the way BuildChangeLog windows a task's
-// chain: oldest first, the most recent changes kept, and the count of what was
-// left out stated rather than implied.
-func buildStatusLog(ledger []configLedgerCommit, truncation *core.HistoryTruncation, limit int, all bool) statusLogResult {
-	entries := make([]statusLogEntry, 0, len(ledger))
-	for _, commit := range ledger {
-		for index, operation := range commit.Pack.Operations {
-			subject := packSubject(commit.Pack, index, operation.Status)
-			entries = append(entries, statusLogEntry{
-				Commit:      commit.Commit,
-				OperationID: operation.ID,
-				WallTime:    commit.Pack.WallTime,
-				Actor:       commit.Pack.Actor.ID,
-				Operation:   operation.Type,
-				Summary:     configOperationSummary(operation),
-				Inverse:     configOperationInverse(commit.Before, operation, subject),
-			})
-		}
-	}
-	result := statusLogResult{Total: len(entries), Truncated: truncation}
-	if !all {
-		if limit <= 0 {
-			limit = core.DefaultChangeLimit
-		}
-		if len(entries) > limit {
-			entries = entries[len(entries)-limit:]
-		}
-	}
-	result.Entries = entries
-	result.Showing = len(entries)
-	return result
-}
-
-// packSubject maps an operation's subject back to the name the pack's parent
-// knew it by, following renames earlier in the same pack.
+// buildStatusLog renders a read window as the change log.
 //
-// Every inverse is read against the pack's parent rather than against the state
-// immediately before the operation, and for a pack of one — which is what most
-// commands write — those are the same thing. For a longer pack the parent is
-// deliberately still the reference: the useful inverse of one operation in a
-// batch is the command that restores what the whole batch found, so a tag
-// replacement reports the set the command replaced rather than an intermediate
-// nobody saw. Only the name needs translating, and only when an earlier
-// operation in the same pack renamed it, because that name did not exist before
-// the pack.
-func packSubject(pack core.ConfigOperationPack, index int, subject core.Status) core.Status {
-	for step := index - 1; step >= 0; step-- {
-		operation := pack.Operations[step]
-		if operation.Type == core.ConfigStatusRename && operation.To == subject {
-			subject = operation.From
+// One entry is one commit, which is the same unit `show --history` counts: a
+// Change there is one operation pack, whatever the pack contains. That matters
+// here beyond symmetry, because a commit is also one command — `workbook status
+// tag` records a transfer and the tags it dropped in one — and the inverse worth
+// printing is the one that undoes the command somebody ran rather than a
+// fragment of it. It is also what makes the total exact under a bounded read:
+// counting commits costs the walk, counting operations would cost reading every
+// pack.
+func buildStatusLog(ledger configLedgerWindow) statusLogResult {
+	entries := make([]statusLogEntry, 0, len(ledger.Commits))
+	for _, commit := range ledger.Commits {
+		if len(commit.Pack.Operations) == 0 {
+			continue
 		}
+		primary := commit.Pack.Operations[0]
+		entries = append(entries, statusLogEntry{
+			Commit:      commit.Commit,
+			OperationID: primary.ID,
+			WallTime:    commit.Pack.WallTime,
+			Actor:       commit.Pack.Actor.ID,
+			Operation:   primary.Type,
+			Summary:     configPackSummary(commit.Pack.Operations),
+			Inverse:     statusPackInverse(commit.Before, commit.Pack.Operations),
+		})
 	}
-	return subject
+	return statusLogResult{
+		Total:     ledger.Total,
+		Showing:   len(entries),
+		Entries:   entries,
+		Truncated: ledger.Truncation,
+	}
 }
 
 func runStatusAdd(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
@@ -672,7 +720,6 @@ func runStatusAdd(ctx context.Context, args []string, cwd string, stdout, stderr
 			}
 			return statusPlan{
 				operations: []core.ConfigOperation{operation},
-				primary:    operation,
 				change:     change,
 			}, nil
 		})
@@ -740,7 +787,6 @@ func runStatusRename(ctx context.Context, args []string, cwd string, stdout, std
 			labelDerived := derived
 			return statusPlan{
 				operations: operations,
-				primary:    rename,
 				change: statusChange{
 					Operation:    "rename",
 					Status:       to,
@@ -749,7 +795,6 @@ func runStatusRename(ctx context.Context, args []string, cwd string, stdout, std
 					LabelDerived: &labelDerived,
 					Tags:         statusTags(vocabulary, subject),
 				},
-				restoreLabel: current,
 			}, nil
 		})
 }
@@ -784,7 +829,6 @@ func runStatusLabel(ctx context.Context, args []string, cwd string, stdout, stde
 			operation := core.ConfigOperation{Type: core.ConfigStatusRelabel, Status: subject, Label: display}
 			return statusPlan{
 				operations: []core.ConfigOperation{operation},
-				primary:    operation,
 				change: statusChange{
 					Operation: "label",
 					Status:    subject,
@@ -844,7 +888,6 @@ func runStatusMove(ctx context.Context, args []string, cwd string, stdout, stder
 			operation := core.ConfigOperation{Type: core.ConfigStatusReorder, Status: subject, Rank: rank}
 			return statusPlan{
 				operations: []core.ConfigOperation{operation},
-				primary:    operation,
 				change: statusChange{
 					Operation: "move",
 					Status:    subject,
@@ -898,10 +941,8 @@ func runStatusTag(ctx context.Context, args []string, cwd string, stdout, stderr
 				change.DefaultFrom = vocabulary.Default()
 			}
 			return statusPlan{
-				operations:  operations,
-				primary:     operations[0],
-				change:      change,
-				restoreTags: current,
+				operations: operations,
+				change:     change,
 			}, nil
 		})
 }
@@ -942,13 +983,11 @@ func runStatusUntag(ctx context.Context, args []string, cwd string, stdout, stde
 			operation := core.ConfigOperation{Type: core.ConfigStatusUntag, Status: subject, Tag: tag}
 			return statusPlan{
 				operations: []core.ConfigOperation{operation},
-				primary:    operation,
 				change: statusChange{
 					Operation: "untag",
 					Status:    subject,
 					Tags:      remaining,
 				},
-				restoreTags: current,
 			}, nil
 		})
 }
@@ -1001,7 +1040,6 @@ func runStatusDelete(ctx context.Context, args []string, cwd string, stdout, std
 			}
 			return statusPlan{
 				operations: []core.ConfigOperation{operation},
-				primary:    operation,
 				change: statusChange{
 					Operation: "delete",
 					Status:    subject,
@@ -1035,10 +1073,20 @@ func missingRemovalDestination(ctx context.Context, cwd string, stderr io.Writer
 // land.
 //
 // Both are counted before the write, against the vocabulary the removal is
-// about to change, because afterwards the tasks resolve into the destination
-// and the question can no longer be asked. Claimability is the coarse form on
-// purpose — a task with no dependencies in a status tagged next is eligible now,
-// while one with dependencies depends on tasks this command is not looking at.
+// about to change, because afterwards the tasks resolve into the destination and
+// the question can no longer be asked.
+//
+// Claimable means what `workbook next` means, through the function Next itself
+// admits a task by: every dependency is an active task in a status that
+// satisfies one. Counting only the tasks with no dependencies at all was a
+// different, smaller number — it called a task blocked when the work it waited
+// for was finished weeks ago, and reported a queue growing by one where the
+// agent would find two.
+//
+// Every dependency is read as it will resolve after the removal, because a
+// dependency sitting in the status being removed lands in the destination with
+// everything else, and whether that satisfies anything is exactly what the
+// destination's tags decide.
 func removalTaskCounts(
 	ctx context.Context,
 	session *taskSession,
@@ -1049,6 +1097,15 @@ func removalTaskCounts(
 	if err != nil {
 		return statusTaskCounts{}, err
 	}
+	active := make(map[string]core.TaskData, len(tasks))
+	for _, task := range tasks {
+		data := task.TaskData
+		if data.Status == subject {
+			data.Status = destination
+		}
+		active[task.ID] = data
+	}
+
 	counts := statusTaskCounts{}
 	claimable := vocabulary.IsNext(destination)
 	for _, task := range tasks {
@@ -1056,7 +1113,7 @@ func removalTaskCounts(
 			continue
 		}
 		counts.Affected++
-		if claimable && len(task.Dependencies) == 0 {
+		if claimable && core.DependenciesDone(vocabulary, task.Dependencies, active) {
 			counts.ClaimableAfter++
 		}
 	}
@@ -1065,18 +1122,14 @@ func removalTaskCounts(
 
 // statusPlan is one authored status change: the operations to record, and
 // everything the envelope says about them that the operations alone do not.
+//
+// It carries nothing for the inverse. Everything an inverse needs is in the
+// operations and in the vocabulary they were authored against, which is what
+// lets the log — which has only those two things — reach the same answer.
 type statusPlan struct {
 	operations []core.ConfigOperation
-	// primary is the operation the inverse is derived from. A command that
-	// writes several operations still has one of them as its subject matter.
-	primary core.ConfigOperation
-	change  statusChange
-	tasks   statusTaskCounts
-	// restoreLabel and restoreTags carry what the inverse has to name to be
-	// exact, for the two commands whose inverse cannot be read off the
-	// operation alone.
-	restoreLabel string
-	restoreTags  []core.StatusTag
+	change     statusChange
+	tasks      statusTaskCounts
 }
 
 // runStatusMutation is the one path every status change takes.
@@ -1128,7 +1181,7 @@ func runStatusMutation(
 			Statuses: statusViews(after, nil),
 		},
 		Tasks:   plan.tasks,
-		Inverse: statusPlanInverse(before, plan),
+		Inverse: statusChangeInverse(before, plan.operations),
 	}
 	if position := result.Change.Position; position != nil {
 		position.Order = after.Order(plan.change.Status) + 1
@@ -1200,13 +1253,32 @@ func requireLiveStatus(
 	if vocabulary.Has(status) {
 		return status, nil
 	}
-	destination, operation, forwarded := vocabulary.Forwarding(status)
+	via, operation, forwarded := vocabulary.Forwarding(status)
 	if !forwarded {
 		return "", core.Errorf(core.CategoryNotFound,
 			"no status %q in this project; the statuses are: %s", status, statusNameList(vocabulary))
 	}
-	return "", core.Errorf(core.CategoryNotFound, "no status %q; it was %s %q%s",
-		status, forwardingVerb(operation), destination, statusForwardedOn(ctx, session, status))
+	resolved, _ := vocabulary.Resolve(status)
+	return "", core.Errorf(core.CategoryNotFound, "no status %q; it was %s %q%s%s",
+		status, forwardingVerb(operation), via,
+		statusForwardedOn(ctx, session, status), statusChainClause(via, resolved))
+}
+
+// statusChainClause says where a chain ends when that is not where its first
+// hop went.
+//
+// The first hop is what happened to the value somebody typed, and it is the only
+// hop this clone can name a verb for: Forwarding answers about one hop by
+// contract. Pairing that verb with the chain's final destination produced
+// sentences describing a change nobody made — "it was renamed to backlog", for a
+// value that was renamed to `sorting` and only reached `backlog` when somebody
+// later removed that. So the hop keeps its verb, and the end of the chain gets
+// its own clause.
+func statusChainClause(via, resolved core.Status) string {
+	if resolved == "" || resolved == via {
+		return ""
+	}
+	return fmt.Sprintf(", which now resolves to %q", resolved)
 }
 
 // statusForwardedOn dates a forwarding from the ledger, and says nothing when
@@ -1214,8 +1286,8 @@ func requireLiveStatus(
 // can place among their own weeks, and reading the ledger for it is affordable
 // here because this path has already failed.
 func statusForwardedOn(ctx context.Context, session *taskSession, status core.Status) string {
-	ledger, _, found, err := readConfigLedger(ctx, session.repository, session.config)
-	if err != nil || !found {
+	ledger, err := readConfigLedgerWindow(ctx, session.repository, session.config, maxDatedConfigCommits)
+	if err != nil || !ledger.Found {
 		return ""
 	}
 	when, dated := forwardingTimes(ledger)[status]
@@ -1309,88 +1381,42 @@ func tagSetOperations(subject core.Status, current, wanted []core.StatusTag) []c
 	return operations
 }
 
-// statusPlanInverse is the command that undoes a whole status command.
-//
-// It starts from the operation's inverse — the same function the log uses, so
-// one matrix answers for both — and adds what a multi-operation command needs
-// to be exact: the label a rename replaced, and the tag set a replacement
-// discarded.
-func statusPlanInverse(before core.Vocabulary, plan statusPlan) statusInverse {
-	inverse := configOperationInverse(before, plan.primary, statusOperationSubject(plan.primary))
-	if inverse == nil {
-		return statusInverse{}
+// statusChangeInverse is the verb path's inverse: the same computation the log
+// performs over the same operations, with nothing left for a mutating command
+// to add. A change whose inverse cannot be expressed reports an empty one rather
+// than a command that would not run.
+func statusChangeInverse(before core.Vocabulary, operations []core.ConfigOperation) statusInverse {
+	if inverse := statusPackInverse(before, operations); inverse != nil {
+		return *inverse
 	}
-	switch plan.change.Operation {
-	case "rename":
-		if plan.change.Label != nil && plan.change.Label.From != plan.change.Label.To {
-			inverse.Command += " --label " + quoteStatusArgument(plan.restoreLabel)
-		}
-	case "tag", "untag":
-		*inverse = tagSetInverse(before, plan)
-	}
-	return *inverse
+	return statusInverse{}
 }
 
-// tagSetInverse restores the tag set a replacement discarded.
+// statusPackInverse is the command that undoes one recorded pack, and the only
+// place an inverse is decided.
 //
-// The default tag is the case that makes this more than a rewrite of the old
-// set. Exactly one status carries it, so a command that took it also took it
-// from somebody: restoring the subject's old set alone would leave the project
-// with no default at all, which the authoring gate refuses outright. So the
-// inverse names the status that gave it up — one command that is valid on its
-// own — and the note carries the second command that finishes the job.
-func tagSetInverse(before core.Vocabulary, plan statusPlan) statusInverse {
-	subject := plan.change.Status
-	restore := tagCommand(subject, plan.restoreTags)
-	if plan.change.DefaultFrom == "" {
-		return statusInverse{Command: restore, Exact: true}
-	}
-	previous := plan.change.DefaultFrom
-	definition, live := statusDefinition(before, previous)
-	if !live {
-		return statusInverse{Command: restore}
-	}
-	return statusInverse{
-		Command: tagCommand(previous, definition.Tags),
-		Exact:   false,
-		Note: fmt.Sprintf("that returns the default tag to %q; %s restores %q's own tags",
-			previous, restore, subject),
-	}
-}
-
-func tagCommand(subject core.Status, tags []core.StatusTag) string {
-	if len(tags) == 0 {
-		return statusCommand("tag", string(subject), "--clear-tags")
-	}
-	parts := []string{"tag", string(subject)}
-	for _, tag := range tags {
-		parts = append(parts, "--tag", string(tag))
-	}
-	return statusCommand(parts...)
-}
-
-// configOperationInverse is the command that undoes one recorded operation,
-// read against the vocabulary that operation found.
+// It takes the whole pack rather than one operation because three of the
+// answers depend on what else was recorded in the same commit: a rename that
+// moved the label has to name the old label, a tag set that took the default
+// has to give it back before it restores anything, and an add that took the
+// default cannot simply be deleted. Deriving those from the pack means the verb
+// that authored it and the log that reads it later reach the same answer by
+// running the same code, rather than by two implementations agreeing.
 //
-// Every answer is a command somebody can run, never a verb Workbook implements:
-// an undo that is sometimes exact and sometimes not is worse than a printed
-// command whose limits are stated beside it. A genesis has no inverse, and says
-// so by returning nothing rather than by offering to delete a project's
-// configuration.
-//
-// subject is the name `before` knew the operation's subject by; see packSubject
-// for the one case where that is not the operation's own subject. The command
-// this returns always names the status by the name it carries now, because that
-// is the name the command would have to be run against.
-func configOperationInverse(before core.Vocabulary, operation core.ConfigOperation, subject core.Status) *statusInverse {
+// It answers about operations[0], which every status command puts its subject
+// operation first, and which for the ledger's own packs is the change the
+// commit is about.
+func statusPackInverse(before core.Vocabulary, operations []core.ConfigOperation) *statusInverse {
+	if len(operations) == 0 {
+		return nil
+	}
+	operation := operations[0]
+	subject := statusOperationSubject(operation)
 	switch operation.Type {
 	case core.ConfigStatusAdd:
 		return addInverse(before, operation)
 	case core.ConfigStatusRename:
-		return &statusInverse{
-			Command: statusCommand("rename", string(operation.To), string(operation.From)),
-			Exact:   true,
-		}
+		return renameInverse(before, operation, operations)
 	case core.ConfigStatusRelabel:
 		definition, live := statusDefinition(before, subject)
 		if !live {
@@ -1403,19 +1429,109 @@ func configOperationInverse(before core.Vocabulary, operation core.ConfigOperati
 	case core.ConfigStatusReorder:
 		return reorderInverse(before, operation, subject)
 	case core.ConfigStatusTag, core.ConfigStatusUntag:
-		definition, live := statusDefinition(before, subject)
-		if !live {
-			return nil
-		}
-		return &statusInverse{
-			Command: tagCommand(operation.Status, definition.Tags),
-			Exact:   true,
-		}
+		return tagInverse(before, operation, operations)
 	case core.ConfigStatusRemove:
 		return removeInverse(before, operation, subject)
 	default:
 		return nil
 	}
+}
+
+// renameInverse renames back, and names the label when the same commit moved
+// it.
+//
+// Without that clause the inverse is a lie in both directions the label can
+// move: a rename that re-derived `Ready` into `Next Up` would leave `Next Up`
+// on a status called `ready`, and a rename given an explicit `--label` would
+// leave that label behind. Naming it is also what makes the answer independent
+// of the derive-or-keep rule running backwards.
+func renameInverse(before core.Vocabulary, operation core.ConfigOperation, pack []core.ConfigOperation) *statusInverse {
+	command := statusCommand("rename", string(operation.To), string(operation.From))
+	if relabelled(pack, operation.To) {
+		definition, live := statusDefinition(before, operation.From)
+		if !live {
+			return nil
+		}
+		command += " --label " + quoteStatusArgument(definition.Label)
+	}
+	return &statusInverse{Command: command, Exact: true}
+}
+
+// relabelled reports whether a pack also set the status's display label, which
+// is how a rename learns that its inverse has to restore one.
+func relabelled(pack []core.ConfigOperation, status core.Status) bool {
+	for _, operation := range pack {
+		if operation.Type == core.ConfigStatusRelabel && operation.Status == status {
+			return true
+		}
+	}
+	return false
+}
+
+// tagInverse restores the tag set a replacement discarded, and gives back the
+// default tag first when the same commit took it.
+//
+// The default is what makes this more than a rewrite of the old set. Exactly one
+// status carries it, so a commit that took it also took it from somebody:
+// restoring only the subject's old set would leave the project with no default
+// at all, which the authoring gate refuses outright — the inverse would exit 5.
+// So the command names the status that gave the tag up, which is valid on its
+// own, and the note carries the second command that finishes the job.
+//
+// The condition is a property of the whole pack rather than of this operation,
+// because `workbook status tag` records the transfer and the tags it dropped as
+// separate operations in one commit, and undoing either half alone has the same
+// problem.
+func tagInverse(before core.Vocabulary, operation core.ConfigOperation, pack []core.ConfigOperation) *statusInverse {
+	subject := statusOperationSubject(operation)
+	definition, live := statusDefinition(before, subject)
+	if !live {
+		return nil
+	}
+	restore := tagCommand(subject, definition.Tags)
+	previous := defaultTagTakenFrom(before, pack)
+	if previous == "" {
+		return &statusInverse{Command: restore, Exact: true}
+	}
+	holder, live := statusDefinition(before, previous)
+	if !live {
+		return &statusInverse{Command: restore}
+	}
+	return &statusInverse{
+		Command: tagCommand(previous, holder.Tags),
+		Note: fmt.Sprintf("that returns the default tag to %q; %s restores %q's own tags",
+			previous, restore, subject),
+	}
+}
+
+// defaultTagTakenFrom names the status a pack took the default tag from, or
+// nothing when the pack left it where it was.
+func defaultTagTakenFrom(before core.Vocabulary, pack []core.ConfigOperation) core.Status {
+	holder := before.Default()
+	if holder == "" {
+		return ""
+	}
+	for _, operation := range pack {
+		taken := operation.Type == core.ConfigStatusTag && operation.Tag == core.StatusTagDefault
+		if operation.Type == core.ConfigStatusAdd && containsStatusTag(operation.Tags, core.StatusTagDefault) {
+			taken = true
+		}
+		if taken && statusOperationSubject(operation) != holder {
+			return holder
+		}
+	}
+	return ""
+}
+
+func tagCommand(subject core.Status, tags []core.StatusTag) string {
+	if len(tags) == 0 {
+		return statusCommand("tag", string(subject), "--clear-tags")
+	}
+	parts := []string{"tag", string(subject)}
+	for _, tag := range tags {
+		parts = append(parts, "--tag", string(tag))
+	}
+	return statusCommand(parts...)
 }
 
 // statusDefinition reads one status's definition, reporting whether the
@@ -1463,19 +1579,24 @@ func addInverse(before core.Vocabulary, operation core.ConfigOperation) *statusI
 	if !live {
 		return nil
 	}
-	inverse := &statusInverse{
-		Command: statusCommand("delete", string(operation.Name), "--into", string(destination)),
-		Note:    fmt.Sprintf("tasks created in %q since are forwarded to %q", operation.Name, destination),
+	removal := statusCommand("delete", string(operation.Name), "--into", string(destination))
+	if !containsStatusTag(operation.Tags, core.StatusTagDefault) {
+		return &statusInverse{
+			Command: removal,
+			Note:    fmt.Sprintf("tasks created in %q since are forwarded to %q", operation.Name, destination),
+		}
 	}
-	if containsStatusTag(operation.Tags, core.StatusTagDefault) {
-		// Removing the status that holds the default tag is refused outright,
-		// so the note names the command that has to come first rather than
-		// leaving somebody to discover it from the refusal.
-		inverse.Note = fmt.Sprintf("%q holds the default tag, so give it back first: %s",
-			operation.Name,
-			tagCommand(destination, append(append([]core.StatusTag(nil), definition.Tags...), core.StatusTagDefault)))
+	// The status holds the default tag, and removing the status that holds it
+	// is refused outright. So the command is the transfer that makes the
+	// removal possible, and the removal is the second step — in that order,
+	// because printing a command that exits 5 would be worse than printing
+	// nothing.
+	return &statusInverse{
+		Command: tagCommand(destination, definition.Tags),
+		Note: fmt.Sprintf("that returns the default tag to %q, which %q holds; %s then removes the status, "+
+			"forwarding the tasks created in it since",
+			destination, operation.Name, removal),
 	}
-	return inverse
 }
 
 // reorderInverse puts a status back between the neighbours it left.
@@ -1507,10 +1628,12 @@ func reorderInverse(before core.Vocabulary, operation core.ConfigOperation, subj
 // removeInverse defines the status again where it was, with the label and tags
 // it had.
 //
-// It is never exact, and the note says the part a command cannot do: the tasks
-// that were forwarded are stored under the destination now, or will be settled
-// there the next time anything writes to them, and defining the name again does
-// not bring them back.
+// It is never exact, and the note says exactly which tasks come back. Defining
+// the name again drops the forwarding pointer — an add deletes the alias and the
+// retirement for the name it defines — so every task still stored under the old
+// value reads as being in that column again. What does not come back is a task
+// some later write settled: correct-on-touch rewrote its stored value to the
+// destination, and no configuration change can find it again.
 func removeInverse(before core.Vocabulary, operation core.ConfigOperation, subject core.Status) *statusInverse {
 	definitions := before.Definitions()
 	index := before.Order(subject)
@@ -1532,9 +1655,28 @@ func removeInverse(before core.Vocabulary, operation core.ConfigOperation, subje
 	}
 	return &statusInverse{
 		Command: statusCommand(parts...),
-		Note: fmt.Sprintf("tasks that resolved into %q are not moved back",
-			operation.Destination),
+		Note: fmt.Sprintf(
+			"tasks still stored under %q return to it, because defining the name again drops the forwarding "+
+				"pointer; tasks a later write settled into %q stay there",
+			definition.Status, operation.Destination),
 	}
+}
+
+// configPackSummary says what one recorded commit did, in one clause.
+//
+// A commit is one command, so the summary is the summary of the operation the
+// command was about, and a pack carrying more than that says how much more
+// rather than listing it: `workbook status tag` records a transfer and every tag
+// it dropped, and "tagged status triage default" is what happened.
+func configPackSummary(operations []core.ConfigOperation) string {
+	if len(operations) == 0 {
+		return "recorded nothing"
+	}
+	summary := configOperationSummary(operations[0])
+	if len(operations) > 1 {
+		summary += fmt.Sprintf(" (+%d more change(s) in this commit)", len(operations)-1)
+	}
+	return summary
 }
 
 // configOperationSummary says what one recorded operation did.

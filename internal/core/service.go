@@ -173,6 +173,12 @@ type StatusFilterResolution struct {
 	// Requested for a live status, and is empty when the value resolves to
 	// nothing at all.
 	Resolved Status
+	// Via is the one hop the requested value takes, which is what actually
+	// happened to it. It differs from Resolved when the chain continues —
+	// renamed, then the new name removed — and a message that paired this
+	// hop's verb with Resolved's destination would describe a change nobody
+	// made.
+	Via Status
 	// Known reports that the filter names a live status, directly or through
 	// the forwarding chains.
 	Known bool
@@ -200,7 +206,8 @@ func (s Service) ResolveStatusFilter(status Status) StatusFilterResolution {
 	resolution.Known = true
 	if resolved != status {
 		resolution.Forwarded = true
-		_, operation, _ := vocabulary.Forwarding(status)
+		via, operation, _ := vocabulary.Forwarding(status)
+		resolution.Via = via
 		resolution.Operation = operation
 	}
 	return resolution
@@ -1163,6 +1170,16 @@ func hasDependency(dependencies []string, wanted string) bool {
 		}
 	}
 	return false
+}
+
+// DependenciesDone reports whether every dependency is an active task in a
+// status that satisfies one. It is the rule Next admits a task by, exported so
+// that a caller predicting what Next will do answers with the same function
+// rather than with a second copy of the rule: `workbook status delete` prices a
+// removal in tasks that become claimable, and "claimable" has to mean what the
+// command that claims them means.
+func DependenciesDone(vocabulary Vocabulary, dependencies []string, active map[string]TaskData) bool {
+	return dependenciesDone(vocabulary, dependencies, active)
 }
 
 func dependenciesDone(vocabulary Vocabulary, dependencies []string, active map[string]TaskData) bool {

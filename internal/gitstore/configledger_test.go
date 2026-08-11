@@ -191,6 +191,71 @@ func TestWriteConfigOperationRefusesALostCompareAndSwap(t *testing.T) {
 	}
 }
 
+// A bounded read delivers the newest commits and nothing else, and still
+// reports how long the whole ledger is.
+//
+// The bound is the point: the per-commit cost is two documents decoded and
+// re-encoded to compare canonical bytes, so a ten-line log that read everything
+// would cost a year of somebody's configuration history. The total stays exact
+// because it comes from the commit walk, which is one rev-list whatever the
+// window is.
+func TestReadConfigHistoryTailDeliversOnlyTheNewestCommits(t *testing.T) {
+	ctx := context.Background()
+	repo, config := writeRepository(t)
+	const changes = 12
+	for index := range changes {
+		writeConfig(t, repo, config, relabelOperation("backlog", fmt.Sprintf("Backlog %d", index)))
+	}
+
+	read := func(window int) ([]string, ConfigHistoryStart) {
+		var delivered []string
+		var start ConfigHistoryStart
+		found, err := repo.ReadConfigHistoryTail(ctx, config, window, ConfigHistoryStream{
+			Begin: func(begin ConfigHistoryStart) error {
+				start = begin
+				return nil
+			},
+			Commit: func(commit ConfigHistoryCommit) error {
+				delivered = append(delivered, commit.Operation.Operations[0].Label)
+				return nil
+			},
+			End: func(ConfigHistoryResult) error { return nil },
+		})
+		if err != nil || !found {
+			t.Fatalf("ReadConfigHistoryTail(%d) = found %t, error %v", window, found, err)
+		}
+		return delivered, start
+	}
+
+	// The genesis plus one commit per change.
+	whole, start := read(0)
+	if len(whole) != changes+1 || start.Commits != changes+1 || start.Skipped != 0 {
+		t.Fatalf("unbounded read delivered %d of %d, skipping %d; want the whole ledger",
+			len(whole), start.Commits, start.Skipped)
+	}
+
+	tail, start := read(3)
+	if len(tail) != 3 {
+		t.Fatalf("bounded read delivered %d commits, want 3", len(tail))
+	}
+	if start.Commits != changes+1 {
+		t.Fatalf("bounded read reported %d commits, want the ledger's whole %d", start.Commits, changes+1)
+	}
+	if start.Skipped != changes+1-3 {
+		t.Fatalf("bounded read skipped %d, want %d", start.Skipped, changes+1-3)
+	}
+	if got, want := tail, whole[len(whole)-3:]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("bounded read delivered %#v, want the newest %#v", got, want)
+	}
+
+	// A window longer than the ledger is not an error and delivers everything.
+	everything, start := read(changes * 10)
+	if len(everything) != changes+1 || start.Skipped != 0 {
+		t.Fatalf("over-long window delivered %d commits skipping %d, want the whole ledger",
+			len(everything), start.Skipped)
+	}
+}
+
 func TestWriteConfigOperationRefusesAnAuthoredGenesis(t *testing.T) {
 	repo, config := writeRepository(t)
 	_, err := repo.WriteConfigOperation(context.Background(), config, core.CryptoULIDSource{},

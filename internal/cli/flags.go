@@ -114,10 +114,28 @@ func commandInvocationMetadata(args []string) (commandMetadata, []string, bool) 
 		}
 		// The subcommand is missing or unknown, but recognizing options still
 		// decides the output format of the resulting error, so fall back to
-		// every option any subcommand accepts.
-		return subcommandUnion(root), optionArgs, true
+		// every option any subcommand accepts — and skip as many leading
+		// positionals as any of them takes, because an unknown subcommand's
+		// arguments are exactly as opaque as a known one's and a caller who
+		// asked for JSON asked for it either way.
+		return subcommandUnion(root), trimPositionals(deepestPositionals(root), optionArgs), true
 	}
 	return root, trimPositionals(root, args[1:]), true
+}
+
+// deepestPositionals returns metadata carrying as many positionals as the
+// wordiest subcommand takes, for a scan that has to get past arguments it
+// cannot attribute to a subcommand it does not recognize. Over-skipping is
+// safe here: everything past the options is a positional the parser will refuse
+// anyway, and the scan stops at the first argument that is not a flag.
+func deepestPositionals(root commandMetadata) commandMetadata {
+	deepest := commandMetadata{}
+	for _, name := range root.SubcommandOrder {
+		if subcommand := root.Subcommands[name]; len(subcommand.Positionals) > len(deepest.Positionals) {
+			deepest.Positionals = subcommand.Positionals
+		}
+	}
+	return deepest
 }
 
 // trimPositionals drops the leading arguments a command takes as positionals,

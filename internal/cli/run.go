@@ -534,10 +534,15 @@ func statusFilterWarnings(service core.Service, filter core.ListFilter) []core.W
 			Message: fmt.Sprintf("no status %q in this project's vocabulary", resolution.Requested),
 		}}
 	case resolution.Forwarded:
+		// The verb belongs to the one hop it describes, and the end of the
+		// chain gets its own clause; see statusChainClause. Pairing the first
+		// hop's verb with the last hop's destination reported a rename that
+		// never happened.
 		return []core.Warning{{
 			Code: core.WarningStatusFilter,
-			Message: fmt.Sprintf("no status %q in this project's vocabulary; it was %s %q, and that is what was listed",
-				resolution.Requested, forwardingVerb(resolution.Operation), resolution.Resolved),
+			Message: fmt.Sprintf("no status %q in this project's vocabulary; it was %s %q%s, and %q is what was listed",
+				resolution.Requested, forwardingVerb(resolution.Operation), resolution.Via,
+				statusChainClause(resolution.Via, resolution.Resolved), resolution.Resolved),
 		}}
 	default:
 		return nil

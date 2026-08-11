@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -272,6 +273,16 @@ func TestStatusWithoutASubcommandNamesTheSubcommandsOrTheTaskCommand(t *testing.
 	if code != 2 || strings.Contains(stderr, "workbook show") {
 		t.Fatalf("status in-progress = code %d, stderr %q; want a subcommand refusal", code, stderr)
 	}
+
+	// A caller who asked for JSON is answered in JSON even when the subcommand
+	// is the part that is wrong, which needs the option scan to get past
+	// arguments it cannot attribute to a subcommand it does not recognize.
+	code, _, stderr = run(t, repository, "status", "frobnicate", "triage", "--json")
+	if code != 2 {
+		t.Fatalf("status frobnicate triage --json = code %d, want 2; stderr = %q", code, stderr)
+	}
+	assertJSONError(t, stderr, core.CategoryInvocation,
+		`unknown status command "frobnicate"; the subcommands are list, add, rename, label, move, tag, untag, delete, log`)
 }
 
 // Every mutating verb, both output modes, in one project: what each one records,
@@ -610,23 +621,26 @@ func TestStatusDeleteRequiresIntoAndRefusesItself(t *testing.T) {
 // What a removal costs is counted before it happens, in the terms the person
 // running it is deciding about: how many tasks move, and how many of those
 // become claimable where they land.
+//
+// Claimable means what `workbook next` means. A task whose only dependency is
+// finished is claimable, and counting only the tasks with no dependencies at all
+// reported a queue growing by one where `workbook next` would hand out two.
 func TestStatusDeleteCountsAffectedAndClaimableTasks(t *testing.T) {
 	repository := initializedRepository(t)
 	mustRunStatus(t, repository, "status", "add", "triage", "--after", "backlog")
 
-	first := cliCreateTask(t, repository, "Alpha")
-	second := cliCreateTask(t, repository, "Beta")
-	third := cliCreateTask(t, repository, "Gamma")
-	blocker := cliCreateTask(t, repository, "Blocker")
-	for _, id := range []string{first.ID, second.ID, third.ID} {
+	free := cliCreateTask(t, repository, "No dependencies")
+	satisfied := cliCreateTask(t, repository, "Waiting on finished work")
+	waiting := cliCreateTask(t, repository, "Waiting on unfinished work")
+	finished := cliCreateTask(t, repository, "Finished")
+	unfinished := cliCreateTask(t, repository, "Unfinished")
+
+	mustRunStatus(t, repository, "depend", satisfied.ID, finished.ID, "--no-sync")
+	mustRunStatus(t, repository, "depend", waiting.ID, unfinished.ID, "--no-sync")
+	mustRunStatus(t, repository, "update", finished.ID, "--status", "done", "--no-sync")
+	for _, id := range []string{free.ID, satisfied.ID, waiting.ID} {
 		mustRunStatus(t, repository, "update", id, "--status", "triage", "--no-sync")
 	}
-	mustRunStatus(t, repository, "depend", third.ID, blocker.ID, "--no-sync")
-
-	// A destination that is not tagged next moves the tasks and makes none of
-	// them claimable.
-	parked := initializedRepositoryLike(t, repository)
-	_ = parked
 
 	removal := cliStatusMutation(t, repository, "status delete",
 		"status", "delete", "triage", "--into", "ready", "--json")
@@ -634,19 +648,44 @@ func TestStatusDeleteCountsAffectedAndClaimableTasks(t *testing.T) {
 		t.Fatalf("affected = %d, want the three tasks in triage", removal.Tasks.Affected)
 	}
 	if removal.Tasks.ClaimableAfter != 2 {
-		t.Fatalf("claimableAfter = %d, want the two with no dependencies", removal.Tasks.ClaimableAfter)
+		t.Fatalf("claimableAfter = %d, want the dependency-free task and the satisfied one",
+			removal.Tasks.ClaimableAfter)
+	}
+
+	// The count is a prediction about `workbook next`, so it is checked against
+	// `workbook next` rather than against itself: draining the queue has to
+	// hand out exactly the tasks that were counted.
+	claimed := make(map[string]bool)
+	for range removal.Tasks.ClaimableAfter {
+		code, stdout, stderr := run(t, repository, "next", "--no-sync", "--json")
+		if code != 0 || stderr != "" {
+			t.Fatalf("next = code %d, stderr %q", code, stderr)
+		}
+		var task core.Task
+		if err := json.Unmarshal(assertJSONResult(t, stdout, "next").Data, &task); err != nil {
+			t.Fatal(err)
+		}
+		if claimed[task.ID] {
+			t.Fatalf("next offered %s twice", task.ID)
+		}
+		claimed[task.ID] = true
+		// Taking it out of the queue is what lets the next call answer about a
+		// different task.
+		mustRunStatus(t, repository, "update", task.ID, "--status", "in-progress", "--no-sync")
+	}
+	if !claimed[free.ID] || !claimed[satisfied.ID] {
+		t.Fatalf("next handed out %#v, want the two tasks the count promised", claimed)
+	}
+	code, stdout, stderr := run(t, repository, "next", "--no-sync", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("next = code %d, stderr %q", code, stderr)
+	}
+	if !strings.Contains(stdout, `"data":null`) {
+		t.Fatalf("next after the counted tasks = %s, want no eligible task", stdout)
 	}
 
 	// The tasks were not rewritten; they resolve into the destination.
 	document := cliStatusList(t, repository)
-	for _, status := range document.Statuses {
-		if status.Status != "ready" {
-			continue
-		}
-		if status.Tasks == nil || *status.Tasks != 3 {
-			t.Fatalf("ready holds %#v tasks, want the three forwarded ones", status.Tasks)
-		}
-	}
 	if len(document.Retired) != 1 || document.Retired[0].Status != "triage" ||
 		document.Retired[0].Becomes != "ready" || document.Retired[0].Operation != "status.remove" {
 		t.Fatalf("retired = %#v, want triage forwarded to ready", document.Retired)
@@ -654,13 +693,6 @@ func TestStatusDeleteCountsAffectedAndClaimableTasks(t *testing.T) {
 	if document.Retired[0].At == "" {
 		t.Fatal("retired entry carries no date, want the ledger's wall time")
 	}
-}
-
-// initializedRepositoryLike keeps a second project available for a comparison a
-// test wants to make without disturbing the first.
-func initializedRepositoryLike(t *testing.T, _ string) string {
-	t.Helper()
-	return initializedRepository(t)
 }
 
 // A destination outside `next` leaves nothing claimable, which is the other half
@@ -678,10 +710,19 @@ func TestStatusDeleteReportsNoClaimableTasksForAParkedDestination(t *testing.T) 
 	}
 }
 
-// The inverse matrix, verified by running it. Every inverse marked exact has to
-// return the vocabulary to the document the change found; the ones marked
-// inexact say what they will not restore.
-func TestStatusInverseMatrixRestoresWhatItClaims(t *testing.T) {
+// The inverse matrix, verified by running it — and by running the one the log
+// emits, through a shell, exactly as printed.
+//
+// Three things are being checked at once, and each of them failed at some point
+// on this branch. The command the log prints has to be the command the verb
+// printed, because they are one computation and a second one drifts. It has to
+// survive a shell, because a label with a space in it is one argument only if
+// the quoting is right, and a test that split on whitespace could not have seen
+// that. And exact:true has to mean the vocabulary comes back, which is the only
+// claim a reader has no way to check for themselves.
+func TestStatusInverseMatrixRoundTripsThroughAShell(t *testing.T) {
+	binary := buildWorkbookBinary(t)
+
 	for _, test := range []struct {
 		name    string
 		setup   [][]string
@@ -699,6 +740,15 @@ func TestStatusInverseMatrixRestoresWhatItClaims(t *testing.T) {
 			note:    `tasks created in "triage" since are forwarded to "backlog"`,
 		},
 		{
+			name:    "add taking the default",
+			command: []string{"status", "add", "intake", "--tag", "default", "--json"},
+			verb:    "status add",
+			inverse: "workbook status tag backlog --tag default",
+			note: `that returns the default tag to "backlog", which "intake" holds; ` +
+				"workbook status delete intake --into backlog then removes the status, " +
+				"forwarding the tasks created in it since",
+		},
+		{
 			name:    "rename",
 			command: []string{"status", "rename", "ready", "queued", "--json"},
 			verb:    "status rename",
@@ -706,7 +756,14 @@ func TestStatusInverseMatrixRestoresWhatItClaims(t *testing.T) {
 			exact:   true,
 		},
 		{
-			name:    "rename with a custom label",
+			name:    "rename with an explicit label",
+			command: []string{"status", "rename", "ready", "queued", "--label", "On Deck", "--json"},
+			verb:    "status rename",
+			inverse: `workbook status rename queued ready --label Ready`,
+			exact:   true,
+		},
+		{
+			name:    "rename keeping a custom label",
 			setup:   [][]string{{"status", "label", "ready", "On Deck"}},
 			command: []string{"status", "rename", "ready", "queued", "--json"},
 			verb:    "status rename",
@@ -717,7 +774,15 @@ func TestStatusInverseMatrixRestoresWhatItClaims(t *testing.T) {
 			name:    "label",
 			command: []string{"status", "label", "ready", "On Deck", "--json"},
 			verb:    "status label",
-			inverse: "workbook status label ready Ready",
+			inverse: `workbook status label ready Ready`,
+			exact:   true,
+		},
+		{
+			name:    "label with a space",
+			setup:   [][]string{{"status", "label", "ready", "Next Up"}},
+			command: []string{"status", "label", "ready", "On Deck", "--json"},
+			verb:    "status label",
+			inverse: `workbook status label ready "Next Up"`,
 			exact:   true,
 		},
 		{
@@ -750,9 +815,6 @@ func TestStatusInverseMatrixRestoresWhatItClaims(t *testing.T) {
 				`workbook status tag in-review --clear-tags restores "in-review"'s own tags`,
 		},
 		{
-			// The last status carrying a tag cannot be untagged, so the
-			// project has to carry a second one first; that is arity, and it
-			// is refused by core rather than here.
 			name:    "untag",
 			setup:   [][]string{{"status", "tag", "blocked", "--tag", "next"}},
 			command: []string{"status", "untag", "blocked", "next", "--json"},
@@ -766,7 +828,8 @@ func TestStatusInverseMatrixRestoresWhatItClaims(t *testing.T) {
 			command: []string{"status", "delete", "triage", "--into", "backlog", "--json"},
 			verb:    "status delete",
 			inverse: "workbook status add triage --after backlog --label Triage",
-			note:    `tasks that resolved into "backlog" are not moved back`,
+			note: `tasks still stored under "triage" return to it, because defining the name again ` +
+				`drops the forwarding pointer; tasks a later write settled into "backlog" stay there`,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -777,32 +840,71 @@ func TestStatusInverseMatrixRestoresWhatItClaims(t *testing.T) {
 			before := cliStatusList(t, repository)
 
 			result := cliStatusMutation(t, repository, test.verb, test.command...)
-			if result.Inverse.Command != test.inverse {
-				t.Fatalf("inverse = %q, want %q", result.Inverse.Command, test.inverse)
-			}
-			if result.Inverse.Exact != test.exact {
-				t.Fatalf("inverse exact = %t, want %t", result.Inverse.Exact, test.exact)
-			}
-			if result.Inverse.Note != test.note {
-				t.Fatalf("inverse note = %q, want %q", result.Inverse.Note, test.note)
-			}
+			assertInverse(t, "the command's", result.Inverse, test.inverse, test.exact, test.note)
 
-			mustRunStatus(t, repository, strings.Fields(strings.TrimPrefix(result.Inverse.Command, "workbook "))...)
+			// The log reads the same change out of the ledger and has to reach
+			// the same answer, because it is the same computation.
+			logged := cliStatusLog(t, repository, "--limit", "1").Entries
+			if len(logged) != 1 || logged[0].Inverse == nil {
+				t.Fatalf("log = %#v, want the change with an inverse", logged)
+			}
+			assertInverse(t, "the log's", *logged[0].Inverse, test.inverse, test.exact, test.note)
+
+			// Executed as printed, by a shell, against the built binary.
+			runInverseThroughShell(t, binary, repository, logged[0].Inverse.Command)
 			after := cliStatusList(t, repository)
 			if !test.exact {
 				return
 			}
 			if !equalStatusDocuments(before, after) {
-				t.Fatalf("running an exact inverse left %#v, want the state it found %#v",
+				t.Fatalf("an exact inverse left %#v, want the state it found %#v",
 					after.Statuses, before.Statuses)
 			}
 		})
 	}
 }
 
+func assertInverse(t *testing.T, whose string, got inverseDocument, command string, exact bool, note string) {
+	t.Helper()
+	if got.Command != command {
+		t.Fatalf("%s inverse = %q, want %q", whose, got.Command, command)
+	}
+	if got.Exact != exact {
+		t.Fatalf("%s inverse exact = %t, want %t", whose, got.Exact, exact)
+	}
+	if got.Note != note {
+		t.Fatalf("%s inverse note = %q, want %q", whose, got.Note, note)
+	}
+}
+
+// runInverseThroughShell runs a printed inverse the way a person would: paste
+// it into a shell. Splitting it on whitespace instead would test a command
+// nobody runs and would never notice a quoting failure.
+func runInverseThroughShell(t *testing.T, binary, repository, command string) {
+	t.Helper()
+	if !strings.HasPrefix(command, "workbook ") {
+		t.Fatalf("inverse %q does not begin with the command name", command)
+	}
+	script := shellQuote(binary) + strings.TrimPrefix(command, "workbook")
+	shell := exec.Command("/bin/sh", "-c", script)
+	shell.Dir = repository
+	output, err := shell.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running the printed inverse failed: %v\n$ %s\n%s", err, script, output)
+	}
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
+}
+
 // The log is the same window `show --history` renders, over a different
 // history: oldest first, the ten most recent by default, and every entry
 // carrying the command that reverses it.
+//
+// One entry is one commit, which is the unit `show --history` counts and the
+// unit a person recognizes: one command they ran. It is also what lets the
+// total stay exact while the read is bounded by the window.
 func TestStatusLogMirrorsShowHistoryWindowing(t *testing.T) {
 	repository := initializedRepository(t)
 	if code, stdout, stderr := run(t, repository, "status", "log"); code != 0 || stderr != "" {
@@ -841,6 +943,16 @@ func TestStatusLogMirrorsShowHistoryWindowing(t *testing.T) {
 	if windowed.Showing != 2 || windowed.Total != 13 {
 		t.Fatalf("limited log = %d of %d, want 2 of 13", windowed.Showing, windowed.Total)
 	}
+	// The window bounds the read, and the oldest entry in it still carries an
+	// inverse — which is only possible if the commit before the window was read
+	// for its checkpoint.
+	if windowed.Entries[0].Inverse == nil {
+		t.Fatalf("windowed log = %#v, want the oldest entry's inverse read against its parent", windowed.Entries[0])
+	}
+	if windowed.Entries[0].Inverse.Command != `workbook status label triage "Triage 8"` {
+		t.Fatalf("windowed inverse = %q, want the label the change replaced", windowed.Entries[0].Inverse.Command)
+	}
+
 	every := cliStatusLog(t, repository, "--all")
 	if every.Showing != 13 {
 		t.Fatalf("--all showing = %d, want every change", every.Showing)
@@ -859,31 +971,43 @@ func TestStatusLogMirrorsShowHistoryWindowing(t *testing.T) {
 	if !strings.Contains(stdout, "\tinverse:\tworkbook status label triage") {
 		t.Fatalf("status log text = %q, want an inverse line", stdout)
 	}
+
+	// `--limit=` sets the flag to an empty value, which used to slip past the
+	// conflict check and let --all win in silence.
+	for _, args := range [][]string{
+		{"status", "log", "--limit=", "--all"},
+		{"status", "log", "--limit", "2", "--all"},
+	} {
+		code, _, stderr := run(t, repository, args...)
+		if code != 2 || !strings.Contains(stderr, "cannot use --limit with --all") {
+			t.Fatalf("%v = code %d, stderr %q; want the conflict refused", args, code, stderr)
+		}
+	}
 }
 
-// A rename writes two operations in one commit, and each is its own entry with
-// its own inverse. The relabel's inverse has to name the status by the value it
-// carries now while reading the label from before the whole commit.
-func TestStatusLogSeparatesTheOperationsOfOneCommit(t *testing.T) {
+// One command is one entry, however many operations it recorded. A rename that
+// also moves the label writes two operations into one commit, and the entry
+// reports the command — with the inverse that undoes all of it.
+func TestStatusLogReportsOneEntryPerRecordedCommand(t *testing.T) {
 	repository := initializedRepository(t)
 	mustRunStatus(t, repository, "status", "rename", "ready", "queued")
 
 	document := cliStatusLog(t, repository, "--all")
-	if document.Total != 3 {
-		t.Fatalf("total = %d, want the genesis, the rename and its relabel", document.Total)
+	if document.Total != 2 {
+		t.Fatalf("total = %d, want the genesis and the rename", document.Total)
 	}
-	rename, relabel := document.Entries[1], document.Entries[2]
-	if rename.Commit != relabel.Commit {
-		t.Fatalf("rename and relabel commits = %q, %q; want one commit", rename.Commit, relabel.Commit)
+	rename := document.Entries[1]
+	if rename.Operation != "status.rename" {
+		t.Fatalf("entry operation = %q, want the rename", rename.Operation)
 	}
-	if rename.OperationID == relabel.OperationID {
-		t.Fatalf("both entries carry operation ID %q, want one each", rename.OperationID)
+	if rename.Summary != "renamed status ready to queued (+1 more change(s) in this commit)" {
+		t.Fatalf("summary = %q, want the command with the rest of its commit counted", rename.Summary)
 	}
-	if rename.Inverse == nil || rename.Inverse.Command != "workbook status rename queued ready" {
-		t.Fatalf("rename inverse = %#v", rename.Inverse)
+	if rename.Inverse == nil || rename.Inverse.Command != "workbook status rename queued ready --label Ready" {
+		t.Fatalf("inverse = %#v, want the rename and the label it moved", rename.Inverse)
 	}
-	if relabel.Inverse == nil || relabel.Inverse.Command != "workbook status label queued Ready" {
-		t.Fatalf("relabel inverse = %#v, want the label from before the commit", relabel.Inverse)
+	if rename.OperationID == "" {
+		t.Fatal("entry carries no operation ID")
 	}
 }
 
@@ -1095,7 +1219,7 @@ func TestListStatusFilterWarnsWithoutFailing(t *testing.T) {
 			t.Fatalf("list --status ready returned %#v, want the renamed status's task", tasks)
 		}
 		if len(result.Warnings) != 1 ||
-			result.Warnings[0].Message != `no status "ready" in this project's vocabulary; it was renamed to "queued", and that is what was listed` {
+			result.Warnings[0].Message != `no status "ready" in this project's vocabulary; it was renamed to "queued", and "queued" is what was listed` {
 			t.Fatalf("warnings = %#v, want the rename explained", result.Warnings)
 		}
 	})
@@ -1109,6 +1233,189 @@ func TestListStatusFilterWarnsWithoutFailing(t *testing.T) {
 			t.Fatalf("list --status queued warned about a live status: %q", stdout)
 		}
 	})
+}
+
+// A chain with two kinds of hop in it has to be described by what happened, not
+// by where it ended.
+//
+// Forwarding answers about one hop by contract, and pairing that hop's verb with
+// the chain's final destination produced sentences describing a change nobody
+// made: "renamed to backlog", for a value that was renamed to `sorting` and only
+// reached `backlog` because somebody later removed that. Both surfaces say the
+// hop, then the end of the chain, and they say it the same way.
+func TestStatusChainsAreDescribedByWhatHappened(t *testing.T) {
+	repository := initializedRepository(t)
+	task := cliCreateTask(t, repository, "Carried along")
+	mustRunStatus(t, repository, "status", "add", "triage", "--after", "backlog")
+	mustRunStatus(t, repository, "update", task.ID, "--status", "triage", "--no-sync")
+
+	// A rename, then a removal of the new name.
+	mustRunStatus(t, repository, "status", "rename", "triage", "sorting")
+	mustRunStatus(t, repository, "status", "delete", "sorting", "--into", "backlog")
+
+	// A removal, then a rename of the destination.
+	mustRunStatus(t, repository, "status", "add", "parking", "--after", "backlog")
+	mustRunStatus(t, repository, "status", "add", "holding", "--after", "parking")
+	mustRunStatus(t, repository, "status", "delete", "parking", "--into", "holding")
+	mustRunStatus(t, repository, "status", "rename", "holding", "storage")
+
+	today := time.Now().UTC().Format("2006-01-02")
+	for _, test := range []struct {
+		name    string
+		status  string
+		refusal string
+		warning string
+	}{
+		{
+			name:   "renamed then removed",
+			status: "triage",
+			refusal: fmt.Sprintf(
+				`no status "triage"; it was renamed to "sorting" on %s, which now resolves to "backlog"`, today),
+			warning: `no status "triage" in this project's vocabulary; it was renamed to "sorting", ` +
+				`which now resolves to "backlog", and "backlog" is what was listed`,
+		},
+		{
+			name:   "removed then renamed",
+			status: "parking",
+			refusal: fmt.Sprintf(
+				`no status "parking"; it was removed into "holding" on %s, which now resolves to "storage"`, today),
+			warning: `no status "parking" in this project's vocabulary; it was removed into "holding", ` +
+				`which now resolves to "storage", and "storage" is what was listed`,
+		},
+		{
+			name:    "one hop only",
+			status:  "sorting",
+			refusal: fmt.Sprintf(`no status "sorting"; it was removed into "backlog" on %s`, today),
+			warning: `no status "sorting" in this project's vocabulary; it was removed into "backlog", ` +
+				`and "backlog" is what was listed`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			code, _, stderr := run(t, repository, "status", "label", test.status, "Renamed", "--json")
+			if code != 4 {
+				t.Fatalf("status label %s = code %d, want 4; stderr = %q", test.status, code, stderr)
+			}
+			assertJSONError(t, stderr, core.CategoryNotFound, test.refusal)
+
+			code, stdout, stderr := run(t, repository, "list", "--status", test.status, "--json")
+			if code != 0 || stderr != "" {
+				t.Fatalf("list --status %s = code %d, stderr %q", test.status, code, stderr)
+			}
+			warnings := assertJSONResult(t, stdout, "list").Warnings
+			if len(warnings) != 1 || warnings[0].Message != test.warning {
+				t.Fatalf("warnings = %#v, want %q", warnings, test.warning)
+			}
+		})
+	}
+
+	// The task itself is where the chain leads, which is the thing all this
+	// describes.
+	listed := cliStatusList(t, repository)
+	for _, status := range listed.Statuses {
+		if status.Status == "backlog" && (status.Tasks == nil || *status.Tasks != 1) {
+			t.Fatalf("backlog holds %#v tasks, want the task carried through both hops", status.Tasks)
+		}
+	}
+}
+
+// The note on a removal's inverse says which tasks come back, and both halves
+// of that are checked against real tasks.
+//
+// Defining the name again drops the forwarding pointer, so a task still stored
+// under the old value reads as being in that column again — the note used to
+// claim the opposite. What does not come back is a task some later write
+// settled, because correct-on-touch rewrote its stored value to the destination
+// and no configuration change can find it again.
+func TestStatusDeleteInverseReturnsStoredTasksAndLeavesSettledOnes(t *testing.T) {
+	repository := initializedRepository(t)
+	mustRunStatus(t, repository, "status", "add", "triage", "--after", "backlog")
+	stored := cliCreateTask(t, repository, "Never touched again")
+	settled := cliCreateTask(t, repository, "Touched after the removal")
+	for _, id := range []string{stored.ID, settled.ID} {
+		mustRunStatus(t, repository, "update", id, "--status", "triage", "--no-sync")
+	}
+
+	removal := cliStatusMutation(t, repository, "status delete",
+		"status", "delete", "triage", "--into", "backlog", "--json")
+	want := `tasks still stored under "triage" return to it, because defining the name again drops the ` +
+		`forwarding pointer; tasks a later write settled into "backlog" stay there`
+	if removal.Inverse.Note != want {
+		t.Fatalf("note = %q, want %q", removal.Inverse.Note, want)
+	}
+
+	// One task is written to after the removal, which settles its stored status
+	// into the destination. The other is left alone.
+	mustRunStatus(t, repository, "update", settled.ID, "--title", "Touched", "--no-sync")
+
+	mustRunStatus(t, repository, strings.Fields(strings.TrimPrefix(removal.Inverse.Command, "workbook "))...)
+
+	if got := taskStatus(t, repository, stored.ID); got != "triage" {
+		t.Fatalf("the untouched task is in %q, want it back in triage as the note says", got)
+	}
+	if got := taskStatus(t, repository, settled.ID); got != "backlog" {
+		t.Fatalf("the settled task is in %q, want it left in backlog as the note says", got)
+	}
+}
+
+func taskStatus(t *testing.T, repository, id string) string {
+	t.Helper()
+	code, stdout, stderr := run(t, repository, "show", id, "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("show %s = code %d, stderr %q", id, code, stderr)
+	}
+	var task core.Task
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "show").Data, &task); err != nil {
+		t.Fatal(err)
+	}
+	return string(task.Status)
+}
+
+// The listing dates a retirement from the newest commits and says nothing for
+// one older than that, rather than reading a history that only grows to answer
+// a courtesy.
+func TestStatusListDatesRecentRetirementsAndDegradesBeyondItsBound(t *testing.T) {
+	repository := initializedRepository(t)
+	// One early retirement, then enough commits to push it past the bound.
+	mustRunStatus(t, repository, "status", "add", "ancient", "--after", "backlog")
+	mustRunStatus(t, repository, "status", "delete", "ancient", "--into", "backlog")
+	packs := make([][]core.ConfigOperation, 0, maxDatedConfigCommits)
+	for index := range maxDatedConfigCommits {
+		packs = append(packs, []core.ConfigOperation{{
+			Type:   core.ConfigStatusRelabel,
+			Status: "backlog",
+			Label:  fmt.Sprintf("Backlog %d", index),
+		}})
+	}
+	writeConfigCommits(t, repository, packs)
+	mustRunStatus(t, repository, "status", "add", "recent", "--after", "backlog")
+	mustRunStatus(t, repository, "status", "delete", "recent", "--into", "backlog")
+
+	document := cliStatusList(t, repository)
+	dates := make(map[string]string, len(document.Retired))
+	for _, retired := range document.Retired {
+		dates[retired.Status] = retired.At
+	}
+	if len(dates) != 2 {
+		t.Fatalf("retired = %#v, want both removals reported", document.Retired)
+	}
+	if dates["recent"] == "" {
+		t.Fatal("the recent removal carries no date, want one from inside the bound")
+	}
+	if dates["ancient"] != "" {
+		t.Fatalf("the ancient removal carries the date %q, want none from beyond the bound", dates["ancient"])
+	}
+
+	// Both are still reported, with the undated one simply missing its clause.
+	code, stdout, stderr := run(t, repository, "status", "list")
+	if code != 0 || stderr != "" {
+		t.Fatalf("status list = code %d, stderr %q", code, stderr)
+	}
+	if !strings.Contains(stdout, "\tRetired:\tancient → backlog\tremoved\n") {
+		t.Fatalf("status list text = %q, want the undated retirement with no clause", stdout)
+	}
+	if !strings.Contains(stdout, "\tRetired:\trecent → backlog\tremoved on ") {
+		t.Fatalf("status list text = %q, want the dated retirement", stdout)
+	}
 }
 
 // Two sessions writing the ledger at once: the loser is refused with something
@@ -1270,6 +1577,13 @@ func writeTaskInAnUndefinedStatus(t *testing.T, repository, status, title string
 // for a state no single command produces.
 func writeConfigOperations(t *testing.T, repository string, operations []core.ConfigOperation) {
 	t.Helper()
+	writeConfigCommits(t, repository, [][]core.ConfigOperation{operations})
+}
+
+// writeConfigCommits records one commit per batch through one opened
+// repository, for a test that needs a ledger longer than it needs commands.
+func writeConfigCommits(t *testing.T, repository string, packs [][]core.ConfigOperation) {
+	t.Helper()
 	ctx := context.Background()
 	repo, err := gitstore.Open(ctx, repository)
 	if err != nil {
@@ -1279,8 +1593,10 @@ func writeConfigOperations(t *testing.T, repository string, operations []core.Co
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.WriteConfigOperation(ctx, config, core.CryptoULIDSource{}, operations, ""); err != nil {
-		t.Fatalf("WriteConfigOperation() error = %v", err)
+	for _, operations := range packs {
+		if _, err := repo.WriteConfigOperation(ctx, config, core.CryptoULIDSource{}, operations, ""); err != nil {
+			t.Fatalf("WriteConfigOperation() error = %v", err)
+		}
 	}
 }
 
