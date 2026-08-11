@@ -19,8 +19,38 @@ type setupResult struct {
 	TaskCount  int               `json:"taskCount"`
 	UserConfig setupUserConfig   `json:"userConfig"`
 	Config     setupConfigResult `json:"config"`
+	Identity   setupIdentity     `json:"identity"`
 	Docs       *agentdocs.Report `json:"docs,omitempty"`
 	Sync       setupSyncResult   `json:"sync"`
+}
+
+// setupIdentity reports which record answered the question "which project is
+// this". Joining an existing project and minting a new one look identical in a
+// result that reports only the ID, and they are the two outcomes a user most
+// needs to tell apart.
+type setupIdentity struct {
+	Source    string `json:"source"`
+	Minted    bool   `json:"minted"`
+	Published bool   `json:"published"`
+}
+
+// setupIdentityDescription renders the identity source for a human.
+func setupIdentityDescription(identity setupIdentity) string {
+	switch identity.Source {
+	case "ref":
+		return "adopted from the published project identity"
+	case "file":
+		if identity.Published {
+			return "adopted from .workbook/config.json and published"
+		}
+		return "adopted from .workbook/config.json"
+	case "guard":
+		return "recovered from this repository's private guard and published"
+	case "mint":
+		return "minted and published"
+	default:
+		return identity.Source
+	}
 }
 
 // setupConfigResult reports the project document version and whether this run
@@ -106,6 +136,13 @@ func runSetup(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 		UserConfig: setupUserConfig{Path: configPath, Created: created},
 		Config:     setupConfigResult{Version: config.Version, Upgraded: upgraded},
 	}
+	if origin, known := repository.IdentityOrigin(); known {
+		result.Identity = setupIdentity{
+			Source:    origin.Source,
+			Minted:    origin.Minted,
+			Published: origin.Published,
+		}
+	}
 
 	if !*noDocs {
 		report, err := agentdocs.Apply(agentdocs.Options{
@@ -148,7 +185,7 @@ func runSetup(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 		return syncErr
 	}
 	fmt.Fprintf(stdout, "Repository:\t%s\n", result.Repository)
-	fmt.Fprintf(stdout, "Project ID:\t%s\n", result.ProjectID)
+	fmt.Fprintf(stdout, "Project ID:\t%s\t(%s)\n", result.ProjectID, setupIdentityDescription(result.Identity))
 	fmt.Fprintf(stdout, "Key:\t%s\n", result.Key)
 	suffix := ""
 	if result.UserConfig.Created {
@@ -210,7 +247,7 @@ func setupSync(
 }
 
 // runDocs manages the agent documentation Workbook generates for a project.
-func runDocs(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+func runDocs(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
 	subcommand, args, err := requiredFirstArgument("docs", "docs command", args)
 	if err != nil {
 		return err
@@ -240,7 +277,7 @@ func runDocs(ctx context.Context, args []string, cwd string, stdout io.Writer) e
 		return err
 	}
 
-	repository, config, err := openRepository(ctx, cwd)
+	repository, config, err := openRepository(ctx, cwd, stderr)
 	if err != nil {
 		return err
 	}

@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/dgoings/workbook/internal/core"
-	"github.com/oklog/ulid/v2"
 )
 
 const (
@@ -24,8 +23,15 @@ const (
 	projectGuard         = "project.json"
 )
 
-// Init creates a repository's tracked Workbook configuration when absent. An
-// existing valid configuration is returned unchanged when it has the same key.
+// Init establishes a repository's project identity and its tracked Workbook
+// configuration, reporting whether this call minted a new project.
+//
+// Identity resolution is the shared precedence chain — the identity ref, then
+// the tracked configuration, then the private guard — extended with the one
+// thing only Init may do: mint. Whatever answers, the tracked configuration is
+// written only when it is absent. An existing document's identity fields are
+// never rewritten, because a v0.4.x teammate reads them and a bootstrap must
+// not change what they see.
 func (r *Repository) Init(ctx context.Context, key string, ids core.IDSource) (core.ProjectConfig, bool, error) {
 	if err := r.verifyIdentity(ctx); err != nil {
 		return core.ProjectConfig{}, false, err
@@ -37,93 +43,79 @@ func (r *Repository) Init(ctx context.Context, key string, ids core.IDSource) (c
 		return core.ProjectConfig{}, false, err
 	}
 
+	resolution, err := r.resolveIdentity(ctx, func() (core.ProjectIdentity, error) {
+		return mintProjectIdentity(key, ids)
+	})
+	if err != nil {
+		return core.ProjectConfig{}, false, err
+	}
+	config := configFromIdentity(resolution.Identity)
+	if err := validateRequestedProjectKey(key, config); err != nil {
+		return core.ProjectConfig{}, false, err
+	}
+
 	tracked, trackedExists, err := r.readConfig()
 	if err != nil {
 		return core.ProjectConfig{}, false, err
 	}
-	guard, guardExists, err := r.readProjectGuard()
-	if err != nil {
-		return core.ProjectConfig{}, false, err
+	if !trackedExists {
+		if err := r.writeConfig(config); err != nil {
+			return core.ProjectConfig{}, false, err
+		}
+	} else {
+		config.Version = tracked.Version
+		config.AutoSync = tracked.AutoSync
 	}
+	r.rememberIdentity(resolution)
+	return r.rememberConfig(config), resolution.Minted, nil
+}
 
-	switch {
-	case trackedExists && guardExists:
-		if !tracked.SameIdentity(guard) {
-			return core.ProjectConfig{}, false, r.guardMismatch(tracked, guard)
-		}
-		if err := validateRequestedProjectKey(key, tracked); err != nil {
-			return core.ProjectConfig{}, false, err
-		}
-		return r.rememberConfig(tracked), false, nil
-	case trackedExists:
-		if err := validateRequestedProjectKey(key, tracked); err != nil {
-			return core.ProjectConfig{}, false, err
-		}
-		persisted, _, err := r.publishProjectGuard(tracked)
-		if err != nil {
-			return core.ProjectConfig{}, false, err
-		}
-		if !persisted.SameIdentity(tracked) {
-			return core.ProjectConfig{}, false, core.Errorf(core.CategoryCorruptData, "tracked Workbook configuration does not match concurrently published project guard")
-		}
-		return r.rememberConfig(tracked), false, nil
-	case guardExists:
-		if err := validateRequestedProjectKey(key, guard); err != nil {
-			return core.ProjectConfig{}, false, err
-		}
-		if err := r.writeConfig(guard); err != nil {
-			return core.ProjectConfig{}, false, err
-		}
-		return r.rememberConfig(guard), false, nil
-	}
-
+func mintProjectIdentity(key string, ids core.IDSource) (core.ProjectIdentity, error) {
 	if ids == nil {
-		return core.ProjectConfig{}, false, core.Errorf(core.CategoryOperational, "project ID source is required")
+		return core.ProjectIdentity{}, core.Errorf(core.CategoryOperational, "project ID source is required")
 	}
 	projectID, err := ids.New()
 	if err != nil {
-		return core.ProjectConfig{}, false, core.Wrap(core.CategoryOperational, "cannot generate project ID", err)
+		return core.ProjectIdentity{}, core.Wrap(core.CategoryOperational, "cannot generate project ID", err)
 	}
 	if err := validateProjectID(projectID); err != nil {
-		return core.ProjectConfig{}, false, err
+		return core.ProjectIdentity{}, err
 	}
-	candidate := core.ProjectConfig{
-		Format:    projectFormat,
-		Version:   projectVersion,
+	return core.ProjectIdentity{
+		Format:    core.ProjectIdentityFormat,
+		Version:   core.ProjectIdentityVersion,
 		ProjectID: projectID,
 		Key:       key,
-	}
-	persisted, published, err := r.publishProjectGuard(candidate)
-	if err != nil {
-		return core.ProjectConfig{}, false, err
-	}
-	if err := r.writeConfig(persisted); err != nil {
-		return core.ProjectConfig{}, false, err
-	}
-	if err := validateRequestedProjectKey(key, persisted); err != nil {
-		return core.ProjectConfig{}, false, err
-	}
-	return r.rememberConfig(persisted), published, nil
+	}, nil
 }
 
 // AdoptOriginProject joins the Workbook project that origin already carries.
 //
 // A checkout that predates a project's Workbook adoption has no tracked
 // configuration for Init to find, and minting a fresh identity there splits
-// the repository into two projects: the common guard records the minted
-// identity and then rejects the real configuration the moment Git delivers
-// it. So before Init may mint, bootstrap asks origin. A configuration
-// committed on origin's default branch is adopted into the working tree;
-// task refs on origin without any such configuration stop bootstrap, because
-// the tasks prove a project exists that this probe cannot name.
+// the repository into two projects. So before Init may mint, bootstrap asks
+// origin, in two escalating steps.
 //
-// The probe runs only when neither the tracked configuration nor the guard
-// exists; callers skip it entirely when the user asked for --no-sync.
+// The first is origin's identity ref. It is authoritative, needs no branch
+// checkout, and needs nothing committed anywhere, so a clone sitting on a
+// pre-Workbook branch joins the real project instead of inventing one. The
+// second is the older probe kept for projects that have not published the ref
+// yet: a configuration committed on origin's default branch is adopted into
+// the working tree, and task refs on origin without any such configuration
+// stop bootstrap, because the tasks prove a project exists that this probe
+// cannot name.
+//
+// The probe runs only when the identity ref, the tracked configuration, and
+// the guard are all absent locally; callers skip it entirely when the user
+// asked for --no-sync.
 func (r *Repository) AdoptOriginProject(ctx context.Context, key string) (core.ProjectConfig, bool, error) {
 	if err := r.verifyIdentity(ctx); err != nil {
 		return core.ProjectConfig{}, false, err
 	}
 	if err := core.ValidateProjectKey(key); err != nil {
+		return core.ProjectConfig{}, false, err
+	}
+	if _, exists, err := r.readIdentityRef(ctx, identityRef); err != nil || exists {
 		return core.ProjectConfig{}, false, err
 	}
 	if _, exists, err := r.readConfig(); err != nil || exists {
@@ -136,14 +128,21 @@ func (r *Repository) AdoptOriginProject(ctx context.Context, key string) (core.P
 		return core.ProjectConfig{}, false, nil
 	}
 
-	listing, err := r.Git(ctx, nil, "ls-remote", "origin", "HEAD", taskRefPrefix+"*")
+	listing, err := r.Git(ctx, nil, "ls-remote", "origin", "HEAD", identityRef, taskRefPrefix+"*")
 	if err != nil {
 		return core.ProjectConfig{}, false, core.Wrap(core.CategoryOperational,
 			"cannot ask origin whether a Workbook project already exists; use --no-sync to bootstrap without consulting origin", err)
 	}
-	head, tasks := parseOriginProbe(listing)
-	if !head && !tasks {
+	head, identity, tasks := parseOriginProbe(listing)
+	if !head && !identity && !tasks {
 		return core.ProjectConfig{}, false, nil
+	}
+	if identity {
+		adopted, err := r.adoptOriginIdentityRef(ctx, key)
+		if err != nil {
+			return core.ProjectConfig{}, false, err
+		}
+		return adopted, true, nil
 	}
 
 	var discovered core.ProjectConfig
@@ -171,9 +170,55 @@ func (r *Repository) AdoptOriginProject(ctx context.Context, key string) (core.P
 	return discovered, true, nil
 }
 
-// parseOriginProbe reads one ls-remote listing of origin's HEAD and Workbook
-// task namespace.
-func parseOriginProbe(listing []byte) (head, tasks bool) {
+// adoptOriginIdentityRef fetches origin's canonical identity and makes it this
+// repository's own, then materializes the advisory tracked configuration so a
+// v0.4.x teammate reading this branch still finds the project.
+func (r *Repository) adoptOriginIdentityRef(ctx context.Context, key string) (core.ProjectConfig, error) {
+	if _, err := r.Git(ctx, nil,
+		"fetch", "--no-tags", "--no-auto-maintenance", "origin", identityFetchRefspec); err != nil {
+		return core.ProjectConfig{}, core.Wrap(core.CategoryOperational,
+			"cannot fetch origin's Workbook project identity", err)
+	}
+	record, found, err := r.readIdentityRef(ctx, remoteIdentityRef)
+	if err != nil {
+		return core.ProjectConfig{}, err
+	}
+	if !found {
+		return core.ProjectConfig{}, core.Errorf(core.CategoryOperational,
+			"origin listed %s but did not deliver it; rerun workbook setup", identityRef)
+	}
+	if record.Identity.Key != key {
+		return core.ProjectConfig{}, core.Errorf(core.CategoryValidation,
+			"origin already has a Workbook project with key %q; rerun workbook setup --key %q to join it",
+			record.Identity.Key, record.Identity.Key)
+	}
+
+	if err := r.createRef(ctx, identityRef, record.Head); err != nil {
+		local, exists, readErr := r.readIdentityRef(ctx, identityRef)
+		if readErr != nil {
+			return core.ProjectConfig{}, readErr
+		}
+		if !exists {
+			return core.ProjectConfig{}, core.Wrap(core.CategoryOperational,
+				"cannot adopt origin's Workbook project identity", err)
+		}
+		if !local.Identity.SameIdentity(record.Identity) {
+			return core.ProjectConfig{}, core.Errorf(core.CategoryCorruptData,
+				"%s names project %s (key %s), but origin's identity names project %s (key %s)",
+				identityRef, local.Identity.ProjectID, local.Identity.Key,
+				record.Identity.ProjectID, record.Identity.Key)
+		}
+	}
+	config := configFromIdentity(record.Identity)
+	if err := r.writeConfig(config); err != nil {
+		return core.ProjectConfig{}, err
+	}
+	return config, nil
+}
+
+// parseOriginProbe reads one ls-remote listing of origin's HEAD, its Workbook
+// identity ref, and its Workbook task namespace.
+func parseOriginProbe(listing []byte) (head, identity, tasks bool) {
 	for _, line := range strings.Split(string(listing), "\n") {
 		_, refname, ok := strings.Cut(line, "\t")
 		if !ok {
@@ -182,11 +227,14 @@ func parseOriginProbe(listing []byte) (head, tasks bool) {
 		if refname == "HEAD" {
 			head = true
 		}
+		if refname == identityRef {
+			identity = true
+		}
 		if strings.HasPrefix(refname, taskRefPrefix) {
 			tasks = true
 		}
 	}
-	return head, tasks
+	return head, identity, tasks
 }
 
 // readOriginHeadConfig fetches origin's default branch and decodes the
@@ -218,45 +266,49 @@ func (r *Repository) readOriginHeadConfig(ctx context.Context) (core.ProjectConf
 }
 
 // LoadConfig returns the repository's validated Workbook configuration.
+//
+// Its signature is deliberately unchanged: every command opens a repository
+// through it and roughly a dozen call sites compare the result with ==. What
+// changed underneath is where each field comes from. The project ID and key are
+// the canonical identity, resolved through the identity ref; the document
+// version and the automatic synchronization policy are mutable preferences and
+// still come from the tracked file. A repository whose branch carries no
+// tracked file is therefore usable when the identity ref says which project it
+// is — which is exactly the checkout that used to look like a new project.
 func (r *Repository) LoadConfig() (core.ProjectConfig, error) {
-	r.metadataMu.Lock()
-	defer r.metadataMu.Unlock()
-	if r.configLoaded {
-		return r.config, nil
+	r.metadataMu.RLock()
+	loaded, config := r.configLoaded, r.config
+	r.metadataMu.RUnlock()
+	if loaded {
+		return config, nil
 	}
+
+	// Identity resolution runs Git, and the metadata mutex guards fields the
+	// Git helpers take for themselves, so it happens outside the lock. The
+	// context is the process-wide one: LoadConfig is called from paths that
+	// predate any context and keeps its signature.
+	identity, err := r.LoadIdentity(context.Background())
+	if err != nil {
+		return core.ProjectConfig{}, err
+	}
+	resolved := configFromIdentity(identity)
 
 	tracked, exists, err := r.readConfig()
 	if err != nil {
 		return core.ProjectConfig{}, err
 	}
-	if !exists {
-		return core.ProjectConfig{}, core.Errorf(core.CategoryNotInitialized, "Workbook is not initialized")
-	}
-	guard, guardExists, err := r.readProjectGuard()
-	if err != nil {
-		return core.ProjectConfig{}, err
-	}
-	if guardExists {
-		if !tracked.SameIdentity(guard) {
-			return core.ProjectConfig{}, r.guardMismatch(tracked, guard)
+	if exists {
+		if !tracked.SameIdentity(resolved) {
+			guard, guardExists, guardErr := r.readProjectGuard()
+			if guardErr != nil {
+				return core.ProjectConfig{}, guardErr
+			}
+			return core.ProjectConfig{}, r.identityMismatch(identity, tracked, guardExists, guard)
 		}
-		r.config = tracked
-		r.configLoaded = true
-		return r.config, nil
+		resolved.Version = tracked.Version
+		resolved.AutoSync = tracked.AutoSync
 	}
-	if err := r.ensurePrivateCache(); err != nil {
-		return core.ProjectConfig{}, err
-	}
-	persisted, _, err := r.publishProjectGuard(tracked)
-	if err != nil {
-		return core.ProjectConfig{}, err
-	}
-	if !persisted.SameIdentity(tracked) {
-		return core.ProjectConfig{}, core.Errorf(core.CategoryCorruptData, "tracked Workbook configuration does not match concurrently published project guard")
-	}
-	r.config = tracked
-	r.configLoaded = true
-	return r.config, nil
+	return r.rememberConfig(resolved), nil
 }
 
 // UpgradeConfig rewrites a legacy tracked configuration at the version
@@ -338,6 +390,9 @@ func (r *Repository) rememberConfig(config core.ProjectConfig) core.ProjectConfi
 // name different projects. The guard lives inside the common Git directory,
 // out of reach of any working-tree cleanup, so the error itself must name the
 // file and the way out.
+//
+// From v0.5.0 this is reachable only while no identity ref exists. Once one
+// does, it arbitrates and a disagreeing guard is repaired from it instead.
 func (r *Repository) guardMismatch(tracked, guard core.ProjectConfig) error {
 	return core.Errorf(core.CategoryCorruptData,
 		"tracked Workbook configuration does not match common project guard: %s names project %s (key %s) but %s names project %s (key %s); if the tracked configuration is this repository's project, delete the guard file and rerun the command — Workbook republishes the guard from the tracked configuration",
@@ -414,6 +469,44 @@ func (r *Repository) publishProjectGuard(candidate core.ProjectConfig) (core.Pro
 		return core.ProjectConfig{}, false, core.Errorf(core.CategoryOperational, "Workbook project guard disappeared during initialization")
 	}
 	return persisted, false, nil
+}
+
+// repairProjectGuard overwrites the private guard with the canonical identity.
+//
+// Publication uses a link, which is exactly-once and therefore cannot replace
+// anything; repair is a deliberate replacement of a record the identity ref has
+// already overruled, so it renames over the existing file instead.
+func (r *Repository) repairProjectGuard(config core.ProjectConfig) error {
+	contents, err := encodeConfig(config)
+	if err != nil {
+		return err
+	}
+	cacheDir := filepath.Join(r.CommonGitDir, "workbook")
+	temporary, err := os.CreateTemp(cacheDir, ".project-*.tmp")
+	if err != nil {
+		return core.Wrap(core.CategoryOperational, "cannot create temporary Workbook project guard", err)
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+
+	if _, err := temporary.Write(contents); err != nil {
+		temporary.Close()
+		return core.Wrap(core.CategoryOperational, "cannot write Workbook project guard", err)
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return core.Wrap(core.CategoryOperational, "cannot sync Workbook project guard", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return core.Wrap(core.CategoryOperational, "cannot close Workbook project guard", err)
+	}
+	if err := os.Chmod(temporaryPath, 0o644); err != nil {
+		return core.Wrap(core.CategoryOperational, "cannot set Workbook project guard permissions", err)
+	}
+	if err := os.Rename(temporaryPath, filepath.Join(cacheDir, projectGuard)); err != nil {
+		return core.Wrap(core.CategoryOperational, "cannot repair Workbook project guard", err)
+	}
+	return syncDirectory(cacheDir)
 }
 
 func syncDirectory(path string) error {
@@ -543,12 +636,5 @@ func supportedProjectVersion(version int) bool {
 }
 
 func validateProjectID(projectID string) error {
-	parsed, err := ulid.ParseStrict(projectID)
-	if err != nil {
-		return core.Wrap(core.CategoryValidation, "project ID must contain a canonical ULID", err)
-	}
-	if parsed.String() != projectID {
-		return core.Errorf(core.CategoryValidation, "project ID must contain a canonical uppercase ULID")
-	}
-	return nil
+	return core.ValidateProjectID(projectID)
 }

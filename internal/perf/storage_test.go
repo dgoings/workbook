@@ -57,13 +57,16 @@ func TestMeasureGitStorageClassifiesEveryReachableObjectExactlyOnce(t *testing.T
 
 	spec := smallStorageFixtureSpec("sha1", operations)
 	commits := int64(spec.TotalTasks * spec.OperationsPerTask)
+	// The project identity ref adds exactly one commit, one tree and one
+	// document to every Workbook repository, once, however many tasks it holds.
 	want := map[string]int64{
-		ObjectClassCommit:        commits,
-		ObjectClassTree:          commits,
-		ObjectClassOperationBlob: commits,
-		ObjectClassStateBlob:     commits,
-		ObjectClassOtherBlob:     0,
-		ObjectClassAnnotatedTag:  0,
+		ObjectClassCommit:           commits + 1,
+		ObjectClassTree:             commits + 1,
+		ObjectClassOperationBlob:    commits,
+		ObjectClassStateBlob:        commits,
+		ObjectClassIdentityDocument: 1,
+		ObjectClassOtherBlob:        0,
+		ObjectClassAnnotatedTag:     0,
 	}
 	got := make(map[string]int64, len(account.Classes))
 	var classTotal, rawTotal, diskTotal int64
@@ -106,8 +109,10 @@ func TestMeasureGitStorageClassifiesEveryReachableObjectExactlyOnce(t *testing.T
 	if account.ObjectFormat != "sha1" {
 		t.Fatalf("object format = %q, want sha1", account.ObjectFormat)
 	}
-	if account.TaskRefs != int64(spec.TotalTasks) || account.WorkbookRefs != int64(spec.TotalTasks) {
-		t.Fatalf("task refs = %d and Workbook refs = %d, want %d each", account.TaskRefs, account.WorkbookRefs, spec.TotalTasks)
+	// One ref per task, plus the single project identity ref.
+	if account.TaskRefs != int64(spec.TotalTasks) || account.WorkbookRefs != int64(spec.TotalTasks)+1 {
+		t.Fatalf("task refs = %d and Workbook refs = %d, want %d and %d",
+			account.TaskRefs, account.WorkbookRefs, spec.TotalTasks, spec.TotalTasks+1)
 	}
 	if account.RefPrefix != workbookRefPrefix {
 		t.Fatalf("ref prefix = %q, want %q", account.RefPrefix, workbookRefPrefix)
@@ -289,8 +294,10 @@ func TestMeasureStorageResourcesReportsEveryComponentForEachDepth(t *testing.T) 
 	if deep.Git.ReachableObjects <= shallow.Git.ReachableObjects {
 		t.Fatalf("deeper fixture reachable objects %d not greater than shallow %d", deep.Git.ReachableObjects, shallow.Git.ReachableObjects)
 	}
-	if classAccountsByName(deep.Git)[ObjectClassCommit].Objects != int64(6*5) ||
-		classAccountsByName(shallow.Git)[ObjectClassCommit].Objects != int64(6*3) {
+	// Each depth carries its tasks' operation commits plus the single project
+	// identity commit.
+	if classAccountsByName(deep.Git)[ObjectClassCommit].Objects != int64(6*5+1) ||
+		classAccountsByName(shallow.Git)[ObjectClassCommit].Objects != int64(6*3+1) {
 		t.Fatalf("commit counts do not follow the requested depths")
 	}
 }

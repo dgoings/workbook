@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"encoding/json"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -9,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/testrepo"
 )
 
 // AGENTS.md expects multiple worktrees and multiple processes. Worktrees are
@@ -119,6 +122,78 @@ func TestBuiltBinariesMutateOneRepositoryConcurrently(t *testing.T) {
 	}
 	if after := listedTaskIDs(t, repository); !sameIDs(after, before) {
 		t.Fatalf("rebuilt projection = %v, want %v", after, before)
+	}
+}
+
+// Project identity is published with a ref transaction whose create verb is
+// exactly-once, and goroutines inside one process share the Repository that
+// memoizes the result. Only separate processes exercise the real race: several
+// binaries bootstrapping the same repository at the same moment, each willing to
+// mint, must converge on exactly one project.
+func TestBuiltBinariesBootstrapOneRepositoryConcurrently(t *testing.T) {
+	binary := buildWorkbookBinary(t)
+	repository := testrepo.New(t)
+
+	const bootstrappers = 4
+	outcomes := runConcurrently(t, bootstrappers, func(int) (int, string, string) {
+		return runBinary(t, binary, repository, "setup", "--no-sync", "--json")
+	})
+
+	minted := 0
+	var projectID string
+	for index, outcome := range outcomes {
+		if outcome.code != 0 {
+			t.Fatalf("concurrent setup %d exited %d; stdout = %q, stderr = %q",
+				index, outcome.code, outcome.stdout, outcome.stderr)
+		}
+		var result struct {
+			ProjectID string `json:"projectId"`
+			Identity  struct {
+				Source    string `json:"source"`
+				Minted    bool   `json:"minted"`
+				Published bool   `json:"published"`
+			} `json:"identity"`
+		}
+		if err := json.Unmarshal(assertJSONResult(t, outcome.stdout, "setup").Data, &result); err != nil {
+			t.Fatalf("decode concurrent setup %d: %v; stdout = %q", index, err, outcome.stdout)
+		}
+		if projectID == "" {
+			projectID = result.ProjectID
+		} else if result.ProjectID != projectID {
+			t.Fatalf("concurrent setup %d joined project %q, want the single project %q",
+				index, result.ProjectID, projectID)
+		}
+		if result.Identity.Minted {
+			minted++
+		}
+	}
+	if minted != 1 {
+		t.Fatalf("%d of %d concurrent bootstraps minted a project, want exactly one", minted, bootstrappers)
+	}
+
+	// One ref, one document, and every advisory record agreeing with it.
+	refs := gitOutput(t, repository, "for-each-ref", "--format=%(refname)", "refs/workbook/project")
+	if refs != "refs/workbook/project" {
+		t.Fatalf("identity refs = %q, want exactly refs/workbook/project", refs)
+	}
+	document := gitOutput(t, repository, "cat-file", "blob", "refs/workbook/project:project.json")
+	if !strings.Contains(document, projectID) {
+		t.Fatalf("identity document = %q, want project %s", document, projectID)
+	}
+	for _, path := range []string{
+		filepath.Join(repository, ".workbook", "config.json"),
+		filepath.Join(repository, ".git", "workbook", "project.json"),
+	} {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		if !strings.Contains(string(contents), projectID) {
+			t.Fatalf("%s = %q, want project %s", path, contents, projectID)
+		}
+	}
+	if code, stdout, stderr := runBinary(t, binary, repository, "list", "--json"); code != 0 {
+		t.Fatalf("list after concurrent bootstrap exited %d; stdout = %q, stderr = %q", code, stdout, stderr)
 	}
 }
 

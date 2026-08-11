@@ -714,8 +714,14 @@ release-tag path when changing where archives are published.
 
 ### Explicit task sharing
 
-`workbook fetch` downloads only `refs/workbook/tasks/*` from `origin` into
-`refs/workbook/remotes/origin/tasks/*`. It validates the current tracking and
+`workbook fetch` downloads `refs/workbook/tasks/*` from `origin` into
+`refs/workbook/remotes/origin/tasks/*`, and `refs/workbook/project` into
+`refs/workbook/remotes/origin/project`, in one `git fetch`. The project identity
+is settled before any task is inspected: a clone and an origin that name
+different projects stop the run rather than replay one project's operations into
+another's history. `fetch` never publishes the identity ref — downloading is not
+the moment to write to `origin` — while `sync` publishes it once, in the run that
+migrates a project to v0.5.0. It validates the current tracking and
 canonical tips' IDs, documents, and safe ancestry relationship before touching
 the corresponding local task ref. A missing local task is created, and a behind
 local task is fast-forwarded in one compare-and-swap transaction. Local-ahead
@@ -1326,26 +1332,94 @@ descriptively; it is measured in its own invocation and carries no target.
 
 ### Project identity across worktrees
 
-`.workbook/config.json` remains the portable tracked configuration that carries a
-Workbook project's identity across clones. Workbook also records that identity in
-a private guard at `<git-common-dir>/workbook/project.json`. The guard is private
-coordination metadata shared by every worktree attached to the same common Git
-directory; it does not replace the tracked configuration or travel with a clone.
+A project's canonical identity lives in a Workbook ref, not in branch content:
 
-The current POC permits one Workbook project per common Git repository, including
-all linked worktrees. The first successful configuration load for each opened
-repository compares the portable configuration with the common guard, then caches
-that validated configuration for the repository session. Reopening the repository
-observes later tracked or guard changes and rejects use when the tracked and common
-identities do not match; the rejection names both files and their identities, and
-deleting the guard file republishes it from the tracked configuration on the next
-command. For repositories initialized before the guard was introduced, the first
-configuration load or repeated `workbook setup` atomically backfills the missing
-guard from `.workbook/config.json`. Concurrent first users must either publish
-that same identity or observe and validate the identity another user published;
-`workbook setup` also consults `origin` before minting, so a checkout that
-predates the project's Workbook adoption joins the published identity instead of
-minting a second one.
+```text
+refs/workbook/project
+ └── commit (no parents, fixed author/committer/date)
+      └── tree
+           └── project.json   {"format":"workbook.project-identity","version":1,"projectId":…,"key":…}
+```
+
+The document holds only the project ID and the project key, both immutable after
+mint. The ref holds exactly one root commit and that commit's tree holds exactly
+one entry; a tip with parents or a second entry is rejected rather than
+interpreted. `refs/workbook/project` is a leaf name and must stay one — Git's
+directory/file rule means no ref may ever be created under it, so a future family
+of project documents belongs in a sibling namespace.
+
+The commit is deterministic: fixed author and committer (`Workbook
+<workbook@invalid>`), the Unix epoch in UTC, a fixed message, and no parent. Two
+clones that adopt the same identity therefore build the *same* commit object, so
+a second publication is "everything up-to-date" rather than a competing history
+that origin must reject.
+
+`.workbook/config.json` stays committed and readable, and keeps deciding the
+mutable preferences it owns (the document version and `autoSync`). Its `projectId`
+and `key` are now advisory copies: they are what a v0.4.x teammate reads, and what
+a v0.5.0 clone migrates from, but the ref decides. Nothing rewrites or strips
+them; slimming the tracked document is a deliberate, later upgrade.
+
+Identity is resolved once per opened repository, in this order:
+
+1. **`refs/workbook/project`** — canonical; it wins outright.
+2. **`.workbook/config.json`** — its identity is adopted and published to the ref
+   once. This is the self-healing migration for every project created before
+   v0.5.0.
+3. **`<git-common-dir>/workbook/project.json`**, the private guard — adopted and
+   published the same way when no branch in the checkout carries the tracked file.
+4. **Nothing** — the repository is not initialized. Only `workbook setup` mints a
+   new identity; no ordinary command can invent a project by being run in the
+   wrong directory.
+
+Because the ref lives in the common Git directory, every linked worktree shares
+one identity, and a checkout of a branch that predates Workbook adoption is no
+longer mistaken for a new project.
+
+The private guard is still written in v0.5.0 for downgrade safety, since a v0.4.x
+binary sharing the repository reads it. What changed is the verdict on
+disagreement: when the ref and the guard disagree, the guard is **repaired** from
+the ref and the command proceeds. The older wedge — the error naming both files
+and telling you to delete the guard — remains reachable only while no identity ref
+exists yet. Deleting the guard entirely waits until no supported version reads it.
+
+One disagreement is still fatal: a tracked `.workbook/config.json` whose
+`projectId` or `key` differs from the ref's. That means two records claim
+different projects for the same working tree, and continuing would write one
+project's operations into another's history. The error names the ref, the tracked
+file, the guard, both identities, and the way out. Document-version drift and a
+missing advisory copy are reported on stderr instead — one line, not a refusal.
+
+`workbook setup` consults `origin` before minting, and asks for the identity ref
+first. If origin publishes one, setup fetches and adopts it — no branch checkout,
+no committed configuration needed anywhere. The older probe (a configuration
+committed on origin's default branch) remains the fallback for projects that have
+not published the ref yet. Setup reports which path ran, so joining an existing
+project and creating a new one never look alike.
+
+#### Mixed versions and forks
+
+Upgrade order does not matter. A v0.4.x client's fetch refspec and `ls-remote`
+patterns name only `refs/workbook/tasks/*`, so publishing `refs/workbook/project`
+is invisible to a teammate who has not upgraded, and the tracked document keeps
+its identity fields for them to read. Nothing breaks until a project deliberately
+upgrades its tracked document, and by then every clone should be on v0.5.0.
+
+Forks copy branches, not Workbook refs. `workbook setup` in a fork of a
+Workbook-tracked repository therefore mints a fresh, empty project rather than
+silently inheriting the upstream one — unless the fork's `origin` still resolves
+to the upstream repository. To carry a tracker into a fork deliberately, push the
+refs:
+
+```sh
+git push fork 'refs/workbook/*:refs/workbook/*'
+```
+
+Because the identity ref rides the same `git fetch` as the task refs, none of
+this costs an extra network round trip. `workbook sync` reports what the identity
+stage did under an `identity` member — `matched`, `created`, `published`,
+`adopted`, or `mismatched` — and omits it entirely when there was nothing new to
+say. A `mismatched` identity stops the run before any task is fetched.
 
 ## Proposed post-POC commands
 
@@ -1577,12 +1651,17 @@ dgoings/tap/workbook`, or `./scripts/install.sh` to build from source.
 `workbook setup` then performs the repository half of the bootstrap:
 
 1. detect the repository and validate Git identity;
-2. create or validate project configuration and the private common-directory guard;
-3. write the user-global configuration file when it is missing;
-4. install or refresh managed agent documentation and the project-local Workbook skill;
-5. explicitly fetch and publish `refs/workbook/tasks/*` through `origin`, or report
-   that synchronization was skipped when no remote is configured;
-6. report the resulting task count.
+2. resolve the project identity — adopt `origin`'s `refs/workbook/project` if it
+   publishes one, otherwise the identity ref, tracked configuration or private
+   guard this checkout already has, and only then mint a new one — publishing
+   `refs/workbook/project` and writing `.workbook/config.json` when it is absent;
+3. repair or write the private common-directory guard from that identity;
+4. write the user-global configuration file when it is missing;
+5. install or refresh managed agent documentation and the project-local Workbook skill;
+6. explicitly fetch and publish `refs/workbook/project` and `refs/workbook/tasks/*`
+   through `origin`, or report that synchronization was skipped when no remote is
+   configured;
+7. report which record the identity came from, and the resulting task count.
 
 Setup deliberately does not install Git hooks. Hooks remain opt-in through
 `workbook hooks install`, because they must never be required for correctness.

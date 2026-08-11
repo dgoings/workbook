@@ -70,17 +70,25 @@ type remoteScenarioContract struct {
 	errorCategory core.Category
 }
 
+// The process budgets below carry a constant that arrived with the canonical
+// project identity ref. Every command pays two Git processes to resolve it —
+// one ref lookup and one object read — and every command that also talks to
+// origin pays one more ref lookup to compare this clone with it. The cost does
+// not grow with the number of tasks, the steady state reads no identity object
+// at all because equal object IDs are equal documents, and what it buys is the
+// guarantee that no clone ever replays another project's history. Each budget
+// therefore rose by that constant and kept the headroom it had.
 var remoteScenarioDefinitions = []remoteScenarioDefinition{
-	{name: "sync-fresh-checkout", topology: RemoteFreshCheckout, command: "fetch", target: &ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 5000, MaxGitProcesses: 20}},
-	{name: "sync-initial-publication", topology: RemoteInitialPublication, command: "push", target: &ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 5000, MaxGitProcesses: 20}},
-	{name: "sync-already-synchronized", topology: RemoteAlreadySynchronized, command: "sync", target: &ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 1000, MaxGitProcesses: 10}},
-	{name: "sync-small-changed-ref-set", topology: RemoteSmallChangedRefSet, command: "sync", target: &ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 2000, MaxGitProcesses: 20}},
+	{name: "sync-fresh-checkout", topology: RemoteFreshCheckout, command: "fetch", target: &ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 5000, MaxGitProcesses: 23}},
+	{name: "sync-initial-publication", topology: RemoteInitialPublication, command: "push", target: &ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 5000, MaxGitProcesses: 22}},
+	{name: "sync-already-synchronized", topology: RemoteAlreadySynchronized, command: "sync", target: &ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 1000, MaxGitProcesses: 13}},
+	{name: "sync-small-changed-ref-set", topology: RemoteSmallChangedRefSet, command: "sync", target: &ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 2000, MaxGitProcesses: 23}},
 	// Reconciliation replays local history rather than refusing to publish it,
 	// so this scenario now measures work the earlier contract never did. It
 	// stays unbudgeted until a recorded run says what that work costs.
 	{name: "sync-divergent-tips", topology: RemoteDivergentTips, command: "sync"},
-	{name: "sync-malformed-local-tip", topology: RemoteMalformedLocalTip, command: "push", expectFailure: true, target: &ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 2000, MaxGitProcesses: 20}},
-	{name: "sync-malformed-remote-tip", topology: RemoteMalformedRemoteTip, command: "fetch", expectFailure: true, target: &ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 2000, MaxGitProcesses: 20}},
+	{name: "sync-malformed-local-tip", topology: RemoteMalformedLocalTip, command: "push", expectFailure: true, target: &ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 2000, MaxGitProcesses: 22}},
+	{name: "sync-malformed-remote-tip", topology: RemoteMalformedRemoteTip, command: "fetch", expectFailure: true, target: &ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 2000, MaxGitProcesses: 23}},
 }
 
 // RunRemoteScenarios measures only the requested remote synchronization

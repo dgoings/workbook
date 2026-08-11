@@ -66,11 +66,11 @@ func Run(ctx context.Context, args []string, cwd string, stdout, stderr io.Write
 	case "create":
 		err = runCreate(ctx, commandArgs, cwd, stdout, stderr)
 	case "list":
-		err = runList(ctx, commandArgs, cwd, stdout)
+		err = runList(ctx, commandArgs, cwd, stdout, stderr)
 	case "board":
-		err = runBoard(ctx, commandArgs, cwd, stdout)
+		err = runBoard(ctx, commandArgs, cwd, stdout, stderr)
 	case "show":
-		err = runShow(ctx, commandArgs, cwd, stdout)
+		err = runShow(ctx, commandArgs, cwd, stdout, stderr)
 	case "update":
 		err = runUpdate(ctx, commandArgs, cwd, stdout, stderr)
 	case "delete":
@@ -84,25 +84,25 @@ func Run(ctx context.Context, args []string, cwd string, stdout, stderr io.Write
 	case "free":
 		err = runFree(ctx, commandArgs, cwd, stdout, stderr)
 	case "next":
-		err = runNext(ctx, commandArgs, cwd, stdout)
+		err = runNext(ctx, commandArgs, cwd, stdout, stderr)
 	case "rebuild":
-		err = runRebuild(ctx, commandArgs, cwd, stdout)
+		err = runRebuild(ctx, commandArgs, cwd, stdout, stderr)
 	case "validate":
-		err = runValidate(ctx, commandArgs, cwd, stdout)
+		err = runValidate(ctx, commandArgs, cwd, stdout, stderr)
 	case "version":
 		err = runVersion(commandArgs, stdout)
 	case "fetch":
-		err = runFetch(ctx, commandArgs, cwd, stdout)
+		err = runFetch(ctx, commandArgs, cwd, stdout, stderr)
 	case "push":
-		err = runPush(ctx, commandArgs, cwd, stdout)
+		err = runPush(ctx, commandArgs, cwd, stdout, stderr)
 	case "sync":
 		err = runSync(ctx, commandArgs, cwd, stdout, stderr)
 	case "config":
-		err = runConfig(ctx, commandArgs, cwd, stdout)
+		err = runConfig(ctx, commandArgs, cwd, stdout, stderr)
 	case "docs":
-		err = runDocs(ctx, commandArgs, cwd, stdout)
+		err = runDocs(ctx, commandArgs, cwd, stdout, stderr)
 	case "hooks":
-		err = runHooks(ctx, commandArgs, cwd, stdout)
+		err = runHooks(ctx, commandArgs, cwd, stdout, stderr)
 	case "serve":
 		err = runServe(ctx, commandArgs, cwd, stdout, stderr)
 	default:
@@ -214,13 +214,13 @@ func parseExplicitHelpRequest(args []string) (helpRequest, bool, error) {
 	return helpRequest{}, true, core.Errorf(core.CategoryInvocation, "help accepts a command or one of its subcommands")
 }
 
-func runFetch(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+func runFetch(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
 	flags := newFlagSet("fetch")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
-	repository, config, err := openRepository(ctx, cwd)
+	repository, config, err := openRepository(ctx, cwd, stderr)
 	if err != nil {
 		return err
 	}
@@ -231,13 +231,13 @@ func runFetch(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 	return syncErr
 }
 
-func runPush(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+func runPush(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
 	flags := newFlagSet("push")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
-	repository, config, err := openRepository(ctx, cwd)
+	repository, config, err := openRepository(ctx, cwd, stderr)
 	if err != nil {
 		return err
 	}
@@ -265,7 +265,7 @@ func runSync(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	if *interval != "" && !*watch {
 		return core.Errorf(core.CategoryInvocation, "sync --interval requires --watch")
 	}
-	repository, config, err := openRepository(ctx, cwd)
+	repository, config, err := openRepository(ctx, cwd, stderr)
 	if err != nil {
 		return err
 	}
@@ -400,7 +400,7 @@ type watcherStoppedResult struct {
 	Stopped bool `json:"stopped"`
 }
 
-func runHooks(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+func runHooks(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
 	subcommand, args, err := requiredFirstArgument("hooks", "hook command", args)
 	if err != nil {
 		return err
@@ -413,7 +413,7 @@ func runHooks(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
-	repository, _, err := openRepository(ctx, cwd)
+	repository, _, err := openRepository(ctx, cwd, stderr)
 	if err != nil {
 		return err
 	}
@@ -449,7 +449,7 @@ func runCreate(ctx context.Context, args []string, cwd string, stdout, stderr io
 	if strings.TrimSpace(title) == "" {
 		return core.Errorf(core.CategoryValidation, "title is required")
 	}
-	session, err := openTaskSession(ctx, cwd, *noSync, true)
+	session, err := openTaskSession(ctx, cwd, *noSync, true, stderr)
 	if err != nil {
 		return err
 	}
@@ -465,7 +465,7 @@ func runCreate(ctx context.Context, args []string, cwd string, stdout, stderr io
 	return writeMutationOutcome(stdout, stderr, "create", session, result, err, *jsonMode)
 }
 
-func runList(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+func runList(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
 	flags := newFlagSet("list")
 	status := flags.String("status", "", "task status")
 	priority := flags.String("priority", "", "task priority")
@@ -476,7 +476,7 @@ func runList(ctx context.Context, args []string, cwd string, stdout io.Writer) e
 		return err
 	}
 
-	service, err := openReadService(ctx, cwd)
+	service, err := openReadService(ctx, cwd, stderr)
 	if err != nil {
 		return err
 	}
@@ -503,7 +503,7 @@ func runList(ctx context.Context, args []string, cwd string, stdout io.Writer) e
 	return nil
 }
 
-func runShow(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+func runShow(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
 	id, args, err := requiredFirstArgument("show", "task ID", args)
 	if err != nil {
 		return err
@@ -536,7 +536,7 @@ func runShow(ctx context.Context, args []string, cwd string, stdout io.Writer) e
 		return err
 	}
 
-	service, err := openReadService(ctx, cwd)
+	service, err := openReadService(ctx, cwd, stderr)
 	if err != nil {
 		return err
 	}
@@ -615,7 +615,7 @@ func runUpdate(ctx context.Context, args []string, cwd string, stdout, stderr io
 		input.Labels = &empty
 	}
 
-	session, err := openTaskSession(ctx, cwd, *noSync, true)
+	session, err := openTaskSession(ctx, cwd, *noSync, true, stderr)
 	if err != nil {
 		return err
 	}
@@ -637,7 +637,7 @@ func runDelete(ctx context.Context, args []string, cwd string, stdout, stderr io
 		return err
 	}
 
-	session, err := openTaskSession(ctx, cwd, *noSync, true)
+	session, err := openTaskSession(ctx, cwd, *noSync, true, stderr)
 	if err != nil {
 		return err
 	}
@@ -659,7 +659,7 @@ func runRestore(ctx context.Context, args []string, cwd string, stdout, stderr i
 		return err
 	}
 
-	session, err := openTaskSession(ctx, cwd, *noSync, true)
+	session, err := openTaskSession(ctx, cwd, *noSync, true, stderr)
 	if err != nil {
 		return err
 	}
@@ -685,7 +685,7 @@ func runMove(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	if (*before == "") == (*after == "") {
 		return core.Errorf(core.CategoryInvocation, "move requires exactly one of --before or --after")
 	}
-	session, err := openTaskSession(ctx, cwd, *noSync, true)
+	session, err := openTaskSession(ctx, cwd, *noSync, true, stderr)
 	if err != nil {
 		return err
 	}
@@ -714,7 +714,7 @@ func runDependencyMutation(ctx context.Context, command string, args []string, c
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
-	session, err := openTaskSession(ctx, cwd, *noSync, true)
+	session, err := openTaskSession(ctx, cwd, *noSync, true, stderr)
 	if err != nil {
 		return err
 	}
@@ -727,14 +727,14 @@ func runDependencyMutation(ctx context.Context, command string, args []string, c
 	return writeMutationOutcome(stdout, stderr, command, session, result, err, *jsonMode)
 }
 
-func runNext(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+func runNext(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
 	flags := newFlagSet("next")
 	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with origin")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
-	session, err := openTaskSession(ctx, cwd, *noSync, false)
+	session, err := openTaskSession(ctx, cwd, *noSync, false, stderr)
 	if err != nil {
 		return err
 	}
@@ -759,13 +759,13 @@ func runNext(ctx context.Context, args []string, cwd string, stdout io.Writer) e
 	return nil
 }
 
-func runRebuild(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+func runRebuild(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
 	flags := newFlagSet("rebuild")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
-	repository, config, err := openRepository(ctx, cwd)
+	repository, config, err := openRepository(ctx, cwd, stderr)
 	if err != nil {
 		return err
 	}
@@ -786,14 +786,14 @@ func runRebuild(ctx context.Context, args []string, cwd string, stdout io.Writer
 	return nil
 }
 
-func runValidate(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+func runValidate(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
 	flags := newFlagSet("validate")
 	full := flags.Bool("full", false, "bypass cached validation results")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
-	repository, config, err := openRepository(ctx, cwd)
+	repository, config, err := openRepository(ctx, cwd, stderr)
 	if err != nil {
 		return err
 	}
@@ -886,7 +886,7 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 		}
 	})
 
-	service, repository, store, err := openServiceParts(ctx, cwd)
+	service, repository, store, err := openServiceParts(ctx, cwd, stderr)
 	if err != nil {
 		return err
 	}
@@ -1192,16 +1192,16 @@ func (w *boardWatcher) stop() {
 	}
 }
 
-func openService(ctx context.Context, cwd string) (core.Service, error) {
-	service, _, _, err := openServiceParts(ctx, cwd)
+func openService(ctx context.Context, cwd string, stderr io.Writer) (core.Service, error) {
+	service, _, _, err := openServiceParts(ctx, cwd, stderr)
 	return service, err
 }
 
 // openServiceParts also returns the repository and projection the service was
 // built on, so a long-running command can share them with a sync loop instead
 // of opening a second projection handle on the same cache file.
-func openServiceParts(ctx context.Context, cwd string) (core.Service, *gitstore.Repository, *projection.Store, error) {
-	repository, config, err := openRepository(ctx, cwd)
+func openServiceParts(ctx context.Context, cwd string, stderr io.Writer) (core.Service, *gitstore.Repository, *projection.Store, error) {
+	repository, config, err := openRepository(ctx, cwd, stderr)
 	if err != nil {
 		return core.Service{}, nil, nil, err
 	}
@@ -1225,8 +1225,8 @@ func openServiceParts(ctx context.Context, cwd string) (core.Service, *gitstore.
 	}, repository, store, nil
 }
 
-func openReadService(ctx context.Context, cwd string) (core.Service, error) {
-	repository, config, err := openRepository(ctx, cwd)
+func openReadService(ctx context.Context, cwd string, stderr io.Writer) (core.Service, error) {
+	repository, config, err := openRepository(ctx, cwd, stderr)
 	if err != nil {
 		return core.Service{}, err
 	}
@@ -1243,7 +1243,15 @@ func openReadService(ctx context.Context, cwd string) (core.Service, error) {
 	}, nil
 }
 
-func openRepository(ctx context.Context, cwd string) (*gitstore.Repository, core.ProjectConfig, error) {
+// openRepository opens the repository a command runs against and loads its
+// configuration.
+//
+// It is also the one place a command reports identity drift. Resolving the
+// canonical identity can find an advisory record missing or a private guard
+// that had to be repaired; none of that stops the command, and none of it
+// should be silent either. Every command funnels through here, so saying it
+// once here says it once per command.
+func openRepository(ctx context.Context, cwd string, stderr io.Writer) (*gitstore.Repository, core.ProjectConfig, error) {
 	repository, err := gitstore.Open(ctx, cwd)
 	if err != nil {
 		return nil, core.ProjectConfig{}, err
@@ -1251,6 +1259,9 @@ func openRepository(ctx context.Context, cwd string) (*gitstore.Repository, core
 	config, err := repository.LoadConfig()
 	if err != nil {
 		return nil, core.ProjectConfig{}, err
+	}
+	if drift, found := repository.IdentityDrift(); found && stderr != nil {
+		fmt.Fprintf(stderr, "workbook: warning: %s\n", drift.Detail)
 	}
 	return repository, config, nil
 }

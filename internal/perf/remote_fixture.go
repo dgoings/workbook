@@ -240,16 +240,30 @@ func populateSynchronizedFixture(ctx context.Context, sourceRoot, localRoot, pee
 	return copyFixtureTasks(ctx, originRoot, peerRoot)
 }
 
+// The project identity ref travels with the task refs everywhere a fixture
+// moves them. A clone that holds task history but no identity would make every
+// measured command perform the one-time migration instead of the steady-state
+// work the scenario is named for. The glob keeps the refspec harmless when the
+// source has no identity ref: Git fails a whole transfer over an explicitly
+// named source ref that does not exist, and matches a pattern silently.
+const (
+	fixtureTaskRefspec             = "refs/workbook/tasks/*:refs/workbook/tasks/*"
+	fixtureIdentityRefspec         = "refs/workbook/project*:refs/workbook/project*"
+	fixtureTaskTrackingRefspec     = "refs/workbook/tasks/*:refs/workbook/remotes/origin/tasks/*"
+	fixtureIdentityTrackingRefspec = "refs/workbook/project*:refs/workbook/remotes/origin/project*"
+)
+
 func copyFixtureTasks(ctx context.Context, from, to string) error {
-	return runFixtureGit(ctx, "-C", to, "fetch", "--quiet", from, "refs/workbook/tasks/*:refs/workbook/tasks/*")
+	return runFixtureGit(ctx, "-C", to, "fetch", "--quiet", from, fixtureTaskRefspec, fixtureIdentityRefspec)
 }
 
 func publishFixtureTasks(ctx context.Context, from, originRoot string) error {
-	return runFixtureGit(ctx, "-C", from, "push", "--quiet", originRoot, "refs/workbook/tasks/*:refs/workbook/tasks/*")
+	return runFixtureGit(ctx, "-C", from, "push", "--quiet", originRoot, fixtureTaskRefspec, fixtureIdentityRefspec)
 }
 
 func fetchFixtureTracking(ctx context.Context, root string) error {
-	return runFixtureGit(ctx, "-C", root, "fetch", "--quiet", "origin", "refs/workbook/tasks/*:refs/workbook/remotes/origin/tasks/*")
+	return runFixtureGit(ctx, "-C", root, "fetch", "--quiet", "origin",
+		fixtureTaskTrackingRefspec, fixtureIdentityTrackingRefspec)
 }
 
 func appendFixtureTask(ctx context.Context, root string, config core.ProjectConfig, taskID string, taskIndex int) error {

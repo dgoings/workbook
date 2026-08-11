@@ -370,7 +370,12 @@ func TestLoadConfigRejectsMismatchedCommonProjectGuard(t *testing.T) {
 	}
 }
 
-func TestLoadConfigRequiresInitWhenOnlyCommonProjectGuardExists(t *testing.T) {
+// The guard is the last local record that this clone already belongs to a
+// project, so a checkout whose branch never carried the tracked file adopts it
+// and publishes the canonical ref rather than reporting an uninitialized
+// repository. Reading a configuration still writes no tracked file: that is a
+// working-tree change, and only a command the user ran on purpose makes one.
+func TestLoadConfigAdoptsCommonProjectGuardIdentityWhenNoRefExists(t *testing.T) {
 	repo, err := Open(context.Background(), testrepo.New(t))
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -380,11 +385,37 @@ func TestLoadConfigRequiresInitWhenOnlyCommonProjectGuardExists(t *testing.T) {
 	}
 	writeProjectConfigFile(t, filepath.Join(repo.CommonGitDir, "workbook", projectGuard), guard)
 
+	got, err := repo.LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if got != guard {
+		t.Fatalf("LoadConfig() = %#v, want the guard's identity %#v", got, guard)
+	}
+	assertPathMissing(t, filepath.Join(repo.Root, configPath))
+	identity, err := repo.LoadIdentity(context.Background())
+	if err != nil {
+		t.Fatalf("LoadIdentity() error = %v", err)
+	}
+	if identity.ProjectID != fixedProjectID {
+		t.Fatalf("published identity = %#v, want project %s", identity, fixedProjectID)
+	}
+}
+
+func TestLoadConfigRequiresInitWhenNothingRecordsAProject(t *testing.T) {
+	repo, err := Open(context.Background(), testrepo.New(t))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+
 	_, err = repo.LoadConfig()
 	if got, want := core.CategoryOf(err), core.CategoryNotInitialized; got != want {
 		t.Fatalf("LoadConfig() category = %q, want %q; error = %v", got, want, err)
 	}
 	assertPathMissing(t, filepath.Join(repo.Root, configPath))
+	if refExists(t, repo, identityRef) {
+		t.Fatal("LoadConfig() minted a project identity; only Init may mint")
+	}
 }
 
 func TestConfigurationFilesystemFailuresAreOperational(t *testing.T) {
@@ -895,6 +926,11 @@ func TestLoadConfigStillRejectsProjectIdentityMismatch(t *testing.T) {
 // The mismatch error must carry its own way out. The guard lives inside the
 // common Git directory where no working-tree cleanup reaches it, so an error
 // that names neither the file nor the recovery leaves the repository unusable.
+//
+// This is the pre-v0.5.0 shape, reached only while no identity ref exists: a
+// repository initialized by an older binary, or one whose ref has not been
+// published yet. With a ref present the same disagreement is arbitrated by it
+// instead, which the identity tests cover.
 func TestLoadConfigGuardMismatchNamesGuardPathAndRecovery(t *testing.T) {
 	ctx := context.Background()
 	repoDir := testrepo.New(t)
@@ -906,6 +942,7 @@ func TestLoadConfigGuardMismatchNamesGuardPathAndRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	gitRun(t, repoDir, "update-ref", "-d", identityRef)
 
 	foreign := config
 	foreign.ProjectID = "01K0M65GBZ8F5ZQX0VC1J8H3TQ"

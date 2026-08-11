@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/dgoings/workbook/internal/autosync"
@@ -58,8 +59,8 @@ type taskSession struct {
 	watcher  syncloop.Status
 }
 
-func openTaskSession(ctx context.Context, cwd string, noSync, withWriter bool) (*taskSession, error) {
-	repository, config, err := openRepository(ctx, cwd)
+func openTaskSession(ctx context.Context, cwd string, noSync, withWriter bool, stderr io.Writer) (*taskSession, error) {
+	repository, config, err := openRepository(ctx, cwd, stderr)
 	if err != nil {
 		return nil, err
 	}

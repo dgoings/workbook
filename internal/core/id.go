@@ -52,6 +52,21 @@ func ValidateProjectKey(key string) error {
 	return nil
 }
 
+// ValidateProjectID reports whether a project ID is a canonical uppercase
+// ULID. It is the one rule for a project ID wherever one is stored: the
+// tracked configuration, the private guard, and the identity document all
+// share it so a value one accepts cannot be rejected by another.
+func ValidateProjectID(projectID string) error {
+	parsed, err := ulid.ParseStrict(projectID)
+	if err != nil {
+		return Wrap(CategoryValidation, "project ID must contain a canonical ULID", err)
+	}
+	if parsed.String() != projectID {
+		return Errorf(CategoryValidation, "project ID must contain a canonical uppercase ULID")
+	}
+	return nil
+}
+
 // ulidShapePattern matches a canonical ULID body's length and alphabet without
 // decoding it, and without insisting on the canonical uppercase form. It is
 // deliberately looser than ulid.ParseStrict: it answers "could another

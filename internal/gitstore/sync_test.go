@@ -717,8 +717,14 @@ func TestSyncReusesFetchedTipsWithoutRepeatedInspection(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Sync() error = %v; result = %#v", err, result)
 			}
-			if got := countCommand(commands, "fetch", "--no-tags", "--prune", "--no-auto-maintenance", "origin", "+"+taskRefPrefix+"*:"+remoteTaskRefPrefix+"*"); got != 1 {
+			// One fetch carries both namespaces. The identity ref rides the
+			// refspec list rather than adding a round trip of its own.
+			if got := countCommand(commands, "fetch", "--no-tags", "--prune", "--no-auto-maintenance", "origin",
+				"+"+taskRefPrefix+"*:"+remoteTaskRefPrefix+"*", identityFetchRefspec); got != 1 {
 				t.Fatalf("fetch commands = %d, want 1; commands = %v", got, commands)
+			}
+			if got := countCommandPrefix(commands, "fetch"); got != 1 {
+				t.Fatalf("fetch invocations = %d, want exactly one for both namespaces; commands = %v", got, commands)
 			}
 			if got := countCommand(commands, "cat-file", "--batch"); got != 1 {
 				t.Fatalf("tip batches = %d, want 1; commands = %v", got, commands)
@@ -735,8 +741,14 @@ func TestSyncReusesFetchedTipsWithoutRepeatedInspection(t *testing.T) {
 			if got := countCommand(commands, "merge-base", "--is-ancestor"); got != 0 {
 				t.Fatalf("merge-base commands = %d, want none; commands = %v", got, commands)
 			}
-			if got := countCommandPrefix(commands, "push", "--porcelain", "origin"); got != 1 {
-				t.Fatalf("push commands = %d, want one; commands = %v", got, commands)
+			if got := countTaskPushes(commands); got != 1 {
+				t.Fatalf("task push commands = %d, want one; commands = %v", got, commands)
+			}
+			// The identity ref is published once in a project's life. This is
+			// that run, so it costs exactly one publication here and none in
+			// the synchronized run below.
+			if got := countIdentityPushes(commands); got != 1 {
+				t.Fatalf("identity push commands = %d, want the one-time publication; commands = %v", got, commands)
 			}
 			if got := countCommand(commands, "rev-list", "--parents", "--stdin"); got > 1 {
 				t.Fatalf("graph classifications = %d, want at most 1; commands = %v", got, commands)
@@ -760,6 +772,9 @@ func TestSyncReusesFetchedTipsWithoutRepeatedInspection(t *testing.T) {
 			}
 			if got := countCommandPrefix(commands, "push", "--porcelain", "origin"); got != 0 {
 				t.Fatalf("synchronized push commands = %d, want none; commands = %v", got, commands)
+			}
+			if result.Identity != nil {
+				t.Fatalf("synchronized Sync reported identity work %#v, want nothing new", result.Identity)
 			}
 			for _, command := range commands {
 				if commandHasPrefix(command, "merge-base", "--is-ancestor") ||
@@ -785,6 +800,32 @@ func TestSyncReusesFetchedTipsWithoutRepeatedInspection(t *testing.T) {
 			}
 		})
 	}
+}
+
+// countIdentityPushes and countTaskPushes separate the two publications a run
+// can make, so an assertion about one never silently accepts the other.
+func countIdentityPushes(commands [][]string) int {
+	return countPushesTargeting(commands, ":"+identityRef)
+}
+
+func countTaskPushes(commands [][]string) int {
+	return countPushesTargeting(commands, ":"+taskRefPrefix)
+}
+
+func countPushesTargeting(commands [][]string, suffix string) int {
+	count := 0
+	for _, command := range commands {
+		if !commandHasPrefix(command, "push") {
+			continue
+		}
+		for _, argument := range command {
+			if strings.Contains(argument, suffix) {
+				count++
+				break
+			}
+		}
+	}
+	return count
 }
 
 func countCommandPrefix(commands [][]string, want ...string) int {

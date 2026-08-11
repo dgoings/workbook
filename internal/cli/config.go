@@ -37,30 +37,30 @@ type configWriteResult struct {
 	Upgraded bool   `json:"upgraded"`
 }
 
-func runConfig(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+func runConfig(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
 	subcommand, args, err := requiredFirstArgument("config", "config command", args)
 	if err != nil {
 		return err
 	}
 	switch subcommand {
 	case "show":
-		return runConfigShow(ctx, args, cwd, stdout)
+		return runConfigShow(ctx, args, cwd, stdout, stderr)
 	case "set":
-		return runConfigSet(ctx, args, cwd, stdout)
+		return runConfigSet(ctx, args, cwd, stdout, stderr)
 	case "unset":
-		return runConfigUnset(ctx, args, cwd, stdout)
+		return runConfigUnset(ctx, args, cwd, stdout, stderr)
 	default:
 		return core.Errorf(core.CategoryInvocation, "unknown config command %q", subcommand)
 	}
 }
 
-func runConfigShow(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+func runConfigShow(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
 	flags := newFlagSet("config", "show")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
-	repository, config, err := openRepository(ctx, cwd)
+	repository, config, err := openRepository(ctx, cwd, stderr)
 	if err != nil {
 		return err
 	}
@@ -95,7 +95,7 @@ func runConfigShow(ctx context.Context, args []string, cwd string, stdout io.Wri
 	return nil
 }
 
-func runConfigSet(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+func runConfigSet(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
 	values, args, err := requiredArguments("config set", []string{"<setting>", "<value>"}, args)
 	if err != nil {
 		return err
@@ -116,10 +116,10 @@ func runConfigSet(ctx context.Context, args []string, cwd string, stdout io.Writ
 	if enabled {
 		setting = core.AutoSyncEnabled
 	}
-	return writeProjectSetting(ctx, cwd, stdout, "config set", setting, strconv.FormatBool(enabled), *jsonMode)
+	return writeProjectSetting(ctx, cwd, stdout, stderr, "config set", setting, strconv.FormatBool(enabled), *jsonMode)
 }
 
-func runConfigUnset(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+func runConfigUnset(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
 	values, args, err := requiredArguments("config unset", []string{"<setting>"}, args)
 	if err != nil {
 		return err
@@ -132,7 +132,7 @@ func runConfigUnset(ctx context.Context, args []string, cwd string, stdout io.Wr
 	if values[0] != autoSyncSettingName {
 		return core.Errorf(core.CategoryInvocation, "unknown project setting %q", values[0])
 	}
-	return writeProjectSetting(ctx, cwd, stdout, "config unset", core.AutoSyncUnset, "unset", *jsonMode)
+	return writeProjectSetting(ctx, cwd, stdout, stderr, "config unset", core.AutoSyncUnset, "unset", *jsonMode)
 }
 
 // writeProjectSetting records a policy and reports whether doing so also
@@ -143,12 +143,13 @@ func writeProjectSetting(
 	ctx context.Context,
 	cwd string,
 	stdout io.Writer,
+	stderr io.Writer,
 	command string,
 	setting core.AutoSyncSetting,
 	display string,
 	jsonMode bool,
 ) error {
-	repository, before, err := openRepository(ctx, cwd)
+	repository, before, err := openRepository(ctx, cwd, stderr)
 	if err != nil {
 		return err
 	}
