@@ -419,10 +419,33 @@ dropped, so the route the reader deliberately went to while waiting is not taken
 away from them a second later. The refresh behind it still runs, which is the
 part that had to keep happening.
 
-A create is deliberately left out of this. Navigating away from a New Task form
-discards its draft whatever the server answers, so the loss there is the
-navigation rather than the refusal, and the create's own reporting path is the
-one that hands drafts back.
+**A create detached while it is in flight** is reported the same way, and hands
+its draft back with the report. This was left out when the save path was fixed,
+on the reasoning that a create's own reporting path already hands drafts back;
+what that missed is which create reaches this handler. A create that stages no
+relationships leaves the form the moment Save is pressed and *is* reported by
+that path, from wherever the reader landed. A create that stages them waits for
+the ID the server has not assigned yet, and that wait is the window: the reader
+gives up on it, and everything typed goes with the node along with the outcome.
+
+So the refusal goes to the notice in the shape a detached save uses — it names
+the draft, says the create was still open when the form was left, and quotes the
+server's sentence last — and the report carries the Restore draft control a
+refused create has always carried, which is now the only copy of those values in
+existence. Nothing is staged on a task's form the way a detached save's message
+is, and no route back is offered: the server refused to make the task, so there
+is neither a form to stage a message on nor a page to open. What the control
+cannot carry is the relationships staged beside the fields, because restoring
+renders a New Task form and a New Task form starts with an empty draft state.
+Both the notice and the restored form say so; a reader who restored and saved
+would otherwise create the task without the prerequisite they staged for it.
+
+A create that lands after its form is detached keeps the reader where they went,
+which it already did: the ownership check the relationship phase performs sees
+the route is gone and stops before the landing navigation, so nothing is
+announced and the created task arrives on the board through the refresh every
+create already performs. That is the same answer the landed save gives, and it is
+now pinned by a test rather than left to be re-derived from the ownership check.
 
 **The form follows its own writes.** The sidebar's dependency edges are the
 other thing that moves this task's head, and a "Depends On" edge is recorded on
@@ -552,6 +575,16 @@ absent and drives a hand-written fake DOM (`handler_test.go:4173`):
   on the conflict, because the link it drops would have led to "Task not found";
 - a save that lands after its form was detached leaves the reader on the route
   they went to instead of returning them to the board;
+- a create refused after its form was detached reports in the notice rather than
+  returning silently: it names the draft, says the create was still open when the
+  form was left, ends on the server's sentence, and offers no route to a task the
+  server refused to make;
+- that same report is holding the draft — Restore draft puts every typed field
+  back into a New Task form, which says the relationships staged beside them did
+  not come with them and shows none;
+- a create that lands after its form was detached leaves the reader on the route
+  they went to, pushes and replaces no route of its own, announces nothing, and
+  puts the new task on the board through the refresh it already performs;
 - a refused save whose forced refresh fails keeps the head the form rendered
   rather than the one the last poll left in the model, says the latest version
   could not be loaded instead of inviting a re-save, and re-bases as soon as a
