@@ -64,8 +64,7 @@ const (
 	//
 	// This one is a usability ceiling as much as a storage ceiling: every live
 	// status is a board column, and a board nobody can read on one screen has
-	// stopped being a board. It also bounds the fold, which is quadratic in the
-	// status count when it normalizes tags.
+	// stopped being a board.
 	MaxStatusCount = 24
 	// MaxStatusAliasCount bounds how many rename aliases the ledger may carry,
 	// and MaxStatusRetiredCount how many retirements.
@@ -81,6 +80,25 @@ const (
 	MaxStatusAliasCount   = 256
 	MaxStatusRetiredCount = 256
 )
+
+// The three status ceilings above are unlike every other ceiling in this file,
+// and the difference is worth stating where somebody raising one will read it.
+//
+// A task ceiling is a property of one document, decided by whoever wrote it: a
+// title is 500 bytes or it is not, and the clone that wrote an oversized one is
+// the clone that erred. The status ceilings are properties of a project that
+// several clones edit concurrently, so no single author decides them. Two
+// people adding a status on the same afternoon can carry a project past
+// MaxStatusCount without either one being told anything — there is no operation
+// either could have written differently.
+//
+// So these three are checked when a pack is authored (validateVocabularyGrowth,
+// reached from ValidateConfigAuthoring) and never when one is folded. A fold
+// that could fail on a count would let that pair of ordinary edits produce a
+// history no clone can ever read, and append-only means there is no repair: the
+// removal that would bring the project back under the ceiling sits behind the
+// fold that already failed. A folded state may therefore exceed one of these,
+// and that condition is reported rather than enforced.
 
 // statusTokenPattern is the one rule for a status name, everywhere.
 //

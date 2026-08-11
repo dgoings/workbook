@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -638,8 +640,17 @@ func TestApplyConfigConcurrencyMatrix(t *testing.T) {
 // Byte equality still matters where it is the actual claim: a clone re-applying
 // one history must reproduce one checkpoint, which is what
 // ValidateConfigCheckpoint asserts.
+// The forwarding arrays are compared by their domain — which tokens forward at
+// all — rather than element for element. Their destinations legitimately differ
+// between orderings and are covered transitively by Resolve, but the domain is
+// not: two documents can resolve every token they mention identically and still
+// disagree about whether a token is forwarded to a dead end or absent entirely,
+// which a later add of that name would turn into a real divergence.
 func observablyEqual(left, right ConfigStateDocument) bool {
 	if !reflect.DeepEqual(left.Config.Vocabulary.Statuses, right.Config.Vocabulary.Statuses) {
+		return false
+	}
+	if !reflect.DeepEqual(forwardedTokens(left), forwardedTokens(right)) {
 		return false
 	}
 	leftVocabulary, rightVocabulary := left.Vocabulary(), right.Vocabulary()
@@ -651,6 +662,20 @@ func observablyEqual(left, right ConfigStateDocument) bool {
 		}
 	}
 	return true
+}
+
+// forwardedTokens returns the sorted set of tokens the document forwards, by
+// either chain.
+func forwardedTokens(state ConfigStateDocument) []Status {
+	tokens := []Status{}
+	for _, alias := range state.Config.Vocabulary.Aliases {
+		tokens = append(tokens, alias.From)
+	}
+	for _, entry := range state.Config.Vocabulary.Retired {
+		tokens = append(tokens, entry.Status)
+	}
+	sort.Slice(tokens, func(left, right int) bool { return tokens[left] < tokens[right] })
+	return tokens
 }
 
 // mentionedStatuses collects every status token either document names, which is
@@ -895,6 +920,153 @@ func operationSubject(operation ConfigOperation) Status {
 		return operation.From
 	default:
 		return operation.Status
+	}
+}
+
+// crowdedVocabulary is a project sitting one status below the ceiling.
+func crowdedVocabulary(t *testing.T, count int) Vocabulary {
+	t.Helper()
+	definitions := make([]StatusDefinition, 0, count)
+	for index := range count {
+		definition := StatusDefinition{
+			Status: Status("s" + strconv.Itoa(index)),
+			Label:  "S" + strconv.Itoa(index),
+			Rank:   strconv.Itoa(index+1) + "/1",
+			Tags:   []StatusTag{},
+		}
+		switch index {
+		case 0:
+			definition.Tags = []StatusTag{StatusTagDefault, StatusTagNext}
+		case count - 1:
+			definition.Tags = []StatusTag{StatusTagDone}
+		}
+		definitions = append(definitions, definition)
+	}
+	vocabulary, err := NewVocabulary(definitions, nil, nil)
+	if err != nil {
+		t.Fatalf("NewVocabulary() error = %v", err)
+	}
+	return vocabulary
+}
+
+// A ceiling enforced inside the fold is a way to brick a repository, and this
+// is the case that does it.
+//
+// A project sits one status below MaxStatusCount. Two clones each add one.
+// Neither author erred — the authoring gate accepts both, because each is
+// proposing the status that reaches the ceiling exactly — and there is no
+// operation either could have written instead. If the fold counted, replaying
+// either pack onto the other's checkpoint would fail, and would keep failing on
+// every clone forever: history is append-only, so the status.remove that would
+// bring the project back under sits behind a fold that already refused to run.
+//
+// So the fold does not count. The project is allowed to sit over the ceiling,
+// and authoring refuses to make it worse until somebody removes a status.
+func TestApplyConfigFoldsPastTheStatusCeilingThatAuthoringWouldRefuse(t *testing.T) {
+	base := genesisState(t, crowdedVocabulary(t, MaxStatusCount-1))
+	ours := []ConfigOperation{add("ours", "Ours", "97/1")}
+	theirs := []ConfigOperation{add("theirs", "Theirs", "98/1")}
+
+	// Both authors are told yes, because each one alone lands exactly on the
+	// ceiling.
+	for name, batch := range map[string][]ConfigOperation{"ours": ours, "theirs": theirs} {
+		pack := configPack(base.LogicalClock+1, identify(0, batch)...)
+		if err := ValidateConfigAuthoring(&base, pack); err != nil {
+			t.Fatalf("ValidateConfigAuthoring(%s) error = %v, want it accepted", name, err)
+		}
+	}
+
+	oursFirst := fold(t, base, ours, theirs)
+	theirsFirst := fold(t, base, theirs, ours)
+
+	for name, state := range map[string]ConfigStateDocument{"ours": oursFirst, "theirs": theirsFirst} {
+		if got, want := len(state.Config.Vocabulary.Statuses), MaxStatusCount+1; got != want {
+			t.Fatalf("%s first: %d statuses, want %d", name, got, want)
+		}
+		if err := state.Vocabulary().Validate(); err != nil {
+			t.Fatalf("%s first: Validate() error = %v", name, err)
+		}
+		// The over-ceiling checkpoint is a durable document like any other.
+		encoded := mustEncode(t, state)
+		if _, err := DecodeConfigStateDocument(encoded); err != nil {
+			t.Fatalf("%s first: DecodeConfigStateDocument() error = %v", name, err)
+		}
+	}
+	if !observablyEqual(oursFirst, theirsFirst) {
+		t.Fatal("the two orderings did not converge")
+	}
+
+	// Authoring now refuses to grow the project further...
+	overflow := configPack(oursFirst.LogicalClock+1, identify(0, []ConfigOperation{
+		add("another", "Another", "99/1"),
+	})...)
+	if err := ValidateConfigAuthoring(&oursFirst, overflow); err == nil {
+		t.Fatal("ValidateConfigAuthoring() accepted a status past the ceiling, want a refusal")
+	} else if got := CategoryOf(err); got != CategoryValidation {
+		t.Fatalf("ValidateConfigAuthoring() category = %q, want %q", got, CategoryValidation)
+	}
+	// ...but the same pack still folds, because it may already have happened
+	// somewhere.
+	if _, err := ApplyConfig(&oursFirst, overflow); err != nil {
+		t.Fatalf("ApplyConfig() error = %v, want the fold to accept what authoring refused", err)
+	}
+
+	// And the way back under is open: a removal is accepted while over.
+	shrink := configPack(oursFirst.LogicalClock+1, identify(0, []ConfigOperation{
+		remove("ours", "theirs"),
+	})...)
+	if err := ValidateConfigAuthoring(&oursFirst, shrink); err != nil {
+		t.Fatalf("ValidateConfigAuthoring(remove) error = %v, want it accepted while over the ceiling", err)
+	}
+	shrunk, err := ApplyConfig(&oursFirst, shrink)
+	if err != nil {
+		t.Fatalf("ApplyConfig(remove) error = %v", err)
+	}
+	if got, want := len(shrunk.Config.Vocabulary.Statuses), MaxStatusCount; got != want {
+		t.Fatalf("after removal: %d statuses, want %d", got, want)
+	}
+}
+
+// The same shape for the forwarding ceilings, which is where it bites hardest:
+// nothing drops an alias, so a fold that counted them would be a countdown to
+// an unreadable repository rather than a limit anybody could stay under.
+func TestApplyConfigFoldsPastTheAliasCeiling(t *testing.T) {
+	renames := make([]ConfigOperation, 0, MaxStatusAliasCount+1)
+	for index := range MaxStatusAliasCount + 1 {
+		renames = append(renames, rename(
+			Status("n"+strconv.Itoa(index)),
+			Status("n"+strconv.Itoa(index+1)),
+		))
+	}
+
+	base := genesisState(t, func() Vocabulary {
+		vocabulary, err := NewVocabulary([]StatusDefinition{
+			{Status: "n0", Label: "Renamed", Rank: "1/1", Tags: []StatusTag{StatusTagDefault, StatusTagNext, StatusTagDone}},
+		}, nil, nil)
+		if err != nil {
+			t.Fatalf("NewVocabulary() error = %v", err)
+		}
+		return vocabulary
+	}())
+
+	pack := configPack(base.LogicalClock+1, identify(0, renames)...)
+	state, err := ApplyConfig(&base, pack)
+	if err != nil {
+		t.Fatalf("ApplyConfig() error = %v, want a fold that does not count aliases", err)
+	}
+	if got, want := len(state.Config.Vocabulary.Aliases), MaxStatusAliasCount+1; got != want {
+		t.Fatalf("aliases = %d, want %d", got, want)
+	}
+	// The whole chain still resolves, which is the property the ceiling exists
+	// to keep affordable rather than to guarantee.
+	if resolved, live := state.Vocabulary().Resolve("n0"); !live || resolved != Status("n"+strconv.Itoa(MaxStatusAliasCount+1)) {
+		t.Fatalf("Resolve(n0) = (%q, %t), want the end of the chain", resolved, live)
+	}
+	if _, err := DecodeConfigStateDocument(mustEncode(t, state)); err != nil {
+		t.Fatalf("DecodeConfigStateDocument() error = %v", err)
+	}
+	if err := ValidateConfigAuthoring(&base, pack); err == nil {
+		t.Fatal("ValidateConfigAuthoring() accepted a pack past the alias ceiling, want a refusal")
 	}
 }
 

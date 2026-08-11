@@ -209,14 +209,26 @@ func TestStatusCeilingsAcceptExactlyTheirLimit(t *testing.T) {
 		t.Fatalf("validateStatusLabel(%d bytes) error = nil, want a rejection", len(label)+1)
 	}
 
-	if _, err := NewVocabulary(manyStatuses(MaxStatusCount), nil, nil); err != nil {
-		t.Fatalf("NewVocabulary(%d statuses) error = %v", MaxStatusCount, err)
+	// The count ceilings are authoring rules, so the boundary is pinned on the
+	// authoring check rather than on the constructor.
+	none := VocabularyDocument{}
+	if err := validateVocabularyGrowth(none, VocabularyDocument{Statuses: manyStatuses(MaxStatusCount)}); err != nil {
+		t.Fatalf("authoring %d statuses error = %v", MaxStatusCount, err)
 	}
-	if _, err := NewVocabulary(manyStatuses(1), manyAliases(MaxStatusAliasCount), nil); err != nil {
-		t.Fatalf("NewVocabulary(%d aliases) error = %v", MaxStatusAliasCount, err)
+	if err := validateVocabularyGrowth(none, VocabularyDocument{Statuses: manyStatuses(MaxStatusCount + 1)}); err == nil {
+		t.Fatalf("authoring %d statuses error = nil, want a refusal", MaxStatusCount+1)
 	}
-	if _, err := NewVocabulary(manyStatuses(1), nil, manyRetirements(MaxStatusRetiredCount)); err != nil {
-		t.Fatalf("NewVocabulary(%d retirements) error = %v", MaxStatusRetiredCount, err)
+	if err := validateVocabularyGrowth(none, VocabularyDocument{Aliases: manyAliases(MaxStatusAliasCount)}); err != nil {
+		t.Fatalf("authoring %d aliases error = %v", MaxStatusAliasCount, err)
+	}
+	if err := validateVocabularyGrowth(none, VocabularyDocument{Aliases: manyAliases(MaxStatusAliasCount + 1)}); err == nil {
+		t.Fatalf("authoring %d aliases error = nil, want a refusal", MaxStatusAliasCount+1)
+	}
+	if err := validateVocabularyGrowth(none, VocabularyDocument{Retired: manyRetirements(MaxStatusRetiredCount)}); err != nil {
+		t.Fatalf("authoring %d retirements error = %v", MaxStatusRetiredCount, err)
+	}
+	if err := validateVocabularyGrowth(none, VocabularyDocument{Retired: manyRetirements(MaxStatusRetiredCount + 1)}); err == nil {
+		t.Fatalf("authoring %d retirements error = nil, want a refusal", MaxStatusRetiredCount+1)
 	}
 }
 

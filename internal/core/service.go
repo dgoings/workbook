@@ -160,19 +160,21 @@ func (s Service) CreateMutation(ctx context.Context, input CreateInput) (Mutatio
 
 // List returns the project's tasks, filtered and ordered.
 //
-// A status filter naming a status this project does not define is not an error.
-// Under a distributed vocabulary it is an ordinary thing to type: a teammate
-// added a status and the configuration has not been fetched here yet, or one
-// was renamed and a script still names the old token. Failing would tell the
-// caller their repository is broken when it is merely behind. The filter
-// matches nothing, an empty list comes back, and the caller decides how loudly
-// to say so — the CLI grows that warning in PR-C, where there is a terminal to
-// say it on.
+// A status filter outside the vocabulary is still rejected, exactly as it was
+// before per-project statuses existed, and deliberately so.
+//
+// Relaxing it is the right end state: under a distributed vocabulary, naming a
+// status this clone has not fetched yet is an ordinary thing to type, and
+// failing tells the caller their repository is broken when it is merely behind.
+// But an empty table and a zero exit status is a worse answer than a clear
+// refusal — a script that greps the output would silently start finding
+// nothing. The relaxation is only honest once the result envelope can carry
+// "no such status here; the configuration may be behind", and that surface is
+// the CLI's warning path, which this PR does not touch. PR-C relaxes this check
+// and adds the warning in the same change.
 func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
-	if filter.Status != nil {
-		if err := validateStatusToken(*filter.Status); err != nil {
-			return nil, err
-		}
+	if filter.Status != nil && !s.vocabulary().Has(*filter.Status) {
+		return nil, Errorf(CategoryValidation, "invalid task status %q", *filter.Status)
 	}
 	if filter.Priority != nil && !isValidPriority(*filter.Priority) {
 		return nil, Errorf(CategoryValidation, "invalid task priority %q", *filter.Priority)

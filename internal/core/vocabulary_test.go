@@ -181,15 +181,6 @@ func TestNewVocabularyRejectsMalformedDefinitions(t *testing.T) {
 		"unknown tag": {
 			definitions: []StatusDefinition{{Status: "todo", Label: "Todo", Rank: "1/1", Tags: []StatusTag{"urgent"}}},
 		},
-		"too many statuses": {definitions: manyStatuses(MaxStatusCount + 1)},
-		"too many aliases": {
-			definitions: valid,
-			aliases:     manyAliases(MaxStatusAliasCount + 1),
-		},
-		"too many retirements": {
-			definitions: valid,
-			retired:     manyRetirements(MaxStatusRetiredCount + 1),
-		},
 		"self alias": {
 			definitions: valid,
 			aliases:     []StatusAlias{{From: "old", To: "old"}},
@@ -213,6 +204,46 @@ func TestNewVocabularyRejectsMalformedDefinitions(t *testing.T) {
 				t.Fatalf("NewVocabulary() category = %q, want %q", got, CategoryValidation)
 			}
 		})
+	}
+}
+
+// A size ceiling is not a shape rule, and NewVocabulary must represent a
+// vocabulary that is over one. The fold can reach that state without any author
+// asking for it, and a value this package refuses to construct is a value the
+// fold cannot produce.
+func TestNewVocabularyRepresentsAVocabularyOverEveryCeiling(t *testing.T) {
+	if _, err := NewVocabulary(manyStatuses(MaxStatusCount+1), nil, nil); err != nil {
+		t.Fatalf("NewVocabulary(%d statuses) error = %v", MaxStatusCount+1, err)
+	}
+	if _, err := NewVocabulary(manyStatuses(1), manyAliases(MaxStatusAliasCount+1), nil); err != nil {
+		t.Fatalf("NewVocabulary(%d aliases) error = %v", MaxStatusAliasCount+1, err)
+	}
+	if _, err := NewVocabulary(manyStatuses(1), nil, manyRetirements(MaxStatusRetiredCount+1)); err != nil {
+		t.Fatalf("NewVocabulary(%d retirements) error = %v", MaxStatusRetiredCount+1, err)
+	}
+}
+
+// Growth past a ceiling is refused; shrinkage while over one is not. A rule
+// that refused every pack while over a ceiling would refuse the removals that
+// are the only way back under it.
+func TestValidateVocabularyGrowthRefusesOnlyGrowth(t *testing.T) {
+	over := VocabularyDocument{Statuses: manyStatuses(MaxStatusCount + 1)}
+	atCeiling := VocabularyDocument{Statuses: manyStatuses(MaxStatusCount)}
+	further := VocabularyDocument{Statuses: manyStatuses(MaxStatusCount + 2)}
+
+	if err := validateVocabularyGrowth(atCeiling, over); err == nil {
+		t.Fatal("growth past the status ceiling was allowed, want a refusal")
+	} else if !strings.Contains(err.Error(), "workbook status remove") {
+		t.Fatalf("refusal = %q, want it to name the removing command", err)
+	}
+	if err := validateVocabularyGrowth(over, further); err == nil {
+		t.Fatal("further growth while over the ceiling was allowed, want a refusal")
+	}
+	if err := validateVocabularyGrowth(over, atCeiling); err != nil {
+		t.Fatalf("shrinking back to the ceiling was refused: %v", err)
+	}
+	if err := validateVocabularyGrowth(over, over); err != nil {
+		t.Fatalf("a pack that holds the count steady while over was refused: %v", err)
 	}
 }
 

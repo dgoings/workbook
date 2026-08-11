@@ -112,11 +112,12 @@ type Vocabulary struct {
 }
 
 // NewVocabulary builds a vocabulary from a status set and its forwarding
-// chains. It validates shape — tokens, labels, ceilings, uniqueness, rank
-// syntax, and the absence of a forwarding cycle — but not arity: a vocabulary
-// with no default is a state the fold can reach from a peer's operations, and
-// refusing to represent it here would only move the failure somewhere it cannot
-// be reported. Call Validate for the arity rules.
+// chains. It validates shape — tokens, labels, uniqueness, rank syntax, and the
+// absence of a forwarding cycle — but neither arity nor the size ceilings: both
+// are states the fold can reach from a peer's operations, and refusing to
+// represent one here would only move the failure somewhere it cannot be
+// reported. Validate covers arity, and ValidateConfigAuthoring covers the
+// ceilings, both before a pack is written rather than while one is folded.
 func NewVocabulary(definitions []StatusDefinition, aliases []StatusAlias, retired []RetiredStatus) (Vocabulary, error) {
 	normalized, err := normalizeVocabularyDocument(VocabularyDocument{
 		Statuses: definitions,
@@ -351,6 +352,50 @@ func (vocabulary Vocabulary) Validate() error {
 	return nil
 }
 
+// validateVocabularyGrowth refuses a pack that would push a project past a
+// ceiling, and only when the pack is what pushes it there.
+//
+// The comparison is against the parent rather than against the ceiling alone,
+// and that is the whole design. A folded state may already sit over a ceiling —
+// two clones adding a status concurrently is enough — and a rule that refused
+// every pack while over one would refuse the removals that bring the project
+// back under, which is the only way out. So growth is refused and shrinkage is
+// always allowed.
+//
+// Every message names what to do about it. The alias and retirement ceilings
+// cannot name a command, because nothing drops a forwarding pointer yet: they
+// stand in for a compaction pass, and the message says so rather than sending
+// somebody looking for a flag that does not exist.
+func validateVocabularyGrowth(before, after VocabularyDocument) error {
+	if len(after.Statuses) > MaxStatusCount && len(after.Statuses) > len(before.Statuses) {
+		return Errorf(
+			CategoryValidation,
+			"the project would define %d statuses and must not exceed %d; "+
+				"remove one first: workbook status remove <status> --into <status>",
+			len(after.Statuses), MaxStatusCount,
+		)
+	}
+	if len(after.Aliases) > MaxStatusAliasCount && len(after.Aliases) > len(before.Aliases) {
+		return Errorf(
+			CategoryValidation,
+			"the project has recorded %d status renames and must not exceed %d; "+
+				"nothing can drop a rename yet, because a clone that has not fetched it "+
+				"still needs it to read tasks stored under the old name",
+			len(after.Aliases), MaxStatusAliasCount,
+		)
+	}
+	if len(after.Retired) > MaxStatusRetiredCount && len(after.Retired) > len(before.Retired) {
+		return Errorf(
+			CategoryValidation,
+			"the project has recorded %d status removals and must not exceed %d; "+
+				"nothing can drop a removal yet, because a clone that has not fetched it "+
+				"still needs it to read tasks stored under the removed name",
+			len(after.Retired), MaxStatusRetiredCount,
+		)
+	}
+	return nil
+}
+
 // builtInStatusDefinitions is the six-status workflow Workbook has shipped
 // since its first release, in its stored form.
 //
@@ -413,17 +458,27 @@ func mustVocabulary(definitions []StatusDefinition) Vocabulary {
 //
 // Sorting here rather than at encode time is what makes the checkpoint's bytes
 // a property of the configuration instead of a property of whoever wrote it.
+//
+// It checks shape and never counts. MaxStatusCount used to be enforced here,
+// and that was a latent way to brick a repository: this function runs inside
+// ApplyConfig, so a project one status below the ceiling where two clones each
+// add one concurrently would produce a pack that folds on neither clone —
+// permanently, because history is append-only and the removal that would fix it
+// can never be reached by a fold that fails first. Both authors would have been
+// refused nothing; neither did anything wrong. The ceilings are therefore an
+// authoring rule only, checked by validateVocabularyGrowth from
+// ValidateConfigAuthoring, and a folded state is allowed to sit over one.
+//
+// Surfacing that condition is a later change: PR-B reports it through
+// historyvalidation's advisories, and PR-C's status list says so where a person
+// can act on it. Any read-time ceiling added afterwards must bound resource use
+// — how much this process is willing to allocate for a document — and must
+// never decide whether a checkpoint computes, which is the mistake this comment
+// records.
 func normalizeVocabularyDocument(document VocabularyDocument) (VocabularyDocument, error) {
 	statuses := make([]StatusDefinition, 0, len(document.Statuses))
 	ranks := make(map[Status]*big.Rat, len(document.Statuses))
 	seen := make(map[Status]struct{}, len(document.Statuses))
-	if len(document.Statuses) > MaxStatusCount {
-		return VocabularyDocument{}, Errorf(
-			CategoryValidation,
-			"the project defines %d statuses and must not exceed %d",
-			len(document.Statuses), MaxStatusCount,
-		)
-	}
 	for _, definition := range document.Statuses {
 		if err := validateStatusToken(definition.Status); err != nil {
 			return VocabularyDocument{}, err
@@ -530,14 +585,11 @@ func normalizeStatusTags(tags []StatusTag) ([]StatusTag, error) {
 	return normalized, nil
 }
 
+// MaxStatusAliasCount is not checked here, for the reason
+// normalizeVocabularyDocument records: a count enforced inside the fold can
+// make a legitimate concurrent pair unfoldable forever. It is an authoring
+// ceiling, in validateVocabularyGrowth.
 func normalizeStatusAliases(aliases []StatusAlias) ([]StatusAlias, error) {
-	if len(aliases) > MaxStatusAliasCount {
-		return nil, Errorf(
-			CategoryValidation,
-			"the project carries %d status aliases and must not exceed %d",
-			len(aliases), MaxStatusAliasCount,
-		)
-	}
 	normalized := make([]StatusAlias, 0, len(aliases))
 	for _, alias := range aliases {
 		if err := validateStatusToken(alias.From); err != nil {
@@ -557,14 +609,8 @@ func normalizeStatusAliases(aliases []StatusAlias) ([]StatusAlias, error) {
 	return normalized, nil
 }
 
+// MaxStatusRetiredCount is not checked here either; see normalizeStatusAliases.
 func normalizeRetiredStatuses(retired []RetiredStatus) ([]RetiredStatus, error) {
-	if len(retired) > MaxStatusRetiredCount {
-		return nil, Errorf(
-			CategoryValidation,
-			"the project carries %d retired statuses and must not exceed %d",
-			len(retired), MaxStatusRetiredCount,
-		)
-	}
 	normalized := make([]RetiredStatus, 0, len(retired))
 	for _, entry := range retired {
 		if err := validateStatusToken(entry.Status); err != nil {

@@ -110,29 +110,38 @@ func TestServiceMutationsRejectAStatusTheProjectDoesNotDefine(t *testing.T) {
 	}
 }
 
-// A filter naming a status this clone has not heard of is behind, not broken.
-// It matches nothing and the caller decides how loudly to say so.
-func TestServiceListFiltersRatherThanFailingOnAnUnknownStatus(t *testing.T) {
+// The filter still refuses a status the project does not define, with the same
+// category and the same message it used before per-project statuses existed. An
+// empty table and a zero exit status would be a worse answer than a refusal
+// until the result envelope can explain itself, which is PR-C's change.
+func TestServiceListStillRejectsAStatusOutsideTheVocabulary(t *testing.T) {
 	store := newMemoryTaskStore(serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F1", TaskData{
 		Title: "Task", Status: "triage", Priority: PriorityMedium, Rank: "1/1",
 	}))
 	service := vocabularyServiceUnderTest(store, &sequenceIDSource{}, customVocabulary(t))
 
-	unknown := Status("awaiting-review")
-	tasks, err := service.List(context.Background(), ListFilter{Status: &unknown})
+	for _, filtered := range []Status{"awaiting-review", "backlog", "Awaiting Review"} {
+		status := filtered
+		_, err := service.List(context.Background(), ListFilter{Status: &status})
+		if err == nil {
+			t.Fatalf("List(%q) error = nil, want a rejection", status)
+		}
+		if got := CategoryOf(err); got != CategoryValidation {
+			t.Fatalf("List(%q) category = %q, want %q", status, got, CategoryValidation)
+		}
+		if got, want := err.Error(), `invalid task status "`+string(status)+`"`; got != want {
+			t.Fatalf("List(%q) error = %q, want %q", status, got, want)
+		}
+	}
+
+	// A status the project does define still filters.
+	live := Status("triage")
+	tasks, err := service.List(context.Background(), ListFilter{Status: &live})
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
-	if got := len(tasks); got != 0 {
-		t.Fatalf("List() returned %d tasks, want none", got)
-	}
-
-	// A value that is not a status token at all is still a caller mistake.
-	malformed := Status("Awaiting Review")
-	if _, err := service.List(context.Background(), ListFilter{Status: &malformed}); err == nil {
-		t.Fatal("List() error = nil, want a rejection of a malformed filter")
-	} else if got := CategoryOf(err); got != CategoryValidation {
-		t.Fatalf("List() category = %q, want %q", got, CategoryValidation)
+	if got := len(tasks); got != 1 {
+		t.Fatalf("List() returned %d tasks, want 1", got)
 	}
 }
 

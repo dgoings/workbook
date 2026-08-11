@@ -195,6 +195,11 @@ func ApplyConfig(parent *ConfigStateDocument, pack ConfigOperationPack) (ConfigS
 // done fails here with a message naming the command that fixes it; the same
 // pack arriving from a peer folds cleanly, because the peer's clone already
 // treats it as history.
+//
+// It is also the only place the size ceilings are enforced. A ceiling has to be
+// asked before a pack exists rather than while folding one: a fold that can
+// fail on a count can be made to fail forever by two clones doing something
+// each was allowed to do.
 func ValidateConfigAuthoring(parent *ConfigStateDocument, pack ConfigOperationPack) error {
 	vocabulary, _, err := applyConfigOperations(parent, pack)
 	if err != nil {
@@ -202,6 +207,13 @@ func ValidateConfigAuthoring(parent *ConfigStateDocument, pack ConfigOperationPa
 	}
 	document, err := vocabulary.document()
 	if err != nil {
+		return err
+	}
+	var before VocabularyDocument
+	if parent != nil {
+		before = parent.Config.Vocabulary
+	}
+	if err := validateVocabularyGrowth(before, document); err != nil {
 		return err
 	}
 	return newVocabularyFromCanonical(document).Validate()
