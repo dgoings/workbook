@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"testing"
 	"time"
+
+	"github.com/dgoings/workbook/internal/perf/proctest"
 )
 
 const (
@@ -201,4 +203,22 @@ func TestDirectoryBytesSumsEveryRegularFile(t *testing.T) {
 	if missing != 0 {
 		t.Fatalf("absent directory bytes = %d, want 0", missing)
 	}
+}
+
+// TestMeasureCommandResourcesReapsDescendantOfCommandThatExits covers the way a
+// resource measurement leaves a descendant behind without ever timing out: the
+// measured command finishes, so the cancellation that kills the process group
+// never runs, and a background descendant it started keeps burning a core after
+// the measurement reported a clean exit.
+func TestMeasureCommandResourcesReapsDescendantOfCommandThatExits(t *testing.T) {
+	childPIDPath := filepath.Join(t.TempDir(), "child.pid")
+	proctest.ReapRecordedProcessGroup(t, childPIDPath)
+	measurement := MeasureCommandResources(context.Background(), CommandSpec{
+		Binary: proctest.Shell, Args: proctest.ExitingLeaderArgs(childPIDPath),
+		Directory: t.TempDir(), Timeout: 30 * time.Second,
+	})
+	if measurement.ExitCode != 0 || measurement.TimedOut || measurement.Error != "" {
+		t.Fatalf("measurement = %#v", measurement)
+	}
+	proctest.RequireDescendantTerminated(t, childPIDPath)
 }

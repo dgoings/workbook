@@ -723,6 +723,9 @@ func commandOutput(ctx context.Context, timeout time.Duration, binary string, ar
 	}
 	command.WaitDelay = commandWaitDelay
 	output, err := command.CombinedOutput()
+	// This helper reports no duration, so the reap has no stamp to follow and
+	// runs as soon as the command is waited on.
+	perf.ReapProcessGroup(command.Process)
 	if commandContext.Err() == context.DeadlineExceeded {
 		return "", fmt.Errorf("%s %s timed out after %s", binary, strings.Join(args, " "), timeout)
 	}

@@ -127,6 +127,9 @@ func MeasureCommandResources(ctx context.Context, spec CommandSpec) ResourceMeas
 	startedAt := time.Now()
 	err := command.Run()
 	elapsed := time.Since(startedAt)
+	// Reap only once the elapsed time is stamped, so the kill(2) is the
+	// harness's cost rather than the measured command's.
+	ReapProcessGroup(command.Process)
 	measurement.Milliseconds = durationAsMilliseconds(elapsed)
 	measurement.Stdout = append([]byte(nil), stdout.Bytes()...)
 	measurement.Stderr = append([]byte(nil), stderr.Bytes()...)

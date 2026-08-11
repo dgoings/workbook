@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/dgoings/workbook/internal/perf"
+	"github.com/dgoings/workbook/internal/perf/proctest"
 )
 
 func TestRunResolvesRelativeWorkbookBinaryAndWritesCompletePerformanceReport(t *testing.T) {
@@ -1190,4 +1191,19 @@ func TestValidateOptionsRejectsWatcherFixtureShortfall(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestCommandOutputReapsDescendantOfCommandThatExits covers the bench's own
+// exec site. It reads the environment the report describes, so every command it
+// runs is expected to exit on its own, and nothing cancels a command that
+// exits: a descendant one of them backgrounded outlives the whole benchmark run
+// unless the site reaps the process group it put the command in.
+func TestCommandOutputReapsDescendantOfCommandThatExits(t *testing.T) {
+	childPIDPath := filepath.Join(t.TempDir(), "child.pid")
+	proctest.ReapRecordedProcessGroup(t, childPIDPath)
+	output, err := commandOutput(context.Background(), 30*time.Second, proctest.Shell, proctest.ExitingLeaderArgs(childPIDPath)...)
+	if err != nil || output != "" {
+		t.Fatalf("commandOutput() = %q, %v", output, err)
+	}
+	proctest.RequireDescendantTerminated(t, childPIDPath)
 }
