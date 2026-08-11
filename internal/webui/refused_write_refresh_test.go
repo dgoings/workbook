@@ -25,10 +25,16 @@ import (
 // "superseded" like a refresh that never read anything, and treating the two
 // alike calls a board that is showing the server's version an outage.
 
+// The fourth is the other end of that line: a refresh that read the board and
+// found the task gone. The board is the server's, so this is not an outage, and
+// there is no version left to save against either — which is the one refusal
+// the invitation to save again must never be printed over.
+
 const (
 	refusedRefreshBoardTaskID  = "WB-01J0000000000000000000RR01"
 	refusedRefreshDetailTaskID = "WB-01J0000000000000000000RR02"
 	refusedRefreshSupersededID = "WB-01J0000000000000000000RR03"
+	refusedRefreshDeletedID    = "WB-01J0000000000000000000RR04"
 )
 
 // A stale write whose forced refresh fails leaves the queue holding a head the
@@ -457,5 +463,103 @@ setTimeout(async () => {
 `
 	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute stale-write behavior when only the relationship context is superseded: %v\n%s", err, output)
+	}
+}
+
+// The refusal a detail form meets most often is a task another clone deleted,
+// and the refresh it forces reads the board and finds nothing to re-base onto.
+// That is not the failed refresh above — the board is the server's — but the
+// invitation is just as doomed: the server holds no version of this task, the
+// head the form proposes stays the refused one, and every save made against it
+// is refused identically. The form says what is true instead of asking for a
+// retry it cannot honor, and the edits stay where the reader typed them.
+func TestHandlerClientDetailFormDoesNotInviteARetryOntoADeletedTask(t *testing.T) {
+	node := requireNode(t)
+	task := clientPlacementTask(refusedRefreshDeletedID, "Deleted while edited", core.StatusReady, core.PriorityMedium)
+	task.Head = "head-1"
+	task.Description = "Original."
+	tasks := []core.Task{task}
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+task.ID)
+	script := renderedClientScript(t, response.Body.String())
+	document := mustJSON(t, TasksDocument{
+		Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks),
+	})
+	emptied := mustJSON(t, TasksDocument{
+		Format: "workbook.tasks", Version: 1, Tasks: []core.Task{}, Presentation: []TaskPresentation{},
+	})
+
+	program := clientDOMHarness("/tasks/"+task.ID, string(document)) + script + `
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const boardFetch = globalThis.fetch;
+  const bodies = [];
+  globalThis.fetch = async (url, options = {}) => {
+    if ((options.method || "GET") !== "GET") {
+      fetchCalls.push({ url, options });
+      bodies.push(JSON.parse(options.body));
+      // The deletion and the refusal are the same event, so the refresh this
+      // refusal forces is the one that reads a board without the task on it.
+      taskResponse = ` + string(emptied) + `;
+      return { ok: false, json: async () => ({
+        format: "workbook.error", version: 1,
+        error: { category: "stale-write", message: "task has changed since head-1; reload and try again" }
+      }) };
+    }
+    return boardFetch(url, options);
+  };
+
+  const section = main.firstElementChild;
+  const form = findElement(main, (element) => element.tagName === "FORM");
+  const description = findElement(main, (element) => element.id === "task-description");
+  const result = findElement(main, (element) => Object.hasOwn(element.dataset, "saveStatus"));
+  if (!form || !description || !result) throw new Error("the detail form did not render");
+  const typed = "Written into a task that was already gone.";
+  description.value = typed;
+
+  await form.eventListeners.submit({ preventDefault() {} });
+  if (bodies.length !== 1 || bodies[0].expectedHead !== "head-1") {
+    throw new Error("the refused save did not carry the head the form rendered: " + JSON.stringify(bodies));
+  }
+  // A reader mid-sentence keeps their sentence and their form.
+  if (main.firstElementChild !== section) {
+    throw new Error("the refusal took the reader off the form they were writing in");
+  }
+  if (description.value !== typed) {
+    throw new Error("the refusal discarded the user's edits");
+  }
+  if (historyPaths.length !== 0) {
+    throw new Error("a refused save navigated away");
+  }
+  if (!result.textContent.includes("deleted")) {
+    throw new Error("the form does not say the task is gone: " + JSON.stringify(result.textContent));
+  }
+  // The invitation, in either of the two wordings that carry it. Both promise a
+  // version the server does not hold.
+  if (result.textContent.includes("save again")) {
+    throw new Error("the form invited a retry that cannot land: " + JSON.stringify(result.textContent));
+  }
+  // Nor is this the outage. The board was read; it is the task that is gone.
+  if (result.textContent.includes("could not be loaded")) {
+    throw new Error("a board the refresh read was reported as unreadable: " + JSON.stringify(result.textContent));
+  }
+
+  // The retry the old copy invited, made anyway. It is refused against the same
+  // head — nothing has moved and nothing can — and the form says the same thing
+  // rather than starting to promise a version that still does not exist.
+  const save = findElement(main, (element) => element.tagName === "BUTTON" && element.textContent === "Save");
+  if (save.disabled) throw new Error("the refusal left Save disabled");
+  await form.eventListeners.submit({ preventDefault() {} });
+  if (bodies.length !== 2 || bodies[1].expectedHead !== "head-1") {
+    throw new Error("the retry did not carry the head the form rendered: " + JSON.stringify(bodies));
+  }
+  if (result.textContent.includes("save again")) {
+    throw new Error("the second refusal invited the same doomed retry: " + JSON.stringify(result.textContent));
+  }
+}, 0);
+`
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute refused save behavior when the refresh finds the task deleted: %v\n%s", err, output)
 	}
 }

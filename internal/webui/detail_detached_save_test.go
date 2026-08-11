@@ -25,6 +25,7 @@ const (
 	detachedSaveStaleTaskID   = "WB-01J0000000000000000000DS02"
 	detachedSaveLandedTaskID  = "WB-01J0000000000000000000DS03"
 	detachedSaveOtherTaskID   = "WB-01J0000000000000000000DS04"
+	detachedSaveDeletedTaskID = "WB-01J0000000000000000000DS05"
 )
 
 // The reader saves, gives up on a slow request and takes the Back link to the
@@ -307,5 +308,120 @@ setTimeout(async () => {
 `
 	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute detached landed save behavior: %v\n%s", err, output)
+	}
+}
+
+// The report offers the way back to the task it is about, which is only an offer
+// when there is a task to go back to. A `stale-write` refusal forces a refresh
+// before the form is given up on, and when that refresh reads the board and no
+// longer finds the task, the offer leads to "Task not found" — the one page this
+// client goes out of its way not to drop a reader on. The proof is in hand at
+// exactly that moment, so the link goes and the report says why.
+//
+// The reader leaves while the forced refresh is still open, because that is the
+// only path on which a detached report knows what a refresh found.
+func TestHandlerClientDetachedDetailSaveDoesNotOfferADeletedTask(t *testing.T) {
+	node := requireNode(t)
+	task := clientPlacementTask(detachedSaveDeletedTaskID, "Deleted while saving", core.StatusReady, core.PriorityMedium)
+	task.Head = "head-1"
+	task.Description = "Original."
+	tasks := []core.Task{task}
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
+
+	response := request(t, handler, http.MethodGet, "/tasks/"+task.ID)
+	script := renderedClientScript(t, response.Body.String())
+	document := mustJSON(t, TasksDocument{
+		Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks),
+	})
+	emptied := mustJSON(t, TasksDocument{
+		Format: "workbook.tasks", Version: 1, Tasks: []core.Task{}, Presentation: []TaskPresentation{},
+	})
+
+	program := clientDOMHarness("/tasks/"+task.ID, string(document)) + script + `
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const boardFetch = globalThis.fetch;
+  // Held only for the read the *forced* refresh makes: the reader has to be
+  // able to leave while it is open, which is what leaves this save reporting
+  // from outside the form with a refresh result in hand.
+  let releaseBoardRead = null;
+  let holdBoardRead = false;
+  globalThis.fetch = async (url, options = {}) => {
+    if ((options.method || "GET") !== "GET") {
+      fetchCalls.push({ url, options });
+      return { ok: false, json: async () => ({
+        format: "workbook.error", version: 1,
+        error: { category: "stale-write", message: "task has changed since head-1; reload and try again" }
+      }) };
+    }
+    if (url === "/api/tasks" && holdBoardRead) {
+      fetchCalls.push({ url, options });
+      return new Promise((resolve) => {
+        releaseBoardRead = () => {
+          // The refusal and the deletion are the same event: this is the read
+          // that proves the task is gone rather than merely changed.
+          taskResponse = ` + string(emptied) + `;
+          resolve({ ok: true, json: async () => taskResponse });
+        };
+      });
+    }
+    return boardFetch(url, options);
+  };
+
+  const form = findElement(main, (element) => element.tagName === "FORM");
+  const description = findElement(main, (element) => element.id === "task-description");
+  if (!form || !description) throw new Error("the detail form did not render");
+  description.value = "A paragraph written into a task another clone deleted.";
+  holdBoardRead = true;
+  const saving = form.eventListeners.submit({ preventDefault() {} });
+  await settle();
+  if (!releaseBoardRead) {
+    throw new Error("the refusal never forced the refresh this report reads");
+  }
+
+  // The reader gives up on the refusal's refresh and goes back to the board,
+  // taking the node this save reports into out of the document with them.
+  const back = findElement(main, (element) => element.tagName === "A" && element.textContent === "Back");
+  await documentEventListeners.click({
+    target: back, button: 0, defaultPrevented: false,
+    metaKey: false, ctrlKey: false, shiftKey: false, altKey: false,
+    preventDefault() {}
+  });
+  if (main.firstElementChild !== boardView) {
+    throw new Error("the reader did not end up on the board");
+  }
+  releaseBoardRead();
+  await saving;
+
+  const reports = findElements(notice, (element) => hasClassToken(element, "notice__report"));
+  if (notice.hidden || reports.length !== 1) {
+    throw new Error("the detached save reported nothing anywhere: " + JSON.stringify(notice.textContent));
+  }
+  const copy = findElement(reports[0], (element) => element.tagName === "P").textContent;
+  if (!copy.includes(` + strconv.Quote(task.ID) + `) || !copy.includes("not saved")) {
+    throw new Error("the report does not say which save did not happen: " + JSON.stringify(copy));
+  }
+  if (reports[0].dataset.kind !== "error") {
+    throw new Error("a refusal was reported as something other than an error: " + JSON.stringify(reports[0].dataset.kind));
+  }
+  // The offer is the whole point: there is nothing behind it.
+  const open = findElement(reports[0], (element) => element.tagName === "A");
+  if (open) {
+    throw new Error("the report offered a task the refresh had proved deleted: " + JSON.stringify(open.href));
+  }
+  if (!copy.includes("nothing left to open")) {
+    throw new Error("the report drops the offer without saying why: " + JSON.stringify(copy));
+  }
+  // Described rather than quoted, and last either way — and what it describes is
+  // the deletion this refresh read, not the vaguer conflict the raw category
+  // would have reported.
+  if (!copy.endsWith("The task was deleted elsewhere, which is why the save was refused.")) {
+    throw new Error("the report does not end on why the save was lost: " + JSON.stringify(copy));
+  }
+}, 0);
+`
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute detached save behavior when the refresh finds the task deleted: %v\n%s", err, output)
 	}
 }
