@@ -52,6 +52,11 @@ type SyncRunResult struct {
 	Remote string     `json:"remote"`
 	Fetch  SyncResult `json:"fetch"`
 	Push   SyncResult `json:"push"`
+	// Identity reports what the identity stage did, and is a pointer so that a
+	// run where it did nothing new omits the member entirely. A steady-state
+	// synchronization therefore emits exactly the JSON it emitted before this
+	// stage existed, which is what every caller parsing that output relies on.
+	Identity *SyncIdentityResult `json:"identity,omitempty"`
 }
 
 // fetchState is the single validated view that Fetch produces for Sync. It is
@@ -61,6 +66,7 @@ type fetchState struct {
 	Canonical map[string]core.Snapshot
 	Tracking  map[string]core.Snapshot
 	Outcomes  map[string]SyncTaskResult
+	Identity  *SyncIdentityResult
 }
 
 // Push publishes validated local Workbook task refs to origin without force or
@@ -106,10 +112,20 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 		valid[tip.Head.TaskID] = struct{}{}
 	}
 
-	remoteOutput, err := r.Git(ctx, nil, "ls-remote", "--refs", "origin", taskRefPrefix+"*")
+	// The identity ref rides the listing Push already makes, so establishing
+	// that origin is this project costs no round trip of its own.
+	remoteOutput, err := r.Git(ctx, nil, "ls-remote", "--refs", "origin", taskRefPrefix+"*", identityRef)
 	if err != nil {
 		return failedPushTransport(result, refs, items, invalid, "push failed before completion", err)
 	}
+	remoteIdentityHead, err := parseRemoteIdentityHead(remoteOutput)
+	if err != nil {
+		return failedPushTransport(result, refs, items, invalid, "push failed before completion", err)
+	}
+	if err := r.ensureOriginIdentityAgreement(ctx, map[string]string{identityRef: remoteIdentityHead}); err != nil {
+		return failedPushTransport(result, refs, items, invalid, "push stopped before publishing any task ref", err)
+	}
+	result.Identity, _ = r.IdentityReport()
 	remoteHeads, ignored, err := r.parseRemoteTaskHeads(config, remoteOutput)
 	if err != nil {
 		return failedPushTransport(result, refs, items, invalid, "push failed before completion", err)
@@ -246,6 +262,13 @@ func (r *Repository) PushTask(ctx context.Context, config core.ProjectConfig, ta
 		result.Detail = tips[0].Err.Error()
 		return result, core.Errorf(core.CategoryCorruptData, "local task ref %s failed validation", taskID)
 	}
+	// A task ref is this project's history. Publishing one to a remote holding
+	// another project would write into a history it does not belong to, so the
+	// identity is settled first — for free on the mutation path, where the
+	// fetch this command already ran compared the two refs.
+	if err := r.ensureOriginIdentityAgreement(ctx, nil); err != nil {
+		return result, err
+	}
 
 	refName := taskRefPrefix + taskID
 	expected := map[string]string{refName: taskID}
@@ -280,6 +303,12 @@ type SyncResult struct {
 	// project's ID format could have produced may be offered for removal.
 	Ignored []IgnoredRef     `json:"ignoredRefs,omitempty"`
 	Tasks   []SyncTaskResult `json:"tasks"`
+	// Identity reports what this phase had to establish about origin's project
+	// before publishing anything, and is omitted when there was nothing to
+	// establish. Publication refuses a remote holding another project, so the
+	// one outcome a caller must never miss is the opposite: origin accepting
+	// task refs while refusing the identity ref beside them.
+	Identity *SyncIdentityResult `json:"identity,omitempty"`
 	// Conflicts travels with the phase that produced it but is not part of its
 	// JSON. Callers lift it to the result envelope's single conflict member so
 	// one command reports one list, whatever mix of phases produced it.
@@ -303,8 +332,9 @@ func (r *Repository) Sync(ctx context.Context, config core.ProjectConfig) (SyncR
 		Push:   skippedSyncPhase("push not run"),
 	}
 
-	state, fetched, fetchErr := r.fetch(ctx, config)
+	state, fetched, fetchErr := r.fetch(ctx, config, true, true)
 	result.Fetch = fetched
+	result.Identity = state.Identity
 	if fetchErr != nil && fetched.Status != SyncPhaseCompleted {
 		result.Push = skippedSyncPhase("push skipped because fetch failed")
 		return result, fetchErr
@@ -332,15 +362,23 @@ func failedSyncPhase(result SyncResult, detail string, err error) (SyncResult, e
 	return result, err
 }
 
-// Fetch downloads origin's Workbook task refs into an isolated tracking
-// namespace, validates their current tips, then creates or fast-forwards
-// compatible canonical refs with one compare-and-swap transaction.
+// Fetch downloads origin's Workbook refs into an isolated tracking namespace,
+// validates their current tips, then creates or fast-forwards compatible
+// canonical refs with one compare-and-swap transaction.
+//
+// It runs the identity stage but never publishes: a download is not the moment
+// to write to origin. Sync, which already has a publication phase, is.
 func (r *Repository) Fetch(ctx context.Context, config core.ProjectConfig) (SyncResult, error) {
-	_, result, err := r.fetch(ctx, config)
+	_, result, err := r.fetch(ctx, config, false, false)
 	return result, err
 }
 
-func (r *Repository) fetch(ctx context.Context, config core.ProjectConfig) (fetchState, SyncResult, error) {
+func (r *Repository) fetch(
+	ctx context.Context,
+	config core.ProjectConfig,
+	publishIdentity bool,
+	announceIdentity bool,
+) (fetchState, SyncResult, error) {
 	state := fetchState{
 		Canonical: make(map[string]core.Snapshot),
 		Tracking:  make(map[string]core.Snapshot),
@@ -356,10 +394,26 @@ func (r *Repository) fetch(ctx context.Context, config core.ProjectConfig) (fetc
 		return state, result, err
 	}
 
-	refspec := "+" + taskRefPrefix + "*:" + remoteTaskRefPrefix + "*"
-	if _, err := r.Git(ctx, nil, "fetch", "--no-tags", "--prune", "--no-auto-maintenance", "origin", refspec); err != nil {
+	// One fetch carries both namespaces. The identity ref is worth nothing if
+	// learning it costs a second round trip on every synchronization, and a
+	// second one could also observe a different moment than the tasks it is
+	// supposed to describe.
+	if _, err := r.Git(ctx, nil, "fetch", "--no-tags", "--prune", "--no-auto-maintenance", "origin",
+		"+"+taskRefPrefix+"*:"+remoteTaskRefPrefix+"*",
+		identityFetchRefspec,
+	); err != nil {
 		result, err = failedSyncPhase(result, "fetch failed before completion", err)
 		return state, result, err
+	}
+
+	// Identity is settled before any task is looked at: every task document
+	// names a project, and there is no point validating them against a project
+	// this clone might not belong to.
+	identityResult, identityErr := r.reconcileIdentity(ctx, publishIdentity, announceIdentity)
+	state.Identity = identityResult
+	if identityErr != nil {
+		result, identityErr = failedSyncPhase(result, "fetch stopped before tasks were synchronized", identityErr)
+		return state, result, identityErr
 	}
 
 	canonicalRefs, _, err := r.listOwnedTaskRefs(ctx, config, taskRefPrefix)

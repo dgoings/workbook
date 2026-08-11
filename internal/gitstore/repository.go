@@ -36,11 +36,33 @@ type Repository struct {
 	identityVerified bool
 	configLoaded     bool
 	config           core.ProjectConfig
-	objectIDBytes    int
-	actorOnce        sync.Once
-	actor            string
-	actorErr         error
-	commandObserver  gitCommandObserver
+	// identityLoaded and the fields below memoize the canonical project
+	// identity for an opened repository, exactly as configLoaded does for the
+	// tracked configuration. Resolving it can publish a ref, so doing it once
+	// per opened repository is what keeps a command from republishing on every
+	// read.
+	identityLoaded     bool
+	identity           core.ProjectIdentity
+	identityHead       string
+	identitySource     identitySource
+	identityMinted     bool
+	identityRefCreated bool
+	// identityPublicationReported keeps the one-time migration announcement from
+	// repeating when one command synchronizes more than once.
+	identityPublicationReported bool
+	// originIdentity records what this command has established about origin's
+	// copy of the identity, so the publication paths never write a task ref to
+	// a remote holding another project.
+	originIdentity originIdentityState
+	// identityReport carries what establishing that agreement cost, or could
+	// not achieve, for a caller whose own result is task shaped.
+	identityReport  *SyncIdentityResult
+	identityDrift   string
+	objectIDBytes   int
+	actorOnce       sync.Once
+	actor           string
+	actorErr        error
+	commandObserver gitCommandObserver
 }
 
 // Open discovers the repository containing startDir without changing the

@@ -225,7 +225,7 @@ func validateBatchSnapshot(
 		return core.Snapshot{}, core.Errorf(core.CategoryCorruptData, "task documents are not blobs")
 	}
 
-	commitTree, err := commitTreeObjectID(commit.contents)
+	commitTree, err := commitTreeObjectID(commit.contents, "task commit")
 	if err != nil {
 		return core.Snapshot{}, err
 	}
@@ -331,10 +331,12 @@ func decodeObjectID(objectID string) ([]byte, error) {
 	return decoded, nil
 }
 
-func commitTreeObjectID(contents []byte) (string, error) {
+// commitTreeObjectID reads one commit object's tree header. noun names the kind
+// of commit being read so a failure says which one Workbook was reading.
+func commitTreeObjectID(contents []byte, noun string) (string, error) {
 	headerEnd := bytes.Index(contents, []byte("\n\n"))
 	if headerEnd < 0 {
-		return "", core.Errorf(core.CategoryCorruptData, "task commit has no header terminator")
+		return "", core.Errorf(core.CategoryCorruptData, "%s has no header terminator", noun)
 	}
 	var treeID string
 	for _, line := range bytes.Split(contents[:headerEnd], []byte{'\n'}) {
@@ -343,54 +345,75 @@ func commitTreeObjectID(contents []byte) (string, error) {
 		}
 		fields := bytes.Fields(line)
 		if len(fields) != 2 || treeID != "" {
-			return "", core.Errorf(core.CategoryCorruptData, "task commit has an invalid tree header")
+			return "", core.Errorf(core.CategoryCorruptData, "%s has an invalid tree header", noun)
 		}
 		treeID = string(fields[1])
 		if _, err := decodeObjectID(treeID); err != nil {
-			return "", core.Wrap(core.CategoryCorruptData, "task commit tree ID is invalid", err)
+			return "", core.Wrap(core.CategoryCorruptData, noun+" tree ID is invalid", err)
 		}
 	}
 	if treeID == "" {
-		return "", core.Errorf(core.CategoryCorruptData, "task commit has no tree header")
+		return "", core.Errorf(core.CategoryCorruptData, "%s has no tree header", noun)
 	}
 	return treeID, nil
 }
 
-func parseRawTaskTree(contents []byte, objectIDBytes int) (map[string]string, error) {
+// scanRawTreeEntries walks a raw tree object, handing each entry to visit. The
+// framing is Git's; what counts as an acceptable entry belongs to the caller,
+// because a task tree and a project identity tree accept different names.
+func scanRawTreeEntries(
+	contents []byte,
+	objectIDBytes int,
+	noun string,
+	visit func(mode, name, objectID string) error,
+) error {
 	if objectIDBytes <= 0 {
-		return nil, core.Errorf(core.CategoryCorruptData, "task tree object ID width is invalid")
+		return core.Errorf(core.CategoryCorruptData, "%s object ID width is invalid", noun)
 	}
-	entries := make(map[string]string, 2)
 	for offset := 0; offset < len(contents); {
 		modeEnd := bytes.IndexByte(contents[offset:], ' ')
 		if modeEnd < 0 {
-			return nil, core.Errorf(core.CategoryCorruptData, "task tree has an invalid mode")
+			return core.Errorf(core.CategoryCorruptData, "%s has an invalid mode", noun)
 		}
 		modeEnd += offset
 		nameEnd := bytes.IndexByte(contents[modeEnd+1:], 0)
 		if nameEnd < 0 {
-			return nil, core.Errorf(core.CategoryCorruptData, "task tree has an invalid name")
+			return core.Errorf(core.CategoryCorruptData, "%s has an invalid name", noun)
 		}
 		nameEnd += modeEnd + 1
 		objectStart := nameEnd + 1
 		objectEnd := objectStart + objectIDBytes
 		if objectEnd > len(contents) {
-			return nil, core.Errorf(core.CategoryCorruptData, "task tree has a truncated object ID")
+			return core.Errorf(core.CategoryCorruptData, "%s has a truncated object ID", noun)
 		}
 
 		mode := string(contents[offset:modeEnd])
 		name := string(contents[modeEnd+1 : nameEnd])
+		if err := visit(mode, name, hex.EncodeToString(contents[objectStart:objectEnd])); err != nil {
+			return err
+		}
+		offset = objectEnd
+	}
+	return nil
+}
+
+func parseRawTaskTree(contents []byte, objectIDBytes int) (map[string]string, error) {
+	entries := make(map[string]string, 2)
+	err := scanRawTreeEntries(contents, objectIDBytes, "task tree", func(mode, name, objectID string) error {
 		if mode != "100644" {
-			return nil, core.Errorf(core.CategoryCorruptData, "task tree entry %q is not a regular blob", name)
+			return core.Errorf(core.CategoryCorruptData, "task tree entry %q is not a regular blob", name)
 		}
 		if name != "operation.json" && name != "state.json" {
-			return nil, core.Errorf(core.CategoryCorruptData, "task tree has an unexpected entry")
+			return core.Errorf(core.CategoryCorruptData, "task tree has an unexpected entry")
 		}
 		if _, duplicate := entries[name]; duplicate {
-			return nil, core.Errorf(core.CategoryCorruptData, "task tree contains duplicate entry %q", name)
+			return core.Errorf(core.CategoryCorruptData, "task tree contains duplicate entry %q", name)
 		}
-		entries[name] = hex.EncodeToString(contents[objectStart:objectEnd])
-		offset = objectEnd
+		entries[name] = objectID
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	if len(entries) != 2 {
 		return nil, core.Errorf(core.CategoryCorruptData, "task tree must contain exactly operation.json and state.json")

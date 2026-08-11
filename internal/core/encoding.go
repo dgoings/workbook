@@ -21,6 +21,11 @@ func EncodeDocument(value any) ([]byte, error) {
 			return nil, err
 		}
 		document = typed
+	case ProjectIdentity:
+		if err := validateProjectIdentityDocument(typed); err != nil {
+			return nil, err
+		}
+		document = typed
 	default:
 		return nil, Errorf(CategoryValidation, "cannot encode unsupported document type %T", value)
 	}
@@ -54,6 +59,34 @@ func DecodeStateDocument(data []byte) (StateDocument, error) {
 		return StateDocument{}, err
 	}
 	return state, nil
+}
+
+// DecodeProjectIdentity strictly decodes a persisted project identity.
+func DecodeProjectIdentity(data []byte) (ProjectIdentity, error) {
+	var identity ProjectIdentity
+	if err := decodeOneJSON(data, &identity); err != nil {
+		return ProjectIdentity{}, err
+	}
+	if err := validateProjectIdentityDocument(identity); err != nil {
+		return ProjectIdentity{}, err
+	}
+	return identity, nil
+}
+
+func validateProjectIdentityDocument(identity ProjectIdentity) error {
+	if identity.Format != ProjectIdentityFormat {
+		return Errorf(CategoryCorruptData, "unsupported Workbook project identity format %q", identity.Format)
+	}
+	if identity.Version != ProjectIdentityVersion {
+		return Errorf(CategoryCorruptData, "unsupported Workbook project identity version %d", identity.Version)
+	}
+	if err := ValidateProjectID(identity.ProjectID); err != nil {
+		return Wrap(CategoryCorruptData, "Workbook project identity project ID is invalid", err)
+	}
+	if err := ValidateProjectKey(identity.Key); err != nil {
+		return Wrap(CategoryCorruptData, "Workbook project identity project key is invalid", err)
+	}
+	return nil
 }
 
 func validateOperationPackDurableDocument(pack OperationPack) error {

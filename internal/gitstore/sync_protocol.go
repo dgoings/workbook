@@ -40,6 +40,12 @@ func (r *Repository) parseRemoteTaskHeads(
 			return nil, nil, core.Wrap(core.CategoryOperational, "Git returned an invalid remote task object ID", err)
 		}
 		refName := string(parts[1])
+		// Publication asks for the identity ref in the same listing, so that
+		// checking which project origin holds costs no second round trip. It is
+		// read by the identity check, not here.
+		if refName == identityRef {
+			continue
+		}
 		if !strings.HasPrefix(refName, taskRefPrefix) {
 			return nil, nil, core.Errorf(core.CategoryOperational, "Git returned remote ref outside %q", taskRefPrefix)
 		}

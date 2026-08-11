@@ -36,7 +36,7 @@ func terminalWidth(output io.Writer) (int, bool) {
 	return width, true
 }
 
-func runBoard(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+func runBoard(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
 	flags := newFlagSet("board")
 	wide := flags.Bool("wide", false, "render a wide board")
 	narrow := flags.Bool("narrow", false, "render a narrow board")
@@ -48,7 +48,7 @@ func runBoard(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 		return core.Errorf(core.CategoryInvocation, "cannot use --wide with --narrow")
 	}
 
-	service, err := openReadService(ctx, cwd)
+	service, err := openReadService(ctx, cwd, stderr)
 	if err != nil {
 		return err
 	}

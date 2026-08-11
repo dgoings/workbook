@@ -154,7 +154,15 @@ func cloneFixtureRepository(ctx context.Context, sourceRoot, destination, origin
 func constructRemoteTopology(ctx context.Context, sourceRoot, localRoot, peerRoot, originRoot string, config core.ProjectConfig, taskIDs, activeTaskIDs []string, topology RemoteTopology) error {
 	switch topology {
 	case RemoteFreshCheckout:
-		return publishFixtureTasks(ctx, sourceRoot, originRoot)
+		if err := publishFixtureTasks(ctx, sourceRoot, originRoot); err != nil {
+			return err
+		}
+		// A fresh checkout holds no task history, but it has been bootstrapped:
+		// `workbook setup` resolves and publishes the project identity before
+		// any fetch runs. Without that the measured fetch would perform the
+		// one-time identity migration and the scenario would stop measuring the
+		// fetch it is named for.
+		return copyFixtureIdentity(ctx, sourceRoot, localRoot)
 	case RemoteInitialPublication:
 		return copyFixtureTasks(ctx, sourceRoot, localRoot)
 	case RemoteAlreadySynchronized:
@@ -240,16 +248,34 @@ func populateSynchronizedFixture(ctx context.Context, sourceRoot, localRoot, pee
 	return copyFixtureTasks(ctx, originRoot, peerRoot)
 }
 
+// The project identity ref travels with the task refs everywhere a fixture
+// moves them. A clone that holds task history but no identity would make every
+// measured command perform the one-time migration instead of the steady-state
+// work the scenario is named for. The glob keeps the refspec harmless when the
+// source has no identity ref: Git fails a whole transfer over an explicitly
+// named source ref that does not exist, and matches a pattern silently.
+const (
+	fixtureTaskRefspec             = "refs/workbook/tasks/*:refs/workbook/tasks/*"
+	fixtureIdentityRefspec         = "refs/workbook/project*:refs/workbook/project*"
+	fixtureTaskTrackingRefspec     = "refs/workbook/tasks/*:refs/workbook/remotes/origin/tasks/*"
+	fixtureIdentityTrackingRefspec = "refs/workbook/project*:refs/workbook/remotes/origin/project*"
+)
+
 func copyFixtureTasks(ctx context.Context, from, to string) error {
-	return runFixtureGit(ctx, "-C", to, "fetch", "--quiet", from, "refs/workbook/tasks/*:refs/workbook/tasks/*")
+	return runFixtureGit(ctx, "-C", to, "fetch", "--quiet", from, fixtureTaskRefspec, fixtureIdentityRefspec)
+}
+
+func copyFixtureIdentity(ctx context.Context, from, to string) error {
+	return runFixtureGit(ctx, "-C", to, "fetch", "--quiet", from, fixtureIdentityRefspec)
 }
 
 func publishFixtureTasks(ctx context.Context, from, originRoot string) error {
-	return runFixtureGit(ctx, "-C", from, "push", "--quiet", originRoot, "refs/workbook/tasks/*:refs/workbook/tasks/*")
+	return runFixtureGit(ctx, "-C", from, "push", "--quiet", originRoot, fixtureTaskRefspec, fixtureIdentityRefspec)
 }
 
 func fetchFixtureTracking(ctx context.Context, root string) error {
-	return runFixtureGit(ctx, "-C", root, "fetch", "--quiet", "origin", "refs/workbook/tasks/*:refs/workbook/remotes/origin/tasks/*")
+	return runFixtureGit(ctx, "-C", root, "fetch", "--quiet", "origin",
+		fixtureTaskTrackingRefspec, fixtureIdentityTrackingRefspec)
 }
 
 func appendFixtureTask(ctx context.Context, root string, config core.ProjectConfig, taskID string, taskIndex int) error {

@@ -345,10 +345,12 @@ func (r *Repository) readTip(ctx context.Context, config core.ProjectConfig, tas
 	return r.ReadTaskHead(ctx, config, TaskHead{TaskID: taskID, ObjectID: objectID})
 }
 
-func validateTipTopologyBytes(contents []byte, pack core.OperationPack) error {
+// commitParentCount counts one commit object's parent headers. noun names the
+// kind of commit being read so a failure says which one Workbook was reading.
+func commitParentCount(contents []byte, noun string) (int, error) {
 	headerEnd := bytes.Index(contents, []byte("\n\n"))
 	if headerEnd < 0 {
-		return core.Errorf(core.CategoryCorruptData, "task commit has no header terminator")
+		return 0, core.Errorf(core.CategoryCorruptData, "%s has no header terminator", noun)
 	}
 
 	parentCount := 0
@@ -357,9 +359,17 @@ func validateTipTopologyBytes(contents []byte, pack core.OperationPack) error {
 			continue
 		}
 		if fields := bytes.Fields(line); len(fields) != 2 {
-			return core.Errorf(core.CategoryCorruptData, "task commit has an invalid parent header")
+			return 0, core.Errorf(core.CategoryCorruptData, "%s has an invalid parent header", noun)
 		}
 		parentCount++
+	}
+	return parentCount, nil
+}
+
+func validateTipTopologyBytes(contents []byte, pack core.OperationPack) error {
+	parentCount, err := commitParentCount(contents, "task commit")
+	if err != nil {
+		return err
 	}
 
 	containsCreate := false

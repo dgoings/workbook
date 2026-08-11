@@ -34,10 +34,15 @@ const (
 const (
 	ObjectClassOperationBlob = "operation-blob"
 	ObjectClassStateBlob     = "state-blob"
-	ObjectClassOtherBlob     = "other-blob"
-	ObjectClassTree          = "tree"
-	ObjectClassCommit        = "commit"
-	ObjectClassAnnotatedTag  = "annotated-tag"
+	// ObjectClassIdentityDocument is the one document the project identity ref
+	// carries. It is counted apart from the task documents because it is one
+	// object per project rather than one per operation, and lumping it into the
+	// "other" bucket would leave an unexplained object in every account.
+	ObjectClassIdentityDocument = "identity-document"
+	ObjectClassOtherBlob        = "other-blob"
+	ObjectClassTree             = "tree"
+	ObjectClassCommit           = "commit"
+	ObjectClassAnnotatedTag     = "annotated-tag"
 )
 
 // Measured resource command names.
@@ -49,6 +54,7 @@ const (
 const (
 	operationDocumentPath = "operation.json"
 	stateDocumentPath     = "state.json"
+	identityDocumentPath  = "project.json"
 
 	projectionCacheFilename = "cache.sqlite"
 	validationCacheFilename = "validation.sqlite"
@@ -62,6 +68,7 @@ const (
 var objectClassOrder = []string{
 	ObjectClassOperationBlob,
 	ObjectClassStateBlob,
+	ObjectClassIdentityDocument,
 	ObjectClassOtherBlob,
 	ObjectClassTree,
 	ObjectClassCommit,
@@ -463,6 +470,8 @@ func classifyReachableObject(object reachableObject) (string, error) {
 			return ObjectClassOperationBlob, nil
 		case stateDocumentPath:
 			return ObjectClassStateBlob, nil
+		case identityDocumentPath:
+			return ObjectClassIdentityDocument, nil
 		default:
 			return ObjectClassOtherBlob, nil
 		}

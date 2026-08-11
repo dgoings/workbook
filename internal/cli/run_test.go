@@ -473,20 +473,43 @@ func TestRunRequiresInitializationAndSetupIsIdempotent(t *testing.T) {
 	if projectID(t, stdout) != projectID(t, second) {
 		t.Fatalf("second setup project ID = %q, want %q", projectID(t, second), projectID(t, stdout))
 	}
+	// The report distinguishes the run that created the project from the run
+	// that found it, which is the difference a user most needs to see.
+	if got, want := projectIdentitySource(t, stdout), "(minted and published)"; got != want {
+		t.Fatalf("first setup identity source = %q, want %q", got, want)
+	}
+	if got, want := projectIdentitySource(t, second), "(adopted from the published project identity)"; got != want {
+		t.Fatalf("second setup identity source = %q, want %q", got, want)
+	}
 	if strings.Contains(second, "\twritten") {
 		t.Fatalf("second setup rewrote managed documentation:\n%s", second)
 	}
 }
 
+// projectID reads the ID out of setup's report. The line also carries where the
+// identity came from, which projectIdentitySource reads instead.
 func projectID(t *testing.T, output string) string {
+	t.Helper()
+	id, _ := projectIdentityLine(t, output)
+	return id
+}
+
+func projectIdentitySource(t *testing.T, output string) string {
+	t.Helper()
+	_, source := projectIdentityLine(t, output)
+	return source
+}
+
+func projectIdentityLine(t *testing.T, output string) (string, string) {
 	t.Helper()
 	for _, line := range strings.Split(output, "\n") {
 		if value, found := strings.CutPrefix(line, "Project ID:\t"); found {
-			return value
+			id, source, _ := strings.Cut(value, "\t")
+			return id, source
 		}
 	}
 	t.Fatalf("output has no project ID:\n%s", output)
-	return ""
+	return "", ""
 }
 
 func TestRunRebuildProducesVersionedResult(t *testing.T) {
@@ -516,7 +539,7 @@ func TestRunRebuildProducesVersionedResult(t *testing.T) {
 func TestOpenServiceUsesSplitMutationStores(t *testing.T) {
 	repository := initializedRepository(t)
 
-	service, err := openService(context.Background(), repository)
+	service, err := openService(context.Background(), repository, io.Discard)
 	if err != nil {
 		t.Fatalf("openService() error = %v", err)
 	}
@@ -583,7 +606,7 @@ func TestReadCommandsRefreshCachedProjectionAfterGitTipAdvances(t *testing.T) {
 	if code != 0 || stderr != "" {
 		t.Fatalf("rebuild = (%d, %q, %q)", code, stdout, stderr)
 	}
-	readService, err := openReadService(context.Background(), repository)
+	readService, err := openReadService(context.Background(), repository, io.Discard)
 	if err != nil {
 		t.Fatalf("openReadService() error = %v", err)
 	}
@@ -1081,7 +1104,10 @@ func TestREADMEDocumentsInstallationPaths(t *testing.T) {
 	}
 }
 
-func TestREADMEDocumentsCommonProjectIdentityGuard(t *testing.T) {
+// The identity model is the one thing a user cannot discover from a command's
+// output: which record decides, what a fork inherits, and what a teammate on the
+// previous version sees. The README has to state all of it.
+func TestREADMEDocumentsProjectIdentity(t *testing.T) {
 	readmePath := filepath.Join("..", "..", "README.md")
 	contents, err := os.ReadFile(readmePath)
 	if err != nil {
@@ -1090,13 +1116,28 @@ func TestREADMEDocumentsCommonProjectIdentityGuard(t *testing.T) {
 	readme := strings.Join(strings.Fields(string(contents)), " ")
 
 	for _, required := range []string{
+		// The ref, its shape, and the rule that keeps it a leaf.
+		"refs/workbook/project",
+		"workbook.project-identity",
+		"directory/file rule",
+		// Why concurrent publication is safe.
+		"deterministic",
+		// The precedence chain and what the tracked file still owns.
+		"advisory copies",
+		"self-healing migration",
+		"Only `workbook setup` mints a new identity",
+		// The guard's v0.5.0 role.
 		"`<git-common-dir>/workbook/project.json`",
-		"one Workbook project per common Git repository",
 		"linked worktrees",
-		"tracked and common identities do not match",
-		"atomically backfills",
-		"portable tracked configuration",
-		"private coordination metadata",
+		"repaired** from the ref",
+		// Mixed versions and forks. A fork inherits the upstream identity
+		// through the committed advisory copy, which is the opposite of what a
+		// reader would assume from "forks do not copy refs", so the README has
+		// to say the true thing and say what to do about it.
+		"Upgrade order does not matter",
+		"inherits the upstream project's identity",
+		"git push fork 'refs/workbook/*:refs/workbook/*'",
+		"git rm .workbook/config.json",
 	} {
 		if !strings.Contains(readme, required) {
 			t.Errorf("README project identity section is missing %q", required)

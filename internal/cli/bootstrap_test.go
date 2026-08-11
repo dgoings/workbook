@@ -125,13 +125,17 @@ func TestSetupJoinsExistingOriginProjectFromPreWorkbookBranch(t *testing.T) {
 	}
 }
 
-// When origin holds Workbook task refs but its default branch never gained the
-// tracked configuration, setup cannot know which project the tasks belong to.
-// Minting a fresh identity would wedge the repository behind a guard mismatch
-// the moment the real configuration arrives, so setup must refuse and leave no
-// identity behind.
-func TestSetupRefusesToMintWhenOriginHasTasksButNoCommittedConfig(t *testing.T) {
-	_, seed, stale := originAdoptedAfterClone(t)
+// When origin holds Workbook task refs but nothing that names their project —
+// no identity ref and no configuration on its default branch — setup cannot know
+// which project the tasks belong to. Minting a fresh identity would wedge the
+// repository the moment the real configuration arrives, so setup must refuse and
+// leave no identity behind.
+//
+// From v0.5.0 this shape can only come from a teammate still on v0.4.x, whose
+// push carries task refs and nothing else. The fixture reproduces that by
+// removing origin's identity ref after the seed publishes it.
+func TestSetupRefusesToMintWhenOriginHasTasksButNothingNamingTheProject(t *testing.T) {
+	bare, seed, stale := originAdoptedAfterClone(t)
 
 	if code, _, stderr := run(t, seed, "setup"); code != 0 {
 		t.Fatalf("seed setup code = %d, want 0; stderr = %q", code, stderr)
@@ -140,6 +144,7 @@ func TestSetupRefusesToMintWhenOriginHasTasksButNoCommittedConfig(t *testing.T) 
 	if code, _, stderr := run(t, seed, "push"); code != 0 {
 		t.Fatalf("seed push code = %d, want 0; stderr = %q", code, stderr)
 	}
+	cliGit(t, bare, "update-ref", "-d", "refs/workbook/project")
 
 	code, _, stderr := run(t, stale, "setup")
 	if code == 0 {

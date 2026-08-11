@@ -281,9 +281,29 @@ func TestValidateCachedInvalidHeadStillExitsNonzeroWithoutHistoryBatch(t *testin
 	if err != nil {
 		t.Fatalf("read Git wrapper log: %v", err)
 	}
-	for _, forbidden := range []string{"rev-list --reverse --topo-order --parents --stdin", "cat-file --batch"} {
-		if strings.Contains(string(logged), forbidden) {
-			t.Fatalf("cached invalid Git commands = %q, want no history batch %q", logged, forbidden)
+	if strings.Contains(string(logged), "rev-list --reverse --topo-order --parents --stdin") {
+		t.Fatalf("cached invalid Git commands = %q, want no history walk", logged)
+	}
+	// One object batch is expected and bounded: reading the canonical project
+	// identity, which every command does before it touches a task. What must
+	// not happen is a batch after task work begins, because that is the history
+	// read the cache hit exists to avoid.
+	assertNoObjectBatchAfterTaskWork(t, string(logged))
+}
+
+func assertNoObjectBatchAfterTaskWork(t *testing.T, logged string) {
+	t.Helper()
+	taskWorkStarted := false
+	for _, line := range strings.Split(logged, "\n") {
+		if strings.Contains(line, "refs/workbook/tasks/") {
+			taskWorkStarted = true
+			continue
+		}
+		if !strings.Contains(line, "cat-file --batch") {
+			continue
+		}
+		if taskWorkStarted {
+			t.Fatalf("cached invalid Git commands = %q, want no history batch once task work began", logged)
 		}
 	}
 }

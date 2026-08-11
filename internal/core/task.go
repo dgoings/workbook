@@ -34,6 +34,46 @@ func (config ProjectConfig) SameIdentity(other ProjectConfig) bool {
 		config.Key == other.Key
 }
 
+// ProjectConfig is compared with == throughout the repository boundary, so it
+// must stay comparable. This assertion fails to compile the moment a field
+// that cannot be a map key is added, which is the cheapest possible warning
+// that roughly a dozen call sites — validateRepositoryConfig above all — would
+// otherwise start failing at run time instead.
+var _ = map[ProjectConfig]struct{}{}
+
+// ProjectIdentityFormat names the canonical identity document Workbook stores
+// in its project identity ref.
+//
+// It is deliberately distinct from ProjectConfig's "workbook.project": the two
+// documents carry different fields, are written by different authorities, and
+// have different lifecycles. The identity document is immutable after mint and
+// owned by the ref; the tracked configuration is mutable, committed, and from
+// v0.5.0 carries identity only as an advisory copy.
+const ProjectIdentityFormat = "workbook.project-identity"
+
+// ProjectIdentityVersion is the identity document version Workbook writes.
+const ProjectIdentityVersion = 1
+
+// ProjectIdentity is a project's canonical, immutable identity.
+//
+// It carries no timestamp and no actor: the document has to encode to the same
+// bytes in every clone that adopts the same project, because two clones
+// publishing it independently must produce the same Git object rather than two
+// competing histories.
+type ProjectIdentity struct {
+	Format    string `json:"format"`
+	Version   int    `json:"version"`
+	ProjectID string `json:"projectId"`
+	Key       string `json:"key"`
+}
+
+// SameIdentity reports whether two identity documents name the same project.
+// The document version is excluded so a future version that adds a field still
+// compares equal on the identity it carries.
+func (identity ProjectIdentity) SameIdentity(other ProjectIdentity) bool {
+	return identity.ProjectID == other.ProjectID && identity.Key == other.Key
+}
+
 // AutoSyncSetting records whether a configuration layer enables automatic
 // synchronization, disables it, or leaves the decision to the next layer.
 //

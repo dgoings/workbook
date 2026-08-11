@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/dgoings/workbook/internal/autosync"
@@ -35,6 +36,11 @@ type syncReport struct {
 	Detail  string                   `json:"detail,omitempty"`
 	Fetch   *gitstore.SyncResult     `json:"fetch,omitempty"`
 	Push    *gitstore.SyncTaskResult `json:"push,omitempty"`
+	// Identity reports what publishing this change had to establish about
+	// origin's project, and is omitted when there was nothing to establish. A
+	// mutation is the most common way a project publishes anything, so it is
+	// also where a remote that refuses the identity ref has to be reported.
+	Identity *gitstore.SyncIdentityResult `json:"identity,omitempty"`
 }
 
 // taskSession carries the repository, service, and resolved synchronization
@@ -58,8 +64,8 @@ type taskSession struct {
 	watcher  syncloop.Status
 }
 
-func openTaskSession(ctx context.Context, cwd string, noSync, withWriter bool) (*taskSession, error) {
-	repository, config, err := openRepository(ctx, cwd)
+func openTaskSession(ctx context.Context, cwd string, noSync, withWriter bool, stderr io.Writer) (*taskSession, error) {
+	repository, config, err := openRepository(ctx, cwd, stderr)
 	if err != nil {
 		return nil, err
 	}
@@ -239,6 +245,7 @@ func (session *taskSession) publish(ctx context.Context, taskID string) {
 func (session *taskSession) pushInline(ctx context.Context, taskID string) {
 	pushed, err := session.repository.PushTask(ctx, session.config, taskID)
 	session.report.Push = &pushed
+	session.report.Identity, _ = session.repository.IdentityReport()
 	if err != nil {
 		session.report.Status = syncStatusFailed
 		session.report.Detail = "push failed: " + err.Error()

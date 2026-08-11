@@ -522,22 +522,35 @@ func TestPushUsesOneBoundedPublication(t *testing.T) {
 	if got := countCommand(commands, "cat-file", "--batch"); got != 1 {
 		t.Fatalf("tip batches = %d, want 1; commands = %v", got, commands)
 	}
-	if got := countCommand(commands, "ls-remote", "--refs", "origin", taskRefPrefix+"*"); got != 1 {
+	// One listing answers both questions Push has to ask origin: which task tips
+	// it already holds, and which project it is.
+	if got := countCommand(commands, "ls-remote", "--refs", "origin", taskRefPrefix+"*", identityRef); got != 1 {
 		t.Fatalf("wildcard remote probes = %d, want 1; commands = %v", got, commands)
 	}
 	for _, command := range commands {
-		if len(command) > 0 && command[0] == "ls-remote" && (len(command) != 4 || command[3] != taskRefPrefix+"*") {
+		if len(command) > 0 && command[0] == "ls-remote" &&
+			(len(command) != 5 || command[3] != taskRefPrefix+"*" || command[4] != identityRef) {
 			t.Fatalf("Push() ran a per-task remote probe: %v", command)
 		}
 	}
-	pushes := 0
+	if got := countTaskPushes(commands); got != 1 {
+		t.Fatalf("task push commands = %d, want 1; commands = %v", got, commands)
+	}
+	// Origin has no identity ref in this fixture, so publication establishes one
+	// before writing any task ref. That is a project's one-time migration, and it
+	// is one publication however many tasks the push carries.
+	if got := countIdentityPushes(commands); got != 1 {
+		t.Fatalf("identity push commands = %d, want the one-time publication; commands = %v", got, commands)
+	}
 	for _, command := range commands {
 		if len(command) == 0 || command[0] != "push" {
 			continue
 		}
-		pushes++
 		if strings.Contains(strings.Join(command, " "), "--atomic") || strings.Contains(strings.Join(command, " "), "--force") {
 			t.Fatalf("Push() command must be non-atomic and non-force: %v", command)
+		}
+		if strings.Contains(strings.Join(command, " "), ":"+identityRef) {
+			continue
 		}
 		if len(command) != 3+25 {
 			t.Fatalf("Push() args = %v, want 25 explicit destinations", command)
@@ -547,9 +560,6 @@ func TestPushUsesOneBoundedPublication(t *testing.T) {
 				t.Fatalf("Push() refspec = %q, want one explicit task destination", refspec)
 			}
 		}
-	}
-	if pushes != 1 {
-		t.Fatalf("push commands = %d, want 1; commands = %v", pushes, commands)
 	}
 }
 
@@ -717,8 +727,14 @@ func TestSyncReusesFetchedTipsWithoutRepeatedInspection(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Sync() error = %v; result = %#v", err, result)
 			}
-			if got := countCommand(commands, "fetch", "--no-tags", "--prune", "--no-auto-maintenance", "origin", "+"+taskRefPrefix+"*:"+remoteTaskRefPrefix+"*"); got != 1 {
+			// One fetch carries both namespaces. The identity ref rides the
+			// refspec list rather than adding a round trip of its own.
+			if got := countCommand(commands, "fetch", "--no-tags", "--prune", "--no-auto-maintenance", "origin",
+				"+"+taskRefPrefix+"*:"+remoteTaskRefPrefix+"*", identityFetchRefspec); got != 1 {
 				t.Fatalf("fetch commands = %d, want 1; commands = %v", got, commands)
+			}
+			if got := countCommandPrefix(commands, "fetch"); got != 1 {
+				t.Fatalf("fetch invocations = %d, want exactly one for both namespaces; commands = %v", got, commands)
 			}
 			if got := countCommand(commands, "cat-file", "--batch"); got != 1 {
 				t.Fatalf("tip batches = %d, want 1; commands = %v", got, commands)
@@ -735,8 +751,14 @@ func TestSyncReusesFetchedTipsWithoutRepeatedInspection(t *testing.T) {
 			if got := countCommand(commands, "merge-base", "--is-ancestor"); got != 0 {
 				t.Fatalf("merge-base commands = %d, want none; commands = %v", got, commands)
 			}
-			if got := countCommandPrefix(commands, "push", "--porcelain", "origin"); got != 1 {
-				t.Fatalf("push commands = %d, want one; commands = %v", got, commands)
+			if got := countTaskPushes(commands); got != 1 {
+				t.Fatalf("task push commands = %d, want one; commands = %v", got, commands)
+			}
+			// The identity ref is published once in a project's life. This is
+			// that run, so it costs exactly one publication here and none in
+			// the synchronized run below.
+			if got := countIdentityPushes(commands); got != 1 {
+				t.Fatalf("identity push commands = %d, want the one-time publication; commands = %v", got, commands)
 			}
 			if got := countCommand(commands, "rev-list", "--parents", "--stdin"); got > 1 {
 				t.Fatalf("graph classifications = %d, want at most 1; commands = %v", got, commands)
@@ -760,6 +782,9 @@ func TestSyncReusesFetchedTipsWithoutRepeatedInspection(t *testing.T) {
 			}
 			if got := countCommandPrefix(commands, "push", "--porcelain", "origin"); got != 0 {
 				t.Fatalf("synchronized push commands = %d, want none; commands = %v", got, commands)
+			}
+			if result.Identity != nil {
+				t.Fatalf("synchronized Sync reported identity work %#v, want nothing new", result.Identity)
 			}
 			for _, command := range commands {
 				if commandHasPrefix(command, "merge-base", "--is-ancestor") ||
@@ -785,6 +810,32 @@ func TestSyncReusesFetchedTipsWithoutRepeatedInspection(t *testing.T) {
 			}
 		})
 	}
+}
+
+// countIdentityPushes and countTaskPushes separate the two publications a run
+// can make, so an assertion about one never silently accepts the other.
+func countIdentityPushes(commands [][]string) int {
+	return countPushesTargeting(commands, ":"+identityRef)
+}
+
+func countTaskPushes(commands [][]string) int {
+	return countPushesTargeting(commands, ":"+taskRefPrefix)
+}
+
+func countPushesTargeting(commands [][]string, suffix string) int {
+	count := 0
+	for _, command := range commands {
+		if !commandHasPrefix(command, "push") {
+			continue
+		}
+		for _, argument := range command {
+			if strings.Contains(argument, suffix) {
+				count++
+				break
+			}
+		}
+	}
+	return count
 }
 
 func countCommandPrefix(commands [][]string, want ...string) int {
@@ -1318,7 +1369,12 @@ func TestPushTaskReportsRejectionWhenRemoteAdvanced(t *testing.T) {
 	}
 }
 
-func TestPushTaskListsNoRemoteRefsAndPublishesOnce(t *testing.T) {
+// PushTask stays constant in the number of tasks a project holds: it names no
+// task but its own, and asks origin nothing per task. Establishing which project
+// origin is costs one listing the first time and nothing afterwards — including
+// nothing at all on the path every mutation takes, where the fetch in the same
+// command already compared the two identity refs.
+func TestPushTaskListsNoPerTaskRemoteRefsAndPublishesOnce(t *testing.T) {
 	repository, _, config := syncRepositories(t)
 	task := createSyncTask(t, repository, config, "Bounded task")
 	for i := 0; i < 10; i++ {
@@ -1332,11 +1388,32 @@ func TestPushTaskListsNoRemoteRefsAndPublishesOnce(t *testing.T) {
 	if _, err := repository.PushTask(context.Background(), config, task.ID); err != nil {
 		t.Fatal(err)
 	}
-	if got := countCommandPrefix(commands, "ls-remote"); got != 0 {
-		t.Fatalf("ls-remote invocations = %d, want 0; commands = %v", got, commands)
+	for _, command := range commands {
+		if len(command) > 0 && command[0] == "ls-remote" && (len(command) != 4 || command[3] != identityRef) {
+			t.Fatalf("PushTask() ran a remote probe beyond the identity check: %v", command)
+		}
 	}
-	if got := countCommandPrefix(commands, "push"); got != 1 {
-		t.Fatalf("push invocations = %d, want 1; commands = %v", got, commands)
+	if got := countCommandPrefix(commands, "ls-remote"); got != 1 {
+		t.Fatalf("ls-remote invocations = %d, want the single identity check; commands = %v", got, commands)
+	}
+	if got := countTaskPushes(commands); got != 1 {
+		t.Fatalf("task push invocations = %d, want 1; commands = %v", got, commands)
+	}
+
+	// A second publication in the same command has nothing left to establish.
+	second := createSyncTask(t, repository, config, "Second bounded task")
+	commands = nil
+	if _, err := repository.PushTask(context.Background(), config, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := countCommandPrefix(commands, "ls-remote"); got != 0 {
+		t.Fatalf("ls-remote invocations = %d, want none once origin is known; commands = %v", got, commands)
+	}
+	if got := countIdentityPushes(commands); got != 0 {
+		t.Fatalf("identity push invocations = %d, want none once origin is known; commands = %v", got, commands)
+	}
+	if got := countTaskPushes(commands); got != 1 {
+		t.Fatalf("task push invocations = %d, want 1; commands = %v", got, commands)
 	}
 }
 
