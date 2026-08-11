@@ -1297,7 +1297,7 @@ operations per task. In the benchmark CLI, `--tasks` counts total refs; omitted
 smaller diagnostics, while an explicit zero is diagnostic-only. Cold CLI
 rebuilds and each warm HTTP sample's preparatory task-list load are untimed
 setup; the `api-tasks` read scenario times a second, warm load of its own. Local
-CLI p95 targets are 200 ms, warm-update p95 is 100 ms, and every burst must be
+CLI p95 targets are 200 ms, warm-update p95 is 150 ms, and every burst must be
 below 1 second; read scenarios are budgeted on the same rule as mutations, so the
 local reads `cli-list` and `cli-show` carry the 200 ms local target while the
 warm `api-tasks` read has no approved budget and reports `not-evaluated`, and
