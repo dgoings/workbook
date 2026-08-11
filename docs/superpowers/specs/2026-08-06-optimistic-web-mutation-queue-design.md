@@ -444,8 +444,24 @@ A create that lands after its form is detached keeps the reader where they went,
 which it already did: the ownership check the relationship phase performs sees
 the route is gone and stops before the landing navigation, so nothing is
 announced and the created task arrives on the board through the refresh every
-create already performs. That is the same answer the landed save gives, and it is
-now pinned by a test rather than left to be re-derived from the ownership check.
+create already performs. That is the same answer the landed save gives.
+
+What the tests pin is that route check specifically. The check asks two questions
+— is this create's route still mounted, and is its dependency controller still
+the published one — and which of them does the work depends on where the reader
+went. A reader who opens another task's detail route publishes a controller of
+its own, so the controller question alone stops the landing there and the route
+question is never exercised. A reader who follows a stale link to a task the
+board no longer carries lands on "Task not found", which returns before any form
+publishes a controller — and the route parser still calls that view a detail, so
+the New Task form's controller is not retired either. The controller question is
+answered yes there and only the route question stops the landing. Both journeys
+are covered, and deleting the route question turns the stale-link one red: the
+regression it catches is a reader dragged off the page they opened and onto the
+board by a create finishing behind them. Deleting the controller question alone
+turns neither red, because the route question is the stronger of the two for
+every way a reader can leave a form; it is the belt to that brace rather than
+behavior under test.
 
 **The form follows its own writes.** The sidebar's dependency edges are the
 other thing that moves this task's head, and a "Depends On" edge is recorded on

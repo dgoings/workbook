@@ -25,6 +25,10 @@ import (
 const (
 	detachedCreatePrerequisiteID = "WB-01J0000000000000000000DC01"
 	detachedCreateCreatedID      = "WB-01J0000000000000000000DC02"
+	// A task the board does not carry, so its route renders "Task not found" —
+	// the page a stale link lands on, and the one route this create can be
+	// detached onto that publishes no dependency controller of its own.
+	detachedCreateMissingID = "WB-01J0000000000000000000DC03"
 )
 
 const (
@@ -220,27 +224,78 @@ setTimeout(async () => {
 // there is nothing to announce — but the route the reader deliberately went to
 // while waiting is theirs, and a create finishing behind them must not take it
 // away, exactly as a landed save must not.
+//
+// The guard that holds this is `ownsCreation()`, and it asks two questions: is
+// the route this create started on still mounted, and is its dependency
+// controller still the published one. Which of them does the work depends
+// entirely on where the reader went, so the reader goes to two different places
+// here. A stale link to a task the board no longer carries renders "Task not
+// found", which returns before any form publishes a controller — and because the
+// route parser still calls that view a detail, renderRoute does not retire the
+// New Task form's controller either, so the controller question is still
+// answered yes and only the route question stops the landing. Another task's
+// detail route is the opposite: it publishes a controller of its own, and the
+// controller question stops the landing there.
+//
+// Deleting the route question turns the first case red and leaves the second
+// green, and the regression it catches is a reader dragged off the page they
+// opened and onto the board by a create finishing behind them. Deleting the
+// controller question turns neither red: the route question is the stronger of
+// the two for every way a reader can leave a form, so it is the belt to that
+// brace rather than behavior these cases can pin. The second case is kept as the
+// ordinary journey anyone would look for first, not as a pin on it.
 func TestHandlerClientDetachedCreateLeavesTheRouteTheReaderChose(t *testing.T) {
-	node := requireNode(t)
 	prerequisite := clientPlacementTask(detachedCreatePrerequisiteID, "Prerequisite", core.StatusDone, core.PriorityHigh)
 	created := clientPlacementTask(detachedCreateCreatedID, detachedCreateTitle, core.StatusReady, core.PriorityMedium)
 	created.Description = detachedCreateDescription
 	created.Labels = []string{detachedCreateLabel}
 	created.Dependencies = []string{prerequisite.ID}
-	script := newTaskClientScript(t, "/tasks/new?status=ready")
 	board := tasksDocumentJSON(t, []core.Task{prerequisite})
 	refreshed := tasksDocumentJSON(t, []core.Task{created, prerequisite})
 
-	program := clientDOMHarness("/tasks/new?status=ready", board) + script + `
+	for _, scenario := range []struct {
+		name string
+		// The task path the reader opens while the create is in flight.
+		opened string
+		// What they must still be looking at once the create has landed.
+		reading string
+	}{
+		{
+			name:   "a stale link that renders no form of its own",
+			opened: detachedCreateMissingID,
+			reading: `
+  const heading = findElement(main, (element) => element.id === "route-message-title");
+  if (!heading || heading.textContent !== "Task not found") {
+    throw new Error("the reader was moved off the page they opened: " +
+      JSON.stringify(heading && heading.textContent));
+  }`,
+		},
+		{
+			name:   "another task's detail route",
+			opened: prerequisite.ID,
+			reading: `
+  const heading = findElement(main, (element) => element.id === "task-form-title");
+  if (!heading || heading.textContent !== ` + strconv.Quote(prerequisite.Title) + `) {
+    throw new Error("the reader was moved off the task they opened: " +
+      JSON.stringify(heading && heading.textContent));
+  }`,
+		},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			node := requireNode(t)
+			script := newTaskClientScript(t, "/tasks/new?status=ready")
+
+			program := clientDOMHarness("/tasks/new?status=ready", board) + script + `
 setTimeout(async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
 ` + heldDetachedCreate(prerequisite.ID, prerequisite.Title, `(() => {
     taskResponse = `+refreshed+`;
     return { ok: true, json: async () => (`+taskMutationJSON(refreshed, "")+`) };
   })()`) + `
-  // Rather than wait, the reader opens the prerequisite they staged, to read it.
+  // Rather than wait, the reader opens something they came here to read.
+  const wantPath = "/tasks/" + encodeURIComponent(` + strconv.Quote(scenario.opened) + `);
   const link = new TestElement("a");
-  link.href = "/tasks/" + encodeURIComponent(prerequisiteID);
+  link.href = wantPath;
   await documentEventListeners.click({
     target: link, button: 0, defaultPrevented: false,
     metaKey: false, ctrlKey: false, shiftKey: false, altKey: false,
@@ -254,11 +309,7 @@ setTimeout(async () => {
   if (main.firstElementChild !== reading) {
     throw new Error("the landed create replaced the route the reader had gone to");
   }
-  const heading = findElement(main, (element) => element.id === "task-form-title");
-  if (heading.textContent !== ` + strconv.Quote(prerequisite.Title) + `) {
-    throw new Error("the reader was moved off the task they opened: " + JSON.stringify(heading.textContent));
-  }
-  const wantPath = "/tasks/" + encodeURIComponent(prerequisiteID);
+` + scenario.reading + `
   if (historyPaths.length !== 1 || historyPaths[0] !== wantPath) {
     throw new Error("the landed create pushed a route of its own: " + JSON.stringify(historyPaths));
   }
@@ -287,7 +338,9 @@ setTimeout(async () => {
   if (!card) throw new Error("the created task never reached the board");
 }, 0);
 `
-	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
-		t.Fatalf("execute detached landed create behavior: %v\n%s", err, output)
+			if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+				t.Fatalf("execute detached landed create behavior: %v\n%s", err, output)
+			}
+		})
 	}
 }
