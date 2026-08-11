@@ -132,7 +132,7 @@ func (r *Repository) LoadVocabulary(ctx context.Context) (core.Vocabulary, error
 	}
 	record, found, err := r.readConfigRef(ctx, config, configRef)
 	if err != nil {
-		return core.Vocabulary{}, err
+		return core.Vocabulary{}, unreadableConfigLedger(err)
 	}
 	if !found {
 		// A project with no ledger costs one ref enumeration and no object
@@ -141,6 +141,26 @@ func (r *Repository) LoadVocabulary(ctx context.Context) (core.Vocabulary, error
 		return r.rememberVocabulary(core.LegacyVocabulary()), nil
 	}
 	return r.rememberVocabulary(record.State.Vocabulary()), nil
+}
+
+// unreadableConfigLedger names the ref and the command that diagnoses it.
+//
+// Failing here rather than degrading to the legacy vocabulary is deliberate: a
+// clone that silently fell back would draw every board in the wrong columns and
+// accept status values the project does not have, which is worse than not
+// running. But this failure reaches a person through `workbook list`, `show`,
+// `next` and `create` alike, and what those used to say was whatever the
+// decoder said — "cannot decode document", naming nothing. Every command that
+// stops has to say which ref stopped it and what reads it in detail.
+func unreadableConfigLedger(err error) error {
+	category := core.CategoryOf(err)
+	if category == "" {
+		category = core.CategoryCorruptData
+	}
+	return core.Wrap(category,
+		"cannot read this project's status configuration from "+configRef+
+			"; run `workbook validate` to see which configuration commit is at fault",
+		err)
 }
 
 func (r *Repository) rememberVocabulary(vocabulary core.Vocabulary) core.Vocabulary {
@@ -897,7 +917,9 @@ func (r *Repository) prunableParkedConfigRefs(ctx context.Context) ([]string, er
 // It stands alone for the same reason the task sweep does: pruning inside a
 // write bounds retention only for a clone that keeps writing, and a clone that
 // fetches and reconciles but never changes a status again would otherwise keep
-// every tip its ledger ever orphaned.
+// every tip its ledger ever orphaned. The synchronization watcher calls it on
+// every tick, beside the task sweep, which is what makes the bound a bound
+// rather than a comment.
 func (r *Repository) PruneParkedConfigRefs(ctx context.Context) (int, error) {
 	if err := r.verifyIdentity(ctx); err != nil {
 		return 0, err

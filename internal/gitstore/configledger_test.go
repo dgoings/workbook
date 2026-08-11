@@ -2,6 +2,7 @@ package gitstore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -307,6 +308,77 @@ func TestConfigRefRejectsChildrenLocallyAndToleratesThemOnOrigin(t *testing.T) {
 	)
 	if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
 		t.Fatalf("local child category = %q, want %q; error = %v", got, want, err)
+	}
+}
+
+// TestUnreadableLedgerNamesTheRefAndTheCommandThatDiagnosesIt.
+//
+// Refusing to run is the right answer — a clone that quietly fell back to the
+// built-in statuses would draw every board in columns the project does not have
+// — but this failure reaches a person through list, show, next and create
+// alike, and what those said before was whatever the decoder said, naming
+// nothing. Every one of them has to say which ref stopped it and what reads it
+// in detail.
+func TestUnreadableLedgerNamesTheRefAndTheCommandThatDiagnosesIt(t *testing.T) {
+	repo, config := writeRepository(t)
+	ctx := context.Background()
+	writeConfig(t, repo, config, configOperations(renameOperation("ready", "todo"))...)
+
+	// A task commit has the same tree shape and decodes as nothing this ref can
+	// hold, which is the shape of a ledger somebody rewrote by hand.
+	task, _, _ := writeRoot(t, repo, config)
+	syncGit(t, repo.Root, "update-ref", configRef, task.Head)
+
+	fresh, err := Open(ctx, repo.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, readErr := fresh.LoadVocabulary(ctx)
+	if readErr == nil {
+		t.Fatal("LoadVocabulary() error = nil, want an unreadable ledger to stop the command")
+	}
+	if !strings.Contains(readErr.Error(), configRef) {
+		t.Fatalf("error = %q, want it to name %s", readErr, configRef)
+	}
+	if !strings.Contains(readErr.Error(), "workbook validate") {
+		t.Fatalf("error = %q, want it to name the command that diagnoses it", readErr)
+	}
+	// The decoder's own account survives; the wrapper adds to it rather than
+	// replacing it.
+	if !strings.Contains(readErr.Error(), "decode") {
+		t.Fatalf("error = %q, want the underlying failure preserved", readErr)
+	}
+}
+
+// TestPushRefusalReasonKeepsTheReasonAndDropsTheAdvice pins the one line a
+// carve-out warning is allowed to be. Git's advice after a refused push is
+// about pulling and merging a branch, which is not what a Workbook ref is, and
+// flattening it buried the reason under a paragraph aimed at the wrong workflow.
+func TestPushRefusalReasonKeepsTheReasonAndDropsTheAdvice(t *testing.T) {
+	refused := gitCommandResult{stderr: []byte(
+		"To /tmp/origin.git\n" +
+			" ! [remote rejected] refs/workbook/config -> refs/workbook/config (pre-receive hook declined)\n" +
+			"error: failed to push some refs to '/tmp/origin.git'\n" +
+			"hint: Updates were rejected because the tip of your current branch is behind\n" +
+			"hint: its remote counterpart. If you want to integrate the remote changes,\n" +
+			"hint: use 'git pull' before pushing again.\n" +
+			"hint: See the 'Note about fast-forwards' in 'git push --help' for details.\n"),
+		err: errors.New("exit status 1"),
+	}
+	got := pushRefusalReason(refused)
+	if strings.Contains(got, "hint:") || strings.Contains(got, "git pull") {
+		t.Fatalf("reason = %q, want the advice dropped", got)
+	}
+	if !strings.Contains(got, "pre-receive hook declined") {
+		t.Fatalf("reason = %q, want the refusal reason kept", got)
+	}
+	if strings.Contains(got, "\n") {
+		t.Fatalf("reason = %q, want one line", got)
+	}
+
+	// A refusal Git explained only through its exit status still says something.
+	if got := pushRefusalReason(gitCommandResult{err: errors.New("exit status 128")}); got != "exit status 128" {
+		t.Fatalf("reason = %q, want the exit status when there is no stderr", got)
 	}
 }
 

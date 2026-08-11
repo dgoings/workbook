@@ -2,9 +2,11 @@ package gitstore
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/testrepo"
@@ -526,4 +528,154 @@ func TestConcurrentConfigWritesConvergeOnOneLedger(t *testing.T) {
 	if !vocabulary.Has("triage") && !vocabulary.Has("review") {
 		t.Fatalf("statuses = %#v, want the winning write to be readable", vocabulary.Definitions())
 	}
+}
+
+// TestPushSucceedsAgainstAnOriginHoldingTheLedger guards a publication that
+// could not survive its own success.
+//
+// Push widened its one remote listing to ask about the configuration ref, and
+// the parser reading that listing skipped only the identity ref, so the first
+// project ever to publish a vocabulary broke publication for every teammate —
+// and with it their code pushes, because the managed pre-push hook's only
+// statement is the Workbook publication this test drives. Every existing
+// publication test pushes before any ledger exists, which is exactly why none
+// of them saw it.
+func TestPushSucceedsAgainstAnOriginHoldingTheLedger(t *testing.T) {
+	ctx := context.Background()
+	first, second, config := syncRepositories(t)
+
+	// Origin gains a ledger, published by somebody else.
+	writeConfig(t, first, config, configOperations(renameOperation("ready", "todo"))...)
+	publishConfigRef(t, first)
+
+	// A teammate who has never touched a status publishes a task.
+	fresh := openSyncCloneAt(t, second.Root)
+	task := createSyncTask(t, fresh, config, "Pushed past origin's ledger")
+	result, err := fresh.Push(ctx, config)
+	if err != nil {
+		t.Fatalf("Push() error = %v; result = %#v", err, result)
+	}
+	assertSyncOutcome(t, result, task.ID, SyncPublished)
+	if !remoteRefExists(t, fresh, taskRefPrefix+task.ID) {
+		t.Fatalf("origin has no %s after a push that reported publishing it", taskRefPrefix+task.ID)
+	}
+	// Origin's ledger is untouched by a push that had nothing to say about it.
+	if got, want := remoteRefValue(t, fresh, configRef), refValue(t, first, configRef); got != want {
+		t.Fatalf("origin's ledger = %q, want the untouched %q", got, want)
+	}
+
+	// A full Sync reads the same listing shape and behaves the same way.
+	syncTask := createSyncTask(t, fresh, config, "Synced past origin's ledger")
+	run, err := fresh.Sync(ctx, config)
+	if err != nil {
+		t.Fatalf("Sync() error = %v; result = %#v", err, run)
+	}
+	assertSyncOutcome(t, run.Push, syncTask.ID, SyncPublished)
+
+	// And so does the targeted push every automatically synchronizing mutation
+	// makes, which never lists origin at all.
+	targeted := createSyncTask(t, fresh, config, "Targeted past origin's ledger")
+	if _, err := fresh.PushTask(ctx, config, targeted.ID); err != nil {
+		t.Fatalf("PushTask() error = %v", err)
+	}
+}
+
+// TestReplayBudgetRefusesAHugeDivergenceWithoutDecidingAnything is the second
+// resource bound's regression guard, driven through a real divergence rather
+// than asserted about the constant.
+//
+// The refusal has to have four properties at once, and only a real reconcile
+// can show all four: it is operational, it names the bound so somebody can
+// raise it, it leaves this clone's ledger exactly where it was — no move, no
+// park — and it does not stop the tasks from synchronizing.
+func TestReplayBudgetRefusesAHugeDivergenceWithoutDecidingAnything(t *testing.T) {
+	ctx := context.Background()
+	first, second, config := syncRepositories(t)
+
+	// A shared ledger, then one commit on each side so the two diverge.
+	writeConfig(t, first, config, configOperations(renameOperation("ready", "todo"))...)
+	publishConfigRef(t, first)
+	if _, err := second.Fetch(ctx, config); err != nil {
+		t.Fatal(err)
+	}
+	writeConfig(t, first, config, configOperations(relabelOperation("doing", "Doing"))...)
+	publishConfigRef(t, first)
+	// A task nobody disputes, to prove the tasks still move.
+	task := createSyncTask(t, first, config, "Unrelated to the ledger")
+	publishTaskRefs(t, first)
+
+	// One commit past the budget on this side. The objects are written directly
+	// rather than through WriteConfigOperation, so the fixture costs three Git
+	// processes a commit instead of eight; what is under test is the fold's
+	// refusal, not the authoring path.
+	local := growConfigLedger(t, second, config, core.MaxConfigLedgerReplayCommits+1)
+
+	fresh := openSyncCloneAt(t, second.Root)
+	result, err := fresh.Fetch(ctx, config)
+	if got, want := core.CategoryOf(err), core.CategoryOperational; got != want {
+		t.Fatalf("Fetch() category = %q, want %q; error = %v", got, want, err)
+	}
+	if !strings.Contains(err.Error(), "MaxConfigLedgerReplayCommits") {
+		t.Fatalf("error = %q, want it to name the bound so it can be raised", err)
+	}
+	if result.Config == nil || result.Config.Status != SyncConfigInvalid {
+		t.Fatalf("configuration result = %#v, want the refusal recorded", result.Config)
+	}
+	if result.Config.Moved {
+		t.Fatalf("configuration result = %#v, want a refusal that moved nothing", result.Config)
+	}
+	if got := refValue(t, second, configRef); got != local {
+		t.Fatalf("%s = %q, want the refusal to have left it at %q", configRef, got, local)
+	}
+	if refExists(t, second, parkedConfigRefPrefix+"0") {
+		t.Fatal("a refusal parked a tip it never replaced")
+	}
+	// The tasks are the project's history, and one oversized ledger does not
+	// stop them.
+	if result.Status != SyncPhaseCompleted {
+		t.Fatalf("fetch phase = %q, want it to have completed the task work", result.Status)
+	}
+	assertSyncOutcome(t, result, task.ID, SyncCreated)
+}
+
+// growConfigLedger appends count relabel commits to a repository's ledger and
+// returns the new tip, writing objects directly and moving the ref once.
+func growConfigLedger(t *testing.T, repo *Repository, config core.ProjectConfig, count int) string {
+	t.Helper()
+	ctx := context.Background()
+	tip, found, err := repo.readConfigRef(ctx, config, configRef)
+	if err != nil || !found {
+		t.Fatalf("readConfigRef() = (found %t, error %v), want an existing ledger", found, err)
+	}
+	head, state := tip.Head, tip.State
+	wallTime := time.Date(2026, time.August, 11, 12, 0, 0, 0, time.UTC)
+	for index := 0; index < count; index++ {
+		pack, err := core.NewConfigOperationPack(
+			state.ProjectID,
+			state.History.Generation,
+			"author@example.test",
+			state.LogicalClock+1,
+			wallTime,
+			[]core.ConfigOperation{{
+				ID:     mustConfigOperationID(t, index),
+				Type:   core.ConfigStatusRelabel,
+				Status: "todo",
+				Label:  fmt.Sprintf("To Do %d", index),
+			}},
+		)
+		if err != nil {
+			t.Fatalf("NewConfigOperationPack(%d) error = %v", index, err)
+		}
+		next, err := core.ApplyConfig(&state, pack)
+		if err != nil {
+			t.Fatalf("ApplyConfig(%d) error = %v", index, err)
+		}
+		head, err = repo.writeConfigObjects(ctx, head, pack, next, "workbook: offline configuration change")
+		if err != nil {
+			t.Fatalf("writeConfigObjects(%d) error = %v", index, err)
+		}
+		state = next
+	}
+	syncGit(t, repo.Root, "update-ref", configRef, head, tip.Head)
+	return head
 }

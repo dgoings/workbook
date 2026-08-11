@@ -40,10 +40,11 @@ func (r *Repository) parseRemoteTaskHeads(
 			return nil, nil, core.Wrap(core.CategoryOperational, "Git returned an invalid remote task object ID", err)
 		}
 		refName := string(parts[1])
-		// Publication asks for the identity ref in the same listing, so that
-		// checking which project origin holds costs no second round trip. It is
-		// read by the identity check, not here.
-		if refName == identityRef {
+		// Publication asks for the singleton refs in the same listing, so that
+		// checking which project origin holds and whether it has this project's
+		// configuration costs no second round trip. They are read by their own
+		// stages, not here.
+		if isPublicationSingletonRef(refName) {
 			continue
 		}
 		if !strings.HasPrefix(refName, taskRefPrefix) {
@@ -64,6 +65,26 @@ func (r *Repository) parseRemoteTaskHeads(
 		heads[taskID] = objectID
 	}
 	return heads, ignored, nil
+}
+
+// publicationSingletonRefs are the non-task refs that publication's one remote
+// listing asks about.
+//
+// This list and the ref patterns Push sends must stay in step, and the cost of
+// them drifting apart is not a missing feature: a name asked for and not
+// skipped here fails the whole publication, so a project that started using the
+// namespace would break `workbook push` — and every code push behind the
+// managed pre-push hook — for every teammate who had not. Anything added to
+// Push's ls-remote patterns belongs here in the same change.
+var publicationSingletonRefs = [...]string{identityRef, configRef}
+
+func isPublicationSingletonRef(refName string) bool {
+	for _, singleton := range publicationSingletonRefs {
+		if refName == singleton {
+			return true
+		}
+	}
+	return false
 }
 
 // parsePushPorcelain produces one exact task outcome for each expected

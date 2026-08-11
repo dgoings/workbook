@@ -46,6 +46,16 @@ type SyncConfigResult struct {
 	Status SyncConfigStatus `json:"status"`
 	Detail string           `json:"detail,omitempty"`
 	Head   string           `json:"head,omitempty"`
+	// Moved reports that this run wrote the local canonical ledger ref.
+	//
+	// It is a separate fact from Status, and it has to be, because Status is
+	// the last thing that happened and a run can do two things: a reconcile
+	// that is then published reports "published", which is true and is also the
+	// half a caller asking "did anything change here?" must not be given. That
+	// caller is the watcher's projection refresh gate, and reading the status
+	// alone made it conclude nothing moved in exactly the run where the local
+	// ref moved furthest. Publication never sets this: pushing changes origin.
+	Moved bool `json:"moved,omitempty"`
 	// Ignored names refs origin holds under the configuration ref's name that
 	// this version does not read. Like the identity and task namespaces, this
 	// is a report and never an instruction: the names belong to origin, and a
@@ -188,6 +198,7 @@ func (r *Repository) reconcileObservedConfig(
 		return configStageOutcome{Result: &SyncConfigResult{
 			Status: SyncConfigCreated,
 			Head:   remoteHead,
+			Moved:  true,
 			Detail: "adopted origin's project configuration",
 		}}
 	}
@@ -211,6 +222,7 @@ func (r *Repository) reconcileObservedConfig(
 		return configStageOutcome{Result: &SyncConfigResult{
 			Status: SyncConfigFastForwarded,
 			Head:   remoteHead,
+			Moved:  true,
 			Detail: "fast-forwarded to origin's project configuration",
 		}}
 	}
@@ -241,11 +253,12 @@ func reconciledConfigResult(outcome configReconcileOutcome) *SyncConfigResult {
 		return &SyncConfigResult{
 			Status:    SyncConfigConflicted,
 			Head:      outcome.Head,
+			Moved:     true,
 			Detail:    core.ConfigConflictDetail(outcome.Conflicts[0]),
 			Conflicts: outcome.Conflicts,
 		}
 	}
-	return &SyncConfigResult{Status: SyncConfigReconciled, Head: outcome.Head, Detail: detail}
+	return &SyncConfigResult{Status: SyncConfigReconciled, Head: outcome.Head, Moved: true, Detail: detail}
 }
 
 func configReplayError(outcome configReconcileOutcome) error {
@@ -408,10 +421,42 @@ func (r *Repository) publishConfigLedger(ctx context.Context) (*SyncConfigResult
 		Head:        head,
 		Unpublished: true,
 		Detail: fmt.Sprintf("could not publish %s to origin: %s",
-			configRef, oneLine(gitCommandResultError(push).Error())),
+			configRef, pushRefusalReason(push)),
 	}
 	r.recordConfigReport(result)
 	return result, nil
+}
+
+// pushRefusalReason renders why origin would not take a ref, as one line a
+// warning can carry.
+//
+// Git answers a refused push with the reason and then several lines of advice
+// about pulling and merging, which is advice about a branch and is wrong for a
+// Workbook ref. Flattening the whole thing produced a warning that buried its
+// own first clause under a paragraph aimed at a workflow the user is not in.
+// The refusal keeps its reason; the hints are dropped, because the run already
+// says what happens next — the next fetch replays this ledger onto whatever
+// origin holds.
+func pushRefusalReason(result gitCommandResult) string {
+	kept := make([]string, 0, 2)
+	for _, line := range strings.Split(string(result.stderr), "\n") {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case trimmed == "",
+			strings.HasPrefix(trimmed, "hint:"),
+			strings.HasPrefix(trimmed, "To "),
+			strings.HasPrefix(trimmed, "Everything up-to-date"):
+			continue
+		}
+		kept = append(kept, strings.Join(strings.Fields(trimmed), " "))
+	}
+	if len(kept) == 0 {
+		if result.err != nil {
+			return oneLine(result.err.Error())
+		}
+		return "origin refused the ref"
+	}
+	return strings.Join(kept, "; ")
 }
 
 // configPublicationCandidate reports the ledger head origin is missing.
@@ -470,6 +515,11 @@ func mergeConfigPublication(stage, published *SyncConfigResult) *SyncConfigResul
 	merged.Head = published.Head
 	merged.Unpublished = published.Unpublished
 	merged.Detail = joinConfigDetails(stage.Detail, published.Detail)
+	// Moved survives the merge. The publication is the run's last word and
+	// takes the status, but whether this clone's own ref moved is a fact about
+	// the stage, and overwriting it would make a reconcile-then-publish
+	// indistinguishable from a publication that changed nothing here.
+	merged.Moved = stage.Moved || published.Moved
 	return &merged
 }
 
