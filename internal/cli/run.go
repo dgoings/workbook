@@ -97,6 +97,8 @@ func Run(ctx context.Context, args []string, cwd string, stdout, stderr io.Write
 		err = runPush(ctx, commandArgs, cwd, stdout, stderr)
 	case "sync":
 		err = runSync(ctx, commandArgs, cwd, stdout, stderr)
+	case "status":
+		err = runStatus(ctx, commandArgs, cwd, stdout, stderr)
 	case "config":
 		err = runConfig(ctx, commandArgs, cwd, stdout, stderr)
 	case "docs":
@@ -500,14 +502,60 @@ func runList(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	if err != nil {
 		return err
 	}
+	warnings := statusFilterWarnings(service, filter)
 	if *jsonMode {
-		writeResult(stdout, "list", tasks)
+		writeResultWithWarnings(stdout, "list", tasks, warnings)
 	} else {
 		if err := writeList(stdout, tasks); err != nil {
 			return core.Wrap(core.CategoryOperational, "render list", err)
 		}
+		writeWarnings(stderr, warnings)
 	}
 	return nil
+}
+
+// statusFilterWarnings says what a status filter turned out to select, when
+// that is not what the caller typed.
+//
+// A filter outside the vocabulary succeeds and returns an empty list, which is
+// the honest answer to "which tasks are in a status this project does not
+// have". It is also indistinguishable from an empty column, so the miss is
+// named here; a filter that had to be forwarded says so too, because the tasks
+// that came back are not stored under the value that was asked for.
+func statusFilterWarnings(service core.Service, filter core.ListFilter) []core.Warning {
+	if filter.Status == nil {
+		return nil
+	}
+	resolution := service.ResolveStatusFilter(*filter.Status)
+	switch {
+	case !resolution.Known:
+		return []core.Warning{{
+			Code:    core.WarningStatusFilter,
+			Message: fmt.Sprintf("no status %q in this project's vocabulary", resolution.Requested),
+		}}
+	case resolution.Forwarded:
+		// The verb belongs to the one hop it describes, and the end of the
+		// chain gets its own clause; see statusChainClause. Pairing the first
+		// hop's verb with the last hop's destination reported a rename that
+		// never happened.
+		return []core.Warning{{
+			Code: core.WarningStatusFilter,
+			Message: fmt.Sprintf("no status %q in this project's vocabulary; it was %s %q%s, and %q is what was listed",
+				resolution.Requested, forwardingVerb(resolution.Operation), resolution.Via,
+				statusChainClause(resolution.Via, resolution.Resolved), resolution.Resolved),
+		}}
+	default:
+		return nil
+	}
+}
+
+// forwardingVerb names how a status stopped being live, in the voice a message
+// about the value somebody typed reads in.
+func forwardingVerb(operation core.ConfigOperationType) string {
+	if operation == core.ConfigStatusRemove {
+		return "removed into"
+	}
+	return "renamed to"
 }
 
 func runShow(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {

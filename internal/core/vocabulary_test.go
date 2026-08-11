@@ -233,7 +233,11 @@ func TestValidateVocabularyGrowthRefusesOnlyGrowth(t *testing.T) {
 
 	if err := validateVocabularyGrowth(atCeiling, over); err == nil {
 		t.Fatal("growth past the status ceiling was allowed, want a refusal")
-	} else if !strings.Contains(err.Error(), "workbook status remove") {
+	} else if !strings.Contains(err.Error(), "workbook status delete") {
+		// The command has to be the one the CLI actually implements. This
+		// message named `workbook status remove` before that verb family
+		// existed, which would have sent a reader to a command Workbook does
+		// not have.
 		t.Fatalf("refusal = %q, want it to name the removing command", err)
 	}
 	if err := validateVocabularyGrowth(over, further); err == nil {

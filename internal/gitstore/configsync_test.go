@@ -285,6 +285,79 @@ func TestConfigLedgerRidesTheTaskPublicationPath(t *testing.T) {
 	}
 }
 
+// A project with no tasks still publishes its statuses.
+//
+// Push returned early on an empty task-ref listing, which made it the one
+// publication path that could silently keep a vocabulary local — and the
+// project likeliest to have a vocabulary and no tasks is one being set up,
+// where the columns are exactly what a teammate needs before anything else.
+// Every existing publication test creates a task first, which is why none of
+// them saw it.
+func TestPushPublishesTheLedgerForAProjectWithNoTasks(t *testing.T) {
+	ctx := context.Background()
+	first, second, config := syncRepositories(t)
+
+	written := writeConfig(t, first, config, configOperations(addOperation("triage", "Triage", "1/2"))...)
+	result, err := first.Push(ctx, config)
+	if err != nil {
+		t.Fatalf("Push() error = %v", err)
+	}
+	if result.Status != SyncPhaseCompleted {
+		t.Fatalf("Push() status = %q, want completed", result.Status)
+	}
+	if result.Config == nil || result.Config.Status != SyncConfigPublished {
+		t.Fatalf("Push() config report = %#v, want a published ledger", result.Config)
+	}
+	if got := remoteRefValue(t, first, configRef); got != written.Head {
+		t.Fatalf("origin's ledger = %q, want %q", got, written.Head)
+	}
+
+	// The teammate reads the published statuses after an ordinary fetch.
+	if _, err := second.Fetch(ctx, config); err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	vocabulary, err := openSyncCloneAt(t, second.Root).LoadVocabulary(ctx)
+	if err != nil {
+		t.Fatalf("LoadVocabulary() error = %v", err)
+	}
+	if !vocabulary.Has("triage") {
+		t.Fatalf("teammate statuses = %#v, want the published triage", vocabulary.Definitions())
+	}
+}
+
+// PushConfig is the publication a status change makes: the ledger alone, with
+// no task ref to name, and the same identity settlement in front of it.
+func TestPushConfigPublishesTheLedgerAlone(t *testing.T) {
+	ctx := context.Background()
+	first, _, config := syncRepositories(t)
+	task := createSyncTask(t, first, config, "Kept local")
+	written := writeConfig(t, first, config, configOperations(renameOperation("ready", "todo"))...)
+
+	published, err := first.PushConfig(ctx, config)
+	if err != nil {
+		t.Fatalf("PushConfig() error = %v", err)
+	}
+	if published == nil || published.Status != SyncConfigPublished || published.Head != written.Head {
+		t.Fatalf("PushConfig() = %#v, want the ledger published", published)
+	}
+	if got := remoteRefValue(t, first, configRef); got != written.Head {
+		t.Fatalf("origin's ledger = %q, want %q", got, written.Head)
+	}
+	if remoteRefExists(t, first, taskRefPrefix+task.ID) {
+		t.Fatal("PushConfig() published a task ref, want the ledger alone")
+	}
+
+	// A second call has nothing to do and says nothing, which is what keeps a
+	// status command that changed nothing from reporting a publication.
+	repeat, err := first.PushConfig(ctx, config)
+	if err != nil {
+		t.Fatalf("PushConfig() error = %v", err)
+	}
+	if repeat != nil {
+		t.Fatalf("PushConfig() = %#v, want no report when origin is current", repeat)
+	}
+}
+
 // TestVocabularyPropagatesAndCorrectsOnTouch is the end-to-end claim the whole
 // story rests on: one clone renames a status, another clone reads its stored
 // tasks into the new column, and the next write to such a task settles the

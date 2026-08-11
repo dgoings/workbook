@@ -264,6 +264,54 @@ func (session *taskSession) publish(ctx context.Context, taskID string) {
 	session.pushInline(ctx, taskID)
 }
 
+// publishConfig sends the configuration ledger a status change just moved.
+//
+// It is publish for the change that has no task ref, and the difference is only
+// in what goes out: the same watcher deferral, the same skip when the fetch did
+// not complete, and the same treatment of a rejection as a warning rather than
+// a failure — the ledger is durable locally, and the next fetch replays it onto
+// whatever origin holds by then.
+//
+// The nudge carries no task ID because there is no task. A watcher's nudge only
+// wakes its loop, which synchronizes everything this clone holds, so the ledger
+// rides that just as a task would.
+func (session *taskSession) publishConfig(ctx context.Context) {
+	if !session.report.Enabled {
+		return
+	}
+	if session.deferred {
+		if err := session.nudge(""); err == nil {
+			return
+		}
+		// The watcher answered the probe and was gone by the time the write
+		// landed, exactly as on the task path; publishing here is what keeps
+		// "deferred" from being a promise this command has no basis to make.
+		session.deferred = false
+		session.report.Status = syncStatusCompleted
+		session.report.Detail = ""
+		session.pushConfigInline(ctx)
+		return
+	}
+	if session.fetched == nil {
+		return
+	}
+	session.pushConfigInline(ctx)
+}
+
+func (session *taskSession) pushConfigInline(ctx context.Context) {
+	published, err := session.repository.PushConfig(ctx, session.config)
+	session.report.Identity, _ = session.repository.IdentityReport()
+	if published != nil {
+		session.report.Config = published
+	}
+	if err != nil {
+		session.report.Status = syncStatusFailed
+		session.report.Detail = "push failed: " + err.Error()
+		return
+	}
+	session.report.Status = syncStatusCompleted
+}
+
 func (session *taskSession) pushInline(ctx context.Context, taskID string) {
 	pushed, err := session.repository.PushTask(ctx, session.config, taskID)
 	session.report.Push = &pushed

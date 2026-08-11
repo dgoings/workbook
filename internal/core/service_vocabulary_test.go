@@ -110,11 +110,11 @@ func TestServiceMutationsRejectAStatusTheProjectDoesNotDefine(t *testing.T) {
 	}
 }
 
-// The filter still refuses a status the project does not define, with the same
-// category and the same message it used before per-project statuses existed. An
-// empty table and a zero exit status would be a worse answer than a refusal
-// until the result envelope can explain itself, which is PR-C's change.
-func TestServiceListStillRejectsAStatusOutsideTheVocabulary(t *testing.T) {
+// The filter accepts a status the project does not define and reports what it
+// did with it. This is the relaxation PR-B deferred: a filter authors nothing,
+// so refusing one buys nothing, and the empty result it produces is only honest
+// because ResolveStatusFilter lets the caller say why it is empty.
+func TestServiceListAcceptsAStatusOutsideTheVocabularyAndReportsIt(t *testing.T) {
 	store := newMemoryTaskStore(serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F1", TaskData{
 		Title: "Task", Status: "triage", Priority: PriorityMedium, Rank: "1/1",
 	}))
@@ -122,15 +122,16 @@ func TestServiceListStillRejectsAStatusOutsideTheVocabulary(t *testing.T) {
 
 	for _, filtered := range []Status{"awaiting-review", "backlog", "Awaiting Review"} {
 		status := filtered
-		_, err := service.List(context.Background(), ListFilter{Status: &status})
-		if err == nil {
-			t.Fatalf("List(%q) error = nil, want a rejection", status)
+		tasks, err := service.List(context.Background(), ListFilter{Status: &status})
+		if err != nil {
+			t.Fatalf("List(%q) error = %v, want the filter accepted", status, err)
 		}
-		if got := CategoryOf(err); got != CategoryValidation {
-			t.Fatalf("List(%q) category = %q, want %q", status, got, CategoryValidation)
+		if len(tasks) != 0 {
+			t.Fatalf("List(%q) returned %d tasks, want none", status, len(tasks))
 		}
-		if got, want := err.Error(), `invalid task status "`+string(status)+`"`; got != want {
-			t.Fatalf("List(%q) error = %q, want %q", status, got, want)
+		resolution := service.ResolveStatusFilter(status)
+		if resolution.Known {
+			t.Fatalf("ResolveStatusFilter(%q) = %#v, want an unknown status", status, resolution)
 		}
 	}
 
@@ -142,6 +143,39 @@ func TestServiceListStillRejectsAStatusOutsideTheVocabulary(t *testing.T) {
 	}
 	if got := len(tasks); got != 1 {
 		t.Fatalf("List() returned %d tasks, want 1", got)
+	}
+	if resolution := service.ResolveStatusFilter(live); !resolution.Known || resolution.Forwarded {
+		t.Fatalf("ResolveStatusFilter(%q) = %#v, want a live status", live, resolution)
+	}
+}
+
+// A filter naming a value that still resolves selects the status it resolves
+// to. Answering "no tasks are in shipped" about a project that merely renamed
+// the column is the one answer that is actually wrong.
+func TestServiceListResolvesAStoredFilterThroughTheChains(t *testing.T) {
+	store := newMemoryTaskStore(serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F1", TaskData{
+		Title: "Task", Status: "released", Priority: PriorityMedium, Rank: "1/1",
+	}))
+	service := vocabularyServiceUnderTest(store, &sequenceIDSource{}, customVocabulary(t))
+
+	renamed := Status("shipped")
+	tasks, err := service.List(context.Background(), ListFilter{Status: &renamed})
+	if err != nil {
+		t.Fatalf("List(%q) error = %v", renamed, err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("List(%q) returned %d tasks, want the renamed status's one task", renamed, len(tasks))
+	}
+	resolution := service.ResolveStatusFilter(renamed)
+	if !resolution.Known || !resolution.Forwarded ||
+		resolution.Resolved != "released" || resolution.Operation != ConfigStatusRename {
+		t.Fatalf("ResolveStatusFilter(%q) = %#v, want a rename forwarded to released", renamed, resolution)
+	}
+
+	removed := Status("blocked")
+	if resolution := service.ResolveStatusFilter(removed); !resolution.Forwarded ||
+		resolution.Resolved != "triage" || resolution.Operation != ConfigStatusRemove {
+		t.Fatalf("ResolveStatusFilter(%q) = %#v, want a removal forwarded to triage", removed, resolution)
 	}
 }
 

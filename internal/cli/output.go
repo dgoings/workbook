@@ -34,6 +34,7 @@ Commands:
   fetch [--json]
   push [--json]
   sync [--watch [--interval <duration>]] [--status] [--json]
+  status <command> [options]
   config <command> [options]
   docs <command> [options]
   hooks install [--json]
@@ -135,6 +136,35 @@ func writeResult(output io.Writer, command string, data any) {
 		Command: command,
 		Data:    data,
 	})
+}
+
+// writeResultWithWarnings writes a successful result that has something to say
+// beside it.
+//
+// It exists because a warning used to require a mutation: writeMutationResult
+// carries core.Warning, and every read wrote through writeResult, which has no
+// member for one. A read that answers correctly while the answer needs
+// explaining — `workbook list --status` naming a status this project does not
+// have — had nowhere to put the explanation but the tasks it was not going to
+// return. The warnings ride the same envelope member mutations use, so one
+// consumer reads both.
+func writeResultWithWarnings(output io.Writer, command string, data any, warnings []core.Warning) {
+	_ = json.NewEncoder(output).Encode(ResultEnvelope{
+		Format:   "workbook.result",
+		Version:  1,
+		Command:  command,
+		Data:     data,
+		Warnings: warnings,
+	})
+}
+
+// writeWarnings prints what a text-mode command has to say beside its answer,
+// on the channel every other warning uses so a pipeline reading stdout is
+// unaffected.
+func writeWarnings(stderr io.Writer, warnings []core.Warning) {
+	for _, warning := range warnings {
+		fmt.Fprintf(stderr, "workbook: warning: %s\n", warning.Message)
+	}
 }
 
 func writeSyncPhaseResult(

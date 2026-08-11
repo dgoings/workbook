@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -138,6 +139,120 @@ func TestWriteConfigOperationRefusesArityTheAuthorCanStillFix(t *testing.T) {
 	}
 	if refExists(t, repo, configRef) {
 		t.Fatalf("%s was created by a write the authoring gate refused", configRef)
+	}
+}
+
+// A write that loses the ledger's compare-and-swap is refused as a stale write
+// and records nothing.
+//
+// TestConcurrentConfigWritesConvergeOnOneLedger observes the same rule through a
+// real race and therefore has to accept either outcome; this one makes the loss
+// happen by moving the ref inside the losing write's own transaction, so the
+// refusal is a fact rather than a probability. The category is what the CLI
+// turns into "run it again", which is only sound advice because the losing
+// write left the ledger exactly where it found it.
+func TestWriteConfigOperationRefusesALostCompareAndSwap(t *testing.T) {
+	ctx := context.Background()
+	repo, config := writeRepository(t)
+	seeded := writeConfig(t, repo, config, configOperations(addOperation("triage", "Triage", "1/2"))...)
+
+	other := openSyncCloneAt(t, repo.Root)
+	var once sync.Once
+	var raced ConfigWriteResult
+	repo.commandObserver = func(args []string) {
+		if len(args) == 0 || args[0] != "update-ref" {
+			return
+		}
+		once.Do(func() {
+			raced = writeConfig(t, other, config, configOperations(addOperation("review", "Review", "5/2"))...)
+		})
+	}
+	defer func() { repo.commandObserver = nil }()
+
+	_, err := repo.WriteConfigOperation(ctx, config, core.CryptoULIDSource{},
+		configOperations(addOperation("shipped", "Shipped", "7/2")), "")
+	if got, want := core.CategoryOf(err), core.CategoryStaleWrite; got != want {
+		t.Fatalf("WriteConfigOperation() category = %q, want %q; error = %v", got, want, err)
+	}
+	if got := gitOutput(t, repo, "rev-parse", configRef); got != raced.Head {
+		t.Fatalf("ledger = %q, want the winning write's head %q", got, raced.Head)
+	}
+	fresh := openSyncCloneAt(t, repo.Root)
+	vocabulary, err := fresh.LoadVocabulary(ctx)
+	if err != nil {
+		t.Fatalf("LoadVocabulary() error = %v", err)
+	}
+	if vocabulary.Has("shipped") {
+		t.Fatal("a refused configuration write left its status behind")
+	}
+	if !vocabulary.Has("triage") || !vocabulary.Has("review") {
+		t.Fatalf("statuses = %#v, want both accepted writes; seeded head %q",
+			vocabulary.Definitions(), seeded.Head)
+	}
+}
+
+// A bounded read delivers the newest commits and nothing else, and still
+// reports how long the whole ledger is.
+//
+// The bound is the point: the per-commit cost is two documents decoded and
+// re-encoded to compare canonical bytes, so a ten-line log that read everything
+// would cost a year of somebody's configuration history. The total stays exact
+// because it comes from the commit walk, which is one rev-list whatever the
+// window is.
+func TestReadConfigHistoryTailDeliversOnlyTheNewestCommits(t *testing.T) {
+	ctx := context.Background()
+	repo, config := writeRepository(t)
+	const changes = 12
+	for index := range changes {
+		writeConfig(t, repo, config, relabelOperation("backlog", fmt.Sprintf("Backlog %d", index)))
+	}
+
+	read := func(window int) ([]string, ConfigHistoryStart) {
+		var delivered []string
+		var start ConfigHistoryStart
+		found, err := repo.ReadConfigHistoryTail(ctx, config, window, ConfigHistoryStream{
+			Begin: func(begin ConfigHistoryStart) error {
+				start = begin
+				return nil
+			},
+			Commit: func(commit ConfigHistoryCommit) error {
+				delivered = append(delivered, commit.Operation.Operations[0].Label)
+				return nil
+			},
+			End: func(ConfigHistoryResult) error { return nil },
+		})
+		if err != nil || !found {
+			t.Fatalf("ReadConfigHistoryTail(%d) = found %t, error %v", window, found, err)
+		}
+		return delivered, start
+	}
+
+	// The genesis plus one commit per change.
+	whole, start := read(0)
+	if len(whole) != changes+1 || start.Commits != changes+1 || start.Skipped != 0 {
+		t.Fatalf("unbounded read delivered %d of %d, skipping %d; want the whole ledger",
+			len(whole), start.Commits, start.Skipped)
+	}
+
+	tail, start := read(3)
+	if len(tail) != 3 {
+		t.Fatalf("bounded read delivered %d commits, want 3", len(tail))
+	}
+	if start.Commits != changes+1 {
+		t.Fatalf("bounded read reported %d commits, want the ledger's whole %d", start.Commits, changes+1)
+	}
+	if start.Skipped != changes+1-3 {
+		t.Fatalf("bounded read skipped %d, want %d", start.Skipped, changes+1-3)
+	}
+	if got, want := tail, whole[len(whole)-3:]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("bounded read delivered %#v, want the newest %#v", got, want)
+	}
+
+	// A window longer than the ledger is not an error and delivers everything.
+	everything, start := read(changes * 10)
+	if len(everything) != changes+1 || start.Skipped != 0 {
+		t.Fatalf("over-long window delivered %d commits skipping %d, want the whole ledger",
+			len(everything), start.Skipped)
 	}
 }
 

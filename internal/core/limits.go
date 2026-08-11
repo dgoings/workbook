@@ -175,13 +175,20 @@ const (
 // adopts rather than one it introduces.
 var statusTokenPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
-// validateStatusToken reports whether a status is well formed as a token. It is
+// ValidateStatusToken reports whether a status is well formed as a token. It is
 // deliberately not a membership check: a stored status names whatever the clone
 // that wrote it had configured, and a build that rejected an unknown-but-well-
 // formed name would refuse to read a repository a teammate can read. Membership
 // belongs at the mutation boundary, where a person is choosing a value and can
 // be told which ones exist.
-func validateStatusToken(status Status) error {
+//
+// It is exported for that boundary. The status verbs build a configuration
+// operation out of a word somebody typed, and every check inside the operation
+// document reports a malformed member as corrupt data — the right verdict for
+// a document read off a ref, and the wrong one for a typo. Asking here first is
+// what makes `workbook status add "Not A Token"` a validation failure that
+// quotes the rule.
+func ValidateStatusToken(status Status) error {
 	if status == "" {
 		return Errorf(CategoryValidation, "status must not be blank")
 	}
@@ -202,10 +209,10 @@ func validateStatusToken(status Status) error {
 	return nil
 }
 
-// validateStatusLabel bounds a status display label. A blank label is rejected
+// ValidateStatusLabel bounds a status display label. A blank label is rejected
 // rather than defaulted: a column with no heading is a rendering bug that would
 // otherwise reach every consumer before anyone noticed.
-func validateStatusLabel(label string) error {
+func ValidateStatusLabel(label string) error {
 	if strings.TrimSpace(label) == "" {
 		return Errorf(CategoryValidation, "status label must not be blank")
 	}

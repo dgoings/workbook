@@ -427,6 +427,58 @@ func (r *Repository) publishConfigLedger(ctx context.Context) (*SyncConfigResult
 	return result, nil
 }
 
+// PushConfig publishes this clone's configuration ledger and nothing else.
+//
+// It is PushTask's counterpart for the change that has no task. A status verb
+// moves refs/workbook/config alone, so the targeted publication every
+// automatically synchronizing mutation makes has nothing to name — and reaching
+// for the full Push instead would make changing a status validate and publish
+// every task ref in the project.
+//
+// The identity is settled first for the same reason PushTask settles it: this
+// ledger is one project's history, and writing it to a remote holding another
+// project's would put it in a history it does not belong to. A refusal by
+// origin is reported through the result rather than raised, which is the
+// carve-out publishConfigLedger documents.
+func (r *Repository) PushConfig(ctx context.Context, config core.ProjectConfig) (*SyncConfigResult, error) {
+	if err := r.verifyIdentity(ctx); err != nil {
+		return nil, err
+	}
+	if err := r.validateRepositoryConfig(config); err != nil {
+		return nil, err
+	}
+	if err := r.ensureOriginIdentityAgreement(ctx, nil); err != nil {
+		return nil, err
+	}
+	return r.publishConfigLedger(ctx)
+}
+
+// pushConfigOnly completes a publication that has no task ref to publish.
+//
+// It is the empty-project case of Push rather than a second path: the identity
+// is settled first, exactly as it is before any task ref goes out, and the same
+// carve-out applies to a refusal. Origin is asked about only through the
+// tracking ref this clone already has, because a project with no task refs has
+// nothing else to ask about and a listing would be a round trip spent on
+// nothing.
+func (r *Repository) pushConfigOnly(ctx context.Context, result SyncResult) (SyncResult, error) {
+	if !r.HasOrigin(ctx) {
+		result.Status = SyncPhaseCompleted
+		return result, nil
+	}
+	if err := r.ensureOriginIdentityAgreement(ctx, nil); err != nil {
+		return failedSyncPhase(result, "push stopped before publishing the configuration ledger", err)
+	}
+	result.Identity, _ = r.IdentityReport()
+	published, err := r.publishConfigLedger(ctx)
+	if err != nil {
+		return failedSyncPhase(result, "push failed before completion", err)
+	}
+	result.Config = published
+	result.Status = SyncPhaseCompleted
+	return result, nil
+}
+
 // pushRefusalReason renders why origin would not take a ref, as one line a
 // warning can carry.
 //

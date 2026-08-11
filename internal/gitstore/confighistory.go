@@ -13,6 +13,14 @@ import (
 // commits.
 type ConfigHistoryStart struct {
 	Head string
+	// Commits is the ledger's whole length, even when this read delivers only
+	// the newest part of it. A caller windowing the history needs the total in
+	// order to say what it left out, and the commit walk that produces it is
+	// one rev-list whatever the window is.
+	Commits int
+	// Skipped counts the commits before the first one delivered, which is zero
+	// for an unbounded read.
+	Skipped int
 }
 
 // ConfigHistoryCommit is one structurally validated configuration commit.
@@ -61,6 +69,37 @@ func (r *Repository) ReadConfigHistoryStream(
 	config core.ProjectConfig,
 	stream ConfigHistoryStream,
 ) (bool, error) {
+	return r.readConfigHistory(ctx, config, 0, stream)
+}
+
+// ReadConfigHistoryTail reads only the newest commits of the ledger, the oldest
+// of them first, and still reports how long the whole ledger is.
+//
+// It exists because reading everything is linear in a history that only grows,
+// and the two commands that read the ledger want a bounded slice of it: a
+// windowed log wants its window, and a status listing wants recent dates. The
+// cost that matters is per commit — two documents decoded and re-encoded to
+// compare canonical bytes — so bounding the commits bounds the command. The
+// commit walk itself is one rev-list and stays unbounded, which is what keeps
+// the reported total exact.
+//
+// A commits argument of zero or less reads everything, so a caller can pass a
+// window straight through without a branch.
+func (r *Repository) ReadConfigHistoryTail(
+	ctx context.Context,
+	config core.ProjectConfig,
+	commits int,
+	stream ConfigHistoryStream,
+) (bool, error) {
+	return r.readConfigHistory(ctx, config, commits, stream)
+}
+
+func (r *Repository) readConfigHistory(
+	ctx context.Context,
+	config core.ProjectConfig,
+	tail int,
+	stream ConfigHistoryStream,
+) (bool, error) {
 	if stream.Begin == nil || stream.Commit == nil || stream.End == nil {
 		return false, core.Errorf(core.CategoryOperational,
 			"configuration history stream requires begin, commit, and end handlers")
@@ -92,6 +131,12 @@ func (r *Repository) ReadConfigHistoryStream(
 	if err != nil {
 		return false, err
 	}
+	total := len(chain)
+	skipped := 0
+	if tail > 0 && tail < len(chain) {
+		skipped = len(chain) - tail
+		chain = chain[skipped:]
+	}
 
 	batch, err := r.startObjectBatch(ctx, func(writer io.Writer) error {
 		for _, objectID := range chain {
@@ -108,7 +153,7 @@ func (r *Repository) ReadConfigHistoryStream(
 	defer batch.Close()
 
 	result := ConfigHistoryResult{Head: head}
-	if err := stream.Begin(ConfigHistoryStart{Head: head}); err != nil {
+	if err := stream.Begin(ConfigHistoryStart{Head: head, Commits: total, Skipped: skipped}); err != nil {
 		return true, err
 	}
 	for _, objectID := range chain {

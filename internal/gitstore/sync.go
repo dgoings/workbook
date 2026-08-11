@@ -91,8 +91,12 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 	}
 	sort.Slice(refs, func(i, j int) bool { return refs[i].taskID < refs[j].taskID })
 	if len(refs) == 0 {
-		result.Status = SyncPhaseCompleted
-		return result, nil
+		// A project with no task refs can still hold a configuration ledger.
+		// Returning here published nothing, which made `workbook push` the one
+		// publication path that could silently keep a vocabulary local — and
+		// the likeliest project to have one and no tasks is a project being set
+		// up, where the columns are exactly what a teammate needs first.
+		return r.pushConfigOnly(ctx, result)
 	}
 
 	heads := make([]TaskHead, len(refs))

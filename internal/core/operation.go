@@ -446,7 +446,7 @@ func validateFieldSetOperation(operation Operation) error {
 		// history into corrupt data, which is a claim about the repository
 		// rather than about the configuration. What it still refuses is a value
 		// that is not a status token at all, because no build ever wrote one.
-		if err := validateStatusToken(Status(operation.Value)); err != nil {
+		if err := ValidateStatusToken(Status(operation.Value)); err != nil {
 			return Wrap(CategoryCorruptData, "field.set status is invalid", err)
 		}
 	case "priority":

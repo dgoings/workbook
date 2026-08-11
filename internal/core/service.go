@@ -45,7 +45,7 @@ func (s Service) vocabulary() Vocabulary {
 // NormalizeTask also runs over documents that were written elsewhere and are
 // not anybody's to choose.
 func (s Service) requireStatusMember(status Status) error {
-	if err := validateStatusToken(status); err != nil {
+	if err := ValidateStatusToken(status); err != nil {
 		return err
 	}
 	if !s.vocabulary().Has(status) {
@@ -158,24 +158,78 @@ func (s Service) CreateMutation(ctx context.Context, input CreateInput) (Mutatio
 	return s.persistMutation(ctx, nil, pack, state, createCommitSubject(taskID, taskData))
 }
 
+// StatusFilterResolution reports what a status filter turned out to mean.
+//
+// A filter is not a mutation: it never authors anything, so refusing an
+// unrecognized one buys nothing and costs the ordinary case of naming a status
+// this clone has not fetched yet. But an empty table and a zero exit status is
+// a worse answer than a clear refusal if nothing says why, so List reports what
+// it did with the value and the CLI turns that into a warning beside the empty
+// result. Nothing here decides how loudly to say it; that is the caller's.
+type StatusFilterResolution struct {
+	// Requested is the value the caller typed.
+	Requested Status
+	// Resolved is the live status the filter was applied as. It equals
+	// Requested for a live status, and is empty when the value resolves to
+	// nothing at all.
+	Resolved Status
+	// Via is the one hop the requested value takes, which is what actually
+	// happened to it. It differs from Resolved when the chain continues —
+	// renamed, then the new name removed — and a message that paired this
+	// hop's verb with Resolved's destination would describe a change nobody
+	// made.
+	Via Status
+	// Known reports that the filter names a live status, directly or through
+	// the forwarding chains.
+	Known bool
+	// Forwarded reports that the requested value is not itself live, so the
+	// filter was applied to the status it now means.
+	Forwarded bool
+	// Operation names how the value was retired — a rename or a removal — for
+	// a Forwarded resolution, so a message can say which.
+	Operation ConfigOperationType
+}
+
+// ResolveStatusFilter reports what a status filter names in this project.
+//
+// It is exported so a caller can explain the answer List gives without
+// re-deriving the vocabulary's chains itself, and so both agree by construction
+// about which status a filter selected.
+func (s Service) ResolveStatusFilter(status Status) StatusFilterResolution {
+	vocabulary := s.vocabulary()
+	resolution := StatusFilterResolution{Requested: status}
+	resolved, live := vocabulary.Resolve(status)
+	if !live {
+		return resolution
+	}
+	resolution.Resolved = resolved
+	resolution.Known = true
+	if resolved != status {
+		resolution.Forwarded = true
+		via, operation, _ := vocabulary.Forwarding(status)
+		resolution.Via = via
+		resolution.Operation = operation
+	}
+	return resolution
+}
+
 // List returns the project's tasks, filtered and ordered.
 //
-// A status filter outside the vocabulary is still rejected, exactly as it was
-// before per-project statuses existed, and deliberately so.
+// A status filter outside the vocabulary is accepted and returns the tasks it
+// selects, which is usually none. That relaxation is PR-C's half of a decision
+// PR-B deferred: under a distributed vocabulary, naming a status this clone has
+// not fetched yet is an ordinary thing to type, and failing tells the caller
+// their repository is broken when it is merely behind. It is only honest
+// because the result envelope now carries the miss — see
+// ResolveStatusFilter and the CLI's warning path — so a script that greps the
+// output is told why it found nothing rather than left to infer it.
 //
-// Relaxing it is the right end state: under a distributed vocabulary, naming a
-// status this clone has not fetched yet is an ordinary thing to type, and
-// failing tells the caller their repository is broken when it is merely behind.
-// But an empty table and a zero exit status is a worse answer than a clear
-// refusal — a script that greps the output would silently start finding
-// nothing. The relaxation is only honest once the result envelope can carry
-// "no such status here; the configuration may be behind", and that surface is
-// the CLI's warning path, which this PR does not touch. PR-C relaxes this check
-// and adds the warning in the same change.
+// A filter that names a retired status is applied to the status it now means
+// rather than to nothing. A task's status is resolved before it is compared, so
+// the alternative would answer "no tasks are in ready" about a project whose
+// ready column was merely renamed, which is the one answer that is actually
+// wrong.
 func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
-	if filter.Status != nil && !s.vocabulary().Has(*filter.Status) {
-		return nil, Errorf(CategoryValidation, "invalid task status %q", *filter.Status)
-	}
 	if filter.Priority != nil && !isValidPriority(*filter.Priority) {
 		return nil, Errorf(CategoryValidation, "invalid task priority %q", *filter.Priority)
 	}
@@ -184,13 +238,20 @@ func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
 		return nil, err
 	}
 	vocabulary := s.vocabulary()
+	wanted := Status("")
+	if filter.Status != nil {
+		wanted = *filter.Status
+		if resolution := s.ResolveStatusFilter(wanted); resolution.Known {
+			wanted = resolution.Resolved
+		}
+	}
 	tasks := make([]Task, 0, len(snapshots))
 	for _, snapshot := range snapshots {
 		task := s.Project(snapshot)
 		if !filter.All && task.Deleted {
 			continue
 		}
-		if filter.Status != nil && task.Status != *filter.Status {
+		if filter.Status != nil && task.Status != wanted {
 			continue
 		}
 		if filter.Priority != nil && task.Priority != *filter.Priority {
@@ -1109,6 +1170,16 @@ func hasDependency(dependencies []string, wanted string) bool {
 		}
 	}
 	return false
+}
+
+// DependenciesDone reports whether every dependency is an active task in a
+// status that satisfies one. It is the rule Next admits a task by, exported so
+// that a caller predicting what Next will do answers with the same function
+// rather than with a second copy of the rule: `workbook status delete` prices a
+// removal in tasks that become claimable, and "claimable" has to mean what the
+// command that claims them means.
+func DependenciesDone(vocabulary Vocabulary, dependencies []string, active map[string]TaskData) bool {
+	return dependenciesDone(vocabulary, dependencies, active)
 }
 
 func dependenciesDone(vocabulary Vocabulary, dependencies []string, active map[string]TaskData) bool {
