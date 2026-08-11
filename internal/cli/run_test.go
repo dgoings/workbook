@@ -1130,10 +1130,14 @@ func TestREADMEDocumentsProjectIdentity(t *testing.T) {
 		"`<git-common-dir>/workbook/project.json`",
 		"linked worktrees",
 		"repaired** from the ref",
-		// Mixed versions and forks.
+		// Mixed versions and forks. A fork inherits the upstream identity
+		// through the committed advisory copy, which is the opposite of what a
+		// reader would assume from "forks do not copy refs", so the README has
+		// to say the true thing and say what to do about it.
 		"Upgrade order does not matter",
-		"Forks copy branches, not Workbook refs",
+		"inherits the upstream project's identity",
 		"git push fork 'refs/workbook/*:refs/workbook/*'",
+		"git rm .workbook/config.json",
 	} {
 		if !strings.Contains(readme, required) {
 			t.Errorf("README project identity section is missing %q", required)

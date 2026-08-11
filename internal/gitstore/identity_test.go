@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -531,6 +532,84 @@ func TestSyncPublishesTheIdentityRefOnceAndThenAgrees(t *testing.T) {
 	}
 	if got := refValue(t, second, identityRef); got != published {
 		t.Fatalf("other clone identity head = %q, want the converged %q", got, published)
+	}
+}
+
+// Two clones publishing the identity to an origin that has none is the ordinary
+// migration race. Determinism is what makes it safe: both build the same commit,
+// so one push creates the ref and the other is up to date.
+func TestConcurrentFirstPublicationsConverge(t *testing.T) {
+	ctx := context.Background()
+	first, second, config := syncRepositories(t)
+	for _, repo := range []*Repository{first, second} {
+		createSyncTask(t, repo, config, "Published in a race")
+	}
+
+	results := make([]error, 2)
+	start := make(chan struct{})
+	var wait sync.WaitGroup
+	for index, repo := range []*Repository{first, second} {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			_, results[index] = repo.Push(ctx, config)
+		}()
+	}
+	close(start)
+	wait.Wait()
+
+	for index, err := range results {
+		if err != nil {
+			t.Fatalf("concurrent Push %d error = %v", index, err)
+		}
+	}
+	published := remoteRefValue(t, first, identityRef)
+	for _, repo := range []*Repository{first, second} {
+		if got := refValue(t, repo, identityRef); got != published {
+			t.Fatalf("local identity ref = %q, want the converged %q", got, published)
+		}
+	}
+}
+
+// Fetch runs the identity stage but reports nothing, so it must not swallow the
+// one-time publication announcement that the next synchronization owes the user.
+func TestFetchDoesNotSwallowTheIdentityPublicationReport(t *testing.T) {
+	ctx := context.Background()
+	first, _, config := syncRepositories(t)
+
+	if _, err := first.Fetch(ctx, config); err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	run, err := first.Sync(ctx, config)
+	if err != nil {
+		t.Fatalf("Sync() error = %v", err)
+	}
+	if run.Identity == nil || run.Identity.Status != SyncIdentityPublished {
+		t.Fatalf("Sync() identity = %#v, want the publication reported after a fetch", run.Identity)
+	}
+}
+
+// Refs under origin's identity name are origin's business. A clone reads past
+// them and says what it skipped, exactly as it does for the task namespace.
+func TestSyncReportsRefsItCannotReadUnderOriginsIdentityName(t *testing.T) {
+	ctx := context.Background()
+	first, second, config := syncRepositories(t)
+	blocked := writeIdentityCommit(t, first.Root, fixedProjectID, "WB")
+	syncGit(t, first.Root, "push", "origin", blocked+":"+identityRef+"/notes")
+
+	run, err := second.Sync(ctx, config)
+	if err != nil {
+		t.Fatalf("Sync() error = %v; result = %#v", err, run)
+	}
+	if run.Identity == nil || len(run.Identity.Ignored) != 1 {
+		t.Fatalf("Sync() identity = %#v, want one ignored ref", run.Identity)
+	}
+	if got, want := run.Identity.Ignored[0], identityRef+"/notes"; got != want {
+		t.Fatalf("ignored ref = %q, want it named as origin holds it, %q", got, want)
+	}
+	if run.Fetch.Status != SyncPhaseCompleted || run.Push.Status != SyncPhaseCompleted {
+		t.Fatalf("phases = fetch %q, push %q, want both completed", run.Fetch.Status, run.Push.Status)
 	}
 }
 

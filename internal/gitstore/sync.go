@@ -112,9 +112,18 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 		valid[tip.Head.TaskID] = struct{}{}
 	}
 
-	remoteOutput, err := r.Git(ctx, nil, "ls-remote", "--refs", "origin", taskRefPrefix+"*")
+	// The identity ref rides the listing Push already makes, so establishing
+	// that origin is this project costs no round trip of its own.
+	remoteOutput, err := r.Git(ctx, nil, "ls-remote", "--refs", "origin", taskRefPrefix+"*", identityRef)
 	if err != nil {
 		return failedPushTransport(result, refs, items, invalid, "push failed before completion", err)
+	}
+	remoteIdentityHead, err := parseRemoteIdentityHead(remoteOutput)
+	if err != nil {
+		return failedPushTransport(result, refs, items, invalid, "push failed before completion", err)
+	}
+	if err := r.ensureOriginIdentityAgreement(ctx, map[string]string{identityRef: remoteIdentityHead}); err != nil {
+		return failedPushTransport(result, refs, items, invalid, "push stopped before publishing any task ref", err)
 	}
 	remoteHeads, ignored, err := r.parseRemoteTaskHeads(config, remoteOutput)
 	if err != nil {
@@ -252,6 +261,13 @@ func (r *Repository) PushTask(ctx context.Context, config core.ProjectConfig, ta
 		result.Detail = tips[0].Err.Error()
 		return result, core.Errorf(core.CategoryCorruptData, "local task ref %s failed validation", taskID)
 	}
+	// A task ref is this project's history. Publishing one to a remote holding
+	// another project would write into a history it does not belong to, so the
+	// identity is settled first — for free on the mutation path, where the
+	// fetch this command already ran compared the two refs.
+	if err := r.ensureOriginIdentityAgreement(ctx, nil); err != nil {
+		return result, err
+	}
 
 	refName := taskRefPrefix + taskID
 	expected := map[string]string{refName: taskID}
@@ -309,7 +325,7 @@ func (r *Repository) Sync(ctx context.Context, config core.ProjectConfig) (SyncR
 		Push:   skippedSyncPhase("push not run"),
 	}
 
-	state, fetched, fetchErr := r.fetch(ctx, config, true)
+	state, fetched, fetchErr := r.fetch(ctx, config, true, true)
 	result.Fetch = fetched
 	result.Identity = state.Identity
 	if fetchErr != nil && fetched.Status != SyncPhaseCompleted {
@@ -346,7 +362,7 @@ func failedSyncPhase(result SyncResult, detail string, err error) (SyncResult, e
 // It runs the identity stage but never publishes: a download is not the moment
 // to write to origin. Sync, which already has a publication phase, is.
 func (r *Repository) Fetch(ctx context.Context, config core.ProjectConfig) (SyncResult, error) {
-	_, result, err := r.fetch(ctx, config, false)
+	_, result, err := r.fetch(ctx, config, false, false)
 	return result, err
 }
 
@@ -354,6 +370,7 @@ func (r *Repository) fetch(
 	ctx context.Context,
 	config core.ProjectConfig,
 	publishIdentity bool,
+	announceIdentity bool,
 ) (fetchState, SyncResult, error) {
 	state := fetchState{
 		Canonical: make(map[string]core.Snapshot),
@@ -385,7 +402,7 @@ func (r *Repository) fetch(
 	// Identity is settled before any task is looked at: every task document
 	// names a project, and there is no point validating them against a project
 	// this clone might not belong to.
-	identityResult, identityErr := r.reconcileIdentity(ctx, publishIdentity)
+	identityResult, identityErr := r.reconcileIdentity(ctx, publishIdentity, announceIdentity)
 	state.Identity = identityResult
 	if identityErr != nil {
 		result, identityErr = failedSyncPhase(result, "fetch stopped before tasks were synchronized", identityErr)

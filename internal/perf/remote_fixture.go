@@ -154,7 +154,15 @@ func cloneFixtureRepository(ctx context.Context, sourceRoot, destination, origin
 func constructRemoteTopology(ctx context.Context, sourceRoot, localRoot, peerRoot, originRoot string, config core.ProjectConfig, taskIDs, activeTaskIDs []string, topology RemoteTopology) error {
 	switch topology {
 	case RemoteFreshCheckout:
-		return publishFixtureTasks(ctx, sourceRoot, originRoot)
+		if err := publishFixtureTasks(ctx, sourceRoot, originRoot); err != nil {
+			return err
+		}
+		// A fresh checkout holds no task history, but it has been bootstrapped:
+		// `workbook setup` resolves and publishes the project identity before
+		// any fetch runs. Without that the measured fetch would perform the
+		// one-time identity migration and the scenario would stop measuring the
+		// fetch it is named for.
+		return copyFixtureIdentity(ctx, sourceRoot, localRoot)
 	case RemoteInitialPublication:
 		return copyFixtureTasks(ctx, sourceRoot, localRoot)
 	case RemoteAlreadySynchronized:
@@ -255,6 +263,10 @@ const (
 
 func copyFixtureTasks(ctx context.Context, from, to string) error {
 	return runFixtureGit(ctx, "-C", to, "fetch", "--quiet", from, fixtureTaskRefspec, fixtureIdentityRefspec)
+}
+
+func copyFixtureIdentity(ctx context.Context, from, to string) error {
+	return runFixtureGit(ctx, "-C", to, "fetch", "--quiet", from, fixtureIdentityRefspec)
 }
 
 func publishFixtureTasks(ctx context.Context, from, originRoot string) error {

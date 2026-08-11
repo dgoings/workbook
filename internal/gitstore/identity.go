@@ -528,11 +528,11 @@ func (r *Repository) replaceRef(ctx context.Context, ref, head, expected string)
 // MaxObjectBytes bounds them too: a hand-built commit pushed by a collaborator
 // cannot make a clone that fetches it allocate without limit.
 func (r *Repository) readIdentityRef(ctx context.Context, ref string) (identityRecord, bool, error) {
-	heads, err := r.listIdentityRefs(ctx, ref)
+	listing, err := r.listIdentityRefs(ctx, ref)
 	if err != nil {
 		return identityRecord{}, false, err
 	}
-	head, found := heads[ref]
+	head, found := listing.Heads[ref]
 	if !found {
 		return identityRecord{}, false, nil
 	}
@@ -550,33 +550,50 @@ func (r *Repository) readIdentityRef(ctx context.Context, ref string) (identityR
 	return record, true, nil
 }
 
-// listIdentityRefs enumerates the named identity refs in one Git process and
-// returns the tips that exist.
+// identityRefListing is one enumeration of the identity refs: the tips that
+// exist, and the names under origin's mirror that this version does not read.
+type identityRefListing struct {
+	Heads map[string]string
+	// Ignored names refs the fetch mirrored from origin's identity namespace
+	// that are not the identity ref. They are stated under the name origin
+	// holds them at, because that is the name a person would have to act on,
+	// and reporting one is never an instruction to delete it.
+	Ignored []string
+}
+
+// listIdentityRefs enumerates the named identity refs in one Git process.
 //
 // Each name is also a prefix pattern, so the listing reports any ref created
-// under one of them. That cannot happen while the ref itself exists — Git's
-// directory/file rule forbids it — which makes such a name evidence that the
-// namespace was rearranged, not something to skip.
-func (r *Repository) listIdentityRefs(ctx context.Context, refs ...string) (map[string]string, error) {
+// under one of them, and the two namespaces earn different verdicts.
+//
+// The canonical ref is under this tool's exclusive control: a name beneath it
+// means the local namespace was rearranged, and that is corruption. Origin's
+// mirror is not. Anyone with push access can create refs/workbook/project/x on
+// a remote that has no identity ref yet — Git's directory/file rule only
+// forbids the two coexisting — and the fetch refspec mirrors it faithfully.
+// Refusing to read past that would let one stray ref deny bootstrap and
+// synchronization to every clone, permanently, with no way for the affected
+// user to clear it. Such a name is skipped and reported instead.
+func (r *Repository) listIdentityRefs(ctx context.Context, refs ...string) (identityRefListing, error) {
 	contents, err := r.Git(ctx, nil, append([]string{"for-each-ref", "--format=" + taskRefFormat}, refs...)...)
 	if err != nil {
-		return nil, err
+		return identityRefListing{}, err
 	}
 	return parseIdentityRefRecords(refs, contents)
 }
 
-func parseIdentityRefRecords(refs []string, contents []byte) (map[string]string, error) {
-	heads := make(map[string]string, len(refs))
+func parseIdentityRefRecords(refs []string, contents []byte) (identityRefListing, error) {
+	listing := identityRefListing{Heads: make(map[string]string, len(refs))}
 	if len(contents) == 0 {
-		return heads, nil
+		return listing, nil
 	}
 	if contents[len(contents)-1] != '\n' {
-		return nil, core.Errorf(core.CategoryCorruptData, "Git returned an unterminated project identity ref record")
+		return identityRefListing{}, core.Errorf(core.CategoryCorruptData, "Git returned an unterminated project identity ref record")
 	}
 	for _, line := range bytes.Split(contents[:len(contents)-1], []byte{'\n'}) {
 		parts := bytes.Split(line, []byte{0})
 		if len(parts) != 3 || len(parts[0]) == 0 || len(parts[1]) == 0 {
-			return nil, core.Errorf(core.CategoryCorruptData, "Git returned an invalid project identity ref record")
+			return identityRefListing{}, core.Errorf(core.CategoryCorruptData, "Git returned an invalid project identity ref record")
 		}
 		refName, objectID, symbolicTarget := string(parts[0]), string(parts[1]), string(parts[2])
 		requested := ""
@@ -587,17 +604,28 @@ func parseIdentityRefRecords(refs []string, contents []byte) (map[string]string,
 			}
 		}
 		if requested == "" {
-			return nil, identityRefChildError(identityRefAncestorOf(refs, refName))
+			if strings.HasPrefix(refName, remoteIdentityRef+"/") {
+				listing.Ignored = append(listing.Ignored, originIdentityRefName(refName))
+				continue
+			}
+			return identityRefListing{}, identityRefChildError(identityRefAncestorOf(refs, refName))
 		}
 		if symbolicTarget != "" {
-			return nil, core.Errorf(core.CategoryCorruptData, "project identity ref %q must not be symbolic", refName)
+			return identityRefListing{}, core.Errorf(core.CategoryCorruptData, "project identity ref %q must not be symbolic", refName)
 		}
-		if _, duplicate := heads[requested]; duplicate {
-			return nil, core.Errorf(core.CategoryCorruptData, "project identity ref %q was returned more than once", refName)
+		if _, duplicate := listing.Heads[requested]; duplicate {
+			return identityRefListing{}, core.Errorf(core.CategoryCorruptData, "project identity ref %q was returned more than once", refName)
 		}
-		heads[requested] = objectID
+		listing.Heads[requested] = objectID
 	}
-	return heads, nil
+	return listing, nil
+}
+
+// originIdentityRefName restates a mirrored name under the ref origin holds it
+// at. The local mirror is rebuilt by every fetch, so naming it would name a ref
+// the user cannot usefully remove.
+func originIdentityRefName(refName string) string {
+	return identityRef + strings.TrimPrefix(refName, remoteIdentityRef)
 }
 
 // identityRefAncestorOf names the requested ref a listed child hangs from, so

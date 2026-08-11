@@ -1387,8 +1387,20 @@ One disagreement is still fatal: a tracked `.workbook/config.json` whose
 `projectId` or `key` differs from the ref's. That means two records claim
 different projects for the same working tree, and continuing would write one
 project's operations into another's history. The error names the ref, the tracked
-file, the guard, both identities, and the way out. Document-version drift and a
-missing advisory copy are reported on stderr instead — one line, not a refusal.
+file, the guard, both identities, and the way out. What is *not* fatal is
+reported instead, as a single `workbook: warning:` line on stderr: a checkout
+whose branch carries no advisory copy at all, and a private guard that had to be
+repaired. A tracked document written by an older version keeps working untouched;
+`workbook setup` is where its version is reported and, deliberately, upgraded.
+
+The same rule governs publication. No path publishes a task ref to `origin`
+without first establishing that `origin` is this project: `workbook push`, and
+the targeted push every automatically synchronizing mutation makes, both check
+first. Where `origin` has no identity ref they publish one before the task refs,
+so task refs on a remote imply an identity beside them; where `origin` holds a
+different project they refuse, and nothing is written. The check costs nothing on
+the mutation path, which has already fetched and compared the two refs in the
+same command.
 
 `workbook setup` consults `origin` before minting, and asks for the identity ref
 first. If origin publishes one, setup fetches and adopts it — no branch checkout,
@@ -1405,21 +1417,40 @@ is invisible to a teammate who has not upgraded, and the tracked document keeps
 its identity fields for them to read. Nothing breaks until a project deliberately
 upgrades its tracked document, and by then every clone should be on v0.5.0.
 
-Forks copy branches, not Workbook refs. `workbook setup` in a fork of a
-Workbook-tracked repository therefore mints a fresh, empty project rather than
-silently inheriting the upstream one — unless the fork's `origin` still resolves
-to the upstream repository. To carry a tracker into a fork deliberately, push the
-refs:
+Forks copy branches, not Workbook refs — but a fork of a project that committed
+`.workbook/config.json` copies that file, and its advisory identity is exactly
+what the migration chain adopts. `workbook setup` in such a fork therefore
+**inherits the upstream project's identity** and publishes it as the fork's own
+canonical ref. Task history does not come with it: refs stay behind, so the fork
+starts empty under an identity it shares with upstream.
 
-```sh
-git push fork 'refs/workbook/*:refs/workbook/*'
-```
+Pick deliberately:
+
+- **To carry the tracker over**, push the refs — history and identity together:
+
+  ```sh
+  git push fork 'refs/workbook/*:refs/workbook/*'
+  ```
+
+- **To start a fresh, independent project in the fork**, remove the inherited
+  advisory copy before bootstrapping, so nothing is left to adopt:
+
+  ```sh
+  git rm .workbook/config.json && workbook setup --no-sync --key WB
+  ```
+
+  Setup then mints a new project ID and publishes a new identity ref. A fork
+  whose `origin` still resolves to the upstream repository joins upstream
+  instead, whatever its files say — the published ref wins.
 
 Because the identity ref rides the same `git fetch` as the task refs, none of
 this costs an extra network round trip. `workbook sync` reports what the identity
-stage did under an `identity` member — `matched`, `created`, `published`,
-`adopted`, or `mismatched` — and omits it entirely when there was nothing new to
-say. A `mismatched` identity stops the run before any task is fetched.
+stage did under an `identity` member — `created`, `published`, `adopted`, or
+`mismatched` — and omits the member entirely when this clone and `origin` already
+agree and there is nothing else to note. The remaining status, `matched`, appears
+only alongside such a note: refs `origin` holds under the identity ref's name,
+which this version skips and lists under `ignoredRefs` rather than refusing to
+run. A `mismatched` identity stops the run before any task is fetched.
 
 ## Proposed post-POC commands
 

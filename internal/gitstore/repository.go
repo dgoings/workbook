@@ -50,12 +50,16 @@ type Repository struct {
 	// identityPublicationReported keeps the one-time migration announcement from
 	// repeating when one command synchronizes more than once.
 	identityPublicationReported bool
-	identityDrift               string
-	objectIDBytes               int
-	actorOnce                   sync.Once
-	actor                       string
-	actorErr                    error
-	commandObserver             gitCommandObserver
+	// originIdentity records what this command has established about origin's
+	// copy of the identity, so the publication paths never write a task ref to
+	// a remote holding another project.
+	originIdentity  originIdentityState
+	identityDrift   string
+	objectIDBytes   int
+	actorOnce       sync.Once
+	actor           string
+	actorErr        error
+	commandObserver gitCommandObserver
 }
 
 // Open discovers the repository containing startDir without changing the

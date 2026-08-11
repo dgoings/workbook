@@ -50,6 +50,193 @@ func TestSetupJoinsOriginIdentityRefWithNoCommittedConfigAnywhere(t *testing.T) 
 	}
 }
 
+// Anyone with push access can create a ref under origin's identity name while
+// no identity ref exists there, and Git's directory/file rule then blocks the
+// identity ref itself. That is origin's namespace, not something a clone may
+// refuse to work with: bootstrap and synchronization must complete, skipping
+// what they cannot read, exactly as they already do for the task namespace.
+func TestSetupAndSyncTolerateRefsUnderOriginsIdentityName(t *testing.T) {
+	bare, seed, stale := originAdoptedAfterClone(t)
+	blob := cliGitOutput(t, seed, "rev-parse", "HEAD")
+	cliGit(t, seed, "push", "--quiet", "origin", blob+":refs/workbook/project/notes")
+
+	if code, _, stderr := run(t, seed, "setup"); code != 0 {
+		t.Fatalf("seed setup code = %d, want 0; stderr = %q", code, stderr)
+	}
+	// The identity ref cannot be published while the name is blocked, so the
+	// project falls back to the committed advisory copy — exactly the pre-v0.5.0
+	// arrangement, which must keep working.
+	cliGit(t, seed, "add", ".workbook/config.json")
+	cliGit(t, seed, "commit", "--quiet", "-m", "Initialize Workbook")
+	cliGit(t, seed, "push", "--quiet", "origin", "main")
+	seeded := []string{cliCreateTask(t, seed, "Shared past a blocked identity name").ID}
+	if code, _, stderr := run(t, seed, "push"); code != 0 {
+		t.Fatalf("seed push code = %d, want 0; stderr = %q", code, stderr)
+	}
+	if code, _, stderr := run(t, seed, "sync"); code != 0 {
+		t.Fatalf("seed sync code = %d, want 0; stderr = %q", code, stderr)
+	}
+
+	if code, _, stderr := run(t, stale, "setup"); code != 0 {
+		t.Fatalf("stale setup code = %d, want 0; stderr = %q", code, stderr)
+	}
+	if code, _, stderr := run(t, stale, "sync"); code != 0 {
+		t.Fatalf("stale sync code = %d, want 0; stderr = %q", code, stderr)
+	}
+	if got := listedTaskIDs(t, stale); !sameIDs(got, seeded) {
+		t.Fatalf("tasks after bootstrap = %v, want %v", got, seeded)
+	}
+
+	// Once the obstruction is gone the identity ref publishes normally, and the
+	// tracking mirror is pruned of what it could not read.
+	cliGit(t, bare, "update-ref", "-d", "refs/workbook/project/notes")
+	if code, _, stderr := run(t, seed, "sync"); code != 0 {
+		t.Fatalf("seed sync after cleanup code = %d, want 0; stderr = %q", code, stderr)
+	}
+	if got := cliGitOutput(t, bare, "for-each-ref", "--format=%(refname)", "refs/workbook/project"); got != "refs/workbook/project" {
+		t.Fatalf("origin identity refs = %q, want the published identity ref", got)
+	}
+	if code, _, stderr := run(t, stale, "sync"); code != 0 {
+		t.Fatalf("stale sync after cleanup code = %d, want 0; stderr = %q", code, stderr)
+	}
+}
+
+// A project can be adopted on a branch nobody has merged, by a team that only
+// ever mutates tasks: no explicit sync, no explicit push, nothing committed.
+// Origin then holds task refs, and unless the mutation path publishes identity
+// too, a fresh clone sitting on the pre-Workbook default branch has nothing to
+// join and hits the very wedge this story removes.
+func TestMutationOnlyFlowPublishesTheIdentityForLaterClones(t *testing.T) {
+	bare, seed, later := originAdoptedAfterClone(t)
+	// --no-sync bootstraps locally, so nothing but the mutation itself can be
+	// what publishes to origin.
+	if code, _, stderr := run(t, seed, "setup", "--no-sync"); code != 0 {
+		t.Fatalf("seed setup code = %d, want 0; stderr = %q", code, stderr)
+	}
+	if got := cliGitOutput(t, bare, "for-each-ref", "--format=%(refname)", "refs/workbook/"); got != "" {
+		t.Fatalf("origin holds %q after a local-only bootstrap, want nothing", got)
+	}
+
+	// An ordinary mutation, synchronizing the way every mutation does by
+	// default: it fetches, records the change, and publishes the one ref it
+	// touched.
+	code, stdout, stderr := run(t, seed, "create", "Recorded by a mutation and nothing else", "--json")
+	if code != 0 {
+		t.Fatalf("create code = %d, want 0; stderr = %q", code, stderr)
+	}
+	task := decodeMutationTask(t, stdout, "create")
+	if got := cliGitOutput(t, bare, "for-each-ref", "--format=%(refname)", "refs/workbook/project"); got != "refs/workbook/project" {
+		t.Fatalf("origin identity refs = %q, want the mutation to have published it", got)
+	}
+	if !remoteHasTaskRef(t, seed, task.ID) {
+		t.Fatalf("origin does not hold task %s", task.ID)
+	}
+
+	code, stdout, stderr = run(t, later, "setup")
+	if code != 0 {
+		t.Fatalf("later setup code = %d, want 0; stderr = %q", code, stderr)
+	}
+	if got, want := projectID(t, stdout), projectIDOf(t, seed); got != want {
+		t.Fatalf("later clone adopted project %q, want %q", got, want)
+	}
+	if got, want := projectIdentitySource(t, stdout), "(adopted from the published project identity)"; got != want {
+		t.Fatalf("later setup identity source = %q, want %q", got, want)
+	}
+	if got := listedTaskIDs(t, later); !sameIDs(got, []string{task.ID}) {
+		t.Fatalf("later clone tasks = %v, want %v", got, []string{task.ID})
+	}
+}
+
+// Publishing a task ref into another project's repository writes this project's
+// history where it does not belong. Every publication path has to refuse that,
+// not only the one that synchronizes.
+func TestPublicationRefusesAnOriginHoldingAnotherProject(t *testing.T) {
+	foreignBare, foreignSeed, _ := originAdoptedAfterClone(t)
+	if code, _, stderr := run(t, foreignSeed, "setup"); code != 0 {
+		t.Fatalf("foreign setup code = %d, want 0; stderr = %q", code, stderr)
+	}
+	foreignID := projectIDOf(t, foreignSeed)
+
+	_, seed, _ := originAdoptedAfterClone(t)
+	if code, _, stderr := run(t, seed, "setup"); code != 0 {
+		t.Fatalf("seed setup code = %d, want 0; stderr = %q", code, stderr)
+	}
+	task := cliCreateTask(t, seed, "Must never reach the wrong repository")
+	cliGit(t, seed, "remote", "set-url", "origin", foreignBare)
+
+	for _, command := range [][]string{{"push"}, {"sync"}} {
+		code, _, stderr := run(t, seed, command...)
+		if code == 0 {
+			t.Fatalf("%v into a foreign project exited 0, want a refusal", command)
+		}
+		for _, want := range []string{projectIDOf(t, seed), foreignID, "refs/workbook/project"} {
+			if !strings.Contains(stderr, want) {
+				t.Fatalf("%v stderr %q does not name %q", command, stderr, want)
+			}
+		}
+	}
+	if got := cliGitOutput(t, foreignBare, "for-each-ref", "--format=%(refname)", "refs/workbook/tasks/"); got != "" {
+		t.Fatalf("foreign origin holds %q, want no task ref from another project", got)
+	}
+	if remoteHasTaskRef(t, seed, task.ID) {
+		t.Fatalf("task %s was published into another project's repository", task.ID)
+	}
+}
+
+// Forks do not copy Workbook refs, but they do copy files, and the committed
+// advisory identity is a file. Setup in a fork therefore inherits the upstream
+// project rather than minting a new one — the opposite of what "refs do not
+// travel" suggests — and starting fresh means removing what would be adopted.
+// The README states both; this is what makes that statement true.
+func TestForkInheritsUpstreamIdentityUnlessTheAdvisoryCopyIsRemoved(t *testing.T) {
+	_, upstream, _ := originAdoptedAfterClone(t)
+	if code, _, stderr := run(t, upstream, "setup"); code != 0 {
+		t.Fatalf("upstream setup code = %d, want 0; stderr = %q", code, stderr)
+	}
+	cliGit(t, upstream, "add", ".workbook/config.json")
+	cliGit(t, upstream, "commit", "--quiet", "-m", "Initialize Workbook")
+	cliGit(t, upstream, "push", "--quiet", "origin", "main")
+	upstreamID := projectIDOf(t, upstream)
+
+	// A fork: the branches, not the refs, copied into a separate remote.
+	forkBare := filepath.Join(t.TempDir(), "fork.git")
+	cliGit(t, t.TempDir(), "init", "--bare", "--quiet", forkBare)
+	fork := filepath.Join(t.TempDir(), "fork")
+	cliGit(t, t.TempDir(), "clone", "--quiet", upstream, fork)
+	cliGit(t, fork, "config", "user.name", "Workbook Test")
+	cliGit(t, fork, "config", "user.email", "workbook@example.test")
+	cliGit(t, fork, "remote", "set-url", "origin", forkBare)
+	cliGit(t, fork, "push", "--quiet", "origin", "HEAD:refs/heads/main")
+
+	code, stdout, stderr := run(t, fork, "setup")
+	if code != 0 {
+		t.Fatalf("fork setup code = %d, want 0; stderr = %q", code, stderr)
+	}
+	if got := projectID(t, stdout); got != upstreamID {
+		t.Fatalf("fork project = %q, want the inherited upstream project %q", got, upstreamID)
+	}
+	if got := cliGitOutput(t, forkBare, "for-each-ref", "--format=%(refname)", "refs/workbook/tasks/"); got != "" {
+		t.Fatalf("fork remote holds task refs %q, want none: refs do not travel with a fork", got)
+	}
+
+	// The documented way to start an independent project in a fork.
+	fresh := filepath.Join(t.TempDir(), "fresh")
+	cliGit(t, t.TempDir(), "clone", "--quiet", upstream, fresh)
+	cliGit(t, fresh, "config", "user.name", "Workbook Test")
+	cliGit(t, fresh, "config", "user.email", "workbook@example.test")
+	cliGit(t, fresh, "rm", "--quiet", ".workbook/config.json")
+	code, stdout, stderr = run(t, fresh, "setup", "--no-sync")
+	if code != 0 {
+		t.Fatalf("fresh fork setup code = %d, want 0; stderr = %q", code, stderr)
+	}
+	if got := projectID(t, stdout); got == upstreamID {
+		t.Fatalf("fresh fork project = %q, want a newly minted project", got)
+	}
+	if got, want := projectIdentitySource(t, stdout), "(minted and published)"; got != want {
+		t.Fatalf("fresh fork identity source = %q, want %q", got, want)
+	}
+}
+
 // A checkout whose branch carries no tracked configuration is now usable: the
 // identity ref says which project it is. The missing advisory copy is worth one
 // line on stderr and nothing more.

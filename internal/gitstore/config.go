@@ -156,7 +156,8 @@ func (r *Repository) AdoptOriginProject(ctx context.Context, key string) (core.P
 	if !found {
 		if tasks {
 			return core.ProjectConfig{}, false, core.Errorf(core.CategoryOperational,
-				"origin already has Workbook task refs, but its default branch has no .workbook/config.json naming their project; check out or merge the branch that adds .workbook/config.json, then rerun workbook setup")
+				"origin already has Workbook task refs, but neither %s nor its default branch's .workbook/config.json names their project; check out or merge the branch that adds .workbook/config.json, then rerun workbook setup",
+				identityRef)
 		}
 		return core.ProjectConfig{}, false, nil
 	}
