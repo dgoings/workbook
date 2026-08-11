@@ -1134,7 +1134,10 @@ server holds, everything you have typed stays exactly as typed, a save already
 in flight keeps reporting into the form, and a message says which change was not
 applied. Saving afterwards sends only your own edits, against the version that
 now exists. If the task has left the board entirely, the form and your unsaved
-text stay put and say so.
+text stay put and say so. If the refusal's refresh could not read the board at
+all, those untouched fields are the last successful poll's rather than the
+server's, and the message says the board could not be refreshed instead of
+claiming otherwise.
 
 A `Publishing:` indicator in the board header says what the *next* mutation will
 do with `origin`, and clicking it changes that for this server. Handed to

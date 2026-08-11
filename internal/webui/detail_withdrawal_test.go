@@ -170,9 +170,13 @@ setTimeout(async () => {
   if (JSON.stringify(chiclets) !== '["docs","web"]') {
     throw new Error("an untouched label set did not follow the server: " + JSON.stringify(chiclets));
   }
+  // Pinned whole rather than sampled. A refusal whose forced refresh could not
+  // read the board says something else here — the fields it moved are the last
+  // poll's, not the server's — and the one way to make that wording wrong is to
+  // print it over this case too.
   const message = findElement(main, (element) => Object.hasOwn(element.dataset, "saveStatus"));
-  if (!message.textContent.includes("changed elsewhere") ||
-      !message.textContent.includes("your edits are kept")) {
+  if (message.textContent !== "That task changed elsewhere. The fields you have not edited now " +
+      "show the version the server holds, and your edits are kept; the change made on the board was not applied.") {
     throw new Error("the form does not say what happened to it: " + JSON.stringify(message.textContent));
   }
 

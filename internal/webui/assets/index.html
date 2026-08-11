@@ -2780,9 +2780,11 @@
               // refresh is what takes it out of the model. A report that has to
               // name a task it can no longer look up names nothing.
               const subject = nameTask(taskID);
-              // Whether the board this report is written against is the
+              // Whether the board these reports are written against is the
               // server's. Only a refresh that read it makes it so, and only a
-              // stale write forces one.
+              // stale write forces one. Both surfaces below are written from the
+              // same model and so turn on the same answer: the card, and the
+              // detail form if this task's is open.
               let boardRead = true;
               if (error && error.category === "stale-write") {
                 // The refusal means this queue is holding a head the server
@@ -2825,7 +2827,7 @@
               // and only a dismissal or the reader's next change to that card
               // takes it away.
               reportIntentFailure(taskID, subject, error, boardRead);
-              withdrawFailedIntentFromOpenDetail(taskID, error);
+              withdrawFailedIntentFromOpenDetail(taskID, error, boardRead);
             }
             rerender();
           }
@@ -3049,7 +3051,28 @@
       // one another clone deleted — has nothing to correct the form against.
       // The form stays as it is and says so, because a reader mid-sentence
       // needs their sentence more than they need a "task not found" page.
-      function withdrawFailedIntentFromOpenDetail(taskID, error) {
+      //
+      // `boardRead` is the caller's, and it decides the only thing this form can
+      // claim about the fields it just moved. The correction reads them out of
+      // the model, which the refresh a `stale-write` forces is what replaces
+      // with the server's version — so when that refresh read the board, the
+      // untouched fields are the server's and the form may say so. When it did
+      // not read the board, the model is still the last successful poll's and
+      // those fields are whatever it read; saying they "now show the version the
+      // server holds" claims exactly the request that just failed. The outage is
+      // named instead, in the wording the card beside it uses for the same
+      // event, and the queue behind the refusal stopped rather than write to a
+      // board it cannot see, so the changes it dropped are named with it. The
+      // stale banner keeps its own single writer through all of this: the
+      // failed refresh raised it, and this sentence is about these fields.
+      //
+      // It defaults to true for a caller with no refresh to report on. A refusal
+      // that is not a `stale-write` forces none, which is why drainIntents
+      // starts the flag there: nothing has told this board it is unreadable, and
+      // the client treats the last poll as the server's version everywhere else.
+      // The outage wording is the falser of the two in that state, because it
+      // reports a read that was never attempted.
+      function withdrawFailedIntentFromOpenDetail(taskID, error, boardRead = true) {
         const open = openDetailForm;
         if (!open || open.taskID !== taskID) return;
         // The same view the detail route renders from, so the form keeps
@@ -3060,7 +3083,9 @@
         open.report((error && error.category === "stale-write"
           ? "That task changed elsewhere."
           : "Task update failed.") + (held
-          ? " The fields you have not edited now show the version the server holds, and your edits are kept; the change made on the board was not applied."
+          ? (boardRead
+            ? " The fields you have not edited now show the version the server holds, and your edits are kept; the change made on the board was not applied."
+            : " The board could not be refreshed, so the fields you have not edited may be out of date; your edits are kept, and changes made on the board were not applied.")
           : " The board no longer carries it, so the change made there was not applied. Your edits are kept here."));
       }
       function ownsDependencyController(controller) {

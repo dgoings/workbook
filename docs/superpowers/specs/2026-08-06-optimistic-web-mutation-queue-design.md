@@ -332,6 +332,21 @@ and its unsaved text stay exactly as they are and say the board no longer
 carries the task: a reader mid-sentence needs their sentence more than they need
 a "task not found" page.
 
+What the form says about the fields it did correct turns on the same read the
+card's report does, and is passed the same answer. The correction takes those
+fields out of the model, and the model is the server's version only because the
+refresh the refusal forced replaced it with one. When that refresh could not
+read the board, the fields the reader has not touched are the last successful
+poll's, so "the fields you have not edited now show the version the server
+holds" claims precisely the request that just failed. The form says the board
+could not be refreshed and that those fields may be out of date instead —
+the wording the card beside it uses for the same event — and names the changes
+in the plural, because the queue behind the refusal stopped there rather than
+write to a board it cannot see. The correction itself still happens: the refused
+value is gone from the display either way, and only the claim about what
+replaced it changes. The banner keeps its single writer through all of this; it
+is already saying the board is behind, and this sentence is about these fields.
+
 **A refused save from the form itself** is treated differently, and should be.
 The edits stay, the head is re-based from the same forced refresh, and the
 baseline the form diffs against stays where it was, so a deliberate re-save
