@@ -246,6 +246,7 @@ func runPush(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 		writeResult(stdout, "push", result)
 	} else {
 		writeSyncResult(stdout, result)
+		writeIdentityWarning(stderr, result.Identity)
 	}
 	return syncErr
 }
@@ -279,6 +280,7 @@ func runSync(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	result, syncErr := repository.Sync(ctx, config)
 	writeSyncPhaseResult(stdout, "sync", result, result.Fetch.Conflicts, *jsonMode, func(output io.Writer) {
 		writeSyncRunResult(output, result)
+		writeIdentityWarning(stderr, result.Identity)
 	})
 	return syncErr
 }

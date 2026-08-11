@@ -180,6 +180,9 @@ func writeMutationResult(
 	for _, warning := range result.Warnings {
 		fmt.Fprintf(stderr, "workbook: warning: %s\n", warning.Message)
 	}
+	if sync != nil {
+		writeIdentityWarning(stderr, sync.Identity)
+	}
 }
 
 // writeMutationOutcome reports what the command did, including when a conflict
@@ -358,6 +361,22 @@ const (
 // for the command on the ones that may be history, and even the command that is
 // offered is phrased as a decision the reader makes about a specific ref rather
 // than a step to take.
+// writeIdentityWarning states what a command could not settle about the
+// project identity, on the same channel every other warning uses.
+//
+// It is deliberately not conditional on the command having failed. A push that
+// origin accepts while refusing the identity ref beside it exits zero, and that
+// is exactly the state that leaves a later clone with task refs it cannot
+// attribute to a project — so it has to be said out loud.
+func writeIdentityWarning(stderr io.Writer, identity *gitstore.SyncIdentityResult) {
+	if identity == nil {
+		return
+	}
+	if detail, found := identity.Warning(); found {
+		fmt.Fprintf(stderr, "workbook: warning: %s\n", detail)
+	}
+}
+
 func writeIgnoredRefs(output io.Writer, remote string, refs []gitstore.IgnoredRef) {
 	if len(refs) == 0 {
 		return

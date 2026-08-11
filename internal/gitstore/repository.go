@@ -53,7 +53,10 @@ type Repository struct {
 	// originIdentity records what this command has established about origin's
 	// copy of the identity, so the publication paths never write a task ref to
 	// a remote holding another project.
-	originIdentity  originIdentityState
+	originIdentity originIdentityState
+	// identityReport carries what establishing that agreement cost, or could
+	// not achieve, for a caller whose own result is task shaped.
+	identityReport  *SyncIdentityResult
 	identityDrift   string
 	objectIDBytes   int
 	actorOnce       sync.Once

@@ -214,6 +214,14 @@ func runSetup(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 	// a run repeats nothing about origin's namespace.
 	if result.Sync.Result != nil {
 		writeIgnoredRefs(stdout, result.Sync.Result.Remote, result.Sync.Result.Fetch.Ignored)
+		// Bootstrap is where a remote that will not take the identity ref has to
+		// be heard: everything downstream assumes task refs on origin have an
+		// identity beside them.
+		if result.Sync.Result.Identity != nil {
+			if detail, found := result.Sync.Result.Identity.Warning(); found {
+				fmt.Fprintf(stdout, "Identity:\t%s\n", detail)
+			}
+		}
 	}
 	fmt.Fprintf(stdout, "Tasks:\t%d\n", result.TaskCount)
 	writeConflicts(stdout, conflicts)

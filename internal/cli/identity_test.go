@@ -237,6 +237,99 @@ func TestForkInheritsUpstreamIdentityUnlessTheAdvisoryCopyIsRemoved(t *testing.T
 	}
 }
 
+// A server-side policy can accept task refs and refuse the identity ref beside
+// them. Publication deliberately continues — nothing on that remote claims a
+// project, which is where every pre-v0.5.0 remote already stands — but the
+// result is a project accumulating task refs with no identity, which is exactly
+// what leaves a later bare-branch clone with nothing to join. Every publishing
+// command therefore has to say so, on its own channel, while still succeeding.
+func TestPublicationWarnsWhenOriginRefusesTheIdentityRef(t *testing.T) {
+	bare, seed, _ := originAdoptedAfterClone(t)
+	hook := "#!/bin/sh\nwhile read old new ref; do\n" +
+		"  if [ \"$ref\" = \"refs/workbook/project\" ]; then\n" +
+		"    echo 'identity refs are not accepted here' >&2\n    exit 1\n  fi\ndone\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(bare, "hooks", "pre-receive"), []byte(hook), 0o755); err != nil {
+		t.Fatalf("write pre-receive hook: %v", err)
+	}
+
+	code, stdout, stderr := run(t, seed, "setup")
+	if code != 0 {
+		t.Fatalf("setup code = %d, want 0; stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stdout, "Identity:\t") ||
+		!strings.Contains(stdout, "could not publish refs/workbook/project to origin") ||
+		!strings.Contains(stdout, "identity refs are not accepted here") {
+		t.Fatalf("setup stdout = %q, want the refused publication reported", stdout)
+	}
+
+	// A mutation: the warning rides stderr in text mode and the sync member in
+	// JSON, and the change itself is published either way.
+	code, _, stderr = run(t, seed, "create", "Recorded despite the refusal")
+	if code != 0 {
+		t.Fatalf("create code = %d, want 0; stderr = %q", code, stderr)
+	}
+	assertIdentityRefusalWarning(t, "create", stderr)
+	code, stdout, stderr = run(t, seed, "create", "Recorded again", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("create --json = (%d, %q); want 0 with the warning in the envelope", code, stderr)
+	}
+	assertIdentityRefusalMember(t, "create --json", stdout)
+
+	for _, command := range []string{"push", "sync"} {
+		code, _, stderr = run(t, seed, command)
+		if code != 0 {
+			t.Fatalf("%s code = %d, want 0; stderr = %q", command, code, stderr)
+		}
+		assertIdentityRefusalWarning(t, command, stderr)
+
+		code, stdout, stderr = run(t, seed, command, "--json")
+		if code != 0 || stderr != "" {
+			t.Fatalf("%s --json = (%d, %q); want 0 with the warning in the envelope", command, code, stderr)
+		}
+		assertIdentityRefusalMember(t, command+" --json", stdout)
+	}
+
+	// The carve-out itself is unchanged: the work is published, the identity is
+	// not, and nothing was refused to the user.
+	if got := cliGitOutput(t, bare, "for-each-ref", "--format=%(refname)", "refs/workbook/project"); got != "" {
+		t.Fatalf("origin identity refs = %q, want none past the hook", got)
+	}
+	if got := cliGitOutput(t, bare, "for-each-ref", "--format=%(refname)", "refs/workbook/tasks/"); got == "" {
+		t.Fatal("origin holds no task refs, so the carve-out did not let publication through")
+	}
+}
+
+// assertIdentityRefusalWarning insists the warning is one line that names the
+// ref and quotes origin's own words, so a user can tell which remote policy to
+// go and change.
+func assertIdentityRefusalWarning(t *testing.T, command, stderr string) {
+	t.Helper()
+	for _, line := range strings.Split(strings.TrimSuffix(stderr, "\n"), "\n") {
+		if !strings.HasPrefix(line, "workbook: warning: ") {
+			continue
+		}
+		if strings.Contains(line, "could not publish refs/workbook/project to origin") &&
+			strings.Contains(line, "identity refs are not accepted here") {
+			return
+		}
+	}
+	t.Fatalf("%s stderr = %q, want one warning line naming the ref and origin's refusal", command, stderr)
+}
+
+func assertIdentityRefusalMember(t *testing.T, command, stdout string) {
+	t.Helper()
+	for _, want := range []string{
+		`"identity":{`,
+		`"could not publish refs/workbook/project to origin`,
+		`identity refs are not accepted here`,
+		`"unpublished":true`,
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("%s stdout = %q, want an identity member containing %q", command, stdout, want)
+		}
+	}
+}
+
 // A checkout whose branch carries no tracked configuration is now usable: the
 // identity ref says which project it is. The missing advisory copy is worth one
 // line on stderr and nothing more.

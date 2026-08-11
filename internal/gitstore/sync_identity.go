@@ -39,6 +39,30 @@ type SyncIdentityResult struct {
 	// report and never an instruction: the names belong to origin, and a clone
 	// states what it skipped rather than refusing to run.
 	Ignored []string `json:"ignoredRefs,omitempty"`
+	// Unpublished reports that origin still has no identity ref after this run
+	// tried to give it one. Publication continues in that state by design, so
+	// this is the flag that keeps the decision from being invisible: it is the
+	// one outcome that leaves task refs on a remote with nothing naming their
+	// project.
+	Unpublished bool `json:"unpublished,omitempty"`
+}
+
+// Warning returns what a command should tell the user about this identity
+// outcome, if anything.
+//
+// Two states qualify. Origin refusing the identity ref is one, whatever else
+// the run managed to do locally. The other is a run that changed nothing and
+// still has something to say — names under origin's identity ref that this
+// version skipped. Everything else describes work that succeeded, which the
+// result member already reports in full.
+func (result SyncIdentityResult) Warning() (string, bool) {
+	if result.Detail == "" {
+		return "", false
+	}
+	if result.Unpublished || result.Status == SyncIdentityMatched {
+		return result.Detail, true
+	}
+	return "", false
 }
 
 // originIdentityState records what this opened repository has established about
@@ -161,6 +185,7 @@ func (r *Repository) publishIdentityBeforeTasks(ctx context.Context, remoteHead 
 		if result.Status != SyncIdentityPublished && result.Status != SyncIdentityAdopted {
 			r.rememberOriginIdentity(originIdentityUnavailable)
 		}
+		r.recordIdentityReport(result)
 		return nil
 	}
 
@@ -186,7 +211,43 @@ func (r *Repository) publishIdentityBeforeTasks(ctx context.Context, remoteHead 
 		return err
 	}
 	r.rememberOriginIdentity(originIdentityAgreed)
+	r.recordIdentityReport(result)
 	return nil
+}
+
+// recordIdentityReport keeps what a publication path did about the identity,
+// for the command envelope to carry.
+//
+// Publication is reached through Push and PushTask, whose results are task
+// shaped and have nowhere to put an identity outcome. Discarding it made the
+// one case that most needs saying — origin refusing the identity ref while
+// accepting task refs — silent on every channel.
+func (r *Repository) recordIdentityReport(result *SyncIdentityResult) {
+	if result == nil {
+		return
+	}
+	r.metadataMu.Lock()
+	defer r.metadataMu.Unlock()
+	r.identityReport = result
+}
+
+// IdentityReport returns what publication established about origin's identity
+// in this command, if it had to establish anything.
+func (r *Repository) IdentityReport() (*SyncIdentityResult, bool) {
+	r.metadataMu.RLock()
+	defer r.metadataMu.RUnlock()
+	if r.identityReport == nil {
+		return nil, false
+	}
+	report := *r.identityReport
+	return &report, true
+}
+
+// oneLine flattens Git's multi-line refusal into something a warning can carry.
+// A remote states its policy across several lines and a warning is one line, so
+// the whitespace collapses and the words survive.
+func oneLine(detail string) string {
+	return strings.Join(strings.Fields(detail), " ")
 }
 
 // parseRemoteIdentityHead reads the single identity record an ls-remote of the
@@ -291,8 +352,16 @@ func (r *Repository) reconcileIdentity(ctx context.Context, publish, announce bo
 	}
 
 	if result.Status == SyncIdentityMatched && publishedLocally {
+		note := fmt.Sprintf("published %s from the %s", identityRef, identityOriginNoun(localSource))
 		result.Status = SyncIdentityCreated
-		result.Detail = fmt.Sprintf("published %s from the %s", identityRef, identityOriginNoun(localSource))
+		if result.Detail == "" {
+			result.Detail = note
+		} else {
+			// A refusal by origin outranks the local publication: reporting only
+			// that the ref was created here would describe the half of the run
+			// that went well and hide the half that did not.
+			result.Detail = note + "; " + result.Detail
+		}
 	}
 	if len(listing.Ignored) > 0 {
 		result.Ignored = listing.Ignored
@@ -301,10 +370,13 @@ func (r *Repository) reconcileIdentity(ctx context.Context, publish, announce bo
 				len(listing.Ignored), identityRef)
 		}
 	}
-	if result.Status == SyncIdentityMatched && len(result.Ignored) == 0 {
-		// Nothing happened, so nothing is reported. Callers omit the member
-		// entirely, which keeps a steady-state run's output exactly what it was
-		// before this stage existed.
+	if result.Status == SyncIdentityMatched && result.Detail == "" && !result.Unpublished && len(result.Ignored) == 0 {
+		// Nothing happened and there is nothing to say, so nothing is reported.
+		// Callers omit the member entirely, which keeps a steady-state run's
+		// output exactly what it was before this stage existed. A detail is
+		// deliberately part of this test: a run that could not publish the
+		// identity ref reports matched with the reason, and swallowing that
+		// would hide the one state in which task refs outlive their identity.
 		return nil, nil
 	}
 	return result, nil
@@ -349,7 +421,8 @@ func (r *Repository) publishIdentityToOrigin(ctx context.Context, local identity
 
 	if _, err := r.Git(ctx, nil,
 		"fetch", "--no-tags", "--no-auto-maintenance", "origin", identityFetchRefspec); err != nil {
-		result.Detail = fmt.Sprintf("could not publish %s to origin: %v", identityRef, pushErr)
+		result.Detail = fmt.Sprintf("could not publish %s to origin: %s", identityRef, oneLine(pushErr.Error()))
+		result.Unpublished = true
 		r.rememberOriginIdentity(originIdentityAbsent)
 		return nil
 	}
@@ -358,7 +431,8 @@ func (r *Repository) publishIdentityToOrigin(ctx context.Context, local identity
 		return err
 	}
 	if !found {
-		result.Detail = fmt.Sprintf("could not publish %s to origin: %v", identityRef, pushErr)
+		result.Detail = fmt.Sprintf("could not publish %s to origin: %s", identityRef, oneLine(pushErr.Error()))
+		result.Unpublished = true
 		r.rememberOriginIdentity(originIdentityAbsent)
 		return nil
 	}

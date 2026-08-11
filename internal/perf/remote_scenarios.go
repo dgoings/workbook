@@ -84,9 +84,14 @@ type remoteScenarioContract struct {
 //
 // Measured on 2026-08-11 with the 10-task, 4-operation fixture: fresh-checkout
 // 12, initial-publication 23, already-synchronized 12, small-changed-ref-set 21,
-// malformed-local-tip 9, malformed-remote-tip 11. Only the two budgets that the
-// measurements had outgrown were raised, each to the measured count plus two;
-// the rest keep the limits they had.
+// malformed-local-tip 9, malformed-remote-tip 11.
+//
+// Three budgets were raised against the limits that preceded the identity ref,
+// each only as far as its own measurement required: initial-publication 20 → 25
+// (measured 23, two processes of headroom), small-changed-ref-set 20 → 23
+// (measured 21, two), and already-synchronized 10 → 13 (measured 12, one — the
+// same single-process margin that limit already carried). The remaining three
+// keep the limits they had.
 var remoteScenarioDefinitions = []remoteScenarioDefinition{
 	{name: "sync-fresh-checkout", topology: RemoteFreshCheckout, command: "fetch", target: &ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 5000, MaxGitProcesses: 20}},
 	// A push into an origin that has no identity ref publishes one first, which

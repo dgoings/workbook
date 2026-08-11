@@ -1397,10 +1397,16 @@ The same rule governs publication. No path publishes a task ref to `origin`
 without first establishing that `origin` is this project: `workbook push`, and
 the targeted push every automatically synchronizing mutation makes, both check
 first. Where `origin` has no identity ref they publish one before the task refs,
-so task refs on a remote imply an identity beside them; where `origin` holds a
-different project they refuse, and nothing is written. The check costs nothing on
-the mutation path, which has already fetched and compared the two refs in the
-same command.
+so task refs on a remote imply an identity beside them — *unless* a server-side
+policy accepts task refs and refuses `refs/workbook/project` in particular, or
+the remote is read-only. Workbook then publishes the tasks anyway, because
+nothing on that remote claims any project and refusing would take a working
+repository away from someone who cannot change its policy; every publishing
+command says so in the same breath, as a `workbook: warning:` line and an
+`identity` member carrying `"unpublished": true` and the remote's own words.
+Where `origin` holds a *different* project they refuse, and nothing is written.
+The check costs nothing on the mutation path, which has already fetched and
+compared the two refs in the same command.
 
 `workbook setup` consults `origin` before minting, and asks for the identity ref
 first. If origin publishes one, setup fetches and adopts it — no branch checkout,

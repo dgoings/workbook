@@ -125,6 +125,7 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 	if err := r.ensureOriginIdentityAgreement(ctx, map[string]string{identityRef: remoteIdentityHead}); err != nil {
 		return failedPushTransport(result, refs, items, invalid, "push stopped before publishing any task ref", err)
 	}
+	result.Identity, _ = r.IdentityReport()
 	remoteHeads, ignored, err := r.parseRemoteTaskHeads(config, remoteOutput)
 	if err != nil {
 		return failedPushTransport(result, refs, items, invalid, "push failed before completion", err)
@@ -302,6 +303,12 @@ type SyncResult struct {
 	// project's ID format could have produced may be offered for removal.
 	Ignored []IgnoredRef     `json:"ignoredRefs,omitempty"`
 	Tasks   []SyncTaskResult `json:"tasks"`
+	// Identity reports what this phase had to establish about origin's project
+	// before publishing anything, and is omitted when there was nothing to
+	// establish. Publication refuses a remote holding another project, so the
+	// one outcome a caller must never miss is the opposite: origin accepting
+	// task refs while refusing the identity ref beside them.
+	Identity *SyncIdentityResult `json:"identity,omitempty"`
 	// Conflicts travels with the phase that produced it but is not part of its
 	// JSON. Callers lift it to the result envelope's single conflict member so
 	// one command reports one list, whatever mix of phases produced it.
