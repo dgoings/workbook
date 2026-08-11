@@ -98,7 +98,8 @@ const (
 // history no clone can ever read, and append-only means there is no repair: the
 // removal that would bring the project back under the ceiling sits behind the
 // fold that already failed. A folded state may therefore exceed one of these,
-// and that condition is reported rather than enforced.
+// and nothing reports that yet: PR-B will surface it as a historyvalidation
+// advisory, and PR-C's status list will say so where a person can act on it.
 
 // statusTokenPattern is the one rule for a status name, everywhere.
 //
