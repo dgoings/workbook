@@ -30,11 +30,17 @@ import (
 // there is no version left to save against either — which is the one refusal
 // the invitation to save again must never be printed over.
 
+// The fifth is the third surface a failed read reaches: a *board* intent refused
+// while its task's detail form is open. The form is corrected from a model the
+// refresh could not replace, so what it says about those fields is the same
+// claim the card and the save path already withhold in this state.
+
 const (
 	refusedRefreshBoardTaskID  = "WB-01J0000000000000000000RR01"
 	refusedRefreshDetailTaskID = "WB-01J0000000000000000000RR02"
 	refusedRefreshSupersededID = "WB-01J0000000000000000000RR03"
 	refusedRefreshDeletedID    = "WB-01J0000000000000000000RR04"
+	refusedRefreshWithdrawnID  = "WB-01J0000000000000000000RR05"
 )
 
 // A stale write whose forced refresh fails leaves the queue holding a head the
@@ -561,5 +567,122 @@ setTimeout(async () => {
 `
 	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute refused save behavior when the refresh finds the task deleted: %v\n%s", err, output)
+	}
+}
+
+// A board intent can be refused while its task's detail form is open, and the
+// withdrawal corrects the fields still displaying the refused value. It corrects
+// them from the model — which the refresh this refusal forced was supposed to
+// replace with the server's version, and could not.
+//
+// So the fields the reader has not touched are the last successful poll's, and a
+// form saying they "now show the version the server holds" names the one request
+// that just failed. The card beside it and the refused-save path both already
+// withhold that claim here; this is the third surface, and it said it anyway.
+// The correction still happens and the reader's text still stays: what changes
+// is only what the form claims about the fields it moved.
+func TestHandlerClientWithdrawalDoesNotClaimFreshFieldsAfterAFailedRefresh(t *testing.T) {
+	node := requireNode(t)
+	moved := clientPlacementTask(refusedRefreshWithdrawnID, "Moved", core.StatusReady, core.PriorityMedium)
+	moved.Description = "Original."
+	moved.Head = "head-1"
+	tasks := []core.Task{moved}
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
+
+	response := request(t, handler, http.MethodGet, "/")
+	script := renderedClientScript(t, response.Body.String())
+	document := mustJSON(t, TasksDocument{
+		Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks),
+	})
+
+	program := clientDOMHarness("/", string(document)) + script + `
+const typed = "Half a paragraph the reader is still in the middle of.";
+setTimeout(async () => {
+  const inProgress = boardLists.find((list) => list.dataset.status === "in-progress");
+  const dataTransfer = { effectAllowed: "", dropEffect: "", setData() {} };
+
+  const boardFetch = globalThis.fetch;
+  let releaseIntent;
+  // Writes are answered and reads are not, from the moment the conflict is
+  // reported: the refresh the refusal forces is exactly the request that fails.
+  // Everything the detail route reads on the way in lands, so what the form is
+  // holding when the refusal arrives is a board it really did read once.
+  let refreshesFail = false;
+  globalThis.fetch = async (url, options = {}) => {
+    if ((options.method || "GET") !== "GET") {
+      fetchCalls.push({ url, options });
+      return new Promise((resolve) => {
+        releaseIntent = () => {
+          refreshesFail = true;
+          resolve({ ok: false, json: async () => ({
+            format: "workbook.error", version: 1,
+            error: { category: "stale-write", message: "task has changed since head-1; reload and try again" }
+          }) });
+        };
+      });
+    }
+    if (refreshesFail) {
+      fetchCalls.push({ url, options });
+      throw new TypeError("fetch failed");
+    }
+    return boardFetch(url, options);
+  };
+
+  const card = boardCard(` + strconv.Quote(moved.ID) + `);
+  card.rect = { top: 0, bottom: 80 };
+  documentEventListeners.dragstart({ target: card, dataTransfer });
+  const pending = documentEventListeners.drop({ target: inProgress, clientY: 1, dataTransfer, preventDefault() {} });
+  await Promise.resolve();
+  documentEventListeners.dragend({ target: card });
+
+  const link = new TestElement("a");
+  link.href = "/tasks/" + encodeURIComponent(` + strconv.Quote(moved.ID) + `);
+  await documentEventListeners.click({
+    target: link, button: 0, defaultPrevented: false,
+    metaKey: false, ctrlKey: false, shiftKey: false, altKey: false,
+    preventDefault() {}
+  });
+
+  const form = findElement(main, (element) => element.tagName === "FORM");
+  const description = findElement(main, (element) => element.id === "task-description");
+  const status = findElement(main, (element) => element.id === "task-status");
+  if (!form || status.value !== "in-progress") {
+    throw new Error("the open form does not project the pending intent: " + JSON.stringify(status && status.value));
+  }
+  description.value = typed;
+  description.focus();
+
+  releaseIntent();
+  await pending;
+
+  if (findElement(main, (element) => element.tagName === "FORM") !== form) {
+    throw new Error("the withdrawal rebuilt the form instead of correcting it");
+  }
+  if (description.value !== typed) {
+    throw new Error("the withdrawal destroyed the unsaved description: " + JSON.stringify(description.value));
+  }
+  if (status.value !== "ready") {
+    throw new Error("the form kept the refused optimistic status: " + JSON.stringify(status.value));
+  }
+  const message = findElement(main, (element) => Object.hasOwn(element.dataset, "saveStatus"));
+  if (message.textContent.includes("now show the version the server holds")) {
+    throw new Error("the form claimed fields the refresh never read: " + JSON.stringify(message.textContent));
+  }
+  // Pinned whole, as the wording for a refresh that landed is: these two
+  // sentences are each other's only alternative, and either one printed over
+  // the other's state is the bug this pins from both sides.
+  if (message.textContent !== "That task changed elsewhere. The board could not be refreshed, so the " +
+      "fields you have not edited may be out of date; your edits are kept, and changes made on the board were not applied.") {
+    throw new Error("the form does not say what happened to it: " + JSON.stringify(message.textContent));
+  }
+  // The banner keeps its own single writer, and a refresh that failed is
+  // exactly that writer. The refusal is on the form; the outage is here.
+  if (stale.dataset.visible !== "true") {
+    throw new Error("the failed refresh did not raise the stale banner");
+  }
+}, 0);
+`
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute withdrawal behavior when the forced refresh fails: %v\n%s", err, output)
 	}
 }
