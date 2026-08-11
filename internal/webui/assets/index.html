@@ -1251,6 +1251,39 @@
           creation.values,
           creationFailureMessage(error));
       }
+      // A create that outlived the form it was typed into. Only a create that
+      // staged relationships can: one that staged none leaves the form the moment
+      // Save is pressed, and reportRefusedCreation above already reports it from
+      // wherever the reader landed. This one was still waiting on the ID the
+      // server assigns when the reader gave up on it, and what left with the node
+      // is not only the outcome but everything typed into it — which is the whole
+      // difference from a detached save. A save's edits belong to a task that
+      // still exists and cannot be handed back anywhere; a create's draft can be,
+      // so it is, through the control a refused create has always carried.
+      //
+      // Nothing is staged on a task's form the way a detached save's message is.
+      // The server refused to make the task, so there is no form to stage it on
+      // and no route to offer back to; this report is the only copy of the draft
+      // left, and only a dismissal or a restore takes it away.
+      //
+      // What the control cannot carry is the relationships staged beside those
+      // fields: restoring renders a New Task form, and a New Task form starts
+      // with an empty draft state. Said in both places rather than left to be
+      // noticed, because a reader who restored and saved would otherwise create
+      // the task without the prerequisite they staged for it.
+      //
+      // The reason goes last, where every detached report puts it: a server
+      // message is a Go error, lower case and unpunctuated, and spliced between
+      // two sentences of this client's own it runs straight into the one after.
+      function reportDetachedCreationFailure(values, error) {
+        reportRecoverableDraft("error",
+          nameDraft(values) + " was not saved. The create was still open when you left the " +
+            "form, and what you typed is kept here; the relationships staged with it are not. " +
+            creationFailureMessage(error),
+          values,
+          "The relationships staged with this draft are not in this form; add them again if " +
+            "you still want them. " + creationFailureMessage(error));
+      }
       // A draft the user is still writing, set aside so a restore could have the
       // route. Nothing failed here, which is why it is reported as a warning and
       // says where the draft went rather than why it stopped.
@@ -2458,12 +2491,14 @@
             // them. It follows them instead, to the two surfaces that outlive a
             // route.
             //
-            // A create is left alone. Navigating away from a New Task form
-            // discards its draft whatever the server answers, so the loss there
-            // is the navigation rather than the refusal, and the create's own
-            // reporting path is the one that hands drafts back.
+            // A create reaching here outlived its form the same way, and has more
+            // to lose by it: the server made no task, so its outcome has no card
+            // and no task form to reach, and the draft it carried left with the
+            // node. The report it goes to is therefore the only copy of that
+            // draft, and it hands it back rather than only naming what failed.
             if (main.firstElementChild !== section) {
-              if (!isNew) reportDetachedSaveFailure(task.id, error);
+              if (isNew) reportDetachedCreationFailure(values, error);
+              else reportDetachedSaveFailure(task.id, error);
               return;
             }
             if (!isNew && error && error.category === "stale-write") {
