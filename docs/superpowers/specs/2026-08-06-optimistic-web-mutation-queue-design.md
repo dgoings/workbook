@@ -347,6 +347,25 @@ The banner already says the board is behind while that lasts, and the next
 refusal whose refresh does read the board re-bases the form and brings the
 invitation back with it.
 
+A refresh that *does* read the board and finds no head for the task is the same
+invitation withheld for the opposite reason. The board is the server's, so
+nothing here is an outage — `/api/tasks` carries only tasks that have not been
+tombstoned, which makes the absence proof that another clone deleted this one.
+There is nothing to re-base onto, the head the form proposes stays the refused
+one, and a save made against it is refused identically for as long as the task
+is gone. Neither of the other two sentences is true in that state: the version
+the server holds does not exist, and the board is not behind. So the form says
+that instead — the task was deleted elsewhere, the server holds no version of it
+to save to, and the edits in front of the reader are theirs to copy rather than
+to re-save.
+
+Those edits are deliberately not offered back the way a refused create's are.
+The only machinery that hands typed values back puts them in a New Task form,
+which would create a *different* task — a new ID carrying none of this one's
+history — and choosing that over restoring the deleted task is the reader's
+decision, not a consolation to hand someone mid-sentence. The values are still
+in the form either way; what changed is that this form can no longer save them.
+
 **A save detached while it is in flight** still reports its outcome. The reader
 can stop waiting on a slow request and go back to the board, or a draft restore
 can render a New Task form over the route, and the request is still open when
@@ -358,7 +377,16 @@ ever contradicted them.
 The refusal goes to the two surfaces that outlive a route instead. The notice is
 read from wherever the reader ended up, so it names the task and offers the way
 back to it; the task's own form says the same thing the next time that task is
-opened, because that is where a message about a save belongs. A conflict is
+opened, because that is where a message about a save belongs. The way back is an
+offer only while there is a task at the end of it. A `stale-write` refusal
+forces a refresh before the form is given up on, and one that read the board and
+no longer found the task is proof that there is none: followed, that link lands
+the reader on "Task not found", the page this client goes out of its way not to
+drop anyone on. So the link goes, the report says there is nothing left to open,
+and the reason it ends on names the deletion rather than the vaguer conflict the
+refusal's own category would have described. The message is still staged on the
+task's form, because restoring the task is what makes that form openable again
+and this is exactly what its next reader needs to know. A conflict is
 described rather than quoted — the server's sentence names the head the request
 carried, which is this client's bookkeeping — while every other refusal is
 quoted, and quoted last: a server message is a Go error, lower case and
@@ -503,12 +531,21 @@ absent and drives a hand-written fake DOM (`handler_test.go:4173`):
   returning silently: it names the task, offers the route back to it, says why
   the save was lost without repeating the server's head sentence, and stages the
   same message on the task's form, which reads it exactly once;
+- a save detached while the refusal's forced refresh is still open, whose
+  refresh then reads a board the task has left, offers no route back at all: the
+  report says there is nothing left to open and ends on the deletion rather than
+  on the conflict, because the link it drops would have led to "Task not found";
 - a save that lands after its form was detached leaves the reader on the route
   they went to instead of returning them to the board;
 - a refused save whose forced refresh fails keeps the head the form rendered
   rather than the one the last poll left in the model, says the latest version
   could not be loaded instead of inviting a re-save, and re-bases as soon as a
   later refusal's refresh lands;
+- a refused save whose forced refresh reads the board and finds the task gone
+  keeps the reader in the form with their text intact, says the task was deleted
+  elsewhere rather than that the board could not be read, and invites no retry —
+  the retry, made anyway, carries the same refused head and is answered with the
+  same sentence;
 - a dependency edge written to the open task moves the head the form proposes,
   and the mirrored direction does not — the second read from a save the server
   refuses after the mirrored edge is written and before the removal that

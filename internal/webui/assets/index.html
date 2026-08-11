@@ -2473,12 +2473,21 @@
               // fields this user changed — the concurrent edit that caused the
               // refusal survives it.
               const rebase = await refreshedTaskHead(task.id);
+              // A refresh that read the board and found no head for this task
+              // is the board saying the task is gone: `/api/tasks` carries only
+              // tasks that have not been tombstoned, and the likeliest refusal
+              // of all is one another clone deleted. A refresh that could not
+              // read the board proves nothing of the kind, which is why both
+              // halves are asked.
+              const deleted = rebase.boardRead && !rebase.head;
               // The form can go while that refresh is in flight, and a re-base
               // has nothing left to re-base. The outcome still has somewhere to
               // be, so it goes there rather than being dropped one await later
-              // than it would have been above.
+              // than it would have been above — and it takes what the refresh
+              // learned with it, because the report is about to decide whether
+              // there is a task left to offer.
               if (main.firstElementChild !== section) {
-                reportDetachedSaveFailure(task.id, error);
+                reportDetachedSaveFailure(task.id, error, deleted);
                 return;
               }
               if (rebase.head) expectedHead = rebase.head;
@@ -2492,9 +2501,23 @@
               // banner says so while it is; the next refusal whose refresh
               // reads the board re-bases the form and brings the invitation
               // back with it.
-              text(result, rebase.boardRead
-                ? "That task changed elsewhere. Your edits are kept; save again to apply them to the version the server holds."
-                : "That task changed elsewhere, and the latest version could not be loaded. Your edits are kept; save again once the board is current.");
+              //
+              // A refresh that read the board and found the task deleted may
+              // not invite it either, for the opposite reason: there is nothing
+              // to re-base onto, so the head stays the refused one and the
+              // retry is refused identically for as long as the task is gone.
+              // Neither wording above is true here — the version the server
+              // holds does not exist, and the board is not behind — so this
+              // says what is left. The edits are named as kept but unsavable
+              // rather than offered back into a New Task form: the only
+              // machinery that hands values back creates a *different* task,
+              // which is a decision for the reader and not a consolation to
+              // hand them mid-sentence.
+              text(result, deleted
+                ? "That task was deleted elsewhere, so the server holds no version of it to save to. Your edits are kept here, but another save would be refused too; copy anything you want to keep before you leave this form."
+                : rebase.boardRead
+                  ? "That task changed elsewhere. Your edits are kept; save again to apply them to the version the server holds."
+                  : "That task changed elsewhere, and the latest version could not be loaded. Your edits are kept; save again once the board is current.");
               return;
             }
             text(result, error instanceof Error
@@ -2945,23 +2968,41 @@
       // one after it: "was not saved. cannot update a tombstoned task The save
       // was still open…". At the end it is a sentence the reader can stop at,
       // which is where a refused create puts its reason too.
-      function reportDetachedSaveFailure(taskID, error) {
-        const reason = error && error.category === "stale-write"
-          ? "The task changed elsewhere, so the save was refused."
-          : (error instanceof Error ? error.message : "Task update failed.");
+      //
+      // `deleted` is the caller's, and only the caller that waited on the
+      // refresh a `stale-write` forces can pass it: a refresh that read the
+      // board and no longer found the task is proof there is nothing to open.
+      // The way back is only an offer while there is a task at the end of it —
+      // followed for a deleted one it lands the reader on "Task not found",
+      // which is the page this client goes out of its way not to drop anyone
+      // on. So the link goes, the report says why it is not there, and the
+      // reason names the deletion rather than the vaguer conflict the refusal's
+      // own category would have described.
+      function reportDetachedSaveFailure(taskID, error, deleted) {
+        const reason = deleted
+          ? "The task was deleted elsewhere, which is why the save was refused."
+          : (error && error.category === "stale-write"
+            ? "The task changed elsewhere, so the save was refused."
+            : (error instanceof Error ? error.message : "Task update failed."));
         // Appended rather than assigned: a created task's warnings can already
-        // be staged on this form, and they are as unread as this is.
+        // be staged on this form, and they are as unread as this is. Staged for
+        // a deleted task too: restoring it is what makes that form openable
+        // again, and this is exactly what its next reader needs to know.
         const staged = pendingTaskMessages.get(taskID) || [];
         pendingTaskMessages.set(taskID, staged.concat([
           "A save from this form was still open when you left it, and it was not applied. " +
             "The edits it carried were not saved. " + reason
         ]));
-        const open = document.createElement("a");
-        open.href = taskPath(taskID);
-        text(open, "Open task");
+        let open = null;
+        if (!deleted) {
+          open = document.createElement("a");
+          open.href = taskPath(taskID);
+          text(open, "Open task");
+        }
         showNotice("error",
           "Task " + nameTask(taskID) + " was not saved. The save was still open when you left " +
-            "the form, and the edits it carried are gone. " + reason,
+            "the form, and the edits it carried are gone. " +
+            (deleted ? "There is nothing left to open. " : "") + reason,
           open);
       }
       // What to call a task in a report that has outlived the card it was drawn
