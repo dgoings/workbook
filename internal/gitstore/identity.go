@@ -502,12 +502,20 @@ func (r *Repository) writeIdentityCommit(ctx context.Context, tree string) (stri
 
 // createRef creates one ref, failing when it already exists.
 func (r *Repository) createRef(ctx context.Context, ref, head string) error {
+	return r.createRefWithReason(ctx, ref, head, identityRefLogReason)
+}
+
+// createRefWithReason creates one ref under a caller-chosen reflog reason. The
+// singleton refs share this transaction shape — creation is the compare-and-swap
+// when the ref does not exist yet — and differ only in what the reflog should
+// say a person was doing.
+func (r *Repository) createRefWithReason(ctx context.Context, ref, head, reason string) error {
 	var input bytes.Buffer
 	input.WriteString("start\noption no-deref\n")
 	fmt.Fprintf(&input, "create %s %s\n", ref, head)
 	input.WriteString("prepare\ncommit\n")
 	_, err := r.Git(ctx, input.Bytes(),
-		"update-ref", "--no-deref", "--create-reflog", "-m", identityRefLogReason, "--stdin")
+		"update-ref", "--no-deref", "--create-reflog", "-m", reason, "--stdin")
 	return err
 }
 

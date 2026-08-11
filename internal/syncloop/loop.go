@@ -43,6 +43,7 @@ var ErrWatcherLive = errors.New("a Workbook watcher already owns this repository
 type Syncer interface {
 	Sync(context.Context, core.ProjectConfig) (gitstore.SyncRunResult, error)
 	PruneParkedRefs(context.Context, core.ProjectConfig) (int, error)
+	PruneParkedConfigRefs(context.Context) (int, error)
 	InspectTaskHead(context.Context, core.ProjectConfig, string) (gitstore.TaskHead, bool, error)
 	HasOrigin(context.Context) bool
 }
@@ -244,6 +245,13 @@ func (l *loop) syncOnce(ctx context.Context) {
 	if _, pruneErr := l.options.Repository.PruneParkedRefs(ctx, l.options.Config); pruneErr != nil && failure == nil {
 		failure = pruneErr
 	}
+	// The configuration ledger's parked tips are swept here too, and they have
+	// to be swept by something: a clone that reconciles the ledger but never
+	// changes a status again would otherwise keep every tip it ever orphaned,
+	// because the only other sweep runs inside a configuration write.
+	if _, pruneErr := l.options.Repository.PruneParkedConfigRefs(ctx); pruneErr != nil && failure == nil {
+		failure = pruneErr
+	}
 	l.expireConflicts(ctx)
 
 	if l.options.Projection != nil && changedRefs(result) {
@@ -350,5 +358,18 @@ func changedRefs(result gitstore.SyncRunResult) bool {
 			return true
 		}
 	}
-	return false
+	return configRefChanged(result.Config)
+}
+
+// configRefChanged reports whether the configuration stage moved the local
+// ledger ref.
+//
+// It reads the movement flag rather than the status, and that distinction is
+// the whole function. A run can reconcile the ledger locally and then publish
+// it, and the status reports the publication because that is the last thing
+// that happened — so a gate switching on the status would decide nothing had
+// changed in exactly the run where this clone's ref moved the furthest. The
+// result carries the movement as its own fact for this caller.
+func configRefChanged(result *gitstore.SyncConfigResult) bool {
+	return result != nil && result.Moved
 }

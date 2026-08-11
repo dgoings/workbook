@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
+	"github.com/dgoings/workbook/internal/testrepo"
 )
 
 const probeDeadline = 500 * time.Millisecond
@@ -469,6 +471,7 @@ type fakeSyncer struct {
 	mu             sync.Mutex
 	syncs          int
 	prunes         int
+	configPrunes   int
 	origin         bool
 	block          chan struct{}
 	heads          map[string]string
@@ -518,6 +521,19 @@ func (f *fakeSyncer) PruneParkedRefs(context.Context, core.ProjectConfig) (int, 
 	return 0, nil
 }
 
+func (f *fakeSyncer) PruneParkedConfigRefs(context.Context) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.configPrunes++
+	return 0, nil
+}
+
+func (f *fakeSyncer) configPruneCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.configPrunes
+}
+
 func (f *fakeSyncer) InspectTaskHead(_ context.Context, _ core.ProjectConfig, taskID string) (gitstore.TaskHead, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -556,4 +572,173 @@ func (f *fakeSyncer) setHead(taskID, head string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.heads[taskID] = head
+}
+
+// TestChangedRefsSeesARealReconcileThatWasThenPublished is the projection
+// refresh gate's hardest case, and it is deliberately driven by a real
+// synchronization rather than a hand-built result.
+//
+// A synthetic result cannot see the bug this guards: a run that reconciles the
+// ledger locally and then publishes it reports the publication as its status,
+// because publishing is the last thing that happened. A gate that read the
+// status alone would conclude nothing moved, in exactly the run where the local
+// canonical ref moved the furthest. Only a run that actually did both says
+// which fact the result carries.
+func TestChangedRefsSeesARealReconcileThatWasThenPublished(t *testing.T) {
+	ctx := context.Background()
+	first, second, config := watcherSyncRepositories(t)
+
+	// Both clones hold the same ledger.
+	writeWatcherConfig(t, first, config, "ready", "todo")
+	if _, err := first.Sync(ctx, config); err != nil {
+		t.Fatalf("first Sync() error = %v", err)
+	}
+	if _, err := second.Fetch(ctx, config); err != nil {
+		t.Fatalf("second Fetch() error = %v", err)
+	}
+
+	// Then both change a different status, so the second clone must replay its
+	// own operation onto origin's tip and publish the result.
+	writeWatcherConfig(t, first, config, "blocked", "waiting")
+	if _, err := first.Sync(ctx, config); err != nil {
+		t.Fatalf("first Sync(diverge) error = %v", err)
+	}
+	writeWatcherConfig(t, second, config, "in-review", "review")
+
+	before := watcherRefValue(t, second, "refs/workbook/config")
+	run, err := second.Sync(ctx, config)
+	if err != nil {
+		t.Fatalf("second Sync() error = %v; result = %#v", err, run)
+	}
+	if run.Config == nil {
+		t.Fatal("Sync() reported no configuration outcome for a run that reconciled and published")
+	}
+	if got := watcherRefValue(t, second, "refs/workbook/config"); got == before {
+		t.Fatalf("the fixture did not move the local ledger: still %q", got)
+	}
+	if run.Config.Status != gitstore.SyncConfigPublished {
+		t.Fatalf("configuration status = %q, want the publication to be the last word", run.Config.Status)
+	}
+	if !changedRefs(run) {
+		t.Fatalf("changedRefs() = false for a run that moved the local ledger and then published it; config = %#v", run.Config)
+	}
+}
+
+// TestChangedRefsIgnoresAConfigurationOutcomeThatMovedNothing is the other
+// half: a run whose only configuration work was on origin's side leaves the
+// local ref alone and must not buy a projection refresh.
+func TestChangedRefsIgnoresAConfigurationOutcomeThatMovedNothing(t *testing.T) {
+	ctx := context.Background()
+	first, _, config := watcherSyncRepositories(t)
+
+	writeWatcherConfig(t, first, config, "ready", "todo")
+	before := watcherRefValue(t, first, "refs/workbook/config")
+	run, err := first.Sync(ctx, config)
+	if err != nil {
+		t.Fatalf("Sync() error = %v; result = %#v", err, run)
+	}
+	if run.Config == nil || run.Config.Status != gitstore.SyncConfigPublished {
+		t.Fatalf("configuration outcome = %#v, want a publication", run.Config)
+	}
+	if got := watcherRefValue(t, first, "refs/workbook/config"); got != before {
+		t.Fatalf("the local ledger moved during a publication: %q → %q", before, got)
+	}
+	if changedRefs(run) {
+		t.Fatalf("changedRefs() = true for a run that only published; config = %#v", run.Config)
+	}
+
+	quiet := gitstore.SyncRunResult{
+		Fetch: gitstore.SyncResult{Tasks: []gitstore.SyncTaskResult{{Status: gitstore.SyncUnchanged}}},
+		Push:  gitstore.SyncResult{Tasks: []gitstore.SyncTaskResult{{Status: gitstore.SyncUpToDate}}},
+	}
+	if changedRefs(quiet) {
+		t.Fatal("changedRefs() = true for a run that moved nothing")
+	}
+}
+
+// TestEverySynchronizationSweepsBothParkingNamespaces is the production caller
+// the configuration ledger's retention bound needs.
+//
+// Pruning inside a configuration write bounds retention only for a clone that
+// keeps changing statuses. A clone that reconciles the ledger and then never
+// touches a status again keeps every tip it ever orphaned, so the bound is only
+// a bound if something else sweeps — and the watcher is the something else, on
+// the same tick that sweeps the task parks.
+func TestEverySynchronizationSweepsBothParkingNamespaces(t *testing.T) {
+	syncer := &fakeSyncer{origin: true}
+	_, output := startWatcher(t, syncer, func(options *Options) {
+		options.Interval = time.Hour
+	})
+	waitForOutput(t, output, ReadyPrefix)
+	waitForSyncs(t, syncer, 1)
+
+	if got := syncer.configPruneCount(); got != 1 {
+		t.Fatalf("configuration parking sweeps = %d, want one per synchronization", got)
+	}
+}
+
+// watcherSyncRepositories builds a bare origin and two clones of one Workbook
+// project. The loop's own tests use fakes, but a gate over a real
+// synchronization result has to be handed a real one.
+func watcherSyncRepositories(t *testing.T) (*gitstore.Repository, *gitstore.Repository, core.ProjectConfig) {
+	t.Helper()
+	ctx := context.Background()
+	bare := filepath.Join(t.TempDir(), "origin.git")
+	watcherGit(t, t.TempDir(), "init", "--bare", "--quiet", bare)
+	watcherGit(t, bare, "config", "receive.autogc", "false")
+	watcherGit(t, bare, "config", "gc.auto", "0")
+	watcherGit(t, bare, "config", "maintenance.auto", "false")
+
+	seedPath := testrepo.New(t)
+	watcherGit(t, seedPath, "branch", "-M", "main")
+	seed, err := gitstore.Open(ctx, seedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, _, err := seed.Init(ctx, "WB", core.CryptoULIDSource{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	watcherGit(t, seedPath, "add", ".workbook/config.json")
+	watcherGit(t, seedPath, "commit", "--quiet", "-m", "Initialize Workbook")
+	watcherGit(t, seedPath, "remote", "add", "origin", bare)
+	watcherGit(t, seedPath, "push", "--quiet", "-u", "origin", "main")
+	watcherGit(t, bare, "symbolic-ref", "HEAD", "refs/heads/main")
+	return watcherClone(t, bare), watcherClone(t, bare), config
+}
+
+func watcherClone(t *testing.T, bare string) *gitstore.Repository {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "clone")
+	watcherGit(t, t.TempDir(), "clone", "--quiet", bare, path)
+	watcherGit(t, path, "config", "user.name", "Workbook Test")
+	watcherGit(t, path, "config", "user.email", "workbook@example.test")
+	repository, err := gitstore.Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return repository
+}
+
+func writeWatcherConfig(t *testing.T, repository *gitstore.Repository, config core.ProjectConfig, from, to core.Status) {
+	t.Helper()
+	if _, err := repository.WriteConfigOperation(context.Background(), config, core.CryptoULIDSource{},
+		[]core.ConfigOperation{{Type: core.ConfigStatusRename, From: from, To: to}}, ""); err != nil {
+		t.Fatalf("WriteConfigOperation(%s → %s) error = %v", from, to, err)
+	}
+}
+
+func watcherRefValue(t *testing.T, repository *gitstore.Repository, ref string) string {
+	t.Helper()
+	return watcherGit(t, repository.Root, "rev-parse", "--verify", ref)
+}
+
+func watcherGit(t *testing.T, directory string, args ...string) string {
+	t.Helper()
+	command := exec.Command("git", append([]string{"-C", directory}, args...)...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, output)
+	}
+	return strings.TrimRight(string(output), "\r\n")
 }

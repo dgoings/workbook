@@ -381,12 +381,9 @@ func (s Service) UpdateMutation(ctx context.Context, idOrPrefix string, input Up
 	// that changes nothing into a write the caller did not ask for.
 	var corrected *StatusCorrection
 	if input.Status == nil {
-		if correction := s.statusCorrection(parent.State.Task); correction != nil {
-			corrected = correction
-			next.Status = correction.To
-			operations = append(operations, Operation{
-				Type: OperationFieldSet, Field: "status", Value: string(correction.To),
-			})
+		operations, corrected = s.settle(operations, parent.State.Task)
+		if corrected != nil {
+			next.Status = corrected.To
 		}
 	}
 	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
@@ -425,6 +422,51 @@ func (s Service) statusCorrection(task TaskData) *StatusCorrection {
 	return &StatusCorrection{From: task.Status, To: resolved}
 }
 
+// settle appends the correct-on-touch status write to a pack that is already
+// being written, and reports what it settled.
+//
+// Every mutation that writes to a task settles its status, not only the ones
+// that were about status. That is the whole meaning of "correct on touch": the
+// stored token is stale because no clone may rewrite another's task from the
+// outside, so the only moment it can be repaired is a moment somebody was
+// writing to that task anyway. A move, a dependency edit and a restore are all
+// such moments, and leaving them out would mean a task that gets reordered
+// every day but never re-statused resolves through the forwarding chain
+// forever.
+//
+// It is deliberately not called where no pack is written. A move that computes
+// the rank it already has returns without a commit, and a settlement that
+// turned that into a write would make a no-op command produce history.
+//
+// The two anchor comparisons in MoveMutation and PlaceMutation still read
+// stored statuses rather than resolved ones, and stay that way here. Fixing
+// them is not a settlement but a change to which tasks share a rank bucket:
+// two tasks whose stored tokens differ while resolving to the same column are
+// in one bucket for ordering purposes and two for these checks, and reconciling
+// that is the bucketing work PR-D does with the rendering that depends on it.
+// Doing half of it here would let a move succeed against an anchor the board
+// draws in another column.
+func (s Service) settle(operations []Operation, task TaskData) ([]Operation, *StatusCorrection) {
+	correction := s.statusCorrection(task)
+	if correction == nil {
+		return operations, nil
+	}
+	return append(operations, Operation{
+		Type:  OperationFieldSet,
+		Field: "status",
+		Value: string(correction.To),
+	}), correction
+}
+
+// Restore is the one mutation that writes a pack and does not settle, and the
+// reason is the fold rather than a policy: Apply refuses a pack against a
+// tombstoned parent unless it is exactly one task.restore operation, so a
+// settlement riding along would be rejected as an attempt to mutate a
+// tombstone. Making it ride would mean widening that rule, which is a change to
+// the durable operation semantics every clone folds — not a settlement, and not
+// something to slip into the change that turns vocabularies on. A restored task
+// settles on its next ordinary write, one command later.
+
 func (s Service) DeleteMutation(ctx context.Context, idOrPrefix string) (MutationResult, error) {
 	parent, err := s.resolveSnapshot(ctx, idOrPrefix)
 	if err != nil {
@@ -448,6 +490,7 @@ func (s Service) RestoreMutation(ctx context.Context, idOrPrefix string) (Mutati
 	if !parent.State.Task.Deleted {
 		return MutationResult{}, Errorf(CategoryValidation, "cannot restore an active task")
 	}
+	// No settlement here; see the note above settle.
 	operations := []Operation{{Type: OperationTaskRestore}}
 	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
 		return MutationResult{}, err
@@ -494,11 +537,19 @@ func (s Service) MoveMutation(ctx context.Context, idOrPrefix string, input Move
 	if rank == parent.State.Task.Rank {
 		return MutationResult{Task: s.Project(parent)}, nil
 	}
-	operations := []Operation{{Type: OperationFieldSet, Field: "rank", Value: rank}}
+	operations, corrected := s.settle(
+		[]Operation{{Type: OperationFieldSet, Field: "rank", Value: rank}},
+		parent.State.Task,
+	)
 	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
 		return MutationResult{}, err
 	}
-	return s.writeMutation(ctx, &parent, operations, "move task")
+	result, err := s.writeMutation(ctx, &parent, operations, "move task")
+	if err != nil {
+		return MutationResult{}, err
+	}
+	result.StatusCorrected = corrected
+	return result, nil
 }
 
 func (s Service) PlaceMutation(ctx context.Context, idOrPrefix string, input PlaceInput) (MutationResult, error) {
@@ -612,11 +663,19 @@ func (s Service) DependMutation(ctx context.Context, idOrPrefix, dependencyOrPre
 	if dependencyReaches(snapshots, dependency.State.TaskID, parent.State.TaskID) {
 		return MutationResult{}, Errorf(CategoryValidation, "dependency would create a cycle")
 	}
-	operations := []Operation{{Type: OperationSetAdd, Field: "dependencies", Value: dependency.State.TaskID}}
+	operations, corrected := s.settle(
+		[]Operation{{Type: OperationSetAdd, Field: "dependencies", Value: dependency.State.TaskID}},
+		parent.State.Task,
+	)
 	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
 		return MutationResult{}, err
 	}
-	return s.writeMutation(ctx, &parent, operations, "add dependency")
+	result, err := s.writeMutation(ctx, &parent, operations, "add dependency")
+	if err != nil {
+		return MutationResult{}, err
+	}
+	result.StatusCorrected = corrected
+	return result, nil
 }
 
 func (s Service) FreeMutation(ctx context.Context, idOrPrefix, dependencyOrPrefix string) (MutationResult, error) {
@@ -639,11 +698,19 @@ func (s Service) FreeMutation(ctx context.Context, idOrPrefix, dependencyOrPrefi
 	if !hasDependency(parent.State.Task.Dependencies, dependencyID) {
 		return MutationResult{Task: s.Project(parent)}, nil
 	}
-	operations := []Operation{{Type: OperationSetRemove, Field: "dependencies", Value: dependencyID}}
+	operations, corrected := s.settle(
+		[]Operation{{Type: OperationSetRemove, Field: "dependencies", Value: dependencyID}},
+		parent.State.Task,
+	)
 	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
 		return MutationResult{}, err
 	}
-	return s.writeMutation(ctx, &parent, operations, "remove dependency")
+	result, err := s.writeMutation(ctx, &parent, operations, "remove dependency")
+	if err != nil {
+		return MutationResult{}, err
+	}
+	result.StatusCorrected = corrected
+	return result, nil
 }
 
 // Project turns a stored snapshot into the task a caller sees, and is the one

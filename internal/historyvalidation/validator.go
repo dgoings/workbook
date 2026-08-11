@@ -22,6 +22,14 @@ type Result struct {
 	Pending          int       `json:"pending"`
 	CachePath        string    `json:"cachePath"`
 	Failures         []Failure `json:"failures"`
+	// Config reports the configuration ledger's audit, and is omitted for a
+	// project that has no ledger — which is every project until somebody
+	// changes a status. A run against such a project therefore emits exactly
+	// the JSON it emitted before this section existed.
+	Config *ConfigValidation `json:"config,omitempty"`
+	// Advisories carry what is true about the validated state without being
+	// wrong with it. They never affect the exit status; see Advisory.
+	Advisories []Advisory `json:"advisories,omitempty"`
 }
 
 type source interface {
@@ -155,11 +163,33 @@ func (v *Validator) Validate(ctx context.Context, full bool) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
+	// The configuration ledger is audited after the tasks, and its outcome is
+	// reported whatever theirs was. It is a separate history with a separate
+	// fold, so a project whose tasks are sound and whose ledger is not has to
+	// be able to say exactly that.
+	configuration, advisories, configErr := v.validateConfig(ctx)
+	if configErr != nil {
+		return result, configErr
+	}
+	result.Config = configuration
+	result.Advisories = advisories
 	if result.Invalid > 0 {
 		return result, core.Errorf(core.CategoryCorruptData, "semantic history validation found %d invalid task(s)", result.Invalid)
 	}
 	if !sameHeads(initialHeads, finalHeads) {
 		return result, core.Errorf(core.CategoryStaleWrite, "canonical task heads changed during validation")
+	}
+	// A ledger failure carries its own category forward rather than being
+	// restated as corrupt data. A pack this clone declined to fold is an
+	// operational refusal that names a bound somebody can raise, and calling it
+	// corruption would tell a team their configuration history is broken when
+	// it is merely large.
+	if configuration != nil && !configuration.Valid {
+		return result, core.Errorf(
+			core.Category(configuration.Failure.Category),
+			"configuration ledger validation failed at %s: %s",
+			configuration.Failure.Commit, configuration.Failure.Message,
+		)
 	}
 	return result, nil
 }

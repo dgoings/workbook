@@ -57,6 +57,10 @@ type SyncRunResult struct {
 	// synchronization therefore emits exactly the JSON it emitted before this
 	// stage existed, which is what every caller parsing that output relies on.
 	Identity *SyncIdentityResult `json:"identity,omitempty"`
+	// Config reports what the configuration stage did, on the same terms and
+	// for the same reason: a project with no ledger, or one whose ledger did
+	// not move, omits the member entirely.
+	Config *SyncConfigResult `json:"config,omitempty"`
 }
 
 // fetchState is the single validated view that Fetch produces for Sync. It is
@@ -67,6 +71,7 @@ type fetchState struct {
 	Tracking  map[string]core.Snapshot
 	Outcomes  map[string]SyncTaskResult
 	Identity  *SyncIdentityResult
+	Config    *SyncConfigResult
 }
 
 // Push publishes validated local Workbook task refs to origin without force or
@@ -112,9 +117,10 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 		valid[tip.Head.TaskID] = struct{}{}
 	}
 
-	// The identity ref rides the listing Push already makes, so establishing
-	// that origin is this project costs no round trip of its own.
-	remoteOutput, err := r.Git(ctx, nil, "ls-remote", "--refs", "origin", taskRefPrefix+"*", identityRef)
+	// Both singleton refs ride the listing Push already makes, so establishing
+	// that origin is this project, and whether it holds this project's
+	// configuration, costs no round trip of its own.
+	remoteOutput, err := r.Git(ctx, nil, "ls-remote", "--refs", "origin", taskRefPrefix+"*", identityRef, configRef)
 	if err != nil {
 		return failedPushTransport(result, refs, items, invalid, "push failed before completion", err)
 	}
@@ -126,6 +132,17 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 		return failedPushTransport(result, refs, items, invalid, "push stopped before publishing any task ref", err)
 	}
 	result.Identity, _ = r.IdentityReport()
+	// The vocabulary goes out before the task refs whose statuses it explains.
+	// A teammate who fetches a task in a column their clone has never heard of
+	// has a worse experience than one whose columns arrive a moment early.
+	if err := r.observeRemoteConfigHead(ctx, remoteOutput); err != nil {
+		return failedPushTransport(result, refs, items, invalid, "push failed before completion", err)
+	}
+	if published, err := r.publishConfigLedger(ctx); err != nil {
+		return failedPushTransport(result, refs, items, invalid, "push failed before completion", err)
+	} else if published != nil {
+		result.Config = published
+	}
 	remoteHeads, ignored, err := r.parseRemoteTaskHeads(config, remoteOutput)
 	if err != nil {
 		return failedPushTransport(result, refs, items, invalid, "push failed before completion", err)
@@ -269,6 +286,14 @@ func (r *Repository) PushTask(ctx context.Context, config core.ProjectConfig, ta
 	if err := r.ensureOriginIdentityAgreement(ctx, nil); err != nil {
 		return result, err
 	}
+	// The vocabulary this task's status is written against goes out with it.
+	// See publishConfigLedger for why a configuration change is more urgent to
+	// publish than the task change that prompted it, not less. On this path the
+	// decision costs nothing: the fetch this command already ran enumerated
+	// both configuration refs.
+	if _, err := r.publishConfigLedger(ctx); err != nil {
+		return result, err
+	}
 
 	refName := taskRefPrefix + taskID
 	expected := map[string]string{refName: taskID}
@@ -309,10 +334,19 @@ type SyncResult struct {
 	// one outcome a caller must never miss is the opposite: origin accepting
 	// task refs while refusing the identity ref beside them.
 	Identity *SyncIdentityResult `json:"identity,omitempty"`
+	// Config reports what this phase had to establish about origin's copy of
+	// the project configuration, and is omitted when there was nothing to
+	// establish.
+	Config *SyncConfigResult `json:"config,omitempty"`
 	// Conflicts travels with the phase that produced it but is not part of its
 	// JSON. Callers lift it to the result envelope's single conflict member so
 	// one command reports one list, whatever mix of phases produced it.
 	Conflicts []core.Conflict `json:"-"`
+	// ConfigConflicts travels the same way, in its own list. It is separate
+	// because a task conflict names a task and a configuration conflict names a
+	// status; merging them would give every consumer of one a member that can
+	// never be populated for it.
+	ConfigConflicts []core.ConfigConflict `json:"-"`
 }
 
 // Sync fetches and validates origin's Workbook refs, replays any divergent
@@ -335,6 +369,7 @@ func (r *Repository) Sync(ctx context.Context, config core.ProjectConfig) (SyncR
 	state, fetched, fetchErr := r.fetch(ctx, config, true, true)
 	result.Fetch = fetched
 	result.Identity = state.Identity
+	result.Config = state.Config
 	if fetchErr != nil && fetched.Status != SyncPhaseCompleted {
 		result.Push = skippedSyncPhase("push skipped because fetch failed")
 		return result, fetchErr
@@ -342,6 +377,7 @@ func (r *Repository) Sync(ctx context.Context, config core.ProjectConfig) (SyncR
 
 	pushed, pushErr := r.publishFetched(ctx, config, state)
 	result.Push = pushed
+	result.Config = mergeConfigPublication(state.Config, pushed.Config)
 	if fetchErr != nil {
 		return result, fetchErr
 	}
@@ -394,13 +430,16 @@ func (r *Repository) fetch(
 		return state, result, err
 	}
 
-	// One fetch carries both namespaces. The identity ref is worth nothing if
-	// learning it costs a second round trip on every synchronization, and a
-	// second one could also observe a different moment than the tasks it is
-	// supposed to describe.
+	// One fetch carries all three namespaces. Each of the two singleton refs is
+	// worth nothing if learning it costs a round trip of its own on every
+	// synchronization, and a separate fetch could also observe a different
+	// moment than the tasks it is supposed to describe. Both singleton refspecs
+	// are globs, because Git fails a whole fetch when an explicitly named source
+	// ref is missing and most origins have neither ref yet.
 	if _, err := r.Git(ctx, nil, "fetch", "--no-tags", "--prune", "--no-auto-maintenance", "origin",
 		"+"+taskRefPrefix+"*:"+remoteTaskRefPrefix+"*",
 		identityFetchRefspec,
+		configFetchRefspec,
 	); err != nil {
 		result, err = failedSyncPhase(result, "fetch failed before completion", err)
 		return state, result, err
@@ -414,6 +453,24 @@ func (r *Repository) fetch(
 	if identityErr != nil {
 		result, identityErr = failedSyncPhase(result, "fetch stopped before tasks were synchronized", identityErr)
 		return state, result, identityErr
+	}
+
+	// Configuration comes next, between identity and tasks. It is downstream of
+	// identity because a ledger naming another project is the same swapped
+	// remote the identity stage refuses, and upstream of tasks because a task's
+	// projected status is read through the vocabulary this stage settles. Unlike
+	// identity it does not gate the tasks: see configStageOutcome for why one
+	// disputed status rename must not stop a team's work from synchronizing.
+	configOutcome := r.reconcileConfig(ctx, config)
+	state.Config = configOutcome.Result
+	result.Config = configOutcome.Result
+	if configOutcome.Result != nil {
+		result.ConfigConflicts = configOutcome.Result.Conflicts
+	}
+	if configOutcome.Fatal != nil {
+		var fatal error
+		result, fatal = failedSyncPhase(result, "fetch stopped before tasks were synchronized", configOutcome.Fatal)
+		return state, result, fatal
 	}
 
 	canonicalRefs, _, err := r.listOwnedTaskRefs(ctx, config, taskRefPrefix)
@@ -592,6 +649,14 @@ func (r *Repository) fetch(
 	if len(result.Conflicts) > 0 {
 		return state, result, core.ConflictError(result.Conflicts)
 	}
+	// The configuration stage's failure is reported last, after every task has
+	// been fetched, replayed and recorded. That ordering is the decision: the
+	// tasks are the project's history and their synchronization is never held
+	// hostage to a status rename two people disagree about, but the
+	// disagreement still has to reach the caller's exit status.
+	if configOutcome.Deferred != nil {
+		return state, result, configOutcome.Deferred
+	}
 	return state, result, nil
 }
 
@@ -665,6 +730,13 @@ func (r *Repository) publishFetched(ctx context.Context, config core.ProjectConf
 	if err := r.validateRepositoryConfig(config); err != nil {
 		return failedSyncPhase(result, "push failed before completion", err)
 	}
+	// The configuration ledger is published before the task refs it explains,
+	// from the observation the fetch phase of this same run already made.
+	published, err := r.publishConfigLedger(ctx)
+	if err != nil {
+		return failedSyncPhase(result, "push failed before completion", err)
+	}
+	result.Config = published
 
 	// Every canonical tip is published, including one whose replay stopped
 	// partway. Publishing is about what this clone durably holds, not about

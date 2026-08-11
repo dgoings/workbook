@@ -225,9 +225,11 @@ func runFetch(ctx context.Context, args []string, cwd string, stdout, stderr io.
 		return err
 	}
 	result, syncErr := repository.Fetch(ctx, config)
-	writeSyncPhaseResult(stdout, "fetch", result, result.Conflicts, *jsonMode, func(output io.Writer) {
-		writeSyncResult(output, result)
-	})
+	writeSyncPhaseResultWithConfig(stdout, "fetch", result, result.Conflicts, result.ConfigConflicts, *jsonMode,
+		func(output io.Writer) {
+			writeSyncResult(output, result)
+			writeConfigWarning(stderr, result.Config)
+		})
 	return syncErr
 }
 
@@ -247,6 +249,7 @@ func runPush(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	} else {
 		writeSyncResult(stdout, result)
 		writeIdentityWarning(stderr, result.Identity)
+		writeConfigWarning(stderr, result.Config)
 	}
 	return syncErr
 }
@@ -278,10 +281,12 @@ func runSync(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	}
 
 	result, syncErr := repository.Sync(ctx, config)
-	writeSyncPhaseResult(stdout, "sync", result, result.Fetch.Conflicts, *jsonMode, func(output io.Writer) {
-		writeSyncRunResult(output, result)
-		writeIdentityWarning(stderr, result.Identity)
-	})
+	writeSyncPhaseResultWithConfig(stdout, "sync", result, result.Fetch.Conflicts, result.Fetch.ConfigConflicts, *jsonMode,
+		func(output io.Writer) {
+			writeSyncRunResult(output, result)
+			writeIdentityWarning(stderr, result.Identity)
+			writeConfigWarning(stderr, result.Config)
+		})
 	return syncErr
 }
 
@@ -741,6 +746,9 @@ func runNext(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 		return err
 	}
 	session.fetchBefore(ctx)
+	if err := session.refreshVocabulary(ctx); err != nil {
+		return err
+	}
 	task, err := session.service.Next(ctx)
 	if err != nil {
 		return err
@@ -818,6 +826,23 @@ func writeValidationResult(output io.Writer, result historyvalidation.Result) {
 		result.TaskCount, result.CommitsChecked, result.CacheHits, result.Valid, result.Invalid, result.Pending)
 	for _, failure := range result.Failures {
 		fmt.Fprintf(output, "Invalid %s at %s [%s]: %s\n", failure.TaskID, failure.Commit, failure.Category, failure.Message)
+	}
+	if result.Config != nil {
+		verdict := "valid"
+		if !result.Config.Valid {
+			verdict = "invalid"
+		}
+		fmt.Fprintf(output, "Configuration ledger: %d commit(s) checked; %s.\n", result.Config.CommitsChecked, verdict)
+		if result.Config.Failure != nil {
+			fmt.Fprintf(output, "Invalid configuration at %s [%s]: %s\n",
+				result.Config.Failure.Commit, result.Config.Failure.Category, result.Config.Failure.Message)
+		}
+	}
+	// Advisories are printed after the verdict and never change it: they
+	// describe a state everybody wrote deliberately and nobody can be blamed
+	// for, which is the whole reason they are not failures.
+	for _, advisory := range result.Advisories {
+		fmt.Fprintf(output, "Advisory:\t%s\t%s\n", advisory.Code, advisory.Message)
 	}
 }
 
@@ -1215,8 +1240,17 @@ func openServiceParts(ctx context.Context, cwd string, stderr io.Writer) (core.S
 	if err != nil {
 		return core.Service{}, nil, nil, err
 	}
+	// The project's own status vocabulary, not the built-in default. This is
+	// what turns the per-project statuses on for real: every projected task
+	// resolves its stored status through the configured forwarding chains, and
+	// every mutation settles a stale token against them.
+	vocabulary, err := repository.LoadVocabulary(ctx)
+	if err != nil {
+		return core.Service{}, nil, nil, err
+	}
 	return core.Service{
 		Config:     config,
+		Vocabulary: vocabulary,
 		Reader:     store,
 		Writer:     repository,
 		Projection: store,
@@ -1236,12 +1270,17 @@ func openReadService(ctx context.Context, cwd string, stderr io.Writer) (core.Se
 	if err != nil {
 		return core.Service{}, err
 	}
+	vocabulary, err := repository.LoadVocabulary(ctx)
+	if err != nil {
+		return core.Service{}, err
+	}
 	return core.Service{
-		Config:  config,
-		Reader:  store,
-		History: store,
-		IDs:     core.CryptoULIDSource{},
-		Now:     time.Now,
+		Config:     config,
+		Vocabulary: vocabulary,
+		Reader:     store,
+		History:    store,
+		IDs:        core.CryptoULIDSource{},
+		Now:        time.Now,
 	}, nil
 }
 
