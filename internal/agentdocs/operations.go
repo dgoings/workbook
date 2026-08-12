@@ -143,18 +143,21 @@ func Apply(options Options) (Report, error) {
 // nobody asked for, and installing a skill that a project deliberately left out
 // would be worse.
 //
-// It refreshes and never installs. A project that has no guidelines file chose
-// that — `workbook setup --no-docs` and `workbook docs remove` are both ways to
-// say it — and creating one from a command that was about statuses would
-// override a decision nobody was asked to revisit. Such a project is reported
-// as absent and untouched; `workbook docs install` is what creates the file.
+// It refreshes and never installs. A project that has no managed guidelines
+// block chose that — `workbook setup --no-docs` and `workbook docs remove` are
+// both ways to say it, and a file somebody wrote at that path themselves is a
+// third — and installing one from a command that was about statuses would
+// override a decision nobody was asked to revisit. The test is the reconciler's
+// own StateAbsent, which covers a missing file and a file carrying no managed
+// block alike, because "there is nothing here Workbook wrote" is the same
+// answer to both. `workbook docs install` is what creates the block.
 func ApplyGuidelines(options Options) (Report, error) {
 	item := guidelinesTarget(options)
 	existing, err := read(item.path)
 	if err != nil {
 		return Report{}, err
 	}
-	if len(existing) == 0 {
+	if outcome := item.document.Reconcile(existing); outcome.State == StateAbsent {
 		return Report{Artifacts: []Artifact{{Path: item.display, State: StateAbsent}}}, nil
 	}
 	return apply([]target{item}, options)

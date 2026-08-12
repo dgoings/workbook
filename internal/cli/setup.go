@@ -264,9 +264,11 @@ func runSetup(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 // It replaces the guidelines entry in the report rather than appending one, so
 // the run still reports one line per managed file.
 //
-// A blocked refresh is not a setup failure. The change it could not make is a
-// stale generated file somebody edited, and `workbook docs update --force` is
-// the answer; reporting the artifact's state is enough to see it.
+// A refusal here is reported like any other, because it cannot be the ordinary
+// one. Apply ran moments ago in the same command and setup returned its error
+// if it was blocked, so the file this reads is one Workbook has just written:
+// stale or current, never modified. Anything else means the file changed under
+// the command, which is worth hearing about rather than swallowing.
 func refreshFetchedGuidelines(
 	ctx context.Context,
 	repository *gitstore.Repository,
@@ -284,7 +286,7 @@ func refreshFetchedGuidelines(
 	}
 	options.Vocabulary = state.Vocabulary
 	refreshed, err := agentdocs.ApplyGuidelines(options)
-	if err != nil && core.CategoryOf(err) != core.CategoryValidation {
+	if err != nil {
 		return err
 	}
 	for _, artifact := range refreshed.Artifacts {
@@ -421,9 +423,19 @@ func validateSkillFlags(skillDir string, noSkill bool) error {
 	return nil
 }
 
+// artifactAction says what an operation did to one managed file.
+//
+// An untouched absent file is its own answer rather than "unchanged": a project
+// with no guidelines block reading "unchanged" beside the path would say the
+// file is already current, which is the opposite of what it means. The JSON
+// report has carried the distinction all along in `state`.
 func artifactAction(artifact agentdocs.Artifact) string {
-	if artifact.Written {
+	switch {
+	case artifact.Written:
 		return "written"
+	case artifact.State == agentdocs.StateAbsent:
+		return "not installed"
+	default:
+		return "unchanged"
 	}
-	return "unchanged"
 }

@@ -551,9 +551,19 @@ Workbook do, and the lifecycle prose under it names this project's own statuses
 because it is read off the tags rather than written out. Every mutating
 `workbook status` verb rewrites it, so the file an agent reads and the ledger it
 describes cannot drift; `--no-docs` skips that for one command, and `workbook
-docs update` catches up afterwards. A project that has no guidelines file is
-left without one — refreshing what a project has is not the same as installing
-what it declined — and `workbook docs install` is what creates it.
+docs update` catches up afterwards. A project with no managed guidelines block —
+no file at all, or a file somebody wrote at that path themselves — is left
+alone, because refreshing what a project has is not the same as installing what
+it declined; `workbook docs install` is what creates the block.
+
+A display label is authored by whoever can push to the configuration ref, so the
+generated file treats one as untrusted text: control runes and newlines are
+collapsed, a pipe is escaped so it cannot add a column to the table, a code span
+is fenced long enough to survive the backticks the label carries, and the
+managed block's own markers are neutralized in the body as well as by the block
+format itself. A label carrying `<!-- workbook:end -->` would otherwise truncate
+the block it was written into, and every clone would report a file nobody had
+edited as locally modified — permanently.
 
 Hand-edits are refused rather than lost. The managed block records a hash of
 what Workbook wrote, so a file that still matches is rewritten in place and a
