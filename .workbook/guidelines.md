@@ -1,4 +1,4 @@
-<!-- workbook:begin generator=dev sha256=9f8f31de4d9c0ea12ee9c4fd61bbf6c4ef38cfda6ad8a720b40f4ca1417eab3b -->
+<!-- workbook:begin generator=dev sha256=0803f22e052e58e7908d4d12043533e6666fbbcb0815cf9d958edc156031a76d -->
 # Workbook guidelines
 
 Workbook tracks this project's tasks in Git refs under `refs/workbook/tasks/`.
@@ -12,21 +12,38 @@ the SQLite projection, or `.workbook/config.json` directly.
 | Project ID | `01KY8964C8TQVBKVACB45DYTNY` |
 | Task ID prefix | `WB-` |
 
-## Canonical statuses
+## Statuses
 
-Pass the machine value, never the display label.
+This project's statuses, in order. Pass the machine value, never the display
+label.
 
-| Machine value | Display label |
+| # | Machine value | Display label | Tags |
+| --- | --- | --- | --- |
+| 1 | `backlog` | Backlog | `default` |
+| 2 | `ready` | Ready | `next` |
+| 3 | `blocked` | Blocked | none |
+| 4 | `in-progress` | In Progress | none |
+| 5 | `in-review` | In Review | none |
+| 6 | `done` | Done | `done` |
+
+Write `--status in-progress`, not `In Progress`.
+The same applies to `in-review`.
+A display label is rejected as a validation error.
+
+A tag is a job the machine gives a status, not a description of its name:
+
+| Tag | What it makes Workbook do |
 | --- | --- |
-| `backlog` | Backlog |
-| `ready` | Ready |
-| `blocked` | Blocked |
-| `in-progress` | In Progress |
-| `in-review` | In Review |
-| `done` | Done |
+| `default` | A task created without `--status` lands here. Exactly one status carries it. |
+| `done` | A dependency sitting here is satisfied, so the work waiting on it can be claimed. |
+| `next` | `workbook next` may return a task sitting here. |
 
-Write `--status in-progress`, not `In Progress`. The same applies to
-`in-review`. A display label is rejected as a validation error.
+A status carrying no tag is an ordinary column: work rests there and nothing
+else follows from it.
+
+These statuses belong to this project and another project's are different, so
+read them here or with `workbook status list --json` rather than assuming the
+ones you have seen elsewhere. This section is rewritten whenever they change.
 
 ## Canonical priorities
 
@@ -38,12 +55,17 @@ Write `--status in-progress`, not `In Progress`. The same applies to
 
 ## Task lifecycle
 
+New tasks land in `backlog`.
+`workbook next` claims from `ready`.
+A dependency is satisfied once it reaches `done`.
+
 1. Select work with `workbook next --json`, or read a known task with
    `workbook show <id> --json`. Keep the canonical full ID from `data.id`.
-2. Claim it with `workbook update <id> --status in-progress --json` before
-   editing files.
-3. Move it to `in-review` once the change is ready for human review.
-4. Move it to `done` only after the work is accepted and merged.
+2. Claim it with `workbook update <id> --status <status> --json` before
+   editing files, naming the status this project uses for work under way.
+3. Move it along the statuses above as the work progresses, including the
+   one this project uses for review, and into a status tagged `done` only
+   after the work is accepted and merged.
 
 ## Machine-readable output
 

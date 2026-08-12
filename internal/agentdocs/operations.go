@@ -17,6 +17,10 @@ type Options struct {
 	Root string
 	// Project supplies the identity and canonical values documented.
 	Project core.ProjectConfig
+	// Vocabulary supplies the statuses the guidelines document. The zero value
+	// means the caller configured none and renders the built-in default, which
+	// is what a project with no configuration ledger is using.
+	Vocabulary core.Vocabulary
 	// User supplies the documentation targets and skill destination.
 	User userconfig.Config
 	// Generator is the Workbook version recorded in each stamp.
@@ -74,6 +78,20 @@ func (r Report) Stale() []Artifact {
 	return stale
 }
 
+// guidelinesTarget is the project's generated guidelines, which is the one
+// managed artifact whose content depends on the project's statuses.
+func guidelinesTarget(options Options) target {
+	return target{
+		path:    filepath.Join(options.Root, filepath.FromSlash(GuidelinesPath)),
+		display: GuidelinesPath,
+		document: Document{
+			Generator: options.Generator,
+			Body:      RenderGuidelines(options.Project, options.Vocabulary),
+		},
+		owned: true,
+	}
+}
+
 type target struct {
 	// path is the absolute location on disk.
 	path string
@@ -112,7 +130,40 @@ func Apply(options Options) (Report, error) {
 	if err != nil {
 		return Report{}, err
 	}
+	return apply(targets, options)
+}
 
+// ApplyGuidelines refreshes the guidelines alone, for the commands that change
+// what the guidelines say rather than the commands that manage documentation.
+//
+// It is the guidelines and nothing else because the guidelines are the only
+// artifact a status change can invalidate: the reference block and the skill
+// say nothing about a particular project's statuses. Rewriting a repository's
+// AGENTS.md as a side effect of `workbook status rename` would be a surprise
+// nobody asked for, and installing a skill that a project deliberately left out
+// would be worse.
+//
+// It refreshes and never installs. A project that has no managed guidelines
+// block chose that — `workbook setup --no-docs` and `workbook docs remove` are
+// both ways to say it, and a file somebody wrote at that path themselves is a
+// third — and installing one from a command that was about statuses would
+// override a decision nobody was asked to revisit. The test is the reconciler's
+// own StateAbsent, which covers a missing file and a file carrying no managed
+// block alike, because "there is nothing here Workbook wrote" is the same
+// answer to both. `workbook docs install` is what creates the block.
+func ApplyGuidelines(options Options) (Report, error) {
+	item := guidelinesTarget(options)
+	existing, err := read(item.path)
+	if err != nil {
+		return Report{}, err
+	}
+	if outcome := item.document.Reconcile(existing); outcome.State == StateAbsent {
+		return Report{Artifacts: []Artifact{{Path: item.display, State: StateAbsent}}}, nil
+	}
+	return apply([]target{item}, options)
+}
+
+func apply(targets []target, options Options) (Report, error) {
 	report := Report{}
 	for _, item := range targets {
 		existing, err := read(item.path)
@@ -175,17 +226,7 @@ func Remove(options Options) (Report, error) {
 }
 
 func plan(options Options) ([]target, error) {
-	guidelines := Document{
-		Generator: options.Generator,
-		Body:      RenderGuidelines(options.Project),
-	}
-
-	targets := []target{{
-		path:     filepath.Join(options.Root, filepath.FromSlash(GuidelinesPath)),
-		display:  GuidelinesPath,
-		document: guidelines,
-		owned:    true,
-	}}
+	targets := []target{guidelinesTarget(options)}
 
 	if !options.SkipSkill {
 		skill, err := skillDocument(options.Generator)

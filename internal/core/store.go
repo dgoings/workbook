@@ -48,6 +48,16 @@ const WarningAutoSync = "auto-sync-incomplete"
 // script cannot tell from "there is genuinely nothing here".
 const WarningStatusFilter = "status-filter-unresolved"
 
+// WarningDocsRefresh reports that generated documentation this change
+// invalidated could not be rewritten — usually because somebody edited the
+// generated file, which Workbook never overwrites without being told to.
+//
+// It is a warning rather than a refusal for the same reason an incomplete
+// synchronization is: the change itself is recorded, and undoing a durable,
+// published configuration change because a Markdown file could not be rewritten
+// would be the worse outcome by far.
+const WarningDocsRefresh = "docs-refresh-incomplete"
+
 type Warning struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`

@@ -1,6 +1,7 @@
 package agentdocs
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -14,7 +15,17 @@ const GuidelinesPath = ".workbook/guidelines.md"
 // RenderGuidelines produces the managed guidelines body for a project. Every
 // canonical value comes from the same definitions the CLI validates against, so
 // there is no second list to maintain.
-func RenderGuidelines(project core.ProjectConfig) string {
+//
+// The statuses come from the project's own vocabulary rather than from the
+// built-in one, which is what makes these guidelines true for a project that
+// renamed a column. The zero vocabulary means "this caller configured none" and
+// renders the built-in default, exactly as core.Service reads it, so a project
+// with no configuration ledger still gets the six statuses it is using.
+func RenderGuidelines(project core.ProjectConfig, vocabulary core.Vocabulary) string {
+	if vocabulary.IsZero() {
+		vocabulary = core.DefaultVocabulary()
+	}
+	definitions := vocabulary.Definitions()
 	var builder strings.Builder
 
 	builder.WriteString("# Workbook guidelines\n\n")
@@ -27,18 +38,30 @@ func RenderGuidelines(project core.ProjectConfig) string {
 	builder.WriteString("| Project ID | `" + project.ProjectID + "` |\n")
 	builder.WriteString("| Task ID prefix | `" + project.Key + "-` |\n\n")
 
-	builder.WriteString("## Canonical statuses\n\n")
-	builder.WriteString("Pass the machine value, never the display label.\n\n")
-	builder.WriteString("| Machine value | Display label |\n| --- | --- |\n")
-	// The built-in vocabulary, not the project's. Rendering the configured one
-	// is what makes these guidelines true for a project that customized its
-	// statuses, and that is a later change in this series; naming the default
-	// explicitly here keeps the output identical until then.
-	for _, definition := range core.DefaultVocabulary().Definitions() {
-		builder.WriteString("| `" + string(definition.Status) + "` | " + definition.Label + " |\n")
+	builder.WriteString("## Statuses\n\n")
+	builder.WriteString("This project's statuses, in order. Pass the machine value, never the display\n")
+	builder.WriteString("label.\n\n")
+	builder.WriteString("| # | Machine value | Display label | Tags |\n| --- | --- | --- | --- |\n")
+	for index, definition := range definitions {
+		builder.WriteString("| " + strconv.Itoa(index+1) +
+			" | `" + string(definition.Status) + "` | " + tableCell(definition.Label) +
+			" | " + renderStatusTags(definition.Tags) + " |\n")
 	}
-	builder.WriteString("\nWrite `--status in-progress`, not `In Progress`. The same applies to\n")
-	builder.WriteString("`in-review`. A display label is rejected as a validation error.\n\n")
+	builder.WriteString("\n")
+	builder.WriteString(displayLabelWarning(definitions))
+	builder.WriteString("A display label is rejected as a validation error.\n\n")
+	builder.WriteString("A tag is a job the machine gives a status, not a description of its name:\n\n")
+	builder.WriteString("| Tag | What it makes Workbook do |\n| --- | --- |\n")
+	// Driven by the tag set core defines, so a tag added there and left
+	// undescribed here renders an empty cell the pinned test fails on.
+	for _, tag := range core.StatusTags() {
+		builder.WriteString("| `" + string(tag) + "` | " + statusTagMeaning(tag) + " |\n")
+	}
+	builder.WriteString("\nA status carrying no tag is an ordinary column: work rests there and nothing\n")
+	builder.WriteString("else follows from it.\n\n")
+	builder.WriteString("These statuses belong to this project and another project's are different, so\n")
+	builder.WriteString("read them here or with `workbook status list --json` rather than assuming the\n")
+	builder.WriteString("ones you have seen elsewhere. This section is rewritten whenever they change.\n\n")
 
 	builder.WriteString("## Canonical priorities\n\n")
 	builder.WriteString("| Machine value | Display label |\n| --- | --- |\n")
@@ -48,12 +71,25 @@ func RenderGuidelines(project core.ProjectConfig) string {
 	builder.WriteString("\n")
 
 	builder.WriteString("## Task lifecycle\n\n")
+	// Every sentence here is read off the tags rather than off a status name,
+	// because a project may call these columns anything. Markdown joins the
+	// lines into one paragraph, which is what lets each sentence be composed
+	// from a list whose length nobody knows in advance.
+	builder.WriteString(defaultStatusSentence(vocabulary))
+	builder.WriteString(taggedStatusSentence(definitions, core.StatusTagNext,
+		"`workbook next` claims from %s.\n",
+		"No status is tagged `next`, so `workbook next` never returns a task.\n"))
+	builder.WriteString(taggedStatusSentence(definitions, core.StatusTagDone,
+		"A dependency is satisfied once it reaches %s.\n",
+		"No status is tagged `done`, so no dependency is ever satisfied.\n"))
+	builder.WriteString("\n")
 	builder.WriteString("1. Select work with `workbook next --json`, or read a known task with\n")
 	builder.WriteString("   `workbook show <id> --json`. Keep the canonical full ID from `data.id`.\n")
-	builder.WriteString("2. Claim it with `workbook update <id> --status in-progress --json` before\n")
-	builder.WriteString("   editing files.\n")
-	builder.WriteString("3. Move it to `in-review` once the change is ready for human review.\n")
-	builder.WriteString("4. Move it to `done` only after the work is accepted and merged.\n\n")
+	builder.WriteString("2. Claim it with `workbook update <id> --status <status> --json` before\n")
+	builder.WriteString("   editing files, naming the status this project uses for work under way.\n")
+	builder.WriteString("3. Move it along the statuses above as the work progresses, including the\n")
+	builder.WriteString("   one this project uses for review, and into a status tagged `done` only\n")
+	builder.WriteString("   after the work is accepted and merged.\n\n")
 
 	builder.WriteString("## Machine-readable output\n\n")
 	builder.WriteString("Every command accepts `--json` except `serve`. Success is a single compact\n")
@@ -137,6 +173,166 @@ func RenderGuidelines(project core.ProjectConfig) string {
 	builder.WriteString("check it with `workbook docs status`.\n")
 
 	return builder.String()
+}
+
+// authoredText renders a value somebody wrote for prose inside a generated
+// file.
+//
+// A display label is written by whoever can push to the shared configuration
+// ref, which makes it untrusted text. core.DisplayLine collapses the control
+// runes and newlines, and the managed block's markers are neutralized here as
+// well as in the block format itself: a label carrying the end marker would
+// otherwise terminate the block early, and the file would read as somebody's
+// local edit in every clone forever. Document.managedBody is the layer that
+// makes that impossible for any body; this is the layer that keeps the
+// guidelines' own untrusted values from ever reaching it.
+func authoredText(value string) string {
+	return neutralizeMarkers(core.DisplayLine(value))
+}
+
+// tableCell renders an authored value inside a Markdown table cell. A pipe is
+// escaped because a pipe is what ends a cell: a label of `a | b` would
+// otherwise silently add a column to the table and shift every value in the row.
+func tableCell(value string) string {
+	return strings.ReplaceAll(authoredText(value), "|", `\|`)
+}
+
+// codeSpan renders an authored value as a Markdown code span.
+//
+// The fence is as long as it has to be, which is CommonMark's own rule: a code
+// span may contain a run of backticks shorter than its delimiter, and a value
+// beginning or ending with one needs a space of padding to keep it. A label of
+// `a` would otherwise close the span it was put in and leave the sentence
+// around it rendered as code.
+func codeSpan(value string) string {
+	fence := "`"
+	for strings.Contains(value, fence) {
+		fence += "`"
+	}
+	padding := ""
+	if strings.HasPrefix(value, "`") || strings.HasSuffix(value, "`") {
+		padding = " "
+	}
+	return fence + padding + value + padding + fence
+}
+
+// renderStatusTags renders a status's tag set for the table, saying "none"
+// where there is nothing rather than leaving a cell a reader has to interpret.
+// It is the word `workbook status list` prints for the same set, so the two
+// surfaces read alike.
+func renderStatusTags(tags []core.StatusTag) string {
+	if len(tags) == 0 {
+		return "none"
+	}
+	rendered := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		rendered = append(rendered, "`"+string(tag)+"`")
+	}
+	return strings.Join(rendered, ", ")
+}
+
+// statusTagMeaning says what a tag makes Workbook do, phrased for the agent
+// reading these guidelines rather than for the person configuring them.
+//
+// The switch is exhaustive over core.StatusTags by construction: the table
+// above iterates that list, so a tag added to core and not described here
+// renders an empty cell, which the pinned rendering test fails on.
+func statusTagMeaning(tag core.StatusTag) string {
+	switch tag {
+	case core.StatusTagDefault:
+		return "A task created without `--status` lands here. Exactly one status carries it."
+	case core.StatusTagNext:
+		return "`workbook next` may return a task sitting here."
+	case core.StatusTagDone:
+		return "A dependency sitting here is satisfied, so the work waiting on it can be claimed."
+	default:
+		return ""
+	}
+}
+
+// displayLabelWarning shows the mistake this project's own labels invite.
+//
+// Multi-word labels are preferred as the example because they are where the
+// mistake actually happens — nobody types `--status Backlog` as often as they
+// type `--status In Progress` — and a project whose labels are all single words
+// gets the first label that differs from its token instead. A project whose
+// labels are exactly their tokens has no trap to warn about, so it gets no
+// example.
+func displayLabelWarning(definitions []core.StatusDefinition) string {
+	var candidates []core.StatusDefinition
+	for _, definition := range definitions {
+		if strings.Contains(definition.Label, " ") {
+			candidates = append(candidates, definition)
+		}
+	}
+	if len(candidates) == 0 {
+		for _, definition := range definitions {
+			if definition.Label != string(definition.Status) {
+				candidates = append(candidates, definition)
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return ""
+	}
+	warning := "Write `--status " + string(candidates[0].Status) + "`, not " +
+		codeSpan(authoredText(candidates[0].Label)) + ".\n"
+	if len(candidates) == 1 {
+		return warning
+	}
+	rest := make([]string, 0, len(candidates)-1)
+	for _, definition := range candidates[1:] {
+		rest = append(rest, "`"+string(definition.Status)+"`")
+	}
+	return warning + "The same applies to " + joinPhrases(rest, "and") + ".\n"
+}
+
+// defaultStatusSentence says where a new task lands, or that nowhere does.
+//
+// The second case is reachable without anybody authoring it: a folded
+// configuration can arrive from a peer with no default at all, and guidelines
+// that claimed one would send an agent looking for a column that does not
+// exist.
+func defaultStatusSentence(vocabulary core.Vocabulary) string {
+	status := vocabulary.Default()
+	if status == "" {
+		return "No status is tagged `default`, so a new task has nowhere to land.\n"
+	}
+	return "New tasks land in `" + string(status) + "`.\n"
+}
+
+// taggedStatusSentence renders one tag-derived sentence, naming every status
+// that carries the tag, and says what is true instead when none does.
+func taggedStatusSentence(
+	definitions []core.StatusDefinition,
+	tag core.StatusTag,
+	sentence, none string,
+) string {
+	var names []string
+	for _, definition := range definitions {
+		if definition.HasTag(tag) {
+			names = append(names, "`"+string(definition.Status)+"`")
+		}
+	}
+	if len(names) == 0 {
+		return none
+	}
+	return fmt.Sprintf(sentence, joinPhrases(names, "or"))
+}
+
+// joinPhrases joins rendered names into a readable list, with the serial comma
+// the rest of this documentation uses.
+func joinPhrases(names []string, conjunction string) string {
+	switch len(names) {
+	case 0:
+		return ""
+	case 1:
+		return names[0]
+	case 2:
+		return names[0] + " " + conjunction + " " + names[1]
+	default:
+		return strings.Join(names[:len(names)-1], ", ") + ", " + conjunction + " " + names[len(names)-1]
+	}
 }
 
 // RenderReference produces the managed block added to agent documentation

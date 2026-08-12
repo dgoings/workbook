@@ -12,10 +12,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dgoings/workbook/internal/agentdocs"
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
 	"github.com/dgoings/workbook/internal/historyvalidation"
 	"github.com/dgoings/workbook/internal/projection"
+	"github.com/dgoings/workbook/internal/release"
 	"github.com/dgoings/workbook/internal/terminalui"
 )
 
@@ -101,7 +103,10 @@ type statusTaskCounts struct {
 	// status.
 	Affected int `json:"affected"`
 	// ClaimableAfter counts how many of those become eligible for `workbook
-	// next` where they land, which is the number an agent's queue changes by.
+	// next` where they land. It is a floor on what an agent's queue gains and
+	// not the whole of it: removing a status into a done-tagged one can also
+	// satisfy the last dependency of a task that was never in the removed
+	// status, and such a task is outside the population this counts.
 	ClaimableAfter int `json:"claimableAfter"`
 }
 
@@ -123,6 +128,12 @@ type statusMutationResult struct {
 	Vocabulary vocabularyView   `json:"vocabulary"`
 	Tasks      statusTaskCounts `json:"tasks"`
 	Inverse    statusInverse    `json:"inverse"`
+	// Docs reports what happened to the generated documentation this change
+	// invalidated, in the shape `workbook setup` and `workbook docs` already
+	// report. It is omitted when --no-docs skipped the regeneration, which is
+	// the same distinction setup draws between "nothing was managed" and "these
+	// files were".
+	Docs *agentdocs.Report `json:"docs,omitempty"`
 }
 
 // statusListResult is `workbook status list`.
@@ -179,7 +190,14 @@ type statusLogEntry struct {
 	// record rather than a report of a command somebody ran.
 	Operation core.ConfigOperationType `json:"operation"`
 	Summary   string                   `json:"summary"`
-	Inverse   *statusInverse           `json:"inverse,omitempty"`
+	// Collapsed counts the operations this commit recorded beyond the one the
+	// entry names. `workbook status tag` records the transfer of the default tag
+	// and every tag it dropped in a single commit, and the summary says how many
+	// more there were rather than listing them — which left the count reachable
+	// only by parsing an English sentence. It is stated rather than omitted, so
+	// a caller reading `entries[].collapsed` gets an answer from every entry.
+	Collapsed int            `json:"collapsed"`
+	Inverse   *statusInverse `json:"inverse,omitempty"`
 }
 
 // statusSubcommands lists the verbs, for the error a bare `workbook status`
@@ -624,6 +642,7 @@ func buildStatusLog(ledger configLedgerWindow) statusLogResult {
 			Actor:       commit.Pack.Actor.ID,
 			Operation:   primary.Type,
 			Summary:     configPackSummary(commit.Pack.Operations),
+			Collapsed:   len(commit.Pack.Operations) - 1,
 			Inverse:     statusPackInverse(commit.Before, commit.Pack.Operations),
 		})
 	}
@@ -647,6 +666,7 @@ func runStatusAdd(ctx context.Context, args []string, cwd string, stdout, stderr
 	var tags stringListValue
 	flags.Var(&tags, "tag", "role to give it")
 	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with origin")
+	noDocs := flags.Bool("no-docs", false, "skip regenerating the generated guidelines")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
@@ -671,7 +691,7 @@ func runStatusAdd(ctx context.Context, args []string, cwd string, stdout, stderr
 		return err
 	}
 
-	return runStatusMutation(ctx, cwd, "status add", *noSync, *jsonMode, stdout, stderr,
+	return runStatusMutation(ctx, cwd, "status add", *noSync, *noDocs, *jsonMode, stdout, stderr,
 		func(ctx context.Context, session *taskSession, vocabulary core.Vocabulary) (statusPlan, error) {
 			if vocabulary.Has(status) {
 				return statusPlan{}, core.Errorf(core.CategoryValidation,
@@ -733,6 +753,7 @@ func runStatusRename(ctx context.Context, args []string, cwd string, stdout, std
 	flags := newFlagSet("status", "rename")
 	label := flags.String("label", "", "display label")
 	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with origin")
+	noDocs := flags.Bool("no-docs", false, "skip regenerating the generated guidelines")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
@@ -747,7 +768,7 @@ func runStatusRename(ctx context.Context, args []string, cwd string, stdout, std
 		}
 	}
 
-	return runStatusMutation(ctx, cwd, "status rename", *noSync, *jsonMode, stdout, stderr,
+	return runStatusMutation(ctx, cwd, "status rename", *noSync, *noDocs, *jsonMode, stdout, stderr,
 		func(ctx context.Context, session *taskSession, vocabulary core.Vocabulary) (statusPlan, error) {
 			subject, err := requireLiveStatus(ctx, session, vocabulary, from)
 			if err != nil {
@@ -806,6 +827,7 @@ func runStatusLabel(ctx context.Context, args []string, cwd string, stdout, stde
 	}
 	flags := newFlagSet("status", "label")
 	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with origin")
+	noDocs := flags.Bool("no-docs", false, "skip regenerating the generated guidelines")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
@@ -815,7 +837,7 @@ func runStatusLabel(ctx context.Context, args []string, cwd string, stdout, stde
 		return err
 	}
 
-	return runStatusMutation(ctx, cwd, "status label", *noSync, *jsonMode, stdout, stderr,
+	return runStatusMutation(ctx, cwd, "status label", *noSync, *noDocs, *jsonMode, stdout, stderr,
 		func(ctx context.Context, session *taskSession, vocabulary core.Vocabulary) (statusPlan, error) {
 			subject, err := requireLiveStatus(ctx, session, vocabulary, core.Status(values[0]))
 			if err != nil {
@@ -848,6 +870,7 @@ func runStatusMove(ctx context.Context, args []string, cwd string, stdout, stder
 	before := flags.String("before", "", "move before this status")
 	after := flags.String("after", "", "move after this status")
 	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with origin")
+	noDocs := flags.Bool("no-docs", false, "skip regenerating the generated guidelines")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
@@ -856,7 +879,7 @@ func runStatusMove(ctx context.Context, args []string, cwd string, stdout, stder
 		return core.Errorf(core.CategoryInvocation, "status move requires exactly one of --before or --after")
 	}
 
-	return runStatusMutation(ctx, cwd, "status move", *noSync, *jsonMode, stdout, stderr,
+	return runStatusMutation(ctx, cwd, "status move", *noSync, *noDocs, *jsonMode, stdout, stderr,
 		func(ctx context.Context, session *taskSession, vocabulary core.Vocabulary) (statusPlan, error) {
 			subject, err := requireLiveStatus(ctx, session, vocabulary, core.Status(values[0]))
 			if err != nil {
@@ -909,6 +932,7 @@ func runStatusTag(ctx context.Context, args []string, cwd string, stdout, stderr
 	flags.Var(&tags, "tag", "role to give it")
 	clear := flags.Bool("clear-tags", false, "replace its roles with an empty set")
 	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with origin")
+	noDocs := flags.Bool("no-docs", false, "skip regenerating the generated guidelines")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
@@ -924,7 +948,7 @@ func runStatusTag(ctx context.Context, args []string, cwd string, stdout, stderr
 		return err
 	}
 
-	return runStatusMutation(ctx, cwd, "status tag", *noSync, *jsonMode, stdout, stderr,
+	return runStatusMutation(ctx, cwd, "status tag", *noSync, *noDocs, *jsonMode, stdout, stderr,
 		func(ctx context.Context, session *taskSession, vocabulary core.Vocabulary) (statusPlan, error) {
 			subject, err := requireLiveStatus(ctx, session, vocabulary, core.Status(values[0]))
 			if err != nil {
@@ -954,6 +978,7 @@ func runStatusUntag(ctx context.Context, args []string, cwd string, stdout, stde
 	}
 	flags := newFlagSet("status", "untag")
 	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with origin")
+	noDocs := flags.Bool("no-docs", false, "skip regenerating the generated guidelines")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
@@ -963,7 +988,7 @@ func runStatusUntag(ctx context.Context, args []string, cwd string, stdout, stde
 		return statusTagError(err)
 	}
 
-	return runStatusMutation(ctx, cwd, "status untag", *noSync, *jsonMode, stdout, stderr,
+	return runStatusMutation(ctx, cwd, "status untag", *noSync, *noDocs, *jsonMode, stdout, stderr,
 		func(ctx context.Context, session *taskSession, vocabulary core.Vocabulary) (statusPlan, error) {
 			subject, err := requireLiveStatus(ctx, session, vocabulary, core.Status(values[0]))
 			if err != nil {
@@ -1000,6 +1025,7 @@ func runStatusDelete(ctx context.Context, args []string, cwd string, stdout, std
 	flags := newFlagSet("status", "delete")
 	into := flags.String("into", "", "where the removed status's tasks belong")
 	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with origin")
+	noDocs := flags.Bool("no-docs", false, "skip regenerating the generated guidelines")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
@@ -1016,7 +1042,7 @@ func runStatusDelete(ctx context.Context, args []string, cwd string, stdout, std
 		return missingRemovalDestination(ctx, cwd, stderr)
 	}
 
-	return runStatusMutation(ctx, cwd, "status delete", *noSync, *jsonMode, stdout, stderr,
+	return runStatusMutation(ctx, cwd, "status delete", *noSync, *noDocs, *jsonMode, stdout, stderr,
 		func(ctx context.Context, session *taskSession, vocabulary core.Vocabulary) (statusPlan, error) {
 			subject, err := requireLiveStatus(ctx, session, vocabulary, core.Status(values[0]))
 			if err != nil {
@@ -1142,7 +1168,7 @@ func runStatusMutation(
 	ctx context.Context,
 	cwd string,
 	command string,
-	noSync bool,
+	noSync, noDocs bool,
 	jsonMode bool,
 	stdout, stderr io.Writer,
 	build func(context.Context, *taskSession, core.Vocabulary) (statusPlan, error),
@@ -1186,8 +1212,72 @@ func runStatusMutation(
 	if position := result.Change.Position; position != nil {
 		position.Order = after.Order(plan.change.Status) + 1
 	}
-	writeStatusMutation(stdout, stderr, command, result, session, jsonMode)
+	docs, docsErr := regenerateGuidelines(session, after, noDocs)
+	result.Docs = docs
+	writeStatusMutation(stdout, stderr, command, result, session, docsErr, jsonMode)
 	return nil
+}
+
+// regenerateGuidelines rewrites the generated guidelines against the statuses
+// this change produced.
+//
+// The guidelines state a project's statuses, so every status change makes them
+// stale, and a generated file that has to be refreshed by hand is a generated
+// file that is wrong most of the time. It goes through the same Reconcile the
+// documentation commands use, which is what keeps the one promise that matters
+// about a generated file: Workbook rewrites what it wrote, and never overwrites
+// what somebody edited.
+//
+// It returns its failure rather than raising it. The configuration change is
+// already recorded and published by the time this runs, so a documentation
+// refresh that could not finish is news to report beside a success, not a
+// reason to exit non-zero on a durable write — the same trade `sync` makes.
+func regenerateGuidelines(
+	session *taskSession,
+	vocabulary core.Vocabulary,
+	noDocs bool,
+) (*agentdocs.Report, error) {
+	if noDocs {
+		return nil, nil
+	}
+	report, err := agentdocs.ApplyGuidelines(agentdocs.Options{
+		Root:       session.repository.Root,
+		Project:    session.config,
+		Vocabulary: vocabulary,
+		Generator:  release.Version,
+	})
+	return &report, err
+}
+
+// docsWarning says what a status change could not do to the documentation it
+// invalidated, and how to finish the job.
+//
+// A blocked artifact is named with the command that overwrites it, because the
+// state it describes — a generated file somebody edited — is the one a person
+// has to decide about. Anything else is reported as it arrived.
+func docsWarning(report *agentdocs.Report, err error) []core.Warning {
+	if report == nil || err == nil {
+		return nil
+	}
+	if blocked := report.Blocked(); len(blocked) > 0 {
+		names := make([]string, 0, len(blocked))
+		for _, artifact := range blocked {
+			names = append(names, artifact.Path)
+		}
+		return []core.Warning{{
+			Code: core.WarningDocsRefresh,
+			Message: fmt.Sprintf(
+				"the status change was recorded, but %s was modified locally and now describes "+
+					"statuses this project no longer has; overwrite it with: workbook docs update --force",
+				strings.Join(names, ", "),
+			),
+		}}
+	}
+	return []core.Warning{{
+		Code: core.WarningDocsRefresh,
+		Message: "the status change was recorded, but the guidelines could not be regenerated: " +
+			publicErrorMessage(err),
+	}}
 }
 
 // configCommitSubject writes what the ledger's `git log` says about this
@@ -1752,6 +1842,7 @@ func writeStatusMutation(
 	command string,
 	result statusMutationResult,
 	session *taskSession,
+	docsErr error,
 	jsonMode bool,
 ) {
 	var warnings []core.Warning
@@ -1761,6 +1852,7 @@ func writeStatusMutation(
 			Message: "the status change was recorded locally, but " + session.report.Detail,
 		})
 	}
+	warnings = append(warnings, docsWarning(result.Docs, docsErr)...)
 	if jsonMode {
 		writeStatusEnvelope(stdout, command, result, session, warnings)
 		return
@@ -1831,6 +1923,13 @@ func writeStatusChange(output io.Writer, result statusMutationResult) {
 		if result.Inverse.Note != "" {
 			fmt.Fprintf(output, "\tnote:\t%s\n", singleLine(result.Inverse.Note))
 		}
+	}
+	if result.Docs == nil {
+		fmt.Fprintf(output, "\tdocs:\tskipped\n")
+		return
+	}
+	for _, artifact := range result.Docs.Artifacts {
+		fmt.Fprintf(output, "\tdocs:\t%s\t%s\n", artifact.Path, artifactAction(artifact))
 	}
 }
 
