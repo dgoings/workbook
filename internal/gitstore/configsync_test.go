@@ -379,6 +379,134 @@ func statusDefinitionOf(vocabulary core.Vocabulary, status core.Status) (core.St
 	return core.StatusDefinition{}, false
 }
 
+// renamePack is the operation pair `workbook status rename` records whenever the
+// display label follows the machine value, which is every status whose label was
+// derived and every rename given --label.
+//
+// It is written out here rather than borrowed from the CLI because gitstore
+// cannot import it, and it is the shape that matters: two operations in one
+// pack, the second naming a status the first brought into existence. A pack like
+// this is ordinary — it is what the default rename path produces — so nothing on
+// the replay path may treat its second operation as an edit to a status nobody
+// defines.
+func renamePack(from, to core.Status, label string) []core.ConfigOperation {
+	return []core.ConfigOperation{
+		{Type: core.ConfigStatusRename, From: from, To: to},
+		{Type: core.ConfigStatusRelabel, Status: to, Label: label},
+	}
+}
+
+// TestConfigReplayAppliesAMultiOperationRenamePack is the ordinary rename,
+// replayed.
+//
+// Classification reads the vocabulary the pack starts from, so an operation
+// whose subject an earlier operation in the same pack created is not in it. A
+// rename records exactly that pair, so treating the second operation as an edit
+// to an undefined status makes every ordinary rename unreplayable the moment two
+// clones diverge — and answers with advice that would add a second status beside
+// the renamed one instead of forwarding anything.
+//
+// Both root shapes run. The shared-root case is the one a teammate meets by
+// renaming a column while somebody else pushes anything at all; the unrelated
+// case replays the same pack after adopting an equal root, which is the other
+// way a pack reaches this path.
+func TestConfigReplayAppliesAMultiOperationRenamePack(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		// separateRoots seeds the two clones independently, so the replay runs
+		// after a root adoption rather than from a shared base.
+		separateRoots bool
+	}{
+		{name: "shared root"},
+		{name: "adopted equal root", separateRoots: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			first, second, config := syncRepositories(t)
+
+			if !test.separateRoots {
+				// One root, published, and adopted by the other clone: the state
+				// two teammates are in before either of them does anything.
+				writeConfig(t, first, config, configOperations(addOperation("triage", "Triage", "1/2"))...)
+				publishConfigRef(t, first)
+				if _, err := openSyncCloneAt(t, second.Root).Fetch(ctx, config); err != nil {
+					t.Fatalf("Fetch(adopt the shared root) error = %v", err)
+				}
+			} else {
+				// Two roots seeded independently. They carry the same vocabulary,
+				// so the adoption itself is settled and what is under test is the
+				// pack replayed onto the adopted root. The two clones edit
+				// different statuses, so the replay's own ordering is not what
+				// the assertions below are reading.
+				writeConfig(t, first, config, configOperations(addOperation("triage", "Triage", "1/2"))...)
+				publishConfigRef(t, first)
+				writeConfig(t, second, config, configOperations(relabelOperation("in-review", "Review"))...)
+			}
+
+			// The teammate renames a status offline, deriving its new label —
+			// the two-operation pack.
+			if !test.separateRoots {
+				writeConfig(t, second, config, renamePack("triage", "intake", "Intake")...)
+			} else {
+				writeConfig(t, second, config, renamePack("blocked", "waiting", "Waiting")...)
+			}
+			localTip := refValue(t, second, configRef)
+
+			// Somebody else publishes something unrelated, so the local pack has
+			// to be replayed rather than fast-forwarded past.
+			writeConfig(t, first, config, configOperations(relabelOperation("done", "Delivered"))...)
+			publishConfigRef(t, first)
+
+			fresh := openSyncCloneAt(t, second.Root)
+			result, err := fresh.Fetch(ctx, config)
+			if err != nil {
+				t.Fatalf("Fetch(rename pack) error = %v; result = %#v", err, result)
+			}
+			if len(result.ConfigConflicts) != 0 {
+				t.Fatalf("configuration conflicts = %#v, want none: an ordinary rename replays",
+					result.ConfigConflicts)
+			}
+			assertConfigStatus(t, result.Config, SyncConfigReconciled)
+			if got := refValue(t, second, parkedConfigRefPrefix+"0"); got != localTip {
+				t.Fatalf("parked ref = %q, want the orphaned local tip %q", got, localTip)
+			}
+
+			from, to, label := core.Status("triage"), core.Status("intake"), "Intake"
+			if test.separateRoots {
+				from, to, label = core.StatusBlocked, "waiting", "Waiting"
+			}
+			settled, err := openSyncCloneAt(t, second.Root).LoadVocabulary(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Both operations landed: the machine value moved and the label
+			// followed it. A replay that applied only the first would leave the
+			// derived label of the old token behind.
+			definition, found := statusDefinitionOf(settled, to)
+			if !found {
+				t.Fatalf("statuses = %#v, want the renamed %q", settled.Definitions(), to)
+			}
+			if definition.Label != label {
+				t.Fatalf("%q label = %q, want the relabel in the same pack to have landed %q",
+					to, definition.Label, label)
+			}
+			if settled.Has(from) {
+				t.Fatalf("statuses = %#v, want %q renamed away", settled.Definitions(), from)
+			}
+			// The forwarding pointer is intact, so a task stored under the old
+			// value still reads into the new one.
+			if resolved, live := settled.Resolve(from); !live || resolved != to {
+				t.Fatalf("Resolve(%q) = (%q, %t), want (%q, true)", from, resolved, live, to)
+			}
+			// The other clone's own change is still there, so the replay landed
+			// on top of it rather than instead of it.
+			if got := settled.Label(core.StatusDone); got != "Delivered" {
+				t.Fatalf("done label = %q, want the fetched change preserved", got)
+			}
+		})
+	}
+}
+
 // TestConfigReplayReportsAnEditToAStatusOriginNeverDefined closes the second
 // half of the same hole.
 //
@@ -414,15 +542,27 @@ func TestConfigReplayReportsAnEditToAStatusOriginNeverDefined(t *testing.T) {
 		}
 	}
 
-	// A status the pack defines itself is not absent. The view is built once per
-	// pack, before the pack applies, so without this an add and an edit recorded
-	// together would report the author's own status as missing.
-	pending := newConfigView(core.DefaultVocabulary().Document())
-	pending.pending["triage"] = struct{}{}
-	if got := classifyConfigOperation(pending, core.ConfigOperation{
-		Type: core.ConfigStatusRelabel, Status: "triage", Label: "Triage",
-	}); got != nil {
-		t.Fatalf("editing a status the same pack adds = %#v, want no conflict", got)
+	// A status the pack brings into existence itself is not absent, and the
+	// exemption is read from the pack rather than asserted: the same builder the
+	// replay uses marks the subjects, so a pack shape it stops recognizing fails
+	// here rather than in somebody's synchronization.
+	for name, operations := range map[string][]core.ConfigOperation{
+		"added by the same pack": {
+			{Type: core.ConfigStatusAdd, Name: "triage", Label: "Triage", Rank: "1/2", Tags: []core.StatusTag{}},
+			{Type: core.ConfigStatusRelabel, Status: "triage", Label: "Intake"},
+		},
+		"renamed onto by the same pack": renamePack(core.StatusReady, "todo", "Todo"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			packed := newConfigView(core.DefaultVocabulary().Document())
+			markPackSubjects(packed, operations)
+			for _, operation := range operations {
+				if got := classifyConfigOperation(packed, operation); got != nil {
+					t.Fatalf("%s in a pack that creates its subject = %#v, want no conflict",
+						operation.Type, got)
+				}
+			}
+		})
 	}
 }
 

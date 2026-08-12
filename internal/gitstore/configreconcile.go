@@ -351,6 +351,37 @@ func (r *Repository) classifyConfigRoots(
 	}, nil
 }
 
+// markPackSubjects records the statuses a pack brings into existence, so an
+// operation later in the same pack can name one of them.
+//
+// A pack is atomic and its operations are ordered, so the honest reading of
+// operation N+1 is against a vocabulary that already has operation N's effect.
+// This projects the one effect classification asks about — which tokens exist —
+// rather than advancing the whole view, and that is deliberate. Advancing would
+// mean folding each operation into a vocabulary document here, which is a second
+// implementation of ApplyConfig's rules living beside the fold rather than in
+// it; classifyConfigAdd compares labels, ranks and tag sets exactly, so a
+// projection that normalized any of them differently would invent conflicts
+// instead of finding them. Existence is the whole question the pending set
+// answers, and it is answerable without reproducing the fold.
+//
+// Two operation types create a token: an add names one outright, and a rename
+// moves an existing status onto a new one. `workbook status rename` records
+// exactly the second followed by a relabel of the new token whenever the display
+// label follows the machine value, which is the default for every derived label
+// — so an ordinary rename is a pack whose second operation names a status only
+// its first operation created.
+func markPackSubjects(view configView, operations []core.ConfigOperation) {
+	for _, operation := range operations {
+		switch operation.Type {
+		case core.ConfigStatusAdd:
+			view.pending[operation.Name] = struct{}{}
+		case core.ConfigStatusRename:
+			view.pending[operation.To] = struct{}{}
+		}
+	}
+}
+
 // configReplay carries the state one ledger's replay advances through.
 type configReplay struct {
 	parent    configRecord
@@ -368,11 +399,7 @@ type configReplay struct {
 // and every one of them would be a guess about what they meant.
 func (replay *configReplay) next(ctx context.Context, r *Repository, local configRecord) (bool, error) {
 	view := newConfigView(replay.parent.State.Config.Vocabulary)
-	for _, operation := range local.Operation.Operations {
-		if operation.Type == core.ConfigStatusAdd {
-			view.pending[operation.Name] = struct{}{}
-		}
-	}
+	markPackSubjects(view, local.Operation.Operations)
 	for _, operation := range local.Operation.Operations {
 		if conflict := classifyConfigOperation(view, operation); conflict != nil {
 			replay.conflicts = append(replay.conflicts, *conflict)
@@ -441,10 +468,11 @@ type configView struct {
 	live    map[core.Status]core.StatusDefinition
 	aliases map[core.Status]core.Status
 	retired map[core.Status]core.Status
-	// pending are the statuses the pack being classified defines itself. The
-	// view is built once per pack, before the pack applies, so without this an
-	// operation editing a status its own pack added would read as an edit to a
-	// status nobody defines.
+	// pending are the statuses the pack being classified brings into existence
+	// itself. The view is built once per pack, from the vocabulary the pack
+	// starts from, so without this an operation editing a status an earlier
+	// operation in the same pack created would read as an edit to a status
+	// nobody defines.
 	pending map[core.Status]struct{}
 }
 
