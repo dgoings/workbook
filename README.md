@@ -1117,12 +1117,30 @@ unfamiliar status, it is data Workbook did not write. Replay says so with
 (you typed it, and you can type something else) while a ref *holding* that value
 is exit `7`.
 
-The residue is a task whose stored status fails the shape rule. Nothing can
-write to it — every read of the ref refuses before a mutation is considered — so
-the correction above does not reach it, and neither does the web board. Only a
-hand-edited or hostile ref produces one: no Workbook build writes a status it
-would then refuse to read. A repair verb is deferred until somebody actually
-hits this; `workbook validate` names the task and the commit in the meantime.
+The residue is a task whose stored status fails the shape rule, and it is not a
+one-task problem. Every command that reads the project reads every task ref, so
+one such task stops the whole project: `list`, `board`, `next`, `show` and
+`update` of a *healthy* sibling, `status list`, and `rebuild` all exit `7`, and
+`workbook serve` answers `/` with a 500 carrying the same error document instead
+of a board. `workbook validate` is the only verb that still answers — it exits
+`7` too, but it prints the report first, naming the task, the commit and the
+rule that was broken:
+
+```text
+Invalid WB-01J… at 6c91b62… [corrupt-data]: task state contains an invalid task: status "Not A Token" must be lowercase letters and digits separated by single hyphens
+```
+
+That is the corruption doctrine working as intended — Workbook does not serve a
+project it cannot read correctly, and `rebuild` refuses for the same reason it
+refuses any unreadable ref — but it means the recovery is not a Workbook
+command. The ref has to be repaired outside Workbook, with the commit `validate`
+names as the starting point.
+
+Only a hand-edited or hostile ref produces one: no Workbook build writes a status
+it would then refuse to read, and every path that could — the status verbs, the
+mutation boundary, replay — checks the shape first. A repair verb is deferred on
+that likelihood alone, not on the cost of hitting it, which is a whole project.
+If anybody does hit it, that judgment should be revisited rather than defended.
 
 Both boards read the unknown/known split from one place — `presentation.Board`
 separates `Columns` from `UnknownTasks` — so a renderer that consumes only

@@ -4084,10 +4084,28 @@ setTimeout(async () => {
 //
 // This board is missing the Blocked column — what dropping the default Blocked
 // status produces, and what a per-project column set produces routinely — while
-// the script still carries "blocked" in its own hardcoded status list. A client
-// that reads that list instead of the rendered columns puts the card in the
-// unknown-status region and then labels it as leaving a column that is not on
-// screen. Every card drags; only the label distinguishes them.
+// the task document still carries a Blocked task, presented against a
+// vocabulary in which `blocked` is perfectly live. Everything except the
+// rendered columns therefore says this task is fine, which is what makes "the
+// rendered columns are the only source consulted" a checkable claim rather than
+// a restatement of the code.
+//
+// The discriminator this actually holds is the one that has a plausible wrong
+// answer left: deciding the label from the node's current parent instead of
+// from the status. applyCard labels a card before card() has inserted it
+// anywhere, so a parent-derived answer strands every card on a first render.
+// Replacing the status test with `article.parentElement === unknownList` fails
+// here with "a card in the unknown-status region claims a column it is not in",
+// and fails TestHandlerClientBoardSurfacesUnknownStatuses and
+// TestHandlerClientDragsACardOutOfTheUnknownStatusRegion with it.
+//
+// What it does not discriminate — and used to claim it did — is a client
+// reading a hardcoded status list of its own. There is no such list any more:
+// `statuses` and `lists` are both built from these same column nodes, so
+// splicing a column out takes it out of both and the injected bug is a no-op.
+//
+// Every card drags, including this one. Only the label distinguishes them, so
+// the label is what this asserts.
 func TestHandlerClientDragsOnlyOutOfRenderedColumns(t *testing.T) {
 	node := requireNode(t)
 	tasks := boardTasks()

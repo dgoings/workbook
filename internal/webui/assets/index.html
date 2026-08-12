@@ -790,11 +790,15 @@
         // The label still distinguishes the two, because "out of the
         // unrecognized status X" is the only place a screen reader is told the
         // card is stranded at all. It asks `lists` — the columns the server
-        // actually rendered — rather than a status list of its own, because
-        // `lists` is already what decides which region the card lands in, and
-        // the two answers have to be the same answer. The status decides, not
-        // the node's current parent, so a card carries the right answer with it
-        // when a poll moves it between the region and a column.
+        // rendered onto this page — because `lists` is already what decides
+        // which region the card lands in, and a label that disagreed with the
+        // region would be the one thing worse than no label.
+        //
+        // Specifically not the node's current parent, which is the near miss:
+        // this runs before card() has inserted the node anywhere, so a
+        // parent-derived answer strands every card on its first render.
+        // The status decides, which is also why a card carries the right answer
+        // with it when a poll moves it between the region and a column.
         const stranded = !lists.has(task.status);
         article.draggable = !view.pending;
         article.setAttribute("aria-label", view.pending
@@ -2819,9 +2823,41 @@
         waitingOnDependencies: false,
         pending: true
       };
-      function projectPresentation(presentation) {
-        if (pendingCreations.size === 0) return presentation;
+      // What the board can say about a task the server has derived nothing for.
+      //
+      // Every rendered task is supposed to have a view — /api/tasks is refused
+      // outright if its presentation does not cover its tasks — but there is one
+      // seam where the two come from different reads. A confirmation puts its
+      // task back into the model (replaceProjectedTask), and if the poll before
+      // it had already taken that task out — another clone deleted it while this
+      // write was in flight — the presentation left behind does not name it. The
+      // renderer then read `undefined.idPrefix` and threw, which killed the poll
+      // loop: the board froze on the last frame and stayed frozen, over a card
+      // that was about to disappear anyway.
+      //
+      // So the gap is filled rather than allowed to reach the renderer. The
+      // prefix falls back to the whole task ID, which is always correct and
+      // merely longer than the shortest unique one the server computes. The
+      // dependency counts fall back to none: the client can count a task's own
+      // dependencies but cannot tell which are done — that needs every other
+      // task's status and the vocabulary's done tag — and "0 of 3 complete" over
+      // three finished prerequisites is a worse answer than no row for one poll.
+      // The next poll derives the real view or takes the card away.
+      function underivedView(task) {
+        return {
+          idPrefix: task.id,
+          dependenciesTotal: 0,
+          dependenciesComplete: 0,
+          waitingOnDependencies: false
+        };
+      }
+      function projectPresentation(presentation, tasks) {
+        // A pending creation has its own stand-in view and must keep it: pending
+        // is what draws it as a stand-in rather than as a task.
+        const underived = tasks.filter((task) => !presentation.has(task.id) && !pendingCreations.has(task.id));
+        if (pendingCreations.size === 0 && underived.length === 0) return presentation;
         const projected = new Map(presentation);
+        underived.forEach((task) => projected.set(task.id, underivedView(task)));
         pendingCreations.forEach((_creation, key) => projected.set(key, pendingCreationView));
         return projected;
       }
@@ -2831,7 +2867,7 @@
         // carries, so the presentation it is paired with names exactly the
         // stand-ins that survived.
         const tasks = projectTasks(latestTasks);
-        render(tasks, projectPresentation(latestPresentation));
+        render(tasks, projectPresentation(latestPresentation, tasks));
       }
       function replaceProjectedTask(task) {
         const index = latestTasks.findIndex((candidate) => candidate.id === task.id);
@@ -3674,7 +3710,7 @@
             // before the last confirmation returned carries an older head, and
             // adopting it would refuse the next intent for no reason.
             const projected = projectTasks(document.tasks);
-            render(projected, projectPresentation(presentation)); stale.dataset.visible = "false"; text(updated, "Updated " + new Date().toLocaleTimeString());
+            render(projected, projectPresentation(presentation, projected)); stale.dataset.visible = "false"; text(updated, "Updated " + new Date().toLocaleTimeString());
             let relationshipContext = { status: "not-applicable" };
             if (!wasLoaded) renderRoute();
             else if (activeDependencyController) {
@@ -3783,10 +3819,30 @@
         if (!target || !activeDrag || !lists.has(target.dataset.dropStatus)) return;
         event.preventDefault();
         const taskId = activeDrag.taskId;
-        const sourceStatus = activeDrag.sourceStatus;
         const placement = placementFor(target, event.clientY);
         clearPlacement();
-        if (placement.status === sourceStatus && !placement.before && !placement.after) return;
+        // Whether this drop changes anything is asked of the status the card is
+        // drawn under *now*, not the one it was drawn under when the drag
+        // started. A poll can re-resolve a card mid-drag — another clone's
+        // status change lands, or the reader's own earlier move settles — and
+        // reconciliation moves the node into its new column while the cursor is
+        // still holding it. Dropping it back on the column it has just arrived
+        // in is a gesture that changes nothing, and answering it from the
+        // drag-start value would send a write for it: a settlement commit
+        // nobody asked for, or a stale-head banner over a move the reader did
+        // not make.
+        //
+        // A card that is still stranded compares against a status no column
+        // has, so a drag out of the unknown-status region is always a real move
+        // — which is the point of making those cards draggable at all.
+        //
+        // It reads the projected model rather than the raw one because the
+        // projection is what is on screen: a queued intent has already moved
+        // the card for the reader, and a no-op is a question about what they
+        // can see.
+        const drawn = projectTasks(latestTasks).find((task) => task.id === taskId);
+        const currentStatus = drawn ? drawn.status : activeDrag.sourceStatus;
+        if (placement.status === currentStatus && !placement.before && !placement.after) return;
 
         const body = { status: placement.status };
         if (placement.before) body.before = placement.before;

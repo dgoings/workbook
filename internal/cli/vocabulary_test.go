@@ -558,7 +558,13 @@ func TestUnresolvedStatusRecovery(t *testing.T) {
 	if code != 7 {
 		t.Fatalf("update on a corrupt priority = code %d, want 7; stderr = %q", code, stderr)
 	}
-	assertJSONError(t, stderr, core.CategoryCorruptData, "")
+	// The message is pinned, not just the category. There is a second
+	// corrupt-data failure within reach here — the projection's "current head is
+	// not a descendant of its previous head" guard, which fires if
+	// overwriteStoredTask ever stops discarding the cache — and it would satisfy
+	// an assertion that only checked the exit code. Naming the message is what
+	// keeps this leg about the tampered field.
+	assertJSONError(t, stderr, core.CategoryCorruptData, "task state contains an invalid task")
 }
 
 // headOperationPack decodes the operation pack a task's newest commit carries,

@@ -131,6 +131,63 @@ func TestHandlerClientDragsACardOutOfTheUnknownStatusRegion(t *testing.T) {
 `)
 }
 
+// A poll that re-resolves a card mid-drag makes the drop a no-op, and the
+// client has to notice.
+//
+// This is reachable rather than theoretical, and stranded cards are where it is
+// likeliest: the status that strands one arrives from another clone, and so does
+// the status that un-strands it. The renderer deliberately leaves a dragged node
+// in place, but reconciliation still files it into the column the model now
+// names — so the reader finishes a drag whose card has already arrived. Dropping
+// it there changes nothing, and a client comparing against the status the drag
+// *started* in would send a write anyway: a settlement commit nobody asked for,
+// or a stale-head banner over a move that was never made.
+//
+// The control is the same gesture on a card that started in a column, which has
+// always sent nothing.
+func TestHandlerClientDoesNotWriteADropOntoTheColumnACardHasAlreadyReached(t *testing.T) {
+	vocabulary := handlerVocabulary(t)
+	stranded := clientPlacementTask("WB-01J0000000000000000000A101", "Written elsewhere", strandedStatus, core.PriorityMedium)
+	stranded.Head = "head-a"
+	// The poll that lands mid-drag: another clone defined the status this card
+	// was stranded under, and the server now resolves it into Shipped.
+	resolved := stranded
+	resolved.Status = core.Status("shipped")
+	resolved.Head = "head-b"
+	served := mustJSON(t, TasksDocument{
+		Format: "workbook.tasks", Version: 1, VocabularyHead: "head-1",
+		Tasks: []core.Task{resolved}, Presentation: presentationForTasks([]core.Task{resolved}),
+	})
+
+	runVocabularyClient(t, "drop onto a column the card already reached", "/", vocabulary, "head-1", []core.Task{stranded}, `
+  const shipped = boardLists.find((list) => list.dataset.status === "shipped");
+  const card = boardCard(`+strconv.Quote(stranded.ID)+`);
+  if (card.parentElement !== boardUnknownList) throw new Error("the stranded card did not start in the region");
+
+  const dataTransfer = { effectAllowed: "", dropEffect: "", setData() {} };
+  card.rect = { top: 0, bottom: 80 };
+  documentEventListeners.dragstart({ target: card, dataTransfer });
+
+  // The poll lands while the cursor is still holding the card.
+  taskResponse = `+string(served)+`;
+  await intervalCallback();
+  if (card.parentElement !== shipped) {
+    throw new Error("the fixture is stale: reconciliation no longer files a dragged card, so nothing is being tested");
+  }
+
+  // Finishing the drag on the column it has already reached asks for nothing.
+  await documentEventListeners.drop({ target: shipped, clientY: 1, dataTransfer, preventDefault() {} });
+  documentEventListeners.dragend({ target: card });
+  if (fetchCalls.some((call) => call.options && (call.options.method || "GET") !== "GET")) {
+    throw new Error("a drop onto the column the card had already reached sent a write");
+  }
+  if (card.parentElement !== shipped) throw new Error("the no-op drop moved the card");
+
+  // And the card is still the reader's own node throughout.
+  if (boardCard(`+strconv.Quote(stranded.ID)+`) !== card) throw new Error("the no-op drop rebuilt the card");
+`)
+}
+
 // The region takes no drops, from either direction. There is no status a drop
 // there would name, so a card dragged onto it is a change nobody can express —
 // and the page says so by not offering the target at all rather than by sending
@@ -175,6 +232,76 @@ func TestHandlerClientTakesNoDropsIntoTheUnknownStatusRegion(t *testing.T) {
     throw new Error("a drop the region cannot express still sent a write");
   }
 `)
+}
+
+// A task another clone deleted mid-drag must not take the board down with it.
+//
+// The write is confirmed against a task the poll before it had already removed,
+// so the confirmation puts the task back into the model while the presentation
+// that poll left behind does not name it. The renderer read `undefined.idPrefix`
+// and threw, and because that happens inside the render every poll performs, the
+// board froze on its last frame — over a card that was about to disappear
+// anyway. `projectPresentation` now fills the gap instead.
+//
+// Both entry paths are covered. A column card is the pre-existing one; a
+// stranded card is the one this change opens, and it is the likelier of the two,
+// because the clone most apt to be rewriting a task is the clone whose status
+// change stranded it here in the first place.
+func TestHandlerClientSurvivesATaskDeletedMidDrag(t *testing.T) {
+	vocabulary := handlerVocabulary(t)
+	bystander := clientPlacementTask("WB-01J0000000000000000000B202", "Bystander", core.Status("icebox"), core.PriorityLow)
+	bystander.Head = "head-b"
+	// What the poll carries once the other clone's delete lands: the dragged
+	// task is gone from the tasks and from the presentation alike.
+	served := mustJSON(t, TasksDocument{
+		Format: "workbook.tasks", Version: 1, VocabularyHead: "head-1",
+		Tasks: []core.Task{bystander}, Presentation: presentationForTasks([]core.Task{bystander}),
+	})
+
+	for _, dragged := range []struct {
+		name   string
+		status core.Status
+	}{
+		{"from a column", core.Status("queued")},
+		{"from the unknown-status region", strandedStatus},
+	} {
+		t.Run(dragged.name, func(t *testing.T) {
+			doomed := clientPlacementTask("WB-01J0000000000000000000A101", "Doomed", dragged.status, core.PriorityMedium)
+			doomed.Head = "head-a"
+			runVocabularyClient(t, "delete during a drag "+dragged.name, "/", vocabulary, "head-1",
+				[]core.Task{doomed, bystander}, `
+  const shipped = boardLists.find((list) => list.dataset.status === "shipped");
+  const card = boardCard(`+strconv.Quote(doomed.ID)+`);
+  if (!card) throw new Error("the board drew no card for the doomed task");
+  const dataTransfer = { effectAllowed: "", dropEffect: "", setData() {} };
+  card.rect = { top: 0, bottom: 80 };
+  documentEventListeners.dragstart({ target: card, dataTransfer });
+
+  // The delete lands while the cursor is still holding the card.
+  taskResponse = `+string(served)+`;
+  await intervalCallback();
+
+  // The drop confirms against a task the board has already forgotten. This is
+  // where the renderer used to throw.
+  await documentEventListeners.drop({ target: shipped, clientY: 1, dataTransfer, preventDefault() {} });
+  documentEventListeners.dragend({ target: card });
+
+  // The board is still rendering, which is the whole claim: the poll that
+  // follows draws, and it takes the deleted card away.
+  await intervalCallback();
+  if (boardCard(`+strconv.Quote(doomed.ID)+`)) throw new Error("the deleted task is still on the board");
+  const survivor = boardCard(`+strconv.Quote(bystander.ID)+`);
+  if (!survivor) throw new Error("the board lost a card the delete did not concern");
+  if (survivor.parentElement !== boardLists.find((list) => list.dataset.status === "icebox")) {
+    throw new Error("the surviving card left its column");
+  }
+  // And it keeps rendering, rather than having thrown once and stopped.
+  await intervalCallback();
+  await intervalCallback();
+  if (!boardCard(`+strconv.Quote(bystander.ID)+`)) throw new Error("a later poll stopped drawing the board");
+`)
+		})
+	}
 }
 
 // The other way out of the region is the task's own form, and it still works.
