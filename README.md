@@ -495,9 +495,17 @@ belong, and reports how many tasks that moves.
 Everywhere includes ordering. A task's status-and-priority bucket is its
 *resolved* status, so two tasks stored under different tokens that forward to
 one status share a bucket: they are drawn in one column, they rank against each
-other, and `move` and `place` accept each as an anchor for the other. Anything
-narrower would let a `move` be refused against the card sitting directly above
-it on the board.
+other, and `move` and `place` each accept the other's task as an anchor whenever
+the bucket resolves to a status this project defines. Anything narrower would
+let a `move` be refused against the card sitting directly above it on the board.
+
+The two verbs part company for a bucket that resolves to nothing — tasks
+stranded under a status no chain leads out of. `move` reorders them against each
+other, because it names an anchor rather than a status; `place` cannot be asked
+to, because it names the destination status and a status the project does not
+define is refused at the mutation boundary. That is the boundary working as
+intended: `place` is how a caller supplies a status, and supplying one that does
+not exist is the mistake it exists to catch.
 
 The configuration lives in its own synchronized ref, `refs/workbook/config`,
 seeded the first time anybody changes a status and published wherever a task is
@@ -1004,10 +1012,16 @@ the next time anything writes to the task; see
 
 The region is a display, not an extra status. Its cards cannot be dragged and
 nothing can be dropped into it, because there is no column the status belongs
-to. This build also cannot edit such a task: every write validates the projected
-task, so `workbook update` on one exits `7` (`corrupt-data`) and the board's
-save fails the same way. Fetch, or use the clone that wrote the status, to
-change one.
+to.
+
+Such a task is still editable, and the rule is narrower than "this task is
+frozen": membership is checked against the status a caller *supplies*, not
+against the one the task already holds. `workbook update <id> --title …`
+succeeds, and so do `move`, `depend` and the board's own save; only naming a
+status this project does not define is refused, with exit `5` (`validation`).
+So the way to file one of these tasks is to give it a status that exists —
+`workbook update <id> --status <one of yours>` — or to fetch the configuration
+the clone that wrote the status was using, after which it resolves on its own.
 
 Both boards read this split from one place — `presentation.Board` separates
 `Columns` from `UnknownTasks` — so a renderer that consumes only `Columns`
@@ -1171,8 +1185,8 @@ read as agent instructions — without ever being on the network. `workbook
 serve` says so in the warning it prints for a wildcard bind. Bind the one
 address you mean instead, and the `Host` is pinned to it.
 
-Drag a task card within a column to reorder it or into another canonical status
-column to change status and position together. Workbook keeps the task's priority
+Drag a task card within a column to reorder it or into another of the
+project's status columns to change status and position together. Workbook keeps the task's priority
 unchanged and clamps drops outside that priority group to the nearest group
 boundary, so dropping at the top or bottom of a column still has a clear result.
 The placement creates one normal Workbook operation commit on the moved task and
@@ -1246,7 +1260,7 @@ vertically scrollable within the viewport. Web cards show the actionable
 task-ID prefix, priority, title, and labels, plus the report of a refused change
 described above while one is standing; each title links to its full-ID
 task-detail URL, where the complete description remains available. Every status
-column has a New Task link that preselects that column's canonical status.
+column has a New Task link that preselects that column's status.
 
 A description is the one card field with no length a column can rely on, so the
 board hides it and a `Descriptions:` toggle in the header puts up to six clamped

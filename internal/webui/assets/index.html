@@ -400,26 +400,31 @@
         not fetched, and a region the server emitted only when it was already
         occupied could never take the first arrival.
 
-        It holds less than it used to. A status the project renamed or removed
-        is forwarded to the column it now means and drawn there, so what lands
-        here is a status that forwards nowhere at all.
+        It holds less than it used to, and one thing more. A status the project
+        renamed or removed is forwarded to the column it now means and drawn
+        there, so a stale token no longer strands a task. What does land here is
+        a status that forwards nowhere — and, for as long as an open page is
+        drawing columns the project has moved on from, a task the server has
+        already resolved into a column this page does not have. The second case
+        is temporary and the vocabulary notice is on screen throughout it, which
+        is why the region's copy names both and points at the reload.
 
         It is a display, not a seventh status. It carries no data-status and no
         data-drop-status, so nothing can drop a task into it and no card inside
         it can be dragged.
 
-        Nor is the drag the only thing unavailable: core rejects any write whose
-        projected task fails normalizeCanonicalTask, so this build cannot edit a
-        task holding a status it does not know from the web board or the CLI
-        (`workbook update` on one exits 7, corrupt-data). The note says so
-        rather than offering a recovery that would fail on save. Showing the
-        task is still the whole point — an uneditable task the reader can see is
-        a much smaller problem than one that looks deleted.
+        The card is undraggable, not uneditable. A write is refused for naming a
+        status the project does not define, which a drop necessarily does;
+        opening the task and changing its title or description is an ordinary
+        save, because membership is checked against what a caller supplies
+        rather than against what the task already holds. Showing the task is
+        still the whole point — a task the reader can see and edit is a much
+        smaller problem than one that looks deleted.
       -->
       <section class="unknown-status" data-unknown-section data-visible="{{ if .Board.UnknownTasks }}true{{ else }}false{{ end }}" aria-label="Tasks with an unrecognized status">
         <header class="unknown-status__header">
           <h2 class="unknown-status__heading">Unknown status <span class="count" data-unknown-count>{{ len .Board.UnknownTasks }}</span></h2>
-          <p class="unknown-status__note">These tasks hold a status this project does not define, and no rename or removal it has recorded leads to one — most often a clone changed the statuses and this checkout has not fetched it yet. They are listed here so they are not mistaken for deleted work. This board cannot edit them; fetch, or use the clone that wrote the status, to change one.</p>
+          <p class="unknown-status__note">These tasks are in none of the columns above, for one of two reasons. Either they hold a status this project does not define and nothing forwards to one — most often a clone changed the statuses and this checkout has not fetched it yet — or the project's statuses have changed since this page was opened, in which case the notice at the top of the page offers the reload that files them. They are listed here so they are not mistaken for deleted work, and they can still be opened and edited: only naming a status the project does not define is refused.</p>
         </header>
         <div class="task-list unknown-status__list" data-unknown-list>{{ range .Board.UnknownTasks }}{{ template "task" . }}{{ end }}</div>
       </section>
@@ -1054,10 +1059,15 @@
         option.disabled = true;
         return option;
       }
-      // Makes a status select show a status, whether or not this client knows
-      // it, so it is also how a select already on screen adopts one. The
-      // placeholder is added and removed as the status needs it, because one
-      // naming a status the task has since left is a worse label than none.
+      // Makes a status select show a status, whether or not this page has a
+      // column for it, so it is also how a select already on screen adopts one.
+      // The placeholder is added and removed as the status needs it, because
+      // one naming a status the task has since left is a worse label than none.
+      //
+      // The placeholder asks for one of this project's statuses rather than a
+      // "canonical" one. There is no canonical set any more: the statuses are
+      // the project's, and the ones this select offers are the columns the
+      // server rendered.
       function showStatus(control, status) {
         const first = control.firstElementChild;
         let placeholder = first && first.value === "" ? first : null;
@@ -1070,7 +1080,7 @@
           placeholder = statusPlaceholder();
           control.insertBefore(placeholder, control.firstElementChild);
         }
-        text(placeholder, "Choose a canonical status (current: " + status + ")");
+        text(placeholder, "Choose one of this project's statuses (current: " + status + ")");
         showSelected(control, "");
       }
       function select(name, options, value) {
