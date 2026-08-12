@@ -35,9 +35,17 @@ const (
 	endMarker   = "<!-- workbook:end -->"
 	// markerOpener is what makes either marker a marker and what makes any four
 	// bytes an HTML comment, and neutralOpener is what it becomes inside a body.
-	// The entity renders as the same four characters everywhere Markdown is read,
-	// so a value carrying one still says what it said — it just no longer opens a
+	// The entity renders as the same four characters in ordinary prose, so a
+	// value carrying one still says what it said — it just no longer opens a
 	// comment or terminates this block.
+	//
+	// Inside a code span it does not: CommonMark takes an entity reference in
+	// code as the literal text it is spelled with, so a neutralized value quoted
+	// as code reaches the reader as `&lt;!--`. That is accepted rather than
+	// worked around. The pass is over the whole body, which by then is Markdown
+	// with no record of which spans are code, and the alternative — leaving the
+	// opener raw where it is quoted — swallows the document instead of showing
+	// somebody five extra characters.
 	markerOpener  = "<!--"
 	neutralOpener = "&lt;!--"
 )

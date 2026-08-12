@@ -199,19 +199,32 @@ type statusMigrationView struct {
 // the genesis itself carried is an inheritance. See blockedTracesToADecision
 // for what the walk counts and what it does when the answer is out of reach.
 //
+// Provenance is answered first, ahead of every shape the note can take. A
+// project that inherited the status and one that chose it are different readers
+// before they are different configurations, and the ordering costs nothing: the
+// membership gate above already keeps the walk off every listing that does not
+// define `blocked` at all, so answering provenance first adds it to no listing
+// that would otherwise have skipped it.
+//
 // A project whose new tasks land in the dropped status gets the same note with
 // a different next step rather than no note at all. `status delete` refuses to
 // forward a status into itself and refuses to leave a project with nowhere for
 // new work to land, so the removal is not a command that exists yet for them —
 // but they are the readers with the most invested in the column and the least
 // reason to be told nothing. Naming the tag handoff is the whole difference
-// between "you have a status Workbook no longer ships" and silence. That note
-// is about the handoff any removal needs first, which is as true of a column
-// somebody chose as of one they inherited, so it is not suppressed — and
-// answering it before the walk is also what keeps the walk off every listing
-// but the one already-rare case that needs it.
+// between "you have a status Workbook no longer ships" and silence.
+//
+// That is the one shape with no escape — no removal to run, no window to fall
+// out of — which is exactly why it sits below the provenance test rather than
+// above it. A project that added the column and made it the place new work
+// lands built a workflow deliberately, and advice on dismantling it is not
+// something to repeat on every listing forever; `status delete` explains the
+// handoff at the moment somebody actually tries the removal.
 func droppedDefaultStatuses(vocabulary core.Vocabulary, ledger configLedgerWindow) []statusMigrationView {
 	if !vocabulary.Has(core.StatusBlocked) {
+		return nil
+	}
+	if blockedTracesToADecision(ledger) {
 		return nil
 	}
 	reason := "task dependencies record what a task is waiting on, so `blocked` is no longer " +
@@ -226,9 +239,6 @@ func droppedDefaultStatuses(vocabulary core.Vocabulary, ledger configLedgerWindo
 			// "<status>". This is the same spelling the arity refusals use.
 			First: "workbook status tag <status> --tag " + string(core.StatusTagDefault),
 		}}
-	}
-	if blockedTracesToADecision(ledger) {
-		return nil
 	}
 	return []statusMigrationView{{
 		Status: core.StatusBlocked,
@@ -245,9 +255,8 @@ func droppedDefaultStatuses(vocabulary core.Vocabulary, ledger configLedgerWindo
 // that established the name, because a status can be established and retired
 // more than once: a project that removed `blocked` and later added it back
 // decided twice, and the second decision is the one the reader is living with.
-// A genesis re-establishes whatever it carries, so it resets the answer — it can
-// only be the root pack's sole operation, which makes that a statement about
-// ordering rather than a case.
+// The arms that reset are restatements of the caller's invariant rather than
+// answers this reaches; see the note on the rename case.
 //
 // An answer this cannot reach is inherited. The window is bounded (see
 // maxDatedConfigCommits), so an add older than it looks exactly like no add at
@@ -270,9 +279,19 @@ func blockedTracesToADecision(ledger configLedgerWindow) bool {
 					decided = true
 				}
 			case core.ConfigStatusRename:
-				// Renaming a column onto the name is as deliberate as adding it,
-				// and renaming this one away retires it — after which only a later
-				// add or rename puts it back.
+				// Renaming a column onto the name is as deliberate as adding it.
+				//
+				// The three arms that reset — a genesis, a rename away, a removal —
+				// are defensive restatements of an invariant the caller's membership
+				// gate already enforces rather than decisions made here. This runs
+				// only for a project whose `blocked` is live, and a live one is
+				// always established by the newest add or rename onto the name that
+				// the window holds, so nothing after such an operation can reset it
+				// and no reset can survive to be returned. They are written out
+				// because the invariant lives in another function and a walk that
+				// silently depended on it would be wrong the day it moved — but the
+				// provenance table does not cover them, because no input can reach
+				// them and change the answer.
 				switch core.StatusBlocked {
 				case operation.To:
 					decided = true

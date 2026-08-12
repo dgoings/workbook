@@ -587,13 +587,22 @@ func TestDroppedDefaultStatusesKeysOnProvenance(t *testing.T) {
 			wantNote: true,
 		},
 		{
-			// The default holder keeps the note whatever the ledger says, and the
-			// walk it would need never runs. Its note is about the tag handoff any
-			// removal needs first, which is true of a `blocked` somebody chose as
-			// squarely as of one they inherited.
-			name:          "blocked holding the default tag",
+			// A project that added the column and made it where new work lands is
+			// the one reader with no escape — no removal to run, no window to fall
+			// out of — so it is the last one to nag. Provenance is answered ahead
+			// of the shape the note would take, and `status delete` explains the
+			// tag handoff at the moment somebody actually tries the removal.
+			name:          "blocked holding the default tag after a deliberate add",
 			defaultHolder: core.StatusBlocked,
 			ledger:        configLedgerOf(genesis, add),
+			wantNote:      false,
+		},
+		{
+			// The handoff note still reaches the project that inherited the column
+			// and never chose anything.
+			name:          "blocked holding the default tag by inheritance",
+			defaultHolder: core.StatusBlocked,
+			ledger:        configLedgerOf(genesis),
 			wantNote:      true,
 		},
 	} {
