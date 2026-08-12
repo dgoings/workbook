@@ -165,6 +165,43 @@ func TestRenderGuidelinesSaysWhenATagIsUnheld(t *testing.T) {
 	}
 }
 
+// A display label is written by whoever can push to the configuration ref, so
+// it is untrusted text landing in a Markdown table. A pipe would add a column
+// and shift every value in the row; a newline would end the row early and take
+// the rest of the table with it.
+func TestRenderGuidelinesKeepsAHostileLabelInsideItsCell(t *testing.T) {
+	vocabulary, err := core.NewVocabulary([]core.StatusDefinition{
+		{Status: "todo", Label: "Next | Up\nand more", Rank: "1/1", Tags: []core.StatusTag{
+			core.StatusTagDefault, core.StatusTagNext,
+		}},
+		{Status: "done", Label: "Done", Rank: "2/1", Tags: []core.StatusTag{core.StatusTagDone}},
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("NewVocabulary() error = %v", err)
+	}
+
+	guidelines := RenderGuidelines(testProject(), vocabulary)
+
+	if !strings.Contains(guidelines, "| 1 | `todo` | Next \\| Up and more | `default`, `next` |") {
+		t.Fatalf("the label escaped its cell:\n%s", guidelines)
+	}
+	// A status row opens with its position, and its four columns are five
+	// unescaped pipes. An escaped pipe is content rather than a boundary.
+	rows := 0
+	for _, line := range strings.Split(section(t, guidelines, "## Statuses"), "\n") {
+		if !strings.HasPrefix(line, "| 1 |") && !strings.HasPrefix(line, "| 2 |") {
+			continue
+		}
+		rows++
+		if strings.Count(line, "|")-strings.Count(line, "\\|") != 5 {
+			t.Errorf("status table row has the wrong number of cells: %q", line)
+		}
+	}
+	if rows != 2 {
+		t.Errorf("checked %d status rows, want both", rows)
+	}
+}
+
 func customVocabulary(t *testing.T) core.Vocabulary {
 	t.Helper()
 	vocabulary, err := core.NewVocabulary([]core.StatusDefinition{

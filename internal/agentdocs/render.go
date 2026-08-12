@@ -44,7 +44,7 @@ func RenderGuidelines(project core.ProjectConfig, vocabulary core.Vocabulary) st
 	builder.WriteString("| # | Machine value | Display label | Tags |\n| --- | --- | --- | --- |\n")
 	for index, definition := range definitions {
 		builder.WriteString("| " + strconv.Itoa(index+1) +
-			" | `" + string(definition.Status) + "` | " + definition.Label +
+			" | `" + string(definition.Status) + "` | " + tableCell(definition.Label) +
 			" | " + renderStatusTags(definition.Tags) + " |\n")
 	}
 	builder.WriteString("\n")
@@ -52,8 +52,8 @@ func RenderGuidelines(project core.ProjectConfig, vocabulary core.Vocabulary) st
 	builder.WriteString("A display label is rejected as a validation error.\n\n")
 	builder.WriteString("A tag is a job the machine gives a status, not a description of its name:\n\n")
 	builder.WriteString("| Tag | What it makes Workbook do |\n| --- | --- |\n")
-	// Driven by the tag set core defines, so a fourth tag cannot be added
-	// without this table refusing to compile.
+	// Driven by the tag set core defines, so a tag added there and left
+	// undescribed here renders an empty cell the pinned test fails on.
 	for _, tag := range core.StatusTags() {
 		builder.WriteString("| `" + string(tag) + "` | " + statusTagMeaning(tag) + " |\n")
 	}
@@ -175,6 +175,17 @@ func RenderGuidelines(project core.ProjectConfig, vocabulary core.Vocabulary) st
 	return builder.String()
 }
 
+// tableCell renders an authored value inside a Markdown table cell.
+//
+// A display label is written by whoever can push to the shared configuration
+// ref, which makes it untrusted text in a generated file. core.DisplayLine
+// collapses the control runes and newlines that would end the row early, and a
+// pipe is escaped because a pipe is what ends a cell: a label of `a | b` would
+// otherwise silently add a column to the table and shift every value in the row.
+func tableCell(value string) string {
+	return strings.ReplaceAll(core.DisplayLine(value), "|", `\|`)
+}
+
 // renderStatusTags renders a status's tag set for the table, saying "none"
 // where there is nothing rather than leaving a cell a reader has to interpret.
 // It is the word `workbook status list` prints for the same set, so the two
@@ -234,7 +245,8 @@ func displayLabelWarning(definitions []core.StatusDefinition) string {
 	if len(candidates) == 0 {
 		return ""
 	}
-	warning := "Write `--status " + string(candidates[0].Status) + "`, not `" + candidates[0].Label + "`.\n"
+	warning := "Write `--status " + string(candidates[0].Status) + "`, not `" +
+		core.DisplayLine(candidates[0].Label) + "`.\n"
 	if len(candidates) == 1 {
 		return warning
 	}
