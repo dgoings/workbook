@@ -175,15 +175,45 @@ func RenderGuidelines(project core.ProjectConfig, vocabulary core.Vocabulary) st
 	return builder.String()
 }
 
-// tableCell renders an authored value inside a Markdown table cell.
+// authoredText renders a value somebody wrote for prose inside a generated
+// file.
 //
 // A display label is written by whoever can push to the shared configuration
-// ref, which makes it untrusted text in a generated file. core.DisplayLine
-// collapses the control runes and newlines that would end the row early, and a
-// pipe is escaped because a pipe is what ends a cell: a label of `a | b` would
+// ref, which makes it untrusted text. core.DisplayLine collapses the control
+// runes and newlines, and the managed block's markers are neutralized here as
+// well as in the block format itself: a label carrying the end marker would
+// otherwise terminate the block early, and the file would read as somebody's
+// local edit in every clone forever. Document.managedBody is the layer that
+// makes that impossible for any body; this is the layer that keeps the
+// guidelines' own untrusted values from ever reaching it.
+func authoredText(value string) string {
+	return neutralizeMarkers(core.DisplayLine(value))
+}
+
+// tableCell renders an authored value inside a Markdown table cell. A pipe is
+// escaped because a pipe is what ends a cell: a label of `a | b` would
 // otherwise silently add a column to the table and shift every value in the row.
 func tableCell(value string) string {
-	return strings.ReplaceAll(core.DisplayLine(value), "|", `\|`)
+	return strings.ReplaceAll(authoredText(value), "|", `\|`)
+}
+
+// codeSpan renders an authored value as a Markdown code span.
+//
+// The fence is as long as it has to be, which is CommonMark's own rule: a code
+// span may contain a run of backticks shorter than its delimiter, and a value
+// beginning or ending with one needs a space of padding to keep it. A label of
+// `a` would otherwise close the span it was put in and leave the sentence
+// around it rendered as code.
+func codeSpan(value string) string {
+	fence := "`"
+	for strings.Contains(value, fence) {
+		fence += "`"
+	}
+	padding := ""
+	if strings.HasPrefix(value, "`") || strings.HasSuffix(value, "`") {
+		padding = " "
+	}
+	return fence + padding + value + padding + fence
 }
 
 // renderStatusTags renders a status's tag set for the table, saying "none"
@@ -245,8 +275,8 @@ func displayLabelWarning(definitions []core.StatusDefinition) string {
 	if len(candidates) == 0 {
 		return ""
 	}
-	warning := "Write `--status " + string(candidates[0].Status) + "`, not `" +
-		core.DisplayLine(candidates[0].Label) + "`.\n"
+	warning := "Write `--status " + string(candidates[0].Status) + "`, not " +
+		codeSpan(authoredText(candidates[0].Label)) + ".\n"
 	if len(candidates) == 1 {
 		return warning
 	}

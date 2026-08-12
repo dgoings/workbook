@@ -33,6 +33,13 @@ const (
 const (
 	beginPrefix = "<!-- workbook:begin "
 	endMarker   = "<!-- workbook:end -->"
+	// markerOpener is what makes either marker a marker, and neutralOpener is
+	// what it becomes inside a body. The entity renders as the same four
+	// characters everywhere Markdown is read, so a value carrying a marker still
+	// says what it said — it just no longer opens an HTML comment or terminates
+	// this block.
+	markerOpener  = "<!--"
+	neutralOpener = "&lt;!--"
 )
 
 var (
@@ -69,6 +76,7 @@ type Outcome struct {
 // explicit override.
 func (d Document) Reconcile(existing []byte) Outcome {
 	rendered := d.render()
+	body := d.managedBody()
 
 	if len(existing) == 0 {
 		return Outcome{State: StateAbsent, Contents: []byte(d.Preamble + rendered), Changed: true}
@@ -83,7 +91,10 @@ func (d Document) Reconcile(existing []byte) Outcome {
 	updated := contents[:block.start] + rendered + contents[block.end:]
 	// The generator version is deliberately excluded here. A release that does
 	// not change generated content must not mark every project stale.
-	if block.body == d.Body && block.recordedHash == hashBody(d.Body) {
+	//
+	// Both sides of this comparison are the body as it is written, never the
+	// body as it was handed in; see managedBody.
+	if block.body == body && block.recordedHash == hashBody(body) {
 		return Outcome{State: StateCurrent, Contents: existing}
 	}
 	if block.recordedHash != "" && block.recordedHash == hashBody(block.body) {
@@ -122,8 +133,46 @@ func Strip(existing []byte) (State, []byte) {
 }
 
 func (d Document) render() string {
-	return beginPrefix + "generator=" + d.Generator + " sha256=" + hashBody(d.Body) + " -->\n" +
-		d.Body + endMarker + "\n"
+	body := d.managedBody()
+	return beginPrefix + "generator=" + d.Generator + " sha256=" + hashBody(body) + " -->\n" +
+		body + endMarker + "\n"
+}
+
+// managedBody is the body as it is written into a managed block: the block's
+// own markers neutralized so that the block can be found again.
+//
+// This is the format defending its own invariant rather than a rendering
+// nicety, and it belongs here because a body carrying the end marker cannot
+// round-trip by construction. findBlock takes the first end marker after the
+// begin marker, so such a body truncates its own block on the next read: the
+// recorded hash covers the whole body, the hash of what is read back covers the
+// truncated one, and the two never agree again. The file is then permanently
+// StateModified — reported as somebody's local edit, refused by every refresh,
+// and re-inserted ahead of its own tail by --force, which grows the file on
+// every run. One authored display label carrying twenty-one bytes would do that
+// to every clone of a project, including breaking `workbook setup` in each of
+// them, so the marker is neutralized rather than trusted not to appear.
+//
+// Escaping rather than refusing is the deliberate half. A refusal would fail
+// somebody's command over a value a teammate chose, which is the outcome this
+// exists to prevent. Only the marker's `<!--` opener is rewritten, so the text
+// still reads as what was written and no HTML comment starts where one would
+// swallow the rest of the document.
+func (d Document) managedBody() string {
+	return neutralizeMarkers(d.Body)
+}
+
+// neutralizeMarkers rewrites the two strings a managed body may not contain.
+// It touches nothing else: a body without them is returned byte for byte, which
+// is what keeps every existing project's stamp valid.
+func neutralizeMarkers(body string) string {
+	if !strings.Contains(body, markerOpener) {
+		return body
+	}
+	return strings.NewReplacer(
+		endMarker, neutralOpener+strings.TrimPrefix(endMarker, markerOpener),
+		beginPrefix, neutralOpener+strings.TrimPrefix(beginPrefix, markerOpener),
+	).Replace(body)
 }
 
 type block struct {

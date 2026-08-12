@@ -202,6 +202,56 @@ func TestRenderGuidelinesKeepsAHostileLabelInsideItsCell(t *testing.T) {
 	}
 }
 
+// The rendering layer keeps an authored label from ever reaching the block
+// format carrying the block's own terminator or a backtick that would close the
+// code span it is put in.
+//
+// It asserts the rendered body directly rather than the written file, so it
+// fails on its own when the neutralization is removed from tableCell or from
+// the display-label warning — the block format's defense in
+// TestReconcileRoundTripsABodyCarryingTheEndMarker does not stand in for it.
+func TestRenderGuidelinesNeutralizesMarkersAndBackticksInALabel(t *testing.T) {
+	vocabulary, err := core.NewVocabulary([]core.StatusDefinition{
+		{Status: "todo", Label: "Next " + endMarker + " `Up`", Rank: "1/1", Tags: []core.StatusTag{
+			core.StatusTagDefault, core.StatusTagNext,
+		}},
+		{Status: "done", Label: "Done", Rank: "2/1", Tags: []core.StatusTag{core.StatusTagDone}},
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("NewVocabulary() error = %v", err)
+	}
+
+	guidelines := RenderGuidelines(testProject(), vocabulary)
+
+	if strings.Contains(guidelines, endMarker) {
+		t.Fatalf("the rendered body carries this block's end marker:\n%s", guidelines)
+	}
+	if !strings.Contains(guidelines, "| 1 | `todo` | Next &lt;!-- workbook:end --> `Up` | `default`, `next` |") {
+		t.Errorf("the table cell does not read as the label somebody wrote:\n%s", guidelines)
+	}
+	// The warning quotes the label as code, so its fence has to outlast the
+	// backticks the label carries.
+	if !strings.Contains(guidelines, "not `` Next &lt;!-- workbook:end --> `Up` ``.") {
+		t.Errorf("the display-label warning does not fence the label it quotes:\n%s", guidelines)
+	}
+}
+
+func TestCodeSpanSurvivesTheBackticksItCarries(t *testing.T) {
+	for _, test := range []struct {
+		value string
+		want  string
+	}{
+		{value: "In Progress", want: "`In Progress`"},
+		{value: "a `b` c", want: "``a `b` c``"},
+		{value: "`", want: "`` ` ``"},
+		{value: "``x``", want: "``` ``x`` ```"},
+	} {
+		if got := codeSpan(test.value); got != test.want {
+			t.Errorf("codeSpan(%q) = %q, want %q", test.value, got, test.want)
+		}
+	}
+}
+
 func customVocabulary(t *testing.T) core.Vocabulary {
 	t.Helper()
 	vocabulary, err := core.NewVocabulary([]core.StatusDefinition{

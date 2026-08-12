@@ -42,6 +42,46 @@ func TestReconcileReportsCurrentForItsOwnOutput(t *testing.T) {
 	}
 }
 
+// A body carrying this block's own end marker cannot round-trip: findBlock
+// stops at the first end marker, so the block read back is a truncated one
+// whose hash can never match the recorded one. The file would then be
+// StateModified forever — reported as somebody's local edit in every clone,
+// refused by every refresh, and grown by every --force, which re-inserts a
+// fresh block ahead of the orphaned tail. This is the layer that makes that
+// impossible for any body, whatever produced it.
+//
+// Removing the neutralization in managedBody fails this test on its own; the
+// rendering layer that keeps authored labels away from here is tested
+// separately, in render_test.go.
+func TestReconcileRoundTripsABodyCarryingTheEndMarker(t *testing.T) {
+	document := testDocument("Statuses: Next " + endMarker + " Up, and " + beginPrefix + "x -->\nmore.\n")
+
+	first := document.Reconcile(nil)
+	written := string(first.Contents)
+
+	if strings.Count(written, endMarker) != 1 {
+		t.Fatalf("the written file carries %d end markers, want the block's own:\n%s",
+			strings.Count(written, endMarker), written)
+	}
+	if !strings.Contains(written, "Next &lt;!-- workbook:end --> Up") {
+		t.Fatalf("the neutralized marker does not still read as what was written:\n%s", written)
+	}
+	if outcome := document.Reconcile(first.Contents); outcome.State != StateCurrent {
+		t.Fatalf("Reconcile(own output) state = %q, want %q:\n%s", outcome.State, StateCurrent, written)
+	}
+
+	// And the next release of the same document refreshes it rather than
+	// refusing, which is the state the truncation used to make unreachable.
+	next := testDocument("Statuses: Next " + endMarker + " Up, and " + beginPrefix + "x -->\nmore, revised.\n")
+	outcome := next.Reconcile(first.Contents)
+	if outcome.State != StateStale || !outcome.Changed {
+		t.Fatalf("Reconcile(changed body) = %q changed %t, want a stale rewrite", outcome.State, outcome.Changed)
+	}
+	if second := next.Reconcile(outcome.Contents); second.State != StateCurrent {
+		t.Fatalf("the rewrite does not settle: state = %q\n%s", second.State, outcome.Contents)
+	}
+}
+
 func TestReconcileReportsStaleWhenTheRenderedBodyChanges(t *testing.T) {
 	// Production mutation: comparing only the recorded generator version would
 	// miss a project whose configuration changed under a constant binary.
