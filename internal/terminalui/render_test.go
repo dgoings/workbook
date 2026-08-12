@@ -81,7 +81,7 @@ func TestRenderBoardWideGolden(t *testing.T) {
 				Labels:   []string{"release"},
 			},
 		},
-	})
+	}, core.DefaultVocabulary())
 
 	var output bytes.Buffer
 	if err := RenderBoard(&output, board, LayoutWide, 140); err != nil {
@@ -118,7 +118,7 @@ func TestRenderBoardWidePreservesLongUniquePrefixes(t *testing.T) {
 				Priority: core.PriorityMedium,
 			},
 		},
-	})
+	}, core.DefaultVocabulary())
 
 	var output bytes.Buffer
 	if err := RenderBoard(&output, board, LayoutWide, 100); err != nil {
@@ -158,7 +158,7 @@ func TestRenderBoardNarrowGolden(t *testing.T) {
 				Labels:   []string{"release"},
 			},
 		},
-	})
+	}, core.DefaultVocabulary())
 
 	var output bytes.Buffer
 	if err := RenderBoard(&output, board, LayoutNarrow, 100); err != nil {
@@ -198,7 +198,7 @@ func TestRenderBoardShowsAllEmptyColumns(t *testing.T) {
 			Status:   core.Status("archived"),
 			Priority: core.PriorityLow,
 		},
-	}})
+	}}, core.DefaultVocabulary())
 
 	var output bytes.Buffer
 	if err := RenderBoard(&output, board, LayoutNarrow, 100); err != nil {
@@ -212,6 +212,7 @@ func TestRenderBoardShowsAllEmptyColumns(t *testing.T) {
 		"IN REVIEW (0)\n-------------\n(empty)\n\n" +
 		"DONE (0)\n--------\n(empty)\n\n" +
 		"UNKNOWN STATUS (1)\n------------------\n" +
+		"(no status this project defines, and no rename or removal leads to one)\n" +
 		"WB-01ARZ3ND [low] Archived task\n"
 	if got := output.String(); got != want {
 		t.Fatalf("RenderBoard() =\n%q\nwant\n%q", got, want)
@@ -255,7 +256,7 @@ func TestRenderBoardStripsControlCharactersFromCards(t *testing.T) {
 			Priority: core.PriorityHigh,
 			Labels:   []string{"git\x1b[2K"},
 		},
-	}})
+	}}, core.DefaultVocabulary())
 
 	for name, layout := range map[string]Layout{"narrow": LayoutNarrow, "wide": LayoutWide} {
 		var output bytes.Buffer

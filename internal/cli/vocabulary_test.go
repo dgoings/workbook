@@ -306,3 +306,48 @@ func TestValidateJSONOmitsTheConfigSectionWithoutALedger(t *testing.T) {
 		t.Fatalf("validate JSON = %s, want no advisories for a vocabulary inside every ceiling", stdout)
 	}
 }
+
+// The terminal board draws the project's columns, under the project's labels,
+// and puts a task still stored under a retired token in the column that token
+// now means.
+//
+// This is the last surface that was still reading the built-in six. Everything
+// else about a rename was already honest — show, list, next, create — while the
+// board a person actually looks at printed a READY column for a project that no
+// longer has one, with the task missing from it.
+func TestBoardRendersTheProjectsOwnColumns(t *testing.T) {
+	repository, _ := cliSyncRepositories(t)
+	task := cliCreateTask(t, repository, "Renamed column")
+	if code, _, stderr := run(t, repository, "update", task.ID, "--status", "ready", "--no-sync"); code != 0 {
+		t.Fatalf("update --status ready = code %d; stderr = %q", code, stderr)
+	}
+	// Through the verb rather than through the ledger API, so the label the
+	// board prints is the one a person renaming a column would actually get.
+	if code, _, stderr := run(t, repository, "status", "rename", "ready", "todo", "--no-sync"); code != 0 {
+		t.Fatalf("status rename = code %d; stderr = %q", code, stderr)
+	}
+	if code, _, stderr := run(t, repository, "status", "delete", "in-review", "--into", "done", "--no-sync"); code != 0 {
+		t.Fatalf("status delete = code %d; stderr = %q", code, stderr)
+	}
+
+	code, stdout, stderr := run(t, repository, "board")
+	if code != 0 || stderr != "" {
+		t.Fatalf("board = code %d, stderr %q", code, stderr)
+	}
+	if !strings.Contains(stdout, "TODO (1)") {
+		t.Fatalf("board = %q, want a TODO column holding the renamed task", stdout)
+	}
+	if strings.Contains(stdout, "READY (") {
+		t.Fatalf("board = %q, want no column for the retired status", stdout)
+	}
+	// A removed status loses its column too, rather than being drawn empty.
+	if strings.Contains(stdout, "IN REVIEW (") {
+		t.Fatalf("board = %q, want no column for the removed status", stdout)
+	}
+	if strings.Contains(stdout, "UNKNOWN STATUS") {
+		t.Fatalf("board = %q, want the stored token resolved rather than stranded", stdout)
+	}
+	if !strings.Contains(stdout, "Renamed column") {
+		t.Fatalf("board = %q, want the task drawn", stdout)
+	}
+}

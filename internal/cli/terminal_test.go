@@ -15,6 +15,35 @@ func TestTerminalWidthRejectsNonFileWriters(t *testing.T) {
 	}
 }
 
+// The wide board's width threshold is a per-column budget now, because a
+// project chooses how many columns it has. Six columns is the calibration
+// point and has to come out at exactly the 140 this shipped with: a change to
+// the budget that moved the six-column answer would silently re-flow every
+// existing project's board.
+func TestWideBoardMinimumIsAPerColumnBudget(t *testing.T) {
+	if got, want := wideBoardMinimumFor(6), 140; got != want {
+		t.Fatalf("wideBoardMinimumFor(6) = %d, want the historical %d", got, want)
+	}
+	// Fewer columns ask for less and more ask for more, monotonically, and the
+	// per-column share never drops below what six columns get.
+	previous := 0
+	for columns := 1; columns <= 24; columns++ {
+		minimum := wideBoardMinimumFor(columns)
+		if minimum <= previous {
+			t.Fatalf("wideBoardMinimumFor(%d) = %d, not greater than %d for one column fewer", columns, minimum, previous)
+		}
+		if minimum*6 < 140*columns {
+			t.Fatalf("wideBoardMinimumFor(%d) = %d, less per column than six columns get", columns, minimum)
+		}
+		previous = minimum
+	}
+	// A board with no columns is charged the whole historical width rather than
+	// nothing, so an empty vocabulary cannot put a grid on a narrow terminal.
+	if got := wideBoardMinimumFor(0); got != 140 {
+		t.Fatalf("wideBoardMinimumFor(0) = %d, want %d", got, 140)
+	}
+}
+
 func TestRunBoardDefaultsToNarrowForBufferedOutput(t *testing.T) {
 	repository := initializedRepository(t)
 	tasks := createTerminalTasks(t, repository)

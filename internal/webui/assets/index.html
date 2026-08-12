@@ -1,5 +1,5 @@
 {{ define "task" }}
-<article class="task-card" tabindex="0" data-task-id="{{ .Task.ID }}" data-priority="{{ .Task.Priority }}" data-id-prefix="{{ .IDPrefix }}" draggable="{{ if knownStatus .Task.Status }}true{{ else }}false{{ end }}" aria-label="{{ if knownStatus .Task.Status }}Move task {{ .Task.Title }} from {{ .Task.Status }}{{ else }}Task {{ .Task.Title }} has the unrecognized status {{ .Task.Status }}{{ end }}">
+<article class="task-card" tabindex="0" data-task-id="{{ .Task.ID }}" data-priority="{{ .Task.Priority }}" data-id-prefix="{{ .IDPrefix }}" draggable="{{ if .StatusUnresolved }}false{{ else }}true{{ end }}" aria-label="{{ if .StatusUnresolved }}Task {{ .Task.Title }} has the unrecognized status {{ .ResolvedStatus }}{{ else }}Move task {{ .Task.Title }} from {{ .ResolvedStatus }}{{ end }}">
   <div class="task-card__meta"><span class="task-id-copy-group"><button type="button" class="task-id-copy" data-copy-task-id="{{ .Task.ID }}" aria-label="Copy full task ID {{ .Task.ID }}"><code>{{ .IDPrefix }}</code></button><span class="copy-status" data-copy-status role="status" aria-live="polite" aria-atomic="true"></span></span><span class="priority priority--{{ .Task.Priority }}">{{ .Task.Priority }}</span></div>
   <h3><a href="/tasks/{{ .Task.ID }}">{{ .Task.Title }}</a></h3>
   {{ if .Task.Description }}<p>{{ .Task.Description }}</p>{{ end }}
@@ -354,14 +354,41 @@
        route the user is on, and it is cleared by a person rather than by the
        next poll. -->
   <div class="notice" data-notice role="status" aria-live="polite" hidden></div>
+  <!-- What the board says when the project's statuses change under a page that
+       is already open.
+
+       It offers a reload rather than doing one, and it never rebuilds the
+       columns in place. A card node is the anchor for everything the reader has
+       in flight — an open edit form, a staged change waiting on a confirmation,
+       a refusal banner they have not read — and rebuilding the board to add a
+       column would destroy all of it to show a column they may not care about.
+       So the page keeps drawing the vocabulary it was served with, says plainly
+       that it is out of date, and lets the reader choose the moment. -->
+  <div class="notice" data-vocabulary-notice role="status" aria-live="polite" hidden>
+    <div class="notice__report">
+      <p>This project's statuses have changed. The columns on this page are the ones it was opened with.</p>
+      <button type="button" data-vocabulary-reload>Reload the board</button>
+    </div>
+  </div>
   <main id="board" tabindex="-1">
-    <div class="board-view" data-board-view>
+    <!-- data-default-status is where a new task lands, and it is the server's
+         answer rather than the client's: it is the status this project tagged
+         default, which no client can derive from the columns alone. Anything
+         the script needs before its first fetch comes from an attribute here,
+         data-vocabulary-head included, so a page and its script never disagree
+         about which vocabulary they were built from. -->
+    <div class="board-view" data-board-view data-default-status="{{ .DefaultStatus }}" data-vocabulary-head="{{ .VocabularyHead }}">
       <p class="stale" data-stale role="status">Task refresh failed. Showing the last successful board.</p>
       <section class="board" aria-label="Task status board">
         {{ range .Board.Columns }}
         <section class="column">
           <header class="column__header"><h2 class="column__heading">{{ .Label }} <span class="count" data-count="{{ .Status }}">{{ len .Tasks }}</span></h2><a class="new-task-link" href="/tasks/new?status={{ .Status }}">New Task</a></header>
-          <div class="task-list" data-status="{{ .Status }}" data-drop-status="{{ .Status }}">{{ range .Tasks }}{{ template "task" . }}{{ end }}</div>
+          <!-- data-status-label carries the project's own name for this column.
+               The client builds its status list out of these nodes rather than
+               keeping a copy, so a project that renamed a column renames it in
+               the form and in every message the script writes, with nothing to
+               keep in step. -->
+          <div class="task-list" data-status="{{ .Status }}" data-status-label="{{ .Label }}" data-drop-status="{{ .Status }}">{{ range .Tasks }}{{ template "task" . }}{{ end }}</div>
         </section>
         {{ end }}
       </section>
@@ -369,9 +396,13 @@
         Tasks whose status matches no column above, which the terminal board
         prints as its UNKNOWN STATUS section. The region is always in the
         document and hidden while empty: the status that strands a task usually
-        arrives on a poll, from a clone running a Workbook that knows a status
-        this one does not, and a region the server emitted only when it was
-        already occupied could never take the first arrival.
+        arrives on a poll, from a clone whose project configuration this one has
+        not fetched, and a region the server emitted only when it was already
+        occupied could never take the first arrival.
+
+        It holds less than it used to. A status the project renamed or removed
+        is forwarded to the column it now means and drawn there, so what lands
+        here is a status that forwards nowhere at all.
 
         It is a display, not a seventh status. It carries no data-status and no
         data-drop-status, so nothing can drop a task into it and no card inside
@@ -388,7 +419,7 @@
       <section class="unknown-status" data-unknown-section data-visible="{{ if .Board.UnknownTasks }}true{{ else }}false{{ end }}" aria-label="Tasks with an unrecognized status">
         <header class="unknown-status__header">
           <h2 class="unknown-status__heading">Unknown status <span class="count" data-unknown-count>{{ len .Board.UnknownTasks }}</span></h2>
-          <p class="unknown-status__note">These tasks hold a status this board has no column for, most likely written by a newer Workbook. They are listed here so they are not mistaken for deleted work. This build cannot edit them; update Workbook, or use the clone that wrote the status, to change one.</p>
+          <p class="unknown-status__note">These tasks hold a status this project does not define, and no rename or removal it has recorded leads to one — most often a clone changed the statuses and this checkout has not fetched it yet. They are listed here so they are not mistaken for deleted work. This board cannot edit them; fetch, or use the clone that wrote the status, to change one.</p>
         </header>
         <div class="task-list unknown-status__list" data-unknown-list>{{ range .Board.UnknownTasks }}{{ template "task" . }}{{ end }}</div>
       </section>
@@ -396,22 +427,32 @@
   </main>
   <script>
     (() => {
-      const statusDefinitions = [
-        ["backlog", "Backlog"],
-        ["ready", "Ready"],
-        ["blocked", "Blocked"],
-        ["in-progress", "In Progress"],
-        ["in-review", "In Review"],
-        ["done", "Done"]
-      ];
-      const statuses = new Set(statusDefinitions.map(([status]) => status));
       const priorityOrder = new Map([["high", 0], ["medium", 1], ["low", 2]]);
       const dropMarker = document.createElement("div");
       dropMarker.className = "drop-marker";
       dropMarker.setAttribute("aria-hidden", "true");
       const main = document.querySelector("main");
       const boardView = document.querySelector("[data-board-view]");
-      const lists = new Map([...boardView.querySelectorAll("[data-status]")].map((element) => [element.dataset.status, element]));
+      const statusColumns = [...boardView.querySelectorAll("[data-status]")];
+      const lists = new Map(statusColumns.map((element) => [element.dataset.status, element]));
+      // The project's statuses, read out of the columns the server rendered
+      // rather than kept as a list of its own.
+      //
+      // There used to be a constant here holding the six statuses Workbook
+      // shipped, and a project may define any statuses it likes now, so a
+      // constant would be a second answer to a question the server has already
+      // answered on this page — one that would be wrong for every project that
+      // customized anything. Everything that needs a status now reads these
+      // columns: the form's select, the /tasks/new?status= check, and the drop
+      // targets, which already did. The order is the columns' order, which is
+      // the vocabulary's.
+      const statusDefinitions = statusColumns.map((element) => [element.dataset.status, element.dataset.statusLabel || element.dataset.status]);
+      const statuses = new Set(statusDefinitions.map(([status]) => status));
+      // Where a new task lands when nothing named a status: the project's
+      // default-tagged status, which only the server knows. Falling back to the
+      // first column keeps a page served by an older build usable rather than
+      // sending it to a status that may not exist.
+      const defaultStatus = boardView.dataset.defaultStatus || (statusDefinitions.length ? statusDefinitions[0][0] : "");
       const counts = new Map([...boardView.querySelectorAll("[data-count]")].map((element) => [element.dataset.count, element]));
       const stale = boardView.querySelector("[data-stale]");
       // The region for tasks whose status matches no column. It is part of the
@@ -422,6 +463,19 @@
       const unknownCount = boardView.querySelector("[data-unknown-count]");
       const updated = document.querySelector("[data-updated]");
       const notice = document.querySelector("[data-notice]");
+      // The standing announcement that this page's columns are out of date, and
+      // the control that acts on it. See the element itself for why a reload is
+      // offered instead of taken.
+      const vocabularyNotice = document.querySelector("[data-vocabulary-notice]");
+      const vocabularyReload = document.querySelector("[data-vocabulary-reload]");
+      // The configuration ledger tip these columns were built from. The server
+      // renders it into the page and repeats it on every poll, so the poll can
+      // notice a change without fetching the vocabulary itself once a second.
+      // An empty value is a project that has recorded no statuses, which is a
+      // real state and not a missing answer, so the comparison is against
+      // whatever this page was served with rather than against emptiness.
+      const renderedVocabularyHead = boardView.dataset.vocabularyHead || "";
+      let vocabularyChanged = false;
       const syncToggle = document.querySelector("[data-sync-toggle]");
       const descriptionToggle = document.querySelector("[data-description-toggle]");
       let syncState = null;
@@ -768,7 +822,7 @@
 		if (url.pathname === "/deleted") return { view: "deleted" };
         if (url.pathname === "/tasks/new") {
           const requestedStatus = url.searchParams.get("status");
-          return { view: "new", status: statuses.has(requestedStatus) ? requestedStatus : "backlog" };
+          return { view: "new", status: statuses.has(requestedStatus) ? requestedStatus : defaultStatus };
         }
         const match = url.pathname.match(/^\/tasks\/([^/]+)$/);
         if (!match) return { view: "unknown" };
@@ -3549,6 +3603,21 @@
         }
         return result;
       }
+      // Announces that the project's statuses have moved on from the ones this
+      // page is drawing, once, and then leaves the board alone.
+      //
+      // Leaving the board alone is the whole point. Rebuilding the columns
+      // would mean building new card nodes, and a card node is where the
+      // reader's work in flight lives — an open form, a change staged against a
+      // head, a refusal they have not read yet. None of that can be moved to a
+      // new node, and all of it is lost with the old one. A reload loses it
+      // too, which is exactly why the reader chooses when.
+      function noteVocabularyChange(head) {
+        if (vocabularyChanged || head === renderedVocabularyHead) return;
+        vocabularyChanged = true;
+        vocabularyNotice.hidden = false;
+      }
+      vocabularyReload.addEventListener("click", () => { window.location.reload(); });
       function refresh() {
         const wasLoaded = tasksLoaded;
         const generation = ++taskRefreshGeneration;
@@ -3580,6 +3649,7 @@
             // check above: a refresh that lost the race never touches the
             // model, so it never has a read to report.
             boardRead = true;
+            noteVocabularyChange(typeof document.vocabularyHead === "string" ? document.vocabularyHead : "");
             // A poll deliberately does not touch a pending queue's head. The
             // queue re-bases when a write is actually refused, where the answer
             // is known to be newer than the head that failed; a poll that left

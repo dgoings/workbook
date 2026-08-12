@@ -21,6 +21,14 @@
 // TestBothBoardsNameATaskWhoseStatusHasNoColumn asserts: the unknown set is
 // rendered, and it is rendered under its own heading rather than folded into a
 // column that would misreport the task's status.
+//
+// The columns themselves are a project's own now, which is where the second
+// standing decision lives: TestBothBoardsBuildTheProjectsOwnColumns feeds one
+// vocabulary to both boards and requires the same columns, the same labels and
+// the same card in the same place on each. Parity used to be free, because both
+// boards read one fixed array of six statuses. It is not free any more, and a
+// renderer that reintroduced a status list of its own would pass every test it
+// owns while disagreeing with the other board about where a task is.
 package presentation_test
 
 import (
@@ -28,6 +36,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -73,7 +83,7 @@ func parityTasks() []core.Task {
 
 func TestBothBoardsPresentTheSameFactsAboutOneTaskSet(t *testing.T) {
 	tasks := parityTasks()
-	board := presentation.NewBoard(tasks)
+	board := presentation.NewBoard(tasks, core.Vocabulary{})
 	document := webBoardDocument(t, tasks)
 
 	if len(document.Presentation) != len(tasks) {
@@ -159,7 +169,7 @@ func TestBothBoardsNameATaskWhoseStatusHasNoColumn(t *testing.T) {
 			Priority: core.PriorityMedium, Rank: "5",
 		},
 	})
-	board := presentation.NewBoard(tasks)
+	board := presentation.NewBoard(tasks, core.Vocabulary{})
 
 	if len(board.UnknownTasks) != 1 || board.UnknownTasks[0].Task.ID != strandedID {
 		t.Fatalf("unknown-status tasks = %#v, want exactly the archived task", board.UnknownTasks)
@@ -222,9 +232,212 @@ func TestBothBoardsNameATaskWhoseStatusHasNoColumn(t *testing.T) {
 	}
 }
 
+// parityVocabulary is a project that shares no status name with the built-in
+// six, renamed one of its own, and removed another into a third. Nothing in it
+// can be produced by a fixed table, which is the point: a renderer that still
+// held one would fail every assertion below rather than a subtle one.
+func parityVocabulary(t *testing.T) core.Vocabulary {
+	t.Helper()
+	vocabulary, err := core.NewVocabulary(
+		[]core.StatusDefinition{
+			{Status: "inbox", Label: "Inbox", Rank: "1/1", Tags: []core.StatusTag{core.StatusTagDefault}},
+			{Status: "doing", Label: "Doing", Rank: "2/1", Tags: []core.StatusTag{core.StatusTagNext}},
+			{Status: "shipped", Label: "Shipped", Rank: "3/1", Tags: []core.StatusTag{core.StatusTagDone}},
+		},
+		[]core.StatusAlias{{From: "in-progress", To: "doing"}},
+		[]core.RetiredStatus{{Status: "blocked", Destination: "inbox"}},
+	)
+	if err != nil {
+		t.Fatalf("NewVocabulary() error = %v", err)
+	}
+	return vocabulary
+}
+
+func customVocabularyTasks() []core.Task {
+	return []core.Task{
+		{
+			ID: "WB-01J0000000000000000000A1",
+			TaskData: core.TaskData{
+				Title: "Filed", Status: core.Status("inbox"), Priority: core.PriorityHigh, Rank: "1",
+			},
+		},
+		{
+			// Stored under the name a rename replaced. It belongs in Doing, and
+			// a board that matched stored tokens would strand it instead.
+			ID: "WB-01J0000000000000000000B2",
+			TaskData: core.TaskData{
+				Title: "Stored under the old name", Status: core.StatusInProgress, Priority: core.PriorityMedium, Rank: "2",
+			},
+		},
+		{
+			// Stored under a status the project removed into Inbox.
+			ID: "WB-01J0000000000000000000C3",
+			TaskData: core.TaskData{
+				Title: "Stored under a removed name", Status: core.StatusBlocked, Priority: core.PriorityLow, Rank: "3",
+			},
+		},
+		{
+			ID: "WB-01J0000000000000000000D4",
+			TaskData: core.TaskData{
+				Title: "Finished", Status: core.Status("shipped"), Priority: core.PriorityMedium, Rank: "4",
+			},
+		},
+		{
+			// No chain leads out of this one, so it is the only task with no
+			// column to be drawn in.
+			ID: "WB-01J0000000000000000000E5",
+			TaskData: core.TaskData{
+				Title: "Nothing forwards this", Status: core.Status("archived"), Priority: core.PriorityLow, Rank: "5",
+			},
+		},
+	}
+}
+
+// The columns are the project's, on both boards, and a task lands in the same
+// one on both.
+//
+// This is the parity rule the fixed six-status array used to satisfy for free.
+// Now that each board builds its columns from a vocabulary, "both boards agree"
+// has to be asserted against a vocabulary neither of them could have guessed —
+// including the two cases resolution exists for, a stored status a rename
+// replaced and one a removal forwarded, which belong in a live column rather
+// than in the unknown region.
+func TestBothBoardsBuildTheProjectsOwnColumns(t *testing.T) {
+	tasks := customVocabularyTasks()
+	vocabulary := parityVocabulary(t)
+	board := presentation.NewBoard(tasks, vocabulary)
+
+	wantColumns := []struct{ status, label string }{
+		{"inbox", "Inbox"},
+		{"doing", "Doing"},
+		{"shipped", "Shipped"},
+	}
+	if len(board.Columns) != len(wantColumns) {
+		t.Fatalf("terminal board has %d columns, want %d: %#v", len(board.Columns), len(wantColumns), board.Columns)
+	}
+	terminalPlacement := make(map[string]string, len(tasks))
+	for index, column := range board.Columns {
+		if string(column.Status) != wantColumns[index].status || column.Label != wantColumns[index].label {
+			t.Fatalf("terminal column %d = {%q, %q}, want {%q, %q}",
+				index, column.Status, column.Label, wantColumns[index].status, wantColumns[index].label)
+		}
+		for _, view := range column.Tasks {
+			terminalPlacement[view.Task.ID] = string(column.Status)
+		}
+	}
+	for _, view := range board.UnknownTasks {
+		terminalPlacement[view.Task.ID] = unknownRegion
+	}
+	want := map[string]string{
+		"WB-01J0000000000000000000A1": "inbox",
+		"WB-01J0000000000000000000B2": "doing",
+		"WB-01J0000000000000000000C3": "inbox",
+		"WB-01J0000000000000000000D4": "shipped",
+		"WB-01J0000000000000000000E5": unknownRegion,
+	}
+	if !reflect.DeepEqual(terminalPlacement, want) {
+		t.Fatalf("terminal placement = %#v, want %#v", terminalPlacement, want)
+	}
+
+	// The labels have to reach the printed board too, in both layouts: a column
+	// that carries the project's label and prints a derived one is the same
+	// drift by another route.
+	for name, layout := range map[string]terminalui.Layout{"wide": terminalui.LayoutWide, "narrow": terminalui.LayoutNarrow} {
+		rendered := renderTerminalBoard(t, board, layout)
+		for _, column := range wantColumns {
+			heading := column.label
+			if layout == terminalui.LayoutNarrow {
+				heading = strings.ToUpper(heading)
+			}
+			assertRenders(t, name, rendered, heading)
+		}
+		for _, absent := range []string{"BACKLOG", "IN REVIEW", "Backlog", "In Review"} {
+			if strings.Contains(rendered, absent) {
+				t.Errorf("terminal %s board prints the built-in column %q for a project that does not define it:\n%s", name, absent, rendered)
+			}
+		}
+	}
+
+	// And the page the server renders before any script runs has to agree,
+	// column for column and card for card.
+	page := webBoardResponse(t, tasks, vocabulary, "/").Body.String()
+	gotColumns := webColumns(page)
+	if len(gotColumns) != len(wantColumns) {
+		t.Fatalf("web board has %d columns, want %d: %#v", len(gotColumns), len(wantColumns), gotColumns)
+	}
+	for index, column := range gotColumns {
+		if column.status != wantColumns[index].status || column.label != wantColumns[index].label {
+			t.Fatalf("web column %d = {%q, %q}, want {%q, %q}",
+				index, column.status, column.label, wantColumns[index].status, wantColumns[index].label)
+		}
+	}
+	if got := webPlacement(t, page); !reflect.DeepEqual(got, terminalPlacement) {
+		t.Fatalf("web placement = %#v, want the terminal board's %#v", got, terminalPlacement)
+	}
+
+	// The default-tagged status is the server's answer, not a constant: it is
+	// what /tasks/new falls back to when no status is named.
+	if !strings.Contains(page, `data-default-status="inbox"`) {
+		t.Errorf("web board page does not carry the project's default status:\n%s", page)
+	}
+}
+
+// unknownRegion is the placement key for the region that is not a column, so
+// the two boards can be compared with one map rather than two shapes.
+const unknownRegion = "(unknown)"
+
+type webColumn struct{ status, label string }
+
+// webColumns reads the columns the page rendered, in document order.
+func webColumns(page string) []webColumn {
+	pattern := regexp.MustCompile(`data-status="([^"]*)" data-status-label="([^"]*)"`)
+	matches := pattern.FindAllStringSubmatch(page, -1)
+	columns := make([]webColumn, len(matches))
+	for index, match := range matches {
+		columns[index] = webColumn{status: match[1], label: match[2]}
+	}
+	return columns
+}
+
+// webPlacement reads which region each card was rendered inside, by position:
+// a card belongs to the last column opened before it, and to the unknown region
+// once that has opened. It is deliberately positional rather than structural,
+// because position is what a reader sees.
+func webPlacement(t *testing.T, page string) map[string]string {
+	t.Helper()
+	type region struct {
+		start int
+		name  string
+	}
+	regions := make([]region, 0, 8)
+	for _, match := range regexp.MustCompile(`data-status="([^"]*)"`).FindAllStringSubmatchIndex(page, -1) {
+		regions = append(regions, region{start: match[0], name: page[match[2]:match[3]]})
+	}
+	unknown := strings.Index(page, "data-unknown-list")
+	if unknown < 0 {
+		t.Fatalf("web board page has no unknown-status region:\n%s", page)
+	}
+	regions = append(regions, region{start: unknown, name: unknownRegion})
+
+	placement := make(map[string]string)
+	for _, match := range regexp.MustCompile(`data-task-id="([^"]*)"`).FindAllStringSubmatchIndex(page, -1) {
+		id := page[match[2]:match[3]]
+		if _, seen := placement[id]; seen {
+			// The copy control repeats the ID inside the card it already placed.
+			continue
+		}
+		for _, candidate := range regions {
+			if candidate.start < match[0] {
+				placement[id] = candidate.name
+			}
+		}
+	}
+	return placement
+}
+
 func webBoardDocument(t *testing.T, tasks []core.Task) webui.TasksDocument {
 	t.Helper()
-	recorder := webBoardResponse(t, tasks, "/api/tasks")
+	recorder := webBoardResponse(t, tasks, core.Vocabulary{}, "/api/tasks")
 	var document webui.TasksDocument
 	if err := json.Unmarshal(recorder.Body.Bytes(), &document); err != nil {
 		t.Fatalf("decode tasks document: %v; body = %s", err, recorder.Body.String())
@@ -234,14 +447,23 @@ func webBoardDocument(t *testing.T, tasks []core.Task) webui.TasksDocument {
 
 func webBoardPage(t *testing.T, tasks []core.Task) string {
 	t.Helper()
-	return webBoardResponse(t, tasks, "/").Body.String()
+	return webBoardResponse(t, tasks, core.Vocabulary{}, "/").Body.String()
 }
 
-func webBoardResponse(t *testing.T, tasks []core.Task, path string) *httptest.ResponseRecorder {
+// webBoardResponse serves one request from a board built on the given
+// vocabulary. The zero vocabulary is a board built without a resolver at all,
+// which is how every caller that predates per-project columns builds one.
+func webBoardResponse(t *testing.T, tasks []core.Task, vocabulary core.Vocabulary, path string) *httptest.ResponseRecorder {
 	t.Helper()
-	handler := webui.NewHandler(webui.Options{
+	options := webui.Options{
 		List: func(context.Context) ([]core.Task, error) { return tasks, nil },
-	})
+	}
+	if !vocabulary.IsZero() {
+		options.Vocabulary = func(context.Context) (webui.VocabularyState, error) {
+			return webui.VocabularyState{Vocabulary: vocabulary, Head: "0123456789abcdef0123456789abcdef01234567"}, nil
+		}
+	}
+	handler := webui.NewHandler(options)
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
 	if recorder.Code != http.StatusOK {

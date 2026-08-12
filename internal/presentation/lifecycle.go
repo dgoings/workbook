@@ -33,7 +33,15 @@ type LifecycleStop struct {
 // log can name is therefore the "from" side of the first status change, and a
 // task whose status never changed leaves its current status as the only stop
 // the lane can honestly show.
-func Lifecycle(log core.ChangeLog, current core.Status) []LifecycleStop {
+//
+// Labels come from the project's own vocabulary, but the statuses themselves
+// are left exactly as the log records them. A lane is history: a stop under a
+// name the project has since renamed happened under that name, and forwarding it
+// to the new one would rewrite what the reader is being shown. The label for a
+// name the project no longer defines is that name.
+func Lifecycle(log core.ChangeLog, current core.Status, vocabulary core.Vocabulary) []LifecycleStop {
+	vocabulary = boardVocabulary(vocabulary)
+	statusLabel := vocabulary.Label
 	stops := make([]LifecycleStop, 0, 4)
 	for _, change := range log.Changes {
 		for _, field := range change.Fields {
@@ -41,7 +49,7 @@ func Lifecycle(log core.ChangeLog, current core.Status) []LifecycleStop {
 				continue
 			}
 			if len(stops) == 0 && field.From != "" {
-				stops = append(stops, openingStop(log, core.Status(field.From)))
+				stops = append(stops, openingStop(log, core.Status(field.From), statusLabel))
 			}
 			wallTime := change.WallTime
 			stops = append(stops, LifecycleStop{
@@ -66,7 +74,7 @@ func Lifecycle(log core.ChangeLog, current core.Status) []LifecycleStop {
 // openingStop attributes the status a task was created in to the change that
 // created it, and leaves the stop unattributed when the log does not reach back
 // that far.
-func openingStop(log core.ChangeLog, status core.Status) LifecycleStop {
+func openingStop(log core.ChangeLog, status core.Status, statusLabel func(core.Status) string) LifecycleStop {
 	stop := LifecycleStop{Status: status, Label: statusLabel(status)}
 	if len(log.Changes) == 0 || !createsTask(log.Changes[0]) {
 		return stop
@@ -84,16 +92,4 @@ func createsTask(change core.Change) bool {
 		}
 	}
 	return false
-}
-
-// statusLabel returns the display label for a canonical status, and the raw
-// value for a status this build does not know, so a lane never hides a status a
-// newer Workbook recorded.
-func statusLabel(status core.Status) string {
-	for _, definition := range core.DefaultVocabulary().Definitions() {
-		if definition.Status == status {
-			return definition.Label
-		}
-	}
-	return string(status)
 }

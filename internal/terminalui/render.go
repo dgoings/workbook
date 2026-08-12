@@ -308,11 +308,23 @@ func narrowSection(label string, tasks []presentation.TaskView, width int) strin
 	return output.String()
 }
 
+// unknownStatusNote says what puts a task in this section, because the answer
+// changed and the old one is the one a reader would assume.
+//
+// It used to hold any status outside the six this build shipped, so "a newer
+// Workbook wrote it" was the usual explanation. A project defines its own
+// statuses now, and a stored status that a rename or a removal forwards to a
+// live one is drawn in that live column. What is left here is a status that
+// forwards nowhere, which no upgrade will fix.
+const unknownStatusNote = "(no status this project defines, and no rename or removal leads to one)"
+
 func writeUnknownSection(output *strings.Builder, tasks []presentation.TaskView, width int) {
 	heading := "UNKNOWN STATUS (" + itoa(len(tasks)) + ")"
 	output.WriteString(heading)
 	output.WriteByte('\n')
 	output.WriteString(strings.Repeat("-", len(heading)))
+	output.WriteByte('\n')
+	output.WriteString(fit(unknownStatusNote, max(1, width)))
 	output.WriteByte('\n')
 	for index, task := range tasks {
 		if index > 0 {
