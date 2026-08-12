@@ -166,9 +166,18 @@ type VocabularyState struct {
 // supplied them.
 //
 // It reads no network, exactly as LoadVocabulary does not: whether this clone's
-// ledger is current is synchronization's business. It also does not consult the
-// memoized vocabulary, because the memo does not record the head — one ref
-// enumeration is what that costs, and only the status verbs pay it.
+// ledger is current is synchronization's business. It deliberately does not
+// consult the vocabulary memo LoadVocabulary fills, because that memo does not
+// record a head and this caller is asking which tip the answer came from —
+// which is the whole reason `workbook serve` calls this rather than that on
+// every request.
+//
+// The ref enumeration therefore happens every time; only the decode is
+// memoized, and keyed on the tip it decoded. That is exact rather than a
+// tolerance: a commit's contents cannot change, so a head this process has
+// already read decodes to the same vocabulary forever, and a head that moved
+// misses the memo and is read. The enumeration is what notices the move, so
+// skipping the decode cannot make this answer stale.
 func (r *Repository) LoadVocabularyState(ctx context.Context, config core.ProjectConfig) (VocabularyState, error) {
 	listing, err := r.listConfigRefs(ctx, configRef)
 	if err != nil {
@@ -178,11 +187,33 @@ func (r *Repository) LoadVocabularyState(ctx context.Context, config core.Projec
 	if !found {
 		return VocabularyState{Vocabulary: core.LegacyVocabulary()}, nil
 	}
+	if vocabulary, decoded := r.decodedVocabularyAt(head); decoded {
+		return VocabularyState{Head: head, Seeded: true, Vocabulary: vocabulary}, nil
+	}
 	record, err := r.readConfigRecordAt(ctx, config, configRef, head)
 	if err != nil {
 		return VocabularyState{}, unreadableConfigLedger(err)
 	}
-	return VocabularyState{Head: head, Seeded: true, Vocabulary: record.State.Vocabulary()}, nil
+	vocabulary := record.State.Vocabulary()
+	r.rememberDecodedVocabulary(head, vocabulary)
+	return VocabularyState{Head: head, Seeded: true, Vocabulary: vocabulary}, nil
+}
+
+// decodedVocabularyAt returns the vocabulary this process already decoded from
+// a ledger tip.
+func (r *Repository) decodedVocabularyAt(head string) (core.Vocabulary, bool) {
+	r.metadataMu.RLock()
+	defer r.metadataMu.RUnlock()
+	if r.stateHead == "" || r.stateHead != head {
+		return core.Vocabulary{}, false
+	}
+	return r.stateVocabulary, true
+}
+
+func (r *Repository) rememberDecodedVocabulary(head string, vocabulary core.Vocabulary) {
+	r.metadataMu.Lock()
+	defer r.metadataMu.Unlock()
+	r.stateHead, r.stateVocabulary = head, vocabulary
 }
 
 // unreadableConfigLedger names the ref and the command that diagnoses it.

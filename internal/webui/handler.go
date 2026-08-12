@@ -289,25 +289,53 @@ type updateTaskRequest struct {
 // the containing list, so a card that changes status carries the right answer
 // with it as it moves.
 
-// vocabulary reads the statuses this request renders under.
+// vocabularyKey addresses the statuses a request has already resolved.
+type vocabularyKey struct{}
+
+// VocabularyFrom reports the statuses a request resolved, for a capability that
+// needs the same answer the route is rendering under.
+//
+// It exists so a request resolves the vocabulary once. A lister that read the
+// project's statuses for itself would pay a second ledger read on every poll —
+// measurably, at 1 Hz — and, worse, could read a different answer: a status
+// change landing between the two reads produces a response whose tasks resolve
+// under the new vocabulary while its vocabularyHead names the old one, which is
+// exactly the pair a client uses to decide that nothing has changed. One read
+// per request makes that window unrepresentable rather than merely narrow.
+//
+// The second return is false for a context that never passed through a route
+// that resolves — every mutation route, and any caller outside a request — and
+// such a caller must read the vocabulary itself.
+func VocabularyFrom(ctx context.Context) (VocabularyState, bool) {
+	state, carried := ctx.Value(vocabularyKey{}).(VocabularyState)
+	return state, carried
+}
+
+// vocabulary reads the statuses this request renders under, and returns a
+// request carrying them so that nothing this route calls afterwards resolves
+// them a second time.
 //
 // A board built without a resolver reports the built-in statuses and no ledger
 // head, which is exactly what every construction that predates per-project
 // columns saw. A resolver that fails is reported rather than papered over:
 // drawing the built-in six for a project that renamed half of them would put
 // every task in the wrong column and accept drops the server would refuse.
-func (handler *handler) vocabulary(request *http.Request) (VocabularyState, error) {
-	if handler.Vocabulary == nil {
-		return VocabularyState{Vocabulary: core.DefaultVocabulary()}, nil
+func (handler *handler) vocabulary(request *http.Request) (VocabularyState, *http.Request, error) {
+	if state, carried := VocabularyFrom(request.Context()); carried {
+		return state, request, nil
 	}
-	state, err := handler.Vocabulary(request.Context())
-	if err != nil {
-		return VocabularyState{}, err
+	state := VocabularyState{Vocabulary: core.DefaultVocabulary()}
+	if handler.Vocabulary != nil {
+		resolved, err := handler.Vocabulary(request.Context())
+		if err != nil {
+			return VocabularyState{}, request, err
+		}
+		state = resolved
+		if state.Vocabulary.IsZero() {
+			state.Vocabulary = core.DefaultVocabulary()
+		}
 	}
-	if state.Vocabulary.IsZero() {
-		state.Vocabulary = core.DefaultVocabulary()
-	}
-	return state, nil
+	return state, request.WithContext(context.WithValue(request.Context(), vocabularyKey{}, state)), nil
 }
 
 // NewHandler builds the board from the capabilities it is given. It is the only
@@ -544,7 +572,7 @@ func taskHistoryPathID(path string) string {
 }
 
 func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Request) {
-	vocabulary, err := handler.vocabulary(request)
+	vocabulary, request, err := handler.vocabulary(request)
 	if err != nil {
 		handler.writeError(writer, err)
 		return
@@ -568,7 +596,7 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 // than the columns already in the page — the labels behind a token in a history
 // entry, or the chain a stored status was forwarded along.
 func (handler *handler) serveVocabulary(writer http.ResponseWriter, request *http.Request) {
-	state, err := handler.vocabulary(request)
+	state, _, err := handler.vocabulary(request)
 	if err != nil {
 		handler.writeError(writer, err)
 		return
@@ -597,7 +625,7 @@ func (handler *handler) listTasks(request *http.Request) ([]core.Task, error) {
 }
 
 func (handler *handler) serveTasks(writer http.ResponseWriter, request *http.Request) {
-	vocabulary, err := handler.vocabulary(request)
+	vocabulary, request, err := handler.vocabulary(request)
 	if err != nil {
 		handler.writeError(writer, err)
 		return
@@ -630,7 +658,7 @@ func (handler *handler) serveTaskHistory(writer http.ResponseWriter, request *ht
 	if id == "" {
 		id = taskHistoryPathID(request.URL.Path)
 	}
-	vocabulary, err := handler.vocabulary(request)
+	vocabulary, request, err := handler.vocabulary(request)
 	if err != nil {
 		handler.writeError(writer, err)
 		return

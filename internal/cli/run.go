@@ -973,27 +973,39 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 	// this checkout on the next fetch. A snapshot taken here would keep drawing
 	// the old columns until somebody restarted serve — and, worse, would keep
 	// refusing writes into a column the page had started drawing, because the
-	// service's own membership check reads the same value. So both halves are
-	// re-read: the resolver below draws the columns, and `current` gives every
+	// service's own membership check reads the same value. So both halves move
+	// together: the resolver below draws the columns, and `current` gives every
 	// mutation a service that agrees with them. LoadVocabularyState is the read
 	// that skips the repository's memo, which exists for one-shot commands.
-	current := func(requestContext context.Context) (core.Service, error) {
+	//
+	// Once per request, though, not once per consumer. A route that has already
+	// resolved carries the answer on its context, and `current` takes it from
+	// there: /api/tasks needs the vocabulary twice — for the head it reports and
+	// for the tasks it lists — and reading the ledger twice cost the poll route
+	// most of its latency and opened a window where the two halves of one
+	// response disagreed about which vocabulary they came from.
+	readVocabulary := func(requestContext context.Context) (webui.VocabularyState, error) {
 		state, err := repository.LoadVocabularyState(requestContext, service.Config)
 		if err != nil {
-			return core.Service{}, err
+			return webui.VocabularyState{}, err
+		}
+		return webui.VocabularyState{Vocabulary: state.Vocabulary, Head: state.Head}, nil
+	}
+	current := func(requestContext context.Context) (core.Service, error) {
+		state, carried := webui.VocabularyFrom(requestContext)
+		if !carried {
+			read, err := readVocabulary(requestContext)
+			if err != nil {
+				return core.Service{}, err
+			}
+			state = read
 		}
 		fresh := service
 		fresh.Vocabulary = state.Vocabulary
 		return fresh, nil
 	}
 	handler := webui.NewHandler(webui.Options{
-		Vocabulary: func(requestContext context.Context) (webui.VocabularyState, error) {
-			state, err := repository.LoadVocabularyState(requestContext, service.Config)
-			if err != nil {
-				return webui.VocabularyState{}, err
-			}
-			return webui.VocabularyState{Vocabulary: state.Vocabulary, Head: state.Head}, nil
-		},
+		Vocabulary: readVocabulary,
 		List: func(requestContext context.Context) ([]core.Task, error) {
 			reader, err := current(requestContext)
 			if err != nil {

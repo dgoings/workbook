@@ -197,6 +197,127 @@ func TestHandlerClientAnnouncesAVocabularyChangeWithoutRebuildingTheBoard(t *tes
 `)
 }
 
+// The interleaving the notice actually exists for: the same poll that reports a
+// new vocabulary head also reports a task the server has already resolved into
+// a column this page does not have.
+//
+// This is not an edge case, it is the ordinary shape of a rename landing under
+// an open board — the server resolves every task through the new vocabulary the
+// moment the ledger moves, while the page keeps the columns it was served with.
+// The card has nowhere to go but the unknown-status region, and the region's
+// copy has to be true of it: it is not stranded, it is one reload from its
+// column, and the notice saying so is on screen. What must not happen is the
+// board rebuilding itself to make room — the card the reader may have open is
+// the same node before and after.
+func TestHandlerClientFilesACardWhoseColumnArrivedWithTheNewVocabulary(t *testing.T) {
+	vocabulary := handlerVocabulary(t)
+	tasks := []core.Task{
+		clientPlacementTask("WB-01J0000000000000000000A101", "Frozen", core.Status("icebox"), core.PriorityMedium),
+		clientPlacementTask("WB-01J0000000000000000000B202", "Queued", core.Status("queued"), core.PriorityHigh),
+	}
+	// One poll, two pieces of news: the vocabulary moved, and a task now
+	// resolves to `thawing` — a status that exists only in the vocabulary this
+	// page has not got.
+	moved := []core.Task{tasks[0], tasks[1]}
+	moved[0].Status = core.Status("thawing")
+	served := mustJSON(t, TasksDocument{
+		Format: "workbook.tasks", Version: 1, VocabularyHead: "head-2",
+		Tasks: moved, Presentation: presentationForTasks(moved),
+	})
+	runVocabularyClient(t, "vocabulary change carrying a re-resolved task", "/", vocabulary, "head-1", tasks, `
+  const listFor = (status) => boardLists.find((list) => list.dataset.status === status);
+  const frozen = boardCard("WB-01J0000000000000000000A101");
+  const queued = boardCard("WB-01J0000000000000000000B202");
+  if (!frozen || !queued) throw new Error("the board did not draw both cards");
+  if (frozen.parentElement !== listFor("icebox")) throw new Error("the icebox card did not start in its column");
+  frozen.__witness = "frozen";
+  queued.__witness = "queued";
+  const columnsBefore = boardLists.map((list) => list.dataset.status).join(",");
+
+  taskResponse = `+string(served)+`;
+  await intervalCallback();
+
+  // The news is announced.
+  if (vocabularyNotice.hidden !== false) throw new Error("the poll raised no vocabulary notice");
+  // The card is filed under the region rather than dropped, and it is the same
+  // node the reader was looking at.
+  const filed = boardCard("WB-01J0000000000000000000A101");
+  if (!filed) throw new Error("the re-resolved card vanished from the board");
+  if (filed !== frozen || filed.__witness !== "frozen") throw new Error("the re-resolved card was rebuilt rather than moved");
+  if (filed.parentElement !== boardUnknownList) throw new Error("the re-resolved card is not in the unknown-status region");
+  if (boardUnknownSection.dataset.visible !== "true") throw new Error("the unknown-status region stayed hidden");
+  if (boardUnknownCount.textContent !== "1") throw new Error("the region counts " + boardUnknownCount.textContent + ", want 1");
+  // The card that did not move is untouched, node and column both.
+  const standing = boardCard("WB-01J0000000000000000000B202");
+  if (standing !== queued || standing.parentElement !== listFor("queued")) {
+    throw new Error("a card the change did not concern was moved or rebuilt");
+  }
+  // And no column was built, removed or renamed to accommodate any of it.
+  if (boardLists.map((list) => list.dataset.status).join(",") !== columnsBefore) {
+    throw new Error("the columns were rebuilt live");
+  }
+`)
+}
+
+// A request resolves the vocabulary once, and hands the same answer to
+// everything that needs it.
+//
+// Twice was measurable — /api/tasks is polled once a second and each resolution
+// is a ledger read — and it was also wrong: a status change landing between the
+// two reads produces a response whose tasks resolve under the new vocabulary
+// while its vocabularyHead still names the old one, which is precisely the pair
+// a client uses to decide that nothing has changed. The cards those tasks
+// belong to would sit in the unknown-status region for a poll with nothing
+// saying why.
+func TestHandlerResolvesTheVocabularyOncePerRequest(t *testing.T) {
+	vocabulary := handlerVocabulary(t)
+	resolutions := 0
+	var listed VocabularyState
+	var carried bool
+	handler := NewHandler(Options{
+		Vocabulary: func(context.Context) (VocabularyState, error) {
+			resolutions++
+			return VocabularyState{Vocabulary: vocabulary, Head: "head-" + strconv.Itoa(resolutions)}, nil
+		},
+		List: func(ctx context.Context) ([]core.Task, error) {
+			listed, carried = VocabularyFrom(ctx)
+			return nil, nil
+		},
+	})
+
+	for _, path := range []string{"/", "/api/tasks", "/api/vocabulary"} {
+		resolutions, carried = 0, false
+		response := request(t, handler, http.MethodGet, path)
+		if response.Code != http.StatusOK {
+			t.Fatalf("GET %s status = %d, want %d; body = %s", path, response.Code, http.StatusOK, response.Body.String())
+		}
+		if resolutions != 1 {
+			t.Errorf("GET %s resolved the vocabulary %d times, want once", path, resolutions)
+		}
+		if path == "/api/vocabulary" {
+			continue
+		}
+		if !carried {
+			t.Errorf("GET %s did not hand the lister the vocabulary it resolved", path)
+		}
+		// The same answer, not merely an answer: the head the response reports
+		// and the vocabulary its tasks were resolved under have to be one read.
+		if listed.Head != "head-1" {
+			t.Errorf("GET %s handed the lister head %q, want the one it reported", path, listed.Head)
+		}
+	}
+
+	// A route with no reason to resolve does not, so a mutation costs no ledger
+	// read it did not need.
+	resolutions = 0
+	if response := request(t, handler, http.MethodGet, "/healthz"); response.Code != http.StatusOK {
+		t.Fatalf("GET /healthz status = %d", response.Code)
+	}
+	if resolutions != 0 {
+		t.Errorf("GET /healthz resolved the vocabulary %d times, want none", resolutions)
+	}
+}
+
 // The client script must not name a status at all.
 //
 // Every status it once knew is a status a project is free not to define, so a
