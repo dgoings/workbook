@@ -159,9 +159,10 @@ type statusListResult struct {
 	// column with tasks in it is not this build's to remove, so the listing says
 	// what changed and prints the command rather than running it.
 	//
-	// It is absent for every project that does not define such a status, which
-	// is every project minted by this build and every project that has already
-	// migrated.
+	// It is absent for every project that does not define such a status — every
+	// project minted by this build and every project that has already migrated —
+	// and for every project whose ledger records somebody defining one on
+	// purpose, which is an answer to the note rather than a state it describes.
 	Migrations []statusMigrationView `json:"migrations,omitempty"`
 }
 
@@ -189,11 +190,14 @@ type statusMigrationView struct {
 // droppedDefaultStatuses reports the statuses this project defines that Workbook
 // has stopped shipping, with the command that removes each one.
 //
-// The test is membership, not provenance: a project reaches this state by never
-// having migrated, and there is no signal in a vocabulary that distinguishes the
-// `blocked` a project inherited from one somebody added back deliberately. So
-// the note explains rather than scolds, and it costs a person one status they
-// chose to keep reading a sentence about it.
+// The test is provenance rather than membership, because the vocabulary alone
+// cannot tell the `blocked` a project never migrated away from apart from one
+// somebody added back on purpose — and telling the second reader about a
+// decision they already made, on every listing, forever, with nothing to
+// suppress it, is nagging rather than explaining. The ledger can tell them
+// apart: a `status.add` after the genesis is recorded history, and a `blocked`
+// the genesis itself carried is an inheritance. See blockedTracesToADecision
+// for what the walk counts and what it does when the answer is out of reach.
 //
 // A project whose new tasks land in the dropped status gets the same note with
 // a different next step rather than no note at all. `status delete` refuses to
@@ -201,8 +205,12 @@ type statusMigrationView struct {
 // new work to land, so the removal is not a command that exists yet for them —
 // but they are the readers with the most invested in the column and the least
 // reason to be told nothing. Naming the tag handoff is the whole difference
-// between "you have a status Workbook no longer ships" and silence.
-func droppedDefaultStatuses(vocabulary core.Vocabulary) []statusMigrationView {
+// between "you have a status Workbook no longer ships" and silence. That note
+// is about the handoff any removal needs first, which is as true of a column
+// somebody chose as of one they inherited, so it is not suppressed — and
+// answering it before the walk is also what keeps the walk off every listing
+// but the one already-rare case that needs it.
+func droppedDefaultStatuses(vocabulary core.Vocabulary, ledger configLedgerWindow) []statusMigrationView {
 	if !vocabulary.Has(core.StatusBlocked) {
 		return nil
 	}
@@ -219,12 +227,66 @@ func droppedDefaultStatuses(vocabulary core.Vocabulary) []statusMigrationView {
 			First: "workbook status tag <status> --tag " + string(core.StatusTagDefault),
 		}}
 	}
+	if blockedTracesToADecision(ledger) {
+		return nil
+	}
 	return []statusMigrationView{{
 		Status: core.StatusBlocked,
 		Reason: reason,
 		Command: statusCommand("delete", string(core.StatusBlocked),
 			"--into", string(vocabulary.Default())),
 	}}
+}
+
+// blockedTracesToADecision reports whether the `blocked` this project defines
+// was put there by somebody rather than inherited.
+//
+// The walk is over the whole read window in order, keeping the last operation
+// that established the name, because a status can be established and retired
+// more than once: a project that removed `blocked` and later added it back
+// decided twice, and the second decision is the one the reader is living with.
+// A genesis re-establishes whatever it carries, so it resets the answer — it can
+// only be the root pack's sole operation, which makes that a statement about
+// ordering rather than a case.
+//
+// An answer this cannot reach is inherited. The window is bounded (see
+// maxDatedConfigCommits), so an add older than it looks exactly like no add at
+// all, and the two directions cost differently: showing the note to somebody who
+// has already decided costs them a sentence they can act on once, while hiding
+// it from a project that never migrated withholds the only place the migration
+// is explained. So the conservative direction is to nag, and absence of evidence
+// is never read as evidence of a decision. A project with no ledger — unseeded,
+// on the legacy fallback — reaches this with an empty window and gets the note
+// for the same reason.
+func blockedTracesToADecision(ledger configLedgerWindow) bool {
+	decided := false
+	for _, commit := range ledger.Commits {
+		for _, operation := range commit.Pack.Operations {
+			switch operation.Type {
+			case core.ConfigGenesis:
+				decided = false
+			case core.ConfigStatusAdd:
+				if operation.Name == core.StatusBlocked {
+					decided = true
+				}
+			case core.ConfigStatusRename:
+				// Renaming a column onto the name is as deliberate as adding it,
+				// and renaming this one away retires it — after which only a later
+				// add or rename puts it back.
+				switch core.StatusBlocked {
+				case operation.To:
+					decided = true
+				case operation.From:
+					decided = false
+				}
+			case core.ConfigStatusRemove:
+				if operation.Status == core.StatusBlocked {
+					decided = false
+				}
+			}
+		}
+	}
+	return decided
 }
 
 type retiredStatusView struct {
@@ -404,27 +466,30 @@ func runStatusList(ctx context.Context, args []string, cwd string, stdout, stder
 	}
 	counts, unresolved := statusTaskCensus(state.Vocabulary, tasks)
 
+	// Two of this listing's answers are read off the ledger — when a value was
+	// retired, and whether the `blocked` a project still defines was chosen —
+	// so it is read once, ahead of both. A project that has none skips the read
+	// entirely: it has nothing retired to date, and nothing recorded to have
+	// decided anything.
+	var ledger configLedgerWindow
+	if state.Seeded {
+		ledger, err = readConfigLedgerWindow(ctx, repository, config, maxDatedConfigCommits)
+		if err != nil {
+			return err
+		}
+	}
+
 	document := state.Vocabulary.Document()
 	result := statusListResult{
 		Head:       state.Head,
 		Seeded:     state.Seeded,
 		Default:    state.Vocabulary.Default(),
 		Statuses:   statusViews(state.Vocabulary, counts),
+		Retired:    retiredStatusViews(document, forwardingTimes(ledger)),
 		Unresolved: unresolved,
 		Advisories: historyvalidation.StatusCeilingAdvisories(document),
-		Migrations: droppedDefaultStatuses(state.Vocabulary),
+		Migrations: droppedDefaultStatuses(state.Vocabulary, ledger),
 	}
-	// Retirement dates come from the ledger, so a project that has none skips
-	// the walk entirely — and has nothing retired to date anyway.
-	var retiredAt map[core.Status]time.Time
-	if state.Seeded {
-		ledger, err := readConfigLedgerWindow(ctx, repository, config, maxDatedConfigCommits)
-		if err != nil {
-			return err
-		}
-		retiredAt = forwardingTimes(ledger)
-	}
-	result.Retired = retiredStatusViews(document, retiredAt)
 
 	if *jsonMode {
 		writeResult(stdout, "status list", result)
@@ -433,16 +498,22 @@ func runStatusList(ctx context.Context, args []string, cwd string, stdout, stder
 	return writeStatusList(stdout, result)
 }
 
-// maxDatedConfigCommits bounds how far back `status list` reads to date a
-// retirement.
+// maxDatedConfigCommits bounds how far back `status list` reads its ledger.
 //
-// The date is a courtesy — it turns "it was renamed" into something a person can
-// place among their own weeks — and a courtesy must not make a listing cost the
-// whole history of a project that has been configured for a year. Reading the
-// newest commits answers it for every recent change, which is the only kind
-// anybody is confused about; a retirement older than this reports no date rather
-// than a wrong one, and the listing says nothing where the clause would have
-// been.
+// The date on a retirement is a courtesy — it turns "it was renamed" into
+// something a person can place among their own weeks — and a courtesy must not
+// make a listing cost the whole history of a project that has been configured
+// for a year. Reading the newest commits answers it for every recent change,
+// which is the only kind anybody is confused about; a retirement older than this
+// reports no date rather than a wrong one, and the listing says nothing where
+// the clause would have been.
+//
+// The same window bounds the one other question this listing asks of the
+// ledger, deliberately rather than incidentally: it is one read, so a second
+// bound would be a second read for no gain, and both questions fall back the
+// same way — an answer older than the window is reported as no answer rather
+// than as a wrong one. See blockedTracesToADecision for which direction that
+// makes the migration note fall.
 const maxDatedConfigCommits = 64
 
 // statusReadService builds a read-only service on a repository that is already
