@@ -125,11 +125,10 @@ func TestRunServeResolvesTheVocabularyPerRequest(t *testing.T) {
 	addr := startServeBoard(t, repository)
 
 	before := boardVocabularyDocument(t, addr)
-	// A project that has never changed a status has no ledger, and the head says
-	// so by being empty rather than by being absent — which is the state a poll
-	// has to be able to compare against.
-	if before.Head != "" {
-		t.Fatalf("vocabulary head = %q, want empty for a project with no ledger", before.Head)
+	// The head is the genesis this project was minted with, and what matters
+	// below is that it moves — which is the comparison a poll makes.
+	if before.Head == "" {
+		t.Fatal("vocabulary head is empty for a project whose genesis was written at setup")
 	}
 	if strings.Contains(statusNames(before.Statuses), "icebox") {
 		t.Fatal("the fixture already defines the status this test adds")

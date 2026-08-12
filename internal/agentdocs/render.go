@@ -19,11 +19,12 @@ const GuidelinesPath = ".workbook/guidelines.md"
 // The statuses come from the project's own vocabulary rather than from the
 // built-in one, which is what makes these guidelines true for a project that
 // renamed a column. The zero vocabulary means "this caller configured none" and
-// renders the built-in default, exactly as core.Service reads it, so a project
-// with no configuration ledger still gets the six statuses it is using.
+// renders core.LegacyVocabulary, exactly as core.Service reads it, so a project
+// with no configuration ledger still gets the six statuses it is using rather
+// than the five this build would mint a new project with.
 func RenderGuidelines(project core.ProjectConfig, vocabulary core.Vocabulary) string {
 	if vocabulary.IsZero() {
-		vocabulary = core.DefaultVocabulary()
+		vocabulary = core.LegacyVocabulary()
 	}
 	definitions := vocabulary.Definitions()
 	var builder strings.Builder

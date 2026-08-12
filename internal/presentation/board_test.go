@@ -167,8 +167,8 @@ func TestNewBoardPreservesInputOrderAndIncludesEmptyColumns(t *testing.T) {
 	}
 
 	got := NewBoard(tasks, core.DefaultVocabulary())
-	if len(got.Columns) != 6 {
-		t.Fatalf("NewBoard() returned %d columns, want 6", len(got.Columns))
+	if len(got.Columns) != 5 {
+		t.Fatalf("NewBoard() returned %d columns, want 5", len(got.Columns))
 	}
 	want := []struct {
 		status core.Status
@@ -177,7 +177,6 @@ func TestNewBoardPreservesInputOrderAndIncludesEmptyColumns(t *testing.T) {
 	}{
 		{core.StatusBacklog, "Backlog", []string{"WB-01BRZ3NDEKTSV4RRFFQ69G5FAW", "WB-01DRZ3NDEKTSV4RRFFQ69G5FAY"}},
 		{core.StatusReady, "Ready", []string{}},
-		{core.StatusBlocked, "Blocked", []string{}},
 		{core.StatusInProgress, "In Progress", []string{"WB-01CRZ3NDEKTSV4RRFFQ69G5FAX"}},
 		{core.StatusInReview, "In Review", []string{"WB-01ERZ3NDEKTSV4RRFFQ69G5FAZ"}},
 		{core.StatusDone, "Done", []string{"WB-01ARZ3NDEKTSV4RRFFQ69G5FAV"}},
@@ -208,8 +207,8 @@ func TestNewBoardKeepsUnknownStatusesVisible(t *testing.T) {
 	}
 
 	got := NewBoard(tasks, core.DefaultVocabulary())
-	if len(got.Columns) != 6 {
-		t.Fatalf("NewBoard() returned %d columns, want 6", len(got.Columns))
+	if len(got.Columns) != 5 {
+		t.Fatalf("NewBoard() returned %d columns, want 5", len(got.Columns))
 	}
 	for i, want := range []struct {
 		status core.Status
@@ -218,7 +217,6 @@ func TestNewBoardKeepsUnknownStatusesVisible(t *testing.T) {
 	}{
 		{core.StatusBacklog, "Backlog", []string{}},
 		{core.StatusReady, "Ready", []string{"WB-01ARZ3NDEKTSV4RRFFQ69G5FAV"}},
-		{core.StatusBlocked, "Blocked", []string{}},
 		{core.StatusInProgress, "In Progress", []string{}},
 		{core.StatusInReview, "In Review", []string{}},
 		{core.StatusDone, "Done", []string{"WB-01CRZ3NDEKTSV4RRFFQ69G5FAX"}},
@@ -242,6 +240,38 @@ func TestNewBoardKeepsUnknownStatusesVisible(t *testing.T) {
 	}
 	if want := []string{"WB-01BRZ3NDEKTSV4RRFFQ69G5FAW", "WB-01DRZ3NDEKTSV4RRFFQ69G5FAY"}; !reflect.DeepEqual(unknownIDs, want) {
 		t.Errorf("NewBoard().UnknownTasks IDs = %#v, want %#v", unknownIDs, want)
+	}
+}
+
+// A caller that configured no vocabulary is drawing a project that may predate
+// the configuration ledger, and such a project has six columns. Substituting the
+// five this build mints a project with would move every task sitting in
+// `blocked` into the unknown-status region of a board that has always drawn it.
+func TestNewBoardDrawsThePreLedgerColumnsForTheZeroVocabulary(t *testing.T) {
+	blocked := core.Task{
+		ID:       "WB-01ARZ3NDEKTSV4RRFFQ69G5FAV",
+		TaskData: core.TaskData{Status: core.StatusBlocked},
+	}
+
+	got := NewBoard([]core.Task{blocked}, core.Vocabulary{})
+
+	want := []core.Status{
+		core.StatusBacklog, core.StatusReady, core.StatusBlocked,
+		core.StatusInProgress, core.StatusInReview, core.StatusDone,
+	}
+	if len(got.Columns) != len(want) {
+		t.Fatalf("NewBoard() returned %d columns, want %d", len(got.Columns), len(want))
+	}
+	for index, status := range want {
+		if got.Columns[index].Status != status {
+			t.Errorf("NewBoard().Columns[%d].Status = %q, want %q", index, got.Columns[index].Status, status)
+		}
+	}
+	if len(got.UnknownTasks) != 0 {
+		t.Fatalf("NewBoard().UnknownTasks = %#v, want the blocked task in its own column", got.UnknownTasks)
+	}
+	if len(got.Columns[2].Tasks) != 1 {
+		t.Fatalf("the blocked column holds %d tasks, want 1", len(got.Columns[2].Tasks))
 	}
 }
 

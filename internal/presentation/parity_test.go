@@ -75,7 +75,7 @@ func parityTasks() []core.Task {
 		{
 			ID: "WB-01J0000000000000000000DD",
 			TaskData: core.TaskData{
-				Title: "Unfinished prerequisite", Status: core.StatusBlocked, Priority: core.PriorityMedium, Rank: "4",
+				Title: "Unfinished prerequisite", Status: core.StatusBacklog, Priority: core.PriorityMedium, Rank: "4",
 			},
 		},
 	}

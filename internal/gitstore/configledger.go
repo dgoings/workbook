@@ -399,26 +399,12 @@ func (r *Repository) seedConfigLedger(
 		return ConfigWriteResult{}, false, core.Wrap(core.CategoryOperational,
 			"cannot generate configuration history generation", err)
 	}
-	genesisID, err := ids.New()
-	if err != nil {
-		return ConfigWriteResult{}, false, core.Wrap(core.CategoryOperational,
-			"cannot generate configuration operation ID", err)
-	}
-	vocabulary := core.LegacyVocabulary().Document()
-	genesisPack, err := core.NewConfigOperationPack(config.ProjectID, generation, actor, 1, configWallTime(),
-		[]core.ConfigOperation{{
-			ID:     genesisID,
-			Type:   core.ConfigGenesis,
-			Config: &core.ConfigData{Vocabulary: vocabulary},
-		}})
-	if err != nil {
-		return ConfigWriteResult{}, false, err
-	}
-	genesisState, err := core.ApplyConfig(nil, genesisPack)
-	if err != nil {
-		return ConfigWriteResult{}, false, err
-	}
-	genesisHead, err := r.writeConfigObjects(ctx, "", genesisPack, genesisState, configGenesisSubject)
+	// The root records core.LegacyVocabulary, not the vocabulary this build
+	// mints a project with. This function runs for a project that already
+	// existed without a ledger, and what such a project is using is a fact about
+	// it rather than a decision this release gets to make; `workbook setup`
+	// seeds the minting default only when it mints the project itself.
+	genesisState, genesisHead, err := r.writeConfigGenesis(ctx, config, ids, generation, actor, core.LegacyVocabulary())
 	if err != nil {
 		return ConfigWriteResult{}, false, err
 	}
@@ -449,6 +435,107 @@ func (r *Repository) seedConfigLedger(
 	}
 	r.replaceVocabulary(state.Vocabulary(), head)
 	return ConfigWriteResult{Head: head, Seeded: true, State: state}, true, nil
+}
+
+// writeConfigGenesis durably records a ledger's root commit without touching
+// any ref, and returns the checkpoint it produced.
+//
+// Writing the whole vocabulary into the root rather than saying "start from the
+// defaults" is what makes the ledger version independent: the built-in defaults
+// change between releases — `blocked` left them once dependencies said what a
+// task waits on — and a later clone folding this root has to reproduce this
+// project rather than its own build's idea of a new one.
+func (r *Repository) writeConfigGenesis(
+	ctx context.Context,
+	config core.ProjectConfig,
+	ids core.IDSource,
+	generation string,
+	actor string,
+	vocabulary core.Vocabulary,
+) (core.ConfigStateDocument, string, error) {
+	genesisID, err := ids.New()
+	if err != nil {
+		return core.ConfigStateDocument{}, "", core.Wrap(core.CategoryOperational,
+			"cannot generate configuration operation ID", err)
+	}
+	pack, err := core.NewConfigOperationPack(config.ProjectID, generation, actor, 1, configWallTime(),
+		[]core.ConfigOperation{{
+			ID:     genesisID,
+			Type:   core.ConfigGenesis,
+			Config: &core.ConfigData{Vocabulary: vocabulary.Document()},
+		}})
+	if err != nil {
+		return core.ConfigStateDocument{}, "", err
+	}
+	state, err := core.ApplyConfig(nil, pack)
+	if err != nil {
+		return core.ConfigStateDocument{}, "", err
+	}
+	head, err := r.writeConfigObjects(ctx, "", pack, state, configGenesisSubject)
+	if err != nil {
+		return core.ConfigStateDocument{}, "", err
+	}
+	return state, head, nil
+}
+
+// MintConfigLedger records this build's default statuses as a brand-new
+// project's configuration genesis, and reports whether it wrote one.
+//
+// It is the one caller of core.DefaultVocabulary that durably records it, and
+// the reason the accessor is separate from core.LegacyVocabulary. A project
+// minted today gets the statuses this release ships; a project that already
+// existed keeps the six it was using until somebody removes one, because a
+// build that dropped a column out from under a running board would be
+// destroying data nobody asked it to touch.
+//
+// A ledger that already exists is left alone and reported as not seeded, which
+// covers both the clone that fetched one and the concurrent process that won
+// the creation race — the same compare-and-swap the lazy seed relies on.
+func (r *Repository) MintConfigLedger(
+	ctx context.Context,
+	config core.ProjectConfig,
+	ids core.IDSource,
+) (bool, error) {
+	if err := r.verifyIdentity(ctx); err != nil {
+		return false, err
+	}
+	if err := r.validateRepositoryConfig(config); err != nil {
+		return false, err
+	}
+	if ids == nil {
+		return false, core.Errorf(core.CategoryOperational, "configuration ID source is required")
+	}
+	listing, err := r.listConfigRefs(ctx, configRef)
+	if err != nil {
+		return false, unreadableConfigLedger(err)
+	}
+	if _, found := listing.Heads[configRef]; found {
+		return false, nil
+	}
+	actor, err := r.Actor(ctx)
+	if err != nil {
+		return false, err
+	}
+	generation, err := ids.New()
+	if err != nil {
+		return false, core.Wrap(core.CategoryOperational,
+			"cannot generate configuration history generation", err)
+	}
+	state, head, err := r.writeConfigGenesis(ctx, config, ids, generation, actor, core.DefaultVocabulary())
+	if err != nil {
+		return false, err
+	}
+	if err := r.createRefWithReason(ctx, configRef, head, configRefLogReason); err != nil {
+		if _, exists, readErr := r.readConfigRef(ctx, config, configRef); readErr != nil {
+			return false, readErr
+		} else if !exists {
+			return false, core.Wrap(core.CategoryOperational,
+				"cannot create the Workbook configuration ledger", err)
+		}
+		return false, nil
+	}
+	r.replaceVocabulary(state.Vocabulary(), head)
+	return true, nil
 }
 
 // appendConfigOperation records one pack on top of an observed tip.

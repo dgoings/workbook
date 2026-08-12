@@ -47,9 +47,10 @@ the task title.
 
 ## Statuses belong to the project
 
-A project's statuses are its own configuration, not a fixed list. Workbook ships
-with `backlog`, `ready`, `blocked`, `in-progress`, `in-review`, and `done`, and
-any project may rename, reorder, add, or remove them.
+A project's statuses are its own configuration, not a fixed list. Workbook gives
+a new project `backlog`, `ready`, `in-progress`, `in-review`, and `done`, and any
+project may rename, reorder, add, or remove them. Older projects define
+`blocked` as well.
 
 Read this project's before naming one. The Statuses table in
 `.workbook/guidelines.md` is a generated rendering of them, and `workbook status
@@ -73,8 +74,8 @@ workbook update <full-id> --status in-progress --json
 ```
 
 Check the result before editing. Resume a task already in that status without
-inventing an operation. Do not silently reopen a blocked or deleted task, or one
-already in a `done`-tagged status. Leave a task in the project's review status
+inventing an operation. Do not silently reopen a deleted task, one with unmet
+prerequisites, or one already in a `done`-tagged status. Leave a task in the project's review status
 when only checking acceptance or merge; return it to the in-progress status
 before making requested implementation changes.
 

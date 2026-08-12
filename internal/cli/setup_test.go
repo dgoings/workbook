@@ -54,6 +54,90 @@ func TestSetupInitializesIdentityAndInstallsDocumentation(t *testing.T) {
 	}
 }
 
+// A project this build mints gets the statuses this build ships, recorded in a
+// genesis rather than left to a fallback that a later release could change under
+// it. `blocked` is not among them: dependencies say what a task is waiting on.
+func TestSetupMintsTheDefaultVocabularyIntoAGenesis(t *testing.T) {
+	repository := testrepo.New(t)
+
+	if code, _, stderr := run(t, repository, "setup"); code != 0 {
+		t.Fatalf("setup code = %d, want 0; stderr = %q", code, stderr)
+	}
+
+	document := cliStatusList(t, repository)
+	if !document.Seeded || document.Head == "" {
+		t.Fatalf("status list = seeded %t, head %q; want a recorded genesis", document.Seeded, document.Head)
+	}
+	if got, want := cliStatusNames(t, repository), []string{
+		"backlog", "ready", "in-progress", "in-review", "done",
+	}; !equalStrings(got, want) {
+		t.Fatalf("minted statuses = %v, want %v", got, want)
+	}
+
+	// The generated guidelines and the board agree with the ledger, because both
+	// read it rather than carrying a list of their own.
+	guidelines := readProjectFile(t, repository, agentdocs.GuidelinesPath)
+	if strings.Contains(guidelines, "`blocked`") {
+		t.Errorf("minted guidelines still document `blocked`:\n%s", guidelines)
+	}
+	if !strings.Contains(guidelines, "| 5 | `done` | Done | `done` |") {
+		t.Errorf("minted guidelines do not put done fifth:\n%s", guidelines)
+	}
+	code, board, stderr := run(t, repository, "board", "--narrow")
+	if code != 0 || stderr != "" {
+		t.Fatalf("board = code %d, stderr %q", code, stderr)
+	}
+	if strings.Contains(board, "BLOCKED") {
+		t.Errorf("minted board still draws a Blocked column:\n%s", board)
+	}
+
+	// A task created without --status still lands where it always did.
+	if got := cliCreateTask(t, repository, "Alpha").Status; got != core.StatusBacklog {
+		t.Fatalf("created task status = %q, want %q", got, core.StatusBacklog)
+	}
+}
+
+// A project that already existed keeps the statuses it was using, and rerunning
+// setup on it does not mint a vocabulary over the top.
+//
+// This is the upgrade every installed project performs, reproduced by removing
+// the ledger: six columns before, six columns after, and no genesis written by a
+// command whose job was to install documentation.
+func TestSetupLeavesAnExistingProjectsStatusesAlone(t *testing.T) {
+	repository := preLedgerRepository(t)
+	task := cliCreateTask(t, repository, "Alpha")
+
+	if code, _, stderr := run(t, repository, "setup"); code != 0 {
+		t.Fatalf("second setup code = %d, want 0; stderr = %q", code, stderr)
+	}
+
+	document := cliStatusList(t, repository)
+	if document.Seeded || document.Head != "" {
+		t.Fatalf("status list = seeded %t, head %q; want setup to have recorded nothing",
+			document.Seeded, document.Head)
+	}
+	if got, want := cliStatusNames(t, repository), []string{
+		"backlog", "ready", "blocked", "in-progress", "in-review", "done",
+	}; !equalStrings(got, want) {
+		t.Fatalf("statuses after the upgrade = %v, want the six it was using %v", got, want)
+	}
+	guidelines := readProjectFile(t, repository, agentdocs.GuidelinesPath)
+	if !strings.Contains(guidelines, "| 3 | `blocked` | Blocked | none |") {
+		t.Errorf("the upgrade rewrote the guidelines without `blocked`:\n%s", guidelines)
+	}
+	code, board, stderr := run(t, repository, "board", "--narrow")
+	if code != 0 || stderr != "" {
+		t.Fatalf("board = code %d, stderr %q", code, stderr)
+	}
+	if !strings.Contains(board, "BLOCKED (0)") {
+		t.Errorf("the upgraded board stopped drawing the Blocked column:\n%s", board)
+	}
+	// The status the project defines is still one a caller may supply.
+	if code, _, stderr := run(t, repository, "update", task.ID, "--status", "blocked", "--no-sync"); code != 0 {
+		t.Fatalf("update --status blocked = code %d; stderr = %q", code, stderr)
+	}
+}
+
 func TestSetupReportsSkippedSyncWithoutAnOrigin(t *testing.T) {
 	// Production mutation: failing when no remote is configured would break the
 	// solo local workflow, which needs no remote at all.

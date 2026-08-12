@@ -1696,7 +1696,7 @@ func TestRunServeUpdatesAllTaskFieldsThroughWebRoute(t *testing.T) {
 	}()
 	waitForHTTP(t, "http://"+addr+"/healthz")
 
-	request, err := http.NewRequest(http.MethodPatch, "http://"+addr+"/api/tasks/"+created.ID, strings.NewReader(`{"title":"After web update","description":"All editable fields reached the core service.","status":"blocked","priority":"low","labels":["updated","web"]}`))
+	request, err := http.NewRequest(http.MethodPatch, "http://"+addr+"/api/tasks/"+created.ID, strings.NewReader(`{"title":"After web update","description":"All editable fields reached the core service.","status":"in-review","priority":"low","labels":["updated","web"]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1727,7 +1727,7 @@ func TestRunServeUpdatesAllTaskFieldsThroughWebRoute(t *testing.T) {
 	if err := json.Unmarshal(assertJSONResult(t, stdout, "show").Data, &updated); err != nil {
 		t.Fatalf("decode shown task: %v", err)
 	}
-	if updated.Title != "After web update" || updated.Description != "All editable fields reached the core service." || updated.Status != core.StatusBlocked || updated.Priority != core.PriorityLow || !reflect.DeepEqual(updated.Labels, []string{"updated", "web"}) {
+	if updated.Title != "After web update" || updated.Description != "All editable fields reached the core service." || updated.Status != core.StatusInReview || updated.Priority != core.PriorityLow || !reflect.DeepEqual(updated.Labels, []string{"updated", "web"}) {
 		t.Fatalf("persisted task = %#v, want complete web update fields", updated)
 	}
 }
@@ -2319,6 +2319,29 @@ func initializedRepository(t *testing.T) string {
 		t.Fatalf("setup code = %d, want 0; stderr = %q", code, stderr)
 	}
 	return repository
+}
+
+// preLedgerRepository is an initialized project with its configuration ledger
+// removed, which is the shape of every project created before the ledger
+// existed: task refs, a project identity, and no `refs/workbook/config`.
+//
+// Setup writes a genesis when it mints a project, so this is now the only way to
+// reach the fallback path a real upgrade lands on — and that path is the one
+// most existing installations are on, which is why several tests here take the
+// trouble to reproduce it rather than testing whatever a fresh mint happens to
+// produce.
+func preLedgerRepository(t *testing.T) string {
+	t.Helper()
+	repository := initializedRepository(t)
+	dropConfigLedger(t, repository)
+	return repository
+}
+
+// dropConfigLedger deletes the configuration ledger, leaving the project on the
+// pre-ledger fallback.
+func dropConfigLedger(t *testing.T, repository string) {
+	t.Helper()
+	gitOutput(t, repository, "update-ref", "-d", "refs/workbook/config")
 }
 
 func run(t *testing.T, cwd string, args ...string) (int, string, string) {

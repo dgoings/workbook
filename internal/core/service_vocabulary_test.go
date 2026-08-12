@@ -34,10 +34,18 @@ func vocabularyServiceUnderTest(store *memoryTaskStore, ids IDSource, vocabulary
 
 // Every construction of a Service that predates per-project statuses leaves the
 // field zero, and every one of them has to keep behaving exactly as it did.
-func TestServiceWithNoConfiguredVocabularyUsesTheBuiltInOne(t *testing.T) {
+//
+// That is the legacy vocabulary rather than the minting default, and the two are
+// no longer the same: a caller that configured none may be working a project
+// older than this build, and reading it under five statuses would strand every
+// task sitting in `blocked`.
+func TestServiceWithNoConfiguredVocabularyUsesTheLegacyOne(t *testing.T) {
 	service := serviceUnderTest(newMemoryTaskStore(), &sequenceIDSource{})
-	if got, want := service.vocabulary().Document(), DefaultVocabulary().Document(); !reflect.DeepEqual(got, want) {
-		t.Fatalf("vocabulary() = %#v, want the built-in default %#v", got, want)
+	if got, want := service.vocabulary().Document(), LegacyVocabulary().Document(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("vocabulary() = %#v, want the pre-ledger vocabulary %#v", got, want)
+	}
+	if !service.vocabulary().Has(StatusBlocked) {
+		t.Fatal("an unconfigured Service dropped `blocked`, which every pre-ledger project still defines")
 	}
 }
 

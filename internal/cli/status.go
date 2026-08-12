@@ -154,6 +154,50 @@ type statusListResult struct {
 	// validate` reports the same list; this is where a person is already
 	// looking at the statuses they would shrink.
 	Advisories []historyvalidation.Advisory `json:"advisories,omitempty"`
+	// Migrations name a status this project still defines that Workbook no
+	// longer ships, and the command that retires it. Nothing acts on them: a
+	// column with tasks in it is not this build's to remove, so the listing says
+	// what changed and prints the command rather than running it.
+	//
+	// It is absent for every project that does not define such a status, which
+	// is every project minted by this build and every project that has already
+	// migrated.
+	Migrations []statusMigrationView `json:"migrations,omitempty"`
+}
+
+// statusMigrationView is one default Workbook dropped that this project kept.
+type statusMigrationView struct {
+	Status core.Status `json:"status"`
+	// Reason says why the status left the default set, so the note is an
+	// explanation rather than an instruction with no argument behind it.
+	Reason string `json:"reason"`
+	// Command is the exact removal, `--into` included, naming this project's own
+	// default status rather than assuming it is still called `backlog`.
+	Command string `json:"command"`
+}
+
+// droppedDefaultStatuses reports the statuses this project defines that Workbook
+// has stopped shipping, with the command that removes each one.
+//
+// The test is membership, not provenance: a project reaches this state by never
+// having migrated, and there is no signal in a vocabulary that distinguishes the
+// `blocked` a project inherited from one somebody added back deliberately. So
+// the note explains rather than scolds, and it costs a person one status they
+// chose to keep reading a sentence about it.
+//
+// The removal is skipped rather than suggested when the status is where new
+// tasks land, because `status delete` refuses to forward a status into itself
+// and a project that made `blocked` its default has said what it wants.
+func droppedDefaultStatuses(vocabulary core.Vocabulary) []statusMigrationView {
+	if !vocabulary.Has(core.StatusBlocked) || vocabulary.Default() == core.StatusBlocked {
+		return nil
+	}
+	return []statusMigrationView{{
+		Status: core.StatusBlocked,
+		Reason: "task dependencies record what a task is waiting on, so `blocked` is no longer " +
+			"one of the statuses Workbook gives a new project",
+		Command: statusCommand("delete", string(core.StatusBlocked), "--into", string(vocabulary.Default())),
+	}}
 }
 
 type retiredStatusView struct {
@@ -322,6 +366,7 @@ func runStatusList(ctx context.Context, args []string, cwd string, stdout, stder
 		Statuses:   statusViews(state.Vocabulary, counts),
 		Unresolved: unresolved,
 		Advisories: historyvalidation.StatusCeilingAdvisories(document),
+		Migrations: droppedDefaultStatuses(state.Vocabulary),
 	}
 	// Retirement dates come from the ledger, so a project that has none skips
 	// the walk entirely — and has nothing retired to date anyway.
@@ -1996,7 +2041,11 @@ func writeStatusList(output io.Writer, result statusListResult) error {
 		return core.Wrap(core.CategoryOperational, "render status list", err)
 	}
 	if !result.Seeded {
-		fmt.Fprintf(output, "\tNo status change is recorded yet, so these are the statuses Workbook ships with.\n")
+		fmt.Fprintf(output, "\tNo status change is recorded yet, so these are the statuses this project started with.\n")
+	}
+	for _, migration := range result.Migrations {
+		fmt.Fprintf(output, "\tNo longer a default:\t%s\t%s\n", migration.Status, migration.Reason)
+		fmt.Fprintf(output, "\t\tremove it when this project no longer needs it: %s\n", migration.Command)
 	}
 	for _, retired := range result.Retired {
 		fmt.Fprintf(output, "\tRetired:\t%s → %s\t%s%s\n",

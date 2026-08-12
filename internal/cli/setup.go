@@ -104,8 +104,11 @@ func runSetup(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 			return err
 		}
 	}
-	config, _, err := repository.Init(ctx, *key, core.CryptoULIDSource{})
+	config, minted, err := repository.Init(ctx, *key, core.CryptoULIDSource{})
 	if err != nil {
+		return err
+	}
+	if err := seedMintedStatuses(ctx, repository, config, minted); err != nil {
 		return err
 	}
 
@@ -253,6 +256,42 @@ func runSetup(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 	writeConflicts(stdout, conflicts)
 	writeConfigConflicts(stdout, configConflicts)
 	return syncErr
+}
+
+// seedMintedStatuses records this build's default statuses for a project this
+// run brought into existence, and does nothing for one it joined.
+//
+// The distinction is the whole point. `blocked` left the default set once
+// dependencies said what a task is waiting on, so a project minted today has
+// five statuses — but a project that already had tasks, an identity, or a
+// tracked configuration was using six, and it keeps using them until a person
+// runs `workbook status delete blocked --into backlog`. Recording the choice in
+// the ledger rather than leaving it to a fallback is what makes it survive the
+// next release: a genesis names the statuses, so no later build has to guess
+// which era this project started in.
+//
+// Local task refs are checked as well as the identity chain, because a
+// repository holding tasks is an existing project whatever its identity records
+// say, and seeding five statuses under it would drop a column its board is
+// drawing.
+func seedMintedStatuses(
+	ctx context.Context,
+	repository *gitstore.Repository,
+	config core.ProjectConfig,
+	minted bool,
+) error {
+	if !minted {
+		return nil
+	}
+	heads, err := repository.ListTaskHeads(ctx, config)
+	if err != nil {
+		return err
+	}
+	if len(heads) > 0 {
+		return nil
+	}
+	_, err = repository.MintConfigLedger(ctx, config, core.CryptoULIDSource{})
+	return err
 }
 
 // refreshFetchedGuidelines rewrites the guidelines when the fetch delivered a

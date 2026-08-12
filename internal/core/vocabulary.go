@@ -553,13 +553,39 @@ func validateVocabularyGrowth(before, after VocabularyDocument) error {
 	return nil
 }
 
-// builtInStatusDefinitions is the six-status workflow Workbook has shipped
-// since its first release, in its stored form.
+// StatusBlocked is the status the built-in vocabulary carried until task
+// dependencies made it redundant.
 //
-// The ranks are the integers 1 through 6 rather than an implied array index
+// It is deliberately not in the constant block beside the statuses this build
+// mints a project with: it is no longer one of them. It is still a live status
+// in every project that predates the configuration ledger, which is why the
+// token survives at all, and legacyStatusDefinitions below is its one caller
+// outside of tests.
+const StatusBlocked Status = "blocked"
+
+// builtInStatusDefinitions is the workflow Workbook mints a new project with,
+// in its stored form.
+//
+// The ranks are the integers 1 through 5 rather than an implied array index
 // because rank is what a reorder edits, and a vocabulary whose ranks only
 // existed once somebody customized it would make the first reorder a migration.
 func builtInStatusDefinitions() []StatusDefinition {
+	return []StatusDefinition{
+		{Status: StatusBacklog, Label: "Backlog", Rank: "1/1", Tags: []StatusTag{StatusTagDefault}},
+		{Status: StatusReady, Label: "Ready", Rank: "2/1", Tags: []StatusTag{StatusTagNext}},
+		{Status: StatusInProgress, Label: "In Progress", Rank: "3/1", Tags: []StatusTag{}},
+		{Status: StatusInReview, Label: "In Review", Rank: "4/1", Tags: []StatusTag{}},
+		{Status: StatusDone, Label: "Done", Rank: "5/1", Tags: []StatusTag{StatusTagDone}},
+	}
+}
+
+// legacyStatusDefinitions is the six-status workflow Workbook shipped from its
+// first release until dependencies replaced `blocked`, in its stored form.
+//
+// It is frozen. Every project that has never recorded a status change is using
+// exactly this, and a build that changed it would re-columnize somebody's board
+// on upgrade without anybody having asked for anything.
+func legacyStatusDefinitions() []StatusDefinition {
 	return []StatusDefinition{
 		{Status: StatusBacklog, Label: "Backlog", Rank: "1/1", Tags: []StatusTag{StatusTagDefault}},
 		{Status: StatusReady, Label: "Ready", Rank: "2/1", Tags: []StatusTag{StatusTagNext}},
@@ -572,14 +598,17 @@ func builtInStatusDefinitions() []StatusDefinition {
 
 // DefaultVocabulary is the vocabulary a project is minted with.
 //
-// It is the vocabulary a `workbook setup` writes into a new project's
-// configuration genesis, and the fallback a Service uses when no vocabulary was
-// configured.
+// It is the vocabulary `workbook setup` writes into a new project's
+// configuration genesis when that setup mints the project, and nothing else.
+// Every other construction of "the built-in statuses" — the fallback a Service,
+// a board, or the generated guidelines substitute for a vocabulary nobody
+// configured — reads LegacyVocabulary, because such a project may predate this
+// build and its columns are not this build's to change.
 //
 // It is built once and shared. A Vocabulary is read-only after construction —
 // Definitions and Document hand out copies, and nothing else writes — and
-// Service reaches for this on every projected task, so rebuilding it per task
-// would put six allocations and two maps on the hot path of every list.
+// Service reaches for one on every projected task, so rebuilding it per task
+// would put allocations and two maps on the hot path of every list.
 var DefaultVocabulary = sync.OnceValue(func() Vocabulary {
 	return mustVocabulary(builtInStatusDefinitions())
 })
@@ -587,15 +616,20 @@ var DefaultVocabulary = sync.OnceValue(func() Vocabulary {
 // LegacyVocabulary is the vocabulary a project that predates the configuration
 // ledger is assumed to have been using.
 //
-// It is a separate accessor from DefaultVocabulary on purpose, and today they
-// return the same six statuses — a test pins that, so the day they diverge is a
-// deliberate edit rather than a surprise. They must diverge eventually: the
-// built-in default is a product decision that will change between releases,
+// It is a separate accessor from DefaultVocabulary on purpose, and they have
+// diverged: `blocked` was dropped from the default set once dependencies said
+// what a task is waiting on, and it is still a live status in every project
+// that never recorded a status change. A test pins the divergence precisely, so
+// neither one can drift into the other by accident.
+//
+// The built-in default is a product decision that changes between releases,
 // while what an existing project was already using is a fact about that project
-// and may not change under it. Seeding a pre-ledger project's genesis reads
-// this one; minting a new project reads DefaultVocabulary.
+// and may not change under it. Seeding a pre-ledger project's genesis reads this
+// one; minting a new project reads DefaultVocabulary. A project that wants
+// `blocked` back adds it, and one that wants it gone runs `workbook status
+// delete blocked --into backlog` — nothing migrates on its own.
 var LegacyVocabulary = sync.OnceValue(func() Vocabulary {
-	return mustVocabulary(builtInStatusDefinitions())
+	return mustVocabulary(legacyStatusDefinitions())
 })
 
 // mustVocabulary panics on a malformed built-in set, which is a programming

@@ -705,7 +705,7 @@ func TestHandlerRendersTaskAndNewTaskLinks(t *testing.T) {
 		t.Fatalf("GET / status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
 	}
 	body := response.Body.String()
-	for _, definition := range core.DefaultVocabulary().Definitions() {
+	for _, definition := range core.LegacyVocabulary().Definitions() {
 		want := `href="/tasks/new?status=` + string(definition.Status) + `"`
 		if !strings.Contains(body, want) {
 			t.Errorf("GET / body does not contain canonical %q New Task link %q", definition.Label, want)
@@ -2356,7 +2356,7 @@ func TestHandlerClientRendersDependencyRelationships(t *testing.T) {
 	node := requireNode(t)
 	current := clientPlacementTask("WB-01J00000000000000000000031", "Current task", core.StatusReady, core.PriorityMedium)
 	activeDependency := clientPlacementTask("WB-01J00000000000000000000032", "Active prerequisite", core.StatusDone, core.PriorityHigh)
-	activeBlocked := clientPlacementTask("WB-01J00000000000000000000033", "Active blocked task", core.StatusBlocked, core.PriorityLow)
+	activeBlocked := clientPlacementTask("WB-01J00000000000000000000033", "Active blocked task", core.StatusBacklog, core.PriorityLow)
 	deletedDependency := clientPlacementTask("WB-01J00000000000000000000034", "Deleted prerequisite", core.StatusReady, core.PriorityMedium)
 	deletedDependency.Deleted = true
 	missingDependencyID := "WB-01J00000000000000000000036"
@@ -2474,7 +2474,7 @@ func TestHandlerClientMountsCompactRelationshipsInSidebar(t *testing.T) {
 	node := requireNode(t)
 	current := clientPlacementTask("WB-01J00000000000000000000037", "Current task", core.StatusReady, core.PriorityMedium)
 	activeDependency := clientPlacementTask("WB-01J00000000000000000000038", "Active prerequisite", core.StatusDone, core.PriorityHigh)
-	activeBlocked := clientPlacementTask("WB-01J00000000000000000000039", "Active blocked task", core.StatusBlocked, core.PriorityLow)
+	activeBlocked := clientPlacementTask("WB-01J00000000000000000000039", "Active blocked task", core.StatusBacklog, core.PriorityLow)
 	deletedDependency := clientPlacementTask("WB-01J00000000000000000000040", "Deleted prerequisite", core.StatusReady, core.PriorityMedium)
 	deletedDependency.Deleted = true
 	deletedBlocked := clientPlacementTask("WB-01J00000000000000000000043", "Deleted blocked task", core.StatusReady, core.PriorityLow)
@@ -2558,7 +2558,7 @@ func TestHandlerClientFiltersDependencyComboboxCandidates(t *testing.T) {
 	node := requireNode(t)
 	current := clientPlacementTask("WB-01J00000000000000000000041", "Current task", core.StatusReady, core.PriorityMedium)
 	existingDependency := clientPlacementTask("WB-01J00000000000000000000042", "Existing prerequisite", core.StatusDone, core.PriorityHigh)
-	alreadyBlocked := clientPlacementTask("WB-01J00000000000000000000043", "Already blocked", core.StatusBlocked, core.PriorityLow)
+	alreadyBlocked := clientPlacementTask("WB-01J00000000000000000000043", "Already blocked", core.StatusBacklog, core.PriorityLow)
 	firstCandidate := clientPlacementTask("WB-01J00000000000000000000044", "First candidate", core.StatusBacklog, core.PriorityHigh)
 	secondCandidate := clientPlacementTask("WB-01J00000000000000000000045", "Second candidate", core.StatusInProgress, core.PriorityMedium)
 	deletedCandidate := clientPlacementTask("WB-01J00000000000000000000046", "Deleted candidate", core.StatusReady, core.PriorityLow)
@@ -2638,7 +2638,7 @@ func TestHandlerClientDependencySnapshotPrefersTombstones(t *testing.T) {
 	node := requireNode(t)
 	current := clientPlacementTask("WB-01J00000000000000000000047", "Current task", core.StatusReady, core.PriorityMedium)
 	activeDependency := clientPlacementTask("WB-01J00000000000000000000048", "Active prerequisite copy", core.StatusDone, core.PriorityHigh)
-	activeBlocked := clientPlacementTask("WB-01J00000000000000000000049", "Active blocked copy", core.StatusBlocked, core.PriorityLow)
+	activeBlocked := clientPlacementTask("WB-01J00000000000000000000049", "Active blocked copy", core.StatusBacklog, core.PriorityLow)
 	activeCandidate := clientPlacementTask("WB-01J0000000000000000000004A", "Active candidate copy", core.StatusBacklog, core.PriorityMedium)
 	current.Dependencies = []string{activeDependency.ID}
 	activeBlocked.Dependencies = []string{current.ID}
@@ -2771,7 +2771,7 @@ func TestHandlerClientDependencyComboboxScrollsKeyboardOptionIntoView(t *testing
 	current := clientPlacementTask("WB-01J0000000000000000000004E", "Current task", core.StatusReady, core.PriorityMedium)
 	first := clientPlacementTask("WB-01J0000000000000000000004F", "First candidate", core.StatusDone, core.PriorityHigh)
 	second := clientPlacementTask("WB-01J0000000000000000000004G", "Second candidate", core.StatusBacklog, core.PriorityLow)
-	third := clientPlacementTask("WB-01J0000000000000000000004H", "Third candidate", core.StatusBlocked, core.PriorityMedium)
+	third := clientPlacementTask("WB-01J0000000000000000000004H", "Third candidate", core.StatusBacklog, core.PriorityMedium)
 	fourth := clientPlacementTask("WB-01J0000000000000000000004J", "Fourth candidate", core.StatusInProgress, core.PriorityHigh)
 	tasks := []core.Task{current, first, second, third, fourth}
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return tasks, nil })
@@ -2956,7 +2956,7 @@ func TestHandlerClientDependencyMutationOrientationAndRefresh(t *testing.T) {
 	node := requireNode(t)
 	current := clientPlacementTask("WB-01J00000000000000000000051", "Current task", core.StatusReady, core.PriorityMedium)
 	existingDependency := clientPlacementTask("WB-01J00000000000000000000052", "Existing prerequisite", core.StatusDone, core.PriorityHigh)
-	existingBlocked := clientPlacementTask("WB-01J00000000000000000000053", "Existing blocked task", core.StatusBlocked, core.PriorityLow)
+	existingBlocked := clientPlacementTask("WB-01J00000000000000000000053", "Existing blocked task", core.StatusBacklog, core.PriorityLow)
 	dependsCandidate := clientPlacementTask("WB-01J00000000000000000000054", "New prerequisite", core.StatusBacklog, core.PriorityHigh)
 	blocksCandidate := clientPlacementTask("WB-01J00000000000000000000055", "New blocked task", core.StatusInProgress, core.PriorityMedium)
 	current.Dependencies = []string{existingDependency.ID}
@@ -4006,7 +4006,7 @@ func TestHandlerClientBoardSurfacesUnknownStatuses(t *testing.T) {
 		Format:       "workbook.tasks",
 		Version:      1,
 		Tasks:        tasks,
-		Presentation: taskPresentation(tasks, core.DefaultVocabulary()),
+		Presentation: taskPresentation(tasks, core.LegacyVocabulary()),
 	}
 	documentJSON, err := json.Marshal(document)
 	if err != nil {
@@ -4096,7 +4096,7 @@ func TestHandlerClientDragsOnlyOutOfRenderedColumns(t *testing.T) {
 		Format:       "workbook.tasks",
 		Version:      1,
 		Tasks:        tasks,
-		Presentation: taskPresentation(tasks, core.DefaultVocabulary()),
+		Presentation: taskPresentation(tasks, core.LegacyVocabulary()),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -4439,10 +4439,12 @@ func renderedClientScript(t *testing.T, body string) string {
 	return body[start+len(open) : end]
 }
 
-// clientDOMHarness builds the fake DOM for a board serving the built-in
-// statuses, which is what every test that is not about the vocabulary wants.
+// clientDOMHarness builds the fake DOM for a board serving the statuses a
+// project with no configuration ledger is using, which is what a handler built
+// without a vocabulary resolver renders and what every test that is not about
+// the vocabulary wants.
 func clientDOMHarness(path, taskDocument string) string {
-	return clientDOMHarnessWith(path, taskDocument, core.DefaultVocabulary(), "")
+	return clientDOMHarnessWith(path, taskDocument, core.LegacyVocabulary(), "")
 }
 
 // clientDOMHarnessWith builds the fake DOM the server would have rendered for a
@@ -5224,7 +5226,7 @@ func TestHandlerServesDragAndDropBoardControls(t *testing.T) {
 // the falsifiable form: it fails for any status a regression reaches for.
 func assertBoardStatusMarkersMatchColumns(t *testing.T, body string) {
 	t.Helper()
-	columns := len(core.DefaultVocabulary().Definitions())
+	columns := len(core.LegacyVocabulary().Definitions())
 	for _, marker := range []string{`data-status="`, `data-drop-status="`} {
 		if got := strings.Count(body, marker); got != columns {
 			t.Errorf("GET / body has %d %s markers, want %d: one per column and none on the unknown-status region", got, marker, columns)
@@ -5363,14 +5365,16 @@ func TestHandlerServesTheProjectVocabulary(t *testing.T) {
 		t.Errorf("vocabulary retired = %#v, want %#v", document.Retired, want.Retired)
 	}
 
-	// A board built without a resolver reports the built-in statuses and no
-	// head, which is what every construction that predates this field saw.
+	// A board built without a resolver reports the pre-ledger statuses and no
+	// head, which is what every construction that predates this field saw. It is
+	// core.LegacyVocabulary rather than the statuses a mint would write, because
+	// such a caller may be drawing a project older than this build.
 	plain := request(t, listHandler(t, func(context.Context) ([]core.Task, error) { return nil, nil }), http.MethodGet, "/api/vocabulary")
 	var fallback VocabularyDocument
 	if err := json.Unmarshal(plain.Body.Bytes(), &fallback); err != nil {
 		t.Fatalf("decode vocabulary document: %v; body = %s", err, plain.Body.String())
 	}
-	if fallback.Head != "" || !reflect.DeepEqual(fallback.Statuses, core.DefaultVocabulary().Document().Statuses) {
+	if fallback.Head != "" || !reflect.DeepEqual(fallback.Statuses, core.LegacyVocabulary().Document().Statuses) {
 		t.Errorf("vocabulary without a resolver = %#v, want the built-in statuses and no head", fallback)
 	}
 }
@@ -6641,7 +6645,7 @@ func TestHandlerClientRendersTaskHistoryLaneRowsAndComparisons(t *testing.T) {
 		Format:    "workbook.task-history",
 		Version:   1,
 		TaskID:    task.ID,
-		Lifecycle: lifecycleStages(*detail.History, task.Status, core.DefaultVocabulary()),
+		Lifecycle: lifecycleStages(*detail.History, task.Status, core.LegacyVocabulary()),
 		History:   *detail.History,
 	})
 	if err != nil {
@@ -7035,12 +7039,19 @@ func boardTasks() []core.Task {
 			TaskData: core.TaskData{
 				Title:       "Blocked task",
 				Description: "Await a dependent decision.",
-				Status:      core.StatusBlocked,
-				Priority:    core.PriorityMedium,
-				Labels:      []string{"decision"},
-				Rank:        "2/1",
-				CreatedAt:   stamp,
-				UpdatedAt:   stamp,
+				// `blocked` is a status this build does not mint a project with
+				// and every pre-ledger project still defines. That is exactly
+				// what this fixture wants: the board these tests drive is built
+				// without a vocabulary resolver, so it renders the pre-ledger
+				// columns, and one of the cases below removes this column from
+				// the rendered page to check what a card does when its column is
+				// not drawn.
+				Status:    core.StatusBlocked,
+				Priority:  core.PriorityMedium,
+				Labels:    []string{"decision"},
+				Rank:      "2/1",
+				CreatedAt: stamp,
+				UpdatedAt: stamp,
 			},
 			HistoryGeneration: "01J00000000000000000000004",
 			Head:              "0123456789abcdef",

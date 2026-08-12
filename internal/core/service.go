@@ -13,11 +13,14 @@ import (
 type Service struct {
 	Config ProjectConfig
 	// Vocabulary is the project's status configuration. The zero value means
-	// "not configured", and every accessor substitutes DefaultVocabulary for
+	// "not configured", and every accessor substitutes LegacyVocabulary for
 	// it, so a Service built the way every caller built one before per-project
 	// statuses existed keeps exactly its previous behavior without being
-	// edited. A caller that has read the project's configuration ledger sets
-	// this; PR-B wires that read.
+	// edited. That is LegacyVocabulary rather than DefaultVocabulary for the
+	// same reason gitstore reads it for a project with no ledger: a caller that
+	// configured none may be working a project that predates this build, and
+	// this build does not get to drop a column out from under it. A caller that
+	// has read the project's configuration ledger sets this.
 	Vocabulary Vocabulary
 	Reader     TaskReader
 	Writer     CanonicalTaskWriter
@@ -28,11 +31,11 @@ type Service struct {
 	Actor      string
 }
 
-// vocabulary returns the configured vocabulary, or the built-in default when
-// none was configured.
+// vocabulary returns the configured vocabulary, or the statuses a project with
+// no recorded configuration is using.
 func (s Service) vocabulary() Vocabulary {
 	if s.Vocabulary.IsZero() {
-		return DefaultVocabulary()
+		return LegacyVocabulary()
 	}
 	return s.Vocabulary
 }

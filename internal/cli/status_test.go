@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -102,6 +103,11 @@ type statusListDocument struct {
 		Code    string `json:"code"`
 		Message string `json:"message"`
 	} `json:"advisories"`
+	Migrations []struct {
+		Status  string `json:"status"`
+		Reason  string `json:"reason"`
+		Command string `json:"command"`
+	} `json:"migrations"`
 }
 
 type statusLogDocument struct {
@@ -187,12 +193,17 @@ func mustRunStatus(t *testing.T, repository string, args ...string) {
 	}
 }
 
-// A project that has never configured its statuses reads the built-in six and
+// A project that has never configured its statuses reads the pre-ledger six and
 // says so. That flag is the whole difference between "this project chose these"
 // and "nobody has chosen anything yet", and a consumer that cannot tell them
 // apart cannot decide whether to offer the setup.
+//
+// The six include `blocked`, which this build no longer mints a project with.
+// Nothing removes it: an upgrade that dropped a column would move somebody's
+// tasks without being asked. The listing says so instead, and prints the command
+// that does the removal when its reader wants it.
 func TestStatusListReadsTheBuiltInVocabularyOnALedgerlessProject(t *testing.T) {
-	repository := initializedRepository(t)
+	repository := preLedgerRepository(t)
 	cliCreateTask(t, repository, "Alpha")
 	cliCreateTask(t, repository, "Beta")
 
@@ -203,8 +214,10 @@ func TestStatusListReadsTheBuiltInVocabularyOnALedgerlessProject(t *testing.T) {
 	if document.Default != "backlog" {
 		t.Fatalf("default = %q, want backlog", document.Default)
 	}
-	if got := len(document.Statuses); got != 6 {
-		t.Fatalf("statuses = %d, want the six built-ins", got)
+	if got, want := cliStatusNames(t, repository), []string{
+		"backlog", "ready", "blocked", "in-progress", "in-review", "done",
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("statuses = %v, want the six a pre-ledger project is using %v", got, want)
 	}
 	first := document.Statuses[0]
 	if first.Status != "backlog" || first.Label != "Backlog" || first.Order != 1 ||
@@ -213,6 +226,15 @@ func TestStatusListReadsTheBuiltInVocabularyOnALedgerlessProject(t *testing.T) {
 	}
 	if len(document.Retired) != 0 || len(document.Unresolved) != 0 || len(document.Advisories) != 0 {
 		t.Fatalf("list = %#v, want nothing retired, unresolved, or advised", document)
+	}
+	if len(document.Migrations) != 1 {
+		t.Fatalf("migrations = %#v, want exactly the note about `blocked`", document.Migrations)
+	}
+	migration := document.Migrations[0]
+	if migration.Status != "blocked" ||
+		migration.Command != "workbook status delete blocked --into backlog" ||
+		!strings.Contains(migration.Reason, "task dependencies record what a task is waiting on") {
+		t.Fatalf("migration = %#v, want blocked, a reason, and the removal command", migration)
 	}
 
 	code, stdout, stderr := run(t, repository, "status", "list")
@@ -224,10 +246,150 @@ func TestStatusListReadsTheBuiltInVocabularyOnALedgerlessProject(t *testing.T) {
 		"1  backlog      Backlog      default  2",
 		"6  done         Done         done     0",
 		"No status change is recorded yet",
+		"No longer a default:",
+		"remove it when this project no longer needs it: workbook status delete blocked --into backlog",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("status list text = %q, want %q", stdout, want)
 		}
+	}
+}
+
+// A project minted by this build gets the five statuses it ships, records them
+// in a genesis rather than leaning on a fallback, and is told nothing about a
+// status it does not have.
+func TestStatusListReportsTheMintedVocabularyOnAFreshProject(t *testing.T) {
+	repository := initializedRepository(t)
+	cliCreateTask(t, repository, "Alpha")
+
+	document := cliStatusList(t, repository)
+	if !document.Seeded || document.Head == "" {
+		t.Fatalf("list = seeded %t, head %q; want a project whose genesis was written", document.Seeded, document.Head)
+	}
+	if got, want := cliStatusNames(t, repository), []string{
+		"backlog", "ready", "in-progress", "in-review", "done",
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("statuses = %v, want the five this build mints %v", got, want)
+	}
+	if document.Default != "backlog" {
+		t.Fatalf("default = %q, want backlog", document.Default)
+	}
+	if len(document.Migrations) != 0 {
+		t.Fatalf("migrations = %#v, want none for a project that never had `blocked`", document.Migrations)
+	}
+
+	code, stdout, stderr := run(t, repository, "status", "list")
+	if code != 0 || stderr != "" {
+		t.Fatalf("status list = code %d, stderr %q", code, stderr)
+	}
+	for _, unwanted := range []string{"blocked", "No longer a default:", "No status change is recorded yet"} {
+		if strings.Contains(stdout, unwanted) {
+			t.Errorf("status list text = %q, want no %q", stdout, unwanted)
+		}
+	}
+}
+
+// The note follows the status rather than the ledger. A project whose genesis
+// was seeded from the pre-ledger vocabulary — which is what the first status
+// change on an existing project writes — still defines `blocked`, and still has
+// the same thing to be told about it.
+func TestStatusListNotesTheDroppedDefaultOnASeededLegacyProject(t *testing.T) {
+	repository := preLedgerRepository(t)
+	mustRunStatus(t, repository, "status", "label", "ready", "Up Next")
+
+	document := cliStatusList(t, repository)
+	if !document.Seeded {
+		t.Fatalf("list = seeded %t, want the status change to have seeded a genesis", document.Seeded)
+	}
+	if got, want := len(document.Statuses), 6; got != want {
+		t.Fatalf("statuses = %d, want %d; the genesis is seeded from the pre-ledger vocabulary", got, want)
+	}
+	if len(document.Migrations) != 1 || document.Migrations[0].Status != "blocked" {
+		t.Fatalf("migrations = %#v, want the note about `blocked`", document.Migrations)
+	}
+
+	// Removing it is what makes the note go away, and nothing else does.
+	mustRunStatus(t, repository, "status", "delete", "blocked", "--into", "backlog")
+	if got := cliStatusList(t, repository).Migrations; len(got) != 0 {
+		t.Fatalf("migrations after the removal = %#v, want none", got)
+	}
+}
+
+// The migration the note recommends, run end to end on the project shape that
+// needs it: a pre-ledger project holding tasks in `blocked`.
+//
+// Nothing here is automatic, and that is the point. The removal is a command a
+// person runs; it re-files the tasks by forwarding rather than by rewriting
+// them; it reports what the queue gains; and the value it retired keeps
+// resolving afterwards so a teammate who names it is told what happened rather
+// than that it never existed.
+func TestStatusDeleteBlockedMigratesAPreLedgerProject(t *testing.T) {
+	repository := preLedgerRepository(t)
+	free := cliCreateTask(t, repository, "Was blocked")
+	dependent := cliCreateTask(t, repository, "Was blocked and waiting")
+	prerequisite := cliCreateTask(t, repository, "Prerequisite")
+	mustRunStatus(t, repository, "depend", dependent.ID, prerequisite.ID, "--no-sync")
+	for _, id := range []string{free.ID, dependent.ID} {
+		mustRunStatus(t, repository, "update", id, "--status", "blocked", "--no-sync")
+	}
+
+	removal := cliStatusMutation(t, repository, "status delete",
+		"status", "delete", "blocked", "--into", "backlog", "--json")
+	if removal.Tasks.Affected != 2 {
+		t.Fatalf("affected = %d, want the two tasks in blocked", removal.Tasks.Affected)
+	}
+	// None of them becomes claimable, and that is the honest answer for the
+	// recommended destination: `backlog` carries no `next` tag, so the tasks land
+	// where new work lands and somebody still moves them on deliberately. Nothing
+	// was claimable while they sat in `blocked` either, so the migration hands
+	// nobody a queue they did not ask for.
+	if removal.Tasks.ClaimableAfter != 0 {
+		t.Fatalf("claimableAfter = %d, want none: backlog is not tagged next", removal.Tasks.ClaimableAfter)
+	}
+
+	if got, want := cliStatusNames(t, repository), []string{
+		"backlog", "ready", "in-progress", "in-review", "done",
+	}; !equalStrings(got, want) {
+		t.Fatalf("statuses after the migration = %v, want %v", got, want)
+	}
+	document := cliStatusList(t, repository)
+	if len(document.Migrations) != 0 {
+		t.Fatalf("migrations = %#v, want none once `blocked` is gone", document.Migrations)
+	}
+	if len(document.Unresolved) != 0 {
+		t.Fatalf("unresolved = %#v, want the tasks forwarded rather than stranded", document.Unresolved)
+	}
+	backlog := document.Statuses[0]
+	if backlog.Status != "backlog" || backlog.Tasks == nil || *backlog.Tasks != 3 {
+		t.Fatalf("backlog = %#v, want all three tasks resolving there", backlog)
+	}
+
+	code, board, stderr := run(t, repository, "board", "--narrow")
+	if code != 0 || stderr != "" {
+		t.Fatalf("board = code %d, stderr %q", code, stderr)
+	}
+	if strings.Contains(board, "BLOCKED") {
+		t.Errorf("the board still draws a Blocked column after the removal:\n%s", board)
+	}
+
+	// Naming the removed value afterwards is answered with what became of it and
+	// when, which is the whole reason a removal leaves a forwarding pointer.
+	today := time.Now().UTC().Format("2006-01-02")
+	code, _, stderr = run(t, repository, "status", "label", "blocked", "Blocked Again", "--json")
+	if code != 4 {
+		t.Fatalf("status label blocked = code %d, want 4; stderr = %q", code, stderr)
+	}
+	assertJSONError(t, stderr, core.CategoryNotFound,
+		fmt.Sprintf(`no status "blocked"; it was removed into "backlog" on %s`, today))
+
+	// A caller supplying it to a task command is refused the same way, and the
+	// task holding it stays fully editable.
+	code, _, stderr = run(t, repository, "update", free.ID, "--status", "blocked", "--no-sync", "--json")
+	if code != 5 {
+		t.Fatalf("update --status blocked = code %d, want 5; stderr = %q", code, stderr)
+	}
+	if code, _, stderr := run(t, repository, "update", free.ID, "--title", "Renamed", "--no-sync"); code != 0 {
+		t.Fatalf("editing a task stored under the removed status = code %d; stderr = %q", code, stderr)
 	}
 }
 
@@ -323,7 +485,7 @@ func TestStatusVerbsRecordTheirChangeInBothModes(t *testing.T) {
 		t.Fatalf("add vocabulary = %#v, want a seeded ledger with a head", add.Vocabulary)
 	}
 	if got, want := cliStatusNames(t, repository), []string{
-		"backlog", "triage", "ready", "blocked", "in-progress", "in-review", "done",
+		"backlog", "triage", "ready", "in-progress", "in-review", "done",
 	}; !equalStrings(got, want) {
 		t.Fatalf("statuses after add = %v, want %v", got, want)
 	}
@@ -331,7 +493,7 @@ func TestStatusVerbsRecordTheirChangeInBothModes(t *testing.T) {
 	// Appending is the default placement, and it appends rather than landing
 	// anywhere the ranks happen to allow.
 	appended := cliStatusMutation(t, repository, "status add", "status", "add", "archived", "--json")
-	if appended.Change.Position == nil || appended.Change.Position.Order != 8 ||
+	if appended.Change.Position == nil || appended.Change.Position.Order != 7 ||
 		appended.Change.Position.Before != "" || appended.Change.Position.After != "" {
 		t.Fatalf("appended position = %#v, want last with no anchor", appended.Change.Position)
 	}
@@ -378,8 +540,8 @@ func TestStatusVerbsRecordTheirChangeInBothModes(t *testing.T) {
 		t.Fatalf("default after tag = %q, want inbox", tag.Vocabulary.Default)
 	}
 
-	mustRunStatus(t, repository, "status", "tag", "blocked", "--tag", "next")
-	untag := cliStatusMutation(t, repository, "status untag", "status", "untag", "blocked", "next", "--json")
+	mustRunStatus(t, repository, "status", "tag", "in-review", "--tag", "next")
+	untag := cliStatusMutation(t, repository, "status untag", "status", "untag", "in-review", "next", "--json")
 	if len(untag.Change.Tags) != 0 {
 		t.Fatalf("untag tags = %#v, want an empty set", untag.Change.Tags)
 	}
@@ -390,7 +552,7 @@ func TestStatusVerbsRecordTheirChangeInBothModes(t *testing.T) {
 		t.Fatalf("delete change = %#v", remove.Change)
 	}
 	if got, want := cliStatusNames(t, repository), []string{
-		"inbox", "backlog", "ready", "blocked", "in-progress", "in-review", "done",
+		"inbox", "backlog", "ready", "in-progress", "in-review", "done",
 	}; !equalStrings(got, want) {
 		t.Fatalf("statuses after the family = %v, want %v", got, want)
 	}
@@ -464,7 +626,7 @@ func TestStatusChangesRegenerateTheGuidelines(t *testing.T) {
 	}
 	guidelines = readProjectFile(t, repository, agentdocs.GuidelinesPath)
 	for _, want := range []string{
-		"| 5 | `in-review` | In Review | `done` |",
+		"| 4 | `in-review` | In Review | `done` |",
 		"A dependency is satisfied once it reaches `in-review` or `done`.",
 	} {
 		if !strings.Contains(guidelines, want) {
@@ -522,7 +684,7 @@ func TestStatusChangeReportsGuidelinesItWillNotOverwrite(t *testing.T) {
 	// The status change itself landed. A documentation refusal is not a
 	// configuration refusal.
 	if got, want := cliStatusNames(t, repository), []string{
-		"backlog", "ready", "blocked", "in-progress", "in-review", "done", "triage",
+		"backlog", "ready", "in-progress", "in-review", "done", "triage",
 	}; !equalStrings(got, want) {
 		t.Fatalf("statuses = %v, want %v", got, want)
 	}
@@ -557,14 +719,14 @@ var statusVerbFixtures = map[string]struct {
 	"rename": {args: []string{"status", "rename", "ready", "todo", "--json"}},
 	"label":  {args: []string{"status", "label", "ready", "Next Up", "--json"}},
 	"move":   {args: []string{"status", "move", "ready", "--before", "backlog", "--json"}},
-	"tag":    {args: []string{"status", "tag", "blocked", "--tag", "next", "--json"}},
+	"tag":    {args: []string{"status", "tag", "in-review", "--tag", "next", "--json"}},
 	"untag": {
 		// Untagging the only status tagged next is refused outright, so the
 		// project gets a second one first.
-		setup: [][]string{{"status", "tag", "blocked", "--tag", "next"}},
-		args:  []string{"status", "untag", "blocked", "next", "--json"},
+		setup: [][]string{{"status", "tag", "in-review", "--tag", "next"}},
+		args:  []string{"status", "untag", "in-review", "next", "--json"},
 	},
-	"delete": {args: []string{"status", "delete", "blocked", "--into", "backlog", "--json"}},
+	"delete": {args: []string{"status", "delete", "in-review", "--into", "done", "--json"}},
 }
 
 // statusReadingVerbs are the two verbs that change nothing and so regenerate
@@ -898,7 +1060,7 @@ func TestStatusRefusesAnUnknownTagAsAValidationFailure(t *testing.T) {
 // message through untouched. Rewording it here would produce two answers to the
 // same question, and this one already names the command that fixes the state.
 func TestStatusArityRefusalsSurfaceCoreMessagesVerbatim(t *testing.T) {
-	repository := initializedRepository(t)
+	repository := preLedgerRepository(t)
 
 	for _, test := range []struct {
 		name string
@@ -936,7 +1098,9 @@ func TestStatusArityRefusalsSurfaceCoreMessagesVerbatim(t *testing.T) {
 		})
 	}
 
-	// Nothing was recorded by any of them.
+	// Nothing was recorded by any of them. The fixture is a pre-ledger project
+	// because a mint writes a genesis, and "seeded" would be true here before the
+	// first refusal ever ran.
 	if cliStatusList(t, repository).Seeded {
 		t.Fatal("a refused status command seeded the configuration ledger")
 	}
@@ -968,14 +1132,14 @@ func TestStatusNamesTheChainForARetiredValue(t *testing.T) {
 		},
 		{
 			name: "removal destination",
-			args: []string{"status", "delete", "blocked", "--into", "triage", "--json"},
+			args: []string{"status", "delete", "in-review", "--into", "triage", "--json"},
 			want: fmt.Sprintf(`no status "triage"; it was removed into "backlog" on %s`, today),
 		},
 		{
 			name: "never defined",
 			args: []string{"status", "tag", "shipped", "--tag", "done", "--json"},
 			want: `no status "shipped" in this project; the statuses are: ` +
-				"backlog, queued, blocked, in-progress, in-review, done",
+				"backlog, queued, in-progress, in-review, done",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -993,7 +1157,7 @@ func TestStatusNamesTheChainForARetiredValue(t *testing.T) {
 func TestStatusDeleteRequiresIntoAndRefusesItself(t *testing.T) {
 	repository := initializedRepository(t)
 
-	code, stdout, stderr := run(t, repository, "status", "delete", "blocked", "--json")
+	code, stdout, stderr := run(t, repository, "status", "delete", "in-review", "--json")
 	if code != 2 {
 		t.Fatalf("status delete without --into = code %d, want 2; stderr = %q", code, stderr)
 	}
@@ -1002,17 +1166,23 @@ func TestStatusDeleteRequiresIntoAndRefusesItself(t *testing.T) {
 	}
 	assertJSONError(t, stderr, core.CategoryInvocation,
 		"status delete requires --into <status>, naming where the removed status's tasks belong; "+
-			"this project's statuses are: backlog, ready, blocked, in-progress, in-review, done")
+			"this project's statuses are: backlog, ready, in-progress, in-review, done")
 
-	code, _, stderr = run(t, repository, "status", "delete", "blocked", "--into", "blocked", "--json")
+	code, _, stderr = run(t, repository, "status", "delete", "in-review", "--into", "in-review", "--json")
 	if code != 5 {
 		t.Fatalf("status delete into itself = code %d, want 5; stderr = %q", code, stderr)
 	}
 	assertJSONError(t, stderr, core.CategoryValidation,
-		`status delete cannot forward "blocked" into itself; name where its tasks belong`)
+		`status delete cannot forward "in-review" into itself; name where its tasks belong`)
 
-	if cliStatusList(t, repository).Seeded {
-		t.Fatal("a refused removal seeded the configuration ledger")
+	// Nothing the refusals touched was recorded. The head is the genesis this
+	// project was minted with, and it has not moved.
+	before := cliStatusList(t, repository).Head
+	if code, _, _ := run(t, repository, "status", "delete", "in-review", "--json"); code == 0 {
+		t.Fatal("status delete without --into succeeded")
+	}
+	if after := cliStatusList(t, repository).Head; after != before {
+		t.Fatalf("configuration head moved from %q to %q on a refused removal", before, after)
 	}
 }
 
@@ -1102,7 +1272,7 @@ func TestStatusDeleteReportsNoClaimableTasksForAParkedDestination(t *testing.T) 
 	mustRunStatus(t, repository, "update", task.ID, "--status", "triage", "--no-sync")
 
 	removal := cliStatusMutation(t, repository, "status delete",
-		"status", "delete", "triage", "--into", "blocked", "--json")
+		"status", "delete", "triage", "--into", "in-progress", "--json")
 	if removal.Tasks.Affected != 1 || removal.Tasks.ClaimableAfter != 0 {
 		t.Fatalf("tasks = %#v, want one affected and none claimable", removal.Tasks)
 	}
@@ -1214,10 +1384,10 @@ func TestStatusInverseMatrixRoundTripsThroughAShell(t *testing.T) {
 		},
 		{
 			name:    "untag",
-			setup:   [][]string{{"status", "tag", "blocked", "--tag", "next"}},
-			command: []string{"status", "untag", "blocked", "next", "--json"},
+			setup:   [][]string{{"status", "tag", "in-progress", "--tag", "next"}},
+			command: []string{"status", "untag", "in-progress", "next", "--json"},
 			verb:    "status untag",
-			inverse: "workbook status tag blocked --tag next",
+			inverse: "workbook status tag in-progress --tag next",
 			exact:   true,
 		},
 		{
@@ -1304,7 +1474,9 @@ func shellQuote(value string) string {
 // unit a person recognizes: one command they ran. It is also what lets the
 // total stay exact while the read is bounded by the window.
 func TestStatusLogMirrorsShowHistoryWindowing(t *testing.T) {
-	repository := initializedRepository(t)
+	// The ledgerless report needs a project with no ledger, and a mint writes
+	// one, so the fixture is the pre-ledger shape a real upgrade lands on.
+	repository := preLedgerRepository(t)
 	if code, stdout, stderr := run(t, repository, "status", "log"); code != 0 || stderr != "" {
 		t.Fatalf("status log on a ledgerless project = code %d, stderr %q", code, stderr)
 	} else if !strings.Contains(stdout, "No status change is recorded") {
@@ -1457,6 +1629,11 @@ func TestStatusChangesReportAndPublishSynchronization(t *testing.T) {
 	if code, _, stderr := run(t, second, "fetch"); code != 0 {
 		t.Fatalf("fetch = code %d; stderr = %q", code, stderr)
 	}
+	// The six rather than the five: this fixture's clones join through a plain
+	// `git clone` of a bare origin that carries no configuration ledger, so both
+	// of them are pre-ledger projects and the first status change seeds the
+	// vocabulary such a project is using. Publication is what is under test here,
+	// and it carries whatever the ledger holds.
 	names := cliStatusNames(t, second)
 	if !equalStrings(names, []string{
 		"backlog", "queued", "blocked", "in-progress", "in-review", "done", "triage", "wip",

@@ -455,8 +455,8 @@ blobs.
 Tombstoned tasks reject every mutation except `workbook restore`, which records
 an explicit append-only restore operation.
 List and show read the current task checkpoint from each task ref's tip. A new
-project's statuses are Backlog, Ready, Blocked, In Progress, In Review, and
-Done, in that order; a project may change them with `workbook status` (see
+project's statuses are Backlog, Ready, In Progress, In Review, and Done, in that
+order; a project may change them with `workbook status` (see
 [Project statuses](#project-statuses)). `move` orders a task inside its status-and-priority bucket with
 an exact rational rank; it changes only that task. `depend` adds a prerequisite
 edge and rejects cycles; `free` removes one prerequisite edge and is idempotent.
@@ -485,6 +485,16 @@ to another status takes it away in the same operation; at least one must carry
 each of `next` and `done`, and a command that would leave none is refused with
 the command that fixes it. A status with no tag is an ordinary column: work
 rests there and nothing else in Workbook follows from it.
+
+A project created before this release also defines `Blocked`, which used to be
+one of the defaults. Task dependencies record what a task is waiting on, so the
+column no longer earns its place, and new projects do not get it. Nothing is
+migrated automatically: a status with tasks in it is not a release's to remove.
+`workbook status list` names it and prints the removal, and the recommended one
+is `workbook status delete blocked --into backlog` — the tasks re-file to
+`backlog` by forwarding, and anything still stored under `blocked` keeps
+resolving there. A project that wants the column keeps it, or adds one back with
+`workbook status add`.
 
 `workbook status list` is how a project's statuses are discovered rather than
 assumed. It shows each status's position, machine value, display label, tags,
@@ -1750,7 +1760,7 @@ Most operations converge because they touch different fields. Meaningful
 contradictions are surfaced rather than silently hidden, through the three
 conflicts described in
 [Reconciling divergent histories](#reconciling-divergent-histories). Concurrent
-`done` and `blocked` status changes are not among them: status is
+`done` and `in-review` status changes are not among them: status is
 last-syncer-wins, and multi-value status conflicts remain proposed.
 
 Exclusive claims are different. When `--remote-required` is used, a claim succeeds only after the remote accepts a fast-forward update based on the task ref that was fetched. If another agent claimed the task first, Workbook refetches and reports that the claim failed instead of merging two exclusive claims. Offline claims, if supported, must be visibly tentative.
