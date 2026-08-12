@@ -30,9 +30,13 @@ const (
 //
 // The budget is per column, rounded up, so at six columns it is exactly the 140
 // this has always used and at any other count it asks for the same room per
-// column rather than the same room in total. A board with no columns is charged
-// the whole historical width: it renders one degenerate cell, and a threshold of
-// zero would put an empty grid on a phone-width terminal.
+// column rather than the same room in total.
+//
+// A board with no columns is charged the whole historical width rather than
+// nothing. That state is reachable from a corrupt or foreign ledger tip and
+// renders as sections either way — renderWideBoard has no grid to draw and says
+// so by deferring to the narrow layout — so the number only has to be a width
+// no terminal is silently under, never zero.
 func wideBoardMinimumFor(columns int) int {
 	if columns <= 0 {
 		return wideBoardMinimum

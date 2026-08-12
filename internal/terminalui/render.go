@@ -171,6 +171,25 @@ func priorityMarker(priority core.Priority) string {
 func renderWideBoard(w io.Writer, board presentation.Board, width int) error {
 	columns := canonicalColumns(board)
 	columnCount := len(columns)
+	// A board with no columns has no grid to draw, and a grid renderer that
+	// divided the width among zero cells crashed rather than saying so.
+	//
+	// This is reachable from data, which is why it is guarded here rather than
+	// prevented upstream. A configuration checkpoint is decoded and trusted —
+	// only a genesis is re-folded — and nothing in the state document requires
+	// a live status, so a ledger tip written by a hand edit, a corruption, or a
+	// build that allows an empty vocabulary reaches this renderer with zero
+	// columns and its tasks stranded in UnknownTasks. The read path is total
+	// over ledger data by doctrine (see core.Vocabulary.Resolve), and a
+	// renderer is part of the read path.
+	//
+	// The narrow layout is the answer rather than an empty frame: in this state
+	// every task the board holds is in the unknown-status section, which is
+	// exactly what the narrow renderer prints, and a bordered box with nothing
+	// in it would only hide it.
+	if columnCount == 0 {
+		return renderNarrowBoard(w, board, width)
+	}
 	cellWidth := max(3, (width-(columnCount+1))/columnCount)
 	contentWidth := max(1, cellWidth-2)
 
@@ -316,6 +335,13 @@ func narrowSection(label string, tasks []presentation.TaskView, width int) strin
 // statuses now, and a stored status that a rename or a removal forwards to a
 // live one is drawn in that live column. What is left here is a status that
 // forwards nowhere, which no upgrade will fix.
+//
+// The claim is absolute because this renderer can afford it: a board is built
+// and printed inside one command, from the statuses that same command read, so
+// a task in this section really did fail to resolve against the vocabulary the
+// columns came from. The web board cannot say that much — its columns are as
+// old as the page and its tasks are as new as the last poll — so its copy names
+// the other case as well.
 const unknownStatusNote = "(no status this project defines, and no rename or removal leads to one)"
 
 func writeUnknownSection(output *strings.Builder, tasks []presentation.TaskView, width int) {
