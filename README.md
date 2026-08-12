@@ -512,12 +512,11 @@ Reading and writing treat a stale value differently, and deliberately.
 Everything that reads a *stored* status resolves it. Everything that takes a
 status a caller *supplies* requires a live member: `workbook update <id>
 --status ready` is refused with `validation` (exit `5`) once `ready` is no
-longer a status this project defines, because supplying a status that does not
-exist is the mistake the mutation boundary exists to catch. The `workbook
-status` verbs answer the same value with what became of it — which rename or
-removal retired it, on what date, and which live status it resolves to now —
-rather than with a bare "not found". A task in a status no chain leads out of is
-still fully editable; only naming that status again is refused. See
+longer a status this project defines. The `workbook status` verbs answer the
+same value with what became of it — which rename or removal retired it, on what
+date, and which live status it resolves to now — rather than with a bare "not
+found". A task holding a status no chain leads out of is still fully editable;
+only supplying that status again is refused. See
 [Statuses a project does not define](#statuses-a-project-does-not-define).
 
 Everywhere includes ordering. A task's status-and-priority bucket is its
@@ -552,7 +551,9 @@ Workbook do, and the lifecycle prose under it names this project's own statuses
 because it is read off the tags rather than written out. Every mutating
 `workbook status` verb rewrites it, so the file an agent reads and the ledger it
 describes cannot drift; `--no-docs` skips that for one command, and `workbook
-docs update` catches up afterwards.
+docs update` catches up afterwards. A project that has no guidelines file is
+left without one — refreshing what a project has is not the same as installing
+what it declined — and `workbook docs install` is what creates it.
 
 Hand-edits are refused rather than lost. The managed block records a hash of
 what Workbook wrote, so a file that still matches is rewritten in place and a
