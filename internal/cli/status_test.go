@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dgoings/workbook/internal/agentdocs"
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
 	"github.com/dgoings/workbook/internal/projection"
@@ -70,6 +71,15 @@ type statusMutationDocument struct {
 		ClaimableAfter int `json:"claimableAfter"`
 	} `json:"tasks"`
 	Inverse inverseDocument `json:"inverse"`
+	Docs    *docsDocument   `json:"docs"`
+}
+
+type docsDocument struct {
+	Artifacts []struct {
+		Path    string `json:"path"`
+		State   string `json:"state"`
+		Written bool   `json:"written"`
+	} `json:"artifacts"`
 }
 
 type statusListDocument struct {
@@ -400,6 +410,160 @@ func TestStatusVerbsRecordTheirChangeInBothModes(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "\tdefault:\tbacklog → triage") {
 		t.Fatalf("tag text = %q, want the default handoff line", stdout)
+	}
+}
+
+// The guidelines state a project's statuses, so a status change that left them
+// alone would ship a generated file that is wrong from the moment it is
+// committed. Every mutating verb rewrites them, and the envelope says so.
+func TestStatusChangesRegenerateTheGuidelines(t *testing.T) {
+	repository := initializedRepository(t)
+
+	rename := cliStatusMutation(t, repository, "status rename",
+		"status", "rename", "ready", "todo", "--label", "Next Up", "--json")
+
+	if rename.Docs == nil || len(rename.Docs.Artifacts) != 1 {
+		t.Fatalf("rename docs = %#v, want the guidelines alone", rename.Docs)
+	}
+	artifact := rename.Docs.Artifacts[0]
+	if artifact.Path != agentdocs.GuidelinesPath || artifact.State != string(agentdocs.StateStale) || !artifact.Written {
+		t.Fatalf("rename docs artifact = %#v, want a stale %s rewritten", artifact, agentdocs.GuidelinesPath)
+	}
+
+	guidelines := readProjectFile(t, repository, agentdocs.GuidelinesPath)
+	for _, want := range []string{
+		"| 2 | `todo` | Next Up | `next` |",
+		"`workbook next` claims from `todo`.",
+		"New tasks land in `backlog`.",
+		"A dependency is satisfied once it reaches `done`.",
+	} {
+		if !strings.Contains(guidelines, want) {
+			t.Errorf("guidelines missing %q after the rename:\n%s", want, guidelines)
+		}
+	}
+	if strings.Contains(guidelines, "`ready`") {
+		t.Errorf("guidelines still document the old status:\n%s", guidelines)
+	}
+	// Regenerated means current, not merely rewritten: `workbook docs status`
+	// has to agree that nothing is left to do.
+	if code, stdout, _ := run(t, repository, "docs", "status"); code != 0 ||
+		strings.Contains(stdout, string(agentdocs.StateStale)) {
+		t.Errorf("docs status after a status change = code %d, %q; want everything current", code, stdout)
+	}
+
+	// A second verb, a second rewrite, and the tag legend follows the tags
+	// rather than the names.
+	tagged := cliStatusMutation(t, repository, "status tag",
+		"status", "tag", "in-review", "--tag", "done", "--json")
+	if tagged.Docs == nil || !tagged.Docs.Artifacts[0].Written {
+		t.Fatalf("tag docs = %#v, want the guidelines rewritten", tagged.Docs)
+	}
+	guidelines = readProjectFile(t, repository, agentdocs.GuidelinesPath)
+	for _, want := range []string{
+		"| 5 | `in-review` | In Review | `done` |",
+		"A dependency is satisfied once it reaches `in-review` or `done`.",
+	} {
+		if !strings.Contains(guidelines, want) {
+			t.Errorf("guidelines missing %q after the tag:\n%s", want, guidelines)
+		}
+	}
+
+	// The text surface reports the file it rewrote, the same way setup does.
+	code, stdout, stderr := run(t, repository, "status", "add", "triage", "--after", "backlog")
+	if code != 0 || stderr != "" {
+		t.Fatalf("status add = code %d, stderr %q", code, stderr)
+	}
+	if !strings.Contains(stdout, "\tdocs:\t"+agentdocs.GuidelinesPath+"\twritten") {
+		t.Errorf("status add text = %q, want the regenerated guidelines line", stdout)
+	}
+}
+
+// A generated file somebody edited is never overwritten, and a status change is
+// not the place to start. The change is already recorded and published when the
+// refresh runs, so the refusal is reported beside a success rather than turned
+// into a failure that would leave the ledger ahead of the exit code.
+func TestStatusChangeReportsGuidelinesItWillNotOverwrite(t *testing.T) {
+	repository := initializedRepository(t)
+	edited := strings.Replace(
+		readProjectFile(t, repository, agentdocs.GuidelinesPath),
+		"# Workbook guidelines", "# Workbook guidelines\n\nOur own preamble.", 1)
+	writeProjectFile(t, repository, agentdocs.GuidelinesPath, edited)
+
+	code, stdout, stderr := run(t, repository, "status", "add", "triage", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("status add = code %d, stderr %q", code, stderr)
+	}
+	envelope := assertJSONResult(t, stdout, "status add")
+
+	var document statusMutationDocument
+	if err := json.Unmarshal(envelope.Data, &document); err != nil {
+		t.Fatalf("decode status add: %v; output = %s", err, stdout)
+	}
+	if document.Docs == nil || len(document.Docs.Artifacts) != 1 {
+		t.Fatalf("docs = %#v, want the guidelines reported", document.Docs)
+	}
+	if artifact := document.Docs.Artifacts[0]; artifact.State != string(agentdocs.StateModified) || artifact.Written {
+		t.Fatalf("docs artifact = %#v, want a modified file left alone", artifact)
+	}
+	if len(envelope.Warnings) != 1 || envelope.Warnings[0].Code != core.WarningDocsRefresh {
+		t.Fatalf("warnings = %#v, want one %q", envelope.Warnings, core.WarningDocsRefresh)
+	}
+	if !strings.Contains(envelope.Warnings[0].Message, "workbook docs update --force") {
+		t.Fatalf("warning = %q, want the command that overwrites it", envelope.Warnings[0].Message)
+	}
+
+	if got := readProjectFile(t, repository, agentdocs.GuidelinesPath); got != edited {
+		t.Fatalf("guidelines were overwritten:\n%s", got)
+	}
+	// The status change itself landed. A documentation refusal is not a
+	// configuration refusal.
+	if got, want := cliStatusNames(t, repository), []string{
+		"backlog", "ready", "blocked", "in-progress", "in-review", "done", "triage",
+	}; !equalStrings(got, want) {
+		t.Fatalf("statuses = %v, want %v", got, want)
+	}
+
+	// The same refusal reaches a text-mode caller on stderr, with the change on
+	// stdout, and still exits 0.
+	code, stdout, stderr = run(t, repository, "status", "add", "archived")
+	if code != 0 {
+		t.Fatalf("status add = code %d; stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stdout, "\tdocs:\t"+agentdocs.GuidelinesPath+"\tunchanged") {
+		t.Errorf("status add text = %q, want the untouched guidelines reported", stdout)
+	}
+	if !strings.Contains(stderr, "workbook docs update --force") {
+		t.Errorf("status add stderr = %q, want the warning", stderr)
+	}
+}
+
+// --no-docs is the escape hatch, and it is the same word `workbook setup`
+// already uses for the same decision.
+func TestStatusChangeSkipsTheGuidelinesOnRequest(t *testing.T) {
+	repository := initializedRepository(t)
+	before := readProjectFile(t, repository, agentdocs.GuidelinesPath)
+
+	document := cliStatusMutation(t, repository, "status add",
+		"status", "add", "triage", "--no-docs", "--json")
+	if document.Docs != nil {
+		t.Fatalf("docs = %#v, want nothing reported for a skipped refresh", document.Docs)
+	}
+	if got := readProjectFile(t, repository, agentdocs.GuidelinesPath); got != before {
+		t.Fatalf("guidelines were regenerated despite --no-docs:\n%s", got)
+	}
+
+	code, stdout, stderr := run(t, repository, "status", "add", "archived", "--no-docs")
+	if code != 0 || stderr != "" {
+		t.Fatalf("status add --no-docs = code %d, stderr %q", code, stderr)
+	}
+	if !strings.Contains(stdout, "\tdocs:\tskipped") {
+		t.Errorf("status add --no-docs text = %q, want the skipped line", stdout)
+	}
+	// The skipped refresh leaves work behind, and `workbook docs` is where it is
+	// found. Nothing else has to notice.
+	if code, stdout, _ := run(t, repository, "docs", "status"); code != 0 ||
+		!strings.Contains(stdout, string(agentdocs.StateStale)) {
+		t.Errorf("docs status = code %d, %q; want the guidelines reported stale", code, stdout)
 	}
 }
 
