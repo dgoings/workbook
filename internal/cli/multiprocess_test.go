@@ -72,14 +72,14 @@ func TestBuiltBinariesMutateOneRepositoryConcurrently(t *testing.T) {
 		}
 	}
 
-	// Then one task, five processes: the ref compare-and-swap is the only thing
-	// keeping two of them from writing over each other.
+	// Then one task and one process per status a task can be moved to: the ref
+	// compare-and-swap is the only thing keeping two of them from writing over
+	// each other.
 	contested := decodeMutationTask(t, mustRunBinary(t, binary, repository, "create", "Contested by processes", "--no-sync", "--json"), "create")
 	// Every status differs from every other and from the one a new task starts
 	// in, so a refusal is always a lost race rather than a no-op update.
 	statuses := []core.Status{
-		core.StatusReady, core.StatusInProgress, core.StatusInReview,
-		core.StatusBlocked, core.StatusDone,
+		core.StatusReady, core.StatusInProgress, core.StatusInReview, core.StatusDone,
 	}
 	contended := runConcurrently(t, len(statuses), func(index int) (int, string, string) {
 		return runBinary(t, binary, repository, "update", contested.ID, "--status", string(statuses[index]), "--no-sync", "--json")

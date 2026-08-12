@@ -126,10 +126,13 @@ func (setting *AutoSyncSetting) UnmarshalJSON(contents []byte) error {
 
 type Status string
 
+// The statuses Workbook mints a project with. A project's own vocabulary is the
+// authority on what it accepts; these are the tokens the built-in one is built
+// from. StatusBlocked used to sit between StatusReady and StatusInProgress and
+// now lives in vocabulary.go beside the legacy vocabulary that still defines it.
 const (
 	StatusBacklog    Status = "backlog"
 	StatusReady      Status = "ready"
-	StatusBlocked    Status = "blocked"
 	StatusInProgress Status = "in-progress"
 	StatusInReview   Status = "in-review"
 	StatusDone       Status = "done"

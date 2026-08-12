@@ -61,6 +61,12 @@ func TestFitDoesNotSplitUTF8WhenTheCellIsNarrowerThanOneRune(t *testing.T) {
 	}
 }
 
+// The board goldens in this file render core.LegacyVocabulary rather than the
+// statuses a mint writes, and deliberately. They pin how a fixed terminal width
+// is divided among columns and where an identifier wraps when it will not fit,
+// so the interesting fixture is the wider set — six columns, which is what every
+// project with no configuration ledger draws. Rendering five would relax the
+// widths these cases exist to hold.
 func TestRenderBoardWideGolden(t *testing.T) {
 	board := presentation.NewBoard([]core.Task{
 		{
@@ -81,7 +87,7 @@ func TestRenderBoardWideGolden(t *testing.T) {
 				Labels:   []string{"release"},
 			},
 		},
-	}, core.DefaultVocabulary())
+	}, core.LegacyVocabulary())
 
 	var output bytes.Buffer
 	if err := RenderBoard(&output, board, LayoutWide, 140); err != nil {
@@ -118,7 +124,7 @@ func TestRenderBoardWidePreservesLongUniquePrefixes(t *testing.T) {
 				Priority: core.PriorityMedium,
 			},
 		},
-	}, core.DefaultVocabulary())
+	}, core.LegacyVocabulary())
 
 	var output bytes.Buffer
 	if err := RenderBoard(&output, board, LayoutWide, 100); err != nil {
@@ -158,7 +164,7 @@ func TestRenderBoardNarrowGolden(t *testing.T) {
 				Labels:   []string{"release"},
 			},
 		},
-	}, core.DefaultVocabulary())
+	}, core.LegacyVocabulary())
 
 	var output bytes.Buffer
 	if err := RenderBoard(&output, board, LayoutNarrow, 100); err != nil {
@@ -198,7 +204,7 @@ func TestRenderBoardShowsAllEmptyColumns(t *testing.T) {
 			Status:   core.Status("archived"),
 			Priority: core.PriorityLow,
 		},
-	}}, core.DefaultVocabulary())
+	}}, core.LegacyVocabulary())
 
 	var output bytes.Buffer
 	if err := RenderBoard(&output, board, LayoutNarrow, 100); err != nil {
@@ -319,7 +325,7 @@ func TestRenderBoardStripsControlCharactersFromCards(t *testing.T) {
 			Priority: core.PriorityHigh,
 			Labels:   []string{"git\x1b[2K"},
 		},
-	}}, core.DefaultVocabulary())
+	}}, core.LegacyVocabulary())
 
 	for name, layout := range map[string]Layout{"narrow": LayoutNarrow, "wide": LayoutWide} {
 		var output bytes.Buffer

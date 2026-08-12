@@ -206,10 +206,19 @@ func writeSyncPhaseResultWithConfig(
 // writeConfigConflicts renders the same list the JSON envelope carries. Every
 // line names the status rather than a task, because that is what the two
 // intents disagreed about and what a person has to decide.
+//
+// One member names no status: a root-vocabulary conflict is a disagreement about
+// where the whole configuration started, so its line drops the column rather
+// than printing an empty one.
 func writeConfigConflicts(output io.Writer, conflicts []core.ConfigConflict) {
 	for _, conflict := range conflicts {
-		fmt.Fprintf(output, "Config conflict:\t%s\t%s\t%s\n",
-			conflict.Status, conflict.Type, core.ConfigConflictDetail(conflict))
+		if conflict.Status == "" {
+			fmt.Fprintf(output, "Config conflict:\t%s\t%s\n",
+				conflict.Type, core.ConfigConflictDetail(conflict))
+		} else {
+			fmt.Fprintf(output, "Config conflict:\t%s\t%s\t%s\n",
+				conflict.Status, conflict.Type, core.ConfigConflictDetail(conflict))
+		}
 		if conflict.Ours != "" || conflict.Theirs != "" {
 			fmt.Fprintf(output, "\tours:\t%s\n", singleLine(conflict.Ours))
 			fmt.Fprintf(output, "\ttheirs:\t%s\n", singleLine(conflict.Theirs))

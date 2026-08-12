@@ -16,16 +16,60 @@ func testProject() core.ProjectConfig {
 	}
 }
 
-// defaultVocabularySections is the rendering the built-in six statuses produce,
-// pinned byte for byte.
+// defaultVocabularySections is the rendering the statuses a minted project gets
+// produce, pinned byte for byte.
 //
 // It exists so that making the guidelines vocabulary-driven is reviewable: the
-// statuses and the lifecycle prose are now computed from tags rather than
-// written out, and the only way to see what that changed for the project every
-// reader already has is to read the two sections side by side. A deliberate
-// wording change edits this constant in the same commit; an accidental one
-// fails here.
+// statuses and the lifecycle prose are computed from tags rather than written
+// out, and the only way to see what a change to either does to the project every
+// reader already has is to read the sections side by side. A deliberate wording
+// change edits this constant in the same commit; an accidental one fails here.
+//
+// legacyVocabularySections below pins the other rendering that ships — the six
+// statuses a project with no configuration ledger is using — because that is
+// what most installed guidelines actually say, and it must stay reachable.
 const defaultVocabularySections = `## Statuses
+
+This project's statuses, in order. Pass the machine value, never the display
+label.
+
+| # | Machine value | Display label | Tags |
+| --- | --- | --- | --- |
+| 1 | ` + "`backlog`" + ` | Backlog | ` + "`default`" + ` |
+| 2 | ` + "`ready`" + ` | Ready | ` + "`next`" + ` |
+| 3 | ` + "`in-progress`" + ` | In Progress | none |
+| 4 | ` + "`in-review`" + ` | In Review | none |
+| 5 | ` + "`done`" + ` | Done | ` + "`done`" + ` |
+
+Write ` + "`--status in-progress`" + `, not ` + "`In Progress`" + `.
+The same applies to ` + "`in-review`" + `.
+A display label is rejected as a validation error.
+
+A tag is a job the machine gives a status, not a description of its name:
+
+| Tag | What it makes Workbook do |
+| --- | --- |
+| ` + "`default`" + ` | A task created without ` + "`--status`" + ` lands here. Exactly one status carries it. |
+| ` + "`done`" + ` | A dependency sitting here is satisfied, so the work waiting on it can be claimed. |
+| ` + "`next`" + ` | ` + "`workbook next`" + ` may return a task sitting here. |
+
+A status carrying no tag is an ordinary column: work rests there and nothing
+else follows from it.
+
+These statuses belong to this project and another project's are different, so
+read them here or with ` + "`workbook status list --json`" + ` rather than assuming the
+ones you have seen elsewhere. This section is rewritten whenever they change.
+`
+
+// legacyVocabularySections is the rendering a project with no configuration
+// ledger produces, pinned byte for byte beside the minted default.
+//
+// It differs from that one by exactly one table row. Keeping both pinned is what
+// makes the fallback visible: `blocked` left the statuses Workbook mints a
+// project with, and every project that has not removed it still documents it —
+// so a change that quietly rendered five columns for those projects fails here
+// rather than in somebody's checkout.
+const legacyVocabularySections = `## Statuses
 
 This project's statuses, in order. Pass the machine value, never the display
 label.
@@ -99,10 +143,30 @@ func TestRenderGuidelinesPinsTheDefaultVocabularyRendering(t *testing.T) {
 	if got := section(t, guidelines, "## Task lifecycle"); got != defaultLifecycleSection {
 		t.Errorf("lifecycle section =\n%s\nwant\n%s", got, defaultLifecycleSection)
 	}
-	// A caller that configured no vocabulary documents the same six statuses,
-	// because that is what such a project is using.
+}
+
+// The fallback rendering is pinned beside the minted one because it is the
+// rendering most installed guidelines actually carry: a project has to record a
+// status change before it has a vocabulary of its own, and until then it is
+// using the six Workbook shipped before dependencies replaced `blocked`.
+//
+// The lifecycle prose is identical in both, which is the point of computing it
+// from tags: `blocked` never carried one, so removing it from the default set
+// changed a table row and nothing a reader is told to do.
+func TestRenderGuidelinesPinsTheLegacyVocabularyRendering(t *testing.T) {
+	guidelines := RenderGuidelines(testProject(), core.LegacyVocabulary())
+
+	if got := section(t, guidelines, "## Statuses"); got != legacyVocabularySections {
+		t.Errorf("statuses section =\n%s\nwant\n%s", got, legacyVocabularySections)
+	}
+	if got := section(t, guidelines, "## Task lifecycle"); got != defaultLifecycleSection {
+		t.Errorf("lifecycle section =\n%s\nwant\n%s", got, defaultLifecycleSection)
+	}
+	// A caller that configured no vocabulary documents these six statuses,
+	// because that is what such a project is using — not the five this build
+	// would mint a new project with.
 	if unconfigured := RenderGuidelines(testProject(), core.Vocabulary{}); unconfigured != guidelines {
-		t.Errorf("the zero vocabulary renders differently from the built-in default:\n%s", unconfigured)
+		t.Errorf("the zero vocabulary renders differently from the pre-ledger one:\n%s", unconfigured)
 	}
 }
 
@@ -273,7 +337,7 @@ func TestRenderGuidelinesStatesEveryCanonicalStatus(t *testing.T) {
 	// from core would let generated documentation drift from CLI validation.
 	guidelines := RenderGuidelines(testProject(), core.Vocabulary{})
 
-	for _, definition := range core.DefaultVocabulary().Definitions() {
+	for _, definition := range core.LegacyVocabulary().Definitions() {
 		if !strings.Contains(guidelines, string(definition.Status)) {
 			t.Errorf("guidelines missing status %q:\n%s", definition.Status, guidelines)
 		}

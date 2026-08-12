@@ -7,25 +7,43 @@ import (
 	"testing"
 )
 
-// LegacyVocabulary and DefaultVocabulary are two names for the same six
-// statuses today, and this test exists to make the day they stop being the same
-// a deliberate edit.
+// LegacyVocabulary is DefaultVocabulary plus `blocked`, and this test pins that
+// relationship in both directions so neither accessor can drift into or away
+// from the other by accident.
 //
 // They answer different questions. DefaultVocabulary is what a project minted
-// by this build starts with, and it is a product decision that will change.
+// by this build starts with, and it is a product decision that has already
+// changed once: `blocked` left it when task dependencies made it redundant.
 // LegacyVocabulary is what a project that predates the configuration ledger was
 // already using, which is a fact about those projects and cannot change under
 // them. Seeding an existing project's genesis from the wrong one would silently
-// re-columnize somebody's board.
-func TestLegacyVocabularyStillMatchesDefaultVocabulary(t *testing.T) {
-	legacy := LegacyVocabulary().Document()
-	current := DefaultVocabulary().Document()
-	if !reflect.DeepEqual(legacy, current) {
+// re-columnize somebody's board, and dropping `blocked` from this one would drop
+// a live column out of every project that has not migrated.
+//
+// The expectation is derived rather than written out twice: the legacy set is
+// the default set with `blocked` reinserted in third place and the ranks
+// renumbered from one. A label, a tag, an order, or a count that changes on
+// either side fails here.
+func TestLegacyVocabularyIsTheDefaultVocabularyPlusBlocked(t *testing.T) {
+	current := DefaultVocabulary().Definitions()
+	want := make([]StatusDefinition, 0, len(current)+1)
+	want = append(want, current[:2]...)
+	want = append(want, StatusDefinition{Status: StatusBlocked, Label: "Blocked", Rank: "", Tags: []StatusTag{}})
+	want = append(want, current[2:]...)
+	for index := range want {
+		want[index].Rank = strconv.Itoa(index+1) + "/1"
+	}
+
+	if got := LegacyVocabulary().Definitions(); !reflect.DeepEqual(got, want) {
 		t.Fatalf(
-			"LegacyVocabulary() = %#v, want the same as DefaultVocabulary() = %#v; "+
-				"if this divergence is intended, update this test and say why",
-			legacy, current,
+			"LegacyVocabulary().Definitions() = %#v, want DefaultVocabulary() plus blocked = %#v; "+
+				"the legacy set is frozen and the default set is a product decision, so a change "+
+				"to either is a change to this test",
+			got, want,
 		)
+	}
+	if DefaultVocabulary().Has(StatusBlocked) {
+		t.Fatal("DefaultVocabulary().Has(\"blocked\") = true, want false; a minted project does not get it")
 	}
 }
 
@@ -35,7 +53,7 @@ func TestDefaultVocabularyAssignsTheThreeRoles(t *testing.T) {
 	if got, want := vocabulary.Default(), StatusBacklog; got != want {
 		t.Fatalf("Default() = %q, want %q", got, want)
 	}
-	for _, status := range []Status{StatusBacklog, StatusBlocked, StatusInProgress, StatusInReview, StatusDone} {
+	for _, status := range []Status{StatusBacklog, StatusInProgress, StatusInReview, StatusDone} {
 		if vocabulary.IsNext(status) {
 			t.Fatalf("IsNext(%q) = true, want only %q", status, StatusReady)
 		}
@@ -43,7 +61,7 @@ func TestDefaultVocabularyAssignsTheThreeRoles(t *testing.T) {
 	if !vocabulary.IsNext(StatusReady) {
 		t.Fatalf("IsNext(%q) = false, want true", StatusReady)
 	}
-	for _, status := range []Status{StatusBacklog, StatusReady, StatusBlocked, StatusInProgress, StatusInReview} {
+	for _, status := range []Status{StatusBacklog, StatusReady, StatusInProgress, StatusInReview} {
 		if vocabulary.IsDone(status) {
 			t.Fatalf("IsDone(%q) = true, want only %q", status, StatusDone)
 		}
@@ -56,22 +74,41 @@ func TestDefaultVocabularyAssignsTheThreeRoles(t *testing.T) {
 	}
 }
 
-// The order the built-in vocabulary reports is the order the previous
-// hard-coded array reported, position for position. Every list, board, and
-// comparison reads it.
-func TestDefaultVocabularyOrderMatchesTheShippedOrder(t *testing.T) {
-	vocabulary := DefaultVocabulary()
-	for index, status := range []Status{
-		StatusBacklog, StatusReady, StatusBlocked, StatusInProgress, StatusInReview, StatusDone,
-	} {
-		if got := vocabulary.Order(status); got != index {
-			t.Fatalf("Order(%q) = %d, want %d", status, got, index)
-		}
+// The order each built-in vocabulary reports is the order its statuses are
+// written in, position for position. Every list, board, and comparison reads it.
+func TestBuiltInVocabularyOrdersMatchTheShippedOrders(t *testing.T) {
+	tests := map[string]struct {
+		vocabulary Vocabulary
+		order      []Status
+	}{
+		"default": {
+			vocabulary: DefaultVocabulary(),
+			order:      []Status{StatusBacklog, StatusReady, StatusInProgress, StatusInReview, StatusDone},
+		},
+		"legacy": {
+			vocabulary: LegacyVocabulary(),
+			order: []Status{
+				StatusBacklog, StatusReady, StatusBlocked, StatusInProgress, StatusInReview, StatusDone,
+			},
+		},
 	}
-	// An unknown status sorts after every live one rather than failing, which
-	// is what keeps a board readable while a rename propagates.
-	if got, want := vocabulary.Order("shipped"), 6; got != want {
-		t.Fatalf("Order(unknown) = %d, want %d", got, want)
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			for index, status := range test.order {
+				if got := test.vocabulary.Order(status); got != index {
+					t.Fatalf("Order(%q) = %d, want %d", status, got, index)
+				}
+			}
+			// An unknown status sorts after every live one rather than failing,
+			// which is what keeps a board readable while a rename propagates.
+			// For the default vocabulary `blocked` is now such a value.
+			if got, want := test.vocabulary.Order("shipped"), len(test.order); got != want {
+				t.Fatalf("Order(unknown) = %d, want %d", got, want)
+			}
+		})
+	}
+	if got, want := DefaultVocabulary().Order(StatusBlocked), 5; got != want {
+		t.Fatalf("DefaultVocabulary().Order(%q) = %d, want %d", StatusBlocked, got, want)
 	}
 }
 

@@ -56,6 +56,12 @@ func TestValidateJSONReportsFreshCachedAndIncrementalCounts(t *testing.T) {
 		Pending:          0,
 		CachePath:        cachePath,
 	})
+	// A project minted by this build carries a configuration genesis, so the
+	// ledger audit is part of an ordinary validate rather than something only a
+	// project that customized its statuses ever sees.
+	if fresh.Config == nil || !fresh.Config.Valid || fresh.Config.CommitsChecked != 1 {
+		t.Fatalf("config audit = %#v, want the genesis this project was minted with", fresh.Config)
+	}
 
 	cached := runValidationJSON(t, repository)
 	assertValidationResult(t, cached, historyvalidation.Result{
@@ -180,7 +186,8 @@ func TestValidateHumanOutputListsEveryFailureInTaskOrder(t *testing.T) {
 			t.Fatalf("validate code = %d, want 7; stdout = %q; stderr = %q", code, stdout, stderr)
 		}
 		want := "Validated 2 task(s): 4 commit(s) checked, 0 cache hit(s); 1 valid, 1 invalid, 0 pending.\n" +
-			"Invalid " + first.ID + " at " + firstHead + " [corrupt-data]: stored checkpoint differs from computed state\n"
+			"Invalid " + first.ID + " at " + firstHead + " [corrupt-data]: stored checkpoint differs from computed state\n" +
+			"Configuration ledger: 1 commit(s) checked; valid.\n"
 		if stdout != want {
 			t.Fatalf("validate stdout = %q, want %q", stdout, want)
 		}
@@ -291,18 +298,44 @@ func TestValidateCachedInvalidHeadStillExitsNonzeroWithoutHistoryBatch(t *testin
 	assertNoObjectBatchAfterTaskWork(t, string(logged))
 }
 
+// assertNoObjectBatchAfterTaskWork checks the window this cache hit is about:
+// between the first task-ref enumeration and the configuration ledger's own,
+// there must be no object batch.
+//
+// The ledger audit is bounded by its own history and has no task cache to hit,
+// so its object batch is expected — a project minted by this build has a genesis
+// from its first moment, and `validate` reads it every run. What must not appear
+// is a batch inside the task window, because that is the history read the cache
+// hit exists to avoid.
+//
+// The window is stated as a pair of boundaries rather than as a flag that a
+// config-ref line clears. A cleared flag reads the same for the log this command
+// produces today and for a log where the ledger audit ran first and the task
+// batch came after it — the second is precisely the regression this guards, and
+// it would pass. Bounding the window keeps the rule armed however the stages are
+// ordered: a task batch outside the window is a batch after the config read,
+// which is a different check's business, and a config read that never happens
+// leaves the window open to the end of the log.
 func assertNoObjectBatchAfterTaskWork(t *testing.T, logged string) {
 	t.Helper()
-	taskWorkStarted := false
-	for _, line := range strings.Split(logged, "\n") {
-		if strings.Contains(line, "refs/workbook/tasks/") {
-			taskWorkStarted = true
+	lines := strings.Split(logged, "\n")
+	start := -1
+	end := len(lines)
+	for index, line := range lines {
+		if start < 0 && strings.Contains(line, "refs/workbook/tasks/") {
+			start = index
 			continue
 		}
-		if !strings.Contains(line, "cat-file --batch") {
-			continue
+		if strings.Contains(line, "refs/workbook/config") {
+			end = index
+			break
 		}
-		if taskWorkStarted {
+	}
+	if start < 0 {
+		t.Fatalf("cached invalid Git commands = %q, want a task ref enumeration to bound the window", logged)
+	}
+	for _, line := range lines[start:min(end, len(lines))] {
+		if strings.Contains(line, "cat-file --batch") {
 			t.Fatalf("cached invalid Git commands = %q, want no history batch once task work began", logged)
 		}
 	}
@@ -397,13 +430,18 @@ var validationResultJSONKeys = map[string]struct{}{
 	"failures":         {},
 }
 
+// validationResultOptionalJSONKeys are members a result carries only when the
+// repository has the thing they report on. `config` is one: a project with no
+// configuration ledger has no ledger audit, and one minted by this build has a
+// genesis from its first moment and therefore always does.
+var validationResultOptionalJSONKeys = map[string]struct{}{
+	"config": {},
+}
+
 func validationResultSchemaError(data []byte) error {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return fmt.Errorf("decode result object: %w", err)
-	}
-	if len(fields) != len(validationResultJSONKeys) {
-		return fmt.Errorf("key count = %d, want %d", len(fields), len(validationResultJSONKeys))
 	}
 	for key := range validationResultJSONKeys {
 		if _, found := fields[key]; !found {
@@ -411,7 +449,9 @@ func validationResultSchemaError(data []byte) error {
 		}
 	}
 	for key := range fields {
-		if _, expected := validationResultJSONKeys[key]; !expected {
+		_, expected := validationResultJSONKeys[key]
+		_, optional := validationResultOptionalJSONKeys[key]
+		if !expected && !optional {
 			return fmt.Errorf("unexpected key %q", key)
 		}
 	}

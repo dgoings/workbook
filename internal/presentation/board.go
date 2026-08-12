@@ -63,13 +63,15 @@ type Board struct {
 	UnknownTasks []TaskView
 }
 
-// boardVocabulary substitutes the built-in statuses for the empty vocabulary,
+// boardVocabulary substitutes the pre-ledger statuses for the empty vocabulary,
 // the way core.Service does and for the same reason: the zero value means "this
 // caller did not configure one", and a board that drew no columns at all for it
-// would turn a caller that never had a vocabulary to pass into a blank page.
+// would turn a caller that never had a vocabulary to pass into a blank page. It
+// reads core.LegacyVocabulary rather than the minting default because such a
+// caller may be drawing a project older than this build.
 func boardVocabulary(vocabulary core.Vocabulary) core.Vocabulary {
 	if vocabulary.IsZero() {
-		return core.DefaultVocabulary()
+		return core.LegacyVocabulary()
 	}
 	return vocabulary
 }

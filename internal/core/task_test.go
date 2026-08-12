@@ -33,6 +33,10 @@ func TestNormalizeTaskSortsSetsAndValidatesValues(t *testing.T) {
 	}
 }
 
+// Normalization checks a status's shape, never its membership: a stored ref may
+// hold a token this build does not mint a project with, and `blocked` is now the
+// commonest example. Rejecting one here would make a task unreadable rather than
+// unwritable.
 func TestNormalizeTaskAcceptsEveryStatusAndPriority(t *testing.T) {
 	statuses := []Status{StatusBacklog, StatusReady, StatusBlocked, StatusInProgress, StatusInReview, StatusDone}
 	priorities := []Priority{PriorityLow, PriorityMedium, PriorityHigh}
@@ -58,13 +62,30 @@ func TestDefaultVocabularyReturnsCanonicalOrder(t *testing.T) {
 	want := []StatusDefinition{
 		{Status: StatusBacklog, Label: "Backlog", Rank: "1/1", Tags: []StatusTag{StatusTagDefault}},
 		{Status: StatusReady, Label: "Ready", Rank: "2/1", Tags: []StatusTag{StatusTagNext}},
+		{Status: StatusInProgress, Label: "In Progress", Rank: "3/1", Tags: []StatusTag{}},
+		{Status: StatusInReview, Label: "In Review", Rank: "4/1", Tags: []StatusTag{}},
+		{Status: StatusDone, Label: "Done", Rank: "5/1", Tags: []StatusTag{StatusTagDone}},
+	}
+	if got := DefaultVocabulary().Definitions(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("DefaultVocabulary().Definitions() = %#v, want %#v", got, want)
+	}
+}
+
+// The vocabulary a project with no configuration ledger is read under is frozen
+// at the six statuses Workbook shipped before dependencies replaced `blocked`.
+// Every such project renders these columns, and a build that changed them would
+// be re-columnizing a board nobody asked it to touch.
+func TestLegacyVocabularyReturnsTheShippedSixStatuses(t *testing.T) {
+	want := []StatusDefinition{
+		{Status: StatusBacklog, Label: "Backlog", Rank: "1/1", Tags: []StatusTag{StatusTagDefault}},
+		{Status: StatusReady, Label: "Ready", Rank: "2/1", Tags: []StatusTag{StatusTagNext}},
 		{Status: StatusBlocked, Label: "Blocked", Rank: "3/1", Tags: []StatusTag{}},
 		{Status: StatusInProgress, Label: "In Progress", Rank: "4/1", Tags: []StatusTag{}},
 		{Status: StatusInReview, Label: "In Review", Rank: "5/1", Tags: []StatusTag{}},
 		{Status: StatusDone, Label: "Done", Rank: "6/1", Tags: []StatusTag{StatusTagDone}},
 	}
-	if got := DefaultVocabulary().Definitions(); !reflect.DeepEqual(got, want) {
-		t.Fatalf("DefaultVocabulary().Definitions() = %#v, want %#v", got, want)
+	if got := LegacyVocabulary().Definitions(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("LegacyVocabulary().Definitions() = %#v, want %#v", got, want)
 	}
 }
 

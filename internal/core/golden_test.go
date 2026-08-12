@@ -156,8 +156,10 @@ func TestGoldenTaskRefsStillValidateAsCheckpoints(t *testing.T) {
 }
 
 // The generated documents below are deliberately built from the same small
-// alphabet of statuses a stored ref can hold: the six built-ins, well-formed
-// tokens no build knows, and tokens that are not tokens at all.
+// alphabet of statuses a stored ref can hold: the six a pre-ledger project is
+// using, well-formed tokens no build knows, and tokens that are not tokens at
+// all. `blocked` stays in the list precisely because it left the default set —
+// refs holding it exist and this normalization has to keep accepting them.
 var propertyStatuses = []Status{
 	StatusBacklog, StatusReady, StatusBlocked, StatusInProgress, StatusInReview, StatusDone,
 	"awaiting-review", "shipped", "triage", "x", "a1-b2-c3",

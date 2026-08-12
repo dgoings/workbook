@@ -154,6 +154,77 @@ type statusListResult struct {
 	// validate` reports the same list; this is where a person is already
 	// looking at the statuses they would shrink.
 	Advisories []historyvalidation.Advisory `json:"advisories,omitempty"`
+	// Migrations name a status this project still defines that Workbook no
+	// longer ships, and the command that retires it. Nothing acts on them: a
+	// column with tasks in it is not this build's to remove, so the listing says
+	// what changed and prints the command rather than running it.
+	//
+	// It is absent for every project that does not define such a status, which
+	// is every project minted by this build and every project that has already
+	// migrated.
+	Migrations []statusMigrationView `json:"migrations,omitempty"`
+}
+
+// statusMigrationView is one default Workbook dropped that this project kept.
+type statusMigrationView struct {
+	Status core.Status `json:"status"`
+	// Reason says why the status left the default set, so the note is an
+	// explanation rather than an instruction with no argument behind it.
+	Reason string `json:"reason"`
+	// Command is the exact removal, `--into` included, naming this project's own
+	// default status rather than assuming it is still called `backlog`.
+	//
+	// It is absent when no single command performs the removal, and its absence
+	// is the shape a caller reads that from: today the one such case is a project
+	// whose new tasks land in the dropped status, which another status has to be
+	// given the `default` tag before anything can remove it. `first` carries that
+	// step, and exactly one of the two members is ever present.
+	Command string `json:"command,omitempty"`
+	// First is the step that has to happen before a removal is even expressible,
+	// with `<status>` left for a person to fill in because only they know which
+	// column their new work should land in.
+	First string `json:"first,omitempty"`
+}
+
+// droppedDefaultStatuses reports the statuses this project defines that Workbook
+// has stopped shipping, with the command that removes each one.
+//
+// The test is membership, not provenance: a project reaches this state by never
+// having migrated, and there is no signal in a vocabulary that distinguishes the
+// `blocked` a project inherited from one somebody added back deliberately. So
+// the note explains rather than scolds, and it costs a person one status they
+// chose to keep reading a sentence about it.
+//
+// A project whose new tasks land in the dropped status gets the same note with
+// a different next step rather than no note at all. `status delete` refuses to
+// forward a status into itself and refuses to leave a project with nowhere for
+// new work to land, so the removal is not a command that exists yet for them —
+// but they are the readers with the most invested in the column and the least
+// reason to be told nothing. Naming the tag handoff is the whole difference
+// between "you have a status Workbook no longer ships" and silence.
+func droppedDefaultStatuses(vocabulary core.Vocabulary) []statusMigrationView {
+	if !vocabulary.Has(core.StatusBlocked) {
+		return nil
+	}
+	reason := "task dependencies record what a task is waiting on, so `blocked` is no longer " +
+		"one of the statuses Workbook gives a new project"
+	if vocabulary.Default() == core.StatusBlocked {
+		return []statusMigrationView{{
+			Status: core.StatusBlocked,
+			Reason: reason + ", and this project's new tasks land in it",
+			// Written out rather than built by statusCommand: `<status>` is a
+			// placeholder for a person to replace, and quoting it the way a real
+			// argument is quoted would make it read as a status called
+			// "<status>". This is the same spelling the arity refusals use.
+			First: "workbook status tag <status> --tag " + string(core.StatusTagDefault),
+		}}
+	}
+	return []statusMigrationView{{
+		Status: core.StatusBlocked,
+		Reason: reason,
+		Command: statusCommand("delete", string(core.StatusBlocked),
+			"--into", string(vocabulary.Default())),
+	}}
 }
 
 type retiredStatusView struct {
@@ -322,6 +393,7 @@ func runStatusList(ctx context.Context, args []string, cwd string, stdout, stder
 		Statuses:   statusViews(state.Vocabulary, counts),
 		Unresolved: unresolved,
 		Advisories: historyvalidation.StatusCeilingAdvisories(document),
+		Migrations: droppedDefaultStatuses(state.Vocabulary),
 	}
 	// Retirement dates come from the ledger, so a project that has none skips
 	// the walk entirely — and has nothing retired to date anyway.
@@ -1996,7 +2068,19 @@ func writeStatusList(output io.Writer, result statusListResult) error {
 		return core.Wrap(core.CategoryOperational, "render status list", err)
 	}
 	if !result.Seeded {
-		fmt.Fprintf(output, "\tNo status change is recorded yet, so these are the statuses Workbook ships with.\n")
+		// Not "the statuses this project started with": a project can reach the
+		// fallback by never having recorded anything and by having lost the
+		// ledger that recorded something, and only one of those started here.
+		// What is true in both is that nothing is recorded now.
+		fmt.Fprintf(output, "\tNo status change is recorded, so these are the statuses Workbook reads for a project that has none of its own.\n")
+	}
+	for _, migration := range result.Migrations {
+		fmt.Fprintf(output, "\tNo longer a default:\t%s\t%s\n", migration.Status, migration.Reason)
+		if migration.Command != "" {
+			fmt.Fprintf(output, "\t\tremove it when this project no longer needs it: %s\n", migration.Command)
+			continue
+		}
+		fmt.Fprintf(output, "\t\tremoving it starts by giving the default tag to another status: %s\n", migration.First)
 	}
 	for _, retired := range result.Retired {
 		fmt.Fprintf(output, "\tRetired:\t%s → %s\t%s%s\n",

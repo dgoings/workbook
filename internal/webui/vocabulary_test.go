@@ -328,9 +328,9 @@ func TestClientScriptNamesNoStatusOfItsOwn(t *testing.T) {
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return nil, nil })
 	response := request(t, handler, http.MethodGet, "/")
 	script := renderedClientScript(t, response.Body.String())
-	for _, definition := range core.DefaultVocabulary().Definitions() {
+	for _, definition := range core.LegacyVocabulary().Definitions() {
 		if literal := strconv.Quote(string(definition.Status)); strings.Contains(script, literal) {
-			t.Errorf("the client script names the built-in status %s, which a project need not define", literal)
+			t.Errorf("the client script names the status %s, which a project need not define", literal)
 		}
 	}
 }

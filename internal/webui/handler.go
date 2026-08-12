@@ -315,16 +315,17 @@ func VocabularyFrom(ctx context.Context) (VocabularyState, bool) {
 // request carrying them so that nothing this route calls afterwards resolves
 // them a second time.
 //
-// A board built without a resolver reports the built-in statuses and no ledger
-// head, which is exactly what every construction that predates per-project
-// columns saw. A resolver that fails is reported rather than papered over:
-// drawing the built-in six for a project that renamed half of them would put
-// every task in the wrong column and accept drops the server would refuse.
+// A board built without a resolver reports the pre-ledger statuses and no
+// ledger head, which is exactly what every construction that predates
+// per-project columns saw. A resolver that fails is reported rather than
+// papered over: drawing the built-in six for a project that renamed half of
+// them would put every task in the wrong column and accept drops the server
+// would refuse.
 func (handler *handler) vocabulary(request *http.Request) (VocabularyState, *http.Request, error) {
 	if state, carried := VocabularyFrom(request.Context()); carried {
 		return state, request, nil
 	}
-	state := VocabularyState{Vocabulary: core.DefaultVocabulary()}
+	state := VocabularyState{Vocabulary: core.LegacyVocabulary()}
 	if handler.Vocabulary != nil {
 		resolved, err := handler.Vocabulary(request.Context())
 		if err != nil {
@@ -332,7 +333,7 @@ func (handler *handler) vocabulary(request *http.Request) (VocabularyState, *htt
 		}
 		state = resolved
 		if state.Vocabulary.IsZero() {
-			state.Vocabulary = core.DefaultVocabulary()
+			state.Vocabulary = core.LegacyVocabulary()
 		}
 	}
 	return state, request.WithContext(context.WithValue(request.Context(), vocabularyKey{}, state)), nil

@@ -54,6 +54,157 @@ func TestSetupInitializesIdentityAndInstallsDocumentation(t *testing.T) {
 	}
 }
 
+// A project this build mints gets the statuses this build ships, recorded in a
+// genesis rather than left to a fallback that a later release could change under
+// it. `blocked` is not among them: dependencies say what a task is waiting on.
+func TestSetupMintsTheDefaultVocabularyIntoAGenesis(t *testing.T) {
+	repository := testrepo.New(t)
+
+	if code, _, stderr := run(t, repository, "setup"); code != 0 {
+		t.Fatalf("setup code = %d, want 0; stderr = %q", code, stderr)
+	}
+
+	document := cliStatusList(t, repository)
+	if !document.Seeded || document.Head == "" {
+		t.Fatalf("status list = seeded %t, head %q; want a recorded genesis", document.Seeded, document.Head)
+	}
+	if got, want := cliStatusNames(t, repository), []string{
+		"backlog", "ready", "in-progress", "in-review", "done",
+	}; !equalStrings(got, want) {
+		t.Fatalf("minted statuses = %v, want %v", got, want)
+	}
+
+	// The generated guidelines and the board agree with the ledger, because both
+	// read it rather than carrying a list of their own.
+	guidelines := readProjectFile(t, repository, agentdocs.GuidelinesPath)
+	if strings.Contains(guidelines, "`blocked`") {
+		t.Errorf("minted guidelines still document `blocked`:\n%s", guidelines)
+	}
+	if !strings.Contains(guidelines, "| 5 | `done` | Done | `done` |") {
+		t.Errorf("minted guidelines do not put done fifth:\n%s", guidelines)
+	}
+	code, board, stderr := run(t, repository, "board", "--narrow")
+	if code != 0 || stderr != "" {
+		t.Fatalf("board = code %d, stderr %q", code, stderr)
+	}
+	if strings.Contains(board, "BLOCKED") {
+		t.Errorf("minted board still draws a Blocked column:\n%s", board)
+	}
+
+	// A task created without --status still lands where it always did.
+	if got := cliCreateTask(t, repository, "Alpha").Status; got != core.StatusBacklog {
+		t.Fatalf("created task status = %q, want %q", got, core.StatusBacklog)
+	}
+}
+
+// A project that already existed keeps the statuses it was using, and rerunning
+// setup on it does not mint a vocabulary over the top.
+//
+// This is the upgrade every installed project performs, reproduced by removing
+// the ledger: six columns before, six columns after, and no genesis written by a
+// command whose job was to install documentation.
+func TestSetupLeavesAnExistingProjectsStatusesAlone(t *testing.T) {
+	repository := preLedgerRepository(t)
+	task := cliCreateTask(t, repository, "Alpha")
+
+	if code, _, stderr := run(t, repository, "setup"); code != 0 {
+		t.Fatalf("second setup code = %d, want 0; stderr = %q", code, stderr)
+	}
+
+	document := cliStatusList(t, repository)
+	if document.Seeded || document.Head != "" {
+		t.Fatalf("status list = seeded %t, head %q; want setup to have recorded nothing",
+			document.Seeded, document.Head)
+	}
+	if got, want := cliStatusNames(t, repository), []string{
+		"backlog", "ready", "blocked", "in-progress", "in-review", "done",
+	}; !equalStrings(got, want) {
+		t.Fatalf("statuses after the upgrade = %v, want the six it was using %v", got, want)
+	}
+	guidelines := readProjectFile(t, repository, agentdocs.GuidelinesPath)
+	if !strings.Contains(guidelines, "| 3 | `blocked` | Blocked | none |") {
+		t.Errorf("the upgrade rewrote the guidelines without `blocked`:\n%s", guidelines)
+	}
+	code, board, stderr := run(t, repository, "board", "--narrow")
+	if code != 0 || stderr != "" {
+		t.Fatalf("board = code %d, stderr %q", code, stderr)
+	}
+	if !strings.Contains(board, "BLOCKED (0)") {
+		t.Errorf("the upgraded board stopped drawing the Blocked column:\n%s", board)
+	}
+	// The status the project defines is still one a caller may supply.
+	if code, _, stderr := run(t, repository, "update", task.ID, "--status", "blocked", "--no-sync"); code != 0 {
+		t.Fatalf("update --status blocked = code %d; stderr = %q", code, stderr)
+	}
+}
+
+// A project whose configuration ledger was never written or was lost is
+// repaired by the next setup, provided nothing has been tracked under it.
+//
+// The gate that produced this branch first was "did this run mint the identity",
+// which cannot see either failure: a genesis write that failed after Init minted
+// leaves the project reverted to the pre-ledger six with nothing able to put it
+// back, and so does a ref lost afterwards. Emptiness is the honest test — a
+// task-less, unconfigured project has no board to re-columnize and no recorded
+// decision to overrule, whoever created it and whenever.
+func TestSetupSeedsAProjectThatHasNoLedgerAndNoTasks(t *testing.T) {
+	repository := preLedgerRepository(t)
+	if document := cliStatusList(t, repository); document.Seeded {
+		t.Fatal("the fixture still has a configuration ledger")
+	}
+
+	if code, _, stderr := run(t, repository, "setup"); code != 0 {
+		t.Fatalf("setup code = %d, want 0; stderr = %q", code, stderr)
+	}
+
+	document := cliStatusList(t, repository)
+	if !document.Seeded || document.Head == "" {
+		t.Fatalf("status list = seeded %t, head %q; want the ledger repaired", document.Seeded, document.Head)
+	}
+	if got, want := cliStatusNames(t, repository), []string{
+		"backlog", "ready", "in-progress", "in-review", "done",
+	}; !equalStrings(got, want) {
+		t.Fatalf("repaired statuses = %v, want %v", got, want)
+	}
+	if len(document.Migrations) != 0 {
+		t.Fatalf("migrations = %#v, want none once the ledger records five statuses", document.Migrations)
+	}
+}
+
+// The repair stops at the first task. A project with work in it is an existing
+// project whatever its ledger says, and seeding one under it would drop a column
+// its board is drawing — so it stays on the conservative fallback and says so.
+func TestSetupLeavesAProjectWithTasksOnTheFallback(t *testing.T) {
+	repository := preLedgerRepository(t)
+	cliCreateTask(t, repository, "Alpha")
+
+	if code, _, stderr := run(t, repository, "setup"); code != 0 {
+		t.Fatalf("setup code = %d, want 0; stderr = %q", code, stderr)
+	}
+
+	if document := cliStatusList(t, repository); document.Seeded {
+		t.Fatal("setup seeded a vocabulary over a project that already holds tasks")
+	}
+	if got, want := cliStatusNames(t, repository), []string{
+		"backlog", "ready", "blocked", "in-progress", "in-review", "done",
+	}; !equalStrings(got, want) {
+		t.Fatalf("statuses = %v, want the six it was using %v", got, want)
+	}
+	// The line a project in this state reads has to be true of it. It did not
+	// necessarily start here — it may have lost a ledger that recorded
+	// something — so the report says what is recorded now and nothing more.
+	code, stdout, stderr := run(t, repository, "status", "list")
+	if code != 0 || stderr != "" {
+		t.Fatalf("status list = code %d, stderr %q", code, stderr)
+	}
+	if strings.Contains(stdout, "this project started with") {
+		t.Errorf("status list claims the project started with these statuses:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "No status change is recorded") {
+		t.Errorf("status list does not say that nothing is recorded:\n%s", stdout)
+	}
+}
+
 func TestSetupReportsSkippedSyncWithoutAnOrigin(t *testing.T) {
 	// Production mutation: failing when no remote is configured would break the
 	// solo local workflow, which needs no remote at all.

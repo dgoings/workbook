@@ -143,6 +143,10 @@ func TestServiceListOrdersRanksAsExactRationals(t *testing.T) {
 	assertTaskIDs(t, tasks, []string{twoThirds.State.TaskID, nineTenths.State.TaskID})
 }
 
+// The order is the one a Service with no configured vocabulary reports, which is
+// the pre-ledger six — `blocked` included. It is the ordering every project that
+// has never recorded a status change still gets, so it is the one worth pinning
+// here; a project's own vocabulary is exercised in service_vocabulary_test.go.
 func TestServiceListOrdersWorkflowStatuses(t *testing.T) {
 	backlog := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", TaskData{Title: "backlog", Status: StatusBacklog, Priority: PriorityMedium, Rank: "1/1"})
 	ready := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D2", TaskData{Title: "ready", Status: StatusReady, Priority: PriorityMedium, Rank: "1/1"})

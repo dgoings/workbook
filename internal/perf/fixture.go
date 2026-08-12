@@ -252,6 +252,13 @@ func fixtureRepresentativeOperation(taskIndex, logicalClock int, dependency stri
 			Value: fmt.Sprintf("Benchmark task %04d update %02d", taskIndex, logicalClock),
 		}
 	case 3, 9, 15:
+		// A fixture repository has no configuration ledger, so it is read under
+		// the pre-ledger vocabulary and `blocked` is a live status in it. The
+		// cycle keeps it deliberately: most repositories Workbook meets in the
+		// field are that shape, and a benchmark that only ever stored statuses
+		// this build mints a project with would price a narrower population than
+		// the one being measured. The order is load-bearing — the first entry is
+		// what a fixture's second task settles on, and a scenario pins it.
 		statuses := []core.Status{
 			core.StatusInProgress,
 			core.StatusBlocked,

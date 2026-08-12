@@ -144,30 +144,64 @@ func localOnlyConfigCommits(graph map[string][]string, localHead, remoteHead str
 }
 
 // unrelatedLocalConfigCommits returns the local commits to replay when the two
-// ledgers have different genesis roots, oldest first and without the root.
+// ledgers have different genesis roots, oldest first and without the root, and
+// the root it dropped.
 //
 // Adopting origin's root rather than trying to merge the two is the whole
 // resolution, and the reason is a division of labour rather than a tiebreak.
 // A genesis root is bookkeeping: it says "this project's configuration started
-// from this vocabulary", which for a lazily seeded ledger is always
-// core.LegacyVocabulary and is therefore the same statement on both sides. The
-// operations after it are intent — somebody added, renamed or removed a status
-// — and intent must survive. Origin won the publication race, so its root is
-// the project's root, and this clone's operations are replayed onto it. Nothing
-// is lost that anybody chose.
-func unrelatedLocalConfigCommits(graph map[string][]string, localHead string) ([]string, error) {
+// from this vocabulary". The operations after it are intent — somebody added,
+// renamed or removed a status — and intent must survive. Origin won the
+// publication race, so its root is the project's root, and this clone's
+// operations are replayed onto it.
+//
+// That division holds only while the two roots make the same statement, and
+// they no longer always do. This comment used to assert that a lazily seeded
+// root is always core.LegacyVocabulary; `workbook setup` now writes
+// core.DefaultVocabulary when it mints a project, so a root can carry either,
+// and adopting across a difference is not bookkeeping at all — it redefines
+// the project. A column can vanish with tasks in it, or appear in a project
+// that never had one. The caller therefore compares the two roots and refuses
+// to adopt across a difference, which is why this returns the dropped root
+// rather than discarding it silently.
+func unrelatedLocalConfigCommits(graph map[string][]string, localHead string) ([]string, string, error) {
 	local, err := commitChain(graph, localHead)
 	if err != nil {
-		return nil, core.Wrap(core.CategoryCorruptData, "cannot walk the local configuration history", err)
+		return nil, "", core.Wrap(core.CategoryCorruptData, "cannot walk the local configuration history", err)
 	}
 	if len(local) == 0 {
-		return nil, core.Errorf(core.CategoryCorruptData, "the local configuration ledger has no commits")
+		return nil, "", core.Errorf(core.CategoryCorruptData, "the local configuration ledger has no commits")
 	}
 	// The oldest commit is this clone's own genesis. It is dropped rather than
 	// replayed: config.genesis requires no parent, so replaying one onto
-	// origin's root would be refused by the fold, and the vocabulary it carries
-	// is the same starting point origin's root already recorded.
-	return reverseCommits(local[:len(local)-1]), nil
+	// origin's root would be refused by the fold.
+	return reverseCommits(local[:len(local)-1]), local[len(local)-1], nil
+}
+
+// configRootOf returns the oldest commit in a ledger, which is its genesis root.
+func configRootOf(graph map[string][]string, head string) (string, error) {
+	chain, err := commitChain(graph, head)
+	if err != nil {
+		return "", core.Wrap(core.CategoryCorruptData, "cannot walk a configuration history", err)
+	}
+	if len(chain) == 0 {
+		return "", core.Errorf(core.CategoryCorruptData, "a configuration ledger has no commits")
+	}
+	return chain[len(chain)-1], nil
+}
+
+// describeRootVocabulary renders a genesis vocabulary for a conflict line: how
+// many statuses it started from and which, in order.
+//
+// Naming them is what makes the report actionable. "Two different vocabularies"
+// sends somebody to read two commits by hand; "backlog, ready, blocked, …
+// against backlog, ready, …" is the difference itself.
+func describeRootVocabulary(document core.VocabularyDocument) string {
+	names := make([]string, 0, len(document.Statuses))
+	for _, definition := range document.Statuses {
+		names = append(names, string(definition.Status))
+	}
+	return fmt.Sprintf("%d status(es): %s", len(names), strings.Join(names, ", "))
 }
 
 func reverseCommits(newestFirst []string) []string {
@@ -200,9 +234,10 @@ func (r *Repository) reconcileConfigLedger(
 	}
 
 	var localOnly []string
+	var localRoot string
 	var err error
 	if unrelated {
-		localOnly, err = unrelatedLocalConfigCommits(graph, local.Head)
+		localOnly, localRoot, err = unrelatedLocalConfigCommits(graph, local.Head)
 	} else {
 		var related bool
 		_, localOnly, related, err = localOnlyConfigCommits(graph, local.Head, remote.Head)
@@ -225,6 +260,20 @@ func (r *Repository) reconcileConfigLedger(
 		return configReconcileOutcome{}, err
 	}
 	outcome.ParkedRef = fmt.Sprintf("%s%d", parkedConfigRefPrefix, index)
+	if unrelated {
+		conflict, err := r.classifyConfigRoots(ctx, config, graph, localRoot, remote.Head, outcome.ParkedRef)
+		if err != nil {
+			return configReconcileOutcome{}, err
+		}
+		if conflict != nil {
+			// The ledger still becomes origin's — a clone cannot serve two
+			// roots — but nothing local is replayed onto it and the whole local
+			// tip is parked, so every operation the local root carried is still
+			// readable at the parked ref while somebody decides.
+			outcome.Conflicts = []core.ConfigConflict{*conflict}
+			return outcome, nil
+		}
+	}
 	if len(localOnly) == 0 {
 		return outcome, nil
 	}
@@ -252,6 +301,87 @@ func (r *Repository) reconcileConfigLedger(
 	return outcome, nil
 }
 
+// classifyConfigRoots reports the one thing that must stop an adoption: the two
+// unrelated ledgers were started from different vocabularies.
+//
+// Equal roots keep the behavior this path has always had — adopt origin's root,
+// replay the local operations onto it, lose nothing anybody chose. The
+// comparison is what makes that safe, where it used to rest on an assumption
+// about how roots were written; `workbook setup` mints one vocabulary and the
+// lazy seed records another, so the assumption no longer holds and only the
+// comparison can tell the two situations apart.
+//
+// It reads two commits, and only on the unrelated path, which a project reaches
+// at most once in its life.
+func (r *Repository) classifyConfigRoots(
+	ctx context.Context,
+	config core.ProjectConfig,
+	graph map[string][]string,
+	localRoot string,
+	remoteHead string,
+	parkedRef string,
+) (*core.ConfigConflict, error) {
+	remoteRoot, err := configRootOf(graph, remoteHead)
+	if err != nil {
+		return nil, err
+	}
+	localRecords, err := r.readConfigRecords(ctx, config, configRef, []string{localRoot})
+	if err != nil {
+		return nil, err
+	}
+	remoteRecords, err := r.readConfigRecords(ctx, config, remoteConfigRef, []string{remoteRoot})
+	if err != nil {
+		return nil, err
+	}
+	ours := localRecords[0].State.Config.Vocabulary
+	theirs := remoteRecords[0].State.Config.Vocabulary
+	if reflect.DeepEqual(ours, theirs) {
+		return nil, nil
+	}
+	return &core.ConfigConflict{
+		Type:   core.ConfigConflictRootVocabulary,
+		Ours:   describeRootVocabulary(ours),
+		Theirs: describeRootVocabulary(theirs),
+		Detail: fmt.Sprintf(
+			"this project's configuration was started twice from different vocabularies — %s here, %s on origin. "+
+				"Origin's is this project's now and nothing local was replayed onto it; the local ledger is kept at %s. "+
+				"Reapply what it recorded with `workbook status`, and add back any status origin's root does not "+
+				"define before tasks stored under it stop resolving",
+			describeRootVocabulary(ours), describeRootVocabulary(theirs), parkedRef),
+	}, nil
+}
+
+// markPackSubjects records the statuses a pack brings into existence, so an
+// operation later in the same pack can name one of them.
+//
+// A pack is atomic and its operations are ordered, so the honest reading of
+// operation N+1 is against a vocabulary that already has operation N's effect.
+// This projects the one effect classification asks about — which tokens exist —
+// rather than advancing the whole view, and that is deliberate. Advancing would
+// mean folding each operation into a vocabulary document here, which is a second
+// implementation of ApplyConfig's rules living beside the fold rather than in
+// it; classifyConfigAdd compares labels, ranks and tag sets exactly, so a
+// projection that normalized any of them differently would invent conflicts
+// instead of finding them. Existence is the whole question the pending set
+// answers, and it is answerable without reproducing the fold.
+//
+// Two operation types create a token: an add names one outright, and a rename
+// moves an existing status onto a new one. `workbook status rename` records
+// exactly the second followed by a relabel of the new token whenever the display
+// label follows the machine value, which is the default for every derived label
+// — so an ordinary rename is a pack whose second operation names a status only
+// its first operation created.
+func markPackSubjects(view configView, operations []core.ConfigOperation) {
+	for _, operation := range operations {
+		switch operation.Type {
+		case core.ConfigStatusAdd:
+			view.pending[operation.Name] = struct{}{}
+		case core.ConfigStatusRename:
+			view.pending[operation.To] = struct{}{}
+		}
+	}
+}
+
 // configReplay carries the state one ledger's replay advances through.
 type configReplay struct {
 	parent    configRecord
@@ -269,6 +399,7 @@ type configReplay struct {
 // and every one of them would be a guess about what they meant.
 func (replay *configReplay) next(ctx context.Context, r *Repository, local configRecord) (bool, error) {
 	view := newConfigView(replay.parent.State.Config.Vocabulary)
+	markPackSubjects(view, local.Operation.Operations)
 	for _, operation := range local.Operation.Operations {
 		if conflict := classifyConfigOperation(view, operation); conflict != nil {
 			replay.conflicts = append(replay.conflicts, *conflict)
@@ -337,6 +468,12 @@ type configView struct {
 	live    map[core.Status]core.StatusDefinition
 	aliases map[core.Status]core.Status
 	retired map[core.Status]core.Status
+	// pending are the statuses the pack being classified brings into existence
+	// itself. The view is built once per pack, from the vocabulary the pack
+	// starts from, so without this an operation editing a status an earlier
+	// operation in the same pack created would read as an edit to a status
+	// nobody defines.
+	pending map[core.Status]struct{}
 }
 
 func newConfigView(document core.VocabularyDocument) configView {
@@ -344,6 +481,7 @@ func newConfigView(document core.VocabularyDocument) configView {
 		live:    make(map[core.Status]core.StatusDefinition, len(document.Statuses)),
 		aliases: make(map[core.Status]core.Status, len(document.Aliases)),
 		retired: make(map[core.Status]core.Status, len(document.Retired)),
+		pending: make(map[core.Status]struct{}),
 	}
 	for _, definition := range document.Statuses {
 		view.live[definition.Status] = definition
@@ -498,7 +636,10 @@ func classifyConfigRename(view configView, operation core.ConfigOperation) *core
 					operation.To, destination),
 			}
 		}
-		return nil
+		// Origin never had it. Reachable only after a root adoption, and a
+		// discarded rename is as much a lost decision as a discarded relabel;
+		// see classifyConfigSubject.
+		return undefinedSubjectConflict(view, operation.From, operation.Type)
 	}
 	if subject == operation.To {
 		// Both sides renamed it to the same token, in either order.
@@ -531,7 +672,8 @@ func classifyConfigRemove(view configView, operation core.ConfigOperation) *core
 	if !live {
 		destination, retired := view.retirementOf(operation.Status)
 		if !retired {
-			return nil
+			// Origin never had it; see classifyConfigSubject.
+			return undefinedSubjectConflict(view, operation.Status, operation.Type)
 		}
 		ours, oursLive := view.resolve(operation.Destination)
 		theirs, theirsLive := view.resolve(destination)
@@ -573,10 +715,21 @@ func classifyConfigRemove(view configView, operation core.ConfigOperation) *core
 }
 
 // classifyConfigSubject covers the operations that only edit a status in place.
-// The one thing that can go wrong with them is that the fetched history removed
-// the status underneath: the fold refuses to chase a retirement, precisely so
-// the edit does not land on the innocent status the tasks were forwarded into,
-// and the dropped edit is what gets reported here.
+//
+// Two things can go wrong with them. The fetched history may have removed the
+// status underneath: the fold refuses to chase a retirement, precisely so the
+// edit does not land on the innocent status the tasks were forwarded into, and
+// the dropped edit is reported.
+//
+// Or the fetched history may never have had the status at all. That used to be
+// unreachable — the two ledgers shared a base, or shared a root that said the
+// same thing — and returning nil for it read as "a no-op nobody needs to decide
+// about". It is reachable now that a root can be minted from one vocabulary and
+// seeded from another, and nil is the wrong answer: the fold applies the edit to
+// nothing, the result equals the parent, and the replay counts the operation as
+// already applied upstream. Somebody's deliberate change is discarded and the
+// report says it landed. An edit to a status the adopted history does not define
+// is a decision, so it is one here.
 func classifyConfigSubject(view configView, operation core.ConfigOperation) *core.ConfigConflict {
 	if operation.Status == "" {
 		return nil
@@ -584,16 +737,42 @@ func classifyConfigSubject(view configView, operation core.ConfigOperation) *cor
 	if _, live := view.resolveSubject(operation.Status); live {
 		return nil
 	}
-	destination, retired := view.retirementOf(operation.Status)
-	if !retired {
+	if destination, retired := view.retirementOf(operation.Status); retired {
+		return &core.ConfigConflict{
+			Type:   core.ConfigConflictStatusRetired,
+			Status: operation.Status,
+			Theirs: string(destination),
+			Detail: fmt.Sprintf("origin removed this status into %s, so the local %s was dropped",
+				destination, operation.Type),
+		}
+	}
+	return undefinedSubjectConflict(view, operation.Status, operation.Type)
+}
+
+// undefinedSubjectConflict reports a local operation whose subject the fetched
+// history neither defines nor has ever retired.
+//
+// A subject the local ledger itself defines in the same pack is not undefined:
+// the pack is classified against the vocabulary it starts from, so an add and an
+// edit recorded together would otherwise report the author's own status as
+// missing.
+func undefinedSubjectConflict(
+	view configView,
+	subject core.Status,
+	operationType core.ConfigOperationType,
+) *core.ConfigConflict {
+	if _, pending := view.pending[subject]; pending {
 		return nil
 	}
 	return &core.ConfigConflict{
-		Type:   core.ConfigConflictStatusRetired,
-		Status: operation.Status,
-		Theirs: string(destination),
-		Detail: fmt.Sprintf("origin removed this status into %s, so the local %s was dropped",
-			destination, operation.Type),
+		Type:   core.ConfigConflictStatusDefinition,
+		Status: subject,
+		Ours:   fmt.Sprintf("a local %s of this status", operationType),
+		Theirs: "not defined",
+		Detail: fmt.Sprintf(
+			"origin's configuration does not define this status and never retired it, so the local %s changed "+
+				"nothing; define it again with `workbook status add` before reapplying the change",
+			operationType),
 	}
 }
 

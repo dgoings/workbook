@@ -140,7 +140,7 @@ func TestFetchResolvesOpposedSameFieldStatusChangesLastSyncerWins(t *testing.T) 
 	// The same field, two different values, neither clone having seen the other.
 	setSyncTaskStatus(t, first, config, task.ID, core.StatusInProgress)
 	publishTaskRefs(t, first)
-	setSyncTaskStatus(t, second, config, task.ID, core.StatusBlocked)
+	setSyncTaskStatus(t, second, config, task.ID, core.StatusInReview)
 
 	result, err := second.Fetch(ctx, config)
 	if err != nil {
@@ -157,9 +157,9 @@ func TestFetchResolvesOpposedSameFieldStatusChangesLastSyncerWins(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.State.Task.Status != core.StatusBlocked {
+	if snapshot.State.Task.Status != core.StatusInReview {
 		t.Fatalf("reconciled status = %q, want %q from the clone that synchronized last",
-			snapshot.State.Task.Status, core.StatusBlocked)
+			snapshot.State.Task.Status, core.StatusInReview)
 	}
 	remoteTip := refValue(t, first, taskRefPrefix+task.ID)
 	if !mergeBaseIsAncestor(t, second.Root, remoteTip, snapshot.Head) {
@@ -182,9 +182,9 @@ func TestFetchResolvesOpposedSameFieldStatusChangesLastSyncerWins(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if converged.State.Task.Status != core.StatusBlocked || converged.Head != snapshot.Head {
+	if converged.State.Task.Status != core.StatusInReview || converged.Head != snapshot.Head {
 		t.Fatalf("converged task = %q at %s, want %q at %s",
-			converged.State.Task.Status, converged.Head, core.StatusBlocked, snapshot.Head)
+			converged.State.Task.Status, converged.Head, core.StatusInReview, snapshot.Head)
 	}
 }
 

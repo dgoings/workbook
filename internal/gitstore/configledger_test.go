@@ -43,6 +43,89 @@ func writeConfig(t *testing.T, repo *Repository, config core.ProjectConfig, oper
 	return result
 }
 
+// MintConfigLedger records the statuses this build ships, which is the one place
+// core.DefaultVocabulary is ever written down.
+//
+// It is the counterpart to the lazy seed above and differs from it in exactly
+// the way that matters: the lazy seed runs for a project that already existed
+// and records what that project was using, while this runs for a project being
+// brought into existence and records what this release gives a new one. Reading
+// the wrong accessor in either place would silently re-columnize a board.
+func TestMintConfigLedgerRecordsTheDefaultVocabulary(t *testing.T) {
+	repo, config := writeRepository(t)
+	ctx := context.Background()
+
+	seeded, err := repo.MintConfigLedger(ctx, config, core.CryptoULIDSource{})
+	if err != nil {
+		t.Fatalf("MintConfigLedger() error = %v", err)
+	}
+	if !seeded {
+		t.Fatal("MintConfigLedger() = false, want a genesis written for a project with no ledger")
+	}
+
+	records := configChain(t, repo, config)
+	if len(records) != 1 {
+		t.Fatalf("ledger holds %d commit(s), want the genesis alone", len(records))
+	}
+	root := records[0]
+	if len(root.Operation.Operations) != 1 || root.Operation.Operations[0].Type != core.ConfigGenesis {
+		t.Fatalf("root pack = %#v, want one config.genesis", root.Operation.Operations)
+	}
+	if got := root.Operation.Operations[0].Config.Vocabulary; !reflect.DeepEqual(got, core.DefaultVocabulary().Document()) {
+		t.Fatalf("genesis vocabulary = %#v, want the vocabulary this build mints with", got)
+	}
+	if got := parentCount(t, repo, root.ObjectID); got != 0 {
+		t.Fatalf("genesis parent count = %d, want 0", got)
+	}
+
+	vocabulary, err := repo.LoadVocabulary(ctx)
+	if err != nil {
+		t.Fatalf("LoadVocabulary() error = %v", err)
+	}
+	if vocabulary.Has(core.StatusBlocked) {
+		t.Fatal("a minted project defines `blocked`, which left the default set")
+	}
+
+	// A second call is a no-op rather than a second root, which is what a rerun
+	// of `workbook setup` and a clone that fetched a ledger both look like.
+	again, err := repo.MintConfigLedger(ctx, config, core.CryptoULIDSource{})
+	if err != nil {
+		t.Fatalf("MintConfigLedger() second call error = %v", err)
+	}
+	if again {
+		t.Fatal("MintConfigLedger() = true on a project that already has a ledger")
+	}
+	if got := len(configChain(t, repo, config)); got != 1 {
+		t.Fatalf("ledger holds %d commit(s) after a second mint, want 1", got)
+	}
+}
+
+// A project that already has a ledger keeps recording what it holds: the lazy
+// seed never runs again, and an authored change appends. The pair of tests is
+// what keeps the two vocabularies from being read in each other's place.
+func TestWriteConfigOperationAppendsToAMintedLedger(t *testing.T) {
+	repo, config := writeRepository(t)
+	ctx := context.Background()
+	if _, err := repo.MintConfigLedger(ctx, config, core.CryptoULIDSource{}); err != nil {
+		t.Fatalf("MintConfigLedger() error = %v", err)
+	}
+
+	result := writeConfig(t, repo, config, configOperations(renameOperation("ready", "todo"))...)
+	if result.Seeded {
+		t.Fatal("WriteConfigOperation() reported seeding a ledger that already existed")
+	}
+	records := configChain(t, repo, config)
+	if len(records) != 2 {
+		t.Fatalf("ledger holds %d commit(s), want the mint's genesis and the author's pack", len(records))
+	}
+	if got := records[0].Operation.Operations[0].Config.Vocabulary; !reflect.DeepEqual(got, core.DefaultVocabulary().Document()) {
+		t.Fatalf("genesis vocabulary = %#v, want the minted one preserved", got)
+	}
+	if result.Vocabulary().Has(core.StatusBlocked) {
+		t.Fatal("appending to a minted ledger reintroduced `blocked`")
+	}
+}
+
 // TestWriteConfigOperationSeedsGenesisLazily pins the shape the whole ledger
 // rests on: a project that never had a configuration grows one from the
 // vocabulary it was already using, and the author's own change is the commit

@@ -104,8 +104,11 @@ func runSetup(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 			return err
 		}
 	}
-	config, _, err := repository.Init(ctx, *key, core.CryptoULIDSource{})
+	config, minted, err := repository.Init(ctx, *key, core.CryptoULIDSource{})
 	if err != nil {
+		return err
+	}
+	if err := seedMintedStatuses(ctx, repository, config, minted, *noSync); err != nil {
 		return err
 	}
 
@@ -253,6 +256,79 @@ func runSetup(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 	writeConflicts(stdout, conflicts)
 	writeConfigConflicts(stdout, configConflicts)
 	return syncErr
+}
+
+// seedMintedStatuses records this build's default statuses for a project that
+// has no statuses recorded anywhere and no work that any statuses could be
+// about.
+//
+// `blocked` left the default set once dependencies said what a task is waiting
+// on, so a project minted today has five statuses — but a project that already
+// had tasks was using six, and it keeps using them until a person runs `workbook
+// status delete blocked --into backlog`. Recording the choice in the ledger
+// rather than leaving it to a fallback is what makes it survive the next
+// release: a genesis names the statuses, so no later build has to guess which
+// era this project started in.
+//
+// The gate is emptiness rather than "this run minted the identity", and that
+// distinction is the repair. A genesis write that failed after Init minted, or a
+// ledger ref lost afterwards, leaves a project this build created reverted to
+// the pre-ledger six with nothing able to put it back — while a task-less,
+// unconfigured project is safe to seed no matter who created it or when, because
+// there is no board to re-columnize and no recorded decision to overrule.
+//
+// Task refs are checked on both sides. A repository holding tasks is an existing
+// project whatever its identity records say, and so is one whose tasks live only
+// on origin — a fresh clone that has not fetched yet looks empty locally, and
+// seeding five statuses under it would both drop a column its teammates draw and
+// start a second configuration root. Origin's ledger is checked for the same
+// reason: two roots is a situation the project can be spared entirely by not
+// creating the second one.
+//
+// `--no-sync` cannot ask origin, so it falls back to the narrower local
+// evidence: seed only what this run itself minted. That is the same bargain
+// --no-sync makes everywhere else — bootstrap fully locally, and accept that
+// what origin holds is unknown until something synchronizes.
+func seedMintedStatuses(
+	ctx context.Context,
+	repository *gitstore.Repository,
+	config core.ProjectConfig,
+	minted bool,
+	noSync bool,
+) error {
+	state, err := repository.LoadVocabularyState(ctx, config)
+	if err != nil {
+		return err
+	}
+	if state.Seeded {
+		return nil
+	}
+	heads, err := repository.ListTaskHeads(ctx, config)
+	if err != nil {
+		return err
+	}
+	if len(heads) > 0 {
+		return nil
+	}
+	if noSync {
+		if !minted {
+			return nil
+		}
+	} else {
+		empty, err := repository.OriginHasNoWorkbookHistory(ctx)
+		if err != nil {
+			// An origin this run cannot reach is reported by the synchronization
+			// stage a moment later. It is not this decision's to fail on, and it
+			// is not evidence of an empty project either, so the project stays on
+			// the fallback and a later setup seeds it once origin can be read.
+			return nil
+		}
+		if !empty {
+			return nil
+		}
+	}
+	_, err = repository.MintConfigLedger(ctx, config, core.CryptoULIDSource{})
+	return err
 }
 
 // refreshFetchedGuidelines rewrites the guidelines when the fetch delivered a
