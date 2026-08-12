@@ -541,6 +541,38 @@ func TestStatusChangeReportsGuidelinesItWillNotOverwrite(t *testing.T) {
 	}
 }
 
+// Setup installs documentation before it fetches, so that an unreachable origin
+// still leaves a clone with documentation. A clone joining a project that
+// configured its statuses would therefore write the built-in six and read them
+// as the truth, which is the one moment a fresh clone is most likely to believe
+// them.
+func TestSetupWritesTheGuidelinesTheFetchDelivered(t *testing.T) {
+	author, _ := cliSyncRepositories(t)
+	mustRunStatus(t, author, "status", "rename", "ready", "todo", "--label", "Next Up")
+
+	joining := cliClone(t, gitOutput(t, author, "remote", "get-url", "origin"))
+	code, stdout, stderr := run(t, joining, "setup")
+	if code != 0 {
+		t.Fatalf("setup = code %d; stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+
+	guidelines := readProjectFile(t, joining, agentdocs.GuidelinesPath)
+	if !strings.Contains(guidelines, "| 2 | `todo` | Next Up | `next` |") {
+		t.Fatalf("guidelines do not describe the fetched statuses:\n%s", guidelines)
+	}
+	if strings.Contains(guidelines, "`ready`") {
+		t.Fatalf("guidelines describe the statuses this clone had before its fetch:\n%s", guidelines)
+	}
+	// One line per managed file, whichever pass wrote it.
+	if got := strings.Count(stdout, "Docs:\t"+agentdocs.GuidelinesPath); got != 1 {
+		t.Fatalf("setup reported the guidelines %d times:\n%s", got, stdout)
+	}
+	if code, out, _ := run(t, joining, "docs", "status"); code != 0 ||
+		strings.Contains(out, string(agentdocs.StateStale)) {
+		t.Fatalf("docs status after setup = code %d, %q; want everything current", code, out)
+	}
+}
+
 // A project that has no guidelines file said so, with `workbook setup
 // --no-docs` or `workbook docs remove`. A status change refreshes generated
 // documentation and never installs it, so that decision survives.
