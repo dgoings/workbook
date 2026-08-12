@@ -45,31 +45,51 @@ the task title.
 - Mention an ID only when it adds something: disambiguating similarly titled
   tasks, or giving a human a command to run themselves.
 
+## Statuses belong to the project
+
+A project's statuses are its own configuration, not a fixed list. Workbook ships
+with `backlog`, `ready`, `blocked`, `in-progress`, `in-review`, and `done`, and
+any project may rename, reorder, add, or remove them.
+
+Read this project's before naming one. The Statuses table in
+`.workbook/guidelines.md` is a generated rendering of them, and `workbook status
+list --json` answers the same question from the CLI. Pass the machine value —
+the lowercase token — never the display label. Naming a status this project does
+not define is refused with exit code 5, so check rather than guess.
+
+Three tags carry the machine meaning wherever the names differ: a task created
+without `--status` lands in the status tagged `default`, `workbook next` returns
+tasks from a status tagged `next`, and a dependency is satisfied once it reaches
+a status tagged `done`. The status names used below are Workbook's defaults;
+where this project uses different ones, use the status it has for that step.
+
 ## Follow the lifecycle
 
-Before implementation, run:
+Before implementation, move the task into the status this project uses for work
+under way:
 
 ```sh
 workbook update <full-id> --status in-progress --json
 ```
 
-Check the result before editing. Resume an already `in-progress` task without
-inventing an operation. Do not silently reopen a blocked, deleted, or `done`
-task. Leave an `in-review` task there when only checking acceptance or merge;
-return it to `in-progress` before making requested implementation changes.
+Check the result before editing. Resume a task already in that status without
+inventing an operation. Do not silently reopen a blocked or deleted task, or one
+already in a `done`-tagged status. Leave a task in the project's review status
+when only checking acceptance or merge; return it to the in-progress status
+before making requested implementation changes.
 
 Follow the repository's instructions for planning, worktrees, implementation,
 tests, commits, branches, pull requests, and merge verification.
 
 | Milestone | Required Workbook action |
 | --- | --- |
-| Pull request is verified and ready for human review | `workbook update <full-id> --status in-review --json` |
-| Review requires implementation changes | Move to `in-progress` before editing; return to `in-review` when ready |
-| Work is accepted and the pull request is merged | `workbook update <full-id> --status done --json` |
+| Pull request is verified and ready for human review | Move it to the project's review status: `workbook update <full-id> --status in-review --json` |
+| Review requires implementation changes | Move it back to the in-progress status before editing; return it to the review status when ready |
+| Work is accepted and the pull request is merged | Move it to a `done`-tagged status: `workbook update <full-id> --status done --json` |
 
 Approval, passing CI, opening a pull request, or finishing locally is not a
-merge. If acceptance and merge cannot both be verified, leave the task
-`in-review` and report what remains.
+merge. If acceptance and merge cannot both be verified, leave the task in the
+review status and report what remains.
 
 ## Publication is automatic
 
@@ -91,7 +111,9 @@ asked, or to reconcile after exit code 6.
 
 ## Common mistakes
 
-- Use canonical `in-progress` and `in-review`, not display labels.
+- Use this project's own machine values, read from `.workbook/guidelines.md` or
+  `workbook status list`, not the display labels and not the six Workbook ships
+  with.
 - Keep using the resolved full task ID after selection.
 - Lead with task titles, not raw IDs, when reporting to a human, including when
   reporting a blocker or a failure.

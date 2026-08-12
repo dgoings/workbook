@@ -285,13 +285,13 @@ workbook fetch [--json]
 workbook push [--json]
 workbook sync [--watch [--interval <duration>]] [--status] [--json]
 workbook status list [--json]
-workbook status add <status> [--label <label>] [--before <status> | --after <status>] [--tag <tag>]... [--no-sync] [--json]
-workbook status rename <status> <new-status> [--label <label>] [--no-sync] [--json]
-workbook status label <status> <display-label> [--no-sync] [--json]
-workbook status move <status> (--before <status> | --after <status>) [--no-sync] [--json]
-workbook status tag <status> ([--tag <tag>]... | --clear-tags) [--no-sync] [--json]
-workbook status untag <status> <tag> [--no-sync] [--json]
-workbook status delete <status> --into <status> [--no-sync] [--json]
+workbook status add <status> [--label <label>] [--before <status> | --after <status>] [--tag <tag>]... [--no-sync] [--no-docs] [--json]
+workbook status rename <status> <new-status> [--label <label>] [--no-sync] [--no-docs] [--json]
+workbook status label <status> <display-label> [--no-sync] [--no-docs] [--json]
+workbook status move <status> (--before <status> | --after <status>) [--no-sync] [--no-docs] [--json]
+workbook status tag <status> ([--tag <tag>]... | --clear-tags) [--no-sync] [--no-docs] [--json]
+workbook status untag <status> <tag> [--no-sync] [--no-docs] [--json]
+workbook status delete <status> --into <status> [--no-sync] [--no-docs] [--json]
 workbook status log [--limit <n>] [--all] [--json]
 workbook config show [--json]
 workbook config set <setting> <value> [--json]
@@ -483,7 +483,15 @@ where a new task lands, `next` is what `workbook next` may return, and `done` is
 what satisfies a dependency. Exactly one status carries `default`, so giving it
 to another status takes it away in the same operation; at least one must carry
 each of `next` and `done`, and a command that would leave none is refused with
-the command that fixes it.
+the command that fixes it. A status with no tag is an ordinary column: work
+rests there and nothing else in Workbook follows from it.
+
+`workbook status list` is how a project's statuses are discovered rather than
+assumed. It shows each status's position, machine value, display label, tags,
+and the tasks resolving to it, followed by the values that are no longer live,
+the stored values that resolve to nothing, and any advisory about the
+configuration itself. Nothing else has to be read to know what `--status`
+accepts here.
 
 Changing a status never rewrites a task. History is append-only and other clones
 may be offline for weeks, so a rename or a removal leaves a forwarding pointer:
@@ -491,6 +499,26 @@ tasks stored under the old value keep resolving to the right column everywhere,
 and each one settles the next time something writes to it. `workbook status
 delete` therefore requires `--into`, naming where the removed status's tasks
 belong, and reports how many tasks that moves.
+
+Forwarding is followed to the end of the chain, not one hop. A task stored under
+`ready`, where `ready` was renamed to `sorting` and `sorting` was later removed
+into `backlog`, is read into `backlog`: it is drawn in that column, it orders
+against the tasks stored under `backlog`, and the next write to it records
+`backlog` for good. That settlement is the only thing that ever rewrites a
+stored status, and it happens on any write to the task — a title edit, a move, a
+dependency change — not only on a status change.
+
+Reading and writing treat a stale value differently, and deliberately.
+Everything that reads a *stored* status resolves it. Everything that takes a
+status a caller *supplies* requires a live member: `workbook update <id>
+--status ready` is refused with `validation` (exit `5`) once `ready` is no
+longer a status this project defines, because supplying a status that does not
+exist is the mistake the mutation boundary exists to catch. The `workbook
+status` verbs answer the same value with what became of it — which rename or
+removal retired it, on what date, and which live status it resolves to now —
+rather than with a bare "not found". A task in a status no chain leads out of is
+still fully editable; only naming that status again is refused. See
+[Statuses a project does not define](#statuses-a-project-does-not-define).
 
 Everywhere includes ordering. A task's status-and-priority bucket is its
 *resolved* status, so two tasks stored under different tokens that forward to
@@ -516,6 +544,23 @@ Reading with a status this project does not have is not an error: `workbook list
 --status <value>` returns what it selects and warns that the value names no
 status here, because a clone that has not fetched a teammate's rename is behind
 rather than broken.
+
+`.workbook/guidelines.md` is a generated rendering of this configuration, not a
+document to maintain. Its status table lists each status's position, machine
+value, display label, and tags, with a legend saying what each tag makes
+Workbook do, and the lifecycle prose under it names this project's own statuses
+because it is read off the tags rather than written out. Every mutating
+`workbook status` verb rewrites it, so the file an agent reads and the ledger it
+describes cannot drift; `--no-docs` skips that for one command, and `workbook
+docs update` catches up afterwards.
+
+Hand-edits are refused rather than lost. The managed block records a hash of
+what Workbook wrote, so a file that still matches is rewritten in place and a
+file somebody changed is left exactly as it is: the status change still lands
+and is still published, and the result envelope's `docs` member reports the file
+as `modified` and unwritten alongside a `docs-refresh-incomplete` warning naming
+`workbook docs update --force`. Edit the project's statuses to change what that
+file says; there is nothing to write in it by hand.
 
 ### Task change history
 
