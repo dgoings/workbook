@@ -409,33 +409,31 @@ func TestServicePlaceIntoADifferentStatusIsNotACorrection(t *testing.T) {
 	}
 }
 
-// TestMoveAndPlaceDisagreeAboutAStaleAnchor pins a gap that per-project
-// vocabularies made reachable, so PR-D inherits a falsifiable statement rather
-// than a note in a pull request.
+// TestMoveAndPlaceAgreeAboutAStaleAnchor closes the gap PR-A pinned as a
+// deliberate failure, and keeps it closed.
 //
-// Both mutations ask whether two tasks share a bucket, and both ask it of the
-// stored status. That was unobservable while every project used the built-in
-// vocabulary, because no two tokens could resolve to one column. It is ordinary
-// now: a task stored under "shipped" and a task stored under "released" render
-// in the same column after a rename, and the two commands disagree about
-// whether they are neighbours — Move refuses, Place does the same reordering
-// and succeeds.
+// Both mutations ask whether two tasks share a bucket, and both used to ask it
+// of the stored status. That was unobservable while every project used the
+// built-in vocabulary, because no two tokens could resolve to one column. It
+// became ordinary the moment a project could rename one: a task stored under
+// "shipped" and a task stored under "released" are drawn in the same column,
+// and the two commands disagreed about whether they were neighbours — Move
+// refused, Place did the same reordering and succeeded.
 //
-// The fix is not a settlement, which is why it is not in this change. It is a
-// decision about what shares a rank bucket, and it belongs with the bucketing
-// and the rendering that depend on it. Settling the anchor here alone would let
-// a move succeed against an anchor the board draws somewhere else.
-func TestMoveAndPlaceDisagreeAboutAStaleAnchor(t *testing.T) {
+// The bucket is the resolved status now, in the anchor checks and in the rank
+// walk alike, which is the same answer the board draws from. So the two verbs
+// accept the same anchor and compute the same rank for it.
+func TestMoveAndPlaceAgreeAboutAStaleAnchor(t *testing.T) {
 	stale := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F1", TaskData{
-		Title: "Stored under the old name", Status: "shipped", Priority: PriorityMedium, Rank: "1/1",
+		Title: "Stored under the old name", Status: "shipped", Priority: PriorityMedium, Rank: "3/1",
 	})
 	live := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F2", TaskData{
 		Title: "Stored under the new name", Status: "released", Priority: PriorityMedium, Rank: "2/1",
 	})
 	vocabulary := customVocabulary(t)
 
-	// Both resolve into the same column, which is what makes the disagreement
-	// visible to a person.
+	// Both resolve into the same column, which is what makes a disagreement
+	// visible to a person in the first place.
 	service := vocabularyServiceUnderTest(newMemoryTaskStore(stale, live), &sequenceIDSource{
 		values: []string{"01K0M6B8A4FTT8C39MXXYTW7E1", "01K0M6B8A4FTT8C39MXXYTW7E2"},
 	}, vocabulary)
@@ -447,25 +445,87 @@ func TestMoveAndPlaceDisagreeAboutAStaleAnchor(t *testing.T) {
 	}
 
 	// The mover carries the stale token and the anchor carries the live one.
-	// Move compares the two stored values and sees two different columns.
-	_, moveErr := service.MoveMutation(context.Background(), stale.State.TaskID, MoveInput{Before: live.State.TaskID})
-	if moveErr == nil {
-		t.Fatal("MoveMutation() succeeded against a stale-token anchor; PR-D changed the bucketing without updating this disclosure")
+	moved, moveErr := service.MoveMutation(context.Background(), stale.State.TaskID, MoveInput{Before: live.State.TaskID})
+	if moveErr != nil {
+		t.Fatalf("MoveMutation() error = %v, want the move against a resolved-equal anchor to be accepted", moveErr)
 	}
-	if got, want := CategoryOf(moveErr), CategoryValidation; got != want {
-		t.Fatalf("MoveMutation() category = %q, want %q; error = %v", got, want, moveErr)
+	// The write settles the stale token on its way past, which is what every
+	// other mutation that touches a task does.
+	if got, want := moved.Task.Status, Status("released"); got != want {
+		t.Fatalf("MoveMutation() status = %q, want %q", got, want)
+	}
+	if moved.StatusCorrected == nil || moved.StatusCorrected.From != "shipped" || moved.StatusCorrected.To != "released" {
+		t.Fatalf("MoveMutation() StatusCorrected = %#v, want shipped settled into released", moved.StatusCorrected)
 	}
 
 	placed := vocabularyServiceUnderTest(newMemoryTaskStore(stale, live), &sequenceIDSource{
 		values: []string{"01K0M6B8A4FTT8C39MXXYTW7E3", "01K0M6B8A4FTT8C39MXXYTW7E4"},
 	}, vocabulary)
-	// Place compares the anchor against the status the caller named instead, so
-	// the same pair, the same column and the same reordering go through.
-	if _, err := placed.PlaceMutation(context.Background(), stale.State.TaskID, PlaceInput{
+	placement, placeErr := placed.PlaceMutation(context.Background(), stale.State.TaskID, PlaceInput{
 		Status: "released",
 		Before: live.State.TaskID,
-	}); err != nil {
-		t.Fatalf("PlaceMutation() error = %v; the two agreeing means PR-D landed and this disclosure is stale", err)
+	})
+	if placeErr != nil {
+		t.Fatalf("PlaceMutation() error = %v", placeErr)
+	}
+	// The same reordering, so the same rank: agreeing about the anchor is worth
+	// nothing if the two walks still measure different neighbours.
+	if moved.Task.Rank != placement.Task.Rank {
+		t.Fatalf("move ranked the task %q and place ranked it %q", moved.Task.Rank, placement.Task.Rank)
+	}
+}
+
+// The other direction of the same pair: the anchor is the one holding the live
+// token, and the mover holds the stale one. Both verbs refuse an anchor that
+// resolves somewhere else, so the check is a bucket comparison rather than a
+// relaxation that accepts anything.
+func TestMoveRefusesAnAnchorThatResolvesToAnotherColumn(t *testing.T) {
+	mover := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F1", TaskData{
+		Title: "Released", Status: "shipped", Priority: PriorityMedium, Rank: "1/1",
+	})
+	// "blocked" was removed into "triage", so this one is drawn in a different
+	// column from the mover no matter which token either of them stores.
+	elsewhere := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F2", TaskData{
+		Title: "Triaged", Status: "blocked", Priority: PriorityMedium, Rank: "2/1",
+	})
+	service := vocabularyServiceUnderTest(
+		newMemoryTaskStore(mover, elsewhere),
+		&sequenceIDSource{values: []string{"01K0M6B8A4FTT8C39MXXYTW7E1"}},
+		customVocabulary(t),
+	)
+
+	_, err := service.MoveMutation(context.Background(), mover.State.TaskID, MoveInput{Before: elsewhere.State.TaskID})
+	if err == nil {
+		t.Fatal("MoveMutation() = nil error, want a refusal across two columns")
+	}
+	if got, want := CategoryOf(err), CategoryValidation; got != want {
+		t.Fatalf("MoveMutation() category = %q, want %q; error = %v", got, want, err)
+	}
+}
+
+// Appending to a column ranks against everything drawn in it, including the
+// tasks still stored under a token a rename replaced. Ranking against only the
+// live token would put the new task on top of a neighbour it shares a column
+// with — two tasks at the same rank, in the same visible column, from a create
+// that did nothing unusual.
+func TestCreateRanksAgainstTheResolvedColumn(t *testing.T) {
+	stale := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F1", TaskData{
+		Title: "Stored under the old name", Status: "shipped", Priority: PriorityMedium, Rank: "7/1",
+	})
+	service := vocabularyServiceUnderTest(newMemoryTaskStore(stale), &sequenceIDSource{values: []string{
+		"01K0M6B8A4FTT8C39MXXYTW7E1",
+		"01K0M6B8A4FTT8C39MXXYTW7E2",
+		"01K0M6B8A4FTT8C39MXXYTW7E3",
+	}}, customVocabulary(t))
+
+	result, err := service.CreateMutation(context.Background(), CreateInput{
+		Title: "Appended", Status: "released", Priority: PriorityMedium,
+	})
+	if err != nil {
+		t.Fatalf("CreateMutation() error = %v", err)
+	}
+	if got, want := result.Task.Rank, "8/1"; got != want {
+		t.Fatalf("CreateMutation() rank = %q, want %q: one past the stale-token task already in that column", got, want)
 	}
 }
 
