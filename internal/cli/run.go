@@ -966,47 +966,126 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 		return err
 	}
 	publisher := &boardPublisher{repository: repository, config: service.Config}
+	// Every request reads the project's statuses again rather than reusing the
+	// ones this process opened with.
+	//
+	// A board is open for hours, and a teammate's `workbook status add` reaches
+	// this checkout on the next fetch. A snapshot taken here would keep drawing
+	// the old columns until somebody restarted serve — and, worse, would keep
+	// refusing writes into a column the page had started drawing, because the
+	// service's own membership check reads the same value. So both halves move
+	// together: the resolver below draws the columns, and `current` gives every
+	// mutation a service that agrees with them. LoadVocabularyState is the read
+	// that skips the repository's memo, which exists for one-shot commands.
+	//
+	// Once per request, though, not once per consumer. A route that has already
+	// resolved carries the answer on its context, and `current` takes it from
+	// there: /api/tasks needs the vocabulary twice — for the head it reports and
+	// for the tasks it lists — and reading the ledger twice cost the poll route
+	// most of its latency and opened a window where the two halves of one
+	// response disagreed about which vocabulary they came from.
+	readVocabulary := func(requestContext context.Context) (webui.VocabularyState, error) {
+		state, err := repository.LoadVocabularyState(requestContext, service.Config)
+		if err != nil {
+			return webui.VocabularyState{}, err
+		}
+		return webui.VocabularyState{Vocabulary: state.Vocabulary, Head: state.Head}, nil
+	}
+	current := func(requestContext context.Context) (core.Service, error) {
+		state, carried := webui.VocabularyFrom(requestContext)
+		if !carried {
+			read, err := readVocabulary(requestContext)
+			if err != nil {
+				return core.Service{}, err
+			}
+			state = read
+		}
+		fresh := service
+		fresh.Vocabulary = state.Vocabulary
+		return fresh, nil
+	}
 	handler := webui.NewHandler(webui.Options{
+		Vocabulary: readVocabulary,
 		List: func(requestContext context.Context) ([]core.Task, error) {
-			return service.List(requestContext, core.ListFilter{All: true})
+			reader, err := current(requestContext)
+			if err != nil {
+				return nil, err
+			}
+			return reader.List(requestContext, core.ListFilter{All: true})
 		},
 		Create: func(requestContext context.Context, input core.CreateInput) (core.MutationResult, error) {
-			result, err := service.CreateMutation(requestContext, input)
+			writer, err := current(requestContext)
+			if err != nil {
+				return core.MutationResult{}, err
+			}
+			result, err := writer.CreateMutation(requestContext, input)
 			return publisher.publish(requestContext, result, err)
 		},
 		Update: func(requestContext context.Context, id string, input core.UpdateInput) (core.MutationResult, error) {
-			result, err := service.UpdateMutation(requestContext, id, input)
+			writer, err := current(requestContext)
+			if err != nil {
+				return core.MutationResult{}, err
+			}
+			result, err := writer.UpdateMutation(requestContext, id, input)
 			return publisher.publish(requestContext, result, err)
 		},
 		UpdateStatus: func(requestContext context.Context, id string, status core.Status, expectedHead string) (core.MutationResult, error) {
-			result, err := service.UpdateMutation(requestContext, id, core.UpdateInput{Status: &status, ExpectedHead: expectedHead})
+			writer, err := current(requestContext)
+			if err != nil {
+				return core.MutationResult{}, err
+			}
+			result, err := writer.UpdateMutation(requestContext, id, core.UpdateInput{Status: &status, ExpectedHead: expectedHead})
 			return publisher.publish(requestContext, result, err)
 		},
 		Position: func(requestContext context.Context, id string, input core.PlaceInput) (core.MutationResult, error) {
-			result, err := service.PlaceMutation(requestContext, id, input)
+			writer, err := current(requestContext)
+			if err != nil {
+				return core.MutationResult{}, err
+			}
+			result, err := writer.PlaceMutation(requestContext, id, input)
 			return publisher.publish(requestContext, result, err)
 		},
 		Delete: func(requestContext context.Context, id string) (core.MutationResult, error) {
-			result, err := service.DeleteMutation(requestContext, id)
+			writer, err := current(requestContext)
+			if err != nil {
+				return core.MutationResult{}, err
+			}
+			result, err := writer.DeleteMutation(requestContext, id)
 			return publisher.publish(requestContext, result, err)
 		},
 		Restore: func(requestContext context.Context, id string) (core.MutationResult, error) {
-			result, err := service.RestoreMutation(requestContext, id)
+			writer, err := current(requestContext)
+			if err != nil {
+				return core.MutationResult{}, err
+			}
+			result, err := writer.RestoreMutation(requestContext, id)
 			return publisher.publish(requestContext, result, err)
 		},
 		Depend: func(requestContext context.Context, id, dependency string) (core.MutationResult, error) {
-			result, err := service.DependMutation(requestContext, id, dependency)
+			writer, err := current(requestContext)
+			if err != nil {
+				return core.MutationResult{}, err
+			}
+			result, err := writer.DependMutation(requestContext, id, dependency)
 			return publisher.publish(requestContext, result, err)
 		},
 		Free: func(requestContext context.Context, id, dependency string) (core.MutationResult, error) {
-			result, err := service.FreeMutation(requestContext, id, dependency)
+			writer, err := current(requestContext)
+			if err != nil {
+				return core.MutationResult{}, err
+			}
+			result, err := writer.FreeMutation(requestContext, id, dependency)
 			return publisher.publish(requestContext, result, err)
 		},
 		// The board's detail view shows history by default and derives a status
 		// lane that reaches back to the task's creation, so it reads the whole
 		// chain rather than the CLI's ten-change default window.
 		History: func(requestContext context.Context, id string) (core.TaskDetail, error) {
-			return service.ShowDetail(requestContext, id, core.ShowOptions{History: true, All: true})
+			reader, err := current(requestContext)
+			if err != nil {
+				return core.TaskDetail{}, err
+			}
+			return reader.ShowDetail(requestContext, id, core.ShowOptions{History: true, All: true})
 		},
 		SyncState:   publisher.state,
 		SetSyncMode: publisher.setMode,

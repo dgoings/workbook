@@ -112,7 +112,7 @@ func (s Service) CreateMutation(ctx context.Context, input CreateInput) (Mutatio
 	if err != nil {
 		return MutationResult{}, err
 	}
-	rank, err := nextRank(snapshots, status, priority)
+	rank, err := nextRank(s.vocabulary(), snapshots, status, priority)
 	if err != nil {
 		return MutationResult{}, err
 	}
@@ -499,14 +499,10 @@ func (s Service) statusCorrection(task TaskData) *StatusCorrection {
 // the rank it already has returns without a commit, and a settlement that
 // turned that into a write would make a no-op command produce history.
 //
-// The two anchor comparisons in MoveMutation and PlaceMutation still read
-// stored statuses rather than resolved ones, and stay that way here. Fixing
-// them is not a settlement but a change to which tasks share a rank bucket:
-// two tasks whose stored tokens differ while resolving to the same column are
-// in one bucket for ordering purposes and two for these checks, and reconciling
-// that is the bucketing work PR-D does with the rendering that depends on it.
-// Doing half of it here would let a move succeed against an anchor the board
-// draws in another column.
+// Settlement is separate from bucketing, which sameBucket now owns: Move and
+// Place compare an anchor by its resolved status, so the anchor they accept is
+// the one the board draws beside the task. Settlement is what happens to the
+// stored token afterwards, on the same write.
 func (s Service) settle(operations []Operation, task TaskData) ([]Operation, *StatusCorrection) {
 	correction := s.statusCorrection(task)
 	if correction == nil {
@@ -584,14 +580,20 @@ func (s Service) MoveMutation(ctx context.Context, idOrPrefix string, input Move
 	if anchor.State.TaskID == parent.State.TaskID {
 		return MutationResult{}, Errorf(CategoryValidation, "cannot use a task as its own move anchor")
 	}
-	if anchor.State.Task.Status != parent.State.Task.Status || anchor.State.Task.Priority != parent.State.Task.Priority {
+	// The bucket both tasks are compared in is the resolved one, so the anchor
+	// this refuses is exactly the anchor the board draws in another column. It
+	// used to compare stored tokens, which was unobservable while every project
+	// used the built-in vocabulary and became a routine contradiction once two
+	// tokens could resolve to one column: Move refused a neighbour Place would
+	// happily reorder against.
+	if !sameBucket(s.vocabulary(), anchor.State.Task, parent.State.Task.Status, parent.State.Task.Priority) {
 		return MutationResult{}, Errorf(CategoryValidation, "move anchor must be in the same status and priority bucket")
 	}
 	snapshots, err := s.Reader.List(ctx, s.Config)
 	if err != nil {
 		return MutationResult{}, err
 	}
-	rank, err := movedRank(snapshots, parent.State.TaskID, anchor.State.TaskID, anchor.State.Task, input.Before != "")
+	rank, err := movedRank(s.vocabulary(), snapshots, parent.State.TaskID, anchor.State.TaskID, anchor.State.Task, input.Before != "")
 	if err != nil {
 		return MutationResult{}, err
 	}
@@ -642,13 +644,16 @@ func (s Service) PlaceMutation(ctx context.Context, idOrPrefix string, input Pla
 		anchorInput = input.After
 	}
 	rank := parent.State.Task.Rank
+	// The destination bucket is the resolved one, exactly as Move's is: a task
+	// still stored under a renamed token occupies the column it now means, so
+	// the column is not empty and a placement into it needs an anchor.
+	vocabulary := s.vocabulary()
 	if anchorInput == "" {
 		for _, snapshot := range snapshots {
 			task := snapshot.State.Task
 			if snapshot.State.TaskID != parent.State.TaskID &&
 				!task.Deleted &&
-				task.Status == input.Status &&
-				task.Priority == parent.State.Task.Priority {
+				sameBucket(vocabulary, task, input.Status, parent.State.Task.Priority) {
 				return MutationResult{}, Errorf(CategoryValidation, "placement requires an anchor when the destination bucket is not empty")
 			}
 		}
@@ -659,11 +664,10 @@ func (s Service) PlaceMutation(ctx context.Context, idOrPrefix string, input Pla
 		}
 		if anchor.State.Task.Deleted ||
 			anchor.State.TaskID == parent.State.TaskID ||
-			anchor.State.Task.Status != input.Status ||
-			anchor.State.Task.Priority != parent.State.Task.Priority {
+			!sameBucket(vocabulary, anchor.State.Task, input.Status, parent.State.Task.Priority) {
 			return MutationResult{}, Errorf(CategoryValidation, "placement anchor must be an active different task in the destination status and priority bucket")
 		}
-		rank, err = movedRank(snapshots, parent.State.TaskID, anchor.State.TaskID, anchor.State.Task, input.Before != "")
+		rank, err = movedRank(vocabulary, snapshots, parent.State.TaskID, anchor.State.TaskID, anchor.State.Task, input.Before != "")
 		if err != nil {
 			return MutationResult{}, err
 		}
@@ -678,7 +682,7 @@ func (s Service) PlaceMutation(ctx context.Context, idOrPrefix string, input Pla
 	var corrected *StatusCorrection
 	if parent.State.Task.Status != input.Status {
 		operations = append(operations, Operation{Type: OperationFieldSet, Field: "status", Value: string(input.Status)})
-		if resolved, live := s.vocabulary().Resolve(parent.State.Task.Status); live && resolved == input.Status {
+		if resolved, live := vocabulary.Resolve(parent.State.Task.Status); live && resolved == input.Status {
 			corrected = &StatusCorrection{From: parent.State.Task.Status, To: input.Status}
 		}
 	}
@@ -1042,11 +1046,19 @@ func setDifference(left, right []string) []string {
 	return values
 }
 
-func nextRank(snapshots []Snapshot, status Status, priority Priority) (string, error) {
+// nextRank returns the rank a task appended to the end of a status×priority
+// bucket takes.
+//
+// The bucket is the resolved status, not the stored one. A task still carrying
+// the token a rename replaced is drawn in the column it now means, so a task
+// appended to that column has to be ranked against everything already drawn
+// there — otherwise the new task lands on top of a neighbour it shares a column
+// with, because the walk that looked for the highest rank never saw it.
+func nextRank(vocabulary Vocabulary, snapshots []Snapshot, status Status, priority Priority) (string, error) {
 	maximum := big.NewRat(0, 1)
 	for _, snapshot := range snapshots {
 		task := snapshot.State.Task
-		if task.Deleted || task.Status != status || task.Priority != priority {
+		if task.Deleted || !sameBucket(vocabulary, task, status, priority) {
 			continue
 		}
 		rank, err := parseRank(task.Rank)
@@ -1060,7 +1072,29 @@ func nextRank(snapshots []Snapshot, status Status, priority Priority) (string, e
 	return formatRank(new(big.Rat).Add(maximum, big.NewRat(1, 1))), nil
 }
 
-func movedRank(snapshots []Snapshot, movedID, anchorID string, anchor TaskData, before bool) (string, error) {
+// sameBucket reports whether a stored task occupies the status×priority bucket
+// a rank is being computed in.
+//
+// It is the one definition of "shares a bucket", and every ranking and every
+// anchor check reads it. Statuses are compared after resolution because that is
+// what a reader sees: two tasks whose stored tokens differ while resolving to
+// one live status are drawn in one column, and a bucket that disagreed with the
+// column would rank a task against neighbours nobody can see it beside. A status
+// that resolves nowhere resolves to itself, so tasks stranded under one token
+// still share a bucket with each other and with nothing else.
+func sameBucket(vocabulary Vocabulary, task TaskData, status Status, priority Priority) bool {
+	if task.Priority != priority {
+		return false
+	}
+	stored, _ := vocabulary.Resolve(task.Status)
+	wanted, _ := vocabulary.Resolve(status)
+	return stored == wanted
+}
+
+// movedRank returns the rank that places a task immediately before or after an
+// anchor, within the anchor's bucket. The bucket is resolved, for the reason
+// nextRank records.
+func movedRank(vocabulary Vocabulary, snapshots []Snapshot, movedID, anchorID string, anchor TaskData, before bool) (string, error) {
 	anchorRank, err := parseRank(anchor.Rank)
 	if err != nil {
 		return "", Errorf(CategoryCorruptData, "anchor task has invalid rank %q", anchor.Rank)
@@ -1072,7 +1106,7 @@ func movedRank(snapshots []Snapshot, movedID, anchorID string, anchor TaskData, 
 			continue
 		}
 		task := snapshot.State.Task
-		if task.Deleted || task.Status != anchor.Status || task.Priority != anchor.Priority {
+		if task.Deleted || !sameBucket(vocabulary, task, anchor.Status, anchor.Priority) {
 			continue
 		}
 		rank, err := parseRank(task.Rank)

@@ -80,10 +80,57 @@ type syncModeRequest struct {
 }
 
 type TasksDocument struct {
-	Format       string             `json:"format"`
-	Version      int                `json:"version"`
-	Tasks        []core.Task        `json:"tasks"`
-	Presentation []TaskPresentation `json:"presentation"`
+	Format  string `json:"format"`
+	Version int    `json:"version"`
+	// VocabularyHead is the configuration ledger tip the columns in this
+	// response were built from, empty for a project that has never recorded one.
+	//
+	// It rides along with the tasks because the board polls this route once a
+	// second and nothing else would tell it the columns had changed. A client
+	// compares it with the head it rendered under and says so; it deliberately
+	// does not carry the vocabulary itself, which is what /api/vocabulary is
+	// for and is far larger than a poll should move every second.
+	VocabularyHead string             `json:"vocabularyHead"`
+	Tasks          []core.Task        `json:"tasks"`
+	Presentation   []TaskPresentation `json:"presentation"`
+}
+
+// VocabularyState is what a resolver reports: the project's statuses and the
+// configuration ledger tip they were read from.
+type VocabularyState struct {
+	Vocabulary core.Vocabulary
+	// Head is the configuration ledger's tip, empty for a project with none.
+	Head string
+}
+
+// VocabularyResolver reads the project's current statuses.
+//
+// It is a function rather than a value because `workbook serve` runs for hours:
+// a snapshot taken at startup would keep drawing a column somebody deleted at
+// lunchtime, and no reload of the page would fix it. Every request that needs
+// statuses calls this, so a change on disk reaches a running server on the next
+// poll.
+type VocabularyResolver func(context.Context) (VocabularyState, error)
+
+// VocabularyDocument is the project's status configuration as the board reads
+// it.
+//
+// The shape is core's own: Statuses in configured order, each with its token,
+// label, rank and tags; Aliases and Retired as the forwarding chains a stored
+// status is resolved through. Default is derived rather than left to the client
+// to find, because "the status tagged default" is a rule and a client that
+// re-derived it could disagree with the server about where a new task lands.
+//
+// It is read-only. Nothing here writes a vocabulary; `workbook status` does,
+// and an administration surface on the board is a separate change.
+type VocabularyDocument struct {
+	Format   string                  `json:"format"`
+	Version  int                     `json:"version"`
+	Head     string                  `json:"head"`
+	Default  core.Status             `json:"default"`
+	Statuses []core.StatusDefinition `json:"statuses"`
+	Aliases  []core.StatusAlias      `json:"aliases"`
+	Retired  []core.RetiredStatus    `json:"retired"`
 }
 
 type TaskMutationDocument struct {
@@ -152,6 +199,10 @@ type ErrorDocument struct {
 // compiles and silently inverts the semantics; named, the same mistake is
 // visible in the call site itself.
 type Options struct {
+	// Vocabulary reads the project's statuses per request. A nil resolver means
+	// this board was built without one and draws the built-in statuses, which
+	// is what every construction that predates per-project columns did.
+	Vocabulary   VocabularyResolver
 	List         TaskLister
 	Create       TaskCreator
 	Update       TaskUpdater
@@ -175,8 +226,18 @@ type handler struct {
 	mux  *http.ServeMux
 }
 
+// pageData is what the server hands the page, and it is also the client's only
+// source for the same facts: the script reads the columns back out of the DOM
+// rather than carrying a status list of its own, so these three fields are the
+// whole vocabulary contract with the browser.
 type pageData struct {
 	Board presentation.Board
+	// DefaultStatus is where a new task lands, rendered as an attribute because
+	// the client needs it before it has fetched anything and must not guess.
+	DefaultStatus core.Status
+	// VocabularyHead is the ledger tip these columns were built from, so the
+	// poll can tell that the columns it is looking at have been superseded.
+	VocabularyHead string
 }
 
 // expectedHead is the task tip the browser rendered before proposing a change.
@@ -214,29 +275,67 @@ type updateTaskRequest struct {
 	ExpectedHead string         `json:"expectedHead"`
 }
 
-// pageFuncs give the page template the one fact a presentation.TaskView does
-// not carry: whether this build has a column for the status the task holds. A
-// card in the unknown-status region cannot be dragged anywhere, so it must not
-// announce itself as movable.
+// The page template used to ask a `knownStatus` helper whether this build had a
+// column for a task's status, and the helper answered from a fixed list. The
+// answer is per-project and therefore per-request now, so it is not a template
+// function at all: presentation.TaskView carries StatusUnresolved, computed
+// against the vocabulary this request resolved, and the template reads the
+// view. A card and its column cannot disagree, because one value produced both.
 //
-// The client script answers the same question on every poll, and answers it
-// from the columns this function rendered — it reads the emitted [data-status]
-// nodes rather than a status list of its own — so the two cannot disagree about
-// a card even while the page is being served by a build the script does not
-// match. Neither side reads it off the containing list, so a card that changes
-// status carries the right answer with it as it moves.
-var pageFuncs = template.FuncMap{"knownStatus": knownStatus}
+// The client script answers the same question from the columns this template
+// rendered — it reads the emitted [data-status] nodes rather than a status list
+// of its own — so the two cannot disagree about a card even while the page is
+// being served by a build the script does not match. Neither side reads it off
+// the containing list, so a card that changes status carries the right answer
+// with it as it moves.
 
-func knownStatus(status core.Status) bool {
-	// The built-in vocabulary, not the project's. Serving the configured
-	// columns is a later change in this series; naming the default explicitly
-	// keeps the rendered page identical until then.
-	for _, definition := range core.DefaultVocabulary().Definitions() {
-		if definition.Status == status {
-			return true
+// vocabularyKey addresses the statuses a request has already resolved.
+type vocabularyKey struct{}
+
+// VocabularyFrom reports the statuses a request resolved, for a capability that
+// needs the same answer the route is rendering under.
+//
+// It exists so a request resolves the vocabulary once. A lister that read the
+// project's statuses for itself would pay a second ledger read on every poll —
+// measurably, at 1 Hz — and, worse, could read a different answer: a status
+// change landing between the two reads produces a response whose tasks resolve
+// under the new vocabulary while its vocabularyHead names the old one, which is
+// exactly the pair a client uses to decide that nothing has changed. One read
+// per request makes that window unrepresentable rather than merely narrow.
+//
+// The second return is false for a context that never passed through a route
+// that resolves — every mutation route, and any caller outside a request — and
+// such a caller must read the vocabulary itself.
+func VocabularyFrom(ctx context.Context) (VocabularyState, bool) {
+	state, carried := ctx.Value(vocabularyKey{}).(VocabularyState)
+	return state, carried
+}
+
+// vocabulary reads the statuses this request renders under, and returns a
+// request carrying them so that nothing this route calls afterwards resolves
+// them a second time.
+//
+// A board built without a resolver reports the built-in statuses and no ledger
+// head, which is exactly what every construction that predates per-project
+// columns saw. A resolver that fails is reported rather than papered over:
+// drawing the built-in six for a project that renamed half of them would put
+// every task in the wrong column and accept drops the server would refuse.
+func (handler *handler) vocabulary(request *http.Request) (VocabularyState, *http.Request, error) {
+	if state, carried := VocabularyFrom(request.Context()); carried {
+		return state, request, nil
+	}
+	state := VocabularyState{Vocabulary: core.DefaultVocabulary()}
+	if handler.Vocabulary != nil {
+		resolved, err := handler.Vocabulary(request.Context())
+		if err != nil {
+			return VocabularyState{}, request, err
+		}
+		state = resolved
+		if state.Vocabulary.IsZero() {
+			state.Vocabulary = core.DefaultVocabulary()
 		}
 	}
-	return false
+	return state, request.WithContext(context.WithValue(request.Context(), vocabularyKey{}, state)), nil
 }
 
 // NewHandler builds the board from the capabilities it is given. It is the only
@@ -245,13 +344,14 @@ func knownStatus(status core.Status) bool {
 // without renaming every earlier call, and a named field expresses the same
 // tier by being set or left nil.
 func NewHandler(options Options) http.Handler {
-	page := template.Must(template.New("index.html").Funcs(pageFuncs).ParseFS(assets, "assets/index.html"))
+	page := template.Must(template.New("index.html").ParseFS(assets, "assets/index.html"))
 	handler := &handler{Options: options, page: page, mux: http.NewServeMux()}
 	handler.mux.HandleFunc("GET /{$}", handler.serveBoard)
 	handler.mux.HandleFunc("GET /deleted", handler.serveBoard)
 	handler.mux.HandleFunc("GET /tasks/new", handler.serveBoard)
 	handler.mux.HandleFunc("GET /tasks/{id}", handler.serveBoard)
 	handler.mux.HandleFunc("GET /api/tasks", handler.serveTasks)
+	handler.mux.HandleFunc("GET /api/vocabulary", handler.serveVocabulary)
 	handler.mux.HandleFunc("GET /api/tasks/{id}/history", handler.serveTaskHistory)
 	handler.mux.HandleFunc("POST /api/tasks", handler.createTask)
 	handler.mux.HandleFunc("PATCH /api/tasks/{id}", handler.updateTask)
@@ -350,6 +450,8 @@ func allowedMethod(path string) (string, bool) {
 		return http.MethodGet, true
 	case "/api/tasks":
 		return http.MethodGet + ", " + http.MethodPost, true
+	case "/api/vocabulary":
+		return http.MethodGet, true
 	case "/api/sync":
 		return http.MethodGet + ", " + http.MethodPut, true
 	default:
@@ -470,15 +572,45 @@ func taskHistoryPathID(path string) string {
 }
 
 func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Request) {
+	vocabulary, request, err := handler.vocabulary(request)
+	if err != nil {
+		handler.writeError(writer, err)
+		return
+	}
 	tasks, err := handler.listTasks(request)
 	if err != nil {
 		handler.writeError(writer, err)
 		return
 	}
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := handler.page.Execute(writer, pageData{Board: presentation.NewBoard(activeTasks(tasks))}); err != nil {
+	if err := handler.page.Execute(writer, pageData{
+		Board:          presentation.NewBoard(activeTasks(tasks), vocabulary.Vocabulary),
+		DefaultStatus:  vocabulary.Vocabulary.Default(),
+		VocabularyHead: vocabulary.Head,
+	}); err != nil {
 		return
 	}
+}
+
+// serveVocabulary reports the project's statuses to a client that wants more
+// than the columns already in the page — the labels behind a token in a history
+// entry, or the chain a stored status was forwarded along.
+func (handler *handler) serveVocabulary(writer http.ResponseWriter, request *http.Request) {
+	state, _, err := handler.vocabulary(request)
+	if err != nil {
+		handler.writeError(writer, err)
+		return
+	}
+	document := state.Vocabulary.Document()
+	writeJSON(writer, http.StatusOK, VocabularyDocument{
+		Format:   "workbook.vocabulary",
+		Version:  1,
+		Head:     state.Head,
+		Default:  state.Vocabulary.Default(),
+		Statuses: document.Statuses,
+		Aliases:  document.Aliases,
+		Retired:  document.Retired,
+	})
 }
 
 // listTasks reads the board's tasks, reporting a board built without a lister
@@ -493,6 +625,11 @@ func (handler *handler) listTasks(request *http.Request) ([]core.Task, error) {
 }
 
 func (handler *handler) serveTasks(writer http.ResponseWriter, request *http.Request) {
+	vocabulary, request, err := handler.vocabulary(request)
+	if err != nil {
+		handler.writeError(writer, err)
+		return
+	}
 	tasks, err := handler.listTasks(request)
 	if err != nil {
 		handler.writeError(writer, err)
@@ -504,10 +641,11 @@ func (handler *handler) serveTasks(writer http.ResponseWriter, request *http.Req
 		tasks = activeTasks(tasks)
 	}
 	writeJSON(writer, http.StatusOK, TasksDocument{
-		Format:       "workbook.tasks",
-		Version:      1,
-		Tasks:        tasks,
-		Presentation: taskPresentation(tasks),
+		Format:         "workbook.tasks",
+		Version:        1,
+		VocabularyHead: vocabulary.Head,
+		Tasks:          tasks,
+		Presentation:   taskPresentation(tasks, vocabulary.Vocabulary),
 	})
 }
 
@@ -519,6 +657,11 @@ func (handler *handler) serveTaskHistory(writer http.ResponseWriter, request *ht
 	id := request.PathValue("id")
 	if id == "" {
 		id = taskHistoryPathID(request.URL.Path)
+	}
+	vocabulary, request, err := handler.vocabulary(request)
+	if err != nil {
+		handler.writeError(writer, err)
+		return
 	}
 	detail, err := handler.History(request.Context(), id)
 	if err != nil {
@@ -533,13 +676,13 @@ func (handler *handler) serveTaskHistory(writer http.ResponseWriter, request *ht
 		Format:    "workbook.task-history",
 		Version:   1,
 		TaskID:    detail.ID,
-		Lifecycle: lifecycleStages(*detail.History, detail.Status),
+		Lifecycle: lifecycleStages(*detail.History, detail.Status, vocabulary.Vocabulary),
 		History:   *detail.History,
 	})
 }
 
-func lifecycleStages(log core.ChangeLog, current core.Status) []LifecycleStage {
-	stops := presentation.Lifecycle(log, current)
+func lifecycleStages(log core.ChangeLog, current core.Status, vocabulary core.Vocabulary) []LifecycleStage {
+	stops := presentation.Lifecycle(log, current, vocabulary)
 	stages := make([]LifecycleStage, len(stops))
 	for index, stop := range stops {
 		stages[index] = LifecycleStage{
@@ -784,8 +927,8 @@ func (handler *handler) writeTaskMutation(writer http.ResponseWriter, result cor
 	})
 }
 
-func taskPresentation(tasks []core.Task) []TaskPresentation {
-	views := presentation.TaskViews(tasks)
+func taskPresentation(tasks []core.Task, vocabulary core.Vocabulary) []TaskPresentation {
+	views := presentation.TaskViews(tasks, vocabulary)
 	result := make([]TaskPresentation, len(views))
 	for index, view := range views {
 		result[index] = TaskPresentation{

@@ -530,3 +530,61 @@ func mustConfigOperationID(t *testing.T, index int) string {
 	id[len(id)-2] = alphabet[(index/len(alphabet))%len(alphabet)]
 	return string(id)
 }
+
+// LoadVocabularyState memoizes the checkpoint it decoded, keyed on the tip it
+// decoded it from, and a tip that moved misses.
+//
+// The memo exists because `workbook serve` calls this on every request — that
+// is how an open board notices a teammate's status change — and an object read
+// a second for a configuration that changes once a month was most of the poll
+// route's latency. Keying on the head is what makes it safe: a commit's
+// contents cannot change, and the ref enumeration that would notice a move
+// still happens every call. This test states the part that could regress: the
+// answer after a write is the new one, not the remembered one.
+func TestLoadVocabularyStateFollowsTheLedgerPastItsMemo(t *testing.T) {
+	repo, config := writeRepository(t)
+	ctx := context.Background()
+
+	unseeded, err := repo.LoadVocabularyState(ctx, config)
+	if err != nil {
+		t.Fatalf("LoadVocabularyState() error = %v", err)
+	}
+	if unseeded.Seeded || unseeded.Head != "" {
+		t.Fatalf("LoadVocabularyState() without a ledger = %#v, want an unseeded state with no head", unseeded)
+	}
+
+	written := writeConfig(t, repo, config, addOperation("icebox", "Icebox", "7/1"))
+	first, err := repo.LoadVocabularyState(ctx, config)
+	if err != nil {
+		t.Fatalf("LoadVocabularyState() error = %v", err)
+	}
+	if !first.Seeded || first.Head == "" || !first.Vocabulary.Has("icebox") {
+		t.Fatalf("LoadVocabularyState() after a write = %#v, want the seeded ledger with icebox", first)
+	}
+	if got := written.Vocabulary().Document(); !reflect.DeepEqual(first.Vocabulary.Document(), got) {
+		t.Fatalf("LoadVocabularyState() vocabulary = %#v, want the written %#v", first.Vocabulary.Document(), got)
+	}
+
+	// Reading the same tip again answers identically, which is the memo hit.
+	repeated, err := repo.LoadVocabularyState(ctx, config)
+	if err != nil {
+		t.Fatalf("LoadVocabularyState() error = %v", err)
+	}
+	if !reflect.DeepEqual(repeated, first) {
+		t.Fatalf("LoadVocabularyState() repeated = %#v, want %#v", repeated, first)
+	}
+
+	// Moving the ledger moves the answer. This is the assertion the memo could
+	// break, and it fails loudly if the head ever stops being the key.
+	writeConfig(t, repo, config, relabelOperation("icebox", "Deep Freeze"))
+	moved, err := repo.LoadVocabularyState(ctx, config)
+	if err != nil {
+		t.Fatalf("LoadVocabularyState() error = %v", err)
+	}
+	if moved.Head == first.Head {
+		t.Fatalf("LoadVocabularyState() head = %q after a second write, want a new tip", moved.Head)
+	}
+	if got := moved.Vocabulary.Label("icebox"); got != "Deep Freeze" {
+		t.Fatalf("LoadVocabularyState() label = %q, want the relabelled Deep Freeze", got)
+	}
+}

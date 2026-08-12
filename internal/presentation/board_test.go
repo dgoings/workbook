@@ -79,7 +79,7 @@ func TestTaskViewsUseShortestActionableUniquePrefixes(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			before := append([]core.Task(nil), test.tasks...)
-			got := TaskViews(test.tasks)
+			got := TaskViews(test.tasks, core.DefaultVocabulary())
 			if !reflect.DeepEqual(test.tasks, before) {
 				t.Fatalf("TaskViews() mutated input tasks: got %#v, want %#v", test.tasks, before)
 			}
@@ -138,7 +138,7 @@ func TestTaskViewsSummarizeDependencyReadiness(t *testing.T) {
 		},
 	}
 
-	views := TaskViews([]core.Task{done, active, ready, inReview, withoutDependencies, tombstonedDone, readyDependingOnTombstonedDone})
+	views := TaskViews([]core.Task{done, active, ready, inReview, withoutDependencies, tombstonedDone, readyDependingOnTombstonedDone}, core.DefaultVocabulary())
 	if got := views[2]; got.DependenciesComplete != 1 ||
 		got.DependenciesTotal != 3 || !got.WaitingOnDependencies {
 		t.Fatalf("ready dependency summary = %#v, want 1/3 waiting", got)
@@ -166,7 +166,7 @@ func TestNewBoardPreservesInputOrderAndIncludesEmptyColumns(t *testing.T) {
 		{ID: "WB-01ERZ3NDEKTSV4RRFFQ69G5FAZ", TaskData: core.TaskData{Status: core.StatusInReview}},
 	}
 
-	got := NewBoard(tasks)
+	got := NewBoard(tasks, core.DefaultVocabulary())
 	if len(got.Columns) != 6 {
 		t.Fatalf("NewBoard() returned %d columns, want 6", len(got.Columns))
 	}
@@ -207,7 +207,7 @@ func TestNewBoardKeepsUnknownStatusesVisible(t *testing.T) {
 		{ID: "WB-01DRZ3NDEKTSV4RRFFQ69G5FAY", TaskData: core.TaskData{Status: "archived"}},
 	}
 
-	got := NewBoard(tasks)
+	got := NewBoard(tasks, core.DefaultVocabulary())
 	if len(got.Columns) != 6 {
 		t.Fatalf("NewBoard() returned %d columns, want 6", len(got.Columns))
 	}

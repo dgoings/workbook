@@ -35,7 +35,7 @@ func TestLifecycleReadsTheChainFromCreationToTheCurrentStatus(t *testing.T) {
 		},
 	}
 
-	stops := Lifecycle(log, core.StatusInReview)
+	stops := Lifecycle(log, core.StatusInReview, core.DefaultVocabulary())
 
 	want := []struct {
 		status core.Status
@@ -84,7 +84,7 @@ func TestLifecycleShowsOneUnattributedStopWhenStatusNeverChanged(t *testing.T) {
 		}},
 	}
 
-	stops := Lifecycle(log, core.StatusBacklog)
+	stops := Lifecycle(log, core.StatusBacklog, core.DefaultVocabulary())
 
 	if len(stops) != 1 {
 		t.Fatalf("lifecycle stops = %#v, want exactly one", stops)
@@ -110,7 +110,7 @@ func TestLifecycleClosesOnTheCurrentStatusWhenTheChainDoesNotReachIt(t *testing.
 		Truncated: &core.HistoryTruncation{Commit: "ccc", Message: "cannot read this operation"},
 	}
 
-	stops := Lifecycle(log, core.StatusDone)
+	stops := Lifecycle(log, core.StatusDone, core.DefaultVocabulary())
 
 	if len(stops) != 3 {
 		t.Fatalf("lifecycle stops = %#v, want backlog, ready, and the current done", stops)
@@ -136,7 +136,7 @@ func TestLifecycleKeepsAStatusThisBuildDoesNotKnow(t *testing.T) {
 		}},
 	}
 
-	stops := Lifecycle(log, core.Status("shipped"))
+	stops := Lifecycle(log, core.Status("shipped"), core.DefaultVocabulary())
 
 	if len(stops) != 2 {
 		t.Fatalf("lifecycle stops = %#v, want two", stops)

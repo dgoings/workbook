@@ -4006,7 +4006,7 @@ func TestHandlerClientBoardSurfacesUnknownStatuses(t *testing.T) {
 		Format:       "workbook.tasks",
 		Version:      1,
 		Tasks:        tasks,
-		Presentation: taskPresentation(tasks),
+		Presentation: taskPresentation(tasks, core.DefaultVocabulary()),
 	}
 	documentJSON, err := json.Marshal(document)
 	if err != nil {
@@ -4096,7 +4096,7 @@ func TestHandlerClientDragsOnlyOutOfRenderedColumns(t *testing.T) {
 		Format:       "workbook.tasks",
 		Version:      1,
 		Tasks:        tasks,
-		Presentation: taskPresentation(tasks),
+		Presentation: taskPresentation(tasks, core.DefaultVocabulary()),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -4439,8 +4439,32 @@ func renderedClientScript(t *testing.T, body string) string {
 	return body[start+len(open) : end]
 }
 
+// clientDOMHarness builds the fake DOM for a board serving the built-in
+// statuses, which is what every test that is not about the vocabulary wants.
 func clientDOMHarness(path, taskDocument string) string {
+	return clientDOMHarnessWith(path, taskDocument, core.DefaultVocabulary(), "")
+}
+
+// clientDOMHarnessWith builds the fake DOM the server would have rendered for a
+// project with these statuses.
+//
+// The columns, their labels, the default status and the ledger head are all
+// attributes on the real page, and the script reads every one of them out of
+// the DOM rather than holding a copy — so a harness that hard-coded six
+// statuses would be testing a page the server no longer serves.
+func clientDOMHarnessWith(path, taskDocument string, vocabulary core.Vocabulary, vocabularyHead string) string {
+	pairs := make([][2]string, 0, len(vocabulary.Definitions()))
+	for _, definition := range vocabulary.Definitions() {
+		pairs = append(pairs, [2]string{string(definition.Status), definition.Label})
+	}
+	encoded, err := json.Marshal(pairs)
+	if err != nil {
+		panic("webui: encode harness vocabulary: " + err.Error())
+	}
 	return `
+const boardStatusDefinitions = ` + string(encoded) + `;
+const boardDefaultStatus = ` + strconv.Quote(string(vocabulary.Default())) + `;
+const boardVocabularyHead = ` + strconv.Quote(vocabularyHead) + `;
 const scrollIntoViewCalls = [];
 function classTokens(element) {
   return (element.className || "").split(/\s+/).filter(Boolean);
@@ -4580,13 +4604,16 @@ const main = new TestElement("main");
 const boardView = new TestElement("div");
 const stale = new TestElement("p");
 const updated = new TestElement("p");
-const boardStatuses = ["backlog", "ready", "blocked", "in-progress", "in-review", "done"];
-const boardLists = boardStatuses.map((status) => {
+const boardStatuses = boardStatusDefinitions.map(([status]) => status);
+const boardLists = boardStatusDefinitions.map(([status, label]) => {
   const element = new TestElement("div");
   element.dataset.status = status;
+  element.dataset.statusLabel = label;
   element.dataset.dropStatus = status;
   return element;
 });
+boardView.dataset.defaultStatus = boardDefaultStatus;
+boardView.dataset.vocabularyHead = boardVocabularyHead;
 // The region that holds tasks whose status matches no column. It is always in
 // the document and hidden while empty, because the status that strands a task
 // arrives on a poll rather than on the first paint, and a region the server
@@ -4616,6 +4643,14 @@ boardView.querySelectorAll = (selector) => selector === "[data-status]" ? boardL
 // from whatever route the save left the user on.
 const notice = new TestElement("div");
 notice.hidden = true;
+// The standing announcement that the project's statuses have moved on from the
+// ones this page drew, and the control that acts on it. Both are part of the
+// page whether or not anything has changed, for the reason the unknown-status
+// region is: the change arrives on a poll.
+const vocabularyNotice = new TestElement("div");
+vocabularyNotice.hidden = true;
+const vocabularyReload = new TestElement("button");
+vocabularyNotice.append(vocabularyReload);
 // The page ships this control hidden and renderRoute() reveals it on the board,
 // so the harness has to start it hidden too. Starting it visible would let a
 // renderRoute() that never touched it look like it had revealed it.
@@ -4630,6 +4665,8 @@ const documentEventListeners = {};
     if (selector === "[data-board-view]") return boardView;
     if (selector === "[data-updated]") return updated;
     if (selector === "[data-notice]") return notice;
+    if (selector === "[data-vocabulary-notice]") return vocabularyNotice;
+    if (selector === "[data-vocabulary-reload]") return vocabularyReload;
     if (selector === "[data-description-toggle]") return descriptionToggle;
     return null;
   },
@@ -4642,6 +4679,7 @@ const documentEventListeners = {};
   }
 };
 	const initialURL = new URL("http://127.0.0.1` + path + `");
+	let reloadCalls = 0;
 	let intervalDelay = null;
 	let intervalCallback = null;
 	const clipboardWrites = [];
@@ -4668,7 +4706,7 @@ globalThis.window = {
 	  innerHeight: 900,
 	  innerWidth: 1440,
 	  localStorage: preferenceStorage,
-	  location: { href: initialURL.href, origin: initialURL.origin },
+	  location: { href: initialURL.href, origin: initialURL.origin, reload() { reloadCalls += 1; } },
 	  addEventListener() {},
 	  removeEventListener() {},
 	  setInterval(callback, delay) { intervalCallback = callback; intervalDelay = delay; },
@@ -5194,39 +5232,203 @@ func assertBoardStatusMarkersMatchColumns(t *testing.T, body string) {
 	}
 }
 
-// The board no longer reads the client's own status list — placement and drag
-// both come from the columns the server rendered — but the task form still
-// builds its status select from it and still validates /tasks/new?status=
-// against it. Those need labels, which the rendered columns do not carry, so
-// the constant stays; what it may not do is drift from the set core accepts,
-// because a form offering a status core rejects is a save that fails after the
-// reader has already filled it in.
-func TestHandlerClientStatusListMatchesWorkflowStatuses(t *testing.T) {
-	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return boardTasks(), nil })
+// The client has no status list of its own any more.
+//
+// It used to declare one, six statuses long, and a test pinned it against
+// core's built-in set so the form could not offer a status core would reject. A
+// project defines its own statuses now, so a constant in the page could only be
+// right for projects that never customized anything — and the ones that had
+// would get a form offering columns they do not have. What the page carries
+// instead is one labelled attribute per rendered column, which the script reads
+// back: there is exactly one answer, and the server wrote it.
+func TestHandlerRendersEachColumnWithItsProjectLabel(t *testing.T) {
+	vocabulary := handlerVocabulary(t)
+	handler := NewHandler(Options{
+		Vocabulary: staticVocabulary(vocabulary, "9f1c2b"),
+		List:       func(context.Context) ([]core.Task, error) { return nil, nil },
+	})
 
 	response := request(t, handler, http.MethodGet, "/")
 	if response.Code != http.StatusOK {
 		t.Fatalf("GET / status = %d, want %d", response.Code, http.StatusOK)
 	}
-	declaration := regexp.MustCompile(`(?s)const statusDefinitions = \[(.*?)\];`).FindStringSubmatch(response.Body.String())
-	if declaration == nil {
-		t.Fatal("GET / body does not declare the client status list")
+	body := response.Body.String()
+	if strings.Contains(body, "const statusDefinitions = [") {
+		t.Error("GET / body still declares a hard-coded client status list")
 	}
-	pairs := regexp.MustCompile(`\["([^"]*)", "([^"]*)"\]`).FindAllStringSubmatch(declaration[1], -1)
-	got := make([]core.StatusDefinition, len(pairs))
-	for i, pair := range pairs {
-		got[i] = core.StatusDefinition{Status: core.Status(pair[1]), Label: pair[2]}
+
+	pattern := regexp.MustCompile(`data-status="([^"]*)" data-status-label="([^"]*)"`)
+	matches := pattern.FindAllStringSubmatch(body, -1)
+	got := make([]core.StatusDefinition, len(matches))
+	for index, match := range matches {
+		got[index] = core.StatusDefinition{Status: core.Status(match[1]), Label: match[2]}
 	}
-	// The client list carries a status and a label and nothing else, so the
-	// comparison is against that projection of core's definitions. A rank or a
-	// tag differing is not drift the form can suffer from; a status or a label
-	// differing is.
-	want := core.DefaultVocabulary().Definitions()
-	for i := range want {
-		want[i] = core.StatusDefinition{Status: want[i].Status, Label: want[i].Label}
+	want := vocabulary.Definitions()
+	for index := range want {
+		want[index] = core.StatusDefinition{Status: want[index].Status, Label: want[index].Label}
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("client statusDefinitions = %v, want core.DefaultVocabulary().Definitions() = %v", got, want)
+		t.Errorf("rendered columns = %v, want the project's %v", got, want)
+	}
+	// The default is a tag, not a position, so it cannot be read off the column
+	// order and the server has to say which one it is.
+	if !strings.Contains(body, `data-default-status="queued"`) {
+		t.Errorf("GET / body does not carry the project's default status:\n%s", body)
+	}
+	if !strings.Contains(body, `data-vocabulary-head="9f1c2b"`) {
+		t.Errorf("GET / body does not carry the vocabulary head it rendered under:\n%s", body)
+	}
+}
+
+// handlerVocabulary is a project whose statuses, labels, order and default tag
+// are all different from the built-in ones, so nothing about it can be
+// satisfied by a fixed table. The default is deliberately not the first column.
+func handlerVocabulary(t *testing.T) core.Vocabulary {
+	t.Helper()
+	vocabulary, err := core.NewVocabulary(
+		[]core.StatusDefinition{
+			{Status: "icebox", Label: "Icebox", Rank: "1/1", Tags: []core.StatusTag{}},
+			{Status: "queued", Label: "Queued Up", Rank: "2/1", Tags: []core.StatusTag{core.StatusTagDefault, core.StatusTagNext}},
+			{Status: "shipped", Label: "Shipped", Rank: "3/1", Tags: []core.StatusTag{core.StatusTagDone}},
+		},
+		[]core.StatusAlias{{From: "done", To: "shipped"}},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("NewVocabulary() error = %v", err)
+	}
+	return vocabulary
+}
+
+// staticVocabulary is a resolver that always answers the same thing, which is
+// what a test that is not about a mid-session change wants.
+func staticVocabulary(vocabulary core.Vocabulary, head string) VocabularyResolver {
+	return func(context.Context) (VocabularyState, error) {
+		return VocabularyState{Vocabulary: vocabulary, Head: head}, nil
+	}
+}
+
+// A resolver that fails stops the request rather than falling back to the
+// built-in statuses. Drawing six columns for a project that defines three would
+// put every card in a column that does not exist and invite drops the server
+// would refuse.
+func TestHandlerReportsAVocabularyItCannotRead(t *testing.T) {
+	handler := NewHandler(Options{
+		Vocabulary: func(context.Context) (VocabularyState, error) {
+			return VocabularyState{}, core.Errorf(core.CategoryCorruptData, "cannot read this project's status configuration")
+		},
+		List: func(context.Context) ([]core.Task, error) { return boardTasks(), nil },
+	})
+
+	for _, path := range []string{"/", "/api/tasks", "/api/vocabulary"} {
+		response := request(t, handler, http.MethodGet, path)
+		if response.Code != http.StatusInternalServerError {
+			t.Errorf("GET %s status = %d, want %d; body = %s", path, response.Code, http.StatusInternalServerError, response.Body.String())
+		}
+	}
+}
+
+// The vocabulary route reports the project's statuses in configured order, with
+// their labels, their tags, the forwarding chains and the ledger head — enough
+// for a client to explain a status it is shown without deriving any of it.
+func TestHandlerServesTheProjectVocabulary(t *testing.T) {
+	vocabulary := handlerVocabulary(t)
+	handler := NewHandler(Options{
+		Vocabulary: staticVocabulary(vocabulary, "9f1c2b"),
+		List:       func(context.Context) ([]core.Task, error) { return nil, nil },
+	})
+
+	response := request(t, handler, http.MethodGet, "/api/vocabulary")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /api/vocabulary status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	var document VocabularyDocument
+	if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+		t.Fatalf("decode vocabulary document: %v; body = %s", err, response.Body.String())
+	}
+	if document.Format != "workbook.vocabulary" || document.Version != 1 {
+		t.Fatalf("vocabulary document = %#v, want workbook.vocabulary v1", document)
+	}
+	if document.Head != "9f1c2b" || document.Default != "queued" {
+		t.Errorf("vocabulary head/default = %q/%q, want 9f1c2b/queued", document.Head, document.Default)
+	}
+	want := vocabulary.Document()
+	if !reflect.DeepEqual(document.Statuses, want.Statuses) {
+		t.Errorf("vocabulary statuses = %#v, want %#v", document.Statuses, want.Statuses)
+	}
+	if !reflect.DeepEqual(document.Aliases, want.Aliases) {
+		t.Errorf("vocabulary aliases = %#v, want %#v", document.Aliases, want.Aliases)
+	}
+	if !reflect.DeepEqual(document.Retired, want.Retired) {
+		t.Errorf("vocabulary retired = %#v, want %#v", document.Retired, want.Retired)
+	}
+
+	// A board built without a resolver reports the built-in statuses and no
+	// head, which is what every construction that predates this field saw.
+	plain := request(t, listHandler(t, func(context.Context) ([]core.Task, error) { return nil, nil }), http.MethodGet, "/api/vocabulary")
+	var fallback VocabularyDocument
+	if err := json.Unmarshal(plain.Body.Bytes(), &fallback); err != nil {
+		t.Fatalf("decode vocabulary document: %v; body = %s", err, plain.Body.String())
+	}
+	if fallback.Head != "" || !reflect.DeepEqual(fallback.Statuses, core.DefaultVocabulary().Document().Statuses) {
+		t.Errorf("vocabulary without a resolver = %#v, want the built-in statuses and no head", fallback)
+	}
+}
+
+// The tasks document carries the head its columns were built from, so the poll
+// can tell that the vocabulary moved without fetching it every second.
+func TestHandlerTasksDocumentCarriesTheVocabularyHead(t *testing.T) {
+	handler := NewHandler(Options{
+		Vocabulary: staticVocabulary(handlerVocabulary(t), "9f1c2b"),
+		List:       func(context.Context) ([]core.Task, error) { return nil, nil },
+	})
+
+	response := request(t, handler, http.MethodGet, "/api/tasks")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /api/tasks status = %d, want %d", response.Code, http.StatusOK)
+	}
+	var document TasksDocument
+	if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+		t.Fatalf("decode tasks document: %v; body = %s", err, response.Body.String())
+	}
+	if document.VocabularyHead != "9f1c2b" {
+		t.Errorf("tasks document vocabularyHead = %q, want 9f1c2b", document.VocabularyHead)
+	}
+}
+
+// A stored status a rename replaced is drawn in the column it now means, and
+// the card says so: it is draggable, and its label names the live status rather
+// than the token on disk. Only a status no chain leads out of lands in the
+// unknown region.
+func TestHandlerDrawsAStaleStatusInItsLiveColumn(t *testing.T) {
+	tasks := []core.Task{
+		clientPlacementTask("WB-01J00000000000000000000001", "Renamed away", core.StatusDone, core.PriorityHigh),
+		clientPlacementTask("WB-01J00000000000000000000002", "Nothing forwards this", core.Status("archived"), core.PriorityLow),
+	}
+	handler := NewHandler(Options{
+		Vocabulary: staticVocabulary(handlerVocabulary(t), "9f1c2b"),
+		List:       func(context.Context) ([]core.Task, error) { return tasks, nil },
+	})
+
+	response := request(t, handler, http.MethodGet, "/")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d, want %d", response.Code, http.StatusOK)
+	}
+	body := response.Body.String()
+	if !strings.Contains(body, `aria-label="Move task Renamed away from shipped"`) {
+		t.Errorf("stale-status card does not announce its live column:\n%s", body)
+	}
+	if !strings.Contains(body, `aria-label="Task Nothing forwards this has the unrecognized status archived"`) {
+		t.Errorf("unresolvable card does not announce itself as unrecognized:\n%s", body)
+	}
+	// The unknown region opens after every column, so a card rendered before it
+	// is in a column and one rendered after it is not.
+	unknown := strings.Index(body, "data-unknown-list")
+	if stale := strings.Index(body, `data-task-id="WB-01J00000000000000000000001"`); stale < 0 || stale > unknown {
+		t.Errorf("the stale-status card was rendered in the unknown region at %d, region opens at %d", stale, unknown)
+	}
+	if stranded := strings.Index(body, `data-task-id="WB-01J00000000000000000000002"`); stranded < unknown {
+		t.Errorf("the unresolvable card was rendered in a column at %d, unknown region opens at %d", stranded, unknown)
 	}
 }
 
@@ -6439,7 +6641,7 @@ func TestHandlerClientRendersTaskHistoryLaneRowsAndComparisons(t *testing.T) {
 		Format:    "workbook.task-history",
 		Version:   1,
 		TaskID:    task.ID,
-		Lifecycle: lifecycleStages(*detail.History, task.Status),
+		Lifecycle: lifecycleStages(*detail.History, task.Status, core.DefaultVocabulary()),
 		History:   *detail.History,
 	})
 	if err != nil {

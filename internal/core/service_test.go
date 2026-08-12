@@ -240,7 +240,7 @@ func TestNextRankAppendsAfterMaximumRationalRank(t *testing.T) {
 	first := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", TaskData{Title: "first", Status: StatusBacklog, Priority: PriorityHigh, Rank: "7/2"})
 	second := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D2", TaskData{Title: "second", Status: StatusBacklog, Priority: PriorityHigh, Rank: "9/2"})
 
-	got, err := nextRank([]Snapshot{first, second}, StatusBacklog, PriorityHigh)
+	got, err := nextRank(DefaultVocabulary(), []Snapshot{first, second}, StatusBacklog, PriorityHigh)
 	if err != nil {
 		t.Fatalf("nextRank() error = %v", err)
 	}

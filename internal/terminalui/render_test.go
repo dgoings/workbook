@@ -81,7 +81,7 @@ func TestRenderBoardWideGolden(t *testing.T) {
 				Labels:   []string{"release"},
 			},
 		},
-	})
+	}, core.DefaultVocabulary())
 
 	var output bytes.Buffer
 	if err := RenderBoard(&output, board, LayoutWide, 140); err != nil {
@@ -118,7 +118,7 @@ func TestRenderBoardWidePreservesLongUniquePrefixes(t *testing.T) {
 				Priority: core.PriorityMedium,
 			},
 		},
-	})
+	}, core.DefaultVocabulary())
 
 	var output bytes.Buffer
 	if err := RenderBoard(&output, board, LayoutWide, 100); err != nil {
@@ -158,7 +158,7 @@ func TestRenderBoardNarrowGolden(t *testing.T) {
 				Labels:   []string{"release"},
 			},
 		},
-	})
+	}, core.DefaultVocabulary())
 
 	var output bytes.Buffer
 	if err := RenderBoard(&output, board, LayoutNarrow, 100); err != nil {
@@ -198,7 +198,7 @@ func TestRenderBoardShowsAllEmptyColumns(t *testing.T) {
 			Status:   core.Status("archived"),
 			Priority: core.PriorityLow,
 		},
-	}})
+	}}, core.DefaultVocabulary())
 
 	var output bytes.Buffer
 	if err := RenderBoard(&output, board, LayoutNarrow, 100); err != nil {
@@ -212,9 +212,73 @@ func TestRenderBoardShowsAllEmptyColumns(t *testing.T) {
 		"IN REVIEW (0)\n-------------\n(empty)\n\n" +
 		"DONE (0)\n--------\n(empty)\n\n" +
 		"UNKNOWN STATUS (1)\n------------------\n" +
+		"(no status this project defines, and no rename or removal leads to one)\n" +
 		"WB-01ARZ3ND [low] Archived task\n"
 	if got := output.String(); got != want {
 		t.Fatalf("RenderBoard() =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// A board with no columns renders rather than crashing, in both layouts.
+//
+// It is reachable from data, not from a mistake in this package: a
+// configuration checkpoint is decoded and trusted, and nothing in the state
+// document requires a live status, so a ledger tip written by a hand edit, a
+// corruption or a foreign build arrives here with an empty status set and a
+// forwarding entry. That vocabulary is not the zero value, so the board's
+// substitution of the built-in statuses does not fire and the column count is
+// genuinely zero. The wide grid used to divide the terminal width among zero
+// cells and panic — through the real `workbook board --wide`, on a repository
+// whose only fault was in a ref.
+//
+// Whatever the board is holding is in the unknown-status section in that state,
+// so both layouts have to print it: a renderer that swallowed the task would
+// turn a broken ledger into missing work.
+func TestRenderBoardWithNoColumnsRendersRatherThanCrashing(t *testing.T) {
+	// Not the zero vocabulary: it forwards a status and defines none, which is
+	// what makes the column count zero instead of six.
+	vocabulary, err := core.NewVocabulary(nil, nil, []core.RetiredStatus{{Status: "ghost", Destination: "gone"}})
+	if err != nil {
+		t.Fatalf("NewVocabulary() error = %v", err)
+	}
+	if vocabulary.IsZero() {
+		t.Fatal("the fixture is the zero vocabulary, so the board substitutes the built-in statuses and proves nothing")
+	}
+	board := presentation.NewBoard([]core.Task{{
+		ID: "WB-01ARZ3NDEKTSV4RRFFQ69G5FAV",
+		TaskData: core.TaskData{
+			Title:    "Stranded by a ledger with no statuses",
+			Status:   core.Status("ghost"),
+			Priority: core.PriorityLow,
+		},
+	}}, vocabulary)
+	if len(board.Columns) != 0 {
+		t.Fatalf("board has %d columns, want none", len(board.Columns))
+	}
+
+	for name, layout := range map[string]Layout{"wide": LayoutWide, "narrow": LayoutNarrow} {
+		var output bytes.Buffer
+		if err := RenderBoard(&output, board, layout, 140); err != nil {
+			t.Fatalf("RenderBoard(%s) error = %v", name, err)
+		}
+		got := output.String()
+		if !strings.Contains(got, "UNKNOWN STATUS (1)") {
+			t.Errorf("RenderBoard(%s) = %q, want the unknown-status section", name, got)
+		}
+		if !strings.Contains(got, "Stranded by a ledger with no statuses") {
+			t.Errorf("RenderBoard(%s) = %q, want the stranded task named", name, got)
+		}
+		// No grid, rather than an empty one drawn around nothing.
+		if strings.Contains(got, "+--") {
+			t.Errorf("RenderBoard(%s) = %q, want no column grid for a board with no columns", name, got)
+		}
+	}
+
+	// And with nothing at all to show, it still returns rather than dividing by
+	// a column count of zero.
+	var empty bytes.Buffer
+	if err := RenderBoard(&empty, presentation.NewBoard(nil, vocabulary), LayoutWide, 140); err != nil {
+		t.Fatalf("RenderBoard(empty) error = %v", err)
 	}
 }
 
@@ -255,7 +319,7 @@ func TestRenderBoardStripsControlCharactersFromCards(t *testing.T) {
 			Priority: core.PriorityHigh,
 			Labels:   []string{"git\x1b[2K"},
 		},
-	}})
+	}}, core.DefaultVocabulary())
 
 	for name, layout := range map[string]Layout{"narrow": LayoutNarrow, "wide": LayoutWide} {
 		var output bytes.Buffer

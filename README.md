@@ -492,6 +492,21 @@ and each one settles the next time something writes to it. `workbook status
 delete` therefore requires `--into`, naming where the removed status's tasks
 belong, and reports how many tasks that moves.
 
+Everywhere includes ordering. A task's status-and-priority bucket is its
+*resolved* status, so two tasks stored under different tokens that forward to
+one status share a bucket: they are drawn in one column, they rank against each
+other, and `move` and `place` each accept the other's task as an anchor whenever
+the bucket resolves to a status this project defines. Anything narrower would
+let a `move` be refused against the card sitting directly above it on the board.
+
+The two verbs part company for a bucket that resolves to nothing — tasks
+stranded under a status no chain leads out of. `move` reorders them against each
+other, because it names an anchor rather than a status; `place` cannot be asked
+to, because it names the destination status and a status the project does not
+define is refused at the mutation boundary. That is the boundary working as
+intended: `place` is how a caller supplies a status, and supplying one that does
+not exist is the mistake it exists to catch.
+
 The configuration lives in its own synchronized ref, `refs/workbook/config`,
 seeded the first time anybody changes a status and published wherever a task is
 published. A project that has never changed a status has no ledger at all, which
@@ -963,28 +978,50 @@ processes.
 
 ### Terminal board
 
-`workbook board` automatically chooses its six-column wide layout on an
-interactive terminal at least 140 columns wide. It uses vertically stacked status
-sections for narrow or noninteractive output; `--wide` and `--narrow` force the
-respective layouts. The task-ID prefixes in human output are accepted anywhere a
-task ID is accepted.
+`workbook board` draws one column per status the project defines, in the order
+`workbook status list` reports and under the labels it shows. It chooses its
+wide layout on an interactive terminal wide enough for those columns: the budget
+is per column, and a six-status project's threshold is 140 columns, which is
+what it has always been. A project with three statuses reaches its wide layout
+on a narrower terminal, and one with ten needs a wider one. Vertically stacked
+status sections are used for narrow or noninteractive output; `--wide` and
+`--narrow` force the respective layouts. The task-ID prefixes in human output
+are accepted anywhere a task ID is accepted.
 
-### Statuses a build does not recognize
+The web board draws the same columns, resolved per request, so a status change
+another clone made reaches a running `workbook serve` on the next poll. It does
+not rebuild the columns under an open page — that would destroy the card nodes
+holding open forms, staged changes and unread refusals — and instead shows a
+notice offering a reload.
 
-A task can hold a status the build reading it has no column for, which is what
-two clones on different Workbook versions produce on their own. Both boards show
-that task rather than dropping it, under a heading that says the status was not
-recognized: the terminal board prints an `UNKNOWN STATUS` section below its
-columns, and the web board shows an "Unknown status" region below its own. A
-task that is invisible reads as a task that was deleted, which is a worse
-report than a task that is merely unsorted.
+### Statuses a project does not define
+
+A task can hold a status that resolves to nothing this project defines: not a
+live status, and not one any recorded rename or removal forwards to a live one.
+That is what a clone whose configuration this checkout has not fetched produces
+on its own. Both boards show that task rather than dropping it, under a heading
+that says the status was not recognized: the terminal board prints an
+`UNKNOWN STATUS` section below its columns, and the web board shows an "Unknown
+status" region below its own. A task that is invisible reads as a task that was
+deleted, which is a worse report than a task that is merely unsorted.
+
+A stored status that a rename or a removal does forward is not in this region.
+It is drawn in the column that status now means, and settled to the live token
+the next time anything writes to the task; see
+[Project statuses](#project-statuses).
 
 The region is a display, not an extra status. Its cards cannot be dragged and
 nothing can be dropped into it, because there is no column the status belongs
-to. This build also cannot edit such a task: every write validates the projected
-task, so `workbook update` on one exits `7` (`corrupt-data`) and the board's
-save fails the same way. Update Workbook, or use the clone that wrote the
-status, to change one.
+to.
+
+Such a task is still editable, and the rule is narrower than "this task is
+frozen": membership is checked against the status a caller *supplies*, not
+against the one the task already holds. `workbook update <id> --title …`
+succeeds, and so do `move`, `depend` and the board's own save; only naming a
+status this project does not define is refused, with exit `5` (`validation`).
+So the way to file one of these tasks is to give it a status that exists —
+`workbook update <id> --status <one of yours>` — or to fetch the configuration
+the clone that wrote the status was using, after which it resolves on its own.
 
 Both boards read this split from one place — `presentation.Board` separates
 `Columns` from `UnknownTasks` — so a renderer that consumes only `Columns`
@@ -1075,6 +1112,10 @@ GET /tasks/new                new-task shell; client-rendered form
 GET /tasks/<id>               linkable task-detail shell; client-rendered form
 GET /deleted                  deleted-task shell; client-rendered list
 GET /api/tasks                versioned task JSON
+GET /api/vocabulary           versioned status vocabulary JSON: the project's
+                              statuses in order, their labels and tags, the
+                              forwarding chains, and the configuration ledger
+                              head they were read from
 GET /api/tasks/<id>/history   versioned change log and status lifecycle JSON
 POST /api/tasks               create a task
 PATCH /api/tasks/<id>         update task fields
@@ -1144,8 +1185,8 @@ read as agent instructions — without ever being on the network. `workbook
 serve` says so in the warning it prints for a wildcard bind. Bind the one
 address you mean instead, and the `Host` is pinned to it.
 
-Drag a task card within a column to reorder it or into another canonical status
-column to change status and position together. Workbook keeps the task's priority
+Drag a task card within a column to reorder it or into another of the
+project's status columns to change status and position together. Workbook keeps the task's priority
 unchanged and clamps drops outside that priority group to the nearest group
 boundary, so dropping at the top or bottom of a column still has a clear result.
 The placement creates one normal Workbook operation commit on the moved task and
@@ -1219,7 +1260,7 @@ vertically scrollable within the viewport. Web cards show the actionable
 task-ID prefix, priority, title, and labels, plus the report of a refused change
 described above while one is standing; each title links to its full-ID
 task-detail URL, where the complete description remains available. Every status
-column has a New Task link that preselects that column's canonical status.
+column has a New Task link that preselects that column's status.
 
 A description is the one card field with no length a column can rely on, so the
 board hides it and a `Descriptions:` toggle in the header puts up to six clamped
