@@ -110,6 +110,100 @@ func TestRunServeReadsWholeTaskHistoryThroughWebRoute(t *testing.T) {
 	}
 }
 
+// A board is open for hours and a status change arrives while it is. The
+// vocabulary is therefore resolved per request rather than once at startup, and
+// this is the test that distinguishes the two: nothing is restarted, and both
+// halves of the board have to move — the columns it reports, and the statuses
+// its writes accept.
+//
+// The second half is the one worth naming. The resolver alone would let the
+// board draw a column the service would then refuse a drop into, because the
+// repository memoizes its vocabulary for one-shot commands. `serve` re-reads it
+// for every mutation for exactly that reason.
+func TestRunServeResolvesTheVocabularyPerRequest(t *testing.T) {
+	repository := initializedRepository(t)
+	addr := startServeBoard(t, repository)
+
+	before := boardVocabularyDocument(t, addr)
+	// A project that has never changed a status has no ledger, and the head says
+	// so by being empty rather than by being absent — which is the state a poll
+	// has to be able to compare against.
+	if before.Head != "" {
+		t.Fatalf("vocabulary head = %q, want empty for a project with no ledger", before.Head)
+	}
+	if strings.Contains(statusNames(before.Statuses), "icebox") {
+		t.Fatal("the fixture already defines the status this test adds")
+	}
+
+	if code, _, stderr := run(t, repository, "status", "add", "icebox", "--label", "Icebox", "--no-sync"); code != 0 {
+		t.Fatalf("status add = code %d; stderr = %q", code, stderr)
+	}
+
+	after := boardVocabularyDocument(t, addr)
+	if after.Head == before.Head {
+		t.Fatalf("vocabulary head is still %q after a status change; the board is holding a snapshot", after.Head)
+	}
+	if !strings.Contains(statusNames(after.Statuses), "icebox") {
+		t.Fatalf("vocabulary statuses = %q, want the added one", statusNames(after.Statuses))
+	}
+
+	// The tasks route carries the same head, which is the only thing telling an
+	// open page that its columns have been superseded.
+	body, status := boardRequest(t, http.MethodGet, "http://"+addr+"/api/tasks", "")
+	if status != http.StatusOK {
+		t.Fatalf("GET /api/tasks = %d, want %d; body = %s", status, http.StatusOK, body)
+	}
+	var tasks webui.TasksDocument
+	if err := json.Unmarshal(body, &tasks); err != nil {
+		t.Fatalf("decode tasks document: %v; body = %s", err, body)
+	}
+	if tasks.VocabularyHead != after.Head {
+		t.Fatalf("tasks document head = %q, want the vocabulary route's %q", tasks.VocabularyHead, after.Head)
+	}
+
+	// And the page draws the new column, so a reader who reloads can use it.
+	page, status := boardRequest(t, http.MethodGet, "http://"+addr+"/", "")
+	if status != http.StatusOK {
+		t.Fatalf("GET / = %d, want %d", status, http.StatusOK)
+	}
+	if !strings.Contains(string(page), `data-status="icebox" data-status-label="Icebox"`) {
+		t.Fatal("the board page does not draw the column added while it was running")
+	}
+
+	// The write boundary agrees with the columns: a create into the new status
+	// is accepted rather than refused against the statuses serve opened with.
+	created, status := boardRequest(t, http.MethodPost, "http://"+addr+"/api/tasks",
+		`{"title":"Filed after the change","description":"","status":"icebox","priority":"medium","labels":[]}`)
+	task := decodeServeMutation(t, created, status)
+	if task.Status != "icebox" {
+		t.Fatalf("created task status = %q, want icebox", task.Status)
+	}
+}
+
+func boardVocabularyDocument(t *testing.T, addr string) webui.VocabularyDocument {
+	t.Helper()
+	body, status := boardRequest(t, http.MethodGet, "http://"+addr+"/api/vocabulary", "")
+	if status != http.StatusOK {
+		t.Fatalf("GET /api/vocabulary = %d, want %d; body = %s", status, http.StatusOK, body)
+	}
+	var document webui.VocabularyDocument
+	if err := json.Unmarshal(body, &document); err != nil {
+		t.Fatalf("decode vocabulary document: %v; body = %s", err, body)
+	}
+	if document.Format != "workbook.vocabulary" || document.Version != 1 {
+		t.Fatalf("vocabulary envelope = %#v, want a versioned document", document)
+	}
+	return document
+}
+
+func statusNames(definitions []core.StatusDefinition) string {
+	names := make([]string, len(definitions))
+	for index, definition := range definitions {
+		names[index] = string(definition.Status)
+	}
+	return strings.Join(names, ",")
+}
+
 // startServeBoard runs the real serve command on an ephemeral loopback port and
 // stops it when the test ends. Port zero matters: another suite may be running
 // on this machine, and a fixed port would make the two collide.
