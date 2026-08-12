@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +16,7 @@ import (
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
 	"github.com/dgoings/workbook/internal/projection"
+	"github.com/dgoings/workbook/internal/testrepo"
 )
 
 // The decoded shapes are declared here rather than reused from production so a
@@ -535,6 +538,29 @@ func TestStatusChangeReportsGuidelinesItWillNotOverwrite(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "workbook docs update --force") {
 		t.Errorf("status add stderr = %q, want the warning", stderr)
+	}
+}
+
+// A project that has no guidelines file said so, with `workbook setup
+// --no-docs` or `workbook docs remove`. A status change refreshes generated
+// documentation and never installs it, so that decision survives.
+func TestStatusChangeDoesNotInstallGuidelinesAProjectDeclined(t *testing.T) {
+	repository := testrepo.New(t)
+	if code, _, stderr := run(t, repository, "setup", "--no-docs"); code != 0 {
+		t.Fatalf("setup --no-docs = code %d; stderr = %q", code, stderr)
+	}
+
+	document := cliStatusMutation(t, repository, "status add", "status", "add", "triage", "--json")
+
+	if document.Docs == nil || len(document.Docs.Artifacts) != 1 {
+		t.Fatalf("docs = %#v, want the guidelines reported", document.Docs)
+	}
+	if artifact := document.Docs.Artifacts[0]; artifact.State != string(agentdocs.StateAbsent) || artifact.Written {
+		t.Fatalf("docs artifact = %#v, want an absent file left absent", artifact)
+	}
+	path := filepath.Join(repository, filepath.FromSlash(agentdocs.GuidelinesPath))
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("stat %s = %v, want the file still absent", agentdocs.GuidelinesPath, err)
 	}
 }
 

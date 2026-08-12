@@ -142,8 +142,22 @@ func Apply(options Options) (Report, error) {
 // AGENTS.md as a side effect of `workbook status rename` would be a surprise
 // nobody asked for, and installing a skill that a project deliberately left out
 // would be worse.
+//
+// It refreshes and never installs. A project that has no guidelines file chose
+// that — `workbook setup --no-docs` and `workbook docs remove` are both ways to
+// say it — and creating one from a command that was about statuses would
+// override a decision nobody was asked to revisit. Such a project is reported
+// as absent and untouched; `workbook docs install` is what creates the file.
 func ApplyGuidelines(options Options) (Report, error) {
-	return apply([]target{guidelinesTarget(options)}, options)
+	item := guidelinesTarget(options)
+	existing, err := read(item.path)
+	if err != nil {
+		return Report{}, err
+	}
+	if len(existing) == 0 {
+		return Report{Artifacts: []Artifact{{Path: item.display, State: StateAbsent}}}, nil
+	}
+	return apply([]target{item}, options)
 }
 
 func apply(targets []target, options Options) (Report, error) {
