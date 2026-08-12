@@ -55,9 +55,9 @@ type Column struct {
 // of the columns matters as much as showing it: the region is a display, not a
 // seventh status, so it takes no drops and its cards do not drag.
 //
-// This is routine rather than exotic, because two clones on different Workbook
-// versions produce it on their own. internal/presentation/parity_test.go holds
-// the decision and asserts it against both renderers at once.
+// This is routine rather than exotic, because a clone whose configuration this
+// one has not fetched produces it on its own. internal/presentation/parity_test.go
+// holds the decision and asserts it against both renderers at once.
 type Board struct {
 	Columns      []Column
 	UnknownTasks []TaskView
