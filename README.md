@@ -527,7 +527,10 @@ same value with what became of it — which rename or removal retired it, on wha
 date, and which live status it resolves to now — rather than with a bare "not
 found". A task holding a status no chain leads out of is still fully editable;
 only supplying that status again is refused. See
-[Statuses a project does not define](#statuses-a-project-does-not-define).
+[Statuses a project does not define](#statuses-a-project-does-not-define) for
+how to file such a task, and
+[Which exit code a status produces](#which-exit-code-a-status-produces) for why
+membership is exit `5` while a malformed stored token is exit `7`.
 
 Everywhere includes ordering. A task's status-and-priority bucket is its
 *resolved* status, so two tasks stored under different tokens that forward to
@@ -1076,23 +1079,56 @@ It is drawn in the column that status now means, and settled to the live token
 the next time anything writes to the task; see
 [Project statuses](#project-statuses).
 
-The region is a display, not an extra status. Its cards cannot be dragged and
-nothing can be dropped into it, because there is no column the status belongs
-to.
+The region is a display, not an extra status. Nothing drops into it, because
+there is no status such a drop would name. Its cards drag *out*, though, and on
+the web board that is the recovery: dropping one on a column sends the same
+status write every other drag sends, naming a status the project does define.
 
-Such a task is still editable, and the rule is narrower than "this task is
-frozen": membership is checked against the status a caller *supplies*, not
-against the one the task already holds. `workbook update <id> --title …`
-succeeds, and so do `move`, `depend` and the board's own save; only naming a
-status this project does not define is refused, with exit `5` (`validation`).
-So the way to file one of these tasks is to give it a status that exists —
-`workbook update <id> --status <one of yours>` — or to fetch the configuration
-the clone that wrote the status was using, after which it resolves on its own.
+Such a task is not frozen, and the rule is narrower than it sounds: membership
+is checked against the status a caller *supplies*, not against the one the task
+already holds. `workbook update <id> --title …` succeeds, and so do `move`,
+`depend` and the board's own save; only naming a status this project does not
+define is refused. So the ways to file one of these tasks are to give it a
+status that exists — `workbook update <id> --status <one of yours>`, or a drag
+out of the web board's region — or to fetch the configuration the clone that
+wrote the status was using, after which it resolves on its own.
 
-Both boards read this split from one place — `presentation.Board` separates
-`Columns` from `UnknownTasks` — so a renderer that consumes only `Columns`
-silently deletes tasks from the reader's view. `internal/presentation/parity_test.go`
-asserts both boards against the same task set and is what keeps them aligned.
+#### Which exit code a status produces
+
+Two different questions are asked about a status, and they are different kinds
+of failure:
+
+| Question | Where it is asked | Failure |
+| --- | --- | --- |
+| Is this status one the project defines? | The mutation boundary, over a value a caller supplied | `validation`, exit `5` |
+| Is this string a status token at all? | Every read, over a value already stored | `corrupt-data`, exit `7` |
+
+Membership is a decision, so it is asked only where somebody is still making
+one: `create`, `update`, `place` and the board's saves. It is deliberately not
+asked on the way in from a ref, because a status this clone has not heard of is
+an ordinary thing for a teammate to have written, and refusing to read their
+task would report a broken repository over a stale configuration.
+
+Shape is not a decision. A status is lowercase letters and digits separated by
+single hyphens (`core.ValidateStatusToken`), and every build that has ever
+written one wrote one of those — so a stored value that fails the rule is not an
+unfamiliar status, it is data Workbook did not write. Replay says so with
+`corrupt-data`, which is why `workbook status add "Not A Token"` is exit `5`
+(you typed it, and you can type something else) while a ref *holding* that value
+is exit `7`.
+
+The residue is a task whose stored status fails the shape rule. Nothing can
+write to it — every read of the ref refuses before a mutation is considered — so
+the correction above does not reach it, and neither does the web board. Only a
+hand-edited or hostile ref produces one: no Workbook build writes a status it
+would then refuse to read. A repair verb is deferred until somebody actually
+hits this; `workbook validate` names the task and the commit in the meantime.
+
+Both boards read the unknown/known split from one place — `presentation.Board`
+separates `Columns` from `UnknownTasks` — so a renderer that consumes only
+`Columns` silently deletes tasks from the reader's view.
+`internal/presentation/parity_test.go` asserts both boards against the same task
+set and is what keeps them aligned.
 
 ### Text-mode output safety
 

@@ -1,9 +1,13 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -479,4 +483,142 @@ func TestBoardRendersTheProjectsOwnColumns(t *testing.T) {
 	if !strings.Contains(stdout, "Renamed column") {
 		t.Fatalf("board = %q, want the task drawn", stdout)
 	}
+}
+
+// TestUnresolvedStatusRecovery is the acceptance pair for the recovery path,
+// kept in one function because the pair is the claim. A stored status this
+// project cannot resolve is a *correction* — the task takes an ordinary status
+// write and lands in a column — while stored data that is not a status at all
+// is *corruption*, and no write reaches it. One exits 0 and appends exactly one
+// operation; the other exits 7 whatever is asked of it.
+//
+// The two halves run against one task on purpose. Corruption is what the same
+// ref becomes when something outside Workbook edits it, and asserting the fork
+// on one task is what makes "the difference is the data, not the task" a
+// statement rather than two unrelated fixtures.
+func TestUnresolvedStatusRecovery(t *testing.T) {
+	repository, _ := cliSyncRepositories(t)
+	stranded := writeTaskInAForeignStatus(t, repository, "Written by a clone we have not fetched", "ghost")
+
+	// (a) The correction. A status this project defines is an ordinary write to
+	// a task whose stored status it does not, because membership is asked of
+	// what a caller supplies rather than of what the task already holds.
+	code, _, stderr := run(t, repository, "update", stranded.ID, "--status", "ready", "--no-sync")
+	if code != 0 {
+		t.Fatalf("update --status ready = code %d, want 0; stderr = %q", code, stderr)
+	}
+	// Exactly one operation, and it is the status: a correction must not smuggle
+	// a settlement alongside itself. There is nothing to settle — the stored
+	// token forwards nowhere — and a pack carrying two status writes would make
+	// the history say the task moved twice.
+	pack := headOperationPack(t, repository, stranded.ID)
+	if len(pack.Operations) != 1 {
+		t.Fatalf("appended pack = %#v, want exactly one operation", pack.Operations)
+	}
+	operation := pack.Operations[0]
+	if operation.Type != core.OperationFieldSet || operation.Field != "status" || operation.Value != "ready" {
+		t.Fatalf("appended operation = %#v, want one field.set of status to ready", operation)
+	}
+
+	code, stdout, stderr := run(t, repository, "board")
+	if code != 0 || stderr != "" {
+		t.Fatalf("board = code %d, stderr %q", code, stderr)
+	}
+	if strings.Contains(stdout, "UNKNOWN STATUS") {
+		t.Fatalf("board = %q, want the corrected task filed into a column", stdout)
+	}
+
+	// (b) The residue. A stored status that is not a status token at all cannot
+	// be reached by the same recovery: it fails the structural rule every read
+	// applies, so the task reports corrupt data rather than an unfamiliar
+	// status. Only a hand edit or a hostile ref produces it, which is why the
+	// repair is a documented gap rather than a verb.
+	overwriteStoredTask(t, repository, stranded.ID, `"status":"ready"`, `"status":"Not A Token"`)
+	code, stdout, stderr = run(t, repository, "update", stranded.ID, "--status", "backlog", "--no-sync", "--json")
+	if code != 7 {
+		t.Fatalf("update on a malformed stored status = code %d, want 7; stderr = %q", code, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want nothing written for a refused write", stdout)
+	}
+	// The refusal is about the stored document rather than about the status the
+	// caller supplied, which is the whole distinction: nothing got as far as
+	// asking whether `backlog` is a member.
+	assertJSONError(t, stderr, core.CategoryCorruptData, "task state contains an invalid task")
+
+	// And a corrupt field that has nothing to do with the status reads the same
+	// way, so the verdict is about the data rather than about this one field.
+	// Its own repository, because a tampered ref is not a state a repository
+	// recovers from: the projection refuses everything downstream of it until
+	// somebody rebuilds, which is the guard doing its job.
+	other, _ := cliSyncRepositories(t)
+	second := writeTaskInAForeignStatus(t, other, "Also written elsewhere", "ghost")
+	overwriteStoredTask(t, other, second.ID, `"priority":"medium"`, `"priority":"urgent"`)
+	code, _, stderr = run(t, other, "update", second.ID, "--status", "ready", "--no-sync", "--json")
+	if code != 7 {
+		t.Fatalf("update on a corrupt priority = code %d, want 7; stderr = %q", code, stderr)
+	}
+	assertJSONError(t, stderr, core.CategoryCorruptData, "")
+}
+
+// headOperationPack decodes the operation pack a task's newest commit carries,
+// so a test can assert what a command appended rather than what the projection
+// reports afterwards.
+func headOperationPack(t *testing.T, repository, taskID string) core.OperationPack {
+	t.Helper()
+	head := gitOutput(t, repository, "rev-parse", "--verify", "refs/workbook/tasks/"+taskID)
+	pack, err := core.DecodeOperationPack([]byte(gitOutput(t, repository, "show", head+":operation.json")))
+	if err != nil {
+		t.Fatalf("decode operation pack at %s: %v", head, err)
+	}
+	return pack
+}
+
+// overwriteStoredTask rewrites a task's stored checkpoint through Git, which is
+// the only way to produce data no Workbook build would write.
+//
+// The edit is a substitution on the stored bytes rather than a re-encode of a
+// decoded document, because every encoder in core validates what it is handed —
+// which is the property under test. It replaces the head commit rather than
+// appending one for the same reason: an append is a write, and every write goes
+// through the validation this is trying to get underneath. What it reproduces is
+// a ref somebody edited by hand.
+func overwriteStoredTask(t *testing.T, repository, taskID, from, to string) {
+	t.Helper()
+	ref := "refs/workbook/tasks/" + taskID
+	head := gitOutput(t, repository, "rev-parse", "--verify", ref)
+	stored := gitBlob(t, repository, head+":state.json")
+	if !bytes.Contains(stored, []byte(from)) {
+		t.Fatalf("stored checkpoint %s does not contain %q, so the tamper would be a no-op", stored, from)
+	}
+	encoded := bytes.Replace(stored, []byte(from), []byte(to), 1)
+	operationBlob := gitOutput(t, repository, "rev-parse", head+":operation.json")
+	stateBlob := gitInput(t, repository, encoded, "hash-object", "-w", "--stdin")
+	tree := gitInput(t, repository,
+		[]byte("100644 blob "+operationBlob+"\toperation.json\n100644 blob "+stateBlob+"\tstate.json\n"), "mktree")
+	commitArgs := []string{"commit-tree", tree}
+	for _, parent := range strings.Fields(gitOutput(t, repository, "rev-list", "--parents", "--max-count=1", head))[1:] {
+		commitArgs = append(commitArgs, "-p", parent)
+	}
+	gitInput(t, repository, nil, "update-ref", ref, gitInput(t, repository, nil, commitArgs...), head)
+	// The projection remembers the head it last saw, and a hand-edited ref is
+	// not a descendant of it — a guard that would answer every later command
+	// with "run workbook rebuild" before anything read the tampered bytes. The
+	// projection is disposable by construction, so discarding it puts the next
+	// command in front of the refs themselves, which is where the corruption is.
+	if err := os.RemoveAll(filepath.Join(repository, ".git", "workbook")); err != nil {
+		t.Fatalf("discard projection cache: %v", err)
+	}
+}
+
+// gitBlob reads an object's bytes exactly, where gitOutput trims them. A stored
+// document ends in a newline that is part of its canonical form, so a helper
+// that dropped it would tamper with more than it meant to.
+func gitBlob(t *testing.T, repository, object string) []byte {
+	t.Helper()
+	contents, err := exec.Command("git", "-C", repository, "cat-file", "blob", object).Output()
+	if err != nil {
+		t.Fatalf("git cat-file blob %s: %v", object, err)
+	}
+	return contents
 }
