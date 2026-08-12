@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1796,6 +1798,44 @@ func TestStatusListReportsUnresolvedStoredStatuses(t *testing.T) {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("status list text = %q, want %q", stdout, want)
 		}
+	}
+}
+
+// One status can strand more work than a status table can hold, so the IDs are
+// a bounded sample and the listing says so. The count beside them is never
+// sampled: "how much is stranded" stays exact while "which tasks" becomes a
+// place to start.
+func TestStatusListBoundsTheUnresolvedTaskIDs(t *testing.T) {
+	repository := initializedRepository(t)
+	stranded := make([]string, 0, maxUnresolvedTaskIDs+2)
+	for index := range maxUnresolvedTaskIDs + 2 {
+		stranded = append(stranded,
+			writeTaskInAnUndefinedStatus(t, repository, "shipped", "Stranded "+strconv.Itoa(index)))
+	}
+	sort.Strings(stranded)
+
+	document := cliStatusList(t, repository)
+	if len(document.Unresolved) != 1 {
+		t.Fatalf("unresolved = %#v, want the one stranded status", document.Unresolved)
+	}
+	entry := document.Unresolved[0]
+	if entry.Tasks != len(stranded) {
+		t.Fatalf("unresolved count = %d, want the exact %d", entry.Tasks, len(stranded))
+	}
+	if !equalStrings(entry.TaskIDs, stranded[:maxUnresolvedTaskIDs]) {
+		t.Fatalf("unresolved ids = %v, want the first %d in ID order", entry.TaskIDs, maxUnresolvedTaskIDs)
+	}
+
+	code, stdout, stderr := run(t, repository, "status", "list")
+	if code != 0 || stderr != "" {
+		t.Fatalf("status list = code %d, stderr %q", code, stderr)
+	}
+	want := fmt.Sprintf("(first %d of %d)", maxUnresolvedTaskIDs, len(stranded))
+	if !strings.Contains(stdout, want) {
+		t.Fatalf("status list text = %q, want %q", stdout, want)
+	}
+	if strings.Contains(stdout, stranded[len(stranded)-1]) {
+		t.Fatalf("status list text = %q, want the sample cut short rather than the whole set", stdout)
 	}
 }
 

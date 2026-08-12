@@ -1,5 +1,5 @@
 {{ define "task" }}
-<article class="task-card" tabindex="0" data-task-id="{{ .Task.ID }}" data-priority="{{ .Task.Priority }}" data-id-prefix="{{ .IDPrefix }}" draggable="{{ if .StatusUnresolved }}false{{ else }}true{{ end }}" aria-label="{{ if .StatusUnresolved }}Task {{ .Task.Title }} has the unrecognized status {{ .ResolvedStatus }}{{ else }}Move task {{ .Task.Title }} from {{ .ResolvedStatus }}{{ end }}">
+<article class="task-card" tabindex="0" data-task-id="{{ .Task.ID }}" data-priority="{{ .Task.Priority }}" data-id-prefix="{{ .IDPrefix }}" draggable="true" aria-label="{{ if .StatusUnresolved }}Move task {{ .Task.Title }} out of the unrecognized status {{ .ResolvedStatus }}{{ else }}Move task {{ .Task.Title }} from {{ .ResolvedStatus }}{{ end }}">
   <div class="task-card__meta"><span class="task-id-copy-group"><button type="button" class="task-id-copy" data-copy-task-id="{{ .Task.ID }}" aria-label="Copy full task ID {{ .Task.ID }}"><code>{{ .IDPrefix }}</code></button><span class="copy-status" data-copy-status role="status" aria-live="polite" aria-atomic="true"></span></span><span class="priority priority--{{ .Task.Priority }}">{{ .Task.Priority }}</span></div>
   <h3><a href="/tasks/{{ .Task.ID }}">{{ .Task.Title }}</a></h3>
   {{ if .Task.Description }}<p>{{ .Task.Description }}</p>{{ end }}
@@ -92,7 +92,7 @@
     .task-list { display: grid; align-content: start; gap: .55rem; min-height: 0; overflow-anchor: none; overflow-y: auto; padding: .55rem; }
     .task-card { border: 1px solid #b9c6d8; border-radius: 4px; background: #fff; padding: .7rem; box-shadow: 0 1px 0 rgba(23,32,51,.05); cursor: grab; }
     .task-card:active { cursor: grabbing; }
-    /* An unknown-status card has no column to leave and none to enter, so it must not offer the grab cursor a drag would promise. draggable is a reflected attribute, so the selector tracks the property the client sets. */
+    /* A card whose save is still in flight has no ID to place, so it must not offer the grab cursor a drag would promise. draggable is a reflected attribute, so the selector tracks the property the client sets — and it is now the pending stand-in alone, since an unknown-status card drags out to the column that files it. */
     .task-card[draggable="false"], .task-card[draggable="false"]:active { cursor: default; }
     .task-card:focus-visible { outline: 3px solid #2457d6; outline-offset: 2px; }
     .task-card.is-dragging { opacity: .5; }
@@ -410,21 +410,22 @@
         is why the region's copy names both and points at the reload.
 
         It is a display, not a seventh status. It carries no data-status and no
-        data-drop-status, so nothing can drop a task into it and no card inside
-        it can be dragged.
+        data-drop-status, so nothing can drop a task into it — there is no status
+        a drop here would name.
 
-        The card is undraggable, not uneditable. A write is refused for naming a
-        status the project does not define, which a drop necessarily does;
-        opening the task and changing its title or description is an ordinary
-        save, because membership is checked against what a caller supplies
-        rather than against what the task already holds. Showing the task is
-        still the whole point — a task the reader can see and edit is a much
-        smaller problem than one that looks deleted.
+        Its cards drag out, though, and that is the recovery. Dropping one on a
+        column sends the same status write every other drag sends, naming a
+        status the project defines, so the mutation boundary has nothing to
+        refuse. Membership is checked against what a caller supplies, not against
+        what the task already holds, which is also why opening the task and
+        editing its title or description has always been an ordinary save.
+        Showing the task was never enough on its own — a task the reader can see,
+        edit and file is a much smaller problem than one that looks deleted.
       -->
       <section class="unknown-status" data-unknown-section data-visible="{{ if .Board.UnknownTasks }}true{{ else }}false{{ end }}" aria-label="Tasks with an unrecognized status">
         <header class="unknown-status__header">
           <h2 class="unknown-status__heading">Unknown status <span class="count" data-unknown-count>{{ len .Board.UnknownTasks }}</span></h2>
-          <p class="unknown-status__note">These tasks are in none of the columns above, for one of two reasons. Either they hold a status this project does not define and nothing forwards to one — most often a clone changed the statuses and this checkout has not fetched it yet — or the project's statuses have changed since this page was opened, in which case the notice at the top of the page offers the reload that files them. They are listed here so they are not mistaken for deleted work, and they can still be opened and edited: only naming a status the project does not define is refused.</p>
+          <p class="unknown-status__note">These tasks are in none of the columns above, for one of two reasons. Either they hold a status this project does not define and nothing forwards to one — most often a clone changed the statuses and this checkout has not fetched it yet — or the project's statuses have changed since this page was opened, in which case the notice at the top of the page offers the reload that files them. They are listed here so they are not mistaken for deleted work, and there is nothing frozen about them: drag one onto any column to file it there, or open it and edit it like any other task. Nothing drops back into this region, because there is no status it would name.</p>
         </header>
         <div class="task-list unknown-status__list" data-unknown-list>{{ range .Board.UnknownTasks }}{{ template "task" . }}{{ end }}</div>
       </section>
@@ -774,26 +775,37 @@
         parts.signature = signature;
         article.dataset.priority = task.priority;
         article.dataset.idPrefix = view.idPrefix;
-        // A card in the unknown-status region has no column to be dragged out of
-        // and none to be dropped into, so it neither offers the drag nor
-        // announces one. This asks `lists` — the columns the server actually
-        // rendered — rather than the hardcoded `statuses` above, because `lists`
-        // is already what decides which region the card lands in, and the two
-        // answers have to be the same answer. Reading a second, duplicate status
-        // set would let a board whose columns differ from that constant (a
-        // removed default status, a per-project column set) strand a card here
-        // and then tell the reader it can be moved out. The status decides, not
-        // the node's current parent, so a card carries the right answer with it
-        // when a poll moves it between the region and a column.
-        // A pending stand-in is not draggable either: its save is still in
-        // flight, and it retires the moment the real card arrives.
-        const movable = lists.has(task.status) && !view.pending;
-        article.draggable = movable;
+        // Every card drags, including one in the unknown-status region. A card
+        // there has no column to be dropped *into* — the region takes no drops —
+        // but dragging it into a column is an ordinary status change, and the
+        // one the reader most needs: it is the whole recovery from a status this
+        // project cannot resolve, expressed the same way every other status
+        // change is. The write it sends names a status the project defines, so
+        // the mutation boundary has nothing to refuse.
+        //
+        // A pending stand-in is the one card that does not drag: its save is
+        // still in flight, it has no ID a placement could be recorded against,
+        // and it retires the moment the real card arrives.
+        //
+        // The label still distinguishes the two, because "out of the
+        // unrecognized status X" is the only place a screen reader is told the
+        // card is stranded at all. It asks `lists` — the columns the server
+        // rendered onto this page — because `lists` is already what decides
+        // which region the card lands in, and a label that disagreed with the
+        // region would be the one thing worse than no label.
+        //
+        // Specifically not the node's current parent, which is the near miss:
+        // this runs before card() has inserted the node anywhere, so a
+        // parent-derived answer strands every card on its first render.
+        // The status decides, which is also why a card carries the right answer
+        // with it when a poll moves it between the region and a column.
+        const stranded = !lists.has(task.status);
+        article.draggable = !view.pending;
         article.setAttribute("aria-label", view.pending
           ? "Task " + task.title + ", saving"
-          : movable
-            ? "Move task " + task.title + " from " + task.status
-            : "Task " + task.title + " has the unrecognized status " + task.status);
+          : stranded
+            ? "Move task " + task.title + " out of the unrecognized status " + task.status
+            : "Move task " + task.title + " from " + task.status);
         if (parts.idText) text(parts.idText, view.idPrefix);
         parts.priority.className = "priority priority--" + task.priority; text(parts.priority, task.priority);
         text(parts.link, task.title);
@@ -2811,9 +2823,41 @@
         waitingOnDependencies: false,
         pending: true
       };
-      function projectPresentation(presentation) {
-        if (pendingCreations.size === 0) return presentation;
+      // What the board can say about a task the server has derived nothing for.
+      //
+      // Every rendered task is supposed to have a view — /api/tasks is refused
+      // outright if its presentation does not cover its tasks — but there is one
+      // seam where the two come from different reads. A confirmation puts its
+      // task back into the model (replaceProjectedTask), and if the poll before
+      // it had already taken that task out — another clone deleted it while this
+      // write was in flight — the presentation left behind does not name it. The
+      // renderer then read `undefined.idPrefix` and threw, which killed the poll
+      // loop: the board froze on the last frame and stayed frozen, over a card
+      // that was about to disappear anyway.
+      //
+      // So the gap is filled rather than allowed to reach the renderer. The
+      // prefix falls back to the whole task ID, which is always correct and
+      // merely longer than the shortest unique one the server computes. The
+      // dependency counts fall back to none: the client can count a task's own
+      // dependencies but cannot tell which are done — that needs every other
+      // task's status and the vocabulary's done tag — and "0 of 3 complete" over
+      // three finished prerequisites is a worse answer than no row for one poll.
+      // The next poll derives the real view or takes the card away.
+      function underivedView(task) {
+        return {
+          idPrefix: task.id,
+          dependenciesTotal: 0,
+          dependenciesComplete: 0,
+          waitingOnDependencies: false
+        };
+      }
+      function projectPresentation(presentation, tasks) {
+        // A pending creation has its own stand-in view and must keep it: pending
+        // is what draws it as a stand-in rather than as a task.
+        const underived = tasks.filter((task) => !presentation.has(task.id) && !pendingCreations.has(task.id));
+        if (pendingCreations.size === 0 && underived.length === 0) return presentation;
         const projected = new Map(presentation);
+        underived.forEach((task) => projected.set(task.id, underivedView(task)));
         pendingCreations.forEach((_creation, key) => projected.set(key, pendingCreationView));
         return projected;
       }
@@ -2823,7 +2867,7 @@
         // carries, so the presentation it is paired with names exactly the
         // stand-ins that survived.
         const tasks = projectTasks(latestTasks);
-        render(tasks, projectPresentation(latestPresentation));
+        render(tasks, projectPresentation(latestPresentation, tasks));
       }
       function replaceProjectedTask(task) {
         const index = latestTasks.findIndex((candidate) => candidate.id === task.id);
@@ -3666,7 +3710,7 @@
             // before the last confirmation returned carries an older head, and
             // adopting it would refuse the next intent for no reason.
             const projected = projectTasks(document.tasks);
-            render(projected, projectPresentation(presentation)); stale.dataset.visible = "false"; text(updated, "Updated " + new Date().toLocaleTimeString());
+            render(projected, projectPresentation(presentation, projected)); stale.dataset.visible = "false"; text(updated, "Updated " + new Date().toLocaleTimeString());
             let relationshipContext = { status: "not-applicable" };
             if (!wasLoaded) renderRoute();
             else if (activeDependencyController) {
@@ -3716,12 +3760,26 @@
       });
       document.addEventListener("dragstart", (event) => {
         const item = event.target.closest(".task-card");
-        const source = item && item.closest("[data-status]");
-        if (!item || !source || !source.dataset.dropStatus) return;
-        // The card is marked undraggable, so this is the belt to that brace: a
-        // task with no ID has nothing a placement could be recorded against.
+        if (!item) return;
+        // A card drags out of a column or out of the unknown-status region, and
+        // out of nothing else. The region has no data-status of its own — it is
+        // a display rather than a seventh column, and giving it one would make
+        // it a drop target — so the two are asked separately and a card from it
+        // carries no source status. Nothing downstream needs one: the only use
+        // is the no-op check below, and a drop into a real column is never a
+        // no-op for a card that was not in one.
+        const source = item.closest("[data-status]");
+        if (!source && !unknownList.contains(item)) return;
+        if (source && !source.dataset.dropStatus) return;
+        // The pending stand-in is marked undraggable, so this is the belt to
+        // that brace: a task with no ID has nothing a placement could be
+        // recorded against.
         if (item.dataset.pendingCreate === "true") return;
-        activeDrag = { taskId: item.dataset.taskId, priority: item.dataset.priority, sourceStatus: source.dataset.status };
+        activeDrag = {
+          taskId: item.dataset.taskId,
+          priority: item.dataset.priority,
+          sourceStatus: source ? source.dataset.status : ""
+        };
         copySuppressedTaskID = item.dataset.taskId;
         event.dataTransfer.effectAllowed = "move";
         event.dataTransfer.setData("text/plain", activeDrag.taskId);
@@ -3761,10 +3819,30 @@
         if (!target || !activeDrag || !lists.has(target.dataset.dropStatus)) return;
         event.preventDefault();
         const taskId = activeDrag.taskId;
-        const sourceStatus = activeDrag.sourceStatus;
         const placement = placementFor(target, event.clientY);
         clearPlacement();
-        if (placement.status === sourceStatus && !placement.before && !placement.after) return;
+        // Whether this drop changes anything is asked of the status the card is
+        // drawn under *now*, not the one it was drawn under when the drag
+        // started. A poll can re-resolve a card mid-drag — another clone's
+        // status change lands, or the reader's own earlier move settles — and
+        // reconciliation moves the node into its new column while the cursor is
+        // still holding it. Dropping it back on the column it has just arrived
+        // in is a gesture that changes nothing, and answering it from the
+        // drag-start value would send a write for it: a settlement commit
+        // nobody asked for, or a stale-head banner over a move the reader did
+        // not make.
+        //
+        // A card that is still stranded compares against a status no column
+        // has, so a drag out of the unknown-status region is always a real move
+        // — which is the point of making those cards draggable at all.
+        //
+        // It reads the projected model rather than the raw one because the
+        // projection is what is on screen: a queued intent has already moved
+        // the card for the reader, and a no-op is a question about what they
+        // can see.
+        const drawn = projectTasks(latestTasks).find((task) => task.id === taskId);
+        const currentStatus = drawn ? drawn.status : activeDrag.sourceStatus;
+        if (placement.status === currentStatus && !placement.before && !placement.after) return;
 
         const body = { status: placement.status };
         if (placement.before) body.before = placement.before;

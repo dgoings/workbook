@@ -237,11 +237,30 @@ type retiredStatusView struct {
 	At        string                   `json:"at,omitempty"`
 }
 
+// unresolvedStatusView is one stored value nothing in this project resolves,
+// with the work standing behind it.
+//
+// Tasks is the whole count and TaskIDs is a bounded sample of it, so the two
+// disagree exactly when the sample was cut short — which is the signal a reader
+// of the JSON gets that there are more. See maxUnresolvedTaskIDs for why a
+// listing samples rather than enumerates.
 type unresolvedStatusView struct {
 	Status  core.Status `json:"status"`
 	Tasks   int         `json:"tasks"`
 	TaskIDs []string    `json:"taskIds"`
 }
+
+// maxUnresolvedTaskIDs bounds the task IDs one unresolved status contributes to
+// the listing.
+//
+// The IDs are here so a person can act — each one is an argument to the command
+// printed beneath them — and a status that stranded a whole project's backlog
+// would otherwise turn a status table into a task dump nobody can read past.
+// The count beside them is never sampled, so "how much work is stranded" stays
+// exact while "which tasks" becomes a place to start. `status log` bounds its
+// window the same way and for the same reason, and both say what they showed
+// out of what there was.
+const maxUnresolvedTaskIDs = 10
 
 // statusLogResult mirrors the change log `workbook show --history` renders,
 // because it answers the same question about a different history.
@@ -474,7 +493,15 @@ func statusTaskCensus(vocabulary core.Vocabulary, tasks []core.Task) (map[core.S
 	for _, status := range names {
 		ids := unresolved[status]
 		sort.Strings(ids)
-		views = append(views, unresolvedStatusView{Status: status, Tasks: len(ids), TaskIDs: ids})
+		// The count is of everything; the IDs are the first few of it. Sorting
+		// before the cut is what makes the sample the same sample on every
+		// clone rather than whatever order the projection happened to list.
+		total := len(ids)
+		views = append(views, unresolvedStatusView{
+			Status:  status,
+			Tasks:   total,
+			TaskIDs: ids[:min(total, maxUnresolvedTaskIDs)],
+		})
 	}
 	return counts, views
 }
@@ -2088,7 +2115,7 @@ func writeStatusList(output io.Writer, result statusListResult) error {
 	}
 	for _, unresolved := range result.Unresolved {
 		fmt.Fprintf(output, "\tUnresolved:\t%s\t%d task(s)\t%s\n",
-			unresolved.Status, unresolved.Tasks, strings.Join(unresolved.TaskIDs, ", "))
+			unresolved.Status, unresolved.Tasks, unresolvedTaskIDsLine(unresolved))
 		fmt.Fprintf(output, "\t\tcorrect with: workbook update <task> --status <status>, or define it again: %s\n",
 			statusCommand("add", string(unresolved.Status)))
 	}
@@ -2096,6 +2123,19 @@ func writeStatusList(output io.Writer, result statusListResult) error {
 		fmt.Fprintf(output, "\tAdvisory:\t%s\t%s\n", advisory.Code, advisory.Message)
 	}
 	return nil
+}
+
+// unresolvedTaskIDsLine renders the tasks stranded under one value, saying so
+// when it is showing only the first few.
+//
+// A sample that did not announce itself would read as the whole set, and a
+// person who filed every ID they were given would think they were finished.
+func unresolvedTaskIDsLine(unresolved unresolvedStatusView) string {
+	ids := strings.Join(unresolved.TaskIDs, ", ")
+	if len(unresolved.TaskIDs) >= unresolved.Tasks {
+		return ids
+	}
+	return fmt.Sprintf("%s (first %d of %d)", ids, len(unresolved.TaskIDs), unresolved.Tasks)
 }
 
 // retirementVerb names how a value stopped being live, for a column rather

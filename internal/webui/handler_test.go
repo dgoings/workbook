@@ -56,8 +56,11 @@ func TestHandlerServesBoardTasksAndHealth(t *testing.T) {
 	// The unknown region is not a seventh status: nothing may treat it as a
 	// status a task can be moved to.
 	assertBoardStatusMarkersMatchColumns(t, board.Body.String())
-	if !strings.Contains(board.Body.String(), `aria-label="Task Future status task has the unrecognized status future-status"`) {
-		t.Error("GET / body does not label the unknown-status card as unmovable")
+	// The card is movable out of the region even so — dropping it on a column is
+	// an ordinary status change — and its label is where a reader is told both
+	// that the status was not recognized and that the card is the way out.
+	if !strings.Contains(board.Body.String(), `aria-label="Move task Future status task out of the unrecognized status future-status"`) {
+		t.Error("GET / body does not label the unknown-status card as movable out of the region")
 	}
 
 	tasksResponse := request(t, handler, http.MethodGet, "/api/tasks")
@@ -4036,9 +4039,9 @@ setTimeout(async () => {
   if (!stranded.textContent.includes("Future status task")) throw new Error("the unknown-status card does not name its task");
   if (boardUnknownCount.textContent !== "1") throw new Error("unknown-status count = " + boardUnknownCount.textContent + ", want 1");
   if (boardUnknownSection.dataset.visible !== "true") throw new Error("the unknown-status region stayed hidden while holding a task");
-  if (stranded.draggable !== false) throw new Error("an unknown-status card offers a drag that has nowhere to land");
-  if (stranded.getAttribute("aria-label") !== "Task Future status task has the unrecognized status future-status") {
-    throw new Error("the unknown-status card announces itself as movable: " + stranded.getAttribute("aria-label"));
+  if (stranded.draggable !== true) throw new Error("an unknown-status card offers no drag, so there is no way out of the region");
+  if (stranded.getAttribute("aria-label") !== "Move task Future status task out of the unrecognized status future-status") {
+    throw new Error("the unknown-status card does not say what dragging it would do: " + stranded.getAttribute("aria-label"));
   }
   // Whether the region carries data-drop-status is a fact about the server
   // template, and this harness builds its own region node, so checking it here
@@ -4062,7 +4065,9 @@ setTimeout(async () => {
   if (findElement(boardUnknownList, (element) => element.dataset.taskId === ` + strconv.Quote(tasks[2].ID) + `)) {
     throw new Error("the card stayed in the unknown-status region after its status became known");
   }
-  if (stranded.draggable !== true) throw new Error("a recovered card did not become draggable again");
+  if (stranded.getAttribute("aria-label") !== "Move task Future status task from done") {
+    throw new Error("a recovered card still reads as stranded: " + stranded.getAttribute("aria-label"));
+  }
   if (boardUnknownCount.textContent !== "0") throw new Error("the emptied region still counts " + boardUnknownCount.textContent);
   if (boardUnknownSection.dataset.visible !== "false") throw new Error("the emptied unknown-status region stayed visible");
 }, 0);
@@ -4073,15 +4078,34 @@ setTimeout(async () => {
 	}
 }
 
-// Which region a card lands in and whether it can be dragged are the same
-// question, so they have to be answered from the same set: the columns the
+// Which region a card lands in and what its label says about the move are the
+// same question, so they have to be answered from the same set: the columns the
 // server actually rendered.
 //
 // This board is missing the Blocked column — what dropping the default Blocked
 // status produces, and what a per-project column set produces routinely — while
-// the script still carries "blocked" in its own hardcoded status list. A client
-// that reads that list instead of the rendered columns puts the card in the
-// unknown-status region and then tells the reader it can be moved out of it.
+// the task document still carries a Blocked task, presented against a
+// vocabulary in which `blocked` is perfectly live. Everything except the
+// rendered columns therefore says this task is fine, which is what makes "the
+// rendered columns are the only source consulted" a checkable claim rather than
+// a restatement of the code.
+//
+// The discriminator this actually holds is the one that has a plausible wrong
+// answer left: deciding the label from the node's current parent instead of
+// from the status. applyCard labels a card before card() has inserted it
+// anywhere, so a parent-derived answer strands every card on a first render.
+// Replacing the status test with `article.parentElement === unknownList` fails
+// here with "a card in the unknown-status region claims a column it is not in",
+// and fails TestHandlerClientBoardSurfacesUnknownStatuses and
+// TestHandlerClientDragsACardOutOfTheUnknownStatusRegion with it.
+//
+// What it does not discriminate — and used to claim it did — is a client
+// reading a hardcoded status list of its own. There is no such list any more:
+// `statuses` and `lists` are both built from these same column nodes, so
+// splicing a column out takes it out of both and the injected bug is a no-op.
+//
+// Every card drags, including this one. Only the label distinguishes them, so
+// the label is what this asserts.
 func TestHandlerClientDragsOnlyOutOfRenderedColumns(t *testing.T) {
 	node := requireNode(t)
 	tasks := boardTasks()
@@ -4122,11 +4146,11 @@ setTimeout(async () => {
   if (inColumn) throw new Error("a task landed in a column this board does not render");
   const stranded = findElement(boardUnknownList, (element) => element.dataset.taskId === blockedID);
   if (!stranded) throw new Error("a task whose column the board does not render vanished from the board");
-  if (stranded.draggable !== false) {
-    throw new Error("a card in the unknown-status region offers a drag that has nowhere to land");
+  if (stranded.draggable !== true) {
+    throw new Error("a card in the unknown-status region offers no drag out of it");
   }
-  if (stranded.getAttribute("aria-label") !== "Task Blocked task has the unrecognized status blocked") {
-    throw new Error("a card in the unknown-status region announces itself as movable: " + stranded.getAttribute("aria-label"));
+  if (stranded.getAttribute("aria-label") !== "Move task Blocked task out of the unrecognized status blocked") {
+    throw new Error("a card in the unknown-status region claims a column it is not in: " + stranded.getAttribute("aria-label"));
   }
   if (boardUnknownCount.textContent !== "2") {
     throw new Error("unknown-status count = " + boardUnknownCount.textContent + ", want 2");
@@ -5401,9 +5425,10 @@ func TestHandlerTasksDocumentCarriesTheVocabularyHead(t *testing.T) {
 }
 
 // A stored status a rename replaced is drawn in the column it now means, and
-// the card says so: it is draggable, and its label names the live status rather
-// than the token on disk. Only a status no chain leads out of lands in the
-// unknown region.
+// the card says so: its label names the live status rather than the token on
+// disk. Only a status no chain leads out of lands in the unknown region, where
+// the label names the unrecognized token instead — both cards drag, and the
+// difference is which move the label describes.
 func TestHandlerDrawsAStaleStatusInItsLiveColumn(t *testing.T) {
 	tasks := []core.Task{
 		clientPlacementTask("WB-01J00000000000000000000001", "Renamed away", core.StatusDone, core.PriorityHigh),
@@ -5422,7 +5447,7 @@ func TestHandlerDrawsAStaleStatusInItsLiveColumn(t *testing.T) {
 	if !strings.Contains(body, `aria-label="Move task Renamed away from shipped"`) {
 		t.Errorf("stale-status card does not announce its live column:\n%s", body)
 	}
-	if !strings.Contains(body, `aria-label="Task Nothing forwards this has the unrecognized status archived"`) {
+	if !strings.Contains(body, `aria-label="Move task Nothing forwards this out of the unrecognized status archived"`) {
 		t.Errorf("unresolvable card does not announce itself as unrecognized:\n%s", body)
 	}
 	// The unknown region opens after every column, so a card rendered before it

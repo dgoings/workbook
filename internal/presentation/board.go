@@ -53,7 +53,10 @@ type Column struct {
 // section, the web board an "Unknown status" area below the columns — rather
 // than folding it into a column that would misreport the status. Keeping it out
 // of the columns matters as much as showing it: the region is a display, not a
-// seventh status, so it takes no drops and its cards do not drag.
+// seventh status, so nothing drops into it — there is no status such a drop
+// would name. Its cards do drag out on the web board, which is the recovery:
+// dropping one on a column is an ordinary status change naming a status the
+// project defines.
 //
 // This is routine rather than exotic, because a clone whose configuration this
 // one has not fetched produces it on its own. internal/presentation/parity_test.go
