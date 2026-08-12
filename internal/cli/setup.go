@@ -144,16 +144,27 @@ func runSetup(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 		}
 	}
 
+	// The vocabulary the guidelines document is the one this clone holds now,
+	// which for a project joining an existing one is the built-in default until
+	// the fetch below delivers the ledger. That is corrected after the sync
+	// rather than before it, because documentation has to be installed even when
+	// origin is unreachable.
+	state, err := repository.LoadVocabularyState(ctx, config)
+	if err != nil {
+		return err
+	}
+	docsOptions := agentdocs.Options{
+		Root:       repository.Root,
+		Project:    config,
+		Vocabulary: state.Vocabulary,
+		User:       user,
+		Generator:  release.Version,
+		Force:      *force,
+		SkillDir:   *skillDir,
+		SkipSkill:  *noSkill,
+	}
 	if !*noDocs {
-		report, err := agentdocs.Apply(agentdocs.Options{
-			Root:      repository.Root,
-			Project:   config,
-			User:      user,
-			Generator: release.Version,
-			Force:     *force,
-			SkillDir:  *skillDir,
-			SkipSkill: *noSkill,
-		})
+		report, err := agentdocs.Apply(docsOptions)
 		if err != nil {
 			return err
 		}
@@ -174,6 +185,11 @@ func runSetup(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 	if result.Sync.Result != nil {
 		conflicts = result.Sync.Result.Fetch.Conflicts
 		configConflicts = result.Sync.Result.Fetch.ConfigConflicts
+	}
+	if result.Docs != nil {
+		if err := refreshFetchedGuidelines(ctx, repository, config, docsOptions, state.Head, result.Docs); err != nil {
+			return err
+		}
 	}
 
 	tasks, err := repository.List(ctx, config)
@@ -237,6 +253,48 @@ func runSetup(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 	writeConflicts(stdout, conflicts)
 	writeConfigConflicts(stdout, configConflicts)
 	return syncErr
+}
+
+// refreshFetchedGuidelines rewrites the guidelines when the fetch delivered a
+// configuration ledger the installed rendering did not know about.
+//
+// A clone joining a project that renamed its columns is the case this exists
+// for: setup installs documentation before it fetches, so without this the very
+// first thing a fresh clone reads about its statuses would be the built-in six.
+// It replaces the guidelines entry in the report rather than appending one, so
+// the run still reports one line per managed file.
+//
+// A blocked refresh is not a setup failure. The change it could not make is a
+// stale generated file somebody edited, and `workbook docs update --force` is
+// the answer; reporting the artifact's state is enough to see it.
+func refreshFetchedGuidelines(
+	ctx context.Context,
+	repository *gitstore.Repository,
+	config core.ProjectConfig,
+	options agentdocs.Options,
+	installedHead string,
+	report *agentdocs.Report,
+) error {
+	state, err := repository.LoadVocabularyState(ctx, config)
+	if err != nil {
+		return err
+	}
+	if state.Head == installedHead {
+		return nil
+	}
+	options.Vocabulary = state.Vocabulary
+	refreshed, err := agentdocs.ApplyGuidelines(options)
+	if err != nil && core.CategoryOf(err) != core.CategoryValidation {
+		return err
+	}
+	for _, artifact := range refreshed.Artifacts {
+		for index, existing := range report.Artifacts {
+			if existing.Path == artifact.Path {
+				report.Artifacts[index] = artifact
+			}
+		}
+	}
+	return nil
 }
 
 // setupSync synchronizes shared task refs unless it was skipped or the
@@ -305,14 +363,22 @@ func runDocs(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 		return err
 	}
 
+	// Read locally, like every other documentation operation: `workbook docs`
+	// renders what this clone knows and never fetches to find out.
+	state, err := repository.LoadVocabularyState(ctx, config)
+	if err != nil {
+		return err
+	}
+
 	options := agentdocs.Options{
-		Root:      repository.Root,
-		Project:   config,
-		User:      user,
-		Generator: release.Version,
-		Create:    create.values,
-		SkillDir:  *skillDir,
-		SkipSkill: *noSkill,
+		Root:       repository.Root,
+		Project:    config,
+		Vocabulary: state.Vocabulary,
+		User:       user,
+		Generator:  release.Version,
+		Create:     create.values,
+		SkillDir:   *skillDir,
+		SkipSkill:  *noSkill,
 	}
 	if force != nil {
 		options.Force = *force
