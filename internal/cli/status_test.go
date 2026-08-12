@@ -111,6 +111,7 @@ type statusLogDocument struct {
 		Actor       string           `json:"actor"`
 		Operation   string           `json:"operation"`
 		Summary     string           `json:"summary"`
+		Collapsed   int              `json:"collapsed"`
 		Inverse     *inverseDocument `json:"inverse"`
 	} `json:"entries"`
 	Truncated *core.HistoryTruncation `json:"truncated"`
@@ -1166,6 +1167,13 @@ func TestStatusLogReportsOneEntryPerRecordedCommand(t *testing.T) {
 	}
 	if rename.Summary != "renamed status ready to queued (+1 more change(s) in this commit)" {
 		t.Fatalf("summary = %q, want the command with the rest of its commit counted", rename.Summary)
+	}
+	// The same count, reachable without parsing the sentence that states it.
+	if rename.Collapsed != 1 {
+		t.Fatalf("collapsed = %d, want the relabel this commit also recorded", rename.Collapsed)
+	}
+	if document.Entries[0].Collapsed != 0 {
+		t.Fatalf("genesis collapsed = %d, want nothing beyond the seeding itself", document.Entries[0].Collapsed)
 	}
 	if rename.Inverse == nil || rename.Inverse.Command != "workbook status rename queued ready --label Ready" {
 		t.Fatalf("inverse = %#v, want the rename and the label it moved", rename.Inverse)

@@ -103,7 +103,10 @@ type statusTaskCounts struct {
 	// status.
 	Affected int `json:"affected"`
 	// ClaimableAfter counts how many of those become eligible for `workbook
-	// next` where they land, which is the number an agent's queue changes by.
+	// next` where they land. It is a floor on what an agent's queue gains and
+	// not the whole of it: removing a status into a done-tagged one can also
+	// satisfy the last dependency of a task that was never in the removed
+	// status, and such a task is outside the population this counts.
 	ClaimableAfter int `json:"claimableAfter"`
 }
 
@@ -187,7 +190,14 @@ type statusLogEntry struct {
 	// record rather than a report of a command somebody ran.
 	Operation core.ConfigOperationType `json:"operation"`
 	Summary   string                   `json:"summary"`
-	Inverse   *statusInverse           `json:"inverse,omitempty"`
+	// Collapsed counts the operations this commit recorded beyond the one the
+	// entry names. `workbook status tag` records the transfer of the default tag
+	// and every tag it dropped in a single commit, and the summary says how many
+	// more there were rather than listing them — which left the count reachable
+	// only by parsing an English sentence. It is stated rather than omitted, so
+	// a caller reading `entries[].collapsed` gets an answer from every entry.
+	Collapsed int            `json:"collapsed"`
+	Inverse   *statusInverse `json:"inverse,omitempty"`
 }
 
 // statusSubcommands lists the verbs, for the error a bare `workbook status`
@@ -632,6 +642,7 @@ func buildStatusLog(ledger configLedgerWindow) statusLogResult {
 			Actor:       commit.Pack.Actor.ID,
 			Operation:   primary.Type,
 			Summary:     configPackSummary(commit.Pack.Operations),
+			Collapsed:   len(commit.Pack.Operations) - 1,
 			Inverse:     statusPackInverse(commit.Before, commit.Pack.Operations),
 		})
 	}
