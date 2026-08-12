@@ -1,4 +1,4 @@
-<!-- workbook:begin generator=dev sha256=0803f22e052e58e7908d4d12043533e6666fbbcb0815cf9d958edc156031a76d -->
+<!-- workbook:begin generator=dev sha256=5c9b725704e3d22913671a1562bc7f0fd4468c5ac55be0bd5aee0c289efb46c3 -->
 # Workbook guidelines
 
 Workbook tracks this project's tasks in Git refs under `refs/workbook/tasks/`.
@@ -21,10 +21,9 @@ label.
 | --- | --- | --- | --- |
 | 1 | `backlog` | Backlog | `default` |
 | 2 | `ready` | Ready | `next` |
-| 3 | `blocked` | Blocked | none |
-| 4 | `in-progress` | In Progress | none |
-| 5 | `in-review` | In Review | none |
-| 6 | `done` | Done | `done` |
+| 3 | `in-progress` | In Progress | none |
+| 4 | `in-review` | In Review | none |
+| 5 | `done` | Done | `done` |
 
 Write `--status in-progress`, not `In Progress`.
 The same applies to `in-review`.
