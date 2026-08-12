@@ -300,6 +300,45 @@ func TestRenderGuidelinesNeutralizesMarkersAndBackticksInALabel(t *testing.T) {
 	}
 }
 
+// A label carrying an opener that completes neither marker is neutralized on
+// both surfaces it reaches, because an HTML comment costs a reader the rest of
+// the file whether or not it terminates this block.
+//
+// It is also where the two injection sites used to disagree. Neutralizing only
+// the complete markers left the table cell escaping `Tail <!-- workbook:begin`
+// by accident — the ` |` that ends the cell supplied the space the prefix
+// needed — while the warning line, which follows the label with a backtick,
+// escaped nothing. Both are asserted here so neither can regress alone.
+func TestRenderGuidelinesNeutralizesAnOpenerThatCompletesNoMarkerInALabel(t *testing.T) {
+	for _, label := range []string{"Next " + markerOpener + " note", "Tail " + strings.TrimSuffix(beginPrefix, " ")} {
+		vocabulary, err := core.NewVocabulary([]core.StatusDefinition{
+			{Status: "todo", Label: label, Rank: "1/1", Tags: []core.StatusTag{
+				core.StatusTagDefault, core.StatusTagNext,
+			}},
+			{Status: "done", Label: "Done", Rank: "2/1", Tags: []core.StatusTag{core.StatusTagDone}},
+		}, nil, nil)
+		if err != nil {
+			t.Fatalf("NewVocabulary() error = %v", err)
+		}
+
+		guidelines := RenderGuidelines(testProject(), vocabulary)
+
+		// The rendered body is the block's contents, so it may carry no comment
+		// opener at all: the two the file ends up with are the markers wrapped
+		// around it.
+		if strings.Contains(guidelines, markerOpener) {
+			t.Errorf("the rendered body opens an HTML comment for label %q:\n%s", label, guidelines)
+		}
+		neutral := strings.Replace(label, markerOpener, neutralOpener, 1)
+		if !strings.Contains(guidelines, "| 1 | `todo` | "+neutral+" | `default`, `next` |") {
+			t.Errorf("the table cell does not read as the label somebody wrote:\n%s", guidelines)
+		}
+		if !strings.Contains(guidelines, "not `"+neutral+"`.") {
+			t.Errorf("the display-label warning does not neutralize the label it quotes:\n%s", guidelines)
+		}
+	}
+}
+
 func TestCodeSpanSurvivesTheBackticksItCarries(t *testing.T) {
 	for _, test := range []struct {
 		value string

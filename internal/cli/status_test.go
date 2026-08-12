@@ -311,10 +311,46 @@ func TestStatusListNotesTheDroppedDefaultOnASeededLegacyProject(t *testing.T) {
 		t.Fatalf("migrations = %#v, want the note about `blocked`", document.Migrations)
 	}
 
-	// Removing it is what makes the note go away, and nothing else does.
+	// Removing it makes the note go away.
 	mustRunStatus(t, repository, "status", "delete", "blocked", "--into", "backlog")
 	if got := cliStatusList(t, repository).Migrations; len(got) != 0 {
 		t.Fatalf("migrations after the removal = %#v, want none", got)
+	}
+
+	// And so does deciding against it. A project that reads the note, removes
+	// the column, and later wants it back has answered the question the note
+	// asks; the ledger records that it did, so the listing stops asking.
+	mustRunStatus(t, repository, "status", "add", "blocked")
+	if got := cliStatusList(t, repository).Migrations; len(got) != 0 {
+		t.Fatalf("migrations after adding it back = %#v, want none: the add is the decision", got)
+	}
+}
+
+// A project minted with the five statuses this build ships, which then adds
+// `blocked` on purpose, is never told that Workbook stopped shipping it. The
+// vocabulary it ends up with is the pre-ledger six minus a column, and no test
+// of membership could tell the two apart — the `status.add` in its ledger is
+// what does.
+func TestStatusListSaysNothingAboutADeliberatelyAddedBlocked(t *testing.T) {
+	repository := initializedRepository(t)
+	mustRunStatus(t, repository, "status", "add", "blocked", "--label", "Blocked", "--after", "ready")
+
+	document := cliStatusList(t, repository)
+	if got, want := cliStatusNames(t, repository), []string{
+		"backlog", "ready", "blocked", "in-progress", "in-review", "done",
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("statuses = %v, want %v", got, want)
+	}
+	if len(document.Migrations) != 0 {
+		t.Fatalf("migrations = %#v, want none: this project chose `blocked`", document.Migrations)
+	}
+
+	code, stdout, stderr := run(t, repository, "status", "list")
+	if code != 0 || stderr != "" {
+		t.Fatalf("status list = code %d, stderr %q", code, stderr)
+	}
+	if strings.Contains(stdout, "No longer a default:") {
+		t.Errorf("status list text = %q, want no note about a status this project added", stdout)
 	}
 }
 
@@ -440,6 +476,174 @@ func TestStatusDeleteBlockedMigratesAPreLedgerProject(t *testing.T) {
 	}
 	if code, _, stderr := run(t, repository, "update", free.ID, "--title", "Renamed", "--no-sync"); code != 0 {
 		t.Fatalf("editing a task stored under the removed status = code %d; stderr = %q", code, stderr)
+	}
+}
+
+// blockedProvenanceVocabulary is the shape every provenance case shares. The
+// vocabulary is the same in all of them by construction — an inherited `blocked`
+// and one somebody added back are indistinguishable in it, which is the whole
+// reason the ledger is consulted.
+func blockedProvenanceVocabulary(t *testing.T, defaultHolder core.Status) core.Vocabulary {
+	t.Helper()
+	definitions := []core.StatusDefinition{
+		{Status: "backlog", Label: "Backlog", Rank: "1/1", Tags: []core.StatusTag{}},
+		{Status: core.StatusBlocked, Label: "Blocked", Rank: "2/1", Tags: []core.StatusTag{}},
+		{Status: "done", Label: "Done", Rank: "3/1", Tags: []core.StatusTag{core.StatusTagDone}},
+	}
+	for index, definition := range definitions {
+		if definition.Status == defaultHolder {
+			definitions[index].Tags = append(definitions[index].Tags, core.StatusTagDefault)
+		}
+	}
+	vocabulary, err := core.NewVocabulary(definitions, nil, nil)
+	if err != nil {
+		t.Fatalf("NewVocabulary() error = %v", err)
+	}
+	return vocabulary
+}
+
+// configLedgerOf builds a read window of one operation per commit. The walk
+// reads operation types and the statuses they name and nothing else, so a
+// genesis here carries no configuration document: what it stands for is the
+// boundary between what a project inherited and what somebody did to it.
+func configLedgerOf(operations ...core.ConfigOperation) configLedgerWindow {
+	commits := make([]configLedgerCommit, 0, len(operations))
+	for _, operation := range operations {
+		commits = append(commits, configLedgerCommit{
+			Pack: core.ConfigOperationPack{Operations: []core.ConfigOperation{operation}},
+		})
+	}
+	return configLedgerWindow{Found: len(commits) > 0, Commits: commits, Total: len(commits)}
+}
+
+// The note keys on provenance rather than on membership, so a project that
+// added `blocked` back deliberately is told about it once — by the command that
+// refused nothing — instead of on every listing forever.
+//
+// The ledger is what separates the cases, and it separates them by recording
+// what somebody did: a `status.add` naming `blocked` after the genesis is a
+// decision, and a `blocked` the genesis itself carried is an inheritance.
+func TestDroppedDefaultStatusesKeysOnProvenance(t *testing.T) {
+	genesis := core.ConfigOperation{Type: core.ConfigGenesis}
+	add := core.ConfigOperation{Type: core.ConfigStatusAdd, Name: core.StatusBlocked, Rank: "2/1"}
+	remove := core.ConfigOperation{
+		Type: core.ConfigStatusRemove, Status: core.StatusBlocked, Destination: "backlog",
+	}
+
+	for _, test := range []struct {
+		name          string
+		defaultHolder core.Status
+		ledger        configLedgerWindow
+		wantNote      bool
+	}{
+		{
+			name:          "genesis seeded from the pre-ledger vocabulary carries blocked",
+			defaultHolder: "backlog",
+			ledger:        configLedgerOf(genesis),
+			wantNote:      true,
+		},
+		{
+			name:          "an unseeded project reading the legacy fallback has no ledger to walk",
+			defaultHolder: "backlog",
+			ledger:        configLedgerWindow{},
+			wantNote:      true,
+		},
+		{
+			name:          "a fresh mint that added blocked back",
+			defaultHolder: "backlog",
+			ledger:        configLedgerOf(genesis, add),
+			wantNote:      false,
+		},
+		{
+			name:          "a legacy-seeded project that removed blocked and later added it back",
+			defaultHolder: "backlog",
+			ledger:        configLedgerOf(genesis, remove, add),
+			wantNote:      false,
+		},
+		{
+			name:          "a rename that lands on the name",
+			defaultHolder: "backlog",
+			ledger: configLedgerOf(genesis, core.ConfigOperation{
+				Type: core.ConfigStatusRename, From: "waiting", To: core.StatusBlocked,
+			}),
+			wantNote: false,
+		},
+		{
+			// The add is older than the window, so the walk sees no evidence of it.
+			// Absent evidence the note shows: nagging a reader who has already
+			// decided costs them a sentence, and hiding the guidance from a project
+			// that never migrated costs them the only place it is said.
+			name:          "an add older than the bounded window",
+			defaultHolder: "backlog",
+			ledger: configLedgerWindow{
+				Found: true,
+				Total: maxDatedConfigCommits + 12,
+				Commits: []configLedgerCommit{{Pack: core.ConfigOperationPack{
+					Operations: []core.ConfigOperation{{
+						Type: core.ConfigStatusRelabel, Status: "backlog", Label: "Inbox",
+					}},
+				}}},
+			},
+			wantNote: true,
+		},
+		{
+			// A project that added the column and made it where new work lands is
+			// the one reader with no escape — no removal to run, no window to fall
+			// out of — so it is the last one to nag. Provenance is answered ahead
+			// of the shape the note would take, and `status delete` explains the
+			// tag handoff at the moment somebody actually tries the removal.
+			name:          "blocked holding the default tag after a deliberate add",
+			defaultHolder: core.StatusBlocked,
+			ledger:        configLedgerOf(genesis, add),
+			wantNote:      false,
+		},
+		{
+			// The handoff note still reaches the project that inherited the column
+			// and never chose anything.
+			name:          "blocked holding the default tag by inheritance",
+			defaultHolder: core.StatusBlocked,
+			ledger:        configLedgerOf(genesis),
+			wantNote:      true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			vocabulary := blockedProvenanceVocabulary(t, test.defaultHolder)
+
+			migrations := droppedDefaultStatuses(vocabulary, test.ledger)
+
+			if !test.wantNote {
+				if len(migrations) != 0 {
+					t.Fatalf("migrations = %#v, want none for a deliberate `blocked`", migrations)
+				}
+				return
+			}
+			if len(migrations) != 1 || migrations[0].Status != core.StatusBlocked {
+				t.Fatalf("migrations = %#v, want the note about `blocked`", migrations)
+			}
+			if test.defaultHolder == core.StatusBlocked {
+				if migrations[0].Command != "" || migrations[0].First == "" {
+					t.Fatalf("migration = %#v, want the tag handoff rather than a removal command", migrations[0])
+				}
+			}
+		})
+	}
+}
+
+// A project that never defined `blocked` is told nothing, whatever its ledger
+// records. The membership test comes first, so the common listing pays for no
+// walk at all.
+func TestDroppedDefaultStatusesSaysNothingWithoutBlocked(t *testing.T) {
+	vocabulary, err := core.NewVocabulary([]core.StatusDefinition{
+		{Status: "backlog", Label: "Backlog", Rank: "1/1", Tags: []core.StatusTag{core.StatusTagDefault}},
+		{Status: "done", Label: "Done", Rank: "2/1", Tags: []core.StatusTag{core.StatusTagDone}},
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("NewVocabulary() error = %v", err)
+	}
+
+	ledger := configLedgerOf(core.ConfigOperation{Type: core.ConfigGenesis})
+	if migrations := droppedDefaultStatuses(vocabulary, ledger); len(migrations) != 0 {
+		t.Fatalf("migrations = %#v, want none for a project that never had `blocked`", migrations)
 	}
 }
 

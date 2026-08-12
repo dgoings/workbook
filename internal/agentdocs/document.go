@@ -33,11 +33,19 @@ const (
 const (
 	beginPrefix = "<!-- workbook:begin "
 	endMarker   = "<!-- workbook:end -->"
-	// markerOpener is what makes either marker a marker, and neutralOpener is
-	// what it becomes inside a body. The entity renders as the same four
-	// characters everywhere Markdown is read, so a value carrying a marker still
-	// says what it said — it just no longer opens an HTML comment or terminates
-	// this block.
+	// markerOpener is what makes either marker a marker and what makes any four
+	// bytes an HTML comment, and neutralOpener is what it becomes inside a body.
+	// The entity renders as the same four characters in ordinary prose, so a
+	// value carrying one still says what it said — it just no longer opens a
+	// comment or terminates this block.
+	//
+	// Inside a code span it does not: CommonMark takes an entity reference in
+	// code as the literal text it is spelled with, so a neutralized value quoted
+	// as code reaches the reader as `&lt;!--`. That is accepted rather than
+	// worked around. The pass is over the whole body, which by then is Markdown
+	// with no record of which spans are code, and the alternative — leaving the
+	// opener raw where it is quoted — swallows the document instead of showing
+	// somebody five extra characters.
 	markerOpener  = "<!--"
 	neutralOpener = "&lt;!--"
 )
@@ -155,24 +163,36 @@ func (d Document) render() string {
 //
 // Escaping rather than refusing is the deliberate half. A refusal would fail
 // somebody's command over a value a teammate chose, which is the outcome this
-// exists to prevent. Only the marker's `<!--` opener is rewritten, so the text
-// still reads as what was written and no HTML comment starts where one would
-// swallow the rest of the document.
+// exists to prevent. Only the four bytes of a `<!--` opener are rewritten, and
+// into an entity that renders as the same four characters, so the text still
+// reads as what was written and no HTML comment starts anywhere in the body —
+// including where one would swallow the rest of the document without going near
+// this block's markers.
 func (d Document) managedBody() string {
 	return neutralizeMarkers(d.Body)
 }
 
-// neutralizeMarkers rewrites the two strings a managed body may not contain.
-// It touches nothing else: a body without them is returned byte for byte, which
-// is what keeps every existing project's stamp valid.
+// neutralizeMarkers rewrites every comment opener a managed body carries. It
+// touches nothing else: a body without one is returned byte for byte, which is
+// what keeps every existing project's stamp valid.
+//
+// Every opener rather than only the two complete markers, because an opener
+// that completes neither is still an opener. `<!-- note` terminates no block,
+// and the drift patterns are line-anchored so nothing here notices it — but
+// every Markdown renderer the committed file is read through opens a comment at
+// it and swallows the file from there to the next `-->`, which in a generated
+// document is usually the end of it. Two markers made this a rule with an
+// exception nobody could see; one opener makes it the rule managedBody states.
+//
+// The rewrite is idempotent by construction, which is what lets a value be
+// neutralized where it is rendered and again where the body is written without
+// growing an entity per layer: `&lt;!--` carries no `<`, so neutralized text
+// never matches an opener again — it does not even reach the replacement.
 func neutralizeMarkers(body string) string {
 	if !strings.Contains(body, markerOpener) {
 		return body
 	}
-	return strings.NewReplacer(
-		endMarker, neutralOpener+strings.TrimPrefix(endMarker, markerOpener),
-		beginPrefix, neutralOpener+strings.TrimPrefix(beginPrefix, markerOpener),
-	).Replace(body)
+	return strings.ReplaceAll(body, markerOpener, neutralOpener)
 }
 
 type block struct {

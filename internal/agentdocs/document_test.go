@@ -82,6 +82,61 @@ func TestReconcileRoundTripsABodyCarryingTheEndMarker(t *testing.T) {
 	}
 }
 
+// A comment opener that completes no marker still costs a reader the rest of
+// the file. `<!-- note` terminates no block and the drift patterns are
+// line-anchored, so the machinery is untouched — but every Markdown renderer
+// the committed file is read through opens an HTML comment there and swallows
+// everything down to the next `-->`, which in a generated guidelines file is
+// usually nothing at all.
+//
+// So the neutralization is of the opener rather than of the two complete
+// markers, and this pins the round-trip for a body that carries only a partial
+// one.
+func TestReconcileNeutralizesAnOpenerThatCompletesNoMarker(t *testing.T) {
+	document := testDocument("Statuses: Next " + markerOpener + " note\nmore.\n")
+
+	first := document.Reconcile(nil)
+	written := string(first.Contents)
+
+	// The block's own begin marker is the one comment opener the file may carry.
+	if strings.Count(written, markerOpener) != 2 {
+		t.Fatalf("the written file carries %d comment openers, want the block's own two:\n%s",
+			strings.Count(written, markerOpener), written)
+	}
+	if !strings.Contains(written, "Next &lt;!-- note") {
+		t.Fatalf("the neutralized opener does not still read as what was written:\n%s", written)
+	}
+	if outcome := document.Reconcile(first.Contents); outcome.State != StateCurrent {
+		t.Fatalf("Reconcile(own output) state = %q, want %q:\n%s", outcome.State, StateCurrent, written)
+	}
+
+	next := testDocument("Statuses: Next " + markerOpener + " note\nmore, revised.\n")
+	outcome := next.Reconcile(first.Contents)
+	if outcome.State != StateStale || !outcome.Changed {
+		t.Fatalf("Reconcile(changed body) = %q changed %t, want a stale rewrite", outcome.State, outcome.Changed)
+	}
+	if second := next.Reconcile(outcome.Contents); second.State != StateCurrent {
+		t.Fatalf("the rewrite does not settle: state = %q\n%s", second.State, outcome.Contents)
+	}
+}
+
+// The neutral form does not round-trip through a second pass, which is what
+// lets the rendering layer neutralize an authored label before the block format
+// neutralizes the whole body without the label growing an entity per layer.
+// `&lt;!--` carries no `<`, so it never matches the opener again.
+func TestNeutralizeMarkersDoesNotEscapeWhatItAlreadyEscaped(t *testing.T) {
+	for _, body := range []string{
+		"nothing to do here\n",
+		"a label somebody wrote as " + neutralOpener + " already\n",
+		neutralizeMarkers("Next " + endMarker + " Up\n"),
+		neutralizeMarkers("Next " + markerOpener + " note\n"),
+	} {
+		if got := neutralizeMarkers(body); got != body {
+			t.Errorf("neutralizeMarkers(%q) = %q, want it unchanged", body, got)
+		}
+	}
+}
+
 func TestReconcileReportsStaleWhenTheRenderedBodyChanges(t *testing.T) {
 	// Production mutation: comparing only the recorded generator version would
 	// miss a project whose configuration changed under a constant binary.
