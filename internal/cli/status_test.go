@@ -107,6 +107,7 @@ type statusListDocument struct {
 		Status  string `json:"status"`
 		Reason  string `json:"reason"`
 		Command string `json:"command"`
+		First   string `json:"first"`
 	} `json:"migrations"`
 }
 
@@ -245,7 +246,7 @@ func TestStatusListReadsTheBuiltInVocabularyOnALedgerlessProject(t *testing.T) {
 		"#  STATUS       LABEL        TAGS     TASKS",
 		"1  backlog      Backlog      default  2",
 		"6  done         Done         done     0",
-		"No status change is recorded yet",
+		"No status change is recorded, so these are the statuses Workbook reads for a project that has none of its own.",
 		"No longer a default:",
 		"remove it when this project no longer needs it: workbook status delete blocked --into backlog",
 	} {
@@ -282,7 +283,7 @@ func TestStatusListReportsTheMintedVocabularyOnAFreshProject(t *testing.T) {
 	if code != 0 || stderr != "" {
 		t.Fatalf("status list = code %d, stderr %q", code, stderr)
 	}
-	for _, unwanted := range []string{"blocked", "No longer a default:", "No status change is recorded yet"} {
+	for _, unwanted := range []string{"blocked", "No longer a default:", "No status change is recorded"} {
 		if strings.Contains(stdout, unwanted) {
 			t.Errorf("status list text = %q, want no %q", stdout, unwanted)
 		}
@@ -312,6 +313,53 @@ func TestStatusListNotesTheDroppedDefaultOnASeededLegacyProject(t *testing.T) {
 	mustRunStatus(t, repository, "status", "delete", "blocked", "--into", "backlog")
 	if got := cliStatusList(t, repository).Migrations; len(got) != 0 {
 		t.Fatalf("migrations after the removal = %#v, want none", got)
+	}
+}
+
+// A project whose new tasks land in `blocked` gets the note with a different
+// next step rather than no note at all.
+//
+// `status delete` refuses to forward a status into itself and refuses to leave a
+// project with nowhere for new work to land, so the removal is not a command
+// that exists for them yet — but they are the readers with the most invested in
+// the column and the least reason to be told nothing. The absent `command` is
+// what a caller reads the difference from, and `first` carries the step that
+// makes a removal expressible at all.
+func TestStatusListNamesTheFirstStepWhenBlockedHoldsTheDefaultTag(t *testing.T) {
+	repository := preLedgerRepository(t)
+	mustRunStatus(t, repository, "status", "tag", "blocked", "--tag", "default")
+
+	document := cliStatusList(t, repository)
+	if document.Default != "blocked" {
+		t.Fatalf("default = %q, want blocked", document.Default)
+	}
+	if len(document.Migrations) != 1 {
+		t.Fatalf("migrations = %#v, want the note about `blocked`", document.Migrations)
+	}
+	migration := document.Migrations[0]
+	if migration.Status != "blocked" {
+		t.Fatalf("migration = %#v, want it to name blocked", migration)
+	}
+	if migration.Command != "" {
+		t.Fatalf("migration command = %q, want none: no single command removes the default holder", migration.Command)
+	}
+	if migration.First != "workbook status tag <status> --tag default" {
+		t.Fatalf("migration first = %q, want the tag handoff", migration.First)
+	}
+	if !strings.Contains(migration.Reason, "new tasks land in it") {
+		t.Fatalf("migration reason = %q, want it to say why the removal needs a step first", migration.Reason)
+	}
+
+	code, stdout, stderr := run(t, repository, "status", "list")
+	if code != 0 || stderr != "" {
+		t.Fatalf("status list = code %d, stderr %q", code, stderr)
+	}
+	if !strings.Contains(stdout,
+		"removing it starts by giving the default tag to another status: workbook status tag <status> --tag default") {
+		t.Errorf("status list text = %q, want the first step", stdout)
+	}
+	if strings.Contains(stdout, "remove it when this project no longer needs it") {
+		t.Errorf("status list text = %q, want no removal command it cannot run", stdout)
 	}
 }
 

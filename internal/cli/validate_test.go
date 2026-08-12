@@ -299,30 +299,43 @@ func TestValidateCachedInvalidHeadStillExitsNonzeroWithoutHistoryBatch(t *testin
 }
 
 // assertNoObjectBatchAfterTaskWork checks the window this cache hit is about:
-// between the moment task work begins and the moment the configuration ledger's
-// own audit does.
+// between the first task-ref enumeration and the configuration ledger's own,
+// there must be no object batch.
 //
 // The ledger audit is bounded by its own history and has no task cache to hit,
-// so its object batch is expected — a project minted by this build has a
-// genesis from its first moment, and `validate` reads it every run. What must
-// not appear is a batch inside the task window, because that is the history read
-// the cache hit exists to avoid.
+// so its object batch is expected — a project minted by this build has a genesis
+// from its first moment, and `validate` reads it every run. What must not appear
+// is a batch inside the task window, because that is the history read the cache
+// hit exists to avoid.
+//
+// The window is stated as a pair of boundaries rather than as a flag that a
+// config-ref line clears. A cleared flag reads the same for the log this command
+// produces today and for a log where the ledger audit ran first and the task
+// batch came after it — the second is precisely the regression this guards, and
+// it would pass. Bounding the window keeps the rule armed however the stages are
+// ordered: a task batch outside the window is a batch after the config read,
+// which is a different check's business, and a config read that never happens
+// leaves the window open to the end of the log.
 func assertNoObjectBatchAfterTaskWork(t *testing.T, logged string) {
 	t.Helper()
-	taskWorkStarted := false
-	for _, line := range strings.Split(logged, "\n") {
-		if strings.Contains(line, "refs/workbook/tasks/") {
-			taskWorkStarted = true
+	lines := strings.Split(logged, "\n")
+	start := -1
+	end := len(lines)
+	for index, line := range lines {
+		if start < 0 && strings.Contains(line, "refs/workbook/tasks/") {
+			start = index
 			continue
 		}
 		if strings.Contains(line, "refs/workbook/config") {
-			taskWorkStarted = false
-			continue
+			end = index
+			break
 		}
-		if !strings.Contains(line, "cat-file --batch") {
-			continue
-		}
-		if taskWorkStarted {
+	}
+	if start < 0 {
+		t.Fatalf("cached invalid Git commands = %q, want a task ref enumeration to bound the window", logged)
+	}
+	for _, line := range lines[start:min(end, len(lines))] {
+		if strings.Contains(line, "cat-file --batch") {
 			t.Fatalf("cached invalid Git commands = %q, want no history batch once task work began", logged)
 		}
 	}

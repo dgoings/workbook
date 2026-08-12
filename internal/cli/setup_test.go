@@ -138,6 +138,73 @@ func TestSetupLeavesAnExistingProjectsStatusesAlone(t *testing.T) {
 	}
 }
 
+// A project whose configuration ledger was never written or was lost is
+// repaired by the next setup, provided nothing has been tracked under it.
+//
+// The gate that produced this branch first was "did this run mint the identity",
+// which cannot see either failure: a genesis write that failed after Init minted
+// leaves the project reverted to the pre-ledger six with nothing able to put it
+// back, and so does a ref lost afterwards. Emptiness is the honest test — a
+// task-less, unconfigured project has no board to re-columnize and no recorded
+// decision to overrule, whoever created it and whenever.
+func TestSetupSeedsAProjectThatHasNoLedgerAndNoTasks(t *testing.T) {
+	repository := preLedgerRepository(t)
+	if document := cliStatusList(t, repository); document.Seeded {
+		t.Fatal("the fixture still has a configuration ledger")
+	}
+
+	if code, _, stderr := run(t, repository, "setup"); code != 0 {
+		t.Fatalf("setup code = %d, want 0; stderr = %q", code, stderr)
+	}
+
+	document := cliStatusList(t, repository)
+	if !document.Seeded || document.Head == "" {
+		t.Fatalf("status list = seeded %t, head %q; want the ledger repaired", document.Seeded, document.Head)
+	}
+	if got, want := cliStatusNames(t, repository), []string{
+		"backlog", "ready", "in-progress", "in-review", "done",
+	}; !equalStrings(got, want) {
+		t.Fatalf("repaired statuses = %v, want %v", got, want)
+	}
+	if len(document.Migrations) != 0 {
+		t.Fatalf("migrations = %#v, want none once the ledger records five statuses", document.Migrations)
+	}
+}
+
+// The repair stops at the first task. A project with work in it is an existing
+// project whatever its ledger says, and seeding one under it would drop a column
+// its board is drawing — so it stays on the conservative fallback and says so.
+func TestSetupLeavesAProjectWithTasksOnTheFallback(t *testing.T) {
+	repository := preLedgerRepository(t)
+	cliCreateTask(t, repository, "Alpha")
+
+	if code, _, stderr := run(t, repository, "setup"); code != 0 {
+		t.Fatalf("setup code = %d, want 0; stderr = %q", code, stderr)
+	}
+
+	if document := cliStatusList(t, repository); document.Seeded {
+		t.Fatal("setup seeded a vocabulary over a project that already holds tasks")
+	}
+	if got, want := cliStatusNames(t, repository), []string{
+		"backlog", "ready", "blocked", "in-progress", "in-review", "done",
+	}; !equalStrings(got, want) {
+		t.Fatalf("statuses = %v, want the six it was using %v", got, want)
+	}
+	// The line a project in this state reads has to be true of it. It did not
+	// necessarily start here — it may have lost a ledger that recorded
+	// something — so the report says what is recorded now and nothing more.
+	code, stdout, stderr := run(t, repository, "status", "list")
+	if code != 0 || stderr != "" {
+		t.Fatalf("status list = code %d, stderr %q", code, stderr)
+	}
+	if strings.Contains(stdout, "this project started with") {
+		t.Errorf("status list claims the project started with these statuses:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "No status change is recorded") {
+		t.Errorf("status list does not say that nothing is recorded:\n%s", stdout)
+	}
+}
+
 func TestSetupReportsSkippedSyncWithoutAnOrigin(t *testing.T) {
 	// Production mutation: failing when no remote is configured would break the
 	// solo local workflow, which needs no remote at all.

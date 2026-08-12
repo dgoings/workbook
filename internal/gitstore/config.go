@@ -217,6 +217,40 @@ func (r *Repository) adoptOriginIdentityRef(ctx context.Context, key string) (co
 	return config, nil
 }
 
+// OriginHasNoWorkbookHistory reports that origin carries neither a Workbook task
+// ref nor a configuration ledger.
+//
+// It answers one question: is this project task-less and unconfigured
+// everywhere, not just here. A project in that state has nothing a vocabulary
+// could strand and no recorded statuses to contradict, so it is safe to seed one
+// — which is what lets `workbook setup` repair a project whose ledger was never
+// written or was lost, without ever redefining a project that has work in it.
+//
+// A repository with no origin answers true: there is no other side to disagree
+// with. Anything that stops the probe is an error rather than a false, because
+// "origin might have history and I could not look" is not the same answer as
+// "origin has none", and the caller must not treat it as one.
+func (r *Repository) OriginHasNoWorkbookHistory(ctx context.Context) (bool, error) {
+	if _, err := r.Git(ctx, nil, "remote", "get-url", "origin"); err != nil {
+		return true, nil
+	}
+	listing, err := r.Git(ctx, nil, "ls-remote", "origin", configRef, taskRefPrefix+"*")
+	if err != nil {
+		return false, core.Wrap(core.CategoryOperational,
+			"cannot ask origin whether this project already has Workbook history", err)
+	}
+	for _, line := range strings.Split(string(listing), "\n") {
+		_, refname, ok := strings.Cut(line, "\t")
+		if !ok {
+			continue
+		}
+		if refname == configRef || strings.HasPrefix(refname, taskRefPrefix) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 // parseOriginProbe reads one ls-remote listing of origin's HEAD, its Workbook
 // identity ref, and its Workbook task namespace.
 func parseOriginProbe(listing []byte) (head, identity, tasks bool) {

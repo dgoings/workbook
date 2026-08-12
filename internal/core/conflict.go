@@ -118,6 +118,18 @@ const (
 	// the project stays usable; this names what was normalized, because the
 	// repair picked a status by position and nobody chose it.
 	ConfigConflictStatusArity ConfigConflictType = "status-arity"
+	// ConfigConflictRootVocabulary reports two configuration ledgers that were
+	// started from different vocabularies. Adopting one root over the other is
+	// how unrelated ledgers converge, and it is safe only while both roots say
+	// the same thing; when they do not, adopting silently redefines the whole
+	// project — a column can vanish with tasks in it, or appear in a project
+	// that never had it.
+	//
+	// It is the one member that names no status, because the two intents
+	// disagree about the starting point rather than about one column. Consumers
+	// that render a status render nothing for it; both vocabularies are in Ours
+	// and Theirs.
+	ConfigConflictRootVocabulary ConfigConflictType = "root-vocabulary"
 )
 
 // ConfigConflict names one status whose configuration replay needs a decision.
@@ -138,6 +150,11 @@ type ConfigConflict struct {
 // failure.
 func ConfigConflictError(conflicts []ConfigConflict) error {
 	if len(conflicts) == 1 {
+		// A conflict about the ledger's starting point names no status, so the
+		// message leads with what happened rather than with an empty name.
+		if conflicts[0].Status == "" {
+			return Errorf(CategoryConflict, "%s", ConfigConflictDetail(conflicts[0]))
+		}
 		return Errorf(CategoryConflict, "status %s: %s", conflicts[0].Status, ConfigConflictDetail(conflicts[0]))
 	}
 	return Errorf(
@@ -161,6 +178,9 @@ func ConfigConflictDetail(conflict ConfigConflict) string {
 		return "this status was defined as " + conflict.Ours + " here and as " + conflict.Theirs + " on origin"
 	case ConfigConflictStatusArity:
 		return "replaying this change left the project without a required status role"
+	case ConfigConflictRootVocabulary:
+		return "this project's configuration started from " + conflict.Ours +
+			" here and from " + conflict.Theirs + " on origin"
 	default:
 		return string(conflict.Type)
 	}

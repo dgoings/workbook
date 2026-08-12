@@ -173,7 +173,17 @@ type statusMigrationView struct {
 	Reason string `json:"reason"`
 	// Command is the exact removal, `--into` included, naming this project's own
 	// default status rather than assuming it is still called `backlog`.
-	Command string `json:"command"`
+	//
+	// It is absent when no single command performs the removal, and its absence
+	// is the shape a caller reads that from: today the one such case is a project
+	// whose new tasks land in the dropped status, which another status has to be
+	// given the `default` tag before anything can remove it. `first` carries that
+	// step, and exactly one of the two members is ever present.
+	Command string `json:"command,omitempty"`
+	// First is the step that has to happen before a removal is even expressible,
+	// with `<status>` left for a person to fill in because only they know which
+	// column their new work should land in.
+	First string `json:"first,omitempty"`
 }
 
 // droppedDefaultStatuses reports the statuses this project defines that Workbook
@@ -185,18 +195,35 @@ type statusMigrationView struct {
 // the note explains rather than scolds, and it costs a person one status they
 // chose to keep reading a sentence about it.
 //
-// The removal is skipped rather than suggested when the status is where new
-// tasks land, because `status delete` refuses to forward a status into itself
-// and a project that made `blocked` its default has said what it wants.
+// A project whose new tasks land in the dropped status gets the same note with
+// a different next step rather than no note at all. `status delete` refuses to
+// forward a status into itself and refuses to leave a project with nowhere for
+// new work to land, so the removal is not a command that exists yet for them —
+// but they are the readers with the most invested in the column and the least
+// reason to be told nothing. Naming the tag handoff is the whole difference
+// between "you have a status Workbook no longer ships" and silence.
 func droppedDefaultStatuses(vocabulary core.Vocabulary) []statusMigrationView {
-	if !vocabulary.Has(core.StatusBlocked) || vocabulary.Default() == core.StatusBlocked {
+	if !vocabulary.Has(core.StatusBlocked) {
 		return nil
+	}
+	reason := "task dependencies record what a task is waiting on, so `blocked` is no longer " +
+		"one of the statuses Workbook gives a new project"
+	if vocabulary.Default() == core.StatusBlocked {
+		return []statusMigrationView{{
+			Status: core.StatusBlocked,
+			Reason: reason + ", and this project's new tasks land in it",
+			// Written out rather than built by statusCommand: `<status>` is a
+			// placeholder for a person to replace, and quoting it the way a real
+			// argument is quoted would make it read as a status called
+			// "<status>". This is the same spelling the arity refusals use.
+			First: "workbook status tag <status> --tag " + string(core.StatusTagDefault),
+		}}
 	}
 	return []statusMigrationView{{
 		Status: core.StatusBlocked,
-		Reason: "task dependencies record what a task is waiting on, so `blocked` is no longer " +
-			"one of the statuses Workbook gives a new project",
-		Command: statusCommand("delete", string(core.StatusBlocked), "--into", string(vocabulary.Default())),
+		Reason: reason,
+		Command: statusCommand("delete", string(core.StatusBlocked),
+			"--into", string(vocabulary.Default())),
 	}}
 }
 
@@ -2041,11 +2068,19 @@ func writeStatusList(output io.Writer, result statusListResult) error {
 		return core.Wrap(core.CategoryOperational, "render status list", err)
 	}
 	if !result.Seeded {
-		fmt.Fprintf(output, "\tNo status change is recorded yet, so these are the statuses this project started with.\n")
+		// Not "the statuses this project started with": a project can reach the
+		// fallback by never having recorded anything and by having lost the
+		// ledger that recorded something, and only one of those started here.
+		// What is true in both is that nothing is recorded now.
+		fmt.Fprintf(output, "\tNo status change is recorded, so these are the statuses Workbook reads for a project that has none of its own.\n")
 	}
 	for _, migration := range result.Migrations {
 		fmt.Fprintf(output, "\tNo longer a default:\t%s\t%s\n", migration.Status, migration.Reason)
-		fmt.Fprintf(output, "\t\tremove it when this project no longer needs it: %s\n", migration.Command)
+		if migration.Command != "" {
+			fmt.Fprintf(output, "\t\tremove it when this project no longer needs it: %s\n", migration.Command)
+			continue
+		}
+		fmt.Fprintf(output, "\t\tremoving it starts by giving the default tag to another status: %s\n", migration.First)
 	}
 	for _, retired := range result.Retired {
 		fmt.Fprintf(output, "\tRetired:\t%s → %s\t%s%s\n",

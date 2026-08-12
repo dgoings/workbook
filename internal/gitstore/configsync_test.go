@@ -230,6 +230,202 @@ func TestConfigLedgerAdoptsOriginsRootWhenBothClonesSeeded(t *testing.T) {
 	}
 }
 
+// mintedLedgerClone gives a clone a root carrying core.DefaultVocabulary, the
+// way `workbook setup` does when it mints a project, and records the caller's
+// operations on top of it.
+//
+// It is half the fixture the divergent-root cases need. The other half is an
+// ordinary writeConfig on a clone with no ledger, which seeds a root from
+// core.LegacyVocabulary — the only way two roots can now disagree.
+func mintedLedgerClone(
+	t *testing.T,
+	repo *Repository,
+	config core.ProjectConfig,
+	operations ...core.ConfigOperation,
+) ConfigWriteResult {
+	t.Helper()
+	seeded, err := repo.MintConfigLedger(context.Background(), config, core.CryptoULIDSource{})
+	if err != nil {
+		t.Fatalf("MintConfigLedger() error = %v", err)
+	}
+	if !seeded {
+		t.Fatal("MintConfigLedger() = false, want a minted root for a clone with no ledger")
+	}
+	return writeConfig(t, repo, config, operations...)
+}
+
+// TestConfigLedgerRefusesToAdoptARootWithADifferentVocabulary is the case the
+// adopt-and-replay path must not settle on its own.
+//
+// Two unrelated roots converge by adopting origin's, and that is bookkeeping
+// only while both roots say the same thing. A minted root carries the statuses
+// this build ships and a lazily seeded root carries the ones a pre-ledger
+// project was using, so a root can now say either — and adopting across the
+// difference redefines the project: a column vanishes with tasks in it, or one
+// appears in a project that never had it. Neither is a tiebreak anybody asked
+// for, so both are refused and reported.
+//
+// Both publication orders run, because the harm is not symmetric and a fix that
+// caught only the losing direction would leave the other silent.
+func TestConfigLedgerRefusesToAdoptARootWithADifferentVocabulary(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		// mintedPublishes says which clone won the publication race, which is
+		// the only thing that differs between the two runs.
+		mintedPublishes bool
+	}{
+		{name: "minted root published first", mintedPublishes: true},
+		{name: "lazily seeded root published first", mintedPublishes: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			first, second, config := syncRepositories(t)
+
+			// Neither clone synchronizes before writing, so each roots its own
+			// ledger — one minted, one seeded from the pre-ledger vocabulary.
+			minted := mintedLedgerClone(t, first, config, addOperation("triage", "Triage", "1/2"))
+			legacy := writeConfig(t, second, config, configOperations(relabelOperation("blocked", "Waiting"))...)
+
+			publisher, joiner := first, second
+			joinerTip := legacy.Head
+			if !test.mintedPublishes {
+				publisher, joiner = second, first
+				joinerTip = minted.Head
+			}
+			publishConfigRef(t, publisher)
+
+			fresh := openSyncCloneAt(t, joiner.Root)
+			result, err := fresh.Fetch(ctx, config)
+			if got, want := core.CategoryOf(err), core.CategoryConflict; got != want {
+				t.Fatalf("Fetch(divergent roots) category = %q, want %q; error = %v; result = %#v",
+					got, want, err, result)
+			}
+			assertConfigStatus(t, result.Config, SyncConfigConflicted)
+			if len(result.ConfigConflicts) != 1 {
+				t.Fatalf("configuration conflicts = %#v, want exactly one", result.ConfigConflicts)
+			}
+			conflict := result.ConfigConflicts[0]
+			if conflict.Type != core.ConfigConflictRootVocabulary {
+				t.Fatalf("conflict = %#v, want a root-vocabulary conflict", conflict)
+			}
+			if conflict.Status != "" {
+				t.Fatalf("conflict status = %q, want none: the disagreement is about the whole vocabulary",
+					conflict.Status)
+			}
+
+			// Both starting points are named, so the report is the difference
+			// itself rather than a pointer at two commits to read by hand. Ours
+			// is always the joiner's own root and Theirs is always origin's,
+			// which is what makes the two runs read them the other way round.
+			preLedgerSide, mintedSide := conflict.Theirs, conflict.Ours
+			if test.mintedPublishes {
+				preLedgerSide, mintedSide = conflict.Ours, conflict.Theirs
+			}
+			if !strings.Contains(preLedgerSide, string(core.StatusBlocked)) {
+				t.Fatalf("the pre-ledger side = %q, want it to name the status it defines", preLedgerSide)
+			}
+			if strings.Contains(mintedSide, string(core.StatusBlocked)) {
+				t.Fatalf("the minted side = %q, want it not to name blocked", mintedSide)
+			}
+			if !strings.Contains(conflict.Detail, parkedConfigRefPrefix) {
+				t.Fatalf("detail = %q, want it to name where the local ledger was kept", conflict.Detail)
+			}
+
+			// Nothing local was replayed onto a root this clone never agreed to,
+			// and nothing was counted as already applied upstream — the two ways
+			// an operation disappears quietly.
+			if strings.Contains(result.Config.Detail, "already applied upstream") {
+				t.Fatalf("detail = %q, want no replay accounting for a refused adoption", result.Config.Detail)
+			}
+			// The whole local tip is parked, so every operation it recorded is
+			// still readable while somebody decides what to do about it.
+			if got := refValue(t, joiner, parkedConfigRefPrefix+"0"); got != joinerTip {
+				t.Fatalf("parked ref = %q, want the orphaned local tip %q", got, joinerTip)
+			}
+			// The ledger is origin's, exactly and only origin's.
+			if got, want := refValue(t, joiner, configRef), refValue(t, publisher, configRef); got != want {
+				t.Fatalf("ledger = %q, want origin's tip %q", got, want)
+			}
+
+			settled, err := openSyncCloneAt(t, joiner.Root).LoadVocabulary(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Whichever side published, the joiner reads origin's vocabulary and
+			// none of its own intent. Its own operation is not silently folded
+			// in; it is parked, reported, and reapplied by hand.
+			if got, want := settled.Has(core.StatusBlocked), !test.mintedPublishes; got != want {
+				t.Fatalf("Has(blocked) = %t, want %t: the joiner reads origin's root", got, want)
+			}
+			if got, want := settled.Has("triage"), test.mintedPublishes; got != want {
+				t.Fatalf("Has(triage) = %t, want %t: only origin's own operations survive", got, want)
+			}
+			if !test.mintedPublishes {
+				definition, found := statusDefinitionOf(settled, core.StatusBlocked)
+				if !found || definition.Label != "Waiting" {
+					t.Fatalf("blocked = %#v, want origin's own relabel to have survived", definition)
+				}
+			}
+		})
+	}
+}
+
+func statusDefinitionOf(vocabulary core.Vocabulary, status core.Status) (core.StatusDefinition, bool) {
+	for _, definition := range vocabulary.Definitions() {
+		if definition.Status == status {
+			return definition, true
+		}
+	}
+	return core.StatusDefinition{}, false
+}
+
+// TestConfigReplayReportsAnEditToAStatusOriginNeverDefined closes the second
+// half of the same hole.
+//
+// An operation whose subject the fetched history neither defines nor ever
+// retired used to classify as "a no-op nobody needs to decide about". The fold
+// applies it to nothing, the result equals the parent, and the replay counts it
+// as already applied upstream — so a deliberate change is discarded and the
+// report says it landed. It reads as a conflict now.
+func TestConfigReplayReportsAnEditToAStatusOriginNeverDefined(t *testing.T) {
+	view := newConfigView(core.DefaultVocabulary().Document())
+
+	conflict := classifyConfigOperation(view, core.ConfigOperation{
+		Type: core.ConfigStatusRelabel, Status: core.StatusBlocked, Label: "Waiting",
+	})
+	if conflict == nil {
+		t.Fatal("relabelling a status origin never defined classified as a no-op")
+	}
+	if conflict.Type != core.ConfigConflictStatusDefinition || conflict.Status != core.StatusBlocked {
+		t.Fatalf("conflict = %#v, want a status-definition conflict on blocked", conflict)
+	}
+	if conflict.Theirs != "not defined" {
+		t.Fatalf("conflict theirs = %q, want it to say origin does not define the status", conflict.Theirs)
+	}
+
+	// A rename and a removal of the same absent subject are the same loss and
+	// get the same answer.
+	for _, operation := range []core.ConfigOperation{
+		{Type: core.ConfigStatusRename, From: core.StatusBlocked, To: "waiting"},
+		{Type: core.ConfigStatusRemove, Status: core.StatusBlocked, Destination: core.StatusBacklog},
+	} {
+		if got := classifyConfigOperation(view, operation); got == nil {
+			t.Fatalf("%s of a status origin never defined classified as a no-op", operation.Type)
+		}
+	}
+
+	// A status the pack defines itself is not absent. The view is built once per
+	// pack, before the pack applies, so without this an add and an edit recorded
+	// together would report the author's own status as missing.
+	pending := newConfigView(core.DefaultVocabulary().Document())
+	pending.pending["triage"] = struct{}{}
+	if got := classifyConfigOperation(pending, core.ConfigOperation{
+		Type: core.ConfigStatusRelabel, Status: "triage", Label: "Triage",
+	}); got != nil {
+		t.Fatalf("editing a status the same pack adds = %#v, want no conflict", got)
+	}
+}
+
 // TestSyncReportsRefsItCannotReadUnderOriginsConfigName is the identity ref's
 // tolerance rule, restated for the second singleton: refs under origin's
 // configuration name are origin's business, and a clone reads past them and
