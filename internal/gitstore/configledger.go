@@ -373,9 +373,6 @@ func (r *Repository) writeConfigOperation(
 	// Read here and compared here, because this is the value the append's
 	// compare-and-swap is about to be given: a check made against any other read
 	// would leave a window this one does not have.
-	// Read here and compared here, because this is the value the append's
-	// compare-and-swap is about to be given: a check made against any other read
-	// would leave a window this one does not have.
 	if expected != nil {
 		current := ""
 		if found {
