@@ -133,6 +133,13 @@ setTimeout(async () => {
   }
   const count = findElement(column, (element) => hasDataKey(element, "deletedCount"));
   if (!count || count.textContent !== "2") throw new Error("the Deleted column counts " + (count && count.textContent));
+  // The heading's text is also its accessible name, and a status column's is
+  // "Ready 3" rather than "Ready3" because the server writes a space between the
+  // label and the count. This one has to read the same way.
+  const heading = findElement(column, (element) => element.className === "column__heading");
+  if (!heading || heading.textContent !== "Deleted 2") {
+    throw new Error("the Deleted column's heading reads " + JSON.stringify(heading && heading.textContent) + ", want \"Deleted 2\"");
+  }
   const empty = findElement(column, (element) => hasDataKey(element, "deletedEmpty"));
   if (!empty || !empty.hidden) throw new Error("a column with cards in it still says it is empty");
   if (empty.textContent !== "No deleted tasks.") throw new Error("the empty state reads " + empty.textContent);
@@ -173,9 +180,7 @@ setTimeout(async () => {
 }
 
 // A hard load of the address that shows the column shows it, and the first poll
-// the page makes is already the one that asks for the deleted tasks. An empty
-// column says nothing until a poll has actually asked: "No deleted tasks." is a
-// claim about what the server holds.
+// the page makes is already the one that asks for the deleted tasks.
 func TestHandlerClientOpensTheDeletedColumnOnAHardLoad(t *testing.T) {
 	tasks := deletedColumnTasks()
 	script := deletedColumnClientScript(t)
@@ -186,7 +191,6 @@ setTimeout(async () => {
   const column = deletedColumn();
   if (!column) throw new Error("a hard load of the deleted address drew no column");
   const empty = findElement(column, (element) => hasDataKey(element, "deletedEmpty"));
-  if (!empty.hidden) throw new Error("the column claimed to be empty before a poll had asked");
   await new Promise((resolve) => setTimeout(resolve, 0));
   const reads = fetchCalls.filter(({ url }) => url.startsWith("/api/tasks") && !url.includes("/restore"));
   if (reads.length === 0) throw new Error("the page made no read at all");
@@ -206,6 +210,129 @@ setTimeout(async () => {
 }, 0);
 `
 	runDeletedColumnClient(t, "deleted column hard load behavior", program)
+}
+
+// "No deleted tasks." is a claim about what the server holds, and a column shown
+// over a model that was read without them has not asked yet. The gap is real and
+// it is a whole render wide: showing the column draws it immediately, from the
+// tasks the last active-only poll left, which name no tombstones at all — so a
+// column that spoke from that would say it was empty and then fill a moment
+// later, over a board that never was.
+//
+// This is the test the hard-load one above cannot be: there, nothing has loaded
+// when the column appears, so the renderer has not run and the empty state is
+// still hidden from construction whatever it would have decided.
+func TestHandlerClientWithholdsTheEmptyStateUntilAPollHasAsked(t *testing.T) {
+	tasks := deletedColumnTasks()
+	script := deletedColumnClientScript(t)
+
+	program := clientDOMHarness("/", tasksDocumentJSON(t, []core.Task{tasks[0]})) + script + `
+includedTaskResponse = ` + tasksDocumentJSON(t, tasks) + `;
+setTimeout(async () => {
+  // A board that has read the server once, without the deleted tasks.
+  await intervalCallback();
+  // The card proves the board loaded, which is what makes the render below run
+  // at all: a toggle over an unloaded board draws nothing and decides nothing.
+  if (!boardCard(` + strconv.Quote(tasks[0].ID) + `)) {
+    throw new Error("the board never loaded, so the render under test never runs");
+  }
+
+  // The read the toggle starts is held open, so what the column says is what it
+  // says before any answer about the deleted tasks has arrived.
+  let releaseInclude = null;
+  const boardFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => {
+    if (url === "/api/tasks?deleted=include") {
+      await new Promise((resolve) => { releaseInclude = resolve; });
+    }
+    return boardFetch(url, options);
+  };
+
+  // Not awaited: what is under test is the frame the toggle paints, and the
+  // click's own promise does not settle until the held read does.
+  documentEventListeners.click({ target: deletedToggle, button: 0, preventDefault() {} });
+  const column = deletedColumn();
+  if (!column) throw new Error("the toggle drew no column");
+  const empty = findElement(column, (element) => hasDataKey(element, "deletedEmpty"));
+  if (deletedCards().length !== 0) {
+    throw new Error("the column already held cards, so it had nothing to be silent about");
+  }
+  if (!empty.hidden) {
+    throw new Error("the column said it was empty before a poll had asked for the deleted tasks");
+  }
+
+  // The answer arrives and it holds two. Had the column spoken a moment ago it
+  // would have been wrong about a board it had not read.
+  releaseInclude();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  if (deletedCards().length !== 2) throw new Error("the held read did not fill the column");
+  if (!empty.hidden) throw new Error("a column with cards in it still says it is empty");
+
+  // And once a poll that asked has answered with none, it says so.
+  includedTaskResponse = ` + tasksDocumentJSON(t, []core.Task{tasks[0]}) + `;
+  await intervalCallback();
+  if (deletedCards().length !== 0) throw new Error("the column kept cards the server no longer holds");
+  if (empty.hidden) throw new Error("a column the server says is empty says nothing");
+}, 0);
+`
+	runDeletedColumnClient(t, "deleted column empty-state timing", program)
+}
+
+// A tombstone is drawn in the Deleted column or it is drawn nowhere. It is
+// never drawn in a status column, and the moment that could happen is the one
+// right after the reader hides the column: the model still holds every deleted
+// task the last poll read, and each of them is filed under a status a column
+// does name. A renderer that only asked "is there a Deleted column to put this
+// in" and then fell through to the status grouping would file them all among
+// the live work, and the next poll — up to a second later — would take them
+// away again.
+func TestHandlerClientDrawsNoTombstoneInAStatusColumnWhileTheColumnIsHidden(t *testing.T) {
+	tasks := deletedColumnTasks()
+	script := deletedColumnClientScript(t)
+	// Both tombstones are filed under a status this board draws a column for, so
+	// a fall-through has somewhere to land. Without that the test could pass over
+	// a renderer that strands them instead.
+	for _, task := range tasks[1:] {
+		if task.Status != core.StatusReady {
+			t.Fatalf("fixture tombstone %s is filed under %q, which the test needs to be a real column", task.ID, task.Status)
+		}
+	}
+
+	program := clientDOMHarness("/?deleted=1", tasksDocumentJSON(t, []core.Task{tasks[0]})) + script + `
+includedTaskResponse = ` + tasksDocumentJSON(t, tasks) + `;
+const tombstones = [` + strconv.Quote(tasks[1].ID) + `, ` + strconv.Quote(tasks[2].ID) + `];
+// Every task ID drawn in a column the board takes drops into, which is the set a
+// tombstone must never appear in.
+function idsInStatusColumns() {
+  return boardLists.flatMap((list) => list.querySelectorAll(".task-card").map((card) => card.dataset.taskId));
+}
+function assertNoTombstonesAreFiled(when) {
+  const filed = idsInStatusColumns().filter((id) => tombstones.includes(id));
+  if (filed.length !== 0) throw new Error("a tombstone was drawn in a status column " + when + ": " + JSON.stringify(filed));
+  const stranded = boardUnknownList.querySelectorAll(".task-card")
+    .map((card) => card.dataset.taskId).filter((id) => tombstones.includes(id));
+  if (stranded.length !== 0) throw new Error("a tombstone was drawn in the unknown-status region " + when + ": " + JSON.stringify(stranded));
+}
+setTimeout(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  if (deletedCards().length !== 2) throw new Error("the column did not fill, so there is nothing to hide");
+  assertNoTombstonesAreFiled("while the column was shown");
+
+  // Hidden, with the model still holding both tombstones: the poll that stops
+  // asking for them has not run yet, and this is the frame that matters.
+  await documentEventListeners.click({ target: deletedToggle, button: 0, preventDefault() {} });
+  if (deletedColumn()) throw new Error("the toggle left the column on the board");
+  assertNoTombstonesAreFiled("in the frame after the column was hidden");
+  tombstones.forEach((id) => {
+    if (boardCard(id)) throw new Error("a hidden tombstone is still drawn somewhere: " + id);
+  });
+
+  // And still not, once the poll that no longer asks has replaced the model.
+  await intervalCallback();
+  assertNoTombstonesAreFiled("after a poll that did not ask for them");
+}, 0);
+`
+	runDeletedColumnClient(t, "hidden tombstone rendering", program)
 }
 
 // Restore on a card is a queued intent like every other board change: the card
@@ -543,6 +670,73 @@ setTimeout(async () => {
 }, 0);
 `
 	runDeletedColumnClient(t, "refused delete behavior", program)
+}
+
+// The Restore control is built once with the card and is its last child, which
+// is what lets the optional sections be rebuilt around it without ever moving
+// it: applyCard inserts each of them before the button rather than appending
+// past it. Three comments in the renderer rest on that, so it is asserted here
+// against a card that carries all three rebuilt sections — a description, labels
+// and dependency progress — before and after a poll that rebuilds every one of
+// them.
+func TestHandlerClientKeepsTheRestoreControlAsTheCardsLastChild(t *testing.T) {
+	task := clientPlacementTask("WB-01J00000000000000000000401", "Rebuilt", core.StatusReady, core.PriorityMedium)
+	task.Description = "A description, which applyCard rebuilds on every change."
+	task.Labels = []string{"alpha", "beta"}
+	task.Head = "head-1"
+	renamed := task
+	renamed.Title = "Rebuilt and renamed"
+	script := deletedColumnClientScript(t)
+	// The dependency progress row is drawn from the view rather than the task, so
+	// the document is built by hand to carry one.
+	viewed := func(tasks []core.Task) string {
+		t.Helper()
+		return string(mustJSON(t, TasksDocument{
+			Format: "workbook.tasks", Version: 1, Tasks: tasks,
+			Presentation: []TaskPresentation{{
+				TaskID: task.ID, IDPrefix: task.ID,
+				DependenciesTotal: 2, DependenciesComplete: 1, WaitingOnDependencies: true,
+			}},
+		}))
+	}
+
+	program := clientDOMHarness("/", viewed([]core.Task{task})) + script + `
+setTimeout(async () => {
+  await intervalCallback();
+  const card = boardCard(` + strconv.Quote(task.ID) + `);
+  if (!card) throw new Error("the board drew no card");
+  const restore = findElement(card, (element) => hasDataKey(element, "restoreTask"));
+  if (!restore) throw new Error("the card carries no Restore control");
+  // All three rebuilt sections are present, or the assertion below could hold
+  // over a card that has nothing to rebuild around the button.
+  const sections = ["P", "labels", "dependencyProgress"].map((marker) => findElement(card, (element) =>
+    marker === "P" ? element.tagName === "P" : (element.className === marker || hasDataKey(element, marker))));
+  if (sections.some((section) => !section)) {
+    throw new Error("the card is missing a rebuilt section, so it cannot witness the order");
+  }
+  const last = () => card.children[card.children.length - 1];
+  if (last() !== restore) {
+    throw new Error("the Restore control is not the card's last child: " + last().tagName + "." + last().className);
+  }
+
+  // A poll that really does change the task rebuilds every one of those
+  // sections. The button must not be pushed off the end by any of them, and it
+  // must be the same node it was.
+  taskResponse = ` + viewed([]core.Task{renamed}) + `;
+  await intervalCallback();
+  if (boardCard(` + strconv.Quote(task.ID) + `) !== card) throw new Error("the poll rebuilt the card instead of updating it");
+  if (findElement(card, (element) => element.tagName === "H3").textContent !== ` + strconv.Quote(renamed.Title) + `) {
+    throw new Error("the poll did not change the card, so nothing was rebuilt around the button");
+  }
+  if (findElement(card, (element) => hasDataKey(element, "restoreTask")) !== restore) {
+    throw new Error("a rebuild replaced the Restore control");
+  }
+  if (last() !== restore) {
+    throw new Error("a rebuilt section was appended past the Restore control: " + last().tagName + "." + last().className);
+  }
+}, 0);
+`
+	runDeletedColumnClient(t, "restore control position", program)
 }
 
 // A deleted task's text is drawn through the same escaping every other card

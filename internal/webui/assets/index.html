@@ -688,6 +688,14 @@
       // a reader who opens a task from a board showing it comes back to a board
       // showing it, and the address they came from is what Back restores.
       //
+      // It stays set while they are on that task's page, and the poll goes on
+      // asking for the deleted tasks the whole time. That is deliberate: the
+      // board is still in the document behind the form, and a poll that stopped
+      // asking would empty the column and leave it empty until a second after
+      // they came back. What it costs is the tombstones in every poll of a route
+      // that draws no columns, which the relationship picker on that very page
+      // is reading anyway.
+      //
       // deletedRead says whether the model in hand came from a poll that asked
       // for the deleted tasks. Until one has, the column knows nothing rather
       // than nothing-to-know, so it says neither — an empty state written over
@@ -3171,7 +3179,15 @@
       // which is what the bare verb has always meant. It is a queued intent
       // like every other board change — optimistic paint, one write at a time
       // per task, re-base on a stale head, refusal reported on the card — and
-      // the head it carries is the only thing in the body when it has one.
+      // the head it carries is the only thing in the body.
+      //
+      // The body-less branch is defensive rather than a case a server produces:
+      // every task this board draws comes from /api/tasks with a head, so
+      // `expectedHead` is populated in practice. It exists because the route
+      // accepts no body at all and this is the one intent whose body would
+      // otherwise be empty — a queue holding a task with no head must send the
+      // bare verb rather than `{"expectedHead":""}`, which is a head the server
+      // would compare against and refuse.
       function restoreTask(taskID) {
         const observed = latestTasks.find((task) => task.id === taskID);
         // The button is drawn on every card and shown on the deleted ones, so
@@ -4355,9 +4371,15 @@
         section.setAttribute("aria-label", "Deleted tasks");
         const header = document.createElement("header"); header.className = "column__header";
         const heading = document.createElement("h2"); heading.className = "column__heading";
-        const name = document.createElement("span"); text(name, "Deleted");
+        // The same shape the server gives a status column's heading: the name as
+        // the heading's own text, then the count. The space at the end of the
+        // name is what the server writes between the two, and it is what keeps
+        // the heading's accessible name "Deleted 7" rather than "Deleted7" — a
+        // trailing space at the end of a line box draws nothing, so the two
+        // headings read alike and look alike.
+        text(heading, "Deleted ");
         const count = document.createElement("span"); count.className = "count"; count.dataset.deletedCount = ""; text(count, "0");
-        heading.append(name, count);
+        heading.append(count);
         header.append(heading);
         const list = document.createElement("div");
         list.className = "task-list";

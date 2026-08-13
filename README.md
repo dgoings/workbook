@@ -1473,9 +1473,10 @@ header's `Deleted tasks:` toggle is a link to `/?deleted=1`, so the state is
 shareable, bookmarkable, and walked by Back and Forward; showing it appends a
 muted **Deleted** column after the last status column and hiding it takes that
 section away, and neither touches another column or another card. The column is
-fed by the same one-second poll as every other column — the page asks
-`/api/tasks?deleted=include` while it is shown — and orders its cards
-most-recently-deleted first. Each card carries a **Restore** button that returns
+fed by the same one-second poll as every other column, which asks
+`/api/tasks?deleted=include` for as long as the board is set to show it — opening
+a task's page does not stop the asking, so the column is already current when you
+come back to it — and orders its cards most-recently-deleted first. Each card carries a **Restore** button that returns
 the task to the status it was deleted from. Dragging a deleted card onto a
 status column restores it into that column at the position it was dropped, and
 dragging a live card onto the Deleted column deletes it; both are queued

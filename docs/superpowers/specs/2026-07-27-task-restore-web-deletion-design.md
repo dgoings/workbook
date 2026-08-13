@@ -1,5 +1,14 @@
 # Web Task Deletion and Restore Design
 
+> **Superseded in part, 2026-08-13.** The `/deleted` route this document
+> specifies no longer exists: the deleted tasks are a hideable column of the
+> board, reached at `/?deleted=1`, and the address 404s. Restore also takes an
+> optional destination now. The rest of this document — the `task.restore`
+> operation, the immutability rule, and the delete and restore endpoints —
+> still describes what is shipped. What replaced the page is described in the
+> README's local web board section and in
+> [the optimistic queue design](2026-08-06-optimistic-web-mutation-queue-design.md).
+
 ## Goal
 
 Let a user tombstone a task from its local web detail view, browse tombstoned
