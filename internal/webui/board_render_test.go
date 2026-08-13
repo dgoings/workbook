@@ -175,6 +175,12 @@ func TestHandlerClientWritesNothingInsideAnUnchangedCardAcrossAPoll(t *testing.T
   });
   const append = alpha.append.bind(alpha);
   alpha.append = (...children) => { additions += 1; return append(...children); };
+  // A rebuilt section is inserted before the card's Restore control rather than
+  // appended past it, because that control is built once with the card and has
+  // to stay its last child. Both writes are additions and the watch has to see
+  // both, or a card that rebuilt every section would count as unchanged.
+  const insert = alpha.insertBefore.bind(alpha);
+  alpha.insertBefore = (child, reference) => { additions += 1; return insert(child, reference); };
   let draggable = alpha.draggable;
   Object.defineProperty(alpha, "draggable", {
     configurable: true,

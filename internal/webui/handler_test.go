@@ -214,146 +214,33 @@ func TestHandlerDeletesRestoresAndListsTombstonedTasks(t *testing.T) {
 	}
 }
 
-func TestHandlerClientRestoreFollowsSupersedingRefreshBeforeNavigation(t *testing.T) {
-	node := requireNode(t)
-	deleted := clientPlacementTask("WB-01J00000000000000000000060", "Restored task", core.StatusReady, core.PriorityMedium)
-	deleted.Description = "Restore me without racing the task refresh."
-	deleted.Deleted = true
-	restored := deleted
-	restored.Deleted = false
-	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return nil, nil })
-
-	response := request(t, handler, http.MethodGet, "/deleted")
-	if response.Code != http.StatusOK {
-		t.Fatalf("GET /deleted status = %d, want %d", response.Code, http.StatusOK)
-	}
-	script := renderedClientScript(t, response.Body.String())
-	documentJSON := func(tasks []core.Task) string {
-		t.Helper()
-		document, err := json.Marshal(TasksDocument{
-			Format:       "workbook.tasks",
-			Version:      1,
-			Tasks:        tasks,
-			Presentation: presentationForTasks(tasks),
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return string(document)
-	}
-	deletedDocument, err := json.Marshal(TasksDocument{
-		Format:  "workbook.tasks",
-		Version: 1,
-		Tasks:   []core.Task{deleted},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	program := clientDOMHarness("/deleted", documentJSON(nil)) + script + `
-deletedTaskResponse = ` + string(deletedDocument) + `;
-setTimeout(async () => {
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  const restore = findElement(main, (element) =>
-    element.tagName === "BUTTON" && element.textContent === "Restore");
-  if (!restore) throw new Error("deleted task Restore button did not render");
-
-  let resolveRestoreRefresh;
-  let resolveWinningRefresh;
-  let activeGets = 0;
-  globalThis.fetch = async (url, options = {}) => {
-    fetchCalls.push({ url, options });
-    if ((options.method || "GET") !== "GET") {
-      return {
-        ok: true,
-        json: async () => ({
-          format: "workbook.task-mutation",
-          version: 1,
-          task: (` + documentJSON([]core.Task{restored}) + `).tasks[0]
-        })
-      };
-    }
-    if (url === "/api/tasks?deleted=true") {
-      return { ok: true, json: async () => deletedTaskResponse };
-    }
-    activeGets += 1;
-    if (activeGets === 1) {
-      return {
-        ok: true,
-        json: async () => new Promise((resolve) => { resolveRestoreRefresh = resolve; })
-      };
-    }
-    return {
-      ok: true,
-      json: async () => new Promise((resolve) => { resolveWinningRefresh = resolve; })
-    };
-  };
-
-  const restoration = restore.eventListeners.click();
-  while (!resolveRestoreRefresh) {
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-  const winningPoll = intervalCallback();
-  while (!resolveWinningRefresh) {
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-
-  resolveRestoreRefresh(` + documentJSON(nil) + `);
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  if (historyPaths.length !== 0) {
-    throw new Error("restore navigated before the superseding refresh populated the restored task");
-  }
-
-  resolveWinningRefresh(` + documentJSON([]core.Task{restored}) + `);
-  await winningPoll;
-  await restoration;
-  const wantPath = "/tasks/" + encodeURIComponent(` + strconv.Quote(restored.ID) + `);
-  if (historyPaths.length !== 1 || historyPaths[0] !== wantPath) {
-    throw new Error("restore navigation = " + JSON.stringify(historyPaths) + ", want " + wantPath);
-  }
-  const title = findElement(main, (element) => element.id === "task-title");
-  if (!title || title.value !== ` + strconv.Quote(restored.Title) + `) {
-    throw new Error("restored detail form did not render after the winning refresh");
-  }
-}, 0);
-`
-	command := nodeCommand(node, program)
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("execute superseding restore refresh behavior: %v\n%s", err, output)
-	}
-}
-
 func TestHandlerClientNamesJSONMediaTypeOnEveryMutation(t *testing.T) {
 	node := requireNode(t)
 	deleted := clientPlacementTask("WB-01J00000000000000000000070", "Body-less restore", core.StatusReady, core.PriorityMedium)
 	deleted.Deleted = true
-	restored := deleted
-	restored.Deleted = false
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return nil, nil })
 
-	response := request(t, handler, http.MethodGet, "/deleted")
+	response := request(t, handler, http.MethodGet, "/")
 	if response.Code != http.StatusOK {
-		t.Fatalf("GET /deleted status = %d, want %d", response.Code, http.StatusOK)
+		t.Fatalf("GET / status = %d, want %d", response.Code, http.StatusOK)
 	}
 	script := renderedClientScript(t, response.Body.String())
-	taskDocument := mustJSON(t, TasksDocument{
-		Format:       "workbook.tasks",
-		Version:      1,
-		Tasks:        []core.Task{restored},
-		Presentation: presentationForTasks([]core.Task{restored}),
+	activeDocument := mustJSON(t, TasksDocument{
+		Format: "workbook.tasks", Version: 1, Tasks: nil, Presentation: presentationForTasks(nil),
 	})
-	deletedDocument := mustJSON(t, TasksDocument{
-		Format:  "workbook.tasks",
-		Version: 1,
-		Tasks:   []core.Task{deleted},
+	includedDocument := mustJSON(t, TasksDocument{
+		Format: "workbook.tasks", Version: 1,
+		Tasks:        []core.Task{deleted},
+		Presentation: presentationForTasks([]core.Task{deleted}),
 	})
 
 	// The server rejects mutations that do not declare Content-Type:
 	// application/json, because an absent media type is exactly what a
-	// cross-site form POST looks like. The body-less restore route is the
-	// mutation most likely to lose the header, so it is the one exercised.
-	program := clientDOMHarness("/deleted", string(taskDocument)) + script + `
-deletedTaskResponse = ` + string(deletedDocument) + `;
+	// cross-site form POST looks like. The Restore control sends the one
+	// mutation that carries no body at all when it has no head to name, so it is
+	// the request most likely to lose the header and the one exercised here.
+	program := clientDOMHarness("/?deleted=1", string(activeDocument)) + script + `
+includedTaskResponse = ` + string(includedDocument) + `;
 let asserted = false;
 process.on("exit", () => {
   if (!asserted) {
@@ -363,9 +250,11 @@ process.on("exit", () => {
 });
 setTimeout(async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
-  const restore = findElement(main, (element) =>
-    element.tagName === "BUTTON" && element.textContent === "Restore");
-  if (!restore) throw new Error("deleted task Restore button did not render");
+  await intervalCallback();
+  const card = boardCard(` + strconv.Quote(deleted.ID) + `);
+  if (!card) throw new Error("the Deleted column drew no card for the deleted task");
+  const restore = findElement(card, (element) => hasDataKey(element, "restoreTask"));
+  if (!restore || restore.hidden) throw new Error("the deleted card offers no Restore control");
   restore.eventListeners.click();
   await new Promise((resolve) => setTimeout(resolve, 0));
   const mutations = fetchCalls.filter(({ options }) => (options.method || "GET") !== "GET");
@@ -683,18 +572,54 @@ func TestHandlerServesTaskRouteShell(t *testing.T) {
 	}
 }
 
-func TestHandlerServesDeletedRouteAndHeaderNavigation(t *testing.T) {
+// The deleted tasks are a column of the board rather than a page, so the page
+// they used to have is gone outright: the address is not a route, it is not a
+// method question either, and nothing on the board still links to it.
+func TestHandlerRemovesTheDeletedTasksRoute(t *testing.T) {
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return boardTasks(), nil })
-	for _, path := range []string{"/", "/deleted"} {
+
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		response := request(t, handler, method, "/deleted")
+		if response.Code != http.StatusNotFound {
+			t.Errorf("%s /deleted status = %d, want %d", method, response.Code, http.StatusNotFound)
+		}
+		// A 405 would say the address exists under another method. It does not
+		// exist at all, so the method question must not be answered for it.
+		if got := response.Header().Get("Allow"); got != "" {
+			t.Errorf("%s /deleted Allow = %q, want no allowed method", method, got)
+		}
+	}
+	body := request(t, handler, http.MethodGet, "/").Body.String()
+	if strings.Contains(body, `href="/deleted"`) {
+		t.Error("GET / still links to the removed deleted-tasks page")
+	}
+}
+
+// The header's link to the deleted tasks is now the column's switch: an anchor,
+// so it can be cmd-clicked, bookmarked and walked with Back, pointing at the
+// address that shows the column. It ships hidden and the board's render reveals
+// it, exactly as the Descriptions setting beside it does.
+func TestHandlerServesTheDeletedColumnToggleAndBoardNavigation(t *testing.T) {
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return boardTasks(), nil })
+
+	for _, path := range []string{"/", "/tasks/new"} {
 		response := request(t, handler, http.MethodGet, path)
 		if response.Code != http.StatusOK {
 			t.Fatalf("GET %s status = %d, want %d", path, response.Code, http.StatusOK)
 		}
-		if !strings.Contains(response.Body.String(), `href="/deleted"`) {
-			t.Fatalf("GET %s does not provide header navigation to deleted tasks", path)
+		body := response.Body.String()
+		tag := openingTag(t, body, "data-deleted-toggle")
+		if !strings.HasPrefix(tag, "<a ") {
+			t.Errorf("GET %s served the deleted-column toggle as %s, want an anchor", path, tag)
 		}
-		if !strings.Contains(response.Body.String(), `href="/"`) {
-			t.Fatalf("GET %s does not provide header navigation to the board", path)
+		if !strings.Contains(tag, `href="/?deleted=1"`) {
+			t.Errorf("GET %s deleted-column toggle does not name the address that shows it: %s", path, tag)
+		}
+		if !strings.Contains(tag, " hidden") {
+			t.Errorf("GET %s served the deleted-column toggle unhidden: %s", path, tag)
+		}
+		if !strings.Contains(body, `href="/"`) {
+			t.Errorf("GET %s does not provide header navigation to the board", path)
 		}
 	}
 }
@@ -4585,6 +4510,7 @@ class TestElement {
       if (selector === ".task-id-copy-group" && hasClass(element, "task-id-copy-group")) return element;
       if (selector === "[data-copy-task-id]" && Object.prototype.hasOwnProperty.call(element.dataset, "copyTaskId")) return element;
       if (selector === "[data-drop-status]" && element.dataset.dropStatus) return element;
+      if (selector === "[data-drop-deleted]" && element.dataset.dropDeleted) return element;
       if (selector === "[data-status]" && element.dataset.status) return element;
     }
     return null;
@@ -4636,11 +4562,20 @@ const boardView = new TestElement("div");
 const stale = new TestElement("p");
 const updated = new TestElement("p");
 const boardStatuses = boardStatusDefinitions.map(([status]) => status);
+// The grid the columns are tracks of. Each column is a section holding the
+// list, exactly as the server renders it, because the Deleted column is
+// appended to this element after the last vocabulary column and a test that
+// held the lists loose could not see where it landed.
+const boardElement = new TestElement("section");
 const boardLists = boardStatusDefinitions.map(([status, label]) => {
   const element = new TestElement("div");
   element.dataset.status = status;
   element.dataset.statusLabel = label;
   element.dataset.dropStatus = status;
+  const column = new TestElement("section");
+  column.className = "column";
+  column.append(element);
+  boardElement.append(column);
   return element;
 });
 boardView.dataset.defaultStatus = boardDefaultStatus;
@@ -4659,6 +4594,7 @@ boardUnknownList.dataset.unknownList = "";
 boardUnknownSection.append(boardUnknownCount, boardUnknownList);
 boardView.querySelector = (selector) => {
   if (selector === "[data-stale]") return stale;
+  if (selector === "[data-board]") return boardElement;
   if (selector === "[data-unknown-section]") return boardUnknownSection;
   if (selector === "[data-unknown-count]") return boardUnknownCount;
   if (selector === "[data-unknown-list]") return boardUnknownList;
@@ -4687,6 +4623,12 @@ vocabularyNotice.append(vocabularyReload);
 // renderRoute() that never touched it look like it had revealed it.
 const descriptionToggle = new TestElement("button");
 descriptionToggle.hidden = true;
+// The Deleted column's switch, shipped hidden beside it and revealed by the
+// board's render for the same reason. It is an anchor, because the state it
+// sets is the address.
+const deletedToggle = new TestElement("a");
+deletedToggle.hidden = true;
+deletedToggle.href = "/?deleted=1";
 // The body of the statuses route, as the server renders it for a board built
 // with the four vocabulary mutations: shipped hidden and outside main, mounted
 // into main by the render for that route, with the list inside it drawn by the
@@ -4711,6 +4653,7 @@ const documentEventListeners = {};
     if (selector === "[data-vocabulary-notice]") return vocabularyNotice;
     if (selector === "[data-vocabulary-reload]") return vocabularyReload;
     if (selector === "[data-description-toggle]") return descriptionToggle;
+    if (selector === "[data-deleted-toggle]") return deletedToggle;
     if (selector === "[data-vocabulary-panel]") return vocabularyPanel;
     if (selector === "[data-vocabulary-panel-status]") return vocabularyPanelStatus;
     if (selector === "[data-vocabulary-panel-body]") return vocabularyPanelBody;
@@ -4748,13 +4691,20 @@ const documentEventListeners = {};
 	  setItem(key, value) { storedPreferences.set(key, String(value)); },
 	  removeItem(key) { storedPreferences.delete(key); }
 	};
+const windowEventListeners = {};
 globalThis.window = {
 	  innerHeight: 900,
 	  innerWidth: 1440,
 	  localStorage: preferenceStorage,
 	  location: { href: initialURL.href, origin: initialURL.origin, reload() { reloadCalls += 1; } },
-	  addEventListener() {},
-	  removeEventListener() {},
+	  // Recorded rather than discarded, so a test can walk Back and Forward the
+	  // way the browser does: the client renders its route from popstate, and a
+	  // harness that swallowed the listener could only ever exercise the
+	  // forward direction.
+	  addEventListener(name, listener) { windowEventListeners[name] = listener; },
+	  removeEventListener(name, listener) {
+	    if (windowEventListeners[name] === listener) delete windowEventListeners[name];
+	  },
 	  setInterval(callback, delay) { intervalCallback = callback; intervalDelay = delay; },
 	  setTimeout(callback, delay) {
 	    const timer = { id: nextWindowTimeoutID++, callback, delay, canceled: false };
@@ -4782,6 +4732,11 @@ globalThis.requestAnimationFrame = (callback) => callback();
 	const taskDocument = ` + taskDocument + `;
 	let taskResponse = taskDocument;
 	let deletedTaskResponse = { format: "workbook.tasks", version: 1, tasks: [] };
+	// What GET /api/tasks?deleted=include answers: one document holding the
+	// active tasks and the deleted ones together, which is what the board polls
+	// for while its Deleted column is shown. Unset, it is the active document, so
+	// a test that never shows the column sees exactly the board it always saw.
+	let includedTaskResponse = null;
 const fetchCalls = [];
 globalThis.fetch = async (url, options = {}) => {
   fetchCalls.push({ url, options });
@@ -4795,8 +4750,18 @@ globalThis.fetch = async (url, options = {}) => {
       })
     };
   }
-  return { ok: true, json: async () => url === "/api/tasks?deleted=true" ? deletedTaskResponse : taskResponse };
+  if (url === "/api/tasks?deleted=true") return { ok: true, json: async () => deletedTaskResponse };
+  if (url === "/api/tasks?deleted=include") return { ok: true, json: async () => includedTaskResponse || taskResponse };
+  return { ok: true, json: async () => taskResponse };
 };
+// Walks the address bar back to an entry the reader has already been at, the
+// way Back does, and hands the client the popstate it re-renders from. The
+// destination is named rather than derived from the push record, because the
+// tests assert on that record and popping it would take the evidence away.
+function returnTo(path) {
+  window.location.href = new URL(path, window.location.href).href;
+  if (windowEventListeners.popstate) windowEventListeners.popstate();
+}
 function findElement(root, predicate) {
   if (predicate(root)) return root;
   for (const child of root.children || []) {
@@ -4813,10 +4778,28 @@ function findElements(root, predicate, matches = []) {
 function hasDataKey(element, key) {
   return Object.prototype.hasOwnProperty.call(element.dataset || {}, key);
 }
+// The Deleted column, its list and its cards, or null while the reader has it
+// hidden. It is the client's own element rather than a served one, so a test
+// finds it by walking the board the way a reader's browser would.
+function deletedColumn() {
+  return findElement(boardElement, (element) => hasDataKey(element, "deletedColumn"));
+}
+function deletedList() {
+  const column = deletedColumn();
+  return column && findElement(column, (element) => hasDataKey(element, "deletedList"));
+}
+function deletedCards() {
+  const list = deletedList();
+  return list ? list.querySelectorAll(".task-card") : [];
+}
 // The card the board is drawing for a task, wherever it currently sits: a
-// column, or the region that holds the statuses no column matches.
+// column, the region that holds the statuses no column matches, or the Deleted
+// column when it is shown.
 function boardCard(taskID) {
-  for (const list of boardLists.concat([boardUnknownList])) {
+  const lists = boardLists.concat([boardUnknownList]);
+  const removed = deletedList();
+  if (removed) lists.push(removed);
+  for (const list of lists) {
     const found = list.querySelectorAll(".task-card").find((item) => item.dataset.taskId === taskID);
     if (found) return found;
   }

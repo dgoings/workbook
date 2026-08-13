@@ -540,7 +540,6 @@ func NewHandler(options Options) http.Handler {
 	page := template.Must(template.New("index.html").ParseFS(assets, "assets/index.html"))
 	handler := &handler{Options: options, page: page, mux: http.NewServeMux()}
 	handler.mux.HandleFunc("GET /{$}", handler.serveBoard)
-	handler.mux.HandleFunc("GET /deleted", handler.serveBoard)
 	handler.mux.HandleFunc("GET /statuses", handler.serveStatuses)
 	handler.mux.HandleFunc("GET /tasks/new", handler.serveBoard)
 	handler.mux.HandleFunc("GET /tasks/{id}", handler.serveBoard)
@@ -644,7 +643,7 @@ func hasPathSegment(path, marker string) bool {
 
 func allowedMethod(path string) (string, bool) {
 	switch path {
-	case "/", "/deleted", "/healthz", "/statuses", "/tasks/new":
+	case "/", "/healthz", "/statuses", "/tasks/new":
 		return http.MethodGet, true
 	case "/api/tasks":
 		return http.MethodGet + ", " + http.MethodPost, true
@@ -825,7 +824,7 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 // serveStatuses answers the statuses route, which is the board's page under
 // another path: the client renders the route it reads out of the address, so a
 // hard load of /statuses and a click through to it from the board have to be
-// served the same document — the same way /deleted and a task's own page are.
+// served the same document — the same way a task's own page is.
 //
 // It is the one page route that a board can be built without. The route is
 // registered whatever the board can do, so the method question has one answer
@@ -1105,9 +1104,19 @@ func (handler *handler) serveTasks(writer http.ResponseWriter, request *http.Req
 		handler.writeError(writer, err)
 		return
 	}
-	if request.URL.Query().Get("deleted") == "true" {
+	// Which tasks this poll is for, asked as one parameter with three answers
+	// rather than as two parameters that could disagree. `true` is the deleted
+	// tasks alone and keeps meaning exactly that: the relationship picker still
+	// asks it, and a value it never sends must not change under it. `include` is
+	// the whole board — the active tasks and the deleted ones in one document,
+	// each carrying the `deleted` flag that says which it is — because the board
+	// draws both at once when its Deleted column is shown, and two polls could
+	// only disagree about the moment they read.
+	switch request.URL.Query().Get("deleted") {
+	case "true":
 		tasks = deletedTasks(tasks)
-	} else {
+	case "include":
+	default:
 		tasks = activeTasks(tasks)
 	}
 	writeJSON(writer, http.StatusOK, TasksDocument{

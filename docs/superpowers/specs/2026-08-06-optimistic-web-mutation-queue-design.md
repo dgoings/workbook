@@ -115,9 +115,21 @@ without changing their shape. They stay as they are: a dependency edge is an
 `add`/`remove` on a set, which converges rather than conflicting, so the
 protection `expectedHead` buys does not apply to them. Saying so here is
 cheaper than a reader discovering the asymmetry and assuming it was an
-oversight. Delete and restore take no body either, and want none: a tombstone is
-not a field edit, and deleting a task someone else just changed is the thing the
-user asked for rather than an accident to catch.
+oversight.
+
+**Delete and restore are queued intents too, and their bodies are optional.**
+They took no body when this was written, on the reasoning that a tombstone is
+not a field edit. That held while the only way to delete a task was to open it
+and press Delete. It stopped holding when the deleted tasks became a board
+column: dragging a card onto it is a delete, dragging one out of it is a
+restore, and a drag is exactly the gesture this queue exists to make immediate.
+So both routes accept a body a client may omit entirely — absent is the bare
+verb, unchanged for every caller that predates it. `DELETE /api/tasks/{id}`
+accepts `expectedHead`. `POST /api/tasks/{id}/restore` accepts `status`,
+`before`, `after` and `expectedHead`: the members the position route uses,
+meaning the same things, so a card dropped on a column restores *into* that
+column at that position as one operation pack rather than reappearing where it
+was deleted from and then moving.
 
 ## The queue
 
@@ -207,9 +219,13 @@ and an ordinary route render is enough to do that, since rendering one drops the
 controller that refresh is holding. Read as an outage, that would clear a queue
 whose re-base was already sitting in the model, and print "the board could not
 be refreshed" under a banner saying the opposite. So the board read answers for
-itself, and every other consumer of the status — the created-task recovery, the
-restore control, and the two dependency-mutation paths — goes on reading the
-status unchanged.
+itself, and every other consumer of the status — the created-task recovery and
+the two dependency-mutation paths — goes on reading the status unchanged. The
+restore control used to be a third: it awaited its own refresh and then
+navigated to the restored task. It is a queued intent now, so it awaits nothing
+and navigates nowhere — the card moves out of the Deleted column and into the
+column its status names, and a refusal rolls it back and reports on it like any
+other.
 
 **Reporting** happens on the card the refusal concerns, worded to distinguish
 "this task changed elsewhere" from an ordinary failure, and written *after* the

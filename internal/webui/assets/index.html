@@ -45,7 +45,15 @@
     .eyebrow { margin: 0 0 .2rem; color: #2457d6; font-size: .7rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
     h1 { margin: 0; font-size: clamp(1.25rem, 2vw, 1.65rem); letter-spacing: -.03em; }
     .updated { margin: 0; color: #56647a; font-size: .75rem; text-align: right; }
-    .header-links { display: flex; align-items: center; gap: .8rem; }
+    /* The row wraps rather than pushing the page sideways. Six controls of text
+       do not fit a phone on one line, and a flex row that cannot shrink far
+       enough widens the document instead of the row: measured at a 390px
+       viewport this row was 454px wide, and the whole page scrolled
+       horizontally with it — over a header, not over the board, which has its
+       own scroll container and is the only thing on this page that is supposed
+       to scroll sideways. Wrapping costs a second line on a phone and nothing
+       at any width the row already fits. */
+    .header-links { display: flex; flex-wrap: wrap; align-items: center; gap: .8rem; }
     .header-link { color: #34425a; font-size: .82rem; font-weight: 750; text-underline-offset: .18em; }
     main { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 1.25rem; }
     /* Reports leave only by being dismissed, so the notice has to be able to run
@@ -227,6 +235,37 @@
     .task-card__failure button { flex: 0 0 auto; border: 1px solid currentcolor; border-radius: 3px; background: transparent; color: inherit; cursor: pointer; font: inherit; font-size: .66rem; font-weight: 800; padding: .08rem .32rem; }
     .task-card__failure button:focus-visible { outline: 3px solid #2457d6; outline-offset: 2px; }
     .drop-marker { height: 0; margin: -.1rem 0; border-top: 3px solid #2457d6; border-radius: 3px; pointer-events: none; }
+    /* The Deleted column. It is a .column and takes the board's track sizing
+       untouched — no width, no minimum, no maximum of its own — so a project
+       with five statuses and a project with twelve widen and scroll exactly as
+       they did before the column existed, and there is no sizing rule here that
+       could lose to one written above it.
+
+       What is here is colour, and every one of these rules is written after the
+       rules it overrides. Equal-specificity declarations in this file are
+       decided by order, and .column--deleted is exactly as specific as .column;
+       moving this block above the .column rules would silently undo it. */
+    .column--deleted { background: rgba(232,237,244,.5); }
+    .column--deleted .column__header { border-top-color: #8496b0; background: #f1f4f8; }
+    .column--deleted .column__heading { color: #4e5d73; }
+    .column--deleted .count { color: #4e5d73; }
+    .column--deleted .task-card { border-color: #cbd5e2; background: #fbfcfe; }
+    /* A tombstone has no detail page to open, so its heading is an anchor with
+       no href — text, to the reader and to the click handler alike. It is
+       coloured here because the rule that greys it is the muted column's, not
+       the card's. */
+    .column--deleted .task-card h3 a { color: #4e5d73; }
+    /* The empty state, and the only rule that decides whether it is seen. It
+       carries no display of its own, so the hidden attribute the renderer sets
+       is what draws it or does not; the explicit declaration is here because a
+       display added to this rule later would silently outrank the attribute. */
+    .column__empty { margin: 0; color: #56647a; font-size: .78rem; line-height: 1.4; }
+    .column__empty[hidden] { display: none; }
+    .restore-button { margin-top: .65rem; border: 1px solid #9eafc5; border-radius: 3px; background: #fff; color: #34425a; cursor: pointer; font: inherit; font-size: .72rem; font-weight: 800; padding: .22rem .5rem; }
+    .restore-button:hover { border-color: #2457d6; color: #2457d6; }
+    .restore-button:focus-visible { outline: 3px solid #2457d6; outline-offset: 2px; }
+    .restore-button:disabled { cursor: default; opacity: .55; }
+    .restore-button[hidden] { display: none; }
     .task-route { display: flex; flex-direction: column; height: 100%; min-height: 0; width: min(100%, 84rem); margin: 0 auto; border: 1px solid #b9c6d8; background: #fff; box-shadow: 0 12px 32px rgba(23,32,51,.08); }
     .task-route__header { padding: 1rem 1.15rem; border-top: 3px solid #2457d6; border-bottom: 1px solid #d5deea; background: #f8faff; }
     .task-route__header h2 { margin: .15rem 0 0; font-size: clamp(1.15rem, 3vw, 1.55rem); letter-spacing: -.025em; }
@@ -296,10 +335,6 @@
     .board-link { color: #34425a; font-size: .84rem; font-weight: 700; text-underline-offset: .18em; }
     .route-message { padding: 1.15rem; color: #56647a; }
     .route-message p { margin: 0 0 1rem; }
-    .deleted-list { display: grid; gap: .7rem; padding: 1.15rem; }
-    .deleted-card { border: 1px solid #b9c6d8; border-radius: 4px; background: #fff; padding: .8rem; }
-    .deleted-card__meta { display: flex; align-items: center; justify-content: space-between; gap: .5rem; color: #526075; font-size: .7rem; }
-    .deleted-card__description { display: -webkit-box; overflow: hidden; margin: .5rem 0 .75rem; color: #56647a; font-size: .82rem; line-height: 1.36; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
     .task-relationships { display: grid; gap: .7rem; padding: .7rem 0 0; }
     .relationship-group { border-top: 1px solid #d5deea; padding-top: .7rem; }
     .relationship-group h3 { margin: 0; font-size: .88rem; }
@@ -437,7 +472,14 @@
   <a class="skip-link" href="#board">Skip to task board</a>
   <header class="app-header">
     <div><p class="eyebrow">Repository workbench</p><h1>Workbook board</h1></div>
-    <div class="header-links"><a class="header-link" href="/">Board</a><a class="header-link" href="/deleted">Deleted tasks</a>{{ if .Administrable }}<a class="header-link" href="/statuses">Statuses</a>{{ end }}<p class="updated" data-updated>Loaded from this checkout</p><button type="button" class="header-link" data-description-toggle hidden>Descriptions: hidden</button><button type="button" class="header-link" data-sync-toggle hidden></button></div>
+    <!-- The Deleted column's switch. It is an anchor rather than a button
+         because the state it sets is the address — /?deleted=1 — so it can be
+         cmd-clicked into a tab, bookmarked, and walked with Back and Forward,
+         and the client drives it through the same navigate() every other link
+         on this page goes through. It ships hidden and the board's render
+         reveals it, for the reason the Descriptions setting does: it acts on
+         the columns, so it travels with the route that draws them. -->
+    <div class="header-links"><a class="header-link" href="/">Board</a>{{ if .Administrable }}<a class="header-link" href="/statuses">Statuses</a>{{ end }}<p class="updated" data-updated>Loaded from this checkout</p><a class="header-link" href="/?deleted=1" data-deleted-toggle hidden>Deleted tasks: hidden</a><button type="button" class="header-link" data-description-toggle hidden>Descriptions: hidden</button><button type="button" class="header-link" data-sync-toggle hidden></button></div>
   </header>
   <!-- What the board has to say to a reader who has moved on: a save that
        already returned, or a refused change whose card the board has since
@@ -470,7 +512,12 @@
          about which vocabulary they were built from. -->
     <div class="board-view" data-board-view data-default-status="{{ .DefaultStatus }}" data-vocabulary-head="{{ .VocabularyHead }}">
       <p class="stale" data-stale role="status">Task refresh failed. Showing the last successful board.</p>
-      <section class="board" aria-label="Task status board">
+      <!-- data-board is where the client appends the Deleted column, after the
+           last vocabulary column the server rendered. It is a client-built
+           column because it is the one column that is not a status: the server
+           renders this project's vocabulary, and this is a view of the tasks
+           the vocabulary no longer holds. -->
+      <section class="board" data-board aria-label="Task status board">
         {{ range .Board.Columns }}
         <section class="column">
           <header class="column__header"><h2 class="column__heading">{{ .Label }} <span class="count" data-count="{{ .Status }}">{{ len .Tasks }}</span></h2><a class="new-task-link" href="/tasks/new?status={{ .Status }}">New Task</a></header>
@@ -575,6 +622,11 @@
       dropMarker.setAttribute("aria-hidden", "true");
       const main = document.querySelector("main");
       const boardView = document.querySelector("[data-board-view]");
+      // The grid the columns are tracks of. The client holds it because the
+      // Deleted column is appended to it and taken off it again, and for
+      // nothing else: the vocabulary columns inside it are the server's and
+      // are never rebuilt.
+      const board = boardView.querySelector("[data-board]");
       const statusColumns = [...boardView.querySelectorAll("[data-status]")];
       const lists = new Map(statusColumns.map((element) => [element.dataset.status, element]));
       // The project's statuses, read out of the columns the server rendered
@@ -630,6 +682,22 @@
       let vocabularyChanged = false;
       const syncToggle = document.querySelector("[data-sync-toggle]");
       const descriptionToggle = document.querySelector("[data-description-toggle]");
+      const deletedToggle = document.querySelector("[data-deleted-toggle]");
+      // Whether the board is drawing its Deleted column, and the parts of that
+      // column while it is. The column is board state rather than route state:
+      // a reader who opens a task from a board showing it comes back to a board
+      // showing it, and the address they came from is what Back restores.
+      //
+      // deletedRead says whether the model in hand came from a poll that asked
+      // for the deleted tasks. Until one has, the column knows nothing rather
+      // than nothing-to-know, so it says neither — an empty state written over
+      // a column that is about to fill is a wrong answer, not an early one.
+      let deletedColumnShown = false;
+      let deletedRead = false;
+      let deletedSection = null;
+      let deletedList = null;
+      let deletedCount = null;
+      let deletedEmpty = null;
       let syncState = null;
       let activeDrag = null;
       const copyFeedback = new Map();
@@ -836,6 +904,7 @@
           task.priority || "",
           task.status || "",
           task.labels || [],
+          Boolean(task.deleted),
           view.idPrefix || "",
           view.dependenciesTotal || 0,
           view.dependenciesComplete || 0,
@@ -896,11 +965,26 @@
         article.append(meta);
         const title = document.createElement("h3");
         const link = document.createElement(view.pending ? "span" : "a");
-        if (!view.pending) link.href = "/tasks/" + encodeURIComponent(task.id);
         title.append(link); article.append(title);
         const failure = cardFailureReport(task.id);
         article.append(failure.region);
-        cardParts.set(article, { priority, link, idText, failure, signature: null });
+        // The card's Restore control, built once with the card and kept for its
+        // whole life, for the reason the failure report is: it holds a control,
+        // and a rebuild would drop the button out from under the caret. It is
+        // the card's last child and stays that way — applyCard inserts the
+        // optional sections *before* it rather than appending past it — so a
+        // task that is deleted, restored and deleted again never moves it.
+        const restore = document.createElement("button");
+        restore.type = "button";
+        restore.className = "restore-button";
+        restore.dataset.restoreTask = task.id;
+        text(restore, "Restore");
+        // The queue's promise is returned rather than dropped, as the drop
+        // handler returns it: a listener's result is discarded by the browser,
+        // and it is the seam the client tests observe a settled board through.
+        restore.addEventListener("click", () => restoreTask(task.id));
+        article.append(restore);
+        cardParts.set(article, { priority, link, idText, failure, restore, signature: null });
         applyCard(article, task, view);
         return article;
       }
@@ -949,9 +1033,25 @@
         article.draggable = !view.pending;
         article.setAttribute("aria-label", view.pending
           ? "Task " + task.title + ", saving"
-          : stranded
-            ? "Move task " + task.title + " out of the unrecognized status " + task.status
-            : "Move task " + task.title + " from " + task.status);
+          : task.deleted
+            // A deleted card drags too, and the only place it can go is a
+            // column — which restores it there. That is what the label says,
+            // because the status it is filed under is not where it is drawn.
+            ? "Restore task " + task.title + " by moving it to a column"
+            : stranded
+              ? "Move task " + task.title + " out of the unrecognized status " + task.status
+              : "Move task " + task.title + " from " + task.status);
+        // A tombstone has no detail page: the route answers for the tasks the
+        // board holds, and a deleted task cannot be edited. The heading keeps
+        // the same node either way — an anchor with no href is text, to the
+        // reader and to the click handler that only follows a[href] — so a card
+        // deleted and restored again is the same node throughout.
+        if (!view.pending) {
+          if (task.deleted) parts.link.removeAttribute("href");
+          else parts.link.href = "/tasks/" + encodeURIComponent(task.id);
+        }
+        parts.restore.hidden = !task.deleted;
+        parts.restore.setAttribute("aria-label", "Restore task " + task.title);
         if (parts.idText) text(parts.idText, view.idPrefix);
         parts.priority.className = "priority priority--" + task.priority; text(parts.priority, task.priority);
         text(parts.link, task.title);
@@ -960,10 +1060,12 @@
         // The optional sections are rebuilt together rather than patched
         // individually, so their order stays fixed by construction instead of by
         // the order in which they happened to appear. They start after the meta
-        // row, the title, and the failure report, which are all built once.
-        [...article.children].slice(3).forEach((child) => child.remove());
-        if (task.description) { const description = document.createElement("p"); text(description, task.description); article.append(description); }
-        if (task.labels && task.labels.length) { const labels = document.createElement("div"); labels.className = "labels"; task.labels.forEach((label) => { const item = document.createElement("span"); item.className = "label"; text(item, label); labels.append(item); }); article.append(labels); }
+        // row, the title, and the failure report, which are all built once — and
+        // they are inserted before the Restore button, which is built once too
+        // and is the card's last child, so rebuilding them never moves it.
+        [...article.children].slice(3).forEach((child) => { if (child !== parts.restore) child.remove(); });
+        if (task.description) { const description = document.createElement("p"); text(description, task.description); article.insertBefore(description, parts.restore); }
+        if (task.labels && task.labels.length) { const labels = document.createElement("div"); labels.className = "labels"; task.labels.forEach((label) => { const item = document.createElement("span"); item.className = "label"; text(item, label); labels.append(item); }); article.insertBefore(labels, parts.restore); }
         if (view.dependenciesTotal > 0) {
           const progress = document.createElement("div");
           progress.className = "dependency-progress";
@@ -976,13 +1078,17 @@
             text(waiting, "Waiting on dependencies");
             progress.append(waiting);
           }
-          article.append(progress);
+          article.insertBefore(progress, parts.restore);
         }
         return article;
       }
       function route(url = new URL(window.location.href)) {
-        if (url.pathname === "/") return { view: "board" };
-		if (url.pathname === "/deleted") return { view: "deleted" };
+        // The board with its Deleted column shown is the board at another
+        // address rather than a page of its own, which is what makes the
+        // header's toggle an ordinary link: it is shareable, it is
+        // bookmarkable, and Back and Forward walk it like any other
+        // navigation.
+        if (url.pathname === "/") return { view: "board", deleted: url.searchParams.get("deleted") === "1" };
         // A board built without the four vocabulary mutations was served none of
         // the statuses page, so this address is not a route on it. The server
         // answers it with a 404 for the same reason; a client that drew the
@@ -2513,7 +2619,10 @@
 		  const remove = document.createElement("button"); remove.className = "delete-button"; remove.type = "button"; text(remove, "Delete");
 		  remove.addEventListener("click", async () => {
 		    remove.disabled = true; text(result, "");
-		    try { await mutateTask("DELETE", "/api/tasks/" + encodeURIComponent(task.id)); navigate("/deleted"); }
+		    // The board with its Deleted column shown, which is where the task
+		    // now is: the reader lands looking at what they just deleted, with
+		    // the Restore that undoes it on the card.
+		    try { await mutateTask("DELETE", "/api/tasks/" + encodeURIComponent(task.id)); navigate("/?deleted=1"); }
 		    catch (error) { text(result, error instanceof Error ? error.message : "Task deletion failed."); }
 		    finally { remove.disabled = false; }
 		  });
@@ -3056,6 +3165,27 @@
         taskFailureReports.delete(taskID);
         rerender();
         return drainIntents(taskID);
+      }
+      // The Restore button on a deleted card, and the one restore that names no
+      // destination: the task comes back to the status it was deleted from,
+      // which is what the bare verb has always meant. It is a queued intent
+      // like every other board change — optimistic paint, one write at a time
+      // per task, re-base on a stale head, refusal reported on the card — and
+      // the head it carries is the only thing in the body when it has one.
+      function restoreTask(taskID) {
+        const observed = latestTasks.find((task) => task.id === taskID);
+        // The button is drawn on every card and shown on the deleted ones, so
+        // this is the belt to that brace: a task the board no longer sees as
+        // deleted has nothing to restore.
+        if (!observed || !observed.deleted) return Promise.resolve();
+        return queueIntent(taskID, observed.head, {
+          apply: (task) => Object.assign({}, task, { deleted: false }),
+          send: (expectedHead) => mutateTask(
+            "POST",
+            "/api/tasks/" + encodeURIComponent(taskID) + "/restore",
+            expectedHead ? { expectedHead } : undefined
+          ),
+        });
       }
       function drainIntents(taskID) {
         const entry = pendingIntents.get(taskID);
@@ -4212,27 +4342,93 @@
         body.append(back); section.append(header, body);
         return section;
       }
-	  function deletedView() {
-		const section = document.createElement("section"); section.className = "task-route";
-		const header = document.createElement("header"); header.className = "task-route__header";
-		const heading = document.createElement("h2"); text(heading, "Deleted tasks"); header.append(heading);
-			const body = document.createElement("div"); body.className = "deleted-list"; section.append(header, body);
-		fetch("/api/tasks?deleted=true", { cache: "no-store" }).then((response) => response.json().then((data) => ({ response, data }))).then(({ response, data }) => {
-		  if (!response.ok || data.format !== "workbook.tasks" || data.version !== 1 || !Array.isArray(data.tasks)) throw new Error(data.error && data.error.message || "Deleted tasks could not be loaded.");
-		  if (data.tasks.length === 0) { const empty = document.createElement("p"); text(empty, "No deleted tasks."); body.append(empty); return; }
-		  data.tasks.forEach((task) => {
-		    const row = document.createElement("article"); row.className = "deleted-card";
-		    const meta = document.createElement("div"); meta.className = "deleted-card__meta";
-		    const id = document.createElement("code"); text(id, task.id.slice(0, 12)); const status = document.createElement("span"); text(status, task.status); meta.append(id, status);
-		    const title = document.createElement("h3"); text(title, task.title);
-		    const description = document.createElement("p"); description.className = "deleted-card__description"; text(description, task.description || "No description.");
-		    const restore = document.createElement("button"); restore.className = "save-button"; restore.type = "button"; text(restore, "Restore");
-		    restore.addEventListener("click", async () => { restore.disabled = true; try { await mutateTask("POST", "/api/tasks/" + encodeURIComponent(task.id) + "/restore"); const refreshed = await currentRefreshResult(refresh()); if (refreshed.status !== "applied") throw new Error("Task restored durably, but the latest task state could not be refreshed."); navigate("/tasks/" + encodeURIComponent(task.id)); } catch (error) { text(description, error instanceof Error ? error.message : "Task restoration failed."); } finally { restore.disabled = false; } });
-		    row.append(meta, title, description, restore); body.append(row);
-		  });
-		}).catch((error) => { const failed = document.createElement("p"); text(failed, error instanceof Error ? error.message : "Deleted tasks could not be loaded."); body.prepend(failed); });
-		return section;
-	  }
+      // The Deleted column, built here rather than served because it is the one
+      // column that is not a status: the server renders this project's
+      // vocabulary, and this is a view of the tasks the vocabulary no longer
+      // holds. It is a real column otherwise — a section.column in the board's
+      // grid, taking the same track the others take — so it widens, scrolls and
+      // wraps with them and has no sizing of its own to keep in step.
+      function buildDeletedColumn() {
+        const section = document.createElement("section");
+        section.className = "column column--deleted";
+        section.dataset.deletedColumn = "";
+        section.setAttribute("aria-label", "Deleted tasks");
+        const header = document.createElement("header"); header.className = "column__header";
+        const heading = document.createElement("h2"); heading.className = "column__heading";
+        const name = document.createElement("span"); text(name, "Deleted");
+        const count = document.createElement("span"); count.className = "count"; count.dataset.deletedCount = ""; text(count, "0");
+        heading.append(name, count);
+        header.append(heading);
+        const list = document.createElement("div");
+        list.className = "task-list";
+        list.dataset.deletedList = "";
+        // The column takes drops and names no status, which is why it carries a
+        // marker of its own rather than a data-drop-status nothing could hold:
+        // a project may name a status anything, so there is no sentinel value
+        // that could not also be a column.
+        list.dataset.dropDeleted = "true";
+        const empty = document.createElement("p");
+        empty.className = "column__empty";
+        empty.dataset.deletedEmpty = "";
+        empty.hidden = true;
+        text(empty, "No deleted tasks.");
+        // First child, ahead of every card, so the renderer's insertions never
+        // have to reckon with it: reconcile() places cards by index among the
+        // nodes that carry a task ID, and this one carries none.
+        list.append(empty);
+        section.append(header, list);
+        return { section, list, count, empty };
+      }
+      // Shows or hides the column, and does nothing else to the board.
+      //
+      // That is the whole contract. Every other column and every card node is
+      // exactly the node it was on both sides of a toggle, because a card node
+      // is where the reader's work in flight lives — an open form, a change
+      // staged against a head, a refusal they have not read. A toggle that
+      // rebuilt the board to add one column would destroy all of it, which is
+      // the same reason a vocabulary change offers a reload instead of taking
+      // one.
+      function showDeletedColumn(shown) {
+        if (shown === deletedColumnShown) {
+          renderDeletedToggle();
+          return;
+        }
+        deletedColumnShown = shown;
+        // What is known about the deleted tasks was read under the other
+        // setting, so it is not an answer to this one until a poll asks again.
+        deletedRead = false;
+        if (shown) {
+          const built = buildDeletedColumn();
+          deletedSection = built.section;
+          deletedList = built.list;
+          deletedCount = built.count;
+          deletedEmpty = built.empty;
+          board.append(deletedSection);
+        } else {
+          deletedSection.remove();
+          deletedSection = null;
+          deletedList = null;
+          deletedCount = null;
+          deletedEmpty = null;
+        }
+        renderDeletedToggle();
+        // The model still holds whatever the last poll read. Drawing it now
+        // fills a column that was just shown with the deleted tasks a queued
+        // intent has already put there, and empties nothing that was hidden:
+        // a task the board is no longer drawing is left in the model until the
+        // next poll replaces it.
+        rerender();
+        // Asked for immediately rather than on the next tick, because a column
+        // that takes a second to fill reads as a column with nothing in it. Not
+        // before the first load, where the poll the page starts with is already
+        // going to ask in this mode and a second read would only race it.
+        if (shown && tasksLoaded) refresh();
+      }
+      function renderDeletedToggle() {
+        if (!deletedToggle) return;
+        deletedToggle.href = deletedColumnShown ? "/" : "/?deleted=1";
+        text(deletedToggle, deletedColumnShown ? "Deleted tasks: shown" : "Deleted tasks: hidden");
+      }
       function renderRoute() {
         const current = route();
         if (current.view !== "detail" && current.view !== "new") {
@@ -4246,12 +4442,18 @@
         readOpenNewTaskValues = null;
         openDetailForm = null;
         // The description setting draws cards, and only the board draws cards.
-        // Beside the deleted list or a task's own page it would be a control
-        // that visibly does nothing, so it travels with the route it acts on.
-        // The markup ships it hidden and this reveals it, so a page that never
-        // runs this script offers no setting rather than a dead one that lies
-        // about the state of a board it can no longer change.
+        // Beside a task's own page it would be a control that visibly does
+        // nothing, so it travels with the route it acts on. The markup ships it
+        // hidden and this reveals it, so a page that never runs this script
+        // offers no setting rather than a dead one that lies about the state of
+        // a board it can no longer change.
+        //
+        // The Deleted column's toggle travels the same way and for the same
+        // reason: it adds a column to the board, and a header that offered to
+        // do that from a task's page would be naming a state the reader cannot
+        // see.
         if (descriptionToggle) descriptionToggle.hidden = current.view !== "board";
+        if (deletedToggle) deletedToggle.hidden = current.view !== "board";
         // The statuses page's body is a served element rather than a built one,
         // so leaving that route has to put it away — the render below would drop
         // it from the document either way, and what it was drawing has to go
@@ -4266,6 +4468,10 @@
           // when the statuses have moved on since — the standing notice above
           // says so and offers the reload, exactly as it does for a change
           // another clone made.
+          //
+          // The Deleted column is the one thing about the board this route
+          // decides, and appending or removing that section is all it does.
+          showDeletedColumn(current.deleted === true);
           if (main.firstElementChild !== boardView) main.replaceChildren(boardView);
           focusCreatedCard();
           return;
@@ -4291,11 +4497,6 @@
           main.replaceChildren(routeMessage("Page not found", "This Workbook route does not exist."));
           return;
         }
-		if (current.view === "deleted") {
-		  document.title = "Deleted tasks · Workbook";
-		  main.replaceChildren(deletedView());
-		  return;
-		}
         if (!tasksLoaded) {
           if (taskLoadFailed) {
             document.title = "Unable to load task · Workbook";
@@ -4322,7 +4523,15 @@
         // The detail view projects pending intents too. Opening a card right
         // after moving it on the board would otherwise show the status the
         // server still holds, which reads as the move having been lost.
-        const task = projectTasks(latestTasks).find((candidate) => candidate.id === current.id);
+        //
+        // A deleted task is not one of them, whether or not the board is
+        // carrying it: a tombstone cannot be edited, so a form over one would
+        // offer a Save the server refuses and a Delete that has already
+        // happened. This is the answer that address gave before the Deleted
+        // column existed and it is the answer it gives now — the column shows
+        // the task and restores it, and restoring is what makes the form
+        // openable again.
+        const task = projectTasks(latestTasks).find((candidate) => candidate.id === current.id && !candidate.deleted);
         if (!task) {
           document.title = "Task not found · Workbook";
           main.replaceChildren(routeMessage("Task not found", "No task has the full ID " + current.id + "."));
@@ -4339,8 +4548,15 @@
           relationshipGeneration
         );
       }
+      // The list a drop would land in: a status column, or the Deleted column,
+      // which names no status and so carries a marker of its own. Asked as two
+      // lookups rather than one selector because they are two different
+      // answers, and the caller has to know which it got.
       function dropTarget(event) {
-        return event.target.closest("[data-drop-status]");
+        return event.target.closest("[data-drop-status]") || event.target.closest("[data-drop-deleted]");
+      }
+      function dropsIntoDeleted(target) {
+        return Boolean(target && target.dataset.dropDeleted);
       }
       function placementFor(list, clientY) {
         // A card the server has not accepted yet is not a placement neighbour:
@@ -4401,7 +4617,16 @@
       // same lookups, or focus restoration and reconciliation would treat it as
       // a node that no longer exists.
       function cardLists() {
-        return [...lists.values(), unknownList];
+        const all = [...lists.values(), unknownList];
+        if (deletedList) all.push(deletedList);
+        return all;
+      }
+      // When a task was deleted, which is what orders the Deleted column. A
+      // tombstone is the last thing that can happen to a task, so the time it
+      // was last updated is the time it was deleted.
+      function deletedAt(task) {
+        const at = Date.parse(task.updatedAt || "");
+        return Number.isNaN(at) ? 0 : at;
       }
       function findCardNode(taskID) {
         for (const list of cardLists()) {
@@ -4455,10 +4680,29 @@
         // Workbook versions produce this on their own. See
         // internal/presentation/parity_test.go for the standing decision.
         const stranded = [];
+        // The Deleted column's cards, when it is shown. A deleted task is filed
+        // under a status the whole time it is tombstoned, and drawing it in that
+        // status's column would put a task nobody can edit among the ones they
+        // can — so the deleted flag decides the column before the status is
+        // consulted at all. With the column hidden the task is not drawn
+        // anywhere: it is in the model only because the poll that read it asked
+        // for it, and the next poll that does not will take it back out.
+        const removed = [];
         tasks.forEach((task) => {
+          if (task.deleted) {
+            if (deletedList) removed.push(task);
+            return;
+          }
           const items = grouped.get(task.status);
           if (items) items.push(task); else stranded.push(task);
         });
+        // Most recently deleted first, which is the order a reader looking for
+        // something they just deleted wants. Ties break on ID so two tombstones
+        // written in the same second keep one order across every poll rather
+        // than swapping places under the reader.
+        removed.sort((left, right) =>
+          deletedAt(right) - deletedAt(left) ||
+          (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
         const focusedID = focusedCardID();
         // Every card node on the board, collected before a single column is
         // touched, so a survivor can be claimed by whichever column now wants it.
@@ -4491,6 +4735,7 @@
           items.forEach((task) => destinations.set(task.id, list));
         });
         stranded.forEach((task) => destinations.set(task.id, unknownList));
+        removed.forEach((task) => destinations.set(task.id, deletedList));
         survivors.forEach((node, taskID) => {
           // The node the browser is dragging is left exactly where it is, because
           // detaching it mid-drag is the defect this renderer exists to remove.
@@ -4514,6 +4759,18 @@
         const strandedTotal = String(stranded.length);
         if (unknownCount.textContent !== strandedTotal) text(unknownCount, strandedTotal);
         unknownSection.dataset.visible = stranded.length > 0 ? "true" : "false";
+        // Reconciled from the same survivor pool again, so a card the reader
+        // deletes moves its own node out of its column and into this one, and a
+        // card they restore moves the same node back.
+        if (deletedList) {
+          reconcile(deletedList, entriesFor(removed, presentation), survivors);
+          const removedTotal = String(removed.length);
+          if (deletedCount.textContent !== removedTotal) text(deletedCount, removedTotal);
+          // "No deleted tasks." is a claim about what the server holds, so it
+          // waits for a poll that actually asked. Until one has landed the
+          // column says nothing rather than something it has not read.
+          deletedEmpty.hidden = removed.length > 0 || !deletedRead;
+        }
         // A report whose card the board no longer draws has nowhere left to be
         // read, and letting it go with the card would put the reader back where
         // this started. The likeliest way to get here is also the one that most
@@ -4579,6 +4836,10 @@
       function refresh() {
         const wasLoaded = tasksLoaded;
         const generation = ++taskRefreshGeneration;
+        // Read once, here, rather than again when the answer lands: a toggle
+        // during the round trip must not let a document that carries no deleted
+        // tasks be recorded as an answer about them.
+        const includingDeleted = deletedColumnShown;
         const operation = (async () => {
           // Whether this refresh's read of the board reached the model, carried
           // beside the status because the two answer different questions. The
@@ -4593,7 +4854,10 @@
           // consumer of the status keeps reading the status.
           let boardRead = false;
           try {
-            const response = await fetch("/api/tasks", { cache: "no-store" });
+            // One poll for the whole board. The Deleted column is fed by the
+            // same document as every other column, so it is exactly as fresh
+            // as they are and there is no second read to disagree with.
+            const response = await fetch(includingDeleted ? "/api/tasks?deleted=include" : "/api/tasks", { cache: "no-store" });
             const document = await response.json();
             if (!response.ok || document.format !== "workbook.tasks" || document.version !== 1 || !Array.isArray(document.tasks) || !Array.isArray(document.presentation)) throw new Error("invalid task document");
             const presentation = new Map(document.presentation.map((view) => [view.taskId, view]));
@@ -4603,6 +4867,10 @@
             latestPresentation = presentation;
             tasksLoaded = true;
             taskLoadFailed = false;
+            // Set with the model it describes: what the Deleted column may say
+            // about itself is decided by whether this read asked for it, not by
+            // whether the column happens to be on screen now.
+            deletedRead = includingDeleted;
             // Set with the assignment it describes, and after the generation
             // check above: a refresh that lost the race never touches the
             // model, so it never has a read to report.
@@ -4672,8 +4940,11 @@
         // carries no source status. Nothing downstream needs one: the only use
         // is the no-op check below, and a drop into a real column is never a
         // no-op for a card that was not in one.
+        //
+        // A card in the Deleted column drags too, and dropping it on a column
+        // is what restores it there — the same gesture, in the other direction.
         const source = item.closest("[data-status]");
-        if (!source && !unknownList.contains(item)) return;
+        if (!source && !unknownList.contains(item) && !(deletedList && deletedList.contains(item))) return;
         if (source && !source.dataset.dropStatus) return;
         // The pending stand-in is marked undraggable, so this is the belt to
         // that brace: a task with no ID has nothing a placement could be
@@ -4705,22 +4976,46 @@
       });
       document.addEventListener("dragover", (event) => {
         const target = dropTarget(event);
+        if (!target || !activeDrag) return;
+        if (dropsIntoDeleted(target)) {
+          // A card already in the column has nowhere to arrive: deleting a
+          // tombstone is not a change anyone asked for.
+          if (draggedTaskIsDeleted()) return;
+          // No drop marker. The column orders itself by when each task was
+          // deleted, and a line drawn between two cards would promise a
+          // position this drop does not name and the column would not keep.
+          clearPlacement();
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "move";
+          return;
+        }
         // Same set as the one that decides `movable`: a card is draggable out of
         // exactly the columns the server rendered, so those are exactly the
         // columns it may be dropped into.
-        if (!target || !activeDrag || !lists.has(target.dataset.dropStatus)) return;
+        if (!lists.has(target.dataset.dropStatus)) return;
         const placement = placementFor(target, event.clientY);
         showPlacement(target, placement);
         event.preventDefault();
         event.dataTransfer.dropEffect = "move";
       });
+      // Whether the card under the cursor is one the board is drawing as
+      // deleted. It reads the projected model rather than the raw one because
+      // the projection is what is on screen: a queued delete has already moved
+      // the card into the Deleted column for the reader.
+      function draggedTaskIsDeleted() {
+        if (!activeDrag) return false;
+        const drawn = projectTasks(latestTasks).find((task) => task.id === activeDrag.taskId);
+        return Boolean(drawn && drawn.deleted);
+      }
       document.addEventListener("dragleave", (event) => {
         const target = dropTarget(event);
         if (target && !target.contains(event.relatedTarget)) clearPlacement();
       });
       document.addEventListener("drop", async (event) => {
         const target = dropTarget(event);
-        if (!target || !activeDrag || !lists.has(target.dataset.dropStatus)) return;
+        if (!target || !activeDrag) return;
+        if (dropsIntoDeleted(target)) return dropIntoDeleted(event, activeDrag.taskId);
+        if (!lists.has(target.dataset.dropStatus)) return;
         event.preventDefault();
         const taskId = activeDrag.taskId;
         const placement = placementFor(target, event.clientY);
@@ -4745,8 +5040,14 @@
         // the card for the reader, and a no-op is a question about what they
         // can see.
         const drawn = projectTasks(latestTasks).find((task) => task.id === taskId);
+        // A card dragged out of the Deleted column is never a no-op, whatever
+        // status it is filed under: a tombstone dropped on the column it was
+        // deleted from is a restore into that column, which is the whole
+        // gesture. The status comparison below is about a card that is already
+        // in the columns.
+        const restoring = Boolean(drawn && drawn.deleted);
         const currentStatus = drawn ? drawn.status : activeDrag.sourceStatus;
-        if (placement.status === currentStatus && !placement.before && !placement.after) return;
+        if (!restoring && placement.status === currentStatus && !placement.before && !placement.after) return;
 
         const body = { status: placement.status };
         if (placement.before) body.before = placement.before;
@@ -4756,14 +5057,42 @@
           // The card lands in its new column immediately. Ordering within the
           // column still comes from the server, because rank is computed from
           // the whole board rather than from the two neighbours the drop names.
-          apply: (task) => Object.assign({}, task, { status: placement.status }),
+          apply: (task) => Object.assign({}, task, restoring
+            ? { deleted: false, status: placement.status }
+            : { status: placement.status }),
+          // One write either way, and the same body either way: a restore that
+          // names a destination is the drop the position route already
+          // describes, so the drop position becomes the same before/after and
+          // the server records the return and the placement as one operation
+          // pack — one history entry, and one refusal that leaves the task
+          // tombstoned rather than restored somewhere nobody asked for.
           send: (expectedHead) => mutateTask(
-            "PATCH",
-            "/api/tasks/" + encodeURIComponent(taskId) + "/position",
+            restoring ? "POST" : "PATCH",
+            "/api/tasks/" + encodeURIComponent(taskId) + (restoring ? "/restore" : "/position"),
             expectedHead ? Object.assign({}, body, { expectedHead }) : body
           ),
         });
       });
+      // A live card dropped on the Deleted column: one queued delete, carrying
+      // the head the card was drawn from so a task another clone has changed
+      // since is refused rather than tombstoned out from under them.
+      function dropIntoDeleted(event, taskId) {
+        const drawn = projectTasks(latestTasks).find((task) => task.id === taskId);
+        // Already there. dragover refuses the drop, so this is the belt to that
+        // brace rather than the guard.
+        if (drawn && drawn.deleted) return;
+        event.preventDefault();
+        clearPlacement();
+        const observed = latestTasks.find((task) => task.id === taskId);
+        return queueIntent(taskId, observed && observed.head, {
+          apply: (task) => Object.assign({}, task, { deleted: true }),
+          send: (expectedHead) => mutateTask(
+            "DELETE",
+            "/api/tasks/" + encodeURIComponent(taskId),
+            expectedHead ? { expectedHead } : undefined
+          ),
+        });
+      }
       renderRoute();
       refresh();
       refreshSyncState();

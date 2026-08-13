@@ -52,14 +52,14 @@ func TestHandlerHidesCardDescriptionsUntilTheBoardIsAskedForThem(t *testing.T) {
 // route is served the same shell, and a browser that never reaches renderRoute()
 // — scripting switched off, a policy that refuses an inline script, an exception
 // thrown earlier in it — would otherwise be left with an enabled
-// "Descriptions: hidden" button on /deleted or on a task's own page, which draw
-// no cards for it to act on and which clicking does nothing to. Shipping it
-// hidden makes that degraded page one with no control rather than one with a
-// control that lies.
+// "Descriptions: hidden" button on a task's own page, which draws no cards for
+// it to act on and which clicking does nothing to. Shipping it hidden makes
+// that degraded page one with no control rather than one with a control that
+// lies.
 func TestHandlerShipsTheDescriptionSettingHiddenUntilItsRouteRevealsIt(t *testing.T) {
 	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return boardTasks(), nil })
 
-	for _, path := range []string{"/", "/deleted", "/tasks/new"} {
+	for _, path := range []string{"/", "/tasks/new"} {
 		response := request(t, handler, http.MethodGet, path)
 		if response.Code != http.StatusOK {
 			t.Fatalf("GET %s status = %d, want %d", path, response.Code, http.StatusOK)
@@ -110,8 +110,10 @@ func openingTag(t *testing.T, body, marker string) string {
 	}
 	tag := body[start : at+end+1]
 	// The marker names an attribute, so the first place it appears has to be the
-	// element itself and not the script that later looks the element up.
-	if !strings.HasPrefix(tag, "<button") {
+	// element itself and not the script that later looks the element up. Which
+	// element it is is the caller's question — these markers sit on a button and
+	// on an anchor — so what is checked here is that a tag is what was found.
+	if !strings.HasPrefix(tag, "<button") && !strings.HasPrefix(tag, "<a ") {
 		t.Fatalf("the first %s is not an element: %s", marker, tag)
 	}
 	return tag
@@ -205,16 +207,18 @@ storedPreferences.set(`+strconv.Quote(descriptionPreferenceKey)+`, "shown");
 `)
 }
 
-// The setting draws cards, and only the board draws cards. Offering it beside
-// the deleted list or a task's own page would be a control that visibly does
-// nothing, so the header carries it only where it means something.
+// The setting draws cards, and only the board draws cards. Offering it beside a
+// task's own page would be a control that visibly does nothing, so the header
+// carries it only where it means something. The Deleted column's toggle travels
+// with the board for the same reason, so it is asked the same question here.
 func TestHandlerClientOffersTheDescriptionSettingOnlyWhereItDrawsCards(t *testing.T) {
 	runBoardClient(t, "description setting on the board", reconcileBoardTasks(), `
   if (descriptionToggle.hidden) throw new Error("the board withheld its own description setting");
+  if (deletedToggle.hidden) throw new Error("the board withheld the Deleted column's toggle");
 `)
 
 	for _, route := range []struct{ name, url string }{
-		{"deleted tasks", "/deleted"},
+		{"a removed address", "/deleted"},
 		{"a new task", "/tasks/new"},
 		{"a task's own page", "/tasks/" + reconcileAlphaID},
 	} {
@@ -222,6 +226,9 @@ func TestHandlerClientOffersTheDescriptionSettingOnlyWhereItDrawsCards(t *testin
 			runBoardClientAt(t, "description setting on "+route.name, route.url, reconcileBoardTasks(), "", `
   if (!descriptionToggle.hidden) {
     throw new Error("a route that draws no cards still offered the description setting");
+  }
+  if (!deletedToggle.hidden) {
+    throw new Error("a route that draws no columns still offered the Deleted column's toggle");
   }
 `)
 		})
