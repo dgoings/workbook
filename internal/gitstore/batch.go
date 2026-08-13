@@ -255,7 +255,13 @@ func validateBatchSnapshot(
 	if err := validateTipIdentity(config, head.TaskID, pack, state); err != nil {
 		return core.Snapshot{}, err
 	}
-	if len(pack.Operations) == 1 && pack.Operations[0].Type == core.OperationTaskCreate {
+	// A root tip is checked against its own fold, which is the one checkpoint a
+	// read can verify without walking the chain. A pack that needs a newer
+	// reader is exempt: folding it is exactly what this build must not do, and
+	// the refusal belongs to the mutation that would build on it rather than to
+	// the read that only has to show it.
+	if !pack.RequiresNewerReader() &&
+		len(pack.Operations) == 1 && pack.Operations[0].Type == core.OperationTaskCreate {
 		if err := core.ValidateCheckpoint(nil, pack, state, config.Key); err != nil {
 			return core.Snapshot{}, err
 		}

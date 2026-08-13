@@ -540,7 +540,7 @@ func (s *Store) metaMatches(ctx context.Context) bool {
 func (s *Store) requiredSchemaExists(ctx context.Context) bool {
 	for _, query := range []string{
 		`SELECT key, value FROM projection_meta LIMIT 0`,
-		`SELECT task_id, head, project_id, history_generation, logical_clock, title, description, status, priority, rank, created_at, updated_at, deleted FROM tasks LIMIT 0`,
+		`SELECT task_id, head, project_id, history_generation, logical_clock, min_reader, title, description, status, priority, rank, created_at, updated_at, deleted FROM tasks LIMIT 0`,
 		`SELECT task_id, label FROM task_labels LIMIT 0`,
 		`SELECT task_id, dependency_id FROM task_dependencies LIMIT 0`,
 		`SELECT operation_id, task_id, commit_id, chain_index, pack_index, logical_clock, history_generation, actor, wall_time, type, field, value, task_data FROM operations LIMIT 0`,
@@ -1022,9 +1022,10 @@ func upsertSnapshot(ctx context.Context, transaction *sql.Tx, snapshot core.Snap
 		deleted = 1
 	}
 	_, err := transaction.ExecContext(ctx, `
-		INSERT INTO tasks (task_id, head, project_id, history_generation, logical_clock, title, description, status, priority, rank, created_at, updated_at, deleted)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		state.TaskID, snapshot.Head, state.ProjectID, state.History.Generation, int64(state.LogicalClock), state.Task.Title, state.Task.Description,
+		INSERT INTO tasks (task_id, head, project_id, history_generation, logical_clock, min_reader, title, description, status, priority, rank, created_at, updated_at, deleted)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		state.TaskID, snapshot.Head, state.ProjectID, state.History.Generation, int64(state.LogicalClock),
+		int64(state.MinReader), state.Task.Title, state.Task.Description,
 		string(state.Task.Status), string(state.Task.Priority), state.Task.Rank, formatTime(state.Task.CreatedAt), formatTime(state.Task.UpdatedAt), deleted)
 	if err != nil {
 		return cacheError("insert projected task", err)
@@ -1054,7 +1055,7 @@ func (s *Store) querySnapshots(ctx context.Context) ([]core.Snapshot, error) {
 	defer transaction.Rollback()
 
 	rows, err := transaction.QueryContext(ctx, `
-		SELECT task_id, head, project_id, history_generation, logical_clock, title, description, status, priority, rank, created_at, updated_at, deleted
+		SELECT task_id, head, project_id, history_generation, logical_clock, min_reader, title, description, status, priority, rank, created_at, updated_at, deleted
 		FROM tasks ORDER BY task_id`)
 	if err != nil {
 		return nil, s.databaseError("query projected tasks", err)
@@ -1146,22 +1147,24 @@ type rowScanner interface {
 
 func scanSnapshotScalars(scanner rowScanner) (core.Snapshot, error) {
 	var (
-		snapshot core.Snapshot
-		state    core.StateDocument
-		status   string
-		priority string
-		created  string
-		updated  string
-		deleted  int
-		clock    int64
+		snapshot  core.Snapshot
+		state     core.StateDocument
+		status    string
+		priority  string
+		created   string
+		updated   string
+		deleted   int
+		clock     int64
+		minReader int64
 	)
 	if err := scanner.Scan(
-		&state.TaskID, &snapshot.Head, &state.ProjectID, &state.History.Generation, &clock, &state.Task.Title, &state.Task.Description,
+		&state.TaskID, &snapshot.Head, &state.ProjectID, &state.History.Generation, &clock, &minReader,
+		&state.Task.Title, &state.Task.Description,
 		&status, &priority, &state.Task.Rank, &created, &updated, &deleted,
 	); err != nil {
 		return core.Snapshot{}, err
 	}
-	if clock < 0 || (deleted != 0 && deleted != 1) {
+	if clock < 0 || minReader < 0 || minReader > math.MaxInt32 || (deleted != 0 && deleted != 1) {
 		return core.Snapshot{}, core.Errorf(core.CategoryCorruptData, "projected task %q has invalid scalar values", state.TaskID)
 	}
 	createdAt, err := time.Parse(time.RFC3339Nano, created)
@@ -1175,6 +1178,11 @@ func scanSnapshotScalars(scanner rowScanner) (core.Snapshot, error) {
 	state.Format = "workbook.task-state"
 	state.Version = 1
 	state.LogicalClock = uint64(clock)
+	// The watermark is restored rather than recomputed. It is what tells every
+	// reader of this snapshot whether the task can be folded at all, and a
+	// projection that silently answered zero would let a mutation build on a
+	// history this build cannot replay.
+	state.MinReader = int(minReader)
 	state.Task.Status = core.Status(status)
 	state.Task.Priority = core.Priority(priority)
 	state.Task.Labels = []string{}
@@ -1194,7 +1202,7 @@ func (s *Store) querySnapshot(ctx context.Context, taskID string) (core.Snapshot
 	defer transaction.Rollback()
 
 	snapshot, err := scanSnapshotScalars(transaction.QueryRowContext(ctx, `
-			SELECT task_id, head, project_id, history_generation, logical_clock, title, description, status, priority, rank, created_at, updated_at, deleted
+			SELECT task_id, head, project_id, history_generation, logical_clock, min_reader, title, description, status, priority, rank, created_at, updated_at, deleted
 			FROM tasks WHERE task_id = ?`, taskID))
 	if errors.Is(err, sql.ErrNoRows) {
 		if err := transaction.Commit(); err != nil {

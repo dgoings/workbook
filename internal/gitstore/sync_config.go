@@ -34,6 +34,11 @@ const (
 	SyncConfigPublished SyncConfigStatus = "published"
 	// SyncConfigInvalid reports a ledger tip this clone could not read or fold.
 	SyncConfigInvalid SyncConfigStatus = "invalid"
+	// SyncConfigNeedsUpgrade reports a ledger whose local operations were not
+	// replayed because origin's ledger was written by a newer Workbook. It is
+	// separate from SyncConfigInvalid for the same reason its task counterpart
+	// is: nothing here is invalid, and the local operations are untouched.
+	SyncConfigNeedsUpgrade SyncConfigStatus = "needs-upgrade"
 )
 
 // SyncConfigResult is the configuration stage's account of one run.
@@ -272,8 +277,12 @@ func configReplayError(outcome configReconcileOutcome) error {
 // run. The ledger is left exactly where it was, tasks synchronize as they
 // always did, and the failure is reported once they have.
 func (r *Repository) configStageFailure(err error) configStageOutcome {
+	status := SyncConfigInvalid
+	if core.CategoryOf(err) == core.CategoryNewerWriter {
+		status = SyncConfigNeedsUpgrade
+	}
 	return configStageOutcome{
-		Result:   &SyncConfigResult{Status: SyncConfigInvalid, Detail: err.Error()},
+		Result:   &SyncConfigResult{Status: status, Detail: err.Error()},
 		Deferred: err,
 	}
 }
@@ -556,7 +565,7 @@ func mergeConfigPublication(stage, published *SyncConfigResult) *SyncConfigResul
 	}
 	merged := *stage
 	switch stage.Status {
-	case SyncConfigConflicted, SyncConfigInvalid:
+	case SyncConfigConflicted, SyncConfigInvalid, SyncConfigNeedsUpgrade:
 		if published.Detail != "" {
 			merged.Detail = joinConfigDetails(merged.Detail, published.Detail)
 		}

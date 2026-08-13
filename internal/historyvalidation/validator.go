@@ -11,17 +11,28 @@ import (
 
 // Result reports the current semantic-validation state for every canonical task.
 type Result struct {
-	ValidatorVersion int       `json:"validatorVersion"`
-	Full             bool      `json:"full"`
-	TaskCount        int       `json:"taskCount"`
-	TasksChecked     int       `json:"tasksChecked"`
-	CommitsChecked   int       `json:"commitsChecked"`
-	CacheHits        int       `json:"cacheHits"`
-	Valid            int       `json:"valid"`
-	Invalid          int       `json:"invalid"`
-	Pending          int       `json:"pending"`
-	CachePath        string    `json:"cachePath"`
-	Failures         []Failure `json:"failures"`
+	ValidatorVersion int  `json:"validatorVersion"`
+	Full             bool `json:"full"`
+	TaskCount        int  `json:"taskCount"`
+	TasksChecked     int  `json:"tasksChecked"`
+	CommitsChecked   int  `json:"commitsChecked"`
+	CacheHits        int  `json:"cacheHits"`
+	Valid            int  `json:"valid"`
+	Invalid          int  `json:"invalid"`
+	// NewerWriter counts tasks whose history carries a writer-format generation
+	// this build cannot fold. They are deliberately not counted as invalid: the
+	// audit could not check them, which is a different answer from checking
+	// them and finding them wrong, and a caller that treats them as corruption
+	// would go looking for damage that is not there.
+	//
+	// It is omitted when zero, so the envelope a healthy project emits is
+	// byte-identical to the one it emitted before this member existed. Their
+	// per-task entries still appear in Failures, carrying the newer-writer
+	// category, because the commit and the message are what somebody needs.
+	NewerWriter int       `json:"newerWriter,omitempty"`
+	Pending     int       `json:"pending"`
+	CachePath   string    `json:"cachePath"`
+	Failures    []Failure `json:"failures"`
 	// Config reports the configuration ledger's audit, and is omitted for a
 	// project that has no ledger — which is every project until somebody
 	// changes a status. A run against such a project therefore emits exactly
@@ -178,6 +189,21 @@ func (v *Validator) Validate(ctx context.Context, full bool) (Result, error) {
 	}
 	if !sameHeads(initialHeads, finalHeads) {
 		return result, core.Errorf(core.CategoryStaleWrite, "canonical task heads changed during validation")
+	}
+	// A newer-writer verdict fails the run, and the reasoning is worth stating
+	// because the softer option was available. `validate` exists to answer
+	// whether this clone can vouch for its history, and for these tasks it
+	// cannot: it could not fold them, and every mutation against them is
+	// refused until somebody upgrades. Exiting zero would tell a script the
+	// project is fully audited when part of it was skipped, and the advisory
+	// channel beside this one is deliberately reserved for states that need no
+	// action at all. So it gets its own nonzero exit — distinct from
+	// corruption, which is reported first, because a repository that is both
+	// damaged and behind needs the damage looked at first.
+	if result.NewerWriter > 0 {
+		return result, core.Errorf(core.CategoryNewerWriter,
+			"%d task history(s) were written by a newer workbook; upgrade workbook to validate them",
+			result.NewerWriter)
 	}
 	// A ledger failure carries its own category forward rather than being
 	// restated as corrupt data. A pack this clone declined to fold is an
@@ -376,7 +402,7 @@ func (v *Validator) resultFromSnapshot(ctx context.Context, heads []gitstore.Tas
 	if err != nil {
 		return prior, err
 	}
-	prior.Valid, prior.Invalid, prior.Pending = 0, 0, 0
+	prior.Valid, prior.Invalid, prior.NewerWriter, prior.Pending = 0, 0, 0, 0
 	prior.Failures = nil
 	byTaskID := make(map[string]CachedTask, len(cached))
 	for _, task := range cached {
@@ -392,7 +418,17 @@ func (v *Validator) resultFromSnapshot(ctx context.Context, heads []gitstore.Tas
 		case StatusValid:
 			prior.Valid++
 		case StatusInvalid:
-			prior.Invalid++
+			// The cache stores one failed status, and the category on the
+			// failure is what separates "this history is wrong" from "this
+			// history is newer than this build". Splitting them here rather
+			// than in the schema keeps every cached row written before the
+			// signal existed readable, and it keeps the one place that decides
+			// what a category means in the same file as the counts it feeds.
+			if task.Failure != nil && core.Category(task.Failure.Category) == core.CategoryNewerWriter {
+				prior.NewerWriter++
+			} else {
+				prior.Invalid++
+			}
 			if task.Failure != nil {
 				prior.Failures = append(prior.Failures, *task.Failure)
 			}

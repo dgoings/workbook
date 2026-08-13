@@ -23,7 +23,15 @@ const (
 	SyncReconciled SyncStatus = "reconciled"
 	// SyncConflicted reports a replay that stopped on concurrent intent
 	// Workbook will not decide. The envelope's conflict list carries the detail.
-	SyncConflicted   SyncStatus = "conflicted"
+	SyncConflicted SyncStatus = "conflicted"
+	// SyncNeedsUpgrade reports a divergent task whose local operations were not
+	// replayed because origin's history for it was written by a newer Workbook.
+	//
+	// It is separate from SyncInvalid because nothing about it is invalid. The
+	// task fetched, the tracking ref advanced, and the local operations are
+	// exactly where they were; what is missing is a build that can fold
+	// origin's side of the divergence, which is a fact about this clone.
+	SyncNeedsUpgrade SyncStatus = "needs-upgrade"
 	SyncInvalid      SyncStatus = "invalid"
 	SyncPublished    SyncStatus = "published"
 	SyncUpToDate     SyncStatus = "up-to-date"
@@ -600,12 +608,19 @@ func (r *Repository) fetch(
 		return state, result, err
 	}
 	invalidReconciled := 0
+	newerReconciled := 0
 	for index, outcome := range reconciled {
 		if outcome.Err != nil {
-			invalidReconciled++
+			status := SyncInvalid
+			if core.CategoryOf(outcome.Err) == core.CategoryNewerWriter {
+				status = SyncNeedsUpgrade
+				newerReconciled++
+			} else {
+				invalidReconciled++
+			}
 			state.Outcomes[outcome.TaskID] = SyncTaskResult{
 				TaskID: outcome.TaskID,
-				Status: SyncInvalid,
+				Status: status,
 				Detail: outcome.Err.Error(),
 			}
 			continue
@@ -649,6 +664,16 @@ func (r *Repository) fetch(
 	}
 	if invalidReconciled > 0 {
 		return state, result, core.Errorf(core.CategoryCorruptData, "%d divergent task history(s) could not be replayed", invalidReconciled)
+	}
+	// Reported after corruption and before conflicts, which is the order of how
+	// much they say about the repository. Every other task in this run fetched,
+	// replayed and published; these are waiting on an upgrade, and their local
+	// operations are still on their refs.
+	if newerReconciled > 0 {
+		return state, result, core.Errorf(core.CategoryNewerWriter,
+			"%d divergent task history(s) were written by a newer workbook; "+
+				"upgrade workbook to replay the local changes onto them",
+			newerReconciled)
 	}
 	if len(result.Conflicts) > 0 {
 		return state, result, core.ConflictError(result.Conflicts)
@@ -747,8 +772,17 @@ func (r *Repository) publishFetched(ctx context.Context, config core.ProjectConf
 	// whether more was intended: the operations that did replay are ordinary
 	// history, and withholding them would make sync disagree with push about
 	// the same refs while stranding work the caller already recorded.
+	// The one tip that is not published is a divergent task whose origin
+	// history needs a newer Workbook. It is not withheld work: origin already
+	// holds a tip this clone's ref is not a descendant of, so pushing it can
+	// only be rejected, and reporting a rejection would describe the fetch
+	// phase's refusal a second time in a word that suggests something went
+	// wrong with the network.
 	taskIDs := make([]string, 0, len(state.Canonical))
 	for taskID := range state.Canonical {
+		if state.Outcomes[taskID].Status == SyncNeedsUpgrade {
+			continue
+		}
 		taskIDs = append(taskIDs, taskID)
 	}
 	sort.Strings(taskIDs)

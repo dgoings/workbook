@@ -226,6 +226,18 @@ func (r *Repository) reconcileConfigLedger(
 	local, remote configRecord,
 	unrelated bool,
 ) (configReconcileOutcome, error) {
+	// Same refusal the task replay makes, for the same reason and with the same
+	// consequence: the local ledger ref is left exactly where it is, holding
+	// every local operation, and origin's tip waits in the tracking namespace
+	// until a build that can fold it arrives. A fast-forward is unaffected —
+	// adopting origin's ledger wholesale needs no fold — so a clone that has
+	// authored nothing locally keeps synchronizing normally.
+	if remote.State.RequiresNewerReader() || local.State.RequiresNewerReader() {
+		return configReconcileOutcome{}, core.Errorf(core.CategoryNewerWriter,
+			"this project's local configuration changes were not replayed: origin's configuration was "+
+				"written by a newer workbook; upgrade workbook to publish them. They are unchanged on %s.",
+			configRef)
+	}
 	outcome := configReconcileOutcome{
 		Head:        remote.Head,
 		Parked:      local.Head,

@@ -1,12 +1,21 @@
 package projection
 
-const schemaVersion = "2"
+// schemaVersion is bumped to 3 because the projection now carries the
+// writer-format generation of every checkpoint and every recorded pack.
+//
+// A cache written by an earlier build has no column for it, so every row it
+// holds would read as generation zero — which is a claim, not an absence, and
+// the one claim that must never be made wrongly: it is what tells a mutation
+// that the task is safe to build on. The projection is disposable, so the
+// answer is to discard it and read Git again rather than to guess.
+const schemaVersion = "3"
 
 const schema = `
 CREATE TABLE projection_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE tasks (
   task_id TEXT PRIMARY KEY, head TEXT NOT NULL, project_id TEXT NOT NULL,
   history_generation TEXT NOT NULL, logical_clock INTEGER NOT NULL,
+  min_reader INTEGER NOT NULL,
   title TEXT NOT NULL, description TEXT NOT NULL, status TEXT NOT NULL,
   priority TEXT NOT NULL, rank TEXT NOT NULL, created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL, deleted INTEGER NOT NULL
@@ -22,6 +31,7 @@ CREATE TABLE operations (
   operation_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, commit_id TEXT NOT NULL,
   chain_index INTEGER NOT NULL, pack_index INTEGER NOT NULL,
   logical_clock INTEGER NOT NULL, history_generation TEXT NOT NULL,
+  min_reader INTEGER NOT NULL,
   actor TEXT NOT NULL, wall_time TEXT NOT NULL, type TEXT NOT NULL,
   field TEXT NOT NULL, value TEXT NOT NULL, task_data TEXT NOT NULL
 );
