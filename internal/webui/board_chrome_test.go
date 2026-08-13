@@ -3,6 +3,7 @@ package webui
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -80,7 +81,7 @@ func TestHandlerBoardColumnsHoldAMinimumWidthAndScroll(t *testing.T) {
 	body := boardPage(t)
 	for _, fragment := range []string{
 		`--board-column-min: 16rem;`,
-		`grid-template-columns: repeat(6, minmax(var(--board-column-min), 1fr))`,
+		`grid-auto-columns: minmax(var(--board-column-min), var(--board-column-max))`,
 		`min-width: var(--board-column-min)`,
 		`overflow-x: auto`,
 		// The phone layout still widens the column to the viewport rather than
@@ -103,6 +104,154 @@ func TestHandlerBoardColumnsHoldAMinimumWidthAndScroll(t *testing.T) {
 			t.Errorf("a board card still carries the hardcoded minimum width %q", stale)
 		}
 	}
+}
+
+// A minimum on its own left the board holding it far past the point the window
+// could afford more: five columns fit their minimum at about 1371px and the
+// track list named six, so the sixth track — empty, because no project defines
+// it — took the width the five would have grown into, and nothing widened until
+// about 1640px. The tracks are counted off the columns now and carry a maximum,
+// so they widen from the moment the window can afford it and stop at a width a
+// card is still readable at.
+func TestHandlerBoardColumnsGrowBetweenAMinimumAndAMaximum(t *testing.T) {
+	body := boardPage(t)
+	rule := boardRule(t, body)
+	for _, fragment := range []string{
+		// One track per column present, created by the flow rather than counted
+		// into a track list the server would have to keep correct.
+		`grid-auto-flow: column`,
+		`grid-auto-columns: minmax(var(--board-column-min), var(--board-column-max))`,
+		// The leftover past the maximum sits on the right, which is also the
+		// only alignment that leaves the first column reachable when the board
+		// is too wide to fit and scrolls.
+		`justify-content: start`,
+	} {
+		if !strings.Contains(rule, fragment) {
+			t.Errorf("the board rule %q does not contain %q", rule, fragment)
+		}
+	}
+	if !strings.Contains(body, `--board-column-max: 26rem;`) {
+		t.Error("the stylesheet does not define the column maximum")
+	}
+	// A track list is how the count got hardcoded, and repeat() is how it would
+	// come back — including the repeat(0, …) a project with no live statuses
+	// would produce, which is not a stylesheet at all.
+	if strings.Contains(rule, "grid-template-columns") || strings.Contains(rule, "repeat(") {
+		t.Errorf("the board rule %q names a track count again", rule)
+	}
+	// 1fr grows without limit, which is the absence this fixes.
+	if strings.Contains(rule, "1fr") {
+		t.Errorf("the board rule %q sizes a column with an unbounded 1fr", rule)
+	}
+}
+
+// The tracks come from the columns, so a project gets as many as it defines —
+// three, eight, or, for a ledger tip that forwards a status and defines none,
+// zero. The last one is the case a track list could not survive: repeat(0, …)
+// is invalid, and a server that stamped the count would have had to special-case
+// it.
+func TestHandlerBoardDrawsOneColumnPerConfiguredStatus(t *testing.T) {
+	for name, vocabulary := range map[string]core.Vocabulary{
+		"default": core.DefaultVocabulary(),
+		"three":   handlerVocabulary(t),
+		"eight":   wideVocabulary(t),
+		"none":    statuslessVocabulary(t),
+		"one":     singleStatusVocabulary(t),
+	} {
+		body := boardPageWith(t, vocabulary)
+		want := len(vocabulary.Definitions())
+		if got := strings.Count(body, `<section class="column">`); got != want {
+			t.Errorf("%s vocabulary rendered %d columns, want %d", name, got, want)
+		}
+		// Whatever the count, the stylesheet is the same one and still names no
+		// number of its own.
+		if strings.Contains(boardRule(t, body), "repeat(") {
+			t.Errorf("%s vocabulary rendered a board rule with a track count", name)
+		}
+	}
+}
+
+// boardRule returns the `.board` declaration block from a rendered page, which
+// is what these tests assert against rather than the whole stylesheet: `repeat(`
+// and `1fr` are ordinary elsewhere on the page and only mean something here.
+func boardRule(t *testing.T, body string) string {
+	t.Helper()
+	const opening = ".board { display: grid;"
+	start := strings.Index(body, opening)
+	if start < 0 {
+		t.Fatal("the rendered page has no .board rule")
+	}
+	end := strings.Index(body[start:], "}")
+	if end < 0 {
+		t.Fatal("the .board rule is unterminated")
+	}
+	return body[start : start+end+1]
+}
+
+// boardPageWith renders an empty board for a project with these statuses.
+func boardPageWith(t *testing.T, vocabulary core.Vocabulary) string {
+	t.Helper()
+	handler := NewHandler(Options{
+		Vocabulary: staticVocabulary(vocabulary, "head-1"),
+		List:       func(context.Context) ([]core.Task, error) { return nil, nil },
+	})
+	response := request(t, handler, http.MethodGet, "/")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	return response.Body.String()
+}
+
+// wideVocabulary is a project with more statuses than Workbook ever shipped.
+func wideVocabulary(t *testing.T) core.Vocabulary {
+	t.Helper()
+	definitions := make([]core.StatusDefinition, 0, 8)
+	for index := 1; index <= 8; index++ {
+		definition := core.StatusDefinition{
+			Status: core.Status("stage-" + strconv.Itoa(index)),
+			Label:  "Stage " + strconv.Itoa(index),
+			Rank:   strconv.Itoa(index) + "/1",
+			Tags:   []core.StatusTag{},
+		}
+		if index == 1 {
+			definition.Tags = []core.StatusTag{core.StatusTagDefault}
+		}
+		definitions = append(definitions, definition)
+	}
+	vocabulary, err := core.NewVocabulary(definitions, nil, nil)
+	if err != nil {
+		t.Fatalf("NewVocabulary() error = %v", err)
+	}
+	return vocabulary
+}
+
+// singleStatusVocabulary is a project configured down to one column, which is
+// the narrowest board that still has a grid.
+func singleStatusVocabulary(t *testing.T) core.Vocabulary {
+	t.Helper()
+	vocabulary, err := core.NewVocabulary([]core.StatusDefinition{
+		{Status: "open", Label: "Open", Rank: "1/1", Tags: []core.StatusTag{core.StatusTagDefault}},
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("NewVocabulary() error = %v", err)
+	}
+	return vocabulary
+}
+
+// statuslessVocabulary defines no statuses and forwards one, which is what a
+// hand-edited or foreign ledger tip arrives as. It is not the zero vocabulary,
+// so the handler does not substitute the built-in statuses and the column count
+// is genuinely zero — the same fixture the terminal renderer guards against.
+func statuslessVocabulary(t *testing.T) core.Vocabulary {
+	t.Helper()
+	vocabulary, err := core.NewVocabulary(nil, nil, []core.RetiredStatus{{Status: "ghost", Destination: "gone"}})
+	if err != nil {
+		t.Fatalf("NewVocabulary() error = %v", err)
+	}
+	if vocabulary.IsZero() {
+		t.Fatal("the fixture is the zero vocabulary, so the handler substitutes the built-in statuses and proves nothing")
+	}
+	return vocabulary
 }
 
 // A column header is a heading and a link in all six columns, so the six are
