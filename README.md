@@ -456,8 +456,10 @@ Tombstoned tasks reject every mutation except `workbook restore`, which records
 an explicit append-only restore operation. A restore may name where the task
 comes back with `--into <status>`; that destination is recorded in the same
 operation pack as the restore, so it is one change rather than two. Without it,
-the task returns to the status it was deleted from. Either way the task keeps
-the position it was deleted with.
+the task returns to the status it was deleted from. `--into` names a column and
+not a position, so the task keeps the position it was deleted with; the web
+route below also accepts a neighbour to land beside, and computes a new position
+when one is named.
 List and show read the current task checkpoint from each task ref's tip. A new
 project's statuses are Backlog, Ready, In Progress, In Review, and Done, in that
 order; a project may change them with `workbook status` (see
@@ -1293,7 +1295,9 @@ GET /healthz                  versioned health JSON
 The delete and restore routes take an optional JSON body, and a request with no
 body at all is the bare verb. Delete accepts `expectedHead`; restore accepts
 `status`, `before`, `after`, and `expectedHead`, which are the members the
-position route uses and mean the same things. A body that is present is held to
+position route uses and mean the same things — a restore naming `before` or
+`after` lands beside that task and takes a new position, while one naming only
+`status` keeps the position it was deleted with. A body that is present is held to
 the same rules every other body is: an unknown member, a trailing value, or
 malformed JSON is refused rather than partly read.
 

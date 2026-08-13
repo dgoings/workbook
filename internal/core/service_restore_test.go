@@ -244,6 +244,42 @@ func TestRestoreValidatesItsAnchors(t *testing.T) {
 	}
 }
 
+// The board reaches Place and Restore with the same drag, so a request that is
+// wrong in two ways at once has to be refused for the same one by both. Restore
+// checks membership before its anchors for exactly this reason.
+func TestRestoreAndPlaceRefuseAMalformedRequestTheSameWay(t *testing.T) {
+	deletedID := "WB-01K0M6B8A4FTT8C39MXXYTW7F1"
+	activeID := "WB-01K0M6B8A4FTT8C39MXXYTW7F2"
+	store := newMemoryTaskStore(
+		serviceSnapshot(deletedID, TaskData{
+			Title: "Deleted", Status: StatusBacklog, Priority: PriorityMedium, Rank: "1/1", Deleted: true,
+		}),
+		serviceSnapshot(activeID, TaskData{
+			Title: "Active", Status: StatusBacklog, Priority: PriorityMedium, Rank: "2/1",
+		}),
+	)
+	service := serviceUnderTest(store, &sequenceIDSource{})
+
+	_, placeErr := service.PlaceMutation(context.Background(), activeID, PlaceInput{
+		Status: "nope", Before: activeID, After: deletedID,
+	})
+	_, restoreErr := service.RestoreMutation(context.Background(), deletedID, RestoreInput{
+		Into: "nope", Before: activeID, After: deletedID,
+	})
+	if placeErr == nil || restoreErr == nil {
+		t.Fatalf("PlaceMutation() error = %v and RestoreMutation() error = %v, want both refused", placeErr, restoreErr)
+	}
+	if got, want := restoreErr.Error(), placeErr.Error(); got != want {
+		t.Fatalf("RestoreMutation() error = %q, want Place's %q", got, want)
+	}
+	if got, want := restoreErr.Error(), `invalid task status "nope"`; got != want {
+		t.Fatalf("refusal = %q, want the status refused before the anchors, %q", got, want)
+	}
+	if got := len(store.writes); got != 0 {
+		t.Fatalf("the two refusals wrote %d packs, want none", got)
+	}
+}
+
 // An anchored restore computes its rank the way Move and Place do, in the
 // destination bucket, so a card dropped between two others comes back between
 // them.

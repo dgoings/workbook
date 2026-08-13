@@ -96,24 +96,48 @@ func Apply(parent *StateDocument, pack OperationPack, projectKey string) (StateD
 	// rather than a restore followed by a separate placement that a crash or a
 	// concurrent write could leave half-done.
 	//
-	// The rule was "exactly one task.restore" before, so a clone running an
-	// older build reads such a pack as corrupt rather than folding it. That is
-	// the cost of the widening and the reason it is stated here: the operation
-	// semantics are the durable contract, and this is a change to them.
+	// "Ordinary" excludes task.tombstone, which is why the rule is not simply
+	// "restore first". A pack that restored and then tombstoned would fold to a
+	// tombstone with the clock advanced, and every later reader would take that
+	// as a valid history for a task nothing legibly deleted. A pack restores or
+	// it deletes; the two are separate intents and belong to separate packs.
+	//
+	// The rule was "exactly one task.restore" before. What that costs a clone on
+	// an older build is narrow and worth stating precisely, because the obvious
+	// guess is worse than the truth: reads and synchronization are unaffected.
+	// Projection, list, board, show, rebuild, fetch, push, sync, further
+	// mutations and divergence replay all read the state checkpoint beside the
+	// pack rather than folding the pack, so an older clone shows the restored
+	// task correctly and keeps working with it. The one symptom is `workbook
+	// validate`, which does fold: it reports that one task as corrupt with
+	// "cannot mutate a tombstoned task", permanently, and says nothing about any
+	// other task. Nothing wedges and no ref is held back — which is a softer
+	// failure than the custom-status precedent, where an older build refuses the
+	// ref at fetch time and keeps stale data until it is upgraded.
 	//
 	// A restore is legal nowhere else. Against a live task it is meaningless,
-	// and a second one inside a pack that already restored would be a claim
+	// and anywhere but first it is either an edit to a tombstone or a claim
 	// about a task that is no longer tombstoned.
 	for index, operation := range pack.Operations {
 		if operation.Type != OperationTaskRestore {
 			continue
 		}
-		if index != 0 || !parent.Task.Deleted {
+		if !parent.Task.Deleted {
 			return StateDocument{}, corrupt("task.restore requires a tombstoned task")
 		}
+		if index != 0 {
+			return StateDocument{}, corrupt("task.restore must be the first operation in its pack")
+		}
 	}
-	if parent.Task.Deleted && pack.Operations[0].Type != OperationTaskRestore {
-		return StateDocument{}, corrupt("cannot mutate a tombstoned task")
+	if parent.Task.Deleted {
+		if pack.Operations[0].Type != OperationTaskRestore {
+			return StateDocument{}, corrupt("cannot mutate a tombstoned task")
+		}
+		for _, operation := range pack.Operations[1:] {
+			if operation.Type == OperationTaskTombstone {
+				return StateDocument{}, corrupt("task.restore must not be followed by task.tombstone")
+			}
+		}
 	}
 
 	task := copyTaskData(parent.Task)

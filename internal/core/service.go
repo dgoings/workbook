@@ -581,6 +581,15 @@ func (s Service) DeleteMutation(ctx context.Context, idOrPrefix string, input De
 // arrangement Place uses, and reported the same way. The note above settle is
 // where the rule those two sentences are exceptions to lives.
 func (s Service) RestoreMutation(ctx context.Context, idOrPrefix string, input RestoreInput) (MutationResult, error) {
+	// Membership is checked before the anchors, which is Place's order: a
+	// request that names both a status the project does not define and two
+	// anchor directions has to be refused the same way by both verbs, or the
+	// board learns that one route means something different from the other.
+	if input.Into != "" {
+		if err := s.requireStatusMember(input.Into); err != nil {
+			return MutationResult{}, err
+		}
+	}
 	if input.Before != "" && input.After != "" {
 		return MutationResult{}, Errorf(CategoryValidation, "restore accepts at most one anchor direction")
 	}
@@ -589,11 +598,6 @@ func (s Service) RestoreMutation(ctx context.Context, idOrPrefix string, input R
 	// restore mean something the caller did not write.
 	if input.Into == "" && (input.Before != "" || input.After != "") {
 		return MutationResult{}, Errorf(CategoryValidation, "restore anchors require a destination status")
-	}
-	if input.Into != "" {
-		if err := s.requireStatusMember(input.Into); err != nil {
-			return MutationResult{}, err
-		}
 	}
 
 	parent, err := s.resolveSnapshot(ctx, idOrPrefix)

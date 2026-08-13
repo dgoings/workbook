@@ -23,7 +23,7 @@ Commands:
   show <id-or-prefix> [--history [--limit <n>] [--all]] [--compare <commit> <commit>] [--json]
   update <id-or-prefix> [options]
   delete <id-or-prefix> [--json]
-  restore <id-or-prefix> [--json]
+  restore <id-or-prefix> [--into <status>] [--json]
   move <id-or-prefix> (--before <id-or-prefix> | --after <id-or-prefix>) [--json]
   depend <id-or-prefix> <dependency-id-or-prefix> [--json]
   free <id-or-prefix> <dependency-id-or-prefix> [--json]
