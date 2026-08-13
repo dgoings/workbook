@@ -3185,9 +3185,9 @@
       // every task this board draws comes from /api/tasks with a head, so
       // `expectedHead` is populated in practice. It exists because the route
       // accepts no body at all and this is the one intent whose body would
-      // otherwise be empty — a queue holding a task with no head must send the
-      // bare verb rather than `{"expectedHead":""}`, which is a head the server
-      // would compare against and refuse.
+      // otherwise be empty — an empty expectation opts out of the head check
+      // on the server, so `{"expectedHead":""}` would behave identically; the
+      // bare verb is simply the shape that sends no noise the route ignores.
       function restoreTask(taskID) {
         const observed = latestTasks.find((task) => task.id === taskID);
         // The button is drawn on every card and shown on the deleted ones, so
