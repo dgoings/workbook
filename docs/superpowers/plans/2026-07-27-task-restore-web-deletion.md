@@ -1,5 +1,14 @@
 # Task Restore and Web Deletion Implementation Plan
 
+> **Superseded in part, 2026-08-13.** This plan was executed as written, and the
+> `/deleted` route and `deletedView` it produced have since been removed: the
+> deleted tasks are a hideable column of the board at `/?deleted=1`, and a
+> successful delete lands there rather than on a page. The steps below are kept
+> as the record of what was done at the time, not as a description of the
+> current client. See
+> [the optimistic queue design](../specs/2026-08-06-optimistic-web-mutation-queue-design.md)
+> and the README's local web board section.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add append-only task restoration to the CLI and local web UI while keeping tombstoned tasks immutable except for restore.

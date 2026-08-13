@@ -167,19 +167,50 @@ func TestHandlerBoardDrawsOneColumnPerConfiguredStatus(t *testing.T) {
 		"one":     singleStatusVocabulary(t),
 	} {
 		body := boardPageWith(t, vocabulary)
-		children := boardChildren(t, body)
-		if want := len(vocabulary.Definitions()); len(children) != want {
-			t.Errorf("%s vocabulary drew %d board tracks, want %d: %q", name, len(children), want, children)
-		}
-		for index, child := range children {
-			if child != `<section class="column">` {
-				t.Errorf("%s vocabulary drew a board track that is not a column at %d: %q", name, index, child)
-			}
-		}
+		// The server never draws the Deleted column: it renders this project's
+		// vocabulary, and that column is a view of what the vocabulary no longer
+		// holds, appended by the client only while the reader asks for it.
+		assertBoardTracks(t, name+" vocabulary", boardChildren(t, body), len(vocabulary.Definitions()), false)
 		// Whatever the count, the stylesheet is the same one and still names no
 		// number of its own.
 		if strings.Contains(boardRules(t, body), "repeat(") {
 			t.Errorf("%s vocabulary rendered a board rule with a track count", name)
+		}
+	}
+}
+
+// assertBoardTracks states what a direct child of the board element may be, in
+// document order, and is the whole contract: every direct child of the board is
+// a grid track, so anything that grows there and is not a column is a track
+// holding width the columns wanted, silently.
+//
+// There are exactly two kinds. A vocabulary column, one per status the project
+// defines. And the Deleted column — at most one of them, always last, and only
+// while the reader has asked for it; hidden, the board is back to the columns
+// alone, which is the state the server always serves.
+//
+// It takes the children as opening tags so both halves of the contract are
+// checked by this one function: the served page's markup walked by
+// boardChildren, and the client's live board reported by the DOM harness in
+// deleted_column_client_test.go.
+func assertBoardTracks(t *testing.T, subject string, children []string, columns int, deletedShown bool) {
+	t.Helper()
+	want := columns
+	if deletedShown {
+		want++
+	}
+	if len(children) != want {
+		t.Errorf("%s drew %d board tracks, want %d: %q", subject, len(children), want, children)
+	}
+	for index, child := range children {
+		if deletedShown && index == len(children)-1 {
+			if child != `<section class="column column--deleted">` {
+				t.Errorf("%s did not end its board with the Deleted column: %q", subject, child)
+			}
+			continue
+		}
+		if child != `<section class="column">` {
+			t.Errorf("%s drew a board track that is not a column at %d: %q", subject, index, child)
 		}
 	}
 }

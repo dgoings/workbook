@@ -1261,11 +1261,12 @@ workbook serve &
 The embedded page and its API expose these routes:
 
 ```text
-GET /                         board HTML
+GET /                         board HTML; `?deleted=1` shows the Deleted column
 GET /tasks/new                new-task shell; client-rendered form
 GET /tasks/<id>               linkable task-detail shell; client-rendered form
-GET /deleted                  deleted-task shell; client-rendered list
-GET /api/tasks                versioned task JSON
+GET /api/tasks                versioned task JSON: the active tasks, or
+                              `?deleted=true` for the deleted ones alone, or
+                              `?deleted=include` for both in one document
 GET /api/vocabulary           versioned status vocabulary JSON: the project's
                               statuses in order, their labels and tags, the
                               forwarding chains, and the configuration ledger
@@ -1464,8 +1465,25 @@ text stays in the card either way and only the stylesheet decides whether it is
 shown, which keeps the setting out of the renderer: turning it on reveals what
 the page already holds rather than rebuilding cards or waiting for the next
 poll, and the reconciling poll has no preference to reset. The toggle
-accompanies the board alone; the deleted list and task pages draw no cards for
-it to act on and so do not offer it.
+accompanies the board alone; task pages draw no cards for it to act on and so
+do not offer it.
+
+Deleted tasks are a column of the board rather than a page of their own. The
+header's `Deleted tasks:` toggle is a link to `/?deleted=1`, so the state is
+shareable, bookmarkable, and walked by Back and Forward; showing it appends a
+muted **Deleted** column after the last status column and hiding it takes that
+section away, and neither touches another column or another card. The column is
+fed by the same one-second poll as every other column, which asks
+`/api/tasks?deleted=include` for as long as the board is set to show it — opening
+a task's page does not stop the asking, so the column is already current when you
+come back to it — and orders its cards most-recently-deleted first. Each card carries a **Restore** button that returns
+the task to the status it was deleted from. Dragging a deleted card onto a
+status column restores it into that column at the position it was dropped, and
+dragging a live card onto the Deleted column deletes it; both are queued
+optimistic changes like every other board drag, with the same head check, the
+same rollback, and the same refusal report on the card. A deleted task has no
+detail page — a tombstone cannot be edited — so its card offers Restore instead
+of a link.
 
 Cards with prerequisites show completed versus total dependency progress.
 Ready cards whose prerequisites are not all active and Done also say
@@ -1565,9 +1583,9 @@ has moved past is refused rather than applied: the form keeps your edits, says
 the task changed elsewhere, and saving again applies the same fields to the
 version the server now holds. Saving a form you changed nothing in sends no
 request at all and simply returns to the board.
-Active task details also provide Delete; successful deletion opens `/deleted`.
-That route lists tombstoned tasks and restores a selected task through the
-explicit restore operation.
+Active task details also provide Delete; a successful deletion returns to the
+board with its Deleted column shown, where the task now is and where the
+Restore that undoes it sits on the card.
 
 The web experience is still local-first and intentionally narrow in scope.
 Authentication, hosted deployment, browser deletion, draft persistence, and
