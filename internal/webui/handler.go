@@ -344,8 +344,8 @@ type handler struct {
 
 // pageData is what the server hands the page, and it is also the client's only
 // source for the same facts: the script reads the columns back out of the DOM
-// rather than carrying a status list of its own, so these three fields are the
-// whole vocabulary contract with the browser.
+// rather than carrying a status list of its own, so these fields are the whole
+// vocabulary contract with the browser.
 type pageData struct {
 	Board presentation.Board
 	// DefaultStatus is where a new task lands, rendered as an attribute because
@@ -354,6 +354,26 @@ type pageData struct {
 	// VocabularyHead is the ledger tip these columns were built from, so the
 	// poll can tell that the columns it is looking at have been superseded.
 	VocabularyHead string
+	// StatusTags are the three roles a status may carry, rendered into the
+	// administration panel's forms for the reason the columns are rendered into
+	// the board: the client must not carry a second copy of a set the server
+	// owns. It is also what keeps the script from naming `done`, which is a tag
+	// here and a status name in most projects.
+	StatusTags []core.StatusTag
+	// Administrable is whether this board was built with all four vocabulary
+	// mutations, and it decides whether the page draws the status panel at all.
+	//
+	// `workbook serve` is the only production caller of NewHandler and always
+	// supplies the four, so this is true wherever a person meets it. It is
+	// computed rather than assumed for the two callers that are not that one:
+	// the tests, which build boards without the capabilities and are what holds
+	// the gate honest, and any future embedding that wires fewer of them, which
+	// gets a board that draws its columns and offers no control that would only
+	// ever answer "this board has no such capability".
+	//
+	// All four rather than any, because the panel is one surface: a partial set
+	// would draw controls that look alike and fail differently.
+	Administrable bool
 }
 
 // expectedHead is the task tip the browser rendered before proposing a change.
@@ -770,6 +790,9 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 		Board:          presentation.NewBoard(activeTasks(tasks), vocabulary.Vocabulary),
 		DefaultStatus:  vocabulary.Vocabulary.Default(),
 		VocabularyHead: vocabulary.Head,
+		StatusTags:     core.StatusTags(),
+		Administrable: handler.AddStatus != nil && handler.EditStatus != nil &&
+			handler.RemoveStatus != nil && handler.ReorderStatus != nil,
 	}); err != nil {
 		return
 	}
