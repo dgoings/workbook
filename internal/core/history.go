@@ -27,6 +27,14 @@ type HistoryEntry struct {
 type HistoryTruncation struct {
 	Commit  string `json:"commit"`
 	Message string `json:"message"`
+	// Category names why the read stopped, when the reason is something other
+	// than corruption. It exists because a replay that stops at a pack written
+	// by a newer Workbook is not a broken history, and every caller that turns
+	// a truncation back into an error would otherwise have to say it was.
+	//
+	// Omitted when empty, which is the ordinary case, so a truncation reported
+	// before this member existed reads exactly as it did.
+	Category Category `json:"category,omitempty"`
 }
 
 // TaskHistory is one task's operation packs ordered by the parent chain, oldest
@@ -157,10 +165,17 @@ func ReplayHistory(projectKey string, history TaskHistory) ([]ReplayStep, *Histo
 	for _, entry := range history.Entries {
 		state, err := Apply(parent, entry.Operation, projectKey)
 		if err != nil {
-			return steps, &HistoryTruncation{
+			truncation := &HistoryTruncation{
 				Commit:  entry.Commit,
 				Message: "cannot replay this operation: " + err.Error(),
 			}
+			// A stop at a pack written by a newer Workbook keeps its category,
+			// so a caller that has to turn this boundary back into an error
+			// does not have to call a sound history broken.
+			if category := CategoryOf(err); category == CategoryNewerWriter {
+				truncation.Category = category
+			}
+			return steps, truncation
 		}
 		step := ReplayStep{Entry: entry, After: state.Task}
 		if parent != nil {
@@ -178,8 +193,12 @@ func ReplayHistory(projectKey string, history TaskHistory) ([]ReplayStep, *Histo
 func StateAt(projectKey string, history TaskHistory) (TaskData, error) {
 	steps, truncation := ReplayHistory(projectKey, history)
 	if truncation != nil {
+		category := truncation.Category
+		if category == "" {
+			category = CategoryCorruptData
+		}
 		return TaskData{}, Errorf(
-			CategoryCorruptData,
+			category,
 			"cannot reconstruct task state at commit %s: %s",
 			truncation.Commit,
 			truncation.Message,
