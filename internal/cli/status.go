@@ -872,65 +872,21 @@ func runStatusAdd(ctx context.Context, args []string, cwd string, stdout, stderr
 	if err != nil {
 		return err
 	}
-	display := core.DerivedStatusLabel(status)
 	if *label != "" {
-		display = *label
-	}
-	if err := core.ValidateStatusLabel(display); err != nil {
-		return err
+		if err := core.ValidateStatusLabel(*label); err != nil {
+			return err
+		}
 	}
 
 	return runStatusMutation(ctx, cwd, "status add", *noSync, *noDocs, *jsonMode, stdout, stderr,
 		func(ctx context.Context, session *taskSession, vocabulary core.Vocabulary) (statusPlan, error) {
-			if vocabulary.Has(status) {
-				return statusPlan{}, core.Errorf(core.CategoryValidation,
-					"this project already defines status %q", status)
-			}
-			rank := vocabulary.AppendRank()
-			anchor, placeBefore := core.Status(*before), *before != ""
-			if *after != "" {
-				anchor = core.Status(*after)
-			}
-			position := &statusPosition{}
-			if anchor != "" {
-				resolved, err := requireLiveStatus(ctx, session, vocabulary, anchor)
-				if err != nil {
-					return statusPlan{}, err
-				}
-				anchor = resolved
-				rank, err = vocabulary.InsertRank("", anchor, placeBefore)
-				if err != nil {
-					return statusPlan{}, err
-				}
-				if placeBefore {
-					position.Before = anchor
-				} else {
-					position.After = anchor
-				}
-			}
-			position.Rank = rank
-
-			operation := core.ConfigOperation{
-				Type:  core.ConfigStatusAdd,
-				Name:  status,
-				Label: display,
-				Rank:  rank,
-				Tags:  wanted,
-			}
-			change := statusChange{
-				Operation: "add",
-				Status:    status,
-				Position:  position,
-				Label:     &statusLabel{To: display},
-				Tags:      wanted,
-			}
-			if containsStatusTag(wanted, core.StatusTagDefault) {
-				change.DefaultFrom = vocabulary.Default()
-			}
-			return statusPlan{
-				operations: []core.ConfigOperation{operation},
-				change:     change,
-			}, nil
+			return planStatusAdd(ctx, session.statusScope(), vocabulary, statusAddition{
+				Status: status,
+				Label:  *label,
+				Tags:   wanted,
+				Before: core.Status(*before),
+				After:  core.Status(*after),
+			})
 		})
 }
 
@@ -959,53 +915,7 @@ func runStatusRename(ctx context.Context, args []string, cwd string, stdout, std
 
 	return runStatusMutation(ctx, cwd, "status rename", *noSync, *noDocs, *jsonMode, stdout, stderr,
 		func(ctx context.Context, session *taskSession, vocabulary core.Vocabulary) (statusPlan, error) {
-			subject, err := requireLiveStatus(ctx, session, vocabulary, from)
-			if err != nil {
-				return statusPlan{}, err
-			}
-			if subject == to {
-				return statusPlan{}, core.Errorf(core.CategoryValidation,
-					"status %q already has that value", to)
-			}
-			if vocabulary.Has(to) {
-				return statusPlan{}, core.Errorf(core.CategoryValidation,
-					"this project already defines status %q", to)
-			}
-
-			// The derived-label rule. A label nobody chose follows the name it
-			// was derived from; a label somebody chose is theirs and survives a
-			// rename of the machine value underneath it.
-			current := vocabulary.Label(subject)
-			display, derived := current, false
-			switch {
-			case *label != "":
-				display = *label
-			case current == core.DerivedStatusLabel(subject):
-				display, derived = core.DerivedStatusLabel(to), true
-			}
-			if err := core.ValidateStatusLabel(display); err != nil {
-				return statusPlan{}, err
-			}
-
-			rename := core.ConfigOperation{Type: core.ConfigStatusRename, From: subject, To: to}
-			operations := []core.ConfigOperation{rename}
-			if display != current {
-				operations = append(operations, core.ConfigOperation{
-					Type: core.ConfigStatusRelabel, Status: to, Label: display,
-				})
-			}
-			labelDerived := derived
-			return statusPlan{
-				operations: operations,
-				change: statusChange{
-					Operation:    "rename",
-					Status:       to,
-					From:         subject,
-					Label:        &statusLabel{From: current, To: display},
-					LabelDerived: &labelDerived,
-					Tags:         statusTags(vocabulary, subject),
-				},
-			}, nil
+			return planStatusRename(ctx, session.statusScope(), vocabulary, from, to, *label)
 		})
 }
 
@@ -1028,25 +938,7 @@ func runStatusLabel(ctx context.Context, args []string, cwd string, stdout, stde
 
 	return runStatusMutation(ctx, cwd, "status label", *noSync, *noDocs, *jsonMode, stdout, stderr,
 		func(ctx context.Context, session *taskSession, vocabulary core.Vocabulary) (statusPlan, error) {
-			subject, err := requireLiveStatus(ctx, session, vocabulary, core.Status(values[0]))
-			if err != nil {
-				return statusPlan{}, err
-			}
-			current := vocabulary.Label(subject)
-			if current == display {
-				return statusPlan{}, core.Errorf(core.CategoryValidation,
-					"status %q already has that label", subject)
-			}
-			operation := core.ConfigOperation{Type: core.ConfigStatusRelabel, Status: subject, Label: display}
-			return statusPlan{
-				operations: []core.ConfigOperation{operation},
-				change: statusChange{
-					Operation: "label",
-					Status:    subject,
-					Label:     &statusLabel{From: current, To: display},
-					Tags:      statusTags(vocabulary, subject),
-				},
-			}, nil
+			return planStatusRelabel(ctx, session.statusScope(), vocabulary, core.Status(values[0]), display)
 		})
 }
 
@@ -1070,44 +962,13 @@ func runStatusMove(ctx context.Context, args []string, cwd string, stdout, stder
 
 	return runStatusMutation(ctx, cwd, "status move", *noSync, *noDocs, *jsonMode, stdout, stderr,
 		func(ctx context.Context, session *taskSession, vocabulary core.Vocabulary) (statusPlan, error) {
-			subject, err := requireLiveStatus(ctx, session, vocabulary, core.Status(values[0]))
-			if err != nil {
-				return statusPlan{}, err
-			}
 			placeBefore := *before != ""
-			anchorInput := core.Status(*after)
+			anchor := core.Status(*after)
 			if placeBefore {
-				anchorInput = core.Status(*before)
+				anchor = core.Status(*before)
 			}
-			anchor, err := requireLiveStatus(ctx, session, vocabulary, anchorInput)
-			if err != nil {
-				return statusPlan{}, err
-			}
-			if anchor == subject {
-				return statusPlan{}, core.Errorf(core.CategoryValidation,
-					"cannot move status %q relative to itself", subject)
-			}
-			rank, err := vocabulary.InsertRank(subject, anchor, placeBefore)
-			if err != nil {
-				return statusPlan{}, err
-			}
-			position := &statusPosition{Rank: rank}
-			if placeBefore {
-				position.Before = anchor
-			} else {
-				position.After = anchor
-			}
-			operation := core.ConfigOperation{Type: core.ConfigStatusReorder, Status: subject, Rank: rank}
-			return statusPlan{
-				operations: []core.ConfigOperation{operation},
-				change: statusChange{
-					Operation: "move",
-					Status:    subject,
-					Position:  position,
-					Label:     &statusLabel{To: vocabulary.Label(subject)},
-					Tags:      statusTags(vocabulary, subject),
-				},
-			}, nil
+			return planStatusMove(ctx, session.statusScope(), vocabulary,
+				core.Status(values[0]), anchor, placeBefore)
 		})
 }
 
@@ -1139,24 +1000,7 @@ func runStatusTag(ctx context.Context, args []string, cwd string, stdout, stderr
 
 	return runStatusMutation(ctx, cwd, "status tag", *noSync, *noDocs, *jsonMode, stdout, stderr,
 		func(ctx context.Context, session *taskSession, vocabulary core.Vocabulary) (statusPlan, error) {
-			subject, err := requireLiveStatus(ctx, session, vocabulary, core.Status(values[0]))
-			if err != nil {
-				return statusPlan{}, err
-			}
-			current := statusTags(vocabulary, subject)
-			operations := tagSetOperations(subject, current, wanted)
-			if len(operations) == 0 {
-				return statusPlan{}, core.Errorf(core.CategoryValidation,
-					"status %q already carries exactly those tags", subject)
-			}
-			change := statusChange{Operation: "tag", Status: subject, Tags: wanted}
-			if containsStatusTag(wanted, core.StatusTagDefault) && !containsStatusTag(current, core.StatusTagDefault) {
-				change.DefaultFrom = vocabulary.Default()
-			}
-			return statusPlan{
-				operations: operations,
-				change:     change,
-			}, nil
+			return planStatusTagSet(ctx, session.statusScope(), vocabulary, core.Status(values[0]), wanted)
 		})
 }
 
@@ -1179,30 +1023,7 @@ func runStatusUntag(ctx context.Context, args []string, cwd string, stdout, stde
 
 	return runStatusMutation(ctx, cwd, "status untag", *noSync, *noDocs, *jsonMode, stdout, stderr,
 		func(ctx context.Context, session *taskSession, vocabulary core.Vocabulary) (statusPlan, error) {
-			subject, err := requireLiveStatus(ctx, session, vocabulary, core.Status(values[0]))
-			if err != nil {
-				return statusPlan{}, err
-			}
-			current := statusTags(vocabulary, subject)
-			if !containsStatusTag(current, tag) {
-				return statusPlan{}, core.Errorf(core.CategoryValidation,
-					"status %q does not carry the %q tag", subject, tag)
-			}
-			remaining := make([]core.StatusTag, 0, len(current))
-			for _, candidate := range current {
-				if candidate != tag {
-					remaining = append(remaining, candidate)
-				}
-			}
-			operation := core.ConfigOperation{Type: core.ConfigStatusUntag, Status: subject, Tag: tag}
-			return statusPlan{
-				operations: []core.ConfigOperation{operation},
-				change: statusChange{
-					Operation: "untag",
-					Status:    subject,
-					Tags:      remaining,
-				},
-			}, nil
+			return planStatusUntag(ctx, session.statusScope(), vocabulary, core.Status(values[0]), tag)
 		})
 }
 
@@ -1233,37 +1054,8 @@ func runStatusDelete(ctx context.Context, args []string, cwd string, stdout, std
 
 	return runStatusMutation(ctx, cwd, "status delete", *noSync, *noDocs, *jsonMode, stdout, stderr,
 		func(ctx context.Context, session *taskSession, vocabulary core.Vocabulary) (statusPlan, error) {
-			subject, err := requireLiveStatus(ctx, session, vocabulary, core.Status(values[0]))
-			if err != nil {
-				return statusPlan{}, err
-			}
-			destination, err := requireLiveStatus(ctx, session, vocabulary, core.Status(*into))
-			if err != nil {
-				return statusPlan{}, err
-			}
-			if destination == subject {
-				return statusPlan{}, core.Errorf(core.CategoryValidation,
-					"status delete cannot forward %q into itself; name where its tasks belong", subject)
-			}
-			definition, _ := statusDefinition(vocabulary, subject)
-			counts, err := removalTaskCounts(ctx, session, vocabulary, subject, destination)
-			if err != nil {
-				return statusPlan{}, err
-			}
-			operation := core.ConfigOperation{
-				Type: core.ConfigStatusRemove, Status: subject, Destination: destination,
-			}
-			return statusPlan{
-				operations: []core.ConfigOperation{operation},
-				change: statusChange{
-					Operation: "delete",
-					Status:    subject,
-					Into:      destination,
-					Label:     &statusLabel{To: definition.Label},
-					Tags:      definition.Tags,
-				},
-				tasks: counts,
-			}, nil
+			return planStatusDelete(ctx, session.statusScope(), vocabulary,
+				core.Status(values[0]), core.Status(*into))
 		})
 }
 
@@ -1304,11 +1096,11 @@ func missingRemovalDestination(ctx context.Context, cwd string, stderr io.Writer
 // destination's tags decide.
 func removalTaskCounts(
 	ctx context.Context,
-	session *taskSession,
+	scope statusScope,
 	vocabulary core.Vocabulary,
 	subject, destination core.Status,
 ) (statusTaskCounts, error) {
-	tasks, err := session.service.List(ctx, core.ListFilter{})
+	tasks, err := scope.service.List(ctx, core.ListFilter{})
 	if err != nil {
 		return statusTaskCounts{}, err
 	}
@@ -1345,6 +1137,541 @@ type statusPlan struct {
 	operations []core.ConfigOperation
 	change     statusChange
 	tasks      statusTaskCounts
+}
+
+// statusScope is what authoring a status change needs from the project besides
+// the vocabulary it is authored against: the ledger, to date a value that is no
+// longer live, and the project's tasks, to price a removal.
+//
+// It is a parameter rather than a session because the verbs are no longer the
+// only surface that authors these changes. `workbook status` fills it from the
+// session it already opened; the board fills it from the repository `serve` is
+// already holding. Both then call the same planners, which is what makes the
+// web routes a second surface over these operations rather than a second
+// implementation of them — one set of refusals, in one voice.
+type statusScope struct {
+	repository *gitstore.Repository
+	config     core.ProjectConfig
+	// service reads the project's tasks. Only a removal needs it, and only to
+	// count what it moves.
+	service core.Service
+}
+
+func (session *taskSession) statusScope() statusScope {
+	return statusScope{repository: session.repository, config: session.config, service: session.service}
+}
+
+// planStatusAdd defines a status this project does not have, optionally next to
+// one it does.
+func planStatusAdd(
+	ctx context.Context,
+	scope statusScope,
+	vocabulary core.Vocabulary,
+	addition statusAddition,
+) (statusPlan, error) {
+	if err := core.ValidateStatusToken(addition.Status); err != nil {
+		return statusPlan{}, err
+	}
+	if vocabulary.Has(addition.Status) {
+		return statusPlan{}, core.Errorf(core.CategoryValidation,
+			"this project already defines status %q", addition.Status)
+	}
+	display := addition.Label
+	if display == "" {
+		display = core.DerivedStatusLabel(addition.Status)
+	}
+	if err := core.ValidateStatusLabel(display); err != nil {
+		return statusPlan{}, err
+	}
+
+	rank := vocabulary.AppendRank()
+	anchor, placeBefore := addition.Before, addition.Before != ""
+	if addition.After != "" {
+		anchor = addition.After
+	}
+	position := &statusPosition{}
+	if anchor != "" {
+		resolved, err := requireLiveStatus(ctx, scope, vocabulary, anchor)
+		if err != nil {
+			return statusPlan{}, err
+		}
+		anchor = resolved
+		rank, err = vocabulary.InsertRank("", anchor, placeBefore)
+		if err != nil {
+			return statusPlan{}, err
+		}
+		if placeBefore {
+			position.Before = anchor
+		} else {
+			position.After = anchor
+		}
+	}
+	position.Rank = rank
+
+	operation := core.ConfigOperation{
+		Type:  core.ConfigStatusAdd,
+		Name:  addition.Status,
+		Label: display,
+		Rank:  rank,
+		Tags:  addition.Tags,
+	}
+	change := statusChange{
+		Operation: "add",
+		Status:    addition.Status,
+		Position:  position,
+		Label:     &statusLabel{To: display},
+		Tags:      addition.Tags,
+	}
+	if containsStatusTag(addition.Tags, core.StatusTagDefault) {
+		change.DefaultFrom = vocabulary.Default()
+	}
+	return statusPlan{operations: []core.ConfigOperation{operation}, change: change}, nil
+}
+
+// statusAddition is one status somebody is defining, however they said it: the
+// verb's arguments and flags, or the board's JSON body.
+type statusAddition struct {
+	Status core.Status
+	// Label empty derives one from the token.
+	Label  string
+	Tags   []core.StatusTag
+	Before core.Status
+	After  core.Status
+}
+
+// planStatusRename moves a status onto a new token, keeping a label somebody
+// chose and re-deriving one nobody did.
+//
+// label is what the caller asked for and empty means they asked for nothing,
+// which is the case the derived-label rule is about.
+func planStatusRename(
+	ctx context.Context,
+	scope statusScope,
+	vocabulary core.Vocabulary,
+	from, to core.Status,
+	label string,
+) (statusPlan, error) {
+	if err := core.ValidateStatusToken(to); err != nil {
+		return statusPlan{}, err
+	}
+	subject, err := requireLiveStatus(ctx, scope, vocabulary, from)
+	if err != nil {
+		return statusPlan{}, err
+	}
+	if subject == to {
+		return statusPlan{}, core.Errorf(core.CategoryValidation,
+			"status %q already has that value", to)
+	}
+	if vocabulary.Has(to) {
+		return statusPlan{}, core.Errorf(core.CategoryValidation,
+			"this project already defines status %q", to)
+	}
+
+	// The derived-label rule. A label nobody chose follows the name it was
+	// derived from; a label somebody chose is theirs and survives a rename of
+	// the machine value underneath it.
+	current := vocabulary.Label(subject)
+	display, derived := current, false
+	switch {
+	case label != "":
+		display = label
+	case current == core.DerivedStatusLabel(subject):
+		display, derived = core.DerivedStatusLabel(to), true
+	}
+	if err := core.ValidateStatusLabel(display); err != nil {
+		return statusPlan{}, err
+	}
+
+	rename := core.ConfigOperation{Type: core.ConfigStatusRename, From: subject, To: to}
+	operations := []core.ConfigOperation{rename}
+	if display != current {
+		operations = append(operations, core.ConfigOperation{
+			Type: core.ConfigStatusRelabel, Status: to, Label: display,
+		})
+	}
+	labelDerived := derived
+	return statusPlan{
+		operations: operations,
+		change: statusChange{
+			Operation:    "rename",
+			Status:       to,
+			From:         subject,
+			Label:        &statusLabel{From: current, To: display},
+			LabelDerived: &labelDerived,
+			Tags:         statusTags(vocabulary, subject),
+		},
+	}, nil
+}
+
+// planStatusRelabel changes what a column is called without touching the value
+// stored on its tasks.
+func planStatusRelabel(
+	ctx context.Context,
+	scope statusScope,
+	vocabulary core.Vocabulary,
+	status core.Status,
+	display string,
+) (statusPlan, error) {
+	if err := core.ValidateStatusLabel(display); err != nil {
+		return statusPlan{}, err
+	}
+	subject, err := requireLiveStatus(ctx, scope, vocabulary, status)
+	if err != nil {
+		return statusPlan{}, err
+	}
+	current := vocabulary.Label(subject)
+	if current == display {
+		return statusPlan{}, core.Errorf(core.CategoryValidation,
+			"status %q already has that label", subject)
+	}
+	operation := core.ConfigOperation{Type: core.ConfigStatusRelabel, Status: subject, Label: display}
+	return statusPlan{
+		operations: []core.ConfigOperation{operation},
+		change: statusChange{
+			Operation: "label",
+			Status:    subject,
+			Label:     &statusLabel{From: current, To: display},
+			Tags:      statusTags(vocabulary, subject),
+		},
+	}, nil
+}
+
+// planStatusMove places one status next to another, leaving every other status
+// where it is.
+func planStatusMove(
+	ctx context.Context,
+	scope statusScope,
+	vocabulary core.Vocabulary,
+	status, anchor core.Status,
+	placeBefore bool,
+) (statusPlan, error) {
+	subject, err := requireLiveStatus(ctx, scope, vocabulary, status)
+	if err != nil {
+		return statusPlan{}, err
+	}
+	resolvedAnchor, err := requireLiveStatus(ctx, scope, vocabulary, anchor)
+	if err != nil {
+		return statusPlan{}, err
+	}
+	if resolvedAnchor == subject {
+		return statusPlan{}, core.Errorf(core.CategoryValidation,
+			"cannot move status %q relative to itself", subject)
+	}
+	rank, err := vocabulary.InsertRank(subject, resolvedAnchor, placeBefore)
+	if err != nil {
+		return statusPlan{}, err
+	}
+	position := &statusPosition{Rank: rank}
+	if placeBefore {
+		position.Before = resolvedAnchor
+	} else {
+		position.After = resolvedAnchor
+	}
+	operation := core.ConfigOperation{Type: core.ConfigStatusReorder, Status: subject, Rank: rank}
+	return statusPlan{
+		operations: []core.ConfigOperation{operation},
+		change: statusChange{
+			Operation: "move",
+			Status:    subject,
+			Position:  position,
+			Label:     &statusLabel{To: vocabulary.Label(subject)},
+			Tags:      statusTags(vocabulary, subject),
+		},
+	}, nil
+}
+
+// planStatusTagSet replaces a status's whole tag set.
+func planStatusTagSet(
+	ctx context.Context,
+	scope statusScope,
+	vocabulary core.Vocabulary,
+	status core.Status,
+	wanted []core.StatusTag,
+) (statusPlan, error) {
+	subject, err := requireLiveStatus(ctx, scope, vocabulary, status)
+	if err != nil {
+		return statusPlan{}, err
+	}
+	current := statusTags(vocabulary, subject)
+	operations := tagSetOperations(subject, current, wanted)
+	if len(operations) == 0 {
+		return statusPlan{}, core.Errorf(core.CategoryValidation,
+			"status %q already carries exactly those tags", subject)
+	}
+	change := statusChange{Operation: "tag", Status: subject, Tags: wanted}
+	if containsStatusTag(wanted, core.StatusTagDefault) && !containsStatusTag(current, core.StatusTagDefault) {
+		change.DefaultFrom = vocabulary.Default()
+	}
+	return statusPlan{operations: operations, change: change}, nil
+}
+
+// planStatusUntag takes one role away from a status.
+func planStatusUntag(
+	ctx context.Context,
+	scope statusScope,
+	vocabulary core.Vocabulary,
+	status core.Status,
+	tag core.StatusTag,
+) (statusPlan, error) {
+	subject, err := requireLiveStatus(ctx, scope, vocabulary, status)
+	if err != nil {
+		return statusPlan{}, err
+	}
+	current := statusTags(vocabulary, subject)
+	if !containsStatusTag(current, tag) {
+		return statusPlan{}, core.Errorf(core.CategoryValidation,
+			"status %q does not carry the %q tag", subject, tag)
+	}
+	remaining := make([]core.StatusTag, 0, len(current))
+	for _, candidate := range current {
+		if candidate != tag {
+			remaining = append(remaining, candidate)
+		}
+	}
+	operation := core.ConfigOperation{Type: core.ConfigStatusUntag, Status: subject, Tag: tag}
+	return statusPlan{
+		operations: []core.ConfigOperation{operation},
+		change: statusChange{
+			Operation: "untag",
+			Status:    subject,
+			Tags:      remaining,
+		},
+	}, nil
+}
+
+// planStatusDelete retires a status and forwards its tasks to a live one.
+func planStatusDelete(
+	ctx context.Context,
+	scope statusScope,
+	vocabulary core.Vocabulary,
+	status, into core.Status,
+) (statusPlan, error) {
+	subject, err := requireLiveStatus(ctx, scope, vocabulary, status)
+	if err != nil {
+		return statusPlan{}, err
+	}
+	destination, err := requireLiveStatus(ctx, scope, vocabulary, into)
+	if err != nil {
+		return statusPlan{}, err
+	}
+	if destination == subject {
+		return statusPlan{}, core.Errorf(core.CategoryValidation,
+			"status delete cannot forward %q into itself; name where its tasks belong", subject)
+	}
+	definition, _ := statusDefinition(vocabulary, subject)
+	counts, err := removalTaskCounts(ctx, scope, vocabulary, subject, destination)
+	if err != nil {
+		return statusPlan{}, err
+	}
+	operation := core.ConfigOperation{
+		Type: core.ConfigStatusRemove, Status: subject, Destination: destination,
+	}
+	return statusPlan{
+		operations: []core.ConfigOperation{operation},
+		change: statusChange{
+			Operation: "delete",
+			Status:    subject,
+			Into:      destination,
+			Label:     &statusLabel{To: definition.Label},
+			Tags:      definition.Tags,
+		},
+		tasks: counts,
+	}, nil
+}
+
+// statusEdit is a change to one status's name, label and roles, in any subset.
+// A nil member is one this change does not touch, which is the difference
+// between leaving a label alone and blanking it.
+type statusEdit struct {
+	Name  *core.Status
+	Label *string
+	Tags  *[]core.StatusTag
+}
+
+// planStatusEdit is the board's status form: a rename, a relabel and a tag set
+// as one change, because that is how somebody edits a column.
+//
+// It composes the verbs' own planners rather than authoring anything new, so
+// the operations it records are the operations `workbook status rename`,
+// `label` and `tag` record — a rename is still a rename followed by the relabel
+// the derived-label rule asks for, which is the pack shape reconciliation knows
+// how to classify.
+//
+// The tag operations name the status by the value it has after a rename in the
+// same pack. A pack is ordered and atomic, so operation N+1 reads against
+// operation N's effect; markPackSubjects is what makes that true for a token
+// the pack itself created.
+//
+// The reported change is the one the commit subject names — a rename if this
+// edit renames, otherwise a relabel, otherwise the tags — with the rest of the
+// pack carried alongside it. That is the shape `workbook status tag` already
+// writes, and `status log` reports the extra operations as collapsed changes.
+func planStatusEdit(
+	ctx context.Context,
+	scope statusScope,
+	vocabulary core.Vocabulary,
+	status core.Status,
+	edit statusEdit,
+) (statusPlan, error) {
+	subject, err := requireLiveStatus(ctx, scope, vocabulary, status)
+	if err != nil {
+		return statusPlan{}, err
+	}
+	members := 0
+	for _, named := range []bool{edit.Name != nil, edit.Label != nil, edit.Tags != nil} {
+		if named {
+			members++
+		}
+	}
+	if members == 0 {
+		return statusPlan{}, core.Errorf(core.CategoryValidation,
+			"status %q was given nothing to change", subject)
+	}
+
+	// A member that repeats what the status already says is not a mistake here,
+	// which is where this parts company with the verbs. A form sends every field
+	// it has, so "rename it to the name it has" is the client saying leave it
+	// alone; typing the same thing into `workbook status rename` means something
+	// else, and is still refused — as it is here when it is the whole change,
+	// below, so a single-member request gets the verb's own answer either way.
+	if edit.Name != nil && *edit.Name == subject && members == 1 {
+		return planStatusRename(ctx, scope, vocabulary, subject, *edit.Name, "")
+	}
+	// A label somebody sent is a label they chose, blank included, so it is
+	// validated before the rename sees it: planStatusRename reads an empty label
+	// as "nothing was asked for" and derives one, which is right for a flag
+	// nobody typed and wrong for a member somebody emptied.
+	if edit.Label != nil {
+		if err := core.ValidateStatusLabel(*edit.Label); err != nil {
+			return statusPlan{}, err
+		}
+	}
+
+	plan := statusPlan{}
+	named := subject
+	// refusal keeps what a half of this edit said about changing nothing, for
+	// the request that turns out to change nothing at all.
+	var refusal error
+	switch {
+	case edit.Name != nil && *edit.Name != subject:
+		label := ""
+		if edit.Label != nil {
+			label = *edit.Label
+		}
+		renamed, err := planStatusRename(ctx, scope, vocabulary, subject, *edit.Name, label)
+		if err != nil {
+			return statusPlan{}, err
+		}
+		plan, named = renamed, *edit.Name
+	case edit.Label != nil:
+		// The label has already been validated, so the only thing left for this
+		// to refuse is a label the status already has.
+		relabelled, err := planStatusRelabel(ctx, scope, vocabulary, subject, *edit.Label)
+		if err != nil {
+			refusal = err
+		} else {
+			plan = relabelled
+		}
+	}
+
+	if edit.Tags != nil {
+		tagged, err := planStatusTagSet(ctx, scope, vocabulary, subject, *edit.Tags)
+		if err != nil {
+			refusal = err
+		} else {
+			for _, operation := range tagged.operations {
+				operation.Status = named
+				plan.operations = append(plan.operations, operation)
+			}
+			if plan.change.Operation == "" {
+				plan.change = tagged.change
+			} else {
+				plan.change.Tags = tagged.change.Tags
+				if tagged.change.DefaultFrom != "" {
+					plan.change.DefaultFrom = tagged.change.DefaultFrom
+				}
+			}
+		}
+	}
+	if len(plan.operations) == 0 {
+		if members == 1 && refusal != nil {
+			// One member, and it changed nothing: the verb's own refusal, in the
+			// verb's own words.
+			return statusPlan{}, refusal
+		}
+		return statusPlan{}, core.Errorf(core.CategoryValidation,
+			"status %q already reads exactly that way", subject)
+	}
+	return plan, nil
+}
+
+// planStatusOrder sets the whole column order at once, which is what a drag
+// across a board means and what no verb expresses: `status move` names a
+// neighbour, and a client that had to translate a drop into a sequence of
+// pairwise moves would be authoring a different change with every intermediate
+// state visible to everybody else.
+//
+// The order must name every live status exactly once. A partial list is refused
+// rather than interpreted, because there is no reading of "put these three
+// first" that does not also decide something about the statuses it left out —
+// and the client that sent it is a client whose columns are already out of step
+// with the project's.
+//
+// Ranks are rewritten as whole numbers in the requested order, and only for the
+// statuses whose rank is not already the one they need. That is deliberately
+// literal: applyReorder records a rank rather than a relation, so two clones
+// that dragged a column to the same place converge, and a status this order did
+// not move keeps the rank a teammate's insertion gave it.
+func planStatusOrder(
+	ctx context.Context,
+	scope statusScope,
+	vocabulary core.Vocabulary,
+	wanted []core.Status,
+) (statusPlan, error) {
+	definitions := vocabulary.Definitions()
+	seen := make(map[core.Status]struct{}, len(wanted))
+	resolved := make([]core.Status, 0, len(wanted))
+	for _, status := range wanted {
+		live, err := requireLiveStatus(ctx, scope, vocabulary, status)
+		if err != nil {
+			return statusPlan{}, err
+		}
+		if _, repeated := seen[live]; repeated {
+			return statusPlan{}, core.Errorf(core.CategoryValidation,
+				"the order names status %q twice; name each of this project's statuses exactly once", live)
+		}
+		seen[live] = struct{}{}
+		resolved = append(resolved, live)
+	}
+	if len(resolved) != len(definitions) {
+		return statusPlan{}, core.Errorf(core.CategoryValidation,
+			"the order names %d of this project's %d statuses; name each of them exactly once: %s",
+			len(resolved), len(definitions), statusNameList(vocabulary))
+	}
+
+	unchanged := true
+	for index, status := range resolved {
+		if definitions[index].Status != status {
+			unchanged = false
+			break
+		}
+	}
+	if unchanged {
+		return statusPlan{}, core.Errorf(core.CategoryValidation,
+			"this project's statuses are already in that order")
+	}
+
+	operations := make([]core.ConfigOperation, 0, len(resolved))
+	for index, status := range resolved {
+		rank := strconv.Itoa(index+1) + "/1"
+		if definition, live := statusDefinition(vocabulary, status); live && definition.Rank == rank {
+			continue
+		}
+		operations = append(operations, core.ConfigOperation{
+			Type: core.ConfigStatusReorder, Status: status, Rank: rank,
+		})
+	}
+	return statusPlan{operations: operations, change: statusChange{Operation: "order"}}, nil
 }
 
 // runStatusMutation is the one path every status change takes.
@@ -1454,12 +1781,8 @@ func docsWarning(report *agentdocs.Report, err error) []core.Warning {
 			names = append(names, artifact.Path)
 		}
 		return []core.Warning{{
-			Code: core.WarningDocsRefresh,
-			Message: fmt.Sprintf(
-				"the status change was recorded, but %s was modified locally and now describes "+
-					"statuses this project no longer has; overwrite it with: workbook docs update --force",
-				strings.Join(names, ", "),
-			),
+			Code:    core.WarningDocsRefresh,
+			Message: docsBlockedMessage(strings.Join(names, ", ")),
 		}}
 	}
 	return []core.Warning{{
@@ -1467,6 +1790,22 @@ func docsWarning(report *agentdocs.Report, err error) []core.Warning {
 		Message: "the status change was recorded, but the guidelines could not be regenerated: " +
 			publicErrorMessage(err),
 	}}
+}
+
+// docsBlockedMessage names a generated file a status change invalidated and
+// could not rewrite because somebody had edited it, with the command that
+// overwrites it anyway.
+//
+// It is one sentence in one place because two surfaces reach it: the verbs,
+// which tried to rewrite the file and were refused, and the board, which does
+// not write files at all and finds the same file describing statuses this
+// project no longer has.
+func docsBlockedMessage(names string) string {
+	return fmt.Sprintf(
+		"the status change was recorded, but %s was modified locally and now describes "+
+			"statuses this project no longer has; overwrite it with: workbook docs update --force",
+		names,
+	)
 }
 
 // configCommitSubject writes what the ledger's `git log` says about this
@@ -1493,6 +1832,11 @@ func (change statusChange) summary() string {
 		return fmt.Sprintf("untag status %s", change.Status)
 	case "delete":
 		return fmt.Sprintf("remove status %s into %s", change.Status, change.Into)
+	case "order":
+		// No status is named, because a reorder is about the arrangement rather
+		// than about any one column: the board sends the whole order and the
+		// pack records every status the arrangement moved.
+		return "reorder statuses"
 	default:
 		return "update project configuration"
 	}
@@ -1522,7 +1866,7 @@ func statusWriteError(err error) error {
 // that used to be right and whose replacement this clone can name.
 func requireLiveStatus(
 	ctx context.Context,
-	session *taskSession,
+	scope statusScope,
 	vocabulary core.Vocabulary,
 	status core.Status,
 ) (core.Status, error) {
@@ -1540,7 +1884,7 @@ func requireLiveStatus(
 	resolved, _ := vocabulary.Resolve(status)
 	return "", core.Errorf(core.CategoryNotFound, "no status %q; it was %s %q%s%s",
 		status, forwardingVerb(operation), via,
-		statusForwardedOn(ctx, session, status), statusChainClause(via, resolved))
+		statusForwardedOn(ctx, scope, status), statusChainClause(via, resolved))
 }
 
 // statusChainClause says where a chain ends when that is not where its first
@@ -1564,8 +1908,8 @@ func statusChainClause(via, resolved core.Status) string {
 // it cannot. The date is what turns "it was renamed" into something a person
 // can place among their own weeks, and reading the ledger for it is affordable
 // here because this path has already failed.
-func statusForwardedOn(ctx context.Context, session *taskSession, status core.Status) string {
-	ledger, err := readConfigLedgerWindow(ctx, session.repository, session.config, maxDatedConfigCommits)
+func statusForwardedOn(ctx context.Context, scope statusScope, status core.Status) string {
+	ledger, err := readConfigLedgerWindow(ctx, scope.repository, scope.config, maxDatedConfigCommits)
 	if err != nil || !ledger.Found {
 		return ""
 	}
@@ -1706,7 +2050,7 @@ func statusPackInverse(before core.Vocabulary, operations []core.ConfigOperation
 			Exact:   true,
 		}
 	case core.ConfigStatusReorder:
-		return reorderInverse(before, operation, subject)
+		return reorderInverse(before, operation, subject, operations)
 	case core.ConfigStatusTag, core.ConfigStatusUntag:
 		return tagInverse(before, operation, operations)
 	case core.ConfigStatusRemove:
@@ -1733,7 +2077,32 @@ func renameInverse(before core.Vocabulary, operation core.ConfigOperation, pack 
 		}
 		command += " --label " + quoteStatusArgument(definition.Label)
 	}
+	// The board's status form can rename and retag in one commit, which no verb
+	// does. Renaming back does not give the tags back, so the inverse says so
+	// rather than claiming to restore a state it leaves half changed.
+	if tagged := taggedIn(pack); tagged != "" {
+		definition, live := statusDefinition(before, operation.From)
+		if !live {
+			return &statusInverse{Command: command}
+		}
+		return &statusInverse{
+			Command: command,
+			Note: fmt.Sprintf("this commit also changed %q's tags; %s restores them",
+				operation.From, tagCommand(operation.From, definition.Tags)),
+		}
+	}
 	return &statusInverse{Command: command, Exact: true}
+}
+
+// taggedIn names the status a pack tagged or untagged beside whatever else it
+// did, or nothing when the pack changed no tags.
+func taggedIn(pack []core.ConfigOperation) core.Status {
+	for _, operation := range pack {
+		if operation.Type == core.ConfigStatusTag || operation.Type == core.ConfigStatusUntag {
+			return operation.Status
+		}
+	}
+	return ""
 }
 
 // relabelled reports whether a pack also set the status's display label, which
@@ -1883,25 +2252,45 @@ func addInverse(before core.Vocabulary, operation core.ConfigOperation) *statusI
 // It names the status that preceded it, or the one that followed when it was
 // first, because those are the two ways to describe a position without
 // depending on a rank that the reorder itself replaced.
-func reorderInverse(before core.Vocabulary, operation core.ConfigOperation, subject core.Status) *statusInverse {
+func reorderInverse(
+	before core.Vocabulary,
+	operation core.ConfigOperation,
+	subject core.Status,
+	pack []core.ConfigOperation,
+) *statusInverse {
 	definitions := before.Definitions()
 	index := before.Order(subject)
 	if index >= len(definitions) || definitions[index].Status != subject {
 		return nil
 	}
+	inverse := &statusInverse{Exact: true}
 	if index == 0 {
 		if len(definitions) < 2 {
 			return nil
 		}
-		return &statusInverse{
-			Command: statusCommand("move", string(operation.Status), "--before", string(definitions[1].Status)),
-			Exact:   true,
+		inverse.Command = statusCommand("move", string(operation.Status), "--before", string(definitions[1].Status))
+	} else {
+		inverse.Command = statusCommand("move", string(operation.Status), "--after", string(definitions[index-1].Status))
+	}
+	// A drag on the board sets the whole order in one commit, which moves as
+	// many statuses as the drag disturbed. One move puts one of them back, so
+	// the inverse says how many it does not.
+	if moved := reorderedIn(pack); moved > 1 {
+		inverse.Exact = false
+		inverse.Note = fmt.Sprintf("this commit moved %d statuses; that restores %q alone", moved, subject)
+	}
+	return inverse
+}
+
+// reorderedIn counts the statuses a pack moved.
+func reorderedIn(pack []core.ConfigOperation) int {
+	moved := 0
+	for _, operation := range pack {
+		if operation.Type == core.ConfigStatusReorder {
+			moved++
 		}
 	}
-	return &statusInverse{
-		Command: statusCommand("move", string(operation.Status), "--after", string(definitions[index-1].Status)),
-		Exact:   true,
-	}
+	return moved
 }
 
 // removeInverse defines the status again where it was, with the label and tags

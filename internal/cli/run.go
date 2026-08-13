@@ -1004,8 +1004,26 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 		fresh.Vocabulary = state.Vocabulary
 		return fresh, nil
 	}
+	// The board's status administration goes through the verb family's own
+	// planners, so what it refuses and what it records are what `workbook
+	// status` refuses and records. Only the write's surroundings differ; see
+	// boardVocabulary.apply.
+	statuses := &boardVocabulary{
+		repository: repository,
+		config:     service.Config,
+		publisher:  publisher,
+		service: func(vocabulary core.Vocabulary) core.Service {
+			reader := service
+			reader.Vocabulary = vocabulary
+			return reader
+		},
+	}
 	handler := webui.NewHandler(webui.Options{
-		Vocabulary: readVocabulary,
+		Vocabulary:    readVocabulary,
+		AddStatus:     statuses.add,
+		EditStatus:    statuses.edit,
+		RemoveStatus:  statuses.remove,
+		ReorderStatus: statuses.reorder,
 		List: func(requestContext context.Context) ([]core.Task, error) {
 			reader, err := current(requestContext)
 			if err != nil {
@@ -1260,6 +1278,49 @@ func (p *boardPublisher) publish(
 		})
 	}
 	return result, nil
+}
+
+// publishConfig sends the configuration ledger a status change just moved.
+//
+// It is publish for the change that has no task ref: the same hand-off to a
+// watcher, the same fallback to pushing inline when none answers, and the same
+// treatment of a rejection as a warning beside a recorded change rather than as
+// a failed request. The nudge carries no task ID because there is no task — a
+// watcher's nudge wakes its loop, which synchronizes everything this clone
+// holds, so the ledger rides that just as a task would.
+//
+// A refusal by origin is read out of the result rather than out of an error,
+// because that is where publication puts it: the ledger's publication carves out
+// a refusal deliberately — the change is durable locally and the next fetch
+// replays it — and reports the state through the result instead. A caller that
+// only checked the error would answer a reader that their column change was
+// published when origin never took it, which is exactly the silence the
+// carve-out was written to avoid. The detail is the sentence the CLI prints for
+// the same condition.
+func (p *boardPublisher) publishConfig(ctx context.Context) []core.Warning {
+	if !p.repository.HasOrigin(ctx) {
+		return nil
+	}
+	if !p.inline.Load() && p.handOff("") {
+		return nil
+	}
+	published, err := p.repository.PushConfig(ctx, p.config)
+	if err != nil {
+		return []core.Warning{{
+			Code:    core.WarningAutoSync,
+			Message: "the change was recorded locally, but publishing it failed: " + err.Error(),
+		}}
+	}
+	if published == nil {
+		return nil
+	}
+	if detail, unsettled := published.Warning(); unsettled {
+		return []core.Warning{{
+			Code:    core.WarningAutoSync,
+			Message: "the change was recorded locally, but " + detail,
+		}}
+	}
+	return nil
 }
 
 // handOff reports whether a trustworthy watcher accepted the change.

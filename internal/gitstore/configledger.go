@@ -290,6 +290,52 @@ func (r *Repository) WriteConfigOperation(
 	operations []core.ConfigOperation,
 	reason string,
 ) (ConfigWriteResult, error) {
+	return r.writeConfigOperation(ctx, config, ids, operations, reason, nil)
+}
+
+// WriteConfigOperationOnto records the same batch, and only onto the ledger tip
+// the caller names.
+//
+// It is for the caller whose change was composed against a vocabulary somebody
+// was looking at, rather than against whatever this clone holds at the moment
+// the write runs — the board's status panel, where the two are seconds apart and
+// a teammate can land a change in between. Applying the batch to a tip that
+// moved is not "recording it against current state": a rename authored against
+// one set of statuses, replayed onto another, answers a question nobody asked
+// and tells neither author about it.
+//
+// The expectation is enforced at the ref transaction rather than beside it. The
+// tip this checks is the same value handed to the compare-and-swap below, so a
+// write that lands between the check and the swap loses the swap, and both
+// outcomes reach the caller as the same stale write. An expectation of no ledger
+// at all — the empty string, which is what a project that has never recorded a
+// status change reports — is settled by the creation, which fails if the ref
+// exists by then.
+//
+// expectedHead names a tip; "" names a project with no ledger.
+func (r *Repository) WriteConfigOperationOnto(
+	ctx context.Context,
+	config core.ProjectConfig,
+	ids core.IDSource,
+	operations []core.ConfigOperation,
+	reason string,
+	expectedHead string,
+) (ConfigWriteResult, error) {
+	return r.writeConfigOperation(ctx, config, ids, operations, reason, &expectedHead)
+}
+
+// writeConfigOperation is both writes. expected is nil for a caller that means
+// "onto whatever this clone holds", which is every command: a verb reads the
+// vocabulary, authors against it, and writes in one uninterrupted sequence, so
+// there is no window for it to name a tip about.
+func (r *Repository) writeConfigOperation(
+	ctx context.Context,
+	config core.ProjectConfig,
+	ids core.IDSource,
+	operations []core.ConfigOperation,
+	reason string,
+	expected *string,
+) (ConfigWriteResult, error) {
 	if err := r.verifyIdentity(ctx); err != nil {
 		return ConfigWriteResult{}, err
 	}
@@ -324,6 +370,18 @@ func (r *Repository) WriteConfigOperation(
 	if err != nil {
 		return ConfigWriteResult{}, err
 	}
+	// Read here and compared here, because this is the value the append's
+	// compare-and-swap is about to be given: a check made against any other read
+	// would leave a window this one does not have.
+	if expected != nil {
+		current := ""
+		if found {
+			current = tip.Head
+		}
+		if current != *expected {
+			return ConfigWriteResult{}, supersededConfigLedger(*expected, current)
+		}
+	}
 	if !found {
 		result, seeded, err := r.seedConfigLedger(ctx, config, ids, authored, actor, reason)
 		if err != nil {
@@ -344,8 +402,34 @@ func (r *Repository) WriteConfigOperation(
 			return ConfigWriteResult{}, core.Errorf(core.CategoryStaleWrite,
 				"%s was created and removed during this write; rerun the command", configRef)
 		}
+		// A caller that named a tip named no ledger at all, and there is one
+		// now. Appending would record its change onto a root it never saw.
+		if expected != nil {
+			return ConfigWriteResult{}, supersededConfigLedger(*expected, tip.Head)
+		}
 	}
 	return r.appendConfigOperation(ctx, tip, authored, actor, reason)
+}
+
+// supersededConfigLedger refuses a write whose caller named a tip that is no
+// longer the ledger's.
+//
+// It states both tips, because the caller is a surface with a reader behind it:
+// what they composed against, and what the project holds now. A project with no
+// ledger is named as such rather than as an empty string, which would read as a
+// missing value rather than as the ordinary state of a project nobody has
+// configured.
+func supersededConfigLedger(expected, current string) error {
+	return core.Errorf(core.CategoryStaleWrite,
+		"this change was composed against %s and the configuration ledger is at %s; nothing was recorded",
+		describeConfigTip(expected), describeConfigTip(current))
+}
+
+func describeConfigTip(head string) string {
+	if head == "" {
+		return "no configuration ledger"
+	}
+	return head
 }
 
 // authoredConfigOperations copies the caller's operations and mints an ID for

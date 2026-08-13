@@ -121,8 +121,8 @@ type VocabularyResolver func(context.Context) (VocabularyState, error)
 // to find, because "the status tagged default" is a rule and a client that
 // re-derived it could disagree with the server about where a new task lands.
 //
-// It is read-only. Nothing here writes a vocabulary; `workbook status` does,
-// and an administration surface on the board is a separate change.
+// It is what GET /api/vocabulary serves and what every vocabulary mutation
+// answers with, so a client hands both to the same renderer.
 type VocabularyDocument struct {
 	Format   string                  `json:"format"`
 	Version  int                     `json:"version"`
@@ -131,6 +131,115 @@ type VocabularyDocument struct {
 	Statuses []core.StatusDefinition `json:"statuses"`
 	Aliases  []core.StatusAlias      `json:"aliases"`
 	Retired  []core.RetiredStatus    `json:"retired"`
+}
+
+// VocabularyStatusAddition is a status the board asks this project to define.
+//
+// Tags are the words the CLI's --tag takes rather than core.StatusTag values,
+// because the same parse that refuses an unknown --tag refuses an unknown one
+// here, and it refuses the word somebody sent.
+type VocabularyStatusAddition struct {
+	Status core.Status
+	// Label is the column heading. Empty means the client named none, and the
+	// label is derived from the token exactly as `workbook status add` derives
+	// one when --label is not given.
+	Label string
+	Tags  []string
+	// Before and After place the new status next to a live one. At most one is
+	// set; neither appends.
+	Before core.Status
+	After  core.Status
+	// ExpectedHead is the configuration ledger tip the client composed this
+	// change against. See requireVocabularyHead for why it is required here and
+	// optional on a task mutation.
+	ExpectedHead string
+}
+
+// VocabularyStatusEdit renames, relabels and retags one status, in any subset:
+// a nil member is a member this change does not touch, which is what lets one
+// form send one intent.
+type VocabularyStatusEdit struct {
+	Name         *core.Status
+	Label        *string
+	Tags         *[]string
+	ExpectedHead string
+}
+
+// VocabularyStatusRemoval removes a status. Into is where its tasks belong and
+// is never guessed: a removal with nowhere to forward to is a removal nobody
+// could have meant.
+type VocabularyStatusRemoval struct {
+	Into         core.Status
+	ExpectedHead string
+}
+
+// VocabularyOrder is the whole column order, because a drag is one gesture and
+// one intent rather than a sequence of pairwise moves the client would have to
+// keep in step with the server.
+type VocabularyOrder struct {
+	Statuses     []core.Status
+	ExpectedHead string
+}
+
+// VocabularyTaskCounts prices a status change in the terms a person removing a
+// column cares about. Both members are zero for every change but a removal, and
+// stated rather than omitted, exactly as the CLI states them.
+type VocabularyTaskCounts struct {
+	// Affected counts the active tasks that resolved through the removed status.
+	Affected int `json:"affected"`
+	// ClaimableAfter counts how many of those become eligible for `workbook
+	// next` where they land.
+	ClaimableAfter int `json:"claimableAfter"`
+}
+
+// VocabularyMutation is what one vocabulary change produced: the statuses as
+// they now stand, the tip they were written to, and what it cost.
+type VocabularyMutation struct {
+	State    VocabularyState
+	Tasks    VocabularyTaskCounts
+	Warnings []core.Warning
+}
+
+// The four capabilities behind the vocabulary mutation routes. Each answers
+// with the whole vocabulary rather than with what it changed, because a status
+// change can move a status the client did not name — a tag is exclusive, a
+// removal retires a token — and a client that patched its own model from a
+// description of one change would disagree with the server about the rest.
+type (
+	VocabularyStatusAdder   func(context.Context, VocabularyStatusAddition) (VocabularyMutation, error)
+	VocabularyStatusEditor  func(context.Context, core.Status, VocabularyStatusEdit) (VocabularyMutation, error)
+	VocabularyStatusRemover func(context.Context, core.Status, VocabularyStatusRemoval) (VocabularyMutation, error)
+	VocabularyReorderer     func(context.Context, VocabularyOrder) (VocabularyMutation, error)
+)
+
+// VocabularyMutationDocument is what every vocabulary mutation answers with.
+//
+// It carries the whole vocabulary document, in the shape GET /api/vocabulary
+// serves it, so the client renders the result of a change through the same code
+// that rendered the page — including the new head, which is what its next
+// change has to name.
+type VocabularyMutationDocument struct {
+	Format     string               `json:"format"`
+	Version    int                  `json:"version"`
+	Vocabulary VocabularyDocument   `json:"vocabulary"`
+	Tasks      VocabularyTaskCounts `json:"tasks"`
+	Warnings   []core.Warning       `json:"warnings,omitempty"`
+}
+
+// VocabularyErrorDocument is the error envelope with the statuses a refused
+// change should be recomposed against.
+//
+// The envelope is byte-for-byte the ordinary one — same format, same version,
+// same error body — so a client that only knows how to read errors reads this
+// one. The vocabulary rides along for the refusal that needs it: a stale write
+// means the client is looking at columns somebody else has already changed, and
+// answering with the current ones saves it the refetch it would otherwise have
+// to make before it could tell the reader anything.
+type VocabularyErrorDocument struct {
+	Format     string              `json:"format"`
+	Version    int                 `json:"version"`
+	Error      ErrorBody           `json:"error"`
+	Vocabulary *VocabularyDocument `json:"vocabulary,omitempty"`
 }
 
 type TaskMutationDocument struct {
@@ -202,19 +311,26 @@ type Options struct {
 	// Vocabulary reads the project's statuses per request. A nil resolver means
 	// this board was built without one and draws the built-in statuses, which
 	// is what every construction that predates per-project columns did.
-	Vocabulary   VocabularyResolver
-	List         TaskLister
-	Create       TaskCreator
-	Update       TaskUpdater
-	UpdateStatus TaskStatusUpdater
-	Position     TaskPositionUpdater
-	Delete       TaskDeleter
-	Restore      TaskRestorer
-	Depend       TaskDependencyAdder
-	Free         TaskDependencyRemover
-	History      TaskHistoryReader
-	SyncState    SyncStateReporter
-	SetSyncMode  SyncModeSetter
+	Vocabulary VocabularyResolver
+	// The four vocabulary mutations. A board given none of them renders its
+	// columns and refuses to change them, which is every board that predates the
+	// administration panel.
+	AddStatus     VocabularyStatusAdder
+	EditStatus    VocabularyStatusEditor
+	RemoveStatus  VocabularyStatusRemover
+	ReorderStatus VocabularyReorderer
+	List          TaskLister
+	Create        TaskCreator
+	Update        TaskUpdater
+	UpdateStatus  TaskStatusUpdater
+	Position      TaskPositionUpdater
+	Delete        TaskDeleter
+	Restore       TaskRestorer
+	Depend        TaskDependencyAdder
+	Free          TaskDependencyRemover
+	History       TaskHistoryReader
+	SyncState     SyncStateReporter
+	SetSyncMode   SyncModeSetter
 }
 
 // handler embeds Options rather than copying it field by field, so there is no
@@ -262,6 +378,38 @@ type createTaskRequest struct {
 	Status      core.Status   `json:"status"`
 	Priority    core.Priority `json:"priority"`
 	Labels      []string      `json:"labels"`
+}
+
+// The four vocabulary mutation bodies. expectedHead is a member of each rather
+// than a header or a query parameter because it is part of the change: the
+// board is proposing this edit to these columns, and the two travel together.
+type addStatusRequest struct {
+	Status       core.Status `json:"status"`
+	Label        string      `json:"label"`
+	Tags         []string    `json:"tags"`
+	Before       core.Status `json:"before"`
+	After        core.Status `json:"after"`
+	ExpectedHead *string     `json:"expectedHead"`
+}
+
+// editStatusRequest takes pointers so that an omitted member and an emptied one
+// are different requests: no `label` leaves the label alone, and `"label": ""`
+// is a blank label the vocabulary refuses.
+type editStatusRequest struct {
+	Name         *core.Status `json:"name"`
+	Label        *string      `json:"label"`
+	Tags         *[]string    `json:"tags"`
+	ExpectedHead *string      `json:"expectedHead"`
+}
+
+type removeStatusRequest struct {
+	Into         core.Status `json:"into"`
+	ExpectedHead *string     `json:"expectedHead"`
+}
+
+type reorderStatusesRequest struct {
+	Statuses     []core.Status `json:"statuses"`
+	ExpectedHead *string       `json:"expectedHead"`
 }
 
 // updateTaskRequest is converted directly to core.UpdateInput, so its fields
@@ -353,6 +501,10 @@ func NewHandler(options Options) http.Handler {
 	handler.mux.HandleFunc("GET /tasks/{id}", handler.serveBoard)
 	handler.mux.HandleFunc("GET /api/tasks", handler.serveTasks)
 	handler.mux.HandleFunc("GET /api/vocabulary", handler.serveVocabulary)
+	handler.mux.HandleFunc("POST /api/vocabulary/statuses", handler.addVocabularyStatus)
+	handler.mux.HandleFunc("PATCH /api/vocabulary/statuses/{status}", handler.editVocabularyStatus)
+	handler.mux.HandleFunc("DELETE /api/vocabulary/statuses/{status}", handler.removeVocabularyStatus)
+	handler.mux.HandleFunc("PUT /api/vocabulary/order", handler.reorderVocabulary)
 	handler.mux.HandleFunc("GET /api/tasks/{id}/history", handler.serveTaskHistory)
 	handler.mux.HandleFunc("POST /api/tasks", handler.createTask)
 	handler.mux.HandleFunc("PATCH /api/tasks/{id}", handler.updateTask)
@@ -453,9 +605,16 @@ func allowedMethod(path string) (string, bool) {
 		return http.MethodGet + ", " + http.MethodPost, true
 	case "/api/vocabulary":
 		return http.MethodGet, true
+	case "/api/vocabulary/statuses":
+		return http.MethodPost, true
+	case "/api/vocabulary/order":
+		return http.MethodPut, true
 	case "/api/sync":
 		return http.MethodGet + ", " + http.MethodPut, true
 	default:
+		if vocabularyStatusPathName(path) != "" {
+			return http.MethodPatch + ", " + http.MethodDelete, true
+		}
 		if _, _, ok := taskDependencyPathIDs(path); ok {
 			return http.MethodPut + ", " + http.MethodDelete, true
 		}
@@ -494,6 +653,29 @@ func taskDependencyPathIDs(path string) (string, string, bool) {
 		return "", "", false
 	}
 	return parts[0], parts[2], true
+}
+
+// vocabularyStatusPathName reads the status one of the per-status routes
+// addresses: it is what answers the method question for a path the mux has not
+// matched yet, and what a request that arrived without the mux's pattern
+// variables falls back to.
+//
+// It asks only whether the path addresses one status, and nothing about whether
+// that status is a status. It cannot usefully: the mux hands the routes their
+// own decoded pattern value, so a check made only here would be a check most
+// requests never pass through. What every status name goes through instead is
+// core.ValidateStatusToken, at the planner, on both surfaces — which is where a
+// name that is not a token gets an answer that says so.
+func vocabularyStatusPathName(path string) string {
+	const prefix = "/api/vocabulary/statuses/"
+	if !strings.HasPrefix(path, prefix) {
+		return ""
+	}
+	status := strings.TrimPrefix(path, prefix)
+	if status == "" || strings.Contains(status, "/") {
+		return ""
+	}
+	return status
 }
 
 func taskPagePathID(path string) string {
@@ -602,8 +784,16 @@ func (handler *handler) serveVocabulary(writer http.ResponseWriter, request *htt
 		handler.writeError(writer, err)
 		return
 	}
+	writeJSON(writer, http.StatusOK, vocabularyDocument(state))
+}
+
+// vocabularyDocument renders one read of the project's statuses. The read route
+// and every mutation answer with it, so a client that can draw the board from
+// GET /api/vocabulary can draw the result of a change it made without a second
+// code path.
+func vocabularyDocument(state VocabularyState) VocabularyDocument {
 	document := state.Vocabulary.Document()
-	writeJSON(writer, http.StatusOK, VocabularyDocument{
+	return VocabularyDocument{
 		Format:   "workbook.vocabulary",
 		Version:  1,
 		Head:     state.Head,
@@ -611,6 +801,214 @@ func (handler *handler) serveVocabulary(writer http.ResponseWriter, request *htt
 		Statuses: document.Statuses,
 		Aliases:  document.Aliases,
 		Retired:  document.Retired,
+	}
+}
+
+// addVocabularyStatus defines a status this project does not have.
+func (handler *handler) addVocabularyStatus(writer http.ResponseWriter, request *http.Request) {
+	if handler.AddStatus == nil {
+		handler.writeError(writer, core.Errorf(core.CategoryOperational, "status addition is not configured"))
+		return
+	}
+	var body addStatusRequest
+	if err := decodeRequest(request.Body, &body); err != nil {
+		handler.writeError(writer, decodeRequestError("decode status add", err))
+		return
+	}
+	if body.Before != "" && body.After != "" {
+		handler.writeError(writer, core.Errorf(core.CategoryInvocation,
+			"a status is placed before or after another status, not both"))
+		return
+	}
+	head, err := vocabularyHead(body.ExpectedHead)
+	if err != nil {
+		handler.writeError(writer, err)
+		return
+	}
+	mutation, err := handler.AddStatus(request.Context(), VocabularyStatusAddition{
+		Status:       body.Status,
+		Label:        body.Label,
+		Tags:         body.Tags,
+		Before:       body.Before,
+		After:        body.After,
+		ExpectedHead: head,
+	})
+	if err != nil {
+		handler.writeVocabularyError(writer, request, err)
+		return
+	}
+	handler.writeVocabularyMutation(writer, mutation)
+}
+
+// editVocabularyStatus renames, relabels and retags one status in any
+// combination, because the panel edits a status as one form and a form is one
+// intent.
+func (handler *handler) editVocabularyStatus(writer http.ResponseWriter, request *http.Request) {
+	if handler.EditStatus == nil {
+		handler.writeError(writer, core.Errorf(core.CategoryOperational, "status editing is not configured"))
+		return
+	}
+	var body editStatusRequest
+	if err := decodeRequest(request.Body, &body); err != nil {
+		handler.writeError(writer, decodeRequestError("decode status change", err))
+		return
+	}
+	if body.Name == nil && body.Label == nil && body.Tags == nil {
+		handler.writeError(writer, core.Errorf(core.CategoryInvocation,
+			"a status change must set at least one of name, label or tags"))
+		return
+	}
+	head, err := vocabularyHead(body.ExpectedHead)
+	if err != nil {
+		handler.writeError(writer, err)
+		return
+	}
+	mutation, err := handler.EditStatus(request.Context(), vocabularyStatusOf(request), VocabularyStatusEdit{
+		Name:         body.Name,
+		Label:        body.Label,
+		Tags:         body.Tags,
+		ExpectedHead: head,
+	})
+	if err != nil {
+		handler.writeVocabularyError(writer, request, err)
+		return
+	}
+	handler.writeVocabularyMutation(writer, mutation)
+}
+
+// removeVocabularyStatus retires a status and forwards its tasks.
+//
+// The destination travels in the body of a DELETE, which is unusual and
+// deliberate: a removal is meaningless without somewhere for the work in that
+// column to go, so the one member the route cannot do without is the one member
+// a bare DELETE would have no room for.
+func (handler *handler) removeVocabularyStatus(writer http.ResponseWriter, request *http.Request) {
+	if handler.RemoveStatus == nil {
+		handler.writeError(writer, core.Errorf(core.CategoryOperational, "status removal is not configured"))
+		return
+	}
+	var body removeStatusRequest
+	if err := decodeRequest(request.Body, &body); err != nil {
+		handler.writeError(writer, decodeRequestError("decode status removal", err))
+		return
+	}
+	head, err := vocabularyHead(body.ExpectedHead)
+	if err != nil {
+		handler.writeError(writer, err)
+		return
+	}
+	mutation, err := handler.RemoveStatus(request.Context(), vocabularyStatusOf(request), VocabularyStatusRemoval{
+		Into:         body.Into,
+		ExpectedHead: head,
+	})
+	if err != nil {
+		handler.writeVocabularyError(writer, request, err)
+		return
+	}
+	handler.writeVocabularyMutation(writer, mutation)
+}
+
+// reorderVocabulary sets the whole column order at once.
+func (handler *handler) reorderVocabulary(writer http.ResponseWriter, request *http.Request) {
+	if handler.ReorderStatus == nil {
+		handler.writeError(writer, core.Errorf(core.CategoryOperational, "status ordering is not configured"))
+		return
+	}
+	var body reorderStatusesRequest
+	if err := decodeRequest(request.Body, &body); err != nil {
+		handler.writeError(writer, decodeRequestError("decode status order", err))
+		return
+	}
+	head, err := vocabularyHead(body.ExpectedHead)
+	if err != nil {
+		handler.writeError(writer, err)
+		return
+	}
+	mutation, err := handler.ReorderStatus(request.Context(), VocabularyOrder{
+		Statuses:     body.Statuses,
+		ExpectedHead: head,
+	})
+	if err != nil {
+		handler.writeVocabularyError(writer, request, err)
+		return
+	}
+	handler.writeVocabularyMutation(writer, mutation)
+}
+
+// vocabularyStatusOf reads the status a per-status route addresses, from the
+// mux's pattern where there is one and from the path where a caller built the
+// request itself.
+func vocabularyStatusOf(request *http.Request) core.Status {
+	if status := request.PathValue("status"); status != "" {
+		return core.Status(status)
+	}
+	return core.Status(vocabularyStatusPathName(request.URL.Path))
+}
+
+// vocabularyHead reads the head a change was composed against, refusing one
+// that names none.
+//
+// It is required where a task mutation's expectedHead is optional, and the
+// asymmetry is the point. A task's optimistic queue re-bases on a refusal and
+// carries on; a status change is a decision about every column on the board and
+// about where every task in one of them lands, so it is made against columns
+// somebody has seen or it is not made. A client that cannot say which
+// vocabulary it composed the change against does not know what it is changing.
+//
+// What is required is that the member is there, not that it says something. A
+// project whose configuration ledger has never been seeded has no head, GET
+// /api/vocabulary reports it as the empty string, and a client that sends that
+// back is telling the truth about what it read — while a client that omits the
+// member entirely is telling us nothing.
+func vocabularyHead(expected *string) (string, error) {
+	if expected == nil {
+		return "", core.Errorf(core.CategoryValidation,
+			"expectedHead is required; it names the vocabulary this change was composed against")
+	}
+	return *expected, nil
+}
+
+func (handler *handler) writeVocabularyMutation(writer http.ResponseWriter, mutation VocabularyMutation) {
+	writeJSON(writer, http.StatusOK, VocabularyMutationDocument{
+		Format:     "workbook.vocabulary-mutation",
+		Version:    1,
+		Vocabulary: vocabularyDocument(mutation.State),
+		Tasks:      mutation.Tasks,
+		Warnings:   mutation.Warnings,
+	})
+}
+
+// writeVocabularyError reports a refused change, and hands back the statuses
+// the client should recompose it against when the refusal was that it was
+// looking at old ones.
+//
+// Nothing is rebased and nothing is merged. A vocabulary is a decision somebody
+// made about how this project works, and a server that resolved two of them by
+// applying both would be inventing a third that neither author chose. So a
+// stale write is refused, and the current state travels with the refusal so the
+// person who made the change can see what happened while they were composing
+// it.
+//
+// A vocabulary that cannot be read at the moment of the refusal costs the
+// client its re-render, not its refusal: the error is reported as it stands
+// rather than replaced by the read's own failure.
+func (handler *handler) writeVocabularyError(writer http.ResponseWriter, request *http.Request, err error) {
+	body := errorBody(err)
+	if body.Category != core.CategoryStaleWrite {
+		handler.writeError(writer, err)
+		return
+	}
+	state, _, readErr := handler.vocabulary(request)
+	if readErr != nil {
+		handler.writeError(writer, err)
+		return
+	}
+	document := vocabularyDocument(state)
+	writeJSON(writer, statusForError(body.Category), VocabularyErrorDocument{
+		Format:     "workbook.error",
+		Version:    1,
+		Error:      body,
+		Vocabulary: &document,
 	})
 }
 
@@ -978,6 +1376,19 @@ func (handler *handler) serveHealth(writer http.ResponseWriter, _ *http.Request)
 }
 
 func (handler *handler) writeError(writer http.ResponseWriter, err error) {
+	body := errorBody(err)
+	writeJSON(writer, statusForError(body.Category), ErrorDocument{
+		Format:  "workbook.error",
+		Version: 1,
+		Error:   body,
+	})
+}
+
+// errorBody is how any failure reads to a client, and the one place that
+// decides it: an uncategorized failure is operational, and an operational one
+// keeps the context its wrapping added because nobody can act on "permission
+// denied" without knowing what was denied.
+func errorBody(err error) ErrorBody {
 	category := core.CategoryOf(err)
 	if category == "" {
 		category = core.CategoryOperational
@@ -987,14 +1398,7 @@ func (handler *handler) writeError(writer http.ResponseWriter, err error) {
 	if errors.As(err, &typed) && category != core.CategoryOperational {
 		message = typed.Message
 	}
-	writeJSON(writer, statusForError(category), ErrorDocument{
-		Format:  "workbook.error",
-		Version: 1,
-		Error: ErrorBody{
-			Category: category,
-			Message:  message,
-		},
-	})
+	return ErrorBody{Category: category, Message: message}
 }
 
 func statusForError(category core.Category) int {

@@ -163,6 +163,28 @@ func ApplyGuidelines(options Options) (Report, error) {
 	return apply([]target{item}, options)
 }
 
+// GuidelinesState reports how the generated guidelines compare with what this
+// project's statuses would render, and writes nothing.
+//
+// It is for the caller that must not write. `workbook serve` records status
+// changes into the configuration ledger and leaves the working tree alone — the
+// board is a long-running server that may be looking at a checkout somebody is
+// rebasing, and rewriting a tracked file out from under them on an HTTP request
+// is not its business — so this is how it tells a reader that the file it did
+// not rewrite now says something untrue.
+//
+// StateAbsent covers a missing file and a file carrying no managed block alike,
+// which is the same answer ApplyGuidelines gives them, and means there is
+// nothing here Workbook wrote and nothing to report as stale.
+func GuidelinesState(options Options) (State, error) {
+	item := guidelinesTarget(options)
+	existing, err := read(item.path)
+	if err != nil {
+		return "", err
+	}
+	return item.document.Reconcile(existing).State, nil
+}
+
 func apply(targets []target, options Options) (Report, error) {
 	report := Report{}
 	for _, item := range targets {
