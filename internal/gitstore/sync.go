@@ -772,6 +772,7 @@ func (r *Repository) publishFetched(ctx context.Context, config core.ProjectConf
 	// whether more was intended: the operations that did replay are ordinary
 	// history, and withholding them would make sync disagree with push about
 	// the same refs while stranding work the caller already recorded.
+	//
 	// The one tip that is not published is a divergent task whose origin
 	// history needs a newer Workbook. It is not withheld work: origin already
 	// holds a tip this clone's ref is not a descendant of, so pushing it can
