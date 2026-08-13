@@ -197,6 +197,17 @@ type Task struct {
 	StoredStatus      Status `json:"storedStatus,omitempty"`
 	HistoryGeneration string `json:"historyGeneration"`
 	Head              string `json:"head"`
+	// NewerWriter reports a task whose history carries a writer-format
+	// generation this build cannot fold. Everything shown about such a task
+	// comes from its stored checkpoint, which is exactly where every read gets
+	// a task from anyway, so the values are the ones its author wrote — this
+	// build simply cannot recompute them, and will refuse to change them.
+	//
+	// It rides on the projected task rather than on a separate channel because
+	// every read surface already carries one of these per task, and the fact is
+	// per task. Omitted when false, so nothing about the ordinary envelope
+	// changes.
+	NewerWriter bool `json:"newerWriter,omitempty"`
 }
 
 func NormalizeTask(projectKey string, task TaskData) (TaskData, error) {

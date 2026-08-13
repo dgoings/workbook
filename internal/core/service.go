@@ -168,19 +168,10 @@ func (s Service) CreateMutation(ctx context.Context, input CreateInput) (Mutatio
 	}
 	taskULID, generation, operationID := ids[0], ids[1], ids[2]
 	taskID := s.Config.Key + "-" + taskULID
-	pack := OperationPack{
-		Format:            operationPackFormat,
-		Version:           documentVersion,
-		ProjectID:         s.Config.ProjectID,
-		TaskID:            taskID,
-		HistoryGeneration: generation,
-		Actor:             Actor{ID: s.Actor},
-		LogicalClock:      1,
-		WallTime:          now,
-		Operations: []Operation{{
-			ID: operationID, Type: OperationTaskCreate, Task: &taskData,
-		}},
-	}
+	pack := NewOperationPack(
+		s.Config.ProjectID, taskID, generation, s.Actor, 1, now,
+		[]Operation{{ID: operationID, Type: OperationTaskCreate, Task: &taskData}},
+	)
 	state, err := Apply(nil, pack, s.Config.Key)
 	if err != nil {
 		return MutationResult{}, err
@@ -931,6 +922,7 @@ func (s Service) Project(snapshot Snapshot) Task {
 		TaskData:          snapshot.State.Task,
 		HistoryGeneration: snapshot.State.History.Generation,
 		Head:              snapshot.Head,
+		NewerWriter:       snapshot.State.RequiresNewerReader(),
 	}
 	if resolved, live := s.vocabulary().Resolve(task.Status); live && resolved != task.Status {
 		task.StoredStatus = task.Status
@@ -971,17 +963,18 @@ func (s Service) resolveSnapshot(ctx context.Context, idOrPrefix string) (Snapsh
 }
 
 func (s Service) writeMutation(ctx context.Context, parent *Snapshot, operations []Operation, reason string) (MutationResult, error) {
-	pack := OperationPack{
-		Format:            operationPackFormat,
-		Version:           documentVersion,
-		ProjectID:         s.Config.ProjectID,
-		TaskID:            parent.State.TaskID,
-		HistoryGeneration: parent.State.History.Generation,
-		Actor:             Actor{ID: s.Actor},
-		LogicalClock:      parent.State.LogicalClock + 1,
-		WallTime:          s.now(),
-		Operations:        operations,
-	}
+	// Every mutation this build authors goes through NewOperationPack, so the
+	// durable header — format, version, and the writer-format marker the
+	// operations imply — has exactly one author.
+	pack := NewOperationPack(
+		s.Config.ProjectID,
+		parent.State.TaskID,
+		parent.State.History.Generation,
+		s.Actor,
+		parent.State.LogicalClock+1,
+		s.now(),
+		operations,
+	)
 	state, err := Apply(&parent.State, pack, s.Config.Key)
 	if err != nil {
 		return MutationResult{}, err

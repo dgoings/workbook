@@ -122,8 +122,14 @@ func NewOperationPack(
 	operations []Operation,
 ) OperationPack {
 	return OperationPack{
-		Format:            operationPackFormat,
-		Version:           documentVersion,
+		Format:  operationPackFormat,
+		Version: documentVersion,
+		// The generation is derived from the operations rather than passed in,
+		// so no caller can forget it and none can overstate it. A build that
+		// ships a new operation type declares its requirement once, in
+		// operationMinReader, and every pack that carries the type gets the
+		// marker here.
+		MinReader:         PackMinReader(operations),
 		ProjectID:         projectID,
 		TaskID:            taskID,
 		HistoryGeneration: historyGeneration,

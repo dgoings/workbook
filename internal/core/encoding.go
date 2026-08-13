@@ -47,8 +47,44 @@ func EncodeDocument(value any) ([]byte, error) {
 	return append(encoded, '\n'), nil
 }
 
-// DecodeOperationPack strictly decodes a persisted operation pack.
+// documentFormatGeneration reads only the writer-format marker out of a stored
+// document, before anything else looks at it.
+//
+// It has to run first and it has to be lenient, and both follow from what the
+// marker means. A document that says "you need generation N to read me" is
+// telling this build that its idea of what members exist is out of date, so
+// decoding it strictly — which is what every other path here does — would
+// reject it for carrying exactly the members it warned about, and would report
+// the one thing the marker exists to prevent: corrupt data.
+//
+// Anything that is not a JSON object at all is corrupt, and stays corrupt. No
+// marker can be claimed by a document that does not parse.
+func documentFormatGeneration(data []byte) (int, error) {
+	var marker struct {
+		MinReader int `json:"minReader"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if err := decoder.Decode(&marker); err != nil {
+		return 0, Wrap(CategoryCorruptData, "cannot decode document", err)
+	}
+	if marker.MinReader < 0 {
+		return 0, corrupt("document minimum reader generation %d is invalid", marker.MinReader)
+	}
+	return marker.MinReader, nil
+}
+
+// DecodeOperationPack strictly decodes a persisted operation pack, unless the
+// pack declares a generation this build cannot fold — in which case it is read
+// leniently and returned marked, so that a reader can still say which task it
+// belongs to and every fold refuses it by name.
 func DecodeOperationPack(data []byte) (OperationPack, error) {
+	generation, err := documentFormatGeneration(data)
+	if err != nil {
+		return OperationPack{}, err
+	}
+	if generation > SupportedFormatGeneration {
+		return decodeNewerOperationPack(data, generation)
+	}
 	var pack OperationPack
 	if err := decodeOneJSON(data, &pack); err != nil {
 		return OperationPack{}, err
@@ -59,8 +95,21 @@ func DecodeOperationPack(data []byte) (OperationPack, error) {
 	return pack, nil
 }
 
-// DecodeStateDocument strictly decodes a persisted task state document.
+// DecodeStateDocument strictly decodes a persisted task state document, with
+// the same exception the operation pack makes for a newer generation.
+//
+// A newer checkpoint is what makes reads keep working. The whole point of the
+// contract is that list, board, show and next serve the task from the stored
+// state rather than from a fold, so this must hand back a usable task even
+// though it cannot vouch for the document's every member.
 func DecodeStateDocument(data []byte) (StateDocument, error) {
+	generation, err := documentFormatGeneration(data)
+	if err != nil {
+		return StateDocument{}, err
+	}
+	if generation > SupportedFormatGeneration {
+		return decodeNewerStateDocument(data, generation)
+	}
 	var state StateDocument
 	if err := decodeOneJSON(data, &state); err != nil {
 		return StateDocument{}, err
@@ -68,6 +117,73 @@ func DecodeStateDocument(data []byte) (StateDocument, error) {
 	if err := validateStateDurableDocument(state); err != nil {
 		return StateDocument{}, err
 	}
+	return state, nil
+}
+
+// decodeNewerOperationPack reads what a newer pack still has to say about
+// itself, and judges nothing else.
+//
+// What it checks is what stays true across every generation of this format: the
+// document is the kind of document the tree said it was, it names a project and
+// a task, and it carries operations. Version, identifier shapes, clocks and the
+// operations themselves are deliberately not checked. A build that declared a
+// generation this one does not have has told us its rules are not our rules,
+// and applying ours would turn "written by a newer workbook" back into
+// "corrupt" one field at a time.
+func decodeNewerOperationPack(data []byte, generation int) (OperationPack, error) {
+	var pack OperationPack
+	if err := decodeOneLenientJSON(data, &pack); err != nil {
+		return OperationPack{}, newerWriter(
+			"an operation pack written by a newer workbook could not be read; upgrade workbook")
+	}
+	pack.MinReader = generation
+	if pack.Format != operationPackFormat {
+		return OperationPack{}, corrupt("unsupported operation pack format %q", pack.Format)
+	}
+	if strings.TrimSpace(pack.ProjectID) == "" || strings.TrimSpace(pack.TaskID) == "" {
+		return OperationPack{}, newerWriter(
+			"an operation pack written by a newer workbook names no task; upgrade workbook")
+	}
+	if len(pack.Operations) == 0 {
+		return OperationPack{}, newerWriterTask(pack.TaskID)
+	}
+	return pack, nil
+}
+
+// decodeNewerStateDocument reads a newer checkpoint well enough to show the
+// task and no further.
+//
+// The stored task is normalized rather than compared against its normal form.
+// Comparing is how this build proves a checkpoint is canonical, and it cannot
+// prove that about a document whose members it did not all decode; normalizing
+// is how every downstream reader gets the total value it expects — a task with
+// arrays rather than nulls. A task that will not normalize at all is reported
+// as newer-writer rather than corrupt, for the same reason everything else here
+// is: under a marker this build cannot meet, every failure to make sense of the
+// document is explained by the marker.
+func decodeNewerStateDocument(data []byte, generation int) (StateDocument, error) {
+	var state StateDocument
+	if err := decodeOneLenientJSON(data, &state); err != nil {
+		return StateDocument{}, newerWriter(
+			"a task state written by a newer workbook could not be read; upgrade workbook")
+	}
+	state.MinReader = generation
+	if state.Format != stateDocumentFormat {
+		return StateDocument{}, corrupt("unsupported task state format %q", state.Format)
+	}
+	if strings.TrimSpace(state.ProjectID) == "" || strings.TrimSpace(state.TaskID) == "" {
+		return StateDocument{}, newerWriter(
+			"a task state written by a newer workbook names no task; upgrade workbook")
+	}
+	projectKey, _, found := strings.Cut(state.TaskID, "-")
+	if !found {
+		return StateDocument{}, newerWriterTask(state.TaskID)
+	}
+	normalized, err := normalizeCanonicalTask(projectKey, state.Task)
+	if err != nil {
+		return StateDocument{}, newerWriterTask(state.TaskID)
+	}
+	state.Task = normalized
 	return state, nil
 }
 
@@ -86,6 +202,24 @@ func DecodeProjectIdentity(data []byte) (ProjectIdentity, error) {
 // DecodeConfigOperationPack strictly decodes a persisted configuration
 // operation pack.
 func DecodeConfigOperationPack(data []byte) (ConfigOperationPack, error) {
+	generation, err := documentFormatGeneration(data)
+	if err != nil {
+		return ConfigOperationPack{}, err
+	}
+	if generation > SupportedFormatGeneration {
+		var pack ConfigOperationPack
+		if err := decodeOneLenientJSON(data, &pack); err != nil {
+			return ConfigOperationPack{}, newerWriterConfig()
+		}
+		pack.MinReader = generation
+		if pack.Format != configOperationPackFormat {
+			return ConfigOperationPack{}, corrupt("unsupported configuration operation pack format %q", pack.Format)
+		}
+		if len(pack.Operations) == 0 {
+			return ConfigOperationPack{}, newerWriterConfig()
+		}
+		return pack, nil
+	}
 	var pack ConfigOperationPack
 	if err := decodeOneJSON(data, &pack); err != nil {
 		return ConfigOperationPack{}, err
@@ -99,7 +233,34 @@ func DecodeConfigOperationPack(data []byte) (ConfigOperationPack, error) {
 // DecodeConfigStateDocument strictly decodes a persisted configuration
 // checkpoint. A document that decodes here is canonical, which is what lets
 // every Vocabulary accessor built from one be total.
+// A checkpoint carrying a newer writer-format generation is the one exception,
+// and it is read leniently for the reason the whole contract exists: resolving
+// a status has to keep working while the ledger is unfoldable, or a clone that
+// is merely out of date cannot render a board. Its vocabulary is normalized
+// rather than compared against its normal form — this build cannot prove a
+// document canonical when it did not decode all of it, but it can still make
+// the value total, which is what the accessors need.
 func DecodeConfigStateDocument(data []byte) (ConfigStateDocument, error) {
+	generation, err := documentFormatGeneration(data)
+	if err != nil {
+		return ConfigStateDocument{}, err
+	}
+	if generation > SupportedFormatGeneration {
+		var state ConfigStateDocument
+		if err := decodeOneLenientJSON(data, &state); err != nil {
+			return ConfigStateDocument{}, newerWriterConfig()
+		}
+		state.MinReader = generation
+		if state.Format != configStateDocumentFormat {
+			return ConfigStateDocument{}, corrupt("unsupported configuration state format %q", state.Format)
+		}
+		normalized, err := normalizeVocabularyDocument(state.Config.Vocabulary)
+		if err != nil {
+			return ConfigStateDocument{}, newerWriterConfig()
+		}
+		state.Config.Vocabulary = normalized
+		return state, nil
+	}
 	var state ConfigStateDocument
 	if err := decodeOneJSON(data, &state); err != nil {
 		return ConfigStateDocument{}, err
@@ -145,6 +306,19 @@ func validateStateDurableDocument(state StateDocument) error {
 func decodeOneJSON(data []byte, destination any) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
+	return decodeOne(decoder, destination)
+}
+
+// decodeOneLenientJSON reads a document whose member set this build does not
+// know all of, keeping the one-value-per-object rule and dropping only the
+// unknown-member rejection. It is used exclusively for documents that declared
+// a newer writer-format generation, where an unrecognized member is the
+// expected consequence of the marker rather than evidence of corruption.
+func decodeOneLenientJSON(data []byte, destination any) error {
+	return decodeOne(json.NewDecoder(bytes.NewReader(data)), destination)
+}
+
+func decodeOne(decoder *json.Decoder, destination any) error {
 	if err := decoder.Decode(destination); err != nil {
 		return Wrap(CategoryCorruptData, "cannot decode document", err)
 	}
