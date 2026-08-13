@@ -198,6 +198,25 @@ func panelRenamedVocabulary(t *testing.T) core.Vocabulary {
 	return vocabulary
 }
 
+// panelRenamedQueuedVocabulary is what a rename answers with: the status is
+// under its new name and its new label, and the old name forwards to it.
+func panelRenamedQueuedVocabulary(t *testing.T) core.Vocabulary {
+	t.Helper()
+	vocabulary, err := core.NewVocabulary(
+		[]core.StatusDefinition{
+			{Status: "icebox", Label: "Icebox", Rank: "1/1", Tags: []core.StatusTag{}},
+			{Status: "waiting", Label: "Waiting On", Rank: "2/1", Tags: []core.StatusTag{core.StatusTagDefault, core.StatusTagNext}},
+			{Status: "shipped", Label: "Shipped", Rank: "3/1", Tags: []core.StatusTag{core.StatusTagDone}},
+		},
+		[]core.StatusAlias{{From: "done", To: "shipped"}, {From: "queued", To: "waiting"}},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("NewVocabulary() error = %v", err)
+	}
+	return vocabulary
+}
+
 // The entry point is on the board and is one word, and it is there for a project
 // that configured its own statuses exactly as it is for one that never did.
 //
@@ -896,7 +915,7 @@ func TestClientStatusPanelEditsOnlyWhatChanged(t *testing.T) {
 	vocabulary := handlerVocabulary(t)
 	runPanelClient(t, "editing one member of a status", vocabulary, "head-7", nil, `
   vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-7")+`;
-  vocabularyAnswer = { body: `+panelMutationJSON(t, panelRenamedVocabulary(t), "head-8", VocabularyTaskCounts{}, nil)+` };
+  vocabularyAnswer = { body: `+panelMutationJSON(t, panelRenamedQueuedVocabulary(t), "head-8", VocabularyTaskCounts{}, nil)+` };
   await openPanel();
 
   panelControl(panelRow("queued"), "Edit Queued Up").eventListeners.click();
@@ -925,6 +944,17 @@ func TestClientStatusPanelEditsOnlyWhatChanged(t *testing.T) {
   }
   if (JSON.stringify(wrote.body) !== JSON.stringify({ name: "waiting", expectedHead: "head-7" })) {
     throw new Error("the edit sent " + JSON.stringify(wrote.body) + ", want the one member it changed");
+  }
+  // A rename is reported under the name the project now has. The label this
+  // form opened with is the one name that is gone, so naming it would tell the
+  // reader their rename had happened to something else — and the answer carries
+  // the new one, since a rename derives a label the reader never typed.
+  const reported = panelMessages();
+  if (reported.length !== 1 || reported[0] !== "Updated Waiting On.") {
+    throw new Error("the rename reported " + JSON.stringify(reported));
+  }
+  if (panelStatuses().join(",") !== "icebox,waiting,shipped") {
+    throw new Error("the panel is drawing " + panelStatuses().join(",") + " after the rename");
   }
 `)
 }

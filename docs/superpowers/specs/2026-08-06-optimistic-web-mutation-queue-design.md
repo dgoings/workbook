@@ -511,6 +511,23 @@ queue's drain loop publishes the promise it settles on for this, so the wait is
 on the loops rather than on a timer; a queue that grows while it waits is waited
 on again.
 
+The rule is one-directional, deliberately. A pending intent gates a vocabulary
+send; a vocabulary send does not gate an intent. The cards stay draggable while
+a status change is in flight, so a reader can start a task write during that
+round trip, and that interleaving is answered rather than prevented. The two
+writes are serialized on the server, and a task write is on one side of the
+status change or the other: one that gets in first is counted and forwarded by
+the removal that follows it, because a removal prices and forwards what it moves
+as it is authored; one that arrives after the status is gone is refused as an
+invalid status — `requireStatusMember` asks whether the vocabulary *has* it, and
+forwarding is for reading a stored status rather than for accepting a new one —
+and that refusal is reported on its own card by the machinery that reports every
+other refused intent. What the guard buys is the other direction, where the
+client would be composing a vocabulary change against columns it is about to
+lose with no server-side check that would notice. The symmetric version would
+freeze every card on the board for the length of a vocabulary round trip, which
+is a worse trade for a race that is already answered on both sides.
+
 **Conflict.** A `stale-write` is terminal. There is no re-base and no retry: a
 status is somebody's decision about how the project works, and two people
 renaming the same column mean two different things, so applying one over the

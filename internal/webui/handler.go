@@ -361,11 +361,18 @@ type pageData struct {
 	// here and a status name in most projects.
 	StatusTags []core.StatusTag
 	// Administrable is whether this board was built with all four vocabulary
-	// mutations. A board given none of them draws its columns and refuses to
-	// change them, so it offers no entry point to a panel whose every control
-	// would answer "this board has no such capability". All four rather than
-	// any, because the panel is one surface: a partial set would draw controls
-	// that look alike and fail differently.
+	// mutations, and it decides whether the page draws the status panel at all.
+	//
+	// `workbook serve` is the only production caller of NewHandler and always
+	// supplies the four, so this is true wherever a person meets it. It is
+	// computed rather than assumed for the two callers that are not that one:
+	// the tests, which build boards without the capabilities and are what holds
+	// the gate honest, and any future embedding that wires fewer of them, which
+	// gets a board that draws its columns and offers no control that would only
+	// ever answer "this board has no such capability".
+	//
+	// All four rather than any, because the panel is one surface: a partial set
+	// would draw controls that look alike and fail differently.
 	Administrable bool
 }
 
