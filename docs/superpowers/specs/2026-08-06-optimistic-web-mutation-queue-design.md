@@ -487,8 +487,13 @@ exists to keep out of it.
 ## Vocabulary mutations are outside the queue
 
 The board can now change the project's statuses — add, rename, relabel, retag,
-remove, reorder — from a panel in its own chrome. None of those changes is an
-intent, and that is a decision rather than an omission.
+remove, reorder — from a page of its own at `/statuses`, reached by a link in
+the board's chrome and served on a hard load like every other route here. (It
+was a disclosure region in that chrome first, and it could not be used: it
+shared the viewport-height flex column with the header and the board, so on an
+ordinary desktop window it opened a sliver too short to hold a form. A page has
+the room its forms need, and the board is one link away.) None of those changes
+is an intent, and that is a decision rather than an omission.
 
 The queue's bargain is that a change can be drawn before it is durable because a
 refusal costs one card a rollback. A refused status change costs the whole
@@ -496,15 +501,18 @@ board: the columns, their counts, the form that offers the statuses, and the
 region that holds every task whose status suddenly matches no column. Repainting
 all of that to take back a change the reader watched happen is worse than the
 round trip the queue exists to hide, and it would repaint it over every card
-node the reader has work in flight on. So the panel disables its controls, sends
+node the reader has work in flight on. So the page disables its controls, sends
 synchronously with the head it read, and re-renders **itself** from the answer.
 Nothing about the board moves.
 
 **Quiescence.** A vocabulary change is not sent while `pendingIntents` is
 non-empty. A pending intent can be carrying the very status the change retires,
-and it was composed against the columns on screen; letting the two race is the
-one ordering this client could not recover from, because the intent's rollback
-and the vocabulary's are answers to different questions. The save control says
+and it was composed against the columns the reader was looking at; letting the
+two race is the one ordering this client could not recover from, because the
+intent's rollback and the vocabulary's are answers to different questions. The
+queue is not emptied by walking to another route — an intent started on the
+board outlives the navigation, as it must — so this is a page that routinely
+opens over a queue that is still draining. The save control says
 it is finishing the changes already in flight, waits for every queue to drain,
 and then proceeds — or re-enables, if the change is refused when it goes. Each
 queue's drain loop publishes the promise it settles on for this, so the wait is
@@ -532,7 +540,7 @@ is a worse trade for a race that is already answered on both sides.
 status is somebody's decision about how the project works, and two people
 renaming the same column mean two different things, so applying one over the
 other would invent a third that neither of them chose. The 409 carries the
-current vocabulary, so the panel consumes it from the refusal rather than
+current vocabulary, so the page consumes it from the refusal rather than
 refetching, redraws its list from it, adopts the head it names as the one the
 next change will carry, and reports that the statuses changed in another clone
 and should be reviewed. As everywhere else in this client, the conflict is
@@ -541,21 +549,32 @@ carried, which is this client's bookkeeping — while every other refusal is the
 reader's own to read and is quoted exactly as the command would have printed it.
 
 **Reconciliation with the board.** A change that lands moves the vocabulary
-head, which makes the columns behind the panel stale by the same protected
+head, which makes the columns the reader left stale by the same protected
 invariant that governs a change from another clone. It is answered the same way,
-by the same machinery: the panel hands the head it adopted to
+by the same machinery: the page hands the head it adopted to
 `noteVocabularyChange`, the standing `[data-vocabulary-notice]` says the columns
 are the ones the page was opened with, and the reader chooses when to reload.
-The panel rebuilds no column, and a poll would have raised the same notice
-within a second anyway — handing it the head directly only means the reader is
-told by the same frame that told them the change worked. Opening the panel can
-raise it too, and honestly: the read it performs is often the first thing on the
-page to notice that another clone moved the ledger.
+Nothing rebuilds a column, and a poll would have raised the same notice within a
+second anyway — handing it the head directly only means the reader is told by the
+same frame that told them the change worked. Entering the route can raise it too,
+and honestly: the read it performs is often the first thing on the page to notice
+that another clone moved the ledger.
 
-**What the panel does not decide.** Tag arity, name syntax, whether a label may
+The notice crossing routes is what makes this hold now that the surface is a
+page. It sits outside `main`, so it is up while the reader is still on
+`/statuses` and still up when they walk back — and the board render they walk
+back to re-attaches `boardView` rather than rebuilding it, which is the same
+node, the same columns and the same card nodes they left, each holding whatever
+it was holding. A render that redrew the board from the new vocabulary would be
+the live rebuild this whole design refuses, only with a navigation in front of
+it to make it look like a fresh page rather than a repaint; the reader would
+lose an open form to a column they may not care about, and lose it silently.
+The reload the notice offers is still the one way the columns change.
+
+**What the page does not decide.** Tag arity, name syntax, whether a label may
 be blank, whether a removal has somewhere to send its tasks — every one of those
 is the vocabulary's rule, enforced by the same planners `workbook status` runs,
-and the panel puts the refusal in front of the reader in the words the command
+and the page puts the refusal in front of the reader in the words the command
 would have used. A client that checked first would be a second copy of a rule
 that lives in one place, and would refuse a change the server would have
 accepted the moment either copy drifted. The two guards it does keep are not
@@ -690,22 +709,29 @@ absent and drives a hand-written fake DOM (`handler_test.go:4173`):
   elsewhere rather than that the board could not be read, and invites no retry —
   the retry, made anyway, carries the same refused head and is answered with the
   same sentence;
-- a status change made while a task intent is still in flight is not sent: the
-  panel says it is finishing what the board already has open, sends once the
-  queue has drained, and the two writes are ordered rather than raced;
-- a status change carries the head the panel read rather than the one the page
+- a status change made while a task intent is still in flight is not sent, and
+  the intent may have been started on the board before the reader walked to
+  `/statuses`: the page says it is finishing what the board already has open,
+  sends once the queue has drained, and the two writes are ordered rather than
+  raced;
+- a status change carries the head the page read rather than the one the board
   was served with, including the empty head of a project whose configuration
   ledger has never been seeded, and the change that follows it carries the head
   the answer produced;
-- a status change that lands re-renders the panel from the answer, raises the
+- a status change that lands re-renders the page from the answer, raises the
   vocabulary notice, and leaves every card node and every column on the board
-  exactly as it found them;
-- a `stale-write` sends nothing further: the panel draws the statuses the
+  exactly as it found them — including after the reader walks back to it, which
+  re-attaches the board rather than rebuilding it;
+- `/statuses` renders on a hard load as it does on a click, reads the statuses
+  on every entry to the route, and is answered as a page that does not exist —
+  by the server with a 404 and by the client with its own not-found route — on a
+  board built without the four vocabulary mutations;
+- a `stale-write` sends nothing further: the page draws the statuses the
   refusal carried, re-enables its controls, describes the conflict without
   quoting the server's sentence about a head, and composes its next change
   against the head the refusal named;
 - a refusal that is not a conflict is quoted verbatim and changes nothing the
-  panel is drawing, including the form the reader is standing in;
+  page is drawing, including the form the reader is standing in;
 - a removal reports what it moved and how much of it `workbook next` can claim
   where it landed, and every warning the answer carries is shown rather than
   folded away;

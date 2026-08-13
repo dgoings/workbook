@@ -10,18 +10,20 @@ import (
 	"github.com/dgoings/workbook/internal/core"
 )
 
-// What the board's status administration panel does, and what it refuses to do.
+// What the statuses route does, and what it refuses to do.
 //
-// The panel is the one writer in this client that is outside the optimistic
-// mutation queue, so most of what is pinned here is about the two rules that
-// follow from that: a change waits for the queue to be empty before it goes,
-// and a stale write is where the change stops. The rest is request shape — the
-// head the panel read has to be the head it names — and the standing invariant
-// the whole board rests on: no vocabulary change rebuilds a column under the
-// reader.
+// It is a page of its own at /statuses, reached from the board and served on a
+// hard load like every other route here. It is also the one writer in this
+// client that is outside the optimistic mutation queue, so most of what is
+// pinned here is about the two rules that follow from that: a change waits for
+// the queue to be empty before it goes — including for intents started on the
+// board before the reader navigated — and a stale write is where the change
+// stops. The rest is request shape — the head the page read has to be the head
+// it names — and the standing invariant the whole board rests on: no vocabulary
+// change rebuilds a column under the reader, on either side of a navigation.
 
 // administrableHandler is a board with the four vocabulary mutations, which is
-// what `workbook serve` builds and the only kind that draws the panel. The
+// what `workbook serve` builds and the only kind that has a statuses route. The
 // mutations themselves are never reached: the client tests answer the routes
 // from the fake fetch, and what the routes do with a request is
 // vocabulary_mutation_test.go's subject.
@@ -45,7 +47,7 @@ func administrableHandler(vocabulary core.Vocabulary, head string, tasks []core.
 	})
 }
 
-// panelFetchHarness replaces the fake fetch with one that records what the panel
+// panelFetchHarness replaces the fake fetch with one that records what the page
 // sends and answers the vocabulary routes from values the test sets.
 //
 // The answers are the server's own documents, encoded by the same builders the
@@ -80,10 +82,30 @@ globalThis.fetch = async (url, options = {}) => {
 // window one the harness fakes, so it runs after the microtasks a fetch chain
 // queues and before anything the page schedules.
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
-// Opens the panel the way a reader does, and waits for the read it starts.
-async function openPanel() {
-  vocabularyPanelToggle.eventListeners.click();
+// Follows a link the way a reader does, through the click the client intercepts
+// rather than by calling navigate() behind its back.
+async function follow(anchor) {
+  await documentEventListeners.click({ target: anchor, button: 0, preventDefault() {} });
   await settle();
+}
+// Walks to the statuses page from wherever the reader is, by the link the
+// server renders into the header, and waits for the read the route starts.
+async function openStatuses() {
+  const link = new TestElement("a");
+  link.href = window.location.origin + "/statuses";
+  await follow(link);
+}
+// Walks back to the board by the page's own Back link.
+async function returnToBoard() {
+  const back = findElement(main, (element) => element.tagName === "A" && element.className === "board-link");
+  if (!back) throw new Error("the statuses page offers no way back to the board");
+  await follow(back);
+}
+// The route shell the statuses page is drawn in, or null when main is drawing
+// something else.
+function statusesRoute() {
+  const section = findElement(main, (element) => hasClassToken(element, "task-route--admin"));
+  return section && section.contains(vocabularyPanel) ? section : null;
 }
 function panelAdd() {
   const form = findElement(vocabularyPanelBody, (element) => hasDataKey(element, "vocabularyAdd"));
@@ -103,22 +125,39 @@ async function submitPanelForm(form) {
 
 // runPanelClient renders an administrable board for a project with these
 // statuses and executes its client script against the fake DOM and the
-// recording fetch.
+// recording fetch. The reader starts on the board, which is where the link to
+// the statuses page is.
 func runPanelClient(t *testing.T, purpose string, vocabulary core.Vocabulary, head string, tasks []core.Task, body string) {
+	t.Helper()
+	runStatusesClient(t, purpose, "/", "", vocabulary, head, tasks, body)
+}
+
+// runStatusesClient is the same with the entry point spelled out: `path` is the
+// address the reader arrived at, which a deep-link test sets to /statuses, and
+// `prelude` is script the harness runs before the client's, which is how a page
+// served without the statuses markup is put in front of it.
+func runStatusesClient(
+	t *testing.T,
+	purpose, path, prelude string,
+	vocabulary core.Vocabulary,
+	head string,
+	tasks []core.Task,
+	body string,
+) {
 	t.Helper()
 	node := requireNode(t)
 	handler := administrableHandler(vocabulary, head, tasks)
-	response := request(t, handler, http.MethodGet, "/")
+	response := request(t, handler, http.MethodGet, path)
 	if response.Code != http.StatusOK {
-		t.Fatalf("GET / status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+		t.Fatalf("GET %s status = %d, want %d; body = %s", path, response.Code, http.StatusOK, response.Body.String())
 	}
 	script := renderedClientScript(t, response.Body.String())
 	document := mustJSON(t, TasksDocument{
 		Format: "workbook.tasks", Version: 1, VocabularyHead: head,
 		Tasks: tasks, Presentation: presentationForTasks(tasks),
 	})
-	program := clientDOMHarnessWith("/", string(document), vocabulary, head) +
-		panelFetchHarness + script + `
+	program := clientDOMHarnessWith(path, string(document), vocabulary, head) +
+		panelFetchHarness + prelude + script + `
 setTimeout(async () => {
 ` + body + `
 }, 0);
@@ -127,6 +166,16 @@ setTimeout(async () => {
 		t.Fatalf("execute %s: %v\n%s", purpose, err, output)
 	}
 }
+
+// withoutStatusAdministration is what a board built without the four vocabulary
+// mutations serves: none of the statuses route's markup at all. The client
+// script is the same on every board and asks for each part by name, so taking
+// the answers away is exactly what such a page does to it.
+const withoutStatusAdministration = `
+const servedQuerySelector = document.querySelector.bind(document);
+document.querySelector = (selector) =>
+  selector.startsWith("[data-vocabulary-panel") ? null : servedQuerySelector(selector);
+`
 
 // panelVocabularyJSON is what GET /api/vocabulary answers, built by the server's
 // own builder.
@@ -217,62 +266,67 @@ func panelRenamedQueuedVocabulary(t *testing.T) core.Vocabulary {
 	return vocabulary
 }
 
-// The entry point is on the board and is one word, and it is there for a project
-// that configured its own statuses exactly as it is for one that never did.
+// The way in is a link in the board's chrome, beside the other two routes this
+// page has, and it is there for a project that configured its own statuses
+// exactly as it is for one that never did.
 //
-// It is a button rather than a link because it opens a region on this page, and
-// it ships hidden: the panel is drawn entirely by the script, so a page whose
-// script never ran offers no way into it rather than a dead control.
-func TestHandlerBoardCarriesTheStatusPanelEntryPoint(t *testing.T) {
+// It is a link rather than a button because it goes to a page: the client
+// intercepts the click and renders the route, and a reader without the script —
+// or with a middle-click — gets the same page from the server.
+func TestHandlerBoardLinksToTheStatusesRoute(t *testing.T) {
 	for name, vocabulary := range map[string]core.Vocabulary{
 		"default": core.DefaultVocabulary(),
 		"custom":  handlerVocabulary(t),
 	} {
 		body := boardMarkup(t, administrableBoardPage(t, vocabulary))
-		toggle := elementTag(t, body, "data-vocabulary-panel-toggle")
-		for _, attribute := range []string{
-			`<button`,
-			`type="button"`,
-			`class="header-link"`,
-			// It says what it controls and whether that is open, which is the
-			// whole of the state: a name that changed with the state as well
-			// would say it twice and in opposite directions.
-			`aria-controls="vocabulary-panel"`,
-			`aria-expanded="false"`,
-			`hidden`,
-		} {
-			if !strings.Contains(toggle, attribute) {
-				t.Errorf("%s vocabulary drew a status entry point %q, which does not carry %q", name, toggle, attribute)
+		link := elementTag(t, body, `href="/statuses"`)
+		for _, attribute := range []string{`<a`, `class="header-link"`} {
+			if !strings.Contains(link, attribute) {
+				t.Errorf("%s vocabulary drew a statuses entry point %q, which does not carry %q", name, link, attribute)
 			}
 		}
-		panel := elementTag(t, body, "data-vocabulary-panel ")
+		// It is not hidden, because it does not depend on the script: the
+		// address it names is served.
+		if strings.Contains(link, "hidden") {
+			t.Errorf("%s vocabulary ships the statuses link hidden: %q", name, link)
+		}
+		page := elementTag(t, body, "data-vocabulary-panel ")
 		for _, attribute := range []string{
-			`<section`,
-			`id="vocabulary-panel"`,
-			`aria-labelledby="vocabulary-panel-title"`,
+			`<div`,
+			`class="admin"`,
+			// Shipped hidden and outside main: the render for the route is what
+			// mounts it, so a page whose script never ran draws the board it
+			// was served rather than an administration surface below it.
 			`hidden`,
+			// It takes focus when a rebuild drops the control the reader
+			// pressed, so it has to be focusable without being tabbable.
+			`tabindex="-1"`,
 			// The roles a status may carry are the server's answer, rendered
 			// here because the client must not hold a second copy of them.
 			`data-status-tags="default done next"`,
 		} {
-			if !strings.Contains(panel, attribute) {
-				t.Errorf("%s vocabulary drew a status panel %q, which does not carry %q", name, panel, attribute)
+			if !strings.Contains(page, attribute) {
+				t.Errorf("%s vocabulary drew a statuses page %q, which does not carry %q", name, page, attribute)
 			}
 		}
-		// The panel is a shell: the list inside it is the client's, drawn from
-		// what the server answers rather than from the columns on the page.
+		if at := strings.Index(body, "</main>"); at < 0 || at > strings.Index(body, "data-vocabulary-panel ") {
+			t.Errorf("%s vocabulary rendered the statuses page inside main, which the board occupies", name)
+		}
+		// The served page is a shell: the list inside it is the client's, drawn
+		// from what the server answers rather than from the columns on the page.
 		if !strings.Contains(body, `data-vocabulary-panel-body`) {
-			t.Errorf("%s vocabulary drew no mount for the panel's status list", name)
+			t.Errorf("%s vocabulary drew no mount for the statuses list", name)
 		}
 	}
 }
 
-// A board built without the four mutations offers no way into a panel whose
-// every control would be answered "this board has no such capability".
+// A board built without the four mutations has no statuses route at all: no
+// link, no markup, and an address that is answered as a page that does not
+// exist rather than as a page whose every control would be refused.
 //
-// All four rather than any, because the panel is one surface: a board carrying
+// All four rather than any, because the page is one surface: a board carrying
 // three of them would draw controls that look alike and fail differently.
-func TestHandlerBoardWithoutVocabularyMutationsOffersNoStatusPanel(t *testing.T) {
+func TestHandlerBoardWithoutVocabularyMutationsOffersNoStatusesRoute(t *testing.T) {
 	vocabulary := handlerVocabulary(t)
 	for name, options := range map[string]Options{
 		"no mutations": {
@@ -293,17 +347,25 @@ func TestHandlerBoardWithoutVocabularyMutationsOffersNoStatusPanel(t *testing.T)
 		}
 		body := response.Body.String()
 		// The markup alone: the script is the same on every board and asks for
-		// the panel's parts by name whether or not they are there, which is
+		// the page's parts by name whether or not they are there, which is
 		// exactly what makes it safe to serve to a board without them.
 		markup := boardMarkup(t, body)
 		for _, marker := range []string{
-			"data-vocabulary-panel-toggle",
-			`id="vocabulary-panel"`,
+			`href="/statuses"`,
+			"data-vocabulary-panel data-status-tags",
 			"data-vocabulary-panel-body",
 		} {
 			if strings.Contains(markup, marker) {
 				t.Errorf("%s: the page carries %q for a board that cannot change its statuses", name, marker)
 			}
+		}
+		// And the address is not a page on this board. A 404 rather than a
+		// board: a reader who bookmarked /statuses against a board that can
+		// administer them is told this one cannot, rather than handed columns
+		// under a title promising a page that is not there.
+		missing := request(t, NewHandler(options), http.MethodGet, "/statuses")
+		if missing.Code != http.StatusNotFound {
+			t.Errorf("%s: GET /statuses status = %d, want %d", name, missing.Code, http.StatusNotFound)
 		}
 		// The board itself is untouched: it still draws its columns and still
 		// says which vocabulary it drew them from.
@@ -313,25 +375,31 @@ func TestHandlerBoardWithoutVocabularyMutationsOffersNoStatusPanel(t *testing.T)
 	}
 }
 
-// Opening the panel reads the project's statuses rather than drawing the ones
-// the page happens to be showing.
+// Rendering the statuses route reads the project's statuses rather than drawing
+// the ones the page happens to be showing.
 //
 // The page carries a token and a label per column and nothing else, and its head
-// may be minutes old by the time anyone opens this. A change composed against
-// what the page remembers is the stale write the panel would rather not have to
-// report, so it asks — every time it is opened, not once.
-func TestClientStatusPanelReadsTheProjectsStatusesWhenItOpens(t *testing.T) {
+// may be minutes old by the time anyone walks to this route. A change composed
+// against what the page remembers is the stale write it would rather not have to
+// report, so it asks — on every entry to the route, not once.
+func TestClientStatusesRouteReadsTheProjectsStatusesOnEntry(t *testing.T) {
 	vocabulary := handlerVocabulary(t)
-	runPanelClient(t, "opening the status panel", vocabulary, "head-1", nil, `
+	runPanelClient(t, "opening the statuses page", vocabulary, "head-1", nil, `
   vocabularyRead = `+panelVocabularyJSON(t, panelRenamedVocabulary(t), "head-9")+`;
-  if (vocabularyPanel.hidden !== true) throw new Error("the panel was open before anyone asked for it");
-  if (vocabularyPanelToggle.hidden !== false) throw new Error("the board route hid the panel's entry point");
-  await openPanel();
+  if (vocabularyPanel.hidden !== true) throw new Error("the statuses page was mounted before anyone walked to it");
+  if (statusesRoute()) throw new Error("the board route drew the statuses page");
+  await openStatuses();
 
-  if (vocabularyPanel.hidden !== false) throw new Error("the entry point did not open the panel");
-  if (vocabularyPanelToggle.getAttribute("aria-expanded") !== "true") throw new Error("the entry point does not report the panel as open");
+  if (window.location.href.indexOf("/statuses") < 0) throw new Error("the link did not go to /statuses: " + window.location.href);
+  if (historyPaths[historyPaths.length - 1] !== "/statuses") throw new Error("the walk pushed " + JSON.stringify(historyPaths));
+  if (document.title !== "Statuses · Workbook") throw new Error("the page is titled " + JSON.stringify(document.title));
+  if (!statusesRoute()) throw new Error("the route drew no statuses page into main");
+  if (vocabularyPanel.hidden !== false) throw new Error("the route left its own body hidden");
+  if (main.children.length !== 1 || main.children[0] !== statusesRoute()) {
+    throw new Error("main is drawing the board and the statuses page at once");
+  }
   if (vocabularyCalls.length !== 1 || vocabularyCalls[0].method !== "GET" || vocabularyCalls[0].url !== "/api/vocabulary") {
-    throw new Error("opening the panel asked for " + JSON.stringify(vocabularyCalls.map((call) => call.method + " " + call.url)));
+    throw new Error("the route asked for " + JSON.stringify(vocabularyCalls.map((call) => call.method + " " + call.url)));
   }
   // The statuses it lists are the ones the server just answered with, in the
   // server's order — not the four columns this page was rendered with.
@@ -346,13 +414,15 @@ func TestClientStatusPanelReadsTheProjectsStatusesWhenItOpens(t *testing.T) {
   const tags = findElements(tagged, (element) => Boolean(element.dataset.statusTag)).map((chip) => chip.dataset.statusTag);
   if (tags.join(",") !== "default,next") throw new Error("the row reports the tags " + tags.join(","));
 
-  // Closing and opening it again asks again, because another clone may have
-  // changed the statuses in between.
-  vocabularyPanelClose.eventListeners.click();
-  if (vocabularyPanel.hidden !== true) throw new Error("Close left the panel open");
-  if (vocabularyPanelToggle.getAttribute("aria-expanded") !== "false") throw new Error("Close left the entry point reporting an open panel");
-  await openPanel();
-  if (vocabularyCalls.length !== 2) throw new Error("re-opening the panel asked " + vocabularyCalls.length + " times in total");
+  // Walking back to the board and returning asks again, because another clone
+  // may have changed the statuses in between. The list it was drawing goes with
+  // the visit rather than standing until the next one replaces it.
+  await returnToBoard();
+  if (statusesRoute()) throw new Error("Back left the statuses page in main");
+  if (vocabularyPanel.hidden !== true) throw new Error("Back left the statuses page mounted");
+  if (panelStatuses().length !== 0) throw new Error("the page kept a list nobody is looking at");
+  await openStatuses();
+  if (vocabularyCalls.length !== 2) throw new Error("returning to the route asked " + vocabularyCalls.length + " times in total");
 
   // The read is often the first thing on the page to notice that another clone
   // moved the ledger — this page drew its columns from head-1 — so the standing
@@ -385,7 +455,7 @@ func TestClientStatusPanelReadsTheProjectsStatusesWhenItOpens(t *testing.T) {
 // not rebuilt to show the change: every card node on the board is holding
 // somebody's work in flight, so the standing notice offers the reload and the
 // reader picks the moment.
-func TestClientStatusPanelAddsAStatusAgainstTheHeadItRead(t *testing.T) {
+func TestClientStatusesPageAddsAStatusAgainstTheHeadItRead(t *testing.T) {
 	vocabulary := handlerVocabulary(t)
 	tasks := []core.Task{
 		clientPlacementTask("WB-01J0000000000000000000A101", "Frozen", core.Status("icebox"), core.PriorityMedium),
@@ -396,7 +466,7 @@ func TestClientStatusPanelAddsAStatusAgainstTheHeadItRead(t *testing.T) {
   vocabularyAnswer = { body: `+panelMutationJSON(t, panelRenamedVocabulary(t), "head-8", VocabularyTaskCounts{}, []core.Warning{
 		{Code: "docs-refresh-incomplete", Message: "the generated guidelines are out of date; run workbook docs update"},
 	})+` };
-  await openPanel();
+  await openStatuses();
 
   // Nothing has changed yet, and the board has been told nothing.
   if (vocabularyNotice.hidden !== true) throw new Error("opening the panel told the board its columns were out of date");
@@ -477,12 +547,12 @@ func TestClientStatusPanelAddsAStatusAgainstTheHeadItRead(t *testing.T) {
 // A project whose configuration ledger has never been seeded is administrable,
 // and the empty head it reads is a head: it is sent, as the empty string, rather
 // than withheld as if the panel had not looked.
-func TestClientStatusPanelSendsTheEmptyHeadOfAnUnseededProject(t *testing.T) {
+func TestClientStatusesPageSendsTheEmptyHeadOfAnUnseededProject(t *testing.T) {
 	vocabulary := handlerVocabulary(t)
 	runPanelClient(t, "administering an unseeded project", vocabulary, "", nil, `
   vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "")+`;
   vocabularyAnswer = { body: `+panelMutationJSON(t, panelRenamedVocabulary(t), "head-1", VocabularyTaskCounts{}, nil)+` };
-  await openPanel();
+  await openStatuses();
   const form = panelAdd();
   const name = findElement(form, (element) => element.id === "status-new-name");
   name.value = "triage";
@@ -496,21 +566,27 @@ func TestClientStatusPanelSendsTheEmptyHeadOfAnUnseededProject(t *testing.T) {
 `)
 }
 
-// A status change waits for the board's own writes to finish.
+// A status change waits for the board's own writes to finish, across the
+// navigation that led to it.
 //
 // A pending intent can be carrying the very status a change retires, and it was
-// composed against the columns on screen. The panel says it is waiting rather
-// than appearing to have ignored the press, and sends once the queue is empty.
-func TestClientStatusPanelWaitsForPendingBoardChanges(t *testing.T) {
+// composed against the columns the reader was looking at a moment ago. Walking
+// to another route does not empty the queue — the intent outlives the page it
+// was made on, as it must — so the move is made on the board here and the change
+// is composed after it, which is the order a reader makes them in. The page says
+// it is waiting rather than appearing to have ignored the press, and sends once
+// the queue is empty.
+func TestClientStatusesPageWaitsForPendingBoardChanges(t *testing.T) {
 	vocabulary := handlerVocabulary(t)
 	task := clientPlacementTask("WB-01J0000000000000000000A101", "Frozen", core.Status("icebox"), core.PriorityMedium)
 	task.Head = "head-a"
 	runPanelClient(t, "a status change behind a pending intent", vocabulary, "head-7", []core.Task{task}, `
   vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-7")+`;
   vocabularyAnswer = { body: `+panelMutationJSON(t, panelRenamedVocabulary(t), "head-8", VocabularyTaskCounts{}, nil)+` };
-  await openPanel();
 
-  // Hold the board's write open, then make one: the queue is now non-empty.
+  // Hold the board's write open, then make one on the board: the queue is now
+  // non-empty, and it stays that way while the reader walks to the statuses
+  // page.
   let releaseTaskWrite = null;
   taskWriteGate = new Promise((resolve) => { releaseTaskWrite = resolve; });
   const shipped = boardLists.find((list) => list.dataset.status === "shipped");
@@ -525,6 +601,7 @@ func TestClientStatusPanelWaitsForPendingBoardChanges(t *testing.T) {
     throw new Error("the board write did not go out");
   }
 
+  await openStatuses();
   const form = panelAdd();
   const name = findElement(form, (element) => element.id === "status-new-name");
   name.value = "triage";
@@ -575,13 +652,13 @@ func TestClientStatusPanelWaitsForPendingBoardChanges(t *testing.T) {
 // learned and send it again. Two people renaming the same column mean two
 // different things, and a client that applied one over the other would invent a
 // third that neither of them chose.
-func TestClientStatusPanelStopsAtAStaleWrite(t *testing.T) {
+func TestClientStatusesPageStopsAtAStaleWrite(t *testing.T) {
 	vocabulary := handlerVocabulary(t)
 	runPanelClient(t, "a status change refused as stale", vocabulary, "head-7", nil, `
   vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-7")+`;
   vocabularyAnswer = { ok: false, body: `+panelStaleWriteJSON(t, panelRenamedVocabulary(t), "head-8",
 		"this project's statuses have changed since head-7; reload and try again")+` };
-  await openPanel();
+  await openStatuses();
 
   panelControl(panelRow("icebox"), "Edit Icebox").eventListeners.click();
   const form = panelForm("icebox", "vocabularyEdit");
@@ -636,13 +713,13 @@ func TestClientStatusPanelStopsAtAStaleWrite(t *testing.T) {
 
 // A removal names where the tasks go and reports what it moved, in the terms
 // `workbook status delete` reports them.
-func TestClientStatusPanelPricesARemoval(t *testing.T) {
+func TestClientStatusesPagePricesARemoval(t *testing.T) {
 	vocabulary := handlerVocabulary(t)
 	runPanelClient(t, "removing a status", vocabulary, "head-7", nil, `
   vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-7")+`;
   vocabularyAnswer = { body: `+panelMutationJSON(t, panelRenamedVocabulary(t), "head-8",
 		VocabularyTaskCounts{Affected: 3, ClaimableAfter: 2}, nil)+` };
-  await openPanel();
+  await openStatuses();
 
   panelControl(panelRow("shipped"), "Delete Shipped").eventListeners.click();
   const form = panelForm("shipped", "vocabularyDelete");
@@ -677,13 +754,13 @@ func TestClientStatusPanelPricesARemoval(t *testing.T) {
 // A client that checked first would refuse in words of its own — a second,
 // worse copy of a rule that lives in one place — and would refuse a change the
 // server would have accepted the moment either of them drifted.
-func TestClientStatusPanelQuotesARefusalItDidNotMake(t *testing.T) {
+func TestClientStatusesPageQuotesARefusalItDidNotMake(t *testing.T) {
 	vocabulary := handlerVocabulary(t)
 	runPanelClient(t, "a refused status change", vocabulary, "head-7", nil, `
   vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-7")+`;
   vocabularyAnswer = { ok: false, body: `+panelRefusalJSON(t, core.CategoryValidation,
 		`unsupported status tag "blocked"`)+` };
-  await openPanel();
+  await openStatuses();
 
   panelControl(panelRow("queued"), "Edit Queued Up").eventListeners.click();
   const form = panelForm("queued", "vocabularyEdit");
@@ -717,12 +794,12 @@ func TestClientStatusPanelQuotesARefusalItDidNotMake(t *testing.T) {
 // of pairwise moves would be several commits describing it, each of which could
 // be refused on its own. Both ways of making the gesture — the drag and the
 // controls a keyboard can reach — send exactly the same one request.
-func TestClientStatusPanelReordersInOneRequestPerGesture(t *testing.T) {
+func TestClientStatusesPageReordersInOneRequestPerGesture(t *testing.T) {
 	vocabulary := handlerVocabulary(t)
 	runPanelClient(t, "reordering the columns", vocabulary, "head-7", nil, `
   vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-7")+`;
   vocabularyAnswer = { body: `+panelMutationJSON(t, panelRenamedVocabulary(t), "head-8", VocabularyTaskCounts{}, nil)+` };
-  await openPanel();
+  await openStatuses();
 
   // The first row cannot move up and the last cannot move down, and both say so
   // rather than sending an order the server would refuse.
@@ -747,7 +824,7 @@ func TestClientStatusPanelReordersInOneRequestPerGesture(t *testing.T) {
 	runPanelClient(t, "dragging a column into place", vocabulary, "head-7", nil, `
   vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-7")+`;
   vocabularyAnswer = { body: `+panelMutationJSON(t, panelRenamedVocabulary(t), "head-8", VocabularyTaskCounts{}, nil)+` };
-  await openPanel();
+  await openStatuses();
 
   // A row whose form is open is not draggable: selecting the text in an input
   // is a press and a drag, which inside a draggable row is the gesture that
@@ -843,24 +920,30 @@ func TestClientScriptNamesNoStatusTagOfItsOwn(t *testing.T) {
 	}
 }
 
-// The panel's stylesheet keeps the page's one column-width contract and adds no
-// second one of its own.
-func TestHandlerStatusPanelIsStyledWithinThePagesLayout(t *testing.T) {
+// The statuses page is styled as a route rather than as a region in the board's
+// chrome, and nothing caps the height it may take.
+//
+// This is the bug the route exists to fix, pinned as a rule. As a disclosure in
+// the viewport-height flex column the page shared its height with the header and
+// the board, and on an ordinary desktop window what was left was a sliver too
+// short to open a form in. The shell it is drawn in now grows with its content
+// and main is what scrolls, which is what every other route here does.
+func TestHandlerStatusesPageIsStyledAsARoute(t *testing.T) {
 	body := administrableBoardPage(t, handlerVocabulary(t))
+	shell := declarationBlock(t, body, ".task-route--admin {")
+	for _, fragment := range []string{"height: auto", "min-height: 100%"} {
+		if !strings.Contains(shell, fragment) {
+			t.Errorf("the statuses route's shell rule %q does not contain %q", shell, fragment)
+		}
+	}
 	rule := declarationBlock(t, body, ".admin {")
-	for _, fragment := range []string{
-		// It shares the viewport-height flex column with main and the notices,
-		// so it can run out of room rather than out of page.
-		"flex: 0 1 auto",
-		"max-height: 50vh",
-		"overflow: auto",
-	} {
-		if !strings.Contains(rule, fragment) {
-			t.Errorf("the panel's rule %q does not contain %q", rule, fragment)
+	for _, fragment := range []string{"flex:", "max-height", "overflow"} {
+		if strings.Contains(rule, fragment) {
+			t.Errorf("the statuses page's rule %q still carries %q, which is what starved it in the board's chrome", rule, fragment)
 		}
 	}
 	if !strings.Contains(body, ".admin[hidden] { display: none; }") {
-		t.Error("the panel's display rule does not defeat the hidden attribute it ships with")
+		t.Error("the statuses page's display rule does not defeat the hidden attribute it ships with")
 	}
 }
 
@@ -882,12 +965,12 @@ func declarationBlock(t *testing.T, body, selector string) string {
 
 // A mutation answer that is not the document these routes promise is a failure,
 // not a change: the panel says so and keeps drawing what it had.
-func TestClientStatusPanelRefusesAnAnswerItCannotRead(t *testing.T) {
+func TestClientStatusesPageRefusesAnAnswerItCannotRead(t *testing.T) {
 	vocabulary := handlerVocabulary(t)
 	runPanelClient(t, "an unreadable mutation answer", vocabulary, "head-7", nil, `
   vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-7")+`;
   vocabularyAnswer = { body: { format: "workbook.tasks", version: 1 } };
-  await openPanel();
+  await openStatuses();
   panelControl(panelRow("icebox"), "Edit Icebox").eventListeners.click();
   const form = panelForm("icebox", "vocabularyEdit");
   findElement(form, (element) => element.id === "status-label-icebox").value = "Deep Freeze";
@@ -911,12 +994,12 @@ func TestClientStatusPanelRefusesAnAnswerItCannotRead(t *testing.T) {
 // overwrite a relabel that landed beside it. The server refuses a change with
 // nothing in it, correctly, but an untouched form is finished rather than
 // broken, so it says so instead of collecting that refusal.
-func TestClientStatusPanelEditsOnlyWhatChanged(t *testing.T) {
+func TestClientStatusesPageEditsOnlyWhatChanged(t *testing.T) {
 	vocabulary := handlerVocabulary(t)
 	runPanelClient(t, "editing one member of a status", vocabulary, "head-7", nil, `
   vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-7")+`;
   vocabularyAnswer = { body: `+panelMutationJSON(t, panelRenamedQueuedVocabulary(t), "head-8", VocabularyTaskCounts{}, nil)+` };
-  await openPanel();
+  await openStatuses();
 
   panelControl(panelRow("queued"), "Edit Queued Up").eventListeners.click();
   let form = panelForm("queued", "vocabularyEdit");
@@ -961,12 +1044,12 @@ func TestClientStatusPanelEditsOnlyWhatChanged(t *testing.T) {
 
 // A panel opened for a project whose statuses cannot be read says so, and offers
 // no controls that would compose a change against nothing.
-func TestClientStatusPanelReportsAVocabularyItCannotRead(t *testing.T) {
+func TestClientStatusesPageReportsAVocabularyItCannotRead(t *testing.T) {
 	vocabulary := handlerVocabulary(t)
 	runPanelClient(t, "an unreadable vocabulary", vocabulary, "head-7", nil, `
   vocabularyRead = { format: "workbook.error", version: 1,
     error: { category: "corrupt-data", message: "cannot read this project's status configuration" } };
-  await openPanel();
+  await openStatuses();
   const said = panelMessages();
   if (said.length !== 1 || said[0] !== "cannot read this project's status configuration") {
     throw new Error("the panel said " + JSON.stringify(said));
@@ -981,25 +1064,131 @@ func TestClientStatusPanelReportsAVocabularyItCannotRead(t *testing.T) {
 `)
 }
 
-// The panel travels with the board, because the columns it administers are the
-// board's. It is closed on the way out rather than left standing over a task's
-// own page.
-func TestClientStatusPanelTravelsWithTheBoardRoute(t *testing.T) {
+// The statuses page is a page like the others: it is what main is drawing while
+// the reader is on it, and it goes when they walk anywhere else — a task's own
+// page as readily as the board.
+func TestClientStatusesRouteIsOneRouteAmongTheOthers(t *testing.T) {
 	vocabulary := handlerVocabulary(t)
 	task := clientPlacementTask("WB-01J0000000000000000000A101", "Frozen", core.Status("icebox"), core.PriorityMedium)
-	runPanelClient(t, "leaving the board with the panel open", vocabulary, "head-7", []core.Task{task}, `
+	runPanelClient(t, "leaving the statuses page for a task", vocabulary, "head-7", []core.Task{task}, `
   vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-7")+`;
-  await openPanel();
-  if (vocabularyPanel.hidden !== false) throw new Error("the panel did not open");
+  await openStatuses();
+  if (!statusesRoute()) throw new Error("the route drew no statuses page");
 
-  // Following a card's link is what leaves the board, and the route render it
-  // performs is what closes the panel.
+  // Following a card's link is a route away from it, and the render it performs
+  // is what puts the page away.
   const link = new TestElement("a");
   link.href = window.location.origin + "/tasks/" + encodeURIComponent(`+strconv.Quote(task.ID)+`);
-  await documentEventListeners.click({ target: link, button: 0, preventDefault() {} });
+  await follow(link);
+  if (window.location.href.indexOf("/tasks/") < 0) throw new Error("the link did not leave the statuses page: " + window.location.href);
+  if (statusesRoute()) throw new Error("the statuses page stayed in main over a task's page");
+  if (vocabularyPanel.hidden !== true) throw new Error("the statuses page stayed mounted over a task's page");
+  if (vocabularyPanel.parentElement) throw new Error("the statuses page is still hanging off the document");
+`)
+}
+
+// A hard load of /statuses is the page, drawn from the address rather than from
+// a click. It is the same document the board is served from — the server answers
+// every page route with it — so a bookmark, a reload and a middle-click all land
+// on the statuses page rather than on the board.
+func TestClientStatusesRouteRendersOnADirectLoad(t *testing.T) {
+	vocabulary := handlerVocabulary(t)
+	task := clientPlacementTask("WB-01J0000000000000000000A101", "Frozen", core.Status("icebox"), core.PriorityMedium)
+	// The answer is prepared before the client script runs, because a hard load
+	// reads the statuses in its first render rather than waiting to be asked.
+	runStatusesClient(t, "a hard load of the statuses page", "/statuses",
+		"vocabularyRead = "+panelVocabularyJSON(t, panelRenamedVocabulary(t), "head-7")+";\n",
+		vocabulary, "head-7", []core.Task{task}, `
   await settle();
-  if (window.location.href.indexOf("/tasks/") < 0) throw new Error("the link did not leave the board: " + window.location.href);
-  if (vocabularyPanel.hidden !== true) throw new Error("the panel stayed open over a task's page");
-  if (vocabularyPanelToggle.hidden !== true) throw new Error("the entry point stayed on a route it does nothing on");
+  if (!statusesRoute()) throw new Error("the first render drew no statuses page into main");
+  if (document.title !== "Statuses · Workbook") throw new Error("the page is titled " + JSON.stringify(document.title));
+  if (vocabularyCalls.length !== 1 || vocabularyCalls[0].url !== "/api/vocabulary") {
+    throw new Error("the load asked for " + JSON.stringify(vocabularyCalls.map((call) => call.url)));
+  }
+  if (panelStatuses().join(",") !== "icebox,queued,triage,shipped") {
+    throw new Error("the page listed " + panelStatuses().join(","));
+  }
+  // The board is not drawn under it, and walking back is what draws it: the
+  // columns the server rendered, in main, with the card it served.
+  if (findElement(main, (element) => element === boardView)) throw new Error("the board was drawn under the statuses page");
+  await returnToBoard();
+  if (main.children.length !== 1 || main.children[0] !== boardView) throw new Error("Back drew something other than the board");
+  if (document.title !== "Workbook board") throw new Error("the board is titled " + JSON.stringify(document.title));
+  if (!boardCard(`+strconv.Quote(task.ID)+`)) throw new Error("the board came back without its card");
+  if (historyPaths[historyPaths.length - 1] !== "/") throw new Error("Back pushed " + JSON.stringify(historyPaths));
+`)
+}
+
+// A page served without the statuses markup has no statuses route, and says so
+// in the words every address this client does not have is answered in.
+//
+// It is the client half of the server's 404. A board built without the four
+// vocabulary mutations is served no link, no page body and no capability, so
+// drawing the route from the address alone would put a shell in front of a
+// reader with nothing the client could fill it from.
+func TestClientStatusesRouteIsNotARouteWithoutTheMarkup(t *testing.T) {
+	vocabulary := handlerVocabulary(t)
+	runStatusesClient(t, "a statuses address on a board that cannot administer them",
+		"/statuses", withoutStatusAdministration, vocabulary, "head-7", nil, `
+  await settle();
+  if (document.title !== "Page not found · Workbook") throw new Error("the page is titled " + JSON.stringify(document.title));
+  if (vocabularyCalls.length !== 0) {
+    throw new Error("a board that cannot change its statuses read them anyway: " + JSON.stringify(vocabularyCalls.map((call) => call.url)));
+  }
+  const drawn = main.children[0];
+  if (!drawn || drawn.textContent.indexOf("does not exist") < 0) {
+    throw new Error("main is drawing " + JSON.stringify(drawn && drawn.textContent));
+  }
+`)
+}
+
+// What the board is showing when the reader comes back from a change they made.
+//
+// The columns are the ones they left, down to the node: main re-attaches the
+// board rather than rebuilding it, so every card is the card it was, holding
+// whatever it was holding. The standing notice is what says the statuses have
+// moved on, and it says so from outside main, which is why it is already up
+// while the reader is still on the statuses page and still up when they return.
+// Reloading is the reader's to choose, as it is for a change another clone made.
+func TestClientBoardKeepsItsColumnsAcrossAStatusChange(t *testing.T) {
+	vocabulary := handlerVocabulary(t)
+	tasks := []core.Task{
+		clientPlacementTask("WB-01J0000000000000000000A101", "Frozen", core.Status("icebox"), core.PriorityMedium),
+		clientPlacementTask("WB-01J0000000000000000000B202", "Queued", core.Status("queued"), core.PriorityHigh),
+	}
+	runPanelClient(t, "returning to the board after a status change", vocabulary, "head-7", tasks, `
+  vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-7")+`;
+  vocabularyAnswer = { body: `+panelMutationJSON(t, panelRenamedVocabulary(t), "head-8", VocabularyTaskCounts{}, nil)+` };
+  const held = boardLists.flatMap((list) => list.querySelectorAll(".task-card"));
+  if (held.length !== 2) throw new Error("the board did not draw both cards");
+  held.forEach((node, index) => { node.__witness = "card-" + index; });
+  const columnsBefore = boardLists.map((list) => list.dataset.status).join(",");
+
+  await openStatuses();
+  const form = panelAdd();
+  const name = findElement(form, (element) => element.id === "status-new-name");
+  name.value = "triage";
+  name.eventListeners.input();
+  await submitPanelForm(form);
+  // The notice is readable from here: it sits outside main, so it is not a
+  // thing the reader has to go back to the board to be told.
+  if (vocabularyNotice.hidden !== false) throw new Error("the change raised no notice while the reader was still on the page");
+
+  await returnToBoard();
+  if (main.children.length !== 1 || main.children[0] !== boardView) throw new Error("Back drew something other than the board");
+  if (vocabularyNotice.hidden !== false) throw new Error("returning to the board took the notice down");
+  if (boardLists.map((list) => list.dataset.status).join(",") !== columnsBefore) {
+    throw new Error("returning to the board rebuilt its columns as " + boardLists.map((list) => list.dataset.status).join(","));
+  }
+  const after = boardLists.flatMap((list) => list.querySelectorAll(".task-card"));
+  held.forEach((node, index) => {
+    if (after[index] !== node || after[index].__witness !== "card-" + index) {
+      throw new Error("card " + index + " was rebuilt by a walk to the statuses page and back");
+    }
+  });
+  // And the reload the notice offers is still the reader's to press.
+  if (reloadCalls !== 0) throw new Error("something reloaded the board without being asked");
+  vocabularyReload.eventListeners.click();
+  if (reloadCalls !== 1) throw new Error("the notice's reload did nothing");
 `)
 }

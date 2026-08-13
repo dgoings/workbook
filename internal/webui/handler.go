@@ -314,7 +314,7 @@ type Options struct {
 	Vocabulary VocabularyResolver
 	// The four vocabulary mutations. A board given none of them renders its
 	// columns and refuses to change them, which is every board that predates the
-	// administration panel.
+	// statuses route.
 	AddStatus     VocabularyStatusAdder
 	EditStatus    VocabularyStatusEditor
 	RemoveStatus  VocabularyStatusRemover
@@ -355,13 +355,15 @@ type pageData struct {
 	// poll can tell that the columns it is looking at have been superseded.
 	VocabularyHead string
 	// StatusTags are the three roles a status may carry, rendered into the
-	// administration panel's forms for the reason the columns are rendered into
-	// the board: the client must not carry a second copy of a set the server
-	// owns. It is also what keeps the script from naming `done`, which is a tag
-	// here and a status name in most projects.
+	// statuses page's forms for the reason the columns are rendered into the
+	// board: the client must not carry a second copy of a set the server owns.
+	// It is also what keeps the script from naming `done`, which is a tag here
+	// and a status name in most projects.
 	StatusTags []core.StatusTag
 	// Administrable is whether this board was built with all four vocabulary
-	// mutations, and it decides whether the page draws the status panel at all.
+	// mutations. It decides whether the page carries the statuses route's link
+	// and body at all, and serveStatuses answers the address itself with a 404
+	// when it is false — one gate, read on both sides.
 	//
 	// `workbook serve` is the only production caller of NewHandler and always
 	// supplies the four, so this is true wherever a person meets it. It is
@@ -371,7 +373,7 @@ type pageData struct {
 	// gets a board that draws its columns and offers no control that would only
 	// ever answer "this board has no such capability".
 	//
-	// All four rather than any, because the panel is one surface: a partial set
+	// All four rather than any, because the page is one surface: a partial set
 	// would draw controls that look alike and fail differently.
 	Administrable bool
 }
@@ -517,6 +519,7 @@ func NewHandler(options Options) http.Handler {
 	handler := &handler{Options: options, page: page, mux: http.NewServeMux()}
 	handler.mux.HandleFunc("GET /{$}", handler.serveBoard)
 	handler.mux.HandleFunc("GET /deleted", handler.serveBoard)
+	handler.mux.HandleFunc("GET /statuses", handler.serveStatuses)
 	handler.mux.HandleFunc("GET /tasks/new", handler.serveBoard)
 	handler.mux.HandleFunc("GET /tasks/{id}", handler.serveBoard)
 	handler.mux.HandleFunc("GET /api/tasks", handler.serveTasks)
@@ -619,7 +622,7 @@ func hasPathSegment(path, marker string) bool {
 
 func allowedMethod(path string) (string, bool) {
 	switch path {
-	case "/", "/deleted", "/healthz", "/tasks/new":
+	case "/", "/deleted", "/healthz", "/statuses", "/tasks/new":
 		return http.MethodGet, true
 	case "/api/tasks":
 		return http.MethodGet + ", " + http.MethodPost, true
@@ -791,11 +794,34 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 		DefaultStatus:  vocabulary.Vocabulary.Default(),
 		VocabularyHead: vocabulary.Head,
 		StatusTags:     core.StatusTags(),
-		Administrable: handler.AddStatus != nil && handler.EditStatus != nil &&
-			handler.RemoveStatus != nil && handler.ReorderStatus != nil,
+		Administrable:  handler.administrable(),
 	}); err != nil {
 		return
 	}
+}
+
+// serveStatuses answers the statuses route, which is the board's page under
+// another path: the client renders the route it reads out of the address, so a
+// hard load of /statuses and a click through to it from the board have to be
+// served the same document — the same way /deleted and a task's own page are.
+//
+// It is the one page route that a board can be built without. The route is
+// registered whatever the board can do, so the method question has one answer
+// everywhere, and a board that cannot change its statuses answers the address
+// with a 404 rather than a page whose every control would be refused.
+func (handler *handler) serveStatuses(writer http.ResponseWriter, request *http.Request) {
+	if !handler.administrable() {
+		http.NotFound(writer, request)
+		return
+	}
+	handler.serveBoard(writer, request)
+}
+
+// administrable is whether this board was built with all four vocabulary
+// mutations. See pageData.Administrable for why all four rather than any.
+func (handler *handler) administrable() bool {
+	return handler.AddStatus != nil && handler.EditStatus != nil &&
+		handler.RemoveStatus != nil && handler.ReorderStatus != nil
 }
 
 // serveVocabulary reports the project's statuses to a client that wants more
@@ -864,8 +890,8 @@ func (handler *handler) addVocabularyStatus(writer http.ResponseWriter, request 
 }
 
 // editVocabularyStatus renames, relabels and retags one status in any
-// combination, because the panel edits a status as one form and a form is one
-// intent.
+// combination, because the statuses page edits a status as one form and a form
+// is one intent.
 func (handler *handler) editVocabularyStatus(writer http.ResponseWriter, request *http.Request) {
 	if handler.EditStatus == nil {
 		handler.writeError(writer, core.Errorf(core.CategoryOperational, "status editing is not configured"))
