@@ -643,64 +643,52 @@ func fixtureSingleLine(output []byte) (string, error) {
 	return line, nil
 }
 
+// The fixture builders go through core.NewOperationPack rather than composing
+// the durable header themselves.
+//
+// A benchmark fixture is not a writer anybody synchronizes with, but it is a
+// writer: it produces the objects the measured commands read, and a header it
+// assembles by hand is a second definition of the format that drifts silently.
+// The writer-format marker made that concrete — a literal here would have kept
+// writing generation zero after the constant that decides it moved.
 func fixtureOperationPack(config core.ProjectConfig, taskID, generation string, taskIndex, logicalClock int, operationID string, timestamp time.Time) core.OperationPack {
-	pack := core.OperationPack{
-		Format:            "workbook.operation-pack",
-		Version:           1,
-		ProjectID:         config.ProjectID,
-		TaskID:            taskID,
-		HistoryGeneration: generation,
-		Actor:             core.Actor{ID: benchmarkActorID},
-		LogicalClock:      uint64(logicalClock),
-		WallTime:          timestamp,
+	operations := []core.Operation{{
+		ID:   operationID,
+		Type: core.OperationTaskCreate,
+		Task: &core.TaskData{
+			Title:        fmt.Sprintf("Benchmark task %04d", taskIndex),
+			Status:       core.StatusBacklog,
+			Priority:     core.PriorityMedium,
+			Labels:       []string{},
+			Rank:         fmt.Sprintf("%d/1", taskIndex+1),
+			Dependencies: []string{},
+			CreatedAt:    timestamp,
+			UpdatedAt:    timestamp,
+		},
+	}}
+	if logicalClock != 1 {
+		operation := fixtureFieldSetOperation(taskIndex, logicalClock)
+		operation.ID = operationID
+		operations = []core.Operation{operation}
 	}
-	if logicalClock == 1 {
-		pack.Operations = []core.Operation{{
-			ID:   operationID,
-			Type: core.OperationTaskCreate,
-			Task: &core.TaskData{
-				Title:        fmt.Sprintf("Benchmark task %04d", taskIndex),
-				Status:       core.StatusBacklog,
-				Priority:     core.PriorityMedium,
-				Labels:       []string{},
-				Rank:         fmt.Sprintf("%d/1", taskIndex+1),
-				Dependencies: []string{},
-				CreatedAt:    timestamp,
-				UpdatedAt:    timestamp,
-			},
-		}}
-		return pack
-	}
-
-	operation := fixtureFieldSetOperation(taskIndex, logicalClock)
-	operation.ID = operationID
-	pack.Operations = []core.Operation{operation}
-	return pack
+	return core.NewOperationPack(
+		config.ProjectID, taskID, generation, benchmarkActorID,
+		uint64(logicalClock), timestamp, operations,
+	)
 }
 
 func fixturePlanOperationPack(config core.ProjectConfig, plan fixtureTaskPlan, taskIndex, logicalClock int, operationID string, timestamp time.Time, operation core.Operation) core.OperationPack {
-	pack := core.OperationPack{
-		Format:            "workbook.operation-pack",
-		Version:           1,
-		ProjectID:         config.ProjectID,
-		TaskID:            plan.TaskID,
-		HistoryGeneration: plan.Generation,
-		Actor:             core.Actor{ID: benchmarkActorID},
-		LogicalClock:      uint64(logicalClock),
-		WallTime:          timestamp,
-	}
 	operation.ID = operationID
 	if operation.Type == core.OperationTaskCreate {
-		initial := operation
 		task := plan.Initial
 		task.CreatedAt = timestamp
 		task.UpdatedAt = timestamp
-		initial.Task = &task
-		pack.Operations = []core.Operation{initial}
-		return pack
+		operation.Task = &task
 	}
-	pack.Operations = []core.Operation{operation}
-	return pack
+	return core.NewOperationPack(
+		config.ProjectID, plan.TaskID, plan.Generation, benchmarkActorID,
+		uint64(logicalClock), timestamp, []core.Operation{operation},
+	)
 }
 
 func fixtureFieldSetOperation(taskIndex, logicalClock int) core.Operation {
