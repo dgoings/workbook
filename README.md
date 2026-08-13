@@ -1236,6 +1236,13 @@ GET /api/vocabulary           versioned status vocabulary JSON: the project's
                               statuses in order, their labels and tags, the
                               forwarding chains, and the configuration ledger
                               head they were read from
+POST /api/vocabulary/statuses            define a status, optionally placed
+                                         before or after an existing one
+PATCH /api/vocabulary/statuses/<status>  rename, relabel and retag a status,
+                                         in any combination
+DELETE /api/vocabulary/statuses/<status> remove a status, naming in the body
+                                         where its tasks belong
+PUT /api/vocabulary/order                set the whole column order at once
 GET /api/tasks/<id>/history   versioned change log and status lifecycle JSON
 POST /api/tasks               create a task
 PATCH /api/tasks/<id>         update task fields
@@ -1249,6 +1256,27 @@ GET /api/sync                 versioned publication-mode JSON
 PUT /api/sync                 change this board's publication mode
 GET /healthz                  versioned health JSON
 ```
+
+The four vocabulary routes are `workbook status` reached over HTTP: they run the
+same planners, so they refuse what the verbs refuse, in the same words, and
+record the same operations into the same configuration ledger. Three things
+follow from being a server rather than a command, and each is deliberate:
+
+- Every one of them requires an `expectedHead` member naming the vocabulary head
+  the change was composed against — the `head` that `GET /api/vocabulary`
+  reports, which is the empty string for a project whose ledger has never been
+  seeded. A head that no longer matches is answered `409` with a `stale-write`
+  document carrying the current vocabulary, and nothing is merged or rebased: a
+  status is somebody's decision about how the project works, and applying two of
+  them would invent a third that neither author chose.
+- Each answers with the whole vocabulary document, in the same shape
+  `GET /api/vocabulary` serves, including the head the next change must name. A
+  removal also reports how many tasks it moved and how many of those become
+  claimable where they land, which is what `workbook status delete` reports.
+- None of them writes the generated `.workbook/guidelines.md`. The board is a
+  long-running server that may be answering while somebody rebases the checkout
+  it lives in, so it records the change and reports that the file is stale; the
+  next `workbook status` verb or `workbook docs update` rewrites it.
 
 The board answers only its own pages. It has no accounts and no tokens, so three
 checks stand in for them and every route is subject to all three:
