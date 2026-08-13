@@ -351,13 +351,21 @@ func writeSyncReport(output io.Writer, sync *syncReport) {
 	}
 }
 
-func writeSyncedResult(output io.Writer, command string, data any, sync *syncReport, conflicts []core.Conflict) {
+func writeSyncedResult(
+	output io.Writer,
+	command string,
+	data any,
+	sync *syncReport,
+	conflicts []core.Conflict,
+	warnings []core.Warning,
+) {
 	_ = json.NewEncoder(output).Encode(ResultEnvelope{
 		Format:   "workbook.result",
 		Version:  1,
 		Command:  command,
 		Data:     data,
 		Conflict: conflicts,
+		Warnings: warnings,
 		Sync:     sync,
 	})
 }

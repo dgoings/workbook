@@ -411,6 +411,7 @@ without parsing a message:
 | 6 | `stale-write` | The task ref moved between read and write, so the compare-and-swap was refused. Retrying the identical command usually succeeds. |
 | 7 | `corrupt-data` | Stored data could not be read as Workbook wrote it. Read the message; repair or rebuild before continuing. |
 | 8 | `conflict` | Reconciliation stopped on a decision Workbook will not make. See [Reconciling divergent histories](#reconciling-divergent-histories). |
+| 9 | `newer-writer` | A newer Workbook wrote this history and this build cannot fold it. Nothing is damaged; upgrade Workbook. See [Mixed Workbook versions](#mixed-workbook-versions). |
 
 Exit `6` is what a concurrent writer sees: two processes mutating one task, a
 push whose remote ref changed underneath it, a projection whose head drifted
@@ -1867,6 +1868,88 @@ deleting their refs. Shared task histories are never rebased or force-pushed. A
 clone that diverged from `origin` replays its own unpublished operations onto
 the fetched tip and parks the tip it replaced, which changes only local refs and
 appends to the shared history.
+
+### Mixed Workbook versions
+
+A team does not upgrade all at once, and a task ref is shared history: the
+newest clone's writes reach the oldest clone's fetch immediately. From v0.5.0
+on, Workbook distinguishes *this history was written by a newer Workbook* from
+*this history is corrupt*, because the two need opposite responses — one is
+fixed by upgrading, the other by repairing a repository.
+
+**The marker.** An operation pack — a task pack or a configuration-ledger pack —
+may carry an optional integer member, `minReader`, naming the lowest
+writer-format generation that can fold it:
+
+```json
+{"format":"workbook.operation-pack","version":1,"minReader":1, …}
+```
+
+Absence means generation 0. **No pack any current build writes carries it**, so
+every document in every existing repository is unchanged, byte for byte, and a
+golden table asserts that. The member is set per operation type, so a build that
+knows how to write a new kind of operation still writes ordinary field changes
+without it — an older clone keeps folding everything it genuinely can.
+
+The task and configuration checkpoints beside the packs carry the same member,
+as a running maximum over the history so far. That is what lets a reader answer
+"can I fold this task at all?" from one object rather than a walk of the chain.
+
+**What an older clone does with one.** Scoped to the one task, or the one
+configuration ledger, that carries it:
+
+- **Reads work.** `list`, `board`, `show`, `next` and the web board serve the
+  task from its stored checkpoint, which is where every read gets a task from
+  anyway. The projected task carries `newerWriter: true`, and the CLI prints a
+  non-fatal advisory beside the answer.
+- **Mutations are refused**, with category `newer-writer` (exit `9`) and a
+  message naming the task and saying to upgrade Workbook. Configuration changes
+  are refused the same way when the ledger carries the marker; resolving a
+  status against it still works, so boards still have columns and tasks can
+  still be filed under statuses that already exist.
+- **`workbook validate`** reports it as `newer-writer`, per task, and never as
+  `corrupt-data`. It exits `9` rather than `0`: `validate` answers whether this
+  clone can vouch for its history, and for these tasks it could not check. If a
+  task is *also* genuinely corrupt, corruption is reported first — it is the
+  more serious claim.
+- **Synchronization never wedges.** Refs advance, other tasks are unaffected,
+  and a clone with nothing local on the task simply fast-forwards onto the newer
+  tip.
+
+**Divergence is the hard edge**, and the answer is deliberate. If a clone has
+unpublished operations on a task whose `origin` history has since gained a
+newer-generation pack, replay is impossible by definition: the local operations
+would have to be folded onto a checkpoint whose rules this build does not have.
+Workbook **refuses the replay and changes nothing**. The task's ref is left
+exactly where it is, holding every local operation; `origin`'s tip waits in the
+tracking namespace; the task is reported as `needs-upgrade` and the run exits
+`9`. That task is also not pushed, because `origin` already holds a tip the
+local ref is not a descendant of and the push could only be rejected. Nothing is
+parked, because nothing was replaced, and nothing is lost — the operations
+publish themselves on the first sync after the upgrade. The configuration ledger
+behaves identically.
+
+**An unknown operation type with no marker is still `corrupt-data`.** That is
+the whole point of the marker: without one, a type nobody recognizes is
+tampering or a bug, not a version skew, and telling somebody to upgrade their
+way out of a broken ref would be wrong. A marker at or below the reader's
+generation changes nothing at all.
+
+**Before v0.5.0 there is no signal**, and honesty about what that costs matters
+more than the reassurance. Installed binaries are frozen; v0.4.4 and earlier
+predate the marker entirely, and their behavior against a newer pack is whatever
+it is. The measured record from the PR #95 review is two different failures:
+a pack using a custom status blocks the ref at fetch time, permanently, and
+keeps stale data until the clone is upgraded; a restore-with-destination pack
+reads, synchronizes and mutates fine but fails `workbook validate` for that one
+task, permanently, as `corrupt-data`. Neither is repairable from the newer side,
+because the history is already written and append-only. v0.5.0 is the last
+release that can carry this hard edge, which is why the signal ships in it.
+
+The marker is a claim made by whoever wrote the pack, and it is trusted for the
+same reason every other field in a fetched ref is: anyone with push access can
+already write a ref this clone refuses. What the marker changes is which message
+that produces, not who is trusted.
 
 ## Concurrency and synchronization
 
