@@ -67,10 +67,9 @@
        column — a sibling of the notices and of main — and could only have the
        height the header and the board did not want, which on an ordinary
        desktop window was a sliver too short to open a form in. Nothing here
-       caps its height for that reason: the route shell grows with its list the
-       way the history route does, and main is what scrolls. */
-    .task-route--admin { height: auto; min-height: 100%; }
-    .task-route--admin .task-route__header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .5rem 1rem; }
+       caps its height for that reason. What lets the shell around it grow is
+       .task-route--admin, which is with the other .task-route rules below,
+       because it only wins where it is written after the one it overrides. */
     .admin { display: grid; gap: .6rem; padding: 1.15rem; }
     .admin[hidden] { display: none; }
     .admin:focus-visible { outline: 3px solid #2457d6; outline-offset: -3px; }
@@ -352,6 +351,13 @@
     .relationship-editor:focus-within .relationship-empty:empty { min-height: 1rem; }
     .task-route--history { height: auto; min-height: 100%; }
     .task-route--history .task-layout { min-height: min(60vh, 34rem); }
+    /* The statuses route, which grows with its list the way the history route
+       does and lets main scroll. Both of these are as specific as .task-route
+       itself, so they only take effect written after it: the same rule text up
+       beside the .admin rules lost to the height: 100% above, and the route's
+       rows spilled out of the card it is drawn in. */
+    .task-route--admin { height: auto; min-height: 100%; }
+    .task-route--admin .task-route__header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .5rem 1rem; }
     .task-history { display: grid; gap: .8rem; padding: 1.15rem; border-top: 1px solid #d5deea; background: #fafbfd; }
     .task-history h3 { margin: 0; font-size: .88rem; }
     .lifecycle { display: flex; flex-wrap: wrap; gap: .3rem 1.1rem; margin: 0; padding: 0; list-style: none; }
@@ -548,7 +554,14 @@
        finds the columns they left and the offer to reload them — the same
        machinery a change from another clone raises, and for the same reason:
        every card node on the board is holding somebody's work in flight. -->
-  <div class="admin" data-vocabulary-panel data-status-tags="{{ range $index, $tag := .StatusTags }}{{ if $index }} {{ end }}{{ $tag }}{{ end }}" tabindex="-1" hidden>
+  <!-- It is focusable and named because a rebuild parks focus on it: every
+       control in the list is dropped and rebuilt by each answer, and the one the
+       reader pressed is usually among them, so focus is caught here rather than
+       dropped on the body. A tabindex="-1" div is nameless to a screen reader —
+       a generic role takes no name at all — so it carries the role that can hold
+       one and points at the heading the route draws above it, which is what the
+       reader is being put back into. -->
+  <div class="admin" data-vocabulary-panel data-status-tags="{{ range $index, $tag := .StatusTags }}{{ if $index }} {{ end }}{{ $tag }}{{ end }}" role="group" aria-labelledby="statuses-title" tabindex="-1" hidden>
     <p class="admin__note">These are this project's columns, in board order. Renaming one forwards the old name, so tasks written by a clone that has not fetched the change still land in the right column, and removing one names where its tasks belong. A tag says what a column means rather than what it is called: <strong>default</strong> is where a new task lands and exactly one column carries it, <strong>next</strong> marks the columns <code>workbook next</code> claims from, and <strong>done</strong> marks the ones that satisfy a dependency. Drag a row, or use its Up and Down controls, to reorder the columns. The board keeps the columns it was opened with until you reload it.</p>
     <div class="admin__status" data-vocabulary-panel-status role="status" aria-live="polite"></div>
     <div data-vocabulary-panel-body></div>
@@ -3256,7 +3269,16 @@
       // holds them.
       let panelControls = [];
       let panelStatusRows = [];
-      // What the panel has to say about the last thing it did: one sentence,
+      // What a change in flight says about itself: that it is behind the board's
+      // own writes, or that it has gone and is waiting for an answer. One
+      // constant each, because the render that draws this page has to be able to
+      // say the same thing a change already said — a reader who leaves mid-change
+      // and comes back is met by a list whose every control is disabled, and a
+      // page that explained itself once and cannot explain itself again is a
+      // dead grey page with nothing on it to read.
+      const panelWaitingMessage = "Finishing the changes already in flight on the board before this one.";
+      const panelSendingMessage = "Sending a change to this project's statuses.";
+      // What the page has to say about the last thing it did: one sentence,
       // and one line per warning the server attached. Warnings are shown rather
       // than folded into the sentence — `docs-refresh-incomplete` and
       // `auto-sync-incomplete` are about the repository rather than about the
@@ -3358,7 +3380,7 @@
           // change retires, so the change waits for the board to be settled and
           // says that it is waiting.
           if (pendingIntents.size > 0) {
-            panelReport("", "Finishing the changes already in flight on the board before this one.");
+            panelReport("", panelWaitingMessage);
             await settledIntents();
           }
           const response = await fetch(path, {
@@ -3403,7 +3425,7 @@
           // is already taken, a removal with nowhere to send its tasks — so it
           // is quoted exactly as the command would have printed it.
           panelReport("error", stale
-            ? "This project's statuses changed in another clone, so this change was not applied. The panel now shows them as they stand; review them and make the change again."
+            ? "This project's statuses changed in another clone, so this change was not applied. This page now shows them as they stand; review them and make the change again."
             : payload.error && payload.error.message || "This status change was not applied.");
           return;
         }
@@ -3868,6 +3890,14 @@
         header.append(naming, back);
         vocabularyPanel.hidden = false;
         section.append(header, vocabularyPanel);
+        // A change the reader left in flight is still in flight, and the render
+        // below will draw its list with every control disabled. Leaving cleared
+        // what the last visit had to say, so the reason is said again here
+        // rather than leaving the reader in front of a page that refuses every
+        // control and explains none of it.
+        if (panelBusy) {
+          panelReport("", pendingIntents.size > 0 ? panelWaitingMessage : panelSendingMessage);
+        }
         return section;
       }
       // Leaving the statuses route. The body goes back out of the document with

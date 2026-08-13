@@ -299,8 +299,12 @@ func TestHandlerBoardLinksToTheStatusesRoute(t *testing.T) {
 			// was served rather than an administration surface below it.
 			`hidden`,
 			// It takes focus when a rebuild drops the control the reader
-			// pressed, so it has to be focusable without being tabbable.
+			// pressed, so it has to be focusable without being tabbable — and
+			// named, since a screen reader announces nothing for a generic
+			// element and a generic role may hold no name at all.
 			`tabindex="-1"`,
+			`role="group"`,
+			`aria-labelledby="statuses-title"`,
 			// The roles a status may carry are the server's answer, rendered
 			// here because the client must not hold a second copy of them.
 			`data-status-tags="default done next"`,
@@ -622,6 +626,19 @@ func TestClientStatusesPageWaitsForPendingBoardChanges(t *testing.T) {
     throw new Error("the panel re-enabled its controls while it was waiting");
   }
 
+  // Walking away and back while it waits is the one way to meet this page with
+  // every control disabled and nothing on it that was said before the walk. It
+  // says why again rather than presenting a dead grey list.
+  await returnToBoard();
+  await openStatuses();
+  const returned = panelMessages();
+  if (returned.length !== 1 || returned[0].indexOf("already in flight") < 0) {
+    throw new Error("coming back mid-change said " + JSON.stringify(returned));
+  }
+  if (panelControl(panelAdd(), "Add status").disabled !== true) {
+    throw new Error("coming back mid-change offered controls a change in flight has disabled");
+  }
+
   releaseTaskWrite();
   await dropped;
   await change;
@@ -926,8 +943,15 @@ func TestClientScriptNamesNoStatusTagOfItsOwn(t *testing.T) {
 // This is the bug the route exists to fix, pinned as a rule. As a disclosure in
 // the viewport-height flex column the page shared its height with the header and
 // the board, and on an ordinary desktop window what was left was a sliver too
-// short to open a form in. The shell it is drawn in now grows with its content
-// and main is what scrolls, which is what every other route here does.
+// short to open a form in. The shell it is drawn in grows with its content and
+// main is what scrolls, which is what every other route here does.
+//
+// Where the rule is written is part of the rule. `.task-route--admin` and
+// `.task-route` are equally specific, so the shell only grows if it is written
+// after the `height: 100%; min-height: 0` it overrides. Written before it, as it
+// was, the declarations are inert and the route's rows spill out of the card it
+// is drawn in — which is a page that renders wrongly while every assertion about
+// its declarations passes.
 func TestHandlerStatusesPageIsStyledAsARoute(t *testing.T) {
 	body := administrableBoardPage(t, handlerVocabulary(t))
 	shell := declarationBlock(t, body, ".task-route--admin {")
@@ -935,6 +959,16 @@ func TestHandlerStatusesPageIsStyledAsARoute(t *testing.T) {
 		if !strings.Contains(shell, fragment) {
 			t.Errorf("the statuses route's shell rule %q does not contain %q", shell, fragment)
 		}
+	}
+	base := strings.Index(body, ".task-route {")
+	modifier := strings.Index(body, ".task-route--admin {")
+	if base < 0 || modifier < 0 {
+		t.Fatalf("the page has no .task-route rule (%d) or no .task-route--admin rule (%d)", base, modifier)
+	}
+	if modifier < base {
+		t.Errorf("the .task-route--admin rule is written at %d, before the .task-route rule at %d, "+
+			"where it is as specific as the height it means to override and therefore does nothing",
+			modifier, base)
 	}
 	rule := declarationBlock(t, body, ".admin {")
 	for _, fragment := range []string{"flex:", "max-height", "overflow"} {
