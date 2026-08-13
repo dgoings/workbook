@@ -37,14 +37,17 @@ func newerWriterWarnings(tasks []core.Task) []core.Warning {
 		return nil
 	}
 	sort.Strings(affected)
+	subject, pronoun := "they", "them"
+	if len(affected) == 1 {
+		subject, pronoun = "it", "it"
+	}
 	return []core.Warning{{
 		Code: core.WarningNewerWriter,
 		Message: fmt.Sprintf(
-			"%s written by a newer workbook; %s shown from the stored checkpoint, and changing %s "+
+			"%s written by a newer workbook; %s %s shown from the stored checkpoint, and changing %s "+
 				"is refused until workbook is upgraded",
 			describeNewerWriterTasks(affected),
-			pluralWas(len(affected), "is", "are"),
-			pluralWas(len(affected), "it", "them"),
+			subject, pluralIs(len(affected)), pronoun,
 		),
 	}}
 }
@@ -55,17 +58,23 @@ func newerWriterTaskWarnings(task core.Task) []core.Warning {
 	return newerWriterWarnings([]core.Task{task})
 }
 
+// describeNewerWriterTasks names the tasks and agrees with itself, because this
+// message is read by people rather than parsed.
 func describeNewerWriterTasks(ids []string) string {
-	if len(ids) <= newerWriterNamedLimit {
-		return "task " + strings.Join(ids, ", ") + " was"
+	switch {
+	case len(ids) == 1:
+		return "task " + ids[0] + " was"
+	case len(ids) <= newerWriterNamedLimit:
+		return "tasks " + strings.Join(ids, ", ") + " were"
+	default:
+		return fmt.Sprintf("%d tasks, including %s, were",
+			len(ids), strings.Join(ids[:newerWriterNamedLimit], ", "))
 	}
-	return fmt.Sprintf("%d tasks, including %s, were",
-		len(ids), strings.Join(ids[:newerWriterNamedLimit], ", "))
 }
 
-func pluralWas(count int, singular, plural string) string {
+func pluralIs(count int) string {
 	if count == 1 {
-		return singular
+		return "is"
 	}
-	return plural
+	return "are"
 }
