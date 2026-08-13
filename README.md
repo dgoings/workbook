@@ -273,7 +273,7 @@ workbook board [--wide | --narrow] [--json]
 workbook show <task> [--history [--limit <n>] [--all]] [--compare <commit> <commit>] [--json]
 workbook update <task> [--title <title>] [--description <text>] [--status <status>] [--priority <priority>] [--label <label>] [--clear-labels] [--no-sync] [--json]
 workbook delete <task> [--no-sync] [--json]
-workbook restore <task> [--no-sync] [--json]
+workbook restore <task> [--into <status>] [--no-sync] [--json]
 workbook move <task> (--before <task> | --after <task>) [--no-sync] [--json]
 workbook depend <task> <dependency> [--no-sync] [--json]
 workbook free <task> <dependency> [--no-sync] [--json]
@@ -453,7 +453,13 @@ Creation and ordinary updates write descriptive task-operation commit subjects
 suitable for `git log`, while canonical data remains in the operation and state
 blobs.
 Tombstoned tasks reject every mutation except `workbook restore`, which records
-an explicit append-only restore operation.
+an explicit append-only restore operation. A restore may name where the task
+comes back with `--into <status>`; that destination is recorded in the same
+operation pack as the restore, so it is one change rather than two. Without it,
+the task returns to the status it was deleted from. `--into` names a column and
+not a position, so the task keeps the position it was deleted with; the web
+route below also accepts a neighbour to land beside, and computes a new position
+when one is named.
 List and show read the current task checkpoint from each task ref's tip. A new
 project's statuses are Backlog, Ready, In Progress, In Review, and Done, in that
 order; a project may change them with `workbook status` (see
@@ -1276,14 +1282,24 @@ POST /api/tasks               create a task
 PATCH /api/tasks/<id>         update task fields
 PATCH /api/tasks/<id>/status  drag-and-drop status changes
 PATCH /api/tasks/<id>/position  atomically change status and board position
-DELETE /api/tasks/<id>        tombstone a task
-POST /api/tasks/<id>/restore  restore a tombstoned task
+DELETE /api/tasks/<id>        tombstone a task, optionally against a task tip
+POST /api/tasks/<id>/restore  restore a tombstoned task, optionally into a
+                              status and position
 PUT /api/tasks/<id>/dependencies/<dependency>     add a prerequisite
 DELETE /api/tasks/<id>/dependencies/<dependency>  remove a prerequisite
 GET /api/sync                 versioned publication-mode JSON
 PUT /api/sync                 change this board's publication mode
 GET /healthz                  versioned health JSON
 ```
+
+The delete and restore routes take an optional JSON body, and a request with no
+body at all is the bare verb. Delete accepts `expectedHead`; restore accepts
+`status`, `before`, `after`, and `expectedHead`, which are the members the
+position route uses and mean the same things — a restore naming `before` or
+`after` lands beside that task and takes a new position, while one naming only
+`status` keeps the position it was deleted with. A body that is present is held to
+the same rules every other body is: an unknown member, a trailing value, or
+malformed JSON is refused rather than partly read.
 
 The four vocabulary routes are `workbook status` reached over HTTP: they run the
 same planners, so they refuse what the verbs refuse, in the same words, and

@@ -404,7 +404,7 @@ func dependSyncTask(t *testing.T, repo *Repository, config core.ProjectConfig, t
 func deleteSyncTask(t *testing.T, repo *Repository, config core.ProjectConfig, taskID string) {
 	t.Helper()
 	service := syncService(repo, config)
-	if _, err := service.DeleteMutation(context.Background(), taskID); err != nil {
+	if _, err := service.DeleteMutation(context.Background(), taskID, core.DeleteInput{}); err != nil {
 		t.Fatal(err)
 	}
 }

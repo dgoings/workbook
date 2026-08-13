@@ -168,10 +168,10 @@ func TestMoveAndDependSettleAStaleStoredStatus(t *testing.T) {
 	// The task settled on the depend, so the free has nothing left to settle.
 	assertNoSettlement(t, stdout)
 
-	// Restore is the one write that does not settle: the fold refuses a pack
-	// against a tombstoned parent unless it is exactly one task.restore, so a
-	// settlement riding along would be rejected. The task comes back carrying
-	// its stored token and settles on its next ordinary write.
+	// A restore that names no destination is the one write that does not settle:
+	// a settlement appended to it would be a status write nobody asked for on a
+	// task whose column may be about to be chosen by hand. The task comes back
+	// carrying its stored token and settles on its next ordinary write.
 	code, _, stderr = run(t, repository, "delete", anchor.ID, "--no-sync")
 	if code != 0 {
 		t.Fatalf("delete = code %d, stderr %q", code, stderr)

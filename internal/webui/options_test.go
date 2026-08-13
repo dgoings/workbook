@@ -39,10 +39,10 @@ func TestNewHandlerRoutesEveryOptionToItsOwnRoute(t *testing.T) {
 		Position: func(context.Context, string, core.PlaceInput) (core.MutationResult, error) {
 			return record("Position"), nil
 		},
-		Delete: func(context.Context, string) (core.MutationResult, error) {
+		Delete: func(context.Context, string, core.DeleteInput) (core.MutationResult, error) {
 			return record("Delete"), nil
 		},
-		Restore: func(context.Context, string) (core.MutationResult, error) {
+		Restore: func(context.Context, string, core.RestoreInput) (core.MutationResult, error) {
 			return record("Restore"), nil
 		},
 		Depend: func(context.Context, string, string) (core.MutationResult, error) {

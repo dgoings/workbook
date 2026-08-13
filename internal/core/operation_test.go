@@ -138,6 +138,152 @@ func TestApplyRejectsRestoreForActiveTaskAndPayloadBearingRestore(t *testing.T) 
 	assertCorrupt(t, applyError(&deleted, restore, "WB"))
 }
 
+// A pack against a tombstone may carry ordinary operations after its restore,
+// which is what lets a restore into a status be one change rather than two.
+// The restore has to come first: everything after it applies to a task that is
+// live again, and everything before it would be an edit to a tombstone.
+func TestApplyAcceptsARestorePackThatCarriesMoreThanTheRestore(t *testing.T) {
+	created, err := Apply(nil, createPack(), "WB")
+	if err != nil {
+		t.Fatalf("Apply(create) error = %v", err)
+	}
+	tombstone := updatePack(2)
+	tombstone.Operations = []Operation{{ID: operationID2, Type: OperationTaskTombstone}}
+	deleted, err := Apply(&created, tombstone, "WB")
+	if err != nil {
+		t.Fatalf("Apply(tombstone) error = %v", err)
+	}
+
+	restore := updatePack(3)
+	restore.Operations = []Operation{
+		{ID: operationID1, Type: OperationTaskRestore},
+		{ID: operationID2, Type: OperationFieldSet, Field: "status", Value: "in-progress"},
+		{ID: operationID3, Type: OperationFieldSet, Field: "rank", Value: "4/1"},
+	}
+	state, err := Apply(&deleted, restore, "WB")
+	if err != nil {
+		t.Fatalf("Apply(restore with a destination) error = %v", err)
+	}
+	if state.Task.Deleted {
+		t.Fatal("Apply(restore with a destination) left the task tombstoned")
+	}
+	if got, want := state.Task.Status, StatusInProgress; got != want {
+		t.Fatalf("Apply(restore with a destination) status = %q, want %q", got, want)
+	}
+	if got, want := state.Task.Rank, "4/1"; got != want {
+		t.Fatalf("Apply(restore with a destination) rank = %q, want %q", got, want)
+	}
+
+	// Each refusal is pinned by message rather than only by category. A pack
+	// refused for the wrong stated reason is a pack whose rule nobody can read
+	// off the error, and the category alone cannot tell these apart.
+	tests := map[string]struct {
+		operations []Operation
+		want       string
+	}{
+		"a restore that is not first": {
+			operations: []Operation{
+				{ID: operationID2, Type: OperationFieldSet, Field: "status", Value: "in-progress"},
+				{ID: operationID1, Type: OperationTaskRestore},
+			},
+			// The parent is tombstoned, so "requires a tombstoned task" would be
+			// a false account of why this is refused.
+			want: "task.restore must be the first operation in its pack",
+		},
+		"two restores": {
+			operations: []Operation{
+				{ID: operationID1, Type: OperationTaskRestore},
+				{ID: operationID2, Type: OperationTaskRestore},
+			},
+			want: "task.restore must be the first operation in its pack",
+		},
+		"no restore at all": {
+			operations: []Operation{
+				{ID: operationID2, Type: OperationFieldSet, Field: "status", Value: "in-progress"},
+			},
+			want: "cannot mutate a tombstoned task",
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			pack := updatePack(3)
+			pack.Operations = test.operations
+			err := applyError(&deleted, pack, "WB")
+			assertCorrupt(t, err)
+			if got := err.Error(); got != test.want {
+				t.Fatalf("Apply(%s) error = %q, want %q", name, got, test.want)
+			}
+		})
+	}
+}
+
+// A pack may not restore a task and then tombstone it again.
+//
+// Restoring first satisfies "opens with task.restore", so a rule that checked
+// only the first operation would fold this to a tombstone with the clock
+// advanced — and ValidateCheckpoint would then certify that state as the
+// canonical result, making a task nothing legibly deleted look validly deleted
+// to every later reader. A restore and a delete are separate intents and belong
+// to separate packs.
+func TestApplyRejectsARestorePackThatTombstonesAgain(t *testing.T) {
+	created, err := Apply(nil, createPack(), "WB")
+	if err != nil {
+		t.Fatalf("Apply(create) error = %v", err)
+	}
+	tombstone := updatePack(2)
+	tombstone.Operations = []Operation{{ID: operationID2, Type: OperationTaskTombstone}}
+	deleted, err := Apply(&created, tombstone, "WB")
+	if err != nil {
+		t.Fatalf("Apply(tombstone) error = %v", err)
+	}
+
+	// The trailing tombstone is the shape that slips past a first-operation
+	// check, because nothing between it and the restore is refused.
+	retombstoned := updatePack(3)
+	retombstoned.Operations = []Operation{
+		{ID: operationID1, Type: OperationTaskRestore},
+		{ID: operationID3, Type: OperationTaskTombstone},
+	}
+	state, err := Apply(&deleted, retombstoned, "WB")
+	if err == nil {
+		t.Fatalf("Apply(restore then tombstone) = %#v, want a refusal", state.Task)
+	}
+	assertCorrupt(t, err)
+	if got, want := err.Error(), "task.restore must not be followed by task.tombstone"; got != want {
+		t.Fatalf("Apply(restore then tombstone) error = %q, want %q", got, want)
+	}
+	// The state a fold would have produced is the reason this matters: it is a
+	// tombstone, and ValidateCheckpoint would have called it canonical.
+	if err := ValidateCheckpoint(&deleted, retombstoned, deleted, "WB"); err == nil {
+		t.Fatal("ValidateCheckpoint accepted a restore-then-tombstone pack")
+	}
+
+	// The same refusal wherever the tombstone sits after the restore.
+	buried := updatePack(3)
+	buried.Operations = []Operation{
+		{ID: operationID1, Type: OperationTaskRestore},
+		{ID: operationID3, Type: OperationTaskTombstone},
+		{ID: operationID2, Type: OperationFieldSet, Field: "title", Value: "Deleted again"},
+	}
+	assertCorrupt(t, applyError(&deleted, buried, "WB"))
+
+	// And the pack this rule must not touch still folds.
+	destination := updatePack(3)
+	destination.Operations = []Operation{
+		{ID: operationID1, Type: OperationTaskRestore},
+		{ID: operationID2, Type: OperationFieldSet, Field: "status", Value: "in-progress"},
+		{ID: operationID3, Type: OperationFieldSet, Field: "rank", Value: "4/1"},
+	}
+	restored, err := Apply(&deleted, destination, "WB")
+	if err != nil {
+		t.Fatalf("Apply(restore with a destination) error = %v", err)
+	}
+	if restored.Task.Deleted {
+		t.Fatal("the restore-into pack no longer folds to a live task")
+	}
+}
+
 func TestApplyRejectsInvalidHistoryAndIdentity(t *testing.T) {
 	created, err := Apply(nil, createPack(), "WB")
 	if err != nil {

@@ -31,9 +31,9 @@ type TaskCreator func(context.Context, core.CreateInput) (core.MutationResult, e
 
 type TaskUpdater func(context.Context, string, core.UpdateInput) (core.MutationResult, error)
 
-type TaskDeleter func(context.Context, string) (core.MutationResult, error)
+type TaskDeleter func(context.Context, string, core.DeleteInput) (core.MutationResult, error)
 
-type TaskRestorer func(context.Context, string) (core.MutationResult, error)
+type TaskRestorer func(context.Context, string, core.RestoreInput) (core.MutationResult, error)
 
 type TaskDependencyAdder func(context.Context, string, string) (core.MutationResult, error)
 
@@ -303,10 +303,11 @@ type ErrorDocument struct {
 // pretending: that is what lets a read-only board and the full one come from
 // the same constructor.
 //
-// The list is named rather than positional because Delete and Restore share a
-// signature, as do Depend and Free. Passed positionally, a transposed pair
-// compiles and silently inverts the semantics; named, the same mistake is
-// visible in the call site itself.
+// The list is named rather than positional because Depend and Free share a
+// signature. Passed positionally, a transposed pair compiles and silently
+// inverts the semantics; named, the same mistake is visible in the call site
+// itself. Delete and Restore used to be such a pair and no longer are: each now
+// carries its own input type, so the compiler refuses the swap outright.
 type Options struct {
 	// Vocabulary reads the project's statuses per request. A nil resolver means
 	// this board was built without one and draws the built-in statuses, which
@@ -392,6 +393,27 @@ type positionTaskRequest struct {
 	Before       string      `json:"before"`
 	After        string      `json:"after"`
 	ExpectedHead string      `json:"expectedHead"`
+}
+
+// restoreTaskRequest and deleteTaskRequest are the two bodies a client may omit
+// entirely. Every member is optional, and a request with no body at all is the
+// bare verb — which is what every client that predates these members sends, and
+// what keeps the routes answering it unchanged.
+//
+// restoreTaskRequest names its destination `status` rather than `into` because
+// it is the same drag the position route already describes that way, and a
+// board that moves a card should not have to describe the move twice.
+type restoreTaskRequest struct {
+	Status       core.Status `json:"status"`
+	Before       string      `json:"before"`
+	After        string      `json:"after"`
+	ExpectedHead string      `json:"expectedHead"`
+}
+
+// deleteTaskRequest is converted directly to core.DeleteInput, so its fields
+// must stay identical in name, type, and order.
+type deleteTaskRequest struct {
+	ExpectedHead string `json:"expectedHead"`
 }
 
 type createTaskRequest struct {
@@ -1250,11 +1272,16 @@ func (handler *handler) updateTask(writer http.ResponseWriter, request *http.Req
 }
 
 func (handler *handler) deleteTask(writer http.ResponseWriter, request *http.Request) {
+	var body deleteTaskRequest
+	if err := decodeOptionalRequest(request.Body, &body); err != nil {
+		handler.writeError(writer, decodeRequestError("decode task delete", err))
+		return
+	}
 	if handler.Delete == nil {
 		handler.writeError(writer, core.Errorf(core.CategoryOperational, "task deletion is not configured"))
 		return
 	}
-	result, err := handler.Delete(request.Context(), request.PathValue("id"))
+	result, err := handler.Delete(request.Context(), request.PathValue("id"), core.DeleteInput(body))
 	if err != nil {
 		handler.writeError(writer, err)
 		return
@@ -1263,11 +1290,20 @@ func (handler *handler) deleteTask(writer http.ResponseWriter, request *http.Req
 }
 
 func (handler *handler) restoreTask(writer http.ResponseWriter, request *http.Request) {
+	var body restoreTaskRequest
+	if err := decodeOptionalRequest(request.Body, &body); err != nil {
+		handler.writeError(writer, decodeRequestError("decode task restore", err))
+		return
+	}
 	if handler.Restore == nil {
 		handler.writeError(writer, core.Errorf(core.CategoryOperational, "task restoration is not configured"))
 		return
 	}
-	result, err := handler.Restore(request.Context(), request.PathValue("id"))
+	result, err := handler.Restore(
+		request.Context(),
+		request.PathValue("id"),
+		core.RestoreInput{Into: body.Status, Before: body.Before, After: body.After, ExpectedHead: body.ExpectedHead},
+	)
 	if err != nil {
 		handler.writeError(writer, err)
 		return
@@ -1338,6 +1374,35 @@ func decodeRequest(body io.Reader, value any) error {
 	if err := decoder.Decode(value); err != nil {
 		return err
 	}
+	return requireDecoderExhausted(decoder)
+}
+
+// decodeOptionalRequest reads one JSON value from a body the client is allowed
+// to leave out. No body at all leaves the value zero and is not an error; a
+// body that is present is held to exactly what decodeRequest demands, unknown
+// members and trailing values included.
+//
+// This is what lets a route gain members without breaking the clients that
+// already call it: they keep sending nothing, and keep getting the behavior
+// they had.
+func decodeOptionalRequest(body io.Reader, value any) error {
+	decoder := json.NewDecoder(body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(value); err != nil {
+		// Only an empty body reads as EOF here. A body that stops partway
+		// through a value reads as an unexpected EOF, which is a malformed
+		// request rather than an absent one.
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		return err
+	}
+	return requireDecoderExhausted(decoder)
+}
+
+// requireDecoderExhausted rejects a body carrying more than the one value the
+// route asked for.
+func requireDecoderExhausted(decoder *json.Decoder) error {
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		if err == nil {
 			err = errors.New("multiple JSON values")

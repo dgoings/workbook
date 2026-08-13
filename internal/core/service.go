@@ -91,6 +91,33 @@ type PlaceInput struct {
 	ExpectedHead string
 }
 
+// DeleteInput carries what a delete may be conditioned on. The zero value is a
+// plain delete, which is every delete written before this type existed.
+type DeleteInput struct {
+	// ExpectedHead carries the same meaning it does on UpdateInput.
+	ExpectedHead string
+}
+
+// RestoreInput names where a restored task lands. The zero value restores the
+// task to the status it was tombstoned under, which is what restore has always
+// done and what a caller that does not care still gets.
+type RestoreInput struct {
+	// Into is the destination status. Naming one turns the restore into a
+	// placement as well: the task comes back in the column the caller chose
+	// rather than the one it left, in a single pack.
+	Into Status
+	// Before and After name a task to land beside, and at most one may be set.
+	// They require Into, because a rank is only meaningful inside a bucket and
+	// the bucket is the destination. With neither, the task keeps the rank it
+	// was tombstoned with and falls wherever that puts it in the destination —
+	// the same thing `workbook update --status` does today.
+	Before string
+	After  string
+	// ExpectedHead carries the same meaning it does on UpdateInput, and is
+	// honored whether or not the restore names a destination.
+	ExpectedHead string
+}
+
 type ListFilter struct {
 	Status   *Status
 	Priority *Priority
@@ -518,18 +545,12 @@ func (s Service) settle(operations []Operation, task TaskData) ([]Operation, *St
 	}), correction
 }
 
-// Restore is the one mutation that writes a pack and does not settle, and the
-// reason is the fold rather than a policy: Apply refuses a pack against a
-// tombstoned parent unless it is exactly one task.restore operation, so a
-// settlement riding along would be rejected as an attempt to mutate a
-// tombstone. Making it ride would mean widening that rule, which is a change to
-// the durable operation semantics every clone folds — not a settlement, and not
-// something to slip into the change that turns vocabularies on. A restored task
-// settles on its next ordinary write, one command later.
-
-func (s Service) DeleteMutation(ctx context.Context, idOrPrefix string) (MutationResult, error) {
+func (s Service) DeleteMutation(ctx context.Context, idOrPrefix string, input DeleteInput) (MutationResult, error) {
 	parent, err := s.resolveSnapshot(ctx, idOrPrefix)
 	if err != nil {
+		return MutationResult{}, err
+	}
+	if err := requireExpectedHead(parent, input.ExpectedHead); err != nil {
 		return MutationResult{}, err
 	}
 	if parent.State.Task.Deleted {
@@ -542,20 +563,134 @@ func (s Service) DeleteMutation(ctx context.Context, idOrPrefix string) (Mutatio
 	return s.writeMutation(ctx, &parent, operations, "delete task")
 }
 
-func (s Service) RestoreMutation(ctx context.Context, idOrPrefix string) (MutationResult, error) {
+// RestoreMutation brings a tombstoned task back, optionally into a status the
+// caller chose.
+//
+// The destination is written in the same pack as the restore rather than in a
+// second command, so the task is never briefly visible in the column it was
+// deleted from and a refusal leaves the task tombstoned rather than restored
+// somewhere nobody asked for.
+//
+// A restore that names no destination is the one mutation that writes a pack
+// and does not settle, and the reason is a judgement rather than the fold:
+// appending a settlement to a bare restore would be a status write nobody asked
+// for, on a task whose column may be about to be chosen by hand. Such a task
+// settles on its next ordinary write, one command later. A restore that does
+// name a destination settles like every other mutation that writes a status,
+// because the status operation it already carries is that settlement — the same
+// arrangement Place uses, and reported the same way. The note above settle is
+// where the rule those two sentences are exceptions to lives.
+func (s Service) RestoreMutation(ctx context.Context, idOrPrefix string, input RestoreInput) (MutationResult, error) {
+	// Membership is checked before the anchors, which is Place's order: a
+	// request that names both a status the project does not define and two
+	// anchor directions has to be refused the same way by both verbs, or the
+	// board learns that one route means something different from the other.
+	if input.Into != "" {
+		if err := s.requireStatusMember(input.Into); err != nil {
+			return MutationResult{}, err
+		}
+	}
+	if input.Before != "" && input.After != "" {
+		return MutationResult{}, Errorf(CategoryValidation, "restore accepts at most one anchor direction")
+	}
+	// An anchor without a destination has no bucket to be an anchor in, and
+	// guessing the tombstoned status as the destination would silently make a
+	// restore mean something the caller did not write.
+	if input.Into == "" && (input.Before != "" || input.After != "") {
+		return MutationResult{}, Errorf(CategoryValidation, "restore anchors require a destination status")
+	}
+
 	parent, err := s.resolveSnapshot(ctx, idOrPrefix)
 	if err != nil {
+		return MutationResult{}, err
+	}
+	if err := requireExpectedHead(parent, input.ExpectedHead); err != nil {
 		return MutationResult{}, err
 	}
 	if !parent.State.Task.Deleted {
 		return MutationResult{}, Errorf(CategoryValidation, "cannot restore an active task")
 	}
-	// No settlement here; see the note above settle.
+
 	operations := []Operation{{Type: OperationTaskRestore}}
+	// No settlement on the bare path; see the note above this function.
+	var corrected *StatusCorrection
+	if input.Into != "" {
+		destination, err := s.restoreDestination(ctx, parent, input)
+		if err != nil {
+			return MutationResult{}, err
+		}
+		operations = append(operations, destination.operations...)
+		corrected = destination.corrected
+	}
 	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
 		return MutationResult{}, err
 	}
-	return s.writeMutation(ctx, &parent, operations, "restore task")
+	result, err := s.writeMutation(ctx, &parent, operations, "restore task")
+	if err != nil {
+		return MutationResult{}, err
+	}
+	result.StatusCorrected = corrected
+	return result, nil
+}
+
+// restorePlacement is what a named destination adds to a restore pack.
+type restorePlacement struct {
+	operations []Operation
+	corrected  *StatusCorrection
+}
+
+// restoreDestination computes the status and rank operations that carry a
+// restored task into the destination it named.
+//
+// It mirrors Place, including the two things that make Place's arrangement
+// right: a stored status that already equals the destination writes no status
+// operation, and a write that only settles a stale token is reported as a
+// correction rather than as a move. It deliberately does not mirror Place's
+// rule that a placement into an occupied bucket needs an anchor. That rule
+// exists because a placement is a caller stating where in a column a task goes;
+// a restore without an anchor is not stating anything about order, and lands on
+// the rank it was tombstoned with — exactly what `update --status` does.
+func (s Service) restoreDestination(ctx context.Context, parent Snapshot, input RestoreInput) (restorePlacement, error) {
+	vocabulary := s.vocabulary()
+	rank := parent.State.Task.Rank
+	anchorInput := input.Before
+	if anchorInput == "" {
+		anchorInput = input.After
+	}
+	if anchorInput != "" {
+		anchor, err := s.resolveSnapshot(ctx, anchorInput)
+		if err != nil {
+			return restorePlacement{}, err
+		}
+		// The destination bucket is the resolved one, exactly as Move's and
+		// Place's are: the anchor this accepts is the one the board draws beside
+		// the restored card.
+		if anchor.State.Task.Deleted ||
+			anchor.State.TaskID == parent.State.TaskID ||
+			!sameBucket(vocabulary, anchor.State.Task, input.Into, parent.State.Task.Priority) {
+			return restorePlacement{}, Errorf(CategoryValidation, "restore anchor must be an active different task in the destination status and priority bucket")
+		}
+		snapshots, err := s.Reader.List(ctx, s.Config)
+		if err != nil {
+			return restorePlacement{}, err
+		}
+		rank, err = movedRank(vocabulary, snapshots, parent.State.TaskID, anchor.State.TaskID, anchor.State.Task, input.Before != "")
+		if err != nil {
+			return restorePlacement{}, err
+		}
+	}
+
+	placement := restorePlacement{operations: make([]Operation, 0, 2)}
+	if parent.State.Task.Status != input.Into {
+		placement.operations = append(placement.operations, Operation{Type: OperationFieldSet, Field: "status", Value: string(input.Into)})
+		if resolved, live := vocabulary.Resolve(parent.State.Task.Status); live && resolved == input.Into {
+			placement.corrected = &StatusCorrection{From: parent.State.Task.Status, To: input.Into}
+		}
+	}
+	if parent.State.Task.Rank != rank {
+		placement.operations = append(placement.operations, Operation{Type: OperationFieldSet, Field: "rank", Value: rank})
+	}
+	return placement, nil
 }
 
 func (s Service) MoveMutation(ctx context.Context, idOrPrefix string, input MoveInput) (MutationResult, error) {
