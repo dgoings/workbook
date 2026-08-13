@@ -543,7 +543,7 @@ func (s *Store) requiredSchemaExists(ctx context.Context) bool {
 		`SELECT task_id, head, project_id, history_generation, logical_clock, min_reader, title, description, status, priority, rank, created_at, updated_at, deleted FROM tasks LIMIT 0`,
 		`SELECT task_id, label FROM task_labels LIMIT 0`,
 		`SELECT task_id, dependency_id FROM task_dependencies LIMIT 0`,
-		`SELECT operation_id, task_id, commit_id, chain_index, pack_index, logical_clock, history_generation, actor, wall_time, type, field, value, task_data FROM operations LIMIT 0`,
+		`SELECT operation_id, task_id, commit_id, chain_index, pack_index, logical_clock, history_generation, min_reader, actor, wall_time, type, field, value, task_data FROM operations LIMIT 0`,
 	} {
 		rows, err := s.db.QueryContext(ctx, query)
 		if err != nil {
