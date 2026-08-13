@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/gitstore"
 	"github.com/dgoings/workbook/internal/historyvalidation"
 )
 
@@ -385,6 +386,106 @@ func TestANewerWritersConfigurationDivergenceIsRefusedAndPreserved(t *testing.T)
 	}
 	if !strings.Contains(stdout, "Up Next") {
 		t.Fatalf("status list = %q, want the local clone's own label to have survived", stdout)
+	}
+}
+
+// The refusal is reported once, and the push does not repeat it in the language
+// of a network failure.
+//
+// The ledger is not published over a newer origin for the same reason the task
+// refs are not: this clone's ref is not a descendant of origin's, so the push
+// can only be rejected. Reporting that rejection would follow "needs upgrade"
+// with "could not publish refs/workbook/config … failed to push some refs",
+// which describes the same refusal twice and blames the wrong thing the second
+// time.
+func TestANewerWritersLedgerIsNotRepublishedOverOrigin(t *testing.T) {
+	local, future := cliSyncRepositories(t)
+	if code, _, stderr := run(t, future, "sync"); code != 0 {
+		t.Fatalf("future clone sync code = %d; stderr = %q", code, stderr)
+	}
+	if code, _, stderr := run(t, future, "status", "label", "backlog", "Inbox", "--no-docs"); code != 0 {
+		t.Fatalf("seeding the ledger code = %d; stderr = %q", code, stderr)
+	}
+	writeFutureConfigCommit(t, future)
+	cliGit(t, future, "push", "--quiet", "origin", "refs/workbook/config")
+
+	if code, _, stderr := run(t, local, "status", "label", "ready", "Up Next", "--no-sync", "--no-docs"); code != 0 {
+		t.Fatalf("local status label code = %d; stderr = %q", code, stderr)
+	}
+	originConfigHead := cliGitOutput(t, future, "ls-remote", "origin", "refs/workbook/config")
+
+	code, stdout, stderr := run(t, local, "sync", "--json")
+	if code != 9 {
+		t.Fatalf("sync code = %d, want 9; stderr = %q", code, stderr)
+	}
+	// One statement about the ledger, in the words of the refusal.
+	if !strings.Contains(stdout, string(gitstore.SyncConfigNeedsUpgrade)) {
+		t.Fatalf("sync report = %q, want the ledger reported as %q", stdout, gitstore.SyncConfigNeedsUpgrade)
+	}
+	for _, forbidden := range []string{"could not publish", "failed to push"} {
+		if strings.Contains(stdout, forbidden) || strings.Contains(stderr, forbidden) {
+			t.Fatalf("sync reported %q as well as the refusal; the push must not repeat it\nstdout = %q\nstderr = %q",
+				forbidden, stdout, stderr)
+		}
+	}
+	// Origin's ledger is untouched, which is the other half of "no push was
+	// attempted".
+	if got := cliGitOutput(t, future, "ls-remote", "origin", "refs/workbook/config"); got != originConfigHead {
+		t.Fatalf("origin's ledger moved to %q, want it left at %q", got, originConfigHead)
+	}
+}
+
+// A divergent task whose origin history needs a newer Workbook is withheld from
+// the push, and this pins the withholding rather than its consequences.
+//
+// Removing the skip leaves every other assertion in this file passing: the ref
+// still holds the local operations and the run still exits 9. What changes is
+// that origin rejects a push nobody should have made, and the run says so in a
+// second, transport-flavored error.
+func TestANewerWritersDivergentTaskIsNotPushed(t *testing.T) {
+	local, future := cliSyncRepositories(t)
+	diverged := cliCreateTask(t, local, "Diverged from the future")
+	if code, _, stderr := run(t, local, "sync"); code != 0 {
+		t.Fatalf("initial sync code = %d; stderr = %q", code, stderr)
+	}
+	if code, _, stderr := run(t, future, "sync"); code != 0 {
+		t.Fatalf("future clone sync code = %d; stderr = %q", code, stderr)
+	}
+	writeFutureTaskCommit(t, future, diverged.ID)
+	cliGit(t, future, "push", "--quiet", "origin", "refs/workbook/tasks/"+diverged.ID)
+	cliUpdateTitle(t, local, diverged.ID, "Renamed locally")
+
+	code, stdout, stderr := run(t, local, "sync", "--json")
+	if code != 9 {
+		t.Fatalf("sync code = %d, want 9; stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stdout, string(gitstore.SyncNeedsUpgrade)) {
+		t.Fatalf("sync report = %q, want the task reported as %q", stdout, gitstore.SyncNeedsUpgrade)
+	}
+	if strings.Contains(stdout, string(gitstore.SyncRejected)) {
+		t.Fatalf("sync report = %q, want no rejected push; the divergent task must be withheld", stdout)
+	}
+	for _, forbidden := range []string{"rejected by origin", "failed to push"} {
+		if strings.Contains(stdout, forbidden) || strings.Contains(stderr, forbidden) {
+			t.Fatalf("sync reported %q; the push must not be attempted\nstdout = %q\nstderr = %q",
+				forbidden, stdout, stderr)
+		}
+	}
+}
+
+// The status strings are contract: a caller filters on them, and collapsing
+// either into "invalid" would tell a script the repository is damaged.
+func TestTheNeedsUpgradeStatusStringsAreWhatCallersRead(t *testing.T) {
+	if got := string(gitstore.SyncNeedsUpgrade); got != "needs-upgrade" {
+		t.Fatalf("SyncNeedsUpgrade = %q, want %q", got, "needs-upgrade")
+	}
+	if got := string(gitstore.SyncConfigNeedsUpgrade); got != "needs-upgrade" {
+		t.Fatalf("SyncConfigNeedsUpgrade = %q, want %q", got, "needs-upgrade")
+	}
+	for _, invalid := range []string{string(gitstore.SyncInvalid), string(gitstore.SyncConfigInvalid)} {
+		if invalid == "needs-upgrade" {
+			t.Fatal("the needs-upgrade status collapsed into the invalid one")
+		}
 	}
 }
 

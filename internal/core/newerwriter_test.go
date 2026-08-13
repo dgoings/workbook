@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"strconv"
 	"strings"
 	"testing"
@@ -42,13 +43,16 @@ func newerWriterState(t *testing.T, document string, generation int) string {
 
 func itoa(value int) string { return strconv.Itoa(value) }
 
-// A marker at or below the supported generation changes nothing at all.
+// A marker at or below the supported generation changes nothing about the fold.
 //
-// This is the half of the contract that is easy to get wrong in the permissive
-// direction: an explicit `"minReader":0` is a document that says "any reader",
-// which is the same claim absence makes, so it must fold exactly as it would
-// without the member. Its bytes differ from the golden's, which is why the
-// canonicality check belongs to the storage layer and not to the fold.
+// The claim is deliberately scoped to the fold, because at the byte level it is
+// false and the difference matters. An explicit `"minReader":0` says what
+// absence says, so it folds identically — but the only canonical encoding of
+// generation zero is absence, so a stored document that spells it is refused by
+// the canonicality rule that refuses every other byte difference. Storage is
+// stricter than semantics here, exactly as it is for a stored task whose fields
+// are in the wrong order, and saying "changes nothing" without that
+// qualification would promise something no reader of a real ref would see.
 func TestAMarkerAtOrBelowTheSupportedGenerationFoldsNormally(t *testing.T) {
 	packDocument := newerWriterPack(t, SupportedFormatGeneration, "")
 	pack, err := DecodeOperationPack([]byte(packDocument))
@@ -71,6 +75,20 @@ func TestAMarkerAtOrBelowTheSupportedGenerationFoldsNormally(t *testing.T) {
 	}
 	if state.MinReader != 0 {
 		t.Fatalf("folded checkpoint minReader = %d, want 0", state.MinReader)
+	}
+
+	// The byte-level half. Re-encoding drops the explicit zero, so the document
+	// is not its own canonical form — which is what the storage layer refuses,
+	// and is why the sentence above says "the fold" rather than "nothing".
+	encoded, err := EncodeDocument(pack)
+	if err != nil {
+		t.Fatalf("EncodeDocument() error = %v", err)
+	}
+	if bytes.Equal(encoded, []byte(packDocument)) {
+		t.Fatal("an explicit minReader:0 round-tripped; the canonical encoding of generation zero must be absence")
+	}
+	if bytes.Contains(encoded, []byte("minReader")) {
+		t.Fatalf("EncodeDocument() emitted the marker for generation zero: %s", encoded)
 	}
 }
 
@@ -194,6 +212,66 @@ func TestAMalformedDocumentCannotClaimAMarker(t *testing.T) {
 		if _, err := DecodeOperationPack([]byte(document)); CategoryOf(err) != CategoryCorruptData {
 			t.Fatalf("DecodeOperationPack(%q) category = %q, want %q", document, CategoryOf(err), CategoryCorruptData)
 		}
+	}
+}
+
+// A negative generation is refused by the guard that exists for it, and this
+// reaches that guard rather than stopping at some earlier rule.
+//
+// The distinction matters because it is easy to write a probe that never
+// arrives: an otherwise-empty document with a negative marker fails on its
+// format or its version long before the generation is looked at, so it proves
+// the guard is unreachable rather than that it works. These fixtures are
+// well-formed golden documents with only the marker changed, so the negative
+// value is the single reason each one is refused — and the refusal is corrupt
+// data rather than newer-writer, because a negative generation is not a claim
+// about the future, it is a malformed number.
+func TestANegativeMarkerIsRefusedByItsOwnGuard(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		decode  func([]byte) error
+		message string
+	}{
+		{
+			name:    "operation pack",
+			decode:  func(data []byte) error { _, err := DecodeOperationPack(data); return err },
+			message: "operation pack minimum reader generation -1 is invalid",
+		},
+		{
+			name:    "task state",
+			decode:  func(data []byte) error { _, err := DecodeStateDocument(data); return err },
+			message: "task state minimum reader generation -1 is invalid",
+		},
+		{
+			name:    "configuration operation pack",
+			decode:  func(data []byte) error { _, err := DecodeConfigOperationPack(data); return err },
+			message: "configuration operation pack minimum reader generation -1 is invalid",
+		},
+		{
+			name:    "configuration state",
+			decode:  func(data []byte) error { _, err := DecodeConfigStateDocument(data); return err },
+			message: "configuration state minimum reader generation -1 is invalid",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			document := map[string]string{
+				"operation pack":               newerWriterPack(t, -1, ""),
+				"task state":                   newerWriterState(t, goldenTaskRefs[1].state, -1),
+				"configuration operation pack": newerWriterState(t, goldenConfigLedger[1].operation, -1),
+				"configuration state":          newerWriterState(t, goldenConfigLedger[1].state, -1),
+			}[testCase.name]
+
+			err := testCase.decode([]byte(document))
+			if err == nil {
+				t.Fatalf("a negative generation was accepted; want %q", testCase.message)
+			}
+			if CategoryOf(err) != CategoryCorruptData {
+				t.Fatalf("category = %q, want %q; error = %v", CategoryOf(err), CategoryCorruptData, err)
+			}
+			if !strings.Contains(err.Error(), testCase.message) {
+				t.Fatalf("error = %q, want it to reach the guard that says %q", err, testCase.message)
+			}
+		})
 	}
 }
 

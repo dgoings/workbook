@@ -176,15 +176,20 @@ func (r *Repository) reconcileDivergentTasks(
 
 // refuseNewerWriterReplay reports a divergence this build must not resolve.
 //
-// Either side is enough. Origin's tip carrying the marker is the case the
-// contract is about; the local tip carrying it means this clone fetched a newer
-// history earlier and then somehow authored on top of it, which the mutation
-// gate refuses — checking it here too costs a comparison and keeps the
-// invariant local to the function that depends on it.
+// It is not what makes the replay safe. core.Apply is: it refuses to fold onto
+// a checkpoint carrying a watermark this build cannot meet, so deleting this
+// function changes the outcome of a synchronization in no way a test can see —
+// the replay still stops, the ref still keeps its local operations, the run
+// still exits newer-writer. What this buys is the wording and the moment. The
+// refusal happens before any object is written rather than partway through a
+// chain, and it says what became of the local work, which is the question
+// somebody reading it actually has; Apply can only say that the task was
+// written by a newer Workbook.
 //
-// The message says what happened to the local work, because that is the
-// question somebody reading it will actually have. Nothing is lost and nothing
-// is published; the operations sit on the task's ref until an upgrade.
+// Either side is checked. Origin's tip carrying the marker is the case the
+// contract is about; the local tip carrying it means this clone fetched a newer
+// history and then authored on top of it, which the mutation gate already
+// refuses. Checking both costs a comparison.
 func refuseNewerWriterReplay(request reconcileRequest) error {
 	if !request.Remote.State.RequiresNewerReader() && !request.Local.State.RequiresNewerReader() {
 		return nil
