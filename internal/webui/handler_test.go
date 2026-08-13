@@ -4487,7 +4487,12 @@ func clientDOMHarnessWith(path, taskDocument string, vocabulary core.Vocabulary,
 	if err != nil {
 		panic("webui: encode harness vocabulary: " + err.Error())
 	}
+	tagNames := make([]string, 0, len(core.StatusTags()))
+	for _, tag := range core.StatusTags() {
+		tagNames = append(tagNames, string(tag))
+	}
 	return `
+const boardStatusTags = ` + strconv.Quote(strings.Join(tagNames, " ")) + `;
 const boardStatusDefinitions = ` + string(encoded) + `;
 const boardDefaultStatus = ` + strconv.Quote(string(vocabulary.Default())) + `;
 const boardVocabularyHead = ` + strconv.Quote(vocabularyHead) + `;
@@ -4682,6 +4687,21 @@ vocabularyNotice.append(vocabularyReload);
 // renderRoute() that never touched it look like it had revealed it.
 const descriptionToggle = new TestElement("button");
 descriptionToggle.hidden = true;
+// The status administration panel, as the server renders it for a board built
+// with the four vocabulary mutations: a shell and an entry point, both shipped
+// hidden, with the list inside the shell drawn by the client from what the
+// server answers. The roles a status may carry are an attribute on the panel
+// for the reason the columns carry their statuses — the set is the server's,
+// and the script must not hold a copy of it.
+const vocabularyPanel = new TestElement("section");
+vocabularyPanel.hidden = true;
+vocabularyPanel.dataset.statusTags = boardStatusTags;
+const vocabularyPanelToggle = new TestElement("button");
+vocabularyPanelToggle.hidden = true;
+const vocabularyPanelClose = new TestElement("button");
+const vocabularyPanelStatus = new TestElement("div");
+const vocabularyPanelBody = new TestElement("div");
+vocabularyPanel.append(vocabularyPanelClose, vocabularyPanelStatus, vocabularyPanelBody);
 const documentEventListeners = {};
 	globalThis.document = {
 	  title: "",
@@ -4694,6 +4714,11 @@ const documentEventListeners = {};
     if (selector === "[data-vocabulary-notice]") return vocabularyNotice;
     if (selector === "[data-vocabulary-reload]") return vocabularyReload;
     if (selector === "[data-description-toggle]") return descriptionToggle;
+    if (selector === "[data-vocabulary-panel]") return vocabularyPanel;
+    if (selector === "[data-vocabulary-panel-toggle]") return vocabularyPanelToggle;
+    if (selector === "[data-vocabulary-panel-close]") return vocabularyPanelClose;
+    if (selector === "[data-vocabulary-panel-status]") return vocabularyPanelStatus;
+    if (selector === "[data-vocabulary-panel-body]") return vocabularyPanelBody;
     return null;
   },
   querySelectorAll() { return []; },
@@ -4815,6 +4840,35 @@ function cardFailureDismiss(card) {
   const region = card && findElement(card, (element) => hasDataKey(element, "taskFailure"));
   if (!region || region.dataset.visible !== "true") return null;
   return findElement(region, (element) => hasDataKey(element, "taskFailureDismiss"));
+}
+// The status administration panel's row for one status, and the statuses it is
+// listing in the order it drew them.
+function panelRow(status) {
+  return findElement(vocabularyPanelBody, (element) => element.dataset.vocabularyStatus === status);
+}
+function panelStatuses() {
+  return findElements(vocabularyPanelBody, (element) => Boolean(element.dataset.vocabularyStatus))
+    .map((row) => row.dataset.vocabularyStatus);
+}
+// A control inside the panel, found by the name it announces or the caption it
+// draws — which is how a reader finds it too.
+function panelControl(root, name) {
+  return findElement(root, (element) =>
+    element.tagName === "BUTTON" &&
+    (element.getAttribute("aria-label") === name || element.textContent === name));
+}
+// Everything the panel is currently saying, one entry per line.
+function panelMessages() {
+  return vocabularyPanelStatus.children.map((line) => line.textContent);
+}
+// Picks an option the way a reader does. A select reports the option that is
+// selected rather than a value written at it, here as in a browser.
+function chooseOption(control, value) {
+  const wanted = control.children.find((option) => option.value === value);
+  if (!wanted) throw new Error("no option " + JSON.stringify(value) + " in " + control.id);
+  control.children.forEach((option) => { option.selected = false; });
+  wanted.selected = true;
+  return control;
 }
 `
 }

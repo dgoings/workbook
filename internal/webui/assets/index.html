@@ -60,6 +60,60 @@
     .notice a { color: inherit; font-weight: 750; text-underline-offset: .18em; }
     .notice button { border: 1px solid currentcolor; border-radius: 4px; background: transparent; color: inherit; cursor: pointer; font: inherit; font-size: .8rem; font-weight: 700; padding: .25rem .6rem; }
     .notice button:focus-visible, .notice a:focus-visible { outline: 3px solid #2457d6; outline-offset: 2px; }
+    /* The status administration panel. It shares main's viewport-height flex
+       column with the notices above it, so it can run out of room rather than
+       out of page: it takes what it needs up to half the viewport and scrolls
+       inside that, and the board underneath is never pushed off screen. It is
+       not a dialog and deliberately does not dim what is behind it — the reader
+       is meant to see the columns they are renaming. */
+    .admin { display: grid; flex: 0 1 auto; gap: .5rem; max-height: 50vh; overflow: auto; padding: .75rem 1.25rem .9rem; border-bottom: 1px solid #d5deea; background: #fff; }
+    .admin[hidden] { display: none; }
+    .admin:focus-visible { outline: 3px solid #2457d6; outline-offset: -3px; }
+    .admin__header { display: flex; align-items: baseline; justify-content: space-between; gap: .75rem; }
+    .admin__title { margin: 0; font-size: 1rem; letter-spacing: -.025em; }
+    .admin__note { max-width: 84ch; margin: 0; color: #56647a; font-size: .76rem; line-height: 1.45; }
+    .admin__note strong { color: #34425a; }
+    .admin__note code { font-size: .72rem; }
+    /* A live region, so it stands in the document whatever it holds: one created
+       in the same frame as its first message never announces it. It collapses
+       while empty rather than reserving a row, because the panel is opened far
+       less often than a label is added and the rows below it are not something
+       the reader is watching for a jump. */
+    .admin__status { display: grid; gap: .2rem; font-size: .8rem; }
+    .admin__status:empty { display: none; }
+    .admin__status p { margin: 0; }
+    .admin__status[data-kind="error"] { color: #8f1d1d; }
+    .admin__status [data-vocabulary-panel-warning] { color: #7c3b08; }
+    .admin-statuses { display: grid; gap: .3rem; margin: 0; padding: 0; list-style: none; }
+    .admin-status { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .35rem .75rem; padding: .4rem .5rem; border: 1px solid #d5deea; border-radius: 4px; background: #fff; cursor: grab; }
+    .admin-status:active { cursor: grabbing; }
+    .admin-status[data-dragging="true"] { opacity: .5; }
+    .admin-status[data-drop-target="true"] { border-color: #2457d6; box-shadow: inset 0 0 0 1px #2457d6; }
+    .admin-status__name { display: flex; flex-wrap: wrap; align-items: baseline; gap: .4rem; min-width: 0; font-size: .84rem; font-weight: 750; }
+    .admin-status__token { color: #526b9b; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .7rem; font-weight: 400; overflow-wrap: anywhere; }
+    .admin-tag { padding: .06rem .3rem; border: 1px solid #b9c6d8; border-radius: 3px; color: #34425a; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .62rem; font-weight: 400; }
+    .admin-status__controls { display: flex; flex-wrap: wrap; gap: .3rem; }
+    .admin-button { border: 1px solid #9eafc5; border-radius: 4px; background: #fff; color: #34425a; cursor: pointer; font: inherit; font-size: .73rem; font-weight: 700; padding: .22rem .5rem; }
+    .admin-button:hover:enabled { border-color: #2457d6; color: #2457d6; }
+    .admin-button:disabled { cursor: default; opacity: .52; }
+    .admin-button--primary { border-color: #173f9e; background: #2457d6; color: #fff; }
+    .admin-button--primary:hover:enabled { background: #1d49b7; color: #fff; }
+    .admin-button--danger { border-color: #8f1d1d; background: #b42318; color: #fff; }
+    .admin-button--danger:hover:enabled { background: #8f1d1d; color: #fff; }
+    .admin-button:focus-visible, .admin input:focus-visible, .admin select:focus-visible { outline: 3px solid #2457d6; outline-offset: 1px; }
+    .admin input, .admin select { border: 1px solid #9eafc5; border-radius: 4px; background: #fff; color: #172033; font: inherit; font-size: .78rem; padding: .28rem .4rem; }
+    .admin input:focus, .admin select:focus { border-color: #2457d6; }
+    .admin-form { display: flex; flex-wrap: wrap; align-items: end; gap: .4rem .7rem; grid-column: 1 / -1; margin-top: .1rem; padding-top: .45rem; border-top: 1px dashed #b9c6d8; }
+    .admin-field { display: grid; gap: .15rem; }
+    .admin-field label { color: #34425a; font-size: .7rem; font-weight: 750; }
+    .admin-tags { display: flex; flex-wrap: wrap; align-items: center; gap: .1rem .6rem; margin: 0; padding: 0; border: 0; }
+    .admin-tags legend { padding: 0; color: #34425a; font-size: .7rem; font-weight: 750; }
+    .admin-tag-choice { display: inline-flex; align-items: center; gap: .25rem; color: #34425a; cursor: pointer; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .72rem; }
+    .admin-tag-choice input { width: .95rem; height: .95rem; margin: 0; accent-color: #2457d6; cursor: pointer; padding: 0; }
+    .admin-note { margin: 0; color: #7c3b08; font-size: .72rem; }
+    .admin-add { display: grid; gap: .4rem; margin-top: .5rem; padding: .5rem; border: 1px solid #d5deea; border-radius: 4px; background: #f8faff; }
+    .admin-add__title { margin: 0; font-size: .82rem; }
+    .admin-add .admin-form { grid-column: auto; margin-top: 0; padding-top: 0; border-top: 0; }
     .stale { display: none; margin: 0 0 1rem; padding: .55rem .7rem; border-left: 3px solid #b45309; background: #fff6e8; color: #7c3b08; font-size: .875rem; }
     .stale[data-visible="true"] { display: block; }
     /* Rows are assigned rather than auto-placed, so the board keeps the flexible
@@ -328,7 +382,7 @@
        swipes between them. On a 390px screen that is 288px of column against
        350px of board. The min() only decides anything below about 328px, where
        18rem would be wider than the window and the column becomes the page. */
-    @media (max-width: 900px) { :root { --board-column-min: min(18rem, calc(100vw - 2.5rem)); } .app-header { align-items: start; flex-direction: column; } .updated { text-align: left; } }
+    @media (max-width: 900px) { :root { --board-column-min: min(18rem, calc(100vw - 2.5rem)); } .app-header { align-items: start; flex-direction: column; } .updated { text-align: left; } .admin-status { grid-template-columns: minmax(0, 1fr); } }
     @media (min-width: 761px) {
       .task-sidebar { padding: .9rem 1rem; }
       .task-properties { gap: .55rem; }
@@ -374,7 +428,7 @@
   <a class="skip-link" href="#board">Skip to task board</a>
   <header class="app-header">
     <div><p class="eyebrow">Repository workbench</p><h1>Workbook board</h1></div>
-    <div class="header-links"><a class="header-link" href="/">Board</a><a class="header-link" href="/deleted">Deleted tasks</a><p class="updated" data-updated>Loaded from this checkout</p><button type="button" class="header-link" data-description-toggle hidden>Descriptions: hidden</button><button type="button" class="header-link" data-sync-toggle hidden></button></div>
+    <div class="header-links"><a class="header-link" href="/">Board</a><a class="header-link" href="/deleted">Deleted tasks</a><p class="updated" data-updated>Loaded from this checkout</p><button type="button" class="header-link" data-description-toggle hidden>Descriptions: hidden</button><button type="button" class="header-link" data-sync-toggle hidden></button>{{ if .Administrable }}<button type="button" class="header-link" data-vocabulary-panel-toggle aria-expanded="false" aria-controls="vocabulary-panel" hidden>Statuses</button>{{ end }}</div>
   </header>
   <!-- What the board has to say to a reader who has moved on: a save that
        already returned, or a refused change whose card the board has since
@@ -398,6 +452,42 @@
       <button type="button" data-vocabulary-reload>Reload the board</button>
     </div>
   </div>
+  {{ if .Administrable }}
+  <!-- Where a project's columns are administered.
+
+       It is a disclosure rather than a dialog: it is an admin affordance beside
+       the reading experience, not a mode the reader is put into, so it takes no
+       focus trap, dims nothing, and the board stays where it is behind it. The
+       entry point is one word in the header chrome, shipped hidden and revealed
+       by the script on the board route, next to the two settings that are also
+       only meaningful there.
+
+       The shell is served and the list inside it is drawn by the client from
+       `GET /api/vocabulary`, because the page's own columns carry only a token
+       and a label — a change has to name the tags, the order, and the ledger
+       head it was composed against, and only that document has them.
+
+       data-status-tags carries the three roles a status may carry, for the same
+       reason the columns carry their statuses: the set is the server's, and a
+       client holding a copy would be a second answer. It is also the one that
+       cannot be spelled in the script at all, since `done` is a tag here and a
+       status name in most projects.
+
+       The panel never rebuilds the board. A change it makes moves the ledger
+       head, the notice above notices, and the reader picks the moment to
+       reload — the same standing machinery a change from another clone raises,
+       and for the same reason: every card node on the board is holding
+       somebody's work in flight. -->
+  <section class="admin" id="vocabulary-panel" data-vocabulary-panel data-status-tags="{{ range $index, $tag := .StatusTags }}{{ if $index }} {{ end }}{{ $tag }}{{ end }}" tabindex="-1" aria-labelledby="vocabulary-panel-title" hidden>
+    <header class="admin__header">
+      <h2 class="admin__title" id="vocabulary-panel-title">Statuses</h2>
+      <button type="button" class="admin-button" data-vocabulary-panel-close>Close</button>
+    </header>
+    <p class="admin__note">These are this project's columns, in board order. Renaming one forwards the old name, so tasks written by a clone that has not fetched the change still land in the right column, and removing one names where its tasks belong. A tag says what a column means rather than what it is called: <strong>default</strong> is where a new task lands and exactly one column carries it, <strong>next</strong> marks the columns <code>workbook next</code> claims from, and <strong>done</strong> marks the ones that satisfy a dependency. Drag a row, or use its Up and Down controls, to reorder the columns. The board behind this panel keeps the columns it was opened with until you reload it.</p>
+    <div class="admin__status" data-vocabulary-panel-status role="status" aria-live="polite"></div>
+    <div data-vocabulary-panel-body></div>
+  </section>
+  {{ end }}
   <main id="board" tabindex="-1">
     <!-- data-default-status is where a new task lands, and it is the server's
          answer rather than the client's: it is the status this project tagged
@@ -502,6 +592,16 @@
       // offered instead of taken.
       const vocabularyNotice = document.querySelector("[data-vocabulary-notice]");
       const vocabularyReload = document.querySelector("[data-vocabulary-reload]");
+      // The status administration panel and its parts. Every one of them is
+      // absent on a board built without the four vocabulary mutations, which is
+      // why each is asked for separately and everything below is guarded: the
+      // page for such a board offers no entry point, and the script must not
+      // depend on one being there.
+      const vocabularyPanel = document.querySelector("[data-vocabulary-panel]");
+      const vocabularyPanelToggle = document.querySelector("[data-vocabulary-panel-toggle]");
+      const vocabularyPanelClose = document.querySelector("[data-vocabulary-panel-close]");
+      const vocabularyPanelBody = document.querySelector("[data-vocabulary-panel-body]");
+      const vocabularyPanelStatus = document.querySelector("[data-vocabulary-panel-status]");
       // The configuration ledger tip these columns were built from. The server
       // renders it into the page and repeats it on every poll, so the poll can
       // notice a change without fetching the vocabulary itself once a second.
@@ -2769,7 +2869,9 @@
           // draining says a loop owns this queue, which is not the same as a
           // request being open: between two sends the loop still owns it. The
           // distinction matters because the head is re-based between sends.
-          entry = { queue: [], draining: false, head: head || "" };
+          // settled is that loop's promise, so anything that has to wait for
+          // this queue waits on the loop rather than on a timer.
+          entry = { queue: [], draining: false, settled: null, head: head || "" };
           pendingIntents.set(taskID, entry);
         }
         return entry;
@@ -2906,9 +3008,12 @@
       // the one before it returned. Independent tasks drain concurrently, so a
       // slow write to one card never stalls the rest of the board.
       // The returned promise settles once this task's queue is empty. Nothing
-      // in the browser awaits it — an event listener's result is discarded —
-      // but it is the seam the client tests use to observe a settled board
-      // without the UI ever waiting on a round trip.
+      // on the board awaits it — an event listener's result is discarded — but
+      // it is the seam the client tests use to observe a settled board without
+      // the UI ever waiting on a round trip, and the seam a status change waits
+      // on before it is allowed to go: a vocabulary change is not queued, and
+      // sending one past a task write composed against the columns on screen is
+      // the one ordering this client cannot recover from.
       function queueIntent(taskID, head, intent) {
         const entry = intentEntry(taskID, head);
         entry.queue.push(intent);
@@ -2927,10 +3032,20 @@
         rerender();
         return drainIntents(taskID);
       }
-      async function drainIntents(taskID) {
+      function drainIntents(taskID) {
         const entry = pendingIntents.get(taskID);
-        if (!entry || entry.draining) return;
+        if (!entry) return Promise.resolve();
+        // A loop already running is the answer to "when is this queue empty",
+        // so a second caller is handed the promise that loop settles rather
+        // than one that resolves immediately — which is what this returned
+        // before anything waited on it, and would have let a status change go
+        // out over a board that was still writing.
+        if (entry.draining) return entry.settled;
         entry.draining = true;
+        entry.settled = drainQueue(entry, taskID);
+        return entry.settled;
+      }
+      async function drainQueue(entry, taskID) {
         try {
           while (entry.queue.length > 0) {
             const intent = entry.queue[0];
@@ -3076,6 +3191,637 @@
         renderSyncState();
       }
       if (syncToggle) syncToggle.addEventListener("click", toggleSyncMode);
+      // Status administration.
+      //
+      // A vocabulary change is the one write in this client that does not go
+      // through the optimistic queue, and that is a decision rather than an
+      // omission. The queue's bargain is that an intent can be drawn before it
+      // is durable because a refusal costs one card a rollback. A refused
+      // status change costs the whole board: the columns, the counts, the form
+      // that offers the statuses, and the region holding every task whose
+      // status suddenly matches no column. Repainting all of that to take back
+      // a change is worse than the round trip the queue would have hidden. So
+      // the panel disables its controls, sends, and re-renders itself from the
+      // answer.
+      //
+      // Two rules follow from being outside the queue rather than in it.
+      //
+      // The change waits for the queue to be empty. A pending intent can be
+      // carrying the very status this change retires, and it was composed
+      // against the columns on screen; sending the status change past it would
+      // race a task write the reader has already made against a vocabulary that
+      // no longer has somewhere to put it. The control says it is waiting and
+      // then proceeds, which is honest about a delay nobody would otherwise be
+      // able to explain.
+      //
+      // A stale write is terminal. There is no re-base here and no retry: a
+      // status is somebody's decision about how the project works, and two
+      // people renaming the same column mean two different things. The refusal
+      // carries the statuses as they now stand, so the panel adopts them and
+      // asks the reader to look again.
+      const statusTagNames = vocabularyPanel
+        ? (vocabularyPanel.dataset.statusTags || "").split(" ").filter(Boolean)
+        : [];
+      // The statuses the panel is drawing and the ledger head it read them at,
+      // which is what every change it sends names. It is read from the server
+      // rather than taken from the page: the page carries a token and a label
+      // per column and nothing else, and its head may already be minutes old.
+      let panelVocabulary = null;
+      let panelHead = "";
+      let panelBusy = false;
+      let panelReading = false;
+      // The row form the reader has open, as {status, kind}. It is held out here
+      // rather than in the DOM because every answer rebuilds the list, and a
+      // form that survived a change to a different status would be editing a
+      // definition nobody is looking at any more.
+      let panelForm = null;
+      let panelDragStatus = null;
+      // The controls a change disables while it is in flight, and the rows a
+      // drag marks. Both are rebuilt with the list, because the list is what
+      // holds them.
+      let panelControls = [];
+      let panelStatusRows = [];
+      // What the panel has to say about the last thing it did: one sentence,
+      // and one line per warning the server attached. Warnings are shown rather
+      // than folded into the sentence — `docs-refresh-incomplete` and
+      // `auto-sync-incomplete` are about the repository rather than about the
+      // change, and they are the reason a later command behaves oddly.
+      function panelReport(kind, message, warnings = []) {
+        if (!vocabularyPanelStatus) return;
+        vocabularyPanelStatus.dataset.kind = kind;
+        const lines = [message].concat(warnings.filter(Boolean));
+        vocabularyPanelStatus.replaceChildren(...lines.map((line, index) => {
+          const paragraph = document.createElement("p");
+          if (index > 0) paragraph.dataset.vocabularyPanelWarning = "";
+          text(paragraph, line);
+          return paragraph;
+        }));
+      }
+      // A control the panel disables for the length of a change, and one it
+      // disables for a reason of its own — the Up control on the first row, a
+      // Save with an empty name beside it. The two are separate states because
+      // a change finishing must not enable a control that was never enabled.
+      function applyPanelBusy() {
+        panelControls.forEach((control) => {
+          control.disabled = panelBusy || control.dataset.blocked === "true";
+        });
+      }
+      function blockPanelControl(control, blocked) {
+        control.dataset.blocked = blocked ? "true" : "false";
+        control.disabled = panelBusy || blocked;
+      }
+      // Settles when no task has work in flight.
+      //
+      // Each queue's drain loop publishes the promise it settles on, so this
+      // waits on the loops rather than on a timer, and a queue that grows while
+      // it waits is waited on again. A queue with no loop to wait on cannot be
+      // waited for at all, so it returns rather than spinning.
+      async function settledIntents() {
+        while (pendingIntents.size > 0) {
+          const draining = [...pendingIntents.values()]
+            .map((entry) => entry.settled)
+            .filter(Boolean);
+          if (draining.length === 0) return;
+          await Promise.all(draining);
+        }
+      }
+      // Takes a vocabulary document as the panel's own, from a read or from any
+      // answer that carries one.
+      //
+      // Wholesale, never patched: a status change can move a status nobody
+      // named — a tag is exclusive, a removal retires a token, a rename
+      // forwards one — so a client that folded a description of one change into
+      // its own model would disagree with the server about the rest.
+      //
+      // The head it adopts is also the news the board needs. The columns behind
+      // this panel were built from an older one, and the standing notice is
+      // what says so; the panel does not rebuild a single column itself.
+      function adoptVocabulary(vocabulary) {
+        panelVocabulary = vocabulary;
+        panelHead = typeof vocabulary.head === "string" ? vocabulary.head : "";
+        noteVocabularyChange(panelHead);
+        renderVocabularyPanel();
+      }
+      async function readVocabulary() {
+        panelReading = true;
+        renderVocabularyPanel();
+        try {
+          const response = await fetch("/api/vocabulary", { cache: "no-store" });
+          const payload = await response.json();
+          if (!response.ok || payload.format !== "workbook.vocabulary" ||
+              payload.version !== 1 || !Array.isArray(payload.statuses)) {
+            throw new Error(payload.error && payload.error.message ||
+              "This project's statuses could not be read.");
+          }
+          panelReading = false;
+          adoptVocabulary(payload);
+        } catch (error) {
+          panelReading = false;
+          panelVocabulary = null;
+          renderVocabularyPanel();
+          panelReport("error", error instanceof Error
+            ? error.message
+            : "This project's statuses could not be read.");
+        }
+      }
+      // The one path every change the panel makes takes.
+      //
+      // `describe` is called with the answer rather than composed before the
+      // send, because a removal's sentence prices the change in tasks and only
+      // the answer knows that number.
+      async function changeVocabulary(method, path, body, describe) {
+        if (panelBusy || !panelVocabulary) return;
+        panelBusy = true;
+        applyPanelBusy();
+        let answer = null;
+        try {
+          // Quiescence. A pending intent may be carrying the very status this
+          // change retires, so the change waits for the board to be settled and
+          // says that it is waiting.
+          if (pendingIntents.size > 0) {
+            panelReport("", "Finishing the changes already in flight on the board before this one.");
+            await settledIntents();
+          }
+          const response = await fetch(path, {
+            method,
+            headers: { "Content-Type": "application/json" },
+            // The head the panel read, exactly as it read it. An empty one is a
+            // project whose configuration ledger has never been seeded, which
+            // is a real state and an administrable one, so it is sent rather
+            // than withheld.
+            body: JSON.stringify(Object.assign({}, body, { expectedHead: panelHead }))
+          });
+          const payload = await response.json();
+          answer = {
+            applied: response.ok && payload.format === "workbook.vocabulary-mutation" &&
+              payload.version === 1,
+            payload
+          };
+        } catch (_) {
+          // Only the exchange is guarded, so a defect in the rendering below
+          // cannot be reported as a request that never went.
+          answer = null;
+        }
+        panelBusy = false;
+        if (!answer) {
+          applyPanelBusy();
+          panelReport("error", "This status change could not be sent. Nothing about this project's statuses has changed.");
+          return;
+        }
+        const payload = answer.payload;
+        if (!answer.applied) {
+          const stale = payload.error && payload.error.category === "stale-write";
+          // A refusal that carries the statuses is a stale write, and the
+          // statuses it carries are the current ones. Adopting them is the
+          // whole of the recovery: no refetch, no re-base, no retry.
+          panelForm = payload.vocabulary ? null : panelForm;
+          if (payload.vocabulary) adoptVocabulary(payload.vocabulary);
+          applyPanelBusy();
+          // A conflict is described rather than quoted, as it is everywhere
+          // else in this client: the server's sentence names the head the
+          // request carried, which is this client's bookkeeping. Every other
+          // refusal is the reader's own to read — an unknown tag, a name that
+          // is already taken, a removal with nowhere to send its tasks — so it
+          // is quoted exactly as the command would have printed it.
+          panelReport("error", stale
+            ? "This project's statuses changed in another clone, so this change was not applied. The panel now shows them as they stand; review them and make the change again."
+            : payload.error && payload.error.message || "This status change was not applied.");
+          return;
+        }
+        panelForm = null;
+        adoptVocabulary(payload.vocabulary);
+        applyPanelBusy();
+        panelReport("", describe(payload), (payload.warnings || []).map((warning) => warning.message));
+      }
+      function panelButton(caption, description, onClick, { modifier = "", blocked = false } = {}) {
+        const control = document.createElement("button");
+        control.type = "button";
+        control.className = modifier ? "admin-button " + modifier : "admin-button";
+        text(control, caption);
+        if (description) control.setAttribute("aria-label", description);
+        control.addEventListener("click", onClick);
+        panelControls.push(control);
+        blockPanelControl(control, blocked);
+        return control;
+      }
+      // The control that sends a panel form. It carries no click handler of its
+      // own: the form's submit does the work, so pressing Enter in a field and
+      // pressing the button are the same gesture rather than two paths that
+      // could drift, and a browser that fires both would not send twice.
+      function panelSubmitButton(caption, description, { modifier = "", blocked = false } = {}) {
+        const control = document.createElement("button");
+        control.type = "submit";
+        control.className = modifier ? "admin-button " + modifier : "admin-button";
+        text(control, caption);
+        if (description) control.setAttribute("aria-label", description);
+        panelControls.push(control);
+        blockPanelControl(control, blocked);
+        return control;
+      }
+      function panelTextInput(id, value, placeholder) {
+        const control = document.createElement("input");
+        control.id = id;
+        control.value = value || "";
+        if (placeholder) control.placeholder = placeholder;
+        panelControls.push(control);
+        return control;
+      }
+      function panelSelect(id, options) {
+        const control = document.createElement("select");
+        control.id = id;
+        options.forEach(([value, label], index) => {
+          const option = document.createElement("option");
+          option.value = value;
+          text(option, label);
+          option.selected = index === 0;
+          control.append(option);
+        });
+        panelControls.push(control);
+        return control;
+      }
+      function panelField(labelText, control) {
+        const wrapper = document.createElement("div");
+        wrapper.className = "admin-field";
+        const caption = document.createElement("label");
+        caption.htmlFor = control.id;
+        text(caption, labelText);
+        wrapper.append(caption, control);
+        return wrapper;
+      }
+      // The tag checkboxes, built from the roles the server rendered into the
+      // panel rather than from a list the script keeps. Nothing here enforces
+      // what a tag means or how many statuses may carry one: the vocabulary
+      // does, in the same words `workbook status` uses, and a client that
+      // refused first would refuse in words of its own.
+      function panelTagChoices(prefix, tags) {
+        const region = document.createElement("fieldset");
+        region.className = "admin-tags";
+        const caption = document.createElement("legend");
+        text(caption, "Tags");
+        region.append(caption);
+        const boxes = statusTagNames.map((tag) => {
+          const choice = document.createElement("label");
+          choice.className = "admin-tag-choice";
+          const box = document.createElement("input");
+          box.type = "checkbox";
+          box.id = prefix + "-tag-" + tag;
+          box.dataset.statusTag = tag;
+          box.checked = (tags || []).includes(tag);
+          const name = document.createElement("span");
+          text(name, tag);
+          choice.append(box, name);
+          region.append(choice);
+          panelControls.push(box);
+          return box;
+        });
+        return {
+          region,
+          values: () => boxes.filter((box) => box.checked).map((box) => box.dataset.statusTag)
+        };
+      }
+      // Whether a form's tags differ from the ones the status carries. Both are
+      // in the canonical order — the document stores them sorted and the
+      // checkboxes are built in the order the server rendered them — so the two
+      // are comparable as they stand.
+      function sameTags(chosen, held) {
+        return chosen.join(" ") === (held || []).join(" ");
+      }
+      function statusEditForm(definition) {
+        const form = document.createElement("form");
+        form.className = "admin-form";
+        form.dataset.vocabularyEdit = definition.status;
+        const name = panelTextInput("status-name-" + definition.status, definition.status);
+        const label = panelTextInput("status-label-" + definition.status, definition.label);
+        const tags = panelTagChoices("status-" + definition.status, definition.tags);
+        const save = panelSubmitButton("Save", "Save changes to " + definition.label,
+          { modifier: "admin-button--primary" });
+        const guard = () => blockPanelControl(save, !name.value.trim());
+        name.addEventListener("input", guard);
+        guard();
+        function submit() {
+          // Only the members this form changed, because a member is sent to be
+          // set: re-asserting a label nobody edited is indistinguishable from
+          // editing it, and a rename that carried the current label with it
+          // would overwrite a relabel that landed in between. A form that
+          // changed nothing is finished rather than broken, so it says so
+          // instead of sending a change with nothing in it for the server to
+          // refuse.
+          const change = {};
+          const renamed = name.value.trim();
+          if (renamed !== definition.status) change.name = renamed;
+          if (label.value !== definition.label) change.label = label.value;
+          const chosen = tags.values();
+          if (!sameTags(chosen, definition.tags)) change.tags = chosen;
+          if (Object.keys(change).length === 0) {
+            panelReport("", "Nothing about " + definition.label + " was changed.");
+            return;
+          }
+          changeVocabulary(
+            "PATCH",
+            "/api/vocabulary/statuses/" + encodeURIComponent(definition.status),
+            change,
+            () => "Updated " + definition.label + "."
+          );
+        }
+        form.addEventListener("submit", (event) => { event.preventDefault(); submit(); });
+        form.append(
+          panelField("Name", name),
+          panelField("Label", label),
+          tags.region,
+          save,
+          panelButton("Cancel", "Stop editing " + definition.label, closePanelForm)
+        );
+        return form;
+      }
+      function statusDeleteForm(definition, definitions) {
+        const form = document.createElement("form");
+        form.className = "admin-form";
+        form.dataset.vocabularyDelete = definition.status;
+        const elsewhere = definitions.filter((candidate) => candidate.status !== definition.status);
+        // Where the tasks in this column belong. It is required and never
+        // guessed, exactly as `workbook status delete --into` is, so a project
+        // with one status has no removal to offer rather than one that would
+        // strand everything in it.
+        const into = panelSelect(
+          "status-into-" + definition.status,
+          elsewhere.map((candidate) => [candidate.status, candidate.label])
+        );
+        function submit() {
+          if (!into.value) return;
+          changeVocabulary(
+            "DELETE",
+            "/api/vocabulary/statuses/" + encodeURIComponent(definition.status),
+            { into: into.value },
+            (answer) => removalSummary(definition, into.value, answer.tasks)
+          );
+        }
+        form.addEventListener("submit", (event) => { event.preventDefault(); submit(); });
+        const remove = panelSubmitButton("Remove", "Remove " + definition.label,
+          { modifier: "admin-button--danger", blocked: elsewhere.length === 0 });
+        if (elsewhere.length === 0) {
+          const note = document.createElement("p");
+          note.className = "admin-note";
+          text(note, "This is the only status this project has, so there is nowhere for its tasks to go.");
+          form.append(note);
+        } else {
+          form.append(panelField("Move its tasks to", into));
+        }
+        form.append(remove, panelButton("Cancel", "Keep " + definition.label, closePanelForm));
+        return form;
+      }
+      // What a removal cost, in the terms the person removing a column cares
+      // about and in the same terms `workbook status delete` reports: how many
+      // tasks moved, and how many of those `workbook next` can claim where they
+      // landed.
+      function removalSummary(definition, into, counts) {
+        const destination = panelVocabulary && (panelVocabulary.statuses || [])
+          .find((candidate) => candidate.status === into);
+        const name = destination ? destination.label : into;
+        const affected = counts && counts.affected || 0;
+        if (affected === 0) return "Removed " + definition.label + ". No tasks were in it.";
+        const claimable = counts && counts.claimableAfter || 0;
+        return "Removed " + definition.label + ". " +
+          affected + (affected === 1 ? " task moved to " : " tasks moved to ") + name +
+          ", " + claimable + " of them claimable by workbook next there.";
+      }
+      function addStatusForm(definitions) {
+        const region = document.createElement("div");
+        region.className = "admin-add";
+        const heading = document.createElement("h3");
+        heading.className = "admin-add__title";
+        text(heading, "Add a status");
+        const form = document.createElement("form");
+        form.className = "admin-form";
+        form.dataset.vocabularyAdd = "";
+        const name = panelTextInput("status-new-name", "", "triage");
+        const label = panelTextInput("status-new-label", "", "derived from the name");
+        const tags = panelTagChoices("status-new", []);
+        // One control for the placement, because a placement is one decision.
+        // The two neighbours a status can be placed against are the same list
+        // twice, and the server refuses a change naming both.
+        const placement = panelSelect("status-new-placement", [["", "At the end"]].concat(
+          definitions.flatMap((candidate) => [
+            ["before:" + candidate.status, "Before " + candidate.label],
+            ["after:" + candidate.status, "After " + candidate.label]
+          ])
+        ));
+        const add = panelSubmitButton("Add status", "",
+          { modifier: "admin-button--primary", blocked: true });
+        const guard = () => blockPanelControl(add, !name.value.trim());
+        name.addEventListener("input", guard);
+        function submit() {
+          const status = name.value.trim();
+          if (!status) return;
+          const addition = { status };
+          // An omitted label is the server deriving one from the name, which is
+          // what `workbook status add` does without --label. An empty string
+          // would be a blank label, which the vocabulary refuses.
+          if (label.value.trim()) addition.label = label.value.trim();
+          const chosen = tags.values();
+          if (chosen.length) addition.tags = chosen;
+          const [side, neighbour] = placement.value ? placement.value.split(":") : ["", ""];
+          if (neighbour) addition[side] = neighbour;
+          changeVocabulary("POST", "/api/vocabulary/statuses", addition,
+            () => "Added " + status + ".");
+        }
+        form.addEventListener("submit", (event) => { event.preventDefault(); submit(); });
+        form.append(
+          panelField("Name", name),
+          panelField("Label", label),
+          tags.region,
+          panelField("Position", placement),
+          add
+        );
+        region.append(heading, form);
+        return region;
+      }
+      function closePanelForm() {
+        panelForm = null;
+        renderVocabularyPanel();
+      }
+      function openPanelForm(status, kind) {
+        panelForm = panelForm && panelForm.status === status && panelForm.kind === kind
+          ? null
+          : { status, kind };
+        renderVocabularyPanel();
+      }
+      function statusRow(definition, index, definitions) {
+        const item = document.createElement("li");
+        item.className = "admin-status";
+        item.dataset.vocabularyStatus = definition.status;
+        const editing = Boolean(panelForm && panelForm.status === definition.status);
+        // A row with a form open is not draggable. Selecting the text in an
+        // input is a press and a drag, and inside a draggable ancestor that is
+        // the gesture that starts the drag; a reader correcting a label would
+        // find themselves reordering the columns instead. The row is still
+        // reorderable while its form is open — by the Up and Down controls,
+        // which is the path a keyboard has always had to take.
+        item.draggable = !editing;
+        const name = document.createElement("div");
+        name.className = "admin-status__name";
+        const label = document.createElement("span");
+        text(label, definition.label);
+        const token = document.createElement("code");
+        token.className = "admin-status__token";
+        text(token, definition.status);
+        name.append(label, token);
+        (definition.tags || []).forEach((tag) => {
+          const chip = document.createElement("span");
+          chip.className = "admin-tag";
+          chip.dataset.statusTag = tag;
+          text(chip, tag);
+          name.append(chip);
+        });
+        const controls = document.createElement("div");
+        controls.className = "admin-status__controls";
+        // Reordering has a keyboard path as well as a drag, and both send the
+        // same one request: the whole order, once per gesture. A drag is not an
+        // input everybody has, and a column order nobody can change without a
+        // mouse is a column order half the readers of this board cannot change.
+        controls.append(
+          panelButton("Up", "Move " + definition.label + " earlier", () => moveStatus(definition.status, -1),
+            { blocked: index === 0 }),
+          panelButton("Down", "Move " + definition.label + " later", () => moveStatus(definition.status, 1),
+            { blocked: index === definitions.length - 1 }),
+          panelButton("Edit", "Edit " + definition.label, () => openPanelForm(definition.status, "edit")),
+          panelButton("Delete", "Delete " + definition.label, () => openPanelForm(definition.status, "delete"))
+        );
+        item.append(name, controls);
+        if (editing) {
+          item.append(panelForm.kind === "delete"
+            ? statusDeleteForm(definition, definitions)
+            : statusEditForm(definition));
+        }
+        item.addEventListener("dragstart", (event) => {
+          if (panelBusy || editing) return;
+          panelDragStatus = definition.status;
+          item.dataset.dragging = "true";
+          if (event.dataTransfer) {
+            event.dataTransfer.effectAllowed = "move";
+            event.dataTransfer.setData("text/plain", definition.status);
+          }
+        });
+        item.addEventListener("dragend", () => {
+          panelDragStatus = null;
+          clearPanelDropMarks();
+          delete item.dataset.dragging;
+        });
+        item.addEventListener("dragover", (event) => {
+          if (!panelDragStatus || panelDragStatus === definition.status) return;
+          event.preventDefault();
+          if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+          clearPanelDropMarks();
+          item.dataset.dropTarget = "true";
+        });
+        item.addEventListener("dragleave", () => { delete item.dataset.dropTarget; });
+        item.addEventListener("drop", (event) => {
+          event.preventDefault();
+          clearPanelDropMarks();
+          const dragged = panelDragStatus;
+          panelDragStatus = null;
+          if (!dragged || dragged === definition.status) return;
+          return moveStatusOnto(dragged, definition.status);
+        });
+        return item;
+      }
+      function clearPanelDropMarks() {
+        panelStatusRows.forEach((row) => { delete row.dataset.dropTarget; });
+      }
+      // The order this panel is drawing, which is the order a reorder sends: the
+      // whole list, once per gesture, because the server takes the whole order
+      // and a sequence of pairwise moves would be several commits describing one
+      // decision.
+      function panelOrder() {
+        return (panelVocabulary && panelVocabulary.statuses || []).map((definition) => definition.status);
+      }
+      function sendPanelOrder(statuses) {
+        return changeVocabulary("PUT", "/api/vocabulary/order", { statuses },
+          () => "Reordered this project's columns.");
+      }
+      function moveStatus(status, offset) {
+        const order = panelOrder();
+        const from = order.indexOf(status);
+        const to = from + offset;
+        if (from < 0 || to < 0 || to >= order.length) return;
+        order.splice(to, 0, ...order.splice(from, 1));
+        return sendPanelOrder(order);
+      }
+      // A row dropped on another takes that row's place: downward it lands
+      // after the row it was dropped on, upward it lands before it, which is
+      // what the two gestures look like they are asking for.
+      function moveStatusOnto(dragged, target) {
+        const order = panelOrder();
+        const from = order.indexOf(dragged);
+        const to = order.indexOf(target);
+        if (from < 0 || to < 0 || from === to) return;
+        order.splice(from, 1);
+        order.splice(to, 0, dragged);
+        return sendPanelOrder(order);
+      }
+      function renderVocabularyPanel() {
+        if (!vocabularyPanel || !vocabularyPanelBody) return;
+        // A rebuild drops every control in the panel, and the one the reader
+        // pressed is usually among them. Focus is caught and parked on the panel
+        // itself — but only when it was inside the panel to begin with, since a
+        // reader who has moved on is not to be dragged back.
+        const held = document.activeElement;
+        const inside = Boolean(held && vocabularyPanel.contains(held));
+        panelControls = [];
+        panelStatusRows = [];
+        if (!panelVocabulary) {
+          const message = document.createElement("p");
+          message.className = "admin-note";
+          message.dataset.vocabularyPanelEmpty = "";
+          text(message, panelReading
+            ? "Reading this project's statuses."
+            : "This project's statuses are not available.");
+          vocabularyPanelBody.replaceChildren(message);
+          restorePanelFocus(inside);
+          return;
+        }
+        const definitions = panelVocabulary.statuses || [];
+        const list = document.createElement("ul");
+        list.className = "admin-statuses";
+        list.setAttribute("role", "list");
+        definitions.forEach((definition, index) => {
+          const row = statusRow(definition, index, definitions);
+          panelStatusRows.push(row);
+          list.append(row);
+        });
+        vocabularyPanelBody.replaceChildren(list, addStatusForm(definitions));
+        applyPanelBusy();
+        restorePanelFocus(inside);
+      }
+      function restorePanelFocus(inside) {
+        if (!inside || !vocabularyPanel || vocabularyPanel.contains(document.activeElement)) return;
+        if (typeof vocabularyPanel.focus === "function") vocabularyPanel.focus();
+      }
+      function openVocabularyPanel() {
+        if (!vocabularyPanel) return;
+        vocabularyPanel.hidden = false;
+        if (vocabularyPanelToggle) vocabularyPanelToggle.setAttribute("aria-expanded", "true");
+        if (typeof vocabularyPanel.focus === "function") vocabularyPanel.focus();
+        // Read every time it is opened rather than once. The panel is opened
+        // seldom and a clone can have changed the statuses since the last look,
+        // and a change composed against what this page happens to remember is
+        // the stale write the panel would rather not have to report.
+        readVocabulary();
+      }
+      function closeVocabularyPanel({ restoreFocus = true } = {}) {
+        if (!vocabularyPanel) return;
+        vocabularyPanel.hidden = true;
+        panelForm = null;
+        if (vocabularyPanelToggle) vocabularyPanelToggle.setAttribute("aria-expanded", "false");
+        if (restoreFocus && vocabularyPanelToggle && !vocabularyPanelToggle.hidden &&
+            typeof vocabularyPanelToggle.focus === "function") {
+          vocabularyPanelToggle.focus();
+        }
+      }
+      if (vocabularyPanelToggle) vocabularyPanelToggle.addEventListener("click", () => {
+        if (vocabularyPanel && vocabularyPanel.hidden) openVocabularyPanel();
+        else closeVocabularyPanel();
+      });
+      if (vocabularyPanelClose) vocabularyPanelClose.addEventListener("click", () => closeVocabularyPanel());
       // A refused change is reported on the card it concerns, which is both
       // where the reader is looking and somewhere the report can stay.
       //
@@ -3404,6 +4150,16 @@
         // runs this script offers no setting rather than a dead one that lies
         // about the state of a board it can no longer change.
         if (descriptionToggle) descriptionToggle.hidden = current.view !== "board";
+        // The status panel administers the columns, and the columns are the
+        // board, so it travels with the route the way the description setting
+        // does. Leaving the board closes it rather than leaving it standing over
+        // a task's page — and closes it without taking the caret, because the
+        // reader is already on their way somewhere and the control it would be
+        // handed to is about to be hidden.
+        if (vocabularyPanelToggle) vocabularyPanelToggle.hidden = current.view !== "board";
+        if (current.view !== "board" && vocabularyPanel && !vocabularyPanel.hidden) {
+          closeVocabularyPanel({ restoreFocus: false });
+        }
         if (current.view === "board") {
           document.title = "Workbook board";
           if (main.firstElementChild !== boardView) main.replaceChildren(boardView);

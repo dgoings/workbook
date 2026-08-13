@@ -484,6 +484,69 @@ adopting confirmed heads into an open form belongs with the render work too.
 not change task" in the form verbatim — the raw error the empty-diff guard
 exists to keep out of it.
 
+## Vocabulary mutations are outside the queue
+
+The board can now change the project's statuses — add, rename, relabel, retag,
+remove, reorder — from a panel in its own chrome. None of those changes is an
+intent, and that is a decision rather than an omission.
+
+The queue's bargain is that a change can be drawn before it is durable because a
+refusal costs one card a rollback. A refused status change costs the whole
+board: the columns, their counts, the form that offers the statuses, and the
+region that holds every task whose status suddenly matches no column. Repainting
+all of that to take back a change the reader watched happen is worse than the
+round trip the queue exists to hide, and it would repaint it over every card
+node the reader has work in flight on. So the panel disables its controls, sends
+synchronously with the head it read, and re-renders **itself** from the answer.
+Nothing about the board moves.
+
+**Quiescence.** A vocabulary change is not sent while `pendingIntents` is
+non-empty. A pending intent can be carrying the very status the change retires,
+and it was composed against the columns on screen; letting the two race is the
+one ordering this client could not recover from, because the intent's rollback
+and the vocabulary's are answers to different questions. The save control says
+it is finishing the changes already in flight, waits for every queue to drain,
+and then proceeds — or re-enables, if the change is refused when it goes. Each
+queue's drain loop publishes the promise it settles on for this, so the wait is
+on the loops rather than on a timer; a queue that grows while it waits is waited
+on again.
+
+**Conflict.** A `stale-write` is terminal. There is no re-base and no retry: a
+status is somebody's decision about how the project works, and two people
+renaming the same column mean two different things, so applying one over the
+other would invent a third that neither of them chose. The 409 carries the
+current vocabulary, so the panel consumes it from the refusal rather than
+refetching, redraws its list from it, adopts the head it names as the one the
+next change will carry, and reports that the statuses changed in another clone
+and should be reviewed. As everywhere else in this client, the conflict is
+described rather than quoted — the server's sentence names the head the request
+carried, which is this client's bookkeeping — while every other refusal is the
+reader's own to read and is quoted exactly as the command would have printed it.
+
+**Reconciliation with the board.** A change that lands moves the vocabulary
+head, which makes the columns behind the panel stale by the same protected
+invariant that governs a change from another clone. It is answered the same way,
+by the same machinery: the panel hands the head it adopted to
+`noteVocabularyChange`, the standing `[data-vocabulary-notice]` says the columns
+are the ones the page was opened with, and the reader chooses when to reload.
+The panel rebuilds no column, and a poll would have raised the same notice
+within a second anyway — handing it the head directly only means the reader is
+told by the same frame that told them the change worked. Opening the panel can
+raise it too, and honestly: the read it performs is often the first thing on the
+page to notice that another clone moved the ledger.
+
+**What the panel does not decide.** Tag arity, name syntax, whether a label may
+be blank, whether a removal has somewhere to send its tasks — every one of those
+is the vocabulary's rule, enforced by the same planners `workbook status` runs,
+and the panel puts the refusal in front of the reader in the words the command
+would have used. A client that checked first would be a second copy of a rule
+that lives in one place, and would refuse a change the server would have
+accepted the moment either copy drifted. The two guards it does keep are not
+rules: a control with a required field empty is disabled, and a form that
+changed nothing says so instead of collecting the server's refusal for a change
+with nothing in it — the same empty-diff guard the detail form keeps, for the
+same reason.
+
 ## Auto-sync state in the UI
 
 The board reports whether it is deferring to a watcher or publishing inline, and
@@ -610,6 +673,27 @@ absent and drives a hand-written fake DOM (`handler_test.go:4173`):
   elsewhere rather than that the board could not be read, and invites no retry —
   the retry, made anyway, carries the same refused head and is answered with the
   same sentence;
+- a status change made while a task intent is still in flight is not sent: the
+  panel says it is finishing what the board already has open, sends once the
+  queue has drained, and the two writes are ordered rather than raced;
+- a status change carries the head the panel read rather than the one the page
+  was served with, including the empty head of a project whose configuration
+  ledger has never been seeded, and the change that follows it carries the head
+  the answer produced;
+- a status change that lands re-renders the panel from the answer, raises the
+  vocabulary notice, and leaves every card node and every column on the board
+  exactly as it found them;
+- a `stale-write` sends nothing further: the panel draws the statuses the
+  refusal carried, re-enables its controls, describes the conflict without
+  quoting the server's sentence about a head, and composes its next change
+  against the head the refusal named;
+- a refusal that is not a conflict is quoted verbatim and changes nothing the
+  panel is drawing, including the form the reader is standing in;
+- a removal reports what it moved and how much of it `workbook next` can claim
+  where it landed, and every warning the answer carries is shown rather than
+  folded away;
+- a reorder is one request carrying the whole order, whether the gesture was a
+  drag or the controls a keyboard can reach;
 - a dependency edge written to the open task moves the head the form proposes,
   and the mirrored direction does not — the second read from a save the server
   refuses after the mirrored edge is written and before the removal that

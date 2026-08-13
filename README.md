@@ -1063,6 +1063,29 @@ not rebuild the columns under an open page — that would destroy the card nodes
 holding open forms, staged changes and unread refusals — and instead shows a
 notice offering a reload.
 
+A `Statuses` control in the board's header opens a panel that administers those
+columns: add one, rename, relabel or retag one, remove one into the column its
+tasks belong in, and reorder them by dragging a row or with the Up and Down
+controls beside it. It is `workbook status` reached from the board — the same
+planners, the same refusals, in the same words — and everything it refuses is
+refused by the vocabulary rather than by the page, so an unknown tag or a name
+that is already taken reads exactly as it does in the terminal. A removal
+reports how many tasks it moved and how many of those `workbook next` can claim
+where they landed, and any warning the change carries, such as generated
+guidelines the server did not rewrite, is shown rather than swallowed.
+
+Three things about it are worth knowing before you use it on a busy board.
+A status change is not queued the way a task change is: the panel waits for any
+card change still in flight, sends, and re-draws itself from the answer, because
+rolling a status change back would repaint every column rather than one card.
+It composes each change against the head it read, so a change made from a stale
+panel is refused rather than applied over somebody else's — and the refusal is
+final: the panel shows the statuses as they now stand and asks you to look
+again, because two people renaming the same column mean two different things.
+And the board behind the panel keeps the columns it was opened with; the notice
+above it offers the reload that redraws them, exactly as it does for a change
+another clone made.
+
 ### Statuses a project does not define
 
 A task can hold a status that resolves to nothing this project defines: not a
