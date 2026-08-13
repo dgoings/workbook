@@ -115,7 +115,7 @@ func TestHandlerBoardColumnsHoldAMinimumWidthAndScroll(t *testing.T) {
 // card is still readable at.
 func TestHandlerBoardColumnsGrowBetweenAMinimumAndAMaximum(t *testing.T) {
 	body := boardPage(t)
-	rule := boardRule(t, body)
+	rule := boardRules(t, body)
 	for _, fragment := range []string{
 		// One track per column present, created by the flow rather than counted
 		// into a track list the server would have to keep correct.
@@ -127,21 +127,23 @@ func TestHandlerBoardColumnsGrowBetweenAMinimumAndAMaximum(t *testing.T) {
 		`justify-content: start`,
 	} {
 		if !strings.Contains(rule, fragment) {
-			t.Errorf("the board rule %q does not contain %q", rule, fragment)
+			t.Errorf("the board's rules %q do not contain %q", rule, fragment)
 		}
 	}
+	// Deleting the property and giving it an unbounded value are the same
+	// failure and read the same way: the columns stop nowhere.
 	if !strings.Contains(body, `--board-column-max: 26rem;`) {
-		t.Error("the stylesheet does not define the column maximum")
+		t.Error("the stylesheet does not define a bounded column maximum")
 	}
 	// A track list is how the count got hardcoded, and repeat() is how it would
 	// come back — including the repeat(0, …) a project with no live statuses
 	// would produce, which is not a stylesheet at all.
 	if strings.Contains(rule, "grid-template-columns") || strings.Contains(rule, "repeat(") {
-		t.Errorf("the board rule %q names a track count again", rule)
+		t.Errorf("the board's rules %q name a track count again", rule)
 	}
 	// 1fr grows without limit, which is the absence this fixes.
 	if strings.Contains(rule, "1fr") {
-		t.Errorf("the board rule %q sizes a column with an unbounded 1fr", rule)
+		t.Errorf("the board's rules %q size a column with an unbounded 1fr", rule)
 	}
 }
 
@@ -150,6 +152,12 @@ func TestHandlerBoardColumnsGrowBetweenAMinimumAndAMaximum(t *testing.T) {
 // zero. The last one is the case a track list could not survive: repeat(0, …)
 // is invalid, and a server that stamped the count would have had to special-case
 // it.
+//
+// A count is not the whole of it, though, and this is the sharp edge of taking
+// the track count from the DOM: every direct child of the board is a track, so
+// anything the markup grows there that is not a column is a track holding width
+// the columns wanted, silently. So the assertion is what the children are, not
+// how many of them there are.
 func TestHandlerBoardDrawsOneColumnPerConfiguredStatus(t *testing.T) {
 	for name, vocabulary := range map[string]core.Vocabulary{
 		"default": core.DefaultVocabulary(),
@@ -159,33 +167,114 @@ func TestHandlerBoardDrawsOneColumnPerConfiguredStatus(t *testing.T) {
 		"one":     singleStatusVocabulary(t),
 	} {
 		body := boardPageWith(t, vocabulary)
-		want := len(vocabulary.Definitions())
-		if got := strings.Count(body, `<section class="column">`); got != want {
-			t.Errorf("%s vocabulary rendered %d columns, want %d", name, got, want)
+		children := boardChildren(t, body)
+		if want := len(vocabulary.Definitions()); len(children) != want {
+			t.Errorf("%s vocabulary drew %d board tracks, want %d: %q", name, len(children), want, children)
+		}
+		for index, child := range children {
+			if child != `<section class="column">` {
+				t.Errorf("%s vocabulary drew a board track that is not a column at %d: %q", name, index, child)
+			}
 		}
 		// Whatever the count, the stylesheet is the same one and still names no
 		// number of its own.
-		if strings.Contains(boardRule(t, body), "repeat(") {
+		if strings.Contains(boardRules(t, body), "repeat(") {
 			t.Errorf("%s vocabulary rendered a board rule with a track count", name)
 		}
 	}
 }
 
-// boardRule returns the `.board` declaration block from a rendered page, which
-// is what these tests assert against rather than the whole stylesheet: `repeat(`
-// and `1fr` are ordinary elsewhere on the page and only mean something here.
-func boardRule(t *testing.T, body string) string {
+// boardRules returns every `.board` declaration block on a rendered page joined
+// together, which is what these tests assert against rather than the whole
+// stylesheet: `repeat(` and `1fr` are ordinary elsewhere on the page and only
+// mean something here. All of them rather than the one that sizes the tracks,
+// because the board is styled by more than one rule and which of them a
+// declaration sits in is not something a test should hold still.
+func boardRules(t *testing.T, body string) string {
 	t.Helper()
-	const opening = ".board { display: grid;"
-	start := strings.Index(body, opening)
-	if start < 0 {
+	const selector = ".board {"
+	var rules []string
+	for rest := body; ; {
+		start := strings.Index(rest, selector)
+		if start < 0 {
+			break
+		}
+		rest = rest[start:]
+		end := strings.IndexByte(rest, '}')
+		if end < 0 {
+			t.Fatalf("a .board rule is unterminated: %q", rest)
+		}
+		rules = append(rules, rest[:end+1])
+		rest = rest[end+1:]
+	}
+	if len(rules) == 0 {
 		t.Fatal("the rendered page has no .board rule")
 	}
-	end := strings.Index(body[start:], "}")
-	if end < 0 {
-		t.Fatal("the .board rule is unterminated")
+	return strings.Join(rules, "\n")
+}
+
+// boardChildren returns the opening tag of every direct child of the rendered
+// board element, in document order.
+//
+// It walks the markup rather than counting a substring because a count only
+// sees the elements it was told to look for: a spurious div added to the board
+// would leave the column count right and the track count wrong. Nesting is
+// tracked by <section> alone, which is the element the board's children are, so
+// the header, headings, links and cards inside a column are passed over without
+// the helper needing to know which tags close themselves.
+func boardChildren(t *testing.T, body string) []string {
+	t.Helper()
+	const opening = `<section class="board"`
+	start := strings.Index(body, opening)
+	if start < 0 {
+		t.Fatal("the rendered page has no board element")
 	}
-	return body[start : start+end+1]
+	rest := body[start+len(opening):]
+	tagEnd := strings.IndexByte(rest, '>')
+	if tagEnd < 0 {
+		t.Fatal("the board element's opening tag is unterminated")
+	}
+	rest = rest[tagEnd+1:]
+	children := []string{}
+	depth := 0
+	for {
+		next := strings.IndexByte(rest, '<')
+		if next < 0 {
+			t.Fatal("the board element is never closed")
+		}
+		rest = rest[next:]
+		if strings.HasPrefix(rest, "<!--") {
+			end := strings.Index(rest, "-->")
+			if end < 0 {
+				t.Fatal("a comment inside the board element is unterminated")
+			}
+			rest = rest[end+len("-->"):]
+			continue
+		}
+		if strings.HasPrefix(rest, "</section>") {
+			rest = rest[len("</section>"):]
+			if depth == 0 {
+				return children
+			}
+			depth--
+			continue
+		}
+		end := strings.IndexByte(rest, '>')
+		if end < 0 {
+			t.Fatalf("an element inside the board has an unterminated tag: %q", rest)
+		}
+		tag := rest[:end+1]
+		rest = rest[end+1:]
+		if strings.HasPrefix(tag, "</") {
+			continue
+		}
+		if depth == 0 {
+			children = append(children, tag)
+		}
+		if strings.HasPrefix(tag, "<section") {
+			depth++
+		}
+	}
 }
 
 // boardPageWith renders an empty board for a project with these statuses.

@@ -30,9 +30,10 @@
 
        And the widest. A card is an ID, a title and its labels, so a column that
        keeps taking every pixel a wide monitor offers turns the title into a line
-       nobody's eye tracks: 26rem leaves about 65 characters of title inside the
-       card's padding, which is the top of the measure text is comfortable at.
-       Past that the columns stop and the leftover width stays leftover. */
+       nobody's eye tracks: measured on the page, a 26rem column leaves the title
+       about 53 characters of English inside the card's padding, and fewer where
+       the glyphs are wide, which sits inside the measure text reads comfortably
+       at. Past that the columns stop and the leftover width stays leftover. */
     :root { --board-column-min: 16rem; --board-column-max: 26rem; color-scheme: light; font-family: ui-rounded, "Avenir Next", system-ui, sans-serif; color: #172033; background: #e9eef5; }
     * { box-sizing: border-box; }
     html, body { height: 100%; }
