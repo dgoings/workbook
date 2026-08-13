@@ -26,8 +26,15 @@
        hold this width and the board scrolls sideways once the window cannot
        give every one of them that much. One custom property, because the track
        size and the column's own minimum have to be the same number — they
-       disagreed the last time each carried its own copy. */
-    :root { --board-column-min: 16rem; color-scheme: light; font-family: ui-rounded, "Avenir Next", system-ui, sans-serif; color: #172033; background: #e9eef5; }
+       disagreed the last time each carried its own copy.
+
+       And the widest. A card is an ID, a title and its labels, so a column that
+       keeps taking every pixel a wide monitor offers turns the title into a line
+       nobody's eye tracks: measured on the page, a 26rem column leaves the title
+       about 53 characters of English inside the card's padding, and fewer where
+       the glyphs are wide, which sits inside the measure text reads comfortably
+       at. Past that the columns stop and the leftover width stays leftover. */
+    :root { --board-column-min: 16rem; --board-column-max: 26rem; color-scheme: light; font-family: ui-rounded, "Avenir Next", system-ui, sans-serif; color: #172033; background: #e9eef5; }
     * { box-sizing: border-box; }
     html, body { height: 100%; }
     body { display: flex; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden; margin: 0; min-width: 20rem; background: #e9eef5; }
@@ -63,7 +70,28 @@
     .stale { grid-row: 1; }
     .board { grid-row: 2; }
     .unknown-status { grid-row: 3; }
-    .board { display: grid; grid-template-columns: repeat(6, minmax(var(--board-column-min), 1fr)); gap: .8rem; min-height: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: .25rem; }
+    /* One track per column the server rendered, and the grid counts them itself.
+       The track list used to name six, which was the number of statuses Workbook
+       shipped; a project defines its own now, and the five in the built-in set
+       left a sixth track standing empty and holding the width the five wanted.
+       That is why the columns sat at their minimum until about 1640px when five
+       of them fill 1371px. grid-auto-flow makes the count the DOM's answer
+       rather than a second copy of it, which is the same reason the client reads
+       its statuses off the columns instead of keeping a list: a project with
+       three columns or eight gets three tracks or eight with nothing to keep in
+       step, a poll that re-renders the cards cannot disturb it, and a corrupt
+       ledger that defines no statuses at all draws no tracks rather than the
+       repeat(0, …) that is not a stylesheet.
+
+       minmax grows the tracks without an fr: the track sizing algorithm hands
+       out free space equally until every track reaches its growth limit, so
+       between min×n and max×n the columns widen together, and past max×n they
+       stop and the board is left-aligned in what is left. Left rather than
+       centred because the unknown-status region below and the header above both
+       run the full width — and because a centred grid puts the first column off
+       the left edge when the board is too wide to fit, where no scroll reaches
+       it. Below min×n nothing has grown and the board scrolls, as before. */
+    .board { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(var(--board-column-min), var(--board-column-max)); justify-content: start; gap: .8rem; min-height: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: .25rem; }
     .unknown-status { display: none; margin-top: .8rem; border: 1px solid #e0b483; border-top: 3px solid #b45309; background: #fff6e8; }
     .unknown-status[data-visible="true"] { display: block; }
     .unknown-status__header { padding: .7rem .75rem .1rem; }
