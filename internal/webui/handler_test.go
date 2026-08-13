@@ -4687,21 +4687,18 @@ vocabularyNotice.append(vocabularyReload);
 // renderRoute() that never touched it look like it had revealed it.
 const descriptionToggle = new TestElement("button");
 descriptionToggle.hidden = true;
-// The status administration panel, as the server renders it for a board built
-// with the four vocabulary mutations: a shell and an entry point, both shipped
-// hidden, with the list inside the shell drawn by the client from what the
-// server answers. The roles a status may carry are an attribute on the panel
-// for the reason the columns carry their statuses — the set is the server's,
-// and the script must not hold a copy of it.
-const vocabularyPanel = new TestElement("section");
+// The body of the statuses route, as the server renders it for a board built
+// with the four vocabulary mutations: shipped hidden and outside main, mounted
+// into main by the render for that route, with the list inside it drawn by the
+// client from what the server answers. The roles a status may carry are an
+// attribute on it for the reason the columns carry their statuses — the set is
+// the server's, and the script must not hold a copy of it.
+const vocabularyPanel = new TestElement("div");
 vocabularyPanel.hidden = true;
 vocabularyPanel.dataset.statusTags = boardStatusTags;
-const vocabularyPanelToggle = new TestElement("button");
-vocabularyPanelToggle.hidden = true;
-const vocabularyPanelClose = new TestElement("button");
 const vocabularyPanelStatus = new TestElement("div");
 const vocabularyPanelBody = new TestElement("div");
-vocabularyPanel.append(vocabularyPanelClose, vocabularyPanelStatus, vocabularyPanelBody);
+vocabularyPanel.append(vocabularyPanelStatus, vocabularyPanelBody);
 const documentEventListeners = {};
 	globalThis.document = {
 	  title: "",
@@ -4715,8 +4712,6 @@ const documentEventListeners = {};
     if (selector === "[data-vocabulary-reload]") return vocabularyReload;
     if (selector === "[data-description-toggle]") return descriptionToggle;
     if (selector === "[data-vocabulary-panel]") return vocabularyPanel;
-    if (selector === "[data-vocabulary-panel-toggle]") return vocabularyPanelToggle;
-    if (selector === "[data-vocabulary-panel-close]") return vocabularyPanelClose;
     if (selector === "[data-vocabulary-panel-status]") return vocabularyPanelStatus;
     if (selector === "[data-vocabulary-panel-body]") return vocabularyPanelBody;
     return null;

@@ -60,24 +60,25 @@
     .notice a { color: inherit; font-weight: 750; text-underline-offset: .18em; }
     .notice button { border: 1px solid currentcolor; border-radius: 4px; background: transparent; color: inherit; cursor: pointer; font: inherit; font-size: .8rem; font-weight: 700; padding: .25rem .6rem; }
     .notice button:focus-visible, .notice a:focus-visible { outline: 3px solid #2457d6; outline-offset: 2px; }
-    /* The status administration panel. The body is the viewport-height flex
-       column, and this is one of its items — a sibling of the notices above it
-       and of main below — so it can run out of room rather than out of page: it
-       takes what it needs up to half the viewport and scrolls inside that, and
-       the board underneath is never pushed off screen. It is not a dialog and
-       deliberately does not dim what is behind it — the reader is meant to see
-       the columns they are renaming. */
-    .admin { display: grid; flex: 0 1 auto; gap: .5rem; max-height: 50vh; overflow: auto; padding: .75rem 1.25rem .9rem; border-bottom: 1px solid #d5deea; background: #fff; }
+    /* The body of the statuses route. It is a page rather than a region on the
+       board: it sits inside the route shell every other page uses, which is
+       inside main, so it takes the height its rows and forms need and the page
+       scrolls. The panel it replaced was an item in the viewport-height flex
+       column — a sibling of the notices and of main — and could only have the
+       height the header and the board did not want, which on an ordinary
+       desktop window was a sliver too short to open a form in. Nothing here
+       caps its height for that reason. What lets the shell around it grow is
+       .task-route--admin, which is with the other .task-route rules below,
+       because it only wins where it is written after the one it overrides. */
+    .admin { display: grid; gap: .6rem; padding: 1.15rem; }
     .admin[hidden] { display: none; }
     .admin:focus-visible { outline: 3px solid #2457d6; outline-offset: -3px; }
-    .admin__header { display: flex; align-items: baseline; justify-content: space-between; gap: .75rem; }
-    .admin__title { margin: 0; font-size: 1rem; letter-spacing: -.025em; }
-    .admin__note { max-width: 84ch; margin: 0; color: #56647a; font-size: .76rem; line-height: 1.45; }
+    .admin__note { max-width: 84ch; margin: 0; color: #56647a; font-size: .8rem; line-height: 1.5; }
     .admin__note strong { color: #34425a; }
     .admin__note code { font-size: .72rem; }
     /* A live region, so it stands in the document whatever it holds: one created
        in the same frame as its first message never announces it. It collapses
-       while empty rather than reserving a row, because the panel is opened far
+       while empty rather than reserving a row, because the page is opened far
        less often than a label is added and the rows below it are not something
        the reader is watching for a jump. */
     .admin__status { display: grid; gap: .2rem; font-size: .8rem; }
@@ -85,16 +86,16 @@
     .admin__status p { margin: 0; }
     .admin__status[data-kind="error"] { color: #8f1d1d; }
     .admin__status [data-vocabulary-panel-warning] { color: #7c3b08; }
-    .admin-statuses { display: grid; gap: .3rem; margin: 0; padding: 0; list-style: none; }
-    .admin-status { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .35rem .75rem; padding: .4rem .5rem; border: 1px solid #d5deea; border-radius: 4px; background: #fff; cursor: grab; }
+    .admin-statuses { display: grid; gap: .4rem; margin: 0; padding: 0; list-style: none; }
+    .admin-status { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .45rem .75rem; padding: .6rem .7rem; border: 1px solid #d5deea; border-radius: 4px; background: #fff; cursor: grab; }
     .admin-status:active { cursor: grabbing; }
     .admin-status[data-dragging="true"] { opacity: .5; }
     .admin-status[data-drop-target="true"] { border-color: #2457d6; box-shadow: inset 0 0 0 1px #2457d6; }
-    .admin-status__name { display: flex; flex-wrap: wrap; align-items: baseline; gap: .4rem; min-width: 0; font-size: .84rem; font-weight: 750; }
-    .admin-status__token { color: #526b9b; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .7rem; font-weight: 400; overflow-wrap: anywhere; }
-    .admin-tag { padding: .06rem .3rem; border: 1px solid #b9c6d8; border-radius: 3px; color: #34425a; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .62rem; font-weight: 400; }
-    .admin-status__controls { display: flex; flex-wrap: wrap; gap: .3rem; }
-    .admin-button { border: 1px solid #9eafc5; border-radius: 4px; background: #fff; color: #34425a; cursor: pointer; font: inherit; font-size: .73rem; font-weight: 700; padding: .22rem .5rem; }
+    .admin-status__name { display: flex; flex-wrap: wrap; align-items: baseline; gap: .45rem; min-width: 0; font-size: .9rem; font-weight: 750; }
+    .admin-status__token { color: #526b9b; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .74rem; font-weight: 400; overflow-wrap: anywhere; }
+    .admin-tag { padding: .08rem .32rem; border: 1px solid #b9c6d8; border-radius: 3px; color: #34425a; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .66rem; font-weight: 400; }
+    .admin-status__controls { display: flex; flex-wrap: wrap; gap: .35rem; }
+    .admin-button { border: 1px solid #9eafc5; border-radius: 4px; background: #fff; color: #34425a; cursor: pointer; font: inherit; font-size: .78rem; font-weight: 700; padding: .35rem .65rem; }
     .admin-button:hover:enabled { border-color: #2457d6; color: #2457d6; }
     .admin-button:disabled { cursor: default; opacity: .52; }
     .admin-button--primary { border-color: #173f9e; background: #2457d6; color: #fff; }
@@ -102,18 +103,18 @@
     .admin-button--danger { border-color: #8f1d1d; background: #b42318; color: #fff; }
     .admin-button--danger:hover:enabled { background: #8f1d1d; color: #fff; }
     .admin-button:focus-visible, .admin input:focus-visible, .admin select:focus-visible { outline: 3px solid #2457d6; outline-offset: 1px; }
-    .admin input, .admin select { border: 1px solid #9eafc5; border-radius: 4px; background: #fff; color: #172033; font: inherit; font-size: .78rem; padding: .28rem .4rem; }
+    .admin input, .admin select { border: 1px solid #9eafc5; border-radius: 4px; background: #fff; color: #172033; font: inherit; font-size: .82rem; padding: .4rem .5rem; }
     .admin input:focus, .admin select:focus { border-color: #2457d6; }
-    .admin-form { display: flex; flex-wrap: wrap; align-items: end; gap: .4rem .7rem; grid-column: 1 / -1; margin-top: .1rem; padding-top: .45rem; border-top: 1px dashed #b9c6d8; }
-    .admin-field { display: grid; gap: .15rem; }
-    .admin-field label { color: #34425a; font-size: .7rem; font-weight: 750; }
-    .admin-tags { display: flex; flex-wrap: wrap; align-items: center; gap: .1rem .6rem; margin: 0; padding: 0; border: 0; }
-    .admin-tags legend { padding: 0; color: #34425a; font-size: .7rem; font-weight: 750; }
-    .admin-tag-choice { display: inline-flex; align-items: center; gap: .25rem; color: #34425a; cursor: pointer; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .72rem; }
-    .admin-tag-choice input { width: .95rem; height: .95rem; margin: 0; accent-color: #2457d6; cursor: pointer; padding: 0; }
-    .admin-note { margin: 0; color: #7c3b08; font-size: .72rem; }
-    .admin-add { display: grid; gap: .4rem; margin-top: .5rem; padding: .5rem; border: 1px solid #d5deea; border-radius: 4px; background: #f8faff; }
-    .admin-add__title { margin: 0; font-size: .82rem; }
+    .admin-form { display: flex; flex-wrap: wrap; align-items: end; gap: .55rem .8rem; grid-column: 1 / -1; margin-top: .2rem; padding-top: .6rem; border-top: 1px dashed #b9c6d8; }
+    .admin-field { display: grid; gap: .2rem; }
+    .admin-field label { color: #34425a; font-size: .74rem; font-weight: 750; }
+    .admin-tags { display: flex; flex-wrap: wrap; align-items: center; gap: .1rem .7rem; margin: 0; padding: 0; border: 0; }
+    .admin-tags legend { padding: 0; color: #34425a; font-size: .74rem; font-weight: 750; }
+    .admin-tag-choice { display: inline-flex; align-items: center; gap: .3rem; color: #34425a; cursor: pointer; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .76rem; }
+    .admin-tag-choice input { width: 1rem; height: 1rem; margin: 0; accent-color: #2457d6; cursor: pointer; padding: 0; }
+    .admin-note { margin: 0; color: #7c3b08; font-size: .76rem; }
+    .admin-add { display: grid; gap: .5rem; margin-top: .6rem; padding: .8rem; border: 1px solid #d5deea; border-radius: 4px; background: #f8faff; }
+    .admin-add__title { margin: 0; font-size: .88rem; }
     .admin-add .admin-form { grid-column: auto; margin-top: 0; padding-top: 0; border-top: 0; }
     .stale { display: none; margin: 0 0 1rem; padding: .55rem .7rem; border-left: 3px solid #b45309; background: #fff6e8; color: #7c3b08; font-size: .875rem; }
     .stale[data-visible="true"] { display: block; }
@@ -350,6 +351,13 @@
     .relationship-editor:focus-within .relationship-empty:empty { min-height: 1rem; }
     .task-route--history { height: auto; min-height: 100%; }
     .task-route--history .task-layout { min-height: min(60vh, 34rem); }
+    /* The statuses route, which grows with its list the way the history route
+       does and lets main scroll. Both of these are as specific as .task-route
+       itself, so they only take effect written after it: the same rule text up
+       beside the .admin rules lost to the height: 100% above, and the route's
+       rows spilled out of the card it is drawn in. */
+    .task-route--admin { height: auto; min-height: 100%; }
+    .task-route--admin .task-route__header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .5rem 1rem; }
     .task-history { display: grid; gap: .8rem; padding: 1.15rem; border-top: 1px solid #d5deea; background: #fafbfd; }
     .task-history h3 { margin: 0; font-size: .88rem; }
     .lifecycle { display: flex; flex-wrap: wrap; gap: .3rem 1.1rem; margin: 0; padding: 0; list-style: none; }
@@ -429,7 +437,7 @@
   <a class="skip-link" href="#board">Skip to task board</a>
   <header class="app-header">
     <div><p class="eyebrow">Repository workbench</p><h1>Workbook board</h1></div>
-    <div class="header-links"><a class="header-link" href="/">Board</a><a class="header-link" href="/deleted">Deleted tasks</a><p class="updated" data-updated>Loaded from this checkout</p><button type="button" class="header-link" data-description-toggle hidden>Descriptions: hidden</button><button type="button" class="header-link" data-sync-toggle hidden></button>{{ if .Administrable }}<button type="button" class="header-link" data-vocabulary-panel-toggle aria-expanded="false" aria-controls="vocabulary-panel" hidden>Statuses</button>{{ end }}</div>
+    <div class="header-links"><a class="header-link" href="/">Board</a><a class="header-link" href="/deleted">Deleted tasks</a>{{ if .Administrable }}<a class="header-link" href="/statuses">Statuses</a>{{ end }}<p class="updated" data-updated>Loaded from this checkout</p><button type="button" class="header-link" data-description-toggle hidden>Descriptions: hidden</button><button type="button" class="header-link" data-sync-toggle hidden></button></div>
   </header>
   <!-- What the board has to say to a reader who has moved on: a save that
        already returned, or a refused change whose card the board has since
@@ -453,42 +461,6 @@
       <button type="button" data-vocabulary-reload>Reload the board</button>
     </div>
   </div>
-  {{ if .Administrable }}
-  <!-- Where a project's columns are administered.
-
-       It is a disclosure rather than a dialog: it is an admin affordance beside
-       the reading experience, not a mode the reader is put into, so it takes no
-       focus trap, dims nothing, and the board stays where it is behind it. The
-       entry point is one word in the header chrome, shipped hidden and revealed
-       by the script on the board route, next to the two settings that are also
-       only meaningful there.
-
-       The shell is served and the list inside it is drawn by the client from
-       `GET /api/vocabulary`, because the page's own columns carry only a token
-       and a label — a change has to name the tags, the order, and the ledger
-       head it was composed against, and only that document has them.
-
-       data-status-tags carries the three roles a status may carry, for the same
-       reason the columns carry their statuses: the set is the server's, and a
-       client holding a copy would be a second answer. It is also the one that
-       cannot be spelled in the script at all, since `done` is a tag here and a
-       status name in most projects.
-
-       The panel never rebuilds the board. A change it makes moves the ledger
-       head, the notice above notices, and the reader picks the moment to
-       reload — the same standing machinery a change from another clone raises,
-       and for the same reason: every card node on the board is holding
-       somebody's work in flight. -->
-  <section class="admin" id="vocabulary-panel" data-vocabulary-panel data-status-tags="{{ range $index, $tag := .StatusTags }}{{ if $index }} {{ end }}{{ $tag }}{{ end }}" tabindex="-1" aria-labelledby="vocabulary-panel-title" hidden>
-    <header class="admin__header">
-      <h2 class="admin__title" id="vocabulary-panel-title">Statuses</h2>
-      <button type="button" class="admin-button" data-vocabulary-panel-close>Close</button>
-    </header>
-    <p class="admin__note">These are this project's columns, in board order. Renaming one forwards the old name, so tasks written by a clone that has not fetched the change still land in the right column, and removing one names where its tasks belong. A tag says what a column means rather than what it is called: <strong>default</strong> is where a new task lands and exactly one column carries it, <strong>next</strong> marks the columns <code>workbook next</code> claims from, and <strong>done</strong> marks the ones that satisfy a dependency. Drag a row, or use its Up and Down controls, to reorder the columns. The board behind this panel keeps the columns it was opened with until you reload it.</p>
-    <div class="admin__status" data-vocabulary-panel-status role="status" aria-live="polite"></div>
-    <div data-vocabulary-panel-body></div>
-  </section>
-  {{ end }}
   <main id="board" tabindex="-1">
     <!-- data-default-status is where a new task lands, and it is the server's
          answer rather than the client's: it is the status this project tagged
@@ -550,6 +522,51 @@
       </section>
     </div>
   </main>
+  {{ if .Administrable }}
+  <!-- Where a project's columns are administered: the body of the /statuses
+       route, served with the page and mounted into main by the render for that
+       route, exactly as a task's own page is drawn into it.
+
+       It is a page rather than a region on the board. It was a disclosure in the
+       board's chrome first, and on a real desktop viewport the header and the
+       board left it a sliver too short to use: it shared the viewport-height
+       flex column with them and could only have what they did not want. A page
+       has the room its forms need and scrolls with main, and the board it
+       administers is one link away.
+
+       It is served here rather than built by the script for the same reason the
+       columns are served: what it says about the tags is the server's to say.
+       `done` is a tag here and a status name in most projects, so a script that
+       spelled either would be holding a second copy of a set that has one owner.
+       data-status-tags carries the roles for the forms, and this element's
+       presence is the whole of the client's capability gate — a board built
+       without the four vocabulary mutations serves none of this, its header
+       offers no Statuses link, and the route answers as a page that does not
+       exist on both sides.
+
+       The list inside it is the client's, drawn from `GET /api/vocabulary` on
+       every entry to the route, because the page's own columns carry only a
+       token and a label — a change has to name the tags, the order, and the
+       ledger head it was composed against, and only that document has them.
+
+       Nothing here rebuilds the board. A change moves the ledger head, the
+       standing notice above main notices, and the reader who navigates back
+       finds the columns they left and the offer to reload them — the same
+       machinery a change from another clone raises, and for the same reason:
+       every card node on the board is holding somebody's work in flight. -->
+  <!-- It is focusable and named because a rebuild parks focus on it: every
+       control in the list is dropped and rebuilt by each answer, and the one the
+       reader pressed is usually among them, so focus is caught here rather than
+       dropped on the body. A tabindex="-1" div is nameless to a screen reader —
+       a generic role takes no name at all — so it carries the role that can hold
+       one and points at the heading the route draws above it, which is what the
+       reader is being put back into. -->
+  <div class="admin" data-vocabulary-panel data-status-tags="{{ range $index, $tag := .StatusTags }}{{ if $index }} {{ end }}{{ $tag }}{{ end }}" role="group" aria-labelledby="statuses-title" tabindex="-1" hidden>
+    <p class="admin__note">These are this project's columns, in board order. Renaming one forwards the old name, so tasks written by a clone that has not fetched the change still land in the right column, and removing one names where its tasks belong. A tag says what a column means rather than what it is called: <strong>default</strong> is where a new task lands and exactly one column carries it, <strong>next</strong> marks the columns <code>workbook next</code> claims from, and <strong>done</strong> marks the ones that satisfy a dependency. Drag a row, or use its Up and Down controls, to reorder the columns. The board keeps the columns it was opened with until you reload it.</p>
+    <div class="admin__status" data-vocabulary-panel-status role="status" aria-live="polite"></div>
+    <div data-vocabulary-panel-body></div>
+  </div>
+  {{ end }}
   <script>
     (() => {
       const priorityOrder = new Map([["high", 0], ["medium", 1], ["low", 2]]);
@@ -593,14 +610,14 @@
       // offered instead of taken.
       const vocabularyNotice = document.querySelector("[data-vocabulary-notice]");
       const vocabularyReload = document.querySelector("[data-vocabulary-reload]");
-      // The status administration panel and its parts. Every one of them is
+      // The body of the statuses route and its parts, served with the page and
+      // mounted into main by the render for that route. Every one of them is
       // absent on a board built without the four vocabulary mutations, which is
-      // why each is asked for separately and everything below is guarded: the
-      // page for such a board offers no entry point, and the script must not
-      // depend on one being there.
+      // why each is asked for separately and everything below is guarded: such a
+      // page has no statuses route at all — the server answers the address with
+      // a 404 and route() below answers it as a page that does not exist — and
+      // the script must not depend on markup it was not served.
       const vocabularyPanel = document.querySelector("[data-vocabulary-panel]");
-      const vocabularyPanelToggle = document.querySelector("[data-vocabulary-panel-toggle]");
-      const vocabularyPanelClose = document.querySelector("[data-vocabulary-panel-close]");
       const vocabularyPanelBody = document.querySelector("[data-vocabulary-panel-body]");
       const vocabularyPanelStatus = document.querySelector("[data-vocabulary-panel-status]");
       // The configuration ledger tip these columns were built from. The server
@@ -966,6 +983,13 @@
       function route(url = new URL(window.location.href)) {
         if (url.pathname === "/") return { view: "board" };
 		if (url.pathname === "/deleted") return { view: "deleted" };
+        // A board built without the four vocabulary mutations was served none of
+        // the statuses page, so this address is not a route on it. The server
+        // answers it with a 404 for the same reason; a client that drew the
+        // route anyway would be offering controls the page has no markup for.
+        if (url.pathname === "/statuses") {
+          return vocabularyPanel ? { view: "statuses" } : { view: "unknown" };
+        }
         if (url.pathname === "/tasks/new") {
           const requestedStatus = url.searchParams.get("status");
           return { view: "new", status: statuses.has(requestedStatus) ? requestedStatus : defaultStatus };
@@ -3202,23 +3226,26 @@
       // that offers the statuses, and the region holding every task whose
       // status suddenly matches no column. Repainting all of that to take back
       // a change is worse than the round trip the queue would have hidden. So
-      // the panel disables its controls, sends, and re-renders itself from the
+      // the page disables its controls, sends, and re-renders itself from the
       // answer.
       //
       // Two rules follow from being outside the queue rather than in it.
       //
       // The change waits for the queue to be empty. A pending intent can be
       // carrying the very status this change retires, and it was composed
-      // against the columns on screen; sending the status change past it would
-      // race a task write the reader has already made against a vocabulary that
-      // no longer has somewhere to put it. The control says it is waiting and
+      // against the columns the reader was looking at; sending the status change
+      // past it would race a task write the reader has already made against a
+      // vocabulary that no longer has somewhere to put it. The queue is not
+      // emptied by walking to another route — an intent started on the board
+      // outlives the navigation, as it must — so this is a page that can open
+      // over a queue that is still draining. The control says it is waiting and
       // then proceeds, which is honest about a delay nobody would otherwise be
       // able to explain.
       //
       // A stale write is terminal. There is no re-base here and no retry: a
       // status is somebody's decision about how the project works, and two
       // people renaming the same column mean two different things. The refusal
-      // carries the statuses as they now stand, so the panel adopts them and
+      // carries the statuses as they now stand, so the page adopts them and
       // asks the reader to look again.
       const statusTagNames = vocabularyPanel
         ? (vocabularyPanel.dataset.statusTags || "").split(" ").filter(Boolean)
@@ -3242,7 +3269,16 @@
       // holds them.
       let panelControls = [];
       let panelStatusRows = [];
-      // What the panel has to say about the last thing it did: one sentence,
+      // What a change in flight says about itself: that it is behind the board's
+      // own writes, or that it has gone and is waiting for an answer. One
+      // constant each, because the render that draws this page has to be able to
+      // say the same thing a change already said — a reader who leaves mid-change
+      // and comes back is met by a list whose every control is disabled, and a
+      // page that explained itself once and cannot explain itself again is a
+      // dead grey page with nothing on it to read.
+      const panelWaitingMessage = "Finishing the changes already in flight on the board before this one.";
+      const panelSendingMessage = "Sending a change to this project's statuses.";
+      // What the page has to say about the last thing it did: one sentence,
       // and one line per warning the server attached. Warnings are shown rather
       // than folded into the sentence — `docs-refresh-incomplete` and
       // `auto-sync-incomplete` are about the repository rather than about the
@@ -3294,9 +3330,13 @@
       // forwards one — so a client that folded a description of one change into
       // its own model would disagree with the server about the rest.
       //
-      // The head it adopts is also the news the board needs. The columns behind
-      // this panel were built from an older one, and the standing notice is
-      // what says so; the panel does not rebuild a single column itself.
+      // The head it adopts is also the news the board needs. The columns the
+      // reader left behind were built from an older one, and the standing notice
+      // — which sits outside main and so is readable from this route as well as
+      // from the board — is what says so. Nothing here rebuilds a column, and
+      // the render that returns to the board re-attaches the very node it left,
+      // so the reader comes back to the board they had and the offer to reload
+      // it rather than to a repaint they did not ask for.
       function adoptVocabulary(vocabulary) {
         panelVocabulary = vocabulary;
         panelHead = typeof vocabulary.head === "string" ? vocabulary.head : "";
@@ -3340,7 +3380,7 @@
           // change retires, so the change waits for the board to be settled and
           // says that it is waiting.
           if (pendingIntents.size > 0) {
-            panelReport("", "Finishing the changes already in flight on the board before this one.");
+            panelReport("", panelWaitingMessage);
             await settledIntents();
           }
           const response = await fetch(path, {
@@ -3385,7 +3425,7 @@
           // is already taken, a removal with nowhere to send its tasks — so it
           // is quoted exactly as the command would have printed it.
           panelReport("error", stale
-            ? "This project's statuses changed in another clone, so this change was not applied. The panel now shows them as they stand; review them and make the change again."
+            ? "This project's statuses changed in another clone, so this change was not applied. This page now shows them as they stand; review them and make the change again."
             : payload.error && payload.error.message || "This status change was not applied.");
           return;
         }
@@ -3816,32 +3856,74 @@
         if (!inside || !vocabularyPanel || vocabularyPanel.contains(document.activeElement)) return;
         if (typeof vocabularyPanel.focus === "function") vocabularyPanel.focus();
       }
-      function openVocabularyPanel() {
-        if (!vocabularyPanel) return;
+      // The statuses page, in the shell every other route is drawn in: a header
+      // that names it and offers the way back to the board, and under it the
+      // body the server rendered.
+      //
+      // The body is moved rather than copied. It is one element with one
+      // identity for the length of the visit, which is what lets the list, the
+      // live region and the focus the rebuilds park on it survive a re-render —
+      // and what a change that answers after the reader has left writes into
+      // harmlessly, off the document, instead of into a second copy of a page
+      // nobody is looking at.
+      function statusesView() {
+        const section = document.createElement("section");
+        section.className = "task-route task-route--admin";
+        section.setAttribute("aria-labelledby", "statuses-title");
+        const header = document.createElement("header");
+        header.className = "task-route__header";
+        const naming = document.createElement("div");
+        const eyebrow = document.createElement("p");
+        eyebrow.className = "eyebrow";
+        text(eyebrow, "Project configuration");
+        const heading = document.createElement("h2");
+        heading.id = "statuses-title";
+        text(heading, "Statuses");
+        naming.append(eyebrow, heading);
+        // The way back, where a task's page keeps it: a link to the board, in
+        // the same words and the same class, rather than a control that only
+        // this page would have.
+        const back = document.createElement("a");
+        back.className = "board-link";
+        back.href = "/";
+        text(back, "Back");
+        header.append(naming, back);
         vocabularyPanel.hidden = false;
-        if (vocabularyPanelToggle) vocabularyPanelToggle.setAttribute("aria-expanded", "true");
-        if (typeof vocabularyPanel.focus === "function") vocabularyPanel.focus();
-        // Read every time it is opened rather than once. The panel is opened
-        // seldom and a clone can have changed the statuses since the last look,
-        // and a change composed against what this page happens to remember is
-        // the stale write the panel would rather not have to report.
-        readVocabulary();
-      }
-      function closeVocabularyPanel({ restoreFocus = true } = {}) {
-        if (!vocabularyPanel) return;
-        vocabularyPanel.hidden = true;
-        panelForm = null;
-        if (vocabularyPanelToggle) vocabularyPanelToggle.setAttribute("aria-expanded", "false");
-        if (restoreFocus && vocabularyPanelToggle && !vocabularyPanelToggle.hidden &&
-            typeof vocabularyPanelToggle.focus === "function") {
-          vocabularyPanelToggle.focus();
+        section.append(header, vocabularyPanel);
+        // A change the reader left in flight is still in flight, and the render
+        // below will draw its list with every control disabled. Leaving cleared
+        // what the last visit had to say, so the reason is said again here
+        // rather than leaving the reader in front of a page that refuses every
+        // control and explains none of it.
+        if (panelBusy) {
+          panelReport("", pendingIntents.size > 0 ? panelWaitingMessage : panelSendingMessage);
         }
+        return section;
       }
-      if (vocabularyPanelToggle) vocabularyPanelToggle.addEventListener("click", () => {
-        if (vocabularyPanel && vocabularyPanel.hidden) openVocabularyPanel();
-        else closeVocabularyPanel();
-      });
-      if (vocabularyPanelClose) vocabularyPanelClose.addEventListener("click", () => closeVocabularyPanel());
+      // Leaving the statuses route. The body goes back out of the document with
+      // the render that replaces it, and what it was drawing goes with it: the
+      // form the reader had open, and the statuses themselves, because the next
+      // visit reads them again rather than drawing a list that may be minutes
+      // old. A change composed against what this page happens to remember is the
+      // stale write it would rather not have to report.
+      //
+      // A change still in flight is deliberately not cancelled. It finishes,
+      // hands its head to noteVocabularyChange for the notice, and renders into
+      // a body that is no longer in the document.
+      function leaveStatusesRoute() {
+        if (!vocabularyPanel || vocabularyPanel.hidden) return;
+        vocabularyPanel.hidden = true;
+        vocabularyPanel.remove();
+        panelForm = null;
+        panelVocabulary = null;
+        // What the last visit had to say goes with it. A sentence about a change
+        // the reader made, or a refusal they have already dealt with, would
+        // otherwise be the first thing on the page the next time they walk here,
+        // over a list read fresh from the server.
+        vocabularyPanelBody.replaceChildren();
+        vocabularyPanelStatus.replaceChildren();
+        vocabularyPanelStatus.dataset.kind = "";
+      }
       // A refused change is reported on the card it concerns, which is both
       // where the reader is looking and somewhere the report can stay.
       //
@@ -4170,20 +4252,38 @@
         // runs this script offers no setting rather than a dead one that lies
         // about the state of a board it can no longer change.
         if (descriptionToggle) descriptionToggle.hidden = current.view !== "board";
-        // The status panel administers the columns, and the columns are the
-        // board, so it travels with the route the way the description setting
-        // does. Leaving the board closes it rather than leaving it standing over
-        // a task's page — and closes it without taking the caret, because the
-        // reader is already on their way somewhere and the control it would be
-        // handed to is about to be hidden.
-        if (vocabularyPanelToggle) vocabularyPanelToggle.hidden = current.view !== "board";
-        if (current.view !== "board" && vocabularyPanel && !vocabularyPanel.hidden) {
-          closeVocabularyPanel({ restoreFocus: false });
-        }
+        // The statuses page's body is a served element rather than a built one,
+        // so leaving that route has to put it away — the render below would drop
+        // it from the document either way, and what it was drawing has to go
+        // with it.
+        if (current.view !== "statuses") leaveStatusesRoute();
         if (current.view === "board") {
           document.title = "Workbook board";
+          // The board is re-attached rather than rebuilt, which is what makes
+          // coming back from the statuses page cost nothing: every card node the
+          // reader left is the node they return to, holding whatever it was
+          // holding. The columns are the ones this page was served with even
+          // when the statuses have moved on since — the standing notice above
+          // says so and offers the reload, exactly as it does for a change
+          // another clone made.
           if (main.firstElementChild !== boardView) main.replaceChildren(boardView);
           focusCreatedCard();
+          return;
+        }
+        if (current.view === "statuses") {
+          document.title = "Statuses · Workbook";
+          // Mounted once per visit, the way the board is re-attached rather than
+          // rebuilt: this render runs again for the same route when the first
+          // task refresh lands, and a reader who had a form open on a hard load
+          // would otherwise watch it disappear a moment later.
+          if (!main.contains(vocabularyPanel)) {
+            main.replaceChildren(statusesView());
+            // Read on entry rather than once. This page is visited seldom and a
+            // clone can have changed the statuses since the last look, and a
+            // change composed against what this client happens to remember is
+            // the stale write it would rather not have to report.
+            readVocabulary();
+          }
           return;
         }
         if (current.view === "unknown") {
