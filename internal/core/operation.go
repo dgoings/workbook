@@ -34,6 +34,16 @@ const (
 // Raising this constant is the last step of shipping a new operation type, not
 // the first: the build has to be able to fold generation N before it may claim
 // to.
+//
+// COUPLING. Anything that caches a verdict about a history has to record this
+// value alongside it, because a verdict is a property of the history and of the
+// build that read it, not of the history alone. `workbook validate` is the case
+// that exists today: it stores its result per task head, and without the
+// generation in the cache key an upgrade that raises this constant leaves every
+// newer-writer verdict standing — the command keeps demanding an upgrade that
+// has already happened, from cache, while the mutations it refused now succeed.
+// See historyvalidation.readerGeneration. Any future cache of a fold's outcome
+// owes the same.
 const SupportedFormatGeneration = 0
 
 type Actor struct {
