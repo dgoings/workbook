@@ -656,16 +656,23 @@ func taskDependencyPathIDs(path string) (string, string, bool) {
 }
 
 // vocabularyStatusPathName reads the status one of the per-status routes
-// addresses, the way the task routes read a task ID: it is what answers the
-// method question for a path the mux has not matched yet, and what a request
-// that arrived without the mux's pattern variables falls back to.
+// addresses: it is what answers the method question for a path the mux has not
+// matched yet, and what a request that arrived without the mux's pattern
+// variables falls back to.
+//
+// It asks only whether the path addresses one status, and nothing about whether
+// that status is a status. It cannot usefully: the mux hands the routes their
+// own decoded pattern value, so a check made only here would be a check most
+// requests never pass through. What every status name goes through instead is
+// core.ValidateStatusToken, at the planner, on both surfaces — which is where a
+// name that is not a token gets an answer that says so.
 func vocabularyStatusPathName(path string) string {
 	const prefix = "/api/vocabulary/statuses/"
 	if !strings.HasPrefix(path, prefix) {
 		return ""
 	}
 	status := strings.TrimPrefix(path, prefix)
-	if status == "" || status == "." || status == ".." || strings.Contains(status, "/") {
+	if status == "" || strings.Contains(status, "/") {
 		return ""
 	}
 	return status

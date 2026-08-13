@@ -110,10 +110,13 @@ func (board *boardVocabulary) reorder(
 //     stale write that nothing was actually wrong with. A trustworthy watcher
 //     answering means the tip is already current within its staleness window,
 //     so the round trip is skipped; that is the CLI's own rule.
-//   - The head the client named must be the head that fetch settled on, and a
+//   - The head the client named must be the head the write lands on, and a
 //     mismatch is refused rather than resolved. Nothing here rebases or merges:
 //     two people renaming the same column mean two different things, and a
 //     server that applied both would invent a third that neither of them chose.
+//     The head is checked here and again where it counts — WriteConfigOperationOnto
+//     hands it to the ref transaction — so a change landing while this one is
+//     being authored is refused rather than silently accepted.
 //   - It regenerates no documentation. The verbs rewrite the generated
 //     guidelines because a person ran them in a working tree they were looking
 //     at; this is a server that may be answering while somebody rebases the
@@ -136,6 +139,8 @@ func (board *boardVocabulary) apply(
 	if err != nil {
 		return webui.VocabularyMutation{}, err
 	}
+	// Cheap and early, so a change nobody could land does not first read the
+	// project's tasks and author a plan. The enforcement is at the write.
 	if state.Head != expectedHead {
 		return webui.VocabularyMutation{}, staleVocabularyWrite(expectedHead)
 	}
@@ -148,10 +153,20 @@ func (board *boardVocabulary) apply(
 		return webui.VocabularyMutation{}, err
 	}
 
-	written, err := board.repository.WriteConfigOperation(
-		ctx, board.config, core.CryptoULIDSource{}, plan.operations, configCommitSubject(plan))
+	// The head travels all the way to the ref transaction. The comparison above
+	// is what saves the work of authoring a change that cannot land; this is
+	// what makes the promise, because between that read and this write is
+	// exactly where a teammate's `workbook status rename` fits.
+	written, err := board.repository.WriteConfigOperationOnto(
+		ctx, board.config, core.CryptoULIDSource{}, plan.operations, configCommitSubject(plan), expectedHead)
 	if err != nil {
-		return webui.VocabularyMutation{}, statusWriteError(err)
+		if core.CategoryOf(err) == core.CategoryStaleWrite {
+			// Whether the ledger moved while this change was being composed or
+			// while it was being written, the reader's situation is the same one
+			// and reads the same way.
+			return webui.VocabularyMutation{}, staleVocabularyWrite(expectedHead)
+		}
+		return webui.VocabularyMutation{}, err
 	}
 	after := written.Vocabulary()
 	return webui.VocabularyMutation{

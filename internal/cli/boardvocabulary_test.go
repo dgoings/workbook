@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/dgoings/workbook/internal/agentdocs"
 	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/gitstore"
 	"github.com/dgoings/workbook/internal/webui"
 )
 
@@ -20,8 +22,14 @@ import (
 // The handler-level tests in internal/webui prove the envelopes; these prove the
 // thing that matters most about this feature — that the board is a second
 // surface over the status verb family rather than a second implementation of it.
-// Every refusal below is asserted as the sentence `workbook status` produces,
-// and the shared ledger is read back through the CLI.
+// The refusals below are asserted as whole sentences, and the shared ledger is
+// read back through the CLI.
+//
+// Some tests drive boardVocabulary directly rather than through a listening
+// board. Two of the decisions this surface makes are about a window a request
+// cannot be held open across — the fetch before authoring, and the head the
+// write lands on — and reaching them through HTTP would mean asserting a timing
+// rather than a rule.
 
 // A rename through the board is a rename: the CLI sees it, the old value
 // forwards to the new one, and the ledger records the pack `status rename`
@@ -219,10 +227,17 @@ func TestBoardReordersEveryColumnInOneCommit(t *testing.T) {
 	}
 }
 
-// Every refusal the board gives is the refusal the verb gives, because both ask
-// the same function. The messages below are quoted from the CLI's own tests, and
-// a divergence in either surface fails here.
-func TestBoardRefusesStatusChangesInTheCLIsWords(t *testing.T) {
+// What the board refuses, and in whose words.
+//
+// The table has two halves, and the split is the honest part of it. The first
+// half is the vocabulary's own rules: those sentences come out of the status
+// verb family and core, this surface wrote none of them, and a divergence
+// between the two surfaces fails here. The second half is this surface's own —
+// refusals about the shape of a request, which a verb states in terms of flags
+// and an HTTP route cannot. Those sentences are authored by the board; they are
+// asserted whole for the same reason, so that changing one is a decision rather
+// than a slip.
+func TestBoardRefusesStatusChanges(t *testing.T) {
 	repository := initializedRepository(t)
 	addr := startServeBoard(t, repository)
 	head := boardVocabularyDocument(t, addr).Head
@@ -312,6 +327,11 @@ func TestBoardRefusesStatusChangesInTheCLIsWords(t *testing.T) {
 			wantStatus: http.StatusNotFound,
 			wantError:  `no status "nowhere" in this project; the statuses are: backlog, ready, in-progress, in-review, done`,
 		},
+		// From here down the sentences are this surface's own: they are about
+		// the request rather than about the vocabulary, and a message naming
+		// --into or --before would be wrong in an HTTP error. Three of them
+		// borrow the CLI's list of this project's statuses, through the same
+		// statusNameList the verbs use.
 		{
 			name: "a change with no head", method: http.MethodPatch, path: "/api/vocabulary/statuses/ready",
 			body:       `{"label":"Next Up"}`,
@@ -748,6 +768,218 @@ func TestBoardVocabularyRoutesEnforceTheirMethods(t *testing.T) {
 			t.Fatalf("%s %s Allow = %q, want %q", test.wrong, test.path, got, test.allow)
 		}
 	}
+}
+
+// The head a change names is the head it lands on, and the check that says so
+// is at the write rather than beside it.
+//
+// The window this closes is the one a board actually has: the panel's change is
+// read, authored and written over several Git processes, and a teammate's
+// `workbook status` fits between any two of them. A check made only against an
+// earlier read would let such a write through — recording a rename against
+// statuses nobody composed it against, and telling neither author. The plan
+// builder below is that window, held open until an interloping CLI change has
+// landed.
+func TestBoardRefusesAChangeTheLedgerMovedUnderneath(t *testing.T) {
+	repository := initializedRepository(t)
+	ctx := context.Background()
+	board := openBoardVocabulary(t, ctx, repository)
+	state, err := board.repository.LoadVocabularyState(ctx, board.config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	interloped := false
+	_, err = board.apply(ctx, state.Head, func(scope statusScope, vocabulary core.Vocabulary) (statusPlan, error) {
+		// Somebody else records a status change while this one is being
+		// composed. It goes through the CLI, in another process's shape, so
+		// nothing about this test depends on the two sharing a handle.
+		if !interloped {
+			interloped = true
+			if code, _, stderr := run(t, repository, "status", "add", "icebox", "--no-sync"); code != 0 {
+				t.Fatalf("interloping status add = code %d; stderr = %q", code, stderr)
+			}
+		}
+		return planStatusRename(ctx, scope, vocabulary, "in-review", "qa", "")
+	})
+	if err == nil {
+		t.Fatal("a change composed against a superseded ledger was recorded")
+	}
+	if core.CategoryOf(err) != core.CategoryStaleWrite {
+		t.Fatalf("error category = %q, want %q; error = %v", core.CategoryOf(err), core.CategoryStaleWrite, err)
+	}
+
+	// Nothing of the refused change reached the ledger: the interloper's commit
+	// is the tip, and the rename it was composed against never happened.
+	after, err := board.repository.LoadVocabularyState(ctx, board.config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Vocabulary.Has("qa") {
+		t.Fatal("the refused rename was recorded anyway")
+	}
+	if !after.Vocabulary.Has("in-review") || !after.Vocabulary.Has("icebox") {
+		t.Fatalf("statuses = %s, want the interloper's change and nothing else",
+			statusNames(after.Vocabulary.Document().Statuses))
+	}
+	if code, _, stderr := run(t, repository, "validate"); code != 0 {
+		t.Fatalf("validate code = %d after the refusal; stderr = %q", code, stderr)
+	}
+	// And the same change against the head that is actually there is recorded,
+	// so what was refused was the staleness rather than the change.
+	mutation, err := board.apply(ctx, after.Head, func(scope statusScope, vocabulary core.Vocabulary) (statusPlan, error) {
+		return planStatusRename(ctx, scope, vocabulary, "in-review", "qa", "")
+	})
+	if err != nil {
+		t.Fatalf("the recomposed change was refused too: %v", err)
+	}
+	if !mutation.State.Vocabulary.Has("qa") {
+		t.Fatal("the recomposed change did not record the rename")
+	}
+}
+
+// A change composed against origin's ledger lands, because the board fetches
+// before it authors.
+//
+// Without that fetch this clone would compare the head the client named against
+// a tip it had not yet been told about, and refuse a change nothing was actually
+// wrong with — the avoidable 409 the fetch exists to prevent. Nothing about the
+// refusal path changes: what the fetch settles on is what the write has to land
+// on.
+func TestBoardFetchesBeforeItAuthorsAChange(t *testing.T) {
+	first, second := cliSyncRepositories(t)
+	if code, _, stderr := run(t, second, "sync"); code != 0 {
+		t.Fatalf("second clone sync code = %d, want 0; stderr = %q", code, stderr)
+	}
+
+	// The first clone changes a status and publishes it. The second clone is a
+	// board somebody has just refreshed against origin, so the head their panel
+	// holds is origin's rather than this clone's.
+	if code, _, stderr := run(t, first, "status", "add", "icebox"); code != 0 {
+		t.Fatalf("status add = code %d; stderr = %q", code, stderr)
+	}
+	published := cliGitOutput(t, first, "rev-parse", "refs/workbook/config")
+
+	ctx := context.Background()
+	board := openBoardVocabulary(t, ctx, second)
+	before, err := board.repository.LoadVocabularyState(ctx, board.config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Head == published {
+		t.Fatal("the second clone already holds origin's ledger, so the fetch cannot be what makes this work")
+	}
+
+	mutation, err := board.apply(ctx, published, func(scope statusScope, vocabulary core.Vocabulary) (statusPlan, error) {
+		// The vocabulary authored against is the fetched one, which is the other
+		// half of what the fetch is for: a change can name a status only origin
+		// knows about.
+		if !vocabulary.Has("icebox") {
+			return statusPlan{}, core.Errorf(core.CategoryValidation,
+				"the change was authored against this clone's older statuses: %s", statusNameList(vocabulary))
+		}
+		return planStatusRelabel(ctx, scope, vocabulary, "icebox", "Cold Storage")
+	})
+	if err != nil {
+		t.Fatalf("a change composed against origin's head was refused: %v", err)
+	}
+	if got := mutation.State.Vocabulary.Label("icebox"); got != "Cold Storage" {
+		t.Fatalf("icebox label = %q, want the change to have been recorded", got)
+	}
+}
+
+// Origin refusing the configuration ledger is news, and publication reports it
+// through the result rather than through an error — so a board that only read
+// the error would tell a reader their column change was published when origin
+// never took it.
+func TestBoardWarnsWhenOriginRefusesTheConfigurationLedger(t *testing.T) {
+	bare, seed, _ := originAdoptedAfterClone(t)
+	if code, _, stderr := run(t, seed, "setup"); code != 0 {
+		t.Fatalf("setup code = %d, want 0; stderr = %q", code, stderr)
+	}
+	// Setup published the genesis before the policy arrived, which is the
+	// ordinary way a project meets one: the ledger origin holds is the tip this
+	// change must fail to move.
+	hook := "#!/bin/sh\nwhile read old new ref; do\n" +
+		"  if [ \"$ref\" = \"refs/workbook/config\" ]; then\n" +
+		"    echo 'configuration refs are not accepted here' >&2\n    exit 1\n  fi\ndone\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(bare, "hooks", "pre-receive"), []byte(hook), 0o755); err != nil {
+		t.Fatalf("write pre-receive hook: %v", err)
+	}
+	publishedBefore := cliGitOutput(t, bare, "rev-parse", "refs/workbook/config")
+
+	ctx := context.Background()
+	board := openBoardVocabulary(t, ctx, seed)
+	// Inline, because a board handing the change to a watcher is reporting what
+	// the watcher will do rather than what origin said.
+	board.publisher.inline.Store(true)
+	state, err := board.repository.LoadVocabularyState(ctx, board.config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutation, err := board.apply(ctx, state.Head, func(scope statusScope, vocabulary core.Vocabulary) (statusPlan, error) {
+		return planStatusAdd(ctx, scope, vocabulary, statusAddition{Status: "icebox"})
+	})
+	if err != nil {
+		t.Fatalf("the change was refused rather than recorded: %v", err)
+	}
+	if !mutation.State.Vocabulary.Has("icebox") {
+		t.Fatal("the change was not recorded locally")
+	}
+	warned := false
+	for _, warning := range mutation.Warnings {
+		if warning.Code != core.WarningAutoSync {
+			continue
+		}
+		if strings.Contains(warning.Message, "could not publish refs/workbook/config to origin") &&
+			strings.Contains(warning.Message, "configuration refs are not accepted here") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Fatalf("warnings = %#v, want the refusal origin reported", mutation.Warnings)
+	}
+	// The carve-out is unchanged: the change is durable here, and origin simply
+	// does not have it — which is exactly the state the warning describes and
+	// the state a silent success would have hidden.
+	if got := cliGitOutput(t, bare, "rev-parse", "refs/workbook/config"); got != publishedBefore {
+		t.Fatalf("origin's ledger moved to %q past the hook, so nothing was refused", got)
+	}
+	local, err := board.repository.LoadVocabularyState(ctx, board.config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if local.Head == publishedBefore {
+		t.Fatal("the local ledger did not move, so this test refused nothing")
+	}
+}
+
+// openBoardVocabulary builds the board's status administration over a real
+// repository, the way runServe does.
+func openBoardVocabulary(t *testing.T, ctx context.Context, repository string) *boardVocabulary {
+	t.Helper()
+	service, store, err := openBoardServiceParts(ctx, repository)
+	if err != nil {
+		t.Fatalf("open the board's service: %v", err)
+	}
+	return &boardVocabulary{
+		repository: store,
+		config:     service.Config,
+		publisher:  &boardPublisher{repository: store, config: service.Config},
+		service: func(vocabulary core.Vocabulary) core.Service {
+			reader := service
+			reader.Vocabulary = vocabulary
+			return reader
+		},
+	}
+}
+
+func openBoardServiceParts(ctx context.Context, repository string) (core.Service, *gitstore.Repository, error) {
+	service, store, _, err := openServiceParts(ctx, repository, io.Discard)
+	if err != nil {
+		return core.Service{}, nil, err
+	}
+	return service, store, nil
 }
 
 // boardVocabularyMutation performs one vocabulary change and returns the
