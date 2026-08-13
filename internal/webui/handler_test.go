@@ -181,11 +181,11 @@ func TestHandlerDeletesRestoresAndListsTombstonedTasks(t *testing.T) {
 		Update:       unexpectedTaskUpdate(t),
 		UpdateStatus: unexpectedStatusUpdate(t),
 		Position:     unexpectedTaskPosition(t),
-		Delete: func(_ context.Context, id string) (core.MutationResult, error) {
+		Delete: func(_ context.Context, id string, _ core.DeleteInput) (core.MutationResult, error) {
 			deletedID = id
 			return core.MutationResult{Task: deleted}, nil
 		},
-		Restore: func(_ context.Context, id string) (core.MutationResult, error) {
+		Restore: func(_ context.Context, id string, _ core.RestoreInput) (core.MutationResult, error) {
 			restoredID = id
 			deleted.Deleted = false
 			return core.MutationResult{Task: deleted}, nil

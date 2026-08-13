@@ -447,10 +447,11 @@ var commandSchemas = map[string]commandMetadata{
 	},
 	"restore": {
 		Name:        "restore",
-		Synopsis:    "workbook restore <id-or-prefix> [--json]",
-		Description: "Restore a tombstoned task.",
+		Synopsis:    "workbook restore <id-or-prefix> [--into <status>] [--json]",
+		Description: "Restore a tombstoned task.\n\nWith --into, the task comes back in the status named rather than the one it was\ndeleted from, recorded as one change. It keeps the position it was deleted with,\nwhich is where `workbook update --status` would leave it too.",
 		Positionals: []string{"<id-or-prefix>"},
 		Options: []optionMetadata{
+			{Name: "into", Kind: stringFlag, Value: "<status>", Description: "restore into this status"},
 			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with origin"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},

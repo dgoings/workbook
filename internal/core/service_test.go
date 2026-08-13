@@ -447,7 +447,7 @@ func TestServiceDeleteTombstonesTaskAndRestoreIsTheOnlyAllowedMutation(t *testin
 	store := newMemoryTaskStore(snapshot)
 	service := serviceUnderTest(store, &sequenceIDSource{values: []string{"01K0M6B8A4FTT8C39MXXYTW7D2", "01K0M6B8A4FTT8C39MXXYTW7D3"}})
 
-	deleteResult, err := service.DeleteMutation(context.Background(), snapshot.State.TaskID)
+	deleteResult, err := service.DeleteMutation(context.Background(), snapshot.State.TaskID, DeleteInput{})
 	if err != nil {
 		t.Fatalf("DeleteMutation() error = %v", err)
 	}
@@ -462,7 +462,7 @@ func TestServiceDeleteTombstonesTaskAndRestoreIsTheOnlyAllowedMutation(t *testin
 	if got, want := CategoryOf(err), CategoryValidation; got != want {
 		t.Fatalf("Update(tombstone) error category = %q, want %q (error: %v)", got, want, err)
 	}
-	_, err = service.DeleteMutation(context.Background(), snapshot.State.TaskID)
+	_, err = service.DeleteMutation(context.Background(), snapshot.State.TaskID, DeleteInput{})
 	if got, want := CategoryOf(err), CategoryValidation; got != want {
 		t.Fatalf("Delete(tombstone) error category = %q, want %q (error: %v)", got, want, err)
 	}
@@ -470,7 +470,7 @@ func TestServiceDeleteTombstonesTaskAndRestoreIsTheOnlyAllowedMutation(t *testin
 		t.Fatalf("Write() calls after tombstone = %d, want %d", got, want)
 	}
 
-	restoreResult, err := service.RestoreMutation(context.Background(), snapshot.State.TaskID)
+	restoreResult, err := service.RestoreMutation(context.Background(), snapshot.State.TaskID, RestoreInput{})
 	if err != nil {
 		t.Fatalf("RestoreMutation() error = %v", err)
 	}
@@ -480,7 +480,7 @@ func TestServiceDeleteTombstonesTaskAndRestoreIsTheOnlyAllowedMutation(t *testin
 	}
 	assertOperations(t, store.writes[1].pack.Operations, []Operation{{ID: "01K0M6B8A4FTT8C39MXXYTW7D3", Type: OperationTaskRestore}})
 
-	_, err = service.RestoreMutation(context.Background(), snapshot.State.TaskID)
+	_, err = service.RestoreMutation(context.Background(), snapshot.State.TaskID, RestoreInput{})
 	if got, want := CategoryOf(err), CategoryValidation; got != want {
 		t.Fatalf("Restore(active) error category = %q, want %q (error: %v)", got, want, err)
 	}
@@ -592,7 +592,7 @@ func TestServiceDeleteRejectsInvalidGeneratedIDBeforeWrite(t *testing.T) {
 	store := newMemoryTaskStore(snapshot)
 	service := serviceUnderTest(store, &sequenceIDSource{values: []string{"not-a-ulid"}})
 
-	_, err := service.DeleteMutation(context.Background(), snapshot.State.TaskID)
+	_, err := service.DeleteMutation(context.Background(), snapshot.State.TaskID, DeleteInput{})
 	if got, want := CategoryOf(err), CategoryValidation; got != want {
 		t.Fatalf("Delete() error category = %q, want %q (error: %v)", got, want, err)
 	}

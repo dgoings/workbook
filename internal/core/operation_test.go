@@ -138,6 +138,57 @@ func TestApplyRejectsRestoreForActiveTaskAndPayloadBearingRestore(t *testing.T) 
 	assertCorrupt(t, applyError(&deleted, restore, "WB"))
 }
 
+// A pack against a tombstone may carry ordinary operations after its restore,
+// which is what lets a restore into a status be one change rather than two.
+// The restore has to come first: everything after it applies to a task that is
+// live again, and everything before it would be an edit to a tombstone.
+func TestApplyAcceptsARestorePackThatCarriesMoreThanTheRestore(t *testing.T) {
+	created, err := Apply(nil, createPack(), "WB")
+	if err != nil {
+		t.Fatalf("Apply(create) error = %v", err)
+	}
+	tombstone := updatePack(2)
+	tombstone.Operations = []Operation{{ID: operationID2, Type: OperationTaskTombstone}}
+	deleted, err := Apply(&created, tombstone, "WB")
+	if err != nil {
+		t.Fatalf("Apply(tombstone) error = %v", err)
+	}
+
+	restore := updatePack(3)
+	restore.Operations = []Operation{
+		{ID: operationID1, Type: OperationTaskRestore},
+		{ID: operationID2, Type: OperationFieldSet, Field: "status", Value: "in-progress"},
+		{ID: operationID3, Type: OperationFieldSet, Field: "rank", Value: "4/1"},
+	}
+	state, err := Apply(&deleted, restore, "WB")
+	if err != nil {
+		t.Fatalf("Apply(restore with a destination) error = %v", err)
+	}
+	if state.Task.Deleted {
+		t.Fatal("Apply(restore with a destination) left the task tombstoned")
+	}
+	if got, want := state.Task.Status, StatusInProgress; got != want {
+		t.Fatalf("Apply(restore with a destination) status = %q, want %q", got, want)
+	}
+	if got, want := state.Task.Rank, "4/1"; got != want {
+		t.Fatalf("Apply(restore with a destination) rank = %q, want %q", got, want)
+	}
+
+	trailing := updatePack(3)
+	trailing.Operations = []Operation{
+		{ID: operationID2, Type: OperationFieldSet, Field: "status", Value: "in-progress"},
+		{ID: operationID1, Type: OperationTaskRestore},
+	}
+	assertCorrupt(t, applyError(&deleted, trailing, "WB"))
+
+	twice := updatePack(3)
+	twice.Operations = []Operation{
+		{ID: operationID1, Type: OperationTaskRestore},
+		{ID: operationID2, Type: OperationTaskRestore},
+	}
+	assertCorrupt(t, applyError(&deleted, twice, "WB"))
+}
+
 func TestApplyRejectsInvalidHistoryAndIdentity(t *testing.T) {
 	created, err := Apply(nil, createPack(), "WB")
 	if err != nil {

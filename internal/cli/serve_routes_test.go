@@ -179,6 +179,58 @@ func TestRunServeResolvesTheVocabularyPerRequest(t *testing.T) {
 	}
 }
 
+// The restore route's body reaches the service through the real serve wiring,
+// and its expected head is checked against the task's actual tip. A handler
+// test cannot show either: it holds its own fake, so a body decoded into an
+// input nobody threads through would still pass.
+func TestRunServeRestoresIntoAStatusThroughTheWebRoute(t *testing.T) {
+	repository := initializedRepository(t)
+	code, stdout, stderr := run(t, repository, "create", "Dragged out of deleted", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("create = (%d, %q, %q)", code, stdout, stderr)
+	}
+	task := decodeMutationTask(t, stdout, "create")
+	addr := startServeBoard(t, repository)
+
+	body, status := boardRequest(t, http.MethodDelete, "http://"+addr+"/api/tasks/"+task.ID, "")
+	deleted := decodeServeMutation(t, body, status)
+	if !deleted.Deleted {
+		t.Fatalf("DELETE /api/tasks/%s returned %#v, want that task tombstoned", task.ID, deleted)
+	}
+
+	// A head the board rendered before the delete is stale by the time it asks
+	// for the restore, and the route says so rather than restoring anyway.
+	body, status = boardRequest(t, http.MethodPost, "http://"+addr+"/api/tasks/"+task.ID+"/restore",
+		`{"status":"in-progress","expectedHead":"`+task.Head+`"}`)
+	if status != http.StatusConflict {
+		t.Fatalf("stale restore = %d, want %d; body = %s", status, http.StatusConflict, body)
+	}
+	assertTaskDeleted(t, repository, task.ID, true)
+
+	body, status = boardRequest(t, http.MethodPost, "http://"+addr+"/api/tasks/"+task.ID+"/restore",
+		`{"status":"in-progress","expectedHead":"`+deleted.Head+`"}`)
+	restored := decodeServeMutation(t, body, status)
+	if restored.Deleted || restored.Status != core.StatusInProgress {
+		t.Fatalf("restore into a status returned %#v, want an active in-progress task", restored)
+	}
+	assertTaskDeleted(t, repository, task.ID, false)
+
+	// A body that is present and wrong is refused, and the task is left where
+	// the refusal found it.
+	body, status = boardRequest(t, http.MethodDelete, "http://"+addr+"/api/tasks/"+task.ID,
+		`{"expectedHead":"`+task.Head+`"}`)
+	if status != http.StatusConflict {
+		t.Fatalf("stale delete = %d, want %d; body = %s", status, http.StatusConflict, body)
+	}
+	assertTaskDeleted(t, repository, task.ID, false)
+
+	body, status = boardRequest(t, http.MethodPost, "http://"+addr+"/api/tasks/"+task.ID+"/restore",
+		`{"status":`)
+	if status != http.StatusBadRequest {
+		t.Fatalf("malformed restore = %d, want %d; body = %s", status, http.StatusBadRequest, body)
+	}
+}
+
 func boardVocabularyDocument(t *testing.T, addr string) webui.VocabularyDocument {
 	t.Helper()
 	body, status := boardRequest(t, http.MethodGet, "http://"+addr+"/api/vocabulary", "")

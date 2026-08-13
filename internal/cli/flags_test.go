@@ -134,7 +134,7 @@ func TestHelpMetadataMatchesSchemas(t *testing.T) {
 		"show":     {"history": boolFlag, "limit": stringFlag, "all": boolFlag, "compare": pairFlag, "json": boolFlag},
 		"update":   {"title": stringFlag, "description": stringFlag, "status": stringFlag, "priority": stringFlag, "label": stringFlag, "clear-labels": boolFlag, "no-sync": boolFlag, "json": boolFlag},
 		"delete":   {"no-sync": boolFlag, "json": boolFlag},
-		"restore":  {"no-sync": boolFlag, "json": boolFlag},
+		"restore":  {"into": stringFlag, "no-sync": boolFlag, "json": boolFlag},
 		"serve":    {"addr": stringFlag},
 		"fetch":    {"json": boolFlag},
 		"push":     {"json": boolFlag},

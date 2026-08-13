@@ -697,7 +697,7 @@ func runDelete(ctx context.Context, args []string, cwd string, stdout, stderr io
 		return err
 	}
 	result, err := session.mutate(ctx, id, func(ctx context.Context) (core.MutationResult, error) {
-		return session.service.DeleteMutation(ctx, id)
+		return session.service.DeleteMutation(ctx, id, core.DeleteInput{})
 	})
 	return writeMutationOutcome(stdout, stderr, "delete", session, result, err, *jsonMode)
 }
@@ -708,9 +708,14 @@ func runRestore(ctx context.Context, args []string, cwd string, stdout, stderr i
 		return err
 	}
 	flags := newFlagSet("restore")
+	into := flags.String("into", "", "restore into this status")
 	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with origin")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
+		return err
+	}
+	destination, err := restoreInto(flags, *into)
+	if err != nil {
 		return err
 	}
 
@@ -719,9 +724,24 @@ func runRestore(ctx context.Context, args []string, cwd string, stdout, stderr i
 		return err
 	}
 	result, err := session.mutate(ctx, id, func(ctx context.Context) (core.MutationResult, error) {
-		return session.service.RestoreMutation(ctx, id)
+		return session.service.RestoreMutation(ctx, id, core.RestoreInput{Into: destination})
 	})
 	return writeMutationOutcome(stdout, stderr, "restore", session, result, err, *jsonMode)
+}
+
+// restoreInto reads --into, refusing an empty one.
+//
+// Core reads an empty destination as "none named", so an explicitly blank
+// --into that reached it would restore the task into the status it was deleted
+// from and say nothing about the flag the caller typed.
+func restoreInto(flags *commandFlagSet, value string) (core.Status, error) {
+	var offending error
+	flags.Visit(func(visited *flag.Flag) {
+		if visited.Name == "into" && value == "" {
+			offending = core.Errorf(core.CategoryInvocation, "restore --into requires a status")
+		}
+	})
+	return core.Status(value), offending
 }
 
 func runMove(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
@@ -1063,20 +1083,20 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 			result, err := writer.PlaceMutation(requestContext, id, input)
 			return publisher.publish(requestContext, result, err)
 		},
-		Delete: func(requestContext context.Context, id string) (core.MutationResult, error) {
+		Delete: func(requestContext context.Context, id string, input core.DeleteInput) (core.MutationResult, error) {
 			writer, err := current(requestContext)
 			if err != nil {
 				return core.MutationResult{}, err
 			}
-			result, err := writer.DeleteMutation(requestContext, id)
+			result, err := writer.DeleteMutation(requestContext, id, input)
 			return publisher.publish(requestContext, result, err)
 		},
-		Restore: func(requestContext context.Context, id string) (core.MutationResult, error) {
+		Restore: func(requestContext context.Context, id string, input core.RestoreInput) (core.MutationResult, error) {
 			writer, err := current(requestContext)
 			if err != nil {
 				return core.MutationResult{}, err
 			}
-			result, err := writer.RestoreMutation(requestContext, id)
+			result, err := writer.RestoreMutation(requestContext, id, input)
 			return publisher.publish(requestContext, result, err)
 		},
 		Depend: func(requestContext context.Context, id, dependency string) (core.MutationResult, error) {

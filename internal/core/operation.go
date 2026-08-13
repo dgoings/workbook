@@ -89,16 +89,31 @@ func Apply(parent *StateDocument, pack OperationPack, projectKey string) (StateD
 	if pack.LogicalClock != parent.LogicalClock+1 {
 		return StateDocument{}, corrupt("operation pack logical clock must advance parent by one")
 	}
-	if parent.Task.Deleted {
-		if len(pack.Operations) != 1 || pack.Operations[0].Type != OperationTaskRestore {
-			return StateDocument{}, corrupt("cannot mutate a tombstoned task")
+	// A pack against a tombstone must open with task.restore, and may then carry
+	// ordinary operations: the restore has already brought the task back, so
+	// what follows is applied to a live task. That is what lets a restore that
+	// names a destination be one pack — one history entry, one refusal surface —
+	// rather than a restore followed by a separate placement that a crash or a
+	// concurrent write could leave half-done.
+	//
+	// The rule was "exactly one task.restore" before, so a clone running an
+	// older build reads such a pack as corrupt rather than folding it. That is
+	// the cost of the widening and the reason it is stated here: the operation
+	// semantics are the durable contract, and this is a change to them.
+	//
+	// A restore is legal nowhere else. Against a live task it is meaningless,
+	// and a second one inside a pack that already restored would be a claim
+	// about a task that is no longer tombstoned.
+	for index, operation := range pack.Operations {
+		if operation.Type != OperationTaskRestore {
+			continue
 		}
-	} else {
-		for _, operation := range pack.Operations {
-			if operation.Type == OperationTaskRestore {
-				return StateDocument{}, corrupt("task.restore requires a tombstoned task")
-			}
+		if index != 0 || !parent.Task.Deleted {
+			return StateDocument{}, corrupt("task.restore requires a tombstoned task")
 		}
+	}
+	if parent.Task.Deleted && pack.Operations[0].Type != OperationTaskRestore {
+		return StateDocument{}, corrupt("cannot mutate a tombstoned task")
 	}
 
 	task := copyTaskData(parent.Task)
