@@ -38,14 +38,25 @@ type AssignmentChange struct {
 	// the design calls a spike and a meaningful outcome, and the result's
 	// Others is how the caller hears about it.
 	//
-	// It never fires on an assignment the task already carries: re-adding what
-	// is already there writes nothing, and refusing a no-op would tell an agent
-	// to go away from work it already holds.
+	// It never fires when the assigning principal already holds the task, under
+	// this label or any other. Adding a second agent of an identity that is
+	// already responsible claims nothing from anybody, and refusing it would
+	// tell an agent to go away from work its own identity is doing.
 	OnlyIfUnheld bool
 }
 
-// AssignInput names who a task is being assigned to. It is the single-intent
-// door on to the same machinery `update --assign` uses.
+// AssignInput names who a task is being assigned to.
+//
+// It, UnassignInput, and the two mutations that take them are the single-intent
+// doors on to the machinery `update --assign` uses, exactly as CommentAddInput
+// and its neighbours are for `update --comment`. Like those, they have no
+// caller in this repository today: every command-line assignment arrives as a
+// member of an ordinary update, because that is what makes changing a status
+// and an assignee together one pack. They are kept rather than deleted so that
+// one intent has one door across the whole family, and so that a caller with a
+// single assignment to record does not have to know how an update is assembled;
+// what they must never become is a second implementation, which is why they
+// build an UpdateInput and hand it on rather than writing anything themselves.
 type AssignInput struct {
 	// To is the assignee as principal[/label], with an empty value meaning the
 	// acting identity; see AssignmentChange.To.
@@ -114,6 +125,12 @@ func (s Service) assignmentOperations(taskID string, task TaskData, changes []As
 	operations := make([]Operation, 0, len(changes))
 	principals := make(map[string]struct{}, len(changes))
 	added, existing := 0, 0
+	// growth is what this pack does to the size of the assignment list: one for
+	// every addition it plans, minus one for every withdrawal. Counting the
+	// operations instead made a withdrawal read as an addition, so a pack that
+	// handed one assignment over to another at the ceiling was refused for
+	// crossing a line it ends the same side of.
+	growth := 0
 	for _, change := range changes {
 		value, err := s.assignee(change.To)
 		if err != nil {
@@ -125,6 +142,7 @@ func (s Service) assignmentOperations(taskID string, task TaskData, changes []As
 				return nil, nil, false, err
 			}
 			operations = append(operations, operation)
+			growth--
 			continue
 		}
 		principal, label, err := s.assignAddPrincipal(value)
@@ -137,18 +155,25 @@ func (s Service) assignmentOperations(taskID string, task TaskData, changes []As
 			existing++
 			continue
 		}
-		if others := AssignmentsHeldByOthers(task.Assignments, principal); change.OnlyIfUnheld && len(others) > 0 {
+		// The gate asks whether this task is somebody else's alone, and it asks
+		// it of the principal rather than of the assignment. An identity that
+		// already holds the task is not claiming it from anybody by adding a
+		// second agent of its own, and refusing that would also contradict the
+		// selection `workbook next` makes: the two have to agree about what
+		// "held by somebody else" means, or an agent loops forever on a task it
+		// is offered and then refused.
+		if change.OnlyIfUnheld && HeldOnlyByOthers(task.Assignments, principal) {
 			return nil, nil, false, Errorf(
 				CategoryAssigned,
 				"task %s is already assigned to %s",
-				taskID, strings.Join(assignmentValues(others), ", "),
+				taskID, strings.Join(assignmentValues(AssignmentsHeldByOthers(task.Assignments, principal)), ", "),
 			)
 		}
 		// The ceiling is asked here and nowhere else; see MaxAssignmentCount for
 		// why a fold must never ask it. Additions already planned in this pack
 		// count against it, because they are as much a part of the task's
 		// assignment list as the ones already stored.
-		if len(task.Assignments)+len(operations)+1 > MaxAssignmentCount {
+		if len(task.Assignments)+growth+1 > MaxAssignmentCount {
 			return nil, nil, false, Errorf(
 				CategoryValidation,
 				"task %s already has %d assignments and must not exceed %d",
@@ -156,6 +181,7 @@ func (s Service) assignmentOperations(taskID string, task TaskData, changes []As
 			)
 		}
 		operations = append(operations, Operation{Type: OperationAssignAdd, Value: value})
+		growth++
 	}
 	if added == 0 {
 		return operations, nil, false, nil

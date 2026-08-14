@@ -227,12 +227,71 @@ func runFetch(ctx context.Context, args []string, cwd string, stdout, stderr io.
 		return err
 	}
 	result, syncErr := repository.Fetch(ctx, config)
-	writeSyncPhaseResultWithConfig(stdout, "fetch", result, result.Conflicts, result.ConfigConflicts, *jsonMode,
+	warnings := fetchSharingWarnings(ctx, repository, config, &result)
+	writeSyncPhaseResultWithConfig(stdout, "fetch", result, result.Conflicts, result.ConfigConflicts, warnings, *jsonMode,
 		func(output io.Writer) {
 			writeSyncResult(output, result)
 			writeConfigWarning(stderr, result.Config)
+			writeWarnings(stderr, warnings)
 		})
 	return syncErr
+}
+
+// fetchSharingWarnings answers the claim contract for the commands that
+// synchronize and nothing else.
+//
+// `workbook sync` after a rejected push is the ordinary way a claimant's work
+// reaches origin, and it is therefore the ordinary place to learn that the claim
+// landed beside somebody else's.
+//
+// Everything it needs — the projection, the vocabulary and the acting identity —
+// is opened only when the fetch actually replayed something, which a
+// steady-state synchronization never does. That gate is why the whole feature
+// costs a synchronization that reconciles nothing exactly nothing, and it is
+// load-bearing: `internal/perf` prices `sync` in Git processes and holds it to a
+// budget this would otherwise blow.
+//
+// A clone with no configured identity, or one whose projection will not open,
+// is answered with silence rather than with a failure: this is a remark beside a
+// synchronization that succeeded, and nothing about it is worth failing over.
+func fetchSharingWarnings(
+	ctx context.Context,
+	repository *gitstore.Repository,
+	config core.ProjectConfig,
+	fetched *gitstore.SyncResult,
+) []core.Warning {
+	replayed := false
+	for _, entry := range fetched.Tasks {
+		if replayedByFetch(entry.Status) {
+			replayed = true
+			break
+		}
+	}
+	if !replayed {
+		return nil
+	}
+	actor, err := repository.Actor(ctx)
+	if err != nil || strings.TrimSpace(actor) == "" {
+		return nil
+	}
+	store, err := projection.Open(ctx, repository, config)
+	if err != nil {
+		return nil
+	}
+	vocabulary, err := repository.LoadVocabulary(ctx)
+	if err != nil {
+		return nil
+	}
+	service := core.Service{
+		Config:     config,
+		Vocabulary: vocabulary,
+		Reader:     store,
+		History:    store,
+		IDs:        core.CryptoULIDSource{},
+		Now:        time.Now,
+		Actor:      actor,
+	}
+	return reconciledSharingWarnings(ctx, service, fetched, "")
 }
 
 func runPush(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
@@ -283,11 +342,13 @@ func runSync(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	}
 
 	result, syncErr := repository.Sync(ctx, config)
-	writeSyncPhaseResultWithConfig(stdout, "sync", result, result.Fetch.Conflicts, result.Fetch.ConfigConflicts, *jsonMode,
+	warnings := fetchSharingWarnings(ctx, repository, config, &result.Fetch)
+	writeSyncPhaseResultWithConfig(stdout, "sync", result, result.Fetch.Conflicts, result.Fetch.ConfigConflicts, warnings, *jsonMode,
 		func(output io.Writer) {
 			writeSyncRunResult(output, result)
 			writeIdentityWarning(stderr, result.Identity)
 			writeConfigWarning(stderr, result.Config)
+			writeWarnings(stderr, warnings)
 		})
 	return syncErr
 }
@@ -729,6 +790,8 @@ func runUpdate(ctx context.Context, args []string, cwd string, stdout, stderr io
 		err = assignmentRefusal(err, "assign it to yourself beside them with --force, or pick another task")
 	} else {
 		result.Warnings = append(result.Warnings, assignmentSharingWarnings(result)...)
+		result.Warnings = append(result.Warnings,
+			reconciledSharingWarnings(ctx, session.service, session.fetched, result.Task.ID)...)
 	}
 	return writeThreadMutationOutcome(stdout, stderr, "update", session, result, err, *jsonMode, changes)
 }
@@ -839,22 +902,92 @@ func assignmentRefusal(err error, advice string) error {
 // somebody else's.
 //
 // It is a warning rather than a refusal because the assignment is recorded:
-// either --force asked for exactly this, or a teammate's claim arrived between
-// this command's check and its write, which the design calls a spike and a
-// meaningful outcome rather than an error. Saying nothing would leave an agent
-// believing it holds the task alone.
+// either --force asked for exactly this, or the fetch this command ran first
+// brought down a claim that the caller then joined, which the design calls a
+// spike and a meaningful outcome rather than an error. Saying nothing would
+// leave an agent believing it holds the task alone.
 func assignmentSharingWarnings(result core.MutationResult) []core.Warning {
 	if len(result.Others) == 0 {
 		return nil
 	}
-	held := make([]string, 0, len(result.Others))
-	for _, assignment := range result.Others {
+	return []core.Warning{sharedAssignmentWarning(result.Task.ID, result.Others)}
+}
+
+func sharedAssignmentWarning(taskID string, others []core.Assignment) core.Warning {
+	held := make([]string, 0, len(others))
+	for _, assignment := range others {
 		held = append(held, singleLine(assignment.Value()))
 	}
-	return []core.Warning{{
+	return core.Warning{
 		Code:    core.WarningAssignmentShared,
-		Message: "task " + result.Task.ID + " is also assigned to " + strings.Join(held, ", "),
-	}}
+		Message: "task " + taskID + " is also assigned to " + strings.Join(held, ", "),
+	}
+}
+
+// replayedByFetch reports that a fetch replayed this clone's own operations onto
+// origin's tip, which is the one outcome that can turn a claim into a shared
+// one behind the claimant's back.
+//
+// It is deliberately narrower than "the fetch moved this task". A fast-forward
+// carries no local work: nothing of this clone's was rebased, and the assignment
+// that arrived is somebody else's news, told by the next command that reads the
+// task. A reconcile is the design's own sentence — the push lost, reconcile
+// replays, and the post-replay state shows the other assignment — and it is also
+// what keeps this off the hot path, since a steady-state synchronization
+// reconciles nothing and therefore asks nothing.
+func replayedByFetch(status gitstore.SyncStatus) bool {
+	return status == gitstore.SyncReconciled
+}
+
+// reconciledSharingWarnings names the tasks this identity turns out to share,
+// among the ones a fetch just moved.
+//
+// This is the half of the claim contract no single command can answer for
+// itself. A claim that loses the push race is durable locally and replayed onto
+// origin's tip by the next fetch, and that fetch is the first moment this clone
+// can see the assignment that beat it. The mutation that recorded the claim
+// cannot say so — when it ran, the other assignment did not exist here — so the
+// synchronization that reconciles it does, and the contract holds whichever of
+// the two the claimant is looking at.
+//
+// The scope is deliberately narrow. Only tasks this fetch moved, and only where
+// this identity holds the task and another principal does too: a shared task
+// nobody touched is not news, a fetch that changed nothing says nothing, and a
+// task whose sharing the caller's own result already reported is skipped rather
+// than reported twice.
+//
+// A task the fetch moved but the projection cannot serve is passed over in
+// silence. Whatever is wrong with it is reported by the phase that met it, and a
+// second complaint about an assignment nobody could read would only crowd out
+// the first.
+func reconciledSharingWarnings(
+	ctx context.Context,
+	service core.Service,
+	fetched *gitstore.SyncResult,
+	reported string,
+) []core.Warning {
+	if fetched == nil || strings.TrimSpace(service.Actor) == "" {
+		return nil
+	}
+	var warnings []core.Warning
+	for _, entry := range fetched.Tasks {
+		if !replayedByFetch(entry.Status) || entry.TaskID == reported {
+			continue
+		}
+		task, err := service.Show(ctx, entry.TaskID)
+		if err != nil {
+			continue
+		}
+		if !core.HeldBy(task.Assignments, service.Actor) {
+			continue
+		}
+		others := core.AssignmentsHeldByOthers(task.Assignments, service.Actor)
+		if len(others) == 0 {
+			continue
+		}
+		warnings = append(warnings, sharedAssignmentWarning(task.ID, others))
+	}
+	return warnings
 }
 
 func runDelete(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
@@ -1032,6 +1165,10 @@ func runNext(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 		}
 		warnings = skipped
 	}
+	// A `next` that fetched is also the command that reconciled, so it carries
+	// the claim contract's other half: an agent that asks what to do after
+	// losing a push race learns here that the task it claimed is shared.
+	warnings = append(warnings, reconciledSharingWarnings(ctx, session.service, session.fetched, "")...)
 	if *jsonMode {
 		writeSyncedResult(stdout, "next", task, &session.report, session.conflicts, warnings)
 		return nil
@@ -1072,10 +1209,23 @@ func (session *taskSession) skippedHeldTasks(ctx context.Context, options core.N
 // It is one synchronous fetch, select, append and push, because that is what
 // makes the claim mean anything: an agent that selected a task in one command
 // and assigned it in another would publish its claim seconds after a second
-// agent selected the same task. The gate is decided against the parent the
-// mutation reads, after the fetch, so the window left is the one between this
-// write and its push — and a claim that loses that race is recorded, published
-// on the next synchronization, and reported as shared rather than as won.
+// agent selected the same task.
+//
+// The claim asks for the gate, and in this command the gate is a guarantee
+// rather than a reported outcome. The selection has already excluded every task
+// another identity holds and this one does not, and the two ask the same
+// question of the same list — see core.HeldOnlyByOthers — so a refusal here
+// would mean the task gained that holder between the selection and the write,
+// which within one command means another process on this clone. That is why
+// neither the help nor the README offers exit 10 as something `next --claim`
+// answers with, and why the gate is still asked for: it is what makes "this
+// command never takes work somebody else is doing" true rather than merely
+// likely.
+//
+// The window it cannot close is between this write and its push. A claim that
+// loses that race is recorded, replayed onto origin's tip by the next fetch, and
+// reported by the synchronization that replays it; see
+// reconciledSharingWarnings.
 func runNextClaim(
 	ctx context.Context,
 	session *taskSession,
@@ -1114,6 +1264,8 @@ func runNextClaim(
 		return writeMutationOutcome(stdout, stderr, "next", session, result, err, jsonMode)
 	}
 	result.Warnings = append(result.Warnings, assignmentSharingWarnings(result)...)
+	result.Warnings = append(result.Warnings,
+		reconciledSharingWarnings(ctx, session.service, session.fetched, result.Task.ID)...)
 	if chosen != nil {
 		result.Warnings = append(result.Warnings, newerWriterTaskWarnings(*chosen)...)
 	}

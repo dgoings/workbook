@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -156,6 +157,40 @@ func TestAssignMutationRefusesAnOversizedActingIdentity(t *testing.T) {
 	}
 	if len(store.writes) != 0 {
 		t.Fatalf("writes = %d, want none", len(store.writes))
+	}
+}
+
+// A pack that hands one assignment over to another ends the same side of the
+// ceiling it started on, so it is not the ceiling's business. Counting the
+// pack's operations instead of its growth refused it.
+func TestUpdateMutationAllowsAHandoverAtTheAssignmentCeiling(t *testing.T) {
+	existing := make([]Assignment, 0, MaxAssignmentCount)
+	for index := 0; index < MaxAssignmentCount; index++ {
+		existing = append(existing, heldBy("sam@example.com", "impl-"+strconv.Itoa(100+index), serviceActor))
+	}
+	store := newMemoryTaskStore(assignedSnapshot(serviceAssignTaskID, existing...))
+	service := assignService(store, serviceActor, operationID1, operationID2)
+
+	result, err := service.UpdateMutation(context.Background(), serviceAssignTaskID, UpdateInput{
+		Assignments: []AssignmentChange{
+			{To: existing[0].Value(), Remove: true},
+			{To: serviceActor},
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpdateMutation() error = %v, want a handover at the ceiling to be allowed", err)
+	}
+	if got := len(result.Task.Assignments); got != MaxAssignmentCount {
+		t.Fatalf("assignments = %d, want %d", got, MaxAssignmentCount)
+	}
+
+	// Growing past it is still refused, which is the rule the arithmetic exists
+	// to enforce.
+	_, err = service.UpdateMutation(context.Background(), serviceAssignTaskID, UpdateInput{
+		Assignments: []AssignmentChange{{To: "mallory@example.com"}},
+	})
+	if CategoryOf(err) != CategoryValidation {
+		t.Fatalf("category = %q, want %q past the ceiling", CategoryOf(err), CategoryValidation)
 	}
 }
 
@@ -400,6 +435,30 @@ func TestAssignMutationRecordsBesideAnotherPrincipalWhenTheGateIsNotAsked(t *tes
 	}
 }
 
+// The gate and the skip have to agree about what "somebody else's" means. An
+// identity that already holds a shared task is offered it by Next, so the gate
+// must let it record a second agent of its own — otherwise an agent is offered
+// a task it is then refused, forever.
+func TestAssignMutationGateLetsAPrincipalThatAlreadyHoldsTheTaskAddAnAgent(t *testing.T) {
+	store := newMemoryTaskStore(assignedSnapshot(serviceAssignTaskID,
+		heldBy(serviceActor, "impl-1", serviceActor),
+		heldBy("sam@example.com", "", "sam@example.com"),
+	))
+	service := assignService(store, serviceActor, operationID1)
+
+	result, err := service.AssignMutation(context.Background(), serviceAssignTaskID,
+		AssignInput{To: serviceActor + "/impl-2", OnlyIfUnheld: true})
+	if err != nil {
+		t.Fatalf("AssignMutation() error = %v, want a second agent of a holding identity to be let through", err)
+	}
+	if len(store.writes) != 1 {
+		t.Fatalf("writes = %d, want 1", len(store.writes))
+	}
+	if got, want := assignmentValues(result.Others), []string{"sam@example.com"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Others = %#v, want %#v", got, want)
+	}
+}
+
 // The gate never fires on an assignment the caller already holds. Refusing a
 // no-op would send an agent away from work it is already doing.
 func TestAssignMutationGateIgnoresAnAssignmentAlreadyHeld(t *testing.T) {
@@ -536,5 +595,36 @@ func TestNextSkipsTasksHeldByAnotherPrincipal(t *testing.T) {
 	}
 	if selected == nil || selected.ID != held.State.TaskID {
 		t.Fatalf("Next() with no identity = %#v, want the whole eligible set", selected)
+	}
+}
+
+// The spike's own claimants keep being offered their work. A task two identities
+// deliberately share is skipped by neither of them — the alternative is that the
+// pairing the design calls a meaningful outcome leaves both agents told there is
+// nothing to do.
+func TestNextOffersATaskThisIdentityShares(t *testing.T) {
+	shared := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E4", TaskData{
+		Title: "Spiked together", Status: StatusReady, Priority: PriorityHigh, Rank: "1/1",
+	})
+	shared.State.Task.Assignments = []Assignment{
+		heldBy(serviceActor, "impl-1", serviceActor),
+		heldBy("sam@example.com", "", "sam@example.com"),
+	}
+	store := newMemoryTaskStore(shared)
+
+	for _, actor := range []string{serviceActor, "sam@example.com"} {
+		selected, err := assignService(store, actor).Next(context.Background(), NextOptions{})
+		if err != nil {
+			t.Fatalf("Next() as %s error = %v", actor, err)
+		}
+		if selected == nil || selected.ID != shared.State.TaskID {
+			t.Fatalf("Next() as %s = %#v, want the task this identity shares", actor, selected)
+		}
+	}
+
+	// A third identity is not offered it: it is held, and not by them.
+	if selected, err := assignService(store, "mallory@example.com").Next(context.Background(), NextOptions{}); err != nil ||
+		selected != nil {
+		t.Fatalf("Next() as a stranger = %#v (error %v), want nothing", selected, err)
 	}
 }

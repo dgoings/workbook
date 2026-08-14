@@ -450,9 +450,9 @@ var commandSchemas = map[string]commandMetadata{
 			"by /label for one agent of that identity. One assignment per invocation,\n" +
 			"and not both in the same one. An assignment is additive and is removable\n" +
 			"only by the person it names or the person who recorded it.\n\n" +
-			"--assign refuses, and records nothing, when somebody else already holds\n" +
-			"the task; --force records yours beside theirs instead. Assigning yourself\n" +
-			"something you already hold changes nothing and says so.",
+			"--assign exits 10 and records nothing when somebody else holds the task\n" +
+			"and you do not; --force records yours beside theirs instead. Assigning\n" +
+			"yourself something your identity already holds changes nothing and says so.",
 		Positionals: []string{"<id-or-prefix>"},
 		Options: []optionMetadata{
 			{Name: "title", Kind: stringFlag, Value: "<title>", Description: "task title"},
@@ -576,12 +576,16 @@ var commandSchemas = map[string]commandMetadata{
 		Name:     "next",
 		Synopsis: "workbook next [--any] [--claim] [--no-sync] [--json]",
 		Description: "Show the next eligible task.\n\n" +
-			"A task somebody else is assigned to is skipped, because it is work that is\n" +
-			"already being done; --any offers the whole eligible set instead.\n\n" +
+			"A task somebody else is assigned to and you are not is skipped, because it\n" +
+			"is work already being done; a task you hold too is still offered, however\n" +
+			"many people share it. --any offers the whole eligible set instead.\n\n" +
 			"With --claim the task next would pick is assigned to you and published in\n" +
 			"the same command, so two agents asking at once do not both walk away with\n" +
-			"it. When somebody else claimed it first, nothing is recorded and the\n" +
-			"command exits 10 so the caller can ask again for another task.",
+			"it. Because the skip has already excluded what somebody else holds, there\n" +
+			"is nothing left to refuse: a board whose eligible work is all held answers\n" +
+			"with no task and says so, and claiming a task you already hold records\n" +
+			"nothing. If the publication loses a race, the claim still stands and the\n" +
+			"synchronization that replays it reports who it is shared with.",
 		Options: []optionMetadata{
 			{Name: "any", Kind: boolFlag, Description: "include tasks somebody else is assigned to"},
 			{Name: "claim", Kind: boolFlag, Description: "assign the chosen task to yourself and publish it"},

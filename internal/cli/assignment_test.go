@@ -549,6 +549,135 @@ func TestTwoClonesClaimingOneTask(t *testing.T) {
 		t.Fatalf("first fetch code = %d, want 0; stderr = %q", code, stderr)
 	}
 	assertAssignments(t, showTask(t, first, task.ID), "one@example.com", "two@example.com")
+
+	// The spike does not make the work disappear from either agent's `next`.
+	// Both hold the task, so both are still offered it; a skip that asked only
+	// whether somebody else holds it would answer "nothing to do" to the two
+	// agents actually doing the work.
+	for name, clone := range map[string]string{"first": first, "second": second} {
+		code, stdout, stderr := run(t, clone, "next", "--json")
+		if code != 0 {
+			t.Fatalf("%s next code = %d, want 0; stderr = %q", name, code, stderr)
+		}
+		if got := decodeNextTask(t, stdout); got == nil || got.ID != task.ID {
+			t.Fatalf("%s next = %#v, want the shared task %s", name, got, task.ID)
+		}
+	}
+
+	// And claiming it again writes nothing: the identity already holds it.
+	head := showTask(t, first, task.ID).Head
+	code, stdout, stderr = run(t, first, "next", "--claim", "--json")
+	if code != 0 {
+		t.Fatalf("post-spike claim code = %d, want 0; stderr = %q", code, stderr)
+	}
+	if claimed := decodeMutationTask(t, stdout, "next"); claimed.ID != task.ID {
+		t.Fatalf("post-spike claim = %s, want the shared task %s", claimed.ID, task.ID)
+	}
+	if now := showTask(t, first, task.ID).Head; now != head {
+		t.Fatalf("head moved from %q to %q; re-claiming a task you already hold writes nothing", head, now)
+	}
+	assertAssignments(t, showTask(t, first, task.ID), "one@example.com", "two@example.com")
+}
+
+// The push race the design names, played out exactly: B claims while A's claim
+// is still unpublished, B's push loses, and the synchronization that replays B's
+// operation onto A's tip is where B learns it shares the task.
+//
+// Nothing in B's claim could have said so — when it ran, A's assignment did not
+// exist in this clone — which is why the contract is that the command that
+// claimed *or* the synchronization that reconciled tells the claimant, and why
+// this repro drives the second one.
+func TestAClaimThatLosesThePushRaceIsReportedBySyncing(t *testing.T) {
+	first, second := cliSyncRepositories(t)
+	cliGit(t, first, "config", "user.email", "one@example.com")
+	cliGit(t, second, "config", "user.email", "two@example.com")
+
+	task := cliCreateTask(t, first, "Contested")
+	if code, _, stderr := run(t, first, "update", task.ID, "--status", "ready"); code != 0 {
+		t.Fatalf("make ready code = %d, want 0; stderr = %q", code, stderr)
+	}
+	if code, _, stderr := run(t, second, "fetch"); code != 0 {
+		t.Fatalf("second fetch code = %d, want 0; stderr = %q", code, stderr)
+	}
+
+	// B claims locally without publishing, which is the state a claim is in
+	// between its write and its push.
+	if code, _, stderr := run(t, second, "update", task.ID, "--assign", "self", "--no-sync"); code != 0 {
+		t.Fatalf("second claim code = %d, want 0; stderr = %q", code, stderr)
+	}
+	assertAssignments(t, showTask(t, second, task.ID), "two@example.com")
+
+	// A claims and publishes first, so B's unpublished claim has lost.
+	if code, _, stderr := run(t, first, "update", task.ID, "--assign", "self"); code != 0 {
+		t.Fatalf("first claim code = %d, want 0; stderr = %q", code, stderr)
+	}
+
+	code, stdout, stderr := run(t, second, "sync", "--json")
+	if code != 0 {
+		t.Fatalf("second sync code = %d, want 0; stderr = %q", code, stderr)
+	}
+	result := assertJSONResult(t, stdout, "sync")
+	if got, want := warningCodes(result.Warnings), []string{core.WarningAssignmentShared}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("sync warnings = %q, want %q; a claimant that ends up sharing has to be told", got, want)
+	}
+	if !strings.Contains(result.Warnings[0].Message, "one@example.com") || !strings.Contains(result.Warnings[0].Message, task.ID) {
+		t.Fatalf("warning = %q, want it to name the task and the other holder", result.Warnings[0].Message)
+	}
+	// Both claims survive, which is the spike the removal rule guarantees.
+	assertAssignments(t, showTask(t, second, task.ID), "one@example.com", "two@example.com")
+
+	// Said once, about a fetch that moved the task. A synchronization that
+	// changes nothing repeats nothing.
+	code, stdout, stderr = run(t, second, "sync", "--json")
+	if code != 0 {
+		t.Fatalf("repeat sync code = %d, want 0; stderr = %q", code, stderr)
+	}
+	if warnings := assertJSONResult(t, stdout, "sync").Warnings; len(warnings) != 0 {
+		t.Fatalf("repeat sync warnings = %#v, want none for a synchronization that moved nothing", warnings)
+	}
+}
+
+// The same contract through the other door: whichever command reconciles is the
+// one that tells the claimant, so an agent that simply asks for its next task
+// hears it too.
+func TestAReconciledClaimIsReportedByTheNextCommandThatFetches(t *testing.T) {
+	first, second := cliSyncRepositories(t)
+	cliGit(t, first, "config", "user.email", "one@example.com")
+	cliGit(t, second, "config", "user.email", "two@example.com")
+
+	task := cliCreateTask(t, first, "Contested")
+	if code, _, stderr := run(t, first, "update", task.ID, "--status", "ready"); code != 0 {
+		t.Fatalf("make ready code = %d, want 0; stderr = %q", code, stderr)
+	}
+	if code, _, stderr := run(t, second, "fetch"); code != 0 {
+		t.Fatalf("second fetch code = %d, want 0; stderr = %q", code, stderr)
+	}
+	if code, _, stderr := run(t, second, "update", task.ID, "--assign", "self", "--no-sync"); code != 0 {
+		t.Fatalf("second claim code = %d, want 0; stderr = %q", code, stderr)
+	}
+	if code, _, stderr := run(t, first, "update", task.ID, "--assign", "self"); code != 0 {
+		t.Fatalf("first claim code = %d, want 0; stderr = %q", code, stderr)
+	}
+
+	code, stdout, stderr := run(t, second, "next", "--json")
+	if code != 0 {
+		t.Fatalf("second next code = %d, want 0; stderr = %q", code, stderr)
+	}
+	result := assertJSONResult(t, stdout, "next")
+	var shared bool
+	for _, warning := range result.Warnings {
+		if warning.Code == core.WarningAssignmentShared && strings.Contains(warning.Message, "one@example.com") {
+			shared = true
+		}
+	}
+	if !shared {
+		t.Fatalf("next warnings = %#v, want the shared claim reported by the command that reconciled it", result.Warnings)
+	}
+	// And the task it shares is still the task it is offered, because it holds
+	// it too.
+	if got := decodeNextTask(t, stdout); got == nil || got.ID != task.ID {
+		t.Fatalf("next = %#v, want the shared task %s offered back to a holder", got, task.ID)
+	}
 }
 
 func decodeNextTask(t *testing.T, output string) *core.Task {

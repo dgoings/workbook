@@ -109,13 +109,18 @@ New tasks land in ` + "`backlog`" + `.
 ` + "`workbook next`" + ` claims from ` + "`ready`" + `.
 A dependency is satisfied once it reaches ` + "`done`" + `.
 
-1. Select work with ` + "`workbook next --json`" + `, or read a known task with
-   ` + "`workbook show <id> --json`" + `. Keep the canonical full ID from ` + "`data.id`" + `.
-2. Claim it with ` + "`workbook update <id> --status <status> --json`" + ` before
-   editing files, naming the status this project uses for work under way.
+1. Select work with ` + "`workbook next --claim --json`" + `, which picks the next
+   eligible task and assigns it to you in one command, or read a known task
+   with ` + "`workbook show <id> --json`" + `. Keep the full ID from ` + "`data.id`" + `.
+2. Take it up with ` + "`workbook update <id> --status <status> --assign self" + `
+   --json` + "`" + ` before editing files, naming the status this project uses for
+   work under way. Both changes are recorded as one, so neither lands
+   without the other.
 3. Move it along the statuses above as the work progresses, including the
    one this project uses for review, and into a status tagged ` + "`done`" + ` only
    after the work is accepted and merged.
+4. Give it back with ` + "`workbook update <id> --unassign self`" + ` if you stop
+   without finishing.
 `
 
 // section returns one "## " heading's block, so a pinned section fails on its

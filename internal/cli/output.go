@@ -176,15 +176,22 @@ func writeSyncPhaseResult(
 	jsonMode bool,
 	renderText func(io.Writer),
 ) {
-	writeSyncPhaseResultWithConfig(output, command, data, conflicts, nil, jsonMode, renderText)
+	writeSyncPhaseResultWithConfig(output, command, data, conflicts, nil, nil, jsonMode, renderText)
 }
 
+// writeSyncPhaseResultWithConfig carries warnings for the same reason
+// writeResultWithWarnings does: a synchronization can succeed while having
+// something to say that its own result has no member for — that this clone now
+// shares a task it claimed, above all — and the warnings ride the envelope
+// member every other command already uses. Text mode leaves them to renderText,
+// because they belong on standard error and this function only holds stdout.
 func writeSyncPhaseResultWithConfig(
 	output io.Writer,
 	command string,
 	data any,
 	conflicts []core.Conflict,
 	configConflicts []core.ConfigConflict,
+	warnings []core.Warning,
 	jsonMode bool,
 	renderText func(io.Writer),
 ) {
@@ -196,6 +203,7 @@ func writeSyncPhaseResultWithConfig(
 			Data:           data,
 			Conflict:       conflicts,
 			ConfigConflict: configConflicts,
+			Warnings:       warnings,
 		})
 		return
 	}

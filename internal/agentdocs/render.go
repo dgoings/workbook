@@ -84,13 +84,38 @@ func RenderGuidelines(project core.ProjectConfig, vocabulary core.Vocabulary) st
 		"A dependency is satisfied once it reaches %s.\n",
 		"No status is tagged `done`, so no dependency is ever satisfied.\n"))
 	builder.WriteString("\n")
-	builder.WriteString("1. Select work with `workbook next --json`, or read a known task with\n")
-	builder.WriteString("   `workbook show <id> --json`. Keep the canonical full ID from `data.id`.\n")
-	builder.WriteString("2. Claim it with `workbook update <id> --status <status> --json` before\n")
-	builder.WriteString("   editing files, naming the status this project uses for work under way.\n")
+	builder.WriteString("1. Select work with `workbook next --claim --json`, which picks the next\n")
+	builder.WriteString("   eligible task and assigns it to you in one command, or read a known task\n")
+	builder.WriteString("   with `workbook show <id> --json`. Keep the full ID from `data.id`.\n")
+	builder.WriteString("2. Take it up with `workbook update <id> --status <status> --assign self\n")
+	builder.WriteString("   --json` before editing files, naming the status this project uses for\n")
+	builder.WriteString("   work under way. Both changes are recorded as one, so neither lands\n")
+	builder.WriteString("   without the other.\n")
 	builder.WriteString("3. Move it along the statuses above as the work progresses, including the\n")
 	builder.WriteString("   one this project uses for review, and into a status tagged `done` only\n")
-	builder.WriteString("   after the work is accepted and merged.\n\n")
+	builder.WriteString("   after the work is accepted and merged.\n")
+	builder.WriteString("4. Give it back with `workbook update <id> --unassign self` if you stop\n")
+	builder.WriteString("   without finishing.\n\n")
+
+	builder.WriteString("## Assignments say who is responsible\n\n")
+	builder.WriteString("An assignment is `self`, an email address, or either followed by `/label`\n")
+	builder.WriteString("naming one agent of that identity — `--assign self/impl-1`. It blocks\n")
+	builder.WriteString("nothing and expires never, and only the identity it names or whoever\n")
+	builder.WriteString("recorded it may take it away.\n\n")
+	builder.WriteString("`workbook next` skips tasks another identity is assigned to and you are\n")
+	builder.WriteString("not, so a fleet does not hand two agents the same work; `--any` offers the\n")
+	builder.WriteString("whole eligible set. A task you already hold is still offered to you, and\n")
+	builder.WriteString("claiming it again records nothing.\n\n")
+	builder.WriteString("`workbook update <id> --assign self` exits 10 when somebody else holds\n")
+	builder.WriteString("that task and you do not, and records nothing: pick another task, or pass\n")
+	builder.WriteString("`--force` to work on it alongside them deliberately. `workbook next\n")
+	builder.WriteString("--claim` never exits 10 — it has already skipped what somebody else holds\n")
+	builder.WriteString("— and answers a fully claimed board with a null `data` and a\n")
+	builder.WriteString("`next-held-by-others` warning instead.\n\n")
+	builder.WriteString("An `assignment-shared` warning means you hold the task together with\n")
+	builder.WriteString("somebody else, either because you forced it or because two claims raced\n")
+	builder.WriteString("and both were kept. The work was recorded; decide with the other party\n")
+	builder.WriteString("rather than removing their assignment, which Workbook refuses anyway.\n\n")
 
 	builder.WriteString("## Machine-readable output\n\n")
 	builder.WriteString("Every command accepts `--json` except `serve`. Success is a single compact\n")
@@ -113,6 +138,7 @@ func RenderGuidelines(project core.ProjectConfig, vocabulary core.Vocabulary) st
 		{core.CategoryStaleWrite, "retry the identical command; it will probably succeed"},
 		{core.CategoryCorruptData, "read the message; repair or rebuild before continuing"},
 		{core.CategoryConflict, "read the envelope's `conflict` list, change the input, then retry"},
+		{core.CategoryAssigned, "somebody else holds that task; pick another one, or `--force` to share it"},
 	} {
 		builder.WriteString("| " + strconv.Itoa(core.ExitCode(core.Errorf(category.category, "x"))) +
 			" | `" + string(category.category) + "` | " + category.remedy + " |\n")

@@ -202,7 +202,7 @@ func runSetup(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 	result.TaskCount = len(tasks)
 
 	if *jsonMode {
-		writeSyncPhaseResultWithConfig(stdout, "setup", result, conflicts, configConflicts, true, func(io.Writer) {})
+		writeSyncPhaseResultWithConfig(stdout, "setup", result, conflicts, configConflicts, nil, true, func(io.Writer) {})
 		return syncErr
 	}
 	fmt.Fprintf(stdout, "Repository:\t%s\n", result.Repository)
