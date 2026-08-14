@@ -22,18 +22,7 @@ func createReadyTask(t *testing.T, repository, title string) core.Task {
 	return decodeMutationTask(t, stdout, "create")
 }
 
-func showTask(t *testing.T, repository, id string) core.Task {
-	t.Helper()
-	code, stdout, stderr := run(t, repository, "show", id, "--json")
-	if code != 0 {
-		t.Fatalf("show code = %d, want 0; stderr = %q", code, stderr)
-	}
-	var detail core.TaskDetail
-	if err := json.Unmarshal(assertJSONResult(t, stdout, "show").Data, &detail); err != nil {
-		t.Fatalf("decode show detail: %v", err)
-	}
-	return detail.Task
-}
+// showTask lives in thread_test.go, which reads a task back the same way.
 
 func assignmentValues(assignments []core.Assignment) []string {
 	values := make([]string, 0, len(assignments))
@@ -211,6 +200,71 @@ func TestUpdateAssignComposesWithAStatusInOnePack(t *testing.T) {
 	if subject := gitOutput(t, repository, "log", "-1", "--format=%s", "refs/workbook/tasks/"+task.ID); !strings.Contains(subject, "assign "+assignTestActor) ||
 		!strings.Contains(subject, "status") {
 		t.Fatalf("commit subject = %q, want it to name both changes", subject)
+	}
+}
+
+// The two families that ride `update` compose with each other, not merely each
+// with the fields.
+//
+// A status, a comment and an assignment in one invocation are one pack: the
+// intents are members of one UpdateInput, so either all three landed or none
+// did. This is what both stories promised separately, and it is only true
+// jointly if neither of them reached for a write of its own.
+func TestUpdateComposesAStatusACommentAndAnAssignmentInOnePack(t *testing.T) {
+	repository := initializedRepository(t)
+	task := createReadyTask(t, repository, "Composed three ways")
+	before := gitOutput(t, repository, "rev-list", "--count", "refs/workbook/tasks/"+task.ID)
+
+	code, stdout, stderr := run(t, repository,
+		"update", task.ID,
+		"--status", "in-progress",
+		"--comment", "picking this up",
+		"--assign", "self",
+		"--no-sync", "--json")
+	if code != 0 {
+		t.Fatalf("composed update code = %d, want 0; stderr = %q", code, stderr)
+	}
+	updated := decodeMutationTask(t, stdout, "update")
+	if updated.Status != core.StatusInProgress {
+		t.Fatalf("status = %q, want in-progress", updated.Status)
+	}
+	if len(updated.Comments) != 1 || updated.Comments[0].Body != "picking this up" {
+		t.Fatalf("comments = %#v, want the one this update carried", updated.Comments)
+	}
+	assertAssignments(t, updated, assignTestActor)
+
+	after := gitOutput(t, repository, "rev-list", "--count", "refs/workbook/tasks/"+task.ID)
+	if before != "1" || after != "2" {
+		t.Fatalf("commit count went %s → %s, want exactly one new commit for all three intents", before, after)
+	}
+	// One pack, and one commit subject naming every intent in it.
+	subject := gitOutput(t, repository, "log", "-1", "--format=%s", "refs/workbook/tasks/"+task.ID)
+	for _, wanted := range []string{"status", "comment added", "assign " + assignTestActor} {
+		if !strings.Contains(subject, wanted) {
+			t.Errorf("commit subject = %q, want it to name %q", subject, wanted)
+		}
+	}
+	// And the change log records them as one entry, which is the same claim read
+	// from the other end.
+	code, stdout, stderr = run(t, repository, "show", task.ID, "--history", "--json")
+	if code != 0 {
+		t.Fatalf("show --history code = %d, want 0; stderr = %q", code, stderr)
+	}
+	var detail core.TaskDetail
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "show").Data, &detail); err != nil {
+		t.Fatalf("decode history: %v", err)
+	}
+	if detail.History == nil || detail.History.Total != 2 {
+		t.Fatalf("history = %#v, want the create and one update", detail.History)
+	}
+	fields := map[string]bool{}
+	for _, change := range detail.History.Changes[len(detail.History.Changes)-1].Fields {
+		fields[change.Field] = true
+	}
+	for _, wanted := range []string{"status", "comment", "assignments"} {
+		if !fields[wanted] {
+			t.Errorf("last change fields = %v, want %q among them", fields, wanted)
+		}
 	}
 }
 
