@@ -752,6 +752,52 @@ func TestFileAttachmentCeilingsRefuseAndSuggestALink(t *testing.T) {
 		}
 	})
 
+	// The budget's growth rule, pinned where a flat ceiling would answer
+	// differently: the swap below leaves the task *still* over the ceiling and
+	// yet smaller than it was. validateThreadGrowth allows that after the fold,
+	// so the price charged before the bytes are staged has to allow it too — a
+	// budget that compared only against the ceiling would refuse a mutation the
+	// fold would have accepted, which is the one way the two checks can
+	// disagree about what is allowed.
+	t.Run("a shrinking swap that stays over the ceiling", func(t *testing.T) {
+		over := base
+		over.Attachments = []Attachment{
+			{
+				ID: attachOneID, Author: threadActor, AddedAt: threadWallTime,
+				AttachmentData: AttachmentData{
+					Name: "huge.bin", Kind: AttachmentFile,
+					Size: MaxLiveAttachmentBytes * 2, Blob: threadBlobOID,
+				},
+			},
+			{
+				ID: attachTwoID, Author: threadActor, AddedAt: threadWallTime,
+				AttachmentData: AttachmentData{
+					Name: "large.bin", Kind: AttachmentFile,
+					Size: MaxLiveAttachmentBytes + 1, Blob: threadBlobOID,
+				},
+			},
+		}
+		service, store, blobs := threadServiceUnderTest(t, over)
+		result, err := service.UpdateMutation(context.Background(), threadTaskID, UpdateInput{
+			Attachments: []AttachmentChange{
+				{AttachmentID: attachOneID, Remove: true},
+				{Kind: AttachmentFile, Name: "small.png", Content: []byte("a few bytes")},
+			},
+		})
+		if err != nil {
+			t.Fatalf("UpdateMutation() error = %v; a swap that shrinks an over-ceiling task must be admitted "+
+				"before staging, exactly as the post-fold check admits it", err)
+		}
+		if got := LiveAttachmentBytes(result.Task.Attachments); got <= MaxLiveAttachmentBytes {
+			t.Fatalf("live bytes after the swap = %d, want the task still over %d; the fixture stopped "+
+				"exercising the growth rule", got, MaxLiveAttachmentBytes)
+		}
+		if len(blobs.staged) != 1 || len(store.writes) != 1 {
+			t.Fatalf("swap staged %d blobs and wrote %d packs, want one of each",
+				len(blobs.staged), len(store.writes))
+		}
+	})
+
 	// The pre-staging price and the post-fold ceiling have to agree, including
 	// where the growth rule makes them permissive: a task already over the
 	// ceiling may swap a large attachment for a smaller one, and a budget that
@@ -955,9 +1001,22 @@ func TestTheAttachmentCountCeilingRefusesGrowthAndAllowsRepair(t *testing.T) {
 		t.Fatalf("a refused attachment wrote %d packs", len(store.writes))
 	}
 
+	// A task carried past the ceiling by a replay nobody could have written
+	// differently is not a wedged task. This block is the only assertion the
+	// growth term in the guard changes, and its absence is why dropping that
+	// term used to leave every package green.
 	over := full
 	over.Attachments = append(append([]Attachment(nil), full.Attachments...),
 		threadFixtureAttachment(MaxAttachmentCount))
+	title := "Renamed anyway"
+	service, store, _ = threadServiceUnderTest(t, over)
+	if _, err := service.UpdateMutation(context.Background(), threadTaskID, UpdateInput{Title: &title}); err != nil {
+		t.Fatalf("UpdateMutation() error = %v; a ceiling this pack does not raise must not refuse it", err)
+	}
+	if len(store.writes) != 1 {
+		t.Fatalf("writes = %d, want one", len(store.writes))
+	}
+
 	service, store, _ = threadServiceUnderTest(t, over)
 	if _, err := service.AttachmentRemoveMutation(context.Background(), threadTaskID,
 		AttachmentRemoveInput{AttachmentID: over.Attachments[0].ID}); err != nil {

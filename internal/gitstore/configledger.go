@@ -957,7 +957,8 @@ func validateConfigObjects(
 	if err != nil {
 		return configRecord{}, err
 	}
-	if entries[configOperationPath] != operationBlob.objectID || entries[configStatePath] != stateBlob.objectID {
+	if entries.objectID(configOperationPath) != operationBlob.objectID ||
+		entries.objectID(configStatePath) != stateBlob.objectID {
 		return configRecord{}, core.Errorf(core.CategoryCorruptData,
 			"the Workbook configuration tree entries do not match their batch objects")
 	}
@@ -972,7 +973,7 @@ func validateConfigObjects(
 	// and the marker exists so that such a commit reads as newer rather than as
 	// broken.
 	if !pack.RequiresNewerReader() {
-		if err := validateConfigTreeEntryNames(entries); err != nil {
+		if err := validateConfigTreeEntries(entries); err != nil {
 			return configRecord{}, err
 		}
 	}
