@@ -81,6 +81,71 @@ func TestProjectionRoundTripsAssignments(t *testing.T) {
 	}
 }
 
+// The schema version has to move whenever the projected shape does, and this
+// is what makes a revert of the constant fail rather than pass quietly.
+//
+// The table probe in requiredSchemaExists already catches a real cache written
+// by an older build, because that cache has no task_assignments table — which
+// is exactly why the constant needs its own test. Left to the probe alone, the
+// constant could be reverted to "3" and nothing would notice, and the next
+// change that alters a *column* rather than adding a table would ship with a
+// stale stamp and no probe to save it.
+//
+// So this stamps the previous version onto an otherwise-current cache and
+// requires it to be discarded. With the constant at "4" the stamp mismatches
+// and the cache is rebuilt; revert it to "3" and the stamp matches, the cache
+// survives, and this fails.
+func TestACacheStampedWithThePreviousSchemaVersionIsDiscarded(t *testing.T) {
+	ctx := context.Background()
+	config := testConfig()
+	// Belt and braces: the behavioural half below is what actually pins the
+	// stamp, and this says out loud which version it is pinned against.
+	if schemaVersion != "4" {
+		t.Fatalf("schemaVersion = %q, want \"4\"; assignments moved it there", schemaVersion)
+	}
+	snapshot := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-stamped", "Stamped")
+	snapshot.State.Task.Assignments = []core.Assignment{
+		{Principal: "dylan@example.com", Creator: "dylan@example.com", CreatedAt: time.Now().UTC()},
+	}
+	source := &staticHeadSource{
+		heads:     []gitstore.TaskHead{{TaskID: snapshot.State.TaskID, ObjectID: snapshot.Head}},
+		snapshots: map[string]core.Snapshot{snapshot.Head: snapshot},
+	}
+	cachePath := filepath.Join(t.TempDir(), "cache.sqlite")
+	store, err := openStore(ctx, source, config, cachePath)
+	if err != nil {
+		t.Fatalf("openStore() error = %v", err)
+	}
+	if _, err := store.Rebuild(ctx); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+
+	// Age the stamp without touching the tables, which is the one thing the
+	// probe cannot see.
+	if _, err := store.db.ExecContext(ctx,
+		`UPDATE projection_meta SET value = '3' WHERE key = 'schema_version'`); err != nil {
+		t.Fatalf("age the schema stamp: %v", err)
+	}
+	// A row the source no longer serves, so a rebuild is observable.
+	if _, err := store.db.ExecContext(ctx,
+		`UPDATE tasks SET title = 'Stale title' WHERE task_id = ?`, snapshot.State.TaskID); err != nil {
+		t.Fatalf("dirty the cached row: %v", err)
+	}
+
+	reopened, err := openStore(ctx, source, config, cachePath)
+	if err != nil {
+		t.Fatalf("openStore(reopened) error = %v", err)
+	}
+	got, err := reopened.Get(ctx, config, snapshot.State.TaskID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got.State.Task.Title != snapshot.State.Task.Title {
+		t.Fatalf("title = %q, want the rebuilt %q; a cache stamped with an older schema version must be discarded",
+			got.State.Task.Title, snapshot.State.Task.Title)
+	}
+}
+
 func mustGet(t *testing.T, store *Store, config core.ProjectConfig, taskID string) core.Snapshot {
 	t.Helper()
 	snapshot, err := store.Get(context.Background(), config, taskID)

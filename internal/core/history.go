@@ -290,17 +290,28 @@ func describeOperation(operation Operation, before, after TaskData) []FieldChang
 // and a no-op contributes no field change at all. The pack still appears in the
 // log, attributed and timestamped, summarized as having recorded no visible
 // change — which is exactly what happened.
+//
+// What is compared is the whole record, not merely whether the value is there.
+// A pack that removes an assignment and re-adds it — which nothing this build's
+// boundary writes, but which a composed pack could — leaves the same value in
+// place while replacing its creator and its creation time. The creation time is
+// the clock a staleness display is computed from, so a log that called that
+// "nothing" would quietly reset the one number somebody was reading. Comparing
+// records reports it honestly, as a removal and an addition, which is what the
+// two operations did.
 func describeAssignment(operation Operation, before, after TaskData) []FieldChange {
 	principal, label, err := SplitAssignmentValue(operation.Value)
 	if err != nil {
 		return nil
 	}
-	_, heldBefore := findAssignment(before.Assignments, principal, label)
-	_, heldAfter := findAssignment(after.Assignments, principal, label)
+	beforeIndex, heldBefore := findAssignment(before.Assignments, principal, label)
+	afterIndex, heldAfter := findAssignment(after.Assignments, principal, label)
+	unchanged := heldBefore && heldAfter &&
+		sameAssignmentRecord(before.Assignments[beforeIndex], after.Assignments[afterIndex])
 	switch {
-	case operation.Type == OperationAssignAdd && !heldBefore && heldAfter:
+	case operation.Type == OperationAssignAdd && heldAfter && !unchanged:
 		return []FieldChange{{Field: "assignments", Kind: ChangeAdded, To: operation.Value}}
-	case operation.Type == OperationAssignRemove && heldBefore && !heldAfter:
+	case operation.Type == OperationAssignRemove && heldBefore && !unchanged:
 		return []FieldChange{{Field: "assignments", Kind: ChangeRemoved, From: operation.Value}}
 	default:
 		return nil

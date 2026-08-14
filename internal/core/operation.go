@@ -391,9 +391,11 @@ func applyCreate(pack OperationPack, projectKey string) (StateDocument, error) {
 	if operation.Task.CreatedAt.IsZero() {
 		return StateDocument{}, corrupt("task.create requires createdAt")
 	}
-	if len(operation.Task.Assignments) > 0 {
-		return StateDocument{}, corrupt("task.create must not contain assignments")
-	}
+	// Assignments are refused in validateTaskCreateOperation, which Apply has
+	// already run over this pack through validateOperationPackDocument. A second
+	// copy of the rule here would be unreachable, and an unreachable guard is
+	// worse than none: it reads as the load-bearing one, so a change that broke
+	// the real check would look covered.
 
 	task := copyTaskData(*operation.Task)
 	task.UpdatedAt = pack.WallTime

@@ -99,10 +99,22 @@ func (assignment Assignment) RemovableBy(actor string) bool {
 // It is deliberately weaker than what the mutation boundary asks for, and the
 // difference is the same one ValidateStatusToken draws: this runs over
 // operations another clone already committed, so it may only reject values no
-// build could have written. What it excludes is whitespace and ASCII control
-// characters, for the reasons a status token excludes them — an assignment
-// value is written into a Git commit subject, an HTML attribute on the board,
-// and a shell word.
+// build could have written.
+//
+// What it excludes is precisely U+0000–U+0020 and U+007F: the C0 control
+// characters, the ASCII space, and DEL. That is the set that would break the
+// grammars an assignment value has to survive — a Git commit subject, where a
+// newline ends the subject; a shell word, where a space splits it; an HTML
+// attribute on the board.
+//
+// It does not exclude non-ASCII whitespace or formatting characters. U+00A0,
+// U+200B and U+202E all pass, and that is a deliberate limit rather than an
+// oversight: every consumer already handles them — DisplayLine collapses what
+// it renders, JSON escaping covers storage, and the board escapes attributes —
+// and a fold that reached for a Unicode property table would be legislating
+// about other people's identities from inside the one place that must not.
+// This is already stricter than normalizeLabels, which bounds nothing but
+// emptiness.
 //
 // The empty principal and the empty label are refused too, but separately, so
 // that each says which half is missing rather than restating the whole grammar.
@@ -318,11 +330,7 @@ func copyAssignments(assignments []Assignment) []Assignment {
 	return append([]Assignment(nil), assignments...)
 }
 
-// SameAssignments compares two assignment lists member by member, and compares
-// the creation times with Equal rather than with ==. A time carrying a
-// monotonic reading is not == to the same instant read back out of JSON, and
-// one side of every comparison this feeds is a freshly folded state whose clock
-// came from time.Now.
+// SameAssignments compares two assignment lists member by member.
 //
 // It is exported for reconciliation, which decides whether a replayed pack
 // earns a commit by asking whether it changed anything an operator can see. A
@@ -334,12 +342,23 @@ func SameAssignments(left, right []Assignment) bool {
 		return false
 	}
 	for index := range left {
-		if left[index].Principal != right[index].Principal ||
-			left[index].Label != right[index].Label ||
-			left[index].Creator != right[index].Creator ||
-			!left[index].CreatedAt.Equal(right[index].CreatedAt) {
+		if !sameAssignmentRecord(left[index], right[index]) {
 			return false
 		}
 	}
 	return true
+}
+
+// sameAssignmentRecord compares two assignments in full — identity and
+// attribution both.
+//
+// It is not `==`, and the reason is the creation time: a time carrying a
+// monotonic reading is not `==` to the same instant read back out of JSON, and
+// one side of these comparisons is routinely a freshly folded state whose clock
+// came from time.Now.
+func sameAssignmentRecord(left, right Assignment) bool {
+	return left.Principal == right.Principal &&
+		left.Label == right.Label &&
+		left.Creator == right.Creator &&
+		left.CreatedAt.Equal(right.CreatedAt)
 }

@@ -362,10 +362,19 @@ func TestApplyRefusesATaskCreateCarryingAssignments(t *testing.T) {
 	task.Assignments = []Assignment{{Principal: dylan, Creator: dylan, CreatedAt: createdAt}}
 	pack.Operations[0].Task = &task
 
-	if _, err := Apply(nil, pack, "WB"); err == nil {
+	_, err := Apply(nil, pack, "WB")
+	if err == nil {
 		t.Fatal("Apply(create with assignments) error = nil, want a refusal")
-	} else if got := CategoryOf(err); got != CategoryCorruptData {
+	}
+	if got := CategoryOf(err); got != CategoryCorruptData {
 		t.Fatalf("category = %q, want %q", got, CategoryCorruptData)
+	}
+	// The message, not just the category. Every other way this pack could be
+	// refused — the canonicality comparison above all — reports corrupt data
+	// too, so a test that checked only the category would stay green with the
+	// guard deleted and would be pinning nothing.
+	if got, want := err.Error(), "task.create must not contain assignments"; !strings.Contains(got, want) {
+		t.Fatalf("refusal = %q, want it to contain %q; a different refusal means the guard is gone", got, want)
 	}
 }
 
@@ -500,6 +509,49 @@ func TestTheChangeLogReportsAssignmentOperationsByTheirEffect(t *testing.T) {
 	if len(removal.Fields) != 1 || removal.Fields[0].Kind != ChangeRemoved ||
 		removal.Fields[0].From != dylan+"/impl-1" {
 		t.Fatalf("the removal row = %#v, want one removed assignment", removal.Fields)
+	}
+}
+
+// A pack that removes an assignment and re-adds it keeps the same value while
+// replacing its creator and its creation time — and the creation time is the
+// clock a staleness display is computed from.
+//
+// Nothing this build's boundary writes composes such a pack, but a composed
+// pack could, so the log has to report it rather than call an identical value
+// "no change" while the number underneath it silently resets.
+func TestTheChangeLogReportsAnAssignmentWhoseAttributionAPackReplaced(t *testing.T) {
+	later := updatedAt.Add(time.Hour)
+	history := TaskHistory{Entries: []HistoryEntry{
+		{Commit: "c1", Operation: createPack()},
+		{Commit: "c2", Operation: assignmentPack(teammate, 2, updatedAt, assign(assignID1, dylan))},
+		// One pack, by the assignee, withdrawing the teammate's tag and
+		// recording their own in its place.
+		{Commit: "c3", Operation: assignmentPack(dylan, 3, later,
+			unassign(assignID2, dylan), assign(assignID3, dylan))},
+	}}
+
+	log := BuildChangeLog("WB", history, 0, true)
+	if log.Truncated != nil {
+		t.Fatalf("change log truncated at %#v", log.Truncated)
+	}
+	replaced := log.Changes[2]
+	want := []FieldChange{
+		{Field: "assignments", Kind: ChangeRemoved, From: dylan},
+		{Field: "assignments", Kind: ChangeAdded, To: dylan},
+	}
+	if !reflect.DeepEqual(replaced.Fields, want) {
+		t.Fatalf("re-attribution row = %#v, want %#v; an unchanged value is not an unchanged record",
+			replaced.Fields, want)
+	}
+
+	// And the record really did move, which is what makes the row true.
+	steps, _ := ReplayHistory("WB", history)
+	final := steps[len(steps)-1].After.Assignments[0]
+	if final.Creator != dylan {
+		t.Fatalf("creator = %q, want %q", final.Creator, dylan)
+	}
+	if !final.CreatedAt.Equal(later) {
+		t.Fatalf("createdAt = %s, want the re-adding pack's %s", final.CreatedAt, later)
 	}
 }
 

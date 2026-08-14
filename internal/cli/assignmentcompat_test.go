@@ -219,6 +219,14 @@ func TestAGenerationZeroBuildTreatsAnAssignedTaskAsANewerWritersWork(t *testing.
 		t.Fatalf("update code = %d, want 9 (newer-writer); stderr = %q", code, stderr)
 	}
 	assertJSONError(t, stderr, core.CategoryNewerWriter, "")
+	// The category alone would let the refusal say anything at all. What an
+	// un-upgraded reader actually needs is the instruction: which task, who
+	// wrote it, and what to do about it.
+	for _, wanted := range []string{assigned.ID, "newer workbook", "upgrade workbook"} {
+		if !strings.Contains(stderr, wanted) {
+			t.Fatalf("refusal = %q, want it to contain %q", stderr, wanted)
+		}
+	}
 	for _, forbidden := range []string{"corrupt", "damaged", "invalid history"} {
 		if strings.Contains(strings.ToLower(stderr), forbidden) {
 			t.Fatalf("refusal = %q, want no claim that the repository is %s", stderr, forbidden)
@@ -284,6 +292,11 @@ func TestAGenerationZeroBuildStillSynchronizesAProjectWithAssignments(t *testing
 		t.Fatalf("old sync code = %d, want 9 (newer-writer); stderr = %q", code, stderr)
 	}
 	assertJSONError(t, stderr, core.CategoryNewerWriter, "")
+	for _, wanted := range []string{"newer workbook", "upgrade workbook"} {
+		if !strings.Contains(stderr, wanted) {
+			t.Fatalf("sync refusal = %q, want it to contain %q", stderr, wanted)
+		}
+	}
 
 	// Nothing was lost and nothing wedged: the local commit is still the task's
 	// head, origin's tip is tracked, and the unrelated task published.
