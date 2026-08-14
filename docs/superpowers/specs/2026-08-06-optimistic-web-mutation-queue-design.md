@@ -599,6 +599,46 @@ changed nothing says so instead of collecting the server's refusal for a change
 with nothing in it — the same empty-diff guard the detail form keeps, for the
 same reason.
 
+## Comments and attachments are outside the queue
+
+The task page grew two panels below its form — the comment thread and the
+attachment list — writing through five routes that take `expectedHead` exactly
+as the routes above do: `POST/PATCH/DELETE /api/tasks/{id}/comments[/{cid}]` and
+`POST/DELETE /api/tasks/{id}/attachments[/{aid}]`. They go through `mutateTask`,
+so the funnel this design describes is still the only one, and the head they
+name is the head the open form holds — the same value a save from that form
+names, moved by whichever of them writes first, the way a dependency edge
+already moves it.
+
+None of them is a queued intent, and that is a decision rather than an omission.
+The queue's bargain is that a change can be drawn before it is durable because
+the client can predict what the change produces: a card in another column, at a
+place the client chose. It cannot predict any of what these produce. A comment's
+identifier is the ULID of the operation that records it, and its author and
+timestamps come from the pack's envelope, so an optimistic comment would be a
+row with no identity to edit or remove drawn under an attribution this client
+invented; an attachment's bytes are not on the board at all, and its identifier
+is minted the same way. So each panel disables its controls, sends with the head
+it read, and draws the thread the answer carries — which is what the form beside
+it has always done, for the same reason.
+
+What they borrow from the queue is its recovery. A refusal is reported in the
+panel it was made in and the text stays where it was typed; a `stale-write`
+forces the same refresh and re-bases the panel's head onto the version the
+server holds, so the retry is made against a version somebody has read; and a
+change that outlives the page it was made on reports through the notice, naming
+the task and offering the route back, exactly as a detached save does.
+
+A poll does not rebuild these panels. It replaces the thread they draw, in
+place, the way it updates the relationship sidebar — except for a comment the
+reader has open in an editor, whose row is kept across every render, because a
+poll lands once a second and rebuilding that row would take the sentence being
+typed with it.
+
+**The board's cards say nothing about any of this.** No comment count, no
+attachment indicator: they are not in the design, and a card that grew one would
+be a card that changes size under a poll.
+
 ## Auto-sync state in the UI
 
 The board reports whether it is deferring to a watcher or publishing inline, and
