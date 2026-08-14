@@ -642,29 +642,8 @@ func TestTwoClonesClaimingOneTask(t *testing.T) {
 // claimed *or* the synchronization that reconciled tells the claimant, and why
 // this repro drives the second one.
 func TestAClaimThatLosesThePushRaceIsReportedBySyncing(t *testing.T) {
-	first, second := cliSyncRepositories(t)
-	cliGit(t, first, "config", "user.email", "one@example.com")
-	cliGit(t, second, "config", "user.email", "two@example.com")
-
-	task := cliCreateTask(t, first, "Contested")
-	if code, _, stderr := run(t, first, "update", task.ID, "--status", "ready"); code != 0 {
-		t.Fatalf("make ready code = %d, want 0; stderr = %q", code, stderr)
-	}
-	if code, _, stderr := run(t, second, "fetch"); code != 0 {
-		t.Fatalf("second fetch code = %d, want 0; stderr = %q", code, stderr)
-	}
-
-	// B claims locally without publishing, which is the state a claim is in
-	// between its write and its push.
-	if code, _, stderr := run(t, second, "update", task.ID, "--assign", "self", "--no-sync"); code != 0 {
-		t.Fatalf("second claim code = %d, want 0; stderr = %q", code, stderr)
-	}
+	_, second, task := stagedClaimRace(t)
 	assertAssignments(t, showTask(t, second, task.ID), "two@example.com")
-
-	// A claims and publishes first, so B's unpublished claim has lost.
-	if code, _, stderr := run(t, first, "update", task.ID, "--assign", "self"); code != 0 {
-		t.Fatalf("first claim code = %d, want 0; stderr = %q", code, stderr)
-	}
 
 	code, stdout, stderr := run(t, second, "sync", "--json")
 	if code != 0 {
@@ -695,23 +674,7 @@ func TestAClaimThatLosesThePushRaceIsReportedBySyncing(t *testing.T) {
 // one that tells the claimant, so an agent that simply asks for its next task
 // hears it too.
 func TestAReconciledClaimIsReportedByTheNextCommandThatFetches(t *testing.T) {
-	first, second := cliSyncRepositories(t)
-	cliGit(t, first, "config", "user.email", "one@example.com")
-	cliGit(t, second, "config", "user.email", "two@example.com")
-
-	task := cliCreateTask(t, first, "Contested")
-	if code, _, stderr := run(t, first, "update", task.ID, "--status", "ready"); code != 0 {
-		t.Fatalf("make ready code = %d, want 0; stderr = %q", code, stderr)
-	}
-	if code, _, stderr := run(t, second, "fetch"); code != 0 {
-		t.Fatalf("second fetch code = %d, want 0; stderr = %q", code, stderr)
-	}
-	if code, _, stderr := run(t, second, "update", task.ID, "--assign", "self", "--no-sync"); code != 0 {
-		t.Fatalf("second claim code = %d, want 0; stderr = %q", code, stderr)
-	}
-	if code, _, stderr := run(t, first, "update", task.ID, "--assign", "self"); code != 0 {
-		t.Fatalf("first claim code = %d, want 0; stderr = %q", code, stderr)
-	}
+	_, second, task := stagedClaimRace(t)
 
 	code, stdout, stderr := run(t, second, "next", "--json")
 	if code != 0 {
@@ -732,6 +695,83 @@ func TestAReconciledClaimIsReportedByTheNextCommandThatFetches(t *testing.T) {
 	if got := decodeNextTask(t, stdout); got == nil || got.ID != task.ID {
 		t.Fatalf("next = %#v, want the shared task %s offered back to a holder", got, task.ID)
 	}
+}
+
+// The command that reconciles is very often an ordinary one that has nothing to
+// do with assignment — `update <id> --status in-progress` is literally the step
+// the README, the skill and the generated guidelines tell an agent to run right
+// after claiming — and it must report the sharing just the same.
+//
+// This is the case that was silently lost: the mutation's own result reports
+// sharing only when the update carried an assignment, so a status change had
+// nothing to say, while the reconcile pass skipped the task because the result
+// had "already reported" it. Both channels went quiet on the one task that
+// needed either of them, and no later command could pick it up, because by then
+// there was nothing left to reconcile.
+func TestANonAssignmentMutationThatReconcilesAClaimReportsTheSharing(t *testing.T) {
+	_, second, task := stagedClaimRace(t)
+
+	// The take-it-up step, run on the very task whose claim lost the race.
+	code, stdout, stderr := run(t, second, "update", task.ID, "--status", "in-progress", "--json")
+	if code != 0 {
+		t.Fatalf("status update code = %d, want 0; stderr = %q", code, stderr)
+	}
+	result := assertJSONResult(t, stdout, "update")
+	if got, want := warningCodes(result.Warnings), []string{core.WarningAssignmentShared}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("warnings = %q, want exactly %q from the command that reconciled the claim", got, want)
+	}
+	if !strings.Contains(result.Warnings[0].Message, "one@example.com") || !strings.Contains(result.Warnings[0].Message, task.ID) {
+		t.Fatalf("warning = %q, want it to name the task and the other holder", result.Warnings[0].Message)
+	}
+	assertAssignments(t, showTask(t, second, task.ID), "one@example.com", "two@example.com")
+}
+
+// The other half of the same rule: an update that did carry an assignment says
+// it once, not once per channel. The result's own report and the reconcile pass
+// would otherwise both name the same task.
+func TestAnAssignmentThatReconcilesItsOwnClaimReportsTheSharingOnce(t *testing.T) {
+	_, second, task := stagedClaimRace(t)
+
+	// Re-claiming is a no-op on the assignment, so everything this reports comes
+	// from the reconcile the same command performed.
+	code, stdout, stderr := run(t, second, "update", task.ID, "--assign", "self", "--json")
+	if code != 0 {
+		t.Fatalf("re-claim code = %d, want 0; stderr = %q", code, stderr)
+	}
+	result := assertJSONResult(t, stdout, "update")
+	if got, want := warningCodes(result.Warnings), []string{core.WarningAssignmentShared}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("warnings = %q, want exactly one %q rather than one per channel", got, want)
+	}
+	assertAssignments(t, showTask(t, second, task.ID), "one@example.com", "two@example.com")
+}
+
+// stagedClaimRace leaves the two clones exactly where the push race the design
+// names leaves them: `second` holds an unpublished claim, `first` has published
+// one, and nothing has reconciled yet. What each test then varies is only which
+// command does the reconciling.
+func stagedClaimRace(t *testing.T) (first, second string, task core.Task) {
+	t.Helper()
+	first, second = cliSyncRepositories(t)
+	cliGit(t, first, "config", "user.email", "one@example.com")
+	cliGit(t, second, "config", "user.email", "two@example.com")
+
+	task = cliCreateTask(t, first, "Contested")
+	if code, _, stderr := run(t, first, "update", task.ID, "--status", "ready"); code != 0 {
+		t.Fatalf("make ready code = %d, want 0; stderr = %q", code, stderr)
+	}
+	if code, _, stderr := run(t, second, "fetch"); code != 0 {
+		t.Fatalf("second fetch code = %d, want 0; stderr = %q", code, stderr)
+	}
+	// The loser claims locally without publishing, which is the state a claim is
+	// in between its write and its push.
+	if code, _, stderr := run(t, second, "update", task.ID, "--assign", "self", "--no-sync"); code != 0 {
+		t.Fatalf("second claim code = %d, want 0; stderr = %q", code, stderr)
+	}
+	// The winner claims and publishes, so the unpublished claim has lost.
+	if code, _, stderr := run(t, first, "update", task.ID, "--assign", "self"); code != 0 {
+		t.Fatalf("first claim code = %d, want 0; stderr = %q", code, stderr)
+	}
+	return first, second, task
 }
 
 func decodeNextTask(t *testing.T, output string) *core.Task {

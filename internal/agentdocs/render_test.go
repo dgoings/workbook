@@ -123,6 +123,40 @@ A dependency is satisfied once it reaches ` + "`done`" + `.
    without finishing.
 `
 
+// The assignment section is pinned for a stronger reason than the lifecycle
+// block beside it: it is where the generated guidelines state a machine
+// contract — which exit code means somebody else holds the task, which warning
+// means the work is shared, and which command can produce neither. An agent
+// acts on those sentences, so a drift here is a change to what the tool
+// promises rather than a change of wording, and it should have to be made
+// deliberately.
+//
+// It is written as quoted lines rather than a raw literal because nearly every
+// line of it contains a backtick.
+const defaultAssignmentSection = "## Assignments say who is responsible\n" +
+	"\n" +
+	"An assignment is `self`, an email address, or either followed by `/label`\n" +
+	"naming one agent of that identity — `--assign self/impl-1`. It blocks\n" +
+	"nothing and expires never, and only the identity it names or whoever\n" +
+	"recorded it may take it away.\n" +
+	"\n" +
+	"`workbook next` skips tasks another identity is assigned to and you are\n" +
+	"not, so a fleet does not hand two agents the same work; `--any` offers the\n" +
+	"whole eligible set. A task you already hold is still offered to you, and\n" +
+	"claiming it again records nothing.\n" +
+	"\n" +
+	"`workbook update <id> --assign self` exits 10 when somebody else holds\n" +
+	"that task and you do not, and records nothing: pick another task, or pass\n" +
+	"`--force` to work on it alongside them deliberately. `workbook next\n" +
+	"--claim` never exits 10 — it has already skipped what somebody else holds\n" +
+	"— and answers a fully claimed board with a null `data` and a\n" +
+	"`next-held-by-others` warning instead.\n" +
+	"\n" +
+	"An `assignment-shared` warning means you hold the task together with\n" +
+	"somebody else, either because you forced it or because two claims raced\n" +
+	"and both were kept. The work was recorded; decide with the other party\n" +
+	"rather than removing their assignment, which Workbook refuses anyway.\n"
+
 // section returns one "## " heading's block, so a pinned section fails on its
 // own content rather than on an unrelated edit elsewhere in the document.
 func section(t *testing.T, guidelines, heading string) string {
@@ -148,6 +182,9 @@ func TestRenderGuidelinesPinsTheDefaultVocabularyRendering(t *testing.T) {
 	if got := section(t, guidelines, "## Task lifecycle"); got != defaultLifecycleSection {
 		t.Errorf("lifecycle section =\n%s\nwant\n%s", got, defaultLifecycleSection)
 	}
+	if got := section(t, guidelines, "## Assignments say who is responsible"); got != defaultAssignmentSection {
+		t.Errorf("assignment section =\n%s\nwant\n%s", got, defaultAssignmentSection)
+	}
 }
 
 // The fallback rendering is pinned beside the minted one because it is the
@@ -166,6 +203,9 @@ func TestRenderGuidelinesPinsTheLegacyVocabularyRendering(t *testing.T) {
 	}
 	if got := section(t, guidelines, "## Task lifecycle"); got != defaultLifecycleSection {
 		t.Errorf("lifecycle section =\n%s\nwant\n%s", got, defaultLifecycleSection)
+	}
+	if got := section(t, guidelines, "## Assignments say who is responsible"); got != defaultAssignmentSection {
+		t.Errorf("assignment section =\n%s\nwant\n%s", got, defaultAssignmentSection)
 	}
 	// A caller that configured no vocabulary documents these six statuses,
 	// because that is what such a project is using — not the five this build

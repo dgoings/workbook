@@ -791,7 +791,7 @@ func runUpdate(ctx context.Context, args []string, cwd string, stdout, stderr io
 	} else {
 		result.Warnings = append(result.Warnings, assignmentSharingWarnings(result)...)
 		result.Warnings = append(result.Warnings,
-			reconciledSharingWarnings(ctx, session.service, session.fetched, result.Task.ID)...)
+			reconciledSharingWarnings(ctx, session.service, session.fetched, reportedSharing(result))...)
 	}
 	return writeThreadMutationOutcome(stdout, stderr, "update", session, result, err, *jsonMode, changes)
 }
@@ -911,6 +911,26 @@ func assignmentSharingWarnings(result core.MutationResult) []core.Warning {
 		return nil
 	}
 	return []core.Warning{sharedAssignmentWarning(result.Task.ID, result.Others)}
+}
+
+// reportedSharing names the task a mutation's own result already spoke about,
+// so the reconcile pass does not say it twice — and names nothing when the
+// result had nothing to say.
+//
+// The distinction is the whole of it. `Others` is populated only by an update
+// that carried an assignment, so a command that changed something else entirely
+// reports no sharing at all, and treating its task as already-reported silenced
+// both channels at once. The command that closed that hole is the ordinary one:
+// `update <id> --status in-progress` is what the documentation tells an agent
+// to run after claiming, so it is exactly the command most likely to be the one
+// performing the reconcile — on precisely the task whose claim lost the race,
+// which no later command would ever mention, because by then there is nothing
+// left to reconcile.
+func reportedSharing(result core.MutationResult) string {
+	if len(result.Others) == 0 {
+		return ""
+	}
+	return result.Task.ID
 }
 
 func sharedAssignmentWarning(taskID string, others []core.Assignment) core.Warning {
