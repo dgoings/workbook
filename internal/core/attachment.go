@@ -218,6 +218,29 @@ func AttachmentMediaType(name string) string {
 	return DefaultAttachmentMedia
 }
 
+// IsScriptableImageMediaType reports a media type Workbook refuses to store,
+// because storing it would be storing a lie with consequences.
+//
+// An SVG is a document that can carry script, and it is the one image type for
+// which "serve every image inline" and "never serve attacker-controlled markup
+// on our own origin" contradict each other. The extension table above already
+// declines to *derive* an SVG type, but a caller may name one — the web upload
+// will pass a browser-supplied type straight through — so the rule cannot live
+// in the table alone. It is asked at the authoring boundary, where somebody can
+// be told, and again of any stored document, so that no clone can hand the web
+// board an attachment labelled as an image that a browser would execute.
+//
+// The comparison is case-insensitive even though the stored-document pattern
+// only admits lowercase: this is a security rule, and a security rule that
+// depends on another rule's charset is one refactor from being no rule.
+func IsScriptableImageMediaType(media string) bool {
+	switch strings.ToLower(strings.TrimSpace(media)) {
+	case "image/svg+xml", "image/svg":
+		return true
+	}
+	return false
+}
+
 // validateAttachmentOperation checks an attachment operation's shape and never
 // its size, for the reason validateCommentOperation records.
 func validateAttachmentOperation(operation Operation) error {
@@ -260,6 +283,9 @@ func validateAttachmentData(data AttachmentData) error {
 		}
 		if data.Media != "" && !mediaTypePattern.MatchString(data.Media) {
 			return corrupt("attachment media type %q is invalid", data.Media)
+		}
+		if IsScriptableImageMediaType(data.Media) {
+			return corrupt("attachment media type %q is not storable", data.Media)
 		}
 		if data.URL != "" || data.Label != "" {
 			return corrupt("a file attachment must not carry a link")

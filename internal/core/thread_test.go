@@ -3,7 +3,9 @@ package core
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -729,7 +731,7 @@ func TestFileAttachmentCeilingsRefuseAndSuggestALink(t *testing.T) {
 				Name: "already.bin", Kind: AttachmentFile, Size: MaxLiveAttachmentBytes, Blob: threadBlobOID,
 			},
 		}}
-		service, store, _ := threadServiceUnderTest(t, crowded)
+		service, store, blobs := threadServiceUnderTest(t, crowded)
 		_, err := service.AttachmentAddMutation(context.Background(), threadTaskID, AttachmentAddInput{
 			Kind: AttachmentFile, Name: "one-more.png", Content: []byte("more bytes"),
 		})
@@ -739,8 +741,44 @@ func TestFileAttachmentCeilingsRefuseAndSuggestALink(t *testing.T) {
 		if !strings.Contains(err.Error(), "attach a link instead") {
 			t.Fatalf("refusal = %q, want it to suggest a link", err)
 		}
+		// This is the half that was claimed and not checked: the ceiling has to
+		// refuse before the bytes are written, or a refused attachment leaves
+		// its object in the database for a later `git gc` to find.
+		if len(blobs.staged) != 0 {
+			t.Fatalf("a refused attachment staged %d blobs", len(blobs.staged))
+		}
 		if len(store.writes) != 0 {
 			t.Fatalf("a refused attachment wrote %d packs", len(store.writes))
+		}
+	})
+
+	// The pre-staging price and the post-fold ceiling have to agree, including
+	// where the growth rule makes them permissive: a task already over the
+	// ceiling may swap a large attachment for a smaller one, and a budget that
+	// only compared against the ceiling would refuse that.
+	t.Run("a swap that shrinks an over-ceiling task", func(t *testing.T) {
+		over := base
+		over.Attachments = []Attachment{{
+			ID: attachOneID, Author: threadActor, AddedAt: threadWallTime,
+			AttachmentData: AttachmentData{
+				Name: "already.bin", Kind: AttachmentFile, Size: MaxLiveAttachmentBytes * 2, Blob: threadBlobOID,
+			},
+		}}
+		service, store, blobs := threadServiceUnderTest(t, over)
+		result, err := service.UpdateMutation(context.Background(), threadTaskID, UpdateInput{
+			Attachments: []AttachmentChange{
+				{AttachmentID: attachOneID, Remove: true},
+				{Kind: AttachmentFile, Name: "smaller.png", Content: []byte("a few bytes")},
+			},
+		})
+		if err != nil {
+			t.Fatalf("UpdateMutation() error = %v; shrinking below what a task already holds must be allowed", err)
+		}
+		if len(blobs.staged) != 1 || len(store.writes) != 1 {
+			t.Fatalf("swap staged %d blobs and wrote %d packs, want one of each", len(blobs.staged), len(store.writes))
+		}
+		if len(result.Task.Attachments) != 1 || result.Task.Attachments[0].Name != "smaller.png" {
+			t.Fatalf("attachments after the swap = %#v", result.Task.Attachments)
 		}
 	})
 
@@ -820,6 +858,204 @@ func TestAttachingALinkStoresNothingAndValidatesTheScheme(t *testing.T) {
 	}
 	if len(store.writes) != 0 {
 		t.Fatalf("a refused link wrote %d packs", len(store.writes))
+	}
+}
+
+// threadFixtureComment builds the nth comment of a crowded thread. The
+// identifiers are sequential so the fixture is already in the canonical order
+// the fold would put it in.
+func threadFixtureComment(index int) Comment {
+	return Comment{
+		ID:        fmt.Sprintf("01K0M6B8A4FTT8C39MXXY%05d", index),
+		Author:    threadActor,
+		Body:      fmt.Sprintf("remark %d", index),
+		CreatedAt: threadWallTime,
+	}
+}
+
+func threadFixtureAttachment(index int) Attachment {
+	return Attachment{
+		ID:      fmt.Sprintf("01K0M6B8A4FTT8C39MXXZ%05d", index),
+		Author:  threadActor,
+		AddedAt: threadWallTime,
+		AttachmentData: AttachmentData{
+			Kind: AttachmentLink,
+			URL:  fmt.Sprintf("https://example.test/%d", index),
+		},
+	}
+}
+
+// The two count ceilings, which nothing else in the suite would miss.
+//
+// Both were claimed and neither was checked: deleting the guards left every
+// package green. What they have to do is refuse the addition that crosses the
+// bound, name the bound, and — because two people can cross one concurrently
+// without either being told — keep letting a task that is already over it be
+// worked with and, above all, be shrunk.
+func TestTheCommentCountCeilingRefusesGrowthAndAllowsRepair(t *testing.T) {
+	base := TaskData{Title: "Task", Status: StatusBacklog, Priority: PriorityMedium, Rank: "1/1"}
+	full := base
+	for index := 0; index < MaxCommentCount; index++ {
+		full.Comments = append(full.Comments, threadFixtureComment(index))
+	}
+
+	service, store, _ := threadServiceUnderTest(t, full)
+	_, err := service.CommentAddMutation(context.Background(), threadTaskID, CommentAddInput{Body: "one too many"})
+	if got := CategoryOf(err); got != CategoryValidation {
+		t.Fatalf("category = %q, want %q; error = %v", got, CategoryValidation, err)
+	}
+	if !strings.Contains(err.Error(), strconv.Itoa(MaxCommentCount)) {
+		t.Fatalf("refusal = %q, want it to name the ceiling %d", err, MaxCommentCount)
+	}
+	if len(store.writes) != 0 {
+		t.Fatalf("a refused comment wrote %d packs", len(store.writes))
+	}
+
+	// A task carried past the ceiling by a replay nobody could have written
+	// differently is not a wedged task.
+	over := full
+	over.Comments = append(append([]Comment(nil), full.Comments...), threadFixtureComment(MaxCommentCount))
+	title := "Renamed anyway"
+	service, store, _ = threadServiceUnderTest(t, over)
+	if _, err := service.UpdateMutation(context.Background(), threadTaskID, UpdateInput{Title: &title}); err != nil {
+		t.Fatalf("UpdateMutation() error = %v; a ceiling this pack does not raise must not refuse it", err)
+	}
+	if len(store.writes) != 1 {
+		t.Fatalf("writes = %d, want one", len(store.writes))
+	}
+
+	service, store, _ = threadServiceUnderTest(t, over)
+	if _, err := service.CommentRemoveMutation(context.Background(), threadTaskID,
+		CommentRemoveInput{CommentID: over.Comments[0].ID}); err != nil {
+		t.Fatalf("CommentRemoveMutation() error = %v; the way back under a ceiling must never be refused", err)
+	}
+	if len(store.writes) != 1 {
+		t.Fatalf("writes = %d, want one", len(store.writes))
+	}
+}
+
+func TestTheAttachmentCountCeilingRefusesGrowthAndAllowsRepair(t *testing.T) {
+	base := TaskData{Title: "Task", Status: StatusBacklog, Priority: PriorityMedium, Rank: "1/1"}
+	full := base
+	for index := 0; index < MaxAttachmentCount; index++ {
+		full.Attachments = append(full.Attachments, threadFixtureAttachment(index))
+	}
+
+	service, store, _ := threadServiceUnderTest(t, full)
+	_, err := service.AttachmentAddMutation(context.Background(), threadTaskID, AttachmentAddInput{
+		Kind: AttachmentLink, URL: "https://example.test/one-too-many",
+	})
+	if got := CategoryOf(err); got != CategoryValidation {
+		t.Fatalf("category = %q, want %q; error = %v", got, CategoryValidation, err)
+	}
+	if !strings.Contains(err.Error(), strconv.Itoa(MaxAttachmentCount)) {
+		t.Fatalf("refusal = %q, want it to name the ceiling %d", err, MaxAttachmentCount)
+	}
+	if len(store.writes) != 0 {
+		t.Fatalf("a refused attachment wrote %d packs", len(store.writes))
+	}
+
+	over := full
+	over.Attachments = append(append([]Attachment(nil), full.Attachments...),
+		threadFixtureAttachment(MaxAttachmentCount))
+	service, store, _ = threadServiceUnderTest(t, over)
+	if _, err := service.AttachmentRemoveMutation(context.Background(), threadTaskID,
+		AttachmentRemoveInput{AttachmentID: over.Attachments[0].ID}); err != nil {
+		t.Fatalf("AttachmentRemoveMutation() error = %v; the way back under a ceiling must never be refused", err)
+	}
+	if len(store.writes) != 1 {
+		t.Fatalf("writes = %d, want one", len(store.writes))
+	}
+}
+
+// A stored media type is written into an HTTP response header by the web board,
+// so the shape rule is a security rule and these are the shapes that make it
+// one. Each is refused by the fold as corrupt data — a document nobody wrote on
+// purpose — rather than tolerated into a checkpoint some later reader trusts.
+func TestAStoredMediaTypeIsRefusedUnlessItIsAPlainToken(t *testing.T) {
+	for _, media := range []string{
+		"text/plain\r\nX-Injected: 1",
+		"text/plain\nX-Injected: 1",
+		"text/plain; charset=utf-8",
+		"text/plain ",
+		" text/plain",
+		`text/"plain"`,
+		"text/plain, text/html",
+		"Text/Plain",
+		"text",
+		"text/",
+		"/plain",
+		"text/plain/extra",
+	} {
+		parent := threadParent(TaskData{})
+		operation := Operation{ID: attachOneID, Type: OperationAttachmentAdd, Attachment: &AttachmentData{
+			Name: "a.txt", Kind: AttachmentFile, Media: media, Size: 1, Blob: threadBlobOID,
+		}}
+		_, err := Apply(&parent, threadPack(parent, operation), serviceTestConfig.Key)
+		if got := CategoryOf(err); got != CategoryCorruptData {
+			t.Fatalf("Apply(media %q) category = %q, want %q; error = %v",
+				media, got, CategoryCorruptData, err)
+		}
+	}
+
+	// And the ordinary ones still fold, so the rule is a filter rather than a
+	// wall.
+	for _, media := range []string{"text/plain", "image/png", "application/vnd.api+json", "text/x-diff"} {
+		parent := threadParent(TaskData{})
+		operation := Operation{ID: attachOneID, Type: OperationAttachmentAdd, Attachment: &AttachmentData{
+			Name: "a.bin", Kind: AttachmentFile, Media: media, Size: 1, Blob: threadBlobOID,
+		}}
+		if _, err := Apply(&parent, threadPack(parent, operation), serviceTestConfig.Key); err != nil {
+			t.Fatalf("Apply(media %q) error = %v", media, err)
+		}
+	}
+}
+
+// The SVG rule, at both layers, because one layer was not enough: the extension
+// table declines to derive an SVG type, and a caller can name one anyway.
+//
+// The property being defended is the web board's, and it is a property of what
+// is *stored*: the board serves image/* inline, so an attachment stored as an
+// SVG image would be script on the board's origin no matter what the upload
+// path checked.
+func TestAnSVGIsNeverStoredAsAnImage(t *testing.T) {
+	base := TaskData{Title: "Task", Status: StatusBacklog, Priority: PriorityMedium, Rank: "1/1"}
+	for _, media := range []string{"image/svg+xml", "image/svg"} {
+		service, store, blobs := threadServiceUnderTest(t, base)
+		_, err := service.AttachmentAddMutation(context.Background(), threadTaskID, AttachmentAddInput{
+			Kind: AttachmentFile, Name: "diagram.svg", Content: []byte("<svg onload=\"alert(1)\"/>"), Media: media,
+		})
+		if got := CategoryOf(err); got != CategoryValidation {
+			t.Fatalf("AttachmentAddMutation(%q) category = %q, want %q; error = %v",
+				media, got, CategoryValidation, err)
+		}
+		if len(blobs.staged) != 0 || len(store.writes) != 0 {
+			t.Fatalf("a refused SVG staged %d blobs and wrote %d packs", len(blobs.staged), len(store.writes))
+		}
+
+		// The fold refuses one too, so a clone that got the operation from
+		// somewhere else cannot hand the board an inline SVG either.
+		parent := threadParent(TaskData{})
+		operation := Operation{ID: attachOneID, Type: OperationAttachmentAdd, Attachment: &AttachmentData{
+			Name: "diagram.svg", Kind: AttachmentFile, Media: media, Size: 1, Blob: threadBlobOID,
+		}}
+		if _, err := Apply(&parent, threadPack(parent, operation), serviceTestConfig.Key); CategoryOf(err) != CategoryCorruptData {
+			t.Fatalf("Apply(media %q) category = %q, want %q; error = %v",
+				media, CategoryOf(err), CategoryCorruptData, err)
+		}
+	}
+
+	// The file itself is still attachable. It is stored as bytes to download,
+	// which is what the extension table's silence about `.svg` produces.
+	service, _, _ := threadServiceUnderTest(t, base)
+	result, err := service.AttachmentAddMutation(context.Background(), threadTaskID, AttachmentAddInput{
+		Kind: AttachmentFile, Name: "diagram.svg", Content: []byte("<svg/>"),
+	})
+	if err != nil {
+		t.Fatalf("AttachmentAddMutation(no media) error = %v; an SVG must still be attachable", err)
+	}
+	if got := result.Task.Attachments[0].Media; got != DefaultAttachmentMedia {
+		t.Fatalf("stored media = %q, want %q", got, DefaultAttachmentMedia)
 	}
 }
 

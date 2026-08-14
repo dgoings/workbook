@@ -456,8 +456,14 @@ type reorderStatusesRequest struct {
 	ExpectedHead *string       `json:"expectedHead"`
 }
 
-// updateTaskRequest is converted directly to core.UpdateInput, so its fields
-// must stay identical in name, type, and order.
+// updateTaskRequest is the shape this endpoint accepts, which is deliberately
+// narrower than core.UpdateInput and no longer tied to it.
+//
+// It used to be converted to that type directly, which required the two structs
+// to stay identical in name, type, and order — a coupling that made the API
+// surface change whenever the service input did. The service input now also
+// carries the comment and attachment intents an update may ride with, which
+// this endpoint does not accept; see input below.
 type updateTaskRequest struct {
 	Title        *string        `json:"title"`
 	Description  *string        `json:"description"`

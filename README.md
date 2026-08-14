@@ -2068,6 +2068,17 @@ tampering or a bug, not a version skew, and telling somebody to upgrade their
 way out of a broken ref would be wrong. A marker at or below the reader's
 generation changes nothing at all.
 
+**The commit's tree is judged by the same rule, and after the marker.** A
+generation may add entries to a commit tree — generation 1 did, for attachment
+blobs — so tree shape is checked only once the pack beside it has been decoded,
+and skipped entirely when the pack declares a generation the reader cannot fold.
+What holds at every generation is that `operation.json` and `state.json` are
+there as regular blobs, because a reader that cannot find the checkpoint cannot
+serve the task at all. An entry a reader does not recognize *at its own
+generation* is still `corrupt-data`; one under a newer marker is simply not that
+reader's to judge. Checking it any earlier would have put a wall in front of the
+next format change in the very place the marker exists to remove one.
+
 **Before v0.5.0 there is no signal**, and honesty about what that costs matters
 more than the reassurance. Installed binaries are frozen; v0.4.4 and earlier
 predate the marker entirely, and their behavior against a newer pack is whatever

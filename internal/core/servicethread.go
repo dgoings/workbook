@@ -143,14 +143,60 @@ func (s Service) threadOperations(ctx context.Context, task TaskData, input Upda
 		}
 		operations = append(operations, operation)
 	}
+	budget := newAttachmentBudget(task, input.Attachments)
 	for _, change := range input.Attachments {
-		operation, err := s.attachmentOperation(ctx, task, change)
+		operation, err := s.attachmentOperation(ctx, task, change, &budget)
 		if err != nil {
 			return nil, err
 		}
 		operations = append(operations, operation)
 	}
 	return operations, nil
+}
+
+// attachmentBudget prices this pack's file attachments before any of their
+// bytes are written.
+//
+// The ceiling is also enforced after the fold, by validateThreadGrowth, which
+// is the authority: it sees the state every operation actually produced. This
+// exists so the refusal happens before StageAttachment writes a Git object,
+// because a refused eleven-megabyte attachment used to leave eleven megabytes
+// in the object database for a `git gc` to find later. The rule is the same
+// rule, growth and all, so the two cannot disagree about what is allowed —
+// including the case that makes the growth rule necessary, a task already over
+// the ceiling swapping a large attachment for a smaller one.
+type attachmentBudget struct {
+	// before is what the task's live file attachments weigh now, and after what
+	// they would weigh once this pack folds.
+	before int64
+	after  int64
+}
+
+func newAttachmentBudget(task TaskData, changes []AttachmentChange) attachmentBudget {
+	budget := attachmentBudget{before: LiveAttachmentBytes(task.Attachments)}
+	budget.after = budget.before
+	for _, change := range changes {
+		if !change.Remove {
+			continue
+		}
+		if index := findAttachment(task.Attachments, change.AttachmentID); index >= 0 &&
+			task.Attachments[index].Kind == AttachmentFile {
+			budget.after -= task.Attachments[index].Size
+		}
+	}
+	return budget
+}
+
+func (budget *attachmentBudget) admit(size int64) error {
+	budget.after += size
+	if budget.after > MaxLiveAttachmentBytes && budget.after > budget.before {
+		return Errorf(
+			CategoryValidation,
+			"task would hold %d bytes of attached files and must not exceed %d; attach a link instead",
+			budget.after, MaxLiveAttachmentBytes,
+		)
+	}
+	return nil
 }
 
 func (s Service) commentOperation(task TaskData, change CommentChange) (Operation, error) {
@@ -185,7 +231,12 @@ func (s Service) commentOperation(task TaskData, change CommentChange) (Operatio
 	return Operation{Type: OperationCommentEdit, CommentID: change.CommentID, Body: body}, nil
 }
 
-func (s Service) attachmentOperation(ctx context.Context, task TaskData, change AttachmentChange) (Operation, error) {
+func (s Service) attachmentOperation(
+	ctx context.Context,
+	task TaskData,
+	change AttachmentChange,
+	budget *attachmentBudget,
+) (Operation, error) {
 	if change.Remove {
 		if change.AttachmentID == "" {
 			return Operation{}, Errorf(CategoryValidation, "removing an attachment requires its ID")
@@ -207,13 +258,17 @@ func (s Service) attachmentOperation(ctx context.Context, task TaskData, change 
 			Label: strings.TrimSpace(change.Label),
 		}}, nil
 	case AttachmentFile:
-		return s.fileAttachmentOperation(ctx, change)
+		return s.fileAttachmentOperation(ctx, change, budget)
 	default:
 		return Operation{}, Errorf(CategoryValidation, "attachment kind must be file or link")
 	}
 }
 
-func (s Service) fileAttachmentOperation(ctx context.Context, change AttachmentChange) (Operation, error) {
+func (s Service) fileAttachmentOperation(
+	ctx context.Context,
+	change AttachmentChange,
+	budget *attachmentBudget,
+) (Operation, error) {
 	name := strings.TrimSpace(change.Name)
 	if name == "" {
 		return Operation{}, Errorf(CategoryValidation, "attached file must have a name")
@@ -235,6 +290,9 @@ func (s Service) fileAttachmentOperation(ctx context.Context, change AttachmentC
 			name, size, MaxAttachmentFileBytes,
 		)
 	}
+	if err := budget.admit(size); err != nil {
+		return Operation{}, err
+	}
 	media := strings.TrimSpace(change.Media)
 	if media == "" {
 		media = AttachmentMediaType(name)
@@ -244,6 +302,20 @@ func (s Service) fileAttachmentOperation(ctx context.Context, change AttachmentC
 		// media type corrupt data, which is right about a stored document and
 		// wrong about a value somebody just typed.
 		return Operation{}, Errorf(CategoryValidation, "attachment media type %q is invalid", media)
+	}
+	// Refused whether the caller named it or the file's name implied it. The
+	// extension table declines to derive an SVG type, but a caller may hand one
+	// over — the web upload will pass the browser's own guess through this same
+	// method — and an attachment stored as an image the board serves inline is
+	// script on the board's origin. The file itself is perfectly attachable; it
+	// is simply bytes to download rather than a picture to render.
+	if IsScriptableImageMediaType(media) {
+		return Operation{}, Errorf(
+			CategoryValidation,
+			"an attachment must not be stored as %q, because an SVG served inline can carry script; "+
+				"attach it without a media type and it is served as a download",
+			media,
+		)
 	}
 	if s.Blobs == nil {
 		return Operation{}, Errorf(CategoryOperational, "attachment blob store is not configured")

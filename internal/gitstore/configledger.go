@@ -953,7 +953,7 @@ func validateConfigObjects(
 		return configRecord{}, core.Errorf(core.CategoryCorruptData,
 			"the Workbook configuration commit tree does not match its batch object")
 	}
-	entries, err := parseRawTaskTree(tree.contents, objectIDBytes)
+	entries, err := parseRawWorkbookTree(tree.contents, objectIDBytes, "the Workbook configuration tree")
 	if err != nil {
 		return configRecord{}, err
 	}
@@ -965,6 +965,16 @@ func validateConfigObjects(
 	pack, err := decodeCanonicalConfigOperation(operationBlob.contents)
 	if err != nil {
 		return configRecord{}, err
+	}
+	// The ledger's tree shape is judged after the pack, and only for a pack this
+	// build can fold, for the reason validateTaskTreeEntryNames records: a
+	// generation this build does not have may write entries it has no name for,
+	// and the marker exists so that such a commit reads as newer rather than as
+	// broken.
+	if !pack.RequiresNewerReader() {
+		if err := validateConfigTreeEntryNames(entries); err != nil {
+			return configRecord{}, err
+		}
 	}
 	if err := validateConfigPackBudget(pack); err != nil {
 		return configRecord{}, err
