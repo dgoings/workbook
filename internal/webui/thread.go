@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"mime"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -106,6 +107,25 @@ var inlineAttachmentMediaTypes = map[string]struct{}{
 	"image/jpeg": {},
 	"image/png":  {},
 	"image/webp": {},
+}
+
+// InlineAttachmentMediaTypes is the same allow-list, sorted, for the page to
+// render into an attribute the client reads.
+//
+// The client needs it because a markdown image resolves to an attachment and
+// only these types come back as pixels: an attachment reference to anything
+// else is drawn as a download link instead of an <img> that would render as a
+// broken image or, worse, as a document. The list is published rather than
+// copied into the script for the reason the attachment ceiling is — a second
+// copy would go on naming the old set the day this one changed, and this set is
+// the one place a type is decided to be safe to render.
+func InlineAttachmentMediaTypes() []string {
+	media := make([]string, 0, len(inlineAttachmentMediaTypes))
+	for name := range inlineAttachmentMediaTypes {
+		media = append(media, name)
+	}
+	sort.Strings(media)
+	return media
 }
 
 // attachmentSecurityPolicy is the content policy an attachment's own bytes are

@@ -4425,6 +4425,11 @@ const boardVocabularyHead = ` + strconv.Quote(vocabularyHead) + `;
 // upload control refuses what the real one refuses rather than what a number
 // invented here would.
 const boardAttachmentLimit = ` + strconv.Itoa(core.MaxAttachmentFileBytes) + `;
+// The media types the download route hands back inline, as the server renders
+// them into the page. The markdown renderer draws an attachment reference as an
+// image only for one of these, so a harness that invented the list would be
+// testing a rule the server does not have.
+const boardInlineMedia = ` + strconv.Quote(strings.Join(InlineAttachmentMediaTypes(), " ")) + `;
 const scrollIntoViewCalls = [];
 function classTokens(element) {
   return (element.className || "").split(/\s+/).filter(Boolean);
@@ -4561,6 +4566,33 @@ class TestElement {
   }
   set value(value) { this._value = String(value); }
 }
+// A text node. The markdown renderer builds these — a paragraph is text with
+// elements in it, and there is no way to express that through textContent — so
+// the harness has to hold one. It is deliberately inert: no attributes, no
+// dataset entries, no children and no listeners, so a walk that asks any
+// element-shaped question of it gets the same answer it would get from a
+// browser's text node, and a test that asks what elements a render produced
+// never has to special-case it.
+class TestText {
+  constructor(data) {
+    this.nodeType = 3;
+    this.tagName = "#text";
+    this.children = [];
+    this.className = "";
+    this.dataset = {};
+    this.attributes = {};
+    this.eventListeners = {};
+    this._data = String(data);
+  }
+  get textContent() { return this._data; }
+  set textContent(value) { this._data = String(value); }
+  remove() {
+    if (!this.parentElement) return;
+    const index = this.parentElement.children.indexOf(this);
+    if (index >= 0) this.parentElement.children.splice(index, 1);
+    this.parentElement = null;
+  }
+}
 const main = new TestElement("main");
 const boardView = new TestElement("div");
 const stale = new TestElement("p");
@@ -4585,6 +4617,7 @@ const boardLists = boardStatusDefinitions.map(([status, label]) => {
 boardView.dataset.defaultStatus = boardDefaultStatus;
 boardView.dataset.vocabularyHead = boardVocabularyHead;
 boardView.dataset.attachmentLimit = String(boardAttachmentLimit);
+boardView.dataset.inlineMedia = boardInlineMedia;
 // The region that holds tasks whose status matches no column. It is always in
 // the document and hidden while empty, because the status that strands a task
 // arrives on a poll rather than on the first paint, and a region the server
@@ -4666,6 +4699,7 @@ const documentEventListeners = {};
   },
   querySelectorAll() { return []; },
   createElement(tagName) { return new TestElement(tagName); },
+  createTextNode(data) { return new TestText(data); },
   createDocumentFragment() { return new TestElement("fragment"); },
   addEventListener(name, listener) { documentEventListeners[name] = listener; },
   removeEventListener(name, listener) {
@@ -4767,7 +4801,13 @@ function returnTo(path) {
   window.location.href = new URL(path, window.location.href).href;
   if (windowEventListeners.popstate) windowEventListeners.popstate();
 }
+// Both walkers visit elements and only elements. A text node is not something
+// a test looks for by tag, class or data attribute — it has none of them — and
+// a walk that handed one to a predicate written for elements would answer a
+// question nobody asked. The renderer builds text nodes now, so this is stated
+// rather than assumed.
 function findElement(root, predicate) {
+  if (root.nodeType === 3) return null;
   if (predicate(root)) return root;
   for (const child of root.children || []) {
     const match = findElement(child, predicate);
@@ -4776,12 +4816,70 @@ function findElement(root, predicate) {
   return null;
 }
 function findElements(root, predicate, matches = []) {
+  if (root.nodeType === 3) return matches;
   if (predicate(root)) matches.push(root);
   for (const child of root.children || []) findElements(child, predicate, matches);
   return matches;
 }
 function hasDataKey(element, key) {
   return Object.prototype.hasOwnProperty.call(element.dataset || {}, key);
+}
+// Every element under a node, in document order. Text nodes are not elements
+// and are skipped, which is what makes this the list a whitelist is asked of.
+function elementsUnder(root) {
+  const found = [];
+  const visit = (element) => {
+    for (const child of element.children || []) {
+      if (child.nodeType === 3) continue;
+      found.push(child);
+      visit(child);
+    }
+  };
+  visit(root);
+  return found;
+}
+// The whole of what rendered markdown may be. A tag outside this list, an
+// attribute outside it, a class, a data entry, a listener, or any property the
+// renderer set on a node that is not one of the five it is allowed to set — any
+// one of them is a finding, and the walk reports all of them rather than the
+// first, so a failure names everything that went wrong at once.
+//
+// The properties are checked as well as the attributes because this client
+// writes href and rel as properties, the way every other link on the page is
+// written; a check that only read setAttribute would pass a renderer that set
+// onclick.
+const markdownTags = ["P", "H3", "H4", "H5", "H6", "STRONG", "EM", "CODE", "PRE", "UL", "OL", "LI", "BLOCKQUOTE", "A", "IMG", "BR"];
+const markdownProperties = ["href", "rel", "target", "src", "alt"];
+const inertElementKeys = Object.keys(new TestElement("p")).concat(["parentElement"]);
+function markdownViolations(root) {
+  const findings = [];
+  elementsUnder(root).forEach((element) => {
+    if (!markdownTags.includes(element.tagName)) {
+      findings.push("built a <" + element.tagName.toLowerCase() + ">");
+      return;
+    }
+    Object.keys(element.attributes || {}).forEach((name) => {
+      findings.push("<" + element.tagName.toLowerCase() + "> carries the attribute " + name);
+    });
+    Object.keys(element.dataset || {}).forEach((name) => {
+      findings.push("<" + element.tagName.toLowerCase() + "> carries the data entry " + name);
+    });
+    Object.keys(element.eventListeners || {}).forEach((name) => {
+      findings.push("<" + element.tagName.toLowerCase() + "> listens for " + name);
+    });
+    if (element.className) findings.push("<" + element.tagName.toLowerCase() + "> carries the class " + element.className);
+    Object.keys(element).forEach((key) => {
+      if (inertElementKeys.includes(key) || markdownProperties.includes(key)) return;
+      findings.push("<" + element.tagName.toLowerCase() + "> carries the property " + key);
+    });
+    if (element.tagName !== "A" && (element.href || element.rel || element.target)) {
+      findings.push("<" + element.tagName.toLowerCase() + "> carries a link property");
+    }
+    if (element.tagName !== "IMG" && element.src !== undefined) {
+      findings.push("<" + element.tagName.toLowerCase() + "> carries a src");
+    }
+  });
+  return findings;
 }
 // The Deleted column, its list and its cards, or null while the reader has it
 // hidden. It is the client's own element rather than a served one, so a test

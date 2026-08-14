@@ -96,10 +96,19 @@ function submitForm(form) {
 function rowControl(row, caption) {
   return findElement(row, (element) => element.tagName === "BUTTON" && element.textContent === caption);
 }
+// What a comment reads as, whatever elements were built to draw it.
+//
+// This helper used to assert that a body had no children at all, which was the
+// whole of "a comment is text": there was no renderer, so an element under a
+// body could only have come from parsing markup. Bodies carry formatting now,
+// so the guarantee moved rather than went away — every element under one is
+// checked against the renderer's whitelist here, in the same place, so a body
+// that drew a <script> or an onerror fails exactly as loudly as it used to.
 function commentBodyText(row) {
   const body = findElement(row, (element) => hasDataKey(element, "commentBody"));
   if (!body) return null;
-  if (body.children.length !== 0) throw new Error("a comment body drew child elements: " + JSON.stringify(body.textContent));
+  const findings = markdownViolations(body);
+  if (findings.length) throw new Error("a comment body drew what it must not: " + findings.join("; "));
   return body.textContent;
 }
 `

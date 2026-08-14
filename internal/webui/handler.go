@@ -380,6 +380,12 @@ type pageData struct {
 	// second copy of a ceiling core owns — one that would go on naming the old
 	// number the day core's changed.
 	AttachmentFileLimit int64
+	// InlineImageMediaTypes are the media types the attachment route serves
+	// inline, space separated, rendered into the page for the reason the ceiling
+	// above is: the markdown renderer draws an attachment reference as an <img>
+	// only for a type that comes back as pixels, and the set of those types is
+	// the download route's to decide.
+	InlineImageMediaTypes string
 	// StatusTags are the three roles a status may carry, rendered into the
 	// statuses page's forms for the reason the columns are rendered into the
 	// board: the client must not carry a second copy of a set the server owns.
@@ -916,12 +922,13 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 	}
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := handler.page.Execute(writer, pageData{
-		Board:               presentation.NewBoard(activeTasks(tasks), vocabulary.Vocabulary),
-		DefaultStatus:       vocabulary.Vocabulary.Default(),
-		VocabularyHead:      vocabulary.Head,
-		AttachmentFileLimit: core.MaxAttachmentFileBytes,
-		StatusTags:          core.StatusTags(),
-		Administrable:       handler.administrable(),
+		Board:                 presentation.NewBoard(activeTasks(tasks), vocabulary.Vocabulary),
+		DefaultStatus:         vocabulary.Vocabulary.Default(),
+		VocabularyHead:        vocabulary.Head,
+		AttachmentFileLimit:   core.MaxAttachmentFileBytes,
+		InlineImageMediaTypes: strings.Join(InlineAttachmentMediaTypes(), " "),
+		StatusTags:            core.StatusTags(),
+		Administrable:         handler.administrable(),
 	}); err != nil {
 		return
 	}
