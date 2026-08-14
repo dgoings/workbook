@@ -364,7 +364,9 @@ func sameTaskState(parent, next core.TaskData) bool {
 	}
 	return sameStrings(parent.Labels, next.Labels) &&
 		sameStrings(parent.Dependencies, next.Dependencies) &&
-		core.SameAssignments(parent.Assignments, next.Assignments)
+		core.SameAssignments(parent.Assignments, next.Assignments) &&
+		core.SameComments(parent.Comments, next.Comments) &&
+		core.SameAttachments(parent.Attachments, next.Attachments)
 }
 
 func sameStrings(left, right []string) bool {

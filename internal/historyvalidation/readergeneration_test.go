@@ -151,9 +151,10 @@ func TestAValidVerdictDoesNotSurviveADowngrade(t *testing.T) {
 // generation one past whatever this build supports, which keeps them true
 // forever and proves nothing about any particular release. This one is
 // concrete: a cache recorded by a build that folded generation zero — every
-// build before assignments existed — must not be inherited by this build, which
-// folds generation one. If a future story bumps the constant again and forgets
-// what lives beside it, this is the test that says so.
+// build before assignments existed, which is also every build before comments
+// and attachments did — must not be inherited by this build, which folds
+// generation one. If a future story bumps the constant again and forgets what
+// lives beside it, this is the test that says so.
 func TestACacheFromAGenerationZeroBuildDoesNotSurviveTheAssignmentBump(t *testing.T) {
 	if core.SupportedFormatGeneration == 0 {
 		t.Fatal("this build folds generation zero; the assignment bump is missing")

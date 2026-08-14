@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -248,6 +249,14 @@ func validateBatchSnapshot(
 	if err := validateTipTopologyBytes(commit.contents, pack); err != nil {
 		return core.Snapshot{}, err
 	}
+	// A pack that needs a newer reader is exempt, for the reason the checkpoint
+	// fold below is: this build does not know what such a pack's operations
+	// mean and must not judge the tree they asked for.
+	if !pack.RequiresNewerReader() {
+		if err := validateAttachmentBlobs(pack, treeEntries); err != nil {
+			return core.Snapshot{}, err
+		}
+	}
 	state, err := decodeCanonicalState(stateBlob.contents)
 	if err != nil {
 		return core.Snapshot{}, err
@@ -403,13 +412,25 @@ func scanRawTreeEntries(
 	return nil
 }
 
+// parseRawTaskTree reads a task commit's tree: the two documents every commit
+// has, and the attachment blobs a commit that attached a file also carries.
+//
+// The two documents are required and everything else must be an attachment
+// entry, which keeps the shape as strict as it was for everything that is not
+// an attachment — an unexpected name is still corruption. What changed is that
+// the tree may now hold more than two entries at all, and that relaxation ships
+// in the same release as the operations that produce one. A development build
+// from before it reports such a commit as corrupt rather than as newer-writer,
+// because the tree is read before any document is decoded and so before any
+// marker can be consulted; no released reader is in that position, since no
+// release has ever written a third entry.
 func parseRawTaskTree(contents []byte, objectIDBytes int) (map[string]string, error) {
 	entries := make(map[string]string, 2)
 	err := scanRawTreeEntries(contents, objectIDBytes, "task tree", func(mode, name, objectID string) error {
 		if mode != "100644" {
 			return core.Errorf(core.CategoryCorruptData, "task tree entry %q is not a regular blob", name)
 		}
-		if name != "operation.json" && name != "state.json" {
+		if name != "operation.json" && name != "state.json" && !validAttachmentEntryName(name) {
 			return core.Errorf(core.CategoryCorruptData, "task tree has an unexpected entry")
 		}
 		if _, duplicate := entries[name]; duplicate {
@@ -421,10 +442,46 @@ func parseRawTaskTree(contents []byte, objectIDBytes int) (map[string]string, er
 	if err != nil {
 		return nil, err
 	}
-	if len(entries) != 2 {
-		return nil, core.Errorf(core.CategoryCorruptData, "task tree must contain exactly operation.json and state.json")
+	if entries["operation.json"] == "" || entries["state.json"] == "" {
+		return nil, core.Errorf(core.CategoryCorruptData, "task tree must contain operation.json and state.json")
 	}
 	return entries, nil
+}
+
+// attachmentEntryPattern is the one name an attachment entry may have: the
+// prefix and the attachment's ULID, uppercase as every canonical ULID is.
+var attachmentEntryPattern = regexp.MustCompile(`^` + attachmentEntryPrefix + `[0-9A-HJKMNP-TV-Z]{26}$`)
+
+func validAttachmentEntryName(name string) bool {
+	return attachmentEntryPattern.MatchString(name)
+}
+
+// validateAttachmentBlobs checks that a pack which attached files brought them
+// with it.
+//
+// This is the reachability invariant enforced at the moment it can be: the
+// bytes an attachment.add names have to be in the tree of the commit that adds
+// them, so that a task's attachments are reachable through that task's own ref
+// history and through nothing else. A commit that names a blob it does not
+// carry would be a task pointing into somebody else's object graph, which is
+// exactly what the future compaction verb must never have to reason about.
+func validateAttachmentBlobs(pack core.OperationPack, entries map[string]string) error {
+	for _, operation := range pack.Operations {
+		if operation.Type != core.OperationAttachmentAdd || operation.Attachment == nil {
+			continue
+		}
+		if operation.Attachment.Kind != core.AttachmentFile {
+			continue
+		}
+		if entries[attachmentTreeName(operation.ID)] != operation.Attachment.Blob {
+			return core.Errorf(
+				core.CategoryCorruptData,
+				"task commit attaches %s but its tree does not carry the blob",
+				operation.ID,
+			)
+		}
+	}
+	return nil
 }
 
 // ValidateTaskHeadAdvances verifies all changed heads with one bounded ancestry

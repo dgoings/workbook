@@ -467,6 +467,24 @@ type updateTaskRequest struct {
 	ExpectedHead string         `json:"expectedHead"`
 }
 
+// input maps the request onto the service input field by field.
+//
+// It used to be a struct conversion, which was shorter and quietly wrong the
+// moment the two shapes stopped matching: core.UpdateInput now also carries the
+// comment and attachment intents an update may ride with, which this endpoint
+// does not accept and must not accept by accident. Naming the fields is what
+// keeps a new member of either struct from silently becoming part of this API.
+func (body updateTaskRequest) input() core.UpdateInput {
+	return core.UpdateInput{
+		Title:        body.Title,
+		Description:  body.Description,
+		Status:       body.Status,
+		Priority:     body.Priority,
+		Labels:       body.Labels,
+		ExpectedHead: body.ExpectedHead,
+	}
+}
+
 // The page template used to ask a `knownStatus` helper whether this build had a
 // column for a task's status, and the helper answered from a fixed list. The
 // answer is per-project and therefore per-request now, so it is not a template
@@ -1272,7 +1290,7 @@ func (handler *handler) updateTask(writer http.ResponseWriter, request *http.Req
 	if id == "" {
 		id = taskPathID(request.URL.Path)
 	}
-	result, err := handler.Update(request.Context(), id, core.UpdateInput(body))
+	result, err := handler.Update(request.Context(), id, body.input())
 	if err != nil {
 		handler.writeError(writer, err)
 		return

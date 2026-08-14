@@ -183,6 +183,15 @@ type TaskData struct {
 	// repository would change bytes the day this shipped, and a task ref is
 	// append-only shared history that no later release could repair.
 	Assignments []Assignment `json:"assignments,omitempty"`
+	// Comments is the live thread, in creation order, and Attachments is
+	// everything attached to the task, of both kinds, in the same order. Both
+	// omit when empty for the reason Assignments does, and both come after it
+	// for a second reason: field order is JSON member order, so a member
+	// appended after one that already ships leaves every document already
+	// written byte-identical. A task with nothing said about it and nothing
+	// attached to it encodes exactly as it did before either member existed.
+	Comments    []Comment    `json:"comments,omitempty"`
+	Attachments []Attachment `json:"attachments,omitempty"`
 }
 
 // Task is a projected task: the stored document plus the identifiers a caller
@@ -261,6 +270,12 @@ func NormalizeTask(projectKey string, task TaskData) (TaskData, error) {
 	task.Labels = labels
 	task.Dependencies = dependencies
 	task.Assignments = assignments
+	// The thread is ordered and shaped but never bounded here. Its ceilings are
+	// asked at the mutation boundary, for the reason limits.go records at
+	// length: a fold that could fail on a collection's size can be made to fail
+	// forever by two clones each doing something they were allowed to do.
+	task.Comments = normalizeComments(task.Comments)
+	task.Attachments = normalizeAttachments(task.Attachments)
 	if err := validateTaskFieldSizes(task); err != nil {
 		return TaskData{}, err
 	}

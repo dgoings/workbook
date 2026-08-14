@@ -23,6 +23,26 @@ type CanonicalTaskWriter interface {
 	WriteValidated(context.Context, ProjectConfig, *Snapshot, OperationPack, StateDocument, string) (Snapshot, error)
 }
 
+// AttachmentBlobStore durably records an attached file's bytes and reports the
+// object ID the operation will name.
+//
+// It is a separate interface from CanonicalTaskWriter, and separate because the
+// two are needed at different moments. The bytes have to exist as an object
+// before the operation that names them can be built, because the checkpoint
+// stores the object ID — that is what makes reading an attachment one
+// `cat-file` rather than a walk. Writing an object touches no ref, so a
+// mutation that is refused afterwards leaves an unreferenced blob, which is
+// what every other object this build writes ahead of a ref update also leaves
+// and what Git collects.
+//
+// A Service without one can do everything except attach a file, which is why it
+// is a separate field rather than a widened writer: the read-only services the
+// command line builds have no writer at all, and the ones that do gain this in
+// the same breath.
+type AttachmentBlobStore interface {
+	StageAttachment(context.Context, ProjectConfig, []byte) (string, error)
+}
+
 // ProjectionUpdater conditionally advances or invalidates disposable task
 // projection rows after a canonical mutation succeeds.
 type ProjectionUpdater interface {

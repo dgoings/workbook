@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -166,11 +167,80 @@ func (r *Repository) writeTaskObjects(
 	if err != nil {
 		return "", err
 	}
-	tree, err := r.writeTaskTree(ctx, operationBlob, stateBlob)
+	tree, err := r.writeTaskTree(ctx, operationBlob, stateBlob, attachmentTreeEntries(pack)...)
 	if err != nil {
 		return "", err
 	}
 	return r.writeCommit(ctx, tree, parentHead, reason)
+}
+
+// StageAttachment writes an attached file's bytes as a Git object and returns
+// its ID, so that the operation naming it can be built.
+//
+// No ref points at the object yet, and none needs to: the commit this mutation
+// is about to write puts the blob in its own tree, and until that commit's ref
+// update lands the object is unreferenced exactly like the operation and state
+// blobs a mutation writes before it moves anything. A mutation refused after
+// this point leaves a blob for Git to collect.
+func (r *Repository) StageAttachment(ctx context.Context, config core.ProjectConfig, content []byte) (string, error) {
+	if err := r.validateRepositoryConfig(config); err != nil {
+		return "", err
+	}
+	if len(content) == 0 {
+		return "", core.Errorf(core.CategoryValidation, "an attachment must have contents")
+	}
+	if len(content) > core.MaxAttachmentFileBytes {
+		return "", core.Errorf(
+			core.CategoryValidation,
+			"attachment is %d bytes and must not exceed %d; attach a link instead",
+			len(content), core.MaxAttachmentFileBytes,
+		)
+	}
+	return r.writeBlob(ctx, content)
+}
+
+// ReadAttachment returns one attached file's bytes.
+//
+// It reads the object by ID, because the checkpoint recorded the ID and that is
+// the whole point of recording it: an attachment costs one object read rather
+// than a walk of a tree or of a history. The object ceiling still applies, and
+// comfortably: an attachment is bounded at a megabyte and the ceiling is four.
+func (r *Repository) ReadAttachment(ctx context.Context, config core.ProjectConfig, objectID string) ([]byte, error) {
+	if err := r.validateRepositoryConfig(config); err != nil {
+		return nil, err
+	}
+	if err := r.ensureGitObjectIDWidth(ctx); err != nil {
+		return nil, err
+	}
+	if err := r.validateFullObjectID(objectID); err != nil {
+		return nil, core.Wrap(core.CategoryValidation, "attachment object ID is invalid", err)
+	}
+	batch, err := r.startObjectBatch(ctx, func(writer io.Writer) error {
+		_, err := fmt.Fprintf(writer, "%s\n", objectID)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer batch.Close()
+
+	object, err := readBatchObject(batch.Reader())
+	if err != nil {
+		return nil, batch.ReadFailure("cannot read attachment from Git batch", err)
+	}
+	if err := batch.Finish(); err != nil {
+		return nil, err
+	}
+	if object.refused != nil {
+		return nil, object.refused
+	}
+	if object.missing {
+		return nil, core.Errorf(core.CategoryNotFound, "attachment object %s is not in this clone", objectID)
+	}
+	if object.kind != "blob" {
+		return nil, core.Errorf(core.CategoryCorruptData, "attachment object %s is not a blob", objectID)
+	}
+	return object.contents, nil
 }
 
 // commitTaskRefUpdate compare-and-swaps the task ref and retires superseded
@@ -278,10 +348,59 @@ func (r *Repository) writeBlob(ctx context.Context, contents []byte) (string, er
 	return objectID, nil
 }
 
-func (r *Repository) writeTaskTree(ctx context.Context, operationBlob, stateBlob string) (string, error) {
+// attachmentTreeEntries reports the blobs one pack's tree must carry beside its
+// documents, derived from the pack itself.
+//
+// Deriving them rather than passing them alongside is what makes the invariant
+// hold everywhere without being restated. A divergence replay rewrites a local
+// pack onto a fetched tip by handing the same pack back to writeTaskObjects, so
+// the replayed commit carries the same blobs by construction; nothing has to
+// remember to bring them along, and nothing can forget.
+func attachmentTreeEntries(pack core.OperationPack) []attachmentTreeEntry {
+	var entries []attachmentTreeEntry
+	for _, operation := range pack.Operations {
+		if operation.Type != core.OperationAttachmentAdd || operation.Attachment == nil {
+			continue
+		}
+		if operation.Attachment.Kind != core.AttachmentFile {
+			continue
+		}
+		entries = append(entries, attachmentTreeEntry{
+			name:     attachmentTreeName(operation.ID),
+			objectID: operation.Attachment.Blob,
+		})
+	}
+	return entries
+}
+
+type attachmentTreeEntry struct {
+	name     string
+	objectID string
+}
+
+// attachmentEntryPrefix names an attachment blob inside a task commit's tree.
+//
+// The entry is named for the attachment rather than for the file, because a
+// file name is somebody's text — it can collide, contain anything, and differ
+// in case — while an attachment ID is a ULID this build minted. The bytes are
+// still served under their own name: the checkpoint records it.
+const attachmentEntryPrefix = "attachment-"
+
+func attachmentTreeName(attachmentID string) string {
+	return attachmentEntryPrefix + attachmentID
+}
+
+func (r *Repository) writeTaskTree(
+	ctx context.Context,
+	operationBlob, stateBlob string,
+	attachments ...attachmentTreeEntry,
+) (string, error) {
 	var entries bytes.Buffer
 	fmt.Fprintf(&entries, "100644 blob %s\toperation.json\n", operationBlob)
 	fmt.Fprintf(&entries, "100644 blob %s\tstate.json\n", stateBlob)
+	for _, attachment := range attachments {
+		fmt.Fprintf(&entries, "100644 blob %s\t%s\n", attachment.objectID, attachment.name)
+	}
 	output, err := r.Git(ctx, entries.Bytes(), "mktree")
 	if err != nil {
 		return "", err

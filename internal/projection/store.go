@@ -4,6 +4,7 @@ package projection
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -540,11 +541,11 @@ func (s *Store) metaMatches(ctx context.Context) bool {
 func (s *Store) requiredSchemaExists(ctx context.Context) bool {
 	for _, query := range []string{
 		`SELECT key, value FROM projection_meta LIMIT 0`,
-		`SELECT task_id, head, project_id, history_generation, logical_clock, min_reader, title, description, status, priority, rank, created_at, updated_at, deleted FROM tasks LIMIT 0`,
+		`SELECT task_id, head, project_id, history_generation, logical_clock, min_reader, title, description, status, priority, rank, created_at, updated_at, deleted, thread FROM tasks LIMIT 0`,
 		`SELECT task_id, label FROM task_labels LIMIT 0`,
 		`SELECT task_id, dependency_id FROM task_dependencies LIMIT 0`,
 		`SELECT task_id, principal, label, creator, created_at FROM task_assignments LIMIT 0`,
-		`SELECT operation_id, task_id, commit_id, chain_index, pack_index, logical_clock, history_generation, min_reader, actor, wall_time, type, field, value, task_data FROM operations LIMIT 0`,
+		`SELECT operation_id, task_id, commit_id, chain_index, pack_index, logical_clock, history_generation, min_reader, actor, wall_time, type, field, value, task_data, payload FROM operations LIMIT 0`,
 	} {
 		rows, err := s.db.QueryContext(ctx, query)
 		if err != nil {
@@ -1022,12 +1023,16 @@ func upsertSnapshot(ctx context.Context, transaction *sql.Tx, snapshot core.Snap
 	if state.Task.Deleted {
 		deleted = 1
 	}
-	_, err := transaction.ExecContext(ctx, `
-		INSERT INTO tasks (task_id, head, project_id, history_generation, logical_clock, min_reader, title, description, status, priority, rank, created_at, updated_at, deleted)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	thread, err := encodeThread(state.Task)
+	if err != nil {
+		return err
+	}
+	_, err = transaction.ExecContext(ctx, `
+		INSERT INTO tasks (task_id, head, project_id, history_generation, logical_clock, min_reader, title, description, status, priority, rank, created_at, updated_at, deleted, thread)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		state.TaskID, snapshot.Head, state.ProjectID, state.History.Generation, int64(state.LogicalClock),
 		int64(state.MinReader), state.Task.Title, state.Task.Description,
-		string(state.Task.Status), string(state.Task.Priority), state.Task.Rank, formatTime(state.Task.CreatedAt), formatTime(state.Task.UpdatedAt), deleted)
+		string(state.Task.Status), string(state.Task.Priority), state.Task.Rank, formatTime(state.Task.CreatedAt), formatTime(state.Task.UpdatedAt), deleted, thread)
 	if err != nil {
 		return cacheError("insert projected task", err)
 	}
@@ -1089,7 +1094,7 @@ func (s *Store) querySnapshots(ctx context.Context) ([]core.Snapshot, error) {
 	defer transaction.Rollback()
 
 	rows, err := transaction.QueryContext(ctx, `
-		SELECT task_id, head, project_id, history_generation, logical_clock, min_reader, title, description, status, priority, rank, created_at, updated_at, deleted
+		SELECT task_id, head, project_id, history_generation, logical_clock, min_reader, title, description, status, priority, rank, created_at, updated_at, deleted, thread
 		FROM tasks ORDER BY task_id`)
 	if err != nil {
 		return nil, s.databaseError("query projected tasks", err)
@@ -1219,11 +1224,12 @@ func scanSnapshotScalars(scanner rowScanner) (core.Snapshot, error) {
 		deleted   int
 		clock     int64
 		minReader int64
+		thread    string
 	)
 	if err := scanner.Scan(
 		&state.TaskID, &snapshot.Head, &state.ProjectID, &state.History.Generation, &clock, &minReader,
 		&state.Task.Title, &state.Task.Description,
-		&status, &priority, &state.Task.Rank, &created, &updated, &deleted,
+		&status, &priority, &state.Task.Rank, &created, &updated, &deleted, &thread,
 	); err != nil {
 		return core.Snapshot{}, err
 	}
@@ -1253,8 +1259,50 @@ func scanSnapshotScalars(scanner rowScanner) (core.Snapshot, error) {
 	state.Task.CreatedAt = createdAt
 	state.Task.UpdatedAt = updatedAt
 	state.Task.Deleted = deleted == 1
+	if err := decodeThread(&state.Task, thread); err != nil {
+		return core.Snapshot{}, err
+	}
 	snapshot.State = state
 	return snapshot, nil
+}
+
+// projectedThread is how a task's comments and attachments are cached.
+//
+// They are one JSON column on the task row rather than two tables, unlike
+// labels and dependencies. The difference is not a shortcut: a label is
+// queried — `list --label` filters on it in SQL — while a thread is only ever
+// read back whole, with the task it belongs to. The projection stores an
+// operation's task payload the same way and for the same reason.
+//
+// A task with neither is stored as the empty string rather than as `{}`, so
+// that the overwhelmingly common row stays the width it was.
+type projectedThread struct {
+	Comments    []core.Comment    `json:"comments,omitempty"`
+	Attachments []core.Attachment `json:"attachments,omitempty"`
+}
+
+func encodeThread(task core.TaskData) (string, error) {
+	if len(task.Comments) == 0 && len(task.Attachments) == 0 {
+		return "", nil
+	}
+	encoded, err := json.Marshal(projectedThread{Comments: task.Comments, Attachments: task.Attachments})
+	if err != nil {
+		return "", core.Wrap(core.CategoryCorruptData, "cannot project task comments and attachments", err)
+	}
+	return string(encoded), nil
+}
+
+func decodeThread(task *core.TaskData, encoded string) error {
+	if encoded == "" {
+		return nil
+	}
+	var thread projectedThread
+	if err := json.Unmarshal([]byte(encoded), &thread); err != nil {
+		return core.Wrap(core.CategoryCorruptData, "projected task has invalid comments or attachments", err)
+	}
+	task.Comments = thread.Comments
+	task.Attachments = thread.Attachments
+	return nil
 }
 
 func (s *Store) querySnapshot(ctx context.Context, taskID string) (core.Snapshot, bool, error) {
@@ -1265,7 +1313,7 @@ func (s *Store) querySnapshot(ctx context.Context, taskID string) (core.Snapshot
 	defer transaction.Rollback()
 
 	snapshot, err := scanSnapshotScalars(transaction.QueryRowContext(ctx, `
-			SELECT task_id, head, project_id, history_generation, logical_clock, min_reader, title, description, status, priority, rank, created_at, updated_at, deleted
+			SELECT task_id, head, project_id, history_generation, logical_clock, min_reader, title, description, status, priority, rank, created_at, updated_at, deleted, thread
 			FROM tasks WHERE task_id = ?`, taskID))
 	if errors.Is(err, sql.ErrNoRows) {
 		if err := transaction.Commit(); err != nil {

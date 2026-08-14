@@ -92,16 +92,19 @@ func TestProjectionRoundTripsAssignments(t *testing.T) {
 // stale stamp and no probe to save it.
 //
 // So this stamps the previous version onto an otherwise-current cache and
-// requires it to be discarded. With the constant at "4" the stamp mismatches
-// and the cache is rebuilt; revert it to "3" and the stamp matches, the cache
+// requires it to be discarded. With the constant at "5" the stamp mismatches
+// and the cache is rebuilt; revert it to "4" and the stamp matches, the cache
 // survives, and this fails.
+//
+// The versions each release moved it for: "4" was assignments, "5" the comment
+// thread, the attachment list, and the operation payload that records them.
 func TestACacheStampedWithThePreviousSchemaVersionIsDiscarded(t *testing.T) {
 	ctx := context.Background()
 	config := testConfig()
 	// Belt and braces: the behavioural half below is what actually pins the
 	// stamp, and this says out loud which version it is pinned against.
-	if schemaVersion != "4" {
-		t.Fatalf("schemaVersion = %q, want \"4\"; assignments moved it there", schemaVersion)
+	if schemaVersion != "5" {
+		t.Fatalf("schemaVersion = %q, want \"5\"; comments and attachments moved it there", schemaVersion)
 	}
 	snapshot := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-stamped", "Stamped")
 	snapshot.State.Task.Assignments = []core.Assignment{
@@ -123,7 +126,7 @@ func TestACacheStampedWithThePreviousSchemaVersionIsDiscarded(t *testing.T) {
 	// Age the stamp without touching the tables, which is the one thing the
 	// probe cannot see.
 	if _, err := store.db.ExecContext(ctx,
-		`UPDATE projection_meta SET value = '3' WHERE key = 'schema_version'`); err != nil {
+		`UPDATE projection_meta SET value = '4' WHERE key = 'schema_version'`); err != nil {
 		t.Fatalf("age the schema stamp: %v", err)
 	}
 	// A row the source no longer serves, so a rebuild is observable.
