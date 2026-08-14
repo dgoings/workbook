@@ -24,6 +24,22 @@ const (
 	// resolution, and issue the ordinary command again with new input.
 	CategoryConflict    Category = "conflict"
 	CategoryOperational Category = "operational"
+	// CategoryNewerWriter reports history a newer Workbook wrote and this build
+	// is too old to fold.
+	//
+	// It exists to be told apart from CategoryCorruptData, which is the only
+	// answer the format had before it. The two say opposite things about whose
+	// problem this is: corrupt data says a stored document does not follow from
+	// what Workbook wrote and somebody has to repair the repository, while this
+	// says the document is exactly what a teammate's build wrote and the repair
+	// is to upgrade this one. Reporting the second as the first sends people to
+	// fix a repository that is not broken, and — worse — invites them to delete
+	// history they cannot read.
+	//
+	// It is scoped like every other refusal: to the one task or the one ledger
+	// whose history carries the marker. Nothing about it holds back a ref,
+	// another task, or synchronization.
+	CategoryNewerWriter Category = "newer-writer"
 )
 
 type Error struct {
@@ -75,6 +91,8 @@ func ExitCode(err error) int {
 		return 7
 	case CategoryConflict:
 		return 8
+	case CategoryNewerWriter:
+		return 9
 	case CategoryOperational:
 		return 1
 	}

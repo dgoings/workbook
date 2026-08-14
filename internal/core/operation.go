@@ -14,6 +14,38 @@ const (
 	documentVersion     = 1
 )
 
+// SupportedFormatGeneration is the highest writer-format generation this build
+// can fold, for task packs and configuration packs alike.
+//
+// The generation is a second versioning axis beside `version`, and the two
+// answer different questions. `version` names the shape of the envelope: what
+// members exist and what a document is. The generation names the semantics
+// inside it: whether folding this pack needs rules a reader might not have. A
+// new operation type does not change the envelope at all, so bumping `version`
+// for one would tell every reader that everything changed; bumping the
+// generation tells them exactly what is true, which is that this one pack needs
+// a newer fold.
+//
+// Zero is the generation every build up to and including v0.5.0 writes, and it
+// is spelled by saying nothing: a document with no `minReader` member is
+// generation zero. That is what keeps the marker free — see the golden byte
+// tables, which would fail the moment a document this build writes gained it.
+//
+// Raising this constant is the last step of shipping a new operation type, not
+// the first: the build has to be able to fold generation N before it may claim
+// to.
+//
+// COUPLING. Anything that caches a verdict about a history has to record this
+// value alongside it, because a verdict is a property of the history and of the
+// build that read it, not of the history alone. `workbook validate` is the case
+// that exists today: it stores its result per task head, and without the
+// generation in the cache key an upgrade that raises this constant leaves every
+// newer-writer verdict standing — the command keeps demanding an upgrade that
+// has already happened, from cache, while the mutations it refused now succeed.
+// See historyvalidation.readerGeneration. Any future cache of a fold's outcome
+// owes the same.
+const SupportedFormatGeneration = 0
+
 type Actor struct {
 	ID string `json:"id"`
 }
@@ -38,8 +70,18 @@ type Operation struct {
 }
 
 type OperationPack struct {
-	Format            string      `json:"format"`
-	Version           int         `json:"version"`
+	Format  string `json:"format"`
+	Version int    `json:"version"`
+	// MinReader is the lowest writer-format generation that can fold this pack.
+	//
+	// It is omitted when it is zero, and zero is what every pack this build
+	// writes carries, so the member is absent from every document in every
+	// repository today. A future build that ships an operation type older
+	// readers cannot fold sets it, per operation type, through
+	// operationMinReader — and from that moment an older clone reads the task
+	// from its checkpoint and refuses to mutate it, instead of calling the
+	// history corrupt.
+	MinReader         int         `json:"minReader,omitempty"`
 	ProjectID         string      `json:"projectId"`
 	TaskID            string      `json:"taskId"`
 	HistoryGeneration string      `json:"historyGeneration"`
@@ -55,8 +97,20 @@ type History struct {
 }
 
 type StateDocument struct {
-	Format       string   `json:"format"`
-	Version      int      `json:"version"`
+	Format  string `json:"format"`
+	Version int    `json:"version"`
+	// MinReader is the highest generation any pack in this task's history has
+	// required, carried forward from the parent checkpoint by Apply.
+	//
+	// It is a running maximum rather than this commit's own requirement, and
+	// that is the whole reason it is here. A newer build may write a pack that
+	// needs generation 1 and then ordinary generation-0 packs on top of it; a
+	// reader looking only at the tip pack would see nothing and would fold a
+	// history it does not understand. Recording the watermark in the checkpoint
+	// makes the question "can I fold this task at all?" cost one object read
+	// rather than a walk of the whole chain — which is the same reason the
+	// checkpoint exists at all.
+	MinReader    int      `json:"minReader,omitempty"`
 	ProjectID    string   `json:"projectId"`
 	TaskID       string   `json:"taskId"`
 	History      History  `json:"history"`
@@ -64,8 +118,117 @@ type StateDocument struct {
 	Task         TaskData `json:"task"`
 }
 
+// operationMinReader declares, per operation type, the writer-format generation
+// a reader needs in order to fold a pack containing it.
+//
+// Every entry is zero, and the table exists anyway. It is the one place a
+// future story bumps: the comments and attachments work adds its operation
+// types here with the generation they need, and every writing path picks the
+// value up from PackMinReader without being edited. Declaring it per operation
+// type rather than per release is what keeps the marker honest — a pack of
+// ordinary field.set operations written by a build that also knows how to write
+// comments still carries no marker, so an older clone keeps folding everything
+// it genuinely can.
+var operationMinReader = map[OperationType]int{
+	OperationTaskCreate:    0,
+	OperationFieldSet:      0,
+	OperationSetAdd:        0,
+	OperationSetRemove:     0,
+	OperationTaskTombstone: 0,
+	OperationTaskRestore:   0,
+}
+
+// PackMinReader returns the generation a reader needs to fold these operations,
+// which is the highest any one of them requires.
+//
+// An operation type this build does not know is not this function's problem: it
+// is only ever called on operations this build is about to write, and it cannot
+// write a type it does not have. An unknown type therefore keeps the zero value
+// the map returns, which is the same answer as "nothing special is needed" —
+// correct here precisely because it is unreachable.
+func PackMinReader(operations []Operation) int {
+	generation := 0
+	for _, operation := range operations {
+		if required := operationMinReader[operation.Type]; required > generation {
+			generation = required
+		}
+	}
+	return generation
+}
+
+// RequiresNewerReader reports a pack this build must not fold.
+func (pack OperationPack) RequiresNewerReader() bool {
+	return pack.MinReader > SupportedFormatGeneration
+}
+
+// RequiresNewerReader reports a checkpoint whose history this build must not
+// fold past, either because the pack beside it needs a newer reader or because
+// one further back in the chain did.
+func (state StateDocument) RequiresNewerReader() bool {
+	return state.MinReader > SupportedFormatGeneration
+}
+
+// newerWriter builds the one refusal every newer-writer path returns.
+//
+// The register is deliberate. It names the subject, says a newer Workbook wrote
+// it, and says what to do; it does not say "damaged", "corrupt", "invalid" or
+// "unreadable", because none of those is true and every one of them would send
+// somebody to repair a repository that is exactly as its authors left it.
+func newerWriter(format string, args ...any) error {
+	return Errorf(CategoryNewerWriter, format, args...)
+}
+
+// newerWriterTask is the refusal for one task, in the wording every surface
+// that refuses a task repeats.
+func newerWriterTask(taskID string) error {
+	return newerWriter(
+		"task %s was written by a newer workbook; upgrade workbook to change it", taskID)
+}
+
+// refuseNewerTaskWriter reports whether either side of a fold carries a
+// generation this build cannot read. The task is named from whichever side
+// carries an ID, so the refusal is scoped even when the pack is the unreadable
+// one.
+func refuseNewerTaskWriter(parent *StateDocument, pack OperationPack) error {
+	if parent != nil && parent.RequiresNewerReader() {
+		return newerWriterTask(parent.TaskID)
+	}
+	if pack.RequiresNewerReader() {
+		return newerWriterTask(pack.TaskID)
+	}
+	return nil
+}
+
+// foldedMinReader carries the history's generation watermark forward.
+//
+// It is a maximum rather than the pack's own value because the watermark is a
+// claim about the whole chain: once one pack in a task's history has needed
+// generation N, every checkpoint after it needs a reader that can replay from
+// the root, and a later generation-zero pack does not take that back.
+func foldedMinReader(parent *StateDocument, pack OperationPack) int {
+	generation := pack.MinReader
+	if parent != nil && parent.MinReader > generation {
+		generation = parent.MinReader
+	}
+	return generation
+}
+
 // Apply validates and applies one immutable operation pack to a task state.
 func Apply(parent *StateDocument, pack OperationPack, projectKey string) (StateDocument, error) {
+	// The generation gate runs before anything else, because everything else is
+	// a judgment this build is not entitled to make about a document it has
+	// been told it cannot read. A pack that needs a newer reader is refused as
+	// newer-writer even when it would also fail some other rule: the marker is
+	// what tells us the failure is our age rather than the pack's contents.
+	//
+	// Both sides are checked. The pack because it may be the newer one; the
+	// parent because a newer pack further back in the chain leaves its
+	// watermark in every checkpoint after it, and folding a generation-zero
+	// pack onto a task whose history this build cannot replay would produce a
+	// checkpoint nobody could justify.
+	if err := refuseNewerTaskWriter(parent, pack); err != nil {
+		return StateDocument{}, err
+	}
 	if err := validateOperationPackDocument(pack, projectKey); err != nil {
 		return StateDocument{}, err
 	}
@@ -162,6 +325,7 @@ func Apply(parent *StateDocument, pack OperationPack, projectKey string) (StateD
 	return StateDocument{
 		Format:       stateDocumentFormat,
 		Version:      documentVersion,
+		MinReader:    foldedMinReader(parent, pack),
 		ProjectID:    pack.ProjectID,
 		TaskID:       pack.TaskID,
 		History:      parent.History,
@@ -211,6 +375,7 @@ func applyCreate(pack OperationPack, projectKey string) (StateDocument, error) {
 	return StateDocument{
 		Format:       stateDocumentFormat,
 		Version:      documentVersion,
+		MinReader:    foldedMinReader(nil, pack),
 		ProjectID:    pack.ProjectID,
 		TaskID:       pack.TaskID,
 		History:      History{Generation: pack.HistoryGeneration},
@@ -293,6 +458,17 @@ func validateOperationPackEnvelope(pack OperationPack, projectKey string) error 
 	if pack.Version != documentVersion {
 		return corrupt("unsupported operation pack version %d", pack.Version)
 	}
+	// A negative generation is not a claim about the future, it is a malformed
+	// number, and no writer produces one.
+	if pack.MinReader < 0 {
+		return corrupt("operation pack minimum reader generation %d is invalid", pack.MinReader)
+	}
+	// Envelope validation is also what stands between a newer pack and
+	// EncodeDocument, which would otherwise write it back out having silently
+	// dropped every member this build could not decode.
+	if pack.RequiresNewerReader() {
+		return newerWriterTask(pack.TaskID)
+	}
 	if err := validateCanonicalULID("operation pack project ID", pack.ProjectID); err != nil {
 		return err
 	}
@@ -342,6 +518,12 @@ func validateStateEnvelope(state StateDocument, projectKey string) error {
 	}
 	if state.Version != documentVersion {
 		return corrupt("unsupported task state version %d", state.Version)
+	}
+	if state.MinReader < 0 {
+		return corrupt("task state minimum reader generation %d is invalid", state.MinReader)
+	}
+	if state.RequiresNewerReader() {
+		return newerWriterTask(state.TaskID)
 	}
 	if err := validateCanonicalULID("task state project ID", state.ProjectID); err != nil {
 		return err

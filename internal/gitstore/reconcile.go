@@ -88,6 +88,18 @@ func (r *Repository) reconcileDivergentTasks(
 		outcomes[index].Head = request.Remote.Head
 		outcomes[index].Parked = request.Local.Head
 		outcomes[index].Snapshot = request.Remote
+		// Replay onto a history this build cannot fold is not hard, it is
+		// undefined: the operations would have to be applied to a checkpoint
+		// whose rules are unknown here. So it is refused before anything is
+		// written, and refused in the direction that loses nothing — the
+		// canonical ref is left exactly where it is, holding every local
+		// operation, and the fetched tip stays in the tracking namespace until
+		// a build that can fold it arrives. Nothing is parked, because nothing
+		// was replaced.
+		if err := refuseNewerWriterReplay(request); err != nil {
+			outcomes[index].Err = err
+			continue
+		}
 		base, localOnly, err := localOnlyCommits(graph, request)
 		if err != nil {
 			outcomes[index].Err = err
@@ -162,6 +174,32 @@ func (r *Repository) reconcileDivergentTasks(
 	return outcomes, nil
 }
 
+// refuseNewerWriterReplay reports a divergence this build must not resolve.
+//
+// It is not what makes the replay safe. core.Apply is: it refuses to fold onto
+// a checkpoint carrying a watermark this build cannot meet, so deleting this
+// function changes the outcome of a synchronization in no way a test can see —
+// the replay still stops, the ref still keeps its local operations, the run
+// still exits newer-writer. What this buys is the wording and the moment. The
+// refusal happens before any object is written rather than partway through a
+// chain, and it says what became of the local work, which is the question
+// somebody reading it actually has; Apply can only say that the task was
+// written by a newer Workbook.
+//
+// Either side is checked. Origin's tip carrying the marker is the case the
+// contract is about; the local tip carrying it means this clone fetched a newer
+// history and then authored on top of it, which the mutation gate already
+// refuses. Checking both costs a comparison.
+func refuseNewerWriterReplay(request reconcileRequest) error {
+	if !request.Remote.State.RequiresNewerReader() && !request.Local.State.RequiresNewerReader() {
+		return nil
+	}
+	return core.Errorf(core.CategoryNewerWriter,
+		"task %s has local changes that were not replayed: origin's history for it was written by a "+
+			"newer workbook; upgrade workbook to publish them. They are unchanged on this clone's task ref.",
+		request.TaskID)
+}
+
 // taskReplay carries the state one task's replay advances through. The base
 // checkpoint stays fixed because it is the three-way base every description
 // comparison is made against.
@@ -197,8 +235,17 @@ func (replay *taskReplay) next(ctx context.Context, r *Repository, local core.Sn
 	pack.LogicalClock = replay.parent.State.LogicalClock + 1
 	state, err := core.Apply(&replay.parent.State, pack, replay.config.Key)
 	if err != nil {
+		// A newer-writer refusal keeps its own category rather than being
+		// restated as corruption. reconcileDivergentTasks refuses such a
+		// divergence before replay begins, so this is defence rather than a
+		// live path — but the category is the whole point of the signal, and a
+		// wrapper that silently drops it would be a bug nobody could see.
+		category := core.CategoryCorruptData
+		if core.CategoryOf(err) == core.CategoryNewerWriter {
+			category = core.CategoryNewerWriter
+		}
 		return false, core.Wrap(
-			core.CategoryCorruptData,
+			category,
 			fmt.Sprintf("cannot replay task %s operation %s onto the fetched tip", replay.taskID, local.Head),
 			err,
 		)

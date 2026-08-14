@@ -372,6 +372,20 @@ func validateTipTopologyBytes(contents []byte, pack core.OperationPack) error {
 		return err
 	}
 
+	// A pack this build cannot fold is not a pack it can reason about the shape
+	// of either. The rule below reads the operation list to decide whether a
+	// commit is a root, and a newer build's root may open with an operation type
+	// that does not exist here — which would make every such task look like a
+	// root pack with a parent, or an ordinary pack without one. What stays true
+	// across generations is that a task commit is a chain: no merges. That is
+	// what is checked, and the rest is left to the build that can read it.
+	if pack.RequiresNewerReader() {
+		if parentCount > 1 {
+			return core.Errorf(core.CategoryCorruptData, "task tip must not be a merge commit")
+		}
+		return nil
+	}
+
 	containsCreate := false
 	for _, operation := range pack.Operations {
 		if operation.Type == core.OperationTaskCreate {
@@ -405,10 +419,22 @@ func (r *Repository) rejectSymbolicTaskRef(ctx context.Context, refName string) 
 	}
 }
 
+// decodeCanonicalOperation reads a stored pack and proves it is the exact bytes
+// this build would have written for it.
+//
+// The proof is skipped for a pack that declared a newer writer-format
+// generation, and it has to be: canonicality here means "re-encoding the
+// decoded value reproduces the file", and a decoder that dropped members it
+// does not know cannot reproduce anything. Demanding it would report every
+// newer pack as non-canonical — that is, as corruption — which is the outcome
+// the marker exists to prevent.
 func decodeCanonicalOperation(contents []byte) (core.OperationPack, error) {
 	pack, err := core.DecodeOperationPack(contents)
 	if err != nil {
 		return core.OperationPack{}, err
+	}
+	if pack.RequiresNewerReader() {
+		return pack, nil
 	}
 	canonical, err := core.EncodeDocument(pack)
 	if err != nil {
@@ -424,6 +450,13 @@ func decodeCanonicalState(contents []byte) (core.StateDocument, error) {
 	state, err := core.DecodeStateDocument(contents)
 	if err != nil {
 		return core.StateDocument{}, err
+	}
+	// Skipped for the same reason the pack's proof is, and with the same
+	// consequence: this build serves the task from the checkpoint without being
+	// able to vouch for every member of it, and refuses to write anything on
+	// top.
+	if state.RequiresNewerReader() {
+		return state, nil
 	}
 	canonical, err := core.EncodeDocument(state)
 	if err != nil {

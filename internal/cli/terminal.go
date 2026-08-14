@@ -84,8 +84,9 @@ func runBoard(ctx context.Context, args []string, cwd string, stdout, stderr io.
 	if err != nil {
 		return err
 	}
+	warnings := newerWriterWarnings(tasks)
 	if *jsonMode {
-		writeResult(stdout, "board", tasks)
+		writeResultWithWarnings(stdout, "board", tasks, warnings)
 		return nil
 	}
 
@@ -103,5 +104,6 @@ func runBoard(ctx context.Context, args []string, cwd string, stdout, stderr io.
 	if err := terminalui.RenderBoard(stdout, board, layout, width); err != nil {
 		return core.Wrap(core.CategoryOperational, "render board", err)
 	}
+	writeWarnings(stderr, warnings)
 	return nil
 }

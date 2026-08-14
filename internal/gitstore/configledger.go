@@ -980,6 +980,16 @@ func validateConfigObjects(
 	if err != nil {
 		return configRecord{}, err
 	}
+	// A ledger tip this build cannot fold gets the one topology check that holds
+	// across every generation — a configuration commit is a chain, never a
+	// merge — and none of the shape checks that read the pack's operations.
+	if pack.RequiresNewerReader() {
+		if parents > 1 {
+			return configRecord{}, core.Errorf(core.CategoryCorruptData,
+				"the Workbook configuration tip must not be a merge commit")
+		}
+		return configRecord{Head: head, Operation: pack, State: state}, nil
+	}
 	if isConfigGenesisPack(pack) {
 		if parents != 0 {
 			return configRecord{}, core.Errorf(core.CategoryCorruptData,
@@ -1038,6 +1048,14 @@ func decodeCanonicalConfigOperation(contents []byte) (core.ConfigOperationPack, 
 	if err != nil {
 		return core.ConfigOperationPack{}, err
 	}
+	// A pack that declared a newer writer-format generation cannot be proved
+	// canonical here: this build decoded only the members it knows, so
+	// re-encoding it would never reproduce the file. Demanding the proof would
+	// report the ledger as corrupt, which is the answer the marker exists to
+	// replace.
+	if pack.RequiresNewerReader() {
+		return pack, nil
+	}
 	canonical, err := core.EncodeDocument(pack)
 	if err != nil {
 		return core.ConfigOperationPack{}, core.Wrap(core.CategoryCorruptData, "cannot canonicalize the configuration operation", err)
@@ -1052,6 +1070,9 @@ func decodeCanonicalConfigState(contents []byte) (core.ConfigStateDocument, erro
 	state, err := core.DecodeConfigStateDocument(contents)
 	if err != nil {
 		return core.ConfigStateDocument{}, err
+	}
+	if state.RequiresNewerReader() {
+		return state, nil
 	}
 	canonical, err := core.EncodeDocument(state)
 	if err != nil {

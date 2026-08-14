@@ -29,12 +29,12 @@ import (
 const insertOperationStatement = `
 	INSERT INTO operations (
 		operation_id, task_id, commit_id, chain_index, pack_index,
-		logical_clock, history_generation, actor, wall_time, type, field, value, task_data
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		logical_clock, history_generation, min_reader, actor, wall_time, type, field, value, task_data
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 const selectOperationColumns = `
 	SELECT commit_id, chain_index, pack_index, operation_id, logical_clock,
-	       history_generation, actor, wall_time, type, field, value, task_data
+	       history_generation, min_reader, actor, wall_time, type, field, value, task_data
 	FROM operations WHERE task_id = ?`
 
 // replaceOperations rewrites one task's whole chain. A refresh that restarted
@@ -127,7 +127,8 @@ func insertOperations(
 				ctx,
 				insertOperationStatement,
 				operation.ID, taskID, commit.ObjectID, firstChainIndex+offset, packIndex,
-				int64(pack.LogicalClock), pack.HistoryGeneration, pack.Actor.ID, formatTime(pack.WallTime),
+				int64(pack.LogicalClock), pack.HistoryGeneration, int64(pack.MinReader),
+				pack.Actor.ID, formatTime(pack.WallTime),
 				string(operation.Type), operation.Field, operation.Value, taskData,
 			); err != nil {
 				return cacheError("insert projected task operation", err)
@@ -144,6 +145,7 @@ type operationScan struct {
 	operationID       string
 	logicalClock      int64
 	historyGeneration string
+	minReader         int64
 	actor             string
 	wallTime          string
 	operationType     string
@@ -176,7 +178,7 @@ func (s *Store) readProjectedHistory(ctx context.Context, taskID, throughCommit 
 		var row operationScan
 		if err := rows.Scan(
 			&row.commit, &row.chainIndex, &row.packIndex, &row.operationID, &row.logicalClock,
-			&row.historyGeneration, &row.actor, &row.wallTime, &row.operationType,
+			&row.historyGeneration, &row.minReader, &row.actor, &row.wallTime, &row.operationType,
 			&row.field, &row.value, &row.taskData,
 		); err != nil {
 			return core.TaskHistory{}, false, s.databaseError("read projected task operation", err)
@@ -213,7 +215,7 @@ func assembleHistory(projectID, taskID string, rows []operationScan) (core.TaskH
 	expectedChainIndex := int64(0)
 	for index := 0; index < len(rows); {
 		row := rows[index]
-		if row.chainIndex != expectedChainIndex || row.logicalClock < 0 {
+		if row.chainIndex != expectedChainIndex || row.logicalClock < 0 || row.minReader < 0 || row.minReader > math.MaxInt32 {
 			return core.TaskHistory{}, false
 		}
 		operations := make([]core.Operation, 0, 2)
@@ -234,13 +236,23 @@ func assembleHistory(projectID, taskID string, rows []operationScan) (core.TaskH
 		if len(entries) > 0 {
 			parent = entries[len(entries)-1].Commit
 		}
+		pack := core.NewOperationPack(
+			projectID, taskID, row.historyGeneration, row.actor,
+			uint64(row.logicalClock), wallTime, operations,
+		)
+		// The recorded generation is restored from the row rather than left to
+		// the constructor's table. The constructor derives the requirement from
+		// the operation types it knows, and a pack a newer build wrote may
+		// carry types this one does not — for which the derived answer is zero,
+		// the one answer that must never be invented. What was stored is what
+		// the pack claimed, so that is what is replayed.
+		if recorded := int(row.minReader); recorded > pack.MinReader {
+			pack.MinReader = recorded
+		}
 		entries = append(entries, core.HistoryEntry{
-			Commit: row.commit,
-			Parent: parent,
-			Operation: core.NewOperationPack(
-				projectID, taskID, row.historyGeneration, row.actor,
-				uint64(row.logicalClock), wallTime, operations,
-			),
+			Commit:    row.commit,
+			Parent:    parent,
+			Operation: pack,
 		})
 		expectedChainIndex++
 	}

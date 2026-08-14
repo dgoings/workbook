@@ -58,6 +58,17 @@ const WarningStatusFilter = "status-filter-unresolved"
 // would be the worse outcome by far.
 const WarningDocsRefresh = "docs-refresh-incomplete"
 
+// WarningNewerWriter reports that something this read showed was written by a
+// newer Workbook than the one running.
+//
+// It is a warning rather than a refusal because the read succeeded and the
+// answer is the author's own: every read serves a task from its stored
+// checkpoint, and a checkpoint a newer build wrote is still that build's
+// account of the task. What the reader has to know is the part that is not
+// visible in the answer — that this build cannot replay the history behind it
+// and will refuse to change it until it is upgraded.
+const WarningNewerWriter = "newer-writer"
+
 type Warning struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`

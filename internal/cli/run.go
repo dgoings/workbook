@@ -502,7 +502,7 @@ func runList(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	if err != nil {
 		return err
 	}
-	warnings := statusFilterWarnings(service, filter)
+	warnings := append(statusFilterWarnings(service, filter), newerWriterWarnings(tasks)...)
 	if *jsonMode {
 		writeResultWithWarnings(stdout, "list", tasks, warnings)
 	} else {
@@ -599,10 +599,12 @@ func runShow(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	if err != nil {
 		return err
 	}
+	warnings := newerWriterTaskWarnings(detail.Task)
 	if *jsonMode {
-		writeResult(stdout, "show", detail)
+		writeResultWithWarnings(stdout, "show", detail, warnings)
 	} else {
 		writeShowDetail(stdout, detail)
+		writeWarnings(stderr, warnings)
 	}
 	return nil
 }
@@ -824,8 +826,12 @@ func runNext(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	// Selecting work succeeds even when some other task needs a decision, so
 	// the conflicts are reported without failing the command. An agent that
 	// only wants the next task is not the caller who must resolve them.
+	var warnings []core.Warning
+	if task != nil {
+		warnings = newerWriterTaskWarnings(*task)
+	}
 	if *jsonMode {
-		writeSyncedResult(stdout, "next", task, &session.report, session.conflicts)
+		writeSyncedResult(stdout, "next", task, &session.report, session.conflicts, warnings)
 		return nil
 	}
 	if task == nil {
@@ -834,6 +840,7 @@ func runNext(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 		writeShow(stdout, *task)
 	}
 	writeConflicts(stdout, session.conflicts)
+	writeWarnings(stderr, warnings)
 	return nil
 }
 
@@ -892,18 +899,38 @@ func runValidate(ctx context.Context, args []string, cwd string, stdout, stderr 
 func writeValidationResult(output io.Writer, result historyvalidation.Result) {
 	fmt.Fprintf(output, "Validated %d task(s): %d commit(s) checked, %d cache hit(s); %d valid, %d invalid, %d pending.\n",
 		result.TaskCount, result.CommitsChecked, result.CacheHits, result.Valid, result.Invalid, result.Pending)
+	// The newer-writer count is printed only when there is one, so the summary
+	// a healthy project prints is the line it has always printed.
+	if result.NewerWriter > 0 {
+		fmt.Fprintf(output, "%d task(s) were written by a newer workbook and could not be checked.\n", result.NewerWriter)
+	}
 	for _, failure := range result.Failures {
-		fmt.Fprintf(output, "Invalid %s at %s [%s]: %s\n", failure.TaskID, failure.Commit, failure.Category, failure.Message)
+		// A newer-writer entry is not an invalid one, and saying "Invalid"
+		// about it would undo the whole distinction the category draws.
+		label := "Invalid"
+		if core.Category(failure.Category) == core.CategoryNewerWriter {
+			label = "Newer"
+		}
+		fmt.Fprintf(output, "%s %s at %s [%s]: %s\n", label, failure.TaskID, failure.Commit, failure.Category, failure.Message)
 	}
 	if result.Config != nil {
 		verdict := "valid"
+		newerLedger := result.Config.Failure != nil &&
+			core.Category(result.Config.Failure.Category) == core.CategoryNewerWriter
 		if !result.Config.Valid {
 			verdict = "invalid"
+			if newerLedger {
+				verdict = "written by a newer workbook"
+			}
 		}
 		fmt.Fprintf(output, "Configuration ledger: %d commit(s) checked; %s.\n", result.Config.CommitsChecked, verdict)
 		if result.Config.Failure != nil {
-			fmt.Fprintf(output, "Invalid configuration at %s [%s]: %s\n",
-				result.Config.Failure.Commit, result.Config.Failure.Category, result.Config.Failure.Message)
+			label := "Invalid"
+			if newerLedger {
+				label = "Newer"
+			}
+			fmt.Fprintf(output, "%s configuration at %s [%s]: %s\n",
+				label, result.Config.Failure.Commit, result.Config.Failure.Category, result.Config.Failure.Message)
 		}
 	}
 	// Advisories are printed after the verdict and never change it: they

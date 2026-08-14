@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -32,6 +33,31 @@ const (
 	// full run costs O(tasks^2 x depth) row visits.
 	validatedCommitsByTaskIndex = "validated_commits_by_task"
 )
+
+// readerGeneration is the writer-format generation this build can fold, and it
+// is recorded in the cache because a verdict is not a property of the history
+// alone — it is a property of the history and of the build that read it.
+//
+// Without this, a cache row survives the upgrade that makes it wrong in the
+// direction that matters most. A generation-zero build folds a history
+// containing a generation-one pack, records newer-writer, and exits 9; the user
+// upgrades to a build that folds generation one; and `workbook validate` keeps
+// reporting the same failure from cache, with a cache hit, while every mutation
+// against the same task now succeeds. The row is keyed on the task head and the
+// validator version, and neither of those moved.
+//
+// A downgrade is the same bug pointed the other way: a `valid` verdict recorded
+// by a newer build says the whole chain folded, which an older build cannot
+// claim about a chain it would refuse.
+//
+// Recording it in the metadata rather than per row follows the schema version's
+// precedent, and says the same thing: the rules this cache was computed under
+// are not this build's rules, so it is rebuilt. That costs one full
+// revalidation on a release that changes the generation, which is rare by
+// construction and cheaper than being wrong.
+//
+// It is a variable rather than a constant only so a test can play the upgrade.
+var readerGeneration = core.SupportedFormatGeneration
 
 type Status string
 
@@ -629,8 +655,8 @@ func rebuildDatabase(ctx context.Context, path, projectID string) (*sql.DB, erro
 	}
 	if _, err := db.ExecContext(ctx, `
 		INSERT INTO validation_meta (key, value)
-		VALUES ('schema_version', ?), ('project_id', ?)
-	`, schemaVersion, projectID); err != nil {
+		VALUES ('schema_version', ?), ('project_id', ?), ('reader_generation', ?)
+	`, schemaVersion, projectID, strconv.Itoa(readerGeneration)); err != nil {
 		_ = db.Close()
 		cleanup()
 		return nil, cacheError("initialize validation cache metadata", err)
@@ -661,11 +687,11 @@ func databaseUsable(ctx context.Context, db *sql.DB, projectID string) bool {
 	if err := db.QueryRowContext(ctx, `PRAGMA quick_check`).Scan(&quickCheck); err != nil || quickCheck != "ok" {
 		return false
 	}
-	values := make(map[string]string, 2)
+	values := make(map[string]string, 3)
 	rows, err := db.QueryContext(ctx, `
 		SELECT key, value
 		FROM validation_meta
-		WHERE key IN ('schema_version', 'project_id')
+		WHERE key IN ('schema_version', 'project_id', 'reader_generation')
 	`)
 	if err != nil {
 		return false
@@ -685,7 +711,12 @@ func databaseUsable(ctx context.Context, db *sql.DB, projectID string) bool {
 	if err := rows.Close(); err != nil {
 		return false
 	}
-	if values["schema_version"] != schemaVersion || values["project_id"] != projectID {
+	// A cache written by a build that folds a different set of generations is
+	// discarded rather than read. See readerGeneration for what a surviving row
+	// would claim.
+	if values["schema_version"] != schemaVersion ||
+		values["project_id"] != projectID ||
+		values["reader_generation"] != strconv.Itoa(readerGeneration) {
 		return false
 	}
 	for _, query := range []string{

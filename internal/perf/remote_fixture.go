@@ -321,19 +321,13 @@ func appendFixtureLabel(
 	if err != nil {
 		return fmt.Errorf("generate fixture operation ID: %w", err)
 	}
-	pack := core.OperationPack{
-		Format:            "workbook.operation-pack",
-		Version:           1,
-		ProjectID:         config.ProjectID,
-		TaskID:            taskID,
-		HistoryGeneration: parent.Pack.HistoryGeneration,
-		Actor:             core.Actor{ID: benchmarkActorID},
-		LogicalClock:      parent.Pack.LogicalClock + 1,
-		WallTime:          ids.timestamp(),
-		Operations: []core.Operation{{
-			ID: operationID, Type: core.OperationSetAdd, Field: "labels", Value: label,
-		}},
-	}
+	// Through the constructor for the same reason the local fixtures are: the
+	// durable header has one author, and a literal here would be a second.
+	pack := core.NewOperationPack(
+		config.ProjectID, taskID, parent.Pack.HistoryGeneration, benchmarkActorID,
+		parent.Pack.LogicalClock+1, ids.timestamp(),
+		[]core.Operation{{ID: operationID, Type: core.OperationSetAdd, Field: "labels", Value: label}},
+	)
 	state, err := core.Apply(&parent.State, pack, config.Key)
 	if err != nil {
 		return fmt.Errorf("apply fixture label operation: %w", err)

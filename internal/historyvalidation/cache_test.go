@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -456,8 +457,9 @@ func TestOpenCacheRebuildsMissingIncompatibleForeignAndCorruptCaches(t *testing.
 			var metadata map[string]string
 			metadata = queryMetadata(t, cache)
 			if !reflect.DeepEqual(metadata, map[string]string{
-				"project_id":     config.ProjectID,
-				"schema_version": schemaVersion,
+				"project_id":        config.ProjectID,
+				"schema_version":    schemaVersion,
+				"reader_generation": strconv.Itoa(readerGeneration),
 			}) {
 				t.Fatalf("metadata = %#v, want fresh current cache", metadata)
 			}

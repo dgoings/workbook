@@ -1530,7 +1530,12 @@ func statusForError(category core.Category) int {
 		return http.StatusBadRequest
 	case core.CategoryNotFound:
 		return http.StatusNotFound
-	case core.CategoryNotInitialized, core.CategoryStaleWrite, core.CategoryConflict:
+	// A newer-writer refusal sits with the other conflicts rather than with the
+	// server errors. Nothing failed here: the request was well formed, the
+	// resource is readable, and this build declines to change it until it is
+	// upgraded. Answering 500 would report a fault the server does not have and
+	// would send a client retrying rather than reporting.
+	case core.CategoryNotInitialized, core.CategoryStaleWrite, core.CategoryConflict, core.CategoryNewerWriter:
 		return http.StatusConflict
 	case core.CategoryCorruptData, core.CategoryOperational:
 		return http.StatusInternalServerError

@@ -90,6 +90,12 @@ type Repository struct {
 	configLocalHead   string
 	configRemoteKnown bool
 	configRemoteHead  string
+	// configRemoteNeedsUpgrade records that origin's ledger was written by a
+	// newer Workbook than this build. It is remembered beside the heads because
+	// the paths that would publish over it are not the path that read it, and
+	// because a push that origin can only reject is a refusal this run has
+	// already reported once.
+	configRemoteNeedsUpgrade bool
 	// configReport carries what publication established about origin's copy of
 	// the ledger, for a caller whose own result is task shaped.
 	configReport    *SyncConfigResult

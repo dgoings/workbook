@@ -34,6 +34,11 @@ const (
 	SyncConfigPublished SyncConfigStatus = "published"
 	// SyncConfigInvalid reports a ledger tip this clone could not read or fold.
 	SyncConfigInvalid SyncConfigStatus = "invalid"
+	// SyncConfigNeedsUpgrade reports a ledger whose local operations were not
+	// replayed because origin's ledger was written by a newer Workbook. It is
+	// separate from SyncConfigInvalid for the same reason its task counterpart
+	// is: nothing here is invalid, and the local operations are untouched.
+	SyncConfigNeedsUpgrade SyncConfigStatus = "needs-upgrade"
 )
 
 // SyncConfigResult is the configuration stage's account of one run.
@@ -178,6 +183,9 @@ func (r *Repository) reconcileObservedConfig(
 	if err != nil {
 		return r.configStageFailure(err)
 	}
+	// Recorded here, where origin's tip is decoded, so that every publication
+	// path this run later takes knows without decoding it again.
+	r.rememberConfigRemoteGeneration(remote.State.RequiresNewerReader())
 	if remote.State.ProjectID != config.ProjectID {
 		err := core.Errorf(core.CategoryCorruptData,
 			"origin's %s belongs to project %s, but this repository is project %s; "+
@@ -272,8 +280,12 @@ func configReplayError(outcome configReconcileOutcome) error {
 // run. The ledger is left exactly where it was, tasks synchronize as they
 // always did, and the failure is reported once they have.
 func (r *Repository) configStageFailure(err error) configStageOutcome {
+	status := SyncConfigInvalid
+	if core.CategoryOf(err) == core.CategoryNewerWriter {
+		status = SyncConfigNeedsUpgrade
+	}
 	return configStageOutcome{
-		Result:   &SyncConfigResult{Status: SyncConfigInvalid, Detail: err.Error()},
+		Result:   &SyncConfigResult{Status: status, Detail: err.Error()},
 		Deferred: err,
 	}
 }
@@ -322,6 +334,24 @@ func (r *Repository) rememberConfigRemoteHead(head string) {
 	defer r.metadataMu.Unlock()
 	r.configRemoteKnown = true
 	r.configRemoteHead = head
+}
+
+// rememberConfigRemoteGeneration records whether origin's ledger needs a newer
+// Workbook than this one.
+//
+// It is set from the one place that decodes origin's tip, and read by every
+// publication path, because the alternative — a check at each call site — is
+// four places that have to agree and one of them was already wrong.
+func (r *Repository) rememberConfigRemoteGeneration(needsUpgrade bool) {
+	r.metadataMu.Lock()
+	defer r.metadataMu.Unlock()
+	r.configRemoteNeedsUpgrade = needsUpgrade
+}
+
+func (r *Repository) configRemoteRequiresNewerReader() bool {
+	r.metadataMu.RLock()
+	defer r.metadataMu.RUnlock()
+	return r.configRemoteNeedsUpgrade
 }
 
 // observeRemoteConfigHead reads origin's configuration ref out of a listing the
@@ -397,6 +427,18 @@ func (r *Repository) ConfigReport() (*SyncConfigResult, bool) {
 // tasks over a remote this clone cannot write one extra ref to would take a
 // working repository away from a user who cannot fix the remote.
 func (r *Repository) publishConfigLedger(ctx context.Context) (*SyncConfigResult, error) {
+	// The invariant above has one exception, and it is the same one the task
+	// refs make: origin's ledger was written by a newer Workbook, so this
+	// clone's ref is not a descendant of it and the push can only be rejected.
+	// The stage that read origin's tip has already reported that once, in the
+	// words that describe it; letting the push report it again would add a
+	// second refusal phrased as though the network had failed.
+	//
+	// Nothing is lost by declining. The local ledger is durable, and the first
+	// synchronization after an upgrade replays and publishes it.
+	if r.configRemoteRequiresNewerReader() {
+		return nil, nil
+	}
 	head, publish, err := r.configPublicationCandidate(ctx)
 	if err != nil {
 		return nil, err
@@ -556,7 +598,7 @@ func mergeConfigPublication(stage, published *SyncConfigResult) *SyncConfigResul
 	}
 	merged := *stage
 	switch stage.Status {
-	case SyncConfigConflicted, SyncConfigInvalid:
+	case SyncConfigConflicted, SyncConfigInvalid, SyncConfigNeedsUpgrade:
 		if published.Detail != "" {
 			merged.Detail = joinConfigDetails(merged.Detail, published.Detail)
 		}

@@ -96,8 +96,14 @@ type ConfigOperation struct {
 // where a task pack has to say which of many histories it belongs to, this one
 // only has to say which project.
 type ConfigOperationPack struct {
-	Format            string            `json:"format"`
-	Version           int               `json:"version"`
+	Format  string `json:"format"`
+	Version int    `json:"version"`
+	// MinReader is the lowest writer-format generation that can fold this pack,
+	// and means exactly what the task pack's member means. The ledger is a
+	// shared ref like any other, and a configuration section a future build
+	// adds is precisely the kind of change an older reader cannot replay, so it
+	// gets the same signal rather than a second mechanism.
+	MinReader         int               `json:"minReader,omitempty"`
 	ProjectID         string            `json:"projectId"`
 	HistoryGeneration string            `json:"historyGeneration"`
 	Actor             Actor             `json:"actor"`
@@ -138,12 +144,62 @@ type ConfigData struct {
 // makes the fold falsifiable, because ValidateConfigCheckpoint can recompute it
 // and compare bytes.
 type ConfigStateDocument struct {
-	Format       string     `json:"format"`
-	Version      int        `json:"version"`
+	Format  string `json:"format"`
+	Version int    `json:"version"`
+	// MinReader is the highest generation any pack in the ledger's history has
+	// required, carried forward by ApplyConfig. It is the ledger's counterpart
+	// to the task checkpoint's watermark, and it is what lets a clone answer
+	// "can I still change the configuration?" from the tip alone.
+	MinReader    int        `json:"minReader,omitempty"`
 	ProjectID    string     `json:"projectId"`
 	History      History    `json:"history"`
 	LogicalClock uint64     `json:"logicalClock"`
 	Config       ConfigData `json:"config"`
+}
+
+// configOperationMinReader declares, per configuration operation type, the
+// writer-format generation a reader needs to fold a pack containing it. Every
+// entry is zero today; it is the table a future configuration section bumps.
+var configOperationMinReader = map[ConfigOperationType]int{
+	ConfigGenesis:       0,
+	ConfigStatusAdd:     0,
+	ConfigStatusRename:  0,
+	ConfigStatusRelabel: 0,
+	ConfigStatusRemove:  0,
+	ConfigStatusReorder: 0,
+	ConfigStatusTag:     0,
+	ConfigStatusUntag:   0,
+}
+
+// ConfigPackMinReader returns the generation a reader needs to fold these
+// configuration operations.
+func ConfigPackMinReader(operations []ConfigOperation) int {
+	generation := 0
+	for _, operation := range operations {
+		if required := configOperationMinReader[operation.Type]; required > generation {
+			generation = required
+		}
+	}
+	return generation
+}
+
+// RequiresNewerReader reports a configuration pack this build must not fold.
+func (pack ConfigOperationPack) RequiresNewerReader() bool {
+	return pack.MinReader > SupportedFormatGeneration
+}
+
+// RequiresNewerReader reports a configuration checkpoint whose history this
+// build must not fold past.
+func (state ConfigStateDocument) RequiresNewerReader() bool {
+	return state.MinReader > SupportedFormatGeneration
+}
+
+// newerWriterConfig is the refusal every configuration surface repeats. It
+// names the ledger rather than a task, because the configuration is a singleton
+// and there is nothing narrower to name.
+func newerWriterConfig() error {
+	return newerWriter(
+		"this project's configuration was written by a newer workbook; upgrade workbook to change it")
 }
 
 // Vocabulary reads the checkpoint's vocabulary. A decoded checkpoint has
@@ -180,6 +236,7 @@ func NewConfigOperationPack(
 	pack := ConfigOperationPack{
 		Format:            configOperationPackFormat,
 		Version:           documentVersion,
+		MinReader:         ConfigPackMinReader(operations),
 		ProjectID:         projectID,
 		HistoryGeneration: historyGeneration,
 		Actor:             Actor{ID: actor},
@@ -219,9 +276,14 @@ func ApplyConfig(parent *ConfigStateDocument, pack ConfigOperationPack) (ConfigS
 	if err != nil {
 		return ConfigStateDocument{}, Wrap(CategoryCorruptData, "configuration pack produced an invalid vocabulary", err)
 	}
+	minReader := pack.MinReader
+	if parent != nil && parent.MinReader > minReader {
+		minReader = parent.MinReader
+	}
 	return ConfigStateDocument{
 		Format:       configStateDocumentFormat,
 		Version:      documentVersion,
+		MinReader:    minReader,
 		ProjectID:    pack.ProjectID,
 		History:      History{Generation: generation},
 		LogicalClock: pack.LogicalClock,
@@ -286,6 +348,15 @@ func ValidateConfigCheckpoint(parent *ConfigStateDocument, pack ConfigOperationP
 // gate go through here; the split is what lets one normalize where the other
 // refuses.
 func applyConfigOperations(parent *ConfigStateDocument, pack ConfigOperationPack) (*configVocabulary, string, error) {
+	// Same gate, same reason, same ordering as the task fold: a document that
+	// declared a generation this build does not have is refused as
+	// newer-writer before any rule of this build's is applied to it.
+	if parent != nil && parent.RequiresNewerReader() {
+		return nil, "", newerWriterConfig()
+	}
+	if pack.RequiresNewerReader() {
+		return nil, "", newerWriterConfig()
+	}
 	if err := validateConfigOperationPackDocument(pack); err != nil {
 		return nil, "", err
 	}
@@ -768,6 +839,14 @@ func validateConfigOperationPackDocument(pack ConfigOperationPack) error {
 	if pack.Version != documentVersion {
 		return corrupt("unsupported configuration operation pack version %d", pack.Version)
 	}
+	if pack.MinReader < 0 {
+		return corrupt("configuration operation pack minimum reader generation %d is invalid", pack.MinReader)
+	}
+	// This is also what stops EncodeDocument from writing a newer pack back out
+	// with the members it could not decode silently dropped.
+	if pack.RequiresNewerReader() {
+		return newerWriterConfig()
+	}
 	if err := validateCanonicalULID("configuration operation pack project ID", pack.ProjectID); err != nil {
 		return err
 	}
@@ -908,6 +987,12 @@ func validateConfigStateDocument(state ConfigStateDocument) error {
 	}
 	if state.Version != documentVersion {
 		return corrupt("unsupported configuration state version %d", state.Version)
+	}
+	if state.MinReader < 0 {
+		return corrupt("configuration state minimum reader generation %d is invalid", state.MinReader)
+	}
+	if state.RequiresNewerReader() {
+		return newerWriterConfig()
 	}
 	if err := validateCanonicalULID("configuration state project ID", state.ProjectID); err != nil {
 		return err
