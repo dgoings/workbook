@@ -88,6 +88,11 @@ type UpdateInput struct {
 	// service methods build one of these and call the same function.
 	Comments    []CommentChange
 	Attachments []AttachmentChange
+	// Assignments is the same arrangement for who is responsible for the task:
+	// `update X --status in-progress --assign self` is one pack, so an agent
+	// that takes work up records taking it and starting it as one change and
+	// one refusal rather than as two writes that can half-succeed.
+	Assignments []AssignmentChange
 	// ExpectedHead is the task tip the caller believes it is changing. An
 	// empty value means the caller is not tracking one and accepts whatever
 	// the store currently holds, which is how every command behaved before
@@ -306,13 +311,40 @@ func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
 	return tasks, nil
 }
 
-// Next returns the highest-priority task in a status tagged next whose
-// dependencies are all active tasks in a status tagged done. It returns nil
-// when no task is eligible.
+// NextOptions selects which eligible tasks Next may return.
 //
-// Both questions are asked of the resolved status, not the stored one, so a
-// task still carrying a token a rename replaced is still eligible.
-func (s Service) Next(ctx context.Context) (*Task, error) {
+// Its zero value skips the tasks somebody else is already responsible for and
+// this identity is not, which is the answer an agent asking "what should I work
+// on" wants: a task another principal holds alone is work that is being done,
+// and offering it to a second agent is how a fleet ends up duplicating one task
+// and ignoring another. Nothing is hidden — the skip is a selection, not an
+// access rule, and IncludeHeldByOthers asks for the whole eligible set back.
+type NextOptions struct {
+	// IncludeHeldByOthers returns eligible tasks whatever their assignments,
+	// which is what `workbook next --any` asks for and what next did before
+	// assignments existed.
+	IncludeHeldByOthers bool
+}
+
+// Next returns the highest-priority task in a status tagged next whose
+// dependencies are all active tasks in a status tagged done, skipping the ones
+// another principal holds and this one does not, unless the options say
+// otherwise. It returns nil when no task is eligible.
+//
+// Both status questions are asked of the resolved status, not the stored one,
+// so a task still carrying a token a rename replaced is still eligible.
+//
+// The skip is decided against the acting identity, and a service with none —
+// every read-only caller — skips nothing, because there is no self to tell
+// others apart from and silently answering "nothing" would be the worst of the
+// three possible answers.
+//
+// A task this identity also holds is never skipped, whoever else holds it. Two
+// agents deliberately paired on one task — the spike the design treats as a
+// meaningful outcome — would otherwise both be told there is nothing to do the
+// moment the pairing succeeded, which is the one state where a claimant most
+// needs its own work offered back to it.
+func (s Service) Next(ctx context.Context, options NextOptions) (*Task, error) {
 	snapshots, err := s.Reader.List(ctx, s.Config)
 	if err != nil {
 		return nil, err
@@ -326,6 +358,7 @@ func (s Service) Next(ctx context.Context) (*Task, error) {
 			active[snapshot.State.TaskID] = task
 		}
 	}
+	skipHeld := !options.IncludeHeldByOthers && strings.TrimSpace(s.Actor) != ""
 
 	var selected *Task
 	var selectedRank *big.Rat
@@ -333,6 +366,9 @@ func (s Service) Next(ctx context.Context) (*Task, error) {
 		task := snapshot.State.Task
 		resolved, _ := vocabulary.Resolve(task.Status)
 		if task.Deleted || !vocabulary.IsNext(resolved) || !dependenciesDone(vocabulary, task.Dependencies, active) {
+			continue
+		}
+		if skipHeld && HeldOnlyByOthers(task.Assignments, s.Actor) {
 			continue
 		}
 		rank, err := parseRank(task.Rank)
@@ -477,8 +513,19 @@ func (s Service) UpdateMutation(ctx context.Context, idOrPrefix string, input Up
 	if err != nil {
 		return MutationResult{}, err
 	}
-	operations := append(changedOperations(parent.State.Task, next), thread...)
+	assignments, others, already, err := s.assignmentOperations(parent.State.TaskID, parent.State.Task, input.Assignments)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	operations := append(append(changedOperations(parent.State.Task, next), thread...), assignments...)
 	if len(operations) == 0 {
+		// An assignment the task already carries is the one empty update that is
+		// not a mistake. Adding it twice is idempotent by design, so the caller
+		// hears "you already hold this" rather than "update does not change
+		// task", which would send an agent looking for what it got wrong.
+		if already {
+			return MutationResult{Task: s.Project(parent), Others: others, Already: true}, nil
+		}
 		return MutationResult{}, Errorf(CategoryValidation, "update does not change task")
 	}
 	// The emptiness check comes first on purpose: a correction rides along with
@@ -494,12 +541,15 @@ func (s Service) UpdateMutation(ctx context.Context, idOrPrefix string, input Up
 	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
 		return MutationResult{}, err
 	}
-	subject := updateCommitSubject(parent.State.TaskID, parent.State.Task, next, threadChangeSubjects(thread))
+	subject := updateCommitSubject(parent.State.TaskID, parent.State.Task, next,
+		append(threadChangeSubjects(thread), assignmentChangeSubjects(assignments)...))
 	result, err := s.writeMutation(ctx, &parent, operations, subject)
 	if err != nil {
 		return MutationResult{}, err
 	}
 	result.StatusCorrected = corrected
+	result.Others = others
+	result.Already = already
 	return result, nil
 }
 

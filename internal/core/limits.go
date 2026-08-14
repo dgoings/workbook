@@ -346,7 +346,7 @@ const (
 //
 // So these are checked when a pack is authored — the status ceilings in
 // validateVocabularyGrowth, reached from ValidateConfigAuthoring, and
-// MaxAssignmentCount in Service.AssignMutation — and never when one is folded.
+// MaxAssignmentCount in Service.assignmentOperations — and never when folded.
 // A fold
 // that could fail on a count would let that pair of ordinary edits produce a
 // history no clone can ever read, and append-only means there is no repair: the

@@ -36,6 +36,8 @@ func TestExitCode(t *testing.T) {
 		{"stale write", Errorf(CategoryStaleWrite, "head changed"), 6},
 		{"conflict", Errorf(CategoryConflict, "both sides changed the description"), 8},
 		{"corrupt data", Errorf(CategoryCorruptData, "bad state"), 7},
+		{"newer writer", Errorf(CategoryNewerWriter, "a newer workbook wrote this"), 9},
+		{"assigned", Errorf(CategoryAssigned, "somebody else holds it"), 10},
 		{"operational", Errorf(CategoryOperational, "git failed"), 1},
 		{"unknown typed category", Errorf(Category("future"), "unknown"), 7},
 		{"unexpected", errors.New("network unavailable"), 1},

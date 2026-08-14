@@ -323,6 +323,32 @@ func AssignmentsHeldByOthers(assignments []Assignment, principal string) []Assig
 	return others
 }
 
+// HeldBy reports whether a principal holds this task at all, under any label.
+//
+// The label answers which agent holds an assignment and never who is
+// responsible, so every question about responsibility — may this be removed,
+// is this task already mine, should the claim gate fire — is asked of the
+// principal alone. Asking it of the pair instead would make an orchestrator's
+// second agent a stranger to work its own identity is already doing.
+func HeldBy(assignments []Assignment, principal string) bool {
+	for _, assignment := range assignments {
+		if assignment.Principal == principal {
+			return true
+		}
+	}
+	return false
+}
+
+// HeldOnlyByOthers reports that somebody else is responsible for this task and
+// this principal is not.
+//
+// It is the question both the claim gate and `workbook next`'s skip ask, and
+// they have to ask the same one: a selection that offered a task the gate then
+// refused would loop an agent forever on the one task it can never take.
+func HeldOnlyByOthers(assignments []Assignment, principal string) bool {
+	return len(AssignmentsHeldByOthers(assignments, principal)) > 0 && !HeldBy(assignments, principal)
+}
+
 func copyAssignments(assignments []Assignment) []Assignment {
 	if assignments == nil {
 		return nil

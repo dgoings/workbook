@@ -13,8 +13,11 @@ SQLite projections, or configuration directly.
 1. If the invocation supplies a task ID or prefix, run
    `workbook show <supplied-id-or-prefix> --json`, then keep the canonical full
    ID from `data.id`.
-2. Otherwise run `workbook next --json`, keep its full `data.id`, then run
-   `workbook show <full-id> --json`.
+2. Otherwise run `workbook next --claim --json`, which picks the next eligible
+   task and assigns it to you in one command; keep its full `data.id`, then run
+   `workbook show <full-id> --json`. A `null` `data` means there was nothing to
+   claim — read the warnings, which say whether the eligible work is all held by
+   somebody else or there is simply none.
 3. Stop and report the error when Workbook is unavailable or uninitialized,
    selection or reading fails, or no task is eligible. Do not guess.
 4. Use the resolved full ID for every later Workbook command.
@@ -67,11 +70,15 @@ where this project uses different ones, use the status it has for that step.
 ## Follow the lifecycle
 
 Before implementation, move the task into the status this project uses for work
-under way:
+under way, and put your name on it in the same command:
 
 ```sh
-workbook update <full-id> --status in-progress --json
+workbook update <full-id> --status in-progress --assign self --json
 ```
+
+Both changes are recorded as one, so the task never ends up started by nobody or
+assigned but not started. A task claimed through `workbook next --claim` is
+already assigned; `--assign self` again records nothing and is not an error.
 
 Check the result before editing. Resume a task already in that status without
 inventing an operation. Do not silently reopen a deleted task, one with unmet
@@ -87,10 +94,37 @@ tests, commits, branches, pull requests, and merge verification.
 | Pull request is verified and ready for human review | Move it to the project's review status: `workbook update <full-id> --status in-review --json` |
 | Review requires implementation changes | Move it back to the in-progress status before editing; return it to the review status when ready |
 | Work is accepted and the pull request is merged | Move it to a `done`-tagged status: `workbook update <full-id> --status done --json` |
+| You stop without finishing | Give the task back: `workbook update <full-id> --unassign self --json` |
 
 Approval, passing CI, opening a pull request, or finishing locally is not a
 merge. If acceptance and merge cannot both be verified, leave the task in the
 review status and report what remains.
+
+## Assignments say who is responsible
+
+An assignment names `self`, an email address, or either followed by `/label` for
+one agent of that identity — `--assign self/impl-1`. It blocks nothing and never
+expires, and only the identity it names or whoever recorded it may remove it, so
+never try to take somebody else's assignment away; Workbook refuses it with exit
+code 5.
+
+`workbook next` skips tasks another identity is assigned to and you are not, so
+two agents are not handed the same work. A task you already hold is still
+offered to you, and claiming it again records nothing.
+
+Two outcomes matter when taking a specific task up:
+
+- **Exit code 10** from `workbook update <full-id> --assign self` means somebody
+  else holds that task and you do not. Nothing was recorded and you hold
+  nothing. Ask for another task, or — only when the human asked for deliberate
+  pairing — pass `--force` to work on it alongside them.
+- An **`assignment-shared` warning** in the result envelope means you hold the
+  task together with somebody else, because you forced it or because two claims
+  raced and both were kept. Your work was recorded. Say so in your report and
+  let the humans decide; do not remove the other assignment.
+
+`workbook next --claim` never exits 10: it has already skipped what somebody
+else holds.
 
 ## Publication is automatic
 

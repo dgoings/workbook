@@ -271,6 +271,10 @@ func writeWideRow(output *strings.Builder, columns []presentation.Column, conten
 	output.WriteString("|\n")
 }
 
+// wideCardLines draws one card. The labels line is drawn whether or not there
+// are labels, because it separates one card from the next; the assignee line is
+// drawn only for a task somebody holds, so an unassigned board keeps the card
+// height it has always had.
 func wideCardLines(task presentation.TaskView, width int) []string {
 	lines := wrapWideMetadata(task.IDPrefix, " ["+priorityMarker(task.Task.Priority)+"]", width)
 	lines = append(
@@ -278,6 +282,9 @@ func wideCardLines(task presentation.TaskView, width int) []string {
 		fit(core.DisplayLine(task.Task.Title), width),
 		fit(core.DisplayLine(strings.Join(task.Task.Labels, ",")), width),
 	)
+	if chips := presentation.AssignmentChips(task.Task.Assignments); len(chips) > 0 {
+		lines = append(lines, fit(core.DisplayLine("@"+strings.Join(chips, " @")), width))
+	}
 	return lines
 }
 
@@ -367,6 +374,15 @@ func writeNarrowTask(output *strings.Builder, task presentation.TaskView, width 
 	if len(task.Task.Labels) > 0 {
 		output.WriteString("\n  labels: ")
 		output.WriteString(fit(core.DisplayLine(strings.Join(task.Task.Labels, ", ")), max(1, width-len("  labels: "))))
+	}
+	// The assignee line follows the labels line's idiom exactly, and appears
+	// only when somebody holds the task: an assignment is a fact about a card
+	// rather than a column of its own, and a board where nobody has claimed
+	// anything should look like the board that has always been printed.
+	if chips := presentation.AssignmentChips(task.Task.Assignments); len(chips) > 0 {
+		const heading = "  assigned: "
+		output.WriteString("\n" + heading)
+		output.WriteString(fit(core.DisplayLine(strings.Join(chips, ", ")), max(1, width-len(heading))))
 	}
 }
 

@@ -433,10 +433,11 @@ var commandSchemas = map[string]commandMetadata{
 		Name:     "update",
 		Synopsis: "workbook update <id-or-prefix> [options]",
 		Description: "Update a task.\n\n" +
-			"Comments and attachments are things a task holds, so they ride this verb:\n" +
-			"every flag given is one intent, and one invocation is one pack, one commit,\n" +
-			"and one change-log entry. `update <id> --status done --comment \"shipped\"` is\n" +
-			"a single change.\n\n" +
+			"Comments, attachments and assignments are things a task holds, so they ride\n" +
+			"this verb: every flag given is one intent, and one invocation is one pack,\n" +
+			"one commit, and one change-log entry. `update <id> --status done --comment\n" +
+			"\"shipped\"` is a single change, and so is `--status in-progress --assign\n" +
+			"self`.\n\n" +
 			"--comment adds a comment on its own, and carries the new body when\n" +
 			"--edit-comment names one to rewrite — a flag takes one value, so the body\n" +
 			"travels in --comment either way. --edit-comment without --comment is\n" +
@@ -444,7 +445,14 @@ var commandSchemas = map[string]commandMetadata{
 			"--attach-url it labels.\n\n" +
 			"A comment or attachment ID may be given as any unambiguous prefix of the one\n" +
 			"`workbook show` prints. An attached file is refused before it is read when it\n" +
-			"is larger than a task may hold; attach a link instead.",
+			"is larger than a task may hold; attach a link instead.\n\n" +
+			"--assign and --unassign name `self`, an email address, or either followed\n" +
+			"by /label for one agent of that identity. One assignment per invocation,\n" +
+			"and not both in the same one. An assignment is additive and is removable\n" +
+			"only by the person it names or the person who recorded it.\n\n" +
+			"--assign exits 10 and records nothing when somebody else holds the task\n" +
+			"and you do not; --force records yours beside theirs instead. Assigning\n" +
+			"yourself something your identity already holds changes nothing and says so.",
 		Positionals: []string{"<id-or-prefix>"},
 		Options: []optionMetadata{
 			{Name: "title", Kind: stringFlag, Value: "<title>", Description: "task title"},
@@ -460,6 +468,9 @@ var commandSchemas = map[string]commandMetadata{
 			{Name: "attach-url", Kind: stringFlag, Value: "<url>", Description: "attach this http or https link"},
 			{Name: "attach-label", Kind: stringFlag, Value: "<text>", Description: "display text for --attach-url"},
 			{Name: "remove-attachment", Kind: stringFlag, Value: "<id-or-prefix>", Description: "remove this attachment"},
+			{Name: "assign", Kind: stringFlag, Value: "<who>", Description: "assign to self, an email, or either with /label"},
+			{Name: "unassign", Kind: stringFlag, Value: "<who>", Description: "withdraw that assignment"},
+			{Name: "force", Kind: boolFlag, Description: "assign beside an assignment somebody else holds"},
 			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with origin"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},
@@ -562,10 +573,22 @@ var commandSchemas = map[string]commandMetadata{
 		},
 	},
 	"next": {
-		Name:        "next",
-		Synopsis:    "workbook next [--json]",
-		Description: "Show the next eligible task.",
+		Name:     "next",
+		Synopsis: "workbook next [--any] [--claim] [--no-sync] [--json]",
+		Description: "Show the next eligible task.\n\n" +
+			"A task somebody else is assigned to and you are not is skipped, because it\n" +
+			"is work already being done; a task you hold too is still offered, however\n" +
+			"many people share it. --any offers the whole eligible set instead.\n\n" +
+			"With --claim the task next would pick is assigned to you and published in\n" +
+			"the same command, so two agents asking at once do not both walk away with\n" +
+			"it. Because the skip has already excluded what somebody else holds, there\n" +
+			"is nothing left to refuse: a board whose eligible work is all held answers\n" +
+			"with no task and says so, and claiming a task you already hold records\n" +
+			"nothing. If the publication loses a race, the claim still stands and the\n" +
+			"synchronization that replays it reports who it is shared with.",
 		Options: []optionMetadata{
+			{Name: "any", Kind: boolFlag, Description: "include tasks somebody else is assigned to"},
+			{Name: "claim", Kind: boolFlag, Description: "assign the chosen task to yourself and publish it"},
 			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with origin"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},

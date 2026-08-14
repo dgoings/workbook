@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/presentation"
@@ -340,4 +341,58 @@ func TestRenderBoardStripsControlCharactersFromCards(t *testing.T) {
 			t.Fatalf("RenderBoard(%s) = %q, want the sanitized title", name, got)
 		}
 	}
+}
+
+// A card names who holds the task, compactly: the local part of the address and
+// the agent label, which are the two parts that differ between the people and
+// agents working on one project.
+func TestRenderBoardShowsAssigneeChips(t *testing.T) {
+	held := core.Task{
+		ID: "WB-01ARZ3NDEKTSV4RRFFQ69G5FAV",
+		TaskData: core.TaskData{
+			Title:    "Plan storage",
+			Status:   core.StatusBacklog,
+			Priority: core.PriorityHigh,
+			Labels:   []string{"git"},
+			Assignments: []core.Assignment{
+				{Principal: "dylan@example.com", Label: "impl-1", Creator: "dylan@example.com", CreatedAt: time.Now()},
+				{Principal: "sam@example.com", Creator: "sam@example.com", CreatedAt: time.Now()},
+			},
+		},
+	}
+	unheld := core.Task{
+		ID: "WB-01BRZ3NDEKTSV4RRFFQ69G5FAW",
+		TaskData: core.TaskData{
+			Title: "Ship release", Status: core.StatusDone, Priority: core.PriorityLow,
+		},
+	}
+	board := presentation.NewBoard([]core.Task{held, unheld}, core.LegacyVocabulary())
+
+	narrow := renderTo(t, board, LayoutNarrow, 100)
+	if !strings.Contains(narrow, "  assigned: dylan/impl-1, sam\n") {
+		t.Fatalf("narrow board = %q, want an assignee line under the card", narrow)
+	}
+	wide := renderTo(t, board, LayoutWide, 140)
+	if !strings.Contains(wide, "@dylan/impl-1 @sam") {
+		t.Fatalf("wide board = %q, want assignee chips on the card", wide)
+	}
+
+	// A task nobody holds gains no line at all, so a board where nothing has
+	// been claimed looks exactly as it always has.
+	unclaimed := presentation.NewBoard([]core.Task{unheld}, core.LegacyVocabulary())
+	for name, layout := range map[string]Layout{"narrow": LayoutNarrow, "wide": LayoutWide} {
+		rendered := renderTo(t, unclaimed, layout, 140)
+		if strings.Contains(rendered, "assigned") || strings.Contains(rendered, "@") {
+			t.Fatalf("%s board = %q, want no assignee line for an unassigned task", name, rendered)
+		}
+	}
+}
+
+func renderTo(t *testing.T, board presentation.Board, layout Layout, width int) string {
+	t.Helper()
+	var output bytes.Buffer
+	if err := RenderBoard(&output, board, layout, width); err != nil {
+		t.Fatalf("RenderBoard() error = %v", err)
+	}
+	return output.String()
 }

@@ -550,7 +550,7 @@ func TestServiceNextReadsTheNextTagThroughResolution(t *testing.T) {
 	)
 	service := vocabularyServiceUnderTest(store, &sequenceIDSource{}, customVocabulary(t))
 
-	selected, err := service.Next(context.Background())
+	selected, err := service.Next(context.Background(), NextOptions{})
 	if err != nil {
 		t.Fatalf("Next() error = %v", err)
 	}
@@ -574,7 +574,7 @@ func TestServiceNextReadsTheDoneTagThroughResolution(t *testing.T) {
 	})
 	service := vocabularyServiceUnderTest(newMemoryTaskStore(dependency, waiting), &sequenceIDSource{}, customVocabulary(t))
 
-	selected, err := service.Next(context.Background())
+	selected, err := service.Next(context.Background(), NextOptions{})
 	if err != nil {
 		t.Fatalf("Next() error = %v", err)
 	}
@@ -587,7 +587,7 @@ func TestServiceNextReadsTheDoneTagThroughResolution(t *testing.T) {
 		Title: "Dependency", Status: "triage", Priority: PriorityMedium, Rank: "1/1",
 	})
 	service = vocabularyServiceUnderTest(newMemoryTaskStore(blocked, waiting), &sequenceIDSource{}, customVocabulary(t))
-	selected, err = service.Next(context.Background())
+	selected, err = service.Next(context.Background(), NextOptions{})
 	if err != nil {
 		t.Fatalf("Next() error = %v", err)
 	}
