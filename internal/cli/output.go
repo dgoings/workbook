@@ -20,7 +20,7 @@ Commands:
   create <title> [options]
   list [options]
   board [--wide | --narrow] [--json]
-  show <id-or-prefix> [--history [--limit <n>] [--all]] [--compare <commit> <commit>] [--json]
+  show <id-or-prefix> [--history [--limit <n>] [--all]] [--compare <commit> <commit>] [--get-attachment <id-or-prefix> [--out <path>]] [--json]
   update <id-or-prefix> [options]
   delete <id-or-prefix> [--json]
   restore <id-or-prefix> [--into <status>] [--json]
@@ -249,6 +249,22 @@ func writeMutationResult(
 	conflicts []core.Conflict,
 	jsonMode bool,
 ) {
+	writeThreadMutationResult(stdout, stderr, command, result, sync, conflicts, jsonMode, nil)
+}
+
+// writeThreadMutationResult is writeMutationResult with the thread changes the
+// pack carried, if any. They are printed under the task line and nowhere else:
+// the JSON envelope's data member is the whole task, which already carries the
+// comments and attachments the mutation produced.
+func writeThreadMutationResult(
+	stdout, stderr io.Writer,
+	command string,
+	result core.MutationResult,
+	sync *syncReport,
+	conflicts []core.Conflict,
+	jsonMode bool,
+	changes []core.FieldChange,
+) {
 	var configConflicts []core.ConfigConflict
 	if sync != nil {
 		configConflicts = sync.configConflicts
@@ -268,6 +284,7 @@ func writeMutationResult(
 	}
 
 	writeMutation(stdout, result.Task)
+	writeFieldChanges(stdout, changes)
 	writeSyncReport(stdout, sync)
 	writeConflicts(stdout, conflicts)
 	writeConfigConflicts(stdout, configConflicts)
@@ -292,6 +309,30 @@ func writeMutationOutcome(
 	err error,
 	jsonMode bool,
 ) error {
+	return writeThreadMutationOutcome(stdout, stderr, command, session, result, err, jsonMode, nil)
+}
+
+// writeThreadMutationOutcome is writeMutationOutcome for a mutation that also
+// changed the task's thread.
+//
+// The extra lines name what the pack did to the comments and attachments,
+// because the task line above them cannot: a comment is invisible in a task's
+// ID, status, priority and title, so an update that only commented would
+// otherwise print a line identical to the one it printed before. They are
+// rendered by writeFieldChanges, which is what `show --history` renders a
+// change with, so the confirmation and the log entry read the same way.
+//
+// Nothing is added to the JSON envelope: its data member is the whole task,
+// which already carries the thread the mutation produced.
+func writeThreadMutationOutcome(
+	stdout, stderr io.Writer,
+	command string,
+	session *taskSession,
+	result core.MutationResult,
+	err error,
+	jsonMode bool,
+	changes []core.FieldChange,
+) error {
 	if err != nil {
 		if core.CategoryOf(err) != core.CategoryConflict {
 			return err
@@ -299,7 +340,7 @@ func writeMutationOutcome(
 		writeSyncPhaseResult(stdout, command, nil, session.conflicts, jsonMode, func(io.Writer) {})
 		return err
 	}
-	writeMutationResult(stdout, stderr, command, result, &session.report, session.conflicts, jsonMode)
+	writeThreadMutationResult(stdout, stderr, command, result, &session.report, session.conflicts, jsonMode, changes)
 	return nil
 }
 
@@ -629,6 +670,81 @@ func writeShow(output io.Writer, task core.Task) {
 	fmt.Fprintf(output, "Deleted:\t%t\n", task.Deleted)
 	fmt.Fprintf(output, "History Generation:\t%s\n", task.HistoryGeneration)
 	fmt.Fprintf(output, "Head:\t%s\n", task.Head)
+	writeComments(output, task.Comments)
+	writeAttachments(output, task.Attachments)
+}
+
+// writeComments prints the thread after the field block, and prints nothing at
+// all for a task nobody has commented on — so what `show` prints for every task
+// that existed before comments did is byte-for-byte what it printed before.
+//
+// The section is fenced the way writeDescription describes: its header sits at
+// column zero, which no comment can reach, each comment's attribution line
+// carries one tab, and the body carries two. A body line claiming to be another
+// comment's attribution therefore lands a tab too deep, and singleLine has
+// already dropped whatever indentation it was written with, so it cannot climb
+// back out.
+//
+// Identifiers are printed whole rather than shortened. They are what the
+// --edit-comment and --remove-comment flags take, and those flags accept a
+// prefix, so a reader who wants a short form can take one — while a display
+// that shortened them would sometimes print two comments under one string,
+// because comments minted moments apart share a long ULID prefix.
+func writeComments(output io.Writer, comments []core.Comment) {
+	if len(comments) == 0 {
+		return
+	}
+	fmt.Fprintln(output)
+	fmt.Fprintln(output, "Comments:")
+	for _, comment := range comments {
+		fmt.Fprintf(output, "\t%s\t%s\t%s%s\n",
+			comment.ID,
+			singleLine(comment.Author),
+			comment.CreatedAt.Format(time.RFC3339),
+			editedMarker(comment),
+		)
+		for _, line := range descriptionLines(comment.Body) {
+			if line == "" {
+				fmt.Fprintln(output)
+				continue
+			}
+			fmt.Fprintf(output, "\t\t%s\n", line)
+		}
+	}
+}
+
+// editedMarker states that a comment no longer reads as it was written, and
+// when it changed. The presence of the time is the flag, exactly as it is in
+// the stored document, so there is no second spelling of the same fact.
+func editedMarker(comment core.Comment) string {
+	if !comment.Edited() {
+		return ""
+	}
+	return "\t(edited " + comment.EditedAt.Format(time.RFC3339) + ")"
+}
+
+// writeAttachments lists what is attached, of both kinds, in one list — because
+// a reader asking what is attached to a task is asking one question.
+//
+// Each row names the identifier, the display text, the kind, and then the one
+// value that differs by kind: a file's size in bytes, which is what a download
+// will cost, and a link's URL, which is the link. A link with no label leaves
+// the display column empty rather than repeating its URL into it.
+func writeAttachments(output io.Writer, attachments []core.Attachment) {
+	if len(attachments) == 0 {
+		return
+	}
+	fmt.Fprintln(output)
+	fmt.Fprintln(output, "Attachments:")
+	for _, attachment := range attachments {
+		detail := singleLine(attachment.URL)
+		name := singleLine(attachment.Label)
+		if attachment.Kind == core.AttachmentFile {
+			detail = fmt.Sprintf("%d bytes", attachment.Size)
+			name = singleLine(attachment.Name)
+		}
+		fmt.Fprintf(output, "\t%s\t%s\t%s\t%s\n", attachment.ID, name, attachment.Kind, detail)
+	}
 }
 
 // writeDescription prints a description over as many lines as it was written

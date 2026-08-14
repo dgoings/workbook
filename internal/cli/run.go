@@ -571,9 +571,18 @@ func runShow(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	history := flags.Bool("history", false, "list this task's changes")
 	limit := flags.String("limit", "", "show this many recent changes")
 	all := flags.Bool("all", false, "show every change")
+	getAttachment := flags.String("get-attachment", "", "write this attachment's bytes")
+	out := flags.String("out", "", "write the attachment to this file")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
+	}
+	attachment, writingAttachment, err := validateAttachmentOutput(flags, comparing, *getAttachment, *out)
+	if err != nil {
+		return err
+	}
+	if writingAttachment {
+		return runShowAttachment(ctx, cwd, id, attachment, stdout, stderr)
 	}
 
 	options := core.ShowOptions{History: *history, All: *all}
@@ -641,6 +650,7 @@ func runUpdate(ctx context.Context, args []string, cwd string, stdout, stderr io
 	var labels stringListValue
 	flags.Var(&labels, "label", "replacement task label")
 	clearLabels := flags.Bool("clear-labels", false, "replace labels with an empty set")
+	thread := registerThreadFlags(flags)
 	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with origin")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
@@ -648,6 +658,10 @@ func runUpdate(ctx context.Context, args []string, cwd string, stdout, stderr io
 	}
 	if labels.set && *clearLabels {
 		return core.Errorf(core.CategoryInvocation, "cannot use --label with --clear-labels")
+	}
+	request, err := thread.read(flags)
+	if err != nil {
+		return err
 	}
 
 	input := core.UpdateInput{}
@@ -676,10 +690,22 @@ func runUpdate(ctx context.Context, args []string, cwd string, stdout, stderr io
 	if err != nil {
 		return err
 	}
+	// The thread intents are resolved inside the mutation rather than before
+	// it, so the identifiers a caller typed are matched against the thread the
+	// pack will actually apply to — the one the session's fetch just settled —
+	// and so that what the outcome reports having removed is what was there.
+	var changes []core.FieldChange
 	result, err := session.mutate(ctx, id, func(ctx context.Context) (core.MutationResult, error) {
+		resolved, described, err := request.resolve(ctx, session.service, id)
+		if err != nil {
+			return core.MutationResult{}, err
+		}
+		changes = described
+		input.Comments = resolved.comments
+		input.Attachments = resolved.attachments
 		return session.service.UpdateMutation(ctx, id, input)
 	})
-	return writeMutationOutcome(stdout, stderr, "update", session, result, err, *jsonMode)
+	return writeThreadMutationOutcome(stdout, stderr, "update", session, result, err, *jsonMode, changes)
 }
 
 func runDelete(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
@@ -1498,17 +1524,30 @@ func openServiceParts(ctx context.Context, cwd string, stderr io.Writer) (core.S
 }
 
 func openReadService(ctx context.Context, cwd string, stderr io.Writer) (core.Service, error) {
+	service, _, err := openReadServiceWithRepository(ctx, cwd, stderr)
+	return service, err
+}
+
+// openReadServiceWithRepository is openReadService for the one read that needs
+// the repository beside the service: an attachment's bytes are a Git object,
+// read by the object ID the checkpoint recorded, and no read model carries
+// them.
+func openReadServiceWithRepository(
+	ctx context.Context,
+	cwd string,
+	stderr io.Writer,
+) (core.Service, *gitstore.Repository, error) {
 	repository, config, err := openRepository(ctx, cwd, stderr)
 	if err != nil {
-		return core.Service{}, err
+		return core.Service{}, nil, err
 	}
 	store, err := projection.Open(ctx, repository, config)
 	if err != nil {
-		return core.Service{}, err
+		return core.Service{}, nil, err
 	}
 	vocabulary, err := repository.LoadVocabulary(ctx)
 	if err != nil {
-		return core.Service{}, err
+		return core.Service{}, nil, err
 	}
 	return core.Service{
 		Config:     config,
@@ -1517,7 +1556,7 @@ func openReadService(ctx context.Context, cwd string, stderr io.Writer) (core.Se
 		History:    store,
 		IDs:        core.CryptoULIDSource{},
 		Now:        time.Now,
-	}, nil
+	}, repository, nil
 }
 
 // openRepository opens the repository a command runs against and loads its

@@ -495,6 +495,10 @@ func FieldLabel(field string) string {
 		return "Dependencies"
 	case "assignments":
 		return "Assignments"
+	case "comment":
+		return "Comment"
+	case "attachment":
+		return "Attachment"
 	default:
 		return field
 	}

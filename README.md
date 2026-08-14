@@ -270,8 +270,8 @@ workbook setup [--key <key>] [--no-docs] [--no-sync] [--skill-dir <dir>] [--no-s
 workbook create <title> [--description <text>] [--status <status>] [--priority <priority>] [--label <label>] [--no-sync] [--json]
 workbook list [--status <status>] [--priority <priority>] [--label <label>] [--all] [--json]
 workbook board [--wide | --narrow] [--json]
-workbook show <task> [--history [--limit <n>] [--all]] [--compare <commit> <commit>] [--json]
-workbook update <task> [--title <title>] [--description <text>] [--status <status>] [--priority <priority>] [--label <label>] [--clear-labels] [--no-sync] [--json]
+workbook show <task> [--history [--limit <n>] [--all]] [--compare <commit> <commit>] [--get-attachment <attachment> [--out <path>]] [--json]
+workbook update <task> [--title <title>] [--description <text>] [--status <status>] [--priority <priority>] [--label <label>] [--clear-labels] [--comment <body>] [--edit-comment <comment>] [--remove-comment <comment>] [--attach-file <path>] [--attach-url <url>] [--attach-label <text>] [--remove-attachment <attachment>] [--no-sync] [--json]
 workbook delete <task> [--no-sync] [--json]
 workbook restore <task> [--into <status>] [--no-sync] [--json]
 workbook move <task> (--before <task> | --after <task>) [--no-sync] [--json]
@@ -345,6 +345,12 @@ what a task document may contain and how much of one it will read back:
 | Labels per task | 50 | Distinct labels, counted after duplicates are dropped. |
 | Rank | 4,096 bytes | The `numerator/denominator` ordering key. |
 | Dependencies per task | 100 | Distinct dependencies, counted after duplicates are dropped. |
+| Comment body | 16,384 bytes (16 KiB) | One comment, after surrounding whitespace is trimmed. |
+| Comments per task | 500 | Live comments; a removed one no longer counts. |
+| Attachments per task | 50 | Live attachments, files and links together. |
+| Attached file | 1,048,576 bytes (1 MiB) | One attached file. |
+| Attached files per task | 10,485,760 bytes (10 MiB) | What one task's live attached files add up to. |
+| Attachment URL | 2,048 bytes | One link attachment's URL. |
 | Git object | 4,194,304 bytes (4 MiB) | Any single object Workbook reads: a commit, a task tree, or a stored document. |
 | Web request body | 1,048,576 bytes (1 MiB) | One request to `workbook serve`. |
 
@@ -386,6 +392,70 @@ task tip at once.
 Treat these numbers as part of the storage format. Raising one is a compatible
 change — an older clone rejects a document a newer one accepted. Lowering one is
 not, because a task already stored at the old size stops reading.
+
+The comment and attachment ceilings are asked of what a task would hold after a
+change, and only of growth: a task already over one — which two people
+commenting on the same afternoon can produce without either doing anything they
+were not allowed to do — can still have things removed from it. A file over the
+per-file ceiling is refused before it is read, and the refusal suggests a link,
+which stores nothing.
+
+### Comments and attachments
+
+Comments and attachments are things a task holds, so they ride `workbook
+update` rather than becoming verbs of their own:
+
+```sh
+workbook update WB-01K --comment "shipped behind the flag"
+workbook update WB-01K --edit-comment 01K7… --comment "shipped, flag removed"
+workbook update WB-01K --remove-comment 01K7…
+workbook update WB-01K --attach-file ./profile.png
+workbook update WB-01K --attach-url https://example.com/pr/42 --attach-label "The pull request"
+workbook update WB-01K --remove-attachment 01K8…
+```
+
+The body of an edit travels in `--comment` because a flag carries one value, so
+`--comment` alone adds a comment and `--comment` beside `--edit-comment` is the
+new body. That is the whole ambiguity in the set, and it is settled by refusing
+the two invocations that would otherwise be guesses: `--edit-comment` without
+`--comment` has no new text, and `--attach-label` without `--attach-url` has
+nothing to label. Every other combination is two intents and composes.
+
+Composition is the point of putting them on `update`. One invocation is one
+operation pack, one commit, and one entry in `workbook show --history`:
+
+```sh
+workbook update WB-01K --status done --comment "shipped" --attach-url https://example.com/pr/42
+```
+
+records the status change, the comment and the link together, or records
+nothing at all.
+
+A comment or attachment identifier may be typed as any unambiguous prefix of
+the one `workbook show` prints, the way a task ID may be. `show` prints them
+whole rather than shortened, because identifiers minted moments apart share a
+long prefix and a display that could not be typed back would be worse than a
+long one.
+
+`workbook show` renders the thread and the attachment list under the task, and
+`--json` carries both in the task document. One attached file's bytes come back
+with `workbook show <task> --get-attachment <attachment>`, on standard output or
+into the file `--out` names:
+
+```sh
+workbook show WB-01K --get-attachment 01K8… --out ./profile.png
+```
+
+Because that output is bytes rather than a rendered task, no other `show`
+option may be given beside it — including `--json`, which a caller reading
+bytes cannot use anyway. A refusal there is plain text and the exit code
+carries the category: a link holds no bytes and is refused with the URL it
+points at, and an attachment nobody holds is `not-found`.
+
+Removing a comment or an attachment hides it. The bytes of a removed file stay
+in the commit that added them, because that commit is shared append-only
+history no clone may rewrite; space comes back only when a future compaction
+pass rewrites the task's history.
 
 ### Machine-readable output and exit codes
 

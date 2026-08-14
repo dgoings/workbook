@@ -407,22 +407,44 @@ var commandSchemas = map[string]commandMetadata{
 		},
 	},
 	"show": {
-		Name:        "show",
-		Synopsis:    "workbook show <id-or-prefix> [--history [--limit <n>] [--all]] [--compare <commit> <commit>] [--json]",
-		Description: "Show a task.\n\nWith --history, list how the task reached its current state, ordered by the\ncommit chain rather than by wall time. With --compare, diff two points in that\nhistory in the order given. Both name entries by full Git commit object ID.",
+		Name:     "show",
+		Synopsis: "workbook show <id-or-prefix> [--history [--limit <n>] [--all]] [--compare <commit> <commit>] [--get-attachment <id-or-prefix> [--out <path>]] [--json]",
+		Description: "Show a task, with its comment thread and its attachments.\n\n" +
+			"With --history, list how the task reached its current state, ordered by the\n" +
+			"commit chain rather than by wall time. With --compare, diff two points in that\n" +
+			"history in the order given. Both name entries by full Git commit object ID.\n\n" +
+			"With --get-attachment, write one attached file's bytes instead of the task:\n" +
+			"to standard output, or to the file --out names. A link attachment holds no\n" +
+			"bytes and is refused, reported with the URL it points at. Because the output\n" +
+			"is bytes rather than a rendered task, no other show option may be given\n" +
+			"beside it.",
 		Positionals: []string{"<id-or-prefix>"},
 		Options: []optionMetadata{
 			{Name: "history", Kind: boolFlag, Description: "list this task's changes"},
 			{Name: "limit", Kind: stringFlag, Value: "<n>", Description: "show this many recent changes (default 10)"},
 			{Name: "all", Kind: boolFlag, Description: "show every change"},
 			{Name: "compare", Kind: pairFlag, Value: "<commit> <commit>", Description: "diff two commits from this task's history"},
+			{Name: "get-attachment", Kind: stringFlag, Value: "<id-or-prefix>", Description: "write this attachment's bytes"},
+			{Name: "out", Kind: stringFlag, Value: "<path>", Description: "write the attachment to this file instead of standard output"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},
 	},
 	"update": {
-		Name:        "update",
-		Synopsis:    "workbook update <id-or-prefix> [options]",
-		Description: "Update a task.",
+		Name:     "update",
+		Synopsis: "workbook update <id-or-prefix> [options]",
+		Description: "Update a task.\n\n" +
+			"Comments and attachments are things a task holds, so they ride this verb:\n" +
+			"every flag given is one intent, and one invocation is one pack, one commit,\n" +
+			"and one change-log entry. `update <id> --status done --comment \"shipped\"` is\n" +
+			"a single change.\n\n" +
+			"--comment adds a comment on its own, and carries the new body when\n" +
+			"--edit-comment names one to rewrite — a flag takes one value, so the body\n" +
+			"travels in --comment either way. --edit-comment without --comment is\n" +
+			"therefore an error rather than a guess, as is --attach-label without the\n" +
+			"--attach-url it labels.\n\n" +
+			"A comment or attachment ID may be given as any unambiguous prefix of the one\n" +
+			"`workbook show` prints. An attached file is refused before it is read when it\n" +
+			"is larger than a task may hold; attach a link instead.",
 		Positionals: []string{"<id-or-prefix>"},
 		Options: []optionMetadata{
 			{Name: "title", Kind: stringFlag, Value: "<title>", Description: "task title"},
@@ -431,6 +453,13 @@ var commandSchemas = map[string]commandMetadata{
 			{Name: "priority", Kind: stringFlag, Value: "<priority>", Description: "task priority"},
 			{Name: "label", Kind: stringFlag, Value: "<label>", Description: "replacement task label"},
 			{Name: "clear-labels", Kind: boolFlag, Description: "replace labels with an empty set"},
+			{Name: "comment", Kind: stringFlag, Value: "<body>", Description: "comment to add, or the new body with --edit-comment"},
+			{Name: "edit-comment", Kind: stringFlag, Value: "<id-or-prefix>", Description: "replace this comment's body with --comment"},
+			{Name: "remove-comment", Kind: stringFlag, Value: "<id-or-prefix>", Description: "remove this comment"},
+			{Name: "attach-file", Kind: stringFlag, Value: "<path>", Description: "attach this file's contents"},
+			{Name: "attach-url", Kind: stringFlag, Value: "<url>", Description: "attach this http or https link"},
+			{Name: "attach-label", Kind: stringFlag, Value: "<text>", Description: "display text for --attach-url"},
+			{Name: "remove-attachment", Kind: stringFlag, Value: "<id-or-prefix>", Description: "remove this attachment"},
 			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with origin"},
 			{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 		},
