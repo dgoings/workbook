@@ -140,6 +140,25 @@ func TestAssignMutationRefusesWhenTheCloneHasNoIdentity(t *testing.T) {
 	}
 }
 
+// The acting identity is bounded where somebody can read the reason, because
+// it is about to be written into the record as the assignment's creator.
+func TestAssignMutationRefusesAnOversizedActingIdentity(t *testing.T) {
+	store := newMemoryTaskStore(assignedSnapshot(serviceAssignTaskID))
+	service := assignService(store, strings.Repeat("a", MaxAssignmentPrincipalBytes)+"@example.com")
+
+	_, err := service.AssignMutation(context.Background(), serviceAssignTaskID,
+		AssignInput{To: "sam@example.com"})
+	if err == nil {
+		t.Fatal("AssignMutation() error = nil, want a refusal")
+	}
+	if got := CategoryOf(err); got != CategoryValidation {
+		t.Fatalf("category = %q, want %q; an over-long identity is not corrupt data", got, CategoryValidation)
+	}
+	if len(store.writes) != 0 {
+		t.Fatalf("writes = %d, want none", len(store.writes))
+	}
+}
+
 // The count ceiling lives here and only here.
 func TestAssignMutationRefusesPastTheAssignmentCeiling(t *testing.T) {
 	existing := make([]Assignment, 0, MaxAssignmentCount)

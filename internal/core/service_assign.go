@@ -65,6 +65,19 @@ func (s Service) AssignMutation(ctx context.Context, idOrPrefix string, input As
 	if err != nil {
 		return AssignResult{}, err
 	}
+	// The acting identity becomes the assignment's creator, so it is bounded
+	// here rather than only inside the fold. The fold does bound it — a stored
+	// assignment with an unbounded creator is not a document this build will
+	// write — but it reports the failure as corrupt data, which is the right
+	// verdict for a document read off a ref and an incomprehensible one for
+	// somebody whose `user.email` is simply too long.
+	if len(s.Actor) > MaxAssignmentPrincipalBytes {
+		return AssignResult{}, Errorf(
+			CategoryValidation,
+			"this repository's identity is %d bytes and must not exceed %d to record an assignment",
+			len(s.Actor), MaxAssignmentPrincipalBytes,
+		)
+	}
 
 	parent, err := s.resolveSnapshot(ctx, idOrPrefix)
 	if err != nil {

@@ -132,6 +132,42 @@ func assignThroughTheService(t *testing.T, repository, taskID, to string) {
 	}
 }
 
+// The same history, audited by the build that wrote it: valid, not
+// newer-writer. `validate` folds every chain from its root, so this is the one
+// command that proves an assignment history replays rather than merely reads —
+// and it is the assertion that would fail first if the fold's removal rule ever
+// stopped being a pure function of the history.
+func TestThisBuildValidatesAnAssignmentHistory(t *testing.T) {
+	repository := initializedRepository(t)
+	task := cliCreateTask(t, repository, "Assigned task")
+	assignThroughTheService(t, repository, task.ID, "dylan@example.com/impl-1")
+	assignThroughTheService(t, repository, task.ID, "sam@example.com")
+
+	code, stdout, stderr := run(t, repository, "validate", "--full", "--json")
+	if code != 0 {
+		t.Fatalf("validate code = %d, want 0; stderr = %q", code, stderr)
+	}
+	var report historyvalidation.Result
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "validate").Data, &report); err != nil {
+		t.Fatalf("decode validate: %v", err)
+	}
+	if report.Invalid != 0 || report.NewerWriter != 0 {
+		t.Fatalf("validate reported %d invalid and %d newer-writer, want none of either",
+			report.Invalid, report.NewerWriter)
+	}
+
+	// And `show --history` renders the operations rather than skipping them.
+	code, stdout, stderr = run(t, repository, "show", task.ID, "--history")
+	if code != 0 {
+		t.Fatalf("show --history code = %d, want 0; stderr = %q", code, stderr)
+	}
+	for _, wanted := range []string{"dylan@example.com/impl-1", "sam@example.com"} {
+		if !strings.Contains(stdout, wanted) {
+			t.Fatalf("show --history output does not mention %q:\n%s", wanted, stdout)
+		}
+	}
+}
+
 func TestAGenerationZeroBuildTreatsAnAssignedTaskAsANewerWritersWork(t *testing.T) {
 	binary := buildGenerationZeroBinary(t)
 	repository := initializedRepository(t)
