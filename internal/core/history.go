@@ -266,8 +266,53 @@ func describeOperation(operation Operation, before, after TaskData) []FieldChang
 		return []FieldChange{{Field: operation.Field, Kind: ChangeAdded, To: operation.Value}}
 	case OperationSetRemove:
 		return []FieldChange{{Field: operation.Field, Kind: ChangeRemoved, From: operation.Value}}
+	case OperationAssignAdd, OperationAssignRemove:
+		return describeAssignment(operation, before, after)
 	case OperationFieldSet:
 		return []FieldChange{scalarChange(operation.Field, fieldValue(before, operation.Field), operation.Value)}
+	default:
+		return nil
+	}
+}
+
+// describeAssignment renders an assignment operation by what it did, not by
+// what it asked for.
+//
+// Every other operation type is unconditional: a set.add adds. An assignment
+// operation is not, and the change log has to say so. An add of an assignment
+// the task already carried changes nothing, and a removal by somebody the
+// removal rule does not entitle changes nothing — that is the fold's whole
+// point, and a row reading "removed dylan@example.com" beside a task that is
+// still assigned to dylan@example.com would be the log lying about the one
+// thing this design most needs to be legible.
+//
+// So the operation is compared against the states on either side of its pack,
+// and a no-op contributes no field change at all. The pack still appears in the
+// log, attributed and timestamped, summarized as having recorded no visible
+// change — which is exactly what happened.
+//
+// What is compared is the whole record, not merely whether the value is there.
+// A pack that removes an assignment and re-adds it — which nothing this build's
+// boundary writes, but which a composed pack could — leaves the same value in
+// place while replacing its creator and its creation time. The creation time is
+// the clock a staleness display is computed from, so a log that called that
+// "nothing" would quietly reset the one number somebody was reading. Comparing
+// records reports it honestly, as a removal and an addition, which is what the
+// two operations did.
+func describeAssignment(operation Operation, before, after TaskData) []FieldChange {
+	principal, label, err := SplitAssignmentValue(operation.Value)
+	if err != nil {
+		return nil
+	}
+	beforeIndex, heldBefore := findAssignment(before.Assignments, principal, label)
+	afterIndex, heldAfter := findAssignment(after.Assignments, principal, label)
+	unchanged := heldBefore && heldAfter &&
+		sameAssignmentRecord(before.Assignments[beforeIndex], after.Assignments[afterIndex])
+	switch {
+	case operation.Type == OperationAssignAdd && heldAfter && !unchanged:
+		return []FieldChange{{Field: "assignments", Kind: ChangeAdded, To: operation.Value}}
+	case operation.Type == OperationAssignRemove && heldBefore && !unchanged:
+		return []FieldChange{{Field: "assignments", Kind: ChangeRemoved, From: operation.Value}}
 	default:
 		return nil
 	}
@@ -340,8 +385,25 @@ func CompareTasks(from, to TaskData) []FieldChange {
 			fields = append(fields, FieldChange{Field: collection.field, Kind: ChangeAdded, To: added})
 		}
 	}
+	// Assignments compare by their values, which is their identity. Creator and
+	// creation time are attribution and cannot differ between two states that
+	// hold the same assignment, because the fold never rewrites either.
+	for _, removed := range setDifference(assignmentValues(from.Assignments), assignmentValues(to.Assignments)) {
+		fields = append(fields, FieldChange{Field: "assignments", Kind: ChangeRemoved, From: removed})
+	}
+	for _, added := range setDifference(assignmentValues(to.Assignments), assignmentValues(from.Assignments)) {
+		fields = append(fields, FieldChange{Field: "assignments", Kind: ChangeAdded, To: added})
+	}
 	sortFieldChanges(fields)
 	return fields
+}
+
+func assignmentValues(assignments []Assignment) []string {
+	values := make([]string, len(assignments))
+	for index, assignment := range assignments {
+		values[index] = assignment.Value()
+	}
+	return values
 }
 
 // fieldDisplayOrder keeps a pack's fields in one reading order whatever order
@@ -349,6 +411,7 @@ func CompareTasks(from, to TaskData) []FieldChange {
 var fieldDisplayOrder = map[string]int{
 	"task": 0, "title": 1, "status": 2, "priority": 3,
 	"description": 4, "rank": 5, "labels": 6, "dependencies": 7,
+	"assignments": 8,
 }
 
 func sortFieldChanges(fields []FieldChange) {
@@ -384,6 +447,8 @@ func FieldLabel(field string) string {
 		return "Labels"
 	case "dependencies":
 		return "Dependencies"
+	case "assignments":
+		return "Assignments"
 	default:
 		return field
 	}

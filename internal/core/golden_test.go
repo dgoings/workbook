@@ -20,6 +20,15 @@ import (
 // replay, because the status field is where the vocabulary work changes the
 // rules and the rest of the document is along for the ride.
 //
+// It also covers every remaining operation type this build writes — set.add and
+// set.remove over both collections, task.tombstone, and task.restore — captured
+// from a second repository under the same project key. Those were added by the
+// assignment work, ahead of it, and for its sake: assignments introduce the
+// first operation types that carry a writer-format marker, and the claim that no
+// pack of the *older* types gained one is only worth as much as the coverage
+// behind it. A table that pinned creation and one field.set would have let a
+// marker appear on every label edit in the repository without saying a word.
+//
 // Three properties are asserted per fixture, and each one fails for a different
 // kind of regression:
 //
@@ -94,6 +103,60 @@ var goldenTaskRefs = []goldenTaskRef{
 		operation: `{"format":"workbook.operation-pack","version":1,"projectId":"01KZRTEV04X1HZ0QQR1RKFQVPD","taskId":"GD-01KZRTEW6CJ88M7XQ3M30EPM3H","historyGeneration":"01KZRTEW6CSHTCD8ETC13P5X38","actor":{"id":"t@example.test"},"logicalClock":1,"wallTime":"2026-08-11T12:28:30.2845-04:00","operations":[{"id":"01KZRTEW6CVM6YB062M9MBVRCM","type":"task.create","task":{"title":"Task done","description":"","status":"done","priority":"medium","labels":[],"rank":"1/1","dependencies":[],"createdAt":"2026-08-11T12:28:30.2845-04:00","updatedAt":"2026-08-11T12:28:30.2845-04:00","deleted":false}}]}
 `,
 		state: `{"format":"workbook.task-state","version":1,"projectId":"01KZRTEV04X1HZ0QQR1RKFQVPD","taskId":"GD-01KZRTEW6CJ88M7XQ3M30EPM3H","history":{"generation":"01KZRTEW6CSHTCD8ETC13P5X38","compactedFrom":null},"logicalClock":1,"task":{"title":"Task done","description":"","status":"done","priority":"medium","labels":[],"rank":"1/1","dependencies":[],"createdAt":"2026-08-11T12:28:30.2845-04:00","updatedAt":"2026-08-11T12:28:30.2845-04:00","deleted":false}}
+`,
+	},
+	{
+		name: "set.add labels",
+		parent: `{"format":"workbook.task-state","version":1,"projectId":"01KZYT0MXR7FR7M4W24030FC9R","taskId":"GD-01KZYT0NGQEGSKMM4Y90RM99HA","history":{"generation":"01KZYT0NGQPEJ7SHFG7C1Q8DRZ","compactedFrom":null},"logicalClock":1,"task":{"title":"Task alpha","description":"","status":"backlog","priority":"medium","labels":[],"rank":"1/1","dependencies":[],"createdAt":"2026-08-13T20:16:11.287094-04:00","updatedAt":"2026-08-13T20:16:11.287094-04:00","deleted":false}}
+`,
+		operation: `{"format":"workbook.operation-pack","version":1,"projectId":"01KZYT0MXR7FR7M4W24030FC9R","taskId":"GD-01KZYT0NGQEGSKMM4Y90RM99HA","historyGeneration":"01KZYT0NGQPEJ7SHFG7C1Q8DRZ","actor":{"id":"t@example.test"},"logicalClock":2,"wallTime":"2026-08-13T20:16:11.834506-04:00","operations":[{"id":"01KZYT0P1TCGQQYH1GMZF9YSWA","type":"set.add","field":"labels","value":"storage"}]}
+`,
+		state: `{"format":"workbook.task-state","version":1,"projectId":"01KZYT0MXR7FR7M4W24030FC9R","taskId":"GD-01KZYT0NGQEGSKMM4Y90RM99HA","history":{"generation":"01KZYT0NGQPEJ7SHFG7C1Q8DRZ","compactedFrom":null},"logicalClock":2,"task":{"title":"Task alpha","description":"","status":"backlog","priority":"medium","labels":["storage"],"rank":"1/1","dependencies":[],"createdAt":"2026-08-13T20:16:11.287094-04:00","updatedAt":"2026-08-13T20:16:11.834506-04:00","deleted":false}}
+`,
+	},
+	{
+		name: "set.remove labels",
+		parent: `{"format":"workbook.task-state","version":1,"projectId":"01KZYT0MXR7FR7M4W24030FC9R","taskId":"GD-01KZYT0NGQEGSKMM4Y90RM99HA","history":{"generation":"01KZYT0NGQPEJ7SHFG7C1Q8DRZ","compactedFrom":null},"logicalClock":3,"task":{"title":"Task alpha","description":"","status":"backlog","priority":"medium","labels":["storage","sync"],"rank":"1/1","dependencies":[],"createdAt":"2026-08-13T20:16:11.287094-04:00","updatedAt":"2026-08-13T20:16:12.108565-04:00","deleted":false}}
+`,
+		operation: `{"format":"workbook.operation-pack","version":1,"projectId":"01KZYT0MXR7FR7M4W24030FC9R","taskId":"GD-01KZYT0NGQEGSKMM4Y90RM99HA","historyGeneration":"01KZYT0NGQPEJ7SHFG7C1Q8DRZ","actor":{"id":"t@example.test"},"logicalClock":4,"wallTime":"2026-08-13T20:16:12.38395-04:00","operations":[{"id":"01KZYT0PJZSVPXN6DA5BND8YA2","type":"set.remove","field":"labels","value":"storage"}]}
+`,
+		state: `{"format":"workbook.task-state","version":1,"projectId":"01KZYT0MXR7FR7M4W24030FC9R","taskId":"GD-01KZYT0NGQEGSKMM4Y90RM99HA","history":{"generation":"01KZYT0NGQPEJ7SHFG7C1Q8DRZ","compactedFrom":null},"logicalClock":4,"task":{"title":"Task alpha","description":"","status":"backlog","priority":"medium","labels":["sync"],"rank":"1/1","dependencies":[],"createdAt":"2026-08-13T20:16:11.287094-04:00","updatedAt":"2026-08-13T20:16:12.38395-04:00","deleted":false}}
+`,
+	},
+	{
+		name: "set.add dependencies",
+		parent: `{"format":"workbook.task-state","version":1,"projectId":"01KZYT0MXR7FR7M4W24030FC9R","taskId":"GD-01KZYT0NGQEGSKMM4Y90RM99HA","history":{"generation":"01KZYT0NGQPEJ7SHFG7C1Q8DRZ","compactedFrom":null},"logicalClock":4,"task":{"title":"Task alpha","description":"","status":"backlog","priority":"medium","labels":["sync"],"rank":"1/1","dependencies":[],"createdAt":"2026-08-13T20:16:11.287094-04:00","updatedAt":"2026-08-13T20:16:12.38395-04:00","deleted":false}}
+`,
+		operation: `{"format":"workbook.operation-pack","version":1,"projectId":"01KZYT0MXR7FR7M4W24030FC9R","taskId":"GD-01KZYT0NGQEGSKMM4Y90RM99HA","historyGeneration":"01KZYT0NGQPEJ7SHFG7C1Q8DRZ","actor":{"id":"t@example.test"},"logicalClock":5,"wallTime":"2026-08-13T20:16:12.689227-04:00","operations":[{"id":"01KZYT0PWH19A8K4CFMFNXJVQN","type":"set.add","field":"dependencies","value":"GD-01KZYT0NS37M21ED4SF80XTRS3"}]}
+`,
+		state: `{"format":"workbook.task-state","version":1,"projectId":"01KZYT0MXR7FR7M4W24030FC9R","taskId":"GD-01KZYT0NGQEGSKMM4Y90RM99HA","history":{"generation":"01KZYT0NGQPEJ7SHFG7C1Q8DRZ","compactedFrom":null},"logicalClock":5,"task":{"title":"Task alpha","description":"","status":"backlog","priority":"medium","labels":["sync"],"rank":"1/1","dependencies":["GD-01KZYT0NS37M21ED4SF80XTRS3"],"createdAt":"2026-08-13T20:16:11.287094-04:00","updatedAt":"2026-08-13T20:16:12.689227-04:00","deleted":false}}
+`,
+	},
+	{
+		name: "set.remove dependencies",
+		parent: `{"format":"workbook.task-state","version":1,"projectId":"01KZYT0MXR7FR7M4W24030FC9R","taskId":"GD-01KZYT0NGQEGSKMM4Y90RM99HA","history":{"generation":"01KZYT0NGQPEJ7SHFG7C1Q8DRZ","compactedFrom":null},"logicalClock":5,"task":{"title":"Task alpha","description":"","status":"backlog","priority":"medium","labels":["sync"],"rank":"1/1","dependencies":["GD-01KZYT0NS37M21ED4SF80XTRS3"],"createdAt":"2026-08-13T20:16:11.287094-04:00","updatedAt":"2026-08-13T20:16:12.689227-04:00","deleted":false}}
+`,
+		operation: `{"format":"workbook.operation-pack","version":1,"projectId":"01KZYT0MXR7FR7M4W24030FC9R","taskId":"GD-01KZYT0NGQEGSKMM4Y90RM99HA","historyGeneration":"01KZYT0NGQPEJ7SHFG7C1Q8DRZ","actor":{"id":"t@example.test"},"logicalClock":6,"wallTime":"2026-08-13T20:16:12.949108-04:00","operations":[{"id":"01KZYT0Q4NKGJM0229WZ3GQ648","type":"set.remove","field":"dependencies","value":"GD-01KZYT0NS37M21ED4SF80XTRS3"}]}
+`,
+		state: `{"format":"workbook.task-state","version":1,"projectId":"01KZYT0MXR7FR7M4W24030FC9R","taskId":"GD-01KZYT0NGQEGSKMM4Y90RM99HA","history":{"generation":"01KZYT0NGQPEJ7SHFG7C1Q8DRZ","compactedFrom":null},"logicalClock":6,"task":{"title":"Task alpha","description":"","status":"backlog","priority":"medium","labels":["sync"],"rank":"1/1","dependencies":[],"createdAt":"2026-08-13T20:16:11.287094-04:00","updatedAt":"2026-08-13T20:16:12.949108-04:00","deleted":false}}
+`,
+	},
+	{
+		name: "task.tombstone",
+		parent: `{"format":"workbook.task-state","version":1,"projectId":"01KZYT0MXR7FR7M4W24030FC9R","taskId":"GD-01KZYT0NS37M21ED4SF80XTRS3","history":{"generation":"01KZYT0NS3ZZMMYS42A5PRQ865","compactedFrom":null},"logicalClock":1,"task":{"title":"Task beta","description":"","status":"backlog","priority":"medium","labels":[],"rank":"2/1","dependencies":[],"createdAt":"2026-08-13T20:16:11.555589-04:00","updatedAt":"2026-08-13T20:16:11.555589-04:00","deleted":false}}
+`,
+		operation: `{"format":"workbook.operation-pack","version":1,"projectId":"01KZYT0MXR7FR7M4W24030FC9R","taskId":"GD-01KZYT0NS37M21ED4SF80XTRS3","historyGeneration":"01KZYT0NS3ZZMMYS42A5PRQ865","actor":{"id":"t@example.test"},"logicalClock":2,"wallTime":"2026-08-13T20:16:13.20482-04:00","operations":[{"id":"01KZYT0QCMS2YZ6J193BTSWBZC","type":"task.tombstone"}]}
+`,
+		state: `{"format":"workbook.task-state","version":1,"projectId":"01KZYT0MXR7FR7M4W24030FC9R","taskId":"GD-01KZYT0NS37M21ED4SF80XTRS3","history":{"generation":"01KZYT0NS3ZZMMYS42A5PRQ865","compactedFrom":null},"logicalClock":2,"task":{"title":"Task beta","description":"","status":"backlog","priority":"medium","labels":[],"rank":"2/1","dependencies":[],"createdAt":"2026-08-13T20:16:11.555589-04:00","updatedAt":"2026-08-13T20:16:13.20482-04:00","deleted":true}}
+`,
+	},
+	{
+		name: "task.restore",
+		parent: `{"format":"workbook.task-state","version":1,"projectId":"01KZYT0MXR7FR7M4W24030FC9R","taskId":"GD-01KZYT0NS37M21ED4SF80XTRS3","history":{"generation":"01KZYT0NS3ZZMMYS42A5PRQ865","compactedFrom":null},"logicalClock":2,"task":{"title":"Task beta","description":"","status":"backlog","priority":"medium","labels":[],"rank":"2/1","dependencies":[],"createdAt":"2026-08-13T20:16:11.555589-04:00","updatedAt":"2026-08-13T20:16:13.20482-04:00","deleted":true}}
+`,
+		operation: `{"format":"workbook.operation-pack","version":1,"projectId":"01KZYT0MXR7FR7M4W24030FC9R","taskId":"GD-01KZYT0NS37M21ED4SF80XTRS3","historyGeneration":"01KZYT0NS3ZZMMYS42A5PRQ865","actor":{"id":"t@example.test"},"logicalClock":3,"wallTime":"2026-08-13T20:16:13.470318-04:00","operations":[{"id":"01KZYT0QMY5A5PR7YR9FRVWVAW","type":"task.restore"}]}
+`,
+		state: `{"format":"workbook.task-state","version":1,"projectId":"01KZYT0MXR7FR7M4W24030FC9R","taskId":"GD-01KZYT0NS37M21ED4SF80XTRS3","history":{"generation":"01KZYT0NS3ZZMMYS42A5PRQ865","compactedFrom":null},"logicalClock":3,"task":{"title":"Task beta","description":"","status":"backlog","priority":"medium","labels":[],"rank":"2/1","dependencies":[],"createdAt":"2026-08-13T20:16:11.555589-04:00","updatedAt":"2026-08-13T20:16:13.470318-04:00","deleted":false}}
 `,
 	},
 }

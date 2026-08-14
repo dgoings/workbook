@@ -26,10 +26,15 @@ const (
 // generation tells them exactly what is true, which is that this one pack needs
 // a newer fold.
 //
-// Zero is the generation every build up to and including v0.5.0 writes, and it
-// is spelled by saying nothing: a document with no `minReader` member is
-// generation zero. That is what keeps the marker free — see the golden byte
-// tables, which would fail the moment a document this build writes gained it.
+// Zero is the generation spelled by saying nothing: a document with no
+// `minReader` member is generation zero. That is what keeps the marker free for
+// every pack that does not need it — see the golden byte tables, which would
+// fail the moment an ordinary document this build writes gained one.
+//
+// One is the generation assignments introduced. A pack carrying assign.add or
+// assign.remove needs a reader that knows the removal rule, because a build
+// that folded those operations without it would compute a different task from
+// the same bytes — which is worse than refusing them.
 //
 // Raising this constant is the last step of shipping a new operation type, not
 // the first: the build has to be able to fold generation N before it may claim
@@ -44,7 +49,7 @@ const (
 // has already happened, from cache, while the mutations it refused now succeed.
 // See historyvalidation.readerGeneration. Any future cache of a fold's outcome
 // owes the same.
-const SupportedFormatGeneration = 0
+const SupportedFormatGeneration = 1
 
 type Actor struct {
 	ID string `json:"id"`
@@ -59,6 +64,20 @@ const (
 	OperationSetRemove     OperationType = "set.remove"
 	OperationTaskTombstone OperationType = "task.tombstone"
 	OperationTaskRestore   OperationType = "task.restore"
+	// OperationAssignAdd and OperationAssignRemove record and withdraw one
+	// assignment. They carry the assignment value in Value and nothing else:
+	// the principal and its optional label are what somebody chose, and the two
+	// members that complete an assignment — who recorded it and when — are
+	// already on the pack that carries the operation.
+	//
+	// They are their own operation types rather than a third `set.add` field
+	// because a set member is a bare string and an assignment is not: the
+	// removal rule needs the creating actor, which only a type the fold knows
+	// how to attribute can supply. It is also what lets them declare a
+	// writer-format generation of their own without moving label edits with
+	// them.
+	OperationAssignAdd    OperationType = "assign.add"
+	OperationAssignRemove OperationType = "assign.remove"
 )
 
 type Operation struct {
@@ -121,14 +140,14 @@ type StateDocument struct {
 // operationMinReader declares, per operation type, the writer-format generation
 // a reader needs in order to fold a pack containing it.
 //
-// Every entry is zero, and the table exists anyway. It is the one place a
-// future story bumps: the comments and attachments work adds its operation
-// types here with the generation they need, and every writing path picks the
-// value up from PackMinReader without being edited. Declaring it per operation
-// type rather than per release is what keeps the marker honest — a pack of
-// ordinary field.set operations written by a build that also knows how to write
-// comments still carries no marker, so an older clone keeps folding everything
-// it genuinely can.
+// The six original entries are zero and the two assignment entries are one.
+// This is the one place a story that ships a new operation type bumps: every
+// writing path picks the value up from PackMinReader without being edited.
+// Declaring it per operation type rather than per release is what keeps the
+// marker honest — a pack of ordinary field.set operations written by a build
+// that also knows how to write assignments still carries no marker, so an older
+// clone keeps folding everything it genuinely can, and only the tasks somebody
+// actually assigned go out of its reach.
 var operationMinReader = map[OperationType]int{
 	OperationTaskCreate:    0,
 	OperationFieldSet:      0,
@@ -136,6 +155,8 @@ var operationMinReader = map[OperationType]int{
 	OperationSetRemove:     0,
 	OperationTaskTombstone: 0,
 	OperationTaskRestore:   0,
+	OperationAssignAdd:     1,
+	OperationAssignRemove:  1,
 }
 
 // PackMinReader returns the generation a reader needs to fold these operations,
@@ -304,6 +325,11 @@ func Apply(parent *StateDocument, pack OperationPack, projectKey string) (StateD
 	}
 
 	task := copyTaskData(parent.Task)
+	// Who authored this pack and when, which the assignment operations fold
+	// with. It is read off the pack rather than passed in from anywhere else,
+	// because a fold that consulted the local clone for either would compute a
+	// different task on every machine that replayed the same history.
+	authored := authorship{actor: pack.Actor.ID, at: pack.WallTime}
 	for _, operation := range pack.Operations {
 		if task.Deleted && operation.Type != OperationTaskRestore {
 			return StateDocument{}, corrupt("cannot mutate a tombstoned task")
@@ -311,7 +337,7 @@ func Apply(parent *StateDocument, pack OperationPack, projectKey string) (StateD
 		if operation.Type == OperationTaskCreate {
 			return StateDocument{}, corrupt("task.create requires no parent")
 		}
-		if err := applyOperation(&task, operation, projectKey); err != nil {
+		if err := applyOperation(&task, operation, projectKey, authored); err != nil {
 			return StateDocument{}, err
 		}
 	}
@@ -365,6 +391,11 @@ func applyCreate(pack OperationPack, projectKey string) (StateDocument, error) {
 	if operation.Task.CreatedAt.IsZero() {
 		return StateDocument{}, corrupt("task.create requires createdAt")
 	}
+	// Assignments are refused in validateTaskCreateOperation, which Apply has
+	// already run over this pack through validateOperationPackDocument. A second
+	// copy of the rule here would be unreachable, and an unreachable guard is
+	// worse than none: it reads as the load-bearing one, so a change that broke
+	// the real check would look covered.
 
 	task := copyTaskData(*operation.Task)
 	task.UpdatedAt = pack.WallTime
@@ -384,7 +415,15 @@ func applyCreate(pack OperationPack, projectKey string) (StateDocument, error) {
 	}, nil
 }
 
-func applyOperation(task *TaskData, operation Operation, projectKey string) error {
+// authorship is the pack-level attribution the fold needs while applying one
+// operation: who wrote the pack and when. Both are already validated members of
+// the envelope by the time an operation is applied.
+type authorship struct {
+	actor string
+	at    time.Time
+}
+
+func applyOperation(task *TaskData, operation Operation, projectKey string, authored authorship) error {
 	if err := validateOperation(operation); err != nil {
 		return err
 	}
@@ -395,6 +434,10 @@ func applyOperation(task *TaskData, operation Operation, projectKey string) erro
 		return applySetAdd(task, operation, projectKey)
 	case OperationSetRemove:
 		return applySetRemove(task, operation, projectKey)
+	case OperationAssignAdd:
+		return applyAssignAdd(task, operation, authored)
+	case OperationAssignRemove:
+		return applyAssignRemove(task, operation, authored)
 	case OperationTaskTombstone:
 		task.Deleted = true
 		return nil
@@ -404,6 +447,73 @@ func applyOperation(task *TaskData, operation Operation, projectKey string) erro
 	default:
 		return corrupt("unsupported operation type %q", operation.Type)
 	}
+}
+
+// applyAssignAdd records one assignment, and records nothing when the task
+// already carries it.
+//
+// Idempotence is what makes duplicate delivery harmless. The same pack can
+// arrive twice — replayed onto a fetched tip, or fetched after it was pushed —
+// and an add that appended a second entry each time would turn a redelivery
+// into a change. The existing entry keeps its creator and its creation time,
+// because the assignment it describes is the first one: a later add restating
+// it is not a new claim, and rewriting the attribution would make the record of
+// who assigned whom depend on how many times a pack was delivered.
+func applyAssignAdd(task *TaskData, operation Operation, authored authorship) error {
+	principal, label, err := SplitAssignmentValue(operation.Value)
+	if err != nil {
+		return Wrap(CategoryCorruptData, "assign.add assignment is invalid", err)
+	}
+	if _, found := findAssignment(task.Assignments, principal, label); found {
+		return nil
+	}
+	task.Assignments = append(task.Assignments, Assignment{
+		Principal: principal,
+		Label:     label,
+		Creator:   authored.actor,
+		CreatedAt: authored.at,
+	})
+	return nil
+}
+
+// applyAssignRemove withdraws one assignment, if — and only if — the pack's
+// actor is entitled to.
+//
+// THE FOLD. This is the second and durable layer of the removal rule. The
+// mutation boundary refuses a foreign remove before it is ever written, which
+// is what a person or an agent experiences; this is what holds when the
+// operation did not come from that boundary. A pack hand-built with `git
+// hash-object`, or written by a modified build, or pushed by a peer running
+// something that is not Workbook at all, folds here on every honest reader to
+// exactly the same task — the operation stays in the history, attributed to
+// whoever wrote it, and changes nothing.
+//
+// A recorded no-op rather than a refusal, deliberately. Refusing would make one
+// hostile pack a permanent corrupt-data verdict on a task ref every clone has
+// already fetched, which is a denial of service dressed up as strictness; and
+// it would need a conflict type, a resolution surface, and an answer to what a
+// reconciliation should do with it. Folding it away needs none of that, and
+// says something truer: the operation was recorded, and it did not have the
+// authority to mean anything.
+//
+// Removing an assignment that is not there is likewise nothing rather than a
+// failure. Two clones can remove the same assignment concurrently, and the
+// second replay has to fold — the boundary refuses that as a mistake where a
+// person can see it, and replay tolerates it because by then it is history.
+func applyAssignRemove(task *TaskData, operation Operation, authored authorship) error {
+	principal, label, err := SplitAssignmentValue(operation.Value)
+	if err != nil {
+		return Wrap(CategoryCorruptData, "assign.remove assignment is invalid", err)
+	}
+	index, found := findAssignment(task.Assignments, principal, label)
+	if !found {
+		return nil
+	}
+	if !task.Assignments[index].RemovableBy(authored.actor) {
+		return nil
+	}
+	task.Assignments = append(task.Assignments[:index:index], task.Assignments[index+1:]...)
+	return nil
 }
 
 func applyFieldSet(task *TaskData, operation Operation) error {
@@ -565,6 +675,10 @@ func validateOperation(operation Operation) error {
 		if operation.Task != nil {
 			return corrupt("%s must not contain task data", operation.Type)
 		}
+	case OperationAssignAdd, OperationAssignRemove:
+		if operation.Task != nil || operation.Field != "" {
+			return corrupt("%s must carry only an assignment value", operation.Type)
+		}
 	case OperationTaskTombstone, OperationTaskRestore:
 		if operation.Task != nil || operation.Field != "" || operation.Value != "" {
 			return corrupt("%s must not contain a payload", operation.Type)
@@ -603,6 +717,8 @@ func validateOperationDocument(operation Operation, projectKey string) error {
 		return validateFieldSetOperation(operation)
 	case OperationSetAdd, OperationSetRemove:
 		return validateSetOperation(operation, projectKey)
+	case OperationAssignAdd, OperationAssignRemove:
+		return validateAssignOperation(operation)
 	case OperationTaskTombstone:
 		if operation.Task != nil || operation.Field != "" || operation.Value != "" {
 			return corrupt("task.tombstone must not contain a payload")
@@ -639,6 +755,16 @@ func validateTaskCreateOperation(operation Operation, projectKey string) error {
 	}
 	if operation.Task.CreatedAt.IsZero() {
 		return corrupt("task.create requires createdAt")
+	}
+	// A create names a task into existence; an assignment is a separate,
+	// attributed act, so it is recorded by a separate operation even when the
+	// two arrive together. Refusing it here also closes a trap the marker could
+	// not see: task.create declares generation zero, so a create that smuggled
+	// assignments in its task data would be a pack an older clone accepts the
+	// header of and then reports as corrupt, which is the exact outcome the
+	// writer-format contract exists to prevent.
+	if len(operation.Task.Assignments) > 0 {
+		return corrupt("task.create must not contain assignments")
 	}
 	normalized, err := normalizeCanonicalTask(projectKey, copyTaskData(*operation.Task))
 	if err != nil {
@@ -707,6 +833,25 @@ func validateSetOperation(operation Operation, projectKey string) error {
 	return nil
 }
 
+// validateAssignOperation checks an assignment operation's structure, and only
+// its structure.
+//
+// Whether the principal looks like an email address is not asked, for the
+// reason validateFieldSetOperation gives about a status token: this runs during
+// replay over operations another clone already committed, and refusing one
+// because this build dislikes a teammate's identity would turn a fetched
+// history into corrupt data. What it still refuses is a value that is not an
+// assignment at all.
+func validateAssignOperation(operation Operation) error {
+	if operation.Task != nil || operation.Field != "" {
+		return corrupt("%s must carry only an assignment value", operation.Type)
+	}
+	if _, _, err := SplitAssignmentValue(operation.Value); err != nil {
+		return Wrap(CategoryCorruptData, string(operation.Type)+" assignment is invalid", err)
+	}
+	return nil
+}
+
 func normalizeCanonicalTask(projectKey string, task TaskData) (TaskData, error) {
 	normalized, err := NormalizeTask(projectKey, task)
 	if err != nil {
@@ -725,6 +870,7 @@ func copyTaskData(task TaskData) TaskData {
 	copy := task
 	copy.Labels = append([]string(nil), task.Labels...)
 	copy.Dependencies = append([]string(nil), task.Dependencies...)
+	copy.Assignments = copyAssignments(task.Assignments)
 	return copy
 }
 

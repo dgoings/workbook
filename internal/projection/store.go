@@ -543,6 +543,7 @@ func (s *Store) requiredSchemaExists(ctx context.Context) bool {
 		`SELECT task_id, head, project_id, history_generation, logical_clock, min_reader, title, description, status, priority, rank, created_at, updated_at, deleted FROM tasks LIMIT 0`,
 		`SELECT task_id, label FROM task_labels LIMIT 0`,
 		`SELECT task_id, dependency_id FROM task_dependencies LIMIT 0`,
+		`SELECT task_id, principal, label, creator, created_at FROM task_assignments LIMIT 0`,
 		`SELECT operation_id, task_id, commit_id, chain_index, pack_index, logical_clock, history_generation, min_reader, actor, wall_time, type, field, value, task_data FROM operations LIMIT 0`,
 	} {
 		rows, err := s.db.QueryContext(ctx, query)
@@ -874,7 +875,7 @@ func (s *Store) invalidateActive(ctx context.Context, taskID, expectedParent, wr
 	}
 	defer transaction.Rollback()
 
-	for _, table := range []string{"task_labels", "task_dependencies", "operations"} {
+	for _, table := range []string{"task_labels", "task_dependencies", "task_assignments", "operations"} {
 		if _, err := transaction.ExecContext(
 			ctx,
 			`DELETE FROM `+table+` WHERE task_id = ? AND EXISTS (
@@ -916,7 +917,7 @@ func replaceSnapshots(
 	defer transaction.Rollback()
 	if _, err := transaction.ExecContext(
 		ctx,
-		`DELETE FROM task_labels; DELETE FROM task_dependencies; DELETE FROM operations; DELETE FROM tasks`,
+		`DELETE FROM task_labels; DELETE FROM task_dependencies; DELETE FROM task_assignments; DELETE FROM operations; DELETE FROM tasks`,
 	); err != nil {
 		return cacheError("clear projection rebuild", err)
 	}
@@ -1004,7 +1005,7 @@ func cachedHeadMatches(ctx context.Context, transaction *sql.Tx, taskID, expecte
 }
 
 func deleteTask(ctx context.Context, transaction *sql.Tx, taskID string) error {
-	for _, table := range []string{"task_labels", "task_dependencies", "tasks"} {
+	for _, table := range []string{"task_labels", "task_dependencies", "task_assignments", "tasks"} {
 		if _, err := transaction.ExecContext(ctx, `DELETE FROM `+table+` WHERE task_id = ?`, taskID); err != nil {
 			return cacheError("remove projected task", err)
 		}
@@ -1044,7 +1045,40 @@ func upsertSnapshot(ctx context.Context, transaction *sql.Tx, snapshot core.Snap
 			return cacheError("insert projected task dependency", err)
 		}
 	}
+	// Assignments are stored as their parts rather than as a rendered value,
+	// because the creator and the creation time are what the removal rule and
+	// the staleness display are computed from, and a projection that dropped
+	// them would hand a mutation a parent it could not decide a removal
+	// against. They are not sorted on the way in: the checkpoint they come from
+	// is already canonically ordered, and every query below orders explicitly.
+	for _, assignment := range state.Task.Assignments {
+		if _, err := transaction.ExecContext(
+			ctx,
+			`INSERT INTO task_assignments (task_id, principal, label, creator, created_at) VALUES (?, ?, ?, ?, ?)`,
+			state.TaskID, assignment.Principal, assignment.Label, assignment.Creator, formatTime(assignment.CreatedAt),
+		); err != nil {
+			return cacheError("insert projected task assignment", err)
+		}
+	}
 	return nil
+}
+
+// scanAssignment reads one projected assignment row.
+func scanAssignment(scanner rowScanner) (string, core.Assignment, error) {
+	var (
+		taskID     string
+		assignment core.Assignment
+		created    string
+	)
+	if err := scanner.Scan(&taskID, &assignment.Principal, &assignment.Label, &assignment.Creator, &created); err != nil {
+		return "", core.Assignment{}, err
+	}
+	createdAt, err := time.Parse(time.RFC3339Nano, created)
+	if err != nil {
+		return "", core.Assignment{}, core.Wrap(core.CategoryCorruptData, "projected task assignment has an invalid creation time", err)
+	}
+	assignment.CreatedAt = createdAt
+	return taskID, assignment, nil
 }
 
 func (s *Store) querySnapshots(ctx context.Context) ([]core.Snapshot, error) {
@@ -1135,6 +1169,35 @@ func (s *Store) querySnapshots(ctx context.Context) ([]core.Snapshot, error) {
 	if err := dependencyRows.Close(); err != nil {
 		return nil, s.databaseError("close projected task dependency query", err)
 	}
+
+	assignmentRows, err := transaction.QueryContext(ctx,
+		`SELECT task_id, principal, label, creator, created_at FROM task_assignments ORDER BY task_id, principal, label`)
+	if err != nil {
+		return nil, s.databaseError("query projected task assignments", err)
+	}
+	for assignmentRows.Next() {
+		taskID, assignment, err := scanAssignment(assignmentRows)
+		if err != nil {
+			_ = assignmentRows.Close()
+			if core.CategoryOf(err) == core.CategoryCorruptData {
+				return nil, err
+			}
+			return nil, s.databaseError("read projected task assignment", err)
+		}
+		index, found := byTaskID[taskID]
+		if !found {
+			_ = assignmentRows.Close()
+			return nil, core.Errorf(core.CategoryCorruptData, "projected assignment references missing task %q", taskID)
+		}
+		snapshots[index].State.Task.Assignments = append(snapshots[index].State.Task.Assignments, assignment)
+	}
+	if err := assignmentRows.Err(); err != nil {
+		_ = assignmentRows.Close()
+		return nil, s.databaseError("read projected task assignments", err)
+	}
+	if err := assignmentRows.Close(); err != nil {
+		return nil, s.databaseError("close projected task assignment query", err)
+	}
 	if err := transaction.Commit(); err != nil {
 		return nil, s.databaseError("commit projected task query", err)
 	}
@@ -1224,12 +1287,48 @@ func (s *Store) querySnapshot(ctx context.Context, taskID string) (core.Snapshot
 	if err != nil {
 		return core.Snapshot{}, false, err
 	}
+	assignments, err := s.queryAssignments(ctx, transaction, taskID)
+	if err != nil {
+		return core.Snapshot{}, false, err
+	}
 	snapshot.State.Task.Labels = labels
 	snapshot.State.Task.Dependencies = dependencies
+	snapshot.State.Task.Assignments = assignments
 	if err := transaction.Commit(); err != nil {
 		return core.Snapshot{}, false, s.databaseError("commit projected task query", err)
 	}
 	return snapshot, true, nil
+}
+
+// queryAssignments reads one task's assignments, and leaves the slice nil when
+// there are none. Nil is the canonical empty assignment list — the member is
+// omitted from a stored checkpoint rather than written as `[]` — so a snapshot
+// served from this cache has to spell emptiness the same way the checkpoint
+// does or every comparison against a folded state would disagree about a task
+// nobody assigned.
+func (s *Store) queryAssignments(ctx context.Context, transaction *sql.Tx, taskID string) ([]core.Assignment, error) {
+	rows, err := transaction.QueryContext(ctx,
+		`SELECT task_id, principal, label, creator, created_at FROM task_assignments WHERE task_id = ? ORDER BY principal, label`,
+		taskID)
+	if err != nil {
+		return nil, s.databaseError("query projected task assignments", err)
+	}
+	defer rows.Close()
+	var assignments []core.Assignment
+	for rows.Next() {
+		_, assignment, err := scanAssignment(rows)
+		if err != nil {
+			if core.CategoryOf(err) == core.CategoryCorruptData {
+				return nil, err
+			}
+			return nil, s.databaseError("read projected task assignment", err)
+		}
+		assignments = append(assignments, assignment)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, s.databaseError("read projected task assignments", err)
+	}
+	return assignments, nil
 }
 
 func (s *Store) queryStrings(ctx context.Context, transaction *sql.Tx, query, taskID string) ([]string, error) {

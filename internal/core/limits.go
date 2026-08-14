@@ -52,6 +52,36 @@ const (
 	// declare. Dependency edges are walked for cycles across the whole project,
 	// so this bounds that graph as well as the document.
 	MaxDependencyCount = 100
+	// MaxAssignmentPrincipalBytes bounds an assignment's principal, which is an
+	// email address. RFC 5321 caps a reverse-path at 256 octets including the
+	// angle brackets, so 254 is the longest address that can be delivered — a
+	// ceiling the format did not choose so much as inherit.
+	MaxAssignmentPrincipalBytes = 254
+	// MaxAssignmentLabelBytes bounds an assignment's agent label. It matches
+	// MaxLabelBytes because the two are the same kind of thing: a short name
+	// somebody gives a thing, read in a board chip and a commit subject.
+	MaxAssignmentLabelBytes = 100
+	// MaxAssignmentBytes bounds one whole assignment value, principal and
+	// label and the separator between them. It is stated rather than derived so
+	// that the one number a message quotes is the one a reader can look up.
+	MaxAssignmentBytes = MaxAssignmentPrincipalBytes + 1 + MaxAssignmentLabelBytes
+	// MaxAssignmentCount bounds how many assignments one task may be given, and
+	// it is checked only where somebody is giving one.
+	//
+	// It belongs with the status ceilings below rather than with the task
+	// ceilings above, for the reason stated there at length: no single author
+	// decides it. Two people — or an orchestrator's two agents — assigning
+	// themselves the same task on the same afternoon can carry it past this
+	// number without either one being told anything, because neither operation
+	// could have been written differently. A fold that failed on the count
+	// would turn that pair of ordinary acts into a task no clone can ever read,
+	// and append-only means the removal that would bring it back under the
+	// ceiling sits behind the fold that already failed.
+	//
+	// Fifty is set where an assignment list stops being a signal. A pairing
+	// session is two, a fleet is a handful, and a task with fifty holders has
+	// stopped saying who is responsible for it.
+	MaxAssignmentCount = 50
 	// MaxStatusNameBytes bounds one status name. A name is a machine token, not
 	// prose: it is typed as a flag value, matched in a filter, and written into
 	// a commit subject, so the ceiling is set where a name stops being
@@ -132,8 +162,9 @@ const (
 	MaxConfigLedgerReplayCommits = 128
 )
 
-// The three status ceilings above are unlike every other ceiling in this file,
-// and the difference is worth stating where somebody raising one will read it.
+// The three status ceilings above — and MaxAssignmentCount with them — are
+// unlike every other ceiling in this file, and the difference is worth stating
+// where somebody raising one will read it.
 //
 // A task ceiling is a property of one document, decided by whoever wrote it: a
 // title is 500 bytes or it is not, and the clone that wrote an oversized one is
@@ -143,8 +174,10 @@ const (
 // MaxStatusCount without either one being told anything — there is no operation
 // either could have written differently.
 //
-// So these three are checked when a pack is authored (validateVocabularyGrowth,
-// reached from ValidateConfigAuthoring) and never when one is folded. A fold
+// So these are checked when a pack is authored — the status ceilings in
+// validateVocabularyGrowth, reached from ValidateConfigAuthoring, and
+// MaxAssignmentCount in Service.AssignMutation — and never when one is folded.
+// A fold
 // that could fail on a count would let that pair of ordinary edits produce a
 // history no clone can ever read, and append-only means there is no repair: the
 // removal that would bring the project back under the ceiling sits behind the
