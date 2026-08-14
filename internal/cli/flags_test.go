@@ -46,7 +46,20 @@ func TestCommandHelp(t *testing.T) {
 			target:      []string{"update"},
 			synopsis:    "Usage: workbook update <id-or-prefix> [options]",
 			positionals: []string{"<id-or-prefix>"},
-			options:     []string{"title", "description", "status", "priority", "label", "clear-labels", "json"},
+			options: []string{
+				"title", "description", "status", "priority", "label", "clear-labels",
+				"comment", "edit-comment", "remove-comment",
+				"attach-file", "attach-url", "attach-label", "remove-attachment",
+				"json",
+			},
+		},
+		{
+			name:   "show",
+			target: []string{"show"},
+			synopsis: "Usage: workbook show <id-or-prefix> [--history [--limit <n>] [--all]] " +
+				"[--compare <commit> <commit>] [--get-attachment <id-or-prefix> [--out <path>]] [--json]",
+			positionals: []string{"<id-or-prefix>"},
+			options:     []string{"history", "limit", "all", "compare", "get-attachment", "out", "json"},
 		},
 		{
 			name:        "hooks install",
@@ -85,20 +98,79 @@ func TestCommandHelp(t *testing.T) {
 					t.Errorf("help = %q, want positional %q", got, positional)
 				}
 			}
-			if !strings.Contains(got, "Options:\n") {
-				t.Errorf("help = %q, want Options section", got)
+			header := strings.Index(got, "Options:\n")
+			if header == -1 {
+				t.Fatalf("help = %q, want Options section", got)
 			}
+			// The count and the ordering are properties of the options list
+			// itself, so they are asked of the list rather than of the whole
+			// page. A description that names the flags it explains — which the
+			// update help does, because the flag matrix is the thing that needs
+			// explaining — would otherwise be read as a duplicate listing.
+			options := got[header:]
 			for _, option := range test.options {
-				if count := strings.Count(got, "  --"+option); count != 1 {
-					t.Errorf("help = %q, --%s count = %d, want 1", got, option, count)
+				if count := strings.Count(options, "  --"+option); count != 1 {
+					t.Errorf("help options = %q, --%s count = %d, want 1", options, option, count)
 				}
 			}
 			optionLines := make([]string, 0, len(test.options))
 			for _, option := range test.options {
 				optionLines = append(optionLines, "--"+option)
 			}
-			assertInOrder(t, got, optionLines)
+			assertInOrder(t, options, optionLines)
 		})
+	}
+}
+
+// usageSynopsisExceptions are the two commands the global usage deliberately
+// spells differently from their schema synopsis.
+//
+// Both sides of each exception are pinned, so it exempts exactly the
+// divergence it describes and nothing else: changing either the schema
+// synopsis or the usage line fails here until somebody decides which of the
+// two spellings was meant to move. An exception that covered the whole line
+// would have left these two commands — and only these two — free to drift in
+// exactly the way this test exists to catch.
+var usageSynopsisExceptions = map[string]struct{ synopsis, line string }{
+	// serve prints the address it will try rather than <address>, because the
+	// port is the thing a reader of the usage wants to know.
+	"serve": {
+		synopsis: "workbook serve [--addr <address>]",
+		line:     "  serve [--addr 127.0.0.1:7331]",
+	},
+	// hooks names its one subcommand, because <command> would tell a reader
+	// nothing about a verb that has exactly one.
+	"hooks": {
+		synopsis: "workbook hooks <command> [options]",
+		line:     "  hooks install [--json]",
+	},
+}
+
+// The global usage constant is the fourth place a verb's shape is written down,
+// after the schema synopsis, the schema options, and `workbook help <verb>`. It
+// is what an invocation error prints, so a flag added everywhere else and not
+// here leaves the one surface a caller sees when they get the command wrong
+// describing a command that no longer exists.
+func TestGlobalUsageAgreesWithEverySynopsis(t *testing.T) {
+	for _, name := range commandOrder {
+		synopsis := commandSchemas[name].Synopsis
+		want := "  " + strings.TrimPrefix(synopsis, "workbook ")
+		if exception, listed := usageSynopsisExceptions[name]; listed {
+			if synopsis != exception.synopsis {
+				t.Errorf("%s synopsis = %q, but its usage exception was written against %q; "+
+					"update the usage line or the exception", name, synopsis, exception.synopsis)
+			}
+			if !strings.Contains(usage, exception.line+"\n") {
+				t.Errorf("usage = %q, want the %s exception line %q", usage, name, exception.line)
+			}
+			if strings.Contains(usage, want+"\n") {
+				t.Errorf("usage carries both the %s synopsis and its exception; drop the exception", name)
+			}
+			continue
+		}
+		if !strings.Contains(usage, want+"\n") {
+			t.Errorf("usage = %q, want the line %q", usage, want)
+		}
 	}
 }
 
@@ -124,15 +196,25 @@ func TestHooksInstallUsesChildMetadataForParserFlags(t *testing.T) {
 
 func TestHelpMetadataMatchesSchemas(t *testing.T) {
 	want := map[string]map[string]flagKind{
-		"setup":    {"key": stringFlag, "no-docs": boolFlag, "no-sync": boolFlag, "skill-dir": stringFlag, "no-skill": boolFlag, "force": boolFlag, "json": boolFlag},
-		"config":   {},
-		"docs":     {},
-		"status":   {},
-		"create":   {"description": stringFlag, "status": stringFlag, "priority": stringFlag, "label": stringFlag, "no-sync": boolFlag, "json": boolFlag},
-		"list":     {"status": stringFlag, "priority": stringFlag, "label": stringFlag, "all": boolFlag, "json": boolFlag},
-		"board":    {"wide": boolFlag, "narrow": boolFlag, "json": boolFlag},
-		"show":     {"history": boolFlag, "limit": stringFlag, "all": boolFlag, "compare": pairFlag, "json": boolFlag},
-		"update":   {"title": stringFlag, "description": stringFlag, "status": stringFlag, "priority": stringFlag, "label": stringFlag, "clear-labels": boolFlag, "no-sync": boolFlag, "json": boolFlag},
+		"setup":  {"key": stringFlag, "no-docs": boolFlag, "no-sync": boolFlag, "skill-dir": stringFlag, "no-skill": boolFlag, "force": boolFlag, "json": boolFlag},
+		"config": {},
+		"docs":   {},
+		"status": {},
+		"create": {"description": stringFlag, "status": stringFlag, "priority": stringFlag, "label": stringFlag, "no-sync": boolFlag, "json": boolFlag},
+		"list":   {"status": stringFlag, "priority": stringFlag, "label": stringFlag, "all": boolFlag, "json": boolFlag},
+		"board":  {"wide": boolFlag, "narrow": boolFlag, "json": boolFlag},
+		"show": {
+			"history": boolFlag, "limit": stringFlag, "all": boolFlag, "compare": pairFlag,
+			"get-attachment": stringFlag, "out": stringFlag, "json": boolFlag,
+		},
+		"update": {
+			"title": stringFlag, "description": stringFlag, "status": stringFlag, "priority": stringFlag,
+			"label": stringFlag, "clear-labels": boolFlag,
+			"comment": stringFlag, "edit-comment": stringFlag, "remove-comment": stringFlag,
+			"attach-file": stringFlag, "attach-url": stringFlag, "attach-label": stringFlag,
+			"remove-attachment": stringFlag,
+			"no-sync":           boolFlag, "json": boolFlag,
+		},
 		"delete":   {"no-sync": boolFlag, "json": boolFlag},
 		"restore":  {"into": stringFlag, "no-sync": boolFlag, "json": boolFlag},
 		"serve":    {"addr": stringFlag},

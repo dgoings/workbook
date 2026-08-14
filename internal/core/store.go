@@ -43,6 +43,18 @@ type AttachmentBlobStore interface {
 	StageAttachment(context.Context, ProjectConfig, []byte) (string, error)
 }
 
+// AttachmentBlobReader returns an attached file's bytes by the object ID the
+// checkpoint recorded.
+//
+// It is the read half of AttachmentBlobStore and a separate interface for the
+// same reason that one is separate from the writer: the two are needed by
+// different services. Every read-only service can serve an attachment and none
+// of them may write one, so a single read-write interface would have forced a
+// writer onto `show`.
+type AttachmentBlobReader interface {
+	ReadAttachment(context.Context, ProjectConfig, string) ([]byte, error)
+}
+
 // ProjectionUpdater conditionally advances or invalidates disposable task
 // projection rows after a canonical mutation succeeds.
 type ProjectionUpdater interface {

@@ -126,6 +126,29 @@ func (s Service) AttachmentRemoveMutation(ctx context.Context, idOrPrefix string
 	})
 }
 
+// AttachmentContent returns one attachment's stored bytes.
+//
+// It exists so that reading an attachment goes through the same Service every
+// other read goes through, rather than each surface reaching past it into the
+// repository — the command line today, the web board next. What it adds beyond
+// the blob read is the two refusals every caller would otherwise write for
+// itself: a link stores nothing, and a Service built without a blob reader
+// cannot answer at all.
+//
+// It takes the attachment rather than an identifier because the caller already
+// holds the list: an attachment is materialized on the task, so finding it is a
+// lookup in a slice the caller is already holding, and asking for it by ID
+// again would mean reading the task twice.
+func (s Service) AttachmentContent(ctx context.Context, attachment Attachment) ([]byte, error) {
+	if attachment.Kind != AttachmentFile {
+		return nil, Errorf(CategoryValidation, "attachment %s is a link and holds no bytes", attachment.ID)
+	}
+	if s.BlobReads == nil {
+		return nil, Errorf(CategoryOperational, "attachment blob reader is not configured")
+	}
+	return s.BlobReads.ReadAttachment(ctx, s.Config, attachment.Blob)
+}
+
 // threadOperations turns an update's comment and attachment intents into the
 // operations that carry them.
 //
