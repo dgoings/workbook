@@ -651,6 +651,11 @@ func runUpdate(ctx context.Context, args []string, cwd string, stdout, stderr io
 	flags.Var(&labels, "label", "replacement task label")
 	clearLabels := flags.Bool("clear-labels", false, "replace labels with an empty set")
 	thread := registerThreadFlags(flags)
+	var assign stringListValue
+	flags.Var(&assign, "assign", "assign to self, an email, or either with /label")
+	var unassign stringListValue
+	flags.Var(&unassign, "unassign", "withdraw that assignment")
+	force := flags.Bool("force", false, "assign beside an assignment somebody else holds")
 	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with origin")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
@@ -660,6 +665,10 @@ func runUpdate(ctx context.Context, args []string, cwd string, stdout, stderr io
 		return core.Errorf(core.CategoryInvocation, "cannot use --label with --clear-labels")
 	}
 	request, err := thread.read(flags)
+	if err != nil {
+		return err
+	}
+	assignment, err := assignmentIntent(assign, unassign, *force)
 	if err != nil {
 		return err
 	}
@@ -690,6 +699,17 @@ func runUpdate(ctx context.Context, args []string, cwd string, stdout, stderr io
 	if err != nil {
 		return err
 	}
+	// The assignment is resolved out here, because `self` is a question about
+	// this repository's identity rather than about the task: the session knows
+	// the answer as soon as it is open, and nothing the fetch brings down can
+	// change it.
+	if assignment != nil {
+		change, err := assignment.change(session.service.Actor)
+		if err != nil {
+			return err
+		}
+		input.Assignments = []core.AssignmentChange{change}
+	}
 	// The thread intents are resolved inside the mutation rather than before
 	// it, so the identifiers a caller typed are matched against the thread the
 	// pack will actually apply to — the one the session's fetch just settled —
@@ -705,7 +725,136 @@ func runUpdate(ctx context.Context, args []string, cwd string, stdout, stderr io
 		input.Attachments = resolved.attachments
 		return session.service.UpdateMutation(ctx, id, input)
 	})
+	if err != nil {
+		err = assignmentRefusal(err, "assign it to yourself beside them with --force, or pick another task")
+	} else {
+		result.Warnings = append(result.Warnings, assignmentSharingWarnings(result)...)
+	}
 	return writeThreadMutationOutcome(stdout, stderr, "update", session, result, err, *jsonMode, changes)
+}
+
+// assignmentRequest is what the command line asked about assignment, before the
+// acting identity is known. `self` cannot be resolved until a session has one,
+// and the flags are parsed before a repository is opened.
+type assignmentRequest struct {
+	// who is the value as typed: self, an email address, or either followed by
+	// /label.
+	who string
+	// remove turns the request into a withdrawal.
+	remove bool
+	// force records the assignment beside an assignment somebody else holds
+	// rather than refusing.
+	force bool
+}
+
+// selfAssignee is the word an agent uses instead of spelling out an identity it
+// would only get wrong. It is not a valid principal — no at sign — so it can
+// never collide with a real address.
+const selfAssignee = "self"
+
+// assignmentIntent reads the assignment flags, refusing the combinations that
+// have no single meaning.
+//
+// One assignment per invocation, and never an addition and a withdrawal
+// together. Both restrictions exist because the alternative is a command whose
+// outcome depends on the order two flags were typed in: assignments are a set,
+// so `--unassign self/impl-1 --assign self/impl-1` has no defensible answer,
+// and a caller who means to hand work over says so in two commands that each
+// report what they did. Nothing is lost — both are one pack either way — and a
+// person who really wants several assignments runs the verb several times.
+func assignmentIntent(assign, unassign stringListValue, force bool) (*assignmentRequest, error) {
+	switch {
+	case assign.set && unassign.set:
+		return nil, core.Errorf(core.CategoryInvocation, "update accepts --assign or --unassign, not both")
+	case len(assign.values) > 1:
+		return nil, core.Errorf(core.CategoryInvocation, "update accepts --assign once")
+	case len(unassign.values) > 1:
+		return nil, core.Errorf(core.CategoryInvocation, "update accepts --unassign once")
+	case force && !assign.set:
+		return nil, core.Errorf(core.CategoryInvocation, "update --force requires --assign")
+	case assign.set:
+		return newAssignmentRequest(assign.values[0], false, force)
+	case unassign.set:
+		return newAssignmentRequest(unassign.values[0], true, false)
+	default:
+		return nil, nil
+	}
+}
+
+// newAssignmentRequest refuses an empty value here rather than deeper, so that
+// a flag typed with nothing after it is answered as the argument error it is,
+// before a repository is opened and while the message can still name the flag.
+func newAssignmentRequest(who string, remove, force bool) (*assignmentRequest, error) {
+	if strings.TrimSpace(who) == "" {
+		return nil, core.Errorf(core.CategoryInvocation, "update assignment must not be blank")
+	}
+	return &assignmentRequest{who: who, remove: remove, force: force}, nil
+}
+
+// change resolves the request against the acting identity.
+//
+// `self` is expanded here rather than left to core, because the label form has
+// to be assembled: `self/impl-1` is this repository's `user.email` followed by
+// that agent's label, and core is handed the finished value. A bare `self`
+// still becomes the empty value core reads as "the acting identity", so a clone
+// with no configured identity meets core's own refusal, which explains why an
+// assignment needs one.
+func (request assignmentRequest) change(actor string) (core.AssignmentChange, error) {
+	change := core.AssignmentChange{Remove: request.remove, OnlyIfUnheld: !request.remove && !request.force}
+	who := request.who
+	switch {
+	case who == selfAssignee:
+		return change, nil
+	case strings.HasPrefix(who, selfAssignee+"/"):
+		if strings.TrimSpace(actor) == "" {
+			return core.AssignmentChange{}, core.Errorf(
+				core.CategoryValidation,
+				"cannot resolve %q: this repository has no configured identity",
+				who,
+			)
+		}
+		change.To = actor + strings.TrimPrefix(who, selfAssignee)
+		return change, nil
+	default:
+		change.To = who
+		return change, nil
+	}
+}
+
+// assignmentRefusal restates core's claim refusal in the command line's voice.
+//
+// Core names the task and everybody who already holds it, which is the part
+// only it can know; only the command line knows which flag proceeds anyway, and
+// a refusal an agent meets has to say what to do next rather than only what
+// went wrong. Every other failure is passed through untouched.
+func assignmentRefusal(err error, advice string) error {
+	var typed *core.Error
+	if !errors.As(err, &typed) || typed.Category != core.CategoryAssigned {
+		return err
+	}
+	return core.Errorf(core.CategoryAssigned, "%s; %s", typed.Message, advice)
+}
+
+// assignmentSharingWarnings says that a recorded assignment landed beside
+// somebody else's.
+//
+// It is a warning rather than a refusal because the assignment is recorded:
+// either --force asked for exactly this, or a teammate's claim arrived between
+// this command's check and its write, which the design calls a spike and a
+// meaningful outcome rather than an error. Saying nothing would leave an agent
+// believing it holds the task alone.
+func assignmentSharingWarnings(result core.MutationResult) []core.Warning {
+	if len(result.Others) == 0 {
+		return nil
+	}
+	held := make([]string, 0, len(result.Others))
+	for _, assignment := range result.Others {
+		held = append(held, singleLine(assignment.Value()))
+	}
+	return []core.Warning{{
+		Code:    core.WarningAssignmentShared,
+		Message: "task " + result.Task.ID + " is also assigned to " + strings.Join(held, ", "),
+	}}
 }
 
 func runDelete(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
@@ -832,20 +981,41 @@ func runDependencyMutation(ctx context.Context, command string, args []string, c
 
 func runNext(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
 	flags := newFlagSet("next")
+	any := flags.Bool("any", false, "include tasks somebody else is assigned to")
+	claim := flags.Bool("claim", false, "assign the chosen task to yourself and publish it")
 	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with origin")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
-	session, err := openTaskSession(ctx, cwd, *noSync, false, stderr)
+	if *any && *claim {
+		// Claiming a task another principal holds is exactly what the claim
+		// path refuses, so the two flags together describe a command that would
+		// pick a task only to refuse to record it.
+		return core.Errorf(core.CategoryInvocation, "next accepts --any or --claim, not both")
+	}
+	// A claim writes, so it needs the writer half of the session and an acting
+	// identity. A plain `next` still opens read-only and reads the identity out
+	// of the repository for the skip alone: making the answer to "what should I
+	// work on" depend on a configured `user.email` would be a regression for
+	// every clone that has never needed one.
+	session, err := openTaskSession(ctx, cwd, *noSync, *claim, stderr)
 	if err != nil {
 		return err
 	}
+	if !*claim {
+		session.service.Actor, _ = session.repository.Actor(ctx)
+	}
+	options := core.NextOptions{IncludeHeldByOthers: *any}
+	if *claim {
+		return runNextClaim(ctx, session, options, stdout, stderr, *jsonMode)
+	}
+
 	session.fetchBefore(ctx)
 	if err := session.refreshVocabulary(ctx); err != nil {
 		return err
 	}
-	task, err := session.service.Next(ctx)
+	task, err := session.service.Next(ctx, options)
 	if err != nil {
 		return err
 	}
@@ -855,6 +1025,12 @@ func runNext(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	var warnings []core.Warning
 	if task != nil {
 		warnings = newerWriterTaskWarnings(*task)
+	} else {
+		skipped, err := session.skippedHeldTasks(ctx, options)
+		if err != nil {
+			return err
+		}
+		warnings = skipped
 	}
 	if *jsonMode {
 		writeSyncedResult(stdout, "next", task, &session.report, session.conflicts, warnings)
@@ -865,6 +1041,108 @@ func runNext(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	} else {
 		writeShow(stdout, *task)
 	}
+	writeConflicts(stdout, session.conflicts)
+	writeWarnings(stderr, warnings)
+	return nil
+}
+
+// skippedHeldTasks explains an empty answer that the skip produced.
+//
+// "No eligible task" and "every eligible task is somebody else's" are different
+// answers, and a caller that cannot tell them apart concludes the board is
+// empty when it is merely busy. The second selection runs only when the first
+// found nothing, and only against the local projection this command has already
+// read, so the ordinary answer costs nothing.
+func (session *taskSession) skippedHeldTasks(ctx context.Context, options core.NextOptions) ([]core.Warning, error) {
+	if options.IncludeHeldByOthers {
+		return nil, nil
+	}
+	held, err := session.service.Next(ctx, core.NextOptions{IncludeHeldByOthers: true})
+	if err != nil || held == nil {
+		return nil, err
+	}
+	return []core.Warning{{
+		Code:    core.WarningNextHeldByOthers,
+		Message: "every eligible task is assigned to somebody else; run `workbook next --any` to see them",
+	}}, nil
+}
+
+// runNextClaim picks the task next would pick and assigns it in one stroke.
+//
+// It is one synchronous fetch, select, append and push, because that is what
+// makes the claim mean anything: an agent that selected a task in one command
+// and assigned it in another would publish its claim seconds after a second
+// agent selected the same task. The gate is decided against the parent the
+// mutation reads, after the fetch, so the window left is the one between this
+// write and its push — and a claim that loses that race is recorded, published
+// on the next synchronization, and reported as shared rather than as won.
+func runNextClaim(
+	ctx context.Context,
+	session *taskSession,
+	options core.NextOptions,
+	stdout, stderr io.Writer,
+	jsonMode bool,
+) error {
+	var chosen *core.Task
+	result, err := session.mutate(ctx, "", func(ctx context.Context) (core.MutationResult, error) {
+		task, err := session.service.Next(ctx, options)
+		if err != nil {
+			return core.MutationResult{}, err
+		}
+		if task == nil {
+			return core.MutationResult{}, errNothingToClaim
+		}
+		chosen = task
+		// mutate cannot check this task against the fetch's conflicts, because
+		// which task it is was not known when the command started. A task whose
+		// local operations could not be replayed is left exactly where the fetch
+		// put it rather than being claimed on top of a history that dropped
+		// them.
+		if conflict := session.conflictFor(ctx, task.ID); conflict != nil {
+			session.acknowledge(*conflict)
+			return core.MutationResult{}, core.ConflictError([]core.Conflict{*conflict})
+		}
+		return session.service.UpdateMutation(ctx, task.ID, core.UpdateInput{
+			Assignments: []core.AssignmentChange{{OnlyIfUnheld: true}},
+		})
+	})
+	switch {
+	case errors.Is(err, errNothingToClaim):
+		return writeNothingClaimed(ctx, session, options, stdout, stderr, jsonMode)
+	case err != nil:
+		err = assignmentRefusal(err, "it was claimed while this command ran and nothing was recorded; ask for another task")
+		return writeMutationOutcome(stdout, stderr, "next", session, result, err, jsonMode)
+	}
+	result.Warnings = append(result.Warnings, assignmentSharingWarnings(result)...)
+	if chosen != nil {
+		result.Warnings = append(result.Warnings, newerWriterTaskWarnings(*chosen)...)
+	}
+	writeMutationResult(stdout, stderr, "next", result, &session.report, session.conflicts, jsonMode)
+	return nil
+}
+
+// errNothingToClaim reports that the selection inside a claim found nothing,
+// which is an ordinary answer rather than a failure: `next --claim` on a board
+// with nothing eligible has to report the same "nothing to do" a plain `next`
+// reports, and exit zero.
+var errNothingToClaim = errors.New("no eligible task to claim")
+
+func writeNothingClaimed(
+	ctx context.Context,
+	session *taskSession,
+	options core.NextOptions,
+	stdout, stderr io.Writer,
+	jsonMode bool,
+) error {
+	warnings, err := session.skippedHeldTasks(ctx, options)
+	if err != nil {
+		return err
+	}
+	if jsonMode {
+		writeSyncedResult(stdout, "next", nil, &session.report, session.conflicts, warnings)
+		return nil
+	}
+	fmt.Fprintln(stdout, "No eligible task.")
 	writeConflicts(stdout, session.conflicts)
 	writeWarnings(stderr, warnings)
 	return nil

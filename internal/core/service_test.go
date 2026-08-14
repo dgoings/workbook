@@ -181,7 +181,7 @@ func TestServiceNextSelectsReadyTaskByPriorityExactRankAndID(t *testing.T) {
 	store := newMemoryTaskStore(medium, highLater, highSecondByID, deleted, highFirstByID, backlog, lowEarlier)
 	service := serviceUnderTest(store, &sequenceIDSource{})
 
-	task, err := service.Next(context.Background())
+	task, err := service.Next(context.Background(), NextOptions{})
 	if err != nil {
 		t.Fatalf("Next() error = %v", err)
 	}
@@ -198,7 +198,7 @@ func TestServiceNextPrefersMediumPriorityOverLowPriority(t *testing.T) {
 	low := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D2", TaskData{Title: "low", Status: StatusReady, Priority: PriorityLow, Rank: "1/2"})
 	service := serviceUnderTest(newMemoryTaskStore(low, medium), &sequenceIDSource{})
 
-	task, err := service.Next(context.Background())
+	task, err := service.Next(context.Background(), NextOptions{})
 	if err != nil {
 		t.Fatalf("Next() error = %v", err)
 	}
@@ -217,7 +217,7 @@ func TestServiceNextRequiresEveryDependencyToBeActiveAndDone(t *testing.T) {
 	deletedDependency := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7E2", TaskData{Title: "deleted dependency", Status: StatusReady, Priority: PriorityHigh, Rank: "3/1", Dependencies: []string{tombstoned.State.TaskID}})
 	service := serviceUnderTest(newMemoryTaskStore(done, notDone, tombstoned, eligible, missing, blocked, deletedDependency), &sequenceIDSource{})
 
-	task, err := service.Next(context.Background())
+	task, err := service.Next(context.Background(), NextOptions{})
 	if err != nil {
 		t.Fatalf("Next() error = %v", err)
 	}
@@ -231,7 +231,7 @@ func TestServiceNextReturnsNilWhenNoTaskIsEligible(t *testing.T) {
 	blocked := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D2", TaskData{Title: "blocked", Status: StatusReady, Priority: PriorityHigh, Rank: "1/1", Dependencies: []string{done.State.TaskID, "WB-01K0M6B8A4FTT8C39MXXYTW7D9"}})
 	service := serviceUnderTest(newMemoryTaskStore(done, blocked), &sequenceIDSource{})
 
-	task, err := service.Next(context.Background())
+	task, err := service.Next(context.Background(), NextOptions{})
 	if err != nil {
 		t.Fatalf("Next() error = %v", err)
 	}

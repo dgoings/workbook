@@ -40,6 +40,23 @@ const (
 	// whose history carries the marker. Nothing about it holds back a ref,
 	// another task, or synchronization.
 	CategoryNewerWriter Category = "newer-writer"
+	// CategoryAssigned reports that a task is already assigned to somebody else
+	// and the caller asked not to record a second assignment beside theirs.
+	//
+	// It has a category of its own so that an agent picking up work can tell it
+	// from every other reason an assignment can fail without reading a message.
+	// That is the whole point of the claim behavior: a fleet member that meets
+	// this should quietly pick another task, while a validation refusal means
+	// it typed something wrong and a not-found means the task is gone. Folding
+	// all three into CategoryValidation would leave the one case a program has
+	// to branch on indistinguishable from the two it cannot do anything about.
+	//
+	// Nothing was written when this is returned, which is the promise the exit
+	// code carries: an agent that sees it holds no assignment on that task and
+	// owes nobody a cleanup. An assignment that lands beside somebody else's —
+	// because it was forced, or because a race arrived between the check and
+	// the push — succeeds and is reported as a warning instead.
+	CategoryAssigned Category = "assigned"
 )
 
 type Error struct {
@@ -93,6 +110,8 @@ func ExitCode(err error) int {
 		return 8
 	case CategoryNewerWriter:
 		return 9
+	case CategoryAssigned:
+		return 10
 	case CategoryOperational:
 		return 1
 	}

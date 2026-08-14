@@ -10,6 +10,7 @@ import (
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
+	"github.com/dgoings/workbook/internal/presentation"
 	"github.com/dgoings/workbook/internal/terminalui"
 )
 
@@ -27,7 +28,7 @@ Commands:
   move <id-or-prefix> (--before <id-or-prefix> | --after <id-or-prefix>) [--json]
   depend <id-or-prefix> <dependency-id-or-prefix> [--json]
   free <id-or-prefix> <dependency-id-or-prefix> [--json]
-  next [--json]
+  next [--any] [--claim] [--no-sync] [--json]
   rebuild [--json]
   validate [--full] [--json]
   version [--json]
@@ -675,6 +676,7 @@ func writeShow(output io.Writer, task core.Task) {
 	fmt.Fprintf(output, "Status:\t%s\n", task.Status)
 	fmt.Fprintf(output, "Priority:\t%s\n", task.Priority)
 	fmt.Fprintf(output, "Labels:\t%s\n", singleLine(strings.Join(task.Labels, ",")))
+	writeAssignments(output, task.Assignments, time.Now())
 	fmt.Fprintf(output, "Rank:\t%s\n", task.Rank)
 	fmt.Fprintf(output, "Dependencies:\t%s\n", strings.Join(task.Dependencies, ","))
 	fmt.Fprintf(output, "Created At:\t%s\n", task.CreatedAt.Format("2006-01-02T15:04:05.999999999Z07:00"))
@@ -758,6 +760,40 @@ func writeAttachments(output io.Writer, attachments []core.Attachment) {
 			name = singleLine(attachment.Name)
 		}
 		fmt.Fprintf(output, "\t%s\t%s\t%s\t%s\n", attachment.ID, name, attachment.Kind, detail)
+	}
+}
+
+// writeAssignments prints who is responsible for a task, one line each.
+//
+// Four columns, because each answers a different question a reader has: the
+// value as somebody would type it into --unassign, the exact time it was
+// recorded, and how long ago that was. The last is the whole of what this
+// design means by staleness — nothing expires, and an assignment three weeks
+// old is a fact for people to settle between themselves rather than something a
+// clock takes away.
+//
+// The field is printed even when nobody holds the task, the way Labels is, so a
+// caller reading text output can rely on the field existing. Continuation lines
+// are indented with a tab for the reason writeDescription's are: every field
+// this block prints begins at column zero, so an indented line cannot be read
+// as one — and an assignment value cannot contain a tab or a newline at all,
+// because the fold refuses one that does.
+func writeAssignments(output io.Writer, assignments []core.Assignment, now time.Time) {
+	if len(assignments) == 0 {
+		fmt.Fprint(output, "Assignments:\t\n")
+		return
+	}
+	for index, assignment := range assignments {
+		field := "Assignments:"
+		if index > 0 {
+			field = ""
+		}
+		fmt.Fprintf(output, "%s\t%s\t%s\t%s\n",
+			field,
+			singleLine(assignment.Value()),
+			assignment.CreatedAt.Format(time.RFC3339),
+			presentation.AssignedAgo(assignment, now),
+		)
 	}
 }
 

@@ -271,13 +271,13 @@ workbook create <title> [--description <text>] [--status <status>] [--priority <
 workbook list [--status <status>] [--priority <priority>] [--label <label>] [--all] [--json]
 workbook board [--wide | --narrow] [--json]
 workbook show <task> [--history [--limit <n>] [--all]] [--compare <commit> <commit>] [--get-attachment <attachment> [--out <path>]] [--json]
-workbook update <task> [--title <title>] [--description <text>] [--status <status>] [--priority <priority>] [--label <label>] [--clear-labels] [--comment <body>] [--edit-comment <comment>] [--remove-comment <comment>] [--attach-file <path>] [--attach-url <url>] [--attach-label <text>] [--remove-attachment <attachment>] [--no-sync] [--json]
+workbook update <task> [--title <title>] [--description <text>] [--status <status>] [--priority <priority>] [--label <label>] [--clear-labels] [--comment <body>] [--edit-comment <comment>] [--remove-comment <comment>] [--attach-file <path>] [--attach-url <url>] [--attach-label <text>] [--remove-attachment <attachment>] [--assign <who>] [--unassign <who>] [--force] [--no-sync] [--json]
 workbook delete <task> [--no-sync] [--json]
 workbook restore <task> [--into <status>] [--no-sync] [--json]
 workbook move <task> (--before <task> | --after <task>) [--no-sync] [--json]
 workbook depend <task> <dependency> [--no-sync] [--json]
 workbook free <task> <dependency> [--no-sync] [--json]
-workbook next [--no-sync] [--json]
+workbook next [--any] [--claim] [--no-sync] [--json]
 workbook rebuild [--json]
 workbook validate [--full] [--json]
 workbook version [--json]
@@ -484,6 +484,16 @@ without parsing a message:
 | 7 | `corrupt-data` | Stored data could not be read as Workbook wrote it. Read the message; repair or rebuild before continuing. |
 | 8 | `conflict` | Reconciliation stopped on a decision Workbook will not make. See [Reconciling divergent histories](#reconciling-divergent-histories). |
 | 9 | `newer-writer` | A newer Workbook wrote this history and this build cannot fold it. Nothing is damaged; upgrade Workbook. See [Mixed Workbook versions](#mixed-workbook-versions). |
+| 10 | `assigned` | The task is already assigned to somebody else and you did not pass `--force`. Nothing was recorded. Pick another task. See [Assignments](#assignments). |
+
+Exit `10` is the one an agent fleet branches on, and it is a category of its own
+rather than a reuse of `5` for that reason: "somebody else is on this task" is
+the only refusal a caller can act on by itself, while a validation refusal means
+it typed something wrong and a not-found means the task is gone. It is also a
+promise about state — nothing was written, so an agent that meets it holds no
+assignment and owes no cleanup. An assignment that lands beside somebody else's,
+whether forced or through a race, exits `0` with an `assignment-shared` warning
+instead.
 
 Exit `6` is what a concurrent writer sees: two processes mutating one task, a
 push whose remote ref changed underneath it, a projection whose head drifted
@@ -541,11 +551,100 @@ an exact rational rank; it changes only that task. `depend` adds a prerequisite
 edge and rejects cycles; `free` removes one prerequisite edge and is idempotent.
 `next` chooses the first task in a status tagged `next` whose dependencies are
 all active and in a status tagged `done`, sorting by priority, rank, and task
-ID; it reports no eligible task when none qualify. `board` uses the same core task order and presents an actionable,
-unambiguous task-ID prefix with each card's priority, title, and labels. Its JSON
+ID; it reports no eligible task when none qualify. It skips the tasks somebody
+else is assigned to — see [Assignments](#assignments) — and `--any` offers the
+whole eligible set instead. `board` uses the same core task order and presents an actionable,
+unambiguous task-ID prefix with each card's priority, title, labels, and
+assignees. Its JSON
 output retains full task IDs, descriptions, and the rest of the task data. Normal
 `list`, `show`, `board`, and `next` reads use the local SQLite projection.
-Claims and implementation links remain future work.
+Implementation links remain future work.
+
+### Assignments
+
+An assignment says who is responsible for a task. It is a convergent collection
+exactly like labels: two clones that assign the same task concurrently both
+survive, because pairing and independent spikes are working modes rather than
+disagreements. There are no leases, no renewals, and no expiry — nothing a clock
+takes away — and an assignment never blocks a write.
+
+```sh
+workbook update WB-01K0 --assign self                 # this repository's user.email
+workbook update WB-01K0 --assign self/impl-1          # one agent of that identity
+workbook update WB-01K0 --assign sam@example.com      # somebody else
+workbook update WB-01K0 --unassign self/impl-1        # give it back
+workbook update WB-01K0 --status in-progress --assign self   # one commit
+```
+
+The principal is the asserted Git identity, which is already stamped on every
+operation: there is no roster and no verification protocol, because verifying
+identity would import the central authority Workbook deliberately lacks. An
+agent qualifies its principal with a free-form label after a slash, so
+`dylan@example.com/impl-1` and `dylan@example.com/impl-2` are two agents of one
+person. Authority keys on the address; the label only says which agent.
+
+One `--assign` or one `--unassign` per invocation, never both. Everything else
+in the same invocation rides in the same operation pack, so `--status
+in-progress --assign self` is one commit, one history entry, and one refusal:
+either the status moved and the assignment landed or neither did.
+
+**Removal is strict.** An assignment may be withdrawn only by the identity it
+names — any agent of that address, so an orchestrator can sweep up after its own
+fleet, including agents that crashed — or by whoever recorded it, so a mistaken
+tag of a teammate is undoable by its author. Anybody else is refused with exit
+`5` and told who to ask. The rule is enforced twice: at the mutation boundary,
+and in the fold, which treats a foreign removal as a recorded no-op. That is
+what makes it durable rather than advisory, and it is why two agents forcing
+their way on to one task terminate immediately in the both-assigned state
+instead of removing each other's claims forever.
+
+`workbook show` prints each assignment with the identity, when it was recorded,
+and how long ago that was. Staleness is displayed and never enforced: "assigned
+9 days ago" on a task nobody has touched is a fact for people to settle between
+themselves. Both boards show a compact chip — the local part of the address plus
+the agent label — beside each card's labels.
+
+#### Claiming work as an agent
+
+`--assign` refuses when somebody else already holds the task, and records
+nothing when it does. The refusal has an exit code of its own, `10`, so a fleet
+member can branch on it without parsing a message:
+
+```sh
+workbook next --claim --json     # pick the next task and claim it, in one command
+# exit 0  → the envelope's data is the task, now assigned to you
+# exit 10 → somebody else got there first; nothing was recorded, ask again
+```
+
+`next --claim` fetches, picks the task `next` would pick, appends the assignment,
+and pushes, in one synchronous command. Doing it in two commands would leave a
+window in which a second agent selects the same task, so the claim is one stroke
+or nothing. The check is decided against the tip the fetch just brought down, so
+the only race left is between the local write and its push — and a claim that
+loses it is recorded, published on the next synchronization, and reported as
+shared rather than as won.
+
+Sharing is never an error. `--force` records your assignment beside the existing
+one, which is how two agents are deliberately paired on one task, and the
+command exits `0` with an `assignment-shared` warning naming who else holds it.
+The same warning appears when a race, rather than a flag, produced the sharing:
+an assignment that was recorded is always reported as recorded.
+
+`workbook next` with nothing to offer says so, and says which kind of nothing it
+is: a board where every eligible task is already somebody else's answers with a
+`next-held-by-others` warning rather than leaving a caller to conclude that the
+work has run out.
+
+The skip is about other *identities*. A task you already hold is still offered
+to you, because a task you claimed and have not moved on is still the one you
+should be working on, and `next --claim` on it writes nothing the second time.
+Two agents of one identity — `dylan@example.com/impl-1` and `/impl-2` — are
+therefore both offered the same task; what separates them is the status. Taking
+work up moves it out of the `next` column, and that is one command:
+
+```sh
+workbook update WB-01K0 --status in-progress --assign self
+```
 
 ### Project statuses
 

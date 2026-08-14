@@ -50,6 +50,7 @@ func TestCommandHelp(t *testing.T) {
 				"title", "description", "status", "priority", "label", "clear-labels",
 				"comment", "edit-comment", "remove-comment",
 				"attach-file", "attach-url", "attach-label", "remove-attachment",
+				"assign", "unassign", "force",
 				"json",
 			},
 		},
@@ -60,6 +61,12 @@ func TestCommandHelp(t *testing.T) {
 				"[--compare <commit> <commit>] [--get-attachment <id-or-prefix> [--out <path>]] [--json]",
 			positionals: []string{"<id-or-prefix>"},
 			options:     []string{"history", "limit", "all", "compare", "get-attachment", "out", "json"},
+		},
+		{
+			name:     "next",
+			target:   []string{"next"},
+			synopsis: "Usage: workbook next [--any] [--claim] [--no-sync] [--json]",
+			options:  []string{"any", "claim", "no-sync", "json"},
 		},
 		{
 			name:        "hooks install",
@@ -105,8 +112,9 @@ func TestCommandHelp(t *testing.T) {
 			// The count and the ordering are properties of the options list
 			// itself, so they are asked of the list rather than of the whole
 			// page. A description that names the flags it explains — which the
-			// update help does, because the flag matrix is the thing that needs
-			// explaining — would otherwise be read as a duplicate listing.
+			// update and next help both do, because the flag matrix and the
+			// claim rules are the things that need explaining — would otherwise
+			// be read as a duplicate listing.
 			options := got[header:]
 			for _, option := range test.options {
 				if count := strings.Count(options, "  --"+option); count != 1 {
@@ -213,7 +221,8 @@ func TestHelpMetadataMatchesSchemas(t *testing.T) {
 			"comment": stringFlag, "edit-comment": stringFlag, "remove-comment": stringFlag,
 			"attach-file": stringFlag, "attach-url": stringFlag, "attach-label": stringFlag,
 			"remove-attachment": stringFlag,
-			"no-sync":           boolFlag, "json": boolFlag,
+			"assign":            stringFlag, "unassign": stringFlag, "force": boolFlag,
+			"no-sync": boolFlag, "json": boolFlag,
 		},
 		"delete":   {"no-sync": boolFlag, "json": boolFlag},
 		"restore":  {"into": stringFlag, "no-sync": boolFlag, "json": boolFlag},
@@ -225,7 +234,7 @@ func TestHelpMetadataMatchesSchemas(t *testing.T) {
 		"move":     {"before": stringFlag, "after": stringFlag, "no-sync": boolFlag, "json": boolFlag},
 		"depend":   {"no-sync": boolFlag, "json": boolFlag},
 		"free":     {"no-sync": boolFlag, "json": boolFlag},
-		"next":     {"no-sync": boolFlag, "json": boolFlag},
+		"next":     {"any": boolFlag, "claim": boolFlag, "no-sync": boolFlag, "json": boolFlag},
 		"rebuild":  {"json": boolFlag},
 		"validate": {"full": boolFlag, "json": boolFlag},
 		"version":  {"json": boolFlag},

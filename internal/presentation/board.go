@@ -1,7 +1,9 @@
 package presentation
 
 import (
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/dgoings/workbook/internal/core"
 )
@@ -178,4 +180,74 @@ func isUniquePrefix(index int, prefix string, tasks []core.Task) bool {
 		}
 	}
 	return true
+}
+
+// AssignmentChip is the compact form a card shows an assignment in.
+//
+// A card has a dozen columns to work with, and a full assignment value —
+// dylan@example.com/impl-1 — spends most of them on a domain everybody on the
+// project shares. The chip keeps the two parts that differ between the people
+// and the agents working on one project: the local part of the address, and the
+// label that says which of that person's agents holds it.
+//
+// It is lossy on purpose and is never the only place an assignment is shown.
+// Two people whose addresses differ only by domain produce the same chip, and
+// `workbook show` prints the whole value beside the time it was recorded. A
+// principal with no at sign — which the fold accepts, because a teammate's
+// identity is not this clone's to judge — is chipped whole rather than guessed
+// at.
+func AssignmentChip(assignment core.Assignment) string {
+	principal := assignment.Principal
+	if local, _, found := strings.Cut(principal, "@"); found && local != "" {
+		principal = local
+	}
+	return core.AssignmentValue(principal, assignment.Label)
+}
+
+// AssignmentChips renders a task's assignments in stored order, which is by
+// principal and then label, so two boards drawn from one task agree about which
+// chip comes first.
+func AssignmentChips(assignments []core.Assignment) []string {
+	if len(assignments) == 0 {
+		return nil
+	}
+	chips := make([]string, 0, len(assignments))
+	for _, assignment := range assignments {
+		chips = append(chips, AssignmentChip(assignment))
+	}
+	return chips
+}
+
+// AssignedAgo says how long an assignment has stood, which is the whole of what
+// this design means by staleness.
+//
+// Nothing expires, no clock enforces anything, and this is not a warning: an
+// assignment recorded three weeks ago on a task nobody has touched since is a
+// fact for people to act on between themselves, and the display is the only
+// place that fact ever appears. Whole units only, because "assigned 3 days ago"
+// is what a reader acts on and a decimal place would not change it.
+//
+// A creation time in the future reads as "just now" rather than as a negative
+// age. Two clones' clocks disagreeing by a few seconds is ordinary — the
+// timestamp is the recording pack's wall time, written wherever the assignment
+// was made — and this is not the place to raise it.
+func AssignedAgo(assignment core.Assignment, now time.Time) string {
+	elapsed := now.Sub(assignment.CreatedAt)
+	switch {
+	case elapsed < time.Minute:
+		return "assigned just now"
+	case elapsed < time.Hour:
+		return "assigned " + plural(int(elapsed.Minutes()), "minute") + " ago"
+	case elapsed < 24*time.Hour:
+		return "assigned " + plural(int(elapsed.Hours()), "hour") + " ago"
+	default:
+		return "assigned " + plural(int(elapsed.Hours()/24), "day") + " ago"
+	}
+}
+
+func plural(count int, noun string) string {
+	if count == 1 {
+		return "1 " + noun
+	}
+	return strconv.Itoa(count) + " " + noun + "s"
 }

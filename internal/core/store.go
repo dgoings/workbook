@@ -101,6 +101,26 @@ const WarningDocsRefresh = "docs-refresh-incomplete"
 // and will refuse to change it until it is upgraded.
 const WarningNewerWriter = "newer-writer"
 
+// WarningAssignmentShared reports that an assignment this command recorded
+// landed beside somebody else's.
+//
+// It is a warning rather than a refusal because the assignment is recorded:
+// either the caller forced it, which is the design's deliberate way of pairing
+// two agents on one task, or a teammate's claim arrived between the check and
+// the write and both survived — a spike, which is a meaningful outcome. The
+// refusal is a different condition entirely and carries CategoryAssigned, under
+// which nothing is written at all.
+const WarningAssignmentShared = "assignment-shared"
+
+// WarningNextHeldByOthers reports that `workbook next` had nothing to offer
+// only because every eligible task is already somebody else's.
+//
+// It exists because "there is no work" and "the work is being done" are
+// different answers that a caller reading an empty result cannot otherwise tell
+// apart, and the second one is the one that means look again later rather than
+// go and write more tasks.
+const WarningNextHeldByOthers = "next-held-by-others"
+
 type Warning struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
@@ -126,4 +146,25 @@ type MutationResult struct {
 	// JSON envelope.
 	StatusCorrected *StatusCorrection `json:"statusCorrected,omitempty"`
 	Warnings        []Warning         `json:"warnings,omitempty"`
+	// Others and Already describe what an assignment intent landed beside, and
+	// are the zero value for every mutation that carried none.
+	//
+	// They live here rather than on a result type of their own because an
+	// assignment rides on an ordinary update — `update X --status in-progress
+	// --assign self` is one pack — so the answer has to come back through the
+	// result any update returns. Both are populated whether or not anything was
+	// written, which is what lets a caller explain the outcome without reading
+	// the task a second time: claiming a task synchronously means fetch, check,
+	// append, push in one stroke, and the warning has to describe the
+	// assignments that were there when the pack was written rather than
+	// whatever a second read finds a moment later.
+	//
+	// Others are the assignments the task already carried under a principal no
+	// addition in this update named, in stored order. Already reports that
+	// every addition this update carried named an assignment the task already
+	// held, so none of them was written — adding an assignment twice is
+	// idempotent by design, and this is how a caller tells that from a fresh
+	// claim.
+	Others  []Assignment `json:"others,omitempty"`
+	Already bool         `json:"already,omitempty"`
 }

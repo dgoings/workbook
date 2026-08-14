@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dgoings/workbook/internal/core"
 )
@@ -272,6 +273,58 @@ func TestNewBoardDrawsThePreLedgerColumnsForTheZeroVocabulary(t *testing.T) {
 	}
 	if len(got.Columns[2].Tasks) != 1 {
 		t.Fatalf("the blocked column holds %d tasks, want 1", len(got.Columns[2].Tasks))
+	}
+}
+
+// The chip keeps the two parts that differ between the people and agents on one
+// project, and never invents one out of a principal it cannot read.
+func TestAssignmentChipShortensThePrincipalWithoutGuessing(t *testing.T) {
+	for name, test := range map[string]struct {
+		assignment core.Assignment
+		want       string
+	}{
+		"labelled":     {core.Assignment{Principal: "dylan@example.com", Label: "impl-1"}, "dylan/impl-1"},
+		"bare":         {core.Assignment{Principal: "dylan@example.com"}, "dylan"},
+		"no at sign":   {core.Assignment{Principal: "dylan", Label: "impl-1"}, "dylan/impl-1"},
+		"empty local":  {core.Assignment{Principal: "@example.com"}, "@example.com"},
+		"slashy label": {core.Assignment{Principal: "dylan@example.com", Label: "spike/a"}, "dylan/spike/a"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := AssignmentChip(test.assignment); got != test.want {
+				t.Fatalf("AssignmentChip(%#v) = %q, want %q", test.assignment, got, test.want)
+			}
+		})
+	}
+	if got := AssignmentChips(nil); got != nil {
+		t.Fatalf("AssignmentChips(nil) = %#v, want nil", got)
+	}
+}
+
+// Staleness is displayed and never enforced, so what this has to get right is
+// only the reading: whole units, and no negative age when two clones' clocks
+// disagree.
+func TestAssignedAgoReadsInWholeUnits(t *testing.T) {
+	now := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC)
+	for name, test := range map[string]struct {
+		created time.Time
+		want    string
+	}{
+		"seconds":     {now.Add(-30 * time.Second), "assigned just now"},
+		"one minute":  {now.Add(-90 * time.Second), "assigned 1 minute ago"},
+		"minutes":     {now.Add(-20 * time.Minute), "assigned 20 minutes ago"},
+		"one hour":    {now.Add(-90 * time.Minute), "assigned 1 hour ago"},
+		"hours":       {now.Add(-5 * time.Hour), "assigned 5 hours ago"},
+		"one day":     {now.Add(-25 * time.Hour), "assigned 1 day ago"},
+		"days":        {now.Add(-72 * time.Hour), "assigned 3 days ago"},
+		"clock skew":  {now.Add(time.Minute), "assigned just now"},
+		"same moment": {now, "assigned just now"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := AssignedAgo(core.Assignment{CreatedAt: test.created}, now)
+			if got != test.want {
+				t.Fatalf("AssignedAgo() = %q, want %q", got, test.want)
+			}
+		})
 	}
 }
 
