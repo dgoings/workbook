@@ -102,12 +102,14 @@ func (assignment Assignment) RemovableBy(actor string) bool {
 // build could have written. What it excludes is whitespace and ASCII control
 // characters, for the reasons a status token excludes them — an assignment
 // value is written into a Git commit subject, an HTML attribute on the board,
-// and a shell word — plus the empty principal and the empty label, which are
-// not values at all.
+// and a shell word.
+//
+// The empty principal and the empty label are refused too, but separately, so
+// that each says which half is missing rather than restating the whole grammar.
 //
 // Whether the principal looks like an email address is a question for the
 // person typing it, and ValidateAssigneeAuthoring is where it is asked.
-var assignmentValuePattern = regexp.MustCompile(`^[^\x00-\x20\x7f/]+(/[^\x00-\x20\x7f]+)?$`)
+var assignmentValuePattern = regexp.MustCompile(`^[^\x00-\x20\x7f]+$`)
 
 // assignmentPrincipalPattern is the boundary's plausibility check.
 //
@@ -155,11 +157,17 @@ func validateAssignmentValueShape(value string) error {
 	if !assignmentValuePattern.MatchString(value) {
 		return Errorf(
 			CategoryValidation,
-			"assignment %q must be a principal, optionally followed by /label, with no spaces",
+			"assignment %q must not contain spaces or control characters",
 			value,
 		)
 	}
-	principal, label, _ := strings.Cut(value, assignmentLabelSeparator)
+	principal, label, labelled := strings.Cut(value, assignmentLabelSeparator)
+	if principal == "" {
+		return Errorf(CategoryValidation, "assignment %q must name a principal before its /label", value)
+	}
+	if labelled && label == "" {
+		return Errorf(CategoryValidation, "assignment %q must not end with /; the agent label must not be blank", value)
+	}
 	if len(principal) > MaxAssignmentPrincipalBytes {
 		return Errorf(
 			CategoryValidation,
@@ -186,7 +194,7 @@ func validateAssignmentValueShape(value string) error {
 // "dylan" a validation failure that quotes the rule rather than a claim that
 // the repository is damaged.
 func ValidateAssigneeAuthoring(value string) error {
-	principal, label, err := SplitAssignmentValue(value)
+	principal, _, err := SplitAssignmentValue(value)
 	if err != nil {
 		return err
 	}
@@ -196,12 +204,6 @@ func ValidateAssigneeAuthoring(value string) error {
 			"assignment principal %q must be an email address, optionally followed by /label",
 			principal,
 		)
-	}
-	// The separator with nothing after it is caught by the shape rule; this
-	// says the same thing where a person can act on it, because "dylan@x.io/"
-	// is a much likelier typo than a control character.
-	if strings.Contains(value, assignmentLabelSeparator) && label == "" {
-		return Errorf(CategoryValidation, "assignment agent label must not be blank")
 	}
 	return nil
 }
