@@ -1965,6 +1965,15 @@ func openServiceParts(ctx context.Context, cwd string, stderr io.Writer) (core.S
 		Reader:     store,
 		Writer:     repository,
 		Blobs:      repository,
+		// The read half of the same store, beside the write half above. The one
+		// long-running caller of this constructor is `serve`, whose attachment
+		// download route serves an attachment's bytes through
+		// Service.AttachmentContent; without this the board could stage an
+		// attachment it could never hand back, answering every download with
+		// "attachment blob reader is not configured". The read-only service the
+		// one-shot commands open has carried it since `show --get-attachment`
+		// shipped.
+		BlobReads:  repository,
 		Projection: store,
 		History:    store,
 		IDs:        core.CryptoULIDSource{},
