@@ -172,6 +172,17 @@ type TaskData struct {
 	CreatedAt    time.Time `json:"createdAt"`
 	UpdatedAt    time.Time `json:"updatedAt"`
 	Deleted      bool      `json:"deleted"`
+	// Assignments is the live assignment list, ordered by principal and then
+	// label so that every clone folding the same history writes the same bytes.
+	//
+	// It is omitted when it is empty, and every other member of this struct is
+	// not. That asymmetry is the whole compatibility story in one struct tag:
+	// the other members have been in the document since version 1, so a task
+	// with no labels writes `"labels":[]`, while a task with no assignments has
+	// to write nothing at all — otherwise every task document in every
+	// repository would change bytes the day this shipped, and a task ref is
+	// append-only shared history that no later release could repair.
+	Assignments []Assignment `json:"assignments,omitempty"`
 }
 
 // Task is a projected task: the stored document plus the identifiers a caller
@@ -243,8 +254,13 @@ func NormalizeTask(projectKey string, task TaskData) (TaskData, error) {
 	if err != nil {
 		return TaskData{}, err
 	}
+	assignments, err := normalizeAssignments(task.Assignments)
+	if err != nil {
+		return TaskData{}, err
+	}
 	task.Labels = labels
 	task.Dependencies = dependencies
+	task.Assignments = assignments
 	if err := validateTaskFieldSizes(task); err != nil {
 		return TaskData{}, err
 	}

@@ -1872,20 +1872,109 @@ operations that should be applied atomically:
 
 Operation IDs are globally unique and independent of Git object IDs. Git commit ancestry provides causal ordering; a logical clock assists validation and deterministic presentation. Wall-clock time is for display only and must not decide semantic conflicts.
 
-The current POC format supports task creation, scalar and label updates, and
-tombstones. Later CLI and format work is expected to add:
+The format supports task creation, scalar and label updates, dependency edges,
+tombstones and restores, and assignments. Later CLI and format work is expected
+to add:
 
-- dependency commands using the existing `set.add` and `set.remove` operation
-  semantics;
 - `comment.add`;
-- `claim.acquire`, `claim.release`, and heartbeat/lease operations;
 - `implementation.link` for associating work with code commits.
+
+The lease-and-claim operations this section used to list — `claim.acquire`,
+`claim.release`, and heartbeats — were dropped rather than deferred. See
+[Assignments](#assignments): a lock asks for the one thing a distributed,
+append-only history resists, and the convergent collection it does resist
+nothing at all turned out to be the better answer to the same problem.
 
 Historical operation commits are immutable. Tasks are tombstoned rather than
 deleting their refs. Shared task histories are never rebased or force-pushed. A
 clone that diverged from `origin` replays its own unpublished operations onto
 the fetched tip and parks the tip it replaced, which changes only local refs and
 appends to the shared history.
+
+### Assignments
+
+An assignment says who is responsible for a task. It is a convergent
+collection, exactly like labels: `assign.add` and `assign.remove` operations on
+the task, concurrent additions from two clones both surviving, and no conflict
+type of its own.
+
+That is deliberate, and it is the answer to a problem a lock cannot solve here.
+Two agents working a queue in parallel will sometimes pick the same task. Under
+a lease, they fight: each takes the lock, each loses it, and the loop has no
+terminating state. Under a collection, they stop instantly in the both-assigned
+state — which is a spike, a legitimate working mode, and a thing a person can
+read off the board and act on. Assignment signals responsibility, never strongly
+blocks, and is always overrideable by addition.
+
+**The value.** An assignment names a *principal* — the asserted Git identity,
+`user.email`, already stamped on every operation — optionally qualified by a
+free-form *agent label*:
+
+```
+dylan@example.com
+dylan@example.com/impl-1
+```
+
+There is no roster and no verification protocol; verifying identity would import
+the central authority Workbook deliberately lacks, and within its trust model
+(push access is trust) an asserted identity is exactly as strong as everything
+else in a fetched ref. A wrong address is visible noise, corrected socially.
+
+**What is stored.** The checkpoint materializes the live list, ordered by
+principal and then label so that every clone folding the same history writes the
+same bytes. The member is omitted when the list is empty, which is what leaves
+every task document ever written unchanged:
+
+```json
+"assignments": [
+  {
+    "principal": "dylan@example.com",
+    "label": "impl-1",
+    "creator": "sam@example.com",
+    "createdAt": "2026-08-13T14:35:00-04:00"
+  }
+]
+```
+
+`creator` and `createdAt` come from the pack that recorded the assignment. They
+are stored rather than derived because they are the removal rule's evidence, and
+that evidence has to live in the history every clone folds.
+
+**The removal rule.** An assignment may be removed only by its
+assignee-principal — any actor whose email matches, whatever agent label the
+assignment carries — or by the actor who recorded it. The first clause lets an
+orchestrator sweep up after its own fleet, including agents that crashed; the
+second lets a mistaken tag of a teammate be undone by whoever made it.
+
+It is enforced twice, and the second time is the one that matters:
+
+- **At the mutation boundary**, a foreign removal is refused with category
+  `validation` (exit `5`) and a message naming who may make it. Nothing is
+  written.
+- **In the fold**, `Apply` treats a foreign removal as a recorded no-op: the
+  operation stays in the history, attributed to whoever wrote it, and changes
+  nothing. This is what makes the rule a data-model contract rather than a
+  courtesy of one code path. A pack built with `git hash-object`, written by a
+  modified build, or pushed by a peer running something that is not Workbook at
+  all folds to the same task on every honest reader.
+
+The fold decides from the pack's actor and the assignment's own recorded
+principal and creator, and from nothing else — no local identity, no clock, no
+configuration. A no-op rather than a refusal, because refusing would make one
+hostile pack a permanent `corrupt-data` verdict on a ref every clone has already
+fetched, which is a denial of service dressed as strictness.
+
+Adding an assignment that already exists is idempotent, and keeps the original
+attribution, so a redelivered pack cannot rewrite who assigned whom. Removing
+one that is not there is refused at the boundary — where it is a mistake
+somebody can fix — and tolerated in replay, where it is already history.
+
+**Ceilings.** A principal is bounded at 254 bytes (the longest deliverable
+address) and a label at 100. How *many* assignments a task may carry is checked
+only where somebody is adding one, never in the fold: two people assigning
+themselves the same task on the same afternoon can carry it past any count
+without either operation being anything but ordinary, and a fold that failed on
+a count would make that pair of acts a task no clone could ever read again.
 
 ### Mixed Workbook versions
 
@@ -1903,11 +1992,15 @@ writer-format generation that can fold it:
 {"format":"workbook.operation-pack","version":1,"minReader":1, …}
 ```
 
-Absence means generation 0. **No pack any current build writes carries it**, so
-every document in every existing repository is unchanged, byte for byte, and a
-golden table asserts that. The member is set per operation type, so a build that
-knows how to write a new kind of operation still writes ordinary field changes
-without it — an older clone keeps folding everything it genuinely can.
+Absence means generation 0, which is every operation type Workbook shipped
+before assignments. Generation 1 is `assign.add` and `assign.remove`, and they
+are the only packs that carry the member: a create, a field change, a label, a
+dependency, a tombstone and a restore all still write no marker, so every
+document written before assignments existed — and every document written after
+them by a command that does not assign — is unchanged, byte for byte, and a
+golden table asserts that. The member is set per operation type, which is what
+keeps an older clone folding everything it genuinely can: only the tasks
+somebody actually assigned go out of its reach.
 
 The task and configuration checkpoints beside the packs carry the same member,
 as a running maximum over the history so far. That is what lets a reader answer

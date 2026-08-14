@@ -145,6 +145,62 @@ func TestAValidVerdictDoesNotSurviveADowngrade(t *testing.T) {
 	}
 }
 
+// The coupling, exercised against the generation bump that actually happened.
+//
+// The two tests above play a hypothetical upgrade by moving the reader
+// generation one past whatever this build supports, which keeps them true
+// forever and proves nothing about any particular release. This one is
+// concrete: a cache recorded by a build that folded generation zero — every
+// build before assignments existed — must not be inherited by this build, which
+// folds generation one. If a future story bumps the constant again and forgets
+// what lives beside it, this is the test that says so.
+func TestACacheFromAGenerationZeroBuildDoesNotSurviveTheAssignmentBump(t *testing.T) {
+	if core.SupportedFormatGeneration == 0 {
+		t.Fatal("this build folds generation zero; the assignment bump is missing")
+	}
+	ctx := context.Background()
+	directory := t.TempDir()
+	head := gitstore.TaskHead{TaskID: taskID(4), ObjectID: "commit-pre-assignments"}
+
+	withReaderGeneration(t, 0)
+	before, err := OpenCache(ctx, directory, testConfig())
+	if err != nil {
+		t.Fatalf("OpenCache(generation zero) error = %v", err)
+	}
+	if _, err := before.Prepare(ctx, []gitstore.TaskHead{head}, false); err != nil {
+		t.Fatalf("Prepare(generation zero) error = %v", err)
+	}
+	if err := before.Record(ctx, Completion{
+		TaskID:               head.TaskID,
+		ObservedHead:         head.ObjectID,
+		Status:               StatusValid,
+		LastValidCommit:      head.ObjectID,
+		LastValidGeneration:  generationID(1),
+		LastValidState:       canonicalState(t, head.TaskID, generationID(1), "folded before assignments"),
+		ValidatedCommitIDs:   []string{head.ObjectID},
+		ValidatedCommitCount: 1,
+	}); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+	if err := before.Close(); err != nil {
+		t.Fatalf("Close(generation zero) error = %v", err)
+	}
+
+	readerGeneration = core.SupportedFormatGeneration
+	after, err := OpenCache(ctx, directory, testConfig())
+	if err != nil {
+		t.Fatalf("OpenCache(this build) error = %v", err)
+	}
+	t.Cleanup(func() { _ = after.Close() })
+	prepared, err := after.Prepare(ctx, []gitstore.TaskHead{head}, false)
+	if err != nil {
+		t.Fatalf("Prepare(this build) error = %v", err)
+	}
+	if got := prepared[head.TaskID].Status; got != StatusPending {
+		t.Fatalf("status = %q, want %q; the generation bump must force one full revalidation", got, StatusPending)
+	}
+}
+
 // An unchanged generation keeps the cache, which is what stops the guard from
 // becoming a rebuild on every run.
 func TestTheCacheSurvivesWhenTheReaderGenerationIsUnchanged(t *testing.T) {

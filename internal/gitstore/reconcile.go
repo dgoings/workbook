@@ -362,7 +362,9 @@ func sameTaskState(parent, next core.TaskData) bool {
 		!parent.CreatedAt.Equal(next.CreatedAt) {
 		return false
 	}
-	return sameStrings(parent.Labels, next.Labels) && sameStrings(parent.Dependencies, next.Dependencies)
+	return sameStrings(parent.Labels, next.Labels) &&
+		sameStrings(parent.Dependencies, next.Dependencies) &&
+		core.SameAssignments(parent.Assignments, next.Assignments)
 }
 
 func sameStrings(left, right []string) bool {

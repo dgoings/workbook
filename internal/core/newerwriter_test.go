@@ -43,43 +43,57 @@ func newerWriterState(t *testing.T, document string, generation int) string {
 
 func itoa(value int) string { return strconv.Itoa(value) }
 
-// A marker at or below the supported generation changes nothing about the fold.
+// A marker at or below the supported generation folds normally.
 //
-// The claim is deliberately scoped to the fold, because at the byte level it is
-// false and the difference matters. An explicit `"minReader":0` says what
-// absence says, so it folds identically — but the only canonical encoding of
-// generation zero is absence, so a stored document that spells it is refused by
-// the canonicality rule that refuses every other byte difference. Storage is
-// stricter than semantics here, exactly as it is for a stored task whose fields
-// are in the wrong order, and saying "changes nothing" without that
-// qualification would promise something no reader of a real ref would see.
+// "Normally" means the operations take effect and nothing is refused. It does
+// not mean the marker is discarded: a pack that declares generation N leaves N
+// in the checkpoint's watermark, which is exactly what the watermark is for —
+// once one pack in a task's history has needed a reader of generation N, every
+// checkpoint after it does, and a later ordinary pack does not take that back.
+//
+// Generation zero is the one case where the claim is also a byte-level claim,
+// and there it is false in an instructive direction. An explicit `"minReader":0`
+// says what absence says, so it folds identically — but the only canonical
+// encoding of generation zero is absence, so a stored document that spells it
+// is refused by the canonicality rule that refuses every other byte difference.
+// Storage is stricter than semantics here, exactly as it is for a stored task
+// whose fields are in the wrong order.
 func TestAMarkerAtOrBelowTheSupportedGenerationFoldsNormally(t *testing.T) {
-	packDocument := newerWriterPack(t, SupportedFormatGeneration, "")
-	pack, err := DecodeOperationPack([]byte(packDocument))
-	if err != nil {
-		t.Fatalf("DecodeOperationPack() error = %v", err)
-	}
-	if pack.RequiresNewerReader() {
-		t.Fatalf("pack with minReader %d requires a newer reader", pack.MinReader)
-	}
 	parent, err := DecodeStateDocument([]byte(goldenTaskRefs[1].parent))
 	if err != nil {
 		t.Fatalf("DecodeStateDocument(parent) error = %v", err)
 	}
-	state, err := Apply(&parent, pack, goldenProjectKey)
-	if err != nil {
-		t.Fatalf("Apply() error = %v", err)
-	}
-	if state.Task.Status != "in-review" {
-		t.Fatalf("folded status = %q, want in-review", state.Task.Status)
-	}
-	if state.MinReader != 0 {
-		t.Fatalf("folded checkpoint minReader = %d, want 0", state.MinReader)
+	for _, generation := range []int{0, SupportedFormatGeneration} {
+		t.Run("generation "+itoa(generation), func(t *testing.T) {
+			pack, err := DecodeOperationPack([]byte(newerWriterPack(t, generation, "")))
+			if err != nil {
+				t.Fatalf("DecodeOperationPack() error = %v", err)
+			}
+			if pack.RequiresNewerReader() {
+				t.Fatalf("pack with minReader %d requires a newer reader", pack.MinReader)
+			}
+			state, err := Apply(&parent, pack, goldenProjectKey)
+			if err != nil {
+				t.Fatalf("Apply() error = %v", err)
+			}
+			if state.Task.Status != "in-review" {
+				t.Fatalf("folded status = %q, want in-review", state.Task.Status)
+			}
+			if state.MinReader != generation {
+				t.Fatalf("folded checkpoint minReader = %d, want the declared %d", state.MinReader, generation)
+			}
+		})
 	}
 
-	// The byte-level half. Re-encoding drops the explicit zero, so the document
-	// is not its own canonical form — which is what the storage layer refuses,
-	// and is why the sentence above says "the fold" rather than "nothing".
+	// The byte-level half, which only generation zero has. Re-encoding drops
+	// the explicit zero, so the document is not its own canonical form — which
+	// is what the storage layer refuses, and is why the sentence above says
+	// "the fold" rather than "nothing".
+	packDocument := newerWriterPack(t, 0, "")
+	pack, err := DecodeOperationPack([]byte(packDocument))
+	if err != nil {
+		t.Fatalf("DecodeOperationPack() error = %v", err)
+	}
 	encoded, err := EncodeDocument(pack)
 	if err != nil {
 		t.Fatalf("EncodeDocument() error = %v", err)

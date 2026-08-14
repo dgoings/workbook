@@ -889,6 +889,17 @@ func TestStoreConcurrentReadsAndRebuilds(t *testing.T) {
 	}
 }
 
+// listQueryCeiling bounds how many SQL statements one List may issue.
+//
+// The number is not the point; its independence from the task count is. Every
+// collection is read with one bulk query joined in memory, so a cache holding a
+// thousand tasks costs the same statements as one holding twelve — and the day
+// somebody reads a collection per task instead, this is what says so.
+//
+// It moved from ten to twelve when assignments arrived, which is the whole cost
+// of a new collection: one statement in the schema probe, one bulk read.
+const listQueryCeiling = 12
+
 func TestListUsesBoundedSQLQueriesForManyTasks(t *testing.T) {
 	ctx := context.Background()
 	config := testConfig()
@@ -947,8 +958,9 @@ func TestListUsesBoundedSQLQueriesForManyTasks(t *testing.T) {
 	if got, want := snapshots[0].State.Task.Dependencies, []string{taskIDs[0], taskIDs[1]}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("dependencies = %v, want %v", got, want)
 	}
-	if got := queries.Load(); got > 10 {
-		t.Fatalf("unchanged List() SQL queries = %d for %d tasks, want at most 10", got, len(taskIDs))
+	if got := queries.Load(); got > listQueryCeiling {
+		t.Fatalf("unchanged List() SQL queries = %d for %d tasks, want at most %d",
+			got, len(taskIDs), listQueryCeiling)
 	}
 }
 
