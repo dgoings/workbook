@@ -571,6 +571,22 @@ func (s *blobStoreSpy) StageAttachment(_ context.Context, _ ProjectConfig, conte
 	return threadBlobOID, nil
 }
 
+// blobReaderSpy is the read half, which no writing test needs and which the two
+// refusals below are entirely about.
+type blobReaderSpy struct {
+	read     []string
+	contents []byte
+	err      error
+}
+
+func (s *blobReaderSpy) ReadAttachment(_ context.Context, _ ProjectConfig, objectID string) ([]byte, error) {
+	s.read = append(s.read, objectID)
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.contents, nil
+}
+
 func threadServiceUnderTest(t *testing.T, task TaskData, ids ...string) (Service, *memoryTaskStore, *blobStoreSpy) {
 	t.Helper()
 	store := newMemoryTaskStore(serviceSnapshot(threadTaskID, task))
@@ -1151,6 +1167,58 @@ func TestAttachingAFileWithoutABlobStoreIsOperational(t *testing.T) {
 	})
 	if got := CategoryOf(err); got != CategoryOperational {
 		t.Fatalf("category = %q, want %q; error = %v", got, CategoryOperational, err)
+	}
+}
+
+// AttachmentContent is the one read every surface that hands an attachment back
+// goes through — `show --get-attachment` and the board's download route — and
+// the two things it adds over the blob read are refusals. Both are stated here
+// rather than on either surface, because both surfaces are entitled to assume
+// them: the board's route decides its response headers from the attachment it
+// was handed, and a link that reached the blob read would be asking Git for the
+// empty object ID.
+func TestAttachmentContentRefusesALinkAndAServiceWithNoReader(t *testing.T) {
+	service, _, _ := threadServiceUnderTest(t, TaskData{Title: "Task", Status: StatusBacklog, Priority: PriorityMedium, Rank: "1/1"})
+	reader := &blobReaderSpy{contents: []byte("hello world")}
+	service.BlobReads = reader
+
+	link := Attachment{ID: attachOneID, AttachmentData: AttachmentData{
+		Kind: AttachmentLink, URL: "https://example.test/design",
+	}}
+	content, err := service.AttachmentContent(context.Background(), link)
+	if got := CategoryOf(err); got != CategoryValidation {
+		t.Fatalf("category = %q, want %q; error = %v", got, CategoryValidation, err)
+	}
+	if content != nil {
+		t.Fatalf("a refused link returned %d bytes", len(content))
+	}
+	if !strings.Contains(err.Error(), attachOneID) {
+		t.Fatalf("refusal = %q, want the attachment named", err.Error())
+	}
+	if len(reader.read) != 0 {
+		t.Fatalf("a link reached the blob reader: %#v", reader.read)
+	}
+
+	file := Attachment{ID: attachTwoID, AttachmentData: AttachmentData{
+		Kind: AttachmentFile, Name: "trace.log", Media: "text/plain", Size: 11, Blob: threadBlobOID,
+	}}
+	content, err = service.AttachmentContent(context.Background(), file)
+	if err != nil {
+		t.Fatalf("AttachmentContent() error = %v", err)
+	}
+	if string(content) != "hello world" {
+		t.Fatalf("content = %q, want the blob's bytes", content)
+	}
+	if len(reader.read) != 1 || reader.read[0] != threadBlobOID {
+		t.Fatalf("blob reads = %#v, want the recorded object ID once", reader.read)
+	}
+
+	// A service built without the read half answers as a missing capability
+	// rather than as a failure of the attachment: nothing is wrong with the
+	// attachment, and this build simply cannot hand it back.
+	service.BlobReads = nil
+	if _, err := service.AttachmentContent(context.Background(), file); CategoryOf(err) != CategoryOperational {
+		t.Fatalf("category = %q, want %q; error = %v", CategoryOf(err), CategoryOperational, err)
 	}
 }
 

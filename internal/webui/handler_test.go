@@ -4421,6 +4421,10 @@ const boardStatusTags = ` + strconv.Quote(strings.Join(tagNames, " ")) + `;
 const boardStatusDefinitions = ` + string(encoded) + `;
 const boardDefaultStatus = ` + strconv.Quote(string(vocabulary.Default())) + `;
 const boardVocabularyHead = ` + strconv.Quote(vocabularyHead) + `;
+// The attachment ceiling the server renders into the page, so the harness's
+// upload control refuses what the real one refuses rather than what a number
+// invented here would.
+const boardAttachmentLimit = ` + strconv.Itoa(core.MaxAttachmentFileBytes) + `;
 const scrollIntoViewCalls = [];
 function classTokens(element) {
   return (element.className || "").split(/\s+/).filter(Boolean);
@@ -4580,6 +4584,7 @@ const boardLists = boardStatusDefinitions.map(([status, label]) => {
 });
 boardView.dataset.defaultStatus = boardDefaultStatus;
 boardView.dataset.vocabularyHead = boardVocabularyHead;
+boardView.dataset.attachmentLimit = String(boardAttachmentLimit);
 // The region that holds tasks whose status matches no column. It is always in
 // the document and hidden while empty, because the status that strands a task
 // arrives on a poll rather than on the first paint, and a region the server

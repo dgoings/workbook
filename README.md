@@ -352,7 +352,8 @@ what a task document may contain and how much of one it will read back:
 | Attached files per task | 10,485,760 bytes (10 MiB) | What one task's live attached files add up to. |
 | Attachment URL | 2,048 bytes | One link attachment's URL. |
 | Git object | 4,194,304 bytes (4 MiB) | Any single object Workbook reads: a commit, a task tree, or a stored document. |
-| Web request body | 1,048,576 bytes (1 MiB) | One request to `workbook serve`. |
+| Web request body | 1,048,576 bytes (1 MiB) | One request to `workbook serve`, except the attachment upload below. |
+| Web attachment upload body | 1,463,640 bytes | One `POST /api/tasks/<id>/attachments`, which carries an attached file base64-encoded inside JSON. Base64 costs four bytes for every three, so the largest attachment needs four thirds of its own ceiling plus the envelope around it. It bounds the encoding, not the attachment: a file over 1 MiB is still refused, against the same number and in the same sentence core answers with, before anything is staged. |
 
 Lengths are counted in bytes rather than characters, because bytes are what a
 reader has to allocate. A field over its limit never reaches storage: the CLI
@@ -1488,6 +1489,12 @@ POST /api/tasks/<id>/restore  restore a tombstoned task, optionally into a
                               status and position
 PUT /api/tasks/<id>/dependencies/<dependency>     add a prerequisite
 DELETE /api/tasks/<id>/dependencies/<dependency>  remove a prerequisite
+POST /api/tasks/<id>/comments             add a comment
+PATCH /api/tasks/<id>/comments/<cid>      edit a comment's body
+DELETE /api/tasks/<id>/comments/<cid>     remove a comment
+POST /api/tasks/<id>/attachments          attach a file or a link
+GET /api/tasks/<id>/attachments/<aid>     download an attached file's bytes
+DELETE /api/tasks/<id>/attachments/<aid>  remove an attachment
 GET /api/sync                 versioned publication-mode JSON
 PUT /api/sync                 change this board's publication mode
 GET /healthz                  versioned health JSON
@@ -1501,6 +1508,58 @@ position route uses and mean the same things — a restore naming `before` or
 `status` keeps the position it was deleted with. A body that is present is held to
 the same rules every other body is: an unknown member, a trailing value, or
 malformed JSON is refused rather than partly read.
+
+The five thread mutations are the `workbook update` comment and attachment flags
+reached over HTTP: they run the same planners and record the same operations, so
+a change either surface refuses is refused by both, in the words the planner
+answers with. They also refuse two things only a request can be wrong about — a
+`content` member that is not base64, and a body that mixes the two kinds — which
+have no flag to be the counterpart of. Each takes an optional `expectedHead` and
+answers with the whole task, thread and attachment list included, the way every
+other task mutation does; the two removals also accept no body at all, which is
+the bare verb.
+
+An upload carries the file base64-encoded in a JSON member rather than as a
+multipart part, and that is the same-origin guard's doing rather than a
+preference: `multipart/form-data` is one of the three media types a cross-site
+HTML form can send without a preflight, so a multipart route would be the one
+address on this board a drive-by page could post to. The body is
+`{"kind":"file","name":…,"content":<base64>}`, or
+`{"kind":"link","url":…,"label":…}`; a body that mixes the two is refused rather
+than read as one of them. `media` is accepted and the board's own upload never
+sends it: a media type is written into shared history, and a browser's guess for
+the same bytes differs from machine to machine, so the file name decides it
+through the table Workbook keeps. A file over the ceiling is refused before
+anything is staged, so an upload refused for its size leaves no Git object
+behind. That is a claim about the size rule alone, and deliberately: the
+refusals that come after staging — a name past its own ceiling, most of all —
+write the blob first and then decline the attachment, which is the mutation
+boundary's existing order rather than anything this route decides.
+
+`GET /api/tasks/<id>/attachments/<aid>` is the one route that answers with
+somebody else's bytes, and its headers are the whole of its security:
+
+- Only an allow-list of media types is served inline — `image/gif`,
+  `image/jpeg`, `image/png`, `image/webp`, which is exactly the set of image
+  types the extension table can produce. It is a list rather than a test on the
+  type: `image/svg+xml` passes any "starts with `image/`" check, and an SVG is
+  markup that can carry script, so an SVG served inline would be stored
+  cross-site scripting on the board's own origin.
+- Everything else is served as `application/octet-stream` with
+  `Content-Disposition: attachment`, so an attached HTML file downloads rather
+  than rendering. The file name inside that header is formatted rather than
+  concatenated, because an attachment name is text somebody typed.
+- `X-Content-Type-Options: nosniff` is set on both paths, so no browser may
+  decide for itself that an octet-stream is HTML.
+- The response carries `Content-Security-Policy: default-src 'none'; sandbox`
+  rather than the page's own policy, which permits the board's inline script.
+
+A link holds no bytes: the route refuses one and names the URL, so a client that
+followed the wrong address is told where the thing is. An attachment whose blob
+this clone does not hold — which a future compaction that strips attachments will
+produce — is answered `404`. So is an identifier the addressed task does not
+carry: an attachment is read out of that task's own live list, so naming another
+task's attachment, or a comment, reaches nothing.
 
 The four vocabulary routes are `workbook status` reached over HTTP: they run the
 same planners, so they refuse what the verbs refuse, in the same words, and
@@ -1550,11 +1609,13 @@ A refused request is answered with a versioned `workbook.error` document and
 never reaches task storage: `403` for a foreign `Host` or `Origin`, and `415`
 for a mutation that does not declare JSON.
 
-Every request body is bounded at 1 MiB before any route sees it, and a body over
-that is answered `400` naming the ceiling. The bound is well above the largest
-task the field limits above allow, and it applies to routes that ignore their
-body as well, so no route can read an unbounded one by forgetting to ask for a
-limit. The server also bounds how long a connection may hold a header
+Every request body is bounded before any route sees it, and a body over the
+bound is answered `400` naming the ceiling it ran into. That ceiling is 1 MiB
+everywhere but the attachment upload, which is bounded at the encoded size of
+the largest attachment plus its envelope, for the reason the limits table above
+gives. The bound is well above the largest task the field limits above allow,
+and it applies to routes that ignore their body as well, so no route can read an
+unbounded one by forgetting to ask for a limit. The server also bounds how long a connection may hold a header
 incomplete, a request body unfinished, or a keep-alive idle, so a client that
 opens a connection and stops talking is closed rather than holding a goroutine
 until `serve` exits. There is no response deadline: a mutation publishing inline
@@ -1786,6 +1847,27 @@ request at all and simply returns to the board.
 Active task details also provide Delete; a successful deletion returns to the
 board with its Deleted column shown, where the task now is and where the
 Restore that undoes it sits on the card.
+
+A task's page also carries what is attached to it and what has been said about
+it, as two sections below the form and above the change history. The attachment
+list shows both kinds in one list — a file's name links to its download, a
+link's label to its destination — with the size, the media type and who added
+it, an upload control, a form for adding a link, and a Remove on each row. The
+thread is drawn oldest first, each comment carrying its author, when it was
+written, and whether it has been edited since, with an Edit and a Remove on each
+one and a box for adding another. Comments render as text: a body is what
+somebody typed, and formatting it is separate work.
+
+None of these is drawn optimistically the way a board drag is. A comment's
+identifier, author and timestamps are minted by the operation that records it,
+so there is nothing for a client to paint in advance; each change is sent with
+the tip the page read, and the thread the answer carries is what is drawn. A
+refusal is reported in the section it was made in and keeps the text you typed;
+a tip that has moved on is re-based, so saving again applies your change to the
+version the server holds. A file too large to attach is refused before it is
+read or sent, naming the ceiling, and the server enforces the same one. The
+board's cards say nothing about either section: a card is an identifier, a
+title, and its labels.
 
 The web experience is still local-first and intentionally narrow in scope.
 Authentication, hosted deployment, browser deletion, draft persistence, and

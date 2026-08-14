@@ -1602,6 +1602,78 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 			result, err := writer.RestoreMutation(requestContext, id, input)
 			return publisher.publish(requestContext, result, err)
 		},
+		// The thread mutations go through core's single-intent doors, which build
+		// the same UpdateInput `workbook update --comment` builds, so the board
+		// and the command line write one pack shape and share one refusal
+		// surface.
+		AddComment: func(requestContext context.Context, id string, input core.CommentAddInput) (core.MutationResult, error) {
+			writer, err := current(requestContext)
+			if err != nil {
+				return core.MutationResult{}, err
+			}
+			result, err := writer.CommentAddMutation(requestContext, id, input)
+			return publisher.publish(requestContext, result, err)
+		},
+		EditComment: func(requestContext context.Context, id string, input core.CommentEditInput) (core.MutationResult, error) {
+			writer, err := current(requestContext)
+			if err != nil {
+				return core.MutationResult{}, err
+			}
+			result, err := writer.CommentEditMutation(requestContext, id, input)
+			return publisher.publish(requestContext, result, err)
+		},
+		RemoveComment: func(requestContext context.Context, id string, input core.CommentRemoveInput) (core.MutationResult, error) {
+			writer, err := current(requestContext)
+			if err != nil {
+				return core.MutationResult{}, err
+			}
+			result, err := writer.CommentRemoveMutation(requestContext, id, input)
+			return publisher.publish(requestContext, result, err)
+		},
+		AddAttachment: func(requestContext context.Context, id string, input core.AttachmentAddInput) (core.MutationResult, error) {
+			writer, err := current(requestContext)
+			if err != nil {
+				return core.MutationResult{}, err
+			}
+			result, err := writer.AttachmentAddMutation(requestContext, id, input)
+			return publisher.publish(requestContext, result, err)
+		},
+		RemoveAttachment: func(requestContext context.Context, id string, input core.AttachmentRemoveInput) (core.MutationResult, error) {
+			writer, err := current(requestContext)
+			if err != nil {
+				return core.MutationResult{}, err
+			}
+			result, err := writer.AttachmentRemoveMutation(requestContext, id, input)
+			return publisher.publish(requestContext, result, err)
+		},
+		// An attachment is found on the task that holds it, because that is
+		// where it lives: the checkpoint materializes the list, so this is one
+		// task read and a lookup in a slice rather than a second index. A task
+		// that has no such attachment reports it the way an unknown task does.
+		Attachment: func(requestContext context.Context, id, attachmentID string) (core.Attachment, error) {
+			reader, err := current(requestContext)
+			if err != nil {
+				return core.Attachment{}, err
+			}
+			task, err := reader.Show(requestContext, id)
+			if err != nil {
+				return core.Attachment{}, err
+			}
+			for _, attachment := range task.Attachments {
+				if attachment.ID == attachmentID {
+					return attachment, nil
+				}
+			}
+			return core.Attachment{}, core.Errorf(core.CategoryNotFound,
+				"task %s has no attachment %s", task.ID, attachmentID)
+		},
+		AttachmentContent: func(requestContext context.Context, attachment core.Attachment) ([]byte, error) {
+			reader, err := current(requestContext)
+			if err != nil {
+				return nil, err
+			}
+			return reader.AttachmentContent(requestContext, attachment)
+		},
 		Depend: func(requestContext context.Context, id, dependency string) (core.MutationResult, error) {
 			writer, err := current(requestContext)
 			if err != nil {
@@ -1965,6 +2037,15 @@ func openServiceParts(ctx context.Context, cwd string, stderr io.Writer) (core.S
 		Reader:     store,
 		Writer:     repository,
 		Blobs:      repository,
+		// The read half of the same store, beside the write half above. The one
+		// long-running caller of this constructor is `serve`, whose attachment
+		// download route serves an attachment's bytes through
+		// Service.AttachmentContent; without this the board could stage an
+		// attachment it could never hand back, answering every download with
+		// "attachment blob reader is not configured". The read-only service the
+		// one-shot commands open has carried it since `show --get-attachment`
+		// shipped.
+		BlobReads:  repository,
 		Projection: store,
 		History:    store,
 		IDs:        core.CryptoULIDSource{},

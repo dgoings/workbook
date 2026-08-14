@@ -329,9 +329,27 @@ type Options struct {
 	Restore       TaskRestorer
 	Depend        TaskDependencyAdder
 	Free          TaskDependencyRemover
-	History       TaskHistoryReader
-	SyncState     SyncStateReporter
-	SetSyncMode   SyncModeSetter
+	// The five thread mutations and the two reads behind the attachment
+	// download. They are capabilities of their own rather than members of
+	// Update because the routes are their own: a board wired for one of them is
+	// wired for the surface that offers it, and a board given none answers those
+	// addresses the way every other unwired route answers.
+	//
+	// Attachment finds one attachment on one task and AttachmentContent reads a
+	// file's bytes, in two steps rather than one, because the two answers are
+	// decided in different places: what an attachment *is* decides this
+	// package's response headers and its refusal for a link, and only a file's
+	// bytes are core's to hand back.
+	AddComment        TaskCommentAdder
+	EditComment       TaskCommentEditor
+	RemoveComment     TaskCommentRemover
+	AddAttachment     TaskAttachmentAdder
+	RemoveAttachment  TaskAttachmentRemover
+	Attachment        TaskAttachmentFinder
+	AttachmentContent AttachmentContentReader
+	History           TaskHistoryReader
+	SyncState         SyncStateReporter
+	SetSyncMode       SyncModeSetter
 }
 
 // handler embeds Options rather than copying it field by field, so there is no
@@ -355,6 +373,13 @@ type pageData struct {
 	// VocabularyHead is the ledger tip these columns were built from, so the
 	// poll can tell that the columns it is looking at have been superseded.
 	VocabularyHead string
+	// AttachmentFileLimit is core's ceiling on one attached file, rendered into
+	// the page for the same reason StatusTags is: the upload control refuses a
+	// file this large before it spends a minute encoding and sending one the
+	// server would refuse, and a number the script carried itself would be a
+	// second copy of a ceiling core owns — one that would go on naming the old
+	// number the day core's changed.
+	AttachmentFileLimit int64
 	// StatusTags are the three roles a status may carry, rendered into the
 	// statuses page's forms for the reason the columns are rendered into the
 	// board: the client must not carry a second copy of a set the server owns.
@@ -582,6 +607,12 @@ func NewHandler(options Options) http.Handler {
 	handler.mux.HandleFunc("POST /api/tasks/{id}/restore", handler.restoreTask)
 	handler.mux.HandleFunc("PUT /api/tasks/{id}/dependencies/{dependency}", handler.addTaskDependency)
 	handler.mux.HandleFunc("DELETE /api/tasks/{id}/dependencies/{dependency}", handler.removeTaskDependency)
+	handler.mux.HandleFunc("POST /api/tasks/{id}/comments", handler.addTaskComment)
+	handler.mux.HandleFunc("PATCH /api/tasks/{id}/comments/{comment}", handler.editTaskComment)
+	handler.mux.HandleFunc("DELETE /api/tasks/{id}/comments/{comment}", handler.removeTaskComment)
+	handler.mux.HandleFunc("POST /api/tasks/{id}/attachments", handler.addTaskAttachment)
+	handler.mux.HandleFunc("GET /api/tasks/{id}/attachments/{attachment}", handler.serveTaskAttachment)
+	handler.mux.HandleFunc("DELETE /api/tasks/{id}/attachments/{attachment}", handler.removeTaskAttachment)
 	handler.mux.HandleFunc("GET /api/sync", handler.serveSyncState)
 	handler.mux.HandleFunc("PUT /api/sync", handler.updateSyncMode)
 	handler.mux.HandleFunc("GET /healthz", handler.serveHealth)
@@ -602,7 +633,7 @@ func (handler *handler) serveHTTP(writer http.ResponseWriter, request *http.Requ
 	// never reads its body is covered too, and http.MaxBytesReader is given the
 	// ResponseWriter so a sender that ignores the limit loses its connection
 	// rather than keeping it to try again.
-	request.Body = http.MaxBytesReader(writer, request.Body, MaxRequestBodyBytes)
+	request.Body = http.MaxBytesReader(writer, request.Body, requestBodyLimit(request.URL.Path))
 	if malformedTaskDependencyRequestPath(request.URL.Path, request.URL.EscapedPath()) {
 		http.NotFound(writer, request)
 		return
@@ -686,6 +717,15 @@ func allowedMethod(path string) (string, bool) {
 		if _, _, ok := taskDependencyPathIDs(path); ok {
 			return http.MethodPut + ", " + http.MethodDelete, true
 		}
+		if _, _, ok := taskCommentPathIDs(path); ok {
+			return http.MethodPatch + ", " + http.MethodDelete, true
+		}
+		if _, _, ok := taskAttachmentPathIDs(path); ok {
+			return http.MethodGet + ", " + http.MethodDelete, true
+		}
+		if taskCommentsPathID(path) != "" || taskAttachmentsPathID(path) != "" {
+			return http.MethodPost, true
+		}
 		if taskPositionPathID(path) != "" {
 			return http.MethodPatch, true
 		}
@@ -709,6 +749,25 @@ func allowedMethod(path string) (string, bool) {
 }
 
 func taskDependencyPathIDs(path string) (string, string, bool) {
+	return taskMemberPathIDs(path, "dependencies")
+}
+
+func taskCommentPathIDs(path string) (string, string, bool) {
+	return taskMemberPathIDs(path, "comments")
+}
+
+func taskAttachmentPathIDs(path string) (string, string, bool) {
+	return taskMemberPathIDs(path, "attachments")
+}
+
+// taskMemberPathIDs reads the task and the member one of the per-member routes
+// addresses — a dependency, a comment, an attachment — and reports whether the
+// path is that route's shape at all.
+//
+// The three collections share it because they share the shape and the rules: a
+// path segment that is empty or is a relative segment names nothing, and a path
+// with any other number of segments is a different route.
+func taskMemberPathIDs(path, collection string) (string, string, bool) {
 	const prefix = "/api/tasks/"
 	if !strings.HasPrefix(path, prefix) {
 		return "", "", false
@@ -716,11 +775,33 @@ func taskDependencyPathIDs(path string) (string, string, bool) {
 	parts := strings.Split(strings.TrimPrefix(path, prefix), "/")
 	if len(parts) != 3 || parts[0] == "" ||
 		parts[0] == "." || parts[0] == ".." ||
-		parts[1] != "dependencies" || parts[2] == "" ||
+		parts[1] != collection || parts[2] == "" ||
 		parts[2] == "." || parts[2] == ".." {
 		return "", "", false
 	}
 	return parts[0], parts[2], true
+}
+
+// taskCommentsPathID and taskAttachmentsPathID read the task a collection route
+// addresses, the way taskHistoryPathID reads the task its route addresses.
+func taskCommentsPathID(path string) string {
+	return taskCollectionPathID(path, "/comments")
+}
+
+func taskAttachmentsPathID(path string) string {
+	return taskCollectionPathID(path, "/attachments")
+}
+
+func taskCollectionPathID(path, suffix string) string {
+	const prefix = "/api/tasks/"
+	if !strings.HasPrefix(path, prefix) || !strings.HasSuffix(path, suffix) {
+		return ""
+	}
+	id := strings.TrimSuffix(strings.TrimPrefix(path, prefix), suffix)
+	if id == "" || strings.Contains(id, "/") {
+		return ""
+	}
+	return id
 }
 
 // vocabularyStatusPathName reads the status one of the per-status routes
@@ -835,11 +916,12 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 	}
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := handler.page.Execute(writer, pageData{
-		Board:          presentation.NewBoard(activeTasks(tasks), vocabulary.Vocabulary),
-		DefaultStatus:  vocabulary.Vocabulary.Default(),
-		VocabularyHead: vocabulary.Head,
-		StatusTags:     core.StatusTags(),
-		Administrable:  handler.administrable(),
+		Board:               presentation.NewBoard(activeTasks(tasks), vocabulary.Vocabulary),
+		DefaultStatus:       vocabulary.Vocabulary.Default(),
+		VocabularyHead:      vocabulary.Head,
+		AttachmentFileLimit: core.MaxAttachmentFileBytes,
+		StatusTags:          core.StatusTags(),
+		Administrable:       handler.administrable(),
 	}); err != nil {
 		return
 	}
@@ -1399,6 +1481,34 @@ func requireEmptyRequestBody(body io.Reader) error {
 // mistake, so it reads as an invocation failure rather than a validation one.
 const MaxRequestBodyBytes = 1 << 20
 
+// MaxAttachmentUploadBodyBytes bounds the one body that is legitimately larger
+// than the ceiling above: an attachment upload.
+//
+// An attached file may be core.MaxAttachmentFileBytes — exactly the ceiling
+// above — and it travels as base64 inside a JSON object, because the board's
+// same-origin guard requires every mutation to declare application/json and a
+// multipart body is one of the three types a cross-site form can send without a
+// preflight. Base64 costs four bytes for every three, so the same file needs
+// four thirds of that ceiling before a single member of the envelope is
+// written; the remaining room is for the envelope itself, whose largest members
+// are a file name and a head.
+//
+// It is a ceiling on the encoding, not a second ceiling on attachments. The
+// attachment itself is bounded by core, once, and the upload route refuses an
+// over-sized file by that number and in core's own words before anything is
+// staged.
+const MaxAttachmentUploadBodyBytes = ((core.MaxAttachmentFileBytes+2)/3)*4 + 64<<10
+
+// requestBodyLimit is how many bytes this path's body may carry. Asked of the
+// path rather than of the matched route, because the limit has to be in place
+// before the mux has matched anything.
+func requestBodyLimit(path string) int64 {
+	if taskAttachmentsPathID(path) != "" {
+		return MaxAttachmentUploadBodyBytes
+	}
+	return MaxRequestBodyBytes
+}
+
 // decodeRequest reads exactly one JSON value from the request body, which
 // serveHTTP has already bounded.
 func decodeRequest(body io.Reader, value any) error {
@@ -1455,10 +1565,14 @@ func requireDecoderExhausted(decoder *json.Decoder) error {
 func decodeRequestError(context string, err error) error {
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
+		// The ceiling the reader ran into rather than the ordinary one: the
+		// attachment upload route carries a larger one, and quoting a number
+		// that route does not enforce would send a sender to shrink a body that
+		// was already inside the limit it was refused by.
 		return core.Errorf(
 			core.CategoryInvocation,
 			"request body must not exceed %d bytes",
-			MaxRequestBodyBytes,
+			tooLarge.Limit,
 		)
 	}
 	return core.Wrap(core.CategoryInvocation, context, err)

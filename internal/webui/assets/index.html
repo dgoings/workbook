@@ -393,6 +393,89 @@
        rows spilled out of the card it is drawn in. */
     .task-route--admin { height: auto; min-height: 100%; }
     .task-route--admin .task-route__header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .5rem 1rem; }
+    /* The two panels a task's page grows below its form: what has been said
+       about the task, and what is attached to it.
+
+       They are full-width sections under the form rather than regions in the
+       20rem sidebar, and that is a measured decision rather than a taste. The
+       sidebar already holds the properties and both relationship groups; a
+       thread of twenty comments or a file name at core's 255-byte ceiling in a
+       column that narrow wraps to a paragraph per line and pushes the
+       relationship editor off the bottom of the panel. Down here each row has
+       the card's whole width at every viewport this was measured at, and the
+       page scrolls — .task-route--history already lets it.
+
+       They sit between the form and the history for the same reason the history
+       sits last: the form is what the reader came to change, the thread is what
+       has been said about it, and the change log is the record underneath both. */
+    .task-panel { display: grid; gap: .55rem; padding: 1.15rem; border-top: 1px solid #d5deea; }
+    .task-panel--comments { background: #fff; }
+    .task-panel--attachments { background: #fafbfd; }
+    .task-panel__header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .3rem .75rem; }
+    .task-panel__header h3 { margin: 0; font-size: .88rem; }
+    .task-panel__count { margin: 0; color: #56647a; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .7rem; }
+    /* The empty state, and the only rule that decides whether it is seen. It
+       carries no display of its own, so the hidden attribute the renderer sets
+       is what draws it or does not; the explicit declaration is here for the
+       reason .column__empty carries one, because a display added to this rule
+       later would silently outrank the attribute. */
+    .task-panel__empty { margin: 0; color: #56647a; font-size: .78rem; }
+    .task-panel__empty[hidden] { display: none; }
+    .task-panel__list { display: grid; gap: .4rem; margin: 0; padding: 0; list-style: none; }
+    /* One line of feedback per panel, and it is the same live region the form
+       uses so a refusal reads the same wherever it happens on this page. */
+    .task-panel .form-status { min-height: 0; }
+    .comment { display: grid; gap: .25rem; padding: .6rem .7rem; border: 1px solid #d5deea; border-radius: 4px; background: #fff; }
+    .comment__attribution { margin: 0; color: #56647a; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .68rem; overflow-wrap: anywhere; }
+    /* pre-wrap, because a comment is prose somebody typed and its line breaks
+       are theirs. overflow-wrap, because a body with no spaces in it is not a
+       reason for the page to scroll sideways. This renders text and only text:
+       formatting is a later change and this element is written through
+       textContent, never innerHTML. */
+    .comment__body { margin: 0; font-size: .84rem; line-height: 1.45; overflow-wrap: anywhere; white-space: pre-wrap; }
+    .comment__note { margin: 0; color: #7c3b08; font-size: .74rem; }
+    .comment__actions { display: flex; flex-wrap: wrap; gap: .4rem; }
+    .comment__editor { display: grid; gap: .35rem; }
+    .comment__editor textarea, .comment-add textarea { width: 100%; min-height: 4.5rem; border: 1px solid #9eafc5; border-radius: 4px; background: #fff; color: #172033; font: inherit; font-size: .84rem; line-height: 1.45; padding: .5rem .6rem; resize: vertical; }
+    .comment__editor textarea:focus, .comment-add textarea:focus, .attachment-add input:focus { border-color: #2457d6; outline: 3px solid rgba(36,87,214,.18); }
+    .comment-add { display: grid; gap: .35rem; }
+    .comment-add label, .attachment-add label { color: #34425a; font-size: .74rem; font-weight: 750; }
+    .comment-add__actions, .attachment-add__actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+    .attachment { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .2rem .75rem; padding: .55rem .7rem; border: 1px solid #d5deea; border-radius: 4px; background: #fff; }
+    .attachment__name { grid-column: 1; min-width: 0; font-size: .84rem; font-weight: 700; overflow-wrap: anywhere; }
+    /* inline-block with padding and a floor on both axes, so the one action in
+       an attachment's row is a 24px target whatever it is called. Measured on
+       the page: the bare anchor was 18px tall at every viewport, and a file
+       named `..` — which core allows, since it forbids only a path separator
+       and a NUL — drew an 8px-wide one. Both are under what WCAG 2.2 asks of a
+       target, and this is the control that downloads the file. The minimum only
+       decides anything for a name of one or two characters; every longer one is
+       already past it. */
+    .attachment__name a { display: inline-block; min-width: 1.5rem; padding: .2rem 0; color: #172033; text-decoration-color: #a9b7ca; text-underline-offset: .16em; }
+    .attachment__name a:hover { color: #2457d6; text-decoration-color: currentcolor; }
+    .attachment__meta { grid-column: 1; margin: 0; color: #56647a; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .68rem; overflow-wrap: anywhere; }
+    .attachment__remove { grid-column: 2; grid-row: 1 / span 2; }
+    /* The two adders, each its own form: see the client for why one form with
+       two buttons in it was a bug rather than a shortcut. */
+    .attachment-add { display: grid; gap: .55rem; padding-top: .1rem; }
+    .attachment-add__group { display: grid; gap: .3rem; margin: 0; }
+    .attachment-add input[type="text"], .attachment-add input[type="url"] { width: 100%; border: 1px solid #9eafc5; border-radius: 4px; background: #fff; color: #172033; font: inherit; font-size: .82rem; padding: .45rem .55rem; }
+    /* The file control is drawn by the browser, so its target size is decided
+       by the font it inherits rather than by any padding here: at .78rem the
+       whole control measured 20px tall, under what WCAG 2.2 asks. It keeps the
+       page's own size, which measures 24px, and it sits on its own line because
+       the file name it has to display can be any length. */
+    .attachment-add input[type="file"] { max-width: 100%; font: inherit; }
+    /* Every button in these two panels. 2rem tall with the text at .78rem is a
+       comfortable target at every viewport this was measured at, and Remove has
+       no confirmation — the page's other direct removals do not either — so it
+       is the one that must not be a sliver. */
+    .thread-button { min-height: 2rem; border: 1px solid #9eafc5; border-radius: 4px; background: #fff; color: #34425a; cursor: pointer; font: inherit; font-size: .78rem; font-weight: 700; padding: .35rem .7rem; }
+    .thread-button:hover:enabled { border-color: #2457d6; color: #2457d6; }
+    .thread-button:disabled { cursor: default; opacity: .52; }
+    .thread-button:focus-visible { outline: 3px solid #2457d6; outline-offset: 1px; }
+    .thread-button--primary { border-color: #173f9e; background: #2457d6; color: #fff; }
+    .thread-button--primary:hover:enabled { background: #1d49b7; color: #fff; }
     .task-history { display: grid; gap: .8rem; padding: 1.15rem; border-top: 1px solid #d5deea; background: #fafbfd; }
     .task-history h3 { margin: 0; font-size: .88rem; }
     .lifecycle { display: flex; flex-wrap: wrap; gap: .3rem 1.1rem; margin: 0; padding: 0; list-style: none; }
@@ -465,6 +548,13 @@
       .task-route--history .task-layout { min-height: 0; }
       .change-row__summary { grid-template-columns: minmax(0, 1fr); gap: .12rem; }
       .field-change { grid-template-columns: minmax(0, 1fr); }
+      /* An attachment row stacks on a phone. Measured at 390px, a 255-byte file
+         name beside a Remove button left the name a column two words wide and
+         twelve lines tall; the button goes underneath instead, where it is the
+         full 2rem target on its own line and the name has the row. Written here,
+         after the rule it overrides, which is the only place it wins. */
+      .attachment { grid-template-columns: minmax(0, 1fr); }
+      .attachment__remove { grid-column: 1; grid-row: auto; justify-self: start; margin-top: .35rem; }
     }
   </style>
 </head>
@@ -510,7 +600,7 @@
          the script needs before its first fetch comes from an attribute here,
          data-vocabulary-head included, so a page and its script never disagree
          about which vocabulary they were built from. -->
-    <div class="board-view" data-board-view data-default-status="{{ .DefaultStatus }}" data-vocabulary-head="{{ .VocabularyHead }}">
+    <div class="board-view" data-board-view data-default-status="{{ .DefaultStatus }}" data-vocabulary-head="{{ .VocabularyHead }}" data-attachment-limit="{{ .AttachmentFileLimit }}">
       <p class="stale" data-stale role="status">Task refresh failed. Showing the last successful board.</p>
       <!-- data-board is where the client appends the Deleted column, after the
            last vocabulary column the server rendered. It is a client-built
@@ -679,6 +769,15 @@
       // real state and not a missing answer, so the comparison is against
       // whatever this page was served with rather than against emptiness.
       const renderedVocabularyHead = boardView.dataset.vocabularyHead || "";
+      // The ceiling on one attached file, as the server renders it into the
+      // page. The upload control refuses a file over it before spending the
+      // encode and the round trip on one the server would refuse anyway, and it
+      // reads the number here rather than holding one, for the reason the
+      // columns and the status tags are read out of the page: core owns this
+      // ceiling, and a copy in this script would go on naming the old number the
+      // day core's changed. A page served without it simply asks the server,
+      // which is the answer that was always authoritative.
+      const attachmentFileLimit = Number(boardView.dataset.attachmentLimit) || 0;
       let vocabularyChanged = false;
       const syncToggle = document.querySelector("[data-sync-toggle]");
       const descriptionToggle = document.querySelector("[data-description-toggle]");
@@ -779,6 +878,12 @@
       // corrects the form the reader is looking at or nothing at all, and never
       // a node that has already left the document.
       let openDetailForm = null;
+      // The comment thread and attachment list on the open task page, retired by
+      // renderRoute beside the form they sit under. They follow the poll in
+      // place: this route is not re-rendered while the reader stands in it, so a
+      // comment a teammate wrote would otherwise not arrive until the reader
+      // left the page and came back.
+      let openThreadPanels = null;
 
       function text(element, value) { element.textContent = value || ""; return element; }
       // Card descriptions are hidden by default and this setting brings them
@@ -2331,6 +2436,585 @@
         controller.update();
         return controller;
       }
+      // What one attached file weighs, in the units somebody prices a download
+      // in. One decimal place until the number is large enough not to need one.
+      function attachmentSize(bytes) {
+        const count = Number(bytes) || 0;
+        for (const [unit, size] of [["MiB", 1048576], ["KiB", 1024]]) {
+          if (count >= size) {
+            const value = count / size;
+            return (value >= 10 ? Math.round(value) : Number(value.toFixed(1))) + " " + unit;
+          }
+        }
+        return count + " B";
+      }
+      // Two sizes as a sentence can tell them apart. A file one byte over the
+      // ceiling rounds to the ceiling's own unit — "enormous.bin is 1 MiB and
+      // must not exceed 1 MiB" reads as a refusal of something allowed — so a
+      // pair the unit cannot separate is given in bytes, which is what the
+      // server's own refusal says.
+      function comparableSizes(size, ceiling) {
+        const shown = attachmentSize(size);
+        const bound = attachmentSize(ceiling);
+        if (shown !== bound) return [shown, bound];
+        return [size + " bytes", ceiling + " bytes"];
+      }
+      // Whether a stored link may be drawn as a link.
+      //
+      // Core refuses everything but http and https when somebody attaches one,
+      // and that is a rule about authoring rather than about stored documents:
+      // a pack written by another clone can carry any URL at all, and this
+      // client draws whatever the poll hands it. A `javascript:` href drawn
+      // here would be script on the board's own origin, one click away — the
+      // same stored cross-site scripting the download route's headers exist to
+      // prevent, arriving through the other door. So the scheme is asked again,
+      // of every link, and one that fails is drawn as text. A relative URL
+      // fails too: parsed without a base it is not a URL, and resolving it
+      // against this board would turn somebody else's text into a link to us.
+      function safeLinkURL(raw) {
+        if (typeof raw !== "string" || raw === "") return "";
+        let parsed;
+        try { parsed = new URL(raw); } catch (_) { return ""; }
+        return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.href : "";
+      }
+      function threadButton(caption, primary = false) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = primary ? "thread-button thread-button--primary" : "thread-button";
+        text(button, caption);
+        return button;
+      }
+      // Every thread change names the tip this page read, exactly as a save from
+      // the form beside it does, and leaves the member out when there is none.
+      function headed(head, values) {
+        const expected = head.read();
+        return expected ? Object.assign({}, values, { expectedHead: expected }) : values;
+      }
+      // A panel on a task's page: a heading with a count, a list, a form, and one
+      // line of feedback. Comments and attachments are the same shape and report
+      // the same way, so everything but the rows is built once.
+      //
+      // They write directly rather than through the board's optimistic queue,
+      // and the difference is deliberate. That queue exists so a drag paints
+      // before the server answers, and it can afford to because a status change
+      // is one field this client can predict. A comment's identity, author and
+      // timestamps are minted by the operation that records it, and an
+      // attachment's bytes are not on the board at all — an optimistic row for
+      // either would be a row with no identity to edit or remove, drawn under an
+      // attribution this client invented. So these write, wait, and draw what
+      // came back, which is how the form on the same page has always saved.
+      function taskPanel(taskID, name, headingText, owner) {
+        const section = document.createElement("section");
+        section.className = "task-panel task-panel--" + name;
+        section.dataset.taskPanel = name;
+        section.setAttribute("aria-label", headingText);
+        const header = document.createElement("div");
+        header.className = "task-panel__header";
+        const heading = document.createElement("h3");
+        text(heading, headingText);
+        const count = document.createElement("p");
+        count.className = "task-panel__count";
+        count.dataset.panelCount = "";
+        header.append(heading, count);
+        const list = document.createElement("ul");
+        list.className = "task-panel__list";
+        list.dataset.panelList = "";
+        // Drawn while empty rather than created when there is something to say,
+        // for the reason the label editor's announcement is: an element created
+        // in the same frame as its first message never announces it.
+        const empty = document.createElement("p");
+        empty.className = "task-panel__empty";
+        empty.dataset.panelEmpty = "";
+        const status = document.createElement("p");
+        status.className = "form-status";
+        status.dataset.panelStatus = "";
+        status.setAttribute("role", "status");
+        status.setAttribute("aria-live", "polite");
+        const controls = [];
+        const panel = {
+          taskID, section, list, empty, status, owns: owner, busy: false,
+          adoptHead() {},
+          setCount(value) { text(count, value); },
+          report(message) { text(status, message); },
+          setBusy(value) {
+            panel.busy = value;
+            controls.forEach((control) => { control.disabled = value; });
+          },
+          // Every control the panel is currently drawing. The list is emptied by
+          // each render and refilled from it, so a request in flight disables
+          // the rows that arrived during it and nothing holds a node that has
+          // left the document.
+          claim(control) {
+            controls.push(control);
+            control.disabled = panel.busy;
+            return control;
+          },
+          resetControls() { controls.length = 0; }
+        };
+        section.append(header, list, empty);
+        return panel;
+      }
+      // One thread change: sent, waited on, and drawn from what came back.
+      //
+      // The refusals are the form's refusals, in the panel the change was made
+      // in. A stale head is re-based against the version the server holds and
+      // said out loud, because these panels have no queue to re-base them; a
+      // change that outlives the page it was made on follows the reader to the
+      // notice, exactly as a detached save does.
+      async function writeThreadChange(panel, method, path, values, describe) {
+        panel.setBusy(true);
+        panel.report("");
+        try {
+          // Named `answer` rather than `document`, which is what the older call
+          // sites in this file call it: a const by that name shadows the global
+          // `document` for the whole function body, so any later — or textually
+          // earlier — createElement in the same function throws rather than
+          // building a node. Nothing here needs the global, and the next edit
+          // that does should not have to notice.
+          const answer = await mutateTask(method, path, values);
+          panel.adoptHead(answer.task && answer.task.head || "");
+          // The model holds what the server just answered with, so the card, the
+          // next poll and this panel cannot disagree about the task in between.
+          replaceProjectedTask(answer.task);
+          rerender();
+          if (!panel.owns()) return answer;
+          panel.follow(answer.task);
+          const warnings = mutationWarnings(answer);
+          if (warnings.length) panel.report("Saved durably. " + warnings.join(" "));
+          return answer;
+        } catch (error) {
+          if (!panel.owns()) {
+            reportDetachedThreadFailure(panel.taskID, describe, error);
+            return null;
+          }
+          if (error && error.category === "stale-write") {
+            const rebase = await refreshedTaskHead(panel.taskID);
+            if (rebase.head) panel.adoptHead(rebase.head);
+            if (!panel.owns()) {
+              reportDetachedThreadFailure(panel.taskID, describe, error);
+              return null;
+            }
+            const held = projectTasks(latestTasks).find((candidate) => candidate.id === panel.taskID);
+            if (held) panel.follow(held);
+            panel.report(rebase.boardRead
+              ? "That task changed elsewhere, so " + describe + " was not saved. This list now shows the version the server holds; try again."
+              : "That task changed elsewhere and the board could not be refreshed, so " + describe + " was not saved. Try again once the board is current.");
+            return null;
+          }
+          panel.report(error instanceof Error ? error.message : "That change failed.");
+          return null;
+        } finally {
+          panel.setBusy(false);
+        }
+      }
+      // A thread change can outlive the panel it was made in, the way a save can
+      // outlive its form: the reader leaves the task while the request is open.
+      // The panel it would report into is gone by then, so the outcome follows
+      // them to the notice, which outlives every route.
+      function reportDetachedThreadFailure(taskID, describe, error) {
+        const open = document.createElement("a");
+        open.href = taskPath(taskID);
+        text(open, "Open task");
+        showNotice("error",
+          "On task " + nameTask(taskID) + ", " + describe + " was not saved. The request was still open " +
+            "when you left the task, and anything it carried is gone. " +
+            (error && error.category === "stale-write"
+              ? "The task changed elsewhere, so the change was refused."
+              : (error instanceof Error ? error.message : "The change failed.")),
+          open);
+      }
+      function commentAttribution(comment) {
+        const written = attribution(comment.author, comment.createdAt);
+        return comment.editedAt ? written + " · edited " + recordedAt(comment.editedAt) : written;
+      }
+      // The comment thread: oldest first, which is the order the server sends —
+      // a comment's identifier is the ULID of the operation that recorded it, so
+      // identifier order is creation order on every clone.
+      function taskComments(taskID, task, head, owner) {
+        const panel = taskPanel(taskID, "comments", "Comments", owner);
+        panel.adoptHead = head.adopt;
+        const form = document.createElement("form");
+        form.className = "comment-add";
+        const label = document.createElement("label");
+        label.setAttribute("for", "comment-body");
+        text(label, "Add a comment");
+        const body = document.createElement("textarea");
+        body.id = "comment-body";
+        body.name = "comment";
+        const actions = document.createElement("div");
+        actions.className = "comment-add__actions";
+        const submit = threadButton("Comment", true);
+        submit.type = "submit";
+        actions.append(submit);
+        form.append(label, body, actions);
+        panel.section.append(form, panel.status);
+
+        let comments = [];
+        // A comment the reader is editing keeps its row across every render.
+        // Rebuilding it would take the sentence they are in the middle of with
+        // it, and a poll lands once a second.
+        const editing = new Map();
+        function commentPath(commentID) {
+          return "/api/tasks/" + encodeURIComponent(taskID) + "/comments/" + encodeURIComponent(commentID);
+        }
+        function commentRow(comment) {
+          const row = document.createElement("li");
+          row.className = "comment";
+          row.dataset.commentId = comment.id;
+          const written = document.createElement("p");
+          written.className = "comment__attribution";
+          text(written, commentAttribution(comment));
+          const bodyText = document.createElement("p");
+          bodyText.className = "comment__body";
+          bodyText.dataset.commentBody = "";
+          // textContent, never innerHTML. A comment body is text somebody typed
+          // and this page has no trusted-HTML path at all; formatting it is a
+          // later change and will build nodes rather than parse markup.
+          text(bodyText, comment.body || "");
+          const rowActions = document.createElement("div");
+          rowActions.className = "comment__actions";
+          const edit = panel.claim(threadButton("Edit"));
+          edit.addEventListener("click", () => beginEdit(comment));
+          // Removal is immediate, like every other removal on this page: the
+          // Delete beside it, a label chiclet, a relationship row. What makes
+          // that safe here is that a comment is history — removing one hides it
+          // from the thread and the change log still holds what it said.
+          const remove = panel.claim(threadButton("Remove"));
+          remove.addEventListener("click", () => writeThreadChange(
+            panel, "DELETE", commentPath(comment.id), headed(head, {}), "that removal"));
+          rowActions.append(edit, remove);
+          row.append(written, bodyText, rowActions);
+          return row;
+        }
+        function beginEdit(comment) {
+          if (panel.busy || editing.has(comment.id)) return;
+          const row = document.createElement("li");
+          row.className = "comment";
+          row.dataset.commentId = comment.id;
+          row.dataset.commentEditing = "";
+          const written = document.createElement("p");
+          written.className = "comment__attribution";
+          text(written, commentAttribution(comment));
+          const editor = document.createElement("div");
+          editor.className = "comment__editor";
+          const area = document.createElement("textarea");
+          area.setAttribute("aria-label", "Edit comment");
+          area.dataset.commentEditor = "";
+          area.value = comment.body || "";
+          const note = document.createElement("p");
+          note.className = "comment__note";
+          const editActions = document.createElement("div");
+          editActions.className = "comment__actions";
+          const save = threadButton("Save", true);
+          const cancel = threadButton("Cancel");
+          save.addEventListener("click", async () => {
+            if (panel.busy) return;
+            if (!area.value.trim()) {
+              panel.report("A comment cannot be blank.");
+              return;
+            }
+            const answer = await writeThreadChange(
+              panel, "PATCH", commentPath(comment.id), headed(head, { body: area.value }), "that edit");
+            if (!answer) return;
+            editing.delete(comment.id);
+            render();
+          });
+          cancel.addEventListener("click", () => {
+            editing.delete(comment.id);
+            render();
+          });
+          editActions.append(save, cancel);
+          editor.append(area, editActions);
+          row.append(written, editor, note);
+          editing.set(comment.id, { row, area, note, buttons: [save, cancel] });
+          render();
+          area.focus();
+        }
+        function render() {
+          panel.resetControls();
+          const known = new Set(comments.map((comment) => comment.id));
+          const rows = comments.map((comment, at) => {
+            const entry = editing.get(comment.id);
+            if (!entry) return commentRow(comment);
+            // Where this comment stands in the thread, remembered while it is
+            // still in it. It is what puts the row back in the same place if it
+            // stops being in it, below.
+            entry.at = at;
+            text(entry.note, "");
+            entry.buttons.forEach((button) => panel.claim(button));
+            return entry.row;
+          });
+          // A comment being edited that has left the thread — removed by another
+          // clone, or by this reader somewhere else — keeps its row rather than
+          // taking the words in it away mid-sentence. It says what happened, and
+          // a save from it is refused by the server, which is the truth about it.
+          //
+          // It keeps its place, too. Appended to the end, the row jumped down the
+          // page under the caret of somebody mid-sentence, which is the one thing
+          // keeping the row was for.
+          editing.forEach((entry, id) => {
+            if (known.has(id)) return;
+            text(entry.note, "This comment was removed elsewhere. Your edit is kept here, but saving it would be refused.");
+            entry.buttons.forEach((button) => panel.claim(button));
+            const at = typeof entry.at === "number" ? Math.min(entry.at, rows.length) : rows.length;
+            rows.splice(at, 0, entry.row);
+          });
+          panel.claim(submit);
+          panel.setCount(comments.length === 1 ? "1 comment" : comments.length + " comments");
+          text(panel.empty, "Nothing has been said about this task yet.");
+          panel.empty.hidden = rows.length > 0;
+          panel.list.replaceChildren(...rows);
+        }
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          if (panel.busy) return;
+          if (!body.value.trim()) {
+            panel.report("A comment cannot be blank.");
+            return;
+          }
+          const answer = await writeThreadChange(
+            panel, "POST", "/api/tasks/" + encodeURIComponent(taskID) + "/comments",
+            headed(head, { body: body.value }), "your comment");
+          if (answer) body.value = "";
+        });
+        panel.follow = (held) => {
+          comments = (held && held.comments) || [];
+          render();
+        };
+        panel.follow(task);
+        return panel;
+      }
+      // A file's bytes as base64, which is what the upload endpoint takes.
+      //
+      // JSON rather than multipart, and that is the same-origin guard's decision
+      // rather than a taste: every mutation on this board must declare
+      // application/json, because multipart/form-data is one of the three types
+      // a cross-site form can send with no preflight — a multipart upload would
+      // be the one address here a drive-by page could post to.
+      function readFileAsBase64(file) {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onerror = () => reject(reader.error || new Error("The file could not be read."));
+          reader.onload = () => {
+            const result = String(reader.result || "");
+            const comma = result.indexOf(",");
+            if (comma < 0) {
+              reject(new Error("The file could not be read."));
+              return;
+            }
+            resolve(result.slice(comma + 1));
+          };
+          reader.readAsDataURL(file);
+        });
+      }
+      function attachmentMeta(attachment) {
+        const parts = [attachment.kind === "link" ? "link" : "file"];
+        if (attachment.kind === "link") {
+          // The destination, whether or not the caption above it is a link: a
+          // reader deciding whether to follow one is entitled to see where it
+          // goes, and this is text either way.
+          if (attachment.url) parts.push(attachment.url);
+        } else {
+          if (attachment.media) parts.push(attachment.media);
+          parts.push(attachmentSize(attachment.size));
+        }
+        parts.push("added " + attribution(attachment.author, attachment.addedAt));
+        return parts.join(" · ");
+      }
+      // The attachment list: both kinds in one list, because the task holds one
+      // list and somebody attaching something is doing one thing.
+      function taskAttachments(taskID, task, head, owner) {
+        const panel = taskPanel(taskID, "attachments", "Attachments", owner);
+        panel.adoptHead = head.adopt;
+        // Two forms rather than one with two buttons in it. A form is one
+        // intent, and pressing Return is a submit: with both controls in one
+        // form, a reader who had chosen a file and pressed Return submitted the
+        // *link* — answered "A link needs a URL", with no request sent and the
+        // file still unattached. Each control now submits the thing it is for.
+        const adder = document.createElement("div");
+        adder.className = "attachment-add";
+        const fileGroup = document.createElement("form");
+        fileGroup.className = "attachment-add__group";
+        fileGroup.dataset.attachmentFileForm = "";
+        const fileLabel = document.createElement("label");
+        fileLabel.setAttribute("for", "attachment-file");
+        text(fileLabel, "Attach a file");
+        const file = document.createElement("input");
+        file.type = "file";
+        file.id = "attachment-file";
+        file.name = "attachment-file";
+        const fileActions = document.createElement("div");
+        fileActions.className = "attachment-add__actions";
+        const attachFile = threadButton("Attach file", true);
+        attachFile.type = "submit";
+        fileActions.append(attachFile);
+        fileGroup.append(fileLabel, file, fileActions);
+        const linkGroup = document.createElement("form");
+        linkGroup.className = "attachment-add__group";
+        linkGroup.dataset.attachmentLinkForm = "";
+        // The browser must not vet this field, because a URL it refuses is a URL
+        // nobody is told about: constraint validation cancels the submit, and
+        // this page's only way to say anything is the panel's own line. Left on,
+        // typing "not a url" and pressing Attach did nothing at all — no request,
+        // no message. Core answers instead, in the words `--attach-url` answers
+        // with, and http-or-https is its rule to enforce anyway.
+        linkGroup.noValidate = true;
+        const linkLabel = document.createElement("label");
+        linkLabel.setAttribute("for", "attachment-url");
+        text(linkLabel, "Attach a link");
+        const url = document.createElement("input");
+        url.type = "url";
+        url.id = "attachment-url";
+        url.name = "attachment-url";
+        url.placeholder = "https://";
+        const caption = document.createElement("input");
+        caption.type = "text";
+        caption.id = "attachment-label";
+        caption.name = "attachment-label";
+        caption.placeholder = "Label (optional)";
+        caption.setAttribute("aria-label", "Link label");
+        const linkActions = document.createElement("div");
+        linkActions.className = "attachment-add__actions";
+        const attachLink = threadButton("Attach link", true);
+        attachLink.type = "submit";
+        linkActions.append(attachLink);
+        linkGroup.append(linkLabel, url, caption, linkActions);
+        adder.append(fileGroup, linkGroup);
+        panel.section.append(adder, panel.status);
+
+        let attachments = [];
+        function attachmentPath(attachmentID) {
+          return "/api/tasks/" + encodeURIComponent(taskID) + "/attachments/" + encodeURIComponent(attachmentID);
+        }
+        function attachmentRow(attachment) {
+          const row = document.createElement("li");
+          row.className = "attachment";
+          row.dataset.attachmentId = attachment.id;
+          const name = document.createElement("p");
+          name.className = "attachment__name";
+          if (attachment.kind === "link") {
+            const destination = safeLinkURL(attachment.url);
+            const shown = attachment.label || attachment.url || "Unnamed link";
+            if (destination) {
+              const link = document.createElement("a");
+              link.href = destination;
+              // A new tab and no referrer: an attached link is somebody else's
+              // address, and this board has no business handing it either this
+              // window or the address the reader is on.
+              link.target = "_blank";
+              link.rel = "noopener noreferrer nofollow";
+              text(link, shown);
+              name.append(link);
+            } else {
+              text(name, shown);
+            }
+          } else {
+            const link = document.createElement("a");
+            link.href = attachmentPath(attachment.id);
+            // The download route decides whether this opens or saves, and it
+            // opens in a tab of its own either way so the task stays where it is.
+            link.target = "_blank";
+            link.rel = "noopener noreferrer";
+            text(link, attachment.name || "Unnamed file");
+            name.append(link);
+          }
+          const meta = document.createElement("p");
+          meta.className = "attachment__meta";
+          text(meta, attachmentMeta(attachment));
+          const remove = panel.claim(threadButton("Remove"));
+          remove.className += " attachment__remove";
+          remove.addEventListener("click", () => writeThreadChange(
+            panel, "DELETE", attachmentPath(attachment.id), headed(head, {}), "that removal"));
+          row.append(name, meta, remove);
+          return row;
+        }
+        function render() {
+          panel.resetControls();
+          const rows = attachments.map(attachmentRow);
+          panel.claim(attachFile);
+          panel.claim(attachLink);
+          const stored = attachments.reduce(
+            (total, attachment) => total + (attachment.kind === "link" ? 0 : Number(attachment.size) || 0), 0);
+          panel.setCount(attachments.length === 0
+            ? "Nothing attached"
+            : attachments.length + " attached · " + attachmentSize(stored) + " of files");
+          text(panel.empty, "Nothing is attached to this task yet.");
+          panel.empty.hidden = rows.length > 0;
+          panel.list.replaceChildren(...rows);
+        }
+        async function uploadFile() {
+          if (panel.busy) return;
+          const chosen = file.files && file.files[0];
+          if (!chosen) {
+            panel.report("Choose a file to attach.");
+            return;
+          }
+          // Asked before the file is read, so a file the server would refuse
+          // costs nobody the encode and the upload. The server enforces the
+          // same ceiling and is the authority; this is the reader being told
+          // now rather than a megabyte and a round trip later. The number is
+          // the server's own, rendered into the page, so there is no second
+          // copy of it here to go stale.
+          if (attachmentFileLimit && chosen.size > attachmentFileLimit) {
+            const [size, ceiling] = comparableSizes(chosen.size, attachmentFileLimit);
+            panel.report(chosen.name + " is " + size + " and must not exceed " + ceiling +
+              "; attach a link instead.");
+            return;
+          }
+          if (chosen.size === 0) {
+            panel.report(chosen.name + " is empty, so there is nothing to attach.");
+            return;
+          }
+          panel.setBusy(true);
+          let encoded;
+          try {
+            encoded = await readFileAsBase64(chosen);
+          } catch (error) {
+            panel.setBusy(false);
+            if (panel.owns()) panel.report(error instanceof Error ? error.message : "The file could not be read.");
+            return;
+          }
+          panel.setBusy(false);
+          const answer = await writeThreadChange(
+            panel, "POST", "/api/tasks/" + encodeURIComponent(taskID) + "/attachments",
+            // No media type. The file name decides it, through the table core
+            // keeps, because a media type is written into shared history and
+            // the browser's guess for the same bytes differs from machine to
+            // machine — two clones attaching one file have to label it once.
+            headed(head, { kind: "file", name: chosen.name, content: encoded }),
+            "that attachment");
+          if (answer) file.value = "";
+        }
+        async function addLink() {
+          if (panel.busy) return;
+          if (!url.value.trim()) {
+            panel.report("A link needs a URL.");
+            return;
+          }
+          const values = { kind: "link", url: url.value.trim() };
+          if (caption.value.trim()) values.label = caption.value.trim();
+          const answer = await writeThreadChange(
+            panel, "POST", "/api/tasks/" + encodeURIComponent(taskID) + "/attachments",
+            headed(head, values), "that link");
+          if (!answer) return;
+          url.value = "";
+          caption.value = "";
+        }
+        fileGroup.addEventListener("submit", (event) => {
+          event.preventDefault();
+          return uploadFile();
+        });
+        linkGroup.addEventListener("submit", (event) => {
+          event.preventDefault();
+          return addLink();
+        });
+        panel.follow = (held) => {
+          attachments = (held && held.attachments) || [];
+          render();
+        };
+        panel.follow(task);
+        return panel;
+      }
       const fieldLabels = new Map([
         ["task", "Task"], ["title", "Title"], ["status", "Status"], ["priority", "Priority"],
         ["description", "Description"], ["rank", "Rank"], ["labels", "Labels"], ["dependencies", "Dependencies"]
@@ -2914,7 +3598,26 @@
         section.append(header, form);
         if (!isNew) {
           section.className = "task-route task-route--history";
-          section.append(taskHistory(task.id));
+          // The thread panels write to this task, so they move the very head
+          // this form proposes and they read it back through the same handle a
+          // dependency edge does: a comment added here must not make the next
+          // save a conflict with a change the reader made seconds earlier.
+          const head = {
+            read: () => expectedHead,
+            adopt: (value) => { if (value) expectedHead = value; }
+          };
+          const owner = () => main.firstElementChild === section;
+          const attachments = taskAttachments(task.id, task, head, owner);
+          const comments = taskComments(task.id, task, head, owner);
+          openThreadPanels = {
+            taskID: task.id,
+            follow: (held) => { attachments.follow(held); comments.follow(held); }
+          };
+          // Attachments before comments, and the change log after both: the
+          // attachment list is bounded at fifty rows while a thread has no
+          // length a page can rely on, so the short section stays reachable
+          // without scrolling past a long one to find it.
+          section.append(attachments.section, comments.section, taskHistory(task.id));
         }
         const failedDrafts = isNew
           ? relationshipDrafts
@@ -4463,6 +5166,7 @@
         // same reason: the node it writes into is about to go.
         readOpenNewTaskValues = null;
         openDetailForm = null;
+        openThreadPanels = null;
         // The description setting draws cards, and only the board draws cards.
         // Beside a task's own page it would be a control that visibly does
         // nothing, so it travels with the route it acts on. The markup ships it
@@ -4855,6 +5559,14 @@
         vocabularyNotice.hidden = false;
       }
       vocabularyReload.addEventListener("click", () => { window.location.reload(); });
+      // The thread the open task page is drawing, brought up to the read that
+      // just landed. A page showing another task, or no task, has nothing here
+      // to follow.
+      function followOpenThreadPanels(tasks) {
+        if (!openThreadPanels) return;
+        const held = tasks.find((candidate) => candidate.id === openThreadPanels.taskID);
+        if (held) openThreadPanels.follow(held);
+      }
       function refresh() {
         const wasLoaded = tasksLoaded;
         const generation = ++taskRefreshGeneration;
@@ -4905,6 +5617,11 @@
             // adopting it would refuse the next intent for no reason.
             const projected = projectTasks(document.tasks);
             render(projected, projectPresentation(presentation, projected)); stale.dataset.visible = "false"; text(updated, "Updated " + new Date().toLocaleTimeString());
+            // The open task page's thread and attachments follow this read in
+            // place, the way the relationship sidebar below does. Nothing else
+            // about that form moves on a poll: a field is corrected only by a
+            // refusal, which is what reviseAgainstTask is for.
+            followOpenThreadPanels(projected);
             let relationshipContext = { status: "not-applicable" };
             if (!wasLoaded) renderRoute();
             else if (activeDependencyController) {
