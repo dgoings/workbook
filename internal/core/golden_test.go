@@ -161,32 +161,65 @@ var goldenTaskRefs = []goldenTaskRef{
 	},
 }
 
+// assertGoldenBytes is the round trip both golden tables assert: what is stored
+// decodes, and what decoded encodes back to the same bytes.
+func assertGoldenBytes(t *testing.T, fixture goldenTaskRef) {
+	t.Helper()
+	pack, err := DecodeOperationPack([]byte(fixture.operation))
+	if err != nil {
+		t.Fatalf("DecodeOperationPack() error = %v", err)
+	}
+	encodedPack, err := EncodeDocument(pack)
+	if err != nil {
+		t.Fatalf("EncodeDocument(pack) error = %v", err)
+	}
+	if !bytes.Equal(encodedPack, []byte(fixture.operation)) {
+		t.Fatalf("EncodeDocument(pack) = %s, want %s", encodedPack, fixture.operation)
+	}
+
+	state, err := DecodeStateDocument([]byte(fixture.state))
+	if err != nil {
+		t.Fatalf("DecodeStateDocument() error = %v", err)
+	}
+	encodedState, err := EncodeDocument(state)
+	if err != nil {
+		t.Fatalf("EncodeDocument(state) error = %v", err)
+	}
+	if !bytes.Equal(encodedState, []byte(fixture.state)) {
+		t.Fatalf("EncodeDocument(state) = %s, want %s", encodedState, fixture.state)
+	}
+}
+
+// assertGoldenCheckpoint is the other half: the stored checkpoint is still what
+// this build's fold computes from the stored pack.
+func assertGoldenCheckpoint(t *testing.T, fixture goldenTaskRef) {
+	t.Helper()
+	pack, err := DecodeOperationPack([]byte(fixture.operation))
+	if err != nil {
+		t.Fatalf("DecodeOperationPack() error = %v", err)
+	}
+	state, err := DecodeStateDocument([]byte(fixture.state))
+	if err != nil {
+		t.Fatalf("DecodeStateDocument() error = %v", err)
+	}
+
+	var parent *StateDocument
+	if fixture.parent != "" {
+		decoded, parentErr := DecodeStateDocument([]byte(fixture.parent))
+		if parentErr != nil {
+			t.Fatalf("DecodeStateDocument(parent) error = %v", parentErr)
+		}
+		parent = &decoded
+	}
+	if err := ValidateCheckpoint(parent, pack, state, goldenProjectKey); err != nil {
+		t.Fatalf("ValidateCheckpoint() error = %v", err)
+	}
+}
+
 func TestGoldenTaskRefsDecodeToTheSameBytes(t *testing.T) {
 	for _, fixture := range goldenTaskRefs {
 		t.Run(fixture.name, func(t *testing.T) {
-			pack, err := DecodeOperationPack([]byte(fixture.operation))
-			if err != nil {
-				t.Fatalf("DecodeOperationPack() error = %v", err)
-			}
-			encodedPack, err := EncodeDocument(pack)
-			if err != nil {
-				t.Fatalf("EncodeDocument(pack) error = %v", err)
-			}
-			if !bytes.Equal(encodedPack, []byte(fixture.operation)) {
-				t.Fatalf("EncodeDocument(pack) = %s, want %s", encodedPack, fixture.operation)
-			}
-
-			state, err := DecodeStateDocument([]byte(fixture.state))
-			if err != nil {
-				t.Fatalf("DecodeStateDocument() error = %v", err)
-			}
-			encodedState, err := EncodeDocument(state)
-			if err != nil {
-				t.Fatalf("EncodeDocument(state) error = %v", err)
-			}
-			if !bytes.Equal(encodedState, []byte(fixture.state)) {
-				t.Fatalf("EncodeDocument(state) = %s, want %s", encodedState, fixture.state)
-			}
+			assertGoldenBytes(t, fixture)
 		})
 	}
 }
@@ -194,26 +227,7 @@ func TestGoldenTaskRefsDecodeToTheSameBytes(t *testing.T) {
 func TestGoldenTaskRefsStillValidateAsCheckpoints(t *testing.T) {
 	for _, fixture := range goldenTaskRefs {
 		t.Run(fixture.name, func(t *testing.T) {
-			pack, err := DecodeOperationPack([]byte(fixture.operation))
-			if err != nil {
-				t.Fatalf("DecodeOperationPack() error = %v", err)
-			}
-			state, err := DecodeStateDocument([]byte(fixture.state))
-			if err != nil {
-				t.Fatalf("DecodeStateDocument() error = %v", err)
-			}
-
-			var parent *StateDocument
-			if fixture.parent != "" {
-				decoded, parentErr := DecodeStateDocument([]byte(fixture.parent))
-				if parentErr != nil {
-					t.Fatalf("DecodeStateDocument(parent) error = %v", parentErr)
-				}
-				parent = &decoded
-			}
-			if err := ValidateCheckpoint(parent, pack, state, goldenProjectKey); err != nil {
-				t.Fatalf("ValidateCheckpoint() error = %v", err)
-			}
+			assertGoldenCheckpoint(t, fixture)
 		})
 	}
 }

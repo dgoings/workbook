@@ -24,6 +24,9 @@ type Service struct {
 	Vocabulary Vocabulary
 	Reader     TaskReader
 	Writer     CanonicalTaskWriter
+	// Blobs records an attached file's bytes. A Service without one refuses to
+	// attach a file and does everything else; see AttachmentBlobStore.
+	Blobs      AttachmentBlobStore
 	Projection ProjectionUpdater
 	History    TaskHistorySource
 	IDs        IDSource
@@ -71,6 +74,16 @@ type UpdateInput struct {
 	Status      *Status
 	Priority    *Priority
 	Labels      *[]string
+	// Comments and Attachments are the intents that ride along with an update,
+	// in one pack with whatever else it changes.
+	//
+	// They are on UpdateInput rather than on a verb of their own because that
+	// is what makes `update X --status done --comment "shipped"` one commit and
+	// one refusal: the operations are appended to the same pack, so either the
+	// status moved and the comment landed or neither did. The single-intent
+	// service methods build one of these and call the same function.
+	Comments    []CommentChange
+	Attachments []AttachmentChange
 	// ExpectedHead is the task tip the caller believes it is changing. An
 	// empty value means the caller is not tracking one and accepts whatever
 	// the store currently holds, which is how every command behaved before
@@ -454,7 +467,13 @@ func (s Service) UpdateMutation(ctx context.Context, idOrPrefix string, input Up
 		return MutationResult{}, err
 	}
 
-	operations := changedOperations(parent.State.Task, next)
+	// The thread operations are built before the emptiness check, because an
+	// update that changes no field but adds a comment changes the task.
+	thread, err := s.threadOperations(ctx, parent.State.Task, input)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	operations := append(changedOperations(parent.State.Task, next), thread...)
 	if len(operations) == 0 {
 		return MutationResult{}, Errorf(CategoryValidation, "update does not change task")
 	}
@@ -471,7 +490,8 @@ func (s Service) UpdateMutation(ctx context.Context, idOrPrefix string, input Up
 	if err := s.assignOperationIDs(operations, taskULIDSuffix(parent.State.TaskID, s.Config.Key), parent.State.History.Generation); err != nil {
 		return MutationResult{}, err
 	}
-	result, err := s.writeMutation(ctx, &parent, operations, updateCommitSubject(parent.State.TaskID, parent.State.Task, next))
+	subject := updateCommitSubject(parent.State.TaskID, parent.State.Task, next, threadChangeSubjects(thread))
+	result, err := s.writeMutation(ctx, &parent, operations, subject)
 	if err != nil {
 		return MutationResult{}, err
 	}
@@ -979,6 +999,14 @@ func (s Service) writeMutation(ctx context.Context, parent *Snapshot, operations
 	if err != nil {
 		return MutationResult{}, err
 	}
+	// The thread ceilings are asked here and only here. This function is
+	// reached by every pack this clone authors and by no pack it folds from
+	// somewhere else, which is exactly the boundary limits.go describes: the
+	// fold takes a peer's history as it is, and a person about to write one is
+	// told what will not fit.
+	if err := validateThreadGrowth(parent.State.Task, state.Task); err != nil {
+		return MutationResult{}, err
+	}
 	return s.persistMutation(ctx, parent, pack, state, reason)
 }
 
@@ -1073,8 +1101,8 @@ func createCommitSubject(taskID string, task TaskData) string {
 	return "workbook: create " + taskCommitShortID(taskID) + " " + formatCommitTitle(task.Title)
 }
 
-func updateCommitSubject(taskID string, before, after TaskData) string {
-	changes := make([]string, 0, 6)
+func updateCommitSubject(taskID string, before, after TaskData, thread []string) string {
+	changes := make([]string, 0, 6+len(thread))
 	if before.Title != after.Title {
 		changes = append(changes, "title "+formatCommitTitle(after.Title))
 	}
@@ -1093,6 +1121,7 @@ func updateCommitSubject(taskID string, before, after TaskData) string {
 	if added := setDifference(after.Labels, before.Labels); len(added) > 0 {
 		changes = append(changes, "labels +"+strings.Join(formatCommitLabels(added), ","))
 	}
+	changes = append(changes, thread...)
 	return "workbook: update " + taskCommitShortID(taskID) + " " + strings.Join(changes, "; ")
 }
 

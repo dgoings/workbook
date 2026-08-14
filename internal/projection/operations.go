@@ -29,13 +29,46 @@ import (
 const insertOperationStatement = `
 	INSERT INTO operations (
 		operation_id, task_id, commit_id, chain_index, pack_index,
-		logical_clock, history_generation, min_reader, actor, wall_time, type, field, value, task_data
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		logical_clock, history_generation, min_reader, actor, wall_time, type, field, value, task_data, payload
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 const selectOperationColumns = `
 	SELECT commit_id, chain_index, pack_index, operation_id, logical_clock,
-	       history_generation, min_reader, actor, wall_time, type, field, value, task_data
+	       history_generation, min_reader, actor, wall_time, type, field, value, task_data, payload
 	FROM operations WHERE task_id = ?`
+
+// operationPayload is everything an operation carries beyond the scalar columns
+// and the task-creation payload: what a comment says, and what an attachment
+// is.
+//
+// It is cached because a projected chain is replayed, not only displayed. A
+// comparison between two commits folds the rows back into packs and applies
+// them, so an operation stored without its body would replay as a comment with
+// no text — and the fold would refuse it, which turns a cache omission into a
+// task whose history cannot be read.
+type operationPayload struct {
+	CommentID    string               `json:"commentId,omitempty"`
+	Body         string               `json:"body,omitempty"`
+	Attachment   *core.AttachmentData `json:"attachment,omitempty"`
+	AttachmentID string               `json:"attachmentId,omitempty"`
+}
+
+func encodeOperationPayload(operation core.Operation) (string, error) {
+	if operation.CommentID == "" && operation.Body == "" &&
+		operation.Attachment == nil && operation.AttachmentID == "" {
+		return "", nil
+	}
+	encoded, err := json.Marshal(operationPayload{
+		CommentID:    operation.CommentID,
+		Body:         operation.Body,
+		Attachment:   operation.Attachment,
+		AttachmentID: operation.AttachmentID,
+	})
+	if err != nil {
+		return "", core.Wrap(core.CategoryCorruptData, "cannot project operation payload", err)
+	}
+	return string(encoded), nil
+}
 
 // replaceOperations rewrites one task's whole chain. A refresh that restarted
 // at the root is the reconciliation signal, and its rows must replace rather
@@ -123,13 +156,17 @@ func insertOperations(
 				}
 				taskData = string(encoded)
 			}
+			payload, err := encodeOperationPayload(operation)
+			if err != nil {
+				return err
+			}
 			if _, err := transaction.ExecContext(
 				ctx,
 				insertOperationStatement,
 				operation.ID, taskID, commit.ObjectID, firstChainIndex+offset, packIndex,
 				int64(pack.LogicalClock), pack.HistoryGeneration, int64(pack.MinReader),
 				pack.Actor.ID, formatTime(pack.WallTime),
-				string(operation.Type), operation.Field, operation.Value, taskData,
+				string(operation.Type), operation.Field, operation.Value, taskData, payload,
 			); err != nil {
 				return cacheError("insert projected task operation", err)
 			}
@@ -152,6 +189,7 @@ type operationScan struct {
 	field             string
 	value             string
 	taskData          string
+	payload           string
 }
 
 // readProjectedHistory rebuilds one task's chain from projected rows. It
@@ -179,7 +217,7 @@ func (s *Store) readProjectedHistory(ctx context.Context, taskID, throughCommit 
 		if err := rows.Scan(
 			&row.commit, &row.chainIndex, &row.packIndex, &row.operationID, &row.logicalClock,
 			&row.historyGeneration, &row.minReader, &row.actor, &row.wallTime, &row.operationType,
-			&row.field, &row.value, &row.taskData,
+			&row.field, &row.value, &row.taskData, &row.payload,
 		); err != nil {
 			return core.TaskHistory{}, false, s.databaseError("read projected task operation", err)
 		}
@@ -272,6 +310,16 @@ func decodeOperation(row operationScan) (core.Operation, bool) {
 			return core.Operation{}, false
 		}
 		operation.Task = &task
+	}
+	if row.payload != "" {
+		var payload operationPayload
+		if err := json.Unmarshal([]byte(row.payload), &payload); err != nil {
+			return core.Operation{}, false
+		}
+		operation.CommentID = payload.CommentID
+		operation.Body = payload.Body
+		operation.Attachment = payload.Attachment
+		operation.AttachmentID = payload.AttachmentID
 	}
 	return operation, true
 }

@@ -36,6 +36,15 @@ const (
 // that folded those operations without it would compute a different task from
 // the same bytes — which is worse than refusing them.
 //
+// Comments and attachments joined that generation rather than opening a new
+// one, and the arithmetic is the point: a generation is a claim about what a
+// reader must be able to do, not a serial number for releases. A build that
+// folds generation one folds both families, and there is no build anywhere that
+// folds one and not the other, so a second number would have described a reader
+// that never existed. What such a pack needs is the same kind of thing the
+// assignment rule needs — the fold that materializes the thread and the
+// attachment list into the checkpoint.
+//
 // Raising this constant is the last step of shipping a new operation type, not
 // the first: the build has to be able to fold generation N before it may claim
 // to.
@@ -78,14 +87,44 @@ const (
 	// them.
 	OperationAssignAdd    OperationType = "assign.add"
 	OperationAssignRemove OperationType = "assign.remove"
+	// The comment and attachment operations are generation 1 for a reason of
+	// their own: a build that cannot fold them cannot compute the thread and
+	// the attachment list the checkpoint materializes. See operationMinReader.
+	OperationCommentAdd       OperationType = "comment.add"
+	OperationCommentEdit      OperationType = "comment.edit"
+	OperationCommentRemove    OperationType = "comment.remove"
+	OperationAttachmentAdd    OperationType = "attachment.add"
+	OperationAttachmentRemove OperationType = "attachment.remove"
 )
 
+// Operation is one recorded intent inside a pack.
+//
+// It must stay comparable: the golden tables compare operations with == to
+// prove a validator inspected one without rewriting it. That is why the payload
+// members below are scalars and pointers rather than slices or maps.
+//
+// A comment.add and an attachment.add name no subject, because their subject is
+// the thing they create and its identifier is this operation's own ID. That is
+// what "comment IDs are minted like operation IDs" means literally: there is
+// one ULID, it identifies the operation in the history and the comment in the
+// thread, and an edit or a removal names it. Nothing has to reconcile two
+// identifier spaces, and a duplicate delivery of an addition is recognizable as
+// the same addition rather than as a second one.
 type Operation struct {
 	ID    string        `json:"id"`
 	Type  OperationType `json:"type"`
 	Field string        `json:"field,omitempty"`
 	Value string        `json:"value,omitempty"`
 	Task  *TaskData     `json:"task,omitempty"`
+	// CommentID names the comment an edit or a removal acts on.
+	CommentID string `json:"commentId,omitempty"`
+	// Body is the text an addition or an edit records.
+	Body string `json:"body,omitempty"`
+	// Attachment is what an addition attaches, nested under its own member the
+	// way task.create nests the task it creates.
+	Attachment *AttachmentData `json:"attachment,omitempty"`
+	// AttachmentID names the attachment a removal acts on.
+	AttachmentID string `json:"attachmentId,omitempty"`
 }
 
 type OperationPack struct {
@@ -140,23 +179,30 @@ type StateDocument struct {
 // operationMinReader declares, per operation type, the writer-format generation
 // a reader needs in order to fold a pack containing it.
 //
-// The six original entries are zero and the two assignment entries are one.
-// This is the one place a story that ships a new operation type bumps: every
-// writing path picks the value up from PackMinReader without being edited.
+// The six original types are zero and stay zero forever; the two assignment
+// types and the five comment and attachment types are one. This is the one
+// place a story that ships a new operation type bumps: every writing path picks
+// the value up from PackMinReader without being edited.
+//
 // Declaring it per operation type rather than per release is what keeps the
 // marker honest — a pack of ordinary field.set operations written by a build
-// that also knows how to write assignments still carries no marker, so an older
-// clone keeps folding everything it genuinely can, and only the tasks somebody
-// actually assigned go out of its reach.
+// that also knows how to write assignments and comments still carries no
+// marker, so an older clone keeps folding everything it genuinely can, and only
+// the tasks somebody actually assigned or commented on go out of its reach.
 var operationMinReader = map[OperationType]int{
-	OperationTaskCreate:    0,
-	OperationFieldSet:      0,
-	OperationSetAdd:        0,
-	OperationSetRemove:     0,
-	OperationTaskTombstone: 0,
-	OperationTaskRestore:   0,
-	OperationAssignAdd:     1,
-	OperationAssignRemove:  1,
+	OperationTaskCreate:       0,
+	OperationFieldSet:         0,
+	OperationSetAdd:           0,
+	OperationSetRemove:        0,
+	OperationTaskTombstone:    0,
+	OperationTaskRestore:      0,
+	OperationAssignAdd:        1,
+	OperationAssignRemove:     1,
+	OperationCommentAdd:       1,
+	OperationCommentEdit:      1,
+	OperationCommentRemove:    1,
+	OperationAttachmentAdd:    1,
+	OperationAttachmentRemove: 1,
 }
 
 // PackMinReader returns the generation a reader needs to fold these operations,
@@ -418,6 +464,11 @@ func applyCreate(pack OperationPack, projectKey string) (StateDocument, error) {
 // authorship is the pack-level attribution the fold needs while applying one
 // operation: who wrote the pack and when. Both are already validated members of
 // the envelope by the time an operation is applied.
+//
+// It is what the assignment, comment and attachment operations all record about
+// themselves, and none of them carries an author or a time of its own. That is
+// the point: a comment cannot claim an author its pack did not, so there is one
+// attribution per commit rather than one per operation to disagree with it.
 type authorship struct {
 	actor string
 	at    time.Time
@@ -444,6 +495,16 @@ func applyOperation(task *TaskData, operation Operation, projectKey string, auth
 	case OperationTaskRestore:
 		task.Deleted = false
 		return nil
+	case OperationCommentAdd:
+		return applyCommentAdd(task, operation, authored)
+	case OperationCommentEdit:
+		return applyCommentEdit(task, operation, authored)
+	case OperationCommentRemove:
+		return applyCommentRemove(task, operation)
+	case OperationAttachmentAdd:
+		return applyAttachmentAdd(task, operation, authored)
+	case OperationAttachmentRemove:
+		return applyAttachmentRemove(task, operation)
 	default:
 		return corrupt("unsupported operation type %q", operation.Type)
 	}
@@ -675,16 +736,34 @@ func validateOperation(operation Operation) error {
 		if operation.Task != nil {
 			return corrupt("%s must not contain task data", operation.Type)
 		}
+		return validateNoThreadPayload(operation)
 	case OperationAssignAdd, OperationAssignRemove:
 		if operation.Task != nil || operation.Field != "" {
 			return corrupt("%s must carry only an assignment value", operation.Type)
 		}
+		return validateNoThreadPayload(operation)
 	case OperationTaskTombstone, OperationTaskRestore:
 		if operation.Task != nil || operation.Field != "" || operation.Value != "" {
 			return corrupt("%s must not contain a payload", operation.Type)
 		}
+		return validateNoThreadPayload(operation)
+	case OperationCommentAdd, OperationCommentEdit, OperationCommentRemove:
+		return validateCommentOperation(operation)
+	case OperationAttachmentAdd, OperationAttachmentRemove:
+		return validateAttachmentOperation(operation)
 	default:
 		return corrupt("unsupported operation type %q", operation.Type)
+	}
+}
+
+// validateNoThreadPayload keeps the operations that predate comments free of
+// the members comments and attachments added. An operation that carried a
+// member its type has no meaning for is a document nobody wrote on purpose, and
+// accepting one silently would let two builds disagree about what it meant.
+func validateNoThreadPayload(operation Operation) error {
+	if operation.CommentID != "" || operation.Body != "" ||
+		operation.Attachment != nil || operation.AttachmentID != "" {
+		return corrupt("%s must not contain comment or attachment data", operation.Type)
 	}
 	return nil
 }
@@ -714,8 +793,14 @@ func validateOperationDocument(operation Operation, projectKey string) error {
 	case OperationTaskCreate:
 		return validateTaskCreateOperation(operation, projectKey)
 	case OperationFieldSet:
+		if err := validateNoThreadPayload(operation); err != nil {
+			return err
+		}
 		return validateFieldSetOperation(operation)
 	case OperationSetAdd, OperationSetRemove:
+		if err := validateNoThreadPayload(operation); err != nil {
+			return err
+		}
 		return validateSetOperation(operation, projectKey)
 	case OperationAssignAdd, OperationAssignRemove:
 		return validateAssignOperation(operation)
@@ -723,12 +808,16 @@ func validateOperationDocument(operation Operation, projectKey string) error {
 		if operation.Task != nil || operation.Field != "" || operation.Value != "" {
 			return corrupt("task.tombstone must not contain a payload")
 		}
-		return nil
+		return validateNoThreadPayload(operation)
 	case OperationTaskRestore:
 		if operation.Task != nil || operation.Field != "" || operation.Value != "" {
 			return corrupt("task.restore must not contain a payload")
 		}
-		return nil
+		return validateNoThreadPayload(operation)
+	case OperationCommentAdd, OperationCommentEdit, OperationCommentRemove:
+		return validateCommentOperation(operation)
+	case OperationAttachmentAdd, OperationAttachmentRemove:
+		return validateAttachmentOperation(operation)
 	default:
 		return corrupt("unsupported operation type %q", operation.Type)
 	}
@@ -749,6 +838,18 @@ func validateCanonicalULID(description, id string) error {
 func validateTaskCreateOperation(operation Operation, projectKey string) error {
 	if operation.Task == nil || operation.Field != "" || operation.Value != "" {
 		return corrupt("task.create must contain only task data")
+	}
+	if err := validateNoThreadPayload(operation); err != nil {
+		return err
+	}
+	// A task is created with nothing said about it yet. A comment and an
+	// attachment are each recorded by their own operation, carrying their own
+	// identifier and their own attribution, so a create that arrived with a
+	// thread already in it would be asserting comments no operation authored —
+	// unremovable, because comment.remove names an operation that is not in the
+	// history.
+	if len(operation.Task.Comments) > 0 || len(operation.Task.Attachments) > 0 {
+		return corrupt("task.create must not contain comments or attachments")
 	}
 	if operation.Task.Deleted {
 		return corrupt("task.create cannot create a deleted task")
@@ -871,6 +972,8 @@ func copyTaskData(task TaskData) TaskData {
 	copy.Labels = append([]string(nil), task.Labels...)
 	copy.Dependencies = append([]string(nil), task.Dependencies...)
 	copy.Assignments = copyAssignments(task.Assignments)
+	copy.Comments = copyComments(task.Comments)
+	copy.Attachments = copyAttachments(task.Attachments)
 	return copy
 }
 

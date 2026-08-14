@@ -456,8 +456,14 @@ type reorderStatusesRequest struct {
 	ExpectedHead *string       `json:"expectedHead"`
 }
 
-// updateTaskRequest is converted directly to core.UpdateInput, so its fields
-// must stay identical in name, type, and order.
+// updateTaskRequest is the shape this endpoint accepts, which is deliberately
+// narrower than core.UpdateInput and no longer tied to it.
+//
+// It used to be converted to that type directly, which required the two structs
+// to stay identical in name, type, and order — a coupling that made the API
+// surface change whenever the service input did. The service input now also
+// carries the comment and attachment intents an update may ride with, which
+// this endpoint does not accept; see input below.
 type updateTaskRequest struct {
 	Title        *string        `json:"title"`
 	Description  *string        `json:"description"`
@@ -465,6 +471,24 @@ type updateTaskRequest struct {
 	Priority     *core.Priority `json:"priority"`
 	Labels       *[]string      `json:"labels"`
 	ExpectedHead string         `json:"expectedHead"`
+}
+
+// input maps the request onto the service input field by field.
+//
+// It used to be a struct conversion, which was shorter and quietly wrong the
+// moment the two shapes stopped matching: core.UpdateInput now also carries the
+// comment and attachment intents an update may ride with, which this endpoint
+// does not accept and must not accept by accident. Naming the fields is what
+// keeps a new member of either struct from silently becoming part of this API.
+func (body updateTaskRequest) input() core.UpdateInput {
+	return core.UpdateInput{
+		Title:        body.Title,
+		Description:  body.Description,
+		Status:       body.Status,
+		Priority:     body.Priority,
+		Labels:       body.Labels,
+		ExpectedHead: body.ExpectedHead,
+	}
 }
 
 // The page template used to ask a `knownStatus` helper whether this build had a
@@ -1272,7 +1296,7 @@ func (handler *handler) updateTask(writer http.ResponseWriter, request *http.Req
 	if id == "" {
 		id = taskPathID(request.URL.Path)
 	}
-	result, err := handler.Update(request.Context(), id, core.UpdateInput(body))
+	result, err := handler.Update(request.Context(), id, body.input())
 	if err != nil {
 		handler.writeError(writer, err)
 		return

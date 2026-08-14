@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -236,8 +237,8 @@ func validateBatchSnapshot(
 	if err != nil {
 		return core.Snapshot{}, err
 	}
-	if treeEntries["operation.json"] != operationBlob.objectID ||
-		treeEntries["state.json"] != stateBlob.objectID {
+	if treeEntries.objectID("operation.json") != operationBlob.objectID ||
+		treeEntries.objectID("state.json") != stateBlob.objectID {
 		return core.Snapshot{}, core.Errorf(core.CategoryCorruptData, "task tree entries do not match their batch objects")
 	}
 
@@ -247,6 +248,21 @@ func validateBatchSnapshot(
 	}
 	if err := validateTipTopologyBytes(commit.contents, pack); err != nil {
 		return core.Snapshot{}, err
+	}
+	// The tree's shape is judged here, after the pack has been decoded, and only
+	// for a pack this build is entitled to judge. A newer generation may put
+	// entries in its trees that this build has no name for, and calling those
+	// corrupt would put a wall in front of the next format change exactly where
+	// the marker was supposed to remove one. What such a commit gets instead is
+	// the newer-writer treatment every other check here already gives it: read
+	// from the checkpoint, refuse to build on.
+	if !pack.RequiresNewerReader() {
+		if err := validateTaskTreeEntries(treeEntries); err != nil {
+			return core.Snapshot{}, err
+		}
+		if err := validateAttachmentBlobs(pack, treeEntries); err != nil {
+			return core.Snapshot{}, err
+		}
 	}
 	state, err := decodeCanonicalState(stateBlob.contents)
 	if err != nil {
@@ -403,28 +419,170 @@ func scanRawTreeEntries(
 	return nil
 }
 
-func parseRawTaskTree(contents []byte, objectIDBytes int) (map[string]string, error) {
-	entries := make(map[string]string, 2)
-	err := scanRawTreeEntries(contents, objectIDBytes, "task tree", func(mode, name, objectID string) error {
-		if mode != "100644" {
-			return core.Errorf(core.CategoryCorruptData, "task tree entry %q is not a regular blob", name)
+// parseRawTaskTree reads a commit's tree and judges only what is true of a
+// Workbook tree in every generation of the format.
+//
+// What it judges: the tree parses, no name appears twice, and the two documents
+// every Workbook commit has are present as regular blobs. What it deliberately
+// does not judge is whether it recognizes the *other* entries — because that
+// question cannot be answered before the pack beside them has been decoded and
+// asked what generation it needs.
+//
+// That ordering is the whole point, and it was learned the expensive way. Tree
+// shape used to be judged here, which put a hard wall in front of every future
+// generation: a build that added a new kind of entry would have its commits
+// reported as corrupt data by every older clone, at fetch and at read, before
+// any `minReader` marker could be consulted — exactly the situation the
+// writer-format contract exists to end, recreated one layer lower and frozen
+// into a release. So the name judgment moved out, to
+// validateTaskTreeEntryNames, which every caller runs after decoding the pack
+// and skips when the pack declares a generation this build cannot fold.
+// Corruption is still corruption at this build's own generation; a newer
+// generation is merely unreadable.
+func parseRawTaskTree(contents []byte, objectIDBytes int) (workbookTree, error) {
+	return parseRawWorkbookTree(contents, objectIDBytes, "task tree")
+}
+
+// workbookTree is one commit's tree as this reader needs it: what each entry
+// points at, and what mode it was stored under.
+//
+// The mode travels with the entry rather than being checked and discarded,
+// because the two questions it answers are asked at different moments. Whether
+// the two documents are regular blobs holds at every generation and is answered
+// during the parse; whether a *recognized* entry is a regular blob is a question
+// about a name this build claims to know, so it belongs with the name check,
+// after the marker has been consulted.
+type workbookTree struct {
+	objects map[string]string
+	modes   map[string]string
+	noun    string
+}
+
+func (tree workbookTree) objectID(name string) string { return tree.objects[name] }
+
+const regularBlobMode = "100644"
+
+func parseRawWorkbookTree(contents []byte, objectIDBytes int, noun string) (workbookTree, error) {
+	tree := workbookTree{
+		objects: make(map[string]string, 2),
+		modes:   make(map[string]string, 2),
+		noun:    noun,
+	}
+	err := scanRawTreeEntries(contents, objectIDBytes, noun, func(mode, name, objectID string) error {
+		if _, duplicate := tree.objects[name]; duplicate {
+			return core.Errorf(core.CategoryCorruptData, "%s contains duplicate entry %q", noun, name)
 		}
-		if name != "operation.json" && name != "state.json" {
-			return core.Errorf(core.CategoryCorruptData, "task tree has an unexpected entry")
-		}
-		if _, duplicate := entries[name]; duplicate {
-			return core.Errorf(core.CategoryCorruptData, "task tree contains duplicate entry %q", name)
-		}
-		entries[name] = objectID
+		tree.objects[name] = objectID
+		tree.modes[name] = mode
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return workbookTree{}, err
 	}
-	if len(entries) != 2 {
-		return nil, core.Errorf(core.CategoryCorruptData, "task tree must contain exactly operation.json and state.json")
+	// The two documents are the one shape that holds at every generation: a
+	// reader that cannot find the checkpoint cannot serve the task at all, which
+	// is the one thing the contract promises an older clone can still do. So
+	// their absence, and their being anything but a regular blob, is corruption
+	// whatever a marker says.
+	for _, required := range []string{"operation.json", "state.json"} {
+		if tree.objects[required] == "" {
+			return workbookTree{}, core.Errorf(core.CategoryCorruptData,
+				"%s must contain operation.json and state.json", noun)
+		}
+		if tree.modes[required] != regularBlobMode {
+			return workbookTree{}, core.Errorf(core.CategoryCorruptData,
+				"%s entry %q is not a regular blob", noun, required)
+		}
 	}
-	return entries, nil
+	return tree, nil
+}
+
+// attachmentEntryPattern is the one name an attachment entry may have: the
+// prefix and the attachment's ULID, uppercase as every canonical ULID is.
+var attachmentEntryPattern = regexp.MustCompile(`^` + attachmentEntryPrefix + `[0-9A-HJKMNP-TV-Z]{26}$`)
+
+func validAttachmentEntryName(name string) bool {
+	return attachmentEntryPattern.MatchString(name)
+}
+
+// validateTaskTreeEntries refuses an entry this build does not recognize in a
+// task commit's tree, and a recognized one stored as something other than a
+// regular blob.
+//
+// It is the strictness parseRawTaskTree used to apply inline, moved to where it
+// can be conditional: a caller runs it only for a pack at or below this build's
+// generation, so a tree written under rules this build does not have is left
+// alone rather than called corrupt. At this build's own generation nothing has
+// changed — an entry that is neither one of the two documents nor an attachment
+// blob is a commit nobody wrote on purpose.
+//
+// The mode is checked here, on recognized names only, and that placement was a
+// bug once. Moving the mode check out of the parser and onto the two documents
+// alone quietly accepted an `attachment-<ULID>` entry stored as a subtree, an
+// executable, or a symlink — nothing followed it, so nothing was unsafe, but
+// `validate` blessed a commit that every earlier build called corrupt. A name
+// this build claims to know is a name it also knows the shape of.
+func validateTaskTreeEntries(tree workbookTree) error {
+	for name, mode := range tree.modes {
+		switch {
+		case name == "operation.json" || name == "state.json":
+			continue
+		case validAttachmentEntryName(name):
+			if mode != regularBlobMode {
+				return core.Errorf(core.CategoryCorruptData,
+					"task tree entry %q is not a regular blob", name)
+			}
+		default:
+			return core.Errorf(core.CategoryCorruptData, "task tree has an unexpected entry")
+		}
+	}
+	return nil
+}
+
+// validateConfigTreeEntries is the same rule for the configuration ledger,
+// whose trees hold the two documents and nothing else.
+//
+// Attachment names are deliberately not accepted here. The ledger shares this
+// parser with task refs, and while the shape check lived inside the parser it
+// silently inherited the task tree's allowance: a configuration commit carrying
+// an `attachment-<ULID>` blob read as valid, in a document where an attachment
+// means nothing at all. Nothing writes one, so nothing accepts one.
+func validateConfigTreeEntries(tree workbookTree) error {
+	for name := range tree.modes {
+		if name == configOperationPath || name == configStatePath {
+			continue
+		}
+		return core.Errorf(core.CategoryCorruptData, "the Workbook configuration tree has an unexpected entry")
+	}
+	return nil
+}
+
+// validateAttachmentBlobs checks that a pack which attached files brought them
+// with it.
+//
+// This is the reachability invariant enforced at the moment it can be: the
+// bytes an attachment.add names have to be in the tree of the commit that adds
+// them, so that a task's attachments are reachable through that task's own ref
+// history and through nothing else. A commit that names a blob it does not
+// carry would be a task pointing into somebody else's object graph, which is
+// exactly what the future compaction verb must never have to reason about.
+func validateAttachmentBlobs(pack core.OperationPack, tree workbookTree) error {
+	for _, operation := range pack.Operations {
+		if operation.Type != core.OperationAttachmentAdd || operation.Attachment == nil {
+			continue
+		}
+		if operation.Attachment.Kind != core.AttachmentFile {
+			continue
+		}
+		if tree.objectID(attachmentTreeName(operation.ID)) != operation.Attachment.Blob {
+			return core.Errorf(
+				core.CategoryCorruptData,
+				"task commit attaches %s but its tree does not carry the blob",
+				operation.ID,
+			)
+		}
+	}
+	return nil
 }
 
 // ValidateTaskHeadAdvances verifies all changed heads with one bounded ancestry

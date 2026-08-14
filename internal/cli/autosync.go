@@ -110,6 +110,7 @@ func openTaskSession(ctx context.Context, cwd string, noSync, withWriter bool, s
 			return nil, err
 		}
 		service.Writer = repository
+		service.Blobs = repository
 		service.Projection = store
 		service.Actor = actor
 	}

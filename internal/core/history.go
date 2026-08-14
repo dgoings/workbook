@@ -270,6 +270,20 @@ func describeOperation(operation Operation, before, after TaskData) []FieldChang
 		return describeAssignment(operation, before, after)
 	case OperationFieldSet:
 		return []FieldChange{scalarChange(operation.Field, fieldValue(before, operation.Field), operation.Value)}
+	case OperationCommentAdd:
+		return []FieldChange{{Field: "comment", Kind: ChangeAdded, To: DisplayLine(operation.Body)}}
+	case OperationCommentEdit:
+		// The change log reports the new text and not the old. Recovering what a
+		// comment said before this edit would mean replaying the thread, and the
+		// log is a summary of what each commit did; `show --compare` is where a
+		// before-and-after belongs.
+		return []FieldChange{{Field: "comment", Kind: ChangeSet, To: DisplayLine(operation.Body)}}
+	case OperationCommentRemove:
+		return []FieldChange{{Field: "comment", Kind: ChangeRemoved, From: commentBody(before, operation.CommentID)}}
+	case OperationAttachmentAdd:
+		return []FieldChange{{Field: "attachment", Kind: ChangeAdded, To: attachmentSubject(operation.Attachment)}}
+	case OperationAttachmentRemove:
+		return []FieldChange{{Field: "attachment", Kind: ChangeRemoved, From: attachmentName(before, operation.AttachmentID)}}
 	default:
 		return nil
 	}
@@ -316,6 +330,38 @@ func describeAssignment(operation Operation, before, after TaskData) []FieldChan
 	default:
 		return nil
 	}
+}
+
+// commentBody names what a removal removed, from the state before it. A comment
+// the previous state does not hold is one a concurrent removal already took, so
+// the removal that folded to nothing also describes nothing.
+func commentBody(before TaskData, commentID string) string {
+	if index := findComment(before.Comments, commentID); index >= 0 {
+		return DisplayLine(before.Comments[index].Body)
+	}
+	return ""
+}
+
+func attachmentName(before TaskData, attachmentID string) string {
+	if index := findAttachment(before.Attachments, attachmentID); index >= 0 {
+		return attachmentSubject(&before.Attachments[index].AttachmentData)
+	}
+	return ""
+}
+
+// attachmentSubject is how an attachment reads in one line: a file by its name,
+// a link by its label or, having none, by its URL.
+func attachmentSubject(data *AttachmentData) string {
+	if data == nil {
+		return ""
+	}
+	if data.Kind == AttachmentLink {
+		if data.Label != "" {
+			return DisplayLine(data.Label)
+		}
+		return DisplayLine(data.URL)
+	}
+	return DisplayLine(data.Name)
 }
 
 // scalarChange renders one scalar field the way that field reads. Title,

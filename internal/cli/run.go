@@ -1488,6 +1488,7 @@ func openServiceParts(ctx context.Context, cwd string, stderr io.Writer) (core.S
 		Vocabulary: vocabulary,
 		Reader:     store,
 		Writer:     repository,
+		Blobs:      repository,
 		Projection: store,
 		History:    store,
 		IDs:        core.CryptoULIDSource{},

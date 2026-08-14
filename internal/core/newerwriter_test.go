@@ -106,6 +106,52 @@ func TestAMarkerAtOrBelowTheSupportedGenerationFoldsNormally(t *testing.T) {
 	}
 }
 
+// An ordinary pack folded onto a checkpoint that already carries a watermark
+// does not bury it.
+//
+// The test above proves a pack's own generation reaches the checkpoint it
+// produces. This is the other half of the running maximum, and the half the
+// whole design rests on: a newer build may write a generation-one pack and then
+// perfectly ordinary generation-zero packs on top of it, and a reader looking
+// only at the tip pack would see nothing and fold a history it does not
+// understand. The watermark is a claim about the whole chain, so a later pack
+// that needs nothing special does not take it back.
+func TestAnOrdinaryPackDoesNotBuryAnEarlierWatermark(t *testing.T) {
+	if SupportedFormatGeneration == 0 {
+		t.Skip("this build folds only generation zero, so there is no watermark to bury")
+	}
+	parent, err := DecodeStateDocument([]byte(goldenTaskRefs[1].parent))
+	if err != nil {
+		t.Fatalf("DecodeStateDocument(parent) error = %v", err)
+	}
+	marked, err := DecodeOperationPack([]byte(newerWriterPack(t, SupportedFormatGeneration, "")))
+	if err != nil {
+		t.Fatalf("DecodeOperationPack(marked) error = %v", err)
+	}
+	state, err := Apply(&parent, marked, goldenProjectKey)
+	if err != nil {
+		t.Fatalf("Apply(marked) error = %v", err)
+	}
+	if state.MinReader != SupportedFormatGeneration {
+		t.Fatalf("folded checkpoint minReader = %d, want %d", state.MinReader, SupportedFormatGeneration)
+	}
+
+	ordinary, err := DecodeOperationPack([]byte(newerWriterPack(t, 0, "")))
+	if err != nil {
+		t.Fatalf("DecodeOperationPack(ordinary) error = %v", err)
+	}
+	ordinary.LogicalClock = state.LogicalClock + 1
+	ordinary.Operations[0].Value = "done"
+	buried, err := Apply(&state, ordinary, goldenProjectKey)
+	if err != nil {
+		t.Fatalf("Apply(ordinary) error = %v", err)
+	}
+	if buried.MinReader != SupportedFormatGeneration {
+		t.Fatalf("checkpoint after an ordinary pack has minReader = %d, want the watermark %d",
+			buried.MinReader, SupportedFormatGeneration)
+	}
+}
+
 // A pack above the supported generation is refused as newer-writer, whether or
 // not this build recognizes the operations inside it.
 func TestAPackAboveTheSupportedGenerationIsRefusedAsNewerWriter(t *testing.T) {

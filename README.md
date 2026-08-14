@@ -1808,7 +1808,8 @@ ref
       ├── parent commit(s)
       └── tree
            ├── operation.json blob
-           └── state.json blob
+           ├── state.json blob
+           └── attachment-<ULID> blob   (only on a commit that attached a file)
 ```
 
 - The root commit has no parents and contains `task.create`.
@@ -1816,9 +1817,22 @@ ref
 - A future reconciliation or resolution commit can have multiple parents.
 - Immutable `operation.json` packs are the authoritative record of task intent,
   and Git parent ancestry is the authoritative record of causality.
-- Every current POC commit tree contains exactly the edit's versioned operation
-  pack in `operation.json` and a deterministic, durable task materialization in
-  `state.json`.
+- Every commit tree contains the edit's versioned operation pack in
+  `operation.json` and a deterministic, durable task materialization in
+  `state.json`. A commit that attached a file also carries that file's bytes as
+  a blob named for the attachment, and the checkpoint records the blob's object
+  ID so reading an attachment costs one object read rather than a tree walk.
+- An attachment's bytes are reachable **only** through their own task's ref
+  history. There is no shared attachment store and no cross-task deduplication:
+  two tasks attaching identical bytes each carry the blob in their own commit,
+  and Git storing one object for both is a property of content addressing rather
+  than a dependency between the two histories. A future compaction verb depends
+  on this — it can offer to strip one task's attachments by rewriting that
+  task's history without reasoning about any other task.
+- Removing an attachment hides it and reclaims nothing. The bytes stay in the
+  commit that added them, because that commit is shared append-only history that
+  no clone may rewrite. Space comes back only when compaction rewrites the
+  task's history.
 - The durable model requires each `state.json` checkpoint to match the result of
   applying that commit's operation pack to its parent state, or to no parent
   state for a root commit.
@@ -1992,15 +2006,23 @@ writer-format generation that can fold it:
 {"format":"workbook.operation-pack","version":1,"minReader":1, …}
 ```
 
-Absence means generation 0, which is every operation type Workbook shipped
-before assignments. Generation 1 is `assign.add` and `assign.remove`, and they
-are the only packs that carry the member: a create, a field change, a label, a
-dependency, a tombstone and a restore all still write no marker, so every
-document written before assignments existed — and every document written after
-them by a command that does not assign — is unchanged, byte for byte, and a
-golden table asserts that. The member is set per operation type, which is what
-keeps an older clone folding everything it genuinely can: only the tasks
-somebody actually assigned go out of its reach.
+Absence means generation 0, and the member is set **per operation type** rather
+than per release:
+
+| Generation | Operations |
+| --- | --- |
+| 0 | `task.create`, `field.set`, `set.add`, `set.remove`, `task.tombstone`, `task.restore` |
+| 1 | `assign.add`, `assign.remove`, `comment.add`, `comment.edit`, `comment.remove`, `attachment.add`, `attachment.remove` |
+
+Generation 0 is every operation type Workbook shipped before assignments, and it
+is the only generation that writes no marker. So a create, a field change, a
+label, a dependency, a tombstone and a restore all still write nothing: every
+document written before generation 1 existed — and every document written after
+it by a command that neither assigns nor comments — is unchanged, byte for byte,
+and golden tables covering every verb assert exactly that. Setting the member
+per operation type is what keeps an older clone folding everything it genuinely
+can: a task goes out of its reach at the commit that assigns, comments on, or
+attaches to it, and not before.
 
 The task and configuration checkpoints beside the packs carry the same member,
 as a running maximum over the history so far. That is what lets a reader answer
@@ -2045,6 +2067,17 @@ the whole point of the marker: without one, a type nobody recognizes is
 tampering or a bug, not a version skew, and telling somebody to upgrade their
 way out of a broken ref would be wrong. A marker at or below the reader's
 generation changes nothing at all.
+
+**The commit's tree is judged by the same rule, and after the marker.** A
+generation may add entries to a commit tree — generation 1 did, for attachment
+blobs — so tree shape is checked only once the pack beside it has been decoded,
+and skipped entirely when the pack declares a generation the reader cannot fold.
+What holds at every generation is that `operation.json` and `state.json` are
+there as regular blobs, because a reader that cannot find the checkpoint cannot
+serve the task at all. An entry a reader does not recognize *at its own
+generation* is still `corrupt-data`; one under a newer marker is simply not that
+reader's to judge. Checking it any earlier would have put a wall in front of the
+next format change in the very place the marker exists to remove one.
 
 **Before v0.5.0 there is no signal**, and honesty about what that costs matters
 more than the reassurance. Installed binaries are frozen; v0.4.4 and earlier

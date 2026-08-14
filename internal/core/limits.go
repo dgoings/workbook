@@ -111,6 +111,176 @@ const (
 	MaxStatusRetiredCount = 256
 )
 
+// Ceilings on a task's thread and its attachments.
+//
+// These are the vocabulary's kind of ceiling rather than the task document's,
+// and the distinction decides where they are asked. A title is one author's
+// value: whoever wrote an oversized one erred, and refusing it in the fold
+// refuses exactly their document. A thread and an attachment list are
+// collections several clones extend at once, so two people commenting on the
+// same afternoon can carry a task past a count without either having written
+// anything they could have written differently. A fold that failed on that
+// would produce a history no clone can ever read, and append-only means there
+// is no repair — the removal that would bring the task back under the ceiling
+// sits behind the fold that already failed.
+//
+// So every ceiling below is asked at the mutation boundary, in Service, and
+// never while folding. A replayed pack is somebody's recorded history and folds
+// whatever it says; a person about to write one is told no, in a message that
+// names the bound.
+const (
+	// MaxCommentBodyBytes bounds one comment body. A comment is a remark rather
+	// than the record of the work, which is what the description is and why
+	// that ceiling is four times this one; a body approaching this belongs in
+	// the description or in the repository.
+	MaxCommentBodyBytes = 16 << 10
+	// MaxCommentCount bounds how many live comments one task may carry. Every
+	// clone reads every task's checkpoint on every list, so a thread is not
+	// only its own task's cost.
+	MaxCommentCount = 500
+	// MaxAttachmentCount bounds how many live attachments one task may carry,
+	// of both kinds together.
+	MaxAttachmentCount = 50
+	// MaxAttachmentNameBytes bounds a file attachment's name, at the width a
+	// file name has on the systems it will be saved onto.
+	MaxAttachmentNameBytes = 255
+	// MaxAttachmentLabelBytes bounds a link attachment's display text.
+	MaxAttachmentLabelBytes = 200
+	// MaxAttachmentURLBytes bounds a link's URL.
+	MaxAttachmentURLBytes = 2048
+	// MaxAttachmentMediaBytes bounds a stored media type.
+	MaxAttachmentMediaBytes = 100
+	// MaxAttachmentFileBytes bounds one attached file.
+	//
+	// A megabyte is a screenshot, a log excerpt, or a patch, and it is under
+	// the four-megabyte object ceiling every read of a Git object is bounded
+	// by, so an attachment is always readable in one `cat-file`. Anything
+	// larger belongs somewhere with its own storage, which is what the refusal
+	// says by suggesting a link.
+	MaxAttachmentFileBytes = 1 << 20
+	// MaxLiveAttachmentBytes bounds what one task's live file attachments add
+	// up to.
+	//
+	// This is the ceiling that actually protects the team. Task refs are
+	// fetched by every clone, and a task nobody bounded could quietly become
+	// the reason a fresh clone takes minutes. Ten megabytes is ten screenshots
+	// of the largest size a single attachment may be.
+	//
+	// It counts live attachments only, which is a deliberate understatement:
+	// removing an attachment frees room under this ceiling while reclaiming
+	// nothing on disk, because the bytes stay in the commit that added them
+	// until a compaction pass rewrites the task's history. The alternative —
+	// counting every attachment a task ever held — would make the ceiling
+	// permanent and unrepairable, which is the failure mode this whole comment
+	// block exists to avoid.
+	MaxLiveAttachmentBytes = 10 << 20
+)
+
+// validateThreadGrowth refuses a pack that would push a task past one of the
+// ceilings above, and only when the pack is what pushes it there.
+//
+// The comparison is against the parent rather than against the ceiling alone,
+// for the reason validateVocabularyGrowth states about statuses and this file's
+// header restates about threads: a folded task may already sit over a ceiling,
+// because two people can comment concurrently and neither wrote anything they
+// could have written differently. A rule that refused every mutation while over
+// one would refuse the removals that bring the task back under, which is the
+// only way out. So growth is refused and shrinkage is always allowed — and the
+// mutations that touch neither, a move or a status change on a task with a long
+// thread, are never refused for a collection they do not change.
+//
+// The per-item ceilings are asked only of items this pack introduces, on the
+// same principle: a comment already in the thread is history, and the mutation
+// adding a second one is not the moment to relitigate the first.
+func validateThreadGrowth(before, after TaskData) error {
+	if len(after.Comments) > MaxCommentCount && len(after.Comments) > len(before.Comments) {
+		return Errorf(
+			CategoryValidation,
+			"task would hold %d comments and must not exceed %d; remove one first",
+			len(after.Comments), MaxCommentCount,
+		)
+	}
+	for _, comment := range after.Comments {
+		index := findComment(before.Comments, comment.ID)
+		if index >= 0 && before.Comments[index].Body == comment.Body {
+			continue
+		}
+		if len(comment.Body) > MaxCommentBodyBytes {
+			return Errorf(
+				CategoryValidation,
+				"comment body is %d bytes and must not exceed %d",
+				len(comment.Body), MaxCommentBodyBytes,
+			)
+		}
+	}
+	if len(after.Attachments) > MaxAttachmentCount && len(after.Attachments) > len(before.Attachments) {
+		return Errorf(
+			CategoryValidation,
+			"task would hold %d attachments and must not exceed %d; remove one first",
+			len(after.Attachments), MaxAttachmentCount,
+		)
+	}
+	for _, attachment := range after.Attachments {
+		if findAttachment(before.Attachments, attachment.ID) >= 0 {
+			continue
+		}
+		if err := validateAttachmentAuthoring(attachment.AttachmentData); err != nil {
+			return err
+		}
+	}
+	total := LiveAttachmentBytes(after.Attachments)
+	if total > MaxLiveAttachmentBytes && total > LiveAttachmentBytes(before.Attachments) {
+		return Errorf(
+			CategoryValidation,
+			"task would hold %d bytes of attached files and must not exceed %d; attach a link instead",
+			total, MaxLiveAttachmentBytes,
+		)
+	}
+	return nil
+}
+
+// validateAttachmentAuthoring bounds one attachment. The file-size refusal
+// names the link because that is the whole advice: the task is the wrong place
+// for these bytes, and there is somewhere right.
+func validateAttachmentAuthoring(data AttachmentData) error {
+	if len(data.Name) > MaxAttachmentNameBytes {
+		return Errorf(
+			CategoryValidation,
+			"attachment name is %d bytes and must not exceed %d",
+			len(data.Name), MaxAttachmentNameBytes,
+		)
+	}
+	if len(data.Label) > MaxAttachmentLabelBytes {
+		return Errorf(
+			CategoryValidation,
+			"attachment label is %d bytes and must not exceed %d",
+			len(data.Label), MaxAttachmentLabelBytes,
+		)
+	}
+	if len(data.URL) > MaxAttachmentURLBytes {
+		return Errorf(
+			CategoryValidation,
+			"attachment URL is %d bytes and must not exceed %d",
+			len(data.URL), MaxAttachmentURLBytes,
+		)
+	}
+	if len(data.Media) > MaxAttachmentMediaBytes {
+		return Errorf(
+			CategoryValidation,
+			"attachment media type is %d bytes and must not exceed %d",
+			len(data.Media), MaxAttachmentMediaBytes,
+		)
+	}
+	if data.Size > MaxAttachmentFileBytes {
+		return Errorf(
+			CategoryValidation,
+			"attachment is %d bytes and must not exceed %d; attach a link instead",
+			data.Size, MaxAttachmentFileBytes,
+		)
+	}
+	return nil
+}
+
 // Bounds on how much configuration history one process is willing to fold.
 //
 // These two are a third kind of ceiling, and the distinction matters more than
