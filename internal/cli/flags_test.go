@@ -123,16 +123,27 @@ func TestCommandHelp(t *testing.T) {
 }
 
 // usageSynopsisExceptions are the two commands the global usage deliberately
-// spells differently from their schema synopsis, with the reason each one does.
-// Everything else must agree, and an entry here that stops matching fails as
-// stale rather than quietly covering for a real divergence.
-var usageSynopsisExceptions = map[string]string{
+// spells differently from their schema synopsis.
+//
+// Both sides of each exception are pinned, so it exempts exactly the
+// divergence it describes and nothing else: changing either the schema
+// synopsis or the usage line fails here until somebody decides which of the
+// two spellings was meant to move. An exception that covered the whole line
+// would have left these two commands — and only these two — free to drift in
+// exactly the way this test exists to catch.
+var usageSynopsisExceptions = map[string]struct{ synopsis, line string }{
 	// serve prints the address it will try rather than <address>, because the
 	// port is the thing a reader of the usage wants to know.
-	"serve": "  serve [--addr 127.0.0.1:7331]",
+	"serve": {
+		synopsis: "workbook serve [--addr <address>]",
+		line:     "  serve [--addr 127.0.0.1:7331]",
+	},
 	// hooks names its one subcommand, because <command> would tell a reader
 	// nothing about a verb that has exactly one.
-	"hooks": "  hooks install [--json]",
+	"hooks": {
+		synopsis: "workbook hooks <command> [options]",
+		line:     "  hooks install [--json]",
+	},
 }
 
 // The global usage constant is the fourth place a verb's shape is written down,
@@ -142,10 +153,15 @@ var usageSynopsisExceptions = map[string]string{
 // describing a command that no longer exists.
 func TestGlobalUsageAgreesWithEverySynopsis(t *testing.T) {
 	for _, name := range commandOrder {
-		want := "  " + strings.TrimPrefix(commandSchemas[name].Synopsis, "workbook ")
+		synopsis := commandSchemas[name].Synopsis
+		want := "  " + strings.TrimPrefix(synopsis, "workbook ")
 		if exception, listed := usageSynopsisExceptions[name]; listed {
-			if !strings.Contains(usage, exception+"\n") {
-				t.Errorf("usage = %q, want the %s exception line %q", usage, name, exception)
+			if synopsis != exception.synopsis {
+				t.Errorf("%s synopsis = %q, but its usage exception was written against %q; "+
+					"update the usage line or the exception", name, synopsis, exception.synopsis)
+			}
+			if !strings.Contains(usage, exception.line+"\n") {
+				t.Errorf("usage = %q, want the %s exception line %q", usage, name, exception.line)
 			}
 			if strings.Contains(usage, want+"\n") {
 				t.Errorf("usage carries both the %s synopsis and its exception; drop the exception", name)

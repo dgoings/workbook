@@ -1524,39 +1524,30 @@ func openServiceParts(ctx context.Context, cwd string, stderr io.Writer) (core.S
 }
 
 func openReadService(ctx context.Context, cwd string, stderr io.Writer) (core.Service, error) {
-	service, _, err := openReadServiceWithRepository(ctx, cwd, stderr)
-	return service, err
-}
-
-// openReadServiceWithRepository is openReadService for the one read that needs
-// the repository beside the service: an attachment's bytes are a Git object,
-// read by the object ID the checkpoint recorded, and no read model carries
-// them.
-func openReadServiceWithRepository(
-	ctx context.Context,
-	cwd string,
-	stderr io.Writer,
-) (core.Service, *gitstore.Repository, error) {
 	repository, config, err := openRepository(ctx, cwd, stderr)
 	if err != nil {
-		return core.Service{}, nil, err
+		return core.Service{}, err
 	}
 	store, err := projection.Open(ctx, repository, config)
 	if err != nil {
-		return core.Service{}, nil, err
+		return core.Service{}, err
 	}
 	vocabulary, err := repository.LoadVocabulary(ctx)
 	if err != nil {
-		return core.Service{}, nil, err
+		return core.Service{}, err
 	}
 	return core.Service{
 		Config:     config,
 		Vocabulary: vocabulary,
 		Reader:     store,
 		History:    store,
-		IDs:        core.CryptoULIDSource{},
-		Now:        time.Now,
-	}, repository, nil
+		// A read service reads attachments too: their bytes are Git objects
+		// rather than projection rows, and serving one is a read like any
+		// other. It is the read half alone — nothing here may write.
+		BlobReads: repository,
+		IDs:       core.CryptoULIDSource{},
+		Now:       time.Now,
+	}, nil
 }
 
 // openRepository opens the repository a command runs against and loads its

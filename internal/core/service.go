@@ -26,7 +26,11 @@ type Service struct {
 	Writer     CanonicalTaskWriter
 	// Blobs records an attached file's bytes. A Service without one refuses to
 	// attach a file and does everything else; see AttachmentBlobStore.
-	Blobs      AttachmentBlobStore
+	Blobs AttachmentBlobStore
+	// BlobReads returns an attached file's bytes. A Service without one refuses
+	// to serve an attachment and does everything else; see
+	// AttachmentBlobReader.
+	BlobReads  AttachmentBlobReader
 	Projection ProjectionUpdater
 	History    TaskHistorySource
 	IDs        IDSource

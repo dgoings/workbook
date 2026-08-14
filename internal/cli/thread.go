@@ -154,6 +154,13 @@ func (options *threadOptions) read(flags *commandFlagSet) (threadRequest, error)
 // gigabyte of memory. The two sentences are deliberately identical, because a
 // file that grows between this stat and the read below is refused by core with
 // the message this refusal would have used.
+//
+// Which is exactly why anything but a regular file is refused outright. A
+// ceiling read off a stat only bounds a file whose size a stat describes: a
+// character device reports zero bytes and then reads forever, and a named pipe
+// reports zero bytes and then blocks until somebody writes to it. Core cannot
+// cover for either, because its own ceiling is asked of bytes that are already
+// in memory — the very allocation this stat exists to prevent.
 func readAttachmentFile(path string) (string, []byte, error) {
 	name := filepath.Base(path)
 	info, err := os.Stat(path)
@@ -167,8 +174,12 @@ func readAttachmentFile(path string) (string, []byte, error) {
 	if err != nil {
 		return "", nil, core.Wrap(core.CategoryOperational, "cannot attach "+singleLine(path), err)
 	}
-	if info.IsDir() {
-		return "", nil, core.Errorf(core.CategoryValidation, "cannot attach %s, which is a directory", singleLine(path))
+	if !info.Mode().IsRegular() {
+		return "", nil, core.Errorf(
+			core.CategoryValidation,
+			"cannot attach %s, which is %s",
+			singleLine(path), describeIrregularFile(info.Mode()),
+		)
 	}
 	if info.Size() > core.MaxAttachmentFileBytes {
 		return "", nil, core.Errorf(
@@ -182,6 +193,23 @@ func readAttachmentFile(path string) (string, []byte, error) {
 		return "", nil, core.Wrap(core.CategoryOperational, "cannot read "+singleLine(path), err)
 	}
 	return name, content, nil
+}
+
+// describeIrregularFile names what somebody pointed --attach-file at, so the
+// refusal says which of the several things that are not files this one is.
+func describeIrregularFile(mode fs.FileMode) string {
+	switch {
+	case mode.IsDir():
+		return "a directory"
+	case mode&fs.ModeNamedPipe != 0:
+		return "a named pipe"
+	case mode&fs.ModeSocket != 0:
+		return "a socket"
+	case mode&fs.ModeDevice != 0:
+		return "a device"
+	default:
+		return "not a regular file"
+	}
 }
 
 // resolve matches every identifier a person typed against what the task holds,
@@ -361,8 +389,9 @@ func attachmentChangeSubject(change core.AttachmentChange) string {
 // on the terms every task ID is already typed under: case-insensitively, by
 // unambiguous prefix, with an exact match always winning.
 //
-// The identifiers are ULIDs minted a few at a time, so two items added within
-// the same fraction of a second share a long prefix. That is why `show` prints
+// The identifiers are ULIDs, which open with ten characters of millisecond
+// timestamp, so two items minted in one pack share those ten outright and are
+// told apart only by the eleventh character onward. That is why `show` prints
 // them whole rather than shortened: a display that could not be typed back is
 // worse than a long one, and a prefix stays available to anyone who wants it.
 func resolveThreadID(noun string, ids []string, typed string) (string, error) {
@@ -411,7 +440,7 @@ func runShowAttachment(
 	output attachmentOutput,
 	stdout, stderr io.Writer,
 ) error {
-	service, repository, err := openReadServiceWithRepository(ctx, cwd, stderr)
+	service, err := openReadService(ctx, cwd, stderr)
 	if err != nil {
 		return err
 	}
@@ -423,21 +452,22 @@ func runShowAttachment(
 	if err != nil {
 		return err
 	}
-	attachment, found := attachmentByID(task, id)
-	if !found {
-		return core.Errorf(core.CategoryNotFound, "no attachment matches %q", output.Target)
-	}
+	// The identifier came out of this task's own list, so the lookup cannot
+	// miss; a zero attachment here would be a resolver that answered about some
+	// other task, and Service.AttachmentContent refuses it as a link.
+	attachment, _ := attachmentByID(task, id)
 	if attachment.Kind == core.AttachmentLink {
 		// A link stores nothing, so there is nothing to write. The URL is the
 		// answer to what the caller was reaching for, so it is what the refusal
-		// hands back rather than a bare "wrong kind".
+		// hands back rather than the bare "holds no bytes" the service would
+		// answer a caller that has no terminal to explain it to.
 		return core.Errorf(
 			core.CategoryValidation,
 			"attachment %s is a link and holds no bytes; it points at %s",
 			id, singleLine(attachment.URL),
 		)
 	}
-	content, err := repository.ReadAttachment(ctx, service.Config, attachment.Blob)
+	content, err := service.AttachmentContent(ctx, attachment)
 	if err != nil {
 		return err
 	}

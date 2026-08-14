@@ -398,7 +398,9 @@ change, and only of growth: a task already over one — which two people
 commenting on the same afternoon can produce without either doing anything they
 were not allowed to do — can still have things removed from it. A file over the
 per-file ceiling is refused before it is read, and the refusal suggests a link,
-which stores nothing.
+which stores nothing. Only a regular file may be attached: a ceiling read off a
+stat bounds only a file whose size a stat describes, and a device or a named
+pipe reports no size and then reads without end.
 
 ### Comments and attachments
 

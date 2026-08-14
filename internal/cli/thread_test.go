@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -89,6 +90,23 @@ func TestUpdateAddsEditsAndRemovesAComment(t *testing.T) {
 	}
 	if !edited.Comments[0].Edited() {
 		t.Fatal("edited comment reports no edit time, want one")
+	}
+
+	// The change log summarizes one commit and does not replay the thread to
+	// recover the previous body, so it reports the new one and says it replaced
+	// something. What it must not print is the bare arrow that an empty
+	// left-hand side produces, which reads as a renderer that lost a value.
+	code, stdout, stderr = run(t, repository, "show", task.ID, "--history")
+	if code != 0 {
+		t.Fatalf("show --history code = %d, want 0; stderr = %q", code, stderr)
+	}
+	if want := "\tComment:\tshipped it, twice\t(edited)\n"; !strings.Contains(stdout, want) {
+		t.Fatalf("history = %q, want the edit row %q", stdout, want)
+	}
+	for _, line := range strings.Split(stdout, "\n") {
+		if strings.Contains(line, "\t → ") {
+			t.Fatalf("history line %q renders an arrow with nothing before it", line)
+		}
 	}
 
 	code, stdout, stderr = run(t, repository, "update", task.ID, "--remove-comment", comment.ID, "--no-sync", "--json")
@@ -315,9 +333,10 @@ func TestUpdateRefusesBlankAndMissingThreadTargets(t *testing.T) {
 		})
 	}
 
-	// Two attachments minted moments apart share a long ULID prefix, which is
-	// exactly why `show` prints identifiers whole: the short form is refused
-	// rather than resolved to whichever one came first.
+	// A ULID opens with ten characters of millisecond timestamp, so two
+	// attachments added seconds apart share the first several of them — which
+	// is exactly why `show` prints identifiers whole: a shared prefix is
+	// refused rather than resolved to whichever one came first.
 	ambiguous := showTask(t, repository, task.ID).Attachments[0].ID[:4]
 	code, _, stderr := run(
 		t, repository, "update", task.ID, "--remove-attachment", ambiguous, "--no-sync", "--json",
@@ -658,6 +677,170 @@ func TestUpdateRefusesAnOversizedFileBeforeReadingIt(t *testing.T) {
 		t.Fatalf("missing file code = %d, want 4; stderr = %q", code, stderr)
 	}
 	assertJSONError(t, stderr, core.CategoryNotFound, "")
+}
+
+func TestUpdateRefusesToAttachAnythingButARegularFile(t *testing.T) {
+	// Mutation caught: gating --attach-file on IsDir and the stat's size alone.
+	// A ceiling read off a stat bounds only a file whose size a stat describes.
+	// A character device reports zero bytes and then reads forever — /dev/zero
+	// took a measured 14.4 GB of resident memory in four seconds — and a named
+	// pipe reports zero bytes and then blocks until somebody writes to it, so
+	// the command never returns at all. Core cannot cover for either: its own
+	// ceiling is asked of bytes that are already in memory.
+	//
+	// The pipe is what this test uses, because it is the case a test can create
+	// portably; a device file cannot be made in a temporary directory. Both are
+	// refused by the same check, and the pipe covers the worse failure of the
+	// two — this test hanging is itself the report that the check is gone.
+	repository := initializedRepository(t)
+	task := createThreadTask(t, repository)
+	pipe := filepath.Join(t.TempDir(), "attachment.fifo")
+	if err := syscall.Mkfifo(pipe, 0o600); err != nil {
+		t.Fatalf("mkfifo %s: %v", pipe, err)
+	}
+
+	code, stdout, stderr := run(t, repository, "update", task.ID, "--attach-file", pipe, "--no-sync", "--json")
+	if code != 5 {
+		t.Fatalf("named pipe code = %d, want 5; stderr = %q", code, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want nothing written", stdout)
+	}
+	assertJSONError(t, stderr, core.CategoryValidation, "cannot attach "+pipe+", which is a named pipe")
+	if attachments := showTask(t, repository, task.ID).Attachments; len(attachments) != 0 {
+		t.Fatalf("attachments = %#v, want none", attachments)
+	}
+}
+
+func TestShowGetAttachmentReportsBytesThisCloneDoesNotHave(t *testing.T) {
+	// Mutation caught: reading the blob without reporting a missing object as a
+	// missing attachment. The checkpoint records an object ID, and a clone can
+	// hold the checkpoint without holding the object — a partial clone, a
+	// damaged object store — so "the task says there is a file here and this
+	// clone cannot produce it" has to be its own answer rather than a decode
+	// failure. Removing the loose object is how a test reaches that state
+	// without a network.
+	repository := initializedRepository(t)
+	task := createThreadTask(t, repository)
+	path := writeAttachmentFile(t, "notes.txt", []byte("notes\n"))
+	run(t, repository, "update", task.ID, "--attach-file", path, "--no-sync")
+	attachment := showTask(t, repository, task.ID).Attachments[0]
+
+	object := filepath.Join(repository, ".git", "objects", attachment.Blob[:2], attachment.Blob[2:])
+	if _, err := os.Stat(object); err != nil {
+		t.Fatalf("stat %s: %v; the attachment blob is expected loose in a fresh repository", object, err)
+	}
+	if err := os.Remove(object); err != nil {
+		t.Fatalf("remove %s: %v", object, err)
+	}
+
+	code, stdout, stderr := run(t, repository, "show", task.ID, "--get-attachment", attachment.ID)
+	if code != 4 {
+		t.Fatalf("missing blob code = %d, want 4; stderr = %q", code, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want nothing written", stdout)
+	}
+	assertHumanError(t, stderr, "attachment object "+attachment.Blob+" is not in this clone")
+}
+
+// The identifiers a caller types are resolved inside the mutation, after the
+// session's fetch, and the two clones here are the only way to say so: every
+// other test in this file is one clone with --no-sync, where resolving before
+// the fetch and resolving after it are the same thing.
+//
+// Mutation caught: hoisting the resolution out of the mutation closure, which
+// resolves against whatever this clone last saw. Both halves below fail under
+// that mutation, in opposite directions — the first because the comment is not
+// in the stale view, the second because the stale view is missing the second
+// comment that makes the prefix ambiguous.
+func TestUpdateResolvesThreadTargetsAgainstTheFetchedThread(t *testing.T) {
+	author, editor := cliSyncRepositories(t)
+	task := cliCreateTask(t, author, "Shared task")
+	if code, _, stderr := run(t, author, "push"); code != 0 {
+		t.Fatalf("author push code = %d; stderr = %q", code, stderr)
+	}
+	if code, _, stderr := run(t, editor, "fetch"); code != 0 {
+		t.Fatalf("editor fetch code = %d; stderr = %q", code, stderr)
+	}
+
+	// The editor writes a comment it keeps to itself, and the author writes one
+	// and publishes it. Neither clone has seen the other's.
+	if code, _, stderr := run(t, editor, "update", task.ID, "--comment", "from the editor", "--no-sync"); code != 0 {
+		t.Fatalf("editor comment code = %d; stderr = %q", code, stderr)
+	}
+	if code, _, stderr := run(t, author, "update", task.ID, "--comment", "from the author", "--no-sync"); code != 0 {
+		t.Fatalf("author comment code = %d; stderr = %q", code, stderr)
+	}
+	if code, _, stderr := run(t, author, "push"); code != 0 {
+		t.Fatalf("author push code = %d; stderr = %q", code, stderr)
+	}
+	authorComment := showTask(t, author, task.ID).Comments[0]
+	editorComment := showTask(t, editor, task.ID).Comments[0]
+	shared := commonPrefix(authorComment.ID, editorComment.ID)
+	if len(shared) < 3 || len(shared) >= len(authorComment.ID) {
+		t.Fatalf("shared prefix %q of %s and %s is not a usable ambiguous prefix",
+			shared, authorComment.ID, editorComment.ID)
+	}
+
+	// A prefix that names one comment in the editor's stale view names two once
+	// the fetch inside the mutation lands the author's, and is refused.
+	code, _, stderr := run(t, editor, "update", task.ID, "--edit-comment", shared, "--comment", "rewritten")
+	if code != 5 {
+		t.Fatalf("ambiguous-after-fetch code = %d, want 5; stderr = %q", code, stderr)
+	}
+	assertHumanError(t, stderr, `comment ID prefix "`+shared+`" is ambiguous`)
+	for _, comment := range showTask(t, editor, task.ID).Comments {
+		if comment.Body == "rewritten" {
+			t.Fatalf("comments = %#v, want the refused edit to have written nothing",
+				showTask(t, editor, task.ID).Comments)
+		}
+	}
+
+	// And a comment the editor has never seen can be named the moment the fetch
+	// brings it in, which is what the ordering buys.
+	if code, _, stderr := run(t, author, "update", task.ID, "--comment", "second from the author"); code != 0 {
+		t.Fatalf("author second comment code = %d; stderr = %q", code, stderr)
+	}
+	var unseen core.Comment
+	for _, comment := range showTask(t, author, task.ID).Comments {
+		if comment.Body == "second from the author" {
+			unseen = comment
+		}
+	}
+	if unseen.ID == "" {
+		t.Fatal("author's second comment was not recorded")
+	}
+	if _, found := findComment(showTask(t, editor, task.ID).Comments, unseen.ID); found {
+		t.Fatal("the editor already holds the author's second comment; the test proves nothing")
+	}
+
+	code, _, stderr = run(t, editor, "update", task.ID, "--edit-comment", unseen.ID, "--comment", "rewritten")
+	if code != 0 {
+		t.Fatalf("edit-after-fetch code = %d, want 0; stderr = %q", code, stderr)
+	}
+	edited, found := findComment(showTask(t, editor, task.ID).Comments, unseen.ID)
+	if !found || edited.Body != "rewritten" {
+		t.Fatalf("comment %s = %#v, want the editor's new body", unseen.ID, edited)
+	}
+}
+
+func findComment(comments []core.Comment, id string) (core.Comment, bool) {
+	for _, comment := range comments {
+		if comment.ID == id {
+			return comment, true
+		}
+	}
+	return core.Comment{}, false
+}
+
+func commonPrefix(left, right string) string {
+	limit := min(len(left), len(right))
+	index := 0
+	for index < limit && left[index] == right[index] {
+		index++
+	}
+	return left[:index]
 }
 
 func TestShowSanitizesThreadTextAndKeepsJSONExact(t *testing.T) {

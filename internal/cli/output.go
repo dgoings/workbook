@@ -626,6 +626,18 @@ func writeFieldChanges(output io.Writer, fields []core.FieldChange) {
 				fmt.Fprintf(output, "\t%s:\t%s\n", label, renderWordDiff(change.Diff))
 				continue
 			}
+			if change.From == "" {
+				// A replacement whose previous value is not known has nothing
+				// to put on the left of the arrow, and a line beginning "→"
+				// reads as a renderer that lost something rather than as the
+				// change it describes. The change log's account of a comment
+				// edit is the case: it summarizes one commit and deliberately
+				// does not replay the thread to recover what the comment said
+				// before, so what it can report is the new body and the fact
+				// that it replaced one.
+				fmt.Fprintf(output, "\t%s:\t%s\t(edited)\n", label, singleLine(change.To))
+				continue
+			}
 			fmt.Fprintf(output, "\t%s:\t%s → %s\n", label, singleLine(change.From), singleLine(change.To))
 		}
 	}
@@ -688,8 +700,10 @@ func writeShow(output io.Writer, task core.Task) {
 // Identifiers are printed whole rather than shortened. They are what the
 // --edit-comment and --remove-comment flags take, and those flags accept a
 // prefix, so a reader who wants a short form can take one — while a display
-// that shortened them would sometimes print two comments under one string,
-// because comments minted moments apart share a long ULID prefix.
+// that shortened them would sometimes print two comments under one string. A
+// ULID opens with ten characters of millisecond timestamp and is random after
+// that, so anything shorter than eleven characters is shared outright by two
+// items minted in the same millisecond, which one pack's are.
 func writeComments(output io.Writer, comments []core.Comment) {
 	if len(comments) == 0 {
 		return
