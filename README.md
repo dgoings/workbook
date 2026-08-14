@@ -353,7 +353,7 @@ what a task document may contain and how much of one it will read back:
 | Attachment URL | 2,048 bytes | One link attachment's URL. |
 | Git object | 4,194,304 bytes (4 MiB) | Any single object Workbook reads: a commit, a task tree, or a stored document. |
 | Web request body | 1,048,576 bytes (1 MiB) | One request to `workbook serve`, except the attachment upload below. |
-| Web attachment upload body | 1,463,640 bytes | One `POST /api/tasks/<id>/attachments`, which carries an attached file base64-encoded inside JSON. Base64 costs four bytes for every three, so the largest attachment needs four thirds of its own ceiling plus the envelope around it. It bounds the encoding, not the attachment: a file over 1 MiB is still refused, in the same words the CLI uses. |
+| Web attachment upload body | 1,463,640 bytes | One `POST /api/tasks/<id>/attachments`, which carries an attached file base64-encoded inside JSON. Base64 costs four bytes for every three, so the largest attachment needs four thirds of its own ceiling plus the envelope around it. It bounds the encoding, not the attachment: a file over 1 MiB is still refused, against the same number and in the same sentence core answers with, before anything is staged. |
 
 Lengths are counted in bytes rather than characters, because bytes are what a
 reader has to allocate. A field over its limit never reaches storage: the CLI
@@ -1510,11 +1510,14 @@ the same rules every other body is: an unknown member, a trailing value, or
 malformed JSON is refused rather than partly read.
 
 The five thread mutations are the `workbook update` comment and attachment flags
-reached over HTTP: they run the same planners, refuse what those flags refuse in
-the same words, and record the same operations. Each takes an optional
-`expectedHead` and answers with the whole task, thread and attachment list
-included, the way every other task mutation does; the two removals also accept no
-body at all, which is the bare verb.
+reached over HTTP: they run the same planners and record the same operations, so
+a change either surface refuses is refused by both, in the words the planner
+answers with. They also refuse two things only a request can be wrong about — a
+`content` member that is not base64, and a body that mixes the two kinds — which
+have no flag to be the counterpart of. Each takes an optional `expectedHead` and
+answers with the whole task, thread and attachment list included, the way every
+other task mutation does; the two removals also accept no body at all, which is
+the bare verb.
 
 An upload carries the file base64-encoded in a JSON member rather than as a
 multipart part, and that is the same-origin guard's doing rather than a
@@ -1527,7 +1530,11 @@ than read as one of them. `media` is accepted and the board's own upload never
 sends it: a media type is written into shared history, and a browser's guess for
 the same bytes differs from machine to machine, so the file name decides it
 through the table Workbook keeps. A file over the ceiling is refused before
-anything is staged, so a refused upload leaves no Git object behind.
+anything is staged, so an upload refused for its size leaves no Git object
+behind. That is a claim about the size rule alone, and deliberately: the
+refusals that come after staging — a name past its own ceiling, most of all —
+write the blob first and then decline the attachment, which is the mutation
+boundary's existing order rather than anything this route decides.
 
 `GET /api/tasks/<id>/attachments/<aid>` is the one route that answers with
 somebody else's bytes, and its headers are the whole of its security:
@@ -1550,7 +1557,9 @@ somebody else's bytes, and its headers are the whole of its security:
 A link holds no bytes: the route refuses one and names the URL, so a client that
 followed the wrong address is told where the thing is. An attachment whose blob
 this clone does not hold — which a future compaction that strips attachments will
-produce — is answered `404`.
+produce — is answered `404`. So is an identifier the addressed task does not
+carry: an attachment is read out of that task's own live list, so naming another
+task's attachment, or a comment, reaches nothing.
 
 The four vocabulary routes are `workbook status` reached over HTTP: they run the
 same planners, so they refuse what the verbs refuse, in the same words, and

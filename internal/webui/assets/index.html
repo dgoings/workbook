@@ -443,16 +443,22 @@
     .comment-add__actions, .attachment-add__actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
     .attachment { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .2rem .75rem; padding: .55rem .7rem; border: 1px solid #d5deea; border-radius: 4px; background: #fff; }
     .attachment__name { grid-column: 1; min-width: 0; font-size: .84rem; font-weight: 700; overflow-wrap: anywhere; }
-    /* inline-block with padding, so the one action in an attachment's row is a
-       24px target rather than an 18px line of text. Measured on the page: the
-       bare anchor was 18px tall at every viewport, which is under what WCAG 2.2
-       asks of a target, and this is the control that downloads the file. */
-    .attachment__name a { display: inline-block; padding: .2rem 0; color: #172033; text-decoration-color: #a9b7ca; text-underline-offset: .16em; }
+    /* inline-block with padding and a floor on both axes, so the one action in
+       an attachment's row is a 24px target whatever it is called. Measured on
+       the page: the bare anchor was 18px tall at every viewport, and a file
+       named `..` — which core allows, since it forbids only a path separator
+       and a NUL — drew an 8px-wide one. Both are under what WCAG 2.2 asks of a
+       target, and this is the control that downloads the file. The minimum only
+       decides anything for a name of one or two characters; every longer one is
+       already past it. */
+    .attachment__name a { display: inline-block; min-width: 1.5rem; padding: .2rem 0; color: #172033; text-decoration-color: #a9b7ca; text-underline-offset: .16em; }
     .attachment__name a:hover { color: #2457d6; text-decoration-color: currentcolor; }
     .attachment__meta { grid-column: 1; margin: 0; color: #56647a; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .68rem; overflow-wrap: anywhere; }
     .attachment__remove { grid-column: 2; grid-row: 1 / span 2; }
+    /* The two adders, each its own form: see the client for why one form with
+       two buttons in it was a bug rather than a shortcut. */
     .attachment-add { display: grid; gap: .55rem; padding-top: .1rem; }
-    .attachment-add__group { display: grid; gap: .3rem; }
+    .attachment-add__group { display: grid; gap: .3rem; margin: 0; }
     .attachment-add input[type="text"], .attachment-add input[type="url"] { width: 100%; border: 1px solid #9eafc5; border-radius: 4px; background: #fff; color: #172033; font: inherit; font-size: .82rem; padding: .45rem .55rem; }
     /* The file control is drawn by the browser, so its target size is decided
        by the font it inherits rather than by any padding here: at .78rem the
@@ -2442,6 +2448,17 @@
         }
         return count + " B";
       }
+      // Two sizes as a sentence can tell them apart. A file one byte over the
+      // ceiling rounds to the ceiling's own unit — "enormous.bin is 1 MiB and
+      // must not exceed 1 MiB" reads as a refusal of something allowed — so a
+      // pair the unit cannot separate is given in bytes, which is what the
+      // server's own refusal says.
+      function comparableSizes(size, ceiling) {
+        const shown = attachmentSize(size);
+        const bound = attachmentSize(ceiling);
+        if (shown !== bound) return [shown, bound];
+        return [size + " bytes", ceiling + " bytes"];
+      }
       // Whether a stored link may be drawn as a link.
       //
       // Core refuses everything but http and https when somebody attaches one,
@@ -2548,17 +2565,23 @@
         panel.setBusy(true);
         panel.report("");
         try {
-          const document = await mutateTask(method, path, values);
-          panel.adoptHead(document.task && document.task.head || "");
+          // Named `answer` rather than `document`, which is what the older call
+          // sites in this file call it: a const by that name shadows the global
+          // `document` for the whole function body, so any later — or textually
+          // earlier — createElement in the same function throws rather than
+          // building a node. Nothing here needs the global, and the next edit
+          // that does should not have to notice.
+          const answer = await mutateTask(method, path, values);
+          panel.adoptHead(answer.task && answer.task.head || "");
           // The model holds what the server just answered with, so the card, the
           // next poll and this panel cannot disagree about the task in between.
-          replaceProjectedTask(document.task);
+          replaceProjectedTask(answer.task);
           rerender();
-          if (!panel.owns()) return document;
-          panel.follow(document.task);
-          const warnings = mutationWarnings(document);
+          if (!panel.owns()) return answer;
+          panel.follow(answer.task);
+          const warnings = mutationWarnings(answer);
           if (warnings.length) panel.report("Saved durably. " + warnings.join(" "));
-          return document;
+          return answer;
         } catch (error) {
           if (!panel.owns()) {
             reportDetachedThreadFailure(panel.taskID, describe, error);
@@ -2690,9 +2713,9 @@
               panel.report("A comment cannot be blank.");
               return;
             }
-            const document = await writeThreadChange(
+            const answer = await writeThreadChange(
               panel, "PATCH", commentPath(comment.id), headed(head, { body: area.value }), "that edit");
-            if (!document) return;
+            if (!answer) return;
             editing.delete(comment.id);
             render();
           });
@@ -2710,9 +2733,13 @@
         function render() {
           panel.resetControls();
           const known = new Set(comments.map((comment) => comment.id));
-          const rows = comments.map((comment) => {
+          const rows = comments.map((comment, at) => {
             const entry = editing.get(comment.id);
             if (!entry) return commentRow(comment);
+            // Where this comment stands in the thread, remembered while it is
+            // still in it. It is what puts the row back in the same place if it
+            // stops being in it, below.
+            entry.at = at;
             text(entry.note, "");
             entry.buttons.forEach((button) => panel.claim(button));
             return entry.row;
@@ -2721,11 +2748,16 @@
           // clone, or by this reader somewhere else — keeps its row rather than
           // taking the words in it away mid-sentence. It says what happened, and
           // a save from it is refused by the server, which is the truth about it.
+          //
+          // It keeps its place, too. Appended to the end, the row jumped down the
+          // page under the caret of somebody mid-sentence, which is the one thing
+          // keeping the row was for.
           editing.forEach((entry, id) => {
             if (known.has(id)) return;
             text(entry.note, "This comment was removed elsewhere. Your edit is kept here, but saving it would be refused.");
             entry.buttons.forEach((button) => panel.claim(button));
-            rows.push(entry.row);
+            const at = typeof entry.at === "number" ? Math.min(entry.at, rows.length) : rows.length;
+            rows.splice(at, 0, entry.row);
           });
           panel.claim(submit);
           panel.setCount(comments.length === 1 ? "1 comment" : comments.length + " comments");
@@ -2740,10 +2772,10 @@
             panel.report("A comment cannot be blank.");
             return;
           }
-          const document = await writeThreadChange(
+          const answer = await writeThreadChange(
             panel, "POST", "/api/tasks/" + encodeURIComponent(taskID) + "/comments",
             headed(head, { body: body.value }), "your comment");
-          if (document) body.value = "";
+          if (answer) body.value = "";
         });
         panel.follow = (held) => {
           comments = (held && held.comments) || [];
@@ -2794,10 +2826,16 @@
       function taskAttachments(taskID, task, head, owner) {
         const panel = taskPanel(taskID, "attachments", "Attachments", owner);
         panel.adoptHead = head.adopt;
-        const form = document.createElement("form");
-        form.className = "attachment-add";
-        const fileGroup = document.createElement("div");
+        // Two forms rather than one with two buttons in it. A form is one
+        // intent, and pressing Return is a submit: with both controls in one
+        // form, a reader who had chosen a file and pressed Return submitted the
+        // *link* — answered "A link needs a URL", with no request sent and the
+        // file still unattached. Each control now submits the thing it is for.
+        const adder = document.createElement("div");
+        adder.className = "attachment-add";
+        const fileGroup = document.createElement("form");
         fileGroup.className = "attachment-add__group";
+        fileGroup.dataset.attachmentFileForm = "";
         const fileLabel = document.createElement("label");
         fileLabel.setAttribute("for", "attachment-file");
         text(fileLabel, "Attach a file");
@@ -2808,10 +2846,19 @@
         const fileActions = document.createElement("div");
         fileActions.className = "attachment-add__actions";
         const attachFile = threadButton("Attach file", true);
+        attachFile.type = "submit";
         fileActions.append(attachFile);
         fileGroup.append(fileLabel, file, fileActions);
-        const linkGroup = document.createElement("div");
+        const linkGroup = document.createElement("form");
         linkGroup.className = "attachment-add__group";
+        linkGroup.dataset.attachmentLinkForm = "";
+        // The browser must not vet this field, because a URL it refuses is a URL
+        // nobody is told about: constraint validation cancels the submit, and
+        // this page's only way to say anything is the panel's own line. Left on,
+        // typing "not a url" and pressing Attach did nothing at all — no request,
+        // no message. Core answers instead, in the words `--attach-url` answers
+        // with, and http-or-https is its rule to enforce anyway.
+        linkGroup.noValidate = true;
         const linkLabel = document.createElement("label");
         linkLabel.setAttribute("for", "attachment-url");
         text(linkLabel, "Attach a link");
@@ -2832,8 +2879,8 @@
         attachLink.type = "submit";
         linkActions.append(attachLink);
         linkGroup.append(linkLabel, url, caption, linkActions);
-        form.append(fileGroup, linkGroup);
-        panel.section.append(form, panel.status);
+        adder.append(fileGroup, linkGroup);
+        panel.section.append(adder, panel.status);
 
         let attachments = [];
         function attachmentPath(attachmentID) {
@@ -2909,8 +2956,9 @@
           // the server's own, rendered into the page, so there is no second
           // copy of it here to go stale.
           if (attachmentFileLimit && chosen.size > attachmentFileLimit) {
-            panel.report(chosen.name + " is " + attachmentSize(chosen.size) + " and must not exceed " +
-              attachmentSize(attachmentFileLimit) + " (" + attachmentFileLimit + " bytes); attach a link instead.");
+            const [size, ceiling] = comparableSizes(chosen.size, attachmentFileLimit);
+            panel.report(chosen.name + " is " + size + " and must not exceed " + ceiling +
+              "; attach a link instead.");
             return;
           }
           if (chosen.size === 0) {
@@ -2927,7 +2975,7 @@
             return;
           }
           panel.setBusy(false);
-          const document = await writeThreadChange(
+          const answer = await writeThreadChange(
             panel, "POST", "/api/tasks/" + encodeURIComponent(taskID) + "/attachments",
             // No media type. The file name decides it, through the table core
             // keeps, because a media type is written into shared history and
@@ -2935,7 +2983,7 @@
             // machine — two clones attaching one file have to label it once.
             headed(head, { kind: "file", name: chosen.name, content: encoded }),
             "that attachment");
-          if (document) file.value = "";
+          if (answer) file.value = "";
         }
         async function addLink() {
           if (panel.busy) return;
@@ -2945,15 +2993,18 @@
           }
           const values = { kind: "link", url: url.value.trim() };
           if (caption.value.trim()) values.label = caption.value.trim();
-          const document = await writeThreadChange(
+          const answer = await writeThreadChange(
             panel, "POST", "/api/tasks/" + encodeURIComponent(taskID) + "/attachments",
             headed(head, values), "that link");
-          if (!document) return;
+          if (!answer) return;
           url.value = "";
           caption.value = "";
         }
-        attachFile.addEventListener("click", uploadFile);
-        form.addEventListener("submit", (event) => {
+        fileGroup.addEventListener("submit", (event) => {
+          event.preventDefault();
+          return uploadFile();
+        });
+        linkGroup.addEventListener("submit", (event) => {
           event.preventDefault();
           return addLink();
         });

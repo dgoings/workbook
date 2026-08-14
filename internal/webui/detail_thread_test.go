@@ -25,6 +25,7 @@ const (
 	threadPageFileID  = "01K0M6B8A4FTT8C39MXXYTWA01"
 	threadPageLinkID  = "01K0M6B8A4FTT8C39MXXYTWA02"
 	threadPageEvilURL = "01K0M6B8A4FTT8C39MXXYTWA03"
+	threadPageRelURL  = "01K0M6B8A4FTT8C39MXXYTWA04"
 )
 
 // threadPageTask is one task carrying a thread, an attached file, a link, and a
@@ -80,9 +81,17 @@ function panelStatusText(name) {
   const line = panel && findElement(panel, (element) => hasDataKey(element, "panelStatus"));
   return line ? line.textContent : "";
 }
-function panelControl(name, caption) {
-  const panel = panelSection(name);
-  return findElement(panel, (element) => element.tagName === "BUTTON" && element.textContent === caption);
+// The attachment panel draws two forms — one per intent — so a test names the
+// one it means rather than taking the first it finds.
+function attachmentForm(which) {
+  const panel = panelSection("attachments");
+  const key = which === "file" ? "attachmentFileForm" : "attachmentLinkForm";
+  const form = findElement(panel, (element) => hasDataKey(element, key));
+  if (!form) throw new Error("the attachments panel has no " + which + " form");
+  return form;
+}
+function submitForm(form) {
+  return form.eventListeners.submit({ preventDefault() {} });
 }
 function rowControl(row, caption) {
   return findElement(row, (element) => element.tagName === "BUTTON" && element.textContent === caption);
@@ -194,6 +203,13 @@ func TestHandlerClientNeverDrawsAnUnsafeLinkAsALink(t *testing.T) {
 		{ID: threadPageFileID, Author: "a@example.com", AttachmentData: core.AttachmentData{
 			Kind: core.AttachmentLink, URL: "data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==", Label: "Notes",
 		}},
+		// A relative URL is the quiet one. Resolved against this page it would
+		// become a link to the board itself — /api/tasks/…/delete, say — drawn
+		// under whatever label its author chose, which is a link this board
+		// invented rather than one anybody stored.
+		{ID: threadPageRelURL, Author: "a@example.com", AttachmentData: core.AttachmentData{
+			Kind: core.AttachmentLink, URL: "../../api/tasks", Label: "Relative",
+		}},
 	}
 	tasks := []core.Task{task}
 	program := threadPageProgram(t, tasks, `
@@ -209,8 +225,12 @@ setTimeout(() => {
   if (anchors[0].rel !== "noopener noreferrer nofollow" || anchors[0].target !== "_blank") {
     throw new Error("a link attachment opens without its guards: " + anchors[0].rel + " " + anchors[0].target);
   }
-  if (anchors[1] || anchors[2]) {
-    throw new Error("a javascript: or data: attachment was drawn as a link");
+  if (anchors[1] || anchors[2] || anchors[3]) {
+    throw new Error("a javascript:, data: or relative attachment was drawn as a link");
+  }
+  const relative = findElement(rows[3], (element) => hasClassToken(element, "attachment__name"));
+  if (relative.textContent !== "Relative") {
+    throw new Error("the relative link is not drawn as its label: " + JSON.stringify(relative.textContent));
   }
   const unsafe = findElement(rows[1], (element) => hasClassToken(element, "attachment__name"));
   if (unsafe.textContent !== "Read me") {
@@ -483,6 +503,11 @@ setTimeout(async () => {
   const rows = panelRows("comments");
   const kept = rows.find((row) => row.dataset.commentId === `+strconv.Quote(threadPageOldest)+`);
   if (!kept) throw new Error("the row being edited was taken away");
+  // And it is where it was. Appended to the end it would have jumped down the
+  // page under the caret of somebody mid-sentence.
+  if (rows[0] !== kept) {
+    throw new Error("the kept row moved to position " + rows.indexOf(kept));
+  }
   const stillOpen = findElement(kept, (element) => hasDataKey(element, "commentEditor"));
   if (!stillOpen || stillOpen.value !== "Words worth keeping") {
     throw new Error("the edit did not survive: " + JSON.stringify(stillOpen && stillOpen.value));
@@ -552,6 +577,11 @@ setTimeout(async () => {
 // A file too large for the ceiling is refused before it is read, encoded or
 // sent, and the refusal names the ceiling the server holds. The server enforces
 // it too; this is the reader being told now rather than a megabyte later.
+//
+// A file one byte over the ceiling is also the case where a rounded unit says
+// nothing: "1 MiB and must not exceed 1 MiB" reads as a refusal of something
+// allowed, so a pair the unit cannot separate is given in bytes — which is what
+// the server's own refusal says. A file that is plainly larger keeps the unit.
 func TestHandlerClientRefusesAnOversizedUploadBeforeSendingIt(t *testing.T) {
 	node := requireNode(t)
 	tasks := []core.Task{threadPageTask()}
@@ -562,19 +592,89 @@ setTimeout(async () => {
   const panel = panelSection("attachments");
   const chooser = findElement(panel, (element) => element.id === "attachment-file");
   chooser.files = [new TestFile("enormous.bin", `+strconv.Itoa(core.MaxAttachmentFileBytes+1)+`, "x")];
-  await panelControl("attachments", "Attach file").eventListeners.click();
+  await submitForm(attachmentForm("file"));
 
   const reported = panelStatusText("attachments");
-  if (!reported.includes("enormous.bin") || !reported.includes("`+strconv.Itoa(core.MaxAttachmentFileBytes)+`") ||
-      !reported.includes("attach a link instead")) {
-    throw new Error("the refusal does not name the file and the ceiling: " + JSON.stringify(reported));
+  if (!reported.includes("enormous.bin") || !reported.includes("attach a link instead")) {
+    throw new Error("the refusal does not name the file: " + JSON.stringify(reported));
+  }
+  // Both sides in bytes, because both round to the same unit.
+  if (!reported.includes("`+strconv.Itoa(core.MaxAttachmentFileBytes+1)+` bytes") ||
+      !reported.includes("`+strconv.Itoa(core.MaxAttachmentFileBytes)+` bytes")) {
+    throw new Error("a one-byte overrun was described in units that cannot tell it apart: " + JSON.stringify(reported));
   }
   if (fetchCalls.length !== before) throw new Error("an over-sized file was sent anyway");
   if (readCalls.length !== 0) throw new Error("an over-sized file was read anyway");
+
+  // A file the unit can separate keeps the unit, which is what a reader can
+  // actually judge a download by.
+  chooser.files = [new TestFile("enormous.bin", `+strconv.Itoa(core.MaxAttachmentFileBytes*9)+`, "x")];
+  await submitForm(attachmentForm("file"));
+  const second = panelStatusText("attachments");
+  if (!second.includes("9 MiB") || !second.includes("1 MiB")) {
+    throw new Error("a plainly larger file was not described in units: " + JSON.stringify(second));
+  }
+  if (fetchCalls.length !== before) throw new Error("an over-sized file was sent anyway");
 }, 0);
 `)
 	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute the oversized upload: %v\n%s", err, output)
+	}
+}
+
+// Choosing a file and pressing Return attaches the file.
+//
+// It used to attach nothing: both controls sat in one form, so Return submitted
+// the link half — "A link needs a URL", no request, and the file the reader had
+// chosen still sitting there. Each control is its own form now, so Return in
+// either one submits the intent it belongs to.
+func TestHandlerClientAttachesTheFileWhenTheFileFormIsSubmitted(t *testing.T) {
+	node := requireNode(t)
+	task := threadPageTask()
+	answered := task
+	answered.Head = "head-2"
+	tasks := []core.Task{task}
+	program := threadPageProgram(t, tasks, `
+`+fileHarness+`
+const answered = `+string(mustJSON(t, answered))+`;
+setTimeout(async () => {
+  const boardFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => {
+    if ((options.method || "GET") === "GET") return boardFetch(url, options);
+    fetchCalls.push({ url, options });
+    return { ok: true, json: async () => ({ format: "workbook.task-mutation", version: 1, task: answered }) };
+  };
+  const file = attachmentForm("file");
+  const link = attachmentForm("link");
+  if (file === link) throw new Error("the two adders are still one form");
+
+  const chooser = findElement(panelSection("attachments"), (element) => element.id === "attachment-file");
+  chooser.files = [new TestFile("notes.txt", 5, "notes")];
+  await submitForm(file);
+
+  const writes = fetchCalls.filter((call) => call.options.method === "POST");
+  if (writes.length !== 1) {
+    throw new Error("submitting the file form sent " + writes.length + " requests; panel says " +
+      JSON.stringify(panelStatusText("attachments")));
+  }
+  const sent = JSON.parse(writes[0].options.body);
+  if (sent.kind !== "file" || sent.name !== "notes.txt") {
+    throw new Error("the file form sent " + JSON.stringify(sent));
+  }
+  if (panelStatusText("attachments") !== "") {
+    throw new Error("an accepted upload reported something: " + JSON.stringify(panelStatusText("attachments")));
+  }
+
+  // The link form, meanwhile, still refuses to send an empty URL and says so —
+  // which is the answer that used to swallow a file upload.
+  await submitForm(link);
+  if (!panelStatusText("attachments").includes("needs a URL")) {
+    throw new Error("the link form said " + JSON.stringify(panelStatusText("attachments")));
+  }
+}, 0);
+`)
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute the file form submit: %v\n%s", err, output)
 	}
 }
 
@@ -600,7 +700,7 @@ setTimeout(async () => {
   const panel = panelSection("attachments");
   const chooser = findElement(panel, (element) => element.id === "attachment-file");
   chooser.files = [new TestFile("screenshot.svg", 5, "hello", "image/svg+xml")];
-  await panelControl("attachments", "Attach file").eventListeners.click();
+  await submitForm(attachmentForm("file"));
 
   const writes = fetchCalls.filter((call) => call.options.method === "POST");
   if (writes.length !== 1 ||
@@ -650,8 +750,14 @@ setTimeout(async () => {
   const label = findElement(panel, (element) => element.id === "attachment-label");
   url.value = "  https://example.test/pr/12  ";
   label.value = " The pull request ";
-  const form = findElement(panel, (element) => element.tagName === "FORM");
-  await form.eventListeners.submit({ preventDefault() {} });
+  const form = attachmentForm("link");
+  // The browser must not vet this field: constraint validation cancels the
+  // submit, and a cancelled submit is a click this page could not report on.
+  // The harness has no constraint validation to run — it calls the submit
+  // listener directly — so what is pinned here is the property a browser reads,
+  // which is the whole of the fix.
+  if (form.noValidate !== true) throw new Error("the link form still lets the browser vet the URL");
+  await submitForm(form);
 
   const writes = fetchCalls.filter((call) => call.options.method === "POST");
   if (writes.length !== 1) throw new Error("writes = " + writes.length);

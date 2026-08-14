@@ -211,10 +211,17 @@ func (handler *handler) addTaskAttachment(writer http.ResponseWriter, request *h
 // bytes that are not base64 or are past the ceiling.
 //
 // The size is refused here rather than only in core because refusing it here
-// refuses it before the service is called at all — which is the same order core
-// itself keeps for the same reason, so that no refused attachment leaves a Git
-// object behind for a later `git gc` to find. The number and the wording are
-// core's, so the two cannot disagree about what is allowed.
+// refuses it before the service is called at all — the same order core itself
+// keeps, and for the same reason: an over-sized upload must not write the very
+// megabyte the ceiling exists to keep out, leaving it for a later `git gc` to
+// find. The number and the wording are core's, so the two cannot disagree about
+// what is allowed.
+//
+// It is the size rule alone that runs ahead of staging, here as in core. The
+// ceilings asked after the fold — an attachment name past its own, most of all
+// — stage the blob and then decline the attachment, which is the mutation
+// boundary's order rather than this route's, and is why nothing here claims
+// that a refused upload never leaves an object behind.
 func (body addAttachmentRequest) input() (core.AttachmentAddInput, error) {
 	input := core.AttachmentAddInput{
 		Media:        body.Media,
@@ -343,6 +350,11 @@ func (handler *handler) serveTaskAttachment(writer http.ResponseWriter, request 
 	media, disposition := attachmentDelivery(attachment.Media)
 	writer.Header().Set("Content-Type", media)
 	writer.Header().Set("Content-Disposition", contentDisposition(disposition, attachment.Name))
+	// Kept, though writeSecurityHeaders has already set it for every response on
+	// this board. Elsewhere it is hygiene over JSON this package wrote; here it
+	// is the rule that stops a browser deciding for itself that somebody else's
+	// bytes are HTML, and a rule that load-bearing is stated where it is relied
+	// on rather than inherited from a helper a later edit could narrow.
 	writer.Header().Set("X-Content-Type-Options", "nosniff")
 	writer.Header().Set("Content-Security-Policy", attachmentSecurityPolicy)
 	writer.Header().Set("Content-Length", strconv.Itoa(len(content)))

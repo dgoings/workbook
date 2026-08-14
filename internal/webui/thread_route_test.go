@@ -516,9 +516,7 @@ func TestAttachmentDownloadServesHostileContentAsADownload(t *testing.T) {
 	if got := header.Get("X-Content-Type-Options"); got != "nosniff" {
 		t.Errorf("X-Content-Type-Options = %q, want nosniff", got)
 	}
-	if got := header.Get("Content-Security-Policy"); got != attachmentSecurityPolicy {
-		t.Errorf("Content-Security-Policy = %q, want %q", got, attachmentSecurityPolicy)
-	}
+	assertAttachmentContentPolicy(t, header)
 	if response.Body.String() != string(page) {
 		t.Errorf("body = %q, want the stored bytes unchanged", response.Body.String())
 	}
@@ -548,9 +546,7 @@ func TestAttachmentDownloadServesAnImageInline(t *testing.T) {
 	if got := header.Get("X-Content-Type-Options"); got != "nosniff" {
 		t.Errorf("X-Content-Type-Options = %q, want nosniff even inline", got)
 	}
-	if got := header.Get("Content-Security-Policy"); got != attachmentSecurityPolicy {
-		t.Errorf("Content-Security-Policy = %q, want the attachment policy", got)
-	}
+	assertAttachmentContentPolicy(t, header)
 	if got := header.Get("Content-Length"); got != "8" {
 		t.Errorf("Content-Length = %q, want 8", got)
 	}
@@ -738,6 +734,33 @@ func attachmentHandler(t *testing.T, calls *threadRouteCalls, attachment core.At
 			return calls.content, nil
 		},
 	})
+}
+
+// assertAttachmentContentPolicy states the policy an attachment is served
+// under, as a literal.
+//
+// Comparing the header with attachmentSecurityPolicy is what this used to do,
+// and it asserted nothing at all: the constant is what the route writes into the
+// header, so the two agree however the constant is edited. Changing it to
+// `default-src *` left the whole package green. This is the one string on this
+// board that decides what a browser may do with somebody else's bytes, so the
+// test spells it out and a change to it has to be made twice, deliberately.
+//
+// The page's own policy is named beside it, because they must never converge:
+// the page permits inline script, and the day an attachment is served under
+// that policy is the day a stored document can run on this origin.
+func assertAttachmentContentPolicy(t *testing.T, header http.Header) {
+	t.Helper()
+	const want = "default-src 'none'; sandbox"
+	if got := header.Get("Content-Security-Policy"); got != want {
+		t.Errorf("Content-Security-Policy = %q, want %q", got, want)
+	}
+	if attachmentSecurityPolicy != want {
+		t.Errorf("attachmentSecurityPolicy = %q, want %q", attachmentSecurityPolicy, want)
+	}
+	if attachmentSecurityPolicy == securityPolicy {
+		t.Error("an attachment is served under the page's own policy, which permits inline script")
+	}
 }
 
 func errorDocumentOf(t *testing.T, body []byte) ErrorBody {
