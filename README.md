@@ -1910,6 +1910,13 @@ image target — an external URL, a `data:` URI, an address on this board — is
 drawn as text as well: a board that fetched images named in task text would
 report every reader of every card to whoever wrote the task.
 
+The page's own content policy is the second lock on that door and the reason
+the first one can be trusted: it carries `img-src 'self'`, so the browser
+refuses any image address outside this server whatever the renderer builds. It
+is also load-bearing in the ordinary direction — without the directive, images
+fall back to `default-src 'none'` and a browser blocks every attachment picture
+on the page.
+
 **Links** are drawn as links only for `http` and `https`, and carry
 `rel="noopener noreferrer nofollow"` in a new tab, exactly as an attached link
 does. A target with any other scheme is drawn as its words with no address
@@ -1926,11 +1933,20 @@ this existed.
 **What deliberately does not render.** Raw HTML (markup in a task is text about
 markup — the renderer builds nodes and has no HTML path at all), tables,
 footnotes, bare URLs, setext headings, thematic breaks, indented code blocks,
-reference links, backslash escapes, and `***three delimiters***`. Nested lists
-render flat. An ordered list always counts from one. Anything the parser does
-not recognize, and anything it recognizes but cannot complete — an unclosed
-`**`, a fence with no end, a link whose target holds a space — is drawn exactly
-as it was typed. The failure mode is always "you see what you wrote".
+reference links, and `***three delimiters***`. Nested lists render flat. An
+ordered list always counts from one. A link's caption may hold no bracket, so
+`[a] b](https://…)` is text rather than a link captioned "a] b" — a caption is
+the words between one pair of brackets, never a run reaching across somebody
+else's. Anything the parser does not recognize, and anything it recognizes but
+cannot complete — an unclosed `**`, a fence with no end, a link whose target
+holds a space — is drawn exactly as it was typed.
+
+**There are no backslash escapes, and that is the one exception to the rule
+above.** A backslash is an ordinary character: it does not suppress the marker
+that follows it. `\*text\*` renders as *text* in italics with both backslashes
+still in it, which is not what somebody writing it meant. It is the only input
+this renderer draws as something other than what was typed, it is written down
+here rather than discovered, and it is what to fix first if the subset grows.
 
 The web experience is still local-first and intentionally narrow in scope.
 Authentication, hosted deployment, browser deletion, draft persistence, and

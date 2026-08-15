@@ -16,7 +16,22 @@ import (
 	"github.com/dgoings/workbook/internal/presentation"
 )
 
-const securityPolicy = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"
+// securityPolicy is what the page itself is served under.
+//
+// `img-src 'self'` is here because a description may draw an attachment of its
+// own task, through this server's own download route. Without the directive
+// those images fall back to `default-src 'none'` and a browser blocks every one
+// of them: measured in Chrome before it was added, twelve requests refused with
+// reason "csp" and a 19px broken-image box where the picture should be. The
+// fake DOM cannot see this — it has no loader and no policy — so the same page
+// that passed every test drew nothing at all.
+//
+// `'self'` and not one character more. The renderer already refuses every image
+// target that is not an attachment of the task, and this is the second lock on
+// the same door: an external image in a task description is a tracking beacon
+// fired by every reader of the board, and a policy that named a host, or a
+// scheme, or `data:` would be the way one gets through a bug in the first lock.
+const securityPolicy = "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"
 
 //go:embed assets/index.html
 var assets embed.FS

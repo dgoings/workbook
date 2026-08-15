@@ -321,9 +321,9 @@
     /* A caption with an action beside it. The row is still the field's first
        grid track, so the control underneath keeps the flexible one it had. */
     .field__header { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; }
-    .description-toggle { flex: 0 0 auto; min-height: 1.5rem; border: 1px solid #9eafc5; border-radius: 3px; background: #fff; color: #34425a; cursor: pointer; font: inherit; font-size: .72rem; font-weight: 800; padding: .12rem .5rem; }
-    .description-toggle:hover { border-color: #2457d6; color: #2457d6; }
-    .description-toggle:focus-visible { outline: 3px solid #2457d6; outline-offset: 1px; }
+    .description-edit-toggle { flex: 0 0 auto; min-height: 1.5rem; border: 1px solid #9eafc5; border-radius: 3px; background: #fff; color: #34425a; cursor: pointer; font: inherit; font-size: .72rem; font-weight: 800; padding: .12rem .5rem; }
+    .description-edit-toggle:hover { border-color: #2457d6; color: #2457d6; }
+    .description-edit-toggle:focus-visible { outline: 3px solid #2457d6; outline-offset: 1px; }
     /* The description as it reads, which is what the page shows until somebody
        asks to edit it. It takes the flexible row the textarea takes and scrolls
        inside itself for the same reason: the form's footer must stay on the
@@ -2609,9 +2609,15 @@
       // are attachments of this task. Nothing else is syntax: raw HTML is text,
       // a table is text, a footnote is text, a bare URL is text. Anything the
       // parser does not recognize, and anything it recognizes but cannot
-      // complete, is drawn exactly as it was typed. The failure mode is always
-      // "you see what you wrote", never "you see something else" and never "the
-      // page does something".
+      // complete, is drawn exactly as it was typed. The failure mode is "you
+      // see what you wrote", never "the page does something".
+      //
+      // There is one input that breaks the first half of that, and it is
+      // written down rather than left to be discovered: a backslash. There are
+      // no escapes here, so `\*text\*` is emphasis with two backslashes in it
+      // rather than the literal somebody meant. It is the only place this
+      // renderer draws something other than what was typed, the README says so,
+      // and it is the first thing to fix if the subset grows.
       //
       // And it is linear. Every scan for a closing delimiter either finds one or
       // records that there is none left to find, so a body made of nine thousand
@@ -2721,13 +2727,6 @@
         const exhausted = new Set();
         let plain = "";
         let index = 0;
-        // Where the next `]` worth considering starts. Every `]` this pass
-        // rejects — because nothing follows it, or because what follows is not a
-        // target — is rejected for good: the test is about what comes after the
-        // bracket, not about where the `[` was. So the cursor only ever moves
-        // forward and the whole scan stays linear no matter how many unclosed
-        // brackets the input holds.
-        let brackets = 0;
         function flush() {
           if (plain === "") return;
           nodes.push(markdownText(plain));
@@ -2742,20 +2741,40 @@
           if (at < 0) exhausted.add(mark);
           return at;
         }
+        // The label of a link or an image, or null when there is not one here.
+        //
+        // The label ends at the first `]` after the opener and nowhere else,
+        // and it may hold no bracket of either kind. That rule is the whole of
+        // this function and it exists because the looser one forged text: an
+        // earlier version walked forward to the first `]` that happened to be
+        // followed by a target, which let
+        //
+        //   Invoice from [ACME Corporation, Inc.] please see [details](https://evil.test)
+        //
+        // draw "ACME Corporation, Inc.] please see [details" as the caption of a
+        // link to evil.test, and let the inner target of a nested pair take the
+        // outer pair's words. Both are the one thing this renderer must never
+        // do — show a reader something the author did not write — and both come
+        // from letting a `]` pair with a `[` that is not its own.
+        //
+        // A refusal here is not a failure to find a link; it is the answer that
+        // this was not one. Nothing is skipped and no cursor moves, so the
+        // brackets that follow are read on their own terms: in the line above,
+        // the first `[` is drawn as a bracket and `[details](https://evil.test)`
+        // then becomes exactly the link it says it is.
         function bracketSpan(open) {
-          for (;;) {
-            const close = closerAt("]", Math.max(open, brackets));
-            if (close < 0) return null;
-            if (text[close + 1] !== "(") { brackets = close + 1; continue; }
-            const end = closerAt(")", close + 2);
-            if (end < 0) return null;
-            const target = text.slice(close + 2, end);
-            // A target is one word. Whitespace in it, or a bracket of either
-            // kind, means this was not a link — CommonMark would take an angled
-            // target here and this subset does not, so it is drawn as text.
-            if (/[\s()<>]/.test(target)) { brackets = close + 1; continue; }
-            return { label: text.slice(open, close), target, end };
-          }
+          const close = closerAt("]", open);
+          if (close < 0 || text[close + 1] !== "(") return null;
+          const label = text.slice(open, close);
+          if (label.includes("[")) return null;
+          const end = closerAt(")", close + 2);
+          if (end < 0) return null;
+          const target = text.slice(close + 2, end);
+          // A target is one word. Whitespace in it, or a bracket of either
+          // kind, means this was not a link — CommonMark would take an angled
+          // target here and this subset does not, so it is drawn as text.
+          if (/[\s()<>]/.test(target)) return null;
+          return { label, target, end };
         }
         while (index < text.length) {
           // Past the bound, the rest of the line is what it says it is. This is
@@ -3839,8 +3858,13 @@
         descriptionView.setAttribute("aria-label", "Description");
         const descriptionToggleControl = document.createElement("button");
         descriptionToggleControl.type = "button";
-        descriptionToggleControl.className = "description-toggle";
-        descriptionToggleControl.dataset.descriptionToggle = "";
+        // Named for what it does rather than for what it sits beside. The
+        // board's header already carries a data-description-toggle — the
+        // setting that shows card descriptions — and two controls answering one
+        // selector is a bug waiting for whichever of them querySelector reaches
+        // first.
+        descriptionToggleControl.className = "description-edit-toggle";
+        descriptionToggleControl.dataset.descriptionEdit = "";
         // A new task has nothing to read, so it opens in the editor. An existing
         // one opens in read mode, which is what the page is for.
         let descriptionEditing = isNew;

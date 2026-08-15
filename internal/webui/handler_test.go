@@ -18,7 +18,7 @@ import (
 	"github.com/dgoings/workbook/internal/testenv"
 )
 
-const contentSecurityPolicy = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"
+const contentSecurityPolicy = "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"
 
 func TestHandlerServesBoardTasksAndHealth(t *testing.T) {
 	tasks := boardTasks()
@@ -4850,6 +4850,14 @@ function elementsUnder(root) {
 // onclick.
 const markdownTags = ["P", "H3", "H4", "H5", "H6", "STRONG", "EM", "CODE", "PRE", "UL", "OL", "LI", "BLOCKQUOTE", "A", "IMG", "BR"];
 const markdownProperties = ["href", "rel", "target", "src", "alt"];
+// Every property a TestElement is born with. A property outside this set is a
+// property the renderer wrote.
+//
+// The style object is in here because every element has one, and that is
+// exactly why its *contents* are checked separately below: a walk that stopped
+// at the property name counted a style the renderer set as something the
+// element always had, and a renderer that put a full-viewport fixed overlay on
+// every node it built passed this whole file without a word.
 const inertElementKeys = Object.keys(new TestElement("p")).concat(["parentElement"]);
 function markdownViolations(root) {
   const findings = [];
@@ -4868,6 +4876,12 @@ function markdownViolations(root) {
       findings.push("<" + element.tagName.toLowerCase() + "> listens for " + name);
     });
     if (element.className) findings.push("<" + element.tagName.toLowerCase() + "> carries the class " + element.className);
+    // A style is markup's other way to be an attack: a fixed, full-viewport,
+    // transparent overlay is one declaration, needs no script, and is drawn by
+    // an element that is otherwise entirely on the whitelist.
+    Object.keys(element.style || {}).forEach((name) => {
+      findings.push("<" + element.tagName.toLowerCase() + "> carries the style " + name);
+    });
     Object.keys(element).forEach((key) => {
       if (inertElementKeys.includes(key) || markdownProperties.includes(key)) return;
       findings.push("<" + element.tagName.toLowerCase() + "> carries the property " + key);

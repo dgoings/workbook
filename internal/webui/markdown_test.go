@@ -135,7 +135,7 @@ function checkCases() {
 // The task page's description, its editor, and the control that swaps them.
 function descriptionPane() { return findElement(main, (element) => hasDataKey(element, "descriptionRead")); }
 function descriptionEditor() { return findElement(main, (element) => element.id === "task-description"); }
-function descriptionEditToggle() { return findElement(main, (element) => hasDataKey(element, "descriptionToggle")); }
+function descriptionEditToggle() { return findElement(main, (element) => hasDataKey(element, "descriptionEdit")); }
 // Draws one source string in the description pane and hands back the pane. The
 // toggle is pressed to reach the editor, the text is typed, and the toggle is
 // pressed again — which is what a reader does and what renders.
@@ -338,6 +338,19 @@ func TestHandlerClientDrawsUnsupportedMarkdownAsText(t *testing.T) {
 			Shape: `p["call some_long_name twice"]`,
 		},
 		{
+			Name: "a backslash before a marker",
+			body: `\*not italic\*`,
+			// The one place in this subset where an unsupported thing is not
+			// drawn as it was typed, and it is written down here so that it is
+			// a decision rather than a surprise. There are no escapes: a
+			// backslash is a character, it does not suppress the marker after
+			// it, and the marker still opens emphasis. What a reader sees is
+			// the emphasis they were trying to avoid, with their backslashes
+			// still in it. The README says so in as many words.
+			Shape: `p["\\",em["not italic\\"]]`,
+			Text:  `\not italic\`,
+		},
+		{
 			Name: "the managed block's marker",
 			body: "<!-- workbook:begin generator=agentdocs sha256=deadbeef -->",
 			// A line that means something to another part of this tool means
@@ -381,6 +394,78 @@ setTimeout(() => { checkCases(); }, 0);
 `)
 	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute the unsupported markdown cases: %v\n%s", err, output)
+	}
+}
+
+// A link's caption is the author's own words between the author's own
+// brackets, and never a run of text a `]` was made to reach across.
+//
+// This is the phishing case, and it is the sharpest one this renderer has: a
+// caption that reads like the name of a company, or like a sentence somebody
+// else wrote, attached to an address they never typed. An earlier version
+// walked forward to the first `]` that happened to be followed by a target,
+// which is exactly how the first two of these forged one. Every case here is a
+// rendering somebody could be shown; the assertion is on the caption, because
+// the caption is what a reader decides from.
+func TestHandlerClientNeverForgesALinksCaption(t *testing.T) {
+	node := requireNode(t)
+	evil := "https://evil.test/phish"
+	cases := []markdownCase{
+		{
+			Name: "a bracketed name before a link",
+			body: "Invoice from [ACME Corporation, Inc.] please see [details](" + evil + ")",
+			// The first bracket is a bracket. The link is the one that was
+			// written as a link, captioned with the one word inside it.
+			Shape: `p["Invoice from [ACME Corporation, Inc.] please see ",a["details"]]`,
+			Text:  "Invoice from [ACME Corporation, Inc.] please see details",
+		},
+		{
+			Name: "a nested pair",
+			body: "[outer [inner](https://evil.test/i)](https://example.test/o)",
+			// The inner pair is a link to the inner target with the inner
+			// words. The outer brackets are brackets — they never lend their
+			// text to somebody else's address.
+			Shape: `p["[outer ",a["inner"],"](https://example.test/o)"]`,
+		},
+		{
+			Name: "a closing bracket inside the caption",
+			body: "[Trusted Site] junk](" + evil + ")",
+			// One opener, two closers, and the first closer is the only
+			// candidate. It is followed by a space rather than a target, so
+			// there is no link here at all and the line reads as it was typed.
+			Shape: `p["[Trusted Site] junk](` + evil + `)"]`,
+			Text:  "[Trusted Site] junk](" + evil + ")",
+		},
+		{
+			Name: "an ordinary link still works",
+			body: "see [the report](https://example.test/r) today",
+			// The guard above must not cost the case it is guarding.
+			Shape: `p["see ",a["the report"]," today"]`,
+		},
+	}
+	program := markdownCaseProgram(t, cases, `
+setTimeout(() => {
+  checkCases();
+  // Whatever else is drawn, no anchor anywhere in this thread carries a caption
+  // that reaches across a bracket the author wrote.
+  panelRows("comments").forEach((row, at) => {
+    elementsUnder(commentBody(at)).filter((element) => element.tagName === "A").forEach((anchor) => {
+      const caption = anchor.textContent;
+      if (caption.includes("[") || caption.includes("]")) {
+        throw new Error(markdownCases[at].name + " drew a link captioned " + JSON.stringify(caption));
+      }
+    });
+  });
+  // And the one address the reader must not be sent to under borrowed words is
+  // reached only by a link that says so.
+  const forged = panelRows("comments").flatMap((row, at) =>
+    elementsUnder(commentBody(at)).filter((element) =>
+      element.tagName === "A" && element.href === `+strconv.Quote(evil)+` && element.textContent !== "details"));
+  if (forged.length) throw new Error("a link to the hostile address was captioned " + JSON.stringify(forged[0].textContent));
+}, 0);
+`)
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute the forged caption cases: %v\n%s", err, output)
 	}
 }
 
@@ -495,10 +580,16 @@ setTimeout(() => {
 // and a body at the ceiling core allows. None of them may build an element
 // outside the whitelist, and none of them may take more than a moment.
 //
-// The time bound is coarse on purpose. It is not measuring how fast the parser
-// is; it is the difference between a scan that is linear and one that is not,
-// and every quadratic version of this renderer written on the way to this one
-// failed it by two orders of magnitude rather than by a hair.
+// The time bound is a smoke test for a catastrophic blowup and nothing more,
+// and it is worth being exact about what it does not do. It does not tell a
+// linear scan from a quadratic one: deleting the memo that makes the delimiter
+// search linear leaves this whole corpus at 146ms against 145ms with it, and
+// the test passes either way, because V8's native indexOf walks 16 KiB fast
+// enough to hide the difference at the only size a comment can be. What it
+// catches is the failure that actually ends a page — a scan that goes
+// exponential, or one that never returns — and it catches it in the surface a
+// reader would meet it in rather than in a microbenchmark. The memo stays
+// because it is correct and cheap, not because this number proves it.
 func TestHandlerClientBoundsHostileMarkdown(t *testing.T) {
 	node := requireNode(t)
 	hostile := []struct {
@@ -755,6 +846,45 @@ func TestHandlerPublishesTheInlineAttachmentMediaTypes(t *testing.T) {
 	}
 }
 
+// An image a description draws has to survive the page's own content policy,
+// and that is a fact no fake DOM can check: the harness has no loader, so a
+// page whose every image is refused by the browser passes every behavior test
+// in this file. It was, before this: the policy named no `img-src`, every
+// attachment image fell back to `default-src 'none'`, and Chrome blocked all
+// twelve of them — a 19px broken-image box where the picture should be, while
+// the suite stayed green.
+//
+// So the directive is pinned here as text, against the served header and the
+// constant alike, and the browser end of it is measured out of tree and
+// recorded in the pull request. `'self'` is pinned as exactly that: the
+// renderer refuses every image target that is not an attachment of this task,
+// and this policy is the second lock on the same door — one that named a host,
+// a scheme, or `data:` would be how a bug in the first lock reaches the wire.
+func TestHandlerServesAPolicyThatPermitsItsOwnAttachmentImages(t *testing.T) {
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return boardTasks(), nil })
+	response := request(t, handler, http.MethodGet, "/")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d, want %d", response.Code, http.StatusOK)
+	}
+	policy := response.Header().Get("Content-Security-Policy")
+	if !strings.Contains(policy, "img-src 'self'") {
+		t.Errorf("Content-Security-Policy = %q, which blocks every attachment image the renderer builds", policy)
+	}
+	if !strings.Contains(policy, "default-src 'none'") {
+		t.Errorf("Content-Security-Policy = %q no longer denies by default", policy)
+	}
+	// An image source wider than this origin is a tracking beacon waiting for a
+	// renderer bug. None of these may ever appear in the directive.
+	for _, wider := range []string{"img-src *", "img-src data:", "img-src https:", "img-src http:", "img-src 'self' "} {
+		if strings.Contains(policy, wider) {
+			t.Errorf("Content-Security-Policy = %q permits images from outside this origin (%q)", policy, wider)
+		}
+	}
+	if policy != securityPolicy {
+		t.Errorf("the served policy %q is not the constant %q", policy, securityPolicy)
+	}
+}
+
 // What the stylesheet has to say about rendered markdown, pinned as text.
 //
 // None of it is drawn by the client, so it is asserted against the served page
@@ -816,6 +946,16 @@ func TestHandlerPinsMarkdownBlockRules(t *testing.T) {
 	// control's rule after this one would silently take the wrap away again.
 	if strings.Index(body, `.task-card code {`) > strings.Index(body, `.task-card p code {`) {
 		t.Error("the copy control's code rule is now written after the description's, which undoes it")
+	}
+	// The Edit control on the description carries a marker of its own. The
+	// board's header already owns data-description-toggle — the setting that
+	// shows card descriptions — and a second control answering that selector
+	// hands querySelector whichever one it reaches first.
+	if strings.Contains(body, "dataset.descriptionToggle =") {
+		t.Error("the description's Edit control claims the board setting's marker")
+	}
+	if !strings.Contains(body, "dataset.descriptionEdit =") {
+		t.Error("the description's Edit control carries no marker of its own")
 	}
 }
 
