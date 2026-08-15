@@ -374,10 +374,19 @@ func TestHandlerClientAcceptsADragOnEnterAsWellAsOnOver(t *testing.T) {
     documentEventListeners[name]({ target, clientY, clientX, dataTransfer, preventDefault() { prevented = true; } });
     return prevented + "/" + dataTransfer.dropEffect;
   };
+  // A column carrying a status this board has no column for. A vocabulary
+  // change can strand one mid-drag, and it is one of the two rows below that
+  // tells the question "is there a drop target here" from the question this
+  // listener actually has to ask, "may this drag be dropped here" — the rest
+  // are targets where the two answers agree, and a handler that asked the
+  // easier question would pass on them alone.
+  const stranded = listFor("done");
+  stranded.dataset.dropStatus = "a-status-this-board-has-no-column-for";
   [
     ["a column this drag can be dropped into", deep, 400, overColumn, "true/move"],
     ["a card inside that column", columnCards(deep)[2], 400, overColumn, "true/move"],
     ["page chrome that takes no drop", main, 400, besideColumn, "false/"],
+    ["a column whose status this board has no column for", stranded, 400, overColumn, "false/"],
   ].forEach(([what, target, clientY, clientX, want]) => {
     const entered = answer("dragenter", target, clientY, clientX);
     const over = answer("dragover", target, clientY, clientX);
@@ -676,6 +685,19 @@ setTimeout(async () => {
   };
   if (answer("dragenter") !== "true/move") throw new Error("the Deleted column refused a dragenter carrying a live card");
   if (answer("dragover") !== "true/move") throw new Error("the Deleted column refused a dragover carrying a live card");
+  documentEventListeners.dragend({ target: card });
+
+  // The other way round: a tombstone carried over the column it is already in.
+  // There is a drop target under the cursor and the drop is still refused,
+  // because deleting a tombstone is not a change anyone asked for — so this is
+  // the row that tells a listener asking "is there a drop target here" from one
+  // asking "may this drag be dropped here", and both events must refuse it.
+  const tombstone = columnCards(removed)[0];
+  documentEventListeners.dragstart({ target: tombstone, dataTransfer });
+  if (answer("dragenter") !== "false/") throw new Error("the Deleted column accepted a dragenter carrying one of its own tombstones");
+  if (answer("dragover") !== "false/") throw new Error("the Deleted column accepted a dragover carrying one of its own tombstones");
+  documentEventListeners.dragend({ target: tombstone });
+  documentEventListeners.dragstart({ target: card, dataTransfer });
 
   documentEventListeners.dragover(dragEvent(removed, 700));
   if (pendingAnimationFrames() !== 1) throw new Error("the Deleted column started no frame loop");
