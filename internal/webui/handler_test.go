@@ -7264,10 +7264,23 @@ func boardTasks() []core.Task {
 	}
 }
 
+// presentationForTasks is the view a poll carries for these tasks. The prefix is
+// the whole ID rather than the shortest unique one, which is what a test that is
+// not about prefixes wants; everything a card is drawn from that this package
+// derives is derived here through the same functions the route uses, so a test
+// that hands a poll an assigned task gets the chips the server would have sent.
 func presentationForTasks(tasks []core.Task) []TaskPresentation {
 	presentation := make([]TaskPresentation, len(tasks))
+	now := time.Now()
 	for i, task := range tasks {
-		presentation[i] = TaskPresentation{TaskID: task.ID, IDPrefix: task.ID}
+		row := assignmentRow(task.Assignments)
+		presentation[i] = TaskPresentation{
+			TaskID:          task.ID,
+			IDPrefix:        task.ID,
+			AssignmentChips: row.Chips,
+			MoreAssignments: row.More,
+			Assignments:     assignmentPresentation(task.Assignments, now),
+		}
 	}
 	return presentation
 }
