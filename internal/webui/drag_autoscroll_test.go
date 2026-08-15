@@ -123,7 +123,12 @@ function markerFollowsCursor(list, pointerY) {
   return "";
 }
 const dataTransfer = { effectAllowed: "", dropEffect: "", setData() {} };
-const dragEvent = (target, clientY) => ({ target, clientY, dataTransfer, preventDefault() {} });
+// Every furnished column here spans x 0..320, so a cursor at 160 is over the
+// column's width and one at 400 is beside it — which is the difference between
+// a card shoved past a column's end and one carried away from it sideways.
+const overColumn = 160;
+const besideColumn = 400;
+const dragEvent = (target, clientY, clientX = overColumn) => ({ target, clientY, clientX, dataTransfer, preventDefault() {} });
 const close = (got, want) => Math.abs(got - want) < 0.0001;
 `
 
@@ -182,8 +187,11 @@ func TestHandlerClientScrollsAColumnHeldAgainstItsEdges(t *testing.T) {
   // Upward, at the same rate, from wherever the column has reached.
   const upward = step(100, 800, 16);
   if (!close(upward, -14.4)) throw new Error("a frame at the top edge scrolled " + upward + ", want -14.4");
-  // Past the top of the column entirely is the top edge: a card carried clear
-  // above a column keeps scrolling it rather than needing to be held in a strip.
+  // A cursor past the top of the column is asking for the top edge at full
+  // speed, not for somewhere between the two zones. This is the arithmetic
+  // only; that a cursor shoved out there still reaches this loop at all is a
+  // question about which events route where, and is pinned separately in
+  // TestHandlerClientKeepsScrollingAColumnShovedPast.
   const above = step(40, 800, 16);
   if (!close(above, -14.4)) throw new Error("a frame above the column scrolled " + above + ", want -14.4");
 
@@ -207,15 +215,18 @@ func TestHandlerClientScrollsAColumnHeldAgainstItsEdges(t *testing.T) {
 `)
 }
 
-// A browser rounds an assigned scroll offset to whole pixels, and the inner
-// half of the edge zone asks for less than a pixel a frame. Nothing there may
-// be lost: a rate the ramp names has to be the rate the reader gets, and a
-// scroll that rounded every step to zero would be a zone that does nothing.
+// A browser rounds an assigned scroll offset to the nearest whole pixel, so
+// every frame's step is quantized and the rate the reader gets drifts from the
+// rate the ramp names — and where the step falls below half a pixel it rounds
+// to nothing at all, turning the innermost strip of the zone into a part of the
+// ramp that does nothing. That strip is what this pins, because it is the one
+// place where the quantization is not a wobble but a stall.
 func TestHandlerClientDoesNotLoseFractionsOfAPixelToARoundingScroller(t *testing.T) {
 	runBoardClient(t, "drag scrolling on a rounding scroller", dragScrollTasks(), dragScrollHarness+`
   const deep = furnishColumn(listFor("in-progress"), 100, 600);
   const carried = cardIn(listFor("ready"), `+strconv.Quote(dragScrollCarriedID)+`);
-  // Chrome reads an assigned 1.25 back as 1, so this column does too.
+  // Chrome reads an assigned 1.25 back as 1 and an assigned 1.75 back as 2, so
+  // this column rounds to nearest the way Chrome does.
   let offset = 0;
   Object.defineProperty(deep, "scrollTop", {
     configurable: true,
@@ -228,8 +239,8 @@ func TestHandlerClientDoesNotLoseFractionsOfAPixelToARoundingScroller(t *testing
 
   documentEventListeners.dragstart({ target: carried, dataTransfer });
   // 71px from the bottom edge of a 72px zone: one seventy-second of 900px per
-  // second is 12.5px a second, which at 60Hz is roughly a fifth of a pixel a
-  // frame — nothing a rounding scroller would keep on its own.
+  // second is 12.5px a second, which at 60Hz is a fifth of a pixel a frame —
+  // and a fifth of a pixel rounds to nothing, every frame, forever.
   documentEventListeners.dragover(dragEvent(deep, 629));
   for (let frame = 0; frame < 240; frame += 1) runAnimationFrame(16);
   // 240 frames of 16ms is 3.84 seconds, so 48px of travel is owed.
@@ -288,35 +299,179 @@ func TestHandlerClientRunsTheDragScrollLoopOnlyWhileTheDragLasts(t *testing.T) {
   documentEventListeners.dragend({ target: again });
   if (pendingAnimationFrames() !== 0) throw new Error("dragend left a frame loop running");
 
-  // The cursor leaves the window while the drag is still live. That is the one
-  // departure no dragover reports, and the leave that says so carries a cursor
-  // outside the column's own box.
+  // The cursor is carried sideways out of the window while the drag is still
+  // live. That is the one departure no dragover reports — nothing else was
+  // entered for one to fire on — and the leave that says so carries a cursor
+  // outside the column's width.
   documentEventListeners.dragstart({ target: again, dataTransfer });
   documentEventListeners.dragover(dragEvent(deep, 700));
   runAnimationFrame(16);
   const held = deep.scrollTop;
-  documentEventListeners.dragleave({ target: deep, relatedTarget: null, clientX: 160, clientY: 940 });
-  if (pendingAnimationFrames() !== 0) throw new Error("leaving the window left a frame loop running");
+  documentEventListeners.dragleave({ target: deep, relatedTarget: null, clientX: besideColumn, clientY: 400 });
+  if (pendingAnimationFrames() !== 0) throw new Error("leaving the window sideways left a frame loop running");
   if (runAnimationFrame(16) !== 0) throw new Error("a frame ran after the cursor left the window");
   if (deep.scrollTop !== held) throw new Error("the column scrolled after the cursor left the window");
 
   // Coming back starts it again.
   documentEventListeners.dragover(dragEvent(deep, 700));
   if (pendingAnimationFrames() !== 1) throw new Error("returning to the column did not restart the loop");
-  // A leave whose cursor is still inside the column is the browser retargeting
-  // under a cursor that has not moved — which is what scrolling the column
-  // causes, several times a second. Chrome names no relatedTarget on a drag
-  // event, so a rule that read that leave as a departure would stop the scroll
-  // it had just caused and never hear another dragover to restart it.
-  documentEventListeners.dragleave({ target: columnCards(deep)[3], relatedTarget: null, clientX: 160, clientY: 700 });
-  if (pendingAnimationFrames() !== 1) throw new Error("a retarget inside the column stopped the loop");
-  if (runAnimationFrame(16) !== 1) throw new Error("a retarget inside the column ended the loop a frame later");
-  documentEventListeners.dragleave({ target: deep, relatedTarget: null, clientX: 160, clientY: 400 });
+
+  // A leave fired because the column scrolled a new card under a cursor that
+  // has not moved. Chrome names the card it moved onto, which the
+  // contains(relatedTarget) guard already reads as no departure at all — this
+  // is the shape measured on Chrome 151, where every leave during an autoscroll
+  // named a relatedTarget inside the same list.
+  documentEventListeners.dragleave({ target: columnCards(deep)[3], relatedTarget: columnCards(deep)[4], clientX: overColumn, clientY: 700 });
+  if (pendingAnimationFrames() !== 1) throw new Error("a Chrome-shaped retarget inside the column stopped the loop");
+  if (runAnimationFrame(16) !== 1) throw new Error("a Chrome-shaped retarget ended the loop a frame later");
+  // The same churn as Firefox and Safari report it: no relatedTarget at all, so
+  // the guard above cannot tell it from a departure and the cursor's own
+  // position has to. This is the case the coordinate rule exists for, and the
+  // scroll this loop had just caused must survive it.
+  documentEventListeners.dragleave({ target: columnCards(deep)[3], relatedTarget: null, clientX: overColumn, clientY: 700 });
+  if (pendingAnimationFrames() !== 1) throw new Error("a Firefox-shaped retarget inside the column stopped the loop");
+  if (runAnimationFrame(16) !== 1) throw new Error("a Firefox-shaped retarget ended the loop a frame later");
+  documentEventListeners.dragleave({ target: deep, relatedTarget: null, clientX: overColumn, clientY: 400 });
   if (pendingAnimationFrames() !== 1) throw new Error("a leave with the cursor still in the column stopped the loop");
-  // Dragging out over the page chrome, where nothing takes a drop at all.
-  documentEventListeners.dragover(dragEvent(main, 700));
+  // Dragging away sideways, over page chrome that takes no drop at all.
+  documentEventListeners.dragover(dragEvent(main, 400, besideColumn));
   if (pendingAnimationFrames() !== 0) throw new Error("dragging off every drop target left a frame loop running");
+
+  // A gesture that begins while the last one's state is still standing. dragend
+  // has always cleared it, so this is the belt to that brace: a drag whose
+  // dragend was never delivered must not leave the next one scrolling a column
+  // its cursor has not reached.
+  documentEventListeners.dragover(dragEvent(deep, 700));
+  if (pendingAnimationFrames() !== 1) throw new Error("the loop did not restart before the stale-state check");
+  documentEventListeners.dragstart({ target: again, dataTransfer });
+  if (pendingAnimationFrames() !== 0) throw new Error("a new dragstart left the last gesture's frame loop running");
   documentEventListeners.dragend({ target: again });
+  documentEventListeners.dragend({ target: again });
+`)
+}
+
+// A drop is delivered only where the page said yes, and a browser takes that
+// answer from whichever of dragenter and dragover it dispatched last. Chrome
+// dispatches dragenter and dragleave rather than dragover whenever the element
+// under the cursor changes, which is exactly what a scrolling column does under
+// a cursor that has not moved — measured on Chrome 151, ten drag updates at
+// identical coordinates during an autoscroll produced ten dragenters, ten
+// dragleaves and no dragover at all. A page that answered only dragover had its
+// card silently discarded when it was released while the column was moving.
+//
+// The fake DOM has no accept flag of its own, so what is pinned here is the
+// property that closes it: for every target either event can land on, the two
+// give the same answer.
+func TestHandlerClientAcceptsADragOnEnterAsWellAsOnOver(t *testing.T) {
+	runBoardClient(t, "drag acceptance on enter and over", dragScrollTasks(), dragScrollHarness+`
+  const deep = furnishColumn(listFor("in-progress"), 100, 600);
+  const carried = cardIn(listFor("ready"), `+strconv.Quote(dragScrollCarriedID)+`);
+  documentEventListeners.dragstart({ target: carried, dataTransfer });
+
+  const answer = (name, target, clientY, clientX) => {
+    let prevented = false;
+    dataTransfer.dropEffect = "";
+    documentEventListeners[name]({ target, clientY, clientX, dataTransfer, preventDefault() { prevented = true; } });
+    return prevented + "/" + dataTransfer.dropEffect;
+  };
+  [
+    ["a column this drag can be dropped into", deep, 400, overColumn, "true/move"],
+    ["a card inside that column", columnCards(deep)[2], 400, overColumn, "true/move"],
+    ["page chrome that takes no drop", main, 400, besideColumn, "false/"],
+  ].forEach(([what, target, clientY, clientX, want]) => {
+    const entered = answer("dragenter", target, clientY, clientX);
+    const over = answer("dragover", target, clientY, clientX);
+    if (entered !== want) throw new Error("dragenter on " + what + " answered " + entered + ", want " + want);
+    if (over !== want) throw new Error("dragover on " + what + " answered " + over + ", want " + want);
+  });
+  documentEventListeners.dragend({ target: carried });
+
+  // And a gesture whose first word over a column is a dragenter still starts
+  // the scroll, because during the churn that is the only word there is.
+  const again = boardCard(`+strconv.Quote(dragScrollCarriedID)+`);
+  documentEventListeners.dragstart({ target: again, dataTransfer });
+  if (pendingAnimationFrames() !== 0) throw new Error("dragstart alone started a frame loop");
+  documentEventListeners.dragenter(dragEvent(deep, 690));
+  if (pendingAnimationFrames() !== 1) throw new Error("dragenter over a column started no frame loop");
+  for (let frame = 0; frame < 4; frame += 1) runAnimationFrame(16);
+  if (deep.scrollTop <= 0) throw new Error("a drag known only from dragenter did not scroll the column");
+  documentEventListeners.dragend({ target: again });
+  if (pendingAnimationFrames() !== 0) throw new Error("dragend left the dragenter-started loop running");
+`)
+}
+
+// The gesture the story actually describes: "dragging a task above or below the
+// viewport of the column". Past a column's end there is the board's background,
+// a heading, or the page — none of which takes a drop, so the dragover that
+// lands there names no destination and every other case of that stops the
+// scroll. This one must not: the reader has shoved the card past the fold and
+// is waiting for the column to come to them, and the column they shoved it out
+// of is the only thing that can answer.
+//
+// Sideways is the opposite and must still stop, because a cursor beside the
+// column has gone somewhere that answers for itself.
+func TestHandlerClientKeepsScrollingAColumnShovedPast(t *testing.T) {
+	runBoardClient(t, "scrolling a column the card is shoved past", dragScrollTasks(), dragScrollHarness+`
+  const deep = furnishColumn(listFor("in-progress"), 100, 600);
+  const carried = cardIn(listFor("ready"), `+strconv.Quote(dragScrollCarriedID)+`);
+  documentEventListeners.dragstart({ target: carried, dataTransfer });
+
+  // Nothing to shove past yet: an overshoot before the cursor has ever reached
+  // a column names no column to keep scrolling.
+  documentEventListeners.dragover(dragEvent(main, 760));
+  if (pendingAnimationFrames() !== 0) throw new Error("an overshoot with no column behind it started a frame loop");
+
+  documentEventListeners.dragover(dragEvent(deep, 690));
+  runAnimationFrame(16);
+  const measure = (event, frames) => {
+    const from = deep.scrollTop;
+    documentEventListeners.dragover(event);
+    for (let frame = 0; frame < frames; frame += 1) runAnimationFrame(16);
+    return deep.scrollTop - from;
+  };
+
+  // 60px below the column's bottom edge, over page chrome that takes no drop.
+  deep.scrollTop = 500;
+  const below = measure(dragEvent(main, 760), 4);
+  if (pendingAnimationFrames() !== 1) throw new Error("a card shoved below the column stopped its scroll");
+  if (!close(below, 4 * 14.4)) throw new Error("a card shoved below the column scrolled " + below + ", want " + (4 * 14.4));
+
+  // And 60px above its top edge, the other half of the same gesture.
+  deep.scrollTop = 500;
+  const above = measure(dragEvent(main, 40), 4);
+  if (pendingAnimationFrames() !== 1) throw new Error("a card shoved above the column stopped its scroll");
+  if (!close(above, -4 * 14.4)) throw new Error("a card shoved above the column scrolled " + above + ", want " + (-4 * 14.4));
+
+  // Sideways past the column's own width is a departure, whatever the height.
+  deep.scrollTop = 500;
+  const sideways = measure(dragEvent(main, 760, besideColumn), 4);
+  if (pendingAnimationFrames() !== 0) throw new Error("carrying the card away sideways left a frame loop running");
+  if (sideways !== 0) throw new Error("carrying the card away sideways scrolled the column " + sideways);
+
+  // A column whose status this board has no column for is a departure too, and
+  // it is asked in the same place. A vocabulary change can strand one mid-drag.
+  documentEventListeners.dragover(dragEvent(deep, 690));
+  if (pendingAnimationFrames() !== 1) throw new Error("the loop did not restart before the stranded-column check");
+  const status = deep.dataset.dropStatus;
+  deep.dataset.dropStatus = "a-status-this-board-has-no-column-for";
+  documentEventListeners.dragover(dragEvent(deep, 690));
+  if (pendingAnimationFrames() !== 0) throw new Error("a column this board cannot drop into kept scrolling");
+  deep.dataset.dropStatus = status;
+
+  // The reader comes back into the column and the scroll settles where they
+  // left it, which is the point of having kept it alive out there.
+  documentEventListeners.dragover(dragEvent(deep, 690));
+  deep.scrollTop = 900;
+  const returned = measure(dragEvent(deep, 400), 4);
+  if (returned !== 0) throw new Error("coming back into the middle of the column kept scrolling it " + returned);
+  if (pendingAnimationFrames() !== 1) throw new Error("coming back into the column stopped the loop");
+
+  // A leave out through the top or bottom of the window is the same request as
+  // any other overshoot, and dragend is what ends it.
+  documentEventListeners.dragleave({ target: deep, relatedTarget: null, clientX: overColumn, clientY: 940 });
+  if (pendingAnimationFrames() !== 1) throw new Error("leaving the window downward stopped the column");
+  documentEventListeners.dragend({ target: carried });
+  if (pendingAnimationFrames() !== 0) throw new Error("dragend left the shoved-past loop running");
 `)
 }
 
@@ -510,6 +665,18 @@ setTimeout(async () => {
   if (!card) throw new Error("the board drew no live card to drag");
 
   documentEventListeners.dragstart({ target: card, dataTransfer });
+  // The Deleted column answers a dragenter exactly as it answers a dragover,
+  // which is what keeps a restore from being discarded when the card is
+  // released while the column is still moving.
+  const answer = (name) => {
+    let prevented = false;
+    dataTransfer.dropEffect = "";
+    documentEventListeners[name]({ target: removed, clientY: 400, clientX: 160, dataTransfer, preventDefault() { prevented = true; } });
+    return prevented + "/" + dataTransfer.dropEffect;
+  };
+  if (answer("dragenter") !== "true/move") throw new Error("the Deleted column refused a dragenter carrying a live card");
+  if (answer("dragover") !== "true/move") throw new Error("the Deleted column refused a dragover carrying a live card");
+
   documentEventListeners.dragover(dragEvent(removed, 700));
   if (pendingAnimationFrames() !== 1) throw new Error("the Deleted column started no frame loop");
   for (let frame = 0; frame < 30; frame += 1) runAnimationFrame(16);

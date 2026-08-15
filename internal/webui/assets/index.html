@@ -952,13 +952,18 @@
       // starting it idempotent and stopping it verifiable.
       let dragScrollFrame = null;
       let dragScrollLast = null;
-      // The travel a frame asked for and the scroller did not keep. A browser
-      // rounds an assigned scroll offset to whole pixels — Chrome reads 1.25
-      // back as 1 — so a slow scroll, which is what the inner half of the edge
-      // zone is for, would lose a fifth of every step and stop entirely below
-      // half a pixel a frame. Whatever is rounded away is held here and added
-      // to the next frame, which makes the rate the reader gets the rate the
-      // ramp names, on a browser that rounds and on one that does not.
+      // The travel a frame asked for and the scroller did not keep.
+      //
+      // A browser rounds an assigned scroll offset to the nearest whole pixel —
+      // Chrome reads 1.25 back as 1, and 1.75 back as 2 — which quantizes every
+      // frame's step to a whole pixel and so bends the rate the reader gets
+      // away from the rate the ramp names, downward or upward depending on
+      // where the fraction falls. Below half a pixel a frame it rounds to
+      // nothing at all, which at 60Hz is the innermost couple of pixels of the
+      // zone: a strip that looks like part of the ramp and does nothing.
+      // Whatever the scroller would not take is held here and added to the next
+      // frame, so the ramp is the rate on a browser that rounds and on one that
+      // does not.
       let dragScrollCarry = 0;
       const copyFeedback = new Map();
       const copyFeedbackTimers = new Map();
@@ -6304,6 +6309,28 @@
         return event.clientX >= bounds.left && event.clientX <= bounds.right &&
           event.clientY >= bounds.top && event.clientY <= bounds.bottom;
       }
+      // Whether the cursor has been pushed past the top or the bottom of this
+      // scroller while still over its width.
+      //
+      // This is the gesture the story is about — "drag a task above or below
+      // the viewport of the column" — and it is the one gesture nothing under
+      // the cursor can answer: past the end of a column there is the board's
+      // background, or a heading, or the page itself, and none of them takes a
+      // drop. Only the column the card came out over can keep moving, so it
+      // does, at the full speed of the edge it was pushed past.
+      //
+      // Sideways is the opposite case and is left alone: a cursor beside the
+      // column has gone to another column or to the gutter, and whatever it
+      // lands on answers for itself.
+      function overshootsVertically(scroller, event) {
+        if (typeof event.clientY !== "number") return false;
+        const bounds = scroller.getBoundingClientRect();
+        // A missing clientX is not taken as a reason to refuse: the vertical
+        // test is the one carrying the meaning, and every browser reports both.
+        if (typeof event.clientX === "number" &&
+          (event.clientX < bounds.left || event.clientX > bounds.right)) return false;
+        return event.clientY < bounds.top || event.clientY > bounds.bottom;
+      }
       function stopDragScroll() {
         if (dragScrollFrame !== null) cancelAnimationFrame(dragScrollFrame);
         dragScrollFrame = null;
@@ -6311,19 +6338,28 @@
         dragScrollCarry = 0;
         dragScroller = null;
       }
-      // Remember where the cursor is, and run the loop for as long as it is
-      // over something a drop could land in. Handed nothing — the gutter
-      // between columns, or a target this drag is refused by — the column stops
-      // where it is, because a drag going nowhere is not asking anything to
-      // move.
-      function trackDragScroll(scroller, pointerY) {
-        if (typeof pointerY === "number") dragPointerY = pointerY;
-        if (!scroller) {
-          stopDragScroll();
+      // Remember where the cursor is, and run the loop for as long as the drag
+      // is asking a column to move.
+      //
+      // Handed a column, that is the column. Handed nothing — the gutter
+      // between columns, a target this drag is refused by — the column it was
+      // scrolling stops, because a drag going nowhere is not asking anything to
+      // move. The exception is the one the story is about: a cursor shoved past
+      // the top or bottom of the column it was already scrolling is still
+      // asking for that column, and there is nothing under it that could say so.
+      function trackDragScroll(scroller, event) {
+        const pointerY = event && typeof event.clientY === "number" ? event.clientY : null;
+        if (scroller) {
+          if (pointerY !== null) dragPointerY = pointerY;
+          dragScroller = scroller;
+          startDragScroll();
           return;
         }
-        dragScroller = scroller;
-        startDragScroll();
+        if (activeDrag && dragScroller && event && overshootsVertically(dragScroller, event)) {
+          if (pointerY !== null) dragPointerY = pointerY;
+          return;
+        }
+        stopDragScroll();
       }
       function cardNodes(list) {
         return [...list.children].filter((child) => child.dataset && child.dataset.taskId);
@@ -6720,44 +6756,58 @@
           }, 250);
         }
       });
-      document.addEventListener("dragover", (event) => {
+      // Where this drag may be dropped, or null if it may not be dropped here.
+      // Asked by dragenter and dragover alike, because a browser decides
+      // whether to deliver the drop at all from whichever of the two it
+      // dispatched last, and two handlers answering the same question in two
+      // places is how they come to disagree.
+      function dragDestination(event) {
         const target = dropTarget(event);
-        if (!target || !activeDrag) {
-          trackDragScroll(null, event.clientY);
-          return;
-        }
+        if (!target || !activeDrag) return null;
         if (dropsIntoDeleted(target)) {
           // A card already in the column has nowhere to arrive: deleting a
           // tombstone is not a change anyone asked for.
-          if (draggedTaskIsDeleted()) {
-            trackDragScroll(null, event.clientY);
-            return;
-          }
-          // The Deleted column is a scroller like any other, so it scrolls like
-          // any other. Nothing here needs the reader to reach a particular row —
-          // the drop names no position — but a column that will not move under a
-          // cursor pushed into its edge reads as a page that has frozen.
-          trackDragScroll(target, event.clientY);
-          // No drop marker. The column orders itself by when each task was
-          // deleted, and a line drawn between two cards would promise a
-          // position this drop does not name and the column would not keep.
-          clearPlacement();
-          event.preventDefault();
-          event.dataTransfer.dropEffect = "move";
-          return;
+          return draggedTaskIsDeleted() ? null : target;
         }
         // Same set as the one that decides `movable`: a card is draggable out of
         // exactly the columns the server rendered, so those are exactly the
         // columns it may be dropped into.
-        if (!lists.has(target.dataset.dropStatus)) {
-          trackDragScroll(null, event.clientY);
-          return;
-        }
-        trackDragScroll(target, event.clientY);
-        const placement = placementFor(target, event.clientY);
-        showPlacement(target, placement);
+        return lists.has(target.dataset.dropStatus) ? target : null;
+      }
+      // A drop is delivered only where the page said yes, and dragenter is one
+      // of the two events that can say it. Chrome dispatches dragenter and
+      // dragleave rather than dragover whenever the element under the cursor
+      // changes — which is what scrolling a column does, several times a second,
+      // under a cursor that has not moved. Measured on Chrome 151: ten drag
+      // updates at identical coordinates while a column was autoscrolling
+      // produced ten dragenters, ten dragleaves and no dragover at all.
+      //
+      // A page that answered only dragover therefore had its acceptance decided
+      // by whichever event happened to land last, and a card released while the
+      // column was still moving was silently discarded: no drop event, no
+      // write, the card back where it started and nothing said about it.
+      // Answering both events with the same rule is what closes that.
+      document.addEventListener("dragenter", (event) => {
+        const target = dragDestination(event);
+        trackDragScroll(target, event);
+        if (!target) return;
         event.preventDefault();
         event.dataTransfer.dropEffect = "move";
+      });
+      document.addEventListener("dragover", (event) => {
+        const target = dragDestination(event);
+        trackDragScroll(target, event);
+        if (!target) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+        if (dropsIntoDeleted(target)) {
+          // No drop marker. The column orders itself by when each task was
+          // deleted, and a line drawn between two cards would promise a
+          // position this drop does not name and the column would not keep.
+          clearPlacement();
+          return;
+        }
+        showPlacement(target, placementFor(target, event.clientY));
       });
       // Whether the card under the cursor is one the board is drawing as
       // deleted. It reads the projected model rather than the raw one because
@@ -6773,21 +6823,32 @@
         if (!target || target.contains(event.relatedTarget)) return;
         clearPlacement();
         // Whether the cursor has left the column is asked of where this event
-        // says the cursor is, not of what it says the cursor moved to.
+        // says the cursor is, as well as of what it says the cursor moved to.
         //
         // A browser fires dragleave whenever the element under the cursor
         // changes, and scrolling a column changes it several times a second
         // under a cursor that has not moved at all — that is this very loop's
-        // doing. Chrome reports no relatedTarget on a drag event either, so the
-        // check above cannot tell that apart from a real departure. Reading the
-        // leave as a departure would stop the scroll it had just caused, and
-        // with the cursor still there would be no dragover to start it again.
+        // doing. On Chrome those leaves name the card the cursor moved onto, so
+        // the relatedTarget check above already tells them from a departure:
+        // measured on Chrome 151, every leave during an autoscroll named a
+        // relatedTarget inside the same list, and the only null one was the
+        // genuine exit from the window. Firefox and Safari report no
+        // relatedTarget on a dragleave at all, and there the check above cannot
+        // tell the two apart; reading a churn leave as a departure would stop
+        // the scroll this loop had just caused, with the cursor still sitting
+        // there and no dragover coming to start it again. So the cursor's own
+        // position decides, which is a fact every browser reports.
         //
-        // A cursor outside the column's own box has genuinely gone: off the
-        // board, or out of the window, which is the case no dragover reports.
-        // Everything else — another column, the gutter, the page's chrome — is
-        // already answered by the dragover that lands there.
-        if (target === dragScroller && !cursorWithin(target, event)) stopDragScroll();
+        // Two things are not a departure. A cursor still inside the column's
+        // box has not left it. Nor has one shoved past its top or bottom, which
+        // is the gesture asking it to keep scrolling — and a cursor that leaves
+        // the window that way is making the same request, so it is answered the
+        // same way and dragend ends it, as it ends everything. What is left is
+        // a cursor gone sideways past the column's edge with no dragover to
+        // report where it went, and that stops the scroll here.
+        if (target !== dragScroller) return;
+        if (cursorWithin(target, event) || overshootsVertically(target, event)) return;
+        stopDragScroll();
       });
       document.addEventListener("drop", async (event) => {
         // The gesture is over the moment something is dropped, whatever the
