@@ -1554,6 +1554,13 @@ somebody else's bytes, and its headers are the whole of its security:
 - The response carries `Content-Security-Policy: default-src 'none'; sandbox`
   rather than the page's own policy, which permits the board's inline script.
 
+That allow-list is rendered into the board page as an attribute, and the
+markdown renderer reads it from there rather than holding a copy: an attachment
+reference becomes an `<img>` only for a type this route would hand back as
+pixels, and every other attachment becomes a link to the same route. Two copies
+of the set is how a type could come to be drawn inline on a page that the route
+would only ever serve as a download.
+
 A link holds no bytes: the route refuses one and names the URL, so a client that
 followed the wrong address is told where the thing is. An attachment whose blob
 this clone does not hold — which a future compaction that strips attachments will
@@ -1855,8 +1862,8 @@ link's label to its destination — with the size, the media type and who added
 it, an upload control, a form for adding a link, and a Remove on each row. The
 thread is drawn oldest first, each comment carrying its author, when it was
 written, and whether it has been edited since, with an Edit and a Remove on each
-one and a box for adding another. Comments render as text: a body is what
-somebody typed, and formatting it is separate work.
+one and a box for adding another. Comment bodies render as markdown, in the
+subset documented below.
 
 None of these is drawn optimistically the way a board drag is. A comment's
 identifier, author and timestamps are minted by the operation that records it,
@@ -1868,6 +1875,78 @@ version the server holds. A file too large to attach is refused before it is
 read or sent, naming the ceiling, and the server enforces the same one. The
 board's cards say nothing about either section: a card is an identifier, a
 title, and its labels.
+
+### Markdown in descriptions and comments
+
+Task descriptions and comment bodies render as markdown in the browser. The
+command line prints them exactly as they were written, and what is stored is
+always the text somebody typed — the formatting is a rendering, not a
+conversion.
+
+A task's page opens with its description rendered and an **Edit** beside the
+caption; Edit swaps the rendering for the textarea it always was, and Done puts
+the rendering back. Saving is unchanged: the same field, the same "send only
+what you changed", the same tip the page rendered against.
+
+**What renders.** Headings (`#` through `######`, drawn as `h3` down to `h6` so
+a heading in a description never outranks the page's own), `**bold**` and
+`*italic*` and `` `inline code` ``, fenced code blocks (`` ``` `` or `~~~`),
+unordered lists (`-`, `*`, `+`), ordered lists (`1.`, `1)`), blockquotes (`>`,
+nested up to six deep), links (`[text](https://…)`), and images that name an
+attachment of the same task. A single newline is a line break, because a
+description written in a textarea means the breaks it was typed with.
+
+**Images are attachments, and only attachments.** `![alt](attachment:<id>)`
+resolves against the task's own attachment list — by full identifier or by any
+prefix that names exactly one file, the same way the command line resolves one —
+and draws the attachment through `GET /api/tasks/<id>/attachments/<aid>`. An
+attachment the download route serves inline (`image/gif`, `image/jpeg`,
+`image/png`, `image/webp`) is drawn as an image; anything else it holds — an
+SVG, a PDF, a text file — is drawn as a **link** to the same route, which
+answers those with `Content-Disposition: attachment` and downloads them rather
+than rendering them. A reference that resolves to nothing, to more than one
+attachment, or to a link attachment is drawn as the text it is. Every other
+image target — an external URL, a `data:` URI, an address on this board — is
+drawn as text as well: a board that fetched images named in task text would
+report every reader of every card to whoever wrote the task.
+
+The page's own content policy is the second lock on that door and the reason
+the first one can be trusted: it carries `img-src 'self'`, so the browser
+refuses any image address outside this server whatever the renderer builds. It
+is also load-bearing in the ordinary direction — without the directive, images
+fall back to `default-src 'none'` and a browser blocks every attachment picture
+on the page.
+
+**Links** are drawn as links only for `http` and `https`, and carry
+`rel="noopener noreferrer nofollow"` in a new tab, exactly as an attached link
+does. A target with any other scheme is drawn as its words with no address
+attached.
+
+**Board cards** render the inline half of the subset — bold, italic, inline
+code — and nothing that makes a block. A card's description is clipped to six
+lines inside a box that must never be wider than its column, so a heading, a
+bullet or a fence on a card is drawn as the characters it is, line breaks run
+together as they always have, and a link is drawn as its words. A card with a
+formatted description is exactly as tall as the same card was before any of
+this existed.
+
+**What deliberately does not render.** Raw HTML (markup in a task is text about
+markup — the renderer builds nodes and has no HTML path at all), tables,
+footnotes, bare URLs, setext headings, thematic breaks, indented code blocks,
+reference links, and `***three delimiters***`. Nested lists render flat. An
+ordered list always counts from one. A link's caption may hold no bracket, so
+`[a] b](https://…)` is text rather than a link captioned "a] b" — a caption is
+the words between one pair of brackets, never a run reaching across somebody
+else's. Anything the parser does not recognize, and anything it recognizes but
+cannot complete — an unclosed `**`, a fence with no end, a link whose target
+holds a space — is drawn exactly as it was typed.
+
+**There are no backslash escapes, and that is the one exception to the rule
+above.** A backslash is an ordinary character: it does not suppress the marker
+that follows it. `\*text\*` renders as *text* in italics with both backslashes
+still in it, which is not what somebody writing it meant. It is the only input
+this renderer draws as something other than what was typed, it is written down
+here rather than discovered, and it is what to fix first if the subset grows.
 
 The web experience is still local-first and intentionally narrow in scope.
 Authentication, hosted deployment, browser deletion, draft persistence, and

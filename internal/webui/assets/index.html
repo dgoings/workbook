@@ -182,7 +182,15 @@
     .new-task-link { display: inline-block; margin-top: .45rem; color: #2457d6; font-size: .73rem; font-weight: 750; text-decoration-thickness: 1px; text-underline-offset: .18em; }
     /* overflow-anchor: none guards against browser scroll anchoring walking a scrolled column downward when a render rebuilds its cards. The renderer reconciles by task ID and reuses nodes, so nothing should churn here any more; keep the declaration anyway, so a future code path that rebuilds a column cannot silently reintroduce the drift. */
     .task-list { display: grid; align-content: start; gap: .55rem; min-height: 0; overflow-anchor: none; overflow-y: auto; padding: .55rem; }
-    .task-card { border: 1px solid #b9c6d8; border-radius: 4px; background: #fff; padding: .7rem; box-shadow: 0 1px 0 rgba(23,32,51,.05); cursor: grab; }
+    /* min-width, because a card is a grid item and a grid item's automatic
+       minimum is its content: without this a card is never allowed to be
+       narrower than the widest unbreakable thing inside it, and it grows out of
+       its column rather than clipping. Measured before it was here: a card
+       whose description held a 46-character identifier in inline code drew
+       374px wide inside a 268px column, over the top of the column beside it.
+       The description under it is already clipped and clamped, so nothing
+       inside a card needs the card to be any wider than the column it is in. */
+    .task-card { min-width: 0; border: 1px solid #b9c6d8; border-radius: 4px; background: #fff; padding: .7rem; box-shadow: 0 1px 0 rgba(23,32,51,.05); cursor: grab; }
     .task-card:active { cursor: grabbing; }
     /* A card whose save is still in flight has no ID to place, so it must not offer the grab cursor a drag would promise. draggable is a reflected attribute, so the selector tracks the property the client sets — and it is now the pending stand-in alone, since an unknown-status card drags out to the column that files it. */
     .task-card[draggable="false"], .task-card[draggable="false"]:active { cursor: default; }
@@ -219,6 +227,27 @@
        card, and the poll that reconciles cards by ID has nothing to reset. */
     .task-card p { display: none; max-height: calc(1.36em * 6); overflow: hidden; margin: 0; color: #56647a; font-size: .8rem; line-height: 1.36; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 6; }
     .board-view[data-descriptions="shown"] .task-card p { display: -webkit-box; }
+    /* A card renders the inline half of the subset and nothing that makes a
+       block: the clamp above measures lines of one box, and a heading or a list
+       inside it would either escape the clamp or collapse it. So these three
+       rules are the whole of a card's formatting, and every one of them is a
+       property that cannot change how tall the box is — no margins, no display,
+       no line-height. The renderer takes the other half of that promise by
+       running a card's lines together rather than breaking them, so a card is
+       exactly as tall as it was before any of this existed. Measured at four
+       viewports against the same board on main: every card identical to the
+       pixel. */
+    .task-card p strong { font-weight: 800; }
+    .task-card p em { font-style: italic; }
+    /* The three properties at the front are a reset, not decoration, and this
+       rule is written after the one they undo. `.task-card code` above is the
+       copy control that holds the task's own identifier: it is one token that
+       must stay on one line and end in an ellipsis, and it matches every <code>
+       on a card, including the ones a description is now made of. Left in
+       place, a 46-character identifier in inline code drew 350px wide inside a
+       202px description box — clipped mid-token, where the same characters as
+       plain text wrapped. Measured both ways; this is the difference. */
+    .task-card p code { overflow: visible; text-overflow: clip; white-space: normal; padding: 0 .18rem; border-radius: 3px; background: #eef2f8; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .95em; }
     .labels { display: flex; flex-wrap: wrap; gap: .25rem; margin-top: .65rem; }
     .label { max-width: 100%; overflow: hidden; padding: .14rem .28rem; border: 1px solid #d5deea; border-radius: 3px; color: #4e5d73; font-size: .64rem; text-overflow: ellipsis; white-space: nowrap; }
     .dependency-progress { display: grid; gap: .18rem; margin-top: .65rem; color: #4e5d73; font-size: .72rem; }
@@ -289,6 +318,27 @@
     .field textarea { min-height: 8rem; resize: vertical; line-height: 1.45; }
     .field--description textarea { height: 100%; min-height: 0; overflow-y: auto; resize: none; }
     .field input:focus, .field textarea:focus, .field select:focus { border-color: #2457d6; outline: 3px solid rgba(36,87,214,.18); }
+    /* A caption with an action beside it. The row is still the field's first
+       grid track, so the control underneath keeps the flexible one it had. */
+    .field__header { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; }
+    .description-edit-toggle { flex: 0 0 auto; min-height: 1.5rem; border: 1px solid #9eafc5; border-radius: 3px; background: #fff; color: #34425a; cursor: pointer; font: inherit; font-size: .72rem; font-weight: 800; padding: .12rem .5rem; }
+    .description-edit-toggle:hover { border-color: #2457d6; color: #2457d6; }
+    .description-edit-toggle:focus-visible { outline: 3px solid #2457d6; outline-offset: 1px; }
+    /* The description as it reads, which is what the page shows until somebody
+       asks to edit it. It takes the flexible row the textarea takes and scrolls
+       inside itself for the same reason: the form's footer must stay on the
+       screen. It is focusable because it scrolls — a region a pointer can scroll
+       and a keyboard cannot is one the keyboard cannot read the bottom of. */
+    .description-read { min-height: 0; overflow-y: auto; padding: .62rem .68rem; border: 1px solid #d5deea; border-radius: 4px; background: #fbfcfe; font-size: .84rem; line-height: 1.5; }
+    .description-read:focus-visible { outline: 3px solid #2457d6; outline-offset: -1px; }
+    .description-read__empty { margin: 0; color: #56647a; font-size: .82rem; }
+    /* Whichever of the two is not in use is hidden by the attribute, and these
+       two rules are what that attribute means here. They are written after the
+       rules that size both elements, which is the only place they win: a
+       `display` in either of those would otherwise outrank the attribute and
+       draw the pane and the textarea at the same time. */
+    .description-read[hidden] { display: none; }
+    .field--description textarea[hidden] { display: none; }
     .label-editor { display: grid; gap: .35rem; }
     .label-chips { display: flex; flex-wrap: wrap; gap: .3rem; margin: 0; padding: 0; list-style: none; }
     .label-chips:empty { display: none; }
@@ -427,12 +477,12 @@
     .task-panel .form-status { min-height: 0; }
     .comment { display: grid; gap: .25rem; padding: .6rem .7rem; border: 1px solid #d5deea; border-radius: 4px; background: #fff; }
     .comment__attribution { margin: 0; color: #56647a; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .68rem; overflow-wrap: anywhere; }
-    /* pre-wrap, because a comment is prose somebody typed and its line breaks
-       are theirs. overflow-wrap, because a body with no spaces in it is not a
-       reason for the page to scroll sideways. This renders text and only text:
-       formatting is a later change and this element is written through
-       textContent, never innerHTML. */
-    .comment__body { margin: 0; font-size: .84rem; line-height: 1.45; overflow-wrap: anywhere; white-space: pre-wrap; }
+    /* overflow-wrap, because a body with no spaces in it is not a reason for the
+       page to scroll sideways. There is no white-space: pre-wrap here any more:
+       the renderer below draws a comment's line breaks as <br> elements, so
+       preserving the source newlines as well would double every one of them.
+       Still no innerHTML anywhere — the formatting is built as nodes. */
+    .comment__body { margin: 0; font-size: .84rem; line-height: 1.45; overflow-wrap: anywhere; }
     .comment__note { margin: 0; color: #7c3b08; font-size: .74rem; }
     .comment__actions { display: flex; flex-wrap: wrap; gap: .4rem; }
     .comment__editor { display: grid; gap: .35rem; }
@@ -476,6 +526,47 @@
     .thread-button:focus-visible { outline: 3px solid #2457d6; outline-offset: 1px; }
     .thread-button--primary { border-color: #173f9e; background: #2457d6; color: #fff; }
     .thread-button--primary:hover:enabled { background: #1d49b7; color: #fff; }
+    /* Rendered markdown, wherever it is drawn. The container carries no font of
+       its own: a comment body and a description read pane each size their own
+       text, and a .markdown rule that named a size would win over one of them by
+       nothing but its position in this file. What is here is the shape of the
+       blocks and one guarantee — nothing inside may widen its column.
+       overflow-wrap on the container covers prose with a 900-character word in
+       it; the code block below takes the other half, because code must not be
+       re-wrapped and so scrolls inside its own box instead of pushing the page
+       sideways. */
+    .markdown { min-width: 0; overflow-wrap: anywhere; }
+    .markdown > :first-child { margin-top: 0; }
+    .markdown > :last-child { margin-bottom: 0; }
+    .markdown p { margin: 0 0 .55rem; }
+    /* A description's headings start at h3: the page's own title is the h2 above
+       them and the panels beside them are h3s, so a heading somebody typed sizes
+       down from there rather than outranking the page it is on. The renderer
+       maps every markdown level into this range, so these four rules are the
+       whole set — there is no .markdown h1 to be left unstyled. */
+    .markdown h3 { margin: .85rem 0 .3rem; font-size: .95rem; line-height: 1.3; }
+    .markdown h4 { margin: .75rem 0 .3rem; font-size: .88rem; line-height: 1.3; }
+    .markdown h5 { margin: .7rem 0 .28rem; font-size: .83rem; line-height: 1.3; }
+    .markdown h6 { margin: .7rem 0 .28rem; color: #34425a; font-size: .8rem; line-height: 1.3; }
+    .markdown ul, .markdown ol { margin: 0 0 .55rem; padding-left: 1.35rem; }
+    .markdown li { margin: .12rem 0; }
+    .markdown blockquote { margin: 0 0 .55rem; padding: .12rem .6rem; border-left: 3px solid #b9c6d8; color: #4e5d73; }
+    .markdown code { padding: .05rem .22rem; border-radius: 3px; background: #eef2f8; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .92em; }
+    /* The fenced block. white-space: pre keeps the author's own line breaks and
+       indentation, overflow-x gives the block its own scrollbar, and
+       overflow-wrap is put back to normal here — the container's `anywhere`
+       would otherwise break a line of code at an arbitrary column, which is the
+       one thing a code block must not do. Written after .markdown, which is what
+       makes the reset win. */
+    .markdown pre { margin: 0 0 .55rem; padding: .5rem .6rem; border: 1px solid #d5deea; border-radius: 4px; background: #f6f8fc; overflow-x: auto; overflow-wrap: normal; white-space: pre; }
+    .markdown pre code { padding: 0; border-radius: 0; background: transparent; font-size: .78rem; }
+    .markdown a { color: #2457d6; text-underline-offset: .16em; }
+    .markdown a:hover { text-decoration-color: currentcolor; }
+    /* An attachment drawn inline. It is bounded by the column it is in rather
+       than by its own pixels, because the image is somebody's upload and a
+       4000-pixel screenshot in a description must not decide how wide this page
+       is. */
+    .markdown img { display: block; max-width: 100%; height: auto; margin: .1rem 0 .55rem; border: 1px solid #d5deea; border-radius: 4px; }
     .task-history { display: grid; gap: .8rem; padding: 1.15rem; border-top: 1px solid #d5deea; background: #fafbfd; }
     .task-history h3 { margin: 0; font-size: .88rem; }
     .lifecycle { display: flex; flex-wrap: wrap; gap: .3rem 1.1rem; margin: 0; padding: 0; list-style: none; }
@@ -600,7 +691,7 @@
          the script needs before its first fetch comes from an attribute here,
          data-vocabulary-head included, so a page and its script never disagree
          about which vocabulary they were built from. -->
-    <div class="board-view" data-board-view data-default-status="{{ .DefaultStatus }}" data-vocabulary-head="{{ .VocabularyHead }}" data-attachment-limit="{{ .AttachmentFileLimit }}">
+    <div class="board-view" data-board-view data-default-status="{{ .DefaultStatus }}" data-vocabulary-head="{{ .VocabularyHead }}" data-attachment-limit="{{ .AttachmentFileLimit }}" data-inline-media="{{ .InlineImageMediaTypes }}">
       <p class="stale" data-stale role="status">Task refresh failed. Showing the last successful board.</p>
       <!-- data-board is where the client appends the Deleted column, after the
            last vocabulary column the server rendered. It is a client-built
@@ -778,6 +869,13 @@
       // day core's changed. A page served without it simply asks the server,
       // which is the answer that was always authoritative.
       const attachmentFileLimit = Number(boardView.dataset.attachmentLimit) || 0;
+      // The media types the attachment route hands back inline, read out of the
+      // page for exactly the reason the ceiling above is. A markdown attachment
+      // reference becomes an <img> only for a type on this list; every other
+      // attachment becomes a link to the same route, which serves it as a
+      // download. A page served without the attribute renders no image at all,
+      // which is the safe end of the failure.
+      const inlineImageMedia = new Set((boardView.dataset.inlineMedia || "").split(/\s+/).filter(Boolean));
       let vocabularyChanged = false;
       const syncToggle = document.querySelector("[data-sync-toggle]");
       const descriptionToggle = document.querySelector("[data-description-toggle]");
@@ -1177,7 +1275,14 @@
         // they are inserted before the Restore button, which is built once too
         // and is the card's last child, so rebuilding them never moves it.
         [...article.children].slice(3).forEach((child) => { if (child !== parts.restore) child.remove(); });
-        if (task.description) { const description = document.createElement("p"); text(description, task.description); article.insertBefore(description, parts.restore); }
+        // The card's description carries the inline half of the markdown subset
+        // and no part of the block half. The clamp above it measures lines of
+        // one box: a heading, a list or a code block inside it would either
+        // escape the clamp or collapse it, and either way a card's height would
+        // start depending on what somebody typed. So bold, italic and code are
+        // drawn, a link is drawn as its words, and everything else is drawn as
+        // the characters it is — which is exactly what a card drew before.
+        if (task.description) { const description = document.createElement("p"); renderInlineMarkdown(description, task.description); article.insertBefore(description, parts.restore); }
         if (task.labels && task.labels.length) { const labels = document.createElement("div"); labels.className = "labels"; task.labels.forEach((label) => { const item = document.createElement("span"); item.className = "label"; text(item, label); labels.append(item); }); article.insertBefore(labels, parts.restore); }
         if (view.dependenciesTotal > 0) {
           const progress = document.createElement("div");
@@ -1235,7 +1340,7 @@
         else history.pushState({}, "", path);
         renderRoute();
       }
-      function field(labelText, control, wide = false, modifier = "") {
+      function field(labelText, control, wide = false, modifier = "", action = null) {
         const classes = ["field"];
         if (wide) classes.push("field--wide");
         if (modifier) classes.push(modifier);
@@ -1246,7 +1351,17 @@
         // still lands the caret where typing goes.
         label.htmlFor = control.dataset.fieldFor || control.id;
         text(label, labelText);
-        wrapper.append(label, control);
+        // An action belonging to the field sits on the caption's own line rather
+        // than on a row of its own, so the field keeps the two grid tracks it
+        // has always had: the caption and the control that stretches under it.
+        if (action) {
+          const header = document.createElement("div");
+          header.className = "field__header";
+          header.append(label, action);
+          wrapper.append(header, control);
+        } else {
+          wrapper.append(label, control);
+        }
         return wrapper;
       }
       // Labels are a set, so the form edits them as one chiclet per label
@@ -2477,6 +2592,434 @@
         try { parsed = new URL(raw); } catch (_) { return ""; }
         return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.href : "";
       }
+      // ─── The markdown subset ────────────────────────────────────────────────
+      //
+      // A renderer over text somebody else typed, which is the whole reason it
+      // is written the way it is.
+      //
+      // It builds nodes. There is no string of markup anywhere in here, no
+      // innerHTML, no insertAdjacentHTML, and no place a character out of a task
+      // description is ever anything but the content of a text node or the value
+      // of one of five attributes this file writes by hand. That is not a
+      // precaution against a parser bug — it is the absence of the thing a
+      // parser bug would need in order to matter.
+      //
+      // It is small on purpose. Headings, bold, italic, inline code, fenced
+      // code, unordered and ordered lists, blockquotes, links, and images that
+      // are attachments of this task. Nothing else is syntax: raw HTML is text,
+      // a table is text, a footnote is text, a bare URL is text. Anything the
+      // parser does not recognize, and anything it recognizes but cannot
+      // complete, is drawn exactly as it was typed. The failure mode is "you
+      // see what you wrote", never "the page does something".
+      //
+      // There is one input that breaks the first half of that, and it is
+      // written down rather than left to be discovered: a backslash. There are
+      // no escapes here, so `\*text\*` is emphasis with two backslashes in it
+      // rather than the literal somebody meant. It is the only place this
+      // renderer draws something other than what was typed, the README says so,
+      // and it is the first thing to fix if the subset grows.
+      //
+      // And it is linear. Every scan for a closing delimiter either finds one or
+      // records that there is none left to find, so a body made of nine thousand
+      // asterisks costs one pass rather than nine thousand of them; both
+      // recursions carry a depth bound, so ten thousand nested quotes end in
+      // paragraphs rather than in a stack overflow.
+
+      // How deep a blockquote may nest before the rest is drawn as text, and how
+      // deep emphasis and link text may. Both are bounds on recursion first and
+      // features second: past them the input is drawn literally.
+      const markdownQuoteDepth = 6;
+      const markdownInlineDepth = 8;
+      // Every element this renderer is allowed to build. It is here as a
+      // sentence rather than as a check — the code below creates these tags and
+      // no others, and the tests assert the rendered tree against this list:
+      // p, h3, h4, h5, h6, strong, em, code, pre, ul, ol, li, blockquote, a,
+      // img, br. Every attribute it is allowed to set: href, rel and target on
+      // an anchor, src and alt on an image. No class, no id, no data, no style,
+      // and no event listener is ever attached to anything built here.
+
+      function markdownText(value) { return document.createTextNode(value); }
+      function markdownNode(tagName, children) {
+        const element = document.createElement(tagName);
+        if (children && children.length) element.append(...children);
+        return element;
+      }
+      // The attachment a reference names, or null.
+      //
+      // Files only, and by full identifier or by any prefix that names exactly
+      // one of them — the same rule the command line resolves a comment or an
+      // attachment identifier by, so a reference typed there reads here. A
+      // prefix that matches two attachments names neither: an ambiguous
+      // reference resolves to nothing and is drawn as the text it is.
+      function markdownAttachment(attachments, reference) {
+        const wanted = String(reference || "").trim().toUpperCase();
+        if (!wanted) return null;
+        const files = (attachments || []).filter(
+          (attachment) => attachment && attachment.kind !== "link" && typeof attachment.id === "string");
+        const exact = files.find((attachment) => attachment.id.toUpperCase() === wanted);
+        if (exact) return exact;
+        const matches = files.filter((attachment) => attachment.id.toUpperCase().startsWith(wanted));
+        return matches.length === 1 ? matches[0] : null;
+      }
+      // An image, which on this page means an attachment of this task and
+      // nothing else.
+      //
+      // `![alt](attachment:<id>)` is the only image syntax there is. An external
+      // URL is not one — a board that fetched images named in task text would
+      // report every reader of every card to whoever wrote the task, which is
+      // the reason the design says attachments only — and neither is a data URI
+      // or anything else.
+      //
+      // A reference that resolves to a file the download route serves inline
+      // becomes an <img> pointing at that route. One that resolves to a file it
+      // does not — an SVG, a PDF, a text file — becomes a link to the same
+      // route instead, which answers those with `Content-Disposition:
+      // attachment` and nosniff, so the file downloads rather than renders. That
+      // degradation is the whole of the SVG question: an SVG is markup that can
+      // carry script, the route already refuses to hand it back inline, and an
+      // <img> at that address would draw nothing anyway. A reference that
+      // resolves to nothing at all is drawn as the text somebody typed.
+      function markdownImage(alt, target, context) {
+        const reference = /^attachment:(.+)$/i.exec(target);
+        if (!reference || !context || !context.taskID) return null;
+        const attachment = markdownAttachment(context.attachments, reference[1]);
+        if (!attachment) return null;
+        const address = "/api/tasks/" + encodeURIComponent(context.taskID) +
+          "/attachments/" + encodeURIComponent(attachment.id);
+        if (!inlineImageMedia.has(attachment.media)) {
+          const link = markdownNode("a", [markdownText(alt || attachment.name || "attachment")]);
+          link.href = address;
+          link.target = "_blank";
+          link.rel = "noopener noreferrer nofollow";
+          return link;
+        }
+        const image = markdownNode("img");
+        image.src = address;
+        // An empty alt is a decorative image to a screen reader, which is the
+        // right answer when the author wrote no alt text: inventing one out of
+        // the file name would put a ULID-shaped string in the reading.
+        image.alt = alt || "";
+        return image;
+      }
+      // A link, or null when the target is not one this page will draw as a
+      // link. safeLinkURL is the same gate the attachment list asks — http and
+      // https and nothing else — and nofollow is added because this text is
+      // somebody's and the board is not lending it any standing.
+      function markdownLink(target) {
+        const destination = safeLinkURL(target);
+        if (!destination) return null;
+        const link = markdownNode("a");
+        link.href = destination;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer nofollow";
+        return link;
+      }
+      // One line's worth of inline content, as an array of nodes.
+      //
+      // `context.inline` is a card: it renders emphasis and code, and draws a
+      // link or an image as its label text with no anchor and no image. A card
+      // is itself a link to the task and is clamped to six lines; a second link
+      // inside it is a mis-click, and an image inside it is a card of unknown
+      // height.
+      function markdownInline(source, context, depth, links) {
+        const text = String(source);
+        const nodes = [];
+        const exhausted = new Set();
+        let plain = "";
+        let index = 0;
+        function flush() {
+          if (plain === "") return;
+          nodes.push(markdownText(plain));
+          plain = "";
+        }
+        // The next occurrence of a delimiter, remembering the ones that have run
+        // out. A search that fails from here fails from anywhere later, because
+        // every later search looks at less of the string.
+        function closerAt(mark, from) {
+          if (exhausted.has(mark)) return -1;
+          const at = text.indexOf(mark, from);
+          if (at < 0) exhausted.add(mark);
+          return at;
+        }
+        // The label of a link or an image, or null when there is not one here.
+        //
+        // The label ends at the first `]` after the opener and nowhere else,
+        // and it may hold no bracket of either kind. That rule is the whole of
+        // this function and it exists because the looser one forged text: an
+        // earlier version walked forward to the first `]` that happened to be
+        // followed by a target, which let
+        //
+        //   Invoice from [ACME Corporation, Inc.] please see [details](https://evil.test)
+        //
+        // draw "ACME Corporation, Inc.] please see [details" as the caption of a
+        // link to evil.test, and let the inner target of a nested pair take the
+        // outer pair's words. Both are the one thing this renderer must never
+        // do — show a reader something the author did not write — and both come
+        // from letting a `]` pair with a `[` that is not its own.
+        //
+        // A refusal here is not a failure to find a link; it is the answer that
+        // this was not one. Nothing is skipped and no cursor moves, so the
+        // brackets that follow are read on their own terms: in the line above,
+        // the first `[` is drawn as a bracket and `[details](https://evil.test)`
+        // then becomes exactly the link it says it is.
+        function bracketSpan(open) {
+          const close = closerAt("]", open);
+          if (close < 0 || text[close + 1] !== "(") return null;
+          const label = text.slice(open, close);
+          if (label.includes("[")) return null;
+          const end = closerAt(")", close + 2);
+          if (end < 0) return null;
+          const target = text.slice(close + 2, end);
+          // A target is one word. Whitespace in it, or a bracket of either
+          // kind, means this was not a link — CommonMark would take an angled
+          // target here and this subset does not, so it is drawn as text.
+          if (/[\s()<>]/.test(target)) return null;
+          return { label, target, end };
+        }
+        while (index < text.length) {
+          // Past the bound, the rest of the line is what it says it is. This is
+          // the floor under both recursions below.
+          if (depth >= markdownInlineDepth) { plain += text.slice(index); break; }
+          const character = text[index];
+          if (character === "`") {
+            let run = 1;
+            while (text[index + run] === "`") run += 1;
+            const fence = "`".repeat(run);
+            const close = closerAt(fence, index + run);
+            if (close > index + run) {
+              flush();
+              // The content of a code span is characters, full stop: no
+              // emphasis inside it, no link inside it, and every marker in it is
+              // one of its own characters. This is what makes "a link wrapping
+              // code wrapping emphasis" resolve the only way it can.
+              nodes.push(markdownNode("code", [markdownText(text.slice(index + run, close))]));
+              index = close + run;
+              continue;
+            }
+            plain += fence;
+            index += run;
+            continue;
+          }
+          if (character === "[" || (character === "!" && text[index + 1] === "[")) {
+            const image = character === "!";
+            const open = index + (image ? 2 : 1);
+            const span = links ? bracketSpan(open) : null;
+            if (span) {
+              const drawn = image
+                ? (context && context.inline ? null : markdownImage(span.label, span.target, context))
+                : (context && context.inline ? null : markdownLink(span.target));
+              if (image && drawn) {
+                flush();
+                nodes.push(drawn);
+                index = span.end + 1;
+                continue;
+              }
+              if (!image) {
+                // Link text is inline content of its own, with links switched
+                // off inside it: a link inside a link is not a thing, and this
+                // is also what keeps the recursion from finding new work at
+                // every level.
+                const label = markdownInline(span.label, context, depth + 1, false);
+                flush();
+                if (drawn) {
+                  drawn.append(...(label.length ? label : [markdownText(span.target)]));
+                  nodes.push(drawn);
+                } else {
+                  // A card, or a target this page will not link to. The words
+                  // are drawn; the address is not.
+                  nodes.push(...label);
+                }
+                index = span.end + 1;
+                continue;
+              }
+              // An image on a card, or a reference that resolved to nothing: the
+              // source text, exactly as typed.
+              plain += text.slice(index, span.end + 1);
+              index = span.end + 1;
+              continue;
+            }
+            plain += character;
+            index += 1;
+            continue;
+          }
+          if (character === "*" || character === "_") {
+            let run = 1;
+            while (text[index + run] === character) run += 1;
+            // Three or more of a delimiter in a row is not syntax in this
+            // subset. It is drawn as the characters it is rather than guessed
+            // at, which is the rule everywhere else in here.
+            if (run > 2) { plain += character.repeat(run); index += run; continue; }
+            // An underscore inside a word is an underscore: `some_long_name` is
+            // an identifier, not an italic. An asterisk has no such problem and
+            // is left able to emphasize part of a word.
+            const intraword = character === "_" && /\w/.test(text[index - 1] || "");
+            const mark = character.repeat(run);
+            const from = index + run;
+            const opens = !intraword && /\S/.test(text[from] || "");
+            const close = opens ? closerAt(mark, from) : -1;
+            if (close > from) {
+              flush();
+              nodes.push(markdownNode(run === 2 ? "strong" : "em",
+                markdownInline(text.slice(from, close), context, depth + 1, links)));
+              index = close + run;
+              continue;
+            }
+            plain += mark;
+            index += run;
+            continue;
+          }
+          plain += character;
+          index += 1;
+        }
+        flush();
+        return nodes;
+      }
+      // Several lines of inline content, with the line breaks kept.
+      //
+      // A paragraph in this subset breaks where the author broke it. That is not
+      // CommonMark, where a single newline is a space, and it is deliberate: the
+      // descriptions and comments this renders were written in a textarea by
+      // people who pressed Return, and every one of them was drawn with its line
+      // breaks intact before this renderer existed. Losing them would be the one
+      // regression a formatting change could not justify.
+      //
+      // It also bounds the inline scanner: no emphasis, code span or link spans
+      // a newline, so the state each pass carries is one line long.
+      //
+      // `joined` is a card, where the breaks are dropped and the lines run
+      // together with a space between them. That is not a taste, it is a
+      // measurement: a card's description is clamped to six lines, and drawing
+      // the breaks made a seven-line description take all six of them where the
+      // same text collapsed took two — cards grew by up to 87px, and the column
+      // holding the longest line grew with them, from 250px of card to 374px.
+      // A card is a summary under a clamp; the line breaks are kept where there
+      // is room for them, which is the task page and the thread.
+      function markdownInlineLines(source, context, joined) {
+        const lines = String(source).split("\n");
+        const nodes = [];
+        lines.forEach((line, at) => {
+          if (at > 0) nodes.push(joined ? markdownText(" ") : markdownNode("br"));
+          nodes.push(...markdownInline(line, context, 0, true));
+        });
+        return nodes;
+      }
+      // Whether a line closes a fence opened with this character and length.
+      function markdownClosesFence(line, marker, length) {
+        const body = line.replace(/^ {0,3}/, "");
+        let run = 0;
+        while (body[run] === marker) run += 1;
+        return run >= length && body.slice(run).trim() === "";
+      }
+      const markdownBullet = /^[ \t]{0,7}[-*+][ \t]+(.*)$/;
+      const markdownOrdered = /^[ \t]{0,7}\d{1,9}[.)][ \t]+(.*)$/;
+      const markdownHeading = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t]*$/;
+      const markdownFence = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+      const markdownQuote = /^ {0,3}>/;
+      // Whether a line begins a block other than the paragraph it is being read
+      // into, which is what ends that paragraph.
+      function markdownStartsBlock(line) {
+        return markdownFence.test(line) || markdownHeading.test(line) ||
+          markdownQuote.test(line) || markdownBullet.test(line) || markdownOrdered.test(line);
+      }
+      // The blocks of a document, as an array of elements.
+      function markdownBlocks(source, context, depth) {
+        const lines = String(source).split(/\r\n|\r|\n/);
+        const blocks = [];
+        let at = 0;
+        while (at < lines.length) {
+          const line = lines[at];
+          if (!line.trim()) { at += 1; continue; }
+          const fence = markdownFence.exec(line);
+          // A backtick fence whose info string holds a backtick is not a fence.
+          // A tilde fence may hold anything, and the info string is discarded
+          // either way: a language name would become a class attribute, and this
+          // renderer sets no attribute it does not need.
+          if (fence && !(fence[1][0] === "`" && fence[2].includes("`"))) {
+            const marker = fence[1][0];
+            const length = fence[1].length;
+            const body = [];
+            let scan = at + 1;
+            while (scan < lines.length && !markdownClosesFence(lines[scan], marker, length)) {
+              body.push(lines[scan]);
+              scan += 1;
+            }
+            // An unclosed fence runs to the end of the text rather than
+            // swallowing the page: everything after it is code and there is
+            // nothing left to mis-parse. A second fence inside it is code too,
+            // which is what makes interleaved fences boring.
+            blocks.push(markdownNode("pre", [markdownNode("code", [markdownText(body.join("\n"))])]));
+            at = scan < lines.length ? scan + 1 : scan;
+            continue;
+          }
+          const heading = markdownHeading.exec(line);
+          if (heading) {
+            // Two levels down, so a description's top heading is an h3 under the
+            // page's own h2 and a seventh `#` is not a heading at all — it fell
+            // out of the pattern above and is a paragraph.
+            const level = Math.min(6, heading[1].length + 2);
+            blocks.push(markdownNode("h" + level, markdownInline(heading[2] || "", context, 0, true)));
+            at += 1;
+            continue;
+          }
+          if (markdownQuote.test(line) && depth < markdownQuoteDepth) {
+            const quoted = [];
+            while (at < lines.length && markdownQuote.test(lines[at])) {
+              quoted.push(lines[at].replace(/^ {0,3}> ?/, ""));
+              at += 1;
+            }
+            blocks.push(markdownNode("blockquote", markdownBlocks(quoted.join("\n"), context, depth + 1)));
+            continue;
+          }
+          const ordered = markdownOrdered.test(line);
+          const pattern = ordered ? markdownOrdered : markdownBullet;
+          if (pattern.test(line)) {
+            const items = [];
+            while (at < lines.length) {
+              const item = pattern.exec(lines[at]);
+              if (item) { items.push(item[1]); at += 1; continue; }
+              // An indented line that is not itself an item continues the one
+              // above it, which is how a wrapped sentence stays in its bullet.
+              if (items.length && /^[ \t]{2,}\S/.test(lines[at]) && !markdownStartsBlock(lines[at])) {
+                items[items.length - 1] += "\n" + lines[at].trim();
+                at += 1;
+                continue;
+              }
+              // A blank line ends the list unless the next thing is another item
+              // of the same kind, which is how a list with air in it stays one
+              // list rather than becoming three.
+              if (!lines[at].trim()) {
+                let ahead = at;
+                while (ahead < lines.length && !lines[ahead].trim()) ahead += 1;
+                if (ahead < lines.length && pattern.test(lines[ahead])) { at = ahead; continue; }
+              }
+              break;
+            }
+            blocks.push(markdownNode(ordered ? "ol" : "ul", items.map(
+              (item) => markdownNode("li", markdownInlineLines(item, context)))));
+            continue;
+          }
+          const paragraph = [];
+          while (at < lines.length && lines[at].trim() && !(paragraph.length && markdownStartsBlock(lines[at]))) {
+            paragraph.push(lines[at]);
+            at += 1;
+          }
+          blocks.push(markdownNode("p", markdownInlineLines(paragraph.join("\n"), context)));
+        }
+        return blocks;
+      }
+      // Draws markdown into an element, replacing whatever was in it.
+      //
+      // The element is the caller's — it carries the class, the label and the
+      // scrolling — and everything inside it is built here.
+      function renderMarkdown(target, source, context) {
+        target.replaceChildren(...markdownBlocks(source || "", context || {}, 0));
+        return target;
+      }
+      // Draws the inline half of the subset into an element: a card.
+      function renderInlineMarkdown(target, source) {
+        target.replaceChildren(...markdownInlineLines(source || "", { inline: true }, true));
+        return target;
+      }
       function threadButton(caption, primary = false) {
         const button = document.createElement("button");
         button.type = "button";
@@ -2650,6 +3193,12 @@
         panel.section.append(form, panel.status);
 
         let comments = [];
+        // What this task has attached, as of the last poll. The thread holds it
+        // because an image in a comment is an attachment reference and resolves
+        // against this list: a comment written before the screenshot was
+        // uploaded draws the reference as text and draws the image the moment
+        // the upload lands, with no edit to the comment.
+        let attachments = (task && task.attachments) || [];
         // A comment the reader is editing keeps its row across every render.
         // Rebuilding it would take the sentence they are in the middle of with
         // it, and a poll lands once a second.
@@ -2664,13 +3213,18 @@
           const written = document.createElement("p");
           written.className = "comment__attribution";
           text(written, commentAttribution(comment));
-          const bodyText = document.createElement("p");
-          bodyText.className = "comment__body";
+          // A div rather than a paragraph, because what goes in it may be
+          // several paragraphs, a list or a fenced block, and none of those may
+          // nest inside a <p>. The class and the marker are unchanged.
+          const bodyText = document.createElement("div");
+          bodyText.className = "comment__body markdown";
           bodyText.dataset.commentBody = "";
-          // textContent, never innerHTML. A comment body is text somebody typed
-          // and this page has no trusted-HTML path at all; formatting it is a
-          // later change and will build nodes rather than parse markup.
-          text(bodyText, comment.body || "");
+          // Nodes, never innerHTML. A comment body is text somebody typed; the
+          // renderer above builds elements out of it and draws everything it
+          // does not recognize as the characters it is. Images in a comment
+          // resolve against this task's own attachments, which is the only
+          // place an image on this page can come from.
+          renderMarkdown(bodyText, comment.body || "", { taskID, attachments });
           const rowActions = document.createElement("div");
           rowActions.className = "comment__actions";
           const edit = panel.claim(threadButton("Edit"));
@@ -2779,6 +3333,7 @@
         });
         panel.follow = (held) => {
           comments = (held && held.comments) || [];
+          attachments = (held && held.attachments) || [];
           render();
         };
         panel.follow(task);
@@ -3284,6 +3839,72 @@
         const form = document.createElement("form"); form.className = "task-layout";
         const title = document.createElement("input"); title.id = "task-title"; title.name = "title"; title.required = true; title.value = task.title || "";
         const description = document.createElement("textarea"); description.id = "task-description"; description.name = "description"; description.value = task.description || "";
+        // The description has two faces and one value.
+        //
+        // Read mode draws the markdown; edit mode is the textarea this form has
+        // always had, with the same id, the same name and the same value. The
+        // switch changes nothing else: the save still reads description.value,
+        // still sends the field only when it differs from the task this form
+        // rendered, and still carries the tip it rendered against. A reader who
+        // never presses Edit is looking at a rendering of exactly the string a
+        // save would send.
+        const descriptionView = document.createElement("div");
+        descriptionView.className = "description-read markdown";
+        descriptionView.dataset.descriptionRead = "";
+        // Focusable because it scrolls: the pane keeps the form's footer on the
+        // screen by scrolling its own content, and a region only a pointer can
+        // scroll is one a keyboard cannot read the end of.
+        descriptionView.tabIndex = 0;
+        descriptionView.setAttribute("aria-label", "Description");
+        const descriptionToggleControl = document.createElement("button");
+        descriptionToggleControl.type = "button";
+        // Named for what it does rather than for what it sits beside. The
+        // board's header already carries a data-description-toggle — the
+        // setting that shows card descriptions — and two controls answering one
+        // selector is a bug waiting for whichever of them querySelector reaches
+        // first.
+        descriptionToggleControl.className = "description-edit-toggle";
+        descriptionToggleControl.dataset.descriptionEdit = "";
+        // A new task has nothing to read, so it opens in the editor. An existing
+        // one opens in read mode, which is what the page is for.
+        let descriptionEditing = isNew;
+        function renderDescriptionView() {
+          const source = description.value || "";
+          if (!source.trim()) {
+            const empty = document.createElement("p");
+            empty.className = "description-read__empty";
+            text(empty, "No description yet.");
+            descriptionView.replaceChildren(empty);
+            return;
+          }
+          renderMarkdown(descriptionView, source, { taskID: isNew ? "" : task.id, attachments: task.attachments || [] });
+        }
+        // The attachment list the description's images resolve against, brought
+        // up to the read that just landed. Only that list is adopted: the
+        // description itself is a field on this form and no field follows a
+        // poll, so the words on the screen stay the reader's own while the
+        // pictures they name arrive.
+        function adoptDescriptionAttachments(held) {
+          const arrived = (held && held.attachments) || [];
+          task = Object.assign({}, task, { attachments: arrived });
+          if (!descriptionEditing) renderDescriptionView();
+        }
+        function renderDescriptionMode() {
+          description.hidden = !descriptionEditing;
+          descriptionView.hidden = descriptionEditing;
+          text(descriptionToggleControl, descriptionEditing ? "Done" : "Edit");
+          descriptionToggleControl.setAttribute("aria-label",
+            descriptionEditing ? "Finish editing the description" : "Edit the description");
+          if (!descriptionEditing) renderDescriptionView();
+        }
+        descriptionToggleControl.addEventListener("click", () => {
+          descriptionEditing = !descriptionEditing;
+          renderDescriptionMode();
+          // The control the reader asked for takes the caret. Leaving it on the
+          // button would put the next keystroke nowhere on the way in, and
+          // Done's own rendering is what the reader wants to see on the way out.
+          if (descriptionEditing) description.focus(); else descriptionView.focus();
+        });
         const status = select("status", statusDefinitions, task.status); status.required = true;
         showStatus(status, task.status);
         const priority = select("priority", [["high", "High"], ["medium", "Medium"], ["low", "Low"]], task.priority);
@@ -3321,9 +3942,17 @@
 		  danger.append(remove); actions.append(danger);
 		}
         const editor = document.createElement("div"); editor.className = "task-editor";
+        const descriptionField = field("Description", description, true, "field--description", descriptionToggleControl);
+        // The read pane sits in the field beside the textarea rather than in a
+        // wrapper around it: the textarea stays a direct child of
+        // .field--description, which is the element that gives it its height,
+        // and exactly one of the two is ever displayed, so the field still lays
+        // out as the two rows it always was.
+        descriptionField.insertBefore(descriptionView, description);
+        renderDescriptionMode();
         editor.append(
           field("Title", title, true),
-          field("Description", description, true, "field--description")
+          descriptionField
         );
         const sidebar = document.createElement("aside"); sidebar.className = "task-sidebar"; sidebar.setAttribute("aria-label", "Task properties and relationships");
         const properties = document.createElement("section"); properties.className = "task-properties";
@@ -3401,6 +4030,15 @@
             adopted.priority = task.priority;
           }
           task = adopted;
+          // Drawn after the task is adopted, so the pane follows both halves of
+          // what a poll can move: the description itself, when this reader has
+          // not touched the field, and the attachment list an image reference
+          // resolves against — a screenshot uploaded in the panel below appears
+          // in the description that referenced it on the next poll, with no edit
+          // to the text at all. In edit mode it renders nothing; the textarea is
+          // what is on the screen and the pane is redrawn when Done returns to
+          // it.
+          if (!descriptionEditing) renderDescriptionView();
           // Re-based the way a refused save re-bases this form: it proposes the
           // tip that now exists, so the reader's next save applies their edits
           // to it instead of being refused for naming a head that has moved on.
@@ -3611,7 +4249,15 @@
           const comments = taskComments(task.id, task, head, owner);
           openThreadPanels = {
             taskID: task.id,
-            follow: (held) => { attachments.follow(held); comments.follow(held); }
+            // The description above these panels follows the same read, for the
+            // one thing it can follow: an image in it is a reference to an
+            // attachment of this task, and the attachment list is what the poll
+            // brings. So a screenshot uploaded in the panel below appears in
+            // the description that already named it, without a reload and
+            // without an edit to a word of the text. The text itself does not
+            // follow the poll — no field on this form does, which is what keeps
+            // a reader's edits under their caret.
+            follow: (held) => { attachments.follow(held); comments.follow(held); adoptDescriptionAttachments(held); }
           };
           // Attachments before comments, and the change log after both: the
           // attachment list is bounded at fifty rows while a thread has no
