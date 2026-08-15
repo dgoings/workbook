@@ -937,6 +937,29 @@
       let deletedEmpty = null;
       let syncState = null;
       let activeDrag = null;
+      // Where the cursor is during a drag, and which column's scroller it is
+      // over. dragover is the only report of a cursor position HTML5 drag and
+      // drop offers, and it stops arriving the moment the cursor holds still,
+      // so a column scrolled from dragover alone would stop under a reader who
+      // has pushed into its bottom edge and is waiting for it to come to them.
+      // The position is remembered here instead and a frame loop reads it, so
+      // holding still at an edge keeps scrolling exactly as it does everywhere
+      // else a drag scrolls something.
+      let dragScroller = null;
+      let dragPointerY = 0;
+      // The frame the loop has asked for, and the timestamp of the one before
+      // it. Both are null while no loop is running, which is what makes
+      // starting it idempotent and stopping it verifiable.
+      let dragScrollFrame = null;
+      let dragScrollLast = null;
+      // The travel a frame asked for and the scroller did not keep. A browser
+      // rounds an assigned scroll offset to whole pixels — Chrome reads 1.25
+      // back as 1 — so a slow scroll, which is what the inner half of the edge
+      // zone is for, would lose a fifth of every step and stop entirely below
+      // half a pixel a frame. Whatever is rounded away is held here and added
+      // to the next frame, which makes the rate the reader gets the rate the
+      // ramp names, on a browser that rounds and on one that does not.
+      let dragScrollCarry = 0;
       const copyFeedback = new Map();
       const copyFeedbackTimers = new Map();
       let copySuppressionTimer = null;
@@ -6191,6 +6214,117 @@
       function clearPlacement() {
         dropMarker.remove();
       }
+      // How deep into a column's top or bottom edge the cursor has to be before
+      // the drag scrolls it, and how fast that scroll runs.
+      //
+      // The zone is a fraction of the scroller with a ceiling on it rather than
+      // a fixed number of pixels. A fixed edge zone is a different proposition
+      // on every viewport: 72px of a tall column is a strip, and 72px of each
+      // end of a short one leaves a reader on a phone-height window with almost
+      // nowhere the cursor can rest without the column moving. Taking a quarter
+      // of the scroller from each end keeps the still middle at least half the
+      // column at every height, and the ceiling stops a very tall column from
+      // turning most of itself into an edge.
+      const dragScrollEdgeFraction = 0.25;
+      const dragScrollEdgeMax = 72;
+      // Pixels per second at the outer edge, ramped linearly from nothing at
+      // the zone's inner boundary. Speed comes from how far the reader pushes
+      // rather than from how long they wait, so a long reorder is one shove and
+      // a short one is a nudge. At this rate a full 900px column passes in
+      // about a second.
+      const dragScrollMaxSpeed = 900;
+      // A frame longer than this is one nobody watched — a backgrounded tab, or
+      // a busy main thread — and scrolling for its whole duration would jump the
+      // column past everything the reader meant to drop between.
+      const dragScrollMaxStep = 50;
+      // The distance this scroller should travel this frame: negative up,
+      // positive down, and zero anywhere in the still middle.
+      function dragScrollDistance(scroller, pointerY, elapsed) {
+        const bounds = scroller.getBoundingClientRect();
+        const height = bounds.bottom - bounds.top;
+        if (!(height > 0)) return 0;
+        const zone = Math.min(dragScrollEdgeMax, height * dragScrollEdgeFraction);
+        const intoTop = pointerY - bounds.top;
+        const intoBottom = bounds.bottom - pointerY;
+        // A cursor a hair past either end counts as being at that end rather
+        // than as being in neither zone. The two zones cannot overlap and leave
+        // a gap between them, because each is at most a quarter of the height.
+        let rate = 0;
+        if (intoTop < zone) rate = -Math.min(1, (zone - intoTop) / zone);
+        else if (intoBottom < zone) rate = Math.min(1, (zone - intoBottom) / zone);
+        else return 0;
+        return rate * dragScrollMaxSpeed * (elapsed / 1000);
+      }
+      // Redraw the drop line for the remembered cursor position. The cards have
+      // moved under a cursor that has not, so the line drawn on the last
+      // dragover is answering a question about a column that no longer looks
+      // like that — and there may never be another dragover to correct it. The
+      // Deleted column draws no line at all, for the reason its dragover
+      // doesn't: its order is not the drop's to name.
+      function refreshDragPlacement(list) {
+        if (!activeDrag || dropsIntoDeleted(list)) return;
+        if (!lists.has(list.dataset.dropStatus)) return;
+        showPlacement(list, placementFor(list, dragPointerY));
+      }
+      function dragScrollTick(timestamp) {
+        dragScrollFrame = null;
+        // The gesture ended between frames. Returning without asking for
+        // another is what stops the loop.
+        if (!activeDrag || !dragScroller) return;
+        const elapsed = dragScrollLast === null
+          ? 0
+          : Math.min(dragScrollMaxStep, Math.max(0, timestamp - dragScrollLast));
+        dragScrollLast = timestamp;
+        const scroller = dragScroller;
+        const distance = dragScrollDistance(scroller, dragPointerY, elapsed);
+        if (distance !== 0) {
+          const limit = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+          const from = scroller.scrollTop;
+          const wanted = Math.max(0, Math.min(limit, from + distance + dragScrollCarry));
+          scroller.scrollTop = wanted;
+          // Read back rather than assumed: the carry is whatever this scroller
+          // would not take, which at either end of its travel is nothing.
+          dragScrollCarry = wanted - scroller.scrollTop;
+          if (scroller.scrollTop !== from) refreshDragPlacement(scroller);
+        }
+        dragScrollFrame = requestAnimationFrame(dragScrollTick);
+      }
+      function startDragScroll() {
+        if (dragScrollFrame !== null) return;
+        // No elapsed time until a second frame has been seen. The first
+        // timestamp is a page-lifetime clock, and treating the whole of it as
+        // one frame would scroll the capped step before the reader had moved.
+        dragScrollLast = null;
+        dragScrollCarry = 0;
+        dragScrollFrame = requestAnimationFrame(dragScrollTick);
+      }
+      // Whether an event's cursor is inside this scroller's own box.
+      function cursorWithin(scroller, event) {
+        const bounds = scroller.getBoundingClientRect();
+        return event.clientX >= bounds.left && event.clientX <= bounds.right &&
+          event.clientY >= bounds.top && event.clientY <= bounds.bottom;
+      }
+      function stopDragScroll() {
+        if (dragScrollFrame !== null) cancelAnimationFrame(dragScrollFrame);
+        dragScrollFrame = null;
+        dragScrollLast = null;
+        dragScrollCarry = 0;
+        dragScroller = null;
+      }
+      // Remember where the cursor is, and run the loop for as long as it is
+      // over something a drop could land in. Handed nothing — the gutter
+      // between columns, or a target this drag is refused by — the column stops
+      // where it is, because a drag going nowhere is not asking anything to
+      // move.
+      function trackDragScroll(scroller, pointerY) {
+        if (typeof pointerY === "number") dragPointerY = pointerY;
+        if (!scroller) {
+          stopDragScroll();
+          return;
+        }
+        dragScroller = scroller;
+        startDragScroll();
+      }
       function cardNodes(list) {
         return [...list.children].filter((child) => child.dataset && child.dataset.taskId);
       }
@@ -6559,6 +6693,10 @@
           sourceStatus: source ? source.dataset.status : ""
         };
         copySuppressedTaskID = item.dataset.taskId;
+        // A new gesture remembers nothing of the last one. The loop starts on
+        // the first dragover, when there is a column under the cursor for it to
+        // scroll.
+        stopDragScroll();
         event.dataTransfer.effectAllowed = "move";
         event.dataTransfer.setData("text/plain", activeDrag.taskId);
         item.classList.add("is-dragging");
@@ -6568,6 +6706,11 @@
         if (item) item.classList.remove("is-dragging");
         activeDrag = null;
         clearPlacement();
+        // dragend arrives however the gesture ended — dropped, cancelled with
+        // Escape, or released over another window — so this is the stop that
+        // cannot be missed, and the one that guarantees no frame loop outlives
+        // a drag.
+        stopDragScroll();
         const suppressedTaskID = copySuppressedTaskID;
         if (copySuppressedTaskID !== null) {
           if (copySuppressionTimer !== null) window.clearTimeout(copySuppressionTimer);
@@ -6579,11 +6722,22 @@
       });
       document.addEventListener("dragover", (event) => {
         const target = dropTarget(event);
-        if (!target || !activeDrag) return;
+        if (!target || !activeDrag) {
+          trackDragScroll(null, event.clientY);
+          return;
+        }
         if (dropsIntoDeleted(target)) {
           // A card already in the column has nowhere to arrive: deleting a
           // tombstone is not a change anyone asked for.
-          if (draggedTaskIsDeleted()) return;
+          if (draggedTaskIsDeleted()) {
+            trackDragScroll(null, event.clientY);
+            return;
+          }
+          // The Deleted column is a scroller like any other, so it scrolls like
+          // any other. Nothing here needs the reader to reach a particular row —
+          // the drop names no position — but a column that will not move under a
+          // cursor pushed into its edge reads as a page that has frozen.
+          trackDragScroll(target, event.clientY);
           // No drop marker. The column orders itself by when each task was
           // deleted, and a line drawn between two cards would promise a
           // position this drop does not name and the column would not keep.
@@ -6595,7 +6749,11 @@
         // Same set as the one that decides `movable`: a card is draggable out of
         // exactly the columns the server rendered, so those are exactly the
         // columns it may be dropped into.
-        if (!lists.has(target.dataset.dropStatus)) return;
+        if (!lists.has(target.dataset.dropStatus)) {
+          trackDragScroll(null, event.clientY);
+          return;
+        }
+        trackDragScroll(target, event.clientY);
         const placement = placementFor(target, event.clientY);
         showPlacement(target, placement);
         event.preventDefault();
@@ -6612,9 +6770,30 @@
       }
       document.addEventListener("dragleave", (event) => {
         const target = dropTarget(event);
-        if (target && !target.contains(event.relatedTarget)) clearPlacement();
+        if (!target || target.contains(event.relatedTarget)) return;
+        clearPlacement();
+        // Whether the cursor has left the column is asked of where this event
+        // says the cursor is, not of what it says the cursor moved to.
+        //
+        // A browser fires dragleave whenever the element under the cursor
+        // changes, and scrolling a column changes it several times a second
+        // under a cursor that has not moved at all — that is this very loop's
+        // doing. Chrome reports no relatedTarget on a drag event either, so the
+        // check above cannot tell that apart from a real departure. Reading the
+        // leave as a departure would stop the scroll it had just caused, and
+        // with the cursor still there would be no dragover to start it again.
+        //
+        // A cursor outside the column's own box has genuinely gone: off the
+        // board, or out of the window, which is the case no dragover reports.
+        // Everything else — another column, the gutter, the page's chrome — is
+        // already answered by the dragover that lands there.
+        if (target === dragScroller && !cursorWithin(target, event)) stopDragScroll();
       });
       document.addEventListener("drop", async (event) => {
+        // The gesture is over the moment something is dropped, whatever the
+        // drop turns out to mean, so nothing is left scrolling while the write
+        // this handler may await is in flight.
+        stopDragScroll();
         const target = dropTarget(event);
         if (!target || !activeDrag) return;
         if (dropsIntoDeleted(target)) return dropIntoDeleted(event, activeDrag.taskId);
