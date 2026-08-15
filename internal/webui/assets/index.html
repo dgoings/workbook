@@ -4,6 +4,7 @@
   <h3><a href="/tasks/{{ .Task.ID }}">{{ .Task.Title }}</a></h3>
   {{ if .Task.Description }}<p>{{ .Task.Description }}</p>{{ end }}
   {{ if .Task.Labels }}<div class="labels">{{ range .Task.Labels }}<span class="label">{{ . }}</span>{{ end }}</div>{{ end }}
+  {{ if .Task.Assignments }}{{ $assignees := cardAssignees .Task.Assignments }}<div class="assignees" data-assignees role="group" aria-label="Assignees">{{ range $assignees.Chips }}<span class="assignee">@{{ . }}</span>{{ end }}{{ if $assignees.More }}<span class="assignee assignee--more">+{{ $assignees.More }} more</span>{{ end }}</div>{{ end }}
   {{ if .DependenciesTotal }}
   <div class="dependency-progress" data-dependency-progress>
     <span>{{ .DependenciesComplete }} of {{ .DependenciesTotal }} prerequisites complete</span>
@@ -250,6 +251,22 @@
     .task-card p code { overflow: visible; text-overflow: clip; white-space: normal; padding: 0 .18rem; border-radius: 3px; background: #eef2f8; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .95em; }
     .labels { display: flex; flex-wrap: wrap; gap: .25rem; margin-top: .65rem; }
     .label { max-width: 100%; overflow: hidden; padding: .14rem .28rem; border: 1px solid #d5deea; border-radius: 3px; color: #4e5d73; font-size: .64rem; text-overflow: ellipsis; white-space: nowrap; }
+    /* The assignee row takes the label row's geometry exactly — same flex wrap,
+       same gap, same top margin — because it is the same kind of thing on the
+       same card and a second geometry would read as a second kind. What differs
+       is colour and the leading @, which is what keeps a chip from being read as
+       a label somebody happened to name after a teammate: no styling of a label,
+       a title or a description produces this box, so a card cannot be made to
+       forge an assignment by typing one.
+
+       `max-width: 100%` and the ellipsis are load-bearing rather than tidy. A
+       principal may be 254 bytes and a label 100, and a column at the 390px
+       viewport is 302px wide: without the clamp one chip drew 1180px and took
+       the whole page into horizontal scroll. Clamped, it ends in an ellipsis
+       inside its column, and the task page below prints the whole value. */
+    .assignees { display: flex; flex-wrap: wrap; gap: .25rem; margin-top: .65rem; }
+    .assignee { max-width: 100%; overflow: hidden; padding: .14rem .28rem; border: 1px solid #b7c9ea; border-radius: 3px; background: #edf3ff; color: #34425a; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .64rem; text-overflow: ellipsis; white-space: nowrap; }
+    .assignee--more { border-style: dashed; background: transparent; color: #56647a; }
     .dependency-progress { display: grid; gap: .18rem; margin-top: .65rem; color: #4e5d73; font-size: .72rem; }
     .dependency-progress strong { color: #9c2f25; font-size: .72rem; }
     /* A refused board change is reported here, on the card it concerns, and it
@@ -475,6 +492,21 @@
     /* One line of feedback per panel, and it is the same live region the form
        uses so a refusal reads the same wherever it happens on this page. */
     .task-panel .form-status { min-height: 0; }
+    /* The assignments section reads rather than writes, so its rows are the
+       attachment row's geometry without the control column: one line naming who
+       holds the task, one line saying when that was recorded and how long ago.
+
+       overflow-wrap: anywhere on both, for the reason the comment body carries
+       it — a 254-byte principal with no space in it is not a reason for this page
+       to scroll sideways. Nothing here is clamped to one line: this section is
+       where the whole value is legible, which is what makes the card's chip above
+       it safe to truncate. */
+    .task-panel--assignments { background: #fafbfd; }
+    .assignment { display: grid; gap: .15rem; padding: .55rem .7rem; border: 1px solid #d5deea; border-radius: 4px; background: #fff; }
+    .assignment__who { margin: 0; min-width: 0; font-size: .84rem; overflow-wrap: anywhere; }
+    .assignment__principal { font-weight: 700; }
+    .assignment__label { color: #2457d6; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .8rem; font-weight: 700; }
+    .assignment__meta { margin: 0; color: #56647a; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .68rem; overflow-wrap: anywhere; }
     .comment { display: grid; gap: .25rem; padding: .6rem .7rem; border: 1px solid #d5deea; border-radius: 4px; background: #fff; }
     .comment__attribution { margin: 0; color: #56647a; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .68rem; overflow-wrap: anywhere; }
     /* overflow-wrap, because a body with no spaces in it is not a reason for the
@@ -1120,6 +1152,11 @@
           view.dependenciesTotal || 0,
           view.dependenciesComplete || 0,
           Boolean(view.waitingOnDependencies),
+          // The chip row the server derived, and what it left out. Both are part
+          // of what the card is drawn from, so an assignment made from the CLI
+          // redraws exactly the card it names on the next poll and no other.
+          view.assignmentChips || [],
+          view.moreAssignments || 0,
           report || ""
         ]);
       }
@@ -1284,6 +1321,41 @@
         // the characters it is — which is exactly what a card drew before.
         if (task.description) { const description = document.createElement("p"); renderInlineMarkdown(description, task.description); article.insertBefore(description, parts.restore); }
         if (task.labels && task.labels.length) { const labels = document.createElement("div"); labels.className = "labels"; task.labels.forEach((label) => { const item = document.createElement("span"); item.className = "label"; text(item, label); labels.append(item); }); article.insertBefore(labels, parts.restore); }
+        // The chip row, drawn only for a task somebody holds — so a board where
+        // nobody has claimed anything is the board that has always been drawn,
+        // node for node and pixel for pixel.
+        //
+        // The chips are the server's: presentation.AssignmentChip decided the
+        // short form and webui's assignmentRow decided how many of them fit, and
+        // this draws what it was handed. A client that re-derived either would be
+        // a second copy of both rules, and the cards the server rendered into the
+        // page would change the moment the first poll landed.
+        const assignees = view.assignmentChips || [];
+        if (assignees.length) {
+          const row = document.createElement("div");
+          row.className = "assignees";
+          row.dataset.assignees = "";
+          // Named for a reader who cannot see that this row is styled unlike the
+          // labels above it. The chips themselves are text and nothing else: a
+          // principal is somebody else's asserted identity and may hold anything
+          // at all, so it reaches the document through text() like a title does.
+          row.setAttribute("role", "group");
+          row.setAttribute("aria-label", "Assignees");
+          assignees.forEach((chip) => {
+            const item = document.createElement("span");
+            item.className = "assignee";
+            text(item, "@" + chip);
+            row.append(item);
+          });
+          const more = view.moreAssignments || 0;
+          if (more > 0) {
+            const overflow = document.createElement("span");
+            overflow.className = "assignee assignee--more";
+            text(overflow, "+" + more + " more");
+            row.append(overflow);
+          }
+          article.insertBefore(row, parts.restore);
+        }
         if (view.dependenciesTotal > 0) {
           const progress = document.createElement("div");
           progress.className = "dependency-progress";
@@ -3166,6 +3238,112 @@
               : (error instanceof Error ? error.message : "The change failed.")),
           open);
       }
+      // Who holds this task, read-only.
+      //
+      // Read-only is the whole design of this section rather than a stage of it.
+      // An assignment is recorded against the actor's asserted git identity, and
+      // this page has no identity to assert: the browser is not a principal, the
+      // server would have to invent one on its behalf, and an assignment nobody
+      // can be held to is worse than none. `workbook update --assign` and
+      // `workbook next --claim` are where an assignment is made, and this is
+      // where the board reads one. So there is no form here, no control, and no
+      // route behind it.
+      //
+      // It is built out of the thread panels' parts — the same section, header,
+      // count and list classes — because it is the same kind of block on the same
+      // page, and it is not built by taskPanel itself because every other thing
+      // that function provides is for a panel that writes: a busy state, a status
+      // line, a control register, and an empty message that this section has no
+      // use for. This one has no empty state at all. A task nobody holds draws
+      // nothing — not a heading over an empty list, which is the convention the
+      // comment thread's empty message deliberately does not extend to a section
+      // a reader cannot act on.
+      function taskAssignments() {
+        const section = document.createElement("section");
+        section.className = "task-panel task-panel--assignments";
+        section.dataset.taskPanel = "assignments";
+        section.setAttribute("aria-label", "Assignments");
+        const header = document.createElement("div");
+        header.className = "task-panel__header";
+        const heading = document.createElement("h3");
+        text(heading, "Assignments");
+        const count = document.createElement("p");
+        count.className = "task-panel__count";
+        count.dataset.panelCount = "";
+        header.append(heading, count);
+        const list = document.createElement("ul");
+        list.className = "task-panel__list";
+        list.dataset.panelList = "";
+        section.append(header, list);
+        // What the section was last drawn from. A poll that changed nothing
+        // costs one string comparison and touches no node, which is what keeps
+        // the rows from being rebuilt under a reader's caret once a second — the
+        // same contract a card holds through cardSignature.
+        let signature = null;
+        // Where the section belongs when there is something to draw: this parent,
+        // immediately before this sibling. Held rather than looked up so that a
+        // task assigned, unassigned and assigned again from the CLI returns to
+        // the same place on the page every time.
+        let parent = null;
+        let anchor = null;
+        function draw(assignments) {
+          const held = Array.isArray(assignments) ? assignments : [];
+          const next = JSON.stringify(held);
+          if (next === signature) return;
+          signature = next;
+          if (!held.length) {
+            section.remove();
+            list.replaceChildren();
+            return;
+          }
+          text(count, held.length === 1 ? "1 assignment" : held.length + " assignments");
+          list.replaceChildren(...held.map((assignment) => {
+            const item = document.createElement("li");
+            item.className = "assignment";
+            // The principal and the label, drawn as the one value somebody types
+            // into `--unassign` and still visibly two things: the slash is the
+            // separator core composes the value with, and the label is styled
+            // apart from the address so a reader can see which agent of that
+            // person holds the task without having to parse the string.
+            //
+            // Both are somebody else's asserted identity, unverified by design,
+            // and both reach the document through text(). A principal that is
+            // markup is drawn as the characters it is, exactly as a title is.
+            const who = document.createElement("p");
+            who.className = "assignment__who";
+            const principal = document.createElement("span");
+            principal.className = "assignment__principal";
+            text(principal, assignment.principal);
+            who.append(principal);
+            if (assignment.label) {
+              const label = document.createElement("span");
+              label.className = "assignment__label";
+              text(label, "/" + assignment.label);
+              who.append(label);
+            }
+            // The exact time it was recorded and how long ago that was. The
+            // phrase is the server's — presentation.AssignedAgo, the same words
+            // `workbook show` prints — and it is recomputed on every poll, so an
+            // open page's hint ages without a reload. Nothing expires and this is
+            // not a warning: an assignment three weeks old is a fact for people
+            // to settle between themselves.
+            const meta = document.createElement("p");
+            meta.className = "assignment__meta";
+            text(meta, recordedAt(assignment.createdAt) + " · " + assignment.ago);
+            item.append(who, meta);
+            return item;
+          }));
+          if (parent && !parent.contains(section)) parent.insertBefore(section, anchor);
+        }
+        return {
+          section,
+          // Mounted by its owner rather than appended by it, because whether the
+          // section is in the document at all is this controller's answer and it
+          // changes with every poll.
+          mountBefore(into, before) { parent = into; anchor = before; },
+          follow(view) { draw(view && view.assignments); }
+        };
+      }
       function commentAttribution(comment) {
         const written = attribution(comment.author, comment.createdAt);
         return comment.editedAt ? written + " · edited " + recordedAt(comment.editedAt) : written;
@@ -4247,6 +4425,7 @@
           const owner = () => main.firstElementChild === section;
           const attachments = taskAttachments(task.id, task, head, owner);
           const comments = taskComments(task.id, task, head, owner);
+          const assignments = taskAssignments();
           openThreadPanels = {
             taskID: task.id,
             // The description above these panels follows the same read, for the
@@ -4257,13 +4436,30 @@
             // without an edit to a word of the text. The text itself does not
             // follow the poll — no field on this form does, which is what keeps
             // a reader's edits under their caret.
-            follow: (held) => { attachments.follow(held); comments.follow(held); adoptDescriptionAttachments(held); }
+            // The assignments section follows the same read, and follows it
+            // through the presentation rather than the task: the chip's short
+            // form and the staleness hint's wording are derived on the server,
+            // so what a poll brings this section is the view beside the task
+            // rather than the task itself. A CLI assign or unassign made
+            // elsewhere therefore appears here within a poll tick — and, like
+            // every other panel on this page, it moves nothing the form above it
+            // is holding, because no field on that form follows the poll at all.
+            follow: (held, view) => { attachments.follow(held); comments.follow(held); adoptDescriptionAttachments(held); assignments.follow(view); }
           };
           // Attachments before comments, and the change log after both: the
           // attachment list is bounded at fifty rows while a thread has no
           // length a page can rely on, so the short section stays reachable
           // without scrolling past a long one to find it.
+          //
+          // Assignments come before all three. It is the shortest section on the
+          // page, it is bounded at fifty rows by the same ceiling the fold
+          // enforces, and it answers the question a reader opening a task in a
+          // fleet's project asks first: is anybody already on this. A task nobody
+          // holds draws none of it, and the row below is what the section is
+          // inserted in front of when a CLI assign lands while the page is open.
           section.append(attachments.section, comments.section, taskHistory(task.id));
+          assignments.mountBefore(section, attachments.section);
+          assignments.follow(latestPresentation.get(task.id));
         }
         const failedDrafts = isNew
           ? relationshipDrafts
@@ -4442,6 +4638,12 @@
         dependenciesTotal: 0,
         dependenciesComplete: 0,
         waitingOnDependencies: false,
+        // A task nobody has accepted yet is a task nobody can have been assigned
+        // to: assignment is a mutation of a stored task, and this one has no ID
+        // to record one against.
+        assignmentChips: [],
+        moreAssignments: 0,
+        assignments: [],
         pending: true
       };
       // What the board can say about a task the server has derived nothing for.
@@ -4469,7 +4671,15 @@
           idPrefix: task.id,
           dependenciesTotal: 0,
           dependenciesComplete: 0,
-          waitingOnDependencies: false
+          waitingOnDependencies: false,
+          // No chips for the poll this gap lasts, on the dependency counts'
+          // reasoning: the short form of a principal and the wording of a
+          // staleness hint are the server's, and a row this client invented from
+          // the raw values would disagree with the row beside it. The next poll
+          // derives the real view or takes the card away.
+          assignmentChips: [],
+          moreAssignments: 0,
+          assignments: []
         };
       }
       function projectPresentation(presentation, tasks) {
@@ -6208,10 +6418,14 @@
       // The thread the open task page is drawing, brought up to the read that
       // just landed. A page showing another task, or no task, has nothing here
       // to follow.
-      function followOpenThreadPanels(tasks) {
+      // The presentation travels with the tasks because one of the panels is
+      // drawn from it rather than from the task: an assignment's chip and its
+      // staleness hint are derived on the server, and the page must not compose
+      // either from the raw values it happens to be holding.
+      function followOpenThreadPanels(tasks, presentation) {
         if (!openThreadPanels) return;
         const held = tasks.find((candidate) => candidate.id === openThreadPanels.taskID);
-        if (held) openThreadPanels.follow(held);
+        if (held) openThreadPanels.follow(held, presentation ? presentation.get(held.id) : null);
       }
       function refresh() {
         const wasLoaded = tasksLoaded;
@@ -6262,12 +6476,16 @@
             // before the last confirmation returned carries an older head, and
             // adopting it would refuse the next intent for no reason.
             const projected = projectTasks(document.tasks);
-            render(projected, projectPresentation(presentation, projected)); stale.dataset.visible = "false"; text(updated, "Updated " + new Date().toLocaleTimeString());
+            // Projected once and handed to both, so the cards and the open task
+            // page are drawn from one answer rather than from two derivations of
+            // the same read.
+            const projectedPresentation = projectPresentation(presentation, projected);
+            render(projected, projectedPresentation); stale.dataset.visible = "false"; text(updated, "Updated " + new Date().toLocaleTimeString());
             // The open task page's thread and attachments follow this read in
             // place, the way the relationship sidebar below does. Nothing else
             // about that form moves on a poll: a field is corrected only by a
             // refusal, which is what reviseAgainstTask is for.
-            followOpenThreadPanels(projected);
+            followOpenThreadPanels(projected, projectedPresentation);
             let relationshipContext = { status: "not-applicable" };
             if (!wasLoaded) renderRoute();
             else if (activeDependencyController) {

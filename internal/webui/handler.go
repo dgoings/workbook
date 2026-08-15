@@ -36,6 +36,16 @@ const securityPolicy = "default-src 'none'; img-src 'self'; style-src 'unsafe-in
 //go:embed assets/index.html
 var assets embed.FS
 
+// pageFuncs are the derivations the page template reaches for rather than
+// re-deriving in template syntax.
+//
+// There is one, and it is the chip row, because that row is the one thing on a
+// server-rendered card that the client also draws: the template calls this and
+// the poll's presentation carries what this returned, so the card a reader loads
+// and the card the first poll redraws hold the same chips. Every other card fact
+// already arrives on presentation.TaskView for exactly that reason.
+var pageFuncs = template.FuncMap{"cardAssignees": assignmentRow}
+
 type TaskLister func(context.Context) ([]core.Task, error)
 
 type TaskStatusUpdater func(context.Context, string, core.Status, string) (core.MutationResult, error)
@@ -270,6 +280,93 @@ type TaskPresentation struct {
 	DependenciesComplete  int    `json:"dependenciesComplete"`
 	DependenciesTotal     int    `json:"dependenciesTotal"`
 	WaitingOnDependencies bool   `json:"waitingOnDependencies"`
+	// AssignmentChips is the card's chip row and MoreAssignments is what the row
+	// left out; Assignments is the whole list, for the task page's section. All
+	// three are absent for a task nobody holds, which is what keeps an unheld
+	// card drawing exactly the nodes it drew before assignments existed.
+	//
+	// They are derived here rather than in the client for the reason IDPrefix is:
+	// the short form of an assignment, the number a capped row hides, and the
+	// words a staleness hint is phrased in are all rules, and a second copy of a
+	// rule in JavaScript is a copy that goes on saying the old thing the day the
+	// rule changes. presentation.AssignmentChip and presentation.AssignedAgo are
+	// the same functions `workbook board` and `workbook show` print through, so
+	// the three surfaces cannot drift.
+	AssignmentChips []string                 `json:"assignmentChips,omitempty"`
+	MoreAssignments int                      `json:"moreAssignments,omitempty"`
+	Assignments     []AssignmentPresentation `json:"assignments,omitempty"`
+}
+
+// AssignmentPresentation is one assignment as the task page draws it: who holds
+// the task, which of their agents holds it, when that was recorded, and how long
+// ago that was.
+//
+// Ago is a server-derived string rather than a client computation over CreatedAt
+// because it is `workbook show`'s own wording, from presentation.AssignedAgo. It
+// is recomputed on every poll, so an open page's "assigned 59 minutes ago"
+// becomes "assigned 1 hour ago" a minute later without a reload. CreatedAt rides
+// along beside it because the exact time is what a reader settling a stale
+// assignment between themselves actually needs, and a phrase in whole days
+// cannot carry it.
+type AssignmentPresentation struct {
+	Principal string    `json:"principal"`
+	Label     string    `json:"label,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+	Ago       string    `json:"ago"`
+}
+
+// AssignmentRow is the chip row one card draws: the chips themselves and how
+// many assignments they left out.
+//
+// The cap exists because a task may hold core.MaxAssignmentCount assignments and
+// a card is one box in one column. Chips wrap, so an uncapped row on a
+// fifty-times-assigned task would grow that card by fifty lines and push every
+// card under it off the screen — while saying nothing a reader could act on. The
+// row is lossy in the same way the chip itself is, and for the same reason: it
+// is never the only place an assignment is shown, and the task page below it
+// lists every one of them with its timestamp.
+type AssignmentRow struct {
+	Chips []string
+	More  int
+}
+
+// maxCardAssignees bounds a card's chip row. Three, because a card that names
+// three holders has already told the reader what they needed to know — this task
+// is worked by several people — and the fourth line costs more than it says.
+const maxCardAssignees = 3
+
+// assignmentRow derives the capped chip row a card draws.
+//
+// It is one function reached from two places: the page template calls it through
+// the `cardAssignees` template function for the cards the server renders, and
+// taskPresentation calls it for the cards the client renders from a poll. A
+// second implementation on either side would be a card whose chips changed when
+// the first poll landed.
+func assignmentRow(assignments []core.Assignment) AssignmentRow {
+	chips := presentation.AssignmentChips(assignments)
+	if len(chips) <= maxCardAssignees {
+		return AssignmentRow{Chips: chips}
+	}
+	return AssignmentRow{Chips: chips[:maxCardAssignees], More: len(chips) - maxCardAssignees}
+}
+
+// assignmentPresentation renders a task's assignments for the task page, in the
+// stored order — by principal, then label — so the section and the chip row
+// above it agree about which comes first.
+func assignmentPresentation(assignments []core.Assignment, now time.Time) []AssignmentPresentation {
+	if len(assignments) == 0 {
+		return nil
+	}
+	rendered := make([]AssignmentPresentation, 0, len(assignments))
+	for _, assignment := range assignments {
+		rendered = append(rendered, AssignmentPresentation{
+			Principal: assignment.Principal,
+			Label:     assignment.Label,
+			CreatedAt: assignment.CreatedAt,
+			Ago:       presentation.AssignedAgo(assignment, now),
+		})
+	}
+	return rendered
 }
 
 // LifecycleStage is one stop on a task's status lane. WallTime, Commit, and
@@ -607,7 +704,7 @@ func (handler *handler) vocabulary(request *http.Request) (VocabularyState, *htt
 // without renaming every earlier call, and a named field expresses the same
 // tier by being set or left nil.
 func NewHandler(options Options) http.Handler {
-	page := template.Must(template.New("index.html").ParseFS(assets, "assets/index.html"))
+	page := template.Must(template.New("index.html").Funcs(pageFuncs).ParseFS(assets, "assets/index.html"))
 	handler := &handler{Options: options, page: page, mux: http.NewServeMux()}
 	handler.mux.HandleFunc("GET /{$}", handler.serveBoard)
 	handler.mux.HandleFunc("GET /statuses", handler.serveStatuses)
@@ -1611,14 +1708,22 @@ func (handler *handler) writeTaskMutation(writer http.ResponseWriter, result cor
 
 func taskPresentation(tasks []core.Task, vocabulary core.Vocabulary) []TaskPresentation {
 	views := presentation.TaskViews(tasks, vocabulary)
+	// One clock for the whole document, read once. A staleness hint computed per
+	// task could cross a minute boundary halfway down the board and report two
+	// ages for two assignments recorded in the same second.
+	now := time.Now()
 	result := make([]TaskPresentation, len(views))
 	for index, view := range views {
+		row := assignmentRow(view.Task.Assignments)
 		result[index] = TaskPresentation{
 			TaskID:                view.Task.ID,
 			IDPrefix:              view.IDPrefix,
 			DependenciesComplete:  view.DependenciesComplete,
 			DependenciesTotal:     view.DependenciesTotal,
 			WaitingOnDependencies: view.WaitingOnDependencies,
+			AssignmentChips:       row.Chips,
+			MoreAssignments:       row.More,
+			Assignments:           assignmentPresentation(view.Task.Assignments, now),
 		}
 	}
 	return result

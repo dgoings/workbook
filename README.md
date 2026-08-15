@@ -607,6 +607,22 @@ and how long ago that was. Staleness is displayed and never enforced: "assigned
 themselves. Both boards show a compact chip — the local part of the address plus
 the agent label — beside each card's labels.
 
+On `workbook serve`'s board the chip row is drawn only on a card somebody holds,
+so an unassigned board is exactly the board it has always been, and it is capped
+at three chips with a `+N more` beside them: a task may hold fifty assignments
+and a card is one box in one column. A long identity is truncated to its column
+and never widens it. The task's own page carries the whole list under
+**Assignments** — the full value, the time it was recorded, and the same
+"assigned 3 days ago" phrasing `workbook show` prints — above the attachments,
+and a task nobody holds draws no section at all. It follows the poll, so an
+assignment made from the CLI in another terminal appears on an open page within
+a second without disturbing anything being typed into it.
+
+The web board displays assignments and does not make them. An assignment is
+recorded against the actor's asserted git identity, and a browser has none to
+assert; `workbook update --assign` and `workbook next --claim` are where one is
+made.
+
 #### Claiming work as an agent
 
 There are two ways to take work up, and they report differently because they ask
