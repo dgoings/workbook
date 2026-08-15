@@ -4460,6 +4460,13 @@ class TestElement {
       }
     };
     this.eventListeners = {};
+    // The scroll geometry a browser gives every element. Left at zero an
+    // element is a box with nothing to scroll, which is what a column shorter
+    // than its own content is, so an element no test has furnished behaves the
+    // way it always did.
+    this.scrollHeight = 0;
+    this.clientHeight = 0;
+    this._scrollTop = 0;
     this._value = "";
     this._textContent = "";
     this.selected = false;
@@ -4553,6 +4560,15 @@ class TestElement {
     return matches;
   }
   getBoundingClientRect() { return this.rect || { top: 0, right: 0, bottom: 0, left: 0, width: 0 }; }
+  // A browser clamps an assigned scroll offset to what there is to scroll, so
+  // the harness does too: a client that asks for an impossible offset has to
+  // read back the possible one, or a test could pass against a page that does
+  // not exist.
+  get scrollTop() { return this._scrollTop; }
+  set scrollTop(value) {
+    const limit = Math.max(0, this.scrollHeight - this.clientHeight);
+    this._scrollTop = Math.max(0, Math.min(limit, Number(value) || 0));
+  }
   scrollIntoView(options) { scrollIntoViewCalls.push({ element: this, options }); }
   get firstElementChild() { return this.children[0] || null; }
   get textContent() { return this._textContent + this.children.map((child) => child.textContent).join(""); }
@@ -4767,7 +4783,33 @@ globalThis.history = {
     window.location.href = new URL(path, window.location.href).href;
   }
 };
-globalThis.requestAnimationFrame = (callback) => callback();
+// The frame queue. A browser runs each callback once, on the next frame, with
+// the time that frame began — and the drag autoscroll asks for the next frame
+// from inside the current one, so a harness that ran callbacks the moment they
+// were asked for would recurse until the stack ran out. Frames are queued here
+// and a test runs them, which is also what lets a test say how much time passed
+// between two of them: a loop whose speed is a rate can only be asserted
+// against a clock the test holds.
+let animationFrameTime = 0;
+let nextAnimationFrameID = 1;
+const animationFrameCallbacks = new Map();
+globalThis.requestAnimationFrame = (callback) => {
+  const id = nextAnimationFrameID++;
+  animationFrameCallbacks.set(id, callback);
+  return id;
+};
+globalThis.cancelAnimationFrame = (id) => { animationFrameCallbacks.delete(id); };
+// Advances the clock and runs the frames queued right now. Anything those
+// callbacks queue waits for the next call, exactly as a browser makes it wait
+// for the next frame, so a test can count frames as well as measure them.
+function runAnimationFrame(milliseconds = 16) {
+  animationFrameTime += milliseconds;
+  const due = [...animationFrameCallbacks.values()];
+  animationFrameCallbacks.clear();
+  due.forEach((callback) => callback(animationFrameTime));
+  return due.length;
+}
+function pendingAnimationFrames() { return animationFrameCallbacks.size; }
 	const taskDocument = ` + taskDocument + `;
 	let taskResponse = taskDocument;
 	let deletedTaskResponse = { format: "workbook.tasks", version: 1, tasks: [] };
