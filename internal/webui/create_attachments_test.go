@@ -560,6 +560,60 @@ setTimeout(async () => {
 	}
 }
 
+// A reader who removes the rows that failed has decided against them, so
+// leaving afterwards announces nothing. The departure report is about a list,
+// and it follows that list rather than the moment the list once had.
+func TestHandlerClientAnnouncesNoLossWhenTheFailedRowsAreRemoved(t *testing.T) {
+	node := requireNode(t)
+	mutation, refreshed := createdTaskJSON(t)
+	program := createAttachmentProgram(t, `
+const created = `+mutation+`;
+const refreshed = `+refreshed+`;
+setTimeout(async () => {
+  const form = await openCreateForm();
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if (url === "/api/tasks" && options.method === "POST") {
+      return { ok: true, json: async () => created };
+    }
+    if (options.method === "POST") {
+      return { ok: false, json: async () => ({
+        format: "workbook.error", version: 1,
+        error: { category: "operational", message: "the ref moved under that write" }
+      }) };
+    }
+    if (url === "/api/tasks?deleted=true") {
+      return { ok: true, json: async () => ({ format: "workbook.tasks", version: 1, tasks: [] }) };
+    }
+    return { ok: true, json: async () => refreshed };
+  };
+
+  typeTitle(form, "Task with attachments");
+  await stageFiles([new TestFile("trace.log", 5, "trace")]);
+  await stageLink("https://example.test/design", "Design doc");
+  await form.eventListeners.submit({ preventDefault() {} });
+  if (stagedNames().length !== 2) throw new Error("the refused uploads did not stay staged");
+
+  // One row back: something is still owed, so a departure would still say so.
+  rowControl(stagedRows()[0], "Remove").eventListeners.click();
+  if (stagedNames().length !== 1) throw new Error("Remove did not take a row out");
+
+  // And the last one: nothing is owed now.
+  rowControl(stagedRows()[0], "Remove").eventListeners.click();
+  if (stagedRows().length !== 0) throw new Error("the list did not empty");
+  returnTo("/");
+  if (main.firstElementChild !== boardView) throw new Error("Back did not leave the form");
+  if (!notice.hidden) {
+    throw new Error("leaving after removing every failed row announced a loss: " +
+      JSON.stringify(notice.textContent));
+  }
+}, 0);
+`)
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute the abandoned attachment notice: %v\n%s", err, output)
+	}
+}
+
 // The retry sends what is left to the task that already exists, and never makes
 // a second one. That is the reason the form holds an ID rather than re-entering
 // the create path: a reader pressing Save twice must end up with one task.

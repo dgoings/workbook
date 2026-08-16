@@ -4151,14 +4151,21 @@
           text(panel.empty, "Nothing is staged. Anything added here is attached once the task is created.");
           panel.empty.hidden = rows.length > 0;
           panel.list.replaceChildren(...rows);
+          // Announced after the list is drawn, so whatever the form does with
+          // this is deciding against a list that is already on the screen.
+          controller.onChange();
         }
-        render();
-        return {
+        const controller = {
           section: panel.section,
           render,
           acceptFiles,
-          setBusy: (value) => panel.setBusy(value)
+          setBusy: (value) => panel.setBusy(value),
+          // What the form wants to know when this list changes under it. The
+          // default is the answer for a list nothing else is watching.
+          onChange() {}
         };
+        render();
+        return controller;
       }
       const fieldLabels = new Map([
         ["task", "Task"], ["title", "Title"], ["status", "Status"], ["priority", "Priority"],
@@ -4576,6 +4583,11 @@
         // where there is room for fifty rows; here it is what the reader is
         // filling in, so it stands with the rest of the form.
         const attachmentDraftPanel = isNew ? taskAttachmentDrafts(attachmentDrafts) : null;
+        // What a departure would announce follows the list it is about, so the
+        // Remove beside a failed row retires the report along with the row.
+        if (attachmentDraftPanel) {
+          attachmentDraftPanel.onChange = () => publishOutstandingAttachments();
+        }
         sidebar.append(properties);
         if (attachmentDraftPanel) sidebar.append(attachmentDraftPanel.section);
         sidebar.append(relationshipMount);
@@ -4743,6 +4755,14 @@
         // report. Names only: the files are unreachable once this node is, and
         // publishing a handle to them would be publishing a handle to nothing.
         function publishOutstandingAttachments() {
+          if (!outstandingAttachments || !hasAttachmentDrafts(attachmentDrafts)) {
+            // Nothing is owed, so a departure has nothing to announce. Said as a
+            // clearing rather than as a skip, because this runs again every time
+            // the list changes: a reader who removes the last failed row has
+            // decided against it, and leaving after that is not a loss.
+            outstandingAttachmentReport = null;
+            return;
+          }
           outstandingAttachmentReport = {
             taskID: createdTaskID,
             names: attachmentDrafts.items.map((item) =>
