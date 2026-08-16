@@ -525,6 +525,11 @@
     .task-panel { display: grid; gap: .55rem; padding: 1.15rem; border-top: 1px solid #d5deea; }
     .task-panel--comments { background: #fff; }
     .task-panel--attachments { background: #fafbfd; }
+    /* The same panel drawn inside the New Task form's sidebar, which supplies
+       the padding and the background this one would otherwise repeat. It keeps
+       the rule above it, because it is a section of that sidebar in the way
+       Properties is and reads as one. */
+    .task-panel--staged { padding: .85rem 0 0; background: none; }
     .task-panel__header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .3rem .75rem; }
     .task-panel__header h3 { margin: 0; font-size: .88rem; }
     .task-panel__count { margin: 0; color: #56647a; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .7rem; }
@@ -584,6 +589,10 @@
     .attachment__name a:hover { color: #2457d6; text-decoration-color: currentcolor; }
     .attachment__meta { grid-column: 1; margin: 0; color: #56647a; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .68rem; overflow-wrap: anywhere; }
     .attachment__remove { grid-column: 2; grid-row: 1 / span 2; }
+    /* Why a staged attachment did not attach, on the row it belongs to rather
+       than only in the panel's one status line: a create that failed on two of
+       five has two different reasons to give, and one line can hold one. */
+    .attachment__failure { grid-column: 1; margin: .1rem 0 0; color: #9c2f25; font-size: .74rem; overflow-wrap: anywhere; }
     /* The two adders, each its own form: see the client for why one form with
        two buttons in it was a bug rather than a shortcut. */
     .attachment-add { display: grid; gap: .55rem; padding-top: .1rem; }
@@ -785,7 +794,7 @@
          the script needs before its first fetch comes from an attribute here,
          data-vocabulary-head included, so a page and its script never disagree
          about which vocabulary they were built from. -->
-    <div class="board-view" data-board-view data-default-status="{{ .DefaultStatus }}" data-vocabulary-head="{{ .VocabularyHead }}" data-attachment-limit="{{ .AttachmentFileLimit }}" data-inline-media="{{ .InlineImageMediaTypes }}">
+    <div class="board-view" data-board-view data-default-status="{{ .DefaultStatus }}" data-vocabulary-head="{{ .VocabularyHead }}" data-attachment-limit="{{ .AttachmentFileLimit }}" data-attachment-total-limit="{{ .AttachmentTotalLimit }}" data-inline-media="{{ .InlineImageMediaTypes }}">
       <p class="stale" data-stale role="status">Task refresh failed. Showing the last successful board.</p>
       <!-- data-board is where the client appends the Deleted column, after the
            last vocabulary column the server rendered. It is a client-built
@@ -963,6 +972,12 @@
       // day core's changed. A page served without it simply asks the server,
       // which is the answer that was always authoritative.
       const attachmentFileLimit = Number(boardView.dataset.attachmentLimit) || 0;
+      // The ceiling on what one task's live file attachments add up to, read out
+      // of the page for the same reason and refused in the same place. This is
+      // the one a create form cannot do without: the task does not exist yet, so
+      // a reader staging more than a task may hold has no server to be refused
+      // by until after the task has been made.
+      const attachmentTotalLimit = Number(boardView.dataset.attachmentTotalLimit) || 0;
       // The media types the attachment route hands back inline, read out of the
       // page for exactly the reason the ceiling above is. A markdown attachment
       // reference becomes an <img> only for a type on this list; every other
@@ -3666,18 +3681,30 @@
         parts.push("added " + attribution(attachment.author, attachment.addedAt));
         return parts.join(" · ");
       }
-      // The attachment list: both kinds in one list, because the task holds one
-      // list and somebody attaching something is doing one thing.
-      function taskAttachments(taskID, task, head, owner) {
-        const panel = taskPanel(taskID, "attachments", "Attachments", owner);
-        panel.adoptHead = head.adopt;
+      // ─── Adding attachments ─────────────────────────────────────────────────
+      //
+      // Two surfaces add attachments and they are not the same operation. A
+      // task's own page sends each one the moment it is chosen. A New Task form
+      // cannot: an attachment's bytes live in the commit that adds them, on the
+      // task's own ref, so there is nothing to add them to until the task
+      // exists. It stages what the other one would have sent and sends it after
+      // the create, once the server has named the task.
+      //
+      // What the two share is everything a reader touches — the same two forms,
+      // the same refusals, the same rows — so those are built once, here.
+      //
+      // Both surfaces expose acceptFiles(): take these File objects and do
+      // whatever this surface does with them. That is the whole seam a drop
+      // target needs, and it is why the pointer half of this can be added later
+      // without either surface knowing it happened.
+      function attachmentAdder(config) {
+        const region = document.createElement("div");
+        region.className = "attachment-add";
         // Two forms rather than one with two buttons in it. A form is one
         // intent, and pressing Return is a submit: with both controls in one
         // form, a reader who had chosen a file and pressed Return submitted the
         // *link* — answered "A link needs a URL", with no request sent and the
         // file still unattached. Each control now submits the thing it is for.
-        const adder = document.createElement("div");
-        adder.className = "attachment-add";
         const fileGroup = document.createElement("form");
         fileGroup.className = "attachment-add__group";
         fileGroup.dataset.attachmentFileForm = "";
@@ -3688,11 +3715,16 @@
         file.type = "file";
         file.id = "attachment-file";
         file.name = "attachment-file";
+        // Offered only where more than one can be taken at a time. A task page
+        // sends each file as its own write against a head the one before it
+        // moved; a form that is only staging holds a list already, so choosing
+        // five at once costs it nothing.
+        if (config.multiple) file.multiple = true;
         const fileActions = document.createElement("div");
         fileActions.className = "attachment-add__actions";
-        const attachFile = threadButton("Attach file", true);
-        attachFile.type = "submit";
-        fileActions.append(attachFile);
+        const addFile = threadButton(config.fileAction, true);
+        addFile.type = "submit";
+        fileActions.append(addFile);
         fileGroup.append(fileLabel, file, fileActions);
         const linkGroup = document.createElement("form");
         linkGroup.className = "attachment-add__group";
@@ -3701,8 +3733,8 @@
         // nobody is told about: constraint validation cancels the submit, and
         // this page's only way to say anything is the panel's own line. Left on,
         // typing "not a url" and pressing Attach did nothing at all — no request,
-        // no message. Core answers instead, in the words `--attach-url` answers
-        // with, and http-or-https is its rule to enforce anyway.
+        // no message. The refusal is said out loud instead, in the words core
+        // uses, and http-or-https is core's rule either way.
         linkGroup.noValidate = true;
         const linkLabel = document.createElement("label");
         linkLabel.setAttribute("for", "attachment-url");
@@ -3720,12 +3752,79 @@
         caption.setAttribute("aria-label", "Link label");
         const linkActions = document.createElement("div");
         linkActions.className = "attachment-add__actions";
-        const attachLink = threadButton("Attach link", true);
-        attachLink.type = "submit";
-        linkActions.append(attachLink);
+        const addLink = threadButton(config.linkAction, true);
+        addLink.type = "submit";
+        linkActions.append(addLink);
         linkGroup.append(linkLabel, url, caption, linkActions);
-        adder.append(fileGroup, linkGroup);
-        panel.section.append(adder, panel.status);
+        region.append(fileGroup, linkGroup);
+        fileGroup.addEventListener("submit", (event) => {
+          event.preventDefault();
+          const chosen = [...(file.files || [])];
+          if (chosen.length === 0) return config.report("Choose a file to attach.");
+          return config.acceptFiles(chosen);
+        });
+        linkGroup.addEventListener("submit", (event) => {
+          event.preventDefault();
+          const destination = url.value.trim();
+          if (!destination) return config.report("A link needs a URL.");
+          return config.acceptLink(destination, caption.value.trim());
+        });
+        return {
+          region, file, url, caption, addFile, addLink,
+          clearFile() { file.value = ""; },
+          clearLink() { url.value = ""; caption.value = ""; }
+        };
+      }
+      // What a task's attachments weigh, which is the unit the total ceiling is
+      // in: a link stores nothing.
+      function attachedFileBytes(attachments) {
+        return (attachments || []).reduce(
+          (total, attachment) => total + (attachment.kind === "link" ? 0 : Number(attachment.size) || 0), 0);
+      }
+      // The refusals a browser can make on its own, asked before a file is read,
+      // encoded or sent — so a file the server would refuse costs nobody the
+      // encode and the upload. The server enforces every one of these and is the
+      // authority; this is the reader being told now rather than a megabyte and
+      // a round trip later. Both numbers are the server's own, rendered into the
+      // page, so there is no second copy of either here to go stale.
+      //
+      // `held` is what already counts against the total ceiling: what the server
+      // holds, on a task's page, and what is already staged, on a create form.
+      // Same rule and the same sentence whichever surface asks — and on a create
+      // form it is the only place the rule can be asked at all, because the task
+      // it would be asked of does not exist yet.
+      function attachmentFileRefusal(chosen, held) {
+        if (attachmentFileLimit && chosen.size > attachmentFileLimit) {
+          const [size, ceiling] = comparableSizes(chosen.size, attachmentFileLimit);
+          return chosen.name + " is " + size + " and must not exceed " + ceiling +
+            "; attach a link instead.";
+        }
+        if (chosen.size === 0) {
+          return chosen.name + " is empty, so there is nothing to attach.";
+        }
+        if (attachmentTotalLimit && held + chosen.size > attachmentTotalLimit) {
+          const [total, ceiling] = comparableSizes(held + chosen.size, attachmentTotalLimit);
+          return "Attaching " + chosen.name + " would bring this task to " + total +
+            " of attached files and must not exceed " + ceiling + "; attach a link instead.";
+        }
+        return "";
+      }
+      // The attachment list: both kinds in one list, because the task holds one
+      // list and somebody attaching something is doing one thing.
+      function taskAttachments(taskID, task, head, owner) {
+        const panel = taskPanel(taskID, "attachments", "Attachments", owner);
+        panel.adoptHead = head.adopt;
+        // This surface sends. Each file goes as its own write the moment it
+        // arrives, which is what a task that already exists can do and a create
+        // form cannot.
+        const adder = attachmentAdder({
+          fileAction: "Attach file",
+          linkAction: "Attach link",
+          report: (message) => panel.report(message),
+          acceptFiles: (files) => acceptFiles(files),
+          acceptLink: (destination, label) => attachLink(destination, label)
+        });
+        panel.section.append(adder.region, panel.status);
 
         let attachments = [];
         function attachmentPath(attachmentID) {
@@ -3776,89 +3875,260 @@
         function render() {
           panel.resetControls();
           const rows = attachments.map(attachmentRow);
-          panel.claim(attachFile);
-          panel.claim(attachLink);
-          const stored = attachments.reduce(
-            (total, attachment) => total + (attachment.kind === "link" ? 0 : Number(attachment.size) || 0), 0);
+          panel.claim(adder.addFile);
+          panel.claim(adder.addLink);
           panel.setCount(attachments.length === 0
             ? "Nothing attached"
-            : attachments.length + " attached · " + attachmentSize(stored) + " of files");
+            : attachments.length + " attached · " + attachmentSize(attachedFileBytes(attachments)) + " of files");
           text(panel.empty, "Nothing is attached to this task yet.");
           panel.empty.hidden = rows.length > 0;
           panel.list.replaceChildren(...rows);
         }
-        async function uploadFile() {
+        // Every file this panel is handed, sent one at a time in the order they
+        // arrived. The chooser only ever hands it one; a drop hands it as many
+        // as were dragged, and each write moves the head the next one names, so
+        // they go in sequence rather than at once. A file that is refused ends
+        // the run: the ones before it are attached, the rest are not, and the
+        // reader is told which one stopped it rather than being handed a run of
+        // identical refusals.
+        async function acceptFiles(files) {
           if (panel.busy) return;
-          const chosen = file.files && file.files[0];
-          if (!chosen) {
-            panel.report("Choose a file to attach.");
-            return;
-          }
-          // Asked before the file is read, so a file the server would refuse
-          // costs nobody the encode and the upload. The server enforces the
-          // same ceiling and is the authority; this is the reader being told
-          // now rather than a megabyte and a round trip later. The number is
-          // the server's own, rendered into the page, so there is no second
-          // copy of it here to go stale.
-          if (attachmentFileLimit && chosen.size > attachmentFileLimit) {
-            const [size, ceiling] = comparableSizes(chosen.size, attachmentFileLimit);
-            panel.report(chosen.name + " is " + size + " and must not exceed " + ceiling +
-              "; attach a link instead.");
-            return;
-          }
-          if (chosen.size === 0) {
-            panel.report(chosen.name + " is empty, so there is nothing to attach.");
-            return;
-          }
-          panel.setBusy(true);
-          let encoded;
-          try {
-            encoded = await readFileAsBase64(chosen);
-          } catch (error) {
+          for (const chosen of files) {
+            const refusal = attachmentFileRefusal(chosen, attachedFileBytes(attachments));
+            if (refusal) {
+              panel.report(refusal);
+              return;
+            }
+            panel.setBusy(true);
+            let encoded;
+            try {
+              encoded = await readFileAsBase64(chosen);
+            } catch (error) {
+              panel.setBusy(false);
+              if (panel.owns()) panel.report(error instanceof Error ? error.message : "The file could not be read.");
+              return;
+            }
             panel.setBusy(false);
-            if (panel.owns()) panel.report(error instanceof Error ? error.message : "The file could not be read.");
-            return;
+            const answer = await writeThreadChange(
+              panel, "POST", "/api/tasks/" + encodeURIComponent(taskID) + "/attachments",
+              // No media type. The file name decides it, through the table core
+              // keeps, because a media type is written into shared history and
+              // the browser's guess for the same bytes differs from machine to
+              // machine — two clones attaching one file have to label it once.
+              headed(head, { kind: "file", name: chosen.name, content: encoded }),
+              "that attachment");
+            if (!answer) return;
           }
-          panel.setBusy(false);
-          const answer = await writeThreadChange(
-            panel, "POST", "/api/tasks/" + encodeURIComponent(taskID) + "/attachments",
-            // No media type. The file name decides it, through the table core
-            // keeps, because a media type is written into shared history and
-            // the browser's guess for the same bytes differs from machine to
-            // machine — two clones attaching one file have to label it once.
-            headed(head, { kind: "file", name: chosen.name, content: encoded }),
-            "that attachment");
-          if (answer) file.value = "";
+          adder.clearFile();
         }
-        async function addLink() {
+        async function attachLink(destination, label) {
           if (panel.busy) return;
-          if (!url.value.trim()) {
-            panel.report("A link needs a URL.");
-            return;
-          }
-          const values = { kind: "link", url: url.value.trim() };
-          if (caption.value.trim()) values.label = caption.value.trim();
+          const values = { kind: "link", url: destination };
+          if (label) values.label = label;
           const answer = await writeThreadChange(
             panel, "POST", "/api/tasks/" + encodeURIComponent(taskID) + "/attachments",
             headed(head, values), "that link");
           if (!answer) return;
-          url.value = "";
-          caption.value = "";
+          adder.clearLink();
         }
-        fileGroup.addEventListener("submit", (event) => {
-          event.preventDefault();
-          return uploadFile();
-        });
-        linkGroup.addEventListener("submit", (event) => {
-          event.preventDefault();
-          return addLink();
-        });
         panel.follow = (held) => {
           attachments = (held && held.attachments) || [];
           render();
         };
         panel.follow(task);
         return panel;
+      }
+      // ─── Attachments staged on a New Task form ──────────────────────────────
+      //
+      // A staged attachment is a File the browser handed this page, held by the
+      // form the reader is standing in and written nowhere else. That is the
+      // whole of the storage, and it is why the failure path below never
+      // navigates: a typed draft can be handed back through a notice, and a File
+      // cannot — it leaves with the node that holds it.
+      function newAttachmentDraftState() {
+        return { items: [], sequence: 0 };
+      }
+      function hasAttachmentDrafts(draftState) {
+        return Boolean(draftState) && draftState.items.length > 0;
+      }
+      function stagedFileBytes(draftState) {
+        return draftState.items.reduce(
+          (total, item) => total + (item.kind === "link" ? 0 : item.size), 0);
+      }
+      // Every staged attachment, sent to the task the create just made.
+      //
+      // Sequential, in the order they were staged, because each write moves the
+      // task's ref and because a reader who staged a screenshot before a log
+      // gets them back in that order. One failure does not stop the run: the
+      // ceiling that refuses the third file has nothing to say about the fourth,
+      // and a reader is owed a reason for every item rather than one reason and
+      // a queue of untried ones.
+      //
+      // What lands leaves the list; what fails stays in it, in place, carrying
+      // the reason it failed. So the list after this call is exactly the work
+      // still outstanding, which is what makes a retry send each thing once.
+      async function persistAttachmentDrafts(taskID, draftState) {
+        const path = "/api/tasks/" + encodeURIComponent(taskID) + "/attachments";
+        const warnings = [];
+        const failures = [];
+        // Walked over a copy: a landed item is taken out of the list as it
+        // lands, and a walk over the live array would step past its neighbour.
+        for (const item of [...draftState.items]) {
+          let values;
+          if (item.kind === "link") {
+            values = { kind: "link", url: item.url };
+            if (item.label) values.label = item.label;
+          } else {
+            try {
+              // No media type, for the reason the task page sends none: the
+              // name decides it through the table core keeps, and the browser's
+              // guess for the same bytes differs from machine to machine.
+              values = { kind: "file", name: item.name, content: await readFileAsBase64(item.file) };
+            } catch (error) {
+              item.error = error instanceof Error ? error.message : "The file could not be read.";
+              failures.push(item);
+              continue;
+            }
+          }
+          try {
+            // No expectedHead. The task was made moments ago by this page and
+            // nobody else has heard of it yet, so there is no concurrent version
+            // to be refused against — exactly as the relationship drafts beside
+            // these are written.
+            const answer = await mutateTask("POST", path, values);
+            (answer.warnings || []).forEach((warning) => warnings.push(warning.message));
+            item.error = "";
+            draftState.items = draftState.items.filter((held) => held !== item);
+          } catch (error) {
+            item.error = error instanceof Error ? error.message : "That attachment was not attached.";
+            failures.push(item);
+          }
+        }
+        return { failures, warnings };
+      }
+      // The staged list, drawn as the panel a task's own page draws, in the
+      // sidebar a New Task form has instead of one.
+      function taskAttachmentDrafts(draftState) {
+        // It owns itself: this panel is destroyed with the route it is in, and
+        // no poll writes to it, so there is no other node it could be reporting
+        // on behalf of.
+        const panel = taskPanel("", "attachments", "Attachments", () => true);
+        panel.section.className += " task-panel--staged";
+        const adder = attachmentAdder({
+          multiple: true,
+          fileAction: "Add file",
+          linkAction: "Add link",
+          report: (message) => panel.report(message),
+          acceptFiles: (files) => acceptFiles(files),
+          acceptLink: (destination, label) => acceptLink(destination, label)
+        });
+        panel.section.append(adder.region, panel.status);
+        // Take these files and stage them. The entry point a drop target hands
+        // a DataTransfer's files to, and the one the chooser goes through, so
+        // both arrive by the same door and are judged by the same rules.
+        function acceptFiles(files) {
+          if (panel.busy) return;
+          panel.report("");
+          // Each file is judged against what is already staged, so five files
+          // that are each under the per-file ceiling are still refused at the
+          // one that takes the task over the total. The refused file is named
+          // and everything staged before it stays staged: a reader who chose a
+          // folder is told which one is the problem rather than losing all of
+          // them.
+          for (const chosen of files) {
+            const refusal = attachmentFileRefusal(chosen, stagedFileBytes(draftState));
+            if (refusal) {
+              panel.report(refusal);
+              break;
+            }
+            draftState.items.push({
+              key: "staged-" + (++draftState.sequence),
+              kind: "file",
+              name: chosen.name,
+              size: chosen.size,
+              file: chosen,
+              error: ""
+            });
+          }
+          adder.clearFile();
+          render();
+        }
+        function acceptLink(destination, label) {
+          if (panel.busy) return;
+          panel.report("");
+          // Asked here rather than left to the server, which is the opposite of
+          // what the task page does and for a reason that only exists here: the
+          // server's refusal would arrive after the create, so a link core will
+          // never store would cost the reader a task made and an attachment
+          // missing. The rule and the words are core's own.
+          if (!safeLinkURL(destination)) {
+            panel.report("That link must use http or https.");
+            return;
+          }
+          draftState.items.push({
+            key: "staged-" + (++draftState.sequence),
+            kind: "link",
+            url: destination,
+            label,
+            size: 0,
+            error: ""
+          });
+          adder.clearLink();
+          render();
+        }
+        function draftRow(item) {
+          const row = document.createElement("li");
+          row.className = "attachment";
+          row.dataset.attachmentDraft = item.key;
+          const name = document.createElement("p");
+          name.className = "attachment__name";
+          // Drawn as text rather than as a link, both kinds of it. A staged file
+          // has no route to download from, and a staged link is a destination
+          // this page has not stored yet — offering either as something to
+          // follow would be offering a state that does not exist.
+          text(name, item.kind === "link" ? (item.label || item.url) : item.name);
+          const meta = document.createElement("p");
+          meta.className = "attachment__meta";
+          text(meta, item.kind === "link"
+            ? "link · " + item.url
+            : "file · " + attachmentSize(item.size));
+          const remove = panel.claim(threadButton("Remove"));
+          remove.className += " attachment__remove";
+          remove.addEventListener("click", () => {
+            draftState.items = draftState.items.filter((held) => held !== item);
+            panel.report("");
+            render();
+          });
+          row.append(name, meta, remove);
+          if (item.error) {
+            const failure = document.createElement("p");
+            failure.className = "attachment__failure";
+            failure.dataset.attachmentFailure = "";
+            text(failure, item.error);
+            row.append(failure);
+          }
+          return row;
+        }
+        function render() {
+          panel.resetControls();
+          const rows = draftState.items.map(draftRow);
+          panel.claim(adder.addFile);
+          panel.claim(adder.addLink);
+          panel.setCount(draftState.items.length === 0
+            ? "Nothing staged"
+            : draftState.items.length + " staged · " +
+              attachmentSize(stagedFileBytes(draftState)) + " of files");
+          text(panel.empty, "Nothing is staged. Anything added here is attached once the task is created.");
+          panel.empty.hidden = rows.length > 0;
+          panel.list.replaceChildren(...rows);
+        }
+        render();
+        return {
+          section: panel.section,
+          render,
+          acceptFiles,
+          setBusy: (value) => panel.setBusy(value)
+        };
       }
       const fieldLabels = new Map([
         ["task", "Task"], ["title", "Title"], ["status", "Status"], ["priority", "Priority"],
@@ -4117,6 +4387,12 @@
         const relationshipDrafts = isNew
           ? newRelationshipDraftState()
           : null;
+        // Attachments a create is carrying. Only a New Task form has them: on a
+        // task that exists the panel below sends what it is given, because there
+        // is a ref to send it to.
+        const attachmentDrafts = isNew
+          ? newAttachmentDraftState()
+          : null;
         const section = document.createElement("section"); section.className = "task-route"; section.setAttribute("aria-labelledby", "task-form-title");
         const header = document.createElement("header"); header.className = "task-route__header";
         const eyebrow = document.createElement("p"); eyebrow.className = "eyebrow"; text(eyebrow, isNew ? "New task" : "Task detail");
@@ -4217,6 +4493,16 @@
         const save = document.createElement("button"); save.className = "save-button"; save.type = "submit"; text(save, "Save");
         const back = document.createElement("a"); back.className = "board-link"; back.href = "/"; text(back, "Back");
         primaryActions.append(save, back); actions.append(primaryActions);
+        // The way out of the one state this form does not leave on its own: the
+        // task was created and some of its attachments were not attached. It is
+        // shipped hidden and revealed there, because until then it would be a
+        // link to a task that does not exist.
+        const openCreatedTask = document.createElement("a");
+        openCreatedTask.className = "board-link";
+        openCreatedTask.dataset.openCreatedTask = "";
+        openCreatedTask.hidden = true;
+        text(openCreatedTask, "Open task");
+        if (isNew) primaryActions.append(openCreatedTask);
 		if (!isNew) {
 		  const danger = document.createElement("div"); danger.className = "form-danger";
 		  const remove = document.createElement("button"); remove.className = "delete-button"; remove.type = "button"; text(remove, "Delete");
@@ -4244,7 +4530,7 @@
           field("Title", title, true),
           descriptionField
         );
-        const sidebar = document.createElement("aside"); sidebar.className = "task-sidebar"; sidebar.setAttribute("aria-label", "Task properties and relationships");
+        const sidebar = document.createElement("aside"); sidebar.className = "task-sidebar"; sidebar.setAttribute("aria-label", isNew ? "Task properties, attachments and relationships" : "Task properties and relationships");
         const properties = document.createElement("section"); properties.className = "task-properties";
         const propertiesHeading = document.createElement("h3"); text(propertiesHeading, "Properties");
         properties.append(
@@ -4254,7 +4540,15 @@
           field("Labels", labels.region, true, "field--labels")
         );
         const relationshipMount = document.createElement("div"); relationshipMount.dataset.relationshipMount = "";
-        sidebar.append(properties, relationshipMount);
+        // Attachments between the properties and the relationships, because they
+        // are part of composing this task and the relationships are about other
+        // ones. On a task that exists the same list is a panel below the form,
+        // where there is room for fifty rows; here it is what the reader is
+        // filling in, so it stands with the rest of the form.
+        const attachmentDraftPanel = isNew ? taskAttachmentDrafts(attachmentDrafts) : null;
+        sidebar.append(properties);
+        if (attachmentDraftPanel) sidebar.append(attachmentDraftPanel.section);
+        sidebar.append(relationshipMount);
         const footer = document.createElement("footer"); footer.className = "task-actions";
         // "Create more" is a setting on the Save beneath it, not an action of
         // its own, so it stands on its own row directly above the button it
@@ -4267,6 +4561,13 @@
         form.append(editor, sidebar, footer);
 
         let taskWasCreated = false;
+        // The task this form made, and whether anything it staged is still
+        // owed to it. Together they are the one state a New Task form stays on
+        // screen in: the create succeeded, some attachments did not, and the
+        // only work left is to send those — to that task, never to another.
+        let createdTaskID = "";
+        let outstandingAttachments = false;
+        let retryingAttachments = false;
         // The tip this form was rendered from. A save names it so a form opened
         // before someone else's change is refused rather than reverting them,
         // and a refusal re-bases it so a deliberate retry lands on the version
@@ -4341,9 +4642,89 @@
             report: (message) => text(result, message)
           };
         }
+        // The task exists and some of its attachments do not. Sends exactly what
+        // is still staged, to exactly the task this form made — which is what
+        // keeps a retry from creating a second one, and why the create path is
+        // not re-entered at all.
+        async function retryOutstandingAttachments() {
+          // Asked as well as disabling the button, because a disabled submit
+          // does not stop a Return pressed in the title field: implicit
+          // submission fires the form's listener either way, and a second run
+          // over a list the first is still walking would send an item twice.
+          if (retryingAttachments) return;
+          retryingAttachments = true;
+          save.disabled = true;
+          text(result, "");
+          attachmentDraftPanel.setBusy(true);
+          try {
+            const outcome = await persistAttachmentDrafts(createdTaskID, attachmentDrafts);
+            attachmentDraftPanel.setBusy(false);
+            attachmentDraftPanel.render();
+            if (outcome.failures.length) {
+              reportOutstandingAttachments(createdTaskID, outcome, null);
+              return;
+            }
+            outstandingAttachments = false;
+            // Everything this create set out to do has happened, so it lands on
+            // the task rather than on the board. The reader has spent this whole
+            // detour on these attachments and the page that lists them is the
+            // only honest confirmation that they are finally there.
+            navigate(taskPath(createdTaskID));
+            await refresh();
+          } finally {
+            retryingAttachments = false;
+            attachmentDraftPanel.setBusy(false);
+            if (outstandingAttachments) save.disabled = false;
+          }
+        }
+        // The create succeeded and some of its attachments did not.
+        //
+        // Nothing navigates and nothing is discarded. The task exists — said
+        // first, and by ID, because that is the part a reader must not have to
+        // guess at — and the files that did not land are still in the list with
+        // the reason each one failed beside it. Save now means "send those
+        // again". Landing on the board and reporting from there was the obvious
+        // alternative and it is not available: a File leaves with the node
+        // holding it, so there would be nothing left to retry with.
+        async function holdForOutstandingAttachments(recovery, outcome) {
+          createdTaskID = recovery.taskID;
+          outstandingAttachments = true;
+          createdTaskRecovery = null;
+          // The relationships this create could not write are staged on the
+          // task's own form, where the sidebar that retries them is. They are
+          // named here too, because here is where the reader is standing.
+          if (hasRelationshipDrafts(recovery.failures)) {
+            pendingRelationshipDrafts.set(recovery.taskID, recovery.failures);
+          }
+          text(save, "Retry attachments");
+          openCreatedTask.href = taskPath(recovery.taskID);
+          openCreatedTask.hidden = false;
+          attachmentDraftPanel.render();
+          reportOutstandingAttachments(recovery.taskID, outcome, recovery);
+          // The board is one Back away and has a task on it it has not read.
+          await refresh();
+        }
+        function reportOutstandingAttachments(taskID, outcome, recovery) {
+          const failed = outcome.failures.length;
+          const said = ["Task " + taskID + " was created, but " + failed +
+            (failed === 1 ? " attachment was not attached." : " attachments were not attached.") +
+            " Each one says why below and is still staged; press Retry attachments to send them to" +
+            " that task, or open it and attach them there."];
+          if (recovery && hasRelationshipDrafts(recovery.failures)) {
+            said.push("Some relationships were not saved either; open the task to retry those.");
+          }
+          (recovery ? recovery.warnings : outcome.warnings).forEach((warning) => said.push(warning));
+          text(result, said.join(" "));
+        }
         form.addEventListener("submit", async (event) => {
           event.preventDefault();
-          if (isNew && taskWasCreated) return;
+          if (isNew && taskWasCreated) {
+            // The server has made this task. The form is only still here at all
+            // because attachments are owed to it, and Save is the control that
+            // sends them.
+            if (outstandingAttachments) return retryOutstandingAttachments();
+            return;
+          }
           const values = isNew ? allTaskValues(controls) : changedTaskValues(task, controls);
           if (!isNew) {
             if (Object.keys(values).length === 0) {
@@ -4356,12 +4737,16 @@
             }
             if (expectedHead) values.expectedHead = expectedHead;
           }
-          // A create that staged no relationships is answered by the board
-          // rather than by this form, and leaves immediately. One that did stage
-          // them waits: those writes need the ID the server has not assigned
-          // yet, and the sidebar that reports and retries their failures is
-          // destroyed by an instant landing.
-          if (isNew && !hasRelationshipDrafts(relationshipDrafts)) {
+          // A create that staged nothing beside the task itself is answered by
+          // the board rather than by this form, and leaves immediately. One that
+          // staged relationships or attachments waits: those writes need the ID
+          // the server has not assigned yet, and the controls that report and
+          // retry their failures are destroyed by an instant landing. An
+          // attachment has more riding on that than a relationship does — its
+          // bytes exist nowhere but this node — so it is the same rule for the
+          // same reason, held harder.
+          if (isNew && !hasRelationshipDrafts(relationshipDrafts) &&
+              !hasAttachmentDrafts(attachmentDrafts)) {
             taskWasCreated = true;
             return createOptimistically(values);
           }
@@ -4381,15 +4766,24 @@
               );
               relationshipDrafts.dependsOn.clear();
               relationshipDrafts.blocks.clear();
+              // After the relationships and never before the create. The task
+              // has to exist to have a ref to attach to, and the relationships
+              // are cheap writes that should not be left untried behind a
+              // megabyte of upload.
+              const attachmentOutcome = await persistAttachmentDrafts(taskID, attachmentDrafts);
               const recovery = {
                 taskID,
                 status: document.task.status,
                 failures: relationshipOutcome.failures,
                 warnings: [
                   ...mutationWarnings(document),
-                  ...relationshipOutcome.warnings
+                  ...relationshipOutcome.warnings,
+                  ...attachmentOutcome.warnings
                 ]
               };
+              if (attachmentOutcome.failures.length) {
+                return holdForOutstandingAttachments(recovery, attachmentOutcome);
+              }
               createdTaskRecovery = recovery;
               const creationOwner = {
                 route: section,
@@ -4520,6 +4914,13 @@
             if (!createdDurably) {
               save.disabled = false;
               if (isNew) relationshipController.setBusy(false);
+            } else if (outstandingAttachments) {
+              // The form is staying, so its Save has to work — as the retry it
+              // now says it is. The relationship sidebar does not come back: its
+              // drafts have been written or handed to the task's own form, and
+              // adding another edge here would compose it against a create that
+              // is over.
+              save.disabled = false;
             }
           }
         });

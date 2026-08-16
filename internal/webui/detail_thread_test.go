@@ -64,9 +64,14 @@ func threadPageProgram(t *testing.T, tasks []core.Task, body string) string {
 	document := mustJSON(t, TasksDocument{
 		Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: presentationForTasks(tasks),
 	})
-	// The helpers every one of these programs reaches for: the panels, their
-	// rows and their controls, found the way a reader finds them.
-	const helpers = `
+	return clientDOMHarness("/tasks/"+tasks[0].ID, string(document)) + script + threadPanelHelpers + body
+}
+
+// The helpers every program that drives a panel reaches for: the panels, their
+// rows and their controls, found the way a reader finds them. Shared with the
+// New Task form's tests, because the staged attachment list is the same panel
+// drawn in a sidebar and a test should not have to know which surface it is on.
+const threadPanelHelpers = `
 function panelSection(name) {
   return findElement(main, (element) => element.dataset.taskPanel === name);
 }
@@ -112,8 +117,6 @@ function commentBodyText(row) {
   return body.textContent;
 }
 `
-	return clientDOMHarness("/tasks/"+tasks[0].ID, string(document)) + script + helpers + body
-}
 
 // The thread is drawn oldest first, each comment carrying who wrote it, when,
 // and whether it has been edited since.
@@ -628,6 +631,55 @@ setTimeout(async () => {
 `)
 	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute the oversized upload: %v\n%s", err, output)
+	}
+}
+
+// A file that is small enough on its own and still more than the task may hold
+// is refused before it is sent, against what the task already carries.
+//
+// This is the same refusal the New Task form makes against what it has staged,
+// asked in the same place and worded the same way — one rule, two surfaces. The
+// task page could have left it to the server, and did; asking here costs an
+// upload less and says the same thing.
+func TestHandlerClientRefusesAnUploadPastTheTotalCeiling(t *testing.T) {
+	node := requireNode(t)
+	task := threadPageTask()
+	// One file, as large as the task is allowed to hold in total. Nothing about
+	// it is refusable on its own.
+	task.Attachments = []core.Attachment{task.Attachments[0], task.Attachments[1]}
+	task.Attachments[0].Size = core.MaxLiveAttachmentBytes
+	tasks := []core.Task{task}
+	program := threadPageProgram(t, tasks, `
+`+fileHarness+`
+setTimeout(async () => {
+  const before = fetchCalls.length;
+  const panel = panelSection("attachments");
+  const chooser = findElement(panel, (element) => element.id === "attachment-file");
+  chooser.files = [new TestFile("one-more.png", 1, "x")];
+  await submitForm(attachmentForm("file"));
+
+  const reported = panelStatusText("attachments");
+  if (!reported.includes("one-more.png") || !reported.includes("attach a link instead")) {
+    throw new Error("the refusal does not name the file: " + JSON.stringify(reported));
+  }
+  if (!reported.includes("`+strconv.Itoa(core.MaxLiveAttachmentBytes+1)+` bytes") ||
+      !reported.includes("`+strconv.Itoa(core.MaxLiveAttachmentBytes)+` bytes")) {
+    throw new Error("the total was not stated against the ceiling: " + JSON.stringify(reported));
+  }
+  if (fetchCalls.length !== before) throw new Error("a file past the total ceiling was sent anyway");
+  if (readCalls.length !== 0) throw new Error("a file past the total ceiling was read anyway");
+
+  // A link weighs nothing, so the ceiling on files has nothing to say about one:
+  // the refusal above is advice, and it has to be advice a reader can take.
+  findElement(panel, (element) => element.id === "attachment-url").value = "https://example.test/build";
+  await submitForm(attachmentForm("link"));
+  if (fetchCalls.length === before) {
+    throw new Error("a link was refused by a ceiling on files: " + JSON.stringify(panelStatusText("attachments")));
+  }
+}, 0);
+`)
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute the total ceiling upload refusal: %v\n%s", err, output)
 	}
 }
 

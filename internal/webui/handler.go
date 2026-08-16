@@ -492,6 +492,13 @@ type pageData struct {
 	// second copy of a ceiling core owns — one that would go on naming the old
 	// number the day core's changed.
 	AttachmentFileLimit int64
+	// AttachmentTotalLimit is core's ceiling on what one task's live file
+	// attachments add up to, rendered into the page for exactly the reason the
+	// per-file ceiling above is. It is the ceiling a create form has to ask
+	// before the task exists: a reader staging six screenshots is over it long
+	// before any of them is sent, and the alternative is a create that succeeds
+	// followed by uploads that do not.
+	AttachmentTotalLimit int64
 	// InlineImageMediaTypes are the media types the attachment route serves
 	// inline, space separated, rendered into the page for the reason the ceiling
 	// above is: the markdown renderer draws an attachment reference as an <img>
@@ -1038,6 +1045,7 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 		DefaultStatus:         vocabulary.Vocabulary.Default(),
 		VocabularyHead:        vocabulary.Head,
 		AttachmentFileLimit:   core.MaxAttachmentFileBytes,
+		AttachmentTotalLimit:  core.MaxLiveAttachmentBytes,
 		InlineImageMediaTypes: strings.Join(InlineAttachmentMediaTypes(), " "),
 		StatusTags:            core.StatusTags(),
 		Administrable:         handler.administrable(),
