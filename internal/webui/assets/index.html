@@ -6380,6 +6380,46 @@
           : { status, kind };
         renderVocabularyPanel();
       }
+      // Whether this drag is carrying files from outside the page rather than a
+      // row from inside it. A reader who drops a file on this panel is not
+      // reordering anything, and the panel must neither take the drop nor
+      // swallow it: the flag that says "I will take this" is the same flag that
+      // stops it reaching whatever else on the page might want it.
+      function draggingPanelFiles(event) {
+        const types = event && event.dataTransfer && event.dataTransfer.types;
+        return Boolean(types && [...types].includes("Files"));
+      }
+      // Where this drag may be dropped on the status list, or null if it may not
+      // be dropped here. Asked by dragenter, dragover and drop alike.
+      //
+      // A browser decides whether to deliver a drop at all from whichever of
+      // dragenter and dragover it dispatched last, and Blink dispatches
+      // dragenter rather than dragover whenever the hit-test target under the
+      // cursor changes — which is what any content moving under a stationary
+      // cursor causes. The board's autoscroll made exactly that happen and lost
+      // drops by it, because the board answered only dragover.
+      //
+      // Nothing moves under the cursor on this panel today, so this is a class
+      // being closed rather than a bug being fixed. What keeps it closed is
+      // having one rule instead of two that can drift apart: a later change that
+      // animates a row, scrolls this list, or reflows it under a held cursor
+      // will find the acceptance already in the right place, rather than
+      // discovering the hard way that dragover alone was never enough.
+      //
+      // Every row is a drop target. The rows that are not droppable are the ones
+      // this returns null for, and they are the rows a handler asking the easier
+      // question — "is there a row here?" — would wrongly accept.
+      function panelDropDestination(event, row, status) {
+        if (draggingPanelFiles(event)) return null;
+        // No panel drag is live: this is somebody else's gesture passing over,
+        // a board card or a drag from another window, and the list is not its
+        // business.
+        if (!panelDragStatus) return null;
+        // The row being dragged has nowhere to arrive: dropping a column on
+        // itself is not a change anyone asked for.
+        if (panelDragStatus === status) return null;
+        return row;
+      }
       function statusRow(definition, index, definitions) {
         const item = document.createElement("li");
         item.className = "admin-status";
@@ -6441,20 +6481,34 @@
           clearPanelDropMarks();
           delete item.dataset.dragging;
         });
-        item.addEventListener("dragover", (event) => {
-          if (!panelDragStatus || panelDragStatus === definition.status) return;
+        // Both events, one rule. dragenter is the one that was missing, and it
+        // is the one Blink reads when the target under the cursor churns.
+        const answerPanelDrag = (event) => {
+          if (!panelDropDestination(event, item, definition.status)) return;
           event.preventDefault();
           if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
-          clearPanelDropMarks();
-          item.dataset.dropTarget = "true";
-        });
+          // Only when it is not already the marked row. Rewriting the same
+          // attributes on every event is a mutation under a drag cursor for no
+          // change, and mutations under a drag cursor are what make a browser
+          // re-run its hit test and dispatch the churn this is about.
+          if (item.dataset.dropTarget !== "true") {
+            clearPanelDropMarks();
+            item.dataset.dropTarget = "true";
+          }
+        };
+        item.addEventListener("dragenter", answerPanelDrag);
+        item.addEventListener("dragover", answerPanelDrag);
         item.addEventListener("dragleave", () => { delete item.dataset.dropTarget; });
         item.addEventListener("drop", (event) => {
+          // The same rule again rather than a second reading of it. A drop this
+          // panel refuses is left alone entirely — not marked, not prevented,
+          // and above all not turned into a reorder, which is what a file
+          // dropped here over a stale drag would otherwise become.
+          if (!panelDropDestination(event, item, definition.status)) return;
           event.preventDefault();
           clearPanelDropMarks();
           const dragged = panelDragStatus;
           panelDragStatus = null;
-          if (!dragged || dragged === definition.status) return;
           return moveStatusOnto(dragged, definition.status);
         });
         return item;

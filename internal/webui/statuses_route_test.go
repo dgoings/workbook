@@ -873,6 +873,158 @@ func TestClientStatusesPageReordersInOneRequestPerGesture(t *testing.T) {
 `)
 }
 
+// A drop is delivered only where the page said yes, and a browser takes that
+// answer from whichever of dragenter and dragover it dispatched last. Blink
+// dispatches dragenter rather than dragover whenever the hit-test target under
+// the cursor changes, which is what any content moving under a stationary
+// cursor causes — the board's autoscroll made exactly that happen and lost
+// drops by it, because the board answered only dragover.
+//
+// Nothing moves under the cursor on this panel today. This closes the class
+// rather than a live bug: the fake DOM has no accept flag of its own, so what
+// is pinned is the property that keeps it closed — for every target either
+// event can land on, the two give the same answer, through one rule.
+func TestClientStatusesPageAcceptsAReorderOnEnterAsWellAsOnOver(t *testing.T) {
+	vocabulary := handlerVocabulary(t)
+	runPanelClient(t, "reorder acceptance on enter and over", vocabulary, "head-7", nil, `
+  vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-7")+`;
+  vocabularyAnswer = { body: `+panelMutationJSON(t, panelRenamedVocabulary(t), "head-8", VocabularyTaskCounts{}, nil)+` };
+  await openStatuses();
+
+  const dataTransfer = { effectAllowed: "", dropEffect: "", setData() {} };
+  const withFiles = { effectAllowed: "", dropEffect: "", setData() {}, types: ["Files"] };
+  const answer = (name, row, transfer) => {
+    let prevented = false;
+    transfer.dropEffect = "";
+    row.eventListeners[name]({ target: row, dataTransfer: transfer, preventDefault() { prevented = true; } });
+    return prevented + "/" + transfer.dropEffect;
+  };
+
+  const dragged = panelRow("shipped");
+  dragged.eventListeners.dragstart({ target: dragged, dataTransfer });
+
+  // Every row here is a drop target. The rows below that answer "false/" are
+  // the ones a handler asking only "is there a row under the cursor?" would
+  // wrongly accept, and they are what tells that question from the one this
+  // listener actually has to ask.
+  [
+    ["another row, with a reorder in flight", panelRow("icebox"), dataTransfer, "true/move"],
+    ["the row being dragged, which has nowhere to arrive", dragged, dataTransfer, "false/"],
+    ["a row while files are being dragged in", panelRow("icebox"), withFiles, "false/"],
+  ].forEach(([what, row, transfer, want]) => {
+    const entered = answer("dragenter", row, transfer);
+    const over = answer("dragover", row, transfer);
+    if (entered !== want) throw new Error("dragenter on " + what + " answered " + entered + ", want " + want);
+    if (over !== want) throw new Error("dragover on " + what + " answered " + over + ", want " + want);
+  });
+
+  // A row dropped on itself is refused rather than half-handled. The drop is
+  // left entirely alone — nothing prevented, no request — and the gesture's own
+  // dragend is what clears the drag, as it is for a drag that ends any other
+  // way.
+  let selfPrevented = false;
+  await dragged.eventListeners.drop({ target: dragged, dataTransfer, preventDefault() { selfPrevented = true; } });
+  await settle();
+  if (selfPrevented) throw new Error("a row dropped on itself was taken as a drop");
+  if (vocabularyCalls.filter((call) => call.method !== "GET").length !== 0) {
+    throw new Error("a row dropped on itself sent a request");
+  }
+
+  // And with no reorder in flight at all — somebody else's gesture passing over
+  // the list — both events refuse every row.
+  dragged.eventListeners.dragend({ target: dragged });
+  ["icebox", "queued", "shipped"].forEach((status) => {
+    if (panelRow(status).dataset.dropTarget === "true") {
+      throw new Error("dragend left " + status + " marked as a drop target");
+    }
+  });
+  ["icebox", "queued", "shipped"].forEach((status) => {
+    const row = panelRow(status);
+    const entered = answer("dragenter", row, dataTransfer);
+    const over = answer("dragover", row, dataTransfer);
+    if (entered !== "false/") throw new Error("dragenter on " + status + " with no reorder in flight answered " + entered);
+    if (over !== "false/") throw new Error("dragover on " + status + " with no reorder in flight answered " + over);
+  });
+  if (vocabularyCalls.filter((call) => call.method !== "GET").length !== 0) {
+    throw new Error("answering a drag sent a request");
+  }
+`)
+}
+
+// The gesture the class is about: a reorder whose only word over the target row
+// is a dragenter. That is what a browser sends once the thing under the cursor
+// churns, and a panel that answered only dragover would take the drop nowhere.
+func TestClientStatusesPageTakesAReorderReportedOnlyByDragenter(t *testing.T) {
+	vocabulary := handlerVocabulary(t)
+	runPanelClient(t, "a reorder reported only by dragenter", vocabulary, "head-7", nil, `
+  vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-7")+`;
+  vocabularyAnswer = { body: `+panelMutationJSON(t, panelRenamedVocabulary(t), "head-8", VocabularyTaskCounts{}, nil)+` };
+  await openStatuses();
+
+  const dataTransfer = { effectAllowed: "", dropEffect: "", setData() {} };
+  const dragged = panelRow("shipped");
+  const target = panelRow("icebox");
+  dragged.eventListeners.dragstart({ target: dragged, dataTransfer });
+
+  // No dragover anywhere in this gesture.
+  let prevented = false;
+  target.eventListeners.dragenter({ target, dataTransfer, preventDefault() { prevented = true; } });
+  if (!prevented) throw new Error("a dragenter over a row the reorder may land on was not answered");
+  if (target.dataset.dropTarget !== "true") throw new Error("a dragenter drew no mark on the row under the cursor");
+
+  await target.eventListeners.drop({ target, dataTransfer, preventDefault() {} });
+  await settle();
+
+  const sent = vocabularyCalls.filter((call) => call.method !== "GET");
+  if (sent.length !== 1) throw new Error("a dragenter-only reorder sent " + sent.length + " requests");
+  if (sent[0].method !== "PUT" || sent[0].url !== "/api/vocabulary/order") {
+    throw new Error("the reorder sent " + sent[0].method + " " + sent[0].url);
+  }
+  if (JSON.stringify(sent[0].body) !== JSON.stringify({ statuses: ["shipped", "icebox", "queued"], expectedHead: "head-7" })) {
+    throw new Error("the reorder sent " + JSON.stringify(sent[0].body));
+  }
+`)
+}
+
+// A file dragged over the status list is not a reorder, and the panel must
+// neither take it nor swallow it. The flag that says "I will take this" is the
+// same flag that stops the drop reaching anything else on the page, so a panel
+// that accepted a file drag would take a reader's file and do nothing with it.
+func TestClientStatusesPageRefusesAFileDraggedOverTheList(t *testing.T) {
+	vocabulary := handlerVocabulary(t)
+	runPanelClient(t, "a file dragged over the status list", vocabulary, "head-7", nil, `
+  vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-7")+`;
+  vocabularyAnswer = { body: `+panelMutationJSON(t, panelRenamedVocabulary(t), "head-8", VocabularyTaskCounts{}, nil)+` };
+  await openStatuses();
+
+  const dataTransfer = { effectAllowed: "", dropEffect: "", setData() {} };
+  const withFiles = { effectAllowed: "", dropEffect: "", setData() {}, types: ["Files"] };
+  const dragged = panelRow("shipped");
+  const target = panelRow("icebox");
+  // The worst case rather than the easy one: a reorder the page still believes
+  // is live — a gesture whose dragend never arrived — and a file arriving over
+  // the list on top of it. Without the file test this drop would be read as a
+  // reorder and would move a column the reader never touched.
+  dragged.eventListeners.dragstart({ target: dragged, dataTransfer });
+
+  let prevented = false;
+  target.eventListeners.dragenter({ target, dataTransfer: withFiles, preventDefault() { prevented = true; } });
+  target.eventListeners.dragover({ target, dataTransfer: withFiles, preventDefault() { prevented = true; } });
+  if (prevented) throw new Error("the panel offered to take a file drag");
+  if (target.dataset.dropTarget === "true") throw new Error("a file drag marked a row as a drop target");
+
+  await target.eventListeners.drop({ target, dataTransfer: withFiles, preventDefault() { prevented = true; } });
+  await settle();
+  if (prevented) throw new Error("the panel took the drop of a file");
+  if (vocabularyCalls.filter((call) => call.method !== "GET").length !== 0) {
+    throw new Error("a file dropped on the status list sent a vocabulary request");
+  }
+  if (panelStatuses().join(",") !== "icebox,queued,shipped") {
+    throw new Error("a file dropped on the status list reordered the columns: " + panelStatuses().join(","));
+  }
+`)
+}
+
 // administrableBoardPage renders an administrable board for a project with these
 // statuses.
 func administrableBoardPage(t *testing.T, vocabulary core.Vocabulary) string {
