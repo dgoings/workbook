@@ -1,0 +1,380 @@
+package webui
+
+import (
+	"net/http"
+	"strings"
+	"testing"
+
+	"github.com/dgoings/workbook/internal/core"
+)
+
+// What the header promises: the routes are in one place and the settings in
+// another, and the two never move each other.
+//
+// They were one row once. The row was right-aligned and its contents changed
+// with the route — the Deleted setting belongs to the board, so leaving the
+// board took it out of the row and slid every link to its left along to fill the
+// gap. A reader who had just aimed the cursor at Board arrived to find Statuses
+// underneath it. Nothing here is about pixels, because a Go test has no layout:
+// what is pinned is the structural fact that produces the layout, which is that
+// nothing route-dependent is drawn in the same box as the links.
+//
+// The settings themselves are switches now rather than sentences. A switch says
+// two things at once, and the whole design of this header turns on their not
+// contradicting each other: the words say what the next click does, and the knob
+// and aria-checked say what is true this second.
+
+// headerElement returns the served page's header, which is where every claim in
+// this file is made.
+func headerElement(t *testing.T, body string) string {
+	t.Helper()
+	start := strings.Index(body, "<header")
+	end := strings.Index(body, "</header>")
+	if start < 0 || end < 0 || end < start {
+		t.Fatal("the served page has no header")
+	}
+	return body[start : end+len("</header>")]
+}
+
+// switchElement returns the whole switch carrying marker — its opening tag, its
+// label, its track and its knob — because half of what this file claims is about
+// what a switch is made of rather than what its outermost tag says.
+func switchElement(t *testing.T, body, marker string) string {
+	t.Helper()
+	at := strings.Index(body, marker)
+	if at < 0 {
+		t.Fatalf("the header carries no element marked %s", marker)
+	}
+	start := strings.LastIndexByte(body[:at], '<')
+	if start < 0 {
+		t.Fatalf("the element marked %s is not inside a tag", marker)
+	}
+	closing := "</button>"
+	if strings.HasPrefix(body[start:], "<a ") {
+		closing = "</a>"
+	}
+	end := strings.Index(body[start:], closing)
+	if end < 0 {
+		t.Fatalf("the element marked %s is never closed", marker)
+	}
+	return body[start : start+end+len(closing)]
+}
+
+// The links come first, and nothing that a route can take away is drawn before
+// them or beside them. This is the whole of the fix: a control that disappears
+// can only close a gap that is after it.
+func TestHandlerHeaderDrawsTheRouteLinksBeforeEverySettingThatComesAndGoes(t *testing.T) {
+	header := headerElement(t, administrableBoardPage(t, core.DefaultVocabulary()))
+
+	navStart := strings.Index(header, "<nav")
+	navEnd := strings.Index(header, "</nav>")
+	if navStart < 0 || navEnd < 0 {
+		t.Fatal("the header draws no navigation element for the routes")
+	}
+	nav := header[navStart : navEnd+len("</nav>")]
+	for _, route := range []string{`href="/"`, `href="/statuses"`} {
+		if !strings.Contains(nav, route) {
+			t.Errorf("the header's navigation does not carry %s: %s", route, nav)
+		}
+	}
+	// A hidden element inside this box is a gap waiting to open: the ones that
+	// ship hidden are exactly the ones a route reveals and hides again.
+	if strings.Contains(nav, "hidden") {
+		t.Errorf("the header's navigation holds something a route can take away: %s", nav)
+	}
+	for _, setting := range []string{"data-deleted-toggle", "data-description-toggle", "data-sync-toggle"} {
+		at := strings.Index(header, setting)
+		if at < 0 {
+			t.Fatalf("the header carries no %s", setting)
+		}
+		if at < navEnd {
+			t.Errorf("%s is drawn before the routes are finished, so hiding it moves them", setting)
+		}
+	}
+	// The reading of the board's freshness is the one thing here whose width
+	// changes on its own, so it is not in the settings' row either.
+	updated := strings.Index(header, "data-updated")
+	switches := strings.Index(header, "header-switches")
+	if updated < 0 || switches < 0 {
+		t.Fatal("the header no longer carries both the freshness reading and the settings row")
+	}
+	if updated > switches {
+		t.Error("the freshness reading is drawn inside or after the settings row, where its ticking clock moves them")
+	}
+}
+
+// Every route is served the same shell, and that is what makes the links land in
+// the same place on all of them. Stated here so that a later change which starts
+// drawing the header per-route has to come back and say why.
+func TestHandlerServesOneHeaderToEveryRoute(t *testing.T) {
+	handler := administrableHandler(core.DefaultVocabulary(), "head-1", boardTasks())
+
+	board := ""
+	for _, path := range []string{"/", "/statuses", "/tasks/new"} {
+		response := request(t, handler, http.MethodGet, path)
+		if response.Code != http.StatusOK {
+			t.Fatalf("GET %s status = %d, want %d", path, response.Code, http.StatusOK)
+		}
+		header := headerElement(t, response.Body.String())
+		if board == "" {
+			board = header
+			continue
+		}
+		if header != board {
+			t.Errorf("GET %s serves a different header from the board's:\n%s\n\nwant\n%s", path, header, board)
+		}
+	}
+}
+
+// A switch is a control with two halves. The words are a child rather than the
+// control's own text because the control now holds a track and a knob that
+// writing over its text would throw away, and role/aria-checked are on the
+// control itself because that is the half a screen reader reads.
+func TestHandlerHeaderDrawsEverySettingAsASwitch(t *testing.T) {
+	header := headerElement(t, administrableBoardPage(t, core.DefaultVocabulary()))
+
+	for marker, label := range map[string]string{
+		"data-deleted-toggle":     "data-deleted-label",
+		"data-description-toggle": "data-description-label",
+		"data-sync-toggle":        "data-sync-label",
+	} {
+		element := switchElement(t, header, marker)
+		for _, want := range []string{
+			`class="nav-switch"`,
+			`role="switch"`,
+			// Off until the client says otherwise. A page whose script never ran
+			// must not draw a knob that claims a setting is on.
+			`aria-checked="false"`,
+			// The words, and the two halves of the switch a reader sees.
+			label,
+			`class="nav-switch__label`,
+			`class="nav-switch__track"`,
+			`class="nav-switch__knob"`,
+			// The track is decoration for the state the control already states.
+			// Announced twice it would be announced once too often.
+			`aria-hidden="true"`,
+			// Revealed by the render that has something for it to act on.
+			" hidden",
+		} {
+			if !strings.Contains(element, want) {
+				t.Errorf("the %s switch does not carry %s: %s", marker, want, element)
+			}
+		}
+		// aria-pressed is the vocabulary of a toggle button. A switch that
+		// carried both would state itself twice, in two roles' words.
+		if strings.Contains(element, "aria-pressed") {
+			t.Errorf("the %s switch states itself twice: %s", marker, element)
+		}
+	}
+}
+
+// The Deleted setting stays an anchor. The state it sets is the address, so it
+// has to keep being one a browser can cmd-click, bookmark and walk with Back;
+// what role="switch" changes is what it is called, not where it goes.
+func TestHandlerDeletedSwitchIsStillTheAddressItSets(t *testing.T) {
+	header := headerElement(t, administrableBoardPage(t, core.DefaultVocabulary()))
+
+	element := switchElement(t, header, "data-deleted-toggle")
+	if !strings.HasPrefix(element, "<a ") {
+		t.Errorf("the Deleted setting is no longer an anchor: %s", element)
+	}
+	if !strings.Contains(element, `href="/?deleted=1"`) {
+		t.Errorf("the Deleted setting does not name the address that shows the column: %s", element)
+	}
+}
+
+// The knob has to move, or the control is a sentence with a picture beside it.
+func TestHandlerStylesheetMovesTheSwitchKnobWithItsState(t *testing.T) {
+	body := administrableBoardPage(t, core.DefaultVocabulary())
+
+	off := cssRule(t, body, ".nav-switch__knob")
+	on := cssRule(t, body, `.nav-switch[aria-checked="true"] .nav-switch__knob`)
+	if !strings.Contains(off, "left: .13rem") {
+		t.Errorf("the knob does not start at one end of its track: %s", off)
+	}
+	if !strings.Contains(on, "left: calc(") {
+		t.Errorf("a switch turned on does not move its knob: %s", on)
+	}
+	if track := cssRule(t, body, `.nav-switch[aria-checked="true"] .nav-switch__track`); !strings.Contains(track, "background: #2457d6") {
+		t.Errorf("a switch turned on does not fill its track: %s", track)
+	}
+	// Reachable by keyboard and visibly so, like every other control here.
+	if focus := cssRule(t, body, ".nav-switch:focus-visible"); !strings.Contains(focus, "outline: 3px solid #2457d6") {
+		t.Errorf("a focused switch is not outlined the way this page outlines focus: %s", focus)
+	}
+}
+
+// The two groups are laid out apart, the settings stack their freshness reading
+// above their row, and the row wraps instead of widening the document. The last
+// is the rule a phone depends on: this row was 454px wide at a 390px viewport
+// before it was allowed to wrap, and the whole page scrolled sideways with it.
+func TestHandlerStylesheetHoldsTheTwoHeaderGroupsApart(t *testing.T) {
+	body := administrableBoardPage(t, core.DefaultVocabulary())
+
+	if lead := cssRule(t, body, ".app-header__lead"); !strings.Contains(lead, "display: flex") {
+		t.Errorf("the title and the routes are not laid out together: %s", lead)
+	}
+	settings := cssRule(t, body, ".header-settings")
+	if !strings.Contains(settings, "flex-direction: column") {
+		t.Errorf("the freshness reading is not stacked above the settings: %s", settings)
+	}
+	if row := cssRule(t, body, ".header-switches"); !strings.Contains(row, "flex-wrap: wrap") {
+		t.Errorf("the settings row cannot wrap, so a phone scrolls sideways over the header: %s", row)
+	}
+	if links := cssRule(t, body, ".header-links"); !strings.Contains(links, "flex-wrap: wrap") {
+		t.Errorf("the routes cannot wrap: %s", links)
+	}
+	// Every label reads two ways and the two are not the same width, so each
+	// reserves the width of its longer reading. The row is right-aligned, so a
+	// label that shrank would drag the settings on its left along with it; on a
+	// phone, where the row wraps and aligns left, it would push the ones after
+	// it instead.
+	for _, label := range []string{
+		".nav-switch__label--deleted",
+		".nav-switch__label--descriptions",
+		".nav-switch__label--sync",
+	} {
+		if rule := cssRule(t, body, label); !strings.Contains(rule, "min-width:") {
+			t.Errorf("%s reserves no width, so flipping it moves the settings beside it: %s", label, rule)
+		}
+	}
+}
+
+// A switch answers Space. The one that is an anchor gets Enter from the browser
+// and Space from nobody — the browser scrolls the page with it — so the client
+// raises the click the anchor would have raised, which reaches the same document
+// listener that turns every link on this page into a render.
+func TestHandlerClientActivatesTheDeletedSwitchFromTheSpaceBar(t *testing.T) {
+	runBoardClient(t, "the Deleted switch under the space bar", reconcileBoardTasks(), `
+  if (deletedToggle.hidden) throw new Error("the board did not reveal the Deleted setting");
+  if (!deletedToggle.eventListeners.keydown) throw new Error("the Deleted switch answers no key at all");
+
+  // A key that is not Space is the browser's business, and Enter is already the
+  // anchor's: neither may be swallowed here.
+  let prevented = 0;
+  deletedToggle.eventListeners.keydown({ key: "Enter", preventDefault() { prevented += 1; } });
+  if (prevented !== 0) throw new Error("the Deleted switch took Enter away from the anchor");
+  if (historyPaths.length !== 0) throw new Error("Enter navigated twice: " + JSON.stringify(historyPaths));
+
+  deletedToggle.eventListeners.keydown({ key: " ", preventDefault() { prevented += 1; } });
+  if (prevented !== 1) throw new Error("Space still scrolls the page under the switch");
+  if (historyPaths.length !== 1 || historyPaths[0] !== "/?deleted=1") {
+    throw new Error("Space did not show the column: " + JSON.stringify(historyPaths));
+  }
+  if (deletedLabel.textContent !== "Hide Deleted" || deletedToggle.getAttribute("aria-checked") !== "true") {
+    throw new Error("the switch did not flip: " + deletedLabel.textContent + " " + deletedToggle.getAttribute("aria-checked"));
+  }
+
+  deletedToggle.eventListeners.keydown({ key: " ", preventDefault() {} });
+  if (historyPaths[1] !== "/") throw new Error("Space did not hide the column again: " + JSON.stringify(historyPaths));
+  if (deletedLabel.textContent !== "Show Deleted" || deletedToggle.getAttribute("aria-checked") !== "false") {
+    throw new Error("the switch did not flip back: " + deletedLabel.textContent + " " + deletedToggle.getAttribute("aria-checked"));
+  }
+`)
+}
+
+// The publishing switch reports the mode the server is in, which is why it is
+// read from the server rather than assumed: a board set to defer still publishes
+// inline when no watcher answers.
+//
+// On is the mode where something else publishes for you — a watcher picks each
+// change up just after it is recorded — so the word offered while it is off is
+// "Publish", which is what turning it on arranges. Off is the mode where this
+// board pushes the change itself before the response returns, so the word
+// offered while it is on is "Push", which is what taking it back means and what
+// the inline mode's own description calls it.
+func TestHandlerClientDrawsThePublishingSwitchFromTheServersMode(t *testing.T) {
+	runBoardClientWithSetup(t, "the publishing switch", reconcileBoardTasks(), syncFetchStub, `
+  await Promise.resolve();
+  await Promise.resolve();
+  if (syncToggle.hidden) throw new Error("a board told a publishing mode drew no switch for it");
+  if (syncLabel.textContent !== "Push" || syncToggle.getAttribute("aria-checked") !== "true") {
+    throw new Error("a board handing publication to a watcher does not read as on: " +
+      syncLabel.textContent + " " + syncToggle.getAttribute("aria-checked"));
+  }
+
+  syncToggle.click();
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  if (syncModes[syncModes.length - 1] !== "inline") {
+    throw new Error("the switch asked for " + JSON.stringify(syncModes));
+  }
+  if (syncLabel.textContent !== "Publish" || syncToggle.getAttribute("aria-checked") !== "false") {
+    throw new Error("a board pushing inline does not read as off: " +
+      syncLabel.textContent + " " + syncToggle.getAttribute("aria-checked"));
+  }
+
+  syncToggle.click();
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  if (syncModes[syncModes.length - 1] !== "deferred") {
+    throw new Error("the switch did not hand publication back: " + JSON.stringify(syncModes));
+  }
+  if (syncLabel.textContent !== "Push" || syncToggle.getAttribute("aria-checked") !== "true") {
+    throw new Error("the switch did not turn back on: " +
+      syncLabel.textContent + " " + syncToggle.getAttribute("aria-checked"));
+  }
+`)
+}
+
+// A board whose deferred mode has no watcher answering it publishes inline, and
+// the switch says so: it reports what the next mutation will do, not what the
+// configuration asked for.
+func TestHandlerClientReadsAWatcherlessDeferralAsPushing(t *testing.T) {
+	runBoardClientWithSetup(t, "a deferral no watcher answers", reconcileBoardTasks(), `
+`+syncFetchStub+`
+syncWatcher = false;
+`, `
+  await Promise.resolve();
+  await Promise.resolve();
+  if (syncToggle.hidden) throw new Error("a board told a publishing mode drew no switch for it");
+  if (syncLabel.textContent !== "Publish" || syncToggle.getAttribute("aria-checked") !== "false") {
+    throw new Error("a deferral with nobody to defer to does not read as pushing: " +
+      syncLabel.textContent + " " + syncToggle.getAttribute("aria-checked"));
+  }
+
+  // And the switch that reads off here is off in the only sense it can be: the
+  // mode is what the server holds, and the server holds a deferral, so asking
+  // to change it asks for inline and the knob has nowhere to go. This is the
+  // behaviour the text button had before it was a switch — a click that
+  // relabelled it from "Publishing: inline" to "Publishing: inline" — and it is
+  // pinned rather than endorsed, so that a fix has to come back and say so.
+  syncToggle.click();
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  if (syncModes[syncModes.length - 1] !== "inline") {
+    throw new Error("a watcherless deferral asked for " + JSON.stringify(syncModes));
+  }
+  if (syncToggle.getAttribute("aria-checked") !== "false") {
+    throw new Error("the switch moved on a mode change that changed nothing it reports");
+  }
+`)
+}
+
+// syncFetchStub is a server with a publishing mode, wrapped around the harness's
+// own fetch so that everything else this page asks for is answered as it always
+// was. The harness answers /api/sync with the task document, which is not a sync
+// document and leaves the switch hidden — which is the right answer for a test
+// that is not about publishing, and no answer at all for one that is.
+const syncFetchStub = `
+let syncMode = "deferred";
+let syncWatcher = true;
+const syncModes = [];
+const boardFetch = globalThis.fetch;
+const syncDocument = () => ({
+  format: "workbook.sync",
+  version: 1,
+  sync: { mode: syncMode, watcher: syncWatcher, detail: "" }
+});
+globalThis.fetch = async (url, options = {}) => {
+  if (url !== "/api/sync") return boardFetch(url, options);
+  if ((options.method || "GET") !== "GET") {
+    syncMode = JSON.parse(options.body).mode;
+    syncModes.push(syncMode);
+  }
+  return { ok: true, json: async () => syncDocument() };
+};
+`

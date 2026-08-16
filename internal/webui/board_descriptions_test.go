@@ -143,11 +143,16 @@ func TestHandlerClientTogglesCardDescriptions(t *testing.T) {
   if (boardView.dataset.descriptions !== "hidden") {
     throw new Error("the board did not open with descriptions hidden: " + boardView.dataset.descriptions);
   }
-  if (descriptionToggle.textContent !== "Descriptions: hidden") {
-    throw new Error("the setting did not report the default: " + descriptionToggle.textContent);
+  // The words offer the next action and aria-checked reports what is true, so
+  // the two halves of the announcement never contradict each other.
+  if (descriptionLabel.textContent !== "Show Descriptions") {
+    throw new Error("the setting did not offer the default's next step: " + descriptionLabel.textContent);
   }
-  // The name is the whole announcement. An aria-pressed beside it would state
-  // the same thing a second time and in the opposite direction.
+  if (descriptionToggle.getAttribute("aria-checked") !== "false") {
+    throw new Error("the setting did not report itself off: " + descriptionToggle.getAttribute("aria-checked"));
+  }
+  // A switch states itself with aria-checked. An aria-pressed beside it would
+  // state the same thing a second time, in the vocabulary of a different role.
   if (descriptionToggle.hasAttribute("aria-pressed")) {
     throw new Error("the setting states itself twice: " + descriptionToggle.getAttribute("aria-pressed"));
   }
@@ -157,12 +162,17 @@ func TestHandlerClientTogglesCardDescriptions(t *testing.T) {
     throw new Error("hiding descriptions dropped the description text from the card");
   }
 
-  descriptionToggle.eventListeners.click({});
+  // Raised the way a browser raises it from the keyboard, so the switch is
+  // shown to answer Space and Enter and not only a mouse.
+  descriptionToggle.click();
   if (boardView.dataset.descriptions !== "shown") {
     throw new Error("the setting did not show descriptions: " + boardView.dataset.descriptions);
   }
-  if (descriptionToggle.textContent !== "Descriptions: shown") {
-    throw new Error("the setting did not report itself as on: " + descriptionToggle.textContent);
+  if (descriptionLabel.textContent !== "Hide Descriptions") {
+    throw new Error("the setting did not offer to undo itself: " + descriptionLabel.textContent);
+  }
+  if (descriptionToggle.getAttribute("aria-checked") !== "true") {
+    throw new Error("the setting did not report itself on: " + descriptionToggle.getAttribute("aria-checked"));
   }
   if (descriptionToggle.hasAttribute("aria-pressed")) {
     throw new Error("the setting states itself twice: " + descriptionToggle.getAttribute("aria-pressed"));
@@ -175,12 +185,15 @@ func TestHandlerClientTogglesCardDescriptions(t *testing.T) {
   await intervalCallback();
   if (boardView.dataset.descriptions !== "shown") throw new Error("a poll reset the description setting");
 
-  descriptionToggle.eventListeners.click({});
+  descriptionToggle.click();
   if (boardView.dataset.descriptions !== "hidden") {
     throw new Error("the setting did not hide descriptions again: " + boardView.dataset.descriptions);
   }
-  if (descriptionToggle.textContent !== "Descriptions: hidden") {
-    throw new Error("the setting did not report itself as off: " + descriptionToggle.textContent);
+  if (descriptionLabel.textContent !== "Show Descriptions") {
+    throw new Error("the setting did not offer to undo itself again: " + descriptionLabel.textContent);
+  }
+  if (descriptionToggle.getAttribute("aria-checked") !== "false") {
+    throw new Error("the setting did not report itself off again: " + descriptionToggle.getAttribute("aria-checked"));
   }
   if (descriptionToggle.hasAttribute("aria-pressed")) {
     throw new Error("the setting states itself twice: " + descriptionToggle.getAttribute("aria-pressed"));
@@ -198,8 +211,11 @@ storedPreferences.set(`+strconv.Quote(descriptionPreferenceKey)+`, "shown");
   if (boardView.dataset.descriptions !== "shown") {
     throw new Error("a remembered setting did not survive the reload: " + boardView.dataset.descriptions);
   }
-  if (descriptionToggle.textContent !== "Descriptions: shown") {
-    throw new Error("the setting did not report what was remembered: " + descriptionToggle.textContent);
+  if (descriptionLabel.textContent !== "Hide Descriptions") {
+    throw new Error("the setting did not report what was remembered: " + descriptionLabel.textContent);
+  }
+  if (descriptionToggle.getAttribute("aria-checked") !== "true") {
+    throw new Error("a remembered setting did not restore the knob: " + descriptionToggle.getAttribute("aria-checked"));
   }
   if (descriptionToggle.hasAttribute("aria-pressed")) {
     throw new Error("the setting states itself twice: " + descriptionToggle.getAttribute("aria-pressed"));

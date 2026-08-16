@@ -4510,6 +4510,16 @@ class TestElement {
   removeAttribute(name) { delete this.attributes[name]; }
   hasAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attributes, name); }
   focus() { globalThis.activeElement = this; }
+  // What a browser does when a control is activated from the keyboard: the
+  // element's own listener runs, and then the click reaches the document, where
+  // this page turns every link into a render. A switch that only ever answered
+  // the mouse would pass a test that called its listener directly, so the
+  // harness raises the event the way the browser raises it instead.
+  click() {
+    const event = { target: this, button: 0, preventDefault() {}, stopPropagation() {} };
+    if (this.eventListeners.click) this.eventListeners.click(event);
+    if (documentEventListeners.click) documentEventListeners.click(event);
+  }
   get id() { return this.attributes.id || this._id || ""; }
   set id(value) { this._id = String(value); this.attributes.id = String(value); }
   addEventListener(name, listener) { this.eventListeners[name] = listener; }
@@ -4672,17 +4682,42 @@ const vocabularyNotice = new TestElement("div");
 vocabularyNotice.hidden = true;
 const vocabularyReload = new TestElement("button");
 vocabularyNotice.append(vocabularyReload);
+// The half of a switch that carries no words. It is here so that a test reading
+// a switch's text reads only its label, exactly as a browser would.
+function switchTrack() {
+  const track = new TestElement("span");
+  track.className = "nav-switch__track";
+  track.append(new TestElement("span"));
+  return track;
+}
+// Each setting is a switch: words that say what happens next, then a track the
+// knob sits at one end of. The words are a child of the control rather than the
+// control's own text, so the harness holds them the way the page does — a test
+// that read the control's text would otherwise pass against a client that had
+// written over the track.
+//
 // The page ships this control hidden and renderRoute() reveals it on the board,
 // so the harness has to start it hidden too. Starting it visible would let a
 // renderRoute() that never touched it look like it had revealed it.
 const descriptionToggle = new TestElement("button");
 descriptionToggle.hidden = true;
+const descriptionLabel = new TestElement("span");
+descriptionToggle.append(descriptionLabel, switchTrack());
 // The Deleted column's switch, shipped hidden beside it and revealed by the
 // board's render for the same reason. It is an anchor, because the state it
 // sets is the address.
 const deletedToggle = new TestElement("a");
 deletedToggle.hidden = true;
 deletedToggle.href = "/?deleted=1";
+const deletedLabel = new TestElement("span");
+deletedToggle.append(deletedLabel, switchTrack());
+// The publishing switch, which no route reveals: it is the answer from
+// /api/sync that decides whether there is a mode to report, so it starts hidden
+// and stays hidden on a harness whose server says nothing about publishing.
+const syncToggle = new TestElement("button");
+syncToggle.hidden = true;
+const syncLabel = new TestElement("span");
+syncToggle.append(syncLabel, switchTrack());
 // The body of the statuses route, as the server renders it for a board built
 // with the four vocabulary mutations: shipped hidden and outside main, mounted
 // into main by the render for that route, with the list inside it drawn by the
@@ -4708,6 +4743,10 @@ const documentEventListeners = {};
     if (selector === "[data-vocabulary-reload]") return vocabularyReload;
     if (selector === "[data-description-toggle]") return descriptionToggle;
     if (selector === "[data-deleted-toggle]") return deletedToggle;
+    if (selector === "[data-sync-toggle]") return syncToggle;
+    if (selector === "[data-description-label]") return descriptionLabel;
+    if (selector === "[data-deleted-label]") return deletedLabel;
+    if (selector === "[data-sync-label]") return syncLabel;
     if (selector === "[data-vocabulary-panel]") return vocabularyPanel;
     if (selector === "[data-vocabulary-panel-status]") return vocabularyPanelStatus;
     if (selector === "[data-vocabulary-panel-body]") return vocabularyPanelBody;

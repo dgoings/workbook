@@ -46,16 +46,63 @@
     .eyebrow { margin: 0 0 .2rem; color: #2457d6; font-size: .7rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
     h1 { margin: 0; font-size: clamp(1.25rem, 2vw, 1.65rem); letter-spacing: -.03em; }
     .updated { margin: 0; color: #56647a; font-size: .75rem; text-align: right; }
-    /* The row wraps rather than pushing the page sideways. Six controls of text
-       do not fit a phone on one line, and a flex row that cannot shrink far
-       enough widens the document instead of the row: measured at a 390px
-       viewport this row was 454px wide, and the whole page scrolled
+    /* The routes sit on the left, beside the title, and the settings on the
+       right. They were one row once, and the row's contents changed with the
+       route: the Deleted setting belongs to the board, so leaving the statuses
+       page took it away and every link to its left slid right to fill the gap.
+       A reader who had just aimed at Board found Statuses under the cursor. The
+       two groups are separated here so that the links occupy the same place on
+       every route — nothing that comes and goes is drawn before them any more. */
+    .app-header__lead { display: flex; flex-wrap: wrap; align-items: end; gap: .3rem 1.1rem; min-width: 0; }
+    /* Both rows wrap rather than pushing the page sideways. The settings do not
+       fit a phone on one line, and a flex row that cannot shrink far enough
+       widens the document instead of the row: measured at a 390px viewport the
+       single row this replaced was 454px wide, and the whole page scrolled
        horizontally with it — over a header, not over the board, which has its
        own scroll container and is the only thing on this page that is supposed
        to scroll sideways. Wrapping costs a second line on a phone and nothing
        at any width the row already fits. */
-    .header-links { display: flex; flex-wrap: wrap; align-items: center; gap: .8rem; }
+    .header-links { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .8rem; padding-bottom: .12rem; }
     .header-link { color: #34425a; font-size: .82rem; font-weight: 750; text-underline-offset: .18em; }
+    /* The reading of the board's freshness sits above the settings rather than
+       beside them, because it is the one thing in this header whose width
+       changes on its own: a clock that ticks from 9:59:59 to 10:00:00 beside
+       the settings would walk them leftwards a few pixels every hour, under a
+       cursor already on its way to one. Stacked, its width buys nothing from
+       them. */
+    .header-settings { display: flex; flex-direction: column; align-items: flex-end; gap: .5rem; min-width: 0; }
+    .header-switches { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: .45rem .95rem; }
+    /* A setting reads as its state before it reads as anything else, so it is
+       drawn as one: a track the knob sits at one end of. The words before it
+       say what happens next — "Hide Deleted" over a board that is showing them
+       — while the knob and aria-checked say what is true now, so the two halves
+       never state the same thing in opposite directions. */
+    .nav-switch { display: inline-flex; align-items: center; gap: .45rem; border: 0; padding: 0; background: none; color: #34425a; cursor: pointer; font: inherit; font-size: .82rem; font-weight: 750; text-decoration: none; }
+    .nav-switch[hidden] { display: none; }
+    .nav-switch__track { position: relative; flex: 0 0 auto; width: 2.25rem; height: 1.2rem; border: 1px solid #9eafc5; border-radius: 999px; background: #e9eef5; transition: background-color .12s ease, border-color .12s ease; }
+    .nav-switch__knob { position: absolute; top: 50%; left: .13rem; width: .9rem; height: .9rem; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(23, 32, 51, .35); transform: translateY(-50%); transition: left .12s ease; }
+    .nav-switch[aria-checked="true"] .nav-switch__track { border-color: #2457d6; background: #2457d6; }
+    .nav-switch[aria-checked="true"] .nav-switch__knob { left: calc(100% - .9rem - .13rem); }
+    .nav-switch:hover .nav-switch__track { border-color: #2457d6; }
+    .nav-switch:focus-visible { outline: 3px solid #2457d6; outline-offset: 2px; border-radius: 4px; }
+    /* Every label reads two ways, and the two are not the same width, so each
+       reserves the width of its longer reading. Without this the row moves under
+       the cursor when a setting is flipped: it is right-aligned, so a label that
+       shrinks pulls everything drawn before it rightwards, and on a phone, where
+       the row wraps and aligns left, it pushes everything after it instead —
+       which is the same complaint that moved the links out of this row.
+
+       The numbers are the readings measured in this page's own font, rounded up:
+       Show Deleted 5.99rem against Hide Deleted 5.62, Show Descriptions 7.96
+       against Hide Descriptions 7.59, Publish 3.17 against Push 2.04. Each keeps
+       a little headroom, so a machine that falls back to a wider font loses the
+       reservation gradually rather than all at once. The space a reservation
+       leaves over falls to the left of the words, where it is only more gap. */
+    .nav-switch__label { display: inline-block; text-align: right; }
+    .nav-switch__label--deleted { min-width: 6.25rem; }
+    .nav-switch__label--descriptions { min-width: 8.25rem; }
+    .nav-switch__label--sync { min-width: 3.5rem; }
+    @media (prefers-reduced-motion: reduce) { .nav-switch__track, .nav-switch__knob { transition: none; } }
     main { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 1.25rem; }
     /* Reports leave only by being dismissed, so the notice has to be able to run
        out of room rather than out of page: it shares a viewport-height flex
@@ -632,7 +679,7 @@
        swipes between them. On a 390px screen that is 288px of column against
        350px of board. The min() only decides anything below about 328px, where
        18rem would be wider than the window and the column becomes the page. */
-    @media (max-width: 900px) { :root { --board-column-min: min(18rem, calc(100vw - 2.5rem)); } .app-header { align-items: start; flex-direction: column; } .updated { text-align: left; } .admin-status { grid-template-columns: minmax(0, 1fr); } }
+    @media (max-width: 900px) { :root { --board-column-min: min(18rem, calc(100vw - 2.5rem)); } .app-header { align-items: start; flex-direction: column; } .updated { text-align: left; } .header-settings { align-items: flex-start; } .header-switches { justify-content: flex-start; } .admin-status { grid-template-columns: minmax(0, 1fr); } }
     @media (min-width: 761px) {
       .task-sidebar { padding: .9rem 1rem; }
       .task-properties { gap: .55rem; }
@@ -684,15 +731,30 @@
 <body>
   <a class="skip-link" href="#board">Skip to task board</a>
   <header class="app-header">
-    <div><p class="eyebrow">Repository workbench</p><h1>Workbook board</h1></div>
-    <!-- The Deleted column's switch. It is an anchor rather than a button
-         because the state it sets is the address — /?deleted=1 — so it can be
+    <!-- The routes, beside the title and before anything that comes and goes,
+         so they are in the same place on every page this board serves. -->
+    <div class="app-header__lead"><div><p class="eyebrow">Repository workbench</p><h1>Workbook board</h1></div><nav class="header-links" aria-label="Primary"><a class="header-link" href="/">Board</a>{{ if .Administrable }}<a class="header-link" href="/statuses">Statuses</a>{{ end }}</nav></div>
+    <!-- The three settings, and above them the reading of when the board last
+         heard from the server.
+
+         The Deleted column's switch is an anchor rather than a button because
+         the state it sets is the address — /?deleted=1 — so it can be
          cmd-clicked into a tab, bookmarked, and walked with Back and Forward,
          and the client drives it through the same navigate() every other link
-         on this page goes through. It ships hidden and the board's render
-         reveals it, for the reason the Descriptions setting does: it acts on
-         the columns, so it travels with the route that draws them. -->
-    <div class="header-links"><a class="header-link" href="/">Board</a>{{ if .Administrable }}<a class="header-link" href="/statuses">Statuses</a>{{ end }}<p class="updated" data-updated>Loaded from this checkout</p><a class="header-link" href="/?deleted=1" data-deleted-toggle hidden>Deleted tasks: hidden</a><button type="button" class="header-link" data-description-toggle hidden>Descriptions: hidden</button><button type="button" class="header-link" data-sync-toggle hidden></button></div>
+         on this page goes through. Carrying role="switch" costs it the word
+         "link" in a screen reader's announcement and buys it the word "on",
+         which is the half a reader of this control needs; the address it names
+         is still an address, and every way a browser opens one still works.
+
+         All three ship hidden. The board's render reveals the first two, which
+         act on the columns and so travel with the route that draws them; the
+         publishing setting is revealed by the answer from /api/sync, the only
+         thing that knows whether there is a mode to report at all.
+
+         The label is a child rather than the control's own text because the
+         control is no longer only text: writing to it would take the track and
+         the knob with it. -->
+    <div class="header-settings"><p class="updated" data-updated>Loaded from this checkout</p><div class="header-switches"><a class="nav-switch" href="/?deleted=1" role="switch" aria-checked="false" data-deleted-toggle hidden><span class="nav-switch__label nav-switch__label--deleted" data-deleted-label>Show Deleted</span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></a><button type="button" class="nav-switch" role="switch" aria-checked="false" data-description-toggle hidden><span class="nav-switch__label nav-switch__label--descriptions" data-description-label>Show Descriptions</span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></button><button type="button" class="nav-switch" role="switch" aria-checked="false" data-sync-toggle hidden><span class="nav-switch__label nav-switch__label--sync" data-sync-label></span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></button></div></div>
   </header>
   <!-- What the board has to say to a reader who has moved on: a save that
        already returned, or a refused change whose card the board has since
@@ -912,6 +974,26 @@
       const syncToggle = document.querySelector("[data-sync-toggle]");
       const descriptionToggle = document.querySelector("[data-description-toggle]");
       const deletedToggle = document.querySelector("[data-deleted-toggle]");
+      // The words in front of each switch. They are written to instead of the
+      // control itself, which now holds a track and a knob that writing its
+      // text would throw away.
+      const syncLabel = document.querySelector("[data-sync-label]");
+      const descriptionLabel = document.querySelector("[data-description-label]");
+      const deletedLabel = document.querySelector("[data-deleted-label]");
+      // A switch answers Space as well as Enter, and the one that is an anchor
+      // gets Enter from the browser and Space from nobody — the browser scrolls
+      // the page with it. The click this raises is the click the anchor would
+      // have raised, so it reaches the same document listener that turns every
+      // link on this page into a render.
+      function activateSwitchOnSpace(element) {
+        if (!element) return;
+        element.addEventListener("keydown", (event) => {
+          if (event.key !== " " && event.key !== "Spacebar") return;
+          event.preventDefault();
+          element.click();
+        });
+      }
+      activateSwitchOnSpace(deletedToggle);
       // Whether the board is drawing its Deleted column, and the parts of that
       // column while it is. The column is board state rather than route state:
       // a reader who opens a task from a board showing it comes back to a board
@@ -1066,16 +1148,18 @@
         } catch (_) {
         }
       }
-      // The button's name is the whole announcement, and deliberately the only
-      // one: a name that changes with the state and an aria-pressed beside it
-      // state the same thing twice and in opposite directions, so "Descriptions:
-      // hidden, toggle button, not pressed" reads as the opposite of what just
-      // happened. A toggle keeps a fixed name when aria-pressed speaks for it;
-      // this one keeps the speaking name, like the publishing control beside it.
+      // The name and the state pull in the same direction now that they are
+      // saying different things: the name is the next action and aria-checked is
+      // what is true, so "Hide Descriptions, switch, on" reads as one sentence.
+      // It was a name that carried the state — "Descriptions: shown" — and it
+      // could carry no aria-pressed beside it, because "Descriptions: hidden,
+      // not pressed" reads as the opposite of what just happened. aria-pressed
+      // stays off it regardless: a switch states itself with aria-checked.
       function renderDescriptionPreference() {
         boardView.dataset.descriptions = descriptionsShown ? "shown" : "hidden";
         if (!descriptionToggle) return;
-        text(descriptionToggle, descriptionsShown ? "Descriptions: shown" : "Descriptions: hidden");
+        descriptionToggle.setAttribute("aria-checked", descriptionsShown ? "true" : "false");
+        text(descriptionLabel, descriptionsShown ? "Hide Descriptions" : "Show Descriptions");
         descriptionToggle.title = descriptionsShown
           ? "Cards show the first lines of their description. Click to hide them."
           : "Cards show titles only. Click to show the first lines of each description.";
@@ -4911,12 +4995,21 @@
       // read from the server rather than assumed: a board set to defer still
       // publishes inline when no watcher answers, and saying "deferred" then
       // would be a claim the board cannot keep.
+      //
+      // On is the mode where something else publishes for you: a watcher picks
+      // each change up just after it is recorded, and the write returns without
+      // waiting for the network. Off is the mode where this board pushes the
+      // change itself, before the response returns — so the word the switch
+      // offers when it is off is "Publish", the thing turning it on arranges,
+      // and the word it offers when it is on is "Push", which is what taking it
+      // back means here and what the inline mode's own description calls it.
       function renderSyncState() {
         if (!syncToggle) return;
         if (!syncState) { syncToggle.hidden = true; return; }
         syncToggle.hidden = false;
         const deferring = syncState.mode === "deferred" && syncState.watcher;
-        text(syncToggle, deferring ? "Publishing: handed to watcher" : "Publishing: inline");
+        syncToggle.setAttribute("aria-checked", deferring ? "true" : "false");
+        text(syncLabel, deferring ? "Push" : "Publish");
         syncToggle.title = syncState.detail ||
           (deferring
             ? "A watcher publishes each change just after it is recorded. Click to wait for the push instead."
@@ -6036,7 +6129,11 @@
       function renderDeletedToggle() {
         if (!deletedToggle) return;
         deletedToggle.href = deletedColumnShown ? "/" : "/?deleted=1";
-        text(deletedToggle, deletedColumnShown ? "Deleted tasks: shown" : "Deleted tasks: hidden");
+        deletedToggle.setAttribute("aria-checked", deletedColumnShown ? "true" : "false");
+        text(deletedLabel, deletedColumnShown ? "Hide Deleted" : "Show Deleted");
+        deletedToggle.title = deletedColumnShown
+          ? "The board is drawing its Deleted column. Click to hide it."
+          : "The board is drawing no Deleted column. Click to show it.";
       }
       function renderRoute() {
         const current = route();

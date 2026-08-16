@@ -1707,13 +1707,20 @@ all, those untouched fields are the last successful poll's rather than the
 server's, and the message says the board could not be refreshed instead of
 claiming otherwise.
 
-A `Publishing:` indicator in the board header says what the *next* mutation will
-do with `origin`, and clicking it changes that for this server. Handed to
-watcher — the default — means a mutation returns as soon as the write is durable
-and a running `workbook sync --watch` publishes it just behind the response.
-Inline means the board attempts the push itself and answers afterwards, rather
-than handing the change to a watcher. Neither mode makes publication a condition
-of success. As on the CLI, an unreachable `origin` is a warning and not a
+The board header keeps its two route links — Board and Statuses — on the left
+beside the title, and its settings on the right, so a link is in the same place
+on every route even though the settings a route offers are not. Each setting is
+a switch: words that say what the next flip does, then a track whose knob and
+`aria-checked` say what is true now. All three answer the mouse, Space and
+Enter.
+
+The publishing switch says what the *next* mutation will do with `origin`, and
+flipping it changes that for this server. On — the default — hands publication
+to a watcher: a mutation returns as soon as the write is durable and a running
+`workbook sync --watch` publishes it just behind the response, so the switch
+offers **Push** as the way back. Off means the board attempts the push itself
+and answers afterwards, so the switch offers **Publish** as the way to hand that
+job away again. Neither mode makes publication a condition of success. As on the CLI, an unreachable `origin` is a warning and not a
 failure, so an inline mutation whose push failed still answers `200` with the
 change recorded locally and an `auto-sync-incomplete` warning naming the error;
 a response says the operation commit exists in Git, never that `origin` has it.
@@ -1740,8 +1747,8 @@ task-detail URL, where the complete description remains available. Every status
 column has a New Task link that preselects that column's status.
 
 A description is the one card field with no length a column can rely on, so the
-board hides it and a `Descriptions:` toggle in the header puts up to six clamped
-lines of it back on every card. The choice says how one reader wants this board
+board hides it and a **Show Descriptions** switch in the header puts up to six
+clamped lines of it back on every card. The choice says how one reader wants this board
 drawn rather than anything about the project, so the browser remembers it and
 nothing is published to `origin`; two people reading the same board can read it
 differently, and a browser that refuses storage simply gets the default. The
@@ -1753,7 +1760,7 @@ accompanies the board alone; task pages draw no cards for it to act on and so
 do not offer it.
 
 Deleted tasks are a column of the board rather than a page of their own. The
-header's `Deleted tasks:` toggle is a link to `/?deleted=1`, so the state is
+header's **Show Deleted** switch is a link to `/?deleted=1`, so the state is
 shareable, bookmarkable, and walked by Back and Forward; showing it appends a
 muted **Deleted** column after the last status column and hiding it takes that
 section away, and neither touches another column or another card. The column is
