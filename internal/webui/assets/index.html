@@ -3926,8 +3926,18 @@
           ? "One folder was skipped: a folder cannot be attached, only the files inside it."
           : folders + " folders were skipped: a folder cannot be attached, only the files inside it.";
       }
+      // How long a leave that might be a cancel waits to find out.
+      //
+      // Child churn is followed by the dragenter for whatever the cursor moved
+      // onto, in the same gesture and immediately — so anything longer than a
+      // frame or two settles it, and this is not a timeout anybody waits on.
+      const attachmentDropDepartureGrace = 250;
       function attachmentDropZone(zone, config) {
         zone.dataset.attachmentDrop = "";
+        // What a refused zone is saying, held so it can be taken back down
+        // without taking down anything written since.
+        const busyRefusal = "Those attachments are still being sent; wait for that to finish and drop again.";
+        let departure = null;
         // The one decision. "" is a drag this zone has nothing to do with — a
         // card being dragged across the page, or text — and it is left entirely
         // alone, so the board's own machinery sees exactly what it saw before.
@@ -3936,10 +3946,32 @@
           return config.busy() ? "refused" : "active";
         }
         function showState(state) {
+          const previous = zone.dataset.dropState || "";
+          if (state === previous) return;
           if (state) zone.dataset.dropState = state;
           else delete zone.dataset.dropState;
+          // The refusal is said as the zone turns red, and not one moment later.
+          //
+          // A refused drop is never delivered at all. dropEffect "none" makes
+          // Blink cancel the drag then and there, so the sequence a refusal
+          // actually produces is dragenter, dragover…, dragleave — and no drop,
+          // ever. A refusal announced from a drop handler is therefore a
+          // refusal nobody is told about, over a zone that would sit there red
+          // for good. So it is announced where the decision is made, and taken
+          // down with the state it explains — and only if it is still the thing
+          // on screen, because anything written since belongs to somebody else.
+          if (state === "refused") config.report(busyRefusal);
+          else if (previous === "refused" && config.status() === busyRefusal) config.report("");
+        }
+        function cancelDeparture() {
+          if (departure === null) return;
+          window.clearTimeout(departure);
+          departure = null;
         }
         function answerDrag(event) {
+          // Any drag event at all is this gesture still going, which is what
+          // calls off a departure booked by an ambiguous leave.
+          cancelDeparture();
           const decision = dropDecision(event);
           if (!decision) return;
           // Answered even when it is refused. Without preventDefault the browser
@@ -3955,28 +3987,55 @@
         zone.addEventListener("dragenter", answerDrag);
         zone.addEventListener("dragover", answerDrag);
         zone.addEventListener("dragleave", (event) => {
-          // This zone is full of elements, and rows inside it are replaced as
-          // the list changes, so a cursor crossing from one child to the next
-          // leaves a child without leaving the zone. Answering every leave would
-          // strobe the highlight under a cursor that has not gone anywhere.
+          // Three answers, and the third is the one that matters.
           //
-          // The two questions the board's own leave handler asks, in its order:
-          // what the cursor moved onto, and where the cursor is. The second is
-          // what carries the browsers that report no relatedTarget on a
-          // dragleave at all, where the first cannot tell a churn from a
-          // departure.
+          // A leave naming somewhere inside this zone is child churn: the rows
+          // are replaced as the list changes, and a cursor crossing from one to
+          // the next leaves a child without leaving the zone. Asked first and on
+          // its own, because the coordinates reported with a leave are not
+          // always the cursor's — Chrome reports a leave at the origin often
+          // enough that a check reading only those would call this a departure.
           if (zone.contains(event.relatedTarget)) return;
-          if (cursorWithin(zone, event)) return;
-          showState("");
+          // A cursor outside the zone's box has left it, however the leave was
+          // reported and whatever it named.
+          if (!cursorWithin(zone, event)) {
+            cancelDeparture();
+            showState("");
+            return;
+          }
+          // What is left is a leave that named nothing while the cursor is
+          // still inside, and two entirely different things produce it. Firefox
+          // and Safari report every churn this way. Every browser reports a
+          // cancelled drag this way — including the one Blink cancels the
+          // instant this zone answers "none", which is the only way a refusal
+          // ever ends.
+          //
+          // So it is not decided here. It is decided by whether the gesture
+          // says anything more: a churn is followed by the dragenter for what
+          // the cursor moved onto, immediately, and a drag that has ended is
+          // followed by nothing at all. The departure is booked and any further
+          // drag event calls it off.
+          //
+          // This is what clears the highlight after a cancel, after a drag
+          // abandoned outside the window, and after a refusal — none of which
+          // deliver a drop, and none of which send a dragend anywhere near this
+          // page when the file came from outside the browser.
+          cancelDeparture();
+          departure = window.setTimeout(() => {
+            departure = null;
+            showState("");
+          }, attachmentDropDepartureGrace);
         });
         zone.addEventListener("drop", (event) => {
           if (!draggingFiles(event)) return;
           event.preventDefault();
+          cancelDeparture();
           showState("");
           if (config.busy()) {
-            // The same answer a mid-run add gets, said out loud because a drop
-            // has no disabled button to have been stopped by.
-            config.report("Those attachments are still being sent; wait for that to finish and drop again.");
+            // Not reachable while dropEffect is "none" — Blink cancels the drag
+            // rather than delivering this — and kept because it is the guard
+            // rather than the message. A browser that delivered the drop anyway
+            // must not put a file into a list a run is already walking.
             return;
           }
           const dropped = droppedFiles(event.dataTransfer);

@@ -70,6 +70,26 @@ function dragEventOn(zone, transfer, extra) {
   return Object.assign(event, extra || {});
 }
 function dropState(zone) { return zone.dataset.dropState || ""; }
+// The fake DOM records window timers rather than running them, so a test about
+// one has to run it. Only the zone's departure grace is run here; everything
+// else this page schedules is somebody else's business.
+const dropDepartureGrace = 250;
+function pendingDepartureTimers() {
+  return windowTimeouts.filter((timer) =>
+    !timer.canceled && !timer.ran && timer.delay === dropDepartureGrace);
+}
+function runDepartureTimers() {
+  const due = pendingDepartureTimers();
+  due.forEach((timer) => { timer.ran = true; timer.callback(); });
+  return due.length;
+}
+// A cancelled or abandoned external drag, as every browser reports it: a leave
+// that names nothing, with the cursor still inside the zone. No dragend follows
+// it, because the file came from outside the browser, and no drop follows it
+// either.
+function cancelShapedLeave(zone, transfer) {
+  return dragEventOn(zone, transfer, { relatedTarget: null, clientX: 200, clientY: 200 });
+}
 `
 
 // Acceptance is one decision and both events ask it.
@@ -249,7 +269,11 @@ setTimeout(async () => {
   }
 
   // The ceilings are the chooser's ceilings, because the door is the chooser's
-  // door: a run stops at the file that is refused and says which one it was.
+  // door — and so is the contract. A run stops at the first file it refuses:
+  // everything before it is kept, the refused one is named, and everything
+  // after it is never looked at. That is not a fan-out and is not meant to be;
+  // it is what acceptFiles has always done, and a drop that behaved differently
+  // would be a second rule on one door.
   const mixed = dragEventOn(zone, fileTransfer([
     new TestFile("fine.log", 16, "c"),
     new TestFile("enormous.bin", `+strconv.Itoa(core.MaxAttachmentFileBytes+1)+`, "x"),
@@ -259,6 +283,9 @@ setTimeout(async () => {
   const after = stagedNames();
   if (after.length !== 3 || after[2] !== "fine.log") {
     throw new Error("the run did not stop at the refused file: " + JSON.stringify(after));
+  }
+  if (after.includes("never.log")) {
+    throw new Error("a file after the refused one was evaluated: " + JSON.stringify(after));
   }
   const reported = panelStatusText("attachments");
   if (!reported.includes("enormous.bin") || !reported.includes("attach a link instead")) {
@@ -388,14 +415,30 @@ setTimeout(async () => {
     }
   }
 
-  const dropped = dragEventOn(zone, fileTransfer([new TestFile("late.log", 5, "late")]));
-  await zone.eventListeners.drop(dropped);
-  if (dropped.prevented !== 1) throw new Error("the refused drop was handed to the browser");
-  if (stagedNames().includes("late.log")) {
-    throw new Error("a file dropped mid-run joined a list the run had already read");
-  }
+  // The reason is on the screen already, before any drop, because no drop is
+  // ever coming: dropEffect "none" makes Blink cancel the drag, so the whole
+  // sequence a refusal produces is enter, over, leave. A refusal announced from
+  // a drop handler would be a refusal nobody is ever told.
   if (!panelStatusText("attachments").includes("still being sent")) {
-    throw new Error("a refused drop said " + JSON.stringify(panelStatusText("attachments")));
+    throw new Error("the refusal was not said at decision time: " +
+      JSON.stringify(panelStatusText("attachments")));
+  }
+
+  // And that is how the gesture actually ends — a leave, no drop, no dragend.
+  zone.eventListeners.dragleave(cancelShapedLeave(zone, fileTransfer([new TestFile("late.log", 5, "late")])));
+  if (pendingDepartureTimers().length !== 1) {
+    throw new Error("an ambiguous leave booked no departure, so nothing will ever clear the zone");
+  }
+  runDepartureTimers();
+  if (dropState(zone) !== "") {
+    throw new Error("the zone kept its refusal outline after the drag ended: " + JSON.stringify(dropState(zone)));
+  }
+  if (panelStatusText("attachments") !== "") {
+    throw new Error("the refusal outlived the state it explained: " +
+      JSON.stringify(panelStatusText("attachments")));
+  }
+  if (stagedNames().includes("late.log")) {
+    throw new Error("a file refused mid-run was staged anyway");
   }
 
   releaseFirstUpload();
@@ -443,8 +486,22 @@ setTimeout(async () => {
     throw new Error("a leave with no relatedTarget was read as a departure while the cursor was still inside");
   }
 
+  // The churn Chrome reports with no useful coordinates at all: a leave naming
+  // a child, at the origin. This is the case that makes contains() load-bearing
+  // — the cursor check disagrees with it and would call this a departure.
+  zone.eventListeners.dragenter(dragEventOn(zone, fileTransfer([new TestFile("shot.png", 12, "x")])));
+  zone.eventListeners.dragleave(dragEventOn(zone, fileTransfer([]), {
+    relatedTarget: chooser, clientX: 0, clientY: 0
+  }));
+  if (dropState(zone) !== "active") {
+    throw new Error("a leave naming a child was read as a departure because its coordinates were the origin");
+  }
+  if (pendingDepartureTimers().length !== 0) {
+    throw new Error("a leave onto a child booked a departure it should have answered outright");
+  }
+
   // A cursor genuinely outside the zone's box is a departure however it is
-  // reported, and the highlight goes.
+  // reported, and the highlight goes at once rather than after the grace.
   zone.eventListeners.dragleave(dragEventOn(zone, fileTransfer([]), {
     relatedTarget: null, clientX: 900, clientY: 900
   }));
@@ -455,6 +512,62 @@ setTimeout(async () => {
 `)
 	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute the drop highlight churn: %v\n%s", err, output)
+	}
+}
+
+// A drag that is cancelled or abandoned leaves the highlight behind unless
+// something takes it down, and for a file dragged in from outside the browser
+// there is nothing that would: no drop is delivered, and no dragend ever
+// reaches this page — the drag belongs to the desktop, not to the document.
+//
+// The only signal is a dragleave that names nothing with the cursor still
+// inside, which is the same shape Firefox and Safari report for ordinary child
+// churn. So it is not read as either: it books a departure, and any further
+// drag event calls that off. Churn always has a further event — the dragenter
+// for whatever the cursor moved onto — and a drag that has ended never does.
+func TestHandlerClientClearsTheDropHighlightWhenADragIsAbandoned(t *testing.T) {
+	node := requireNode(t)
+	program := createAttachmentProgram(t, `
+`+dropHarness+`
+setTimeout(async () => {
+  await openCreateForm();
+  const zone = dropZone();
+  const chooser = findElement(zone, (element) => element.id === "attachment-file");
+
+  // Abandoned: lit, then a cancel-shaped leave and nothing more.
+  zone.eventListeners.dragenter(dragEventOn(zone, fileTransfer([new TestFile("shot.png", 12, "x")])));
+  if (dropState(zone) !== "active") throw new Error("the zone did not light up");
+  zone.eventListeners.dragleave(cancelShapedLeave(zone, fileTransfer([])));
+  if (dropState(zone) !== "active") {
+    throw new Error("an ambiguous leave was read as a departure outright, which strobes on Firefox and Safari");
+  }
+  if (runDepartureTimers() !== 1) throw new Error("no departure was booked, so nothing would ever clear it");
+  if (dropState(zone) !== "") {
+    throw new Error("the highlight outlived a drag that was abandoned: " + JSON.stringify(dropState(zone)));
+  }
+
+  // Churn of the same shape is not a departure, because the gesture carries on:
+  // the dragenter for whatever the cursor moved onto calls the departure off.
+  zone.eventListeners.dragenter(dragEventOn(zone, fileTransfer([new TestFile("shot.png", 12, "x")])));
+  zone.eventListeners.dragleave(cancelShapedLeave(zone, fileTransfer([])));
+  zone.eventListeners.dragenter(dragEventOn(zone, fileTransfer([new TestFile("shot.png", 12, "x")]), { target: chooser }));
+  if (runDepartureTimers() !== 0) {
+    throw new Error("the gesture carried on and the departure was not called off, so the zone would go dark mid-drag");
+  }
+  if (dropState(zone) !== "active") {
+    throw new Error("a churn cleared the highlight: " + JSON.stringify(dropState(zone)));
+  }
+
+  // A drop calls it off too, and the drop's own clear is what is left.
+  zone.eventListeners.dragleave(cancelShapedLeave(zone, fileTransfer([])));
+  await zone.eventListeners.drop(dragEventOn(zone, fileTransfer([new TestFile("kept.log", 32, "k")])));
+  if (runDepartureTimers() !== 0) throw new Error("a delivered drop left a departure booked behind it");
+  if (dropState(zone) !== "") throw new Error("the drop did not clear the highlight");
+  if (!stagedNames().includes("kept.log")) throw new Error("the drop did not stage its file");
+}, 0);
+`)
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute the abandoned drag: %v\n%s", err, output)
 	}
 }
 
