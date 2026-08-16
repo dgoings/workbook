@@ -3932,6 +3932,27 @@
       // onto, in the same gesture and immediately — so anything longer than a
       // frame or two settles it, and this is not a timeout anybody waits on.
       const attachmentDropDepartureGrace = 250;
+      // And the backstop, for the drag that ends without telling the page
+      // anything at all.
+      //
+      // Measured on Chrome 151 through Blink's own drag pipeline: a refused
+      // hover ends with dragenter, dragover, dragover, dragleave — a leave the
+      // rule above catches — but a cancelled drag delivers nothing whatsoever,
+      // no leave and no dragend, because a file dragged in from the desktop
+      // belongs to the desktop and this page is never told it was dropped
+      // somewhere else. Only time can tell it.
+      //
+      // It is deliberately generous, because the same measurement says a drag
+      // hovering still emits no dragover to keep it alive — one dispatched
+      // dragover, then nothing at 0.5s, 1s, 1.5s and 2s, which is the same
+      // thing the board's autoscroll had to build a frame loop around. Anything
+      // brisk would go dark under a reader who paused to read the panel.
+      //
+      // Nothing rests on it being right. The highlight is decoration: whether a
+      // drop is accepted is decided fresh on every dragenter and dragover, so
+      // the worst this can do is take a highlight down early and put it back on
+      // the next movement.
+      const attachmentDropIdleGrace = 3000;
       function attachmentDropZone(zone, config) {
         zone.dataset.attachmentDrop = "";
         // What a refused zone is saying, held so it can be taken back down
@@ -3968,12 +3989,24 @@
           window.clearTimeout(departure);
           departure = null;
         }
+        // One timer, two deadlines: the short one for a leave that might be the
+        // end, the long one for a gesture that has said nothing for so long
+        // that it cannot still be here.
+        function armDeparture(delay) {
+          cancelDeparture();
+          departure = window.setTimeout(() => {
+            departure = null;
+            showState("");
+          }, delay);
+        }
         function answerDrag(event) {
-          // Any drag event at all is this gesture still going, which is what
-          // calls off a departure booked by an ambiguous leave.
+          // Any drag event at all is this gesture still going, which calls off
+          // a departure booked by an ambiguous leave and pushes the backstop
+          // out again.
           cancelDeparture();
           const decision = dropDecision(event);
           if (!decision) return;
+          armDeparture(attachmentDropIdleGrace);
           // Answered even when it is refused. Without preventDefault the browser
           // handles the drop itself and navigates the window to the file — which
           // over a create form holding staged files is the worst outcome
@@ -4016,15 +4049,10 @@
           // followed by nothing at all. The departure is booked and any further
           // drag event calls it off.
           //
-          // This is what clears the highlight after a cancel, after a drag
-          // abandoned outside the window, and after a refusal — none of which
-          // deliver a drop, and none of which send a dragend anywhere near this
-          // page when the file came from outside the browser.
-          cancelDeparture();
-          departure = window.setTimeout(() => {
-            departure = null;
-            showState("");
-          }, attachmentDropDepartureGrace);
+          // This is what clears the highlight after a refusal, which is the one
+          // ending Blink does report this way — and the backstop above is what
+          // clears it after the endings Blink reports no way at all.
+          armDeparture(attachmentDropDepartureGrace);
         });
         zone.addEventListener("drop", (event) => {
           if (!draggingFiles(event)) return;

@@ -74,12 +74,13 @@ function dropState(zone) { return zone.dataset.dropState || ""; }
 // one has to run it. Only the zone's departure grace is run here; everything
 // else this page schedules is somebody else's business.
 const dropDepartureGrace = 250;
-function pendingDepartureTimers() {
+const dropIdleGrace = 3000;
+function pendingDepartureTimers(delay = dropDepartureGrace) {
   return windowTimeouts.filter((timer) =>
-    !timer.canceled && !timer.ran && timer.delay === dropDepartureGrace);
+    !timer.canceled && !timer.ran && timer.delay === delay);
 }
-function runDepartureTimers() {
-  const due = pendingDepartureTimers();
+function runDepartureTimers(delay = dropDepartureGrace) {
+  const due = pendingDepartureTimers(delay);
   due.forEach((timer) => { timer.ran = true; timer.callback(); });
   return due.length;
 }
@@ -564,6 +565,25 @@ setTimeout(async () => {
   if (runDepartureTimers() !== 0) throw new Error("a delivered drop left a departure booked behind it");
   if (dropState(zone) !== "") throw new Error("the drop did not clear the highlight");
   if (!stagedNames().includes("kept.log")) throw new Error("the drop did not stage its file");
+
+  // And the ending that tells this page nothing at all — measured on Chrome
+  // 151: a cancelled drag delivers no leave, no drop and no dragend, because
+  // the file belongs to the desktop. Only the backstop can clear that, and
+  // every drag event pushes it out again so a live gesture never trips it.
+  zone.eventListeners.dragenter(dragEventOn(zone, fileTransfer([new TestFile("shot.png", 12, "x")])));
+  if (dropState(zone) !== "active") throw new Error("the zone did not light up");
+  if (pendingDepartureTimers(dropIdleGrace).length !== 1) {
+    throw new Error("no backstop was armed, so a silently cancelled drag would stay lit for good");
+  }
+  zone.eventListeners.dragover(dragEventOn(zone, fileTransfer([new TestFile("shot.png", 12, "x")])));
+  if (pendingDepartureTimers(dropIdleGrace).length !== 1) {
+    throw new Error("the backstop was not pushed out by a drag event that proves the gesture is live");
+  }
+  runDepartureTimers(dropIdleGrace);
+  if (dropState(zone) !== "") {
+    throw new Error("a drag that ended without telling the page anything stayed lit: " +
+      JSON.stringify(dropState(zone)));
+  }
 }, 0);
 `)
 	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
