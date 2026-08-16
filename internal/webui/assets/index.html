@@ -811,7 +811,7 @@
          the script needs before its first fetch comes from an attribute here,
          data-vocabulary-head included, so a page and its script never disagree
          about which vocabulary they were built from. -->
-    <div class="board-view" data-board-view data-default-status="{{ .DefaultStatus }}" data-vocabulary-head="{{ .VocabularyHead }}" data-attachment-limit="{{ .AttachmentFileLimit }}" data-attachment-total-limit="{{ .AttachmentTotalLimit }}" data-inline-media="{{ .InlineImageMediaTypes }}">
+    <div class="board-view" data-board-view data-default-status="{{ .DefaultStatus }}" data-vocabulary-head="{{ .VocabularyHead }}" data-attachment-limit="{{ .AttachmentFileLimit }}" data-attachment-total-limit="{{ .AttachmentTotalLimit }}" data-attachment-name-limit="{{ .AttachmentNameLimit }}" data-inline-media="{{ .InlineImageMediaTypes }}">
       <p class="stale" data-stale role="status">Task refresh failed. Showing the last successful board.</p>
       <!-- data-board is where the client appends the Deleted column, after the
            last vocabulary column the server rendered. It is a client-built
@@ -995,6 +995,11 @@
       // a reader staging more than a task may hold has no server to be refused
       // by until after the task has been made.
       const attachmentTotalLimit = Number(boardView.dataset.attachmentTotalLimit) || 0;
+      // The ceiling on a file attachment's name, in bytes. Bytes is the reason
+      // it is read from here rather than counted here: a name is stored as
+      // UTF-8, so an 85-character Japanese file name is 255 bytes' worth of
+      // ceiling and 85 of anything a reader — or a naive `length` — would count.
+      const attachmentNameLimit = Number(boardView.dataset.attachmentNameLimit) || 0;
       // The media types the attachment route hands back inline, read out of the
       // page for exactly the reason the ceiling above is. A markdown attachment
       // reference becomes an <img> only for a type on this list; every other
@@ -3841,6 +3846,20 @@
       // form it is the only place the rule can be asked at all, because the task
       // it would be asked of does not exist yet.
       function attachmentFileRefusal(chosen, held) {
+        // Asked first, because the server asks it first: core validates the
+        // name before the size, and a refusal that named the wrong reason would
+        // be a refusal the reader cannot act on. Counted in bytes through the
+        // encoder rather than by `length`, because the ceiling is on the stored
+        // UTF-8 and a name of emoji or kanji is several bytes a character —
+        // which is exactly the file this check exists for, since one that is
+        // plainly too long by eye never gets this far.
+        if (attachmentNameLimit) {
+          const named = new TextEncoder().encode(chosen.name || "").length;
+          if (named > attachmentNameLimit) {
+            return chosen.name + " has a name of " + named + " bytes and must not exceed " +
+              attachmentNameLimit + "; rename it before attaching it.";
+          }
+        }
         if (attachmentFileLimit && chosen.size > attachmentFileLimit) {
           const [size, ceiling] = comparableSizes(chosen.size, attachmentFileLimit);
           return chosen.name + " is " + size + " and must not exceed " + ceiling +
@@ -4142,6 +4161,12 @@
           const remove = panel.claim(threadButton("Remove"));
           remove.className += " attachment__remove";
           remove.addEventListener("click", () => {
+            // Asked as well as disabled, for the reason the adders ask it: a
+            // run in flight is walking this list as it stood when it started,
+            // so a row taken out mid-walk is a row that gets attached anyway
+            // while the reader watches it leave the screen. The disabled
+            // attribute is what a browser honours; this is what makes it true.
+            if (panel.busy) return;
             draftState.items = draftState.items.filter((held) => held !== item);
             panel.report("");
             render();
@@ -4762,6 +4787,11 @@
           text(save, "Retry attachments");
           openCreatedTask.href = taskPath(recovery.taskID);
           openCreatedTask.hidden = false;
+          // Handed back to the reader: the walk is over, and the rows it left
+          // behind are ones they have to be able to remove or add to. Released
+          // before the render, because a render claims its controls against
+          // whatever the panel's busy state is at the time.
+          attachmentDraftPanel.setBusy(false);
           attachmentDraftPanel.render();
           publishOutstandingAttachments();
           reportOutstandingAttachments(recovery.taskID, outcome, recovery);
@@ -4835,6 +4865,14 @@
           let createdDurably = false;
           save.disabled = true;
           if (isNew) relationshipController.setBusy(true);
+          // Frozen for the whole run, exactly as the retry below freezes it and
+          // for a sharper reason. persistAttachmentDrafts walks the list as it
+          // stood when it started, so a file staged while it is running is one
+          // it will never see: it would sit in the list reading "3 staged",
+          // upload nothing, fail nothing — and a run with no failures navigates,
+          // which takes the File with the node and reports not one word. A list
+          // that cannot change under the walk cannot lose anything that way.
+          if (isNew) attachmentDraftPanel.setBusy(true);
           text(result, "");
           try {
             const document = await mutateTask(isNew ? "POST" : "PATCH", isNew ? "/api/tasks" : "/api/tasks/" + encodeURIComponent(task.id), values);
@@ -4996,6 +5034,10 @@
             if (!createdDurably) {
               save.disabled = false;
               if (isNew) relationshipController.setBusy(false);
+              // The server made no task, so everything staged is still a draft
+              // this form is holding and the reader has to be able to change it
+              // before saving again.
+              if (isNew) attachmentDraftPanel.setBusy(false);
             } else if (outstandingAttachments) {
               // The form is staying, so its Save has to work — as the retry it
               // now says it is. The relationship sidebar does not come back: its

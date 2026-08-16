@@ -4433,6 +4433,8 @@ const boardAttachmentLimit = ` + strconv.Itoa(core.MaxAttachmentFileBytes) + `;
 // the staging control on a create form refuses what the server would refuse, and
 // a number invented here would be testing a rule core does not have.
 const boardAttachmentTotalLimit = ` + strconv.Itoa(core.MaxLiveAttachmentBytes) + `;
+// The ceiling on a file attachment's name, in bytes, for the same reason again.
+const boardAttachmentNameLimit = ` + strconv.Itoa(core.MaxAttachmentNameBytes) + `;
 // The media types the download route hands back inline, as the server renders
 // them into the page. The markdown renderer draws an attachment reference as an
 // image only for one of these, so a harness that invented the list would be
@@ -4652,6 +4654,7 @@ boardView.dataset.defaultStatus = boardDefaultStatus;
 boardView.dataset.vocabularyHead = boardVocabularyHead;
 boardView.dataset.attachmentLimit = String(boardAttachmentLimit);
 boardView.dataset.attachmentTotalLimit = String(boardAttachmentTotalLimit);
+boardView.dataset.attachmentNameLimit = String(boardAttachmentNameLimit);
 boardView.dataset.inlineMedia = boardInlineMedia;
 // The region that holds tasks whose status matches no column. It is always in
 // the document and hidden while empty, because the status that strands a task

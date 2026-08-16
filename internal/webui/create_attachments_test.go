@@ -2,6 +2,7 @@ package webui
 
 import (
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -244,6 +245,56 @@ setTimeout(async () => {
 	}
 }
 
+// A name too long for core is refused as it is staged, and the ceiling is in
+// bytes rather than in characters.
+//
+// This is the refusal a naive `length` would never make: 85 Japanese characters
+// are 255 bytes of stored name and 85 of anything a reader counts, so the file
+// that trips this is one that looks entirely ordinary. Left to the server it is
+// the exact outcome the pre-checks exist to prevent — a task created and an
+// upload refused after it.
+func TestHandlerClientRefusesAFileNameTooLongInBytes(t *testing.T) {
+	node := requireNode(t)
+	// Three bytes a character in UTF-8, so this is well over the ceiling while
+	// being far under it by any count of characters.
+	overlong := strings.Repeat("あ", core.MaxAttachmentNameBytes/3+1) + ".png"
+	program := createAttachmentProgram(t, `
+setTimeout(async () => {
+  await openCreateForm();
+  const name = `+strconv.Quote(overlong)+`;
+  const bytes = new TextEncoder().encode(name).length;
+  if (bytes <= `+strconv.Itoa(core.MaxAttachmentNameBytes)+`) {
+    throw new Error("the test's own name is not over the ceiling: " + bytes + " bytes");
+  }
+  if (name.length > `+strconv.Itoa(core.MaxAttachmentNameBytes)+`) {
+    throw new Error("the test's name is over the ceiling by character count too, so it proves nothing");
+  }
+  await stageFiles([new TestFile(name, 1024, "x")]);
+
+  const reported = panelStatusText("attachments");
+  if (!reported.includes("rename it")) {
+    throw new Error("an over-long name was answered with " + JSON.stringify(reported));
+  }
+  if (!reported.includes(bytes + " bytes") ||
+      !reported.includes("`+strconv.Itoa(core.MaxAttachmentNameBytes)+`")) {
+    throw new Error("the refusal does not state the count against the ceiling: " + JSON.stringify(reported));
+  }
+  if (stagedRows().length !== 0) throw new Error("a file with an unstorable name was staged");
+  if (readCalls.length !== 0) throw new Error("a file with an unstorable name was read");
+
+  // A name that is long in characters and inside the ceiling in bytes is fine,
+  // which is the half of this rule a byte count is needed to get right.
+  await stageFiles([new TestFile("a".repeat(`+strconv.Itoa(core.MaxAttachmentNameBytes)+`), 1024, "x")]);
+  if (stagedRows().length !== 1) {
+    throw new Error("a name exactly at the ceiling was refused: " + JSON.stringify(panelStatusText("attachments")));
+  }
+}, 0);
+`)
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute the over-long name refusal: %v\n%s", err, output)
+	}
+}
+
 // A link core will never store is refused as it is staged. The task page leaves
 // this to the server deliberately, because there its refusal costs one request;
 // here it would cost a task made and an attachment missing.
@@ -351,6 +402,162 @@ setTimeout(async () => {
 	}
 }
 
+// The staged list cannot change while the run is walking it.
+//
+// persistAttachmentDrafts reads the list once, at entry, so anything staged
+// after that is invisible to it — and invisible in the worst possible way: the
+// row sits on the screen saying "3 staged", uploads nothing, fails nothing, and
+// a run with no failures navigates. The File would leave with the node and this
+// client would not have said one word about it. So the panel is frozen for the
+// whole run, exactly as the relationship sidebar beside it is.
+func TestHandlerClientFreezesTheStagedListWhileTheCreateRunWalksIt(t *testing.T) {
+	node := requireNode(t)
+	mutation, refreshed := createdTaskJSON(t)
+	program := createAttachmentProgram(t, `
+const created = `+mutation+`;
+const refreshed = `+refreshed+`;
+setTimeout(async () => {
+  const form = await openCreateForm();
+  let releaseFirstUpload = null;
+  let uploads = 0;
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if (url === "/api/tasks" && options.method === "POST") {
+      return { ok: true, json: async () => created };
+    }
+    if (options.method === "POST") {
+      uploads += 1;
+      // The first upload is held open, which is the window a reader has to
+      // touch the list while the run is inside it.
+      if (uploads === 1) {
+        return { ok: true, json: () => new Promise((resolve) => { releaseFirstUpload = () => resolve(created); }) };
+      }
+      return { ok: true, json: async () => created };
+    }
+    if (url === "/api/tasks?deleted=true") {
+      return { ok: true, json: async () => ({ format: "workbook.tasks", version: 1, tasks: [] }) };
+    }
+    return { ok: true, json: async () => refreshed };
+  };
+
+  typeTitle(form, "Task with attachments");
+  await stageFiles([new TestFile("first.log", 5, "first"), new TestFile("second.log", 6, "second")]);
+  if (stagedNames().length !== 2) throw new Error("the two files did not stage");
+
+  const settled = form.eventListeners.submit({ preventDefault() {} });
+  for (let turn = 0; turn < 200 && !releaseFirstUpload; turn += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  if (!releaseFirstUpload) throw new Error("the first upload never opened, so nothing was observed mid-run");
+
+  // Every control the panel is drawing is disabled, which is what a browser
+  // honours.
+  const live = findElements(panelSection("attachments"), (element) => element.tagName === "BUTTON")
+    .filter((button) => !button.disabled);
+  if (live.length !== 0) {
+    throw new Error("controls stayed live while the run walked the list: " +
+      JSON.stringify(live.map((button) => button.textContent)));
+  }
+
+  // And a file staged anyway does not join a list the run has already read.
+  await stageFiles([new TestFile("late.log", 9, "late")]);
+  const during = stagedNames();
+  if (during.length !== 2 || during.includes("late.log")) {
+    throw new Error("a file staged mid-run joined the list: " + JSON.stringify(during));
+  }
+  // A link is the same list and the same answer.
+  await stageLink("https://example.test/late");
+  if (stagedNames().length !== 2) {
+    throw new Error("a link staged mid-run joined the list: " + JSON.stringify(stagedNames()));
+  }
+
+  releaseFirstUpload();
+  await settled;
+
+  if (uploads !== 2) throw new Error("uploads = " + uploads + ", want the two that were staged");
+  const sentNames = fetchCalls
+    .filter((call) => call.options.method === "POST" && call.url !== "/api/tasks")
+    .map((call) => JSON.parse(call.options.body).name);
+  if (sentNames.join(",") !== "first.log,second.log") {
+    throw new Error("the run sent " + JSON.stringify(sentNames));
+  }
+  // The landing is the proof that the silent case is gone: a run that quietly
+  // skipped a staged file would arrive here with nothing to report either.
+  if (main.firstElementChild !== boardView) throw new Error("the finished create did not land on the board");
+  if (!notice.hidden) throw new Error("a create that lost nothing reported a loss: " + notice.textContent);
+}, 0);
+`)
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute the frozen staged list: %v\n%s", err, output)
+	}
+}
+
+// Removing a row while the run is walking the list does not take it out from
+// under the walk. The row would leave the screen and be attached anyway, which
+// is a reader watching this client do the opposite of what they asked.
+func TestHandlerClientRefusesToRemoveAStagedRowMidRun(t *testing.T) {
+	node := requireNode(t)
+	mutation, refreshed := createdTaskJSON(t)
+	program := createAttachmentProgram(t, `
+const created = `+mutation+`;
+const refreshed = `+refreshed+`;
+setTimeout(async () => {
+  const form = await openCreateForm();
+  let releaseFirstUpload = null;
+  let uploads = 0;
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if (url === "/api/tasks" && options.method === "POST") {
+      return { ok: true, json: async () => created };
+    }
+    if (options.method === "POST") {
+      uploads += 1;
+      if (uploads === 1) {
+        return { ok: true, json: () => new Promise((resolve) => { releaseFirstUpload = () => resolve(created); }) };
+      }
+      return { ok: true, json: async () => created };
+    }
+    if (url === "/api/tasks?deleted=true") {
+      return { ok: true, json: async () => ({ format: "workbook.tasks", version: 1, tasks: [] }) };
+    }
+    return { ok: true, json: async () => refreshed };
+  };
+
+  typeTitle(form, "Task with attachments");
+  await stageFiles([new TestFile("first.log", 5, "first"), new TestFile("second.log", 6, "second")]);
+  const settled = form.eventListeners.submit({ preventDefault() {} });
+  for (let turn = 0; turn < 200 && !releaseFirstUpload; turn += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  if (!releaseFirstUpload) throw new Error("the first upload never opened, so nothing was observed mid-run");
+
+  const second = stagedRows()[1];
+  const remove = rowControl(second, "Remove");
+  if (!remove.disabled) throw new Error("the Remove on a row the run has not reached yet is still live");
+  // Pressed anyway, which a disabled attribute alone would not stop if the
+  // press arrived some other way.
+  remove.eventListeners.click();
+  if (stagedNames().length !== 2) {
+    throw new Error("a row was taken out from under the walk: " + JSON.stringify(stagedNames()));
+  }
+
+  releaseFirstUpload();
+  await settled;
+  // The row that could not be removed was attached, which is the honest
+  // outcome: it was already on its way when the reader asked.
+  const sentNames = fetchCalls
+    .filter((call) => call.options.method === "POST" && call.url !== "/api/tasks")
+    .map((call) => JSON.parse(call.options.body).name);
+  if (sentNames.join(",") !== "first.log,second.log") {
+    throw new Error("the run sent " + JSON.stringify(sentNames));
+  }
+}, 0);
+`)
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute the mid-run removal refusal: %v\n%s", err, output)
+	}
+}
+
 // A refused create attaches nothing. There is no task to attach to, so nothing
 // is read, nothing is sent, and everything staged is still staged — including
 // the Save that means "create", because no task was made to retry against.
@@ -395,6 +602,14 @@ setTimeout(async () => {
     throw new Error("a refused create re-captioned Save to " + JSON.stringify(saveButton().textContent));
   }
   if (saveButton().disabled) throw new Error("a refused create left Save disabled");
+  // And the list is the reader's again: the run froze it, and a run that made
+  // no task has to hand it back or the draft cannot be changed before a retry.
+  const frozen = findElements(panelSection("attachments"), (element) => element.tagName === "BUTTON")
+    .filter((button) => button.disabled);
+  if (frozen.length !== 0) {
+    throw new Error("a refused create left the staged list frozen: " +
+      JSON.stringify(frozen.map((button) => button.textContent)));
+  }
   await form.eventListeners.submit({ preventDefault() {} });
   if (creates !== 2) throw new Error("saving again after a refused create attempted " + creates + " creates");
 }, 0);
@@ -482,6 +697,14 @@ setTimeout(async () => {
     throw new Error("Save says " + JSON.stringify(saveButton().textContent));
   }
   if (saveButton().disabled) throw new Error("the retry control is disabled");
+  // The list is handed back too, or the reader cannot remove what they have
+  // given up on or add what they meant to bring.
+  const stillFrozen = findElements(panelSection("attachments"), (element) => element.tagName === "BUTTON")
+    .filter((button) => button.disabled);
+  if (stillFrozen.length !== 0) {
+    throw new Error("the outstanding list stayed frozen: " +
+      JSON.stringify(stillFrozen.map((button) => button.textContent)));
+  }
   const open = openTaskLink();
   if (!open || open.hidden || open.href !== "/tasks/" + encodeURIComponent(`+strconv.Quote(createAttachmentTaskID)+`)) {
     throw new Error("there is no way from this form to the task it made");
