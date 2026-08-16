@@ -907,9 +907,13 @@ setTimeout(() => {
   if (!form || !editor || !sidebar || !actions) {
     throw new Error("shared task regions did not render");
   }
+  // A New Task form's sidebar holds the attachments the create is carrying as
+  // well, so it says so. A task that already exists draws those in a panel of
+  // their own below the form and its sidebar names the two regions it has.
   if (sidebar.getAttribute("aria-label") !==
-      "Task properties and relationships") {
-    throw new Error("sidebar does not identify its contents");
+      "Task properties, attachments and relationships") {
+    throw new Error("sidebar does not identify its contents: " +
+      JSON.stringify(sidebar.getAttribute("aria-label")));
   }
 
   const groupFor = (headingText) => {
@@ -4425,6 +4429,15 @@ const boardVocabularyHead = ` + strconv.Quote(vocabularyHead) + `;
 // upload control refuses what the real one refuses rather than what a number
 // invented here would.
 const boardAttachmentLimit = ` + strconv.Itoa(core.MaxAttachmentFileBytes) + `;
+// The ceiling on what one task's attached files add up to, for the same reason:
+// the staging control on a create form refuses what the server would refuse, and
+// a number invented here would be testing a rule core does not have.
+const boardAttachmentTotalLimit = ` + strconv.Itoa(core.MaxLiveAttachmentBytes) + `;
+// The ceiling on a file attachment's name, in bytes, for the same reason again.
+const boardAttachmentNameLimit = ` + strconv.Itoa(core.MaxAttachmentNameBytes) + `;
+// A link's display text and its destination, in bytes, for the same reason.
+const boardAttachmentLabelLimit = ` + strconv.Itoa(core.MaxAttachmentLabelBytes) + `;
+const boardAttachmentURLLimit = ` + strconv.Itoa(core.MaxAttachmentURLBytes) + `;
 // The media types the download route hands back inline, as the server renders
 // them into the page. The markdown renderer draws an attachment reference as an
 // image only for one of these, so a harness that invented the list would be
@@ -4643,6 +4656,10 @@ const boardLists = boardStatusDefinitions.map(([status, label]) => {
 boardView.dataset.defaultStatus = boardDefaultStatus;
 boardView.dataset.vocabularyHead = boardVocabularyHead;
 boardView.dataset.attachmentLimit = String(boardAttachmentLimit);
+boardView.dataset.attachmentTotalLimit = String(boardAttachmentTotalLimit);
+boardView.dataset.attachmentNameLimit = String(boardAttachmentNameLimit);
+boardView.dataset.attachmentLabelLimit = String(boardAttachmentLabelLimit);
+boardView.dataset.attachmentUrlLimit = String(boardAttachmentURLLimit);
 boardView.dataset.inlineMedia = boardInlineMedia;
 // The region that holds tasks whose status matches no column. It is always in
 // the document and hidden while empty, because the status that strands a task

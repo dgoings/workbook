@@ -492,6 +492,26 @@ type pageData struct {
 	// second copy of a ceiling core owns — one that would go on naming the old
 	// number the day core's changed.
 	AttachmentFileLimit int64
+	// AttachmentTotalLimit is core's ceiling on what one task's live file
+	// attachments add up to, rendered into the page for exactly the reason the
+	// per-file ceiling above is. It is the ceiling a create form has to ask
+	// before the task exists: a reader staging six screenshots is over it long
+	// before any of them is sent, and the alternative is a create that succeeds
+	// followed by uploads that do not.
+	AttachmentTotalLimit int64
+	// AttachmentNameLimit is core's ceiling on a file attachment's name, in
+	// bytes, rendered into the page for the reason the two above are — and it is
+	// bytes rather than characters, which is the whole reason the client cannot
+	// carry its own copy of the rule. An 85-character Japanese file name is over
+	// a 255-byte ceiling and under every count a reader would make of it.
+	AttachmentNameLimit int
+	// AttachmentLabelLimit and AttachmentURLLimit are core's ceilings on a link
+	// attachment's display text and its destination, in bytes, rendered into the
+	// page for the reason the name ceiling above is. A link staged on a create
+	// form is refused by the server only after the task has been made, so these
+	// are the only place the reader can hear about them in time.
+	AttachmentLabelLimit int
+	AttachmentURLLimit   int
 	// InlineImageMediaTypes are the media types the attachment route serves
 	// inline, space separated, rendered into the page for the reason the ceiling
 	// above is: the markdown renderer draws an attachment reference as an <img>
@@ -1038,6 +1058,10 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 		DefaultStatus:         vocabulary.Vocabulary.Default(),
 		VocabularyHead:        vocabulary.Head,
 		AttachmentFileLimit:   core.MaxAttachmentFileBytes,
+		AttachmentTotalLimit:  core.MaxLiveAttachmentBytes,
+		AttachmentNameLimit:   core.MaxAttachmentNameBytes,
+		AttachmentLabelLimit:  core.MaxAttachmentLabelBytes,
+		AttachmentURLLimit:    core.MaxAttachmentURLBytes,
 		InlineImageMediaTypes: strings.Join(InlineAttachmentMediaTypes(), " "),
 		StatusTags:            core.StatusTags(),
 		Administrable:         handler.administrable(),
