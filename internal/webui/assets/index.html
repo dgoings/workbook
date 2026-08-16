@@ -529,7 +529,10 @@
        the padding and the background this one would otherwise repeat. It keeps
        the rule above it, because it is a section of that sidebar in the way
        Properties is and reads as one. */
-    .task-panel--staged { padding: .85rem 0 0; background: none; }
+    /* The horizontal padding is given back by the negative margin, so the
+       content keeps the sidebar's full width while the drop outline has a few
+       pixels to sit in rather than resting on the text. */
+    .task-panel--staged { padding: .85rem .5rem .5rem; margin: 0 -.5rem; background: none; }
     /* Every grid inside it bounded at the column it is in.
        These are the same single-column grids the task page draws, and there
        they sit in a panel as wide as the page. In a 20rem sidebar they do not:
@@ -612,6 +615,20 @@
     .attachment__failure { grid-column: 1; margin: .1rem 0 0; color: #9c2f25; font-size: .74rem; overflow-wrap: anywhere; }
     /* The two adders, each its own form: see the client for why one form with
        two buttons in it was a bug rather than a shortcut. */
+    /* The drop target around the attachment controls. It is the whole panel,
+       because a reader dragging a file out of Finder aims at the list of things
+       already attached rather than at the chooser beside it.
+
+       Drawn with an outline rather than a border so nothing on the panel moves
+       when it lights up: a border would take a few pixels the layout does not
+       have spare, and a target that reflows as the cursor crosses it is a
+       target that shifts out from under the drop. Inset, so it reads as this
+       panel rather than as the page. */
+    [data-attachment-drop][data-drop-state="active"] { outline: 2px dashed #2457d6; outline-offset: -3px; background: #eef3ff; }
+    /* Refused: the same shape in the colour every refusal on this page uses, so
+       a reader who cannot drop right now can see that without reading. */
+    [data-attachment-drop][data-drop-state="refused"] { outline: 2px dashed #9c2f25; outline-offset: -3px; }
+    .attachment-add__hint { margin: 0; color: #56647a; font-size: .72rem; }
     .attachment-add { display: grid; gap: .55rem; padding-top: .1rem; }
     .attachment-add__group { display: grid; gap: .3rem; margin: 0; }
     .attachment-add input[type="text"], .attachment-add input[type="url"] { width: 100%; border: 1px solid #9eafc5; border-radius: 4px; background: #fff; color: #172033; font: inherit; font-size: .82rem; padding: .45rem .55rem; }
@@ -3792,7 +3809,14 @@
         const addFile = threadButton(config.fileAction, true);
         addFile.type = "submit";
         fileActions.append(addFile);
-        fileGroup.append(fileLabel, file, fileActions);
+        // A drop target nobody knows about is a chooser. Said once, in the group
+        // it belongs to, rather than drawn as a dashed box taking up room the
+        // sidebar has not got.
+        const dropHint = document.createElement("p");
+        dropHint.className = "attachment-add__hint";
+        dropHint.dataset.attachmentDropHint = "";
+        text(dropHint, "Or drop files anywhere in this panel.");
+        fileGroup.append(fileLabel, file, dropHint, fileActions);
         const linkGroup = document.createElement("form");
         linkGroup.className = "attachment-add__group";
         linkGroup.dataset.attachmentLinkForm = "";
@@ -3841,6 +3865,138 @@
           clearFile() { file.value = ""; },
           clearLink() { url.value = ""; caption.value = ""; }
         };
+      }
+      // ─── Dropping files onto the attachment controls ────────────────────────
+      //
+      // A drop is the same intent as choosing a file, so it arrives at the same
+      // door: acceptFiles(). Both surfaces already had one — the task page
+      // uploads what it is handed, the create form stages it — and neither had
+      // to learn anything to gain this. Every ceiling a chosen file is asked, a
+      // dropped file is asked, because they are the same call.
+      //
+      // Whether a drag is one this zone takes is decided in one place and asked
+      // by dragenter and dragover alike. That is not tidiness. A browser takes
+      // the accept flag from whichever of the two it dispatched last, and Chrome
+      // dispatches dragenter rather than dragover whenever the element under the
+      // cursor changes — which, inside a panel made of rows, inputs and buttons,
+      // is most of the time a cursor is moving. This repo has already paid for
+      // that once on the board, where a card released while its column was
+      // scrolling was silently discarded; dragDestination() carries the
+      // measurement. Two handlers answering one question in two places is how
+      // they come to disagree, so there is one question here.
+      function draggingFiles(event) {
+        const transfer = event.dataTransfer;
+        if (!transfer || !transfer.types) return false;
+        // A DOMStringList in one browser and a frozen array in another. indexOf
+        // through Array's prototype answers both, which `includes` does not.
+        return Array.prototype.indexOf.call(transfer.types, "Files") >= 0;
+      }
+      // The files a drop is carrying, with folders counted rather than mistaken
+      // for them.
+      //
+      // A folder arrives in `files` looking like a file — it has a name, and on
+      // some platforms a size — and only the entry API tells them apart. Left
+      // undetected it stages, uploads, and fails on the read: a loud failure,
+      // several seconds later, over something this page could have answered the
+      // instant it was dropped.
+      function droppedFiles(transfer) {
+        const files = [];
+        let folders = 0;
+        const items = transfer && transfer.items;
+        if (items && items.length) {
+          for (const item of items) {
+            if (item.kind !== "file") continue;
+            const entry = typeof item.webkitGetAsEntry === "function" ? item.webkitGetAsEntry() : null;
+            if (entry && entry.isDirectory) {
+              folders += 1;
+              continue;
+            }
+            const file = item.getAsFile();
+            if (file) files.push(file);
+          }
+          return { files, folders };
+        }
+        // No item list to ask. Every file still arrives, and a folder among them
+        // is refused by the size check the way an empty file is — later than
+        // here, but refused, and never attached.
+        return { files: [...((transfer && transfer.files) || [])], folders: 0 };
+      }
+      function skippedFolderNote(folders) {
+        return folders === 1
+          ? "One folder was skipped: a folder cannot be attached, only the files inside it."
+          : folders + " folders were skipped: a folder cannot be attached, only the files inside it.";
+      }
+      function attachmentDropZone(zone, config) {
+        zone.dataset.attachmentDrop = "";
+        // The one decision. "" is a drag this zone has nothing to do with — a
+        // card being dragged across the page, or text — and it is left entirely
+        // alone, so the board's own machinery sees exactly what it saw before.
+        function dropDecision(event) {
+          if (!draggingFiles(event)) return "";
+          return config.busy() ? "refused" : "active";
+        }
+        function showState(state) {
+          if (state) zone.dataset.dropState = state;
+          else delete zone.dataset.dropState;
+        }
+        function answerDrag(event) {
+          const decision = dropDecision(event);
+          if (!decision) return;
+          // Answered even when it is refused. Without preventDefault the browser
+          // handles the drop itself and navigates the window to the file — which
+          // over a create form holding staged files is the worst outcome
+          // available, and it is what happens by default.
+          event.preventDefault();
+          if (event.dataTransfer) {
+            event.dataTransfer.dropEffect = decision === "active" ? "copy" : "none";
+          }
+          showState(decision);
+        }
+        zone.addEventListener("dragenter", answerDrag);
+        zone.addEventListener("dragover", answerDrag);
+        zone.addEventListener("dragleave", (event) => {
+          // This zone is full of elements, and rows inside it are replaced as
+          // the list changes, so a cursor crossing from one child to the next
+          // leaves a child without leaving the zone. Answering every leave would
+          // strobe the highlight under a cursor that has not gone anywhere.
+          //
+          // The two questions the board's own leave handler asks, in its order:
+          // what the cursor moved onto, and where the cursor is. The second is
+          // what carries the browsers that report no relatedTarget on a
+          // dragleave at all, where the first cannot tell a churn from a
+          // departure.
+          if (zone.contains(event.relatedTarget)) return;
+          if (cursorWithin(zone, event)) return;
+          showState("");
+        });
+        zone.addEventListener("drop", (event) => {
+          if (!draggingFiles(event)) return;
+          event.preventDefault();
+          showState("");
+          if (config.busy()) {
+            // The same answer a mid-run add gets, said out loud because a drop
+            // has no disabled button to have been stopped by.
+            config.report("Those attachments are still being sent; wait for that to finish and drop again.");
+            return;
+          }
+          const dropped = droppedFiles(event.dataTransfer);
+          if (dropped.files.length === 0) {
+            config.report(dropped.folders
+              ? skippedFolderNote(dropped.folders)
+              : "That drop carried no file to attach.");
+            return;
+          }
+          return takeDroppedFiles(dropped);
+        });
+        async function takeDroppedFiles(dropped) {
+          await config.acceptFiles(dropped.files);
+          if (!dropped.folders) return;
+          // Said after the files are dealt with, because acceptFiles clears this
+          // line as it starts — and never over the top of what it wrote there. A
+          // file that was too large to attach is a better thing to be told about
+          // than a folder that was never attachable at all.
+          if (!config.status()) config.report(skippedFolderNote(dropped.folders));
+        }
       }
       // What a task's attachments weigh, which is the unit the total ceiling is
       // in: a link stores nothing.
@@ -3948,6 +4104,15 @@
           acceptLink: (destination, label) => attachLink(destination, label)
         });
         panel.section.append(adder.region, panel.status);
+        // The whole section takes a drop, not just the chooser inside it: a
+        // reader dragging a screenshot out of Finder aims at the list of things
+        // already attached, which is the biggest and most obvious part of this.
+        attachmentDropZone(panel.section, {
+          busy: () => panel.busy,
+          report: (message) => panel.report(message),
+          status: () => panel.status.textContent,
+          acceptFiles: (files) => acceptFiles(files)
+        });
 
         let attachments = [];
         function attachmentPath(attachmentID) {
@@ -4146,6 +4311,16 @@
           acceptLink: (destination, label) => acceptLink(destination, label)
         });
         panel.section.append(adder.region, panel.status);
+        // The same zone over the same controls. A drop here stages, because
+        // that is what acceptFiles does on this surface — and it is refused
+        // while a create run is walking the list, for the reason a mid-run add
+        // is: the walk has already read past anything that arrives now.
+        attachmentDropZone(panel.section, {
+          busy: () => panel.busy,
+          report: (message) => panel.report(message),
+          status: () => panel.status.textContent,
+          acceptFiles: (files) => acceptFiles(files)
+        });
         // Take these files and stage them. The entry point a drop target hands
         // a DataTransfer's files to, and the one the chooser goes through, so
         // both arrive by the same door and are judged by the same rules.
@@ -7687,6 +7862,13 @@
       function dragDestination(event) {
         const target = dropTarget(event);
         if (!target || !activeDrag) return null;
+        // A file dragged in from the desktop is not a card, whatever it is
+        // over. activeDrag above is usually enough to say so — this page is the
+        // only thing that sets it — but "usually" is doing real work there: a
+        // dragend that never arrived leaves it standing, and then the next file
+        // dropped on a column would move a card the reader had finished with.
+        // The drag says what it is carrying, so that is what decides.
+        if (draggingFiles(event)) return null;
         if (dropsIntoDeleted(target)) {
           // A card already in the column has nowhere to arrive: deleting a
           // tombstone is not a change anyone asked for.
@@ -7803,6 +7985,9 @@
         stopDragScroll();
         const target = dropTarget(event);
         if (!target || !activeDrag) return;
+        // Asked again here, for the reason dragDestination asks it: what a drop
+        // is carrying is what decides whether it is a card being moved.
+        if (draggingFiles(event)) return;
         if (dropsIntoDeleted(target)) return dropIntoDeleted(event, activeDrag.taskId);
         if (!lists.has(target.dataset.dropStatus)) return;
         event.preventDefault();
