@@ -442,6 +442,33 @@ setTimeout(async () => {
     throw new Error("a file refused mid-run was staged anyway");
   }
 
+  // The guard inside the drop handler, asked directly.
+  //
+  // No browser reaches it while the effect is "none" — that is the whole
+  // finding above — so it is kept as a guard rather than as a message, and a
+  // guard nothing exercises is a guard that quietly stops working. This is the
+  // call a browser does not make.
+  //
+  // What it uniquely protects is the panel's own line. A file cannot be staged
+  // mid-run either way, because acceptFiles refuses while busy; what only this
+  // guard stops is everything the handler would otherwise say on the way there
+  // — a folder note, or "that drop carried no file" — written over a panel that
+  // belongs to the run. So the drop that proves it is one with something to
+  // say.
+  const before = stagedNames().length;
+  const quiet = panelStatusText("attachments");
+  const forced = dragEventOn(zone, fileTransfer([new TestFile("forced.log", 5, "forced")], 1));
+  await zone.eventListeners.drop(forced);
+  if (forced.prevented !== 1) throw new Error("the drop handler handed a busy drop to the browser");
+  if (stagedNames().length !== before || stagedNames().includes("forced.log")) {
+    throw new Error("a drop delivered mid-run pushed a file into the list the run is walking: " +
+      JSON.stringify(stagedNames()));
+  }
+  if (panelStatusText("attachments") !== quiet) {
+    throw new Error("a drop delivered mid-run wrote over the panel the run is using: " +
+      JSON.stringify(panelStatusText("attachments")));
+  }
+
   releaseFirstUpload();
   await settled;
   const uploaded = fetchCalls
