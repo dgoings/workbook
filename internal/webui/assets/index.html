@@ -6380,15 +6380,6 @@
           : { status, kind };
         renderVocabularyPanel();
       }
-      // Whether this drag is carrying files from outside the page rather than a
-      // row from inside it. A reader who drops a file on this panel is not
-      // reordering anything, and the panel must neither take the drop nor
-      // swallow it: the flag that says "I will take this" is the same flag that
-      // stops it reaching whatever else on the page might want it.
-      function draggingPanelFiles(event) {
-        const types = event && event.dataTransfer && event.dataTransfer.types;
-        return Boolean(types && [...types].includes("Files"));
-      }
       // Where this drag may be dropped on the status list, or null if it may not
       // be dropped here. Asked by dragenter, dragover and drop alike.
       //
@@ -6410,7 +6401,12 @@
       // this returns null for, and they are the rows a handler asking the easier
       // question — "is there a row here?" — would wrongly accept.
       function panelDropDestination(event, row, status) {
-        if (draggingPanelFiles(event)) return null;
+        // A reader dropping a file here is not reordering anything, and the
+        // panel must neither take it nor swallow it: the flag that says "I will
+        // take this" is the same flag that stops the drop reaching whatever
+        // else on the page wants it. Same question the board's own handlers
+        // ask, through the same function.
+        if (draggingFiles(event)) return null;
         // No panel drag is live: this is somebody else's gesture passing over,
         // a board card or a drag from another window, and the list is not its
         // business.
@@ -6498,7 +6494,31 @@
         };
         item.addEventListener("dragenter", answerPanelDrag);
         item.addEventListener("dragover", answerPanelDrag);
-        item.addEventListener("dragleave", () => { delete item.dataset.dropTarget; });
+        // A leave that is not a departure leaves the mark alone.
+        //
+        // A browser pairs a dragleave with every dragenter it sends: the board's
+        // own measurement in this file is ten dragenters, ten dragleaves and no
+        // dragover at all. A bare handler here would erase, on each of those
+        // leaves, the mark the matching dragenter had just drawn — so under the
+        // churn this whole change is about, the reader would still be shown
+        // nothing about where the row is going to land.
+        //
+        // It does not take churn, either. A row is a name, some chips and four
+        // buttons, so a cursor crossing any of them fires dragenter on the
+        // child and dragleave on the row, and the mark would blink out with the
+        // cursor still sitting inside the row it names.
+        //
+        // Two questions, because it takes both to cover the browsers.
+        // relatedTarget names what the cursor moved onto and settles it on
+        // Chrome; Firefox and Safari send none on a dragleave, and there the
+        // cursor's own coordinates decide, which every browser reports. What is
+        // left — a cursor gone somewhere else entirely — is the departure, and
+        // that still clears the mark.
+        item.addEventListener("dragleave", (event) => {
+          if (item.contains(event.relatedTarget)) return;
+          if (cursorWithin(item, event)) return;
+          delete item.dataset.dropTarget;
+        });
         item.addEventListener("drop", (event) => {
           // The same rule again rather than a second reading of it. A drop this
           // panel refuses is left alone entirely — not marked, not prevented,
