@@ -88,8 +88,11 @@ setTimeout(async () => {
   await intervalCallback();
   if (deletedColumn()) throw new Error("the board drew the Deleted column before anyone asked for it");
   if (deletedToggle.hidden) throw new Error("the board did not reveal the Deleted column's toggle");
-  if (deletedToggle.textContent !== "Deleted tasks: hidden" || deletedToggle.href !== "/?deleted=1") {
-    throw new Error("the toggle does not offer the column: " + deletedToggle.textContent + " " + deletedToggle.href);
+  if (deletedLabel.textContent !== "Show Deleted" || deletedToggle.href !== "/?deleted=1") {
+    throw new Error("the toggle does not offer the column: " + deletedLabel.textContent + " " + deletedToggle.href);
+  }
+  if (deletedToggle.getAttribute("aria-checked") !== "false") {
+    throw new Error("the toggle does not report the column absent: " + deletedToggle.getAttribute("aria-checked"));
   }
   reportTracks("hidden");
 
@@ -118,8 +121,11 @@ setTimeout(async () => {
       if (node !== held[index][at]) throw new Error("showing the column replaced a card node");
     });
   });
-  if (deletedToggle.textContent !== "Deleted tasks: shown" || deletedToggle.href !== "/") {
-    throw new Error("the toggle does not offer to hide the column: " + deletedToggle.textContent + " " + deletedToggle.href);
+  if (deletedLabel.textContent !== "Hide Deleted" || deletedToggle.href !== "/") {
+    throw new Error("the toggle does not offer to hide the column: " + deletedLabel.textContent + " " + deletedToggle.href);
+  }
+  if (deletedToggle.getAttribute("aria-checked") !== "true") {
+    throw new Error("the toggle does not report the column drawn: " + deletedToggle.getAttribute("aria-checked"));
   }
   reportTracks("shown");
 

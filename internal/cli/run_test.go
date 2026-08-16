@@ -991,7 +991,11 @@ func TestREADMEImplementedCommands(t *testing.T) {
 		"GET /api/sync",
 		"PUT /api/sync",
 		"per-task queue",
-		"Publishing:",
+		// The indicator is a switch now rather than a sentence, so what the
+		// README has to carry is the pair of words it offers.
+		"publishing switch",
+		"**Push**",
+		"**Publish**",
 	} {
 		if !strings.Contains(readme, required) {
 			t.Errorf("README web board documentation is missing %q", required)
