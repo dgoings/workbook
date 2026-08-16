@@ -811,7 +811,7 @@
          the script needs before its first fetch comes from an attribute here,
          data-vocabulary-head included, so a page and its script never disagree
          about which vocabulary they were built from. -->
-    <div class="board-view" data-board-view data-default-status="{{ .DefaultStatus }}" data-vocabulary-head="{{ .VocabularyHead }}" data-attachment-limit="{{ .AttachmentFileLimit }}" data-attachment-total-limit="{{ .AttachmentTotalLimit }}" data-attachment-name-limit="{{ .AttachmentNameLimit }}" data-inline-media="{{ .InlineImageMediaTypes }}">
+    <div class="board-view" data-board-view data-default-status="{{ .DefaultStatus }}" data-vocabulary-head="{{ .VocabularyHead }}" data-attachment-limit="{{ .AttachmentFileLimit }}" data-attachment-total-limit="{{ .AttachmentTotalLimit }}" data-attachment-name-limit="{{ .AttachmentNameLimit }}" data-attachment-label-limit="{{ .AttachmentLabelLimit }}" data-attachment-url-limit="{{ .AttachmentURLLimit }}" data-inline-media="{{ .InlineImageMediaTypes }}">
       <p class="stale" data-stale role="status">Task refresh failed. Showing the last successful board.</p>
       <!-- data-board is where the client appends the Deleted column, after the
            last vocabulary column the server rendered. It is a client-built
@@ -1000,6 +1000,11 @@
       // UTF-8, so an 85-character Japanese file name is 255 bytes' worth of
       // ceiling and 85 of anything a reader — or a naive `length` — would count.
       const attachmentNameLimit = Number(boardView.dataset.attachmentNameLimit) || 0;
+      // The ceilings on a link's display text and its destination, in bytes and
+      // read from the page for the same two reasons: core owns them, and a
+      // staged link is refused by the server only after the task has been made.
+      const attachmentLabelLimit = Number(boardView.dataset.attachmentLabelLimit) || 0;
+      const attachmentURLLimit = Number(boardView.dataset.attachmentUrlLimit) || 0;
       // The media types the attachment route hands back inline, read out of the
       // page for exactly the reason the ceiling above is. A markdown attachment
       // reference becomes an <img> only for a type on this list; every other
@@ -3845,16 +3850,22 @@
       // Same rule and the same sentence whichever surface asks — and on a create
       // form it is the only place the rule can be asked at all, because the task
       // it would be asked of does not exist yet.
+      // What a stored string weighs, which is the unit every one of core's text
+      // ceilings is in. Counted through the encoder rather than by `length`
+      // because these are stored as UTF-8: a name, a label or a URL written in
+      // kanji or emoji is several bytes a character, so `length` would wave
+      // through exactly the values these ceilings exist to refuse — and only
+      // those, because anything long enough to fail by character count is long
+      // enough that nobody types it by accident.
+      function attachmentByteLength(value) {
+        return new TextEncoder().encode(value || "").length;
+      }
       function attachmentFileRefusal(chosen, held) {
         // Asked first, because the server asks it first: core validates the
         // name before the size, and a refusal that named the wrong reason would
-        // be a refusal the reader cannot act on. Counted in bytes through the
-        // encoder rather than by `length`, because the ceiling is on the stored
-        // UTF-8 and a name of emoji or kanji is several bytes a character —
-        // which is exactly the file this check exists for, since one that is
-        // plainly too long by eye never gets this far.
+        // be a refusal the reader cannot act on.
         if (attachmentNameLimit) {
-          const named = new TextEncoder().encode(chosen.name || "").length;
+          const named = attachmentByteLength(chosen.name);
           if (named > attachmentNameLimit) {
             return chosen.name + " has a name of " + named + " bytes and must not exceed " +
               attachmentNameLimit + "; rename it before attaching it.";
@@ -3872,6 +3883,37 @@
           const [total, ceiling] = comparableSizes(held + chosen.size, attachmentTotalLimit);
           return "Attaching " + chosen.name + " would bring this task to " + total +
             " of attached files and must not exceed " + ceiling + "; attach a link instead.";
+        }
+        return "";
+      }
+      // The refusals a link can be given before its task exists, in the order
+      // core gives them: the URL's length, then its scheme, then the label
+      // beside it. That order is core's own — ValidateAttachmentURL measures
+      // before it parses, and the label is bounded later, when the attachment is
+      // folded in — and it is worth matching, because a link that is wrong twice
+      // should be told the same thing here that it would be told there.
+      //
+      // Asked at all only where staging happens. A task page sends a link and
+      // hears back; a create form would hear back after the task had been made,
+      // which is a task created and an attachment missing over a label somebody
+      // pasted.
+      function stagedLinkRefusal(destination, label) {
+        if (attachmentURLLimit) {
+          const measured = attachmentByteLength(destination);
+          if (measured > attachmentURLLimit) {
+            return "That link's URL is " + measured + " bytes and must not exceed " +
+              attachmentURLLimit + "; shorten it before attaching it.";
+          }
+        }
+        if (!safeLinkURL(destination)) {
+          return "That link must use http or https.";
+        }
+        if (attachmentLabelLimit && label) {
+          const measured = attachmentByteLength(label);
+          if (measured > attachmentLabelLimit) {
+            return "That link's label is " + measured + " bytes and must not exceed " +
+              attachmentLabelLimit + "; shorten it or leave it out.";
+          }
         }
         return "";
       }
@@ -4126,9 +4168,10 @@
           // what the task page does and for a reason that only exists here: the
           // server's refusal would arrive after the create, so a link core will
           // never store would cost the reader a task made and an attachment
-          // missing. The rule and the words are core's own.
-          if (!safeLinkURL(destination)) {
-            panel.report("That link must use http or https.");
+          // missing. The rules, their order and their words are core's own.
+          const refusal = stagedLinkRefusal(destination, label);
+          if (refusal) {
+            panel.report(refusal);
             return;
           }
           draftState.items.push({

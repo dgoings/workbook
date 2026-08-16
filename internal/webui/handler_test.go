@@ -4435,6 +4435,9 @@ const boardAttachmentLimit = ` + strconv.Itoa(core.MaxAttachmentFileBytes) + `;
 const boardAttachmentTotalLimit = ` + strconv.Itoa(core.MaxLiveAttachmentBytes) + `;
 // The ceiling on a file attachment's name, in bytes, for the same reason again.
 const boardAttachmentNameLimit = ` + strconv.Itoa(core.MaxAttachmentNameBytes) + `;
+// A link's display text and its destination, in bytes, for the same reason.
+const boardAttachmentLabelLimit = ` + strconv.Itoa(core.MaxAttachmentLabelBytes) + `;
+const boardAttachmentURLLimit = ` + strconv.Itoa(core.MaxAttachmentURLBytes) + `;
 // The media types the download route hands back inline, as the server renders
 // them into the page. The markdown renderer draws an attachment reference as an
 // image only for one of these, so a harness that invented the list would be
@@ -4655,6 +4658,8 @@ boardView.dataset.vocabularyHead = boardVocabularyHead;
 boardView.dataset.attachmentLimit = String(boardAttachmentLimit);
 boardView.dataset.attachmentTotalLimit = String(boardAttachmentTotalLimit);
 boardView.dataset.attachmentNameLimit = String(boardAttachmentNameLimit);
+boardView.dataset.attachmentLabelLimit = String(boardAttachmentLabelLimit);
+boardView.dataset.attachmentUrlLimit = String(boardAttachmentURLLimit);
 boardView.dataset.inlineMedia = boardInlineMedia;
 // The region that holds tasks whose status matches no column. It is always in
 // the document and hidden while empty, because the status that strands a task

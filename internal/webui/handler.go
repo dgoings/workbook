@@ -505,6 +505,13 @@ type pageData struct {
 	// carry its own copy of the rule. An 85-character Japanese file name is over
 	// a 255-byte ceiling and under every count a reader would make of it.
 	AttachmentNameLimit int
+	// AttachmentLabelLimit and AttachmentURLLimit are core's ceilings on a link
+	// attachment's display text and its destination, in bytes, rendered into the
+	// page for the reason the name ceiling above is. A link staged on a create
+	// form is refused by the server only after the task has been made, so these
+	// are the only place the reader can hear about them in time.
+	AttachmentLabelLimit int
+	AttachmentURLLimit   int
 	// InlineImageMediaTypes are the media types the attachment route serves
 	// inline, space separated, rendered into the page for the reason the ceiling
 	// above is: the markdown renderer draws an attachment reference as an <img>
@@ -1053,6 +1060,8 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 		AttachmentFileLimit:   core.MaxAttachmentFileBytes,
 		AttachmentTotalLimit:  core.MaxLiveAttachmentBytes,
 		AttachmentNameLimit:   core.MaxAttachmentNameBytes,
+		AttachmentLabelLimit:  core.MaxAttachmentLabelBytes,
+		AttachmentURLLimit:    core.MaxAttachmentURLBytes,
 		InlineImageMediaTypes: strings.Join(InlineAttachmentMediaTypes(), " "),
 		StatusTags:            core.StatusTags(),
 		Administrable:         handler.administrable(),

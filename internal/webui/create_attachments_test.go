@@ -321,6 +321,114 @@ setTimeout(async () => {
 	}
 }
 
+// A link label too long for core is refused as it is staged, and the ceiling is
+// in bytes rather than in characters.
+//
+// The same discrimination the file-name check needs: a 67-character Japanese
+// label is over a 200-byte ceiling and comfortably under it by any count a
+// reader — or a naive `length` — would make. Left to the server it is a task
+// created and a link missing, over text somebody pasted.
+func TestHandlerClientRefusesALinkLabelTooLongInBytes(t *testing.T) {
+	node := requireNode(t)
+	overlong := strings.Repeat("あ", core.MaxAttachmentLabelBytes/3+1)
+	program := createAttachmentProgram(t, `
+setTimeout(async () => {
+  await openCreateForm();
+  const label = `+strconv.Quote(overlong)+`;
+  const bytes = new TextEncoder().encode(label).length;
+  if (bytes <= `+strconv.Itoa(core.MaxAttachmentLabelBytes)+`) {
+    throw new Error("the test's own label is not over the ceiling: " + bytes + " bytes");
+  }
+  if (label.length > `+strconv.Itoa(core.MaxAttachmentLabelBytes)+`) {
+    throw new Error("the test's label is over by character count too, so it proves nothing");
+  }
+  await stageLink("https://example.test/design", label);
+
+  const reported = panelStatusText("attachments");
+  if (!reported.includes("label")) {
+    throw new Error("an over-long label was answered with " + JSON.stringify(reported));
+  }
+  if (!reported.includes(bytes + " bytes") ||
+      !reported.includes("`+strconv.Itoa(core.MaxAttachmentLabelBytes)+`")) {
+    throw new Error("the refusal does not state the count against the ceiling: " + JSON.stringify(reported));
+  }
+  if (stagedRows().length !== 0) throw new Error("a link with an unstorable label was staged");
+
+  // A label exactly at the ceiling is storable and stages.
+  await stageLink("https://example.test/design", "b".repeat(`+strconv.Itoa(core.MaxAttachmentLabelBytes)+`));
+  if (stagedRows().length !== 1) {
+    throw new Error("a label at the ceiling was refused: " + JSON.stringify(panelStatusText("attachments")));
+  }
+  // And a link with no label at all is never measured for one.
+  await stageLink("https://example.test/plain");
+  if (stagedRows().length !== 2) {
+    throw new Error("an unlabelled link was refused: " + JSON.stringify(panelStatusText("attachments")));
+  }
+}, 0);
+`)
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute the over-long label refusal: %v\n%s", err, output)
+	}
+}
+
+// A URL too long for core is refused as it is staged, in bytes, and before its
+// scheme is looked at — which is the order core asks in, so a URL that is both
+// too long and not http hears the same first answer here that it would there.
+func TestHandlerClientRefusesALinkURLTooLongInBytes(t *testing.T) {
+	node := requireNode(t)
+	// Multibyte path segment, so the ceiling is passed by bytes while the
+	// character count stays under it.
+	overlong := "https://example.test/" + strings.Repeat("あ", core.MaxAttachmentURLBytes/3+1)
+	program := createAttachmentProgram(t, `
+setTimeout(async () => {
+  await openCreateForm();
+  const destination = `+strconv.Quote(overlong)+`;
+  const bytes = new TextEncoder().encode(destination).length;
+  if (bytes <= `+strconv.Itoa(core.MaxAttachmentURLBytes)+`) {
+    throw new Error("the test's own URL is not over the ceiling: " + bytes + " bytes");
+  }
+  if (destination.length > `+strconv.Itoa(core.MaxAttachmentURLBytes)+`) {
+    throw new Error("the test's URL is over by character count too, so it proves nothing");
+  }
+  await stageLink(destination);
+
+  const reported = panelStatusText("attachments");
+  if (!reported.includes("URL")) {
+    throw new Error("an over-long URL was answered with " + JSON.stringify(reported));
+  }
+  if (!reported.includes(bytes + " bytes") ||
+      !reported.includes("`+strconv.Itoa(core.MaxAttachmentURLBytes)+`")) {
+    throw new Error("the refusal does not state the count against the ceiling: " + JSON.stringify(reported));
+  }
+  if (stagedRows().length !== 0) throw new Error("a link with an unstorable URL was staged");
+
+  // Length before scheme, which is core's order: a URL that fails both is told
+  // about its length first.
+  const longAndUnsafe = "javascript:" + "あ".repeat(`+strconv.Itoa(core.MaxAttachmentURLBytes)+`);
+  await stageLink(longAndUnsafe);
+  if (!panelStatusText("attachments").includes("URL is")) {
+    throw new Error("a URL that fails both rules was answered out of order: " +
+      JSON.stringify(panelStatusText("attachments")));
+  }
+  if (stagedRows().length !== 0) throw new Error("a script URL was staged");
+
+  // A URL at the ceiling is storable and stages.
+  const atCeiling = "https://example.test/" +
+    "c".repeat(`+strconv.Itoa(core.MaxAttachmentURLBytes)+` - "https://example.test/".length);
+  if (new TextEncoder().encode(atCeiling).length !== `+strconv.Itoa(core.MaxAttachmentURLBytes)+`) {
+    throw new Error("the boundary URL is not exactly at the ceiling");
+  }
+  await stageLink(atCeiling);
+  if (stagedRows().length !== 1) {
+    throw new Error("a URL at the ceiling was refused: " + JSON.stringify(panelStatusText("attachments")));
+  }
+}, 0);
+`)
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute the over-long URL refusal: %v\n%s", err, output)
+	}
+}
+
 // The create, then one upload per staged attachment, in the order they were
 // staged and every one of them addressed to the task the server just named.
 //
