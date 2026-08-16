@@ -873,6 +873,289 @@ func TestClientStatusesPageReordersInOneRequestPerGesture(t *testing.T) {
 `)
 }
 
+// A drop is delivered only where the page said yes, and a browser takes that
+// answer from whichever of dragenter and dragover it dispatched last. Blink
+// dispatches dragenter rather than dragover whenever the hit-test target under
+// the cursor changes, which is what any content moving under a stationary
+// cursor causes — the board's autoscroll made exactly that happen and lost
+// drops by it, because the board answered only dragover.
+//
+// Nothing moves under the cursor on this panel today. This closes the class
+// rather than a live bug: the fake DOM has no accept flag of its own, so what
+// is pinned is the property that keeps it closed — for every target either
+// event can land on, the two give the same answer, through one rule.
+func TestClientStatusesPageAcceptsAReorderOnEnterAsWellAsOnOver(t *testing.T) {
+	vocabulary := handlerVocabulary(t)
+	runPanelClient(t, "reorder acceptance on enter and over", vocabulary, "head-7", nil, `
+  vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-7")+`;
+  vocabularyAnswer = { body: `+panelMutationJSON(t, panelRenamedVocabulary(t), "head-8", VocabularyTaskCounts{}, nil)+` };
+  await openStatuses();
+
+  const dataTransfer = { effectAllowed: "", dropEffect: "", setData() {} };
+  const withFiles = { effectAllowed: "", dropEffect: "", setData() {}, types: ["Files"] };
+  const answer = (name, row, transfer) => {
+    let prevented = false;
+    transfer.dropEffect = "";
+    row.eventListeners[name]({ target: row, dataTransfer: transfer, preventDefault() { prevented = true; } });
+    return prevented + "/" + transfer.dropEffect;
+  };
+
+  const dragged = panelRow("shipped");
+  dragged.eventListeners.dragstart({ target: dragged, dataTransfer });
+
+  // Every row here is a drop target. The rows below that answer "false/" are
+  // the ones a handler asking only "is there a row under the cursor?" would
+  // wrongly accept, and they are what tells that question from the one this
+  // listener actually has to ask.
+  [
+    ["another row, with a reorder in flight", panelRow("icebox"), dataTransfer, "true/move"],
+    ["the row being dragged, which has nowhere to arrive", dragged, dataTransfer, "false/"],
+    ["a row while files are being dragged in", panelRow("icebox"), withFiles, "false/"],
+  ].forEach(([what, row, transfer, want]) => {
+    const entered = answer("dragenter", row, transfer);
+    const over = answer("dragover", row, transfer);
+    if (entered !== want) throw new Error("dragenter on " + what + " answered " + entered + ", want " + want);
+    if (over !== want) throw new Error("dragover on " + what + " answered " + over + ", want " + want);
+  });
+
+  // A row dropped on itself is refused rather than half-handled. The drop is
+  // left entirely alone — nothing prevented, no request — and the gesture's own
+  // dragend is what clears the drag, as it is for a drag that ends any other
+  // way.
+  let selfPrevented = false;
+  await dragged.eventListeners.drop({ target: dragged, dataTransfer, preventDefault() { selfPrevented = true; } });
+  await settle();
+  if (selfPrevented) throw new Error("a row dropped on itself was taken as a drop");
+  if (vocabularyCalls.filter((call) => call.method !== "GET").length !== 0) {
+    throw new Error("a row dropped on itself sent a request");
+  }
+
+  // And with no reorder in flight at all — somebody else's gesture passing over
+  // the list — both events refuse every row.
+  dragged.eventListeners.dragend({ target: dragged });
+  ["icebox", "queued", "shipped"].forEach((status) => {
+    if (panelRow(status).dataset.dropTarget === "true") {
+      throw new Error("dragend left " + status + " marked as a drop target");
+    }
+  });
+  ["icebox", "queued", "shipped"].forEach((status) => {
+    const row = panelRow(status);
+    const entered = answer("dragenter", row, dataTransfer);
+    const over = answer("dragover", row, dataTransfer);
+    if (entered !== "false/") throw new Error("dragenter on " + status + " with no reorder in flight answered " + entered);
+    if (over !== "false/") throw new Error("dragover on " + status + " with no reorder in flight answered " + over);
+  });
+  if (vocabularyCalls.filter((call) => call.method !== "GET").length !== 0) {
+    throw new Error("answering a drag sent a request");
+  }
+`)
+}
+
+// The gesture the class is about: a reorder whose only word over the target row
+// is a dragenter. That is what a browser sends once the thing under the cursor
+// churns, and a panel that answered only dragover would take the drop nowhere.
+func TestClientStatusesPageTakesAReorderReportedOnlyByDragenter(t *testing.T) {
+	vocabulary := handlerVocabulary(t)
+	runPanelClient(t, "a reorder reported only by dragenter", vocabulary, "head-7", nil, `
+  vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-7")+`;
+  vocabularyAnswer = { body: `+panelMutationJSON(t, panelRenamedVocabulary(t), "head-8", VocabularyTaskCounts{}, nil)+` };
+  await openStatuses();
+
+  const dataTransfer = { effectAllowed: "", dropEffect: "", setData() {} };
+  const dragged = panelRow("shipped");
+  const target = panelRow("icebox");
+  dragged.eventListeners.dragstart({ target: dragged, dataTransfer });
+
+  // No dragover anywhere in this gesture.
+  let prevented = false;
+  target.eventListeners.dragenter({ target, dataTransfer, preventDefault() { prevented = true; } });
+  if (!prevented) throw new Error("a dragenter over a row the reorder may land on was not answered");
+  if (target.dataset.dropTarget !== "true") throw new Error("a dragenter drew no mark on the row under the cursor");
+
+  await target.eventListeners.drop({ target, dataTransfer, preventDefault() {} });
+  await settle();
+
+  const sent = vocabularyCalls.filter((call) => call.method !== "GET");
+  if (sent.length !== 1) throw new Error("a dragenter-only reorder sent " + sent.length + " requests");
+  if (sent[0].method !== "PUT" || sent[0].url !== "/api/vocabulary/order") {
+    throw new Error("the reorder sent " + sent[0].method + " " + sent[0].url);
+  }
+  if (JSON.stringify(sent[0].body) !== JSON.stringify({ statuses: ["shipped", "icebox", "queued"], expectedHead: "head-7" })) {
+    throw new Error("the reorder sent " + JSON.stringify(sent[0].body));
+  }
+`)
+}
+
+// The mark saying where the row will land has to survive the leave that comes
+// with every enter.
+//
+// A browser pairs a dragleave with each dragenter it sends — the board's own
+// measurement in this file is ten dragenters, ten dragleaves and no dragover at
+// all — so a handler that cleared on any leave would erase, on each churn tick,
+// the mark the matching enter had just drawn. And it does not take churn: a row
+// is a name, some chips and four buttons, so a cursor crossing any of them
+// fires dragenter on the child and dragleave on the row.
+//
+// Two rules cover the browsers between them. relatedTarget settles it on
+// Chrome; Firefox and Safari send none on a dragleave, and there the cursor's
+// own coordinates have to.
+func TestClientStatusesPageKeepsTheDropMarkThroughTheLeaveThatFollowsEachEnter(t *testing.T) {
+	vocabulary := handlerVocabulary(t)
+	runPanelClient(t, "the leave that follows each enter", vocabulary, "head-7", nil, `
+  vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-7")+`;
+  vocabularyAnswer = { body: `+panelMutationJSON(t, panelRenamedVocabulary(t), "head-8", VocabularyTaskCounts{}, nil)+` };
+  await openStatuses();
+
+  const dataTransfer = { effectAllowed: "", dropEffect: "", setData() {} };
+  const dragged = panelRow("shipped");
+  const target = panelRow("icebox");
+  // The geometry a browser would have computed for the row under the cursor.
+  target.rect = { left: 100, right: 500, top: 200, bottom: 260, width: 400 };
+  const inside = { clientX: 300, clientY: 230 };
+  const outside = { clientX: 300, clientY: 400 };
+  const child = target.children[0];
+  if (!child) throw new Error("the row drew no children for a cursor to cross");
+
+  dragged.eventListeners.dragstart({ target: dragged, dataTransfer });
+  const mark = () => {
+    target.eventListeners.dragenter({ target, dataTransfer, ...inside, preventDefault() {} });
+    if (target.dataset.dropTarget !== "true") throw new Error("the row under the cursor was not marked");
+  };
+
+  // Chrome's shape: the leave names the child the cursor moved onto.
+  mark();
+  target.eventListeners.dragleave({ target, relatedTarget: child, ...inside });
+  if (target.dataset.dropTarget !== "true") {
+    throw new Error("a leave naming a child of the row erased the row's own mark");
+  }
+  // The same shape with nothing to go on but the name — no coordinates at all,
+  // which is what the two rules are for: either one alone leaves a browser
+  // unanswered, and this is the half only relatedTarget can answer.
+  target.eventListeners.dragleave({ target, relatedTarget: child });
+  if (target.dataset.dropTarget !== "true") {
+    throw new Error("a leave naming a child, with no coordinates to fall back on, erased the mark");
+  }
+
+  // Firefox and Safari send no relatedTarget at all, and there the cursor's
+  // position is the only thing that can tell a churn leave from a departure.
+  target.eventListeners.dragleave({ target, relatedTarget: null, ...inside });
+  if (target.dataset.dropTarget !== "true") {
+    throw new Error("a leave with no relatedTarget and the cursor still inside erased the mark");
+  }
+
+  // The whole churn tick, ten times over, with no dragover anywhere: enter,
+  // leave, enter, leave. The mark has to be there at the end of it.
+  for (let tick = 0; tick < 10; tick += 1) {
+    target.eventListeners.dragenter({ target, dataTransfer, ...inside, preventDefault() {} });
+    target.eventListeners.dragleave({ target, relatedTarget: null, ...inside });
+  }
+  if (target.dataset.dropTarget !== "true") {
+    throw new Error("ten churn ticks left the reader with no mark at all");
+  }
+
+  // And a real departure still clears it: the cursor has gone somewhere else,
+  // and nothing about this row is being promised any more.
+  target.eventListeners.dragleave({ target, relatedTarget: null, ...outside });
+  if (target.dataset.dropTarget === "true") {
+    throw new Error("carrying the cursor off the row left its mark behind");
+  }
+  // As does a departure a browser names, with the cursor's own position
+  // unavailable — a leave carrying neither is read as the departure it most
+  // likely is.
+  mark();
+  target.eventListeners.dragleave({ target, relatedTarget: panelRow("queued") });
+  if (target.dataset.dropTarget === "true") {
+    throw new Error("a leave naming another row left the mark behind");
+  }
+  dragged.eventListeners.dragend({ target: dragged });
+`)
+}
+
+// The mark is written when it changes and not otherwise. Rewriting the same
+// attribute on every drag event is a mutation under a drag cursor for no
+// change, and mutations under a drag cursor are what make a browser re-run its
+// hit test and dispatch more of the churn this whole change is about.
+func TestClientStatusesPageWritesTheDropMarkOnlyWhenItMoves(t *testing.T) {
+	vocabulary := handlerVocabulary(t)
+	runPanelClient(t, "the drop mark is written only when it moves", vocabulary, "head-7", nil, `
+  vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-7")+`;
+  vocabularyAnswer = { body: `+panelMutationJSON(t, panelRenamedVocabulary(t), "head-8", VocabularyTaskCounts{}, nil)+` };
+  await openStatuses();
+
+  const dataTransfer = { effectAllowed: "", dropEffect: "", setData() {} };
+  const dragged = panelRow("shipped");
+  const target = panelRow("icebox");
+  const other = panelRow("queued");
+  target.rect = { left: 100, right: 500, top: 200, bottom: 260, width: 400 };
+  const inside = { clientX: 300, clientY: 230 };
+
+  // Count what the page writes to the attribute rather than what it ends up
+  // saying, because the whole point is the writing.
+  let written = 0;
+  const raw = target.dataset;
+  target.dataset = new Proxy(raw, {
+    set(store, key, value) { if (key === "dropTarget") written += 1; store[key] = value; return true; },
+    deleteProperty(store, key) { delete store[key]; return true; }
+  });
+
+  dragged.eventListeners.dragstart({ target: dragged, dataTransfer });
+  // A stationary cursor, twenty drag events, one row: the mark moves once.
+  for (let tick = 0; tick < 10; tick += 1) {
+    target.eventListeners.dragenter({ target, dataTransfer, ...inside, preventDefault() {} });
+    target.eventListeners.dragover({ target, dataTransfer, ...inside, preventDefault() {} });
+  }
+  if (target.dataset.dropTarget !== "true") throw new Error("the row under the cursor is not marked");
+  if (written !== 1) throw new Error("twenty drag events over one row wrote the mark " + written + " times, want 1");
+
+  // Moving to another row and back writes it again, because now it has moved.
+  other.eventListeners.dragover({ target: other, dataTransfer, clientX: 300, clientY: 500, preventDefault() {} });
+  if (other.dataset.dropTarget !== "true") throw new Error("the second row was not marked");
+  target.eventListeners.dragover({ target, dataTransfer, ...inside, preventDefault() {} });
+  if (written !== 2) throw new Error("coming back to the first row wrote the mark " + written + " times in total, want 2");
+
+  dragged.eventListeners.dragend({ target: dragged });
+`)
+}
+
+// A file dragged over the status list is not a reorder, and the panel must
+// neither take it nor swallow it. The flag that says "I will take this" is the
+// same flag that stops the drop reaching anything else on the page, so a panel
+// that accepted a file drag would take a reader's file and do nothing with it.
+func TestClientStatusesPageRefusesAFileDraggedOverTheList(t *testing.T) {
+	vocabulary := handlerVocabulary(t)
+	runPanelClient(t, "a file dragged over the status list", vocabulary, "head-7", nil, `
+  vocabularyRead = `+panelVocabularyJSON(t, vocabulary, "head-7")+`;
+  vocabularyAnswer = { body: `+panelMutationJSON(t, panelRenamedVocabulary(t), "head-8", VocabularyTaskCounts{}, nil)+` };
+  await openStatuses();
+
+  const dataTransfer = { effectAllowed: "", dropEffect: "", setData() {} };
+  const withFiles = { effectAllowed: "", dropEffect: "", setData() {}, types: ["Files"] };
+  const dragged = panelRow("shipped");
+  const target = panelRow("icebox");
+  // The worst case rather than the easy one: a reorder the page still believes
+  // is live — a gesture whose dragend never arrived — and a file arriving over
+  // the list on top of it. Without the file test this drop would be read as a
+  // reorder and would move a column the reader never touched.
+  dragged.eventListeners.dragstart({ target: dragged, dataTransfer });
+
+  let prevented = false;
+  target.eventListeners.dragenter({ target, dataTransfer: withFiles, preventDefault() { prevented = true; } });
+  target.eventListeners.dragover({ target, dataTransfer: withFiles, preventDefault() { prevented = true; } });
+  if (prevented) throw new Error("the panel offered to take a file drag");
+  if (target.dataset.dropTarget === "true") throw new Error("a file drag marked a row as a drop target");
+
+  await target.eventListeners.drop({ target, dataTransfer: withFiles, preventDefault() { prevented = true; } });
+  await settle();
+  if (prevented) throw new Error("the panel took the drop of a file");
+  if (vocabularyCalls.filter((call) => call.method !== "GET").length !== 0) {
+    throw new Error("a file dropped on the status list sent a vocabulary request");
+  }
+  if (panelStatuses().join(",") !== "icebox,queued,shipped") {
+    throw new Error("a file dropped on the status list reordered the columns: " + panelStatuses().join(","));
+  }
+`)
+}
+
 // administrableBoardPage renders an administrable board for a project with these
 // statuses.
 func administrableBoardPage(t *testing.T, vocabulary core.Vocabulary) string {
