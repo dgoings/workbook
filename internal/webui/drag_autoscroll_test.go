@@ -857,6 +857,82 @@ func TestBoardTrackIsItsOwnHorizontalScroller(t *testing.T) {
 	t.Fatalf(".board is declared as %q, none of which scrolls its columns sideways", declared)
 }
 
+// The page has a floor below which the window is narrower than the document,
+// and it is written in rem. That is the whole reason the track's edge zone is
+// measured from a box clipped to the window rather than from the box itself:
+// under the floor the document scrolls sideways and takes the track's right
+// edge off the screen with it, and because the floor is in rem it moves with
+// the reader's default font size rather than sitting at one pixel width.
+func TestBoardPageFloorIsNarrowerThanSomeWindowsAndScalesWithType(t *testing.T) {
+	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return nil, nil })
+	response := request(t, handler, http.MethodGet, "/")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d, want %d", response.Code, http.StatusOK)
+	}
+	rule := cssRule(t, response.Body.String(), "body")
+	if !strings.Contains(rule, "min-width:") {
+		t.Fatalf("body = %q, which sets no floor for the drag scroll's clip to answer", rule)
+	}
+	if !strings.Contains(rule, "min-width: 20rem") {
+		t.Fatalf("body = %q, want a floor stated in rem so it follows the reader's own type size", rule)
+	}
+}
+
+// The zone the reader pushes into is at the edge of the window, not at the edge
+// of a box that may hang off it.
+//
+// Below the page's own floor the document scrolls sideways and the track's box
+// runs past the screen, and the floor is in rem so a large default font size
+// brings that about at window widths nobody would call narrow. Measured in
+// Chrome without this clip, 800ms held at the rightmost pixel a cursor can
+// occupy: 712px at a 320px viewport, 92px at 240px, 0px at 220px, and 0px at
+// 390x844 with a 28px root.
+func TestHandlerClientMeasuresTheTracksZoneFromTheWindowItCanReach(t *testing.T) {
+	runBoardClient(t, "the track's zone against a window narrower than the page", dragScrollTasks(), dragScrollHarness+`
+  const carried = cardIn(listFor("ready"), `+strconv.Quote(dragScrollCarriedID)+`);
+  documentEventListeners.dragstart({ target: carried, dataTransfer });
+  const windowWidth = window.innerWidth;
+  const moves = (clientX) => {
+    boardElement.scrollLeft = 500;
+    documentEventListeners.dragover({ target: main, clientX, clientY: 300, dataTransfer, preventDefault() {} });
+    runAnimationFrame(16);
+    runAnimationFrame(16);
+    return boardElement.scrollLeft - 500;
+  };
+  try {
+    // A window narrower than the page's floor: the document has scrolled
+    // sideways, so the track's box starts on screen and ends 280px past it.
+    window.innerWidth = 320;
+    boardElement.rect = { left: 20, right: 600, top: 100, bottom: 500, width: 580 };
+    boardElement.clientWidth = 580;
+    boardElement.scrollWidth = 2580;
+    // The zone is at the window's own right edge. Measured from the raw box it
+    // would be out at 528..600, where no cursor can go.
+    const atScreenEdge = moves(320);
+    if (!close(atScreenEdge, 14.4)) throw new Error("the window's right edge slid the track " + atScreenEdge + ", want 14.4");
+    if (moves(560) === 0) {
+      // 560 is inside the box's own right zone and off the screen entirely; it
+      // is unreachable rather than wrong, and is only probed to show the two
+      // zones are in different places.
+      throw new Error("this probe was meant to show the box's own zone is elsewhere");
+    }
+    if (moves(240) !== 0) throw new Error("the still middle did not reach to within 80px of the window's edge");
+    if (moves(200) !== 0) throw new Error("the track slid 120px in from the window's edge, where nothing should move");
+
+    // And the other way: the document scrolled right, so the box now starts
+    // off the screen to the left and the left zone belongs to the window too.
+    boardElement.rect = { left: -200, right: 400, top: 100, bottom: 500, width: 600 };
+    boardElement.clientWidth = 600;
+    const atScreenStart = moves(0);
+    if (!close(atScreenStart, -14.4)) throw new Error("the window's left edge slid the track " + atScreenStart + ", want -14.4");
+    if (moves(150) !== 0) throw new Error("the track slid 150px in from the window's left edge");
+  } finally {
+    window.innerWidth = windowWidth;
+  }
+  documentEventListeners.dragend({ target: carried });
+`)
+}
+
 // The board track slides toward whichever side the cursor is held against, on
 // the same ramp a column scrolls down on, and not at all while the cursor is
 // anywhere in the middle of the track.
@@ -1008,29 +1084,66 @@ func TestHandlerClientScrollsBothAxesFromOneHeldCursor(t *testing.T) {
   if (pendingAnimationFrames() !== 1) throw new Error("the corner ran " + pendingAnimationFrames() + " frame loops, want 1");
   documentEventListeners.dragend({ target: carried });
 
-  // Each remainder is its own. Both scrollers round, and both are asked for a
-  // fifth of a pixel a frame — a shared accumulator would hand one of them the
-  // other's fractions and neither would travel what its ramp owes.
+  // Each remainder is its own, and the shape below is the one that can tell
+  // that from a single accumulator the two of them share.
+  //
+  // Most corners cannot. Two scrollers passing one accumulator back and forth
+  // are trading bounded, mean-zero rounding residues, so both still track their
+  // ramps and every symmetric probe — and every lopsided one — comes out right.
+  // What breaks is a scroller that is *clamped*: it takes the accumulator,
+  // cannot move, and writes back nothing. Do that on every frame and the other
+  // axis never gets to keep a fraction long enough to become a pixel.
+  //
+  // Which is an ordinary gesture, not a contrived one: a column with fewer
+  // cards than fit is at its limit already, and a reader pushing into the
+  // bottom corner of one to bring the next column into view is asking the
+  // track for the slow end of its ramp while the column under them can give
+  // nothing. Below, a column with no travel at all sits under a cursor 71px
+  // inside the track's right zone; the track must still deliver its 48px.
+  const empty = listFor("done");
+  if (columnCards(empty).length !== 0) throw new Error("this probe needs a column with nothing to scroll");
+  furnishTrack(100, 400);
+  roundScroller(boardElement, "scrollLeft");
+  parkColumnUnder(empty, 509, 29);
+  const pinned = boardCard(`+strconv.Quote(dragScrollCarriedID)+`);
+  documentEventListeners.dragstart({ target: pinned, dataTransfer });
+  if (columnAt(509, 460) !== empty) throw new Error("the pinned corner is not over the empty column");
+  if (empty.scrollHeight - empty.clientHeight > 0) throw new Error("the empty column has travel it should not have");
+  const pinnedFrom = boardElement.scrollLeft;
+  documentEventListeners.dragover(trackEvent(509, 460));
+  for (let frame = 0; frame < 240; frame += 1) runAnimationFrame(16);
+  const besidePinned = boardElement.scrollLeft - pinnedFrom;
+  if (besidePinned < 47 || besidePinned > 49) {
+    throw new Error("beside a column with nothing to give, the track travelled " + besidePinned + "px of the 47.8px its ramp owed");
+  }
+  documentEventListeners.dragend({ target: pinned });
+
+  // And the plain lopsided corner still adds up, which is what says the two
+  // accumulators are not merely separate but each correct.
   const again = boardCard(`+strconv.Quote(dragScrollCarriedID)+`);
   furnishTrack(100, 400);
   roundScroller(boardElement, "scrollLeft");
   roundScroller(deep, "scrollTop");
   // Parked so the deep column is the one under a cursor held 71px inside the
-  // right zone and 71px inside the bottom zone at once.
+  // track's right zone and 40px inside that column's bottom zone.
   parkColumnUnder(deep, 509, 29);
   documentEventListeners.dragstart({ target: again, dataTransfer });
-  if (columnAt(509, 429) !== deep) throw new Error("the slow corner is not over the deep column");
+  if (columnAt(509, 460) !== deep) throw new Error("the lopsided corner is not over the deep column");
   const trackFrom = boardElement.scrollLeft;
   const columnFrom = deep.scrollTop;
-  documentEventListeners.dragover(trackEvent(509, 429));
+  documentEventListeners.dragover(trackEvent(509, 460));
   for (let frame = 0; frame < 240; frame += 1) runAnimationFrame(16);
   const trackTravelled = boardElement.scrollLeft - trackFrom;
   const columnTravelled = deep.scrollTop - columnFrom;
+  // 240 frames of 16ms, of which the loop's first measures no time at all, so
+  // 239 are worth anything: the track's 1/72nd of 900px/s owes 47.8px and the
+  // column's 32/72nds owes 1529.6. The column's own travel is 2600, so it never
+  // clamps and never hides the fractions it is dropping.
   if (trackTravelled < 47 || trackTravelled > 49) {
-    throw new Error("the track kept " + trackTravelled + "px of the 48px owed while a column was carrying its own remainder");
+    throw new Error("the track travelled " + trackTravelled + "px of the 47.8px its own ramp owed, beside a column running 32 times faster");
   }
-  if (columnTravelled < 47 || columnTravelled > 49) {
-    throw new Error("the column kept " + columnTravelled + "px of the 48px owed while the track was carrying its own remainder");
+  if (columnTravelled < 1528 || columnTravelled > 1532) {
+    throw new Error("the column travelled " + columnTravelled + "px of the 1529.6px owed, beside a track running at a thirty-second of its rate");
   }
   documentEventListeners.dragend({ target: again });
 `)
@@ -1183,6 +1296,55 @@ func TestHandlerClientFollowsTheColumnSlidingUnderTheCursor(t *testing.T) {
   }
   if (promised && writes[0].body.before !== promised.dataset.taskId) {
     throw new Error("the drop asked for " + JSON.stringify(writes[0].body) + ", want the line's own neighbour " + promised.dataset.taskId);
+  }
+  documentEventListeners.dragend({ target: carried });
+`)
+}
+
+// A track that has run out of travel is still a track the reader is pushing,
+// and the board under it does not hold still just because the track does. A
+// poll re-render can put a different column under a cursor that has not moved,
+// over a track that cannot move either — and a loop that only re-resolved on
+// frames where the track had actually slid would never notice.
+func TestHandlerClientFindsAColumnArrivingOverAClampedTrack(t *testing.T) {
+	runBoardClient(t, "a column arriving over a clamped track", dragScrollTasks(), dragScrollHarness+`
+  furnishTrack(100, 400);
+  const deep = listFor("in-progress");
+  const carried = cardIn(listFor("ready"), `+strconv.Quote(dragScrollCarriedID)+`);
+  // Every column carried off to the right, so the cursor starts over nothing.
+  const elsewhere = { left: 900, right: 1100, top: 100, bottom: 500, width: 200 };
+  boardLists.forEach((list) => {
+    Object.defineProperty(list, "rect", { configurable: true, get: () => elsewhere });
+  });
+  boardElement.scrollLeft = 0;
+
+  // Pushed into the track's left edge, where there is no travel left to take.
+  const cursorX = 110;
+  const cursorY = 460;
+  documentEventListeners.dragstart({ target: carried, dataTransfer });
+  documentEventListeners.dragover({ target: main, clientX: cursorX, clientY: cursorY, dataTransfer, preventDefault() {} });
+  for (let frame = 0; frame < 3; frame += 1) runAnimationFrame(16);
+  if (boardElement.scrollLeft !== 0) throw new Error("the track was meant to be clamped at its start, it is at " + boardElement.scrollLeft);
+  if (pendingAnimationFrames() !== 1) throw new Error("a clamped track stopped the loop while the reader was still pushing");
+  if (dropMarkerGapAnywhere() >= 0) throw new Error("a line was drawn with no column under the cursor");
+
+  // The re-render arrives and lands a column under the cursor. Nothing else
+  // moves: not the cursor, and not the track, which has nowhere to go.
+  Object.defineProperty(deep, "rect", {
+    configurable: true,
+    get: () => ({ left: 20, right: 220, top: 100, bottom: 500, width: 200 })
+  });
+  const restedAt = deep.scrollTop;
+  runAnimationFrame(16);
+  if (dropMarkerGapAnywhere() < 0) {
+    throw new Error("the loop never noticed the column a re-render put under a still cursor over a clamped track");
+  }
+  if (markerGap(deep) < 0) throw new Error("the line went somewhere other than the column that arrived");
+  // And it is that column's scroller now, so the corner the cursor is in scrolls
+  // it: 40px inside its bottom zone.
+  for (let frame = 0; frame < 4; frame += 1) runAnimationFrame(16);
+  if (deep.scrollTop <= restedAt) {
+    throw new Error("the column that arrived under the cursor never started scrolling, it is still at " + deep.scrollTop);
   }
   documentEventListeners.dragend({ target: carried });
 `)

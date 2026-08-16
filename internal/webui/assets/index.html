@@ -6934,13 +6934,18 @@
       // Taking the line out of the document and putting it back exactly where
       // it was is still a mutation under a drag cursor, and a mutation under a
       // drag cursor is what makes a browser re-run its drag hit test and
-      // dispatch another dragenter/dragleave pair. Those are not free: a
-      // gesture whose last word from the browser is a dragleave has had its
-      // drop target withdrawn, and the release that follows is discarded.
-      // Measured on Chrome 151 — a card carried to a column off the right of
-      // the window and released as the track reached its end: refused in 2 runs
-      // of 3 while the line was rebuilt every frame, and in 0 of 12 once the
-      // rebuild only happened when the line actually moved.
+      // dispatch another dragenter/dragleave pair. Sixty of those a second, for
+      // a line that has not moved, is work asked of the browser for nothing —
+      // and the pair is not harmless, because a gesture whose last word from
+      // the browser is a dragleave has had its drop target withdrawn and the
+      // release that follows is discarded.
+      //
+      // How much of that reaches a reader is not settled. Refusals were seen
+      // here on Chrome 151 while the line was rebuilt every frame and not seen
+      // after, but a second harness driving fewer drag events per gesture saw
+      // none either way, so the counts are an observation and not a
+      // demonstration. The reason to do it is the one above: not mutating the
+      // document sixty times a second to say nothing.
       function showPlacement(list, placement) {
         const reference = placement.reference || null;
         if (dropMarker.parentElement === list && dropMarker.nextElementSibling === reference) return;
@@ -7031,16 +7036,35 @@
       // sliding under them would be answering a gesture nobody is making. That
       // is the column loop's sideways rule, turned a quarter turn.
       //
-      // The box is taken as it is rather than clipped to the window. The board
-      // is laid out to fit the window it is in and the columns are what
-      // overflow, not the page: measured in Chrome at a 390x844 viewport, the
-      // track's box is x 20..370 of a 390px window with the document not
-      // scrolling sideways at all. A clip would be a defence against a page
-      // this one is not.
+      // Sideways, the box is clipped to the window before the zone is measured
+      // off it, because the box can hang off the screen.
+      //
+      // The page has a floor — body { min-width: 20rem } — and once the window
+      // is narrower than that floor the document itself scrolls sideways and
+      // carries the track's right edge off the screen with it. The floor is in
+      // rem, so it moves with the reader's own default font size rather than
+      // sitting at one pixel width: 320px at the usual 16px root, 480px at the
+      // 24px root Chrome calls "Very Large". A zone measured from the raw box
+      // would then be somewhere no cursor can reach, and the readers it fails
+      // are the ones on the narrowest windows and the largest type.
+      //
+      // Measured on this branch with no clip, 800ms held at the rightmost pixel
+      // the cursor can occupy: 712px of travel at a 320px viewport, 92px at
+      // 240px, 0px at 220px; and at 390x844, 109px at a 24px root and 0px at a
+      // 28px one. With the clip every one of those is back to the full rate,
+      // and every case that already worked is unchanged.
+      //
+      // Nothing clips the vertical axis, because nothing can move it off the
+      // screen: body is height:100dvh with overflow hidden, so the document
+      // never scrolls down and the track's top and bottom are the window's.
       function boardScrollRate() {
         const bounds = board.getBoundingClientRect();
         if (dragPointerY < bounds.top || dragPointerY > bounds.bottom) return 0;
-        return dragScrollRate(dragPointerX, bounds.left, bounds.right);
+        return dragScrollRate(
+          dragPointerX,
+          Math.max(0, bounds.left),
+          Math.min(window.innerWidth, bounds.right)
+        );
       }
       // Draw the line this destination would take, or take none away.
       //
@@ -7138,11 +7162,22 @@
           // assigned scrollTop, so the track needs the same carry the column
           // needs, kept apart from it.
           boardScrollCarry = wanted - board.scrollLeft;
-          // A whole column changed under the cursor, not just the cards in one,
-          // so this asks the harder question rather than redrawing the line
-          // where it already was. It also puts back a line a churn dragleave
-          // cleared.
-          if (board.scrollLeft !== from) retargetDragScroller();
+          // A whole column may have changed under the cursor, not just the
+          // cards in one, so this asks the harder question rather than
+          // redrawing the line where it already was. It also puts back a line a
+          // churn dragleave cleared.
+          //
+          // Asked on every frame the reader is pushing, not only on frames the
+          // track actually moved. At either end of the travel the track stops
+          // while the reader is still asking, and the board underneath does not
+          // hold still with it: a poll re-render can put a different column
+          // under a cursor that has not moved, over a track that cannot. That
+          // was observed — cursor in the track's bottom padding at the left
+          // edge, a re-render sliding a column under it, and its scrollTop
+          // sitting at 0 for 400ms with nothing left to notice. The cost is one
+          // hit test a frame, and the line it draws is idempotent, so a frame
+          // where nothing changed touches nothing.
+          retargetDragScroller();
         }
         // Nothing is asking for another frame: no column is being tracked and
         // the cursor is nowhere near the track's edges. An event starts the
