@@ -530,6 +530,23 @@
        the rule above it, because it is a section of that sidebar in the way
        Properties is and reads as one. */
     .task-panel--staged { padding: .85rem 0 0; background: none; }
+    /* Every grid inside it bounded at the column it is in.
+       These are the same single-column grids the task page draws, and there
+       they sit in a panel as wide as the page. In a 20rem sidebar they do not:
+       a grid track sized `auto` grows to the widest thing in it, and a file
+       input's intrinsic width is wider than the sidebar — so the whole column
+       grew, the sidebar scrolled sideways, and the Remove button on every row
+       sat off the edge of it. Bounded, the track can never exceed the sidebar
+       and the rows wrap inside it. */
+    .task-panel--staged,
+    .task-panel--staged .task-panel__list,
+    .task-panel--staged .attachment-add,
+    .task-panel--staged .attachment-add__group { grid-template-columns: minmax(0, 1fr); }
+    .task-panel--staged .attachment-add input[type="file"] { min-width: 0; }
+    /* The count is the one line here that cannot wrap usefully, so it is
+       allowed to sit under the heading rather than push it out of the panel. */
+    .task-panel--staged .task-panel__header { flex-wrap: wrap; row-gap: .1rem; }
+    .task-panel--staged .task-panel__count { min-width: 0; overflow-wrap: anywhere; }
     .task-panel__header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .3rem .75rem; }
     .task-panel__header h3 { margin: 0; font-size: .88rem; }
     .task-panel__count { margin: 0; color: #56647a; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .7rem; }
