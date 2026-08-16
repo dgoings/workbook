@@ -288,6 +288,20 @@ setTimeout(async () => {
   if (stagedRows().length !== 1) {
     throw new Error("a name exactly at the ceiling was refused: " + JSON.stringify(panelStatusText("attachments")));
   }
+
+  // A file that is wrong twice is told what the server would tell it. Core
+  // prices the size in fileAttachmentOperation and never looks at the name's
+  // length until the fold, so the size refusal is the one that exists — and
+  // "rename it" would be advice against an answer this reader will never get.
+  await stageFiles([new TestFile(name, `+strconv.Itoa(core.MaxAttachmentFileBytes+1)+`, "x")]);
+  const both = panelStatusText("attachments");
+  if (!both.includes("attach a link instead")) {
+    throw new Error("an over-sized, over-named file was refused for the wrong reason: " + JSON.stringify(both));
+  }
+  if (both.includes("rename it")) {
+    throw new Error("the name was blamed for a file the server would refuse for its size: " + JSON.stringify(both));
+  }
+  if (stagedRows().length !== 1) throw new Error("a doubly-invalid file was staged");
 }, 0);
 `)
 	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
@@ -663,6 +677,84 @@ setTimeout(async () => {
 `)
 	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute the mid-run removal refusal: %v\n%s", err, output)
+	}
+}
+
+// The create landed, every attachment landed, and the read of the board that
+// follows did not — the one exit that leaves this form standing after a run
+// that ended up owing nothing.
+//
+// It is the exit the freeze had no way out of. The two paths that release the
+// panel are a create the server refused and a create holding outstanding
+// attachments, and this is neither: the list was emptied by the run and then
+// never drawn again, so the rows the reader staged were still on the screen,
+// under controls that would never work again, beside a message about a refresh.
+// Read straight, that is a create that lost the files it is still showing.
+func TestHandlerClientClearsTheStagedListWhenTheRefreshAfterACreateFails(t *testing.T) {
+	node := requireNode(t)
+	mutation, _ := createdTaskJSON(t)
+	program := createAttachmentProgram(t, `
+const created = `+mutation+`;
+setTimeout(async () => {
+  const form = await openCreateForm();
+  let uploads = 0;
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if (url === "/api/tasks" && options.method === "POST") {
+      return { ok: true, json: async () => created };
+    }
+    if (options.method === "POST") {
+      uploads += 1;
+      return { ok: true, json: async () => created };
+    }
+    if (url === "/api/tasks?deleted=true") {
+      return { ok: true, json: async () => ({ format: "workbook.tasks", version: 1, tasks: [] }) };
+    }
+    // Every read of the board fails from here on, which is what strands the
+    // create on this form.
+    return { ok: false, json: async () => ({
+      format: "workbook.error", version: 1,
+      error: { category: "operational", message: "the board could not be read" }
+    }) };
+  };
+
+  typeTitle(form, "Task with attachments");
+  await stageFiles([new TestFile("first.log", 5, "first"), new TestFile("second.log", 6, "second")]);
+  await form.eventListeners.submit({ preventDefault() {} });
+
+  // Both files really did attach; this is not a failure path for them.
+  if (uploads !== 2) throw new Error("uploads = " + uploads + ", want both staged files attached");
+  if (main.firstElementChild === boardView) {
+    throw new Error("a create whose refresh failed left the form, so there is nothing to strand");
+  }
+  const said = findElement(main, (element) => hasDataKey(element, "saveStatus")).textContent;
+  if (!said.includes("could not be refreshed")) {
+    throw new Error("this is not the refresh-failure exit: " + JSON.stringify(said));
+  }
+
+  // The rows are gone, because the files they named are on the task.
+  if (stagedRows().length !== 0) {
+    throw new Error("the list still shows attachments that were attached: " + JSON.stringify(stagedNames()));
+  }
+  // And the panel is the reader's again rather than frozen for good.
+  const frozen = findElements(panelSection("attachments"), (element) => element.tagName === "BUTTON")
+    .filter((button) => button.disabled);
+  if (frozen.length !== 0) {
+    throw new Error("the panel was left frozen with no path that releases it: " +
+      JSON.stringify(frozen.map((button) => button.textContent)));
+  }
+  // Nothing was lost, so nothing is announced as lost.
+  if (!notice.hidden) {
+    throw new Error("a create that attached everything reported a loss: " + notice.textContent);
+  }
+  returnTo("/");
+  if (!notice.hidden) {
+    throw new Error("leaving afterwards announced a loss that did not happen: " + notice.textContent);
+  }
+}, 0);
+`)
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute the stranded create's staged list: %v\n%s", err, output)
 	}
 }
 

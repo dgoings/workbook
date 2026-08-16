@@ -3861,16 +3861,6 @@
         return new TextEncoder().encode(value || "").length;
       }
       function attachmentFileRefusal(chosen, held) {
-        // Asked first, because the server asks it first: core validates the
-        // name before the size, and a refusal that named the wrong reason would
-        // be a refusal the reader cannot act on.
-        if (attachmentNameLimit) {
-          const named = attachmentByteLength(chosen.name);
-          if (named > attachmentNameLimit) {
-            return chosen.name + " has a name of " + named + " bytes and must not exceed " +
-              attachmentNameLimit + "; rename it before attaching it.";
-          }
-        }
         if (attachmentFileLimit && chosen.size > attachmentFileLimit) {
           const [size, ceiling] = comparableSizes(chosen.size, attachmentFileLimit);
           return chosen.name + " is " + size + " and must not exceed " + ceiling +
@@ -3883,6 +3873,21 @@
           const [total, ceiling] = comparableSizes(held + chosen.size, attachmentTotalLimit);
           return "Attaching " + chosen.name + " would bring this task to " + total +
             " of attached files and must not exceed " + ceiling + "; attach a link instead.";
+        }
+        // Asked last, because core asks it last. The sizes above are priced in
+        // fileAttachmentOperation, before the bytes are even hashed; the name's
+        // *length* is not asked there at all — only its presence and its shape
+        // are — and the ceiling on it is a fold-time rule, reached after every
+        // size refusal has already had its say. A file that is three megabytes
+        // *and* over-named is refused for its size by the server, so a client
+        // that led with "rename it" would be handing out advice that does not
+        // help against an answer it cannot see.
+        if (attachmentNameLimit) {
+          const named = attachmentByteLength(chosen.name);
+          if (named > attachmentNameLimit) {
+            return chosen.name + " has a name of " + named + " bytes and must not exceed " +
+              attachmentNameLimit + "; rename it before attaching it.";
+          }
         }
         return "";
       }
@@ -4980,6 +4985,17 @@
               }
               if (refreshed.status !== "applied" ||
                   refreshed.relationshipContext.status !== "applied") {
+                // The one exit that leaves this form standing after a create
+                // that owed nothing. Every attachment landed and the list is
+                // empty, but the run drew nothing after emptying it, so the
+                // rows were still on the screen — under a panel the freeze had
+                // no other way out of, because the two paths that release it
+                // are the two this is not. Read as a create that lost the
+                // files it is still showing, held by controls that would never
+                // work again. So the list is drawn as it now stands, which is
+                // empty, and handed back.
+                attachmentDraftPanel.setBusy(false);
+                attachmentDraftPanel.render();
                 showCreatedTaskRefreshFailure(result, retryCreatedTaskRefresh);
                 return;
               }
