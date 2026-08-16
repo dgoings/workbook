@@ -4480,6 +4480,9 @@ class TestElement {
     this.scrollHeight = 0;
     this.clientHeight = 0;
     this._scrollTop = 0;
+    this.scrollWidth = 0;
+    this.clientWidth = 0;
+    this._scrollLeft = 0;
     this._value = "";
     this._textContent = "";
     this.selected = false;
@@ -4592,8 +4595,25 @@ class TestElement {
     const limit = Math.max(0, this.scrollHeight - this.clientHeight);
     this._scrollTop = Math.max(0, Math.min(limit, Number(value) || 0));
   }
+  // The board track scrolls sideways under a drag exactly as a column scrolls
+  // down under one, so the harness gives every element the other axis on the
+  // same terms: clamped on the way in, and zero until a test says otherwise.
+  get scrollLeft() { return this._scrollLeft; }
+  set scrollLeft(value) {
+    const limit = Math.max(0, this.scrollWidth - this.clientWidth);
+    this._scrollLeft = Math.max(0, Math.min(limit, Number(value) || 0));
+  }
   scrollIntoView(options) { scrollIntoViewCalls.push({ element: this, options }); }
   get firstElementChild() { return this.children[0] || null; }
+  // The next element beside this one, text nodes skipped. The drop line asks
+  // for it to find out whether it is already where it is about to be put, which
+  // is what keeps it from rebuilding itself under a drag cursor every frame.
+  get nextElementSibling() {
+    if (!this.parentElement) return null;
+    const siblings = this.parentElement.children.filter((child) => child.nodeType !== 3);
+    const at = siblings.indexOf(this);
+    return at < 0 ? null : (siblings[at + 1] || null);
+  }
   get textContent() { return this._textContent + this.children.map((child) => child.textContent).join(""); }
   set textContent(value) { this._textContent = String(value); }
   get value() {
@@ -4770,6 +4790,22 @@ const documentEventListeners = {};
     return null;
   },
   querySelectorAll() { return []; },
+  // The browser's own hit test, over the boxes a test has stated. The drag
+  // loop asks the document what is under a cursor that has not moved after the
+  // board track has slid beneath it, which is the one question the loop cannot
+  // answer from the events it was handed — and the deepest box containing the
+  // point is exactly what a browser would return, so a test furnishing the
+  // geometry gets the answer the page gets.
+  elementFromPoint(x, y) {
+    let found = null;
+    const visit = (element) => {
+      const box = element.rect;
+      if (box && x >= box.left && x <= box.right && y >= box.top && y <= box.bottom) found = element;
+      (element.children || []).forEach(visit);
+    };
+    visit(boardElement);
+    return found;
+  },
   createElement(tagName) { return new TestElement(tagName); },
   createTextNode(data) { return new TestText(data); },
   createDocumentFragment() { return new TestElement("fragment"); },

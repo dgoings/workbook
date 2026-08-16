@@ -1069,8 +1069,14 @@
       // The position is remembered here instead and a frame loop reads it, so
       // holding still at an edge keeps scrolling exactly as it does everywhere
       // else a drag scrolls something.
+      //
+      // Both coordinates are kept, because the same held cursor drives two
+      // scrollers: the column's own list down its cards, and the board track
+      // sideways toward the columns the window is too narrow to show. Near a
+      // corner the reader is asking for both at once.
       let dragScroller = null;
       let dragPointerY = 0;
+      let dragPointerX = 0;
       // The frame the loop has asked for, and the timestamp of the one before
       // it. Both are null while no loop is running, which is what makes
       // starting it idempotent and stopping it verifiable.
@@ -1088,7 +1094,11 @@
       // Whatever the scroller would not take is held here and added to the next
       // frame, so the ramp is the rate on a browser that rounds and on one that
       // does not.
+      // Each scroller keeps its own, because two scrollers rounding
+      // independently would otherwise trade each other's lost fractions and
+      // neither would deliver the rate its ramp named.
       let dragScrollCarry = 0;
+      let boardScrollCarry = 0;
       const copyFeedback = new Map();
       const copyFeedbackTimers = new Map();
       let copySuppressionTimer = null;
@@ -6740,6 +6750,22 @@
           reportAbandonedAttachments(outstandingAttachmentReport);
           outstandingAttachmentReport = null;
         }
+        // A drag cannot outlive the page it was carrying a card across. A route
+        // change rebuilds the board out from under the gesture and takes the
+        // card node with it, and no dragend follows something the reader never
+        // released — so the gesture is retired here rather than left holding a
+        // task nobody can see, drawing a line into a detached column, and
+        // driving a frame loop with nothing left to stop it.
+        //
+        // Measured before this, on a drag carried across a client-side
+        // navigation: one live requestAnimationFrame callback still queued and
+        // 129 frames run after the route had changed, and Chrome refusing to
+        // start the next gesture because the last one had never ended.
+        if (activeDrag) {
+          activeDrag = null;
+          clearPlacement();
+        }
+        stopDragScroll();
         // The description setting draws cards, and only the board draws cards.
         // Beside a task's own page it would be a control that visibly does
         // nothing, so it travels with the route it acts on. The markup ships it
@@ -6901,9 +6927,25 @@
           reference: cards[index]
         };
       }
+      // Idempotent on purpose, because the frame loop asks for this on every
+      // frame it moves a scroller and the answer is usually the one already on
+      // screen.
+      //
+      // Taking the line out of the document and putting it back exactly where
+      // it was is still a mutation under a drag cursor, and a mutation under a
+      // drag cursor is what makes a browser re-run its drag hit test and
+      // dispatch another dragenter/dragleave pair. Those are not free: a
+      // gesture whose last word from the browser is a dragleave has had its
+      // drop target withdrawn, and the release that follows is discarded.
+      // Measured on Chrome 151 — a card carried to a column off the right of
+      // the window and released as the track reached its end: refused in 2 runs
+      // of 3 while the line was rebuilt every frame, and in 0 of 12 once the
+      // rebuild only happened when the line actually moved.
       function showPlacement(list, placement) {
+        const reference = placement.reference || null;
+        if (dropMarker.parentElement === list && dropMarker.nextElementSibling === reference) return;
         dropMarker.remove();
-        list.insertBefore(dropMarker, placement.reference);
+        list.insertBefore(dropMarker, reference);
       }
       function clearPlacement() {
         dropMarker.remove();
@@ -6931,55 +6973,184 @@
       // a busy main thread — and scrolling for its whole duration would jump the
       // column past everything the reader meant to drop between.
       const dragScrollMaxStep = 50;
-      // The distance this scroller should travel this frame: negative up,
+      // How hard the cursor is pushing into one of a scroller's two edges, as a
+      // signed fraction of the way across the edge zone: -1 at the near edge
+      // and anywhere past it, +1 at the far edge and anywhere past it, and 0
+      // through the whole still middle between them.
+      //
+      // Both axes ask this one function. A board that slid sideways on a
+      // different ramp from the one a column scrolls down on would be two
+      // behaviours a reader has to learn separately, and near a corner they
+      // would be two behaviours happening at once.
+      //
+      // A cursor a hair past either end counts as being at that end rather than
+      // as being in neither zone. The two zones cannot overlap and leave a gap
+      // between them, because each is at most a quarter of the span.
+      function dragScrollRate(pointer, near, far) {
+        const span = far - near;
+        if (!(span > 0)) return 0;
+        const zone = Math.min(dragScrollEdgeMax, span * dragScrollEdgeFraction);
+        const intoNear = pointer - near;
+        const intoFar = far - pointer;
+        if (intoNear < zone) return -Math.min(1, (zone - intoNear) / zone);
+        if (intoFar < zone) return Math.min(1, (zone - intoFar) / zone);
+        return 0;
+      }
+      // What a rate is worth in pixels over a frame of this length.
+      function dragScrollTravel(rate, elapsed) {
+        return rate * dragScrollMaxSpeed * (elapsed / 1000);
+      }
+      // The distance this column should travel this frame: negative up,
       // positive down, and zero anywhere in the still middle.
       function dragScrollDistance(scroller, pointerY, elapsed) {
         const bounds = scroller.getBoundingClientRect();
-        const height = bounds.bottom - bounds.top;
-        if (!(height > 0)) return 0;
-        const zone = Math.min(dragScrollEdgeMax, height * dragScrollEdgeFraction);
-        const intoTop = pointerY - bounds.top;
-        const intoBottom = bounds.bottom - pointerY;
-        // A cursor a hair past either end counts as being at that end rather
-        // than as being in neither zone. The two zones cannot overlap and leave
-        // a gap between them, because each is at most a quarter of the height.
-        let rate = 0;
-        if (intoTop < zone) rate = -Math.min(1, (zone - intoTop) / zone);
-        else if (intoBottom < zone) rate = Math.min(1, (zone - intoBottom) / zone);
-        else return 0;
-        return rate * dragScrollMaxSpeed * (elapsed / 1000);
+        return dragScrollTravel(dragScrollRate(pointerY, bounds.top, bounds.bottom), elapsed);
       }
-      // Redraw the drop line for the remembered cursor position. The cards have
-      // moved under a cursor that has not, so the line drawn on the last
-      // dragover is answering a question about a column that no longer looks
-      // like that — and there may never be another dragover to correct it. The
-      // Deleted column draws no line at all, for the reason its dragover
-      // doesn't: its order is not the drop's to name.
-      function refreshDragPlacement(list) {
-        if (!activeDrag || dropsIntoDeleted(list)) return;
-        if (!lists.has(list.dataset.dropStatus)) return;
-        showPlacement(list, placementFor(list, dragPointerY));
+      // How hard the held cursor is asking the board track to slide sideways,
+      // and whether it is asking at all.
+      //
+      // The frame of reference is the track's own box rather than the window's.
+      // The track is the thing that scrolls, and its left and right edges are
+      // where the columns the window cannot show begin — so a cursor pushed out
+      // past the window's edge is past the track's edge too and asks for the
+      // full rate, exactly as a cursor shoved past a column's fold asks for
+      // that column's full rate. Neither is a gesture anything under the cursor
+      // could answer, and both are the reader saying "keep going".
+      //
+      // Which column the cursor happens to be over decides nothing here. The
+      // zone is a property of the track's viewport, so it is the same 72px
+      // whether the columns are 16rem or 26rem wide and whether the cursor is
+      // over a column, over the gutter between two of them, or past the last
+      // one — a reader dragging toward the right edge is asking for the same
+      // thing in all three places, and a rule that read the column under the
+      // cursor would stall the gesture in the gaps.
+      //
+      // Out through the track's top or bottom is a departure rather than a
+      // push, and stops it. A reader who has carried the card up over the
+      // header or down below the track has left the board, and a board still
+      // sliding under them would be answering a gesture nobody is making. That
+      // is the column loop's sideways rule, turned a quarter turn.
+      //
+      // The box is taken as it is rather than clipped to the window. The board
+      // is laid out to fit the window it is in and the columns are what
+      // overflow, not the page: measured in Chrome at a 390x844 viewport, the
+      // track's box is x 20..370 of a 390px window with the document not
+      // scrolling sideways at all. A clip would be a defence against a page
+      // this one is not.
+      function boardScrollRate() {
+        const bounds = board.getBoundingClientRect();
+        if (dragPointerY < bounds.top || dragPointerY > bounds.bottom) return 0;
+        return dragScrollRate(dragPointerX, bounds.left, bounds.right);
       }
+      // Draw the line this destination would take, or take none away.
+      //
+      // One rule, asked by the listeners answering an event and by the frame
+      // loop answering for a cursor no event is reporting. The loop's case is
+      // the one that needs saying: the cards have moved under a cursor that has
+      // not, so a line drawn on the last dragover is answering a question about
+      // a column that no longer looks like that, and there may never be another
+      // dragover to correct it.
+      //
+      // Every caller hands it a destination dragDestination() has already
+      // approved, so there is no column to refuse here — the refusing is done
+      // before the line is ever asked for.
+      function showDragPlacement(target, pointerY) {
+        if (dropsIntoDeleted(target)) {
+          // No drop marker. The column orders itself by when each task was
+          // deleted, and a line drawn between two cards would promise a
+          // position this drop does not name and the column would not keep.
+          clearPlacement();
+          return;
+        }
+        showPlacement(target, placementFor(target, pointerY));
+      }
+      // Which column the held cursor is over now, after the track has slid a
+      // different one under it.
+      //
+      // A column scrolling under a still cursor changes which cards are there;
+      // a track sliding under one changes which column is there, and that is a
+      // harder question because the page's answer to it comes only from a
+      // dragenter. A browser dispatches those when it feels like it, and a drop
+      // does not consult them at all — it hit-tests for itself and lands where
+      // the cursor actually is. So the loop asks the document the same question
+      // the drop will ask, through the same dragDestination() the listeners
+      // use, and the line, the column being scrolled and the drop then agree by
+      // construction rather than by luck. Measured before this: a card carried
+      // to a column three tracks off the right of the window landed in that
+      // column while the line was still drawn in the column the slide started
+      // over.
+      function retargetDragScroller() {
+        const under = document.elementFromPoint(dragPointerX, dragPointerY);
+        const target = under ? dragDestination({ target: under }) : null;
+        // A different column is a different scroller, and the fraction of a
+        // pixel the last one would not take is not owed to this one.
+        if (target !== dragScroller) dragScrollCarry = 0;
+        dragScroller = target;
+        // Over the gutter between two columns, or past the last one: nothing to
+        // scroll down and no landing place to promise, while the track keeps
+        // sliding toward the one the reader is heading for.
+        if (!target) {
+          clearPlacement();
+          return;
+        }
+        showDragPlacement(target, dragPointerY);
+      }
+      // One frame, both axes, from the one remembered cursor.
+      //
+      // Near a corner the reader is asking for both at once — the column coming
+      // up under the card while the track slides the column they are heading
+      // for into view — and they are different scrollers on different axes, so
+      // neither is ever in the other's way.
       function dragScrollTick(timestamp) {
         dragScrollFrame = null;
         // The gesture ended between frames. Returning without asking for
         // another is what stops the loop.
-        if (!activeDrag || !dragScroller) return;
+        if (!activeDrag) return;
         const elapsed = dragScrollLast === null
           ? 0
           : Math.min(dragScrollMaxStep, Math.max(0, timestamp - dragScrollLast));
         dragScrollLast = timestamp;
         const scroller = dragScroller;
-        const distance = dragScrollDistance(scroller, dragPointerY, elapsed);
-        if (distance !== 0) {
-          const limit = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
-          const from = scroller.scrollTop;
-          const wanted = Math.max(0, Math.min(limit, from + distance + dragScrollCarry));
-          scroller.scrollTop = wanted;
-          // Read back rather than assumed: the carry is whatever this scroller
-          // would not take, which at either end of its travel is nothing.
-          dragScrollCarry = wanted - scroller.scrollTop;
-          if (scroller.scrollTop !== from) refreshDragPlacement(scroller);
+        if (scroller) {
+          const distance = dragScrollDistance(scroller, dragPointerY, elapsed);
+          if (distance !== 0) {
+            const limit = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+            const from = scroller.scrollTop;
+            const wanted = Math.max(0, Math.min(limit, from + distance + dragScrollCarry));
+            scroller.scrollTop = wanted;
+            // Read back rather than assumed: the carry is whatever this scroller
+            // would not take, which at either end of its travel is nothing.
+            dragScrollCarry = wanted - scroller.scrollTop;
+            if (scroller.scrollTop !== from) showDragPlacement(scroller, dragPointerY);
+          }
+        }
+        // The rate rather than the distance decides whether the track is being
+        // asked for, because the first frame of a loop measures no elapsed time
+        // and every distance on it is zero.
+        const rate = boardScrollRate();
+        if (rate !== 0) {
+          const distance = dragScrollTravel(rate, elapsed);
+          const limit = Math.max(0, board.scrollWidth - board.clientWidth);
+          const from = board.scrollLeft;
+          const wanted = Math.max(0, Math.min(limit, from + distance + boardScrollCarry));
+          board.scrollLeft = wanted;
+          // Chrome rounds an assigned scrollLeft exactly as it rounds an
+          // assigned scrollTop, so the track needs the same carry the column
+          // needs, kept apart from it.
+          boardScrollCarry = wanted - board.scrollLeft;
+          // A whole column changed under the cursor, not just the cards in one,
+          // so this asks the harder question rather than redrawing the line
+          // where it already was. It also puts back a line a churn dragleave
+          // cleared.
+          if (board.scrollLeft !== from) retargetDragScroller();
+        }
+        // Nothing is asking for another frame: no column is being tracked and
+        // the cursor is nowhere near the track's edges. An event starts the
+        // loop again the moment the reader pushes somewhere that wants it, so
+        // idling on here would be a loop with no reason to live.
+        if (!scroller && rate === 0) {
+          stopDragScroll();
+          return;
         }
         dragScrollFrame = requestAnimationFrame(dragScrollTick);
       }
@@ -6990,6 +7161,7 @@
         // one frame would scroll the capped step before the reader had moved.
         dragScrollLast = null;
         dragScrollCarry = 0;
+        boardScrollCarry = 0;
         dragScrollFrame = requestAnimationFrame(dragScrollTick);
       }
       // Whether an event's cursor is inside this scroller's own box.
@@ -7025,30 +7197,57 @@
         dragScrollFrame = null;
         dragScrollLast = null;
         dragScrollCarry = 0;
+        boardScrollCarry = 0;
         dragScroller = null;
       }
-      // Remember where the cursor is, and run the loop for as long as the drag
-      // is asking a column to move.
+      // The column under the cursor stops being scrolled. The loop only stops
+      // with it when the board has no reason of its own to keep running.
       //
-      // Handed a column, that is the column. Handed nothing — the gutter
-      // between columns, a target this drag is refused by — the column it was
-      // scrolling stops, because a drag going nowhere is not asking anything to
-      // move. The exception is the one the story is about: a cursor shoved past
-      // the top or bottom of the column it was already scrolling is still
-      // asking for that column, and there is nothing under it that could say so.
+      // This is the difference the second axis makes. A cursor that has left a
+      // column used to be a cursor that had stopped asking for anything, so the
+      // one stop did for both. Now a reader carrying a card into the gutter
+      // between two columns while pushing at the track's right edge is still
+      // asking loudly — and the track sliding a fresh column under a stationary
+      // cursor is itself what takes the cursor off the column it was on, so a
+      // stop here would cancel the very scroll that caused it, several times a
+      // second.
+      function releaseDragScroller() {
+        dragScroller = null;
+        dragScrollCarry = 0;
+        if (activeDrag && boardScrollRate() !== 0) {
+          startDragScroll();
+          return;
+        }
+        stopDragScroll();
+      }
+      // Remember where the cursor is, and run the loop for as long as the drag
+      // is asking anything to move.
+      //
+      // The position is recorded wherever the cursor has got to, including
+      // somewhere that takes no drop at all, because the board track answers
+      // for the whole window and the places a card is carried to on the way to
+      // an off-screen column — the gutter, the page beyond the last column, the
+      // strip past the window's edge — are exactly those places.
+      //
+      // Handed a column, that is the column. Handed nothing, the column it was
+      // scrolling is released, and whether the loop goes with it is the board's
+      // to say. The exception is the one the vertical story was about: a cursor
+      // shoved past the top or bottom of the column it was already scrolling is
+      // still asking for that column, and there is nothing under it that could
+      // say so.
       function trackDragScroll(scroller, event) {
-        const pointerY = event && typeof event.clientY === "number" ? event.clientY : null;
+        if (event && typeof event.clientY === "number") dragPointerY = event.clientY;
+        if (event && typeof event.clientX === "number") dragPointerX = event.clientX;
         if (scroller) {
-          if (pointerY !== null) dragPointerY = pointerY;
+          // A different column is a different scroller, and the fraction of a
+          // pixel the last one would not take is not owed to this one.
+          if (scroller !== dragScroller) dragScrollCarry = 0;
           dragScroller = scroller;
           startDragScroll();
           return;
         }
-        if (activeDrag && dragScroller && event && overshootsVertically(dragScroller, event)) {
-          if (pointerY !== null) dragPointerY = pointerY;
-          return;
-        }
-        stopDragScroll();
+        if (activeDrag && dragScroller && event && overshootsVertically(dragScroller, event)) return;
+        releaseDragScroller();
       }
       function cardNodes(list) {
         return [...list.children].filter((child) => child.dataset && child.dataset.taskId);
@@ -7476,27 +7675,27 @@
       // column was still moving was silently discarded: no drop event, no
       // write, the card back where it started and nothing said about it.
       // Answering both events with the same rule is what closes that.
+      //
+      // Both listeners also draw the line, for the same reason both answer.
+      // While the board track is sliding, the column under a stationary cursor
+      // changes several times a second and dragenter is the only word the page
+      // gets about it — a page that drew the line on dragover alone would leave
+      // it in a column that has since moved out from under the reader, or leave
+      // it nowhere at all after the dragleave that came with the churn.
+      function answerDrag(event, target) {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+        showDragPlacement(target, event.clientY);
+      }
       document.addEventListener("dragenter", (event) => {
         const target = dragDestination(event);
         trackDragScroll(target, event);
-        if (!target) return;
-        event.preventDefault();
-        event.dataTransfer.dropEffect = "move";
+        if (target) answerDrag(event, target);
       });
       document.addEventListener("dragover", (event) => {
         const target = dragDestination(event);
         trackDragScroll(target, event);
-        if (!target) return;
-        event.preventDefault();
-        event.dataTransfer.dropEffect = "move";
-        if (dropsIntoDeleted(target)) {
-          // No drop marker. The column orders itself by when each task was
-          // deleted, and a line drawn between two cards would promise a
-          // position this drop does not name and the column would not keep.
-          clearPlacement();
-          return;
-        }
-        showPlacement(target, placementFor(target, event.clientY));
+        if (target) answerDrag(event, target);
       });
       // Whether the card under the cursor is one the board is drawing as
       // deleted. It reads the projected model rather than the raw one because
@@ -7508,8 +7707,27 @@
         return Boolean(drawn && drawn.deleted);
       }
       document.addEventListener("dragleave", (event) => {
+        // Wherever this leave came from and whatever it turns out to mean, it
+        // is a report of where the cursor is, and the track answers for the
+        // whole window rather than for any one column. A leave that names a
+        // column the loop is not scrolling is ignored below, and it still
+        // carries the news that the cursor has gone somewhere the track has
+        // nothing to do — without this the loop would keep sliding on a
+        // position nothing had corrected.
+        if (activeDrag) {
+          if (typeof event.clientX === "number") dragPointerX = event.clientX;
+          if (typeof event.clientY === "number") dragPointerY = event.clientY;
+        }
         const target = dropTarget(event);
         if (!target || target.contains(event.relatedTarget)) return;
+        // A leave whose own cursor is still inside the column is not a
+        // departure at all, so nothing about it is answered: not the scroll,
+        // and not the line either. Erasing the line there was wrong twice over
+        // — it took away a promise the reader is still being made, and it did
+        // it by mutating the document under a drag cursor, which is what makes
+        // a browser fire the next dragleave. The clear moved below the test
+        // rather than above it.
+        if (cursorWithin(target, event)) return;
         clearPlacement();
         // Whether the cursor has left the column is asked of where this event
         // says the cursor is, as well as of what it says the cursor moved to.
@@ -7532,12 +7750,16 @@
         // box has not left it. Nor has one shoved past its top or bottom, which
         // is the gesture asking it to keep scrolling — and a cursor that leaves
         // the window that way is making the same request, so it is answered the
-        // same way and dragend ends it, as it ends everything. What is left is
-        // a cursor gone sideways past the column's edge with no dragover to
-        // report where it went, and that stops the scroll here.
+        // same way and dragend ends it, as it ends everything.
+        //
+        // What is left is a cursor gone sideways past the column's edge with no
+        // dragover to report where it went. The column stops — but where the
+        // cursor went may still be asking the board track to slide, and the
+        // gutter at the track's own edge is precisely that, so this leave's own
+        // coordinates are worth keeping and the loop is the board's to end.
         if (target !== dragScroller) return;
-        if (cursorWithin(target, event) || overshootsVertically(target, event)) return;
-        stopDragScroll();
+        if (overshootsVertically(target, event)) return;
+        releaseDragScroller();
       });
       document.addEventListener("drop", async (event) => {
         // The gesture is over the moment something is dropped, whatever the
