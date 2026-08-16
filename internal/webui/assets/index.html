@@ -1099,6 +1099,15 @@
       const pendingRelationshipDrafts = new Map();
       const pendingTaskMessages = new Map();
       let createdTaskRecovery = null;
+      // What a New Task form is still holding for a task it already made: the
+      // attachments its create could not attach, named rather than carried.
+      //
+      // The files themselves cannot be published here. A staged file is a File
+      // the browser handed one node, and nothing outside that node can hold it
+      // usefully — which is exactly why this exists: the form is the only place
+      // those bytes are, so a render that replaces it has to say so on the way
+      // past rather than let them go without a word.
+      let outstandingAttachmentReport = null;
       let pendingRelationshipRecoveryFocus = null;
       // The New Task form's "Create more" preference. It lives out here because
       // a save rebuilds the route it is drawn on: state held by the form would
@@ -2045,6 +2054,27 @@
           values,
           "The relationships staged with this draft are not in this form; add them again if " +
             "you still want them. " + creationFailureMessage(error));
+      }
+      // A New Task form that was holding attachments for a task it had already
+      // made is being replaced, and the files go with it.
+      //
+      // Every other draft this client can lose is offered back through the
+      // notice; these cannot be, so the notice says what was lost, names the
+      // task it belonged to, and points at the one place they can still be
+      // attached. Reported as an error rather than a warning: something the
+      // reader asked for is not going to happen, and the form that said so is
+      // gone.
+      function reportAbandonedAttachments(held) {
+        const open = document.createElement("a");
+        open.href = taskPath(held.taskID);
+        text(open, "Open task");
+        showNotice("error",
+          "Task " + held.taskID + " was created, but " +
+          (held.names.length === 1
+            ? "one attachment was not attached to it"
+            : held.names.length + " attachments were not attached to it") +
+          " and left with the form: " + held.names.join(", ") +
+          ". Attach them from the task itself.", open);
       }
       // A draft the user is still writing, set aside so a restore could have the
       // route. Nothing failed here, which is why it is reported as a warning and
@@ -4661,10 +4691,14 @@
             attachmentDraftPanel.setBusy(false);
             attachmentDraftPanel.render();
             if (outcome.failures.length) {
+              publishOutstandingAttachments();
               reportOutstandingAttachments(createdTaskID, outcome, null);
               return;
             }
             outstandingAttachments = false;
+            // Retired before the navigation below, which is the render that
+            // would otherwise announce a loss that did not happen.
+            outstandingAttachmentReport = null;
             // Everything this create set out to do has happened, so it lands on
             // the task rather than on the board. The reader has spent this whole
             // detour on these attachments and the page that lists them is the
@@ -4700,9 +4734,20 @@
           openCreatedTask.href = taskPath(recovery.taskID);
           openCreatedTask.hidden = false;
           attachmentDraftPanel.render();
+          publishOutstandingAttachments();
           reportOutstandingAttachments(recovery.taskID, outcome, recovery);
           // The board is one Back away and has a task on it it has not read.
           await refresh();
+        }
+        // Names what is still owed, for the render that replaces this form to
+        // report. Names only: the files are unreachable once this node is, and
+        // publishing a handle to them would be publishing a handle to nothing.
+        function publishOutstandingAttachments() {
+          outstandingAttachmentReport = {
+            taskID: createdTaskID,
+            names: attachmentDrafts.items.map((item) =>
+              item.kind === "link" ? (item.label || item.url) : item.name)
+          };
         }
         function reportOutstandingAttachments(taskID, outcome, recovery) {
           const failed = outcome.failures.length;
@@ -6549,6 +6594,14 @@
         readOpenNewTaskValues = null;
         openDetailForm = null;
         openThreadPanels = null;
+        // Said on the way past, because after this render there is nobody left
+        // to say it: the form holding those files is about to stop existing, and
+        // a reader who pressed Back would otherwise learn nothing at all about
+        // attachments they watched fail a moment ago.
+        if (outstandingAttachmentReport) {
+          reportAbandonedAttachments(outstandingAttachmentReport);
+          outstandingAttachmentReport = null;
+        }
         // The description setting draws cards, and only the board draws cards.
         // Beside a task's own page it would be a control that visibly does
         // nothing, so it travels with the route it acts on. The markup ships it

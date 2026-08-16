@@ -493,6 +493,73 @@ setTimeout(async () => {
 	}
 }
 
+// Leaving the form while it is still holding attachments is the one way those
+// files can be lost, so it is the one thing this client will not let happen
+// quietly. The notice names the task, names what did not attach, and points at
+// the only place it can still be attached — it cannot offer the files back,
+// because a File leaves with the node holding it, which is exactly why it has
+// to say so instead.
+func TestHandlerClientAnnouncesAttachmentsAbandonedWithTheForm(t *testing.T) {
+	node := requireNode(t)
+	mutation, refreshed := createdTaskJSON(t)
+	program := createAttachmentProgram(t, `
+const created = `+mutation+`;
+const refreshed = `+refreshed+`;
+setTimeout(async () => {
+  const form = await openCreateForm();
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, options });
+    if (url === "/api/tasks" && options.method === "POST") {
+      return { ok: true, json: async () => created };
+    }
+    if (options.method === "POST") {
+      return { ok: false, json: async () => ({
+        format: "workbook.error", version: 1,
+        error: { category: "operational", message: "the ref moved under that write" }
+      }) };
+    }
+    if (url === "/api/tasks?deleted=true") {
+      return { ok: true, json: async () => ({ format: "workbook.tasks", version: 1, tasks: [] }) };
+    }
+    return { ok: true, json: async () => refreshed };
+  };
+
+  typeTitle(form, "Task with attachments");
+  await stageFiles([new TestFile("trace.log", 5, "trace")]);
+  await stageLink("https://example.test/design", "Design doc");
+  await form.eventListeners.submit({ preventDefault() {} });
+  if (stagedNames().length !== 2) throw new Error("the refused uploads did not stay staged");
+  if (!notice.hidden) throw new Error("a form that is still holding the files announced a loss");
+
+  // Back to the board, which is the render that destroys the form.
+  returnTo("/");
+  if (main.firstElementChild !== boardView) throw new Error("Back did not leave the form");
+  if (notice.hidden) throw new Error("leaving the form said nothing about the files it took");
+  const said = notice.textContent;
+  if (!said.includes(`+strconv.Quote(createAttachmentTaskID)+`) || !said.includes("was created")) {
+    throw new Error("the notice does not name the task: " + JSON.stringify(said));
+  }
+  if (!said.includes("trace.log") || !said.includes("Design doc")) {
+    throw new Error("the notice does not name what was lost: " + JSON.stringify(said));
+  }
+  if (!findElement(notice, (element) => element.tagName === "A" &&
+      element.href === "/tasks/" + encodeURIComponent(`+strconv.Quote(createAttachmentTaskID)+`))) {
+    throw new Error("the notice does not point at the task the files belong to");
+  }
+  // Said once. A second render is not a second loss.
+  const before = notice.textContent;
+  returnTo("/tasks/new");
+  returnTo("/");
+  if (notice.textContent !== before) {
+    throw new Error("the loss was announced twice: " + JSON.stringify(notice.textContent));
+  }
+}, 0);
+`)
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute the abandoned attachment notice: %v\n%s", err, output)
+	}
+}
+
 // The retry sends what is left to the task that already exists, and never makes
 // a second one. That is the reason the form holds an ID rather than re-entering
 // the create path: a reader pressing Save twice must end up with one task.
