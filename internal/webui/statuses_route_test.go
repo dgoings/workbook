@@ -12,7 +12,8 @@ import (
 
 // What the statuses route does, and what it refuses to do.
 //
-// It is a page of its own at /statuses, reached from the board and served on a
+// It is a section of a page of its own at /config, reached from the board and
+// served on
 // hard load like every other route here. It is also the one writer in this
 // client that is outside the optimistic mutation queue, so most of what is
 // pinned here is about the two rules that follow from that: a change waits for
@@ -92,7 +93,7 @@ async function follow(anchor) {
 // server renders into the header, and waits for the read the route starts.
 async function openStatuses() {
   const link = new TestElement("a");
-  link.href = window.location.origin + "/statuses";
+  link.href = window.location.origin + "/config";
   await follow(link);
 }
 // Walks back to the board by the page's own Back link.
@@ -133,7 +134,7 @@ func runPanelClient(t *testing.T, purpose string, vocabulary core.Vocabulary, he
 }
 
 // runStatusesClient is the same with the entry point spelled out: `path` is the
-// address the reader arrived at, which a deep-link test sets to /statuses, and
+// address the reader arrived at, which a deep-link test sets to /config, and
 // `prelude` is script the harness runs before the client's, which is how a page
 // served without the statuses markup is put in front of it.
 func runStatusesClient(
@@ -279,7 +280,7 @@ func TestHandlerBoardLinksToTheStatusesRoute(t *testing.T) {
 		"custom":  handlerVocabulary(t),
 	} {
 		body := boardMarkup(t, administrableBoardPage(t, vocabulary))
-		link := elementTag(t, body, `href="/statuses"`)
+		link := elementTag(t, body, `href="/config"`)
 		for _, attribute := range []string{`<a`, `class="header-link"`} {
 			if !strings.Contains(link, attribute) {
 				t.Errorf("%s vocabulary drew a statuses entry point %q, which does not carry %q", name, link, attribute)
@@ -355,7 +356,7 @@ func TestHandlerBoardWithoutVocabularyMutationsOffersNoStatusesRoute(t *testing.
 		// exactly what makes it safe to serve to a board without them.
 		markup := boardMarkup(t, body)
 		for _, marker := range []string{
-			`href="/statuses"`,
+			`href="/config"`,
 			"data-vocabulary-panel data-status-tags",
 			"data-vocabulary-panel-body",
 		} {
@@ -364,12 +365,15 @@ func TestHandlerBoardWithoutVocabularyMutationsOffersNoStatusesRoute(t *testing.
 			}
 		}
 		// And the address is not a page on this board. A 404 rather than a
-		// board: a reader who bookmarked /statuses against a board that can
-		// administer them is told this one cannot, rather than handed columns
-		// under a title promising a page that is not there.
-		missing := request(t, NewHandler(options), http.MethodGet, "/statuses")
+		// board: a reader who bookmarked /config against a board that can
+		// administer its statuses is told this one cannot, rather than handed
+		// columns under a title promising a page that is not there. The address
+		// this route used to answer, /statuses, is not answered at all any more
+		// — on this board or on the administrable one — because a redirect would
+		// be a second name for a page that has one.
+		missing := request(t, NewHandler(options), http.MethodGet, "/config")
 		if missing.Code != http.StatusNotFound {
-			t.Errorf("%s: GET /statuses status = %d, want %d", name, missing.Code, http.StatusNotFound)
+			t.Errorf("%s: GET /config status = %d, want %d", name, missing.Code, http.StatusNotFound)
 		}
 		// The board itself is untouched: it still draws its columns and still
 		// says which vocabulary it drew them from.
@@ -394,9 +398,9 @@ func TestClientStatusesRouteReadsTheProjectsStatusesOnEntry(t *testing.T) {
   if (statusesRoute()) throw new Error("the board route drew the statuses page");
   await openStatuses();
 
-  if (window.location.href.indexOf("/statuses") < 0) throw new Error("the link did not go to /statuses: " + window.location.href);
-  if (historyPaths[historyPaths.length - 1] !== "/statuses") throw new Error("the walk pushed " + JSON.stringify(historyPaths));
-  if (document.title !== "Statuses · Workbook") throw new Error("the page is titled " + JSON.stringify(document.title));
+  if (window.location.href.indexOf("/config") < 0) throw new Error("the link did not go to /config: " + window.location.href);
+  if (historyPaths[historyPaths.length - 1] !== "/config") throw new Error("the walk pushed " + JSON.stringify(historyPaths));
+  if (document.title !== "Configuration · Workbook") throw new Error("the page is titled " + JSON.stringify(document.title));
   if (!statusesRoute()) throw new Error("the route drew no statuses page into main");
   if (vocabularyPanel.hidden !== false) throw new Error("the route left its own body hidden");
   if (main.children.length !== 1 || main.children[0] !== statusesRoute()) {
@@ -518,7 +522,7 @@ func TestClientStatusesPageAddsAStatusAgainstTheHeadItRead(t *testing.T) {
   if (said.length !== 2) throw new Error("the panel said " + JSON.stringify(said));
   if (said[0].indexOf("triage") < 0) throw new Error("the panel did not report the change: " + said[0]);
   if (said[1].indexOf("workbook docs update") < 0) throw new Error("the server's warning was swallowed: " + JSON.stringify(said));
-  const warned = findElements(vocabularyPanelStatus, (element) => hasDataKey(element, "vocabularyPanelWarning"));
+  const warned = findElements(vocabularyPanelStatus, (element) => hasDataKey(element, "panelWarning"));
   if (warned.length !== 1) throw new Error("the warning was not marked as one");
 
   // The board is untouched, and told to say so.
@@ -1413,12 +1417,12 @@ func TestClientStatusesRouteRendersOnADirectLoad(t *testing.T) {
 	task := clientPlacementTask("WB-01J0000000000000000000A101", "Frozen", core.Status("icebox"), core.PriorityMedium)
 	// The answer is prepared before the client script runs, because a hard load
 	// reads the statuses in its first render rather than waiting to be asked.
-	runStatusesClient(t, "a hard load of the statuses page", "/statuses",
+	runStatusesClient(t, "a hard load of the statuses page", "/config",
 		"vocabularyRead = "+panelVocabularyJSON(t, panelRenamedVocabulary(t), "head-7")+";\n",
 		vocabulary, "head-7", []core.Task{task}, `
   await settle();
   if (!statusesRoute()) throw new Error("the first render drew no statuses page into main");
-  if (document.title !== "Statuses · Workbook") throw new Error("the page is titled " + JSON.stringify(document.title));
+  if (document.title !== "Configuration · Workbook") throw new Error("the page is titled " + JSON.stringify(document.title));
   if (vocabularyCalls.length !== 1 || vocabularyCalls[0].url !== "/api/vocabulary") {
     throw new Error("the load asked for " + JSON.stringify(vocabularyCalls.map((call) => call.url)));
   }
@@ -1446,7 +1450,7 @@ func TestClientStatusesRouteRendersOnADirectLoad(t *testing.T) {
 func TestClientStatusesRouteIsNotARouteWithoutTheMarkup(t *testing.T) {
 	vocabulary := handlerVocabulary(t)
 	runStatusesClient(t, "a statuses address on a board that cannot administer them",
-		"/statuses", withoutStatusAdministration, vocabulary, "head-7", nil, `
+		"/config", withoutStatusAdministration, vocabulary, "head-7", nil, `
   await settle();
   if (document.title !== "Page not found · Workbook") throw new Error("the page is titled " + JSON.stringify(document.title));
   if (vocabularyCalls.length !== 0) {

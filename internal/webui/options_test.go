@@ -63,6 +63,10 @@ func TestNewHandlerRoutesEveryOptionToItsOwnRoute(t *testing.T) {
 			called = append(called, "SetSyncMode")
 			return SyncState{Mode: SyncModeInline}, nil
 		},
+		SetDisplay: func(context.Context, DisplayChange) (DisplayMutation, error) {
+			called = append(called, "SetDisplay")
+			return DisplayMutation{}, nil
+		},
 	})
 
 	dependencyPath := "/api/tasks/" + task.ID + "/dependencies/" + boardTasks()[1].ID
@@ -84,6 +88,7 @@ func TestNewHandlerRoutesEveryOptionToItsOwnRoute(t *testing.T) {
 		{option: "History", method: http.MethodGet, target: "/api/tasks/" + task.ID + "/history"},
 		{option: "SyncState", method: http.MethodGet, target: "/api/sync"},
 		{option: "SetSyncMode", method: http.MethodPut, target: "/api/sync", body: `{"mode":"inline"}`},
+		{option: "SetDisplay", method: http.MethodPatch, target: "/api/display", body: `{"expectedHead":""}`},
 	}
 	for _, test := range tests {
 		t.Run(test.option, func(t *testing.T) {
@@ -125,6 +130,7 @@ func TestNewHandlerReportsUnconfiguredCapabilities(t *testing.T) {
 		{name: "history", method: http.MethodGet, target: "/api/tasks/" + task.ID + "/history"},
 		{name: "sync state", method: http.MethodGet, target: "/api/sync"},
 		{name: "sync mode", method: http.MethodPut, target: "/api/sync", body: `{"mode":"inline"}`},
+		{name: "display settings", method: http.MethodPatch, target: "/api/display", body: `{"expectedHead":""}`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

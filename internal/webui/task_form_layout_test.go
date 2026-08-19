@@ -221,7 +221,7 @@ func TestHandlerClientCompactsTheRelationshipGroups(t *testing.T) {
 		// would appear on rather than growing one under their cursor.
 		`.relationship-editor:focus-within .relationship-empty:empty { min-height: 1rem; }`,
 		`.task-relationships { display: grid; gap: .7rem; padding: .7rem 0 0; }`,
-		`.relationship-group { border-top: 1px solid #d5deea; padding-top: .7rem; }`,
+		`.relationship-group { border-top: 1px solid var(--wb-hairline); padding-top: .7rem; }`,
 	} {
 		if !strings.Contains(body, fragment) {
 			t.Errorf("relationship group styling does not contain %q", fragment)

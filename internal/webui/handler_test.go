@@ -680,7 +680,7 @@ func TestHandlerRendersTextLikeCopyableTaskIDControls(t *testing.T) {
 		`background: transparent`,
 		`cursor: pointer`,
 		`padding: 0`,
-		`.task-id-copy:hover { color: #2457d6; }`,
+		`.task-id-copy:hover { color: var(--wb-primary); }`,
 		`.task-id-copy:focus-visible`,
 		`.task-id-copy-group {`,
 		`position: relative`,
@@ -4425,6 +4425,8 @@ const boardStatusTags = ` + strconv.Quote(strings.Join(tagNames, " ")) + `;
 const boardStatusDefinitions = ` + string(encoded) + `;
 const boardDefaultStatus = ` + strconv.Quote(string(vocabulary.Default())) + `;
 const boardVocabularyHead = ` + strconv.Quote(vocabularyHead) + `;
+const boardProjectName = ` + strconv.Quote(core.DefaultProjectName) + `;
+const boardTitleSuffixName = "Workbook";
 // The attachment ceiling the server renders into the page, so the harness's
 // upload control refuses what the real one refuses rather than what a number
 // invented here would.
@@ -4675,6 +4677,11 @@ const boardLists = boardStatusDefinitions.map(([status, label]) => {
 });
 boardView.dataset.defaultStatus = boardDefaultStatus;
 boardView.dataset.vocabularyHead = boardVocabularyHead;
+// What the board is called and what every other route's title ends in, as the
+// server resolves them. A harness that invented either would be testing a
+// fallback core owns rather than the one the page is served with.
+boardView.dataset.projectName = boardProjectName;
+boardView.dataset.titleSuffix = boardTitleSuffixName;
 boardView.dataset.attachmentLimit = String(boardAttachmentLimit);
 boardView.dataset.attachmentTotalLimit = String(boardAttachmentTotalLimit);
 boardView.dataset.attachmentNameLimit = String(boardAttachmentNameLimit);
@@ -4767,6 +4774,14 @@ vocabularyPanel.dataset.statusTags = boardStatusTags;
 const vocabularyPanelStatus = new TestElement("div");
 const vocabularyPanelBody = new TestElement("div");
 vocabularyPanel.append(vocabularyPanelStatus, vocabularyPanelBody);
+// The board settings section beside it, as the server renders it for a board
+// built with the display writer. Its fields are the client's, filled from the
+// display member of the same vocabulary document the statuses come from.
+const displayPanel = new TestElement("div");
+displayPanel.hidden = true;
+const displayPanelStatus = new TestElement("div");
+const displayPanelBody = new TestElement("div");
+displayPanel.append(displayPanelStatus, displayPanelBody);
 const documentEventListeners = {};
 	globalThis.document = {
 	  title: "",
@@ -4787,6 +4802,9 @@ const documentEventListeners = {};
     if (selector === "[data-vocabulary-panel]") return vocabularyPanel;
     if (selector === "[data-vocabulary-panel-status]") return vocabularyPanelStatus;
     if (selector === "[data-vocabulary-panel-body]") return vocabularyPanelBody;
+    if (selector === "[data-display-panel]") return displayPanel;
+    if (selector === "[data-display-panel-status]") return displayPanelStatus;
+    if (selector === "[data-display-panel-body]") return displayPanelBody;
     return null;
   },
   querySelectorAll() { return []; },

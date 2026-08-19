@@ -14,7 +14,7 @@ import (
 // They were one row once. The row was right-aligned and its contents changed
 // with the route — the Deleted setting belongs to the board, so leaving the
 // board took it out of the row and slid every link to its left along to fill the
-// gap. A reader who had just aimed the cursor at Board arrived to find Statuses
+// gap. A reader who had just aimed the cursor at Board arrived to find Config
 // underneath it. Nothing here is about pixels, because a Go test has no layout:
 // what is pinned is the structural fact that produces the layout, which is that
 // nothing route-dependent is drawn in the same box as the links.
@@ -72,7 +72,7 @@ func TestHandlerHeaderDrawsTheRouteLinksBeforeEverySettingThatComesAndGoes(t *te
 		t.Fatal("the header draws no navigation element for the routes")
 	}
 	nav := header[navStart : navEnd+len("</nav>")]
-	for _, route := range []string{`href="/"`, `href="/statuses"`} {
+	for _, route := range []string{`href="/"`, `href="/config"`} {
 		if !strings.Contains(nav, route) {
 			t.Errorf("the header's navigation does not carry %s: %s", route, nav)
 		}
@@ -110,7 +110,7 @@ func TestHandlerServesOneHeaderToEveryRoute(t *testing.T) {
 	handler := administrableHandler(core.DefaultVocabulary(), "head-1", boardTasks())
 
 	board := ""
-	for _, path := range []string{"/", "/statuses", "/tasks/new"} {
+	for _, path := range []string{"/", "/config", "/tasks/new"} {
 		response := request(t, handler, http.MethodGet, path)
 		if response.Code != http.StatusOK {
 			t.Fatalf("GET %s status = %d, want %d", path, response.Code, http.StatusOK)
@@ -195,11 +195,11 @@ func TestHandlerStylesheetMovesTheSwitchKnobWithItsState(t *testing.T) {
 	if !strings.Contains(on, "left: calc(") {
 		t.Errorf("a switch turned on does not move its knob: %s", on)
 	}
-	if track := cssRule(t, body, `.nav-switch[aria-checked="true"] .nav-switch__track`); !strings.Contains(track, "background: #2457d6") {
+	if track := cssRule(t, body, `.nav-switch[aria-checked="true"] .nav-switch__track`); !strings.Contains(track, "background: var(--wb-primary)") {
 		t.Errorf("a switch turned on does not fill its track: %s", track)
 	}
 	// Reachable by keyboard and visibly so, like every other control here.
-	if focus := cssRule(t, body, ".nav-switch:focus-visible"); !strings.Contains(focus, "outline: 3px solid #2457d6") {
+	if focus := cssRule(t, body, ".nav-switch:focus-visible"); !strings.Contains(focus, "outline: 3px solid var(--wb-primary)") {
 		t.Errorf("a focused switch is not outlined the way this page outlines focus: %s", focus)
 	}
 }

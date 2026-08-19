@@ -120,12 +120,22 @@ type TasksDocument struct {
 	Presentation   []TaskPresentation `json:"presentation"`
 }
 
-// VocabularyState is what a resolver reports: the project's statuses and the
-// configuration ledger tip they were read from.
+// VocabularyState is what a resolver reports: the project's statuses, the
+// display settings recorded beside them, and the configuration ledger tip both
+// were read from.
 type VocabularyState struct {
 	Vocabulary core.Vocabulary
 	// Head is the configuration ledger's tip, empty for a project with none.
 	Head string
+	// Display is what this project calls its board and the colors it draws it
+	// in, zero for a project that has configured none of them.
+	//
+	// It rides in the state the statuses ride in rather than behind a resolver
+	// of its own because it is the same commit: a board that read its columns
+	// and then its name could be answered from either side of a fetch and would
+	// draw one page out of two configurations. gitstore.LoadVocabularyState
+	// answers both from one read for exactly that reason.
+	Display core.DisplaySettings
 }
 
 // VocabularyResolver reads the project's current statuses.
@@ -156,6 +166,20 @@ type VocabularyDocument struct {
 	Statuses []core.StatusDefinition `json:"statuses"`
 	Aliases  []core.StatusAlias      `json:"aliases"`
 	Retired  []core.RetiredStatus    `json:"retired"`
+	// Display is this project's own name for its board and the colors it draws
+	// it in, absent for a project that has configured none of them.
+	//
+	// It rides here rather than behind a route of its own so that a client
+	// reads both halves of one configuration from one commit: the two are
+	// recorded in the same ledger, and a page that asked separately could be
+	// answered from either side of a change and would offer a Save composed
+	// against a configuration nobody was shown. Its head is this document's
+	// head, from the one state a request resolves.
+	//
+	// Absent rather than empty for an unconfigured project, so every response
+	// this route gave before display settings existed is the response it gives
+	// now, byte for byte.
+	Display *DisplayDocument `json:"display,omitempty"`
 }
 
 // VocabularyStatusAddition is a status the board asks this project to define.
@@ -432,15 +456,29 @@ type Options struct {
 	EditStatus    VocabularyStatusEditor
 	RemoveStatus  VocabularyStatusRemover
 	ReorderStatus VocabularyReorderer
-	List          TaskLister
-	Create        TaskCreator
-	Update        TaskUpdater
-	UpdateStatus  TaskStatusUpdater
-	Position      TaskPositionUpdater
-	Delete        TaskDeleter
-	Restore       TaskRestorer
-	Depend        TaskDependencyAdder
-	Free          TaskDependencyRemover
+	// SetDisplay records what this project calls its board and the colors it
+	// draws it in. A board given none draws no board settings section on its
+	// configuration page, the way a board given no vocabulary mutations draws
+	// no statuses to administer.
+	SetDisplay DisplaySettingsWriter
+	// RepoName is the checkout this board is serving, as the header's eyebrow
+	// names it — the base name of the worktree root, which is what distinguishes
+	// two boards a reader has open at once before either of them is named.
+	//
+	// It is a value rather than a reader because it cannot change while the
+	// server runs: `workbook serve` is bound to one worktree, and a checkout that
+	// moved out from under it has taken every other answer with it. A board built
+	// without one keeps the generic eyebrow every board carried before this.
+	RepoName     string
+	List         TaskLister
+	Create       TaskCreator
+	Update       TaskUpdater
+	UpdateStatus TaskStatusUpdater
+	Position     TaskPositionUpdater
+	Delete       TaskDeleter
+	Restore      TaskRestorer
+	Depend       TaskDependencyAdder
+	Free         TaskDependencyRemover
 	// The five thread mutations and the two reads behind the attachment
 	// download. They are capabilities of their own rather than members of
 	// Update because the routes are their own: a board wired for one of them is
@@ -479,6 +517,27 @@ type handler struct {
 // vocabulary contract with the browser.
 type pageData struct {
 	Board presentation.Board
+	// ProjectName is what this project calls its board, or core's generic name
+	// for a board nobody has named. It is the page's title, its heading, and the
+	// name the client titles every other route with, all from one value: the
+	// header is byte-compared across routes, so nothing about it may be decided
+	// per-route, and a client that derived the fallback itself would hold a
+	// second copy of a default core owns.
+	ProjectName string
+	// TitleSuffix is what a route that is not the board appends to its own name
+	// — "New task · Atlas". It is the project's name where there is one and the
+	// product's where there is not, which is why it is not ProjectName: "New
+	// task · Workbook board" reads as a board called "New task".
+	TitleSuffix string
+	// Eyebrow is the line above the heading: which checkout this is. It is
+	// composed here rather than in the page so that a board built without a
+	// repository name keeps the words it had rather than trailing a colon.
+	Eyebrow string
+	// Theme is the `:root` override a project's chosen colors ask for, empty for
+	// a project that has chosen none. It is template.CSS because it is composed
+	// in Go out of validated values — see boardTheme for why the page cannot
+	// interpolate the values themselves.
+	Theme template.CSS
 	// DefaultStatus is where a new task lands, rendered as an attribute because
 	// the client needs it before it has fetched anything and must not guess.
 	DefaultStatus core.Status
@@ -540,6 +599,17 @@ type pageData struct {
 	// All four rather than any, because the page is one surface: a partial set
 	// would draw controls that look alike and fail differently.
 	Administrable bool
+	// DisplayAdministrable is whether this board was built with the display
+	// writer, and it decides whether the configuration page carries the board
+	// settings section at all.
+	//
+	// It is asked separately from Administrable rather than folded into it
+	// because the two capabilities are separate: the route belongs to the
+	// statuses, which is what a board must be able to administer for the page to
+	// exist, and a board wired for those but not for this one would otherwise
+	// draw a Save that could only ever be refused. `workbook serve` supplies
+	// both, so a person meets them together.
+	DisplayAdministrable bool
 }
 
 // expectedHead is the task tip the browser rendered before proposing a change.
@@ -727,7 +797,7 @@ func NewHandler(options Options) http.Handler {
 	page := template.Must(template.New("index.html").Funcs(pageFuncs).ParseFS(assets, "assets/index.html"))
 	handler := &handler{Options: options, page: page, mux: http.NewServeMux()}
 	handler.mux.HandleFunc("GET /{$}", handler.serveBoard)
-	handler.mux.HandleFunc("GET /statuses", handler.serveStatuses)
+	handler.mux.HandleFunc("GET /config", handler.serveConfig)
 	handler.mux.HandleFunc("GET /tasks/new", handler.serveBoard)
 	handler.mux.HandleFunc("GET /tasks/{id}", handler.serveBoard)
 	handler.mux.HandleFunc("GET /api/tasks", handler.serveTasks)
@@ -736,6 +806,7 @@ func NewHandler(options Options) http.Handler {
 	handler.mux.HandleFunc("PATCH /api/vocabulary/statuses/{status}", handler.editVocabularyStatus)
 	handler.mux.HandleFunc("DELETE /api/vocabulary/statuses/{status}", handler.removeVocabularyStatus)
 	handler.mux.HandleFunc("PUT /api/vocabulary/order", handler.reorderVocabulary)
+	handler.mux.HandleFunc("PATCH /api/display", handler.updateDisplay)
 	handler.mux.HandleFunc("GET /api/tasks/{id}/history", handler.serveTaskHistory)
 	handler.mux.HandleFunc("POST /api/tasks", handler.createTask)
 	handler.mux.HandleFunc("PATCH /api/tasks/{id}", handler.updateTask)
@@ -836,7 +907,7 @@ func hasPathSegment(path, marker string) bool {
 
 func allowedMethod(path string) (string, bool) {
 	switch path {
-	case "/", "/healthz", "/statuses", "/tasks/new":
+	case "/", "/healthz", "/config", "/tasks/new":
 		return http.MethodGet, true
 	case "/api/tasks":
 		return http.MethodGet + ", " + http.MethodPost, true
@@ -846,6 +917,8 @@ func allowedMethod(path string) (string, bool) {
 		return http.MethodPost, true
 	case "/api/vocabulary/order":
 		return http.MethodPut, true
+	case "/api/display":
+		return http.MethodPatch, true
 	case "/api/sync":
 		return http.MethodGet + ", " + http.MethodPut, true
 	default:
@@ -1055,6 +1128,10 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := handler.page.Execute(writer, pageData{
 		Board:                 presentation.NewBoard(activeTasks(tasks), vocabulary.Vocabulary),
+		ProjectName:           projectName(vocabulary.Display),
+		TitleSuffix:           boardTitleSuffix(vocabulary.Display),
+		Eyebrow:               boardEyebrow(handler.RepoName),
+		Theme:                 boardTheme(vocabulary.Display),
 		DefaultStatus:         vocabulary.Vocabulary.Default(),
 		VocabularyHead:        vocabulary.Head,
 		AttachmentFileLimit:   core.MaxAttachmentFileBytes,
@@ -1065,21 +1142,29 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 		InlineImageMediaTypes: strings.Join(InlineAttachmentMediaTypes(), " "),
 		StatusTags:            core.StatusTags(),
 		Administrable:         handler.administrable(),
+		DisplayAdministrable:  handler.SetDisplay != nil,
 	}); err != nil {
 		return
 	}
 }
 
-// serveStatuses answers the statuses route, which is the board's page under
+// serveConfig answers the configuration route, which is the board's page under
 // another path: the client renders the route it reads out of the address, so a
-// hard load of /statuses and a click through to it from the board have to be
+// hard load of /config and a click through to it from the board have to be
 // served the same document — the same way a task's own page is.
+//
+// The address used to be /statuses, which named the one thing the page held. It
+// holds the project's display settings too now, so the page is the project's
+// configuration and the address says so. Nothing forwards the old path: it is an
+// address a bookmark may hold and nothing else, this board's routes are read out
+// of the address by a client that has to agree with the server about every one
+// of them, and a redirect would be a second name for a page with one.
 //
 // It is the one page route that a board can be built without. The route is
 // registered whatever the board can do, so the method question has one answer
 // everywhere, and a board that cannot change its statuses answers the address
 // with a 404 rather than a page whose every control would be refused.
-func (handler *handler) serveStatuses(writer http.ResponseWriter, request *http.Request) {
+func (handler *handler) serveConfig(writer http.ResponseWriter, request *http.Request) {
 	if !handler.administrable() {
 		http.NotFound(writer, request)
 		return
@@ -1112,7 +1197,7 @@ func (handler *handler) serveVocabulary(writer http.ResponseWriter, request *htt
 // code path.
 func vocabularyDocument(state VocabularyState) VocabularyDocument {
 	document := state.Vocabulary.Document()
-	return VocabularyDocument{
+	rendered := VocabularyDocument{
 		Format:   "workbook.vocabulary",
 		Version:  1,
 		Head:     state.Head,
@@ -1121,6 +1206,11 @@ func vocabularyDocument(state VocabularyState) VocabularyDocument {
 		Aliases:  document.Aliases,
 		Retired:  document.Retired,
 	}
+	if state.Display.Configured() {
+		display := displayDocument(state)
+		rendered.Display = &display
+	}
+	return rendered
 }
 
 // addVocabularyStatus defines a status this project does not have.
