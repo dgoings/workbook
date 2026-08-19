@@ -382,6 +382,16 @@ func TestAGenerationOneReaderParksOnADisplayConfiguredProject(t *testing.T) {
 		t.Fatalf("older clone list code = %d, want 0; stderr = %q", code, stderr)
 	}
 
+	// A full validation is the one read that is not tolerant: it replays the
+	// configuration ledger from its root and compares every checkpoint it
+	// recomputes, which is the fold this reader does not have. It answers with
+	// the upgrade signal, so the README can say what a v0.5.0 clone sees here
+	// instead of leaving somebody to discover a 9 and guess.
+	code, stdout, stderr = runBinary(t, binary, older, "validate", "--full", "--json")
+	if code != 9 {
+		t.Fatalf("older clone validate --full code = %d, want 9; stdout = %q stderr = %q", code, stdout, stderr)
+	}
+
 	// Changing the configuration is refused with the upgrade signal, not with a
 	// corruption report.
 	code, _, stderr = runBinary(t, binary, older, "status", "add", "triage", "--no-sync", "--json")
