@@ -699,11 +699,24 @@ func runStatusLog(ctx context.Context, args []string, cwd string, stdout, stderr
 }
 
 // configLedgerCommit is one commit of the configuration ledger with the
-// vocabulary its parent held, which is what every inverse is computed against.
+// configuration its parent held, which is what every inverse is computed
+// against.
 type configLedgerCommit struct {
 	Commit string
 	Pack   core.ConfigOperationPack
-	Before core.Vocabulary
+	Before configBefore
+}
+
+// configBefore is the configuration a recorded pack found: both sections, from
+// one commit.
+//
+// It is one struct rather than two parameters because an inverse is a statement
+// about what a change replaced, and the two sections would otherwise have to be
+// carried side by side through the window reader, the log builder, and the
+// renderer — three places for them to come from different commits.
+type configBefore struct {
+	vocabulary core.Vocabulary
+	display    core.DisplaySettings
 }
 
 // configLedgerWindow is what one bounded read of the ledger saw: the commits it
@@ -747,7 +760,7 @@ func readConfigLedgerWindow(
 		requested = window + 1
 	}
 	result := configLedgerWindow{}
-	var previous core.Vocabulary
+	var previous configBefore
 	found, err := repository.ReadConfigHistoryTail(ctx, config, requested, gitstore.ConfigHistoryStream{
 		Begin: func(start gitstore.ConfigHistoryStart) error {
 			result.Total = start.Commits
@@ -759,7 +772,7 @@ func readConfigLedgerWindow(
 				Pack:   commit.Operation,
 				Before: previous,
 			})
-			previous = commit.State.Vocabulary()
+			previous = configBefore{vocabulary: commit.State.Vocabulary(), display: commit.State.Display()}
 			return nil
 		},
 		End: func(outcome gitstore.ConfigHistoryResult) error {
@@ -2009,7 +2022,7 @@ func tagSetOperations(subject core.Status, current, wanted []core.StatusTag) []c
 // to add. A change whose inverse cannot be expressed reports an empty one rather
 // than a command that would not run.
 func statusChangeInverse(before core.Vocabulary, operations []core.ConfigOperation) statusInverse {
-	if inverse := statusPackInverse(before, operations); inverse != nil {
+	if inverse := statusPackInverse(configBefore{vocabulary: before}, operations); inverse != nil {
 		return *inverse
 	}
 	return statusInverse{}
@@ -2029,19 +2042,25 @@ func statusChangeInverse(before core.Vocabulary, operations []core.ConfigOperati
 // It answers about operations[0], which every status command puts its subject
 // operation first, and which for the ledger's own packs is the change the
 // commit is about.
-func statusPackInverse(before core.Vocabulary, operations []core.ConfigOperation) *statusInverse {
+func statusPackInverse(before configBefore, operations []core.ConfigOperation) *statusInverse {
 	if len(operations) == 0 {
 		return nil
 	}
 	operation := operations[0]
 	subject := statusOperationSubject(operation)
 	switch operation.Type {
+	case core.ConfigDisplaySet, core.ConfigDisplayUnset:
+		// The display family renders its own inverses, with its own command
+		// prefix. Routing them from here rather than from a second entry point
+		// keeps the doctrine this function's comment states — one place decides
+		// an inverse — across a second verb family.
+		return displayPackInverse(before.display, operation)
 	case core.ConfigStatusAdd:
-		return addInverse(before, operation)
+		return addInverse(before.vocabulary, operation)
 	case core.ConfigStatusRename:
-		return renameInverse(before, operation, operations)
+		return renameInverse(before.vocabulary, operation, operations)
 	case core.ConfigStatusRelabel:
-		definition, live := statusDefinition(before, subject)
+		definition, live := statusDefinition(before.vocabulary, subject)
 		if !live {
 			return nil
 		}
@@ -2050,11 +2069,11 @@ func statusPackInverse(before core.Vocabulary, operations []core.ConfigOperation
 			Exact:   true,
 		}
 	case core.ConfigStatusReorder:
-		return reorderInverse(before, operation, subject, operations)
+		return reorderInverse(before.vocabulary, operation, subject, operations)
 	case core.ConfigStatusTag, core.ConfigStatusUntag:
-		return tagInverse(before, operation, operations)
+		return tagInverse(before.vocabulary, operation, operations)
 	case core.ConfigStatusRemove:
-		return removeInverse(before, operation, subject)
+		return removeInverse(before.vocabulary, operation, subject)
 	default:
 		return nil
 	}
@@ -2374,6 +2393,10 @@ func configOperationSummary(operation core.ConfigOperation) string {
 		return fmt.Sprintf("untagged status %s %s", operation.Status, operation.Tag)
 	case core.ConfigStatusRemove:
 		return fmt.Sprintf("removed status %s into %s", operation.Status, operation.Destination)
+	case core.ConfigDisplaySet:
+		return fmt.Sprintf("set %s to %s", operation.Setting, operation.Value)
+	case core.ConfigDisplayUnset:
+		return fmt.Sprintf("cleared %s", operation.Setting)
 	default:
 		return string(operation.Type)
 	}

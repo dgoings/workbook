@@ -18,6 +18,16 @@ const (
 	DisplayTextColor = "text-color"
 )
 
+// DefaultProjectName is what a board calls itself when nobody has named the
+// project.
+//
+// It is stated here rather than in the surface that renders it because two
+// surfaces read it — the board's heading and `workbook config show`, which has
+// to be able to say what "default" resolves to — and a fallback with two
+// authors eventually has two values. Nothing stores it: an unconfigured name is
+// an absent value, and this is what an absent value looks like when it is read.
+const DefaultProjectName = "Workbook board"
+
 // DisplaySettingNames lists the settings in the order every surface presents
 // them: the name first, because it is what distinguishes two boards at a
 // glance, and then the two colors.
