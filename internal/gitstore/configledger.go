@@ -160,6 +160,12 @@ type VocabularyState struct {
 	// a recorded decision.
 	Seeded     bool
 	Vocabulary core.Vocabulary
+	// Display is the project's resolved display settings, read from the same
+	// tip as the vocabulary because it is the same read. Two accessors would be
+	// two commits: a caller that asked for the statuses and then for the name
+	// could be answered from either side of a fetch that moved the ledger, and
+	// would render a board out of two configurations.
+	Display core.DisplaySettings
 }
 
 // LoadVocabularyState reads the project's statuses and reports whether a ledger
@@ -187,33 +193,41 @@ func (r *Repository) LoadVocabularyState(ctx context.Context, config core.Projec
 	if !found {
 		return VocabularyState{Vocabulary: core.LegacyVocabulary()}, nil
 	}
-	if vocabulary, decoded := r.decodedVocabularyAt(head); decoded {
-		return VocabularyState{Head: head, Seeded: true, Vocabulary: vocabulary}, nil
+	if decoded, found := r.decodedConfigAt(head); found {
+		return VocabularyState{Head: head, Seeded: true, Vocabulary: decoded.vocabulary, Display: decoded.display}, nil
 	}
 	record, err := r.readConfigRecordAt(ctx, config, configRef, head)
 	if err != nil {
 		return VocabularyState{}, unreadableConfigLedger(err)
 	}
-	vocabulary := record.State.Vocabulary()
-	r.rememberDecodedVocabulary(head, vocabulary)
-	return VocabularyState{Head: head, Seeded: true, Vocabulary: vocabulary}, nil
+	decoded := decodedConfig{vocabulary: record.State.Vocabulary(), display: record.State.Display()}
+	r.rememberDecodedConfig(head, decoded)
+	return VocabularyState{Head: head, Seeded: true, Vocabulary: decoded.vocabulary, Display: decoded.display}, nil
 }
 
-// decodedVocabularyAt returns the vocabulary this process already decoded from
-// a ledger tip.
-func (r *Repository) decodedVocabularyAt(head string) (core.Vocabulary, bool) {
+// decodedConfig is one ledger tip's resolved sections, memoized together
+// because they were decoded together. Memoizing one and re-reading the other
+// would reintroduce the skew the single read exists to avoid.
+type decodedConfig struct {
+	vocabulary core.Vocabulary
+	display    core.DisplaySettings
+}
+
+// decodedConfigAt returns the configuration this process already decoded from a
+// ledger tip.
+func (r *Repository) decodedConfigAt(head string) (decodedConfig, bool) {
 	r.metadataMu.RLock()
 	defer r.metadataMu.RUnlock()
 	if r.stateHead == "" || r.stateHead != head {
-		return core.Vocabulary{}, false
+		return decodedConfig{}, false
 	}
-	return r.stateVocabulary, true
+	return r.stateConfig, true
 }
 
-func (r *Repository) rememberDecodedVocabulary(head string, vocabulary core.Vocabulary) {
+func (r *Repository) rememberDecodedConfig(head string, decoded decodedConfig) {
 	r.metadataMu.Lock()
 	defer r.metadataMu.Unlock()
-	r.stateHead, r.stateVocabulary = head, vocabulary
+	r.stateHead, r.stateConfig = head, decoded
 }
 
 // unreadableConfigLedger names the ref and the command that diagnoses it.

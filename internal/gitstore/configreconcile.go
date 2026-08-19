@@ -410,7 +410,7 @@ type configReplay struct {
 // applying the author's later operations to a vocabulary the author never saw,
 // and every one of them would be a guess about what they meant.
 func (replay *configReplay) next(ctx context.Context, r *Repository, local configRecord) (bool, error) {
-	view := newConfigView(replay.parent.State.Config.Vocabulary)
+	view := newConfigView(replay.parent.State.Config)
 	markPackSubjects(view, local.Operation.Operations)
 	for _, operation := range local.Operation.Operations {
 		if conflict := classifyConfigOperation(view, operation); conflict != nil {
@@ -480,6 +480,11 @@ type configView struct {
 	live    map[core.Status]core.StatusDefinition
 	aliases map[core.Status]core.Status
 	retired map[core.Status]core.Status
+	// display is the parent's resolved display settings. It is carried as the
+	// resolved value rather than the stored pointer because every question asked
+	// of it is "what does origin say this setting is", and an unconfigured
+	// setting and an absent section are the same answer.
+	display core.DisplaySettings
 	// pending are the statuses the pack being classified brings into existence
 	// itself. The view is built once per pack, from the vocabulary the pack
 	// starts from, so without this an operation editing a status an earlier
@@ -488,11 +493,19 @@ type configView struct {
 	pending map[core.Status]struct{}
 }
 
-func newConfigView(document core.VocabularyDocument) configView {
+// newConfigView takes the whole configuration rather than the vocabulary alone,
+// because classification is now a question about two sections. Passing the
+// vocabulary and letting the display arrive some other way would let the two
+// come from different reads of the ledger, which is precisely the skew the
+// replay cannot afford: the parent is one commit, and the view is what that one
+// commit said.
+func newConfigView(config core.ConfigData) configView {
+	document := config.Vocabulary
 	view := configView{
 		live:    make(map[core.Status]core.StatusDefinition, len(document.Statuses)),
 		aliases: make(map[core.Status]core.Status, len(document.Aliases)),
 		retired: make(map[core.Status]core.Status, len(document.Retired)),
+		display: core.ResolveDisplaySettings(config.Display),
 		pending: make(map[core.Status]struct{}),
 	}
 	for _, definition := range document.Statuses {
@@ -607,8 +620,81 @@ func classifyConfigOperation(view configView, operation core.ConfigOperation) *c
 		return classifyConfigRemove(view, operation)
 	case core.ConfigStatusRelabel, core.ConfigStatusReorder, core.ConfigStatusTag, core.ConfigStatusUntag:
 		return classifyConfigSubject(view, operation)
+	case core.ConfigDisplaySet, core.ConfigDisplayUnset:
+		return classifyConfigDisplay(view, operation)
 	default:
 		return nil
+	}
+}
+
+// classifyConfigDisplay reports two clones deciding the same display setting
+// differently.
+//
+// The section's three values are independent, so the question is asked of one
+// setting at a time: what does the fetched history say this setting is, and what
+// would this operation make it? A pair that agrees — both sides chose the same
+// name, both cleared the same color, or origin never touched the setting at all
+// — converges, and recording it again would say nothing. A pair that disagrees
+// is a decision, because the fold keeps whichever applied first and after a
+// reconciliation that is always upstream's: the local value is the one that
+// would vanish without anybody being told.
+//
+// A set against an unconfigured setting is not a disagreement even though the
+// two sides differ. Origin expressed no intent about it, so there is nothing to
+// weigh the local one against, and the fold records it — which is the same rule
+// classifyConfigAdd applies to a status origin does not define.
+func classifyConfigDisplay(view configView, operation core.ConfigOperation) *core.ConfigConflict {
+	theirs, known := displaySettingValue(view.display, operation.Setting)
+	if !known {
+		// A setting name this build does not know reached the classifier, which
+		// the operation document check already refuses. Saying nothing about it
+		// is the only honest answer: this cannot compare two values when it does
+		// not know where either is stored.
+		return nil
+	}
+	ours := ""
+	if operation.Type == core.ConfigDisplaySet {
+		ours = operation.Value
+	}
+	if theirs == "" || ours == theirs {
+		return nil
+	}
+	return &core.ConfigConflict{
+		Type:   core.ConfigConflictDisplaySetting,
+		Ours:   ours,
+		Theirs: theirs,
+		Detail: describeDisplayConflict(operation.Setting, ours, theirs),
+	}
+}
+
+// describeDisplayConflict says which setting disagrees and what the two sides
+// made of it, in one line, because the conflict union has no member to put a
+// setting name in — it names a status, and a display setting is not one.
+func describeDisplayConflict(setting, ours, theirs string) string {
+	if ours == "" {
+		return fmt.Sprintf(
+			"%s was cleared here and set to %s on origin, so origin's value stands; clear it again to keep the local intent",
+			setting, theirs)
+	}
+	return fmt.Sprintf(
+		"%s was set to %s here and to %s on origin, so origin's value stands; set it again to keep the local intent",
+		setting, ours, theirs)
+}
+
+// displaySettingValue reads one setting out of a resolved section. It is the
+// classifier's half of core's member lookup, and it is here rather than
+// exported from core because the fold needs a pointer to write through and this
+// needs a value to compare.
+func displaySettingValue(settings core.DisplaySettings, setting string) (string, bool) {
+	switch setting {
+	case core.DisplayProjectName:
+		return settings.Name, true
+	case core.DisplayPrimaryColor:
+		return settings.PrimaryColor, true
+	case core.DisplayTextColor:
+		return settings.TextColor, true
+	default:
+		return "", false
 	}
 }
 
@@ -804,7 +890,7 @@ func undefinedSubjectConflict(
 // which is what a person would expect, and reporting it would make every
 // ordinary removal of the done column a conflict.
 func classifyConfigArity(before, after core.VocabularyDocument, pack core.ConfigOperationPack) []core.ConfigConflict {
-	afterView := newConfigView(after)
+	afterView := newConfigView(core.ConfigData{Vocabulary: after})
 	conflicts := make([]core.ConfigConflict, 0, len(statusRoleTags))
 	for _, tag := range statusRoleTags {
 		allowed := make(map[core.Status]struct{})

@@ -516,7 +516,7 @@ func TestConfigReplayAppliesAMultiOperationRenamePack(t *testing.T) {
 // as already applied upstream — so a deliberate change is discarded and the
 // report says it landed. It reads as a conflict now.
 func TestConfigReplayReportsAnEditToAStatusOriginNeverDefined(t *testing.T) {
-	view := newConfigView(core.DefaultVocabulary().Document())
+	view := newConfigView(core.ConfigData{Vocabulary: core.DefaultVocabulary().Document()})
 
 	conflict := classifyConfigOperation(view, core.ConfigOperation{
 		Type: core.ConfigStatusRelabel, Status: core.StatusBlocked, Label: "Waiting",
@@ -554,7 +554,7 @@ func TestConfigReplayReportsAnEditToAStatusOriginNeverDefined(t *testing.T) {
 		"renamed onto by the same pack": renamePack(core.StatusReady, "todo", "Todo"),
 	} {
 		t.Run(name, func(t *testing.T) {
-			packed := newConfigView(core.DefaultVocabulary().Document())
+			packed := newConfigView(core.ConfigData{Vocabulary: core.DefaultVocabulary().Document()})
 			markPackSubjects(packed, operations)
 			for _, operation := range operations {
 				if got := classifyConfigOperation(packed, operation); got != nil {

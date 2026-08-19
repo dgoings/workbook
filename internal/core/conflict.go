@@ -130,6 +130,19 @@ const (
 	// that render a status render nothing for it; both vocabularies are in Ours
 	// and Theirs.
 	ConfigConflictRootVocabulary ConfigConflictType = "root-vocabulary"
+	// ConfigConflictDisplaySetting reports two clones setting the same display
+	// setting to different things, or one setting it while the other cleared it.
+	// The fold converges by keeping whichever applied first, which after a
+	// reconciliation is always upstream's, so the local intent is the one that
+	// would vanish without being mentioned.
+	//
+	// Like root-vocabulary it names no status, because a display setting is a
+	// property of the project rather than of a column; the setting it is about is
+	// named in Detail, where a consumer that renders a status renders nothing.
+	// Two clones that chose the same value are not a conflict — there is nothing
+	// for anybody to decide — and two clones that changed different settings are
+	// not either, because the section holds three independent values.
+	ConfigConflictDisplaySetting ConfigConflictType = "display-setting"
 )
 
 // ConfigConflict names one status whose configuration replay needs a decision.
@@ -181,6 +194,11 @@ func ConfigConflictDetail(conflict ConfigConflict) string {
 	case ConfigConflictRootVocabulary:
 		return "this project's configuration started from " + conflict.Ours +
 			" here and from " + conflict.Theirs + " on origin"
+	case ConfigConflictDisplaySetting:
+		// Reached only by a conflict somebody built without a detail line; the
+		// classifier always writes one, because the setting's name is the whole
+		// subject and this union has no member to put it in.
+		return "this display setting was changed here and on origin"
 	default:
 		return string(conflict.Type)
 	}
