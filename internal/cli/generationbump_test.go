@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -44,6 +45,21 @@ import (
 // under test is the real one.
 func buildPatchedGenerationZeroBinary(t *testing.T) string {
 	t.Helper()
+	return buildPatchedGenerationBinary(t, 0)
+}
+
+// buildPatchedGenerationBinary builds this tree with SupportedFormatGeneration
+// pinned to a generation this build has since left behind.
+//
+// It is parameterized because there is more than one older reader worth
+// standing up now. Generation zero is every clone from before assignments;
+// generation one is every clone running v0.5.0, which is the reader a project
+// that records a display setting has to keep working for. The same LIMITATION
+// stated above applies to both, and for the same reason: this is not a previous
+// build, it is this build with one constant moved, so what it proves is the
+// marker's own behavior and nothing about tree shape.
+func buildPatchedGenerationBinary(t *testing.T, generation int) string {
+	t.Helper()
 	root := repositoryRoot(t)
 	staging := t.TempDir()
 	for _, tree := range []string{"cmd", "internal", "skills"} {
@@ -64,15 +80,15 @@ func buildPatchedGenerationZeroBinary(t *testing.T) string {
 		t.Fatal("SupportedFormatGeneration is no longer declared where this test patches it")
 	}
 	end := strings.Index(string(source[index:]), "\n") + index
-	patched := string(source[:index]) + marker + "0" + string(source[end:])
+	patched := string(source[:index]) + marker + strconv.Itoa(generation) + string(source[end:])
 	if patched == string(source) {
-		t.Fatal("the generation is already zero; there is no bump for this test to cross")
+		t.Fatalf("the generation is already %d; there is no bump for this test to cross", generation)
 	}
 	if err := os.WriteFile(operationPath, []byte(patched), 0o644); err != nil {
 		t.Fatalf("write %s: %v", operationPath, err)
 	}
 
-	binary := filepath.Join(t.TempDir(), "workbook-generation-zero")
+	binary := filepath.Join(t.TempDir(), "workbook-generation-"+strconv.Itoa(generation))
 	if runtime.GOOS == "windows" {
 		binary += ".exe"
 	}
@@ -83,7 +99,7 @@ func buildPatchedGenerationZeroBinary(t *testing.T) string {
 	}
 	command.Env = toolchainEnvironment
 	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("go build (generation zero): %v\n%s", err, output)
+		t.Fatalf("go build (generation %d): %v\n%s", generation, err, output)
 	}
 	return binary
 }

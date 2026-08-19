@@ -109,6 +109,16 @@ const (
 	// has renamed and removed statuses hundreds of times.
 	MaxStatusAliasCount   = 256
 	MaxStatusRetiredCount = 256
+	// MaxProjectNameBytes bounds the display name a project may give itself.
+	//
+	// It sits with the status ceilings rather than with the task ceilings above
+	// because it is the same kind of value: something one project records once,
+	// read as a heading by everyone who fetches, and typed as a command
+	// argument. It matches MaxLabelBytes because a project name and a label are
+	// the same shape of thing — a short name somebody gives a thing — and
+	// because a hundred bytes is already past where a name stops fitting a
+	// browser tab, which is the place it exists to be read.
+	MaxProjectNameBytes = 100
 )
 
 // Ceilings on a task's thread and its attachments.
@@ -427,6 +437,61 @@ func ValidateStatusLabel(label string) error {
 		)
 	}
 	return nil
+}
+
+// ValidateProjectName bounds the display name a project gives itself, on the
+// same terms ValidateStatusLabel bounds a column heading.
+//
+// A blank name is rejected rather than stored, and the difference from clearing
+// one matters: `workbook config unset project-name` records that the project
+// has no name and the board falls back to what it always said, while a name of
+// spaces would be a configured name that renders as an empty heading. There is
+// one way to mean "no name", and it is not a value.
+func ValidateProjectName(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return Errorf(CategoryValidation, "project name must not be blank; clear it with `workbook config unset project-name`")
+	}
+	if len(name) > MaxProjectNameBytes {
+		return Errorf(
+			CategoryValidation,
+			"project name is %d bytes and must not exceed %d",
+			len(name), MaxProjectNameBytes,
+		)
+	}
+	return nil
+}
+
+// themeColorPattern is the one color notation Workbook stores.
+//
+// Six hex digits behind a hash is the notation every surface that reads one can
+// already parse — a CSS declaration, an HTML attribute, a color picker's value —
+// and the only one that needs no interpretation to be exact. The three-digit
+// shorthand, the eight-digit form with alpha, `rgb()` and the named colors are
+// all refused rather than expanded, because each would be a second spelling of a
+// value the ledger compares by bytes: two clones that configured the same color
+// two ways would hold two different configurations.
+//
+// Case is accepted on input and folded on the way in, for the same reason a
+// status token forbids uppercase outright: allowing `#ABC123` and `#abc123` to
+// be two stored values would make the durable format depend on a shift key. The
+// difference is that a color has an obvious canonical form, so this one folds
+// where a status name refuses.
+var themeColorPattern = regexp.MustCompile(`^#[0-9A-Fa-f]{6}$`)
+
+// ValidateThemeColor accepts a color in either case and returns the lowercase
+// form the ledger stores.
+func ValidateThemeColor(value string) (string, error) {
+	if value == "" {
+		return "", Errorf(CategoryValidation, "color must not be blank")
+	}
+	if !themeColorPattern.MatchString(value) {
+		return "", Errorf(
+			CategoryValidation,
+			"color %q must be six hexadecimal digits behind a hash, as in #1a7f4b",
+			value,
+		)
+	}
+	return strings.ToLower(value), nil
 }
 
 // validateTaskFieldSizes rejects a task whose normalized fields exceed the

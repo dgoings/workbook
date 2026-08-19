@@ -294,8 +294,8 @@ workbook status untag <status> <tag> [--no-sync] [--no-docs] [--json]
 workbook status delete <status> --into <status> [--no-sync] [--no-docs] [--json]
 workbook status log [--limit <n>] [--all] [--json]
 workbook config show [--json]
-workbook config set <setting> <value> [--json]
-workbook config unset <setting> [--json]
+workbook config set <setting> <value> [--no-sync] [--json]
+workbook config unset <setting> [--no-sync] [--json]
 workbook docs install [--create <file>] [--skill-dir <dir>] [--no-skill] [--force] [--json]
 workbook docs update [--skill-dir <dir>] [--no-skill] [--force] [--json]
 workbook docs status [--skill-dir <dir>] [--no-skill] [--json]
@@ -808,6 +808,51 @@ and is still published, and the result envelope's `docs` member reports the file
 as `modified` and unwritten alongside a `docs-refresh-incomplete` warning naming
 `workbook docs update --force`. Edit the project's statuses to change what that
 file says; there is nothing to write in it by hand.
+
+### Board display settings
+
+A project can say what its board is called and what color it draws itself in.
+`workbook config set project-name Atlas`, `workbook config set primary-color
+"#1a7f4b"` and `workbook config set text-color "#101820"` record the three, and
+`workbook config unset <setting>` clears one. `workbook config show` reports all
+three with their source — `configured`, or `default` when nobody has decided.
+
+They are project configuration in the same sense the statuses are: recorded in
+the shared configuration history at `refs/workbook/config`, synchronized with
+everyone who fetches, and reversed by the exact command every result and every
+`workbook status log` entry prints. `--no-sync` records one without talking to
+`origin`, and two clones that named the project differently get a
+`display-setting` conflict naming both values rather than a silent winner. A
+change to a different setting, or the same value chosen twice, converges without
+a conflict — the three values are independent.
+
+The quotes around a color are the shell's, not Workbook's: `#` starts a comment
+in every POSIX shell, so an unquoted color reaches the command as a missing
+argument.
+
+A color is six hexadecimal digits behind a hash, in either case; it is stored
+lowercase, because the configuration checkpoint is compared byte for byte and a
+color with two spellings would be two configurations. A project name is
+trimmed, must not be blank, and must not exceed 100 bytes. Clearing a setting is
+how a project has none: there is no stored default, and a board with nothing
+configured renders exactly as it did before this existed.
+
+A command that would change nothing is refused rather than recorded: `config
+unset` of a setting nobody has configured, and `config set` to the value already
+stored, both exit 5 and leave the configuration history exactly where it was.
+
+Recording any display setting raises what the configuration history requires of
+a reader. A clone running v0.5.0 or earlier keeps reading the project and keeps
+synchronizing every task, and reports that the configuration was written by a
+newer Workbook when it is asked to change a status — with the upgrade message
+rather than a corruption report. On such a clone `workbook validate --full`
+exits 9 rather than replaying a ledger it cannot fold, and a `workbook sync`
+exits 9 with the configuration reported as `needs-upgrade` once its own
+configuration history has diverged from origin's — while the tasks in that same
+run still synchronize and every read still works. A project that never
+configures a display setting is unaffected: the marker is per operation, a
+refused no-op records none, and a ledger carrying no display operation is
+exactly the ledger those versions already fold.
 
 ### Task change history
 

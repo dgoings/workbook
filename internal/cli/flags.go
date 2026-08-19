@@ -166,9 +166,16 @@ var commandSchemas = map[string]commandMetadata{
 		},
 	},
 	"config": {
-		Name:            "config",
-		Synopsis:        "workbook config <command> [options]",
-		Description:     "Inspect and record this project's Workbook settings.",
+		Name:     "config",
+		Synopsis: "workbook config <command> [options]",
+		Description: "Inspect and record this project's Workbook settings.\n\n" +
+			"`auto-sync` is a policy recorded in the tracked `.workbook/config.json`, so\n" +
+			"it travels with the branch it is committed on.\n\n" +
+			"`project-name`, `primary-color` and `text-color` are display settings\n" +
+			"recorded in the shared configuration history beside the statuses, so they\n" +
+			"synchronize with everyone who fetches. A color is six hexadecimal digits\n" +
+			"behind a hash, as in `#1a7f4b`. Clearing one returns the board to its\n" +
+			"built-in presentation; nothing stores a default.",
 		Positionals:     []string{"<command>"},
 		SubcommandOrder: []string{"show", "set", "unset"},
 		Subcommands: map[string]commandMetadata{
@@ -180,17 +187,23 @@ var commandSchemas = map[string]commandMetadata{
 			},
 			"set": {
 				Name:        "set",
-				Synopsis:    "workbook config set <setting> <value> [--json]",
+				Synopsis:    "workbook config set <setting> <value> [--no-sync] [--json]",
 				Description: "Record a project setting.",
 				Positionals: []string{"<setting>", "<value>"},
-				Options:     []optionMetadata{{Name: "json", Kind: boolFlag, Description: "emit JSON"}},
+				Options: []optionMetadata{
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin (display settings only)"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
 			},
 			"unset": {
 				Name:        "unset",
-				Synopsis:    "workbook config unset <setting> [--json]",
-				Description: "Clear a project setting so the user configuration decides.",
+				Synopsis:    "workbook config unset <setting> [--no-sync] [--json]",
+				Description: "Clear a project setting so the default or the user configuration decides.",
 				Positionals: []string{"<setting>"},
-				Options:     []optionMetadata{{Name: "json", Kind: boolFlag, Description: "emit JSON"}},
+				Options: []optionMetadata{
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin (display settings only)"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
 			},
 		},
 	},

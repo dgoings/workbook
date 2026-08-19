@@ -15,11 +15,13 @@ const (
 
 // ConfigOperationType names one durable change to a project's configuration.
 //
-// The set is closed and every member is a statement about a status, because
-// status vocabulary is the only configuration the ledger carries today. A later
-// section adds its own types beside these rather than overloading them: an
-// operation whose meaning depends on which section it lands in cannot be
-// replayed by a build that does not know that section.
+// The set is closed, and it now spans two sections: the status vocabulary the
+// ledger was built for, and the display settings a project presents itself
+// with. The second section got its own types beside the first rather than
+// overloading them, which is the rule this comment stated before there was a
+// second section to apply it to: an operation whose meaning depends on which
+// section it lands in cannot be replayed by a build that does not know that
+// section, and a build that does not know a type refuses it by name.
 type ConfigOperationType string
 
 const (
@@ -48,6 +50,23 @@ const (
 	ConfigStatusTag ConfigOperationType = "status.tag"
 	// ConfigStatusUntag takes a role away.
 	ConfigStatusUntag ConfigOperationType = "status.untag"
+	// ConfigDisplaySet records what one display setting is, and
+	// ConfigDisplayUnset records that it is nothing again.
+	//
+	// They are the second section the type comment above anticipated, and they
+	// are two symmetric types rather than one carrying an empty value on the way
+	// out. An operation whose meaning turned on whether a member was blank would
+	// make "cleared it" and "set it to nothing" the same recorded intent, and
+	// only one of those is a thing somebody can mean. Two types also give the
+	// classifier and the inverse renderer a shape to key on rather than a value
+	// to interpret.
+	//
+	// One pair covers all three settings, keyed on Setting, because they differ
+	// only in which member of the section they land on: a build that can fold one
+	// can fold all three, so a type per setting would declare a reader that never
+	// existed — the same arithmetic the writer-format generation makes.
+	ConfigDisplaySet   ConfigOperationType = "display.set"
+	ConfigDisplayUnset ConfigOperationType = "display.unset"
 )
 
 // ConfigOperation is one immutable configuration change.
@@ -86,6 +105,14 @@ type ConfigOperation struct {
 	// Destination is where a status.remove forwards the retired status's
 	// tasks.
 	Destination Status `json:"destination,omitempty"`
+	// Setting names the display setting a display.set or display.unset acts on:
+	// project-name, primary-color, or text-color.
+	Setting string `json:"setting,omitempty"`
+	// Value is what a display.set records. It is stored in the canonical form
+	// the boundary produced — a trimmed name, a lowercase color — because the
+	// checkpoint these fold into is compared by bytes, so a value with two
+	// spellings would be two configurations.
+	Value string `json:"value,omitempty"`
 	// Config is the whole configuration a config.genesis carries.
 	Config *ConfigData `json:"config,omitempty"`
 }
@@ -128,11 +155,18 @@ type VocabularyDocument struct {
 	Retired []RetiredStatus `json:"retired"`
 }
 
-// ConfigData is everything the ledger configures. It is a struct with one
-// member rather than the vocabulary itself so that a later story adds a section
-// beside this one without changing the genesis operation's shape.
+// ConfigData is everything the ledger configures. It is a struct rather than
+// the vocabulary itself so that a section can be added beside that one without
+// changing the genesis operation's shape — which is what the display section
+// below did.
 type ConfigData struct {
 	Vocabulary VocabularyDocument `json:"vocabulary"`
+	// Display is how this project presents itself: what its board is called and
+	// what colors it draws in. It is a pointer with omitempty, and the canonical
+	// value for a project that has configured nothing is nil, so every
+	// checkpoint written before this section existed still encodes to exactly
+	// the bytes it was stored as. See DisplayDocument.
+	Display *DisplayDocument `json:"display,omitempty"`
 }
 
 // ConfigStateDocument is a resolved configuration checkpoint, written beside
@@ -158,8 +192,17 @@ type ConfigStateDocument struct {
 }
 
 // configOperationMinReader declares, per configuration operation type, the
-// writer-format generation a reader needs to fold a pack containing it. Every
-// entry is zero today; it is the table a future configuration section bumps.
+// writer-format generation a reader needs to fold a pack containing it.
+//
+// The status entries are zero: they are what the ledger was built to carry, and
+// every build that has a ledger at all folds them. The display entries are two,
+// the generation the display section introduced, and they are the reason this
+// table is per operation type rather than per document. A build without the
+// section cannot decode a checkpoint carrying `display` strictly, and a build
+// that folded a display operation by ignoring it would compute a different
+// configuration from the same bytes — so it is told to upgrade instead, and
+// only about a project that has configured something. A project that has not
+// keeps a ledger those builds fold exactly as they always did.
 var configOperationMinReader = map[ConfigOperationType]int{
 	ConfigGenesis:       0,
 	ConfigStatusAdd:     0,
@@ -169,15 +212,30 @@ var configOperationMinReader = map[ConfigOperationType]int{
 	ConfigStatusReorder: 0,
 	ConfigStatusTag:     0,
 	ConfigStatusUntag:   0,
+	ConfigDisplaySet:    2,
+	ConfigDisplayUnset:  2,
 }
 
 // ConfigPackMinReader returns the generation a reader needs to fold these
 // configuration operations.
+//
+// A config.genesis is judged by what it carries rather than by its type alone,
+// which is the one place the table above is not the whole answer. A genesis
+// carries a whole ConfigData as data, so one carrying a display section is a
+// document an older reader cannot read even though no display operation appears
+// in the pack. Nothing this build writes seeds a genesis that way — the section
+// is only ever reached by an operation — and the check is here so that a build
+// which one day does cannot ship the marker off by one.
 func ConfigPackMinReader(operations []ConfigOperation) int {
 	generation := 0
 	for _, operation := range operations {
 		if required := configOperationMinReader[operation.Type]; required > generation {
 			generation = required
+		}
+		if operation.Config != nil && operation.Config.Display != nil {
+			if required := configOperationMinReader[ConfigDisplaySet]; required > generation {
+				generation = required
+			}
 		}
 	}
 	return generation
@@ -206,6 +264,13 @@ func newerWriterConfig() error {
 // already been normalized, so this cannot fail.
 func (state ConfigStateDocument) Vocabulary() Vocabulary {
 	return newVocabularyFromCanonical(state.Config.Vocabulary)
+}
+
+// Display reads the checkpoint's display settings, the sibling of Vocabulary
+// and normalized on the same terms. The zero value is a project that has
+// configured none of them, which is every project until somebody does.
+func (state ConfigStateDocument) Display() DisplaySettings {
+	return ResolveDisplaySettings(state.Config.Display)
 }
 
 // NewConfigOperationPack stamps one authored batch of configuration operations
@@ -267,10 +332,11 @@ func NewConfigOperationPack(
 // corrupt data, and folding past them would invent a state no author ever
 // wrote.
 func ApplyConfig(parent *ConfigStateDocument, pack ConfigOperationPack) (ConfigStateDocument, error) {
-	vocabulary, generation, err := applyConfigOperations(parent, pack)
+	folded, generation, err := applyConfigOperations(parent, pack)
 	if err != nil {
 		return ConfigStateDocument{}, err
 	}
+	vocabulary := folded.vocabulary
 	vocabulary.normalizeArity()
 	document, err := vocabulary.document()
 	if err != nil {
@@ -287,7 +353,7 @@ func ApplyConfig(parent *ConfigStateDocument, pack ConfigOperationPack) (ConfigS
 		ProjectID:    pack.ProjectID,
 		History:      History{Generation: generation},
 		LogicalClock: pack.LogicalClock,
-		Config:       ConfigData{Vocabulary: document},
+		Config:       ConfigData{Vocabulary: document, Display: folded.display.canonical()},
 	}, nil
 }
 
@@ -304,14 +370,20 @@ func ApplyConfig(parent *ConfigStateDocument, pack ConfigOperationPack) (ConfigS
 // fail on a count can be made to fail forever by two clones doing something
 // each was allowed to do.
 func ValidateConfigAuthoring(parent *ConfigStateDocument, pack ConfigOperationPack) error {
-	vocabulary, _, err := applyConfigOperations(parent, pack)
+	folded, _, err := applyConfigOperations(parent, pack)
 	if err != nil {
 		return err
 	}
-	document, err := vocabulary.document()
+	document, err := folded.vocabulary.document()
 	if err != nil {
 		return err
 	}
+	// The display section has no arity to violate and no collection to grow:
+	// three optional values, each bounded where it is authored and each already
+	// refused by the operation document check if it is not. There is therefore
+	// nothing for this gate to ask about it that the fold has not already
+	// settled, and inventing a question would be a second rule to keep in step
+	// with the first.
 	var before VocabularyDocument
 	if parent != nil {
 		before = parent.Config.Vocabulary
@@ -343,22 +415,30 @@ func ValidateConfigCheckpoint(parent *ConfigStateDocument, pack ConfigOperationP
 	return nil
 }
 
+// configFold is every section's working state during one fold, threaded
+// together so that adding a section is one member here rather than one more
+// return value at four call sites.
+type configFold struct {
+	vocabulary *configVocabulary
+	display    *configDisplay
+}
+
 // applyConfigOperations folds a pack over its parent and returns the raw
-// vocabulary, before arity normalization. Both ApplyConfig and the authoring
+// sections, before arity normalization. Both ApplyConfig and the authoring
 // gate go through here; the split is what lets one normalize where the other
 // refuses.
-func applyConfigOperations(parent *ConfigStateDocument, pack ConfigOperationPack) (*configVocabulary, string, error) {
+func applyConfigOperations(parent *ConfigStateDocument, pack ConfigOperationPack) (configFold, string, error) {
 	// Same gate, same reason, same ordering as the task fold: a document that
 	// declared a generation this build does not have is refused as
 	// newer-writer before any rule of this build's is applied to it.
 	if parent != nil && parent.RequiresNewerReader() {
-		return nil, "", newerWriterConfig()
+		return configFold{}, "", newerWriterConfig()
 	}
 	if pack.RequiresNewerReader() {
-		return nil, "", newerWriterConfig()
+		return configFold{}, "", newerWriterConfig()
 	}
 	if err := validateConfigOperationPackDocument(pack); err != nil {
-		return nil, "", err
+		return configFold{}, "", err
 	}
 
 	if parent == nil {
@@ -377,44 +457,74 @@ func applyConfigOperations(parent *ConfigStateDocument, pack ConfigOperationPack
 		// sync work rather than here. This function's only obligation is to
 		// make each root well defined.
 		if pack.LogicalClock != 1 {
-			return nil, "", corrupt("root configuration pack logical clock must be 1")
+			return configFold{}, "", corrupt("root configuration pack logical clock must be 1")
 		}
 		if len(pack.Operations) != 1 || pack.Operations[0].Type != ConfigGenesis {
-			return nil, "", corrupt("root configuration pack must contain exactly one config.genesis operation")
+			return configFold{}, "", corrupt("root configuration pack must contain exactly one config.genesis operation")
 		}
-		vocabulary, err := newConfigVocabulary(pack.Operations[0].Config.Vocabulary)
+		folded, err := newConfigFold(*pack.Operations[0].Config)
 		if err != nil {
-			return nil, "", err
+			return configFold{}, "", err
 		}
-		return vocabulary, pack.HistoryGeneration, nil
+		return folded, pack.HistoryGeneration, nil
 	}
 
 	if err := validateConfigStateDocument(*parent); err != nil {
-		return nil, "", err
+		return configFold{}, "", err
 	}
 	if parent.ProjectID != pack.ProjectID {
-		return nil, "", corrupt("configuration pack project ID does not match parent")
+		return configFold{}, "", corrupt("configuration pack project ID does not match parent")
 	}
 	if parent.History.Generation != pack.HistoryGeneration {
-		return nil, "", corrupt("configuration pack history generation does not match parent")
+		return configFold{}, "", corrupt("configuration pack history generation does not match parent")
 	}
 	if pack.LogicalClock != parent.LogicalClock+1 {
-		return nil, "", corrupt("configuration pack logical clock must advance parent by one")
+		return configFold{}, "", corrupt("configuration pack logical clock must advance parent by one")
 	}
 
-	vocabulary, err := newConfigVocabulary(parent.Config.Vocabulary)
+	folded, err := newConfigFold(parent.Config)
 	if err != nil {
-		return nil, "", err
+		return configFold{}, "", err
 	}
 	for _, operation := range pack.Operations {
 		if operation.Type == ConfigGenesis {
-			return nil, "", corrupt("config.genesis requires no parent")
+			return configFold{}, "", corrupt("config.genesis requires no parent")
 		}
-		if err := vocabulary.apply(operation); err != nil {
-			return nil, "", err
+		if err := folded.apply(operation); err != nil {
+			return configFold{}, "", err
 		}
 	}
-	return vocabulary, parent.History.Generation, nil
+	return folded, parent.History.Generation, nil
+}
+
+// newConfigFold builds every section's working state from a stored
+// configuration.
+func newConfigFold(config ConfigData) (configFold, error) {
+	vocabulary, err := newConfigVocabulary(config.Vocabulary)
+	if err != nil {
+		return configFold{}, err
+	}
+	display, err := newConfigDisplay(config.Display)
+	if err != nil {
+		return configFold{}, err
+	}
+	return configFold{vocabulary: vocabulary, display: display}, nil
+}
+
+// apply routes one operation to the section that owns it.
+//
+// The routing is by type rather than by trial, and the default arm belongs to
+// the vocabulary because that is where every unsupported type is already
+// refused. A section added later gets an arm here; an operation belonging to no
+// section is corrupt data, which is what stops a build from folding a future
+// generation's operation as if it were an older one.
+func (folded configFold) apply(operation ConfigOperation) error {
+	switch operation.Type {
+	case ConfigDisplaySet, ConfigDisplayUnset:
+		return folded.display.apply(operation)
+	default:
+		return folded.vocabulary.apply(operation)
+	}
 }
 
 // configStatus is a live status plus its parsed rank. The rank is parsed once,
@@ -891,6 +1001,8 @@ type configOperationMembers struct {
 	tags        bool
 	tag         bool
 	destination bool
+	setting     bool
+	value       bool
 	config      bool
 }
 
@@ -903,6 +1015,8 @@ var configOperationShapes = map[ConfigOperationType]configOperationMembers{
 	ConfigStatusReorder: {status: true, rank: true},
 	ConfigStatusTag:     {status: true, tag: true},
 	ConfigStatusUntag:   {status: true, tag: true},
+	ConfigDisplaySet:    {setting: true, value: true},
+	ConfigDisplayUnset:  {setting: true},
 }
 
 func validateConfigOperationDocument(operation ConfigOperation) error {
@@ -923,6 +1037,8 @@ func validateConfigOperationDocument(operation ConfigOperation) error {
 		tags:        operation.Tags != nil,
 		tag:         operation.Tag != "",
 		destination: operation.Destination != "",
+		setting:     operation.Setting != "",
+		value:       operation.Value != "",
 		config:      operation.Config != nil,
 	}
 	// status.add is the one type with an optional member: a status may
@@ -963,6 +1079,26 @@ func validateConfigOperationDocument(operation ConfigOperation) error {
 			return Wrap(CategoryCorruptData, string(operation.Type)+" carries an invalid tag", err)
 		}
 	}
+	if operation.Setting != "" {
+		if err := ValidateDisplaySetting(operation.Setting); err != nil {
+			return Wrap(CategoryCorruptData, string(operation.Type)+" names an unknown display setting", err)
+		}
+	}
+	// The stored value has to be the canonical one, not merely an acceptable
+	// one. This is the deliberate second half of the double validation the
+	// boundary performs: the boundary folds `#ABC123` and trims a name so a
+	// person is not refused for typing either, and this refuses a document that
+	// recorded the unfolded form, because a checkpoint whose bytes are compared
+	// cannot afford two spellings of one configuration.
+	if operation.Type == ConfigDisplaySet {
+		canonical, err := CanonicalDisplayValue(operation.Setting, operation.Value)
+		if err != nil {
+			return Wrap(CategoryCorruptData, "display.set carries an invalid value", err)
+		}
+		if canonical != operation.Value {
+			return corrupt("display.set value for %s is not canonical", operation.Setting)
+		}
+	}
 	if operation.Type == ConfigStatusRename && operation.From == operation.To {
 		return corrupt("status.rename must name a different status")
 	}
@@ -975,6 +1111,13 @@ func validateConfigOperationDocument(operation ConfigOperation) error {
 			return Wrap(CategoryCorruptData, "config.genesis carries an invalid vocabulary", err)
 		}
 		if !reflect.DeepEqual(operation.Config.Vocabulary, normalized) {
+			return corrupt("config.genesis configuration is not canonical")
+		}
+		display, err := normalizeDisplayDocument(operation.Config.Display)
+		if err != nil {
+			return Wrap(CategoryCorruptData, "config.genesis carries invalid display settings", err)
+		}
+		if !reflect.DeepEqual(operation.Config.Display, display) {
 			return corrupt("config.genesis configuration is not canonical")
 		}
 	}
@@ -1011,6 +1154,13 @@ func validateConfigStateDocument(state ConfigStateDocument) error {
 		return Wrap(CategoryCorruptData, "configuration state contains an invalid vocabulary", err)
 	}
 	if !reflect.DeepEqual(state.Config.Vocabulary, normalized) {
+		return corrupt("configuration state is not canonical")
+	}
+	display, err := normalizeDisplayDocument(state.Config.Display)
+	if err != nil {
+		return Wrap(CategoryCorruptData, "configuration state contains invalid display settings", err)
+	}
+	if !reflect.DeepEqual(state.Config.Display, display) {
 		return corrupt("configuration state is not canonical")
 	}
 	return nil

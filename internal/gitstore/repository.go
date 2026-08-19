@@ -65,20 +65,20 @@ type Repository struct {
 	// task path.
 	vocabularyLoaded bool
 	vocabulary       core.Vocabulary
-	// stateHead and stateVocabulary memoize the last checkpoint
+	// stateHead and stateConfig memoize the last checkpoint
 	// LoadVocabularyState decoded, keyed by the commit it came from.
 	//
 	// This is a different memo from the one above and cannot replace it: that
-	// one answers "the statuses", this one answers "the statuses at this ref
-	// tip", and the caller that needs the second is the one that must see a
-	// change. Keying on the head is what makes it exact rather than a guess — a
-	// commit's contents cannot change, so a tip this process has already decoded
-	// decodes to the same vocabulary forever, and a tip that moved misses. It
-	// exists for `workbook serve`, which reads this on every request and would
-	// otherwise pay an object read a second for a configuration that changes
-	// once a month.
-	stateHead       string
-	stateVocabulary core.Vocabulary
+	// one answers "the statuses", this one answers "the whole configuration at
+	// this ref tip", and the caller that needs the second is the one that must
+	// see a change. Keying on the head is what makes it exact rather than a
+	// guess — a commit's contents cannot change, so a tip this process has
+	// already decoded decodes to the same configuration forever, and a tip that
+	// moved misses. It exists for `workbook serve`, which reads this on every
+	// request and would otherwise pay an object read a second for a
+	// configuration that changes once a month.
+	stateHead   string
+	stateConfig decodedConfig
 	// The four fields below record what this command last saw of the
 	// configuration ledger on each side. The synchronization stage sets both
 	// from the ref listing it already makes, and Push sets the remote side from
