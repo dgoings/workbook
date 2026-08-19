@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -87,8 +88,11 @@ func TestConfigSetRecordsADisplaySettingAndSaysHowToUndoIt(t *testing.T) {
 	if entry.Operation != core.ConfigDisplaySet {
 		t.Fatalf("newest log entry = %#v, want the display.set", entry)
 	}
-	if !strings.Contains(entry.Summary, "project-name") || !strings.Contains(entry.Summary, "Atlas") {
-		t.Fatalf("log summary = %q, want it to name the setting and the value", entry.Summary)
+	// The value is quoted the way the sibling arm quotes a status label, so a
+	// name with a space in it reads as one value rather than as the end of the
+	// sentence.
+	if entry.Summary != `set project-name to "Atlas"` {
+		t.Fatalf("log summary = %q, want the setting and the quoted value", entry.Summary)
 	}
 	if entry.Inverse == nil || entry.Inverse.Command != "workbook config unset project-name" {
 		t.Fatalf("log inverse = %#v, want the clearing command", entry.Inverse)
@@ -116,6 +120,15 @@ func TestConfigSetRecordsADisplaySettingAndSaysHowToUndoIt(t *testing.T) {
 	if got := settingView(t, decodeConfigShow(t, mustRun(t, repository, "config", "show", "--json")),
 		core.DisplayProjectName); got.Source != "default" {
 		t.Fatalf("config show after clearing = %#v, want the default again", got)
+	}
+	// A clearing summarizes as the verb and the setting: the operation carries
+	// no value, and inventing one would be a claim about what it replaced.
+	logged = mustRun(t, repository, "status", "log", "--json")
+	if err := json.Unmarshal(assertJSONResult(t, logged, "status log").Data, &logResult); err != nil {
+		t.Fatalf("decode status log: %v", err)
+	}
+	if got := logResult.Entries[len(logResult.Entries)-1].Summary; got != "cleared project-name" {
+		t.Fatalf("log summary after clearing = %q", got)
 	}
 
 	// The strongest statement available that the section really folds: validate
@@ -467,4 +480,86 @@ func mustRun(t *testing.T, repository string, args ...string) string {
 		t.Fatalf("workbook %s code = %d; stderr = %q", strings.Join(args, " "), code, stderr)
 	}
 	return stdout
+}
+
+// `config show` says where the values it printed came from, including when the
+// answer is "nowhere yet".
+//
+// The tip is a Git object ID, which says nothing about itself; a bare hash on a
+// line labelled "Display" reads as though it were one of the settings. And a
+// project on the pre-ledger fallback — every project created before the
+// configuration ledger existed — has no tip to print at all, which is a
+// different statement from "the settings are unconfigured" and has to be a
+// different line.
+func TestConfigShowLabelsTheConfigurationLedger(t *testing.T) {
+	pre := preLedgerRepository(t)
+	shown := mustRun(t, pre, "config", "show")
+	if !strings.Contains(shown, "Display:\tno configuration ledger") {
+		t.Fatalf("config show output = %q, want it to say the project has no ledger", shown)
+	}
+	if !strings.Contains(shown, "project-name:\t"+core.DefaultProjectName+"\t(default)") {
+		t.Fatalf("config show output = %q, want every setting to still read as a default", shown)
+	}
+	result := decodeConfigShow(t, mustRun(t, pre, "config", "show", "--json"))
+	if result.Display.Seeded || result.Display.Head != "" {
+		t.Fatalf("config show display = %#v, want no ledger reported", result.Display)
+	}
+
+	repository := initializedRepository(t)
+	mustRun(t, repository, "config", "set", "project-name", "Atlas", "--json")
+	head := cliGitOutput(t, repository, "rev-parse", configLedgerRefName)
+	shown = mustRun(t, repository, "config", "show")
+	if !strings.Contains(shown, "Display:\t"+head+"\t(configuration ledger tip)") {
+		t.Fatalf("config show output = %q, want the tip labelled as the ledger's", shown)
+	}
+}
+
+// A display change that could not reach origin is still recorded, and says so
+// in the words every other mutation uses.
+//
+// The wording is the point as much as the warning is. This used to say "the
+// display setting was recorded", which is a sentence about a set — a `config
+// unset` that could not reach origin reported that a setting had been recorded
+// when what had been recorded was its removal. The sibling mutations all say
+// "the change", which is true of both verbs.
+func TestADisplayChangeThatCannotReachOriginSaysSo(t *testing.T) {
+	repository, _ := cliSyncRepositories(t)
+	mustRun(t, repository, "config", "set", "project-name", "Atlas", "--json")
+	cliGit(t, repository, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "gone.git"))
+
+	for _, testCase := range []struct {
+		name string
+		args []string
+	}{
+		{"a set", []string{"config", "set", "text-color", "#101820"}},
+		{"an unset", []string{"config", "unset", "project-name"}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			code, stdout, stderr := run(t, repository, append(testCase.args, "--json")...)
+			if code != 0 {
+				t.Fatalf("code = %d, want the change recorded anyway; stdout = %q stderr = %q",
+					code, stdout, stderr)
+			}
+			document := assertJSONResult(t, stdout, testCase.args[0]+" "+testCase.args[1])
+			if len(document.Warnings) != 1 || document.Warnings[0].Code != core.WarningAutoSync {
+				t.Fatalf("warnings = %#v, want one %s", document.Warnings, core.WarningAutoSync)
+			}
+			message := document.Warnings[0].Message
+			if !strings.HasPrefix(message, "the change was recorded locally, but ") {
+				t.Fatalf("warning = %q, want the wording every mutation shares", message)
+			}
+			if !strings.Contains(message, "fetch failed") {
+				t.Fatalf("warning = %q, want it to name what went wrong", message)
+			}
+		})
+	}
+
+	// Recorded is recorded: the ledger holds both changes whatever origin did.
+	shown := decodeConfigShow(t, mustRun(t, repository, "config", "show", "--json"))
+	if got := settingView(t, shown, core.DisplayTextColor); got.Value != "#101820" {
+		t.Fatalf("text-color = %#v, want the change that could not be published", got)
+	}
+	if got := settingView(t, shown, core.DisplayProjectName); got.Source != "default" {
+		t.Fatalf("project-name = %#v, want the clearing that could not be published", got)
+	}
 }

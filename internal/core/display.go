@@ -58,15 +58,29 @@ type DisplayDocument struct {
 // generation to carry it, and the other is what callers read, which may. It is
 // also a value rather than a pointer, so a caller asking for a name it has not
 // configured reads an empty string instead of dereferencing nothing.
+//
+// It carries no serialization tags, and that is the distinction holding: the
+// durable form is DisplayDocument, and every surface that publishes these
+// values builds its own view of them — `workbook config show` reports each
+// setting beside the source it came from, which is a shape this struct does not
+// have. Tags here would be a second wire format for one section, and the first
+// caller to marshal it would have made it real.
 type DisplaySettings struct {
-	Name         string `json:"name,omitempty"`
-	PrimaryColor string `json:"primaryColor,omitempty"`
-	TextColor    string `json:"textColor,omitempty"`
+	Name         string
+	PrimaryColor string
+	TextColor    string
 }
 
 // Configured reports that this project recorded at least one display setting,
 // which is the difference between a board that looks like every other Workbook
 // board on purpose and one nobody has decided about.
+//
+// Nothing calls it yet. It belongs to the web board — the surface that has to
+// choose between the legacy palette and a computed one, and between the generic
+// heading and a project's own — which is PR 2 of this story. It is here rather
+// than there because the question is about these three values and the answer is
+// one expression over all of them; a caller writing that expression at the call
+// site is a caller deciding what "configured" means.
 func (settings DisplaySettings) Configured() bool {
 	return settings != DisplaySettings{}
 }
@@ -144,16 +158,20 @@ func CanonicalDisplayValue(setting, value string) (string, error) {
 // which is the rule that keeps a project's checkpoint bytes unchanged through
 // the whole life of the section — before anybody configures anything, and again
 // after they clear the last setting.
+//
+// The walk follows DisplaySettingNames rather than a map of the three, because
+// a section with more than one thing wrong has to be refused with the same
+// message on every clone. Go randomizes map iteration per run, so the map form
+// picked which of two bad values to name by coin toss, and a refusal somebody
+// is meant to act on cannot be one of two sentences.
 func normalizeDisplayDocument(document *DisplayDocument) (*DisplayDocument, error) {
 	if document == nil {
 		return nil, nil
 	}
 	normalized := *document
-	for setting, value := range map[string]string{
-		DisplayProjectName:  normalized.Name,
-		DisplayPrimaryColor: normalized.PrimaryColor,
-		DisplayTextColor:    normalized.TextColor,
-	} {
+	stored := ResolveDisplaySettings(&normalized)
+	for _, setting := range DisplaySettingNames {
+		value, _ := stored.Value(setting)
 		if value == "" {
 			continue
 		}

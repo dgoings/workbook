@@ -244,3 +244,73 @@ func TestCanonicalDisplayValueTrimsAndFolds(t *testing.T) {
 		t.Fatalf("unknown setting category = %q, want %q", CategoryOf(err), CategoryValidation)
 	}
 }
+
+// A stored section with more than one thing wrong names the same one every
+// time.
+//
+// The check used to walk a Go map, whose iteration order is randomized per run,
+// so a checkpoint that had been hand-edited into two non-canonical values would
+// be refused with one message on one clone and another on the next. A refusal
+// somebody has to act on is a refusal that has to be the same refusal twice, so
+// the walk follows DisplaySettingNames — the order every other surface presents
+// these settings in.
+func TestNormalizeDisplayDocumentRefusesInAStableOrder(t *testing.T) {
+	document := &DisplayDocument{
+		Name:         " Untrimmed",
+		PrimaryColor: "#ABC123",
+		TextColor:    "not-a-color",
+	}
+	_, err := normalizeDisplayDocument(document)
+	if err == nil {
+		t.Fatal("normalizeDisplayDocument() accepted a section no author could have written")
+	}
+	first := err.Error()
+	for range 64 {
+		_, again := normalizeDisplayDocument(document)
+		if again == nil {
+			t.Fatal("normalizeDisplayDocument() accepted the same section on a later call")
+		}
+		if again.Error() != first {
+			t.Fatalf("normalizeDisplayDocument() = %q then %q; the refusal depends on map order", first, again.Error())
+		}
+	}
+	// And the one it names is the first in the order every surface reads.
+	if !strings.Contains(first, DisplayProjectName) {
+		t.Fatalf("refusal = %q, want it to name %q, the first setting in DisplaySettingNames", first, DisplayProjectName)
+	}
+}
+
+// The fallback line for a display conflict somebody built without a detail.
+//
+// The classifier always writes one, because this union has no member to put a
+// setting name in — but ConfigConflictDetail is what every surface calls, and
+// its default arm returns the bare type string. A display conflict that reached
+// a person as "display-setting" would be a report nobody could act on, so the
+// arm exists; it is untested until something asks for it.
+func TestConfigConflictDetailAnswersForADisplaySettingWithoutOne(t *testing.T) {
+	detail := ConfigConflictDetail(ConfigConflict{Type: ConfigConflictDisplaySetting, Ours: "Atlas"})
+	if detail == string(ConfigConflictDisplaySetting) {
+		t.Fatal("ConfigConflictDetail() fell through to the bare type string")
+	}
+	if !strings.Contains(detail, "display setting") {
+		t.Fatalf("ConfigConflictDetail() = %q, want it to say what kind of conflict this is", detail)
+	}
+	// A conflict that carries its own line keeps it, which is every conflict the
+	// classifier produces.
+	written := ConfigConflict{
+		Type:   ConfigConflictDisplaySetting,
+		Detail: "project-name was set to Atlas here and cleared on origin",
+	}
+	if got := ConfigConflictDetail(written); got != written.Detail {
+		t.Fatalf("ConfigConflictDetail() = %q, want the conflict's own line", got)
+	}
+	// And a display conflict names no status, so the failure it summarizes to
+	// leads with what happened rather than with an empty name.
+	err := ConfigConflictError([]ConfigConflict{written})
+	if CategoryOf(err) != CategoryConflict {
+		t.Fatalf("ConfigConflictError() category = %q, want %q", CategoryOf(err), CategoryConflict)
+	}
+	if err.Error() != written.Detail {
+		t.Fatalf("ConfigConflictError() = %q, want exactly the conflict's line", err.Error())
+	}
+}

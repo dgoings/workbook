@@ -230,11 +230,15 @@ func writeDisplayView(output io.Writer, view displayView) {
 	}
 }
 
+// displayLedgerLine says what the object ID beside "Display" is. A bare hash on
+// a line that lists three settings under it reads as though it were one of
+// them; naming it as the ledger's tip is what makes the block one statement
+// about where these values came from.
 func displayLedgerLine(view displayView) string {
 	if !view.Seeded {
 		return "no configuration ledger"
 	}
-	return view.Head
+	return view.Head + "\t(configuration ledger tip)"
 }
 
 // displaySettingLine says the value and where it came from, and never prints an
@@ -251,7 +255,7 @@ func displaySettingLine(setting displaySettingView) string {
 }
 
 func runConfigSet(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
-	values, args, err := requiredArguments("config set", []string{"<setting>", "<value>"}, args)
+	values, args, err := requiredArguments(configSetCommand, []string{"<setting>", "<value>"}, args)
 	if err != nil {
 		return err
 	}
@@ -266,7 +270,13 @@ func runConfigSet(ctx context.Context, args []string, cwd string, stdout, stderr
 		return err
 	}
 	if kind == ledgerSetting {
-		return runDisplayMutation(ctx, cwd, "config set", values[0], values[1], false, *noSync, *jsonMode, stdout, stderr)
+		return runDisplayMutation(ctx, cwd, displayMutation{
+			command: configSetCommand,
+			setting: values[0],
+			value:   values[1],
+			noSync:  *noSync,
+			json:    *jsonMode,
+		}, stdout, stderr)
 	}
 	enabled, parseErr := strconv.ParseBool(values[1])
 	if parseErr != nil {
@@ -276,11 +286,11 @@ func runConfigSet(ctx context.Context, args []string, cwd string, stdout, stderr
 	if enabled {
 		setting = core.AutoSyncEnabled
 	}
-	return writeProjectSetting(ctx, cwd, stdout, stderr, "config set", setting, strconv.FormatBool(enabled), *jsonMode)
+	return writeProjectSetting(ctx, cwd, stdout, stderr, configSetCommand, setting, strconv.FormatBool(enabled), *jsonMode)
 }
 
 func runConfigUnset(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
-	values, args, err := requiredArguments("config unset", []string{"<setting>"}, args)
+	values, args, err := requiredArguments(configUnsetCommand, []string{"<setting>"}, args)
 	if err != nil {
 		return err
 	}
@@ -295,9 +305,43 @@ func runConfigUnset(ctx context.Context, args []string, cwd string, stdout, stde
 		return err
 	}
 	if kind == ledgerSetting {
-		return runDisplayMutation(ctx, cwd, "config unset", values[0], "", true, *noSync, *jsonMode, stdout, stderr)
+		return runDisplayMutation(ctx, cwd, displayMutation{
+			command: configUnsetCommand,
+			setting: values[0],
+			noSync:  *noSync,
+			json:    *jsonMode,
+		}, stdout, stderr)
 	}
-	return writeProjectSetting(ctx, cwd, stdout, stderr, "config unset", core.AutoSyncUnset, "unset", *jsonMode)
+	return writeProjectSetting(ctx, cwd, stdout, stderr, configUnsetCommand, core.AutoSyncUnset, "unset", *jsonMode)
+}
+
+// The two display verbs, named once. Both the command a result envelope reports
+// and the verb the command performs are read from these, so the two cannot
+// disagree about which one is running.
+const (
+	configSetCommand   = "config set"
+	configUnsetCommand = "config unset"
+)
+
+// displayMutation is one display command as somebody invoked it.
+//
+// It is a struct rather than six positional parameters because half of them
+// were strings and two were bools, which is a call site nobody can read and a
+// signature where transposing two arguments still compiles.
+type displayMutation struct {
+	command string
+	setting string
+	// value is empty for a clearing, which the command already says.
+	value  string
+	noSync bool
+	json   bool
+}
+
+// clears reports the verb. It is derived from the command rather than carried
+// beside it: `config unset` is the clearing verb, that is the whole rule, and a
+// separate flag saying the same thing is a second place for it to be wrong.
+func (mutation displayMutation) clears() bool {
+	return mutation.command == configUnsetCommand
 }
 
 // runDisplayMutation records one display setting in the configuration ledger.
@@ -309,18 +353,9 @@ func runConfigUnset(ctx context.Context, args []string, cwd string, stdout, stde
 // envelope. What it does not have is a documentation hook — nothing generated
 // states a project's name or colors, so there is no `--no-docs` here and
 // nothing to regenerate.
-func runDisplayMutation(
-	ctx context.Context,
-	cwd string,
-	command string,
-	setting string,
-	value string,
-	clear bool,
-	noSync bool,
-	jsonMode bool,
-	stdout, stderr io.Writer,
-) error {
-	session, err := openTaskSession(ctx, cwd, noSync, true, stderr)
+func runDisplayMutation(ctx context.Context, cwd string, mutation displayMutation, stdout, stderr io.Writer) error {
+	setting := mutation.setting
+	session, err := openTaskSession(ctx, cwd, mutation.noSync, true, stderr)
 	if err != nil {
 		return err
 	}
@@ -336,10 +371,10 @@ func runDisplayMutation(
 
 	operation := core.ConfigOperation{Type: core.ConfigDisplayUnset, Setting: setting}
 	change := configDisplayChange{Operation: "unset", Setting: setting, From: before}
-	if !clear {
+	if !mutation.clears() {
 		// Canonicalized here, at the boundary, so `#ABC123` and a name typed
 		// with a stray space are accepted from a person and stored as one value.
-		canonical, err := core.CanonicalDisplayValue(setting, value)
+		canonical, err := core.CanonicalDisplayValue(setting, mutation.value)
 		if err != nil {
 			return err
 		}
@@ -363,7 +398,7 @@ func runDisplayMutation(
 		Display: newDisplayView(written.Head, true, written.State.Display()),
 		Inverse: displayChangeInverse(state.Display, operation),
 	}
-	writeDisplayMutation(stdout, stderr, command, result, session, jsonMode)
+	writeDisplayMutation(stdout, stderr, mutation.command, result, session, mutation.json)
 	return nil
 }
 
@@ -427,8 +462,14 @@ func writeDisplayMutation(
 	var warnings []core.Warning
 	if session.report.Status == syncStatusFailed {
 		warnings = append(warnings, core.Warning{
+			// "the change", not "the display setting was recorded": this body
+			// serves both verbs, and a `config unset` that could not reach
+			// origin would otherwise report that a setting had been recorded
+			// when what was recorded is its removal. It is also the wording
+			// every other mutation's warning uses, which is what lets somebody
+			// recognize the sentence rather than read it.
 			Code:    core.WarningAutoSync,
-			Message: "the display setting was recorded locally, but " + session.report.Detail,
+			Message: "the change was recorded locally, but " + session.report.Detail,
 		})
 	}
 	if jsonMode {

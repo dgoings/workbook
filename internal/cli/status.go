@@ -2394,7 +2394,10 @@ func configOperationSummary(operation core.ConfigOperation) string {
 	case core.ConfigStatusRemove:
 		return fmt.Sprintf("removed status %s into %s", operation.Status, operation.Destination)
 	case core.ConfigDisplaySet:
-		return fmt.Sprintf("set %s to %s", operation.Setting, operation.Value)
+		// Quoted for the reason the relabel arm above quotes a label: a value
+		// somebody typed can contain a space, and an unquoted one leaves a
+		// reader to guess where the sentence ends and the value begins.
+		return fmt.Sprintf("set %s to %q", operation.Setting, operation.Value)
 	case core.ConfigDisplayUnset:
 		return fmt.Sprintf("cleared %s", operation.Setting)
 	default:
