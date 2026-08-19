@@ -219,6 +219,89 @@ func TestConfigSetRendersTheChangeAsText(t *testing.T) {
 	}
 }
 
+// The mixed-version contract, against a real generation-one process and a real
+// display setting written by this build.
+//
+// Generation one is every clone running v0.5.0, and this is the whole question
+// the bump raises: what happens to a teammate who has not upgraded when
+// somebody names the project. Everything asserted here is what the marker was
+// raised to buy — the older clone keeps reading the project, keeps
+// synchronizing, and is told to upgrade rather than told its repository is
+// broken when it tries to change the configuration.
+func TestAGenerationOneReaderParksOnADisplayConfiguredProject(t *testing.T) {
+	binary := buildPatchedGenerationBinary(t, 1)
+	writer, older := cliSyncRepositories(t)
+
+	task := cliCreateTask(t, writer, "Ordinary task")
+	if code, _, stderr := run(t, writer, "sync"); code != 0 {
+		t.Fatalf("writer sync code = %d; stderr = %q", code, stderr)
+	}
+	// The older clone starts from a project it understands completely.
+	if code, _, stderr := runBinary(t, binary, older, "sync"); code != 0 {
+		t.Fatalf("older clone initial sync code = %d; stderr = %q", code, stderr)
+	}
+	if code, _, stderr := run(t, writer, "config", "set", "project-name", "Atlas", "--json"); code != 0 {
+		t.Fatalf("config set code = %d; stderr = %q", code, stderr)
+	}
+
+	// The marker really is on the documents the older build will read.
+	head := cliGitOutput(t, writer, "rev-parse", "refs/workbook/config")
+	for _, name := range []string{"operation.json", "state.json"} {
+		document := cliGitOutput(t, writer, "show", head+":"+name)
+		if !strings.Contains(document, `"minReader":2`) {
+			t.Fatalf("%s carries no generation-two marker: %s", name, document)
+		}
+	}
+
+	// Synchronization advances what it can. The configuration ledger is a
+	// fast-forward for a clone that has authored none of its own, so nothing is
+	// refused here at all — which is the property that keeps an un-upgraded
+	// teammate receiving everybody else's work.
+	if code, stdout, stderr := runBinary(t, binary, older, "sync", "--json"); code != 0 {
+		t.Fatalf("older clone sync code = %d, want 0; stdout = %q stderr = %q", code, stdout, stderr)
+	}
+	if got := cliGitOutput(t, older, "rev-parse", "refs/workbook/config"); got != head {
+		t.Fatalf("older clone configuration ref = %q, want origin's tip %q", got, head)
+	}
+
+	// Reads still work: the statuses come out of the checkpoint it could not
+	// decode strictly but could decode.
+	code, stdout, stderr := runBinary(t, binary, older, "status", "list", "--json")
+	if code != 0 {
+		t.Fatalf("older clone status list code = %d, want 0; stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stdout, "backlog") {
+		t.Fatalf("older clone status list = %q, want it to still name the project's statuses", stdout)
+	}
+	if code, _, stderr := runBinary(t, binary, older, "list", "--json"); code != 0 {
+		t.Fatalf("older clone list code = %d, want 0; stderr = %q", code, stderr)
+	}
+
+	// Changing the configuration is refused with the upgrade signal, not with a
+	// corruption report.
+	code, _, stderr = runBinary(t, binary, older, "status", "add", "triage", "--no-sync", "--json")
+	if code != 9 {
+		t.Fatalf("older clone status add code = %d, want 9 (newer-writer); stderr = %q", code, stderr)
+	}
+	assertJSONError(t, stderr, core.CategoryNewerWriter, "")
+	for _, wanted := range []string{"newer workbook", "upgrade workbook"} {
+		if !strings.Contains(stderr, wanted) {
+			t.Fatalf("refusal = %q, want it to contain %q", stderr, wanted)
+		}
+	}
+	for _, forbidden := range []string{"corrupt", "damaged", "invalid history"} {
+		if strings.Contains(strings.ToLower(stderr), forbidden) {
+			t.Fatalf("refusal = %q, want no claim that the repository is %s", stderr, forbidden)
+		}
+	}
+
+	// And the scope is the configuration alone. Tasks are a different ref and a
+	// different generation, so the older clone still does its own work.
+	if code, _, stderr := runBinary(t, binary, older, "update", task.ID, "--title", "Still editable", "--json"); code != 0 {
+		t.Fatalf("older clone update code = %d, want 0; stderr = %q", code, stderr)
+	}
+}
+
 func mustRun(t *testing.T, repository string, args ...string) string {
 	t.Helper()
 	code, stdout, stderr := run(t, repository, args...)

@@ -147,6 +147,47 @@ func TestDisplayOperationDocumentsRefuseWhatTheyCannotMean(t *testing.T) {
 	}
 }
 
+// The whole point of the marker: a pack carrying a display operation says so,
+// and the checkpoint carries the watermark forward for every later read.
+func TestADisplayPackRequiresTheDisplayGeneration(t *testing.T) {
+	if configOperationMinReader[ConfigDisplaySet] != 2 || configOperationMinReader[ConfigDisplayUnset] != 2 {
+		t.Fatalf("display operations declare generation %d and %d, want 2 and 2",
+			configOperationMinReader[ConfigDisplaySet], configOperationMinReader[ConfigDisplayUnset])
+	}
+	pack, err := NewConfigOperationPack(configTestProjectID, configTestGeneration, "developer@example.com", 2,
+		configTestNow, identify(1, []ConfigOperation{setDisplay(DisplayProjectName, "Atlas")}))
+	if err != nil {
+		t.Fatalf("NewConfigOperationPack() error = %v", err)
+	}
+	if pack.MinReader != 2 {
+		t.Fatalf("pack minReader = %d, want 2", pack.MinReader)
+	}
+	state := genesisState(t, testVocabulary(t))
+	if state.MinReader != 0 {
+		t.Fatalf("a genesis carrying no display section declares generation %d, want 0", state.MinReader)
+	}
+	written, err := ApplyConfig(&state, pack)
+	if err != nil {
+		t.Fatalf("ApplyConfig() error = %v", err)
+	}
+	if written.MinReader != 2 {
+		t.Fatalf("checkpoint minReader = %d, want 2", written.MinReader)
+	}
+	// The watermark stays put when a later pack needs nothing new, which is what
+	// lets a clone answer "can I still change this?" from the tip alone.
+	later := fold(t, written, []ConfigOperation{add("triage", "Triage", "5/1")})
+	if later.MinReader != 2 {
+		t.Fatalf("checkpoint minReader after an ordinary pack = %d, want 2", later.MinReader)
+	}
+	// And a genesis that carries the section declares it too, even though no
+	// display operation appears in the pack. Nothing this build writes seeds one
+	// that way; the marker must not be off by one if something ever does.
+	config := ConfigData{Vocabulary: testVocabulary(t).Document(), Display: &DisplayDocument{Name: "Atlas"}}
+	if got := ConfigPackMinReader([]ConfigOperation{{Type: ConfigGenesis, Config: &config}}); got != 2 {
+		t.Fatalf("a genesis carrying display settings declares generation %d, want 2", got)
+	}
+}
+
 func TestValidateThemeColorCanonicalizesToLowercase(t *testing.T) {
 	canonical, err := ValidateThemeColor("#1A7F4B")
 	if err != nil {

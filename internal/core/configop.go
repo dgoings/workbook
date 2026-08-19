@@ -191,11 +191,15 @@ type ConfigStateDocument struct {
 // configOperationMinReader declares, per configuration operation type, the
 // writer-format generation a reader needs to fold a pack containing it.
 //
-// Every entry is zero while the display section is being built: this build
-// cannot yet claim to fold generation two, and a pack it would refuse to fold
-// is a pack it must not write. The commit that raises
-// SupportedFormatGeneration raises the two display entries with it, which is
-// the last step of shipping this section rather than the first.
+// The status entries are zero: they are what the ledger was built to carry, and
+// every build that has a ledger at all folds them. The display entries are two,
+// the generation the display section introduced, and they are the reason this
+// table is per operation type rather than per document. A build without the
+// section cannot decode a checkpoint carrying `display` strictly, and a build
+// that folded a display operation by ignoring it would compute a different
+// configuration from the same bytes — so it is told to upgrade instead, and
+// only about a project that has configured something. A project that has not
+// keeps a ledger those builds fold exactly as they always did.
 var configOperationMinReader = map[ConfigOperationType]int{
 	ConfigGenesis:       0,
 	ConfigStatusAdd:     0,
@@ -205,8 +209,8 @@ var configOperationMinReader = map[ConfigOperationType]int{
 	ConfigStatusReorder: 0,
 	ConfigStatusTag:     0,
 	ConfigStatusUntag:   0,
-	ConfigDisplaySet:    0,
-	ConfigDisplayUnset:  0,
+	ConfigDisplaySet:    2,
+	ConfigDisplayUnset:  2,
 }
 
 // ConfigPackMinReader returns the generation a reader needs to fold these
