@@ -670,13 +670,22 @@ func classifyConfigOperation(view configView, operation core.ConfigOperation) *c
 // The section's three values are independent, so the question is asked of one
 // setting at a time, and it takes three values to answer: what the setting was
 // at the fork this local operation was authored onto, what origin's tip says it
-// is now, and what this operation would make it. A conflict is both sides having
-// moved the setting off the fork to different places. Two clauses therefore
-// converge, and each is a different kind of agreement — the operation's outcome
-// already equals origin's, so there is nothing to lose; or origin never touched
-// the setting since the fork, so the local intent is the only one there is and
-// the fold records it. That second clause is the rule classifyConfigAdd applies
-// to a status origin does not define.
+// is now, and what this operation would make it. A conflict is origin having
+// moved the setting off the fork to somewhere this operation's outcome does not
+// agree with. Two clauses therefore converge, and each is a different kind of
+// agreement — the operation's outcome already equals origin's, so there is
+// nothing to lose; or origin never touched the setting since the fork, so the
+// local intent is the only one there is and the fold records it. That second
+// clause is the rule classifyConfigAdd applies to a status origin does not
+// define.
+//
+// The local side is deliberately not asked whether it moved. An operation that
+// re-records the fork's own value against an origin that moved is classified as
+// a disagreement even though nobody locally changed anything, and that is
+// accepted rather than fixed: `workbook config` refuses to author such an
+// operation at all — refuseUnchangedDisplay stops a set to the value already
+// stored — so the only way to reach it is a pack no surface in this repository
+// writes. A branch nobody can take is a branch nobody can test.
 //
 // Reading origin's current value alone is what this used to do, and it made the
 // two directions of a set-against-unset asymmetric. A cleared setting and a

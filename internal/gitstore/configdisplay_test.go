@@ -271,8 +271,14 @@ func TestConfigSyncSurfacesOriginClearingWhatThisCloneSet(t *testing.T) {
 		t.Fatalf("conflict values = (%q, %q), want the local name against origin's clearing",
 			conflict.Ours, conflict.Theirs)
 	}
-	if !strings.Contains(conflict.Detail, core.DisplayProjectName) {
-		t.Fatalf("conflict detail = %q, want it to name the setting", conflict.Detail)
+	// The line has its own arm, and the arm is the whole reason this direction
+	// reads as anything: the shared wording puts origin's value in a sentence
+	// with nowhere to say there is none, so a clearing rendered through it comes
+	// out as "and to  on origin" — a double space where a fact should be.
+	wanted := "project-name was set to Atlas here and cleared on origin, so origin's clearing stands; " +
+		"set it again to keep the local intent"
+	if conflict.Detail != wanted {
+		t.Fatalf("conflict detail = %q, want %q", conflict.Detail, wanted)
 	}
 	// Origin's clearing stands, as it does in the other direction, so the two
 	// clones still hold one ledger while somebody decides.
@@ -282,6 +288,71 @@ func TestConfigSyncSurfacesOriginClearingWhatThisCloneSet(t *testing.T) {
 	}
 	if state.Display.Name != "" {
 		t.Fatalf("display after the conflicted replay = %#v, want origin's clearing", state.Display)
+	}
+}
+
+// Two local changes to one setting replay in order, and the second is not a
+// conflict with the first.
+//
+// The fork advances along the local chain while the replay's parent advances
+// along the rewritten one, and they are two different questions: the parent is
+// what an operation lands on, the fork is what its author was looking at. Hold
+// the fork still at the shared base and the second local pack is classified
+// against a value its own author had already replaced — so this clone's second
+// change reads as a disagreement with origin, is discarded, and the conflict
+// report names origin as holding a value origin never had.
+func TestConfigSyncReplaysASecondDisplayChangeOntoTheFirst(t *testing.T) {
+	ctx := context.Background()
+	first, second, config := syncRepositories(t)
+
+	// One published value both clones fork from.
+	writeConfig(t, first, config, setDisplayOperation(core.DisplayProjectName, "Seed"))
+	if _, err := first.Sync(ctx, config); err != nil {
+		t.Fatalf("first Sync() error = %v", err)
+	}
+	if _, err := second.Sync(ctx, config); err != nil {
+		t.Fatalf("second Sync() error = %v", err)
+	}
+
+	// Origin then moves something that is not this setting. That is what makes
+	// the two ledgers diverge, so the local packs are replayed rather than
+	// fast-forwarded past — and it leaves origin's own value for the setting
+	// exactly where the fork left it.
+	writeConfig(t, first, config, relabelOperation(core.StatusBacklog, "Inbox"))
+	if _, err := first.Sync(ctx, config); err != nil {
+		t.Fatalf("first Sync() after the relabel error = %v", err)
+	}
+
+	// Two local changes to the same setting, in order, each its own pack.
+	writeConfig(t, second, config, setDisplayOperation(core.DisplayProjectName, "Alpha"))
+	writeConfig(t, second, config, setDisplayOperation(core.DisplayProjectName, "Beta"))
+
+	run, err := second.Sync(ctx, config)
+	if err != nil {
+		t.Fatalf("second Sync() error = %v, want both local packs replayed", err)
+	}
+	if len(run.Fetch.ConfigConflicts) != 0 {
+		t.Fatalf("config conflicts = %#v, want none: this clone disagreed with nobody",
+			run.Fetch.ConfigConflicts)
+	}
+	if run.Fetch.Config == nil {
+		t.Fatal("the fetch reported nothing about the configuration ledger")
+	}
+	if !strings.Contains(run.Fetch.Config.Detail, "replayed 2 configuration operation(s)") {
+		t.Fatalf("config stage detail = %q, want both local packs replayed", run.Fetch.Config.Detail)
+	}
+
+	state, err := second.LoadVocabularyState(ctx, config)
+	if err != nil {
+		t.Fatalf("LoadVocabularyState() error = %v", err)
+	}
+	if state.Display.Name != "Beta" {
+		t.Fatalf("display after the replay = %#v, want this clone's later change", state.Display)
+	}
+	// And origin's own change came through, which is the other half of a replay
+	// that lost nothing.
+	if label := state.Vocabulary.Label(core.StatusBacklog); label != "Inbox" {
+		t.Fatalf("backlog label after the replay = %q, want origin's %q", label, "Inbox")
 	}
 }
 
