@@ -247,12 +247,19 @@ func (r *Repository) reconcileConfigLedger(
 
 	var localOnly []string
 	var localRoot string
+	// forkCommit is the local commit the oldest local-only pack was authored
+	// onto: the shared base where the two histories meet, and this clone's own
+	// genesis root where they never did. The replay needs the configuration it
+	// carried to tell a setting origin has cleared since the fork from one
+	// origin never configured.
+	var forkCommit string
 	var err error
 	if unrelated {
 		localOnly, localRoot, err = unrelatedLocalConfigCommits(graph, local.Head)
+		forkCommit = localRoot
 	} else {
 		var related bool
-		_, localOnly, related, err = localOnlyConfigCommits(graph, local.Head, remote.Head)
+		forkCommit, localOnly, related, err = localOnlyConfigCommits(graph, local.Head, remote.Head)
 		if err == nil && !related {
 			err = core.Errorf(core.CategoryCorruptData,
 				"the local and fetched configuration ledgers share no common commit")
@@ -290,13 +297,16 @@ func (r *Repository) reconcileConfigLedger(
 		return outcome, nil
 	}
 
-	records, err := r.readConfigRecords(ctx, config, configRef, localOnly)
+	// The fork is read in the same batch as the packs replayed onto origin, so
+	// consulting it costs no extra Git process — one more object in a walk the
+	// replay budget already bounds.
+	records, err := r.readConfigRecords(ctx, config, configRef, append([]string{forkCommit}, localOnly...))
 	if err != nil {
 		return configReconcileOutcome{}, err
 	}
 
-	replay := configReplay{parent: remote}
-	for _, record := range records {
+	replay := configReplay{parent: remote, fork: records[0].State.Config}
+	for _, record := range records[1:] {
 		done, err := replay.next(ctx, r, record)
 		if err != nil {
 			return configReconcileOutcome{}, err
@@ -396,7 +406,14 @@ func markPackSubjects(view configView, operations []core.ConfigOperation) {
 
 // configReplay carries the state one ledger's replay advances through.
 type configReplay struct {
-	parent    configRecord
+	parent configRecord
+	// fork is the configuration the pack about to be replayed was authored
+	// onto, which for the first local-only commit is the shared base and
+	// afterwards is the local commit before it. It advances along the local
+	// chain while parent advances along the rewritten one, because they answer
+	// two different questions: parent is what the operation lands on, fork is
+	// what its author was looking at.
+	fork      core.ConfigData
 	replayed  int
 	skipped   int
 	conflicts []core.ConfigConflict
@@ -410,7 +427,7 @@ type configReplay struct {
 // applying the author's later operations to a vocabulary the author never saw,
 // and every one of them would be a guess about what they meant.
 func (replay *configReplay) next(ctx context.Context, r *Repository, local configRecord) (bool, error) {
-	view := newConfigView(replay.parent.State.Config)
+	view := newConfigView(replay.parent.State.Config, replay.fork)
 	markPackSubjects(view, local.Operation.Operations)
 	for _, operation := range local.Operation.Operations {
 		if conflict := classifyConfigOperation(view, operation); conflict != nil {
@@ -418,6 +435,9 @@ func (replay *configReplay) next(ctx context.Context, r *Repository, local confi
 			return true, nil
 		}
 	}
+	// Past classification, the next local pack's author was looking at this
+	// one's result whatever this replay goes on to do with it.
+	replay.fork = local.State.Config
 
 	// Only the logical clock and the history generation are rewritten. Actor,
 	// wall time and operation IDs are the record of what somebody actually did.
@@ -485,6 +505,16 @@ type configView struct {
 	// of it is "what does origin say this setting is", and an unconfigured
 	// setting and an absent section are the same answer.
 	display core.DisplaySettings
+	// fork is the same three values as they stood in the commit the local pack
+	// being classified was authored onto.
+	//
+	// It is the one thing origin's tip cannot supply. A display setting has no
+	// tombstone: origin having cleared a setting since the fork and origin never
+	// having configured it are both the empty string, and the first is a
+	// decision this clone would be overwriting while the second is nothing at
+	// all. The fork tells them apart, and it is the only member of this view
+	// that comes from the local side of the history.
+	fork core.DisplaySettings
 	// pending are the statuses the pack being classified brings into existence
 	// itself. The view is built once per pack, from the vocabulary the pack
 	// starts from, so without this an operation editing a status an earlier
@@ -499,13 +529,20 @@ type configView struct {
 // come from different reads of the ledger, which is precisely the skew the
 // replay cannot afford: the parent is one commit, and the view is what that one
 // commit said.
-func newConfigView(config core.ConfigData) configView {
+//
+// The fork is a second commit and a second read on purpose: it is the state the
+// local pack was authored onto, which is the only place "origin changed this
+// since we forked" is written down. It is passed as a whole configuration for
+// the same reason the parent is, so that a later question about another section
+// has an answer that came from the same commit as this one's.
+func newConfigView(config, fork core.ConfigData) configView {
 	document := config.Vocabulary
 	view := configView{
 		live:    make(map[core.Status]core.StatusDefinition, len(document.Statuses)),
 		aliases: make(map[core.Status]core.Status, len(document.Aliases)),
 		retired: make(map[core.Status]core.Status, len(document.Retired)),
 		display: core.ResolveDisplaySettings(config.Display),
+		fork:    core.ResolveDisplaySettings(fork.Display),
 		pending: make(map[core.Status]struct{}),
 	}
 	for _, definition := range document.Statuses {
@@ -631,18 +668,29 @@ func classifyConfigOperation(view configView, operation core.ConfigOperation) *c
 // differently.
 //
 // The section's three values are independent, so the question is asked of one
-// setting at a time: what does the fetched history say this setting is, and what
-// would this operation make it? A pair that agrees — both sides chose the same
-// name, both cleared the same color, or origin never touched the setting at all
-// — converges, and recording it again would say nothing. A pair that disagrees
-// is a decision, because the fold keeps whichever applied first and after a
-// reconciliation that is always upstream's: the local value is the one that
-// would vanish without anybody being told.
+// setting at a time, and it takes three values to answer: what the setting was
+// at the fork this local operation was authored onto, what origin's tip says it
+// is now, and what this operation would make it. A conflict is both sides having
+// moved the setting off the fork to different places. Two clauses therefore
+// converge, and each is a different kind of agreement — the operation's outcome
+// already equals origin's, so there is nothing to lose; or origin never touched
+// the setting since the fork, so the local intent is the only one there is and
+// the fold records it. That second clause is the rule classifyConfigAdd applies
+// to a status origin does not define.
 //
-// A set against an unconfigured setting is not a disagreement even though the
-// two sides differ. Origin expressed no intent about it, so there is nothing to
-// weigh the local one against, and the fold records it — which is the same rule
-// classifyConfigAdd applies to a status origin does not define.
+// Reading origin's current value alone is what this used to do, and it made the
+// two directions of a set-against-unset asymmetric. A cleared setting and a
+// setting nobody ever configured are the same empty string on origin's tip, so
+// "origin cleared what this clone set" was answered as "origin expressed no
+// intent" and origin's deliberate clearing was overwritten on exit 0, while the
+// mirror image conflicted. The fork is the only thing that tells those apart.
+//
+// Losing the local intent is what makes a disagreement worth stopping for, and
+// the mechanism is not the fold's. configDisplay.apply is last-write-wins, so a
+// replayed local set would happily overwrite origin's value — the reason origin's
+// value survives is that the replay aborts at the first conflict and the clone
+// adopts origin's ledger wholesale. The conflict is the report of what that
+// adoption drops.
 func classifyConfigDisplay(view configView, operation core.ConfigOperation) *core.ConfigConflict {
 	theirs, known := view.display.Value(operation.Setting)
 	if !known {
@@ -652,11 +700,12 @@ func classifyConfigDisplay(view configView, operation core.ConfigOperation) *cor
 		// not know where either is stored.
 		return nil
 	}
+	forked, _ := view.fork.Value(operation.Setting)
 	ours := ""
 	if operation.Type == core.ConfigDisplaySet {
 		ours = operation.Value
 	}
-	if theirs == "" || ours == theirs {
+	if ours == theirs || forked == theirs {
 		return nil
 	}
 	return &core.ConfigConflict{
@@ -671,14 +720,20 @@ func classifyConfigDisplay(view configView, operation core.ConfigOperation) *cor
 // made of it, in one line, because the conflict union has no member to put a
 // setting name in — it names a status, and a display setting is not one.
 func describeDisplayConflict(setting, ours, theirs string) string {
-	if ours == "" {
+	switch {
+	case ours == "":
 		return fmt.Sprintf(
 			"%s was cleared here and set to %s on origin, so origin's value stands; clear it again to keep the local intent",
 			setting, theirs)
+	case theirs == "":
+		return fmt.Sprintf(
+			"%s was set to %s here and cleared on origin, so origin's clearing stands; set it again to keep the local intent",
+			setting, ours)
+	default:
+		return fmt.Sprintf(
+			"%s was set to %s here and to %s on origin, so origin's value stands; set it again to keep the local intent",
+			setting, ours, theirs)
 	}
-	return fmt.Sprintf(
-		"%s was set to %s here and to %s on origin, so origin's value stands; set it again to keep the local intent",
-		setting, ours, theirs)
 }
 
 // classifyConfigAdd reports two clones defining the same status differently.
@@ -873,7 +928,8 @@ func undefinedSubjectConflict(
 // which is what a person would expect, and reporting it would make every
 // ordinary removal of the done column a conflict.
 func classifyConfigArity(before, after core.VocabularyDocument, pack core.ConfigOperationPack) []core.ConfigConflict {
-	afterView := newConfigView(core.ConfigData{Vocabulary: after})
+	afterConfig := core.ConfigData{Vocabulary: after}
+	afterView := newConfigView(afterConfig, afterConfig)
 	conflicts := make([]core.ConfigConflict, 0, len(statusRoleTags))
 	for _, tag := range statusRoleTags {
 		allowed := make(map[core.Status]struct{})

@@ -132,9 +132,12 @@ const (
 	ConfigConflictRootVocabulary ConfigConflictType = "root-vocabulary"
 	// ConfigConflictDisplaySetting reports two clones setting the same display
 	// setting to different things, or one setting it while the other cleared it.
-	// The fold converges by keeping whichever applied first, which after a
-	// reconciliation is always upstream's, so the local intent is the one that
-	// would vanish without being mentioned.
+	// What is lost is the local intent, but not for the reason the status
+	// members lose it: the display fold is last-write-wins, so a replayed local
+	// operation would overwrite upstream's value rather than lose to it. Origin's
+	// value survives because the replay stops at the first conflict and the
+	// clone adopts origin's ledger whole — this is the report of what that
+	// adoption drops.
 	//
 	// Like root-vocabulary it names no status, because a display setting is a
 	// property of the project rather than of a column; the setting it is about is

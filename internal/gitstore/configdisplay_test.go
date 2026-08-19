@@ -16,15 +16,22 @@ func unsetDisplayOperation(setting string) core.ConfigOperation {
 	return core.ConfigOperation{Type: core.ConfigDisplayUnset, Setting: setting}
 }
 
-func displayView(display core.DisplaySettings) configView {
-	return newConfigView(core.ConfigData{
+func displayConfig(display core.DisplaySettings) core.ConfigData {
+	return core.ConfigData{
 		Vocabulary: core.DefaultVocabulary().Document(),
 		Display: &core.DisplayDocument{
 			Name:         display.Name,
 			PrimaryColor: display.PrimaryColor,
 			TextColor:    display.TextColor,
 		},
-	})
+	}
+}
+
+// displayView builds the two sides classification compares: what origin's tip
+// says the settings are, and what they were in the commit the local pack was
+// authored onto.
+func displayView(fetched, fork core.DisplaySettings) configView {
+	return newConfigView(displayConfig(fetched), displayConfig(fork))
 }
 
 // The classification matrix for a section whose three values are independent.
@@ -32,13 +39,19 @@ func displayView(display core.DisplaySettings) configView {
 // The rule it pins is the whole difference between a conflict and convergence:
 // two intents about the same setting that cannot both hold need a person, and
 // everything else — the same value chosen twice, two different settings, a
-// setting origin never touched — converges without one. The `default: return
-// nil` arm of classifyConfigOperation would answer every row of this table with
-// "no conflict", so every conflicting row here is also the test that the display
-// types are classified at all.
+// setting nobody upstream has touched since the fork — converges without one.
+// The `default: return nil` arm of classifyConfigOperation would answer every
+// row of this table with "no conflict", so every conflicting row here is also
+// the test that the display types are classified at all.
+//
+// Every row carries a fork as well as a fetched tip, because origin's current
+// value alone cannot tell "origin cleared this since we forked" from "origin
+// never configured it": both read as the empty string. The fork is what makes
+// the two directions of a set-against-unset symmetric.
 func TestClassifyConfigDisplaySurfacesOnlyDisagreement(t *testing.T) {
 	for _, testCase := range []struct {
 		name      string
+		fork      core.DisplaySettings
 		fetched   core.DisplaySettings
 		operation core.ConfigOperation
 		conflict  bool
@@ -64,8 +77,26 @@ func TestClassifyConfigDisplaySurfacesOnlyDisagreement(t *testing.T) {
 			operation: setDisplayOperation(core.DisplayProjectName, "Atlas"),
 		},
 		{
+			name:      "this clone is the only one that moved the setting",
+			fork:      core.DisplaySettings{Name: "Seed"},
+			fetched:   core.DisplaySettings{Name: "Seed"},
+			operation: setDisplayOperation(core.DisplayProjectName, "Atlas"),
+		},
+		{
+			name:      "this clone cleared what nobody upstream had touched",
+			fork:      core.DisplaySettings{Name: "Seed"},
+			fetched:   core.DisplaySettings{Name: "Seed"},
+			operation: unsetDisplayOperation(core.DisplayProjectName),
+		},
+		{
+			// Both sides had the fork's color and both moved off it: origin to
+			// nothing, this clone to another color. Origin's tip reads empty,
+			// which is what "never configured" reads as too — the fork is the
+			// only thing that tells the two apart.
 			name:      "origin cleared what this clone set",
-			operation: setDisplayOperation(core.DisplayPrimaryColor, "#1a7f4b"),
+			fork:      core.DisplaySettings{PrimaryColor: "#1a7f4b"},
+			operation: setDisplayOperation(core.DisplayPrimaryColor, "#2457d6"),
+			conflict:  true,
 		},
 		{
 			name:      "this clone cleared what origin set",
@@ -75,11 +106,12 @@ func TestClassifyConfigDisplaySurfacesOnlyDisagreement(t *testing.T) {
 		},
 		{
 			name:      "both sides cleared it",
+			fork:      core.DisplaySettings{TextColor: "#101820"},
 			operation: unsetDisplayOperation(core.DisplayTextColor),
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			conflict := classifyConfigOperation(displayView(testCase.fetched), testCase.operation)
+			conflict := classifyConfigOperation(displayView(testCase.fetched, testCase.fork), testCase.operation)
 			if testCase.conflict != (conflict != nil) {
 				t.Fatalf("classifyConfigOperation() = %#v, want conflict = %t", conflict, testCase.conflict)
 			}
@@ -104,11 +136,12 @@ func TestClassifyConfigDisplaySurfacesOnlyDisagreement(t *testing.T) {
 // other: a clone that renamed a status while origin renamed the board converges
 // on both.
 func TestClassifyConfigDisplayIgnoresStatusChanges(t *testing.T) {
-	view := displayView(core.DisplaySettings{Name: "Atlas"})
+	view := displayView(core.DisplaySettings{Name: "Atlas"}, core.DisplaySettings{})
 	if conflict := classifyConfigOperation(view, renameOperation(core.StatusReady, "todo")); conflict != nil {
 		t.Fatalf("a status rename against a configured display = %#v, want no conflict", conflict)
 	}
-	statusView := newConfigView(core.ConfigData{Vocabulary: core.DefaultVocabulary().Document()})
+	statusConfig := core.ConfigData{Vocabulary: core.DefaultVocabulary().Document()}
+	statusView := newConfigView(statusConfig, statusConfig)
 	if conflict := classifyConfigOperation(statusView, setDisplayOperation(core.DisplayTextColor, "#101820")); conflict != nil {
 		t.Fatalf("a display set against an unconfigured project = %#v, want no conflict", conflict)
 	}
@@ -184,6 +217,71 @@ func TestConfigSyncReportsDivergentDisplaySettings(t *testing.T) {
 	}
 	if state.Display.Name != "Atlas" {
 		t.Fatalf("display after the conflicted replay = %#v, want origin's", state.Display)
+	}
+}
+
+// The direction origin's tip alone cannot see: origin cleared a setting both
+// clones had, and this one set it to something else.
+//
+// It is the same disagreement as the passing direction — one clone kept a value
+// and the other decided the project should have none — and it has to surface as
+// one. Reading only origin's current value cannot tell this apart from "origin
+// never configured it", because both are the empty string, so before the fork
+// was consulted this converged silently on exit 0 and origin's deliberate
+// clearing was overwritten without anybody being told.
+func TestConfigSyncSurfacesOriginClearingWhatThisCloneSet(t *testing.T) {
+	ctx := context.Background()
+	first, second, config := syncRepositories(t)
+
+	// Both clones start from one published value, which is what makes the two
+	// later changes a disagreement rather than two independent decisions.
+	writeConfig(t, first, config, setDisplayOperation(core.DisplayProjectName, "Seed"))
+	if _, err := first.Sync(ctx, config); err != nil {
+		t.Fatalf("first Sync() error = %v", err)
+	}
+	if _, err := second.Sync(ctx, config); err != nil {
+		t.Fatalf("second Sync() error = %v", err)
+	}
+	state, err := second.LoadVocabularyState(ctx, config)
+	if err != nil {
+		t.Fatalf("LoadVocabularyState() error = %v", err)
+	}
+	if state.Display.Name != "Seed" {
+		t.Fatalf("second clone display = %#v, want the published seed", state.Display)
+	}
+
+	writeConfig(t, first, config, unsetDisplayOperation(core.DisplayProjectName))
+	if _, err := first.Sync(ctx, config); err != nil {
+		t.Fatalf("first Sync() after clearing error = %v", err)
+	}
+	writeConfig(t, second, config, setDisplayOperation(core.DisplayProjectName, "Atlas"))
+
+	run, err := second.Sync(ctx, config)
+	if err == nil || core.CategoryOf(err) != core.CategoryConflict {
+		t.Fatalf("second Sync() error = %v, want a conflict", err)
+	}
+	if len(run.Fetch.ConfigConflicts) != 1 {
+		t.Fatalf("config conflicts = %#v, want one", run.Fetch.ConfigConflicts)
+	}
+	conflict := run.Fetch.ConfigConflicts[0]
+	if conflict.Type != core.ConfigConflictDisplaySetting {
+		t.Fatalf("conflict = %#v, want a display-setting conflict", conflict)
+	}
+	if conflict.Ours != "Atlas" || conflict.Theirs != "" {
+		t.Fatalf("conflict values = (%q, %q), want the local name against origin's clearing",
+			conflict.Ours, conflict.Theirs)
+	}
+	if !strings.Contains(conflict.Detail, core.DisplayProjectName) {
+		t.Fatalf("conflict detail = %q, want it to name the setting", conflict.Detail)
+	}
+	// Origin's clearing stands, as it does in the other direction, so the two
+	// clones still hold one ledger while somebody decides.
+	state, err = second.LoadVocabularyState(ctx, config)
+	if err != nil {
+		t.Fatalf("LoadVocabularyState() error = %v", err)
+	}
+	if state.Display.Name != "" {
+		t.Fatalf("display after the conflicted replay = %#v, want origin's clearing", state.Display)
 	}
 }
 
