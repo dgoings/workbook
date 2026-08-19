@@ -321,6 +321,19 @@ func TestBoardAnswersAStaleDisplaySaveWithTheCurrentSettings(t *testing.T) {
 	if document.Display.Head == before.Head {
 		t.Fatal("the refusal carried the head the save was composed against")
 	}
+
+	// A save that happens to propose what the other clone already recorded is
+	// refused too, and this is where the order of the two checks shows. It would
+	// diff to nothing, so a save that asked what changed before it asked which
+	// configuration this was composed against would answer success — and the
+	// reader would be told their save landed on a page that is showing a
+	// configuration somebody else has replaced. The head is asked about first.
+	agreeing, status := boardRequest(t, http.MethodPatch, "http://"+addr+"/api/display",
+		`{"name":"Beta","primaryColor":"","textColor":"","expectedHead":`+quoteJSON(before.Head)+`}`)
+	if status != http.StatusConflict {
+		t.Fatalf("a stale save proposing what already stands = %d, want %d; body = %s",
+			status, http.StatusConflict, agreeing)
+	}
 }
 
 // A status change and a display save share one ledger and one tip, so a status
