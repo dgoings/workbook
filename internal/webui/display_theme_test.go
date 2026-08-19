@@ -1,7 +1,6 @@
 package webui
 
 import (
-	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -155,14 +154,5 @@ func TestBoardThemeDerivesAGreyWithoutInventingAHue(t *testing.T) {
 	}
 	if !strings.Contains(theme, "--wb-primary: #808080;") {
 		t.Errorf("a grey accent is not the accent: %s", theme)
-	}
-}
-
-// printThemeFamily is the tuning aid the table above was read off. It is a test
-// so it stays compilable, and it states nothing.
-func TestBoardThemeFamilyIsPrintable(t *testing.T) {
-	color, _ := parseThemeColor("#2457d6")
-	for _, token := range primaryThemeTokens {
-		t.Log(fmt.Sprintf("%-26s legacy %-22s derived %s", token.property, token.legacy, token.derive(color)))
 	}
 }

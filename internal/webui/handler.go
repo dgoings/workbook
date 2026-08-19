@@ -604,11 +604,13 @@ type pageData struct {
 	// settings section at all.
 	//
 	// It is asked separately from Administrable rather than folded into it
-	// because the two capabilities are separate: the route belongs to the
-	// statuses, which is what a board must be able to administer for the page to
-	// exist, and a board wired for those but not for this one would otherwise
-	// draw a Save that could only ever be refused. `workbook serve` supplies
-	// both, so a person meets them together.
+	// because the two capabilities are separate: a board wired for the four
+	// vocabulary mutations but not for this one would otherwise draw a Save that
+	// could only ever be refused. It still requires Administrable as well,
+	// because the route belongs to the statuses — a board that cannot administer
+	// those answers /config with a 404, and a section served onto a page nobody
+	// can reach is a section that is never seen and never taken away.
+	// `workbook serve` supplies both, so a person meets them together.
 	DisplayAdministrable bool
 }
 
@@ -1142,7 +1144,7 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 		InlineImageMediaTypes: strings.Join(InlineAttachmentMediaTypes(), " "),
 		StatusTags:            core.StatusTags(),
 		Administrable:         handler.administrable(),
-		DisplayAdministrable:  handler.SetDisplay != nil,
+		DisplayAdministrable:  handler.administrable() && handler.SetDisplay != nil,
 	}); err != nil {
 		return
 	}

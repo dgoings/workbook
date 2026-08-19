@@ -56,10 +56,13 @@ func administrableHandler(vocabulary core.Vocabulary, head string, tasks []core.
 // here rather than in a browser.
 const panelFetchHarness = `
 const vocabularyCalls = [];
-// What GET /api/vocabulary answers, what the next mutation answers, and a gate
-// a task write waits on so a test can hold the optimistic queue open.
+const displayCalls = [];
+// What GET /api/vocabulary answers, what the next mutation answers, what the
+// next save of the board settings answers, and a gate a task write waits on so
+// a test can hold the optimistic queue open.
 let vocabularyRead = null;
 let vocabularyAnswer = null;
+let displayAnswer = null;
 let taskWriteGate = null;
 globalThis.fetch = async (url, options = {}) => {
   const method = (options.method || "GET").toUpperCase();
@@ -71,6 +74,12 @@ globalThis.fetch = async (url, options = {}) => {
     if (method === "GET") return { ok: true, json: async () => vocabularyRead };
     if (!vocabularyAnswer) throw new Error("the panel sent " + method + " " + url + " with no answer prepared");
     const answer = vocabularyAnswer;
+    return { ok: answer.ok !== false, json: async () => answer.body };
+  }
+  if (url === "/api/display") {
+    displayCalls.push(call);
+    if (!displayAnswer) throw new Error("the page sent " + method + " " + url + " with no answer prepared");
+    const answer = displayAnswer;
     return { ok: answer.ok !== false, json: async () => answer.body };
   }
   if (method !== "GET") {
@@ -95,6 +104,27 @@ async function openStatuses() {
   const link = new TestElement("a");
   link.href = window.location.origin + "/config";
   await follow(link);
+}
+// The board settings form the configuration route draws, and the value in one
+// of its fields.
+function displayForm() {
+  const form = findElement(displayPanelBody, (element) => hasDataKey(element, "displayForm"));
+  if (!form) throw new Error("the configuration page drew no board settings form");
+  return form;
+}
+function displayField(member) {
+  const field = findElement(displayPanelBody, (element) => element.dataset.displayField === member);
+  if (!field) throw new Error("the board settings form has no " + member + " field");
+  return field;
+}
+async function saveDisplay() {
+  await displayForm().eventListeners.submit({ preventDefault() {} });
+  await settle();
+}
+// The heading the route draws over a section, by the id the panel points at.
+function sectionHeadingText(id) {
+  const heading = findElement(main, (element) => element.attributes && element.attributes.id === id);
+  return heading ? heading.textContent : null;
 }
 // Walks back to the board by the page's own Back link.
 async function returnToBoard() {
@@ -145,9 +175,25 @@ func runStatusesClient(
 	tasks []core.Task,
 	body string,
 ) {
+	runClientOverHandler(t, administrableHandler(vocabulary, head, tasks),
+		purpose, path, prelude, vocabulary, head, tasks, body)
+}
+
+// runClientOverHandler is the same again for a board built some other way — the
+// one wired for the board settings as well as for the statuses, which is what
+// `workbook serve` builds and what the configuration route's second section
+// needs to be served at all.
+func runClientOverHandler(
+	t *testing.T,
+	handler http.Handler,
+	purpose, path, prelude string,
+	vocabulary core.Vocabulary,
+	head string,
+	tasks []core.Task,
+	body string,
+) {
 	t.Helper()
 	node := requireNode(t)
-	handler := administrableHandler(vocabulary, head, tasks)
 	response := request(t, handler, http.MethodGet, path)
 	if response.Code != http.StatusOK {
 		t.Fatalf("GET %s status = %d, want %d; body = %s", path, response.Code, http.StatusOK, response.Body.String())
@@ -176,6 +222,16 @@ const withoutStatusAdministration = `
 const servedQuerySelector = document.querySelector.bind(document);
 document.querySelector = (selector) =>
   selector.startsWith("[data-vocabulary-panel") ? null : servedQuerySelector(selector);
+`
+
+// withoutDisplaySettings is what a board built without the display writer
+// serves: the statuses section and none of the board settings markup. The client
+// script is the same on every board and asks for each part by name, so taking
+// the answers away is exactly what such a page does to it.
+const withoutDisplaySettings = `
+const servedDisplayQuerySelector = document.querySelector.bind(document);
+document.querySelector = (selector) =>
+  selector.startsWith("[data-display-panel") ? null : servedDisplayQuerySelector(selector);
 `
 
 // panelVocabularyJSON is what GET /api/vocabulary answers, built by the server's

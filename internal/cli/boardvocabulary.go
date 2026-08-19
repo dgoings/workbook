@@ -134,7 +134,7 @@ func (board *boardVocabulary) apply(
 	expectedHead string,
 	build func(statusScope, core.Vocabulary) (statusPlan, error),
 ) (webui.VocabularyMutation, error) {
-	board.fetchBefore(ctx)
+	fetchConfigBefore(ctx, board.repository, board.config, board.publisher)
 	state, err := board.repository.LoadVocabularyState(ctx, board.config)
 	if err != nil {
 		return webui.VocabularyMutation{}, err
@@ -179,20 +179,30 @@ func (board *boardVocabulary) apply(
 	}, nil
 }
 
-// fetchBefore refreshes the configuration ledger before a change is authored
-// against it.
+// fetchConfigBefore refreshes the configuration ledger before a change is
+// authored against it.
 //
 // It is best-effort in the same way the CLI's is: an unreachable origin is not a
 // reason to refuse a local, durable write, and whatever the fetch could not do
-// the compare-and-swap below still catches. A trustworthy watcher answering
-// means this clone is already synchronizing on its own schedule, and `serve`
-// usually is that watcher, so the common case costs one socket probe rather than
-// a network round trip inside a request.
-func (board *boardVocabulary) fetchBefore(ctx context.Context) {
-	if board.publisher.watcherAnswers() || !board.repository.HasOrigin(ctx) {
+// the compare-and-swap still catches. A trustworthy watcher answering means this
+// clone is already synchronizing on its own schedule, and `serve` usually is
+// that watcher, so the common case costs one socket probe rather than a network
+// round trip inside a request.
+//
+// It is a function rather than a method because both of the board's writers into
+// that ledger need it — the statuses and the display settings — and they need
+// exactly the same thing: there is one ledger, and its tip is refreshed the same
+// way whichever half of it is about to move.
+func fetchConfigBefore(
+	ctx context.Context,
+	repository *gitstore.Repository,
+	config core.ProjectConfig,
+	publisher *boardPublisher,
+) {
+	if publisher.watcherAnswers() || !repository.HasOrigin(ctx) {
 		return
 	}
-	_, _ = board.repository.Fetch(ctx, board.config)
+	_, _ = repository.Fetch(ctx, config)
 }
 
 // staleVocabularyWrite refuses a change composed against statuses that have
