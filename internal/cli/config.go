@@ -346,6 +346,9 @@ func runDisplayMutation(
 		operation = core.ConfigOperation{Type: core.ConfigDisplaySet, Setting: setting, Value: canonical}
 		change = configDisplayChange{Operation: "set", Setting: setting, Value: canonical, From: before}
 	}
+	if err := refuseUnchangedDisplay(setting, before, operation); err != nil {
+		return err
+	}
 
 	written, err := session.repository.WriteConfigOperation(
 		ctx, session.config, core.CryptoULIDSource{}, []core.ConfigOperation{operation},
@@ -361,6 +364,33 @@ func runDisplayMutation(
 		Inverse: displayChangeInverse(state.Display, operation),
 	}
 	writeDisplayMutation(stdout, stderr, command, result, session, jsonMode)
+	return nil
+}
+
+// refuseUnchangedDisplay refuses a display command whose operation would record
+// nothing, which is what `status label` and `status untag` already do when they
+// are asked for a state a status is already in.
+//
+// The doctrine is the same and the stake is higher. A display operation carries
+// a generation-two marker, and a marker in a project's checkpoint is permanent:
+// every clone running v0.5.0 stops being able to change that project's
+// configuration from the moment one is recorded. Authoring a pack for a clearing
+// of something nobody configured would therefore spend the whole cost of the
+// bump — on every teammate, for the life of the project — to record an operation
+// whose own inverse renderer already answers "this changed nothing". The cost is
+// only opt-in while opting in takes an actual change.
+func refuseUnchangedDisplay(setting, before string, operation core.ConfigOperation) error {
+	switch operation.Type {
+	case core.ConfigDisplaySet:
+		if operation.Value == before {
+			return core.Errorf(core.CategoryValidation, "%s is already %q", setting, before)
+		}
+	case core.ConfigDisplayUnset:
+		if before == "" {
+			return core.Errorf(core.CategoryValidation,
+				"%s is not configured, so there is nothing to clear", setting)
+		}
+	}
 	return nil
 }
 
@@ -530,7 +560,9 @@ func displayChangeInverse(before core.DisplaySettings, operation core.ConfigOper
 //
 // Clearing something already clear has no inverse at all, and reports none: the
 // operation changed nothing, and printing a command that would also change
-// nothing reads as advice.
+// nothing reads as advice. The verb path no longer authors such an operation —
+// refuseUnchangedDisplay stops it before anything is written — but the log path
+// renders whatever a ledger holds, including a pack some other writer recorded.
 func displayPackInverse(before core.DisplaySettings, operation core.ConfigOperation) *statusInverse {
 	previous, _ := before.Value(operation.Setting)
 	switch operation.Type {

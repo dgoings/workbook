@@ -126,6 +126,104 @@ func TestConfigSetRecordsADisplaySettingAndSaysHowToUndoIt(t *testing.T) {
 	}
 }
 
+// configLedgerTip reads the configuration ref without failing on a project that
+// has none, which is exactly the project a refused no-op has to leave alone.
+func configLedgerTip(t *testing.T, repository string) string {
+	t.Helper()
+	return cliGitOutput(t, repository, "for-each-ref", "--format=%(objectname)", configLedgerRefName)
+}
+
+const configLedgerRefName = "refs/workbook/config"
+
+// A display command that would change nothing is refused, and refused before
+// anything at all is written.
+//
+// This is the rule the status family already applies — `workbook status untag`
+// on a tag a status does not carry exits 5 and moves no ref — and here it
+// carries a second weight. Every display pack stamps generation two into the
+// project's checkpoint permanently, so a `config unset` of a setting nobody has
+// configured that authored a pack anyway would park every un-upgraded clone
+// forever in exchange for recording nothing. The cost of the marker is only
+// opt-in while a command that changes nothing writes nothing.
+func TestConfigRefusesADisplayChangeThatChangesNothing(t *testing.T) {
+	repository := initializedRepository(t)
+
+	virgin := configLedgerTip(t, repository)
+	code, stdout, stderr := run(t, repository, "config", "unset", "project-name", "--json")
+	if code != 5 {
+		t.Fatalf("config unset on an unconfigured setting code = %d, want 5; stdout = %q stderr = %q",
+			code, stdout, stderr)
+	}
+	assertJSONError(t, stderr, core.CategoryValidation, "")
+	for _, wanted := range []string{"project-name", "is not configured"} {
+		if !strings.Contains(stderr, wanted) {
+			t.Fatalf("refusal = %q, want it to contain %q", stderr, wanted)
+		}
+	}
+	if got := configLedgerTip(t, repository); got != virgin {
+		t.Fatalf("the configuration ref moved from %q to %q for a change that recorded nothing", virgin, got)
+	}
+
+	mustRun(t, repository, "config", "set", "project-name", "Atlas", "--json")
+	configured := configLedgerTip(t, repository)
+	if configured == virgin {
+		t.Fatal("recording a display setting did not move the configuration ref")
+	}
+
+	for _, testCase := range []struct {
+		name     string
+		args     []string
+		messages []string
+	}{
+		{"the same name again", []string{"config", "set", "project-name", "Atlas"},
+			[]string{"project-name is already", "Atlas"}},
+		{"the same name untrimmed", []string{"config", "set", "project-name", "  Atlas  "},
+			[]string{"project-name is already", "Atlas"}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			code, stdout, stderr := run(t, repository, append(testCase.args, "--json")...)
+			if code != 5 {
+				t.Fatalf("code = %d, want 5; stdout = %q stderr = %q", code, stdout, stderr)
+			}
+			assertJSONError(t, stderr, core.CategoryValidation, "")
+			for _, message := range testCase.messages {
+				if !strings.Contains(stderr, message) {
+					t.Fatalf("refusal = %q, want it to contain %q", stderr, message)
+				}
+			}
+			if got := configLedgerTip(t, repository); got != configured {
+				t.Fatalf("the configuration ref moved for a change that recorded nothing")
+			}
+		})
+	}
+
+	// A color is compared in the form it is stored in, so the same color typed
+	// in the other case is the same no-op.
+	mustRun(t, repository, "config", "set", "primary-color", "#1a7f4b", "--json")
+	colored := configLedgerTip(t, repository)
+	code, stdout, stderr = run(t, repository, "config", "set", "primary-color", "#1A7F4B", "--json")
+	if code != 5 {
+		t.Fatalf("config set of the same color code = %d, want 5; stdout = %q stderr = %q", code, stdout, stderr)
+	}
+	if !strings.Contains(stderr, "#1a7f4b") {
+		t.Fatalf("refusal = %q, want it to quote the value already stored", stderr)
+	}
+	if got := configLedgerTip(t, repository); got != colored {
+		t.Fatalf("the configuration ref moved for a color that was already stored")
+	}
+
+	// And a second clearing of something already cleared is refused the way the
+	// first clearing of something never configured is.
+	mustRun(t, repository, "config", "unset", "primary-color", "--json")
+	cleared := configLedgerTip(t, repository)
+	if code, _, stderr := run(t, repository, "config", "unset", "primary-color", "--json"); code != 5 {
+		t.Fatalf("second config unset code = %d, want 5; stderr = %q", code, stderr)
+	}
+	if got := configLedgerTip(t, repository); got != cleared {
+		t.Fatalf("the configuration ref moved for a second clearing")
+	}
+}
+
 // A color typed in either case is one stored value, because the checkpoint the
 // ledger compares is compared by bytes.
 func TestConfigSetFoldsAColorToItsCanonicalForm(t *testing.T) {
@@ -306,6 +404,49 @@ func TestAGenerationOneReaderParksOnADisplayConfiguredProject(t *testing.T) {
 	// different generation, so the older clone still does its own work.
 	if code, _, stderr := runBinary(t, binary, older, "update", task.ID, "--title", "Still editable", "--json"); code != 0 {
 		t.Fatalf("older clone update code = %d, want 0; stderr = %q", code, stderr)
+	}
+}
+
+// The other half of the opt-in claim, against the same real generation-one
+// process: a project that only ever ran a display command that changed nothing
+// is a project an un-upgraded clone can still configure.
+//
+// The parking test above proves the marker does what it exists to do. This
+// proves it is not spent by accident. The two together are what makes "the cost
+// is per project and opt-in" a statement about behavior rather than about
+// intent — before the refusal existed, a single `config unset` of a setting
+// nobody had configured parked every v0.5.0 clone on the project permanently.
+func TestARefusedNoOpUnsetLeavesAGenerationOneReaderWriting(t *testing.T) {
+	binary := buildPatchedGenerationBinary(t, 1)
+	writer, older := cliSyncRepositories(t)
+
+	cliCreateTask(t, writer, "Ordinary task")
+	if code, _, stderr := run(t, writer, "sync"); code != 0 {
+		t.Fatalf("writer sync code = %d; stderr = %q", code, stderr)
+	}
+	if code, _, stderr := runBinary(t, binary, older, "sync"); code != 0 {
+		t.Fatalf("older clone initial sync code = %d; stderr = %q", code, stderr)
+	}
+
+	before := configLedgerTip(t, writer)
+	if code, _, stderr := run(t, writer, "config", "unset", "project-name", "--json"); code != 5 {
+		t.Fatalf("no-op config unset code = %d, want 5; stderr = %q", code, stderr)
+	}
+	if got := configLedgerTip(t, writer); got != before {
+		t.Fatalf("the configuration ref moved from %q to %q for a refused command", before, got)
+	}
+	if code, _, stderr := run(t, writer, "sync"); code != 0 {
+		t.Fatalf("writer sync after the refusal code = %d; stderr = %q", code, stderr)
+	}
+
+	// Nothing was published that raises what a reader must be, so the older
+	// clone changes the configuration exactly as it always could.
+	if code, _, stderr := runBinary(t, binary, older, "sync", "--json"); code != 0 {
+		t.Fatalf("older clone sync code = %d, want 0; stderr = %q", code, stderr)
+	}
+	code, _, stderr := runBinary(t, binary, older, "status", "add", "triage", "--no-sync", "--json")
+	if code != 0 {
+		t.Fatalf("older clone status add code = %d, want 0; stderr = %q", code, stderr)
 	}
 }
 
