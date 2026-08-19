@@ -15,11 +15,13 @@ const (
 
 // ConfigOperationType names one durable change to a project's configuration.
 //
-// The set is closed and every member is a statement about a status, because
-// status vocabulary is the only configuration the ledger carries today. A later
-// section adds its own types beside these rather than overloading them: an
-// operation whose meaning depends on which section it lands in cannot be
-// replayed by a build that does not know that section.
+// The set is closed, and it now spans two sections: the status vocabulary the
+// ledger was built for, and the display settings a project presents itself
+// with. The second section got its own types beside the first rather than
+// overloading them, which is the rule this comment stated before there was a
+// second section to apply it to: an operation whose meaning depends on which
+// section it lands in cannot be replayed by a build that does not know that
+// section, and a build that does not know a type refuses it by name.
 type ConfigOperationType string
 
 const (
@@ -153,13 +155,14 @@ type VocabularyDocument struct {
 	Retired []RetiredStatus `json:"retired"`
 }
 
-// ConfigData is everything the ledger configures. It is a struct with one
-// member rather than the vocabulary itself so that a later story adds a section
-// beside this one without changing the genesis operation's shape.
+// ConfigData is everything the ledger configures. It is a struct rather than
+// the vocabulary itself so that a section can be added beside that one without
+// changing the genesis operation's shape — which is what the display section
+// below did.
 type ConfigData struct {
 	Vocabulary VocabularyDocument `json:"vocabulary"`
-	// Display is the section that later story turned out to be: how this
-	// project presents itself. It is a pointer with omitempty, and the canonical
+	// Display is how this project presents itself: what its board is called and
+	// what colors it draws in. It is a pointer with omitempty, and the canonical
 	// value for a project that has configured nothing is nil, so every
 	// checkpoint written before this section existed still encodes to exactly
 	// the bytes it was stored as. See DisplayDocument.

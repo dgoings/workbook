@@ -210,7 +210,8 @@ func runConfigShow(ctx context.Context, args []string, cwd string, stdout, stder
 func newDisplayView(head string, seeded bool, settings core.DisplaySettings) displayView {
 	view := displayView{Head: head, Seeded: seeded, Settings: make([]displaySettingView, 0, len(core.DisplaySettingNames))}
 	for _, setting := range core.DisplaySettingNames {
-		entry := displaySettingView{Setting: setting, Value: displaySettingValue(settings, setting), Source: "default"}
+		value, _ := settings.Value(setting)
+		entry := displaySettingView{Setting: setting, Value: value, Source: "default"}
 		if entry.Value != "" {
 			entry.Source = "configured"
 		}
@@ -220,23 +221,6 @@ func newDisplayView(head string, seeded bool, settings core.DisplaySettings) dis
 		view.Settings = append(view.Settings, entry)
 	}
 	return view
-}
-
-// displaySettingValue reads one setting out of a resolved section. It is the
-// CLI's own lookup rather than an accessor on core.DisplaySettings, because a
-// caller with a setting name in hand is exactly this command family and nothing
-// else in the tree asks the question that way.
-func displaySettingValue(settings core.DisplaySettings, setting string) string {
-	switch setting {
-	case core.DisplayProjectName:
-		return settings.Name
-	case core.DisplayPrimaryColor:
-		return settings.PrimaryColor
-	case core.DisplayTextColor:
-		return settings.TextColor
-	default:
-		return ""
-	}
 }
 
 func writeDisplayView(output io.Writer, view displayView) {
@@ -348,7 +332,7 @@ func runDisplayMutation(
 	if err != nil {
 		return err
 	}
-	before := displaySettingValue(state.Display, setting)
+	before, _ := state.Display.Value(setting)
 
 	operation := core.ConfigOperation{Type: core.ConfigDisplayUnset, Setting: setting}
 	change := configDisplayChange{Operation: "unset", Setting: setting, From: before}
@@ -548,7 +532,7 @@ func displayChangeInverse(before core.DisplaySettings, operation core.ConfigOper
 // operation changed nothing, and printing a command that would also change
 // nothing reads as advice.
 func displayPackInverse(before core.DisplaySettings, operation core.ConfigOperation) *statusInverse {
-	previous := displaySettingValue(before, operation.Setting)
+	previous, _ := before.Value(operation.Setting)
 	switch operation.Type {
 	case core.ConfigDisplaySet:
 		if previous == "" {

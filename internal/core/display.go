@@ -71,6 +71,28 @@ func (settings DisplaySettings) Configured() bool {
 	return settings != DisplaySettings{}
 }
 
+// Value reads the setting a name refers to, and reports whether the name refers
+// to one at all.
+//
+// It exists because two callers hold a setting name rather than a member: the
+// reconcile classifier, comparing what origin says a setting is against what a
+// local operation would make it, and `workbook config show`, printing all three
+// in order. Both would otherwise write this switch, and a switch with three
+// authors eventually disagrees about one arm. The fold does not use it — that
+// path needs a pointer to write through, which is a different question.
+func (settings DisplaySettings) Value(setting string) (string, bool) {
+	switch setting {
+	case DisplayProjectName:
+		return settings.Name, true
+	case DisplayPrimaryColor:
+		return settings.PrimaryColor, true
+	case DisplayTextColor:
+		return settings.TextColor, true
+	default:
+		return "", false
+	}
+}
+
 // ValidateDisplaySetting reports whether a word names a display setting.
 //
 // It is exported for the same reason ValidateStatusToken is: the command line

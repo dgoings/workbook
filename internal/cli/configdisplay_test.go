@@ -117,6 +117,13 @@ func TestConfigSetRecordsADisplaySettingAndSaysHowToUndoIt(t *testing.T) {
 		core.DisplayProjectName); got.Source != "default" {
 		t.Fatalf("config show after clearing = %#v, want the default again", got)
 	}
+
+	// The strongest statement available that the section really folds: validate
+	// replays the whole configuration ledger from its root and compares every
+	// stored checkpoint against the one it recomputes, byte for byte.
+	if code, _, stderr := run(t, repository, "validate", "--full", "--json"); code != 0 {
+		t.Fatalf("validate --full code = %d, want 0; stderr = %q", code, stderr)
+	}
 }
 
 // A color typed in either case is one stored value, because the checkpoint the

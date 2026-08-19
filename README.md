@@ -811,7 +811,7 @@ file says; there is nothing to write in it by hand.
 
 ### Board display settings
 
-A project can say what its board is called and what colour it draws itself in.
+A project can say what its board is called and what color it draws itself in.
 `workbook config set project-name Atlas`, `workbook config set primary-color
 #1a7f4b` and `workbook config set text-color #101820` record the three, and
 `workbook config unset <setting>` clears one. `workbook config show` reports all
@@ -826,9 +826,9 @@ everyone who fetches, and reversed by the exact command every result and every
 change to a different setting, or the same value chosen twice, converges without
 a conflict — the three values are independent.
 
-A colour is six hexadecimal digits behind a hash, in either case; it is stored
+A color is six hexadecimal digits behind a hash, in either case; it is stored
 lowercase, because the configuration checkpoint is compared byte for byte and a
-colour with two spellings would be two configurations. A project name is
+color with two spellings would be two configurations. A project name is
 trimmed, must not be blank, and must not exceed 100 bytes. Clearing a setting is
 how a project has none: there is no stored default, and a board with nothing
 configured renders exactly as it did before this existed.

@@ -644,7 +644,7 @@ func classifyConfigOperation(view configView, operation core.ConfigOperation) *c
 // weigh the local one against, and the fold records it — which is the same rule
 // classifyConfigAdd applies to a status origin does not define.
 func classifyConfigDisplay(view configView, operation core.ConfigOperation) *core.ConfigConflict {
-	theirs, known := displaySettingValue(view.display, operation.Setting)
+	theirs, known := view.display.Value(operation.Setting)
 	if !known {
 		// A setting name this build does not know reached the classifier, which
 		// the operation document check already refuses. Saying nothing about it
@@ -679,23 +679,6 @@ func describeDisplayConflict(setting, ours, theirs string) string {
 	return fmt.Sprintf(
 		"%s was set to %s here and to %s on origin, so origin's value stands; set it again to keep the local intent",
 		setting, ours, theirs)
-}
-
-// displaySettingValue reads one setting out of a resolved section. It is the
-// classifier's half of core's member lookup, and it is here rather than
-// exported from core because the fold needs a pointer to write through and this
-// needs a value to compare.
-func displaySettingValue(settings core.DisplaySettings, setting string) (string, bool) {
-	switch setting {
-	case core.DisplayProjectName:
-		return settings.Name, true
-	case core.DisplayPrimaryColor:
-		return settings.PrimaryColor, true
-	case core.DisplayTextColor:
-		return settings.TextColor, true
-	default:
-		return "", false
-	}
 }
 
 // classifyConfigAdd reports two clones defining the same status differently.
