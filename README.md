@@ -847,8 +847,9 @@ colors at all: `workbook config unset primary-color` or `workbook config unset
 text-color` restores this board's own palette, and a page reloaded afterwards is
 legible again. On the web board itself the Board settings form's field labels
 keep a fixed color rather than the project's, so the form can still be found and
-emptied — but a pale primary draws its Save button white on white, and the
-command line is the reliable way out of that one.
+emptied — but a pale primary draws every filled button on the page, Save and Add
+status among them, white on white, and the command line is the reliable way out
+of that one.
 
 A command that would change nothing is refused rather than recorded: `config
 unset` of a setting nobody has configured, and `config set` to the value already

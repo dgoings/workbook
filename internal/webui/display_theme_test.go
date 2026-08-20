@@ -186,6 +186,30 @@ func TestBoardThemeDerivesAWellFormedColorForEveryAccent(t *testing.T) {
 	}
 }
 
+// And the conversion itself answers a colour for any lightness, not only for the
+// lightnesses the tokens above happen to ask for.
+//
+// The tokens all darken, so nothing reaches a lightness outside [0, 1] today.
+// This is asked directly of renderColor because the cost of that not holding is
+// paid by whoever adds the first token that lightens, and it is paid twice over:
+// an out-of-range lightness renders `#104104104` on its own at any chroma
+// including none, and it also makes the room a lightness has for chroma go
+// negative, which bounds the chroma below zero and produces `#109106ff`. Both
+// are declarations a browser drops in silence rather than colours anybody can
+// see are wrong.
+func TestBoardThemeRendersAColorAtAnyLightness(t *testing.T) {
+	for _, hue := range []float64{0, 60, 123.4, 180, 222.8, 300, 334.7, 359.9} {
+		for _, chroma := range []float64{0, .05, .5, 1, 1.4} {
+			for _, light := range []float64{-0.4, 0, .001, .25, .5, .75, .999, 1, 1.02, 1.5} {
+				if derived := renderColor(hue, chroma, light); !hexColor.MatchString(derived) {
+					t.Errorf("hue %v, chroma %v, lightness %v renders %s, which is not a color a browser can read",
+						hue, chroma, light, derived)
+				}
+			}
+		}
+	}
+}
+
 // A rose is on the counter-clockwise side of the red sector, so its hue comes
 // out of the conversion negative and is wrapped. Nothing else in this file
 // reaches that wrap: every other accent here is at a hue the first arm reports

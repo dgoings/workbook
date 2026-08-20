@@ -16,13 +16,13 @@ import (
 // It is one of two sections on a page of its own at /config, reached from the
 // board and served on a hard load like every other route here. It is also the
 // one writer in this client that is outside the optimistic mutation queue, so
-// most of what is
-// pinned here is about the two rules that follow from that: a change waits for
-// the queue to be empty before it goes — including for intents started on the
-// board before the reader navigated — and a stale write is where the change
-// stops. The rest is request shape — the head the page read has to be the head
-// it names — and the standing invariant the whole board rests on: no vocabulary
-// change rebuilds a column under the reader, on either side of a navigation.
+// most of what is pinned here is about the two rules that follow from that: a
+// change waits for the queue to be empty before it goes — including for intents
+// started on the board before the reader navigated — and a stale write is where
+// the change stops. The rest is request shape — the head the page read has to be
+// the head it names — and the standing invariant the whole board rests on: no
+// vocabulary change rebuilds a column under the reader, on either side of a
+// navigation.
 
 // administrableHandler is a board with the four vocabulary mutations, which is
 // what `workbook serve` builds and the only kind whose configuration route

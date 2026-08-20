@@ -425,6 +425,14 @@ func (color themeColor) toned(chroma, light float64) string {
 }
 
 func renderColor(hue, chroma, light float64) string {
+	// The lightness is brought into range before anything is asked of it, which
+	// is what makes this function total rather than conditionally correct. No
+	// step asks for one outside it today — every scaled factor is below one and
+	// every stated lightness is inside — but the whole point of the bound below
+	// is that a colour outside the range is written as a declaration a browser
+	// drops in silence, and `light` is the other way to leave it: a lightness of
+	// 1.02 renders `#104104104` at any chroma at all, including none.
+	light = math.Min(math.Max(light, 0), 1)
 	chroma = clampChroma(chroma, light)
 	sector := math.Mod(hue/60, 6)
 	middle := chroma * (1 - math.Abs(math.Mod(sector, 2)-1))
@@ -457,8 +465,13 @@ func renderColor(hue, chroma, light float64) string {
 // the darker steps ask for chroma at a much lower lightness than the accent's,
 // so any accent at full chroma — #ff0000, #00ff00, #ffff00 — overshoots it.
 //
-// With the chroma bounded here the channel arithmetic below cannot leave the
-// unit range at all, which is why channelByte rounds rather than clamps.
+// The lightness is the caller's to bring into range — renderColor does, before
+// it asks — and outside [0, 1] the room this computes from it goes negative,
+// which would bound the chroma below zero and produce the same unreadable
+// declaration by a longer route.
+//
+// With both bounded, the channel arithmetic in renderColor cannot leave the unit
+// range, which is why channelByte rounds rather than clamps.
 func clampChroma(chroma, light float64) float64 {
 	return math.Min(math.Max(chroma, 0), 1-math.Abs(2*light-1))
 }
