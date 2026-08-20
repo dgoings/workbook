@@ -1326,6 +1326,26 @@ func TestHandlerStatusesPageIsStyledAsARoute(t *testing.T) {
 	}
 }
 
+// The heading over each configuration section is the route's rather than the
+// panel's, which is what lets a panel leave the document without taking its own
+// name with it — and it means the panel's padding never reaches the heading.
+// Without an inset of its own it sits flush against the card's edge while
+// everything under it is drawn 1.15rem in. The claim here is alignment rather
+// than a number: the heading's horizontal inset is asserted to be the inset the
+// panel's padding declares, so the two can only move together.
+func TestHandlerConfigHeadingsShareThePanelsInset(t *testing.T) {
+	body := administrableBoardPage(t, handlerVocabulary(t))
+	const inset = "1.15rem"
+	panel := declarationBlock(t, body, ".admin {")
+	if !strings.Contains(panel, "padding: "+inset) {
+		t.Fatalf("the panel rule %q no longer declares its %s padding, so this test no longer states an alignment", panel, inset)
+	}
+	heading := declarationBlock(t, body, ".admin__heading {")
+	if !strings.Contains(heading, "padding: 0 "+inset) {
+		t.Errorf("the heading rule %q does not carry the panel's %s inset, so a section title sits flush against the card's edge", heading, inset)
+	}
+}
+
 // declarationBlock returns the declaration block of one CSS rule on a rendered
 // page, selector included.
 func declarationBlock(t *testing.T, body, selector string) string {

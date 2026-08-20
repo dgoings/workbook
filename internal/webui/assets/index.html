@@ -151,8 +151,10 @@
     /* The heading over each section of the configuration route. It belongs to
        the route rather than to the panel underneath it, which is what lets a
        panel be moved in and out of the document without taking its own name
-       with it. */
-    .admin__heading { margin: .9rem 0 -.35rem; font-size: .95rem; letter-spacing: -.01em; }
+       with it — and which is why the panel's padding cannot reach it: the
+       heading states the same inset itself, so it aligns with the content it
+       names instead of sitting flush against the card's edge. */
+    .admin__heading { margin: .9rem 0 -.35rem; padding: 0 1.15rem; font-size: .95rem; letter-spacing: -.01em; }
     .admin:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: -3px; }
     .admin__note { max-width: 84ch; margin: 0; color: #56647a; font-size: .8rem; line-height: 1.5; }
     .admin__note strong { color: #34425a; }
