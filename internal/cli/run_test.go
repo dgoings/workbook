@@ -914,15 +914,21 @@ func TestRunJSONFailureIsCompactAndUsesStableExitCodes(t *testing.T) {
 	})
 }
 
-func TestREADMEImplementedCommands(t *testing.T) {
-	readmePath := filepath.Join("..", "..", "README.md")
-	contents, err := os.ReadFile(readmePath)
+// repositoryDoc reads one of the repository's documentation files, which the
+// tests below hold to the implemented command surface.
+func repositoryDoc(t *testing.T, parts ...string) string {
+	t.Helper()
+	path := filepath.Join(append([]string{"..", ".."}, parts...)...)
+	contents, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("read %s: %v", readmePath, err)
+		t.Fatalf("read %s: %v", path, err)
 	}
+	return string(contents)
+}
 
-	implemented, proposed := readmeCommandSections(t, string(contents))
-	commandList := firstFencedCodeBlock(t, implemented)
+func TestCommandReferenceDocumentsImplementedCommands(t *testing.T) {
+	reference := repositoryDoc(t, "docs", "reference.md")
+	commandList := firstFencedCodeBlock(t, reference)
 	var lines []string
 	for _, line := range strings.Split(commandList, "\n") {
 		line = strings.TrimSpace(line)
@@ -932,11 +938,11 @@ func TestREADMEImplementedCommands(t *testing.T) {
 	}
 
 	// Expectations come from commandSchemas rather than a second hard-coded
-	// copy of the same strings. The old list pinned the README against itself,
-	// so a command that gained an option the README never learned about — every
-	// --no-sync and --json the block omitted — passed. Deriving them means the
-	// schema is the one place a new option is declared, and forgetting the
-	// README is a failure rather than a silent divergence.
+	// copy of the same strings. The old list pinned the reference against
+	// itself, so a command that gained an option the reference never learned
+	// about — every --no-sync and --json the block omitted — passed. Deriving
+	// them means the schema is the one place a new option is declared, and
+	// forgetting the reference is a failure rather than a silent divergence.
 	got := make([]string, len(lines))
 	options := make(map[string][]string, len(lines))
 	for index, line := range lines {
@@ -956,7 +962,7 @@ func TestREADMEImplementedCommands(t *testing.T) {
 		}
 		metadata, exists := commandMetadataFor(strings.Fields(path))
 		if !exists {
-			t.Fatalf("no schema for README command %q", path)
+			t.Fatalf("no schema for reference command %q", path)
 		}
 		wantOptions := make([]string, 0, len(metadata.Options))
 		for _, option := range metadata.Options {
@@ -966,18 +972,23 @@ func TestREADMEImplementedCommands(t *testing.T) {
 		gotOptions := append([]string(nil), options[path]...)
 		sort.Strings(gotOptions)
 		if !reflect.DeepEqual(gotOptions, wantOptions) {
-			t.Errorf("README documents %q with options %q, want exactly the schema's %q", path, gotOptions, wantOptions)
+			t.Errorf("reference documents %q with options %q, want exactly the schema's %q", path, gotOptions, wantOptions)
 		}
 	}
 
-	for _, command := range []string{"workbook claim"} {
-		if !strings.Contains(proposed, command) {
-			t.Errorf("proposed commands missing %q", command)
+	readme := repositoryDoc(t, "README.md")
+	// Every user-facing document is held to the same rule: an unimplemented
+	// command may only appear under a heading that says it is proposed.
+	for name, document := range map[string]string{
+		"README.md":            readme,
+		"CONTRIBUTING.md":      repositoryDoc(t, "CONTRIBUTING.md"),
+		"docs/reference.md":    reference,
+		"docs/architecture.md": repositoryDoc(t, "docs", "architecture.md"),
+	} {
+		if violations := readmeCommandPolicyViolations(document); len(violations) != 0 {
+			t.Errorf("%s presents unimplemented commands outside proposed sections:\n%s", name, strings.Join(violations, "\n"))
 		}
 	}
-
-	readme := string(contents)
-	assertREADMECommandPolicy(t, readme)
 	if !strings.Contains(readme, "### Small-team workflow") {
 		t.Error("README is missing the implemented small-team workflow")
 	}
@@ -987,23 +998,23 @@ func TestREADMEImplementedCommands(t *testing.T) {
 		"client-rendered form",
 		"shared new-task and detail form",
 		// The publication indicator and the optimistic queue changed what the
-		// board does with a mutation; both landed without touching the README.
+		// board does with a mutation; both landed without touching the docs.
 		"GET /api/sync",
 		"PUT /api/sync",
 		"per-task queue",
 		// The indicator is a switch now rather than a sentence, so what the
-		// README has to carry is the pair of words it offers.
+		// reference has to carry is the pair of words it offers.
 		"publishing switch",
 		"**Push**",
 		"**Publish**",
 	} {
-		if !strings.Contains(readme, required) {
-			t.Errorf("README web board documentation is missing %q", required)
+		if !strings.Contains(reference, required) {
+			t.Errorf("reference web board documentation is missing %q", required)
 		}
 	}
 	// An agent-facing tool that documents no exit code leaves a caller parsing
 	// messages. Every code the CLI can return has to appear in one table.
-	assertREADMEDocumentsEveryExitCode(t, readme)
+	assertREADMEDocumentsEveryExitCode(t, reference)
 	for _, stale := range []string{
 		"Workbook synchronizes only its own refs",
 		"automatically reconciles concurrent edits",
@@ -1011,8 +1022,8 @@ func TestREADMEImplementedCommands(t *testing.T) {
 		// note said otherwise while the section describing it said it worked.
 		"Conflict reconciliation remains proposed",
 	} {
-		if strings.Contains(readme, stale) {
-			t.Errorf("README contains stale present-tense claim %q", stale)
+		if strings.Contains(readme, stale) || strings.Contains(reference, stale) {
+			t.Errorf("documentation contains stale present-tense claim %q", stale)
 		}
 	}
 }
@@ -1085,12 +1096,7 @@ func assertREADMEDocumentsEveryExitCode(t *testing.T, readme string) {
 }
 
 func TestREADMEDocumentsInstallationPaths(t *testing.T) {
-	readmePath := filepath.Join("..", "..", "README.md")
-	contents, err := os.ReadFile(readmePath)
-	if err != nil {
-		t.Fatalf("read %s: %v", readmePath, err)
-	}
-	readme := string(contents)
+	readme := repositoryDoc(t, "README.md")
 
 	for _, required := range []string{
 		"## Installation",
@@ -1110,14 +1116,9 @@ func TestREADMEDocumentsInstallationPaths(t *testing.T) {
 
 // The identity model is the one thing a user cannot discover from a command's
 // output: which record decides, what a fork inherits, and what a teammate on the
-// previous version sees. The README has to state all of it.
-func TestREADMEDocumentsProjectIdentity(t *testing.T) {
-	readmePath := filepath.Join("..", "..", "README.md")
-	contents, err := os.ReadFile(readmePath)
-	if err != nil {
-		t.Fatalf("read %s: %v", readmePath, err)
-	}
-	readme := strings.Join(strings.Fields(string(contents)), " ")
+// previous version sees. The command reference has to state all of it.
+func TestCommandReferenceDocumentsProjectIdentity(t *testing.T) {
+	readme := strings.Join(strings.Fields(repositoryDoc(t, "docs", "reference.md")), " ")
 
 	for _, required := range []string{
 		// The ref, its shape, and the rule that keeps it a leaf.
@@ -1144,7 +1145,7 @@ func TestREADMEDocumentsProjectIdentity(t *testing.T) {
 		"git rm .workbook/config.json",
 	} {
 		if !strings.Contains(readme, required) {
-			t.Errorf("README project identity section is missing %q", required)
+			t.Errorf("reference project identity section is missing %q", required)
 		}
 	}
 }
@@ -1159,13 +1160,6 @@ func TestREADMECommandPolicyRejectsUnimplementedCommandOutsideProposedSection(t 
 	const proposal = "## Proposed web workflow\n\nA future release may run `workbook serve`.\n"
 	if violations := readmeCommandPolicyViolations(proposal); len(violations) != 0 {
 		t.Fatalf("proposed command violations = %q, want none", violations)
-	}
-}
-
-func assertREADMECommandPolicy(t *testing.T, readme string) {
-	t.Helper()
-	if violations := readmeCommandPolicyViolations(readme); len(violations) != 0 {
-		t.Fatalf("README presents unimplemented commands outside proposed sections:\n%s", strings.Join(violations, "\n"))
 	}
 }
 
@@ -1200,43 +1194,17 @@ func readmeCommandPolicyViolations(readme string) []string {
 	return violations
 }
 
-func readmeCommandSections(t *testing.T, readme string) (string, string) {
-	t.Helper()
-	const (
-		implementedHeading = "## Implemented POC commands"
-		proposedHeading    = "## Proposed post-POC commands"
-	)
-	implementedStart := strings.Index(readme, implementedHeading)
-	if implementedStart < 0 {
-		t.Fatalf("README missing %q section", implementedHeading)
-	}
-	proposedStart := strings.Index(readme, proposedHeading)
-	if proposedStart < 0 {
-		t.Fatalf("README missing %q section", proposedHeading)
-	}
-	if proposedStart <= implementedStart {
-		t.Fatalf("%q must follow %q", proposedHeading, implementedHeading)
-	}
-
-	implemented := readme[implementedStart+len(implementedHeading) : proposedStart]
-	proposed := readme[proposedStart+len(proposedHeading):]
-	if nextHeading := strings.Index(proposed, "\n## "); nextHeading >= 0 {
-		proposed = proposed[:nextHeading]
-	}
-	return implemented, proposed
-}
-
 func firstFencedCodeBlock(t *testing.T, section string) string {
 	t.Helper()
 	const fence = "```"
 	start := strings.Index(section, fence)
 	if start < 0 {
-		t.Fatal("README implemented-command section has no code block")
+		t.Fatal("command reference has no code block")
 	}
 	section = section[start+len(fence):]
 	end := strings.Index(section, fence)
 	if end < 0 {
-		t.Fatal("README implemented-command code block is unterminated")
+		t.Fatal("command reference code block is unterminated")
 	}
 	return section[:end]
 }
