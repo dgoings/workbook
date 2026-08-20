@@ -31,6 +31,8 @@ Environment:
   WORKBOOK_DEV_PREFIX     working-tree install prefix
                           (default ${HOME}/.local/share/workbook/dev)
   WORKBOOK_SETUP_PROFILE  shell profile to update instead of the detected ones
+  WORKBOOK_TAP_FORMULA    Homebrew formula for the published build
+                          (default dgoings/tap/workbook)
 USAGE
 }
 
@@ -141,6 +143,7 @@ absolute_directory() {
 
 stable_prefix=${WORKBOOK_STABLE_PREFIX:-${HOME}/.local/share/workbook/stable}
 dev_prefix=${WORKBOOK_DEV_PREFIX:-${HOME}/.local/share/workbook/dev}
+tap_formula=${WORKBOOK_TAP_FORMULA:-dgoings/tap/workbook}
 stable_bin=
 stable_binary=
 stable_description=
@@ -151,14 +154,14 @@ install_stable_with_brew() {
 	if brew list --formula --versions workbook >/dev/null 2>&1; then
 		# A failed upgrade still leaves the previously installed formula in place,
 		# which is enough for a fallback, so report it and keep going.
-		if ! brew upgrade dgoings/tap/workbook; then
+		if ! brew upgrade "${tap_formula}"; then
 			echo "workbook setup: brew upgrade failed; keeping the installed formula" >&2
 		fi
 	else
-		brew install dgoings/tap/workbook
+		brew install "${tap_formula}"
 	fi
 
-	if brew_prefix=$(brew --prefix dgoings/tap/workbook 2>/dev/null) && [ -x "${brew_prefix}/bin/workbook" ]; then
+	if brew_prefix=$(brew --prefix "${tap_formula}" 2>/dev/null) && [ -x "${brew_prefix}/bin/workbook" ]; then
 		stable_binary=${brew_prefix}/bin/workbook
 	elif linked_binary=$(command -v workbook 2>/dev/null); then
 		stable_binary=${linked_binary}
@@ -166,7 +169,7 @@ install_stable_with_brew() {
 		fail "Homebrew did not provide a workbook binary"
 	fi
 	stable_bin=${stable_binary%/*}
-	stable_description="Homebrew formula dgoings/tap/workbook"
+	stable_description="Homebrew formula ${tap_formula}"
 }
 
 install_stable_from_source() {
