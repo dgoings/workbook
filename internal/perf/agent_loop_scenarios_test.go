@@ -231,18 +231,16 @@ func acquiredNextStdout(taskID string) []byte {
 	return []byte(`{"format":"workbook.result","version":1,"command":"next","data":{"id":"` + taskID + `","status":"ready"}}` + "\n")
 }
 
-// TestColdNextScenarioCarriesTheSynchronizedBudget records the deliberate target
-// choice. `next` fetches before answering, so holding it to the 200 ms local
-// budget would publish a classification the command cannot meet by design and
-// would hide the round trip instead of pricing it.
-func TestColdNextScenarioCarriesTheSynchronizedBudget(t *testing.T) {
-	want := ScenarioTarget{DurationStatistic: DurationP95, DurationComparison: DurationAtMost, MaxMilliseconds: 1000}
+// TestColdNextScenarioIsRegistered keeps `next` on the cold CLI surface even
+// though it fetches before answering: the round trip is part of the loop an
+// agent runs continuously, so its cost belongs in every report.
+func TestColdNextScenarioIsRegistered(t *testing.T) {
 	for _, result := range coldCLIResults(1) {
 		if result.Name != "cli-next" {
 			continue
 		}
-		if result.Target == nil || *result.Target != want {
-			t.Fatalf("cli-next target = %#v, want the synchronized budget %#v", result.Target, want)
+		if result.Surface != "cold-cli" {
+			t.Fatalf("cli-next surface = %q, want cold-cli", result.Surface)
 		}
 		return
 	}
@@ -346,18 +344,15 @@ func TestWarmTaskListScenarioReadsThePopulatedBoard(t *testing.T) {
 	}
 }
 
-// TestWarmTaskListScenarioHasNoApprovedDurationTarget keeps the warm read
-// surface descriptive. The read-path target policy that budgets `cli-list` and
-// `cli-show` covers the cold CLI surface; the warm budget was approved for a
-// mutation, and attaching it to a warm read would publish a pass/fail
-// classification nobody approved.
-func TestWarmTaskListScenarioHasNoApprovedDurationTarget(t *testing.T) {
+// TestWarmTaskListScenarioIsRegistered keeps the warm whole-board read on the
+// warm HTTP surface so its cost appears in every report.
+func TestWarmTaskListScenarioIsRegistered(t *testing.T) {
 	for _, result := range warmHTTPResults(1) {
 		if result.Name != "api-tasks" {
 			continue
 		}
-		if result.Target != nil {
-			t.Fatalf("api-tasks target = %#v, want no approved target", result.Target)
+		if result.Surface != "warm-http" {
+			t.Fatalf("api-tasks surface = %q, want warm-http", result.Surface)
 		}
 		return
 	}

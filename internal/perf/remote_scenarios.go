@@ -56,10 +56,6 @@ type remoteScenarioDefinition struct {
 	topology      RemoteTopology
 	command       string
 	expectFailure bool
-	// target is nil for a scenario that is measured but has no approved
-	// budget. Its samples are recorded and reported as not-evaluated rather
-	// than classified against a threshold nobody has observed evidence for.
-	target *ScenarioTarget
 }
 
 type remoteScenarioContract struct {
@@ -70,55 +66,16 @@ type remoteScenarioContract struct {
 	errorCategory core.Category
 }
 
-// The canonical project identity ref costs each of these scenarios something,
-// and not the same something, so the budgets below are set from measurement
-// rather than from one assumed constant.
-//
-// Resolving the identity costs two Git processes — one ref lookup and one object
-// read — in every command. A command that compares this clone with origin pays
-// one more ref lookup; the comparison itself reads no object in the steady
-// state, because equal object IDs are equal documents. A command that finds
-// origin without an identity ref also publishes one, which is a project's
-// one-time migration but is paid on every sample of a topology whose fixture is
-// rebuilt each time.
-//
-// Measured on 2026-08-11 with the 10-task, 4-operation fixture: fresh-checkout
-// 12, initial-publication 23, already-synchronized 12, small-changed-ref-set 21,
-// malformed-local-tip 9, malformed-remote-tip 11.
-//
-// Three budgets were raised against the limits that preceded the identity ref,
-// each only as far as its own measurement required: initial-publication 20 → 25
-// (measured 23, two processes of headroom), small-changed-ref-set 20 → 23
-// (measured 21, two), and already-synchronized 10 → 13 (measured 12, one — the
-// same single-process margin that limit already carried). The remaining three
-// keep the limits they had.
-//
-// Remeasured on the same fixture after the configuration ledger: fresh-checkout
-// 13, initial-publication 24, already-synchronized 13, small-changed-ref-set 22,
-// divergent-tips 29, malformed-local-tip 10, malformed-remote-tip 12. Every
-// scenario gained exactly one process and no scenario gained more, which is
-// what the stage's shape predicts: the ledger's refspec rides the one fetch, so
-// the whole cost is one ref enumeration — the configuration stage's on a fetch,
-// and the publication path's local one on a push. A project with no ledger
-// reads no objects beyond that.
-//
-// One budget was raised as a result, by exactly the one process measured:
-// already-synchronized 13 → 14, keeping the single-process margin that limit
-// has carried since it was set. The other five stayed where they were because
-// their measurements still fit.
 var remoteScenarioDefinitions = []remoteScenarioDefinition{
-	{name: "sync-fresh-checkout", topology: RemoteFreshCheckout, command: "fetch", target: &ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 5000, MaxGitProcesses: 20}},
+	{name: "sync-fresh-checkout", topology: RemoteFreshCheckout, command: "fetch"},
 	// A push into an origin that has no identity ref publishes one first, which
 	// is what makes task refs on a remote imply an identity beside them.
-	{name: "sync-initial-publication", topology: RemoteInitialPublication, command: "push", target: &ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 5000, MaxGitProcesses: 25}},
-	{name: "sync-already-synchronized", topology: RemoteAlreadySynchronized, command: "sync", target: &ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 1000, MaxGitProcesses: 14}},
-	{name: "sync-small-changed-ref-set", topology: RemoteSmallChangedRefSet, command: "sync", target: &ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 2000, MaxGitProcesses: 23}},
-	// Reconciliation replays local history rather than refusing to publish it,
-	// so this scenario now measures work the earlier contract never did. It
-	// stays unbudgeted until a recorded run says what that work costs.
+	{name: "sync-initial-publication", topology: RemoteInitialPublication, command: "push"},
+	{name: "sync-already-synchronized", topology: RemoteAlreadySynchronized, command: "sync"},
+	{name: "sync-small-changed-ref-set", topology: RemoteSmallChangedRefSet, command: "sync"},
 	{name: "sync-divergent-tips", topology: RemoteDivergentTips, command: "sync"},
-	{name: "sync-malformed-local-tip", topology: RemoteMalformedLocalTip, command: "push", expectFailure: true, target: &ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 2000, MaxGitProcesses: 20}},
-	{name: "sync-malformed-remote-tip", topology: RemoteMalformedRemoteTip, command: "fetch", expectFailure: true, target: &ScenarioTarget{DurationStatistic: DurationEverySample, DurationComparison: DurationAtMost, MaxMilliseconds: 2000, MaxGitProcesses: 20}},
+	{name: "sync-malformed-local-tip", topology: RemoteMalformedLocalTip, command: "push", expectFailure: true},
+	{name: "sync-malformed-remote-tip", topology: RemoteMalformedRemoteTip, command: "fetch", expectFailure: true},
 }
 
 // RunRemoteScenarios measures only the requested remote synchronization
@@ -175,7 +132,6 @@ func runRemoteScenarios(ctx context.Context, spec RunSpec, fixtureRoot string, s
 		result := ScenarioResult{
 			Name:    definition.name,
 			Surface: "remote-sync",
-			Target:  definition.target,
 			Samples: make([]Sample, spec.Samples),
 		}
 		for sample := range spec.Samples {

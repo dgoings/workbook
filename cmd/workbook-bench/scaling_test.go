@@ -18,7 +18,7 @@ import (
 func scalingArgs(workbookBinary, outputRoot string, extra ...string) []string {
 	args := []string{
 		"--workbook", workbookBinary,
-		"--phase", "scaling",
+		"--scaling",
 		"--output-json", filepath.Join(outputRoot, "report.json"),
 		"--output-markdown", filepath.Join(outputRoot, "report.md"),
 	}
@@ -38,7 +38,7 @@ func parseScalingOptions(t *testing.T, args []string) (*options, error) {
 // Mutation witness: relaxing the workload minimums for every invocation, rather
 // than only for the scaling matrix, would let a single-run remote or validation
 // baseline measure a fixture the harness never approved.
-func TestValidateOptionsRelaxesWorkloadMinimumsOnlyForTheScalingPhase(t *testing.T) {
+func TestValidateOptionsRelaxesWorkloadMinimumsOnlyForTheScalingMatrix(t *testing.T) {
 	workbookBinary := buildWorkbookBinary(t)
 
 	t.Run("scaling matrix accepts its own small point", func(t *testing.T) {
@@ -77,7 +77,6 @@ func TestValidateOptionsRelaxesWorkloadMinimumsOnlyForTheScalingPhase(t *testing
 			outputRoot := t.TempDir()
 			_, err := parseScalingOptions(t, []string{
 				"--workbook", workbookBinary,
-				"--phase", "baseline",
 				"--tasks", "105",
 				"--operations", "20",
 				"--scenario", test.selector,
@@ -85,28 +84,10 @@ func TestValidateOptionsRelaxesWorkloadMinimumsOnlyForTheScalingPhase(t *testing
 				"--output-markdown", filepath.Join(outputRoot, "report.md"),
 			})
 			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("baseline validation error = %v, want %q", err, test.want)
+				t.Fatalf("single-run validation error = %v, want %q", err, test.want)
 			}
 		})
 	}
-
-	t.Run("acceptance keeps its fixture minimum", func(t *testing.T) {
-		outputRoot := t.TempDir()
-		_, err := parseScalingOptions(t, []string{
-			"--workbook", workbookBinary,
-			"--phase", "acceptance",
-			"--tasks", "105",
-			"--tombstones", "5",
-			"--operations", "20",
-			"--samples", "20",
-			"--scenario", "cli-update",
-			"--output-json", filepath.Join(outputRoot, "report.json"),
-			"--output-markdown", filepath.Join(outputRoot, "report.md"),
-		})
-		if err == nil || !strings.Contains(err.Error(), "acceptance requires at least 500 total tasks") {
-			t.Fatalf("acceptance validation error = %v, want the unchanged acceptance minimum", err)
-		}
-	})
 }
 
 func TestValidateOptionsRejectsConflictingScalingInvocations(t *testing.T) {
@@ -119,22 +100,22 @@ func TestValidateOptionsRejectsConflictingScalingInvocations(t *testing.T) {
 		{
 			name: "explicit scenario selection",
 			args: func(root string) []string { return scalingArgs(workbookBinary, root, "--scenario", "cli-update") },
-			want: "--scenario is not valid with --phase scaling",
+			want: "--scenario is not valid with --scaling",
 		},
 		{
 			name: "explicit task count",
 			args: func(root string) []string { return scalingArgs(workbookBinary, root, "--tasks", "500") },
-			want: "--tasks is not valid with --phase scaling",
+			want: "--tasks is not valid with --scaling",
 		},
 		{
 			name: "explicit tombstone count",
 			args: func(root string) []string { return scalingArgs(workbookBinary, root, "--tombstones", "25") },
-			want: "--tombstones is not valid with --phase scaling",
+			want: "--tombstones is not valid with --scaling",
 		},
 		{
 			name: "explicit operation count",
 			args: func(root string) []string { return scalingArgs(workbookBinary, root, "--operations", "20") },
-			want: "--operations is not valid with --phase scaling",
+			want: "--operations is not valid with --scaling",
 		},
 		{
 			name: "malformed point",
@@ -159,29 +140,16 @@ func TestValidateOptionsRejectsConflictingScalingInvocations(t *testing.T) {
 			want: "duplicate --scaling-point 100x20",
 		},
 		{
-			name: "scaling point without the scaling phase",
+			name: "scaling point without scaling mode",
 			args: func(root string) []string {
 				return []string{
 					"--workbook", workbookBinary,
-					"--phase", "baseline",
 					"--scaling-point", "100x20",
 					"--output-json", filepath.Join(root, "report.json"),
 					"--output-markdown", filepath.Join(root, "report.md"),
 				}
 			},
-			want: "--scaling-point requires --phase scaling",
-		},
-		{
-			name: "unsupported phase",
-			args: func(root string) []string {
-				return []string{
-					"--workbook", workbookBinary,
-					"--phase", "exploration",
-					"--output-json", filepath.Join(root, "report.json"),
-					"--output-markdown", filepath.Join(root, "report.md"),
-				}
-			},
-			want: "--phase must be baseline, acceptance, or scaling",
+			want: "--scaling-point requires --scaling",
 		},
 	}
 	for _, test := range tests {
@@ -215,7 +183,6 @@ func scalingTestReport() perf.ScalingReport {
 	return perf.ScalingReport{
 		Format:       perf.ScalingReportFormat,
 		Version:      perf.ScalingReportVersion,
-		Phase:        "scaling",
 		GeneratedAt:  time.Date(2026, time.July, 30, 0, 0, 0, 0, time.UTC),
 		ObjectFormat: "sha1",
 		Samples:      1,
@@ -327,7 +294,7 @@ func TestRunScalingBenchmarkMeasuresEveryRequestedPointEndToEnd(t *testing.T) {
 
 	exitCode := run(context.Background(), []string{
 		"--workbook", workbookBinary,
-		"--phase", "scaling",
+		"--scaling",
 		"--scaling-point", "10x4",
 		"--scaling-point", "10x6",
 		"--samples", "1",
@@ -376,55 +343,38 @@ func TestRunScalingBenchmarkMeasuresEveryRequestedPointEndToEnd(t *testing.T) {
 	}
 }
 
-// Mutation witness: leaving provenance to operator discipline lets a scaling
-// run publish slope evidence that names no source commit, which no later run
-// can be compared against.
-func TestRunScalingBenchmarkRejectsAnUnknownCommitBeforeFixtureConstruction(t *testing.T) {
-	binaryDirectory := t.TempDir()
-	gitPath := filepath.Join(binaryDirectory, "git")
-	goPath := filepath.Join(binaryDirectory, "go")
-	workbookPath := filepath.Join(binaryDirectory, "workbook")
-	writeExecutableScript(t, gitPath, "printf 'git version test\\n'")
-	writeExecutableScript(t, goPath, "printf 'go version test\\n'")
-	writeExecutableScript(t, workbookPath, `printf '%s\n' '{"format":"workbook.result","version":1,"command":"version","data":{"version":"dev","commit":"unknown"}}'`)
-	t.Setenv("PATH", binaryDirectory)
-
-	_, err := runScalingBenchmark(context.Background(), options{
-		workbookBinary: workbookPath,
-		samples:        1,
-		timeout:        time.Second,
-		objectFormat:   "sha1",
-		phase:          scalingPhase,
-		scalingPoints:  []perf.ScalingPointSpec{{ActiveTasks: 10, OperationsPerTask: 2}},
-	})
-	if err == nil || !strings.Contains(err.Error(), "scaling requires a measured Workbook commit") {
-		t.Fatalf("runScalingBenchmark error = %v, want unknown measured commit rejection", err)
-	}
-}
-
-// Mutation witness: gating every phase on a measured commit would break the
-// ordinary baseline run, which is a development tool and not evidence.
-func TestRequireMeasuredCommitGatesOnlyThePublishedEvidencePhases(t *testing.T) {
-	unknown := perf.Environment{WorkbookCommit: unknownWorkbookCommit}
-	known := perf.Environment{WorkbookCommit: "725a2838adde83e20e9b73eb959820ca9871cb0c"}
+// Mutation witness: dropping the warning would let a run publish a report
+// that names no source commit with no hint that later runs cannot be
+// compared against it; warning on a known commit would add noise to every
+// ordinary run.
+func TestRunScalingWarnsWhenTheMeasuredCommitIsUnknown(t *testing.T) {
 	for _, test := range []struct {
-		phase string
-		gated bool
+		name        string
+		commit      string
+		wantWarning bool
 	}{
-		{phase: "baseline", gated: false},
-		{phase: "acceptance", gated: true},
-		{phase: scalingPhase, gated: true},
+		{name: "unknown commit warns", commit: unknownWorkbookCommit, wantWarning: true},
+		{name: "empty commit warns", commit: "", wantWarning: true},
+		{name: "known commit stays quiet", commit: "725a2838adde83e20e9b73eb959820ca9871cb0c", wantWarning: false},
 	} {
-		t.Run(test.phase, func(t *testing.T) {
-			err := requireMeasuredCommit(test.phase, unknown)
-			if test.gated != (err != nil) {
-				t.Fatalf("requireMeasuredCommit(%q, unknown) = %v, gated = %t", test.phase, err, test.gated)
+		t.Run(test.name, func(t *testing.T) {
+			outputRoot := t.TempDir()
+			runOptions := options{
+				outputJSON:     filepath.Join(outputRoot, "report.json"),
+				outputMarkdown: filepath.Join(outputRoot, "report.md"),
 			}
-			if err := requireMeasuredCommit(test.phase, known); err != nil {
-				t.Fatalf("requireMeasuredCommit(%q, known commit) = %v, want nil", test.phase, err)
+			var stdout, stderr bytes.Buffer
+			exitCode := runScalingWithMatrix(context.Background(), runOptions, &stdout, &stderr, func(context.Context, options) (perf.ScalingReport, error) {
+				report := scalingTestReport()
+				report.Environment.WorkbookCommit = test.commit
+				return report, nil
+			})
+			if exitCode != 0 {
+				t.Fatalf("exit code = %d, want 0; stderr = %q", exitCode, stderr.String())
 			}
-			if err := requireMeasuredCommit(test.phase, perf.Environment{}); test.gated != (err != nil) {
-				t.Fatalf("requireMeasuredCommit(%q, empty commit) = %v, gated = %t", test.phase, err, test.gated)
+			warned := strings.Contains(stderr.String(), "no source commit")
+			if warned != test.wantWarning {
+				t.Fatalf("stderr = %q, warning presence = %t, want %t", stderr.String(), warned, test.wantWarning)
 			}
 		})
 	}

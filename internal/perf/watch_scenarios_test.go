@@ -289,7 +289,7 @@ func TestReportCarriesTheWatcherBlockInBothOutputs(t *testing.T) {
 		},
 	}
 	report := Report{
-		Format: ReportFormat, Version: ReportVersion, Phase: "acceptance",
+		Format: ReportFormat, Version: ReportVersion,
 		Scenarios: []ScenarioResult{}, WatcherSteadyState: watcher,
 	}
 

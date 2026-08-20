@@ -232,9 +232,6 @@ func TestRunProjectionRefreshScenariosMeasureOnlyTheRefreshCommand(t *testing.T)
 				if result.Surface != "repository" {
 					t.Errorf("%s surface = %q, want repository", result.Name, result.Surface)
 				}
-				if result.Target != nil {
-					t.Errorf("%s target = %#v, want no target", result.Name, result.Target)
-				}
 				if len(result.Samples) != 2 {
 					t.Fatalf("%s samples = %d, want 2", result.Name, len(result.Samples))
 				}

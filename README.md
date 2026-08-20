@@ -157,8 +157,8 @@ Source builds are stamped from `git describe`, so `workbook version` reports the
 commit they came from rather than `dev (unknown)`. A source build reports a
 leading `v`, for example `v0.2.0-3-g86281c9`, and gains a `-dirty` suffix when
 built from a modified tree. A released artifact reports a bare `0.2.0`, so the
-two are always distinguishable. Stamping also lets a source build satisfy the
-benchmark harness, which rejects an unknown commit.
+two are always distinguishable. Stamping also lets a benchmark report name the
+commit it measured, so two reports can be compared.
 
 ### Setting up a development environment
 
@@ -1324,12 +1324,10 @@ canonical heads change before the final inventory check, affected results remain
 pending and the command exits nonzero. Validation never mutates canonical or
 tracking Git refs.
 
-The following acceptance scenarios are **planned targets**, not recorded
-performance evidence: with 500 total task refs (475 active and 25 tombstoned)
-and 20 operations per task, a full audit targets at most 10 seconds; an
-unchanged cached audit targets at most 500 milliseconds; and five one-operation
-changes target at most 1 second. Each scenario also targets fewer than 12 Git
-processes.
+Validation cost is measured by the benchmark harness's `validate-full-history`,
+`validate-cached-unchanged`, and `validate-five-changed` scenarios against the
+representative 500-task, 20-operation fixture; run `scripts/benchmark.sh` and
+compare reports to see how audits behave over time.
 
 ### Terminal board
 
@@ -2077,37 +2075,41 @@ broader collaboration remain future work. A request using the wrong method for
 a known route receives `405` with the route's allowed method.
 
 Development performance is measured with the reproducible, bounded
-`workbook-bench` harness.
-Remote synchronization benchmarks select one or more of seven named topologies
-with repeatable `--scenario` flags and use at least 500 total tasks with 20
-operations per task. In the benchmark CLI, `--tasks` counts total refs; omitted
-`--tombstones` produces 25 tombstones at 500 or more total tasks and one in
-smaller diagnostics, while an explicit zero is diagnostic-only. Cold CLI
-rebuilds and each warm HTTP sample's preparatory task-list load are untimed
-setup; the `api-tasks` read scenario times a second, warm load of its own. Local
-CLI p95 targets are 200 ms, warm-update p95 is 150 ms, and every burst must be
-below 1 second; read scenarios are budgeted on the same rule as mutations, so the
-local reads `cli-list` and `cli-show` carry the 200 ms local target while the
-warm `api-tasks` read has no approved budget and reports `not-evaluated`, and
-local scenarios have no Git-process target. Version-2 reports include the
-SHA-256 of the resolved measured binary and acceptance rejects an `unknown`
-measured commit before it builds a fixture. Reports evaluate each topology as
-`pass`, `miss`, `timeout`, or `failed` against a time and Git-process reference
-budget; `not-evaluated` means that scenario has no target. Baseline budgets and
-outcomes are evidence, not achieved-performance guarantees; in particular, a
-timeout is only lower-bound elapsed-time evidence.
+`workbook-bench` harness. One command builds the working tree and runs the
+whole scenario registry, writing a dated JSON and Markdown report pair under
+the gitignored `bench-reports/` directory and printing the Markdown path:
+
+```sh
+scripts/benchmark.sh
+```
+
+Any `workbook-bench` flag passes through, so a quick diagnostic run looks like
+`scripts/benchmark.sh --scenario cli-list --tasks 50 --operations 5`, and
+`scripts/benchmark.sh --scaling` runs the task-count and history-depth scaling
+matrix instead of the single-fixture scenarios. Reports are descriptive: they
+carry no thresholds and no pass or fail classification. Each scenario reports
+its measured latencies and Git process counts with a `completed`, `failed`, or
+`timeout` outcome, and reports include the SHA-256 and source commit of the
+measured binary; comparing a run's report against an earlier one is how a
+baseline shift is noticed.
+
+In the benchmark CLI, `--tasks` counts total refs; omitted `--tombstones`
+produces 25 tombstones at 500 or more total tasks and one in smaller
+diagnostics, while an explicit zero is diagnostic-only. Remote synchronization
+benchmarks select one or more of seven named topologies with repeatable
+`--scenario` flags and require at least 500 total tasks with 20 operations per
+task, so a per-command number always describes a board someone actually runs.
+Cold CLI rebuilds and each warm HTTP sample's preparatory task-list load are
+untimed setup; the `api-tasks` read scenario times a second, warm load of its
+own.
 
 The three commands an agent runs continuously — `next` to acquire work, `show`
 to read its context, `update` to record progress — are all measured. `cli-next`
-carries the 1,000 ms synchronized target rather than the 200 ms local one,
-because `next` fetches before answering so two agents cannot claim the same
-task, and that fetch is priced rather than hidden. That is the general rule for
-read scenarios: a read answered from the local projection takes the 200 ms local
-budget, and a read that fetches first takes the 1,000 ms synchronized one.
-
-The `watch-steady-state` selector observes a live `workbook sync --watch` with
+includes the fetch `next` performs before answering so two agents cannot claim
+the same task; that round trip is priced rather than hidden. The
+`watch-steady-state` selector observes a live `workbook sync --watch` with
 nothing pending and reports its CPU, peak resident memory, and per-tick cost
-descriptively; it is measured in its own invocation and carries no target.
+descriptively; it is measured in its own invocation.
 
 ### Project identity across worktrees
 

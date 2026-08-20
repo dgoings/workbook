@@ -79,7 +79,7 @@ type countObjectsMetrics struct {
 }
 
 // RunColdCLI builds deterministic fixtures and measures cold CLI mutations
-// against an acceptance-sized baseline isolated by scenario and sample.
+// against a representative baseline isolated by scenario and sample.
 func RunColdCLI(ctx context.Context, spec RunSpec, fixtureRoot string, selected []string) ([]ScenarioResult, error) {
 	return runColdCLI(ctx, spec, fixtureRoot, selected, scenarioDependencies{
 		buildFixture: func(ctx context.Context, root string, fixture FixtureSpec) (Fixture, error) {
@@ -267,7 +267,7 @@ func measureColdRestore(ctx context.Context, dependencies scenarioDependencies, 
 //     leave the local task ahead and price a replay this scenario does not claim
 //     to measure.
 //   - The mutation leaves the projection one head stale, and refreshing a single
-//     changed head is tens of milliseconds at acceptance size. Re-settling it
+//     changed head is tens of milliseconds at the standard fixture size. Re-settling it
 //     untimed keeps the sample comparable with every other cold scenario, whose
 //     projection is current when its command starts.
 //
@@ -999,43 +999,6 @@ func measureLocalBareSync(
 	return results, nil
 }
 
-// coldSingleTarget budgets a local command that performs no round trip. It
-// covers reads as well as mutations, approved 2026-08-10: `cli-list` and
-// `cli-show` answer from the local projection, so the local class is theirs
-// too, and a read that fetches first belongs in coldAutoSyncTarget instead.
-// docs/performance/README.md records the policy.
-var coldSingleTarget = ScenarioTarget{
-	DurationStatistic:  DurationP95,
-	DurationComparison: DurationAtMost,
-	MaxMilliseconds:    200,
-}
-
-// coldAutoSyncTarget budgets a synchronized mutation. Two connections to origin
-// dominate it, and a connection costs roughly the same whatever it carries, so
-// the budget is a network allowance rather than a scaled local budget.
-var coldAutoSyncTarget = ScenarioTarget{
-	DurationStatistic:  DurationP95,
-	DurationComparison: DurationAtMost,
-	MaxMilliseconds:    1000,
-}
-
-// warmUpdateTarget holds api-update to p95 ≤ 150 ms, approved 2026-08-08 from
-// the eight-measurement derivation in docs/performance/README.md: bounded
-// below by the worst quiet-host observation plus margin (134.16 ms + 12%) and
-// above by staying 25% under the 200 ms cold local budget, so a regression
-// that erased the warm path's advantage over a process start could not pass.
-var warmUpdateTarget = ScenarioTarget{
-	DurationStatistic:  DurationP95,
-	DurationComparison: DurationAtMost,
-	MaxMilliseconds:    150,
-}
-
-var burstTarget = ScenarioTarget{
-	DurationStatistic:  DurationEverySample,
-	DurationComparison: DurationLessThan,
-	MaxMilliseconds:    1000,
-}
-
 func coldCLIResults(samples int) []ScenarioResult {
 	results := make([]ScenarioResult, len(coldScenarioDefinitions))
 	for index, definition := range coldScenarioDefinitions {
@@ -1045,35 +1008,13 @@ func coldCLIResults(samples int) []ScenarioResult {
 }
 
 func coldCLIResult(name string, samples int) ScenarioResult {
-	target := &coldSingleTarget
-	switch name {
-	case "cli-burst-independent-10", "cli-burst-same-task-10":
-		target = &burstTarget
-	case "cli-update-autosync", "cli-next":
-		// `next` fetches before answering, so it is priced in the
-		// synchronized class rather than held to a local budget it cannot
-		// meet by design.
-		target = &coldAutoSyncTarget
-	}
-	return ScenarioResult{Name: name, Surface: "cold-cli", Target: target, Samples: make([]Sample, samples)}
+	return ScenarioResult{Name: name, Surface: "cold-cli", Samples: make([]Sample, samples)}
 }
 
 func warmHTTPResult(name string, samples int) ScenarioResult {
-	target := &warmUpdateTarget
-	switch name {
-	case "api-burst-independent-10", "api-burst-same-task-10":
-		target = &burstTarget
-	case "api-tasks":
-		// The read-path target policy covers the cold CLI surface. The warm
-		// budget was approved for a single mutation and no warm read budget
-		// has been approved, so this one is still reported descriptively
-		// rather than classified against an invented threshold.
-		target = nil
-	}
 	return ScenarioResult{
 		Name:    name,
 		Surface: "warm-http",
-		Target:  target,
 		Samples: make([]Sample, samples),
 	}
 }
