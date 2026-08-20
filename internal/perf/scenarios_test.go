@@ -519,7 +519,6 @@ func TestRunWarmHTTPIsolatesEveryScenarioSampleAndRetainsMeasuredMisses(t *testi
 	report := Report{
 		Format:    ReportFormat,
 		Version:   ReportVersion,
-		Phase:     "baseline",
 		Fixture:   fixtureSpec,
 		Scenarios: results,
 	}

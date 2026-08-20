@@ -64,9 +64,6 @@ func TestRunResolvesRelativeWorkbookBinaryAndWritesCompletePerformanceReport(t *
 	if report.Format != perf.ReportFormat || report.Version != perf.ReportVersion {
 		t.Fatalf("report identity = %q v%d, want %q v%d", report.Format, report.Version, perf.ReportFormat, perf.ReportVersion)
 	}
-	if report.Phase != "baseline" {
-		t.Errorf("report phase = %q, want baseline", report.Phase)
-	}
 	if report.Fixture != (perf.FixtureSpec{TotalTasks: 10, ActiveTasks: 9, TombstonedTasks: 1, OperationsPerTask: 4, ObjectFormat: "sha1"}) {
 		t.Errorf("report fixture = %#v, want ten tasks and four operations using SHA-1", report.Fixture)
 	}
@@ -92,13 +89,12 @@ func TestRunResolvesRelativeWorkbookBinaryAndWritesCompletePerformanceReport(t *
 
 // Mutation witness: returning success unconditionally after writing the report
 // would make timeout, product-failure, and harness-error evidence look like a
-// valid completed invocation. A target miss remains valid acceptance evidence.
+// valid completed invocation.
 func TestRunRetainsLocalMeasurementOutcomesAndReturnsExecutionStatus(t *testing.T) {
 	tests := []struct {
 		name         string
 		scenarioName string
 		surface      string
-		target       *perf.ScenarioTarget
 		sample       perf.Sample
 		timeout      string
 		wantExitCode int
@@ -108,11 +104,6 @@ func TestRunRetainsLocalMeasurementOutcomesAndReturnsExecutionStatus(t *testing.
 			name:         "timeout exits one",
 			scenarioName: "cli-update",
 			surface:      "cold-cli",
-			target: &perf.ScenarioTarget{
-				DurationStatistic:  perf.DurationP95,
-				DurationComparison: perf.DurationAtMost,
-				MaxMilliseconds:    200,
-			},
 			sample:       perf.Sample{Duration: time.Second, TimedOut: true},
 			timeout:      "1s",
 			wantExitCode: failureExitCode,
@@ -122,11 +113,6 @@ func TestRunRetainsLocalMeasurementOutcomesAndReturnsExecutionStatus(t *testing.
 			name:         "nonzero exit exits one",
 			scenarioName: "cli-update",
 			surface:      "cold-cli",
-			target: &perf.ScenarioTarget{
-				DurationStatistic:  perf.DurationP95,
-				DurationComparison: perf.DurationAtMost,
-				MaxMilliseconds:    200,
-			},
 			sample:       perf.Sample{Duration: time.Millisecond, ExitCode: 7},
 			timeout:      "1s",
 			wantExitCode: failureExitCode,
@@ -136,29 +122,19 @@ func TestRunRetainsLocalMeasurementOutcomesAndReturnsExecutionStatus(t *testing.
 			name:         "measurement start error exits one",
 			scenarioName: "cli-update",
 			surface:      "cold-cli",
-			target: &perf.ScenarioTarget{
-				DurationStatistic:  perf.DurationP95,
-				DurationComparison: perf.DurationAtMost,
-				MaxMilliseconds:    200,
-			},
 			sample:       perf.Sample{Duration: time.Millisecond, Error: "start measured command"},
 			timeout:      "1s",
 			wantExitCode: failureExitCode,
 			wantOutcome:  "failed",
 		},
 		{
-			name:         "valid target miss exits zero",
+			name:         "completed measurement exits zero",
 			scenarioName: "cli-update",
 			surface:      "cold-cli",
-			target: &perf.ScenarioTarget{
-				DurationStatistic:  perf.DurationP95,
-				DurationComparison: perf.DurationAtMost,
-				MaxMilliseconds:    200,
-			},
 			sample:       perf.Sample{Duration: 250 * time.Millisecond},
 			timeout:      "1s",
 			wantExitCode: 0,
-			wantOutcome:  "miss",
+			wantOutcome:  "completed",
 		},
 		{
 			name:         "repository failure exits one after reports",
@@ -195,11 +171,9 @@ func TestRunRetainsLocalMeasurementOutcomesAndReturnsExecutionStatus(t *testing.
 				return perf.Report{
 					Format:  perf.ReportFormat,
 					Version: perf.ReportVersion,
-					Phase:   "baseline",
 					Scenarios: []perf.ScenarioResult{{
 						Name:    test.scenarioName,
 						Surface: test.surface,
-						Target:  test.target,
 						Samples: []perf.Sample{test.sample},
 					}},
 				}, nil
@@ -250,7 +224,6 @@ func TestRunBenchmarkRunsOnlySelectedRemoteScenario(t *testing.T) {
 		samples:        1,
 		timeout:        5 * time.Second,
 		objectFormat:   "sha1",
-		phase:          "baseline",
 		scenarios:      []string{"sync-fresh-checkout"},
 	})
 	if err != nil {
@@ -259,8 +232,8 @@ func TestRunBenchmarkRunsOnlySelectedRemoteScenario(t *testing.T) {
 	if len(report.Scenarios) != 1 || report.Scenarios[0].Name != "sync-fresh-checkout" {
 		t.Fatalf("remote-only scenarios = %#v, want fresh checkout only", report.Scenarios)
 	}
-	if report.Scenarios[0].Target == nil || len(report.Scenarios[0].Samples) != 1 {
-		t.Fatalf("remote scenario evidence = %#v, want target and sample", report.Scenarios[0])
+	if len(report.Scenarios[0].Samples) != 1 {
+		t.Fatalf("remote scenario evidence = %#v, want one sample", report.Scenarios[0])
 	}
 }
 
@@ -274,7 +247,6 @@ func TestRunBenchmarkRunsOnlySelectedWarmScenario(t *testing.T) {
 		samples:        1,
 		timeout:        5 * time.Second,
 		objectFormat:   "sha1",
-		phase:          "baseline",
 		scenarios:      []string{"api-update"},
 	})
 	if err != nil {
@@ -325,7 +297,6 @@ exit "$status"
 		samples:        1,
 		timeout:        20 * time.Second,
 		objectFormat:   "sha1",
-		phase:          "baseline",
 		scenarios: []string{
 			"sync-initial-local-bare",
 			"sync-unchanged-local-bare",
@@ -412,7 +383,6 @@ func TestBenchmarkMainRunsOnlySelectedValidationScenarios(t *testing.T) {
 				"--workbook", workbook,
 				"--tasks", test.tasks,
 				"--operations", test.operations,
-				"--phase", "baseline",
 				"--scenario", "validate-cached-unchanged",
 				"--output-json", filepath.Join(outputRoot, "report.json"),
 				"--output-markdown", filepath.Join(outputRoot, "report.md"),
@@ -444,7 +414,6 @@ func TestBenchmarkMainRunsOnlySelectedValidationScenarios(t *testing.T) {
 		samples:        1,
 		timeout:        20 * time.Second,
 		objectFormat:   "sha1",
-		phase:          "baseline",
 		scenarios:      []string{"validate-cached-unchanged"},
 	})
 	if err != nil {
@@ -597,80 +566,19 @@ func TestRunRejectsInvalidInvocation(t *testing.T) {
 	}
 }
 
-func TestValidateOptionsEnforcesAcceptanceMinimum(t *testing.T) {
-	workbookBinary := buildWorkbookBinary(t)
-	rejected := []struct {
-		name       string
-		tasks      string
-		operations string
-		want       string
-	}{
-		{name: "diagnostic task count", tasks: "499", operations: "20", want: "acceptance requires at least 500 total tasks"},
-		{name: "short history", tasks: "500", operations: "19", want: "acceptance requires at least 20 operations per task"},
-	}
-	for _, test := range rejected {
-		t.Run(test.name, func(t *testing.T) {
-			outputRoot := t.TempDir()
-			var stderr bytes.Buffer
-			flags, options := newFlagSet(&stderr)
-			err := flags.Parse([]string{
-				"--workbook", workbookBinary,
-				"--tasks", test.tasks,
-				"--operations", test.operations,
-				"--phase", "acceptance",
-				"--output-json", filepath.Join(outputRoot, "report.json"),
-				"--output-markdown", filepath.Join(outputRoot, "report.md"),
-			})
-			if err != nil {
-				t.Fatalf("parse flags: %v", err)
-			}
-			err = validateOptions(flags, options)
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("validateOptions error = %v, want acceptance minimum guidance", err)
-			}
-		})
-	}
-
-	// An omitted selection includes the whole registry, so a larger acceptance
-	// workload must also satisfy the 500-changed projection refresh point's
-	// 500 mutable active task heads.
-	t.Run("larger future workload", func(t *testing.T) {
-		outputRoot := t.TempDir()
-		var stderr bytes.Buffer
-		flags, options := newFlagSet(&stderr)
-		err := flags.Parse([]string{
-			"--workbook", workbookBinary,
-			"--tasks", "526",
-			"--operations", "21",
-			"--samples", "20",
-			"--phase", "acceptance",
-			"--output-json", filepath.Join(outputRoot, "report.json"),
-			"--output-markdown", filepath.Join(outputRoot, "report.md"),
-		})
-		if err != nil {
-			t.Fatalf("parse flags: %v", err)
-		}
-		if err := validateOptions(flags, options); err != nil {
-			t.Fatalf("validateOptions rejected larger acceptance workload: %v", err)
-		}
-	})
-}
-
 func TestValidateOptionsNormalizesTombstonePopulation(t *testing.T) {
 	workbookBinary := buildWorkbookBinary(t)
 	tests := []struct {
 		name           string
 		tasks          string
 		tombstones     string
-		phase          string
 		wantActive     int
 		wantTombstones int
 		wantError      string
 	}{
-		{name: "default acceptance-sized fixture", tasks: "500", wantActive: 475, wantTombstones: 25},
+		{name: "default representative fixture", tasks: "500", wantActive: 475, wantTombstones: 25},
 		{name: "default diagnostic fixture", tasks: "10", wantActive: 9, wantTombstones: 1},
 		{name: "explicit diagnostic zero", tasks: "10", tombstones: "0", wantActive: 10, wantTombstones: 0},
-		{name: "acceptance requires tombstones", tasks: "500", tombstones: "0", phase: "acceptance", wantError: "acceptance requires at least 25 tombstoned tasks"},
 		{name: "cannot exceed total", tasks: "10", tombstones: "11", wantError: "--tombstones must not exceed --tasks"},
 	}
 	for _, test := range tests {
@@ -686,9 +594,6 @@ func TestValidateOptionsNormalizesTombstonePopulation(t *testing.T) {
 			}
 			if test.tombstones != "" {
 				args = append(args, "--tombstones", test.tombstones)
-			}
-			if test.phase != "" {
-				args = append(args, "--phase", test.phase)
 			}
 			var stderr bytes.Buffer
 			flags, options := newFlagSet(&stderr)
@@ -712,111 +617,6 @@ func TestValidateOptionsNormalizesTombstonePopulation(t *testing.T) {
 	}
 }
 
-func TestValidateOptionsRejectsEveryAcceptanceFixtureShortfall(t *testing.T) {
-	workbookBinary := buildWorkbookBinary(t)
-	tests := []struct {
-		name string
-		args []string
-		want string
-	}{
-		{name: "499 total tasks", args: []string{"--tasks", "499", "--tombstones", "25", "--operations", "20"}, want: "acceptance requires at least 500 total tasks"},
-		{name: "24 tombstones", args: []string{"--tasks", "500", "--tombstones", "24", "--operations", "20"}, want: "acceptance requires at least 25 tombstoned tasks"},
-		{name: "19 operations", args: []string{"--tasks", "500", "--tombstones", "25", "--operations", "19"}, want: "acceptance requires at least 20 operations per task"},
-		{name: "nine active tasks", args: []string{"--tasks", "500", "--tombstones", "491", "--operations", "20"}, want: "acceptance requires at least 10 active tasks"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			outputRoot := t.TempDir()
-			args := append([]string{
-				"--workbook", workbookBinary,
-				"--phase", "acceptance",
-				"--output-json", filepath.Join(outputRoot, "report.json"),
-				"--output-markdown", filepath.Join(outputRoot, "report.md"),
-			}, test.args...)
-			var stderr bytes.Buffer
-			flags, options := newFlagSet(&stderr)
-			if err := flags.Parse(args); err != nil {
-				t.Fatal(err)
-			}
-			if err := validateOptions(flags, options); err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("validateOptions error = %v, want %q", err, test.want)
-			}
-		})
-	}
-}
-
-// Mutation witness: applying the minimum to every acceptance invocation would
-// break historical non-local scenarios, while accepting 19 local samples would
-// make nearest-rank p95 evidence too weak at the required boundary.
-func TestValidateOptionsRequiresTwentySamplesForLocalAcceptance(t *testing.T) {
-	workbookBinary := buildWorkbookBinary(t)
-	tests := []struct {
-		name     string
-		phase    string
-		scenario string
-		samples  string
-		wantErr  string
-	}{
-		{
-			name:     "nineteen local acceptance samples",
-			phase:    "acceptance",
-			scenario: "cli-update",
-			samples:  "19",
-			wantErr:  "local acceptance requires at least 20 samples",
-		},
-		{
-			name:     "twenty local acceptance samples",
-			phase:    "acceptance",
-			scenario: "api-update",
-			samples:  "20",
-		},
-		{
-			name:     "baseline local diagnostic",
-			phase:    "baseline",
-			scenario: "cli-update",
-			samples:  "1",
-		},
-		{
-			name:     "non-local acceptance compatibility",
-			phase:    "acceptance",
-			scenario: "sync-fresh-checkout",
-			samples:  "19",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			outputRoot := t.TempDir()
-			var stderr bytes.Buffer
-			flags, options := newFlagSet(&stderr)
-			if err := flags.Parse([]string{
-				"--workbook", workbookBinary,
-				"--tasks", "500",
-				"--tombstones", "25",
-				"--operations", "20",
-				"--samples", test.samples,
-				"--phase", test.phase,
-				"--scenario", test.scenario,
-				"--output-json", filepath.Join(outputRoot, "report.json"),
-				"--output-markdown", filepath.Join(outputRoot, "report.md"),
-			}); err != nil {
-				t.Fatal(err)
-			}
-
-			err := validateOptions(flags, options)
-			if test.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
-					t.Fatalf("validateOptions error = %v, want %q", err, test.wantErr)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("validateOptions rejected valid boundary: %v", err)
-			}
-		})
-	}
-}
-
 func TestBenchmarkEnvironmentRecordsMeasuredBinarySHA256(t *testing.T) {
 	binaryDirectory := t.TempDir()
 	gitPath := filepath.Join(binaryDirectory, "git")
@@ -834,32 +634,6 @@ func TestBenchmarkEnvironmentRecordsMeasuredBinarySHA256(t *testing.T) {
 	}
 	if environment.WorkbookBinarySHA256 != want {
 		t.Fatalf("Workbook binary SHA-256 = %q, want %q", environment.WorkbookBinarySHA256, want)
-	}
-}
-
-func TestRunBenchmarkRejectsUnknownAcceptanceCommitBeforeFixtureConstruction(t *testing.T) {
-	binaryDirectory := t.TempDir()
-	gitPath := filepath.Join(binaryDirectory, "git")
-	goPath := filepath.Join(binaryDirectory, "go")
-	workbookPath := filepath.Join(binaryDirectory, "workbook")
-	writeExecutableScript(t, gitPath, "printf 'git version test\\n'")
-	writeExecutableScript(t, goPath, "printf 'go version test\\n'")
-	writeExecutableScript(t, workbookPath, `printf '%s\n' '{"format":"workbook.result","version":1,"command":"version","data":{"version":"dev","commit":"unknown"}}'`)
-	t.Setenv("PATH", binaryDirectory)
-
-	_, err := runBenchmark(context.Background(), options{
-		workbookBinary: workbookPath,
-		tasks:          500,
-		tombstones:     25,
-		operations:     20,
-		samples:        1,
-		timeout:        time.Second,
-		objectFormat:   "sha1",
-		phase:          "acceptance",
-		scenarios:      []string{"cli-create"},
-	})
-	if err == nil || !strings.Contains(err.Error(), "acceptance requires a measured Workbook commit") {
-		t.Fatalf("runBenchmark error = %v, want unknown measured commit rejection", err)
 	}
 }
 
@@ -909,9 +683,8 @@ func buildWorkbookBinaryAt(t *testing.T, binary string) {
 	buildWorkbookBinaryWithCommit(t, binary, "")
 }
 
-// buildWorkbookBinaryWithCommit mirrors the evidence build. An evidence phase
-// refuses to measure a binary that reports no commit, so a test that exercises
-// one has to embed a commit exactly as the documented build does.
+// buildWorkbookBinaryWithCommit mirrors the documented build, which embeds
+// the measured commit so a report can be traced to the source it measured.
 func buildWorkbookBinaryWithCommit(t *testing.T, binary, commit string) {
 	t.Helper()
 	root := filepath.Clean(filepath.Join("..", ".."))
@@ -978,7 +751,6 @@ func TestBenchmarkReportsEveryProjectionRefreshChangeCountPoint(t *testing.T) {
 		samples:        2,
 		timeout:        60 * time.Second,
 		objectFormat:   "sha1",
-		phase:          "baseline",
 		scenarios:      selected,
 	})
 	if err != nil {

@@ -138,7 +138,7 @@ func paths(t *testing.T) (string, string) {
 func TestInstallStampsVersionAndCommit(t *testing.T) {
 	// Production mutation: building without ldflags leaves every source install
 	// reporting "dev (unknown)", so a developer cannot tell which build they are
-	// running, and the binary is rejected by acceptance benchmarking.
+	// running, and a benchmark report of it cannot name the commit it measured.
 	root, script := paths(t)
 	destination := filepath.Join(t.TempDir(), "bin")
 
