@@ -252,6 +252,66 @@ func TestClientConfigPageClearsEverySetting(t *testing.T) {
 `)
 }
 
+// Each colour field carries a colour well beside it: a little square that opens
+// the browser's picker and writes what was picked into the field. The field
+// stays the setting — `#rrggbb` is what the ledger stores, and an empty field is
+// a colour taken back off the board, which a well with no empty value could
+// never say — so the well only ever writes into the field, and follows it when
+// a complete colour is typed.
+func TestClientConfigPageOffersAColorWellBesideEachColorField(t *testing.T) {
+	vocabulary := handlerVocabulary(t)
+	runConfigClient(t, "picking a colour from the well", vocabulary, "head-1", `
+  vocabularyRead = `+configuredVocabularyJSON(t, panelRenamedVocabulary(t), "head-9")+`;
+  await openStatuses();
+
+  const wellFor = (member) => findElement(displayPanelBody, (element) => element.dataset.displayWell === member);
+  const accentWell = wellFor("primaryColor");
+  const textWell = wellFor("textColor");
+  if (!accentWell || !textWell) throw new Error("a colour field has no well beside it");
+  if (accentWell.type !== "color" || textWell.type !== "color") {
+    throw new Error("the wells are " + accentWell.type + " and " + textWell.type + " inputs rather than colour inputs");
+  }
+  // The name is not a colour, and gets no well.
+  if (wellFor("name")) throw new Error("the name field grew a colour well");
+  // Each well opens on the colour its field holds. A field holding nothing
+  // leaves the well at the control's black default, rather than at a colour of
+  // the board's own — that literal is the stylesheet's, and the script must
+  // not keep a second copy of it.
+  if (accentWell.value !== "#1a7f4b") throw new Error("the accent well opens on " + JSON.stringify(accentWell.value));
+  if (textWell.value !== "#000000") throw new Error("the empty text well opens on " + JSON.stringify(textWell.value));
+
+  // Picking writes into the field, which stays what the save reads.
+  accentWell.value = "#123abc";
+  accentWell.eventListeners.input();
+  if (displayField("primaryColor").value !== "#123abc") {
+    throw new Error("picking left the field at " + JSON.stringify(displayField("primaryColor").value));
+  }
+  // Typing a complete colour turns the well to match; an incomplete one leaves
+  // it where it stands rather than guessing at what is still being typed.
+  displayField("textColor").value = "#A1B2C3";
+  displayField("textColor").eventListeners.input();
+  if (textWell.value !== "#a1b2c3") throw new Error("the text well shows " + JSON.stringify(textWell.value));
+  displayField("textColor").value = "#a1b";
+  displayField("textColor").eventListeners.input();
+  if (textWell.value !== "#a1b2c3") throw new Error("an incomplete colour moved the well to " + JSON.stringify(textWell.value));
+
+  // A save re-draws the form from the answer, wells included: the accent the
+  // server recorded is what the redrawn well opens on, and a colour the answer
+  // does not carry takes its well back to the default.
+  displayField("textColor").value = "";
+  displayAnswer = { body: `+displayMutationJSON(t, "head-10", core.DisplaySettings{Name: "Atlas", PrimaryColor: "#123abc"})+` };
+  await saveDisplay();
+  const redrawnAccent = wellFor("primaryColor");
+  if (!redrawnAccent || redrawnAccent.value !== "#123abc") {
+    throw new Error("the redrawn accent well shows " + JSON.stringify(redrawnAccent && redrawnAccent.value));
+  }
+  const redrawnText = wellFor("textColor");
+  if (!redrawnText || redrawnText.value !== "#000000") {
+    throw new Error("the redrawn text well shows " + JSON.stringify(redrawnText && redrawnText.value));
+  }
+`)
+}
+
 // A page served without a name — every board built before this existed, and any
 // embedding that does not render the attribute — titles itself the way it always
 // did rather than titling itself the empty string.
@@ -351,6 +411,10 @@ func TestClientConfigPageWaitsForPendingBoardChanges(t *testing.T) {
   // ledger, one tip, so neither section may be changed while the other is
   // changing it.
   if (displayField("name").disabled !== true) throw new Error("the form was usable while a save waited");
+  const waitingWell = findElement(displayPanelBody, (element) => element.dataset.displayWell === "primaryColor");
+  if (!waitingWell || waitingWell.disabled !== true) {
+    throw new Error("a save in flight left the colour well usable");
+  }
   if (panelControl(panelRow("icebox"), "Edit Icebox").disabled !== true) {
     throw new Error("a save in flight left the statuses controls usable");
   }
