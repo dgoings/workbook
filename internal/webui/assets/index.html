@@ -67,9 +67,10 @@
     .updated { margin: 0; color: #56647a; font-size: .75rem; text-align: right; }
     /* The routes sit on the left, beside the title, and the settings on the
        right. They were one row once, and the row's contents changed with the
-       route: the Deleted setting belongs to the board, so leaving the statuses
-       page took it away and every link to its left slid right to fill the gap.
-       A reader who had just aimed at Board found Statuses under the cursor. The
+       route: the Deleted setting belongs to the board, so leaving for the
+       configuration page took it away and every link to its left slid right to
+       fill the gap. A reader who had just aimed at Board found the link beside
+       it under the cursor. The
        two groups are separated here so that the links occupy the same place on
        every route — nothing that comes and goes is drawn before them any more. */
     .app-header__lead { display: flex; flex-wrap: wrap; align-items: end; gap: .3rem 1.1rem; min-width: 0; }
@@ -135,7 +136,7 @@
     .notice a { color: inherit; font-weight: 750; text-underline-offset: .18em; }
     .notice button { border: 1px solid currentcolor; border-radius: 4px; background: transparent; color: inherit; cursor: pointer; font: inherit; font-size: .8rem; font-weight: 700; padding: .25rem .6rem; }
     .notice button:focus-visible, .notice a:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 2px; }
-    /* The body of the statuses route. It is a page rather than a region on the
+    /* The body of a configuration section. It is a page rather than a region on the
        board: it sits inside the route shell every other page uses, which is
        inside main, so it takes the height its rows and forms need and the page
        scrolls. The panel it replaced was an item in the viewport-height flex
@@ -524,7 +525,7 @@
     .relationship-editor:focus-within .relationship-empty:empty { min-height: 1rem; }
     .task-route--history { height: auto; min-height: 100%; }
     .task-route--history .task-layout { min-height: min(60vh, 34rem); }
-    /* The statuses route, which grows with its list the way the history route
+    /* The configuration route, which grows with its lists the way the history route
        does and lets main scroll. Both of these are as specific as .task-route
        itself, so they only take effect written after it: the same rule text up
        beside the .admin rules lost to the height: 100% above, and the route's
@@ -859,7 +860,7 @@
          the script needs before its first fetch comes from an attribute here,
          data-vocabulary-head included, so a page and its script never disagree
          about which vocabulary they were built from. -->
-    <div class="board-view" data-board-view data-project-name="{{ .ProjectName }}" data-title-suffix="{{ .TitleSuffix }}" data-default-status="{{ .DefaultStatus }}" data-vocabulary-head="{{ .VocabularyHead }}" data-attachment-limit="{{ .AttachmentFileLimit }}" data-attachment-total-limit="{{ .AttachmentTotalLimit }}" data-attachment-name-limit="{{ .AttachmentNameLimit }}" data-attachment-label-limit="{{ .AttachmentLabelLimit }}" data-attachment-url-limit="{{ .AttachmentURLLimit }}" data-inline-media="{{ .InlineImageMediaTypes }}">
+    <div class="board-view" data-board-view data-project-name="{{ .ProjectName }}" data-default-project-name="{{ .DefaultProjectName }}" data-title-suffix="{{ .TitleSuffix }}" data-default-status="{{ .DefaultStatus }}" data-vocabulary-head="{{ .VocabularyHead }}" data-attachment-limit="{{ .AttachmentFileLimit }}" data-attachment-total-limit="{{ .AttachmentTotalLimit }}" data-attachment-name-limit="{{ .AttachmentNameLimit }}" data-attachment-label-limit="{{ .AttachmentLabelLimit }}" data-attachment-url-limit="{{ .AttachmentURLLimit }}" data-inline-media="{{ .InlineImageMediaTypes }}">
       <p class="stale" data-stale role="status">Task refresh failed. Showing the last successful board.</p>
       <!-- data-board is where the client appends the Deleted column, after the
            last vocabulary column the server rendered. It is a client-built
@@ -937,7 +938,7 @@
        data-status-tags carries the roles for the forms, and this element's
        presence is the whole of the client's capability gate — a board built
        without the four vocabulary mutations serves none of this, its header
-       offers no Statuses link, and the route answers as a page that does not
+       offers no Config link, and the route answers as a page that does not
        exist on both sides.
 
        The list inside it is the client's, drawn from `GET /api/vocabulary` on
@@ -1034,13 +1035,14 @@
       // offered instead of taken.
       const vocabularyNotice = document.querySelector("[data-vocabulary-notice]");
       const vocabularyReload = document.querySelector("[data-vocabulary-reload]");
-      // The body of the statuses route and its parts, served with the page and
-      // mounted into main by the render for that route. Every one of them is
-      // absent on a board built without the four vocabulary mutations, which is
-      // why each is asked for separately and everything below is guarded: such a
-      // page has no statuses route at all — the server answers the address with
-      // a 404 and route() below answers it as a page that does not exist — and
-      // the script must not depend on markup it was not served.
+      // The statuses section of the configuration route and its parts, served
+      // with the page and mounted into main by the render for that route. Every
+      // one of them is absent on a board built without the four vocabulary
+      // mutations, which is why each is asked for separately and everything
+      // below is guarded: such a page has no configuration route at all — the
+      // server answers the address with a 404 and route() below answers it as a
+      // page that does not exist — and the script must not depend on markup it
+      // was not served.
       const vocabularyPanel = document.querySelector("[data-vocabulary-panel]");
       const vocabularyPanelBody = document.querySelector("[data-vocabulary-panel-body]");
       const vocabularyPanelStatus = document.querySelector("[data-vocabulary-panel-status]");
@@ -1056,6 +1058,12 @@
       // derived here: the fallbacks are core's, and a client that spelled them
       // would go on saying the old word the day core's changed.
       const boardName = boardView.dataset.projectName || "Workbook board";
+      // What this board would be called if its name were cleared, which is what
+      // the settings form's own placeholder says. It is not boardName: a project
+      // called Atlas whose name field is emptied gets the generic heading, so a
+      // placeholder reading "Atlas" would be advertising the value the field no
+      // longer holds — and would go on doing so after a save that cleared it.
+      const boardDefaultName = boardView.dataset.defaultProjectName || "Workbook board";
       const boardTitleSuffix = " · " + (boardView.dataset.titleSuffix || "Workbook");
       // The configuration ledger tip these columns were built from. The server
       // renders it into the page and repeats it on every poll, so the poll can
@@ -6865,7 +6873,7 @@
         // which is a literal the stylesheet owns and the script must not keep a
         // second copy of.
         displayFields = {
-          name: displayInput("display-name", "name", displaySettings.name, boardName),
+          name: displayInput("display-name", "name", displaySettings.name, boardDefaultName),
           primaryColor: displayInput("display-primary-color", "primaryColor", displaySettings.primaryColor, "#rrggbb"),
           textColor: displayInput("display-text-color", "textColor", displaySettings.textColor, "#rrggbb")
         };
@@ -7442,7 +7450,7 @@
         if (current.view === "board") {
           document.title = boardName;
           // The board is re-attached rather than rebuilt, which is what makes
-          // coming back from the statuses page cost nothing: every card node the
+          // coming back from the configuration page cost nothing: every card node the
           // reader left is the node they return to, holding whatever it was
           // holding. The columns are the ones this page was served with even
           // when the statuses have moved on since — the standing notice above

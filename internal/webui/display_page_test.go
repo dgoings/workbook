@@ -172,24 +172,69 @@ func TestHandlerStylesheetDeclaresTheLegacyPaletteAsItsDefaults(t *testing.T) {
 		}
 		// And nothing still writes the literal out where the property should be
 		// read, which is what would make one control stop following a project's
-		// choice while every other one followed it.
-		if strings.Count(body, token.legacy) > expectedLegacyMentions(token.legacy) {
-			t.Errorf("%s is still written out somewhere the property should be read", token.legacy)
+		// choice while every other one followed it. Counted exactly rather than
+		// bounded: a literal that stopped appearing is a default that stopped
+		// being declared, which is the other half of the same claim.
+		if got := strings.Count(body, token.legacy); got != expectedLegacyMentions(token.legacy) {
+			t.Errorf("the page writes %s out %d times, want %d — once as this property's default%s",
+				token.legacy, got, expectedLegacyMentions(token.legacy), priorityException(token.legacy))
 		}
 	}
 }
 
 // expectedLegacyMentions is how many times a legacy literal may still appear in
 // the served page: once as the property's own default, and — for the accent —
-// once more in `.priority--low`, which keeps a static blue on purpose. It sits
-// in a triad with the danger red and the warning amber, and a red-ish accent
-// must not make "low" read as "high".
+// once more in `.priority--low`, which keeps a static blue on purpose.
 func expectedLegacyMentions(literal string) int {
 	switch literal {
-	case "#2457d6":
+	case priorityLowBlue:
 		return 2
 	default:
 		return 1
+	}
+}
+
+func priorityException(literal string) string {
+	if literal == priorityLowBlue {
+		return ", and once in the priority triad"
+	}
+	return ""
+}
+
+// priorityLowBlue is the accent, and the one place in this stylesheet that keeps
+// it written out.
+const priorityLowBlue = "#2457d6"
+
+// `.priority--low` does not follow a project's accent, and this is the only
+// place in the stylesheet that is true of.
+//
+// It is not an oversight to be tidied up later. The three priority colours are a
+// triad read against each other — the danger red for high, the warning amber for
+// medium, this blue for low — and a project that picks a red-ish accent would
+// make "low" read as "high" on every card on the board. The rule is stated here
+// because the conversion that took every other occurrence of this literal was
+// mechanical, and the next such sweep will reach this one too.
+func TestHandlerStylesheetKeepsThePriorityTriadOffTheProjectsAccent(t *testing.T) {
+	body := displayBoardPage(t, core.DisplaySettings{PrimaryColor: "#b42318"}, "workbook")
+
+	const rule = ".priority--low { color: " + priorityLowBlue + "; }"
+	if !strings.Contains(body, rule) {
+		t.Errorf("the stylesheet no longer carries %q, so a red-ish accent makes \"low\" read as \"high\"", rule)
+	}
+	// The other two are literal for the same reason and have always been; they
+	// are here so the triad is asserted as a triad.
+	for _, sibling := range []string{
+		".priority--high { color: #b42318; }",
+		".priority--medium { color: #b45309; }",
+	} {
+		if !strings.Contains(body, sibling) {
+			t.Errorf("the stylesheet no longer carries %q", sibling)
+		}
+	}
+	// And the accent this project chose really is in force elsewhere, so the
+	// rule above is an exception rather than a board that ignored the setting.
+	if !strings.Contains(themeBlock(t, body), "--wb-primary: #b42318;") {
+		t.Error("the project's accent did not reach the theme, so nothing here is an exception to anything")
 	}
 }
 

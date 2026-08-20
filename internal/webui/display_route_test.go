@@ -207,6 +207,74 @@ func TestClientConfigPageSavesEverySettingAgainstTheHeadItRead(t *testing.T) {
 `)
 }
 
+// Clearing every setting is a real save, and what the page says afterwards has
+// to be true of a board that now has no settings of its own.
+//
+// The name field's placeholder is the point of the second half. It says what
+// this board would be called if the field were left empty, which is the generic
+// heading — not the name the board was served with, which is the name the reader
+// has just taken away.
+func TestClientConfigPageClearsEverySetting(t *testing.T) {
+	vocabulary := handlerVocabulary(t)
+	runConfigClient(t, "clearing the board settings", vocabulary, "head-1", `
+  vocabularyRead = `+configuredVocabularyJSON(t, panelRenamedVocabulary(t), "head-9")+`;
+  await openStatuses();
+
+  // Before the save: the field holds the configured name, and offers the
+  // generic one as what emptying it would mean.
+  if (displayField("name").value !== "Atlas") throw new Error("the name field holds " + JSON.stringify(displayField("name").value));
+  if (displayField("name").placeholder !== "Workbook board") {
+    throw new Error("the name field offers " + JSON.stringify(displayField("name").placeholder));
+  }
+
+  displayField("name").value = "";
+  displayField("primaryColor").value = "";
+  displayField("textColor").value = "";
+  displayAnswer = { body: `+displayMutationJSON(t, "head-10", core.DisplaySettings{})+` };
+  await saveDisplay();
+
+  const sent = displayCalls[0].body;
+  if (sent.name !== "" || sent.primaryColor !== "" || sent.textColor !== "") {
+    throw new Error("the save sent " + JSON.stringify(sent));
+  }
+  // The sentence a board with nothing left says.
+  const said = displayPanelStatus.textContent;
+  if (said.indexOf("no settings of its own") < 0) {
+    throw new Error("clearing everything said " + JSON.stringify(said));
+  }
+  // And the form now reads as an unconfigured project: empty fields, and a
+  // placeholder still offering the generic heading rather than the name that
+  // was just cleared.
+  if (displayField("name").value !== "") throw new Error("the name field still holds " + JSON.stringify(displayField("name").value));
+  if (displayField("name").placeholder !== "Workbook board") {
+    throw new Error("the cleared field advertises " + JSON.stringify(displayField("name").placeholder));
+  }
+`)
+}
+
+// A page served without a name — every board built before this existed, and any
+// embedding that does not render the attribute — titles itself the way it always
+// did rather than titling itself the empty string.
+func TestClientBoardWithoutAServedNameFallsBackToTheGenericOne(t *testing.T) {
+	vocabulary := handlerVocabulary(t)
+	runClientOverHandler(t, configurableHandler(vocabulary, "head-1", nil),
+		"a page served without a name", "/", `
+delete boardView.dataset.projectName;
+delete boardView.dataset.defaultProjectName;
+delete boardView.dataset.titleSuffix;
+`, vocabulary, "head-1", nil, `
+  vocabularyRead = `+configuredVocabularyJSON(t, panelRenamedVocabulary(t), "head-9")+`;
+  await settle();
+  if (document.title !== "Workbook board") throw new Error("the board is titled " + JSON.stringify(document.title));
+
+  await openStatuses();
+  if (document.title !== "Configuration · Workbook") throw new Error("the page is titled " + JSON.stringify(document.title));
+  if (displayField("name").placeholder !== "Workbook board") {
+    throw new Error("the name field offers " + JSON.stringify(displayField("name").placeholder));
+  }
+`)
+}
+
 // A stale write is where a save stops. The settings it carries are the current
 // ones and the page adopts them, and the copy names the configuration rather
 // than the statuses — either half of one ledger may be what moved.

@@ -4426,6 +4426,7 @@ const boardStatusDefinitions = ` + string(encoded) + `;
 const boardDefaultStatus = ` + strconv.Quote(string(vocabulary.Default())) + `;
 const boardVocabularyHead = ` + strconv.Quote(vocabularyHead) + `;
 const boardProjectName = ` + strconv.Quote(core.DefaultProjectName) + `;
+const boardDefaultProjectName = ` + strconv.Quote(core.DefaultProjectName) + `;
 const boardTitleSuffixName = "Workbook";
 // The attachment ceiling the server renders into the page, so the harness's
 // upload control refuses what the real one refuses rather than what a number
@@ -4681,6 +4682,7 @@ boardView.dataset.vocabularyHead = boardVocabularyHead;
 // server resolves them. A harness that invented either would be testing a
 // fallback core owns rather than the one the page is served with.
 boardView.dataset.projectName = boardProjectName;
+boardView.dataset.defaultProjectName = boardDefaultProjectName;
 boardView.dataset.titleSuffix = boardTitleSuffixName;
 boardView.dataset.attachmentLimit = String(boardAttachmentLimit);
 boardView.dataset.attachmentTotalLimit = String(boardAttachmentTotalLimit);

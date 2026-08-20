@@ -451,7 +451,7 @@ type Options struct {
 	Vocabulary VocabularyResolver
 	// The four vocabulary mutations. A board given none of them renders its
 	// columns and refuses to change them, which is every board that predates the
-	// statuses route.
+	// route that administers them.
 	AddStatus     VocabularyStatusAdder
 	EditStatus    VocabularyStatusEditor
 	RemoveStatus  VocabularyStatusRemover
@@ -529,6 +529,14 @@ type pageData struct {
 	// product's where there is not, which is why it is not ProjectName: "New
 	// task · Workbook board" reads as a board called "New task".
 	TitleSuffix string
+	// DefaultProjectName is what a board with no name of its own is called. It
+	// is rendered beside the resolved name because the two answer different
+	// questions: the resolved name is what this board *is* called, and this is
+	// what it would be called if the name were cleared — which is what the
+	// settings form's own placeholder has to say, whatever the project is called
+	// today. Both come from the server so the script holds no copy of a fallback
+	// core owns.
+	DefaultProjectName string
 	// Eyebrow is the line above the heading: which checkout this is. It is
 	// composed here rather than in the page so that a board built without a
 	// repository name keeps the words it had rather than trailing a colon.
@@ -578,15 +586,16 @@ type pageData struct {
 	// the download route's to decide.
 	InlineImageMediaTypes string
 	// StatusTags are the three roles a status may carry, rendered into the
-	// statuses page's forms for the reason the columns are rendered into the
-	// board: the client must not carry a second copy of a set the server owns.
+	// configuration page's forms for the reason the columns are rendered into
+	// the board: the client must not carry a second copy of a set the server
+	// owns.
 	// It is also what keeps the script from naming `done`, which is a tag here
 	// and a status name in most projects.
 	StatusTags []core.StatusTag
 	// Administrable is whether this board was built with all four vocabulary
-	// mutations. It decides whether the page carries the statuses route's link
-	// and body at all, and serveStatuses answers the address itself with a 404
-	// when it is false — one gate, read on both sides.
+	// mutations. It decides whether the page carries the configuration route's
+	// link and its statuses section at all, and serveConfig answers the address
+	// itself with a 404 when it is false — one gate, read on both sides.
 	//
 	// `workbook serve` is the only production caller of NewHandler and always
 	// supplies the four, so this is true wherever a person meets it. It is
@@ -1132,6 +1141,7 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 		Board:                 presentation.NewBoard(activeTasks(tasks), vocabulary.Vocabulary),
 		ProjectName:           projectName(vocabulary.Display),
 		TitleSuffix:           boardTitleSuffix(vocabulary.Display),
+		DefaultProjectName:    core.DefaultProjectName,
 		Eyebrow:               boardEyebrow(handler.RepoName),
 		Theme:                 boardTheme(vocabulary.Display),
 		DefaultStatus:         vocabulary.Vocabulary.Default(),
@@ -1252,8 +1262,8 @@ func (handler *handler) addVocabularyStatus(writer http.ResponseWriter, request 
 }
 
 // editVocabularyStatus renames, relabels and retags one status in any
-// combination, because the statuses page edits a status as one form and a form
-// is one intent.
+// combination, because the configuration page edits a status as one form and a
+// form is one intent.
 func (handler *handler) editVocabularyStatus(writer http.ResponseWriter, request *http.Request) {
 	if handler.EditStatus == nil {
 		handler.writeError(writer, core.Errorf(core.CategoryOperational, "status editing is not configured"))

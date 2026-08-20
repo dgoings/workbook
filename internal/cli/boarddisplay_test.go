@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -122,7 +123,17 @@ func TestBoardRecordsDisplaySettingsThroughTheSharedLedger(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("GET / = %d, want %d", status, http.StatusOK)
 	}
-	for _, want := range []string{"<h1>Atlas</h1>", "<title>Atlas</title>", "--wb-primary: #1a7f4b;"} {
+	for _, want := range []string{
+		"<h1>Atlas</h1>",
+		"<title>Atlas</title>",
+		"--wb-primary: #1a7f4b;",
+		// The eyebrow names this checkout, which is what distinguishes two
+		// boards before either of them is named — and it is the one value on
+		// this page the server does not read out of the ledger. `serve` derives
+		// it from the worktree root it is bound to, so a board that lost that
+		// wiring would quietly read "Repository: ." on every project.
+		"Repository: " + filepath.Base(repository),
+	} {
 		if !strings.Contains(string(page), want) {
 			t.Errorf("the served board does not carry %q", want)
 		}

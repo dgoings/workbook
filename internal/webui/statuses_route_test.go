@@ -10,12 +10,13 @@ import (
 	"github.com/dgoings/workbook/internal/core"
 )
 
-// What the statuses route does, and what it refuses to do.
+// What the statuses section of the configuration route does, and what it
+// refuses to do.
 //
-// It is a section of a page of its own at /config, reached from the board and
-// served on
-// hard load like every other route here. It is also the one writer in this
-// client that is outside the optimistic mutation queue, so most of what is
+// It is one of two sections on a page of its own at /config, reached from the
+// board and served on a hard load like every other route here. It is also the
+// one writer in this client that is outside the optimistic mutation queue, so
+// most of what is
 // pinned here is about the two rules that follow from that: a change waits for
 // the queue to be empty before it goes — including for intents started on the
 // board before the reader navigated — and a stale write is where the change
@@ -24,7 +25,8 @@ import (
 // change rebuilds a column under the reader, on either side of a navigation.
 
 // administrableHandler is a board with the four vocabulary mutations, which is
-// what `workbook serve` builds and the only kind that has a statuses route. The
+// what `workbook serve` builds and the only kind whose configuration route
+// exists at all. The
 // mutations themselves are never reached: the client tests answer the routes
 // from the fake fetch, and what the routes do with a request is
 // vocabulary_mutation_test.go's subject.

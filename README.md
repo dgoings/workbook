@@ -837,6 +837,19 @@ trimmed, must not be blank, and must not exceed 100 bytes. Clearing a setting is
 how a project has none: there is no stored default, and a board with nothing
 configured renders exactly as it did before this existed.
 
+Any color that is six hexadecimal digits is accepted, including one that makes
+the board hard to read: a very pale primary or text color draws the web board's
+links, hairlines and prose — including the text you type into the Board settings
+form itself — close to invisible against its white surfaces. There is no
+contrast floor, because which colors a project wants are the project's business.
+The way back is always open from the command line, which does not use these
+colors at all: `workbook config unset primary-color` or `workbook config unset
+text-color` restores this board's own palette, and a page reloaded afterwards is
+legible again. On the web board itself the Board settings form's field labels
+keep a fixed color rather than the project's, so the form can still be found and
+emptied — but a pale primary draws its Save button white on white, and the
+command line is the reliable way out of that one.
+
 A command that would change nothing is refused rather than recorded: `config
 unset` of a setting nobody has configured, and `config set` to the value already
 stored, both exit 5 and leave the configuration history exactly where it was.
