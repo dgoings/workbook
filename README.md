@@ -36,7 +36,7 @@ The tap serves macOS and Linux bottles for Apple Silicon and Intel.
 
 ### Building from source
 
-A Go toolchain (1.26 or newer) and Git are the only requirements:
+A Go 1.26 (or newer) toolchain and Git are the only requirements:
 
 ```sh
 git clone https://github.com/dgoings/workbook.git
@@ -45,8 +45,8 @@ cd workbook
 ```
 
 `scripts/install.sh [destination] [name]` builds `cmd/workbook` and installs it
-as `~/.local/bin/workbook` by default; pass a destination directory and an
-alternate binary name to put it anywhere else. Source builds are stamped from
+into `$HOME/.local/bin` as `workbook` by default; pass a destination directory
+and an alternate binary name to put it anywhere else. Source builds are stamped from
 `git describe`, so `workbook version` reports the commit they came from rather
 than `dev (unknown)`. A source build reports a leading `v`, for example
 `v0.2.0-3-g86281c9`, and gains a `-dirty` suffix when built from a modified
