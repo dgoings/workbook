@@ -1219,8 +1219,8 @@ never a requirement: every command works unchanged with none running.
 While a watcher is running, a mutation writes locally, asks the watcher to
 publish, and returns, reporting a `sync` status of `deferred` rather than the
 usual `completed`. That removes both network round trips from the command's
-critical path — roughly 500 ms and 16 Git processes per mutation, measured in
-[`docs/performance/`](docs/performance/). Publication follows within
+critical path — roughly 500 ms and 16 Git processes per mutation, measured
+with the benchmark harness. Publication follows within
 milliseconds rather than at the next scheduled tick, because the command hands
 the change over rather than waiting for the timer.
 
@@ -2076,8 +2076,8 @@ Authentication, hosted deployment, browser deletion, draft persistence, and
 broader collaboration remain future work. A request using the wrong method for
 a known route receives `405` with the route's allowed method.
 
-Development performance is measured with the reproducible, bounded harness
-documented in [`docs/performance/README.md`](docs/performance/README.md).
+Development performance is measured with the reproducible, bounded
+`workbook-bench` harness.
 Remote synchronization benchmarks select one or more of seven named topologies
 with repeatable `--scenario` flags and use at least 500 total tasks with 20
 operations per task. In the benchmark CLI, `--tasks` counts total refs; omitted
@@ -2658,8 +2658,8 @@ that does not descend from the projected one is the reconciliation signal: repla
 drops operations three ways, so upserting alone would strand rows and break the
 logical-clock chain a root-first replay depends on. Workbook deletes that task's
 operation rows and reprojects the returned chain instead. Refresh and rebuild
-therefore scale with operation count rather than task count; see the
-[projection refresh evidence](docs/performance/README.md#projection-refresh-change-count-family).
+therefore scale with operation count rather than task count, as the
+projection-refresh benchmark family measures.
 
 The cache can be deleted at any time and rebuilt entirely from Workbook refs.
 Semantic validation results live in a separate `validation.sqlite` beside it, so

@@ -1,4 +1,4 @@
-.DS_STORE
+.DS_Store
 .worktrees/
 .superpowers/
 .claude/*
@@ -7,3 +7,8 @@
 # Workbook skill, stays local.
 !.claude/hooks/
 !.claude/settings.json
+# Locally built binaries and benchmark output.
+/workbook
+/workbook-dev
+/wb-dev
+bench-reports/
