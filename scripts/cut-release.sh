@@ -184,4 +184,21 @@ echo
 echo "Pushed ${tag}. The release workflow now builds and publishes:"
 echo "  - the four platform archives and checksums.txt on the GitHub release"
 echo "  - the Homebrew formula in the tap"
-echo "Watch it at https://github.com/dgoings/workbook/actions"
+# Derive the Actions URL from the remote rather than hardcoding the owner, so
+# a fork's operator is pointed at their own workflow runs.
+remote_url=$(git_command remote get-url "${remote}" 2>/dev/null || echo "")
+case ${remote_url} in
+	git@github.com:*)
+		repository_path=${remote_url#git@github.com:}
+		;;
+	https://github.com/*)
+		repository_path=${remote_url#https://github.com/}
+		;;
+	*)
+		repository_path=
+		;;
+esac
+repository_path=${repository_path%.git}
+if [ -n "${repository_path}" ]; then
+	echo "Watch it at https://github.com/${repository_path}/actions"
+fi
