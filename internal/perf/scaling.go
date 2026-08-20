@@ -13,7 +13,7 @@ import (
 )
 
 // activeTasksPerTombstone keeps the representative tombstone population
-// proportional to the active population. The default acceptance fixture is 25
+// proportional to the active population. The standard fixture is 25
 // tombstoned tasks in 500, so every scaling point uses the same one-in-twenty
 // ratio and each matrix axis varies exactly one dimension.
 const activeTasksPerTombstone = 20
@@ -276,17 +276,16 @@ func scalingMetricValue(summary Summary, metric string) float64 {
 
 const (
 	ScalingReportFormat  = "workbook.performance-scaling-report"
-	ScalingReportVersion = 1
+	ScalingReportVersion = 2
 )
 
 // ScalingReport is the machine-readable evidence for one scaling matrix run.
 // It is a separate versioned format from the single-fixture performance report
 // because it carries several fixture points and descriptive slopes rather than
-// one fixture and one target classification.
+// one fixture.
 type ScalingReport struct {
 	Format       string         `json:"format"`
 	Version      int            `json:"version"`
-	Phase        string         `json:"phase"`
 	GeneratedAt  time.Time      `json:"generatedAt"`
 	Environment  Environment    `json:"environment"`
 	ObjectFormat string         `json:"objectFormat"`
@@ -318,8 +317,8 @@ func (report ScalingReport) WriteMarkdown(w io.Writer) error {
 func writeScalingHeader(w io.Writer, report ScalingReport) error {
 	_, err := fmt.Fprintf(
 		w,
-		"# Workbook performance scaling report\n\nPhase: %s\n\nObject format: %s\n\nSamples per scenario: %d\n",
-		report.Phase, report.ObjectFormat, report.Samples,
+		"# Workbook performance scaling report\n\nObject format: %s\n\nSamples per scenario: %d\n",
+		report.ObjectFormat, report.Samples,
 	)
 	return err
 }
@@ -421,8 +420,8 @@ func writeScalingSlopeTable(w io.Writer, report ScalingReport) error {
 }
 
 // normalized orders points and scenarios deterministically, recomputes every
-// summary from the retained samples, strips single-fixture duration budgets
-// from scaling evidence, and recomputes the slopes from the measured points.
+// summary from the retained samples, and recomputes the slopes from the
+// measured points.
 func (report ScalingReport) normalized() ScalingReport {
 	points := append([]ScalingPoint(nil), report.Points...)
 	for index := range points {
@@ -435,7 +434,6 @@ func (report ScalingReport) normalized() ScalingReport {
 			for sampleIndex := range scenario.Samples {
 				scenario.Samples[sampleIndex].Milliseconds = durationMilliseconds(scenario.Samples[sampleIndex])
 			}
-			scenario.Target = nil
 			scenario.Summary = Summarize(scenario.Samples)
 			scenario.Outcome = scenarioOutcome(*scenario)
 		}

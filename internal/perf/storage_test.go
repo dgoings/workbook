@@ -417,7 +417,6 @@ func TestStorageResourceMarkdownReportsEveryComponent(t *testing.T) {
 	report := Report{
 		Format:           ReportFormat,
 		Version:          ReportVersion,
-		Phase:            "acceptance",
 		StorageResources: sampleStorageResourceReport(),
 	}
 	if err := report.WriteMarkdown(&buffer); err != nil {
@@ -451,7 +450,7 @@ func TestStorageResourceMarkdownReportsEveryComponent(t *testing.T) {
 }
 
 func TestReportOmitsStorageSectionWhenNotMeasured(t *testing.T) {
-	report := Report{Format: ReportFormat, Version: ReportVersion, Phase: "baseline"}
+	report := Report{Format: ReportFormat, Version: ReportVersion}
 	var jsonBuffer, markdownBuffer strings.Builder
 	if err := report.WriteJSON(&jsonBuffer); err != nil {
 		t.Fatal(err)

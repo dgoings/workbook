@@ -22,6 +22,7 @@ jobs:
     if: github.event.action != 'closed'
     name: Validate release label and changelog
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: read
     concurrency:
@@ -33,6 +34,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      # This step runs scripts from the pull request's own checkout with a
+      # token in the environment. plan-release.sh needs gh read access to ask
+      # which releases published, and a fork pull request's token is read-only
+      # with no secrets present, so the exposure is accepted deliberately;
+      # revisit if the collaborator set grows.
       - name: Check the label and the changelog agree
         env:
           GH_TOKEN: ${{ github.token }}
@@ -66,6 +72,7 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository
     name: Cut the release
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: write
       # Reading the check runs that decide whether the reviewed commit passed.
@@ -115,4 +122,7 @@ jobs:
     uses: ./.github/workflows/release.yml
     with:
       tag: ${{ needs.cut.outputs.tag }}
-    secrets: inherit
+    # Passed explicitly rather than inherited, so a secret added to the
+    # repository later is not silently exposed to the release job.
+    secrets:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

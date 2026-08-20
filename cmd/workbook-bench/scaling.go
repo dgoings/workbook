@@ -14,22 +14,17 @@ import (
 	"github.com/dgoings/workbook/internal/perf"
 )
 
-// scalingPhase runs the task-count and history-depth scaling matrix instead of
-// the single-fixture benchmark. It is a separate phase so the baseline and
-// acceptance guards keep their existing strictness.
-const scalingPhase = "scaling"
-
 // configureScalingOptions resolves the matrix points and rejects flags whose
 // meaning the matrix already owns.
 func configureScalingOptions(flags *flag.FlagSet, options *options) error {
 	explicit := explicitFlagNames(flags)
 	for _, name := range []string{"tasks", "tombstones", "operations"} {
 		if _, set := explicit[name]; set {
-			return fmt.Errorf("--%s is not valid with --phase scaling; each matrix point defines its own fixture", name)
+			return fmt.Errorf("--%s is not valid with --scaling; each matrix point defines its own fixture", name)
 		}
 	}
 	if len(options.scenarioFlags) != 0 {
-		return fmt.Errorf("--scenario is not valid with --phase scaling; the matrix defines its own scenario set")
+		return fmt.Errorf("--scenario is not valid with --scaling; the matrix defines its own scenario set")
 	}
 	points, err := resolveScalingPoints(options.scalingPointFlags)
 	if err != nil {
@@ -102,6 +97,7 @@ func runScalingWithMatrix(
 		fmt.Fprintf(stderr, "workbook-bench: %v\n", err)
 		return failureExitCode
 	}
+	warnUnknownCommit(stderr, report.Environment)
 	if err := writeScalingReports(options.outputJSON, options.outputMarkdown, report); err != nil {
 		fmt.Fprintf(stderr, "workbook-bench: %v\n", err)
 		return failureExitCode
@@ -117,9 +113,6 @@ func runScalingWithMatrix(
 func runScalingBenchmark(ctx context.Context, options options) (perf.ScalingReport, error) {
 	environment, err := benchmarkEnvironment(ctx, options.workbookBinary, options.timeout)
 	if err != nil {
-		return perf.ScalingReport{}, err
-	}
-	if err := requireMeasuredCommit(options.phase, environment); err != nil {
 		return perf.ScalingReport{}, err
 	}
 	fixtureRoot, err := os.MkdirTemp("", "workbook-scaling-")
@@ -141,7 +134,6 @@ func runScalingBenchmark(ctx context.Context, options options) (perf.ScalingRepo
 	return perf.ScalingReport{
 		Format:       perf.ScalingReportFormat,
 		Version:      perf.ScalingReportVersion,
-		Phase:        scalingPhase,
 		GeneratedAt:  time.Now().UTC(),
 		Environment:  environment,
 		ObjectFormat: options.objectFormat,

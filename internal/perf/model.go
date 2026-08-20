@@ -11,7 +11,7 @@ import (
 
 const (
 	ReportFormat  = "workbook.performance-report"
-	ReportVersion = 2
+	ReportVersion = 3
 )
 
 type FixtureSpec struct {
@@ -20,36 +20,6 @@ type FixtureSpec struct {
 	TombstonedTasks   int    `json:"tombstonedTasks"`
 	OperationsPerTask int    `json:"operationsPerTask"`
 	ObjectFormat      string `json:"objectFormat"`
-}
-
-type Targets struct {
-	WarmP95Milliseconds float64 `json:"warmP95Milliseconds"`
-	ColdP95Milliseconds float64 `json:"coldP95Milliseconds"`
-	BurstMilliseconds   float64 `json:"burstMilliseconds"`
-}
-
-type DurationStatistic string
-
-const (
-	DurationP95         DurationStatistic = "p95"
-	DurationEverySample DurationStatistic = "every-sample"
-)
-
-type DurationComparison string
-
-const (
-	DurationAtMost   DurationComparison = "at-most"
-	DurationLessThan DurationComparison = "less-than"
-)
-
-// ScenarioTarget sets the duration policy and optional exclusive Git process
-// limit for one measured scenario. A zero MaxGitProcesses has no process
-// target.
-type ScenarioTarget struct {
-	DurationStatistic  DurationStatistic  `json:"durationStatistic"`
-	DurationComparison DurationComparison `json:"durationComparison"`
-	MaxMilliseconds    float64            `json:"maxMilliseconds"`
-	MaxGitProcesses    int                `json:"maxGitProcesses,omitempty"`
 }
 
 type Sample struct {
@@ -71,12 +41,11 @@ type Summary struct {
 }
 
 type ScenarioResult struct {
-	Name    string          `json:"name"`
-	Surface string          `json:"surface"`
-	Target  *ScenarioTarget `json:"target,omitempty"`
-	Outcome string          `json:"outcome,omitempty"`
-	Samples []Sample        `json:"samples"`
-	Summary Summary         `json:"summary"`
+	Name    string   `json:"name"`
+	Surface string   `json:"surface"`
+	Outcome string   `json:"outcome,omitempty"`
+	Samples []Sample `json:"samples"`
+	Summary Summary  `json:"summary"`
 }
 
 type RepositoryMetrics struct {
@@ -101,11 +70,9 @@ type Environment struct {
 type Report struct {
 	Format      string            `json:"format"`
 	Version     int               `json:"version"`
-	Phase       string            `json:"phase"`
 	GeneratedAt time.Time         `json:"generatedAt"`
 	Environment Environment       `json:"environment"`
 	Fixture     FixtureSpec       `json:"fixture"`
-	Targets     Targets           `json:"targets"`
 	Scenarios   []ScenarioResult  `json:"scenarios"`
 	Repository  RepositoryMetrics `json:"repository"`
 	// ProjectionRefresh is present only when the projection refresh
@@ -160,33 +127,17 @@ func (r Report) WriteMarkdown(w io.Writer) error {
 	if _, err := fmt.Fprintln(w, "# Workbook performance report"); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "\nPhase: %s\n\n", r.Phase); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintln(w, "## Reference budgets"); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(w, "Baseline targets are reference budgets, not achieved guarantees: warm p95 %.2f ms, cold p95 %.2f ms, burst %.2f ms.\n", r.Targets.WarmP95Milliseconds, r.Targets.ColdP95Milliseconds, r.Targets.BurstMilliseconds); err != nil {
-		return err
-	}
 	if _, err := fmt.Fprintln(w, "\n## Scenarios"); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(w, "| Scenario | Surface | Completed | Timed out | Min (ms) | Median (ms) | P95 (ms) | P95 Git processes | Target duration | Target Git processes | Outcome |"); err != nil {
+	if _, err := fmt.Fprintln(w, "| Scenario | Surface | Completed | Timed out | Min (ms) | Median (ms) | P95 (ms) | P95 Git processes | Outcome |"); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(w, "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"); err != nil {
+	if _, err := fmt.Fprintln(w, "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |"); err != nil {
 		return err
 	}
 	for _, scenario := range r.Scenarios {
-		targetDuration, targetGitProcesses := "-", "-"
-		if scenario.Target != nil {
-			targetDuration = formatDurationTarget(*scenario.Target)
-			if scenario.Target.MaxGitProcesses > 0 {
-				targetGitProcesses = fmt.Sprintf("< %d", scenario.Target.MaxGitProcesses)
-			}
-		}
-		if _, err := fmt.Fprintf(w, "| %s | %s | %d | %d | %.2f | %.2f | %.2f | %d | %s | %s | %s |\n", scenario.Name, scenario.Surface, scenario.Summary.Completed, scenario.Summary.TimedOut, scenario.Summary.MinMilliseconds, scenario.Summary.MedianMilliseconds, scenario.Summary.P95Milliseconds, scenario.Summary.P95GitProcesses, targetDuration, targetGitProcesses, scenario.Outcome); err != nil {
+		if _, err := fmt.Fprintf(w, "| %s | %s | %d | %d | %.2f | %.2f | %.2f | %d | %s |\n", scenario.Name, scenario.Surface, scenario.Summary.Completed, scenario.Summary.TimedOut, scenario.Summary.MinMilliseconds, scenario.Summary.MedianMilliseconds, scenario.Summary.P95Milliseconds, scenario.Summary.P95GitProcesses, scenario.Outcome); err != nil {
 			return err
 		}
 	}
@@ -218,79 +169,23 @@ func (r Report) normalized() Report {
 	return r
 }
 
+// scenarioOutcome reports harness health, not a performance judgment: a
+// report whose samples timed out or failed is not a valid comparison
+// baseline, while a completed scenario is simply measured.
 func scenarioOutcome(scenario ScenarioResult) string {
-	failed := false
+	failed := len(scenario.Samples) == 0
 	for _, sample := range scenario.Samples {
 		if sample.TimedOut {
 			return "timeout"
 		}
 		if sample.ExitCode != 0 || sample.Error != "" {
 			failed = true
-			continue
 		}
 	}
 	if failed {
 		return "failed"
 	}
-	if scenario.Target == nil {
-		return "not-evaluated"
-	}
-	if len(scenario.Samples) == 0 {
-		return "failed"
-	}
-	if scenarioTargetMissed(scenario) {
-		return "miss"
-	}
-	return "pass"
-}
-
-func scenarioTargetMissed(scenario ScenarioResult) bool {
-	target := *scenario.Target
-	if target.MaxGitProcesses > 0 {
-		for _, sample := range scenario.Samples {
-			if sample.GitProcesses >= target.MaxGitProcesses {
-				return true
-			}
-		}
-	}
-
-	switch target.DurationStatistic {
-	case DurationP95:
-		return durationExceeds(Summarize(scenario.Samples).P95Milliseconds, target)
-	case DurationEverySample:
-		for _, sample := range scenario.Samples {
-			if sample.TimedOut || sample.ExitCode != 0 || sample.Error != "" {
-				continue
-			}
-			if durationExceeds(durationMilliseconds(sample), target) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func durationExceeds(milliseconds float64, target ScenarioTarget) bool {
-	switch target.DurationComparison {
-	case DurationAtMost:
-		return milliseconds > target.MaxMilliseconds
-	case DurationLessThan:
-		return milliseconds >= target.MaxMilliseconds
-	default:
-		return false
-	}
-}
-
-func formatDurationTarget(target ScenarioTarget) string {
-	statistic := "each"
-	if target.DurationStatistic == DurationP95 {
-		statistic = "p95"
-	}
-	comparison := "<="
-	if target.DurationComparison == DurationLessThan {
-		comparison = "<"
-	}
-	return fmt.Sprintf("%s %s %.2f ms", statistic, comparison, target.MaxMilliseconds)
+	return "completed"
 }
 
 func durationMilliseconds(sample Sample) float64 {
