@@ -262,18 +262,18 @@ type themeToken struct {
 // a desaturated ink, and the hairline every rule on the page is drawn in.
 var primaryThemeTokens = []themeToken{
 	{"--wb-primary", "#2457d6", func(color themeColor) string { return color.hex() }},
-	{"--wb-primary-hover", "#1d49b7", func(color themeColor) string { return color.scaled(1, .85) }},
-	{"--wb-primary-edge", "#173f9e", func(color themeColor) string { return color.scaled(1.05, .725) }},
+	{"--wb-primary-hover", "#1d49b7", func(color themeColor) string { return color.scaled(.865, .848) }},
+	{"--wb-primary-edge", "#173f9e", func(color themeColor) string { return color.scaled(.758, .724) }},
 	{"--wb-primary-glow", "rgba(36,87,214,.18)", func(color themeColor) string { return color.alpha(".18") }},
 	{"--wb-primary-glow-strong", "rgba(36,87,214,.28)", func(color themeColor) string { return color.alpha(".28") }},
-	{"--wb-primary-tint-1", "#edf3ff", func(color themeColor) string { return color.toned(1.4, .965) }},
-	{"--wb-primary-tint-2", "#eef3ff", func(color themeColor) string { return color.toned(1.4, .967) }},
-	{"--wb-primary-tint-3", "#f3f7ff", func(color themeColor) string { return color.toned(1.4, .976) }},
-	{"--wb-primary-tint-4", "#f8faff", func(color themeColor) string { return color.toned(1.4, .986) }},
-	{"--wb-primary-chip", "#d3e0fa", func(color themeColor) string { return color.toned(1.12, .904) }},
-	{"--wb-primary-muted", "#b7c9ea", func(color themeColor) string { return color.toned(.77, .818) }},
-	{"--wb-primary-ink", "#526b9b", func(color themeColor) string { return color.toned(.433, .465) }},
-	{"--wb-hairline", "#d5deea", func(color themeColor) string { return color.toned(.468, .877) }},
+	{"--wb-primary-tint-1", "#edf3ff", func(color themeColor) string { return color.toned(.15, .9647) }},
+	{"--wb-primary-tint-2", "#eef3ff", func(color themeColor) string { return color.toned(.15, .9667) }},
+	{"--wb-primary-tint-3", "#f3f7ff", func(color themeColor) string { return color.toned(.15, .9765) }},
+	{"--wb-primary-tint-4", "#f8faff", func(color themeColor) string { return color.toned(.15, .9863) }},
+	{"--wb-primary-chip", "#d3e0fa", func(color themeColor) string { return color.toned(.219, .9039) }},
+	{"--wb-primary-muted", "#b7c9ea", func(color themeColor) string { return color.toned(.287, .8176) }},
+	{"--wb-primary-ink", "#526b9b", func(color themeColor) string { return color.toned(.410, .4647) }},
+	{"--wb-hairline", "#d5deea", func(color themeColor) string { return color.toned(.118, .8765) }},
 }
 
 // The ink family: the page's text colour and the four shadows cast in it. The
@@ -322,17 +322,32 @@ func themeDeclarations(value string, tokens []themeToken) []string {
 }
 
 // themeColor is a chosen color in both the spaces a family is derived in: the
-// channels a translucent ring is written from, and the hue, saturation and
-// lightness every solid step moves along.
+// channels a translucent ring is written from, and the hue, chroma and lightness
+// every solid step moves along.
 //
-// HSL rather than a channel-wise darkening because the steps are relationships
-// between colors rather than arithmetic on one. A hover that multiplies each
-// channel by 0.85 drifts the hue of anything that is not already grey, and a
-// pale tint mixed towards white loses the very hue that made it a tint of this
-// project's accent rather than of blue.
+// A cylindrical space rather than a channel-wise darkening because the steps are
+// relationships between colors rather than arithmetic on one. A hover that
+// multiplies each channel by 0.85 drifts the hue of anything that is not already
+// grey, and a pale tint mixed towards white loses the very hue that made it a
+// tint of this project's accent rather than of blue.
+//
+// Chroma rather than HSL's saturation, and that is a correction rather than a
+// preference. Saturation is chroma divided by the room the lightness leaves for
+// it, so at the extremes the two go to zero together and their ratio does not:
+// #fffffe is one unit off white and reads as *fully saturated* yellow, S = 100%,
+// because a span of 1/255 is all the chroma a lightness of 99.8% can hold.
+// Scaling that saturation therefore derived a screaming yellow family from a
+// colour nobody could tell from white — while #ffffff, which is not a special
+// case in any other way, derived greys. Chroma has no such discontinuity: it is
+// the span itself, it goes to zero as the colour goes to white, and the family
+// it derives approaches the grey family continuously.
+//
+// Every step converts back at its own lightness, where the chroma it asks for is
+// capped at the room that lightness has — see clampChroma, which is also what
+// keeps the arithmetic inside the byte range.
 type themeColor struct {
-	red, green, blue       int
-	hue, saturation, light float64
+	red, green, blue   int
+	hue, chroma, light float64
 }
 
 // parseThemeColor reads a stored `#rrggbb`. Anything else is not a color this
@@ -359,7 +374,7 @@ func parseThemeColor(value string) (themeColor, bool) {
 	if span == 0 {
 		return color, true
 	}
-	color.saturation = span / (1 - math.Abs(2*color.light-1))
+	color.chroma = span
 	switch high {
 	case red:
 		color.hue = math.Mod((green-blue)/span, 6)
@@ -369,6 +384,11 @@ func parseThemeColor(value string) (themeColor, bool) {
 		color.hue = (red-green)/span + 4
 	}
 	color.hue *= 60
+	// The red sector straddles zero, so a colour on its counter-clockwise side —
+	// every pink, magenta and rose, hue 300 to 360 — comes out of that first arm
+	// negative. It is wrapped here rather than left for the sector arithmetic to
+	// cope with, because that arithmetic reads a negative sector as the first one
+	// and answers with a negative green channel.
 	if color.hue < 0 {
 		color.hue += 360
 	}
@@ -385,23 +405,27 @@ func (color themeColor) alpha(opacity string) string {
 	return fmt.Sprintf("rgba(%d,%d,%d,%s)", color.red, color.green, color.blue, opacity)
 }
 
-// scaled moves both saturation and lightness by a factor, which is how the two
+// scaled moves both chroma and lightness by a factor, which is how the two
 // darker steps of a filled control stay in proportion to the color they darken:
 // a pale accent's hover has to be pale enough to still read as the same button.
-func (color themeColor) scaled(saturation, light float64) string {
-	return renderHSL(color.hue, color.saturation*saturation, color.light*light)
+func (color themeColor) scaled(chroma, light float64) string {
+	return renderColor(color.hue, color.chroma*chroma, color.light*light)
 }
 
-// toned scales the saturation but states the lightness outright, which is what
-// a surface needs: a tint has to be pale to be a tint, and a project that picks
-// a near-black accent must not get a chip nobody can read a label on.
-func (color themeColor) toned(saturation, light float64) string {
-	return renderHSL(color.hue, color.saturation*saturation, light)
+// toned scales the chroma but states the lightness outright, which is what a
+// surface needs: a tint has to be pale to be a tint, and a project that picks a
+// near-black accent must not get a chip nobody can read a label on.
+//
+// A tint's chroma is asked for generously and then capped by clampChroma, which
+// is what makes the pale end of the family behave: a saturated accent gets all
+// the colour a 96%-light surface can hold, and a nearly-grey one gets nearly
+// none, out of the same number.
+func (color themeColor) toned(chroma, light float64) string {
+	return renderColor(color.hue, color.chroma*chroma, light)
 }
 
-func renderHSL(hue, saturation, light float64) string {
-	saturation, light = clampUnit(saturation), clampUnit(light)
-	chroma := (1 - math.Abs(2*light-1)) * saturation
+func renderColor(hue, chroma, light float64) string {
+	chroma = clampChroma(chroma, light)
 	sector := math.Mod(hue/60, 6)
 	middle := chroma * (1 - math.Abs(math.Mod(sector, 2)-1))
 	var red, green, blue float64
@@ -423,10 +447,22 @@ func renderHSL(hue, saturation, light float64) string {
 	return fmt.Sprintf("#%02x%02x%02x", channelByte(red+base), channelByte(green+base), channelByte(blue+base))
 }
 
-func channelByte(value float64) int {
-	return int(math.Round(clampUnit(value) * 255))
+// clampChroma bounds a step's chroma by the room its lightness has for one, and
+// it is what keeps every derived colour a colour.
+//
+// A lightness of L can hold at most 1-|2L-1| chroma; past that the conversion
+// puts the low channel below zero and the high one above one, and the formatter
+// writes those out as `#bd-4-4` — a declaration a browser drops, silently
+// unstyling whatever read that property. It is reachable from ordinary input:
+// the darker steps ask for chroma at a much lower lightness than the accent's,
+// so any accent at full chroma — #ff0000, #00ff00, #ffff00 — overshoots it.
+//
+// With the chroma bounded here the channel arithmetic below cannot leave the
+// unit range at all, which is why channelByte rounds rather than clamps.
+func clampChroma(chroma, light float64) float64 {
+	return math.Min(math.Max(chroma, 0), 1-math.Abs(2*light-1))
 }
 
-func clampUnit(value float64) float64 {
-	return math.Min(1, math.Max(0, value))
+func channelByte(value float64) int {
+	return int(math.Round(value * 255))
 }

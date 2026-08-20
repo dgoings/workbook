@@ -2,6 +2,7 @@ package webui
 
 import (
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -135,6 +136,142 @@ func TestBoardThemeIgnoresAColorItCannotRead(t *testing.T) {
 			t.Errorf("%q produced a theme: %s", value, theme)
 		}
 	}
+}
+
+// derivedFamily is every solid step a colour derives, keyed by property. The
+// translucent rings are left out: they are the colour itself at an opacity, and
+// the claims below are about the conversion.
+func derivedFamily(t *testing.T, value string) map[string]string {
+	t.Helper()
+	color, parsed := parseThemeColor(value)
+	if !parsed {
+		t.Fatalf("%q does not parse as a color", value)
+	}
+	family := make(map[string]string, len(primaryThemeTokens))
+	for _, token := range primaryThemeTokens {
+		derived := token.derive(color)
+		if strings.HasPrefix(derived, "rgba(") {
+			continue
+		}
+		family[token.property] = derived
+	}
+	return family
+}
+
+// hexColor is what a derived colour has to be, and the reason this test exists
+// as a shape rather than as a value: a channel that leaves the byte range is
+// formatted as a negative number, and `#bd-5-5` is a declaration a browser drops
+// silently — unstyling whatever read that property while every other assertion
+// about the theme goes on passing.
+var hexColor = regexp.MustCompile(`^#[0-9a-f]{6}$`)
+
+// Every derived colour is a colour, for accents at the corners of the space.
+//
+// These are ordinary brand colours and they are exactly the ones that overshoot:
+// the edge step asks for less chroma than the accent has but at a much lower
+// lightness, and a lightness has only so much room for chroma. Nothing but the
+// bound stops the conversion putting one channel below zero.
+func TestBoardThemeDerivesAWellFormedColorForEveryAccent(t *testing.T) {
+	for _, accent := range []string{
+		"#ff0000", "#00ff00", "#0000ff", "#ffff00", "#00ffff", "#ff00ff",
+		"#ffffff", "#000000", "#fffffe", "#010100", "#808080",
+		"#2457d6", "#1a7f4b", "#d6246f",
+	} {
+		for property, derived := range derivedFamily(t, accent) {
+			if !hexColor.MatchString(derived) {
+				t.Errorf("%s derives %s from %s, which is not a color a browser can read",
+					property, derived, accent)
+			}
+		}
+	}
+}
+
+// A rose is on the counter-clockwise side of the red sector, so its hue comes
+// out of the conversion negative and is wrapped. Nothing else in this file
+// reaches that wrap: every other accent here is at a hue the first arm reports
+// positive.
+//
+// The family is pinned outright rather than described, because what an unwrapped
+// hue produces is not an error — it is a different, plausible-looking family
+// with the wrong colour in it.
+func TestBoardThemeDerivesTheFamilyOfARoseAccent(t *testing.T) {
+	family := derivedFamily(t, "#d6246f")
+	for property, want := range map[string]string{
+		"--wb-primary":        "#d6246f",
+		"--wb-primary-hover":  "#b71d5e",
+		"--wb-primary-edge":   "#9e1750",
+		"--wb-primary-tint-1": "#ffedf5",
+		"--wb-primary-tint-2": "#ffeef5",
+		"--wb-primary-tint-3": "#fff3f8",
+		"--wb-primary-tint-4": "#fff8fb",
+		"--wb-primary-chip":   "#fad3e3",
+		"--wb-primary-muted":  "#eab7cc",
+		"--wb-primary-ink":    "#9b5271",
+		"--wb-hairline":       "#ead5de",
+	} {
+		if family[property] != want {
+			t.Errorf("%s derives %s from a rose accent, want %s", property, family[property], want)
+		}
+	}
+}
+
+// The family a colour derives approaches the grey family as the colour
+// approaches grey, and this is the property HSL saturation does not have.
+//
+// One unit off white is hsl(60, 100%, 99.8%) — fully saturated yellow, because a
+// span of 1/255 is all the chroma that lightness can hold — so scaling that
+// saturation derived a screaming yellow family from a colour nobody could tell
+// from white, while white itself derived greys. Chroma is the span, so it goes
+// to zero with the colour and the two families meet.
+func TestBoardThemeApproachesTheGreyFamilyContinuously(t *testing.T) {
+	for _, pair := range []struct{ near, plain string }{
+		{near: "#fffffe", plain: "#ffffff"},
+		{near: "#010100", plain: "#000000"},
+	} {
+		nearly, exactly := derivedFamily(t, pair.near), derivedFamily(t, pair.plain)
+		for property, derived := range nearly {
+			if distance := channelDistance(t, derived, exactly[property]); distance > 2 {
+				t.Errorf("%s derives %s from %s and %s from %s: one unit of colour moved it %d",
+					property, derived, pair.near, exactly[property], pair.plain, distance)
+			}
+			// And each of those is a grey in its own right, which is the claim a
+			// distance from another near-grey cannot make on its own.
+			if spread := channelSpread(t, derived); spread > 4 {
+				t.Errorf("%s derives %s from %s, whose channels are %d apart",
+					property, derived, pair.near, spread)
+			}
+		}
+	}
+	// The other half of the claim, without which the one above is satisfied by a
+	// generator that answers grey to everything: a colour that is a colour still
+	// derives one.
+	for property, derived := range derivedFamily(t, "#1a7f4b") {
+		if property == "--wb-primary-tint-4" {
+			// The palest surface is barely a colour by construction.
+			continue
+		}
+		if channelSpread(t, derived) < 5 {
+			t.Errorf("%s derives %s from a saturated accent, which is a grey", property, derived)
+		}
+	}
+}
+
+// channelSpread is how far a colour's furthest-apart channels are, which is how
+// grey it is: zero is a grey exactly.
+func channelSpread(t *testing.T, value string) int {
+	t.Helper()
+	if len(value) != 7 {
+		t.Fatalf("%q is not a hex color", value)
+	}
+	high, low := 0, 255
+	for index := 0; index < 3; index++ {
+		channel, err := strconv.ParseUint(value[1+2*index:3+2*index], 16, 8)
+		if err != nil {
+			t.Fatalf("%q is not a hex color", value)
+		}
+		high, low = max(high, int(channel)), min(low, int(channel))
+	}
+	return high - low
 }
 
 // A grey has no hue to preserve, and every step of the family is still a grey
