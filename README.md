@@ -837,9 +837,27 @@ trimmed, must not be blank, and must not exceed 100 bytes. Clearing a setting is
 how a project has none: there is no stored default, and a board with nothing
 configured renders exactly as it did before this existed.
 
+Any color that is six hexadecimal digits is accepted, including one that makes
+the board hard to read: a very pale primary or text color draws the web board's
+links, hairlines and prose — including the text you type into the Board settings
+form itself — close to invisible against its white surfaces. There is no
+contrast floor, because which colors a project wants are the project's business.
+The way back is always open from the command line, which does not use these
+colors at all: `workbook config unset primary-color` or `workbook config unset
+text-color` restores this board's own palette, and a page reloaded afterwards is
+legible again. On the web board itself the Board settings form's field labels
+keep a fixed color rather than the project's, so the form can still be found and
+emptied — but a pale primary draws every filled button on the page, Save and Add
+status among them, white on white, and the command line is the reliable way out
+of that one.
+
 A command that would change nothing is refused rather than recorded: `config
 unset` of a setting nobody has configured, and `config set` to the value already
 stored, both exit 5 and leave the configuration history exactly where it was.
+The board's own **Board settings** form on `/config` upholds the same rule from
+the other side: it sends all three values at once and the server records only
+the ones that moved, so a Save you have not edited writes nothing and answers
+with the configuration as it already stands.
 
 Recording any display setting raises what the configuration history requires of
 a reader. A clone running v0.5.0 or earlier keeps reading the project and keeps
@@ -1331,20 +1349,48 @@ not rebuild the columns under an open page — that would destroy the card nodes
 holding open forms, staged changes and unread refusals — and instead shows a
 notice offering a reload.
 
-The `Statuses` link in the board's header goes to `/statuses`, a page that
-administers those columns: add one, rename, relabel or retag one, remove one
-into the column its tasks belong in, and reorder them by dragging a row or with
-the Up and Down controls beside it. It is a page rather than a drawer over the
-board, so its forms have room, and it is a route like any other here — a
-bookmark, a reload and a middle-click all land on it, and `Back` returns to the
-board. It is `workbook status` reached from the browser — the same planners, the
-same refusals, in the same words — and everything it refuses is refused by the
-vocabulary rather than by the page, so an unknown tag or a name that is already
-taken reads exactly as it does in the terminal. A removal reports how many tasks
-it moved and how many of those `workbook next` can claim where they landed, and
-any warning the change carries, such as generated guidelines the server did not
-rewrite, is shown rather than swallowed. A board served without the four
-vocabulary mutations has no such page: no link, and `/statuses` is a 404.
+The board says which checkout it is serving and what the project calls itself:
+the header's eyebrow reads `Repository: <the worktree's directory name>`, and
+the heading, the browser tab and every route's title are the project's own name
+where it has recorded one — see
+[Board display settings](#board-display-settings). A project that has
+recorded a primary or a text colour is drawn in it: the server derives the whole
+family that colour implies — the darker steps a filled control takes, the pale
+surfaces, the hairlines, the focus rings — and serves it as a stylesheet
+override, so a board named and coloured per project is distinguishable from
+another one in a strip of browser tabs. The semantic colours do not move: the
+danger red, the warning amber and the priority triad mean what they mean
+whatever accent a project picks.
+
+The `Config` link in the board's header goes to `/config`, a page with two
+sections. **Statuses** administers the board's columns: add one, rename, relabel
+or retag one, remove one into the column its tasks belong in, and reorder them
+by dragging a row or with the Up and Down controls beside it. **Board settings**
+is the project's name and its two colours, as three fields and one Save; an
+empty field is a setting cleared, and a save records only the settings that
+actually changed — a Save you have not edited records nothing at all, which
+matters because a display setting is what marks a project's configuration as
+needing Workbook 0.6 or newer. Both write the same ledger the command line
+writes, so `workbook status` and `workbook config set` see exactly what the page
+records.
+
+It is a page rather than a drawer over the board, so its forms have room, and it
+is a route like any other here — a bookmark, a reload and a middle-click all
+land on it, and `Back` returns to the board. It is `workbook status` and
+`workbook config` reached from the browser — the same rules, the same refusals,
+in the same words — and everything it refuses is refused by the vocabulary or by
+the configuration rather than by the page, so an unknown tag, a name that is
+already taken or a colour that is not six hexadecimal digits reads exactly as it
+does in the terminal. A removal reports how many tasks it moved and how many of
+those `workbook next` can claim where they landed, and any warning a change
+carries, such as generated guidelines the server did not rewrite, is shown
+rather than swallowed. A board served without the four vocabulary mutations has
+no such page: no link, and `/config` is a 404; one served without the display
+writer has the page and not its Board settings section.
+
+The route was `/statuses` before it held more than statuses, and nothing
+forwards the old address: a bookmark to it now lands on this board's
+`Page not found`.
 
 Three things about it are worth knowing before you use it on a busy board.
 A status change is not queued the way a task change is: the page waits for any
@@ -1355,9 +1401,12 @@ It composes each change against the head it read, so a change made from a stale
 page is refused rather than applied over somebody else's — and the refusal is
 final: the page shows the statuses as they now stand and asks you to look
 again, because two people renaming the same column mean two different things.
-And the board you walk back to keeps the columns you left it with; the notice
-above it offers the reload that redraws them, exactly as it does for a change
-another clone made.
+And the board you walk back to keeps the columns you left it with — and the
+name and colours it was opened with; the notice above it offers the reload that
+redraws them, exactly as it does for a change another clone made. The two
+sections share one ledger and one tip, so neither can be changed while the other
+is changing, and a save of the board's settings is as much a reason for a status
+change to be refused as another status change would be.
 
 ### Statuses a project does not define
 
@@ -1531,8 +1580,10 @@ GET /api/tasks                versioned task JSON: the active tasks, or
                               `?deleted=include` for both in one document
 GET /api/vocabulary           versioned status vocabulary JSON: the project's
                               statuses in order, their labels and tags, the
-                              forwarding chains, and the configuration ledger
-                              head they were read from
+                              forwarding chains, the configuration ledger head
+                              they were read from, and — for a project that has
+                              recorded any — a `display` member carrying its
+                              name and colours at that same head
 POST /api/vocabulary/statuses            define a status, optionally placed
                                          before or after an existing one
 PATCH /api/vocabulary/statuses/<status>  rename, relabel and retag a status,
@@ -1540,6 +1591,10 @@ PATCH /api/vocabulary/statuses/<status>  rename, relabel and retag a status,
 DELETE /api/vocabulary/statuses/<status> remove a status, naming in the body
                                          where its tasks belong
 PUT /api/vocabulary/order                set the whole column order at once
+PATCH /api/display                       record the project's name and colours;
+                                         the body states all three, an empty
+                                         value clears a setting, and only what
+                                         changed is recorded
 GET /api/tasks/<id>/history   versioned change log and status lifecycle JSON
 POST /api/tasks               create a task
 PATCH /api/tasks/<id>         update task fields

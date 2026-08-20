@@ -18,8 +18,27 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Workbook board</title>
+  <title>{{ .ProjectName }}</title>
   <style>
+    /* Every color a project is allowed to choose, and the color it is if nobody
+       chooses. The values here are the literals this page was drawn in before
+       any of this existed, so a project that has configured nothing renders
+       exactly what it always rendered — the theming is an override that is
+       simply absent, not a computation the default goes through.
+
+       Three families, and no more. The accent is the board's own blue and the
+       hairline and the ink follow a reader's choice with it; the neutral greys
+       and the semantic red, amber and green stay written out below, because a
+       project that picks a green accent has not thereby decided that its danger
+       colour is green. `.priority--low` keeps its own static blue for the same
+       reason: it sits in a triad with those two, and a red-ish accent must not
+       make "low" read as "high".
+
+       A project that has chosen a colour is served a second `:root` block after
+       this stylesheet, composed in Go from values core has already validated —
+       see boardTheme, which also says why it is composed rather than
+       interpolated. Nothing here changes for it; the later rule simply wins. */
+    :root { --wb-primary: #2457d6; --wb-primary-hover: #1d49b7; --wb-primary-edge: #173f9e; --wb-primary-glow: rgba(36,87,214,.18); --wb-primary-glow-strong: rgba(36,87,214,.28); --wb-primary-tint-1: #edf3ff; --wb-primary-tint-2: #eef3ff; --wb-primary-tint-3: #f3f7ff; --wb-primary-tint-4: #f8faff; --wb-primary-chip: #d3e0fa; --wb-primary-muted: #b7c9ea; --wb-primary-ink: #526b9b; --wb-hairline: #d5deea; --wb-text: #172033; --wb-text-shadow-strong: rgba(23,32,51,.35); --wb-text-shadow: rgba(23,32,51,.12); --wb-text-shadow-soft: rgba(23,32,51,.08); --wb-text-shadow-faint: rgba(23,32,51,.05); }
     /* The narrowest a status column is allowed to be drawn. Six columns sharing
        whatever the window happens to be gave a 1280-wide browser 12rem of card:
        a title broke over four lines and the labels under it wrapped one per row.
@@ -35,24 +54,25 @@
        about 53 characters of English inside the card's padding, and fewer where
        the glyphs are wide, which sits inside the measure text reads comfortably
        at. Past that the columns stop and the leftover width stays leftover. */
-    :root { --board-column-min: 16rem; --board-column-max: 26rem; color-scheme: light; font-family: ui-rounded, "Avenir Next", system-ui, sans-serif; color: #172033; background: #e9eef5; }
+    :root { --board-column-min: 16rem; --board-column-max: 26rem; color-scheme: light; font-family: ui-rounded, "Avenir Next", system-ui, sans-serif; color: var(--wb-text); background: #e9eef5; }
     * { box-sizing: border-box; }
     html, body { height: 100%; }
     body { display: flex; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden; margin: 0; min-width: 20rem; background: #e9eef5; }
-    .skip-link { position: fixed; left: 1rem; top: -4rem; z-index: 2; background: #172033; color: #fff; padding: .55rem .75rem; border-radius: 4px; }
+    .skip-link { position: fixed; left: 1rem; top: -4rem; z-index: 2; background: var(--wb-text); color: #fff; padding: .55rem .75rem; border-radius: 4px; }
     .skip-link:focus { top: 1rem; }
     .app-header { display: flex; flex: 0 0 auto; align-items: end; justify-content: space-between; gap: 1.25rem; padding: 1.25rem; border-bottom: 1px solid #b9c6d8; background: #fff; }
     .eyebrow, code, .priority, .label, .label-chip, .updated { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
-    .eyebrow { margin: 0 0 .2rem; color: #2457d6; font-size: .7rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+    .eyebrow { margin: 0 0 .2rem; color: var(--wb-primary); font-size: .7rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
     h1 { margin: 0; font-size: clamp(1.25rem, 2vw, 1.65rem); letter-spacing: -.03em; }
     .updated { margin: 0; color: #56647a; font-size: .75rem; text-align: right; }
     /* The routes sit on the left, beside the title, and the settings on the
        right. They were one row once, and the row's contents changed with the
-       route: the Deleted setting belongs to the board, so leaving the statuses
-       page took it away and every link to its left slid right to fill the gap.
-       A reader who had just aimed at Board found Statuses under the cursor. The
-       two groups are separated here so that the links occupy the same place on
-       every route — nothing that comes and goes is drawn before them any more. */
+       route: the Deleted setting belongs to the board, so leaving for the
+       configuration page took it away and every link to its left slid right to
+       fill the gap. A reader who had just aimed at Board found the link beside
+       it under the cursor. The two groups are separated here so that the links
+       occupy the same place on every route — nothing that comes and goes is
+       drawn before them any more. */
     .app-header__lead { display: flex; flex-wrap: wrap; align-items: end; gap: .3rem 1.1rem; min-width: 0; }
     /* Both rows wrap rather than pushing the page sideways. The settings do not
        fit a phone on one line, and a flex row that cannot shrink far enough
@@ -80,11 +100,11 @@
     .nav-switch { display: inline-flex; align-items: center; gap: .45rem; border: 0; padding: 0; background: none; color: #34425a; cursor: pointer; font: inherit; font-size: .82rem; font-weight: 750; text-decoration: none; }
     .nav-switch[hidden] { display: none; }
     .nav-switch__track { position: relative; flex: 0 0 auto; width: 2.25rem; height: 1.2rem; border: 1px solid #9eafc5; border-radius: 999px; background: #e9eef5; transition: background-color .12s ease, border-color .12s ease; }
-    .nav-switch__knob { position: absolute; top: 50%; left: .13rem; width: .9rem; height: .9rem; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(23, 32, 51, .35); transform: translateY(-50%); transition: left .12s ease; }
-    .nav-switch[aria-checked="true"] .nav-switch__track { border-color: #2457d6; background: #2457d6; }
+    .nav-switch__knob { position: absolute; top: 50%; left: .13rem; width: .9rem; height: .9rem; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px var(--wb-text-shadow-strong); transform: translateY(-50%); transition: left .12s ease; }
+    .nav-switch[aria-checked="true"] .nav-switch__track { border-color: var(--wb-primary); background: var(--wb-primary); }
     .nav-switch[aria-checked="true"] .nav-switch__knob { left: calc(100% - .9rem - .13rem); }
-    .nav-switch:hover .nav-switch__track { border-color: #2457d6; }
-    .nav-switch:focus-visible { outline: 3px solid #2457d6; outline-offset: 2px; border-radius: 4px; }
+    .nav-switch:hover .nav-switch__track { border-color: var(--wb-primary); }
+    .nav-switch:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 2px; border-radius: 4px; }
     /* Every label reads two ways, and the two are not the same width, so each
        reserves the width of its longer reading. Without this the row moves under
        the cursor when a setting is flipped: it is right-aligned, so a label that
@@ -108,15 +128,15 @@
        out of room rather than out of page: it shares a viewport-height flex
        column with main, and the body never scrolls. The cap keeps the route
        underneath reachable while a run of refusals stacks up inside it. */
-    .notice { display: grid; flex: 0 1 auto; gap: .4rem; max-height: 40vh; overflow: auto; padding: .6rem 1.25rem; border-bottom: 1px solid #d5deea; background: #fff; font-size: .85rem; }
+    .notice { display: grid; flex: 0 1 auto; gap: .4rem; max-height: 40vh; overflow: auto; padding: .6rem 1.25rem; border-bottom: 1px solid var(--wb-hairline); background: #fff; font-size: .85rem; }
     .notice[hidden] { display: none; }
     .notice__report { display: flex; align-items: baseline; gap: .75rem; padding: .35rem .6rem; border-left: 3px solid currentcolor; background: #fff6e8; color: #7c3b08; }
     .notice__report[data-kind="error"] { background: #fdecea; color: #8f1d1d; }
     .notice p { flex: 1 1 auto; margin: 0; }
     .notice a { color: inherit; font-weight: 750; text-underline-offset: .18em; }
     .notice button { border: 1px solid currentcolor; border-radius: 4px; background: transparent; color: inherit; cursor: pointer; font: inherit; font-size: .8rem; font-weight: 700; padding: .25rem .6rem; }
-    .notice button:focus-visible, .notice a:focus-visible { outline: 3px solid #2457d6; outline-offset: 2px; }
-    /* The body of the statuses route. It is a page rather than a region on the
+    .notice button:focus-visible, .notice a:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 2px; }
+    /* The body of a configuration section. It is a page rather than a region on the
        board: it sits inside the route shell every other page uses, which is
        inside main, so it takes the height its rows and forms need and the page
        scrolls. The panel it replaced was an item in the viewport-height flex
@@ -128,7 +148,12 @@
        because it only wins where it is written after the one it overrides. */
     .admin { display: grid; gap: .6rem; padding: 1.15rem; }
     .admin[hidden] { display: none; }
-    .admin:focus-visible { outline: 3px solid #2457d6; outline-offset: -3px; }
+    /* The heading over each section of the configuration route. It belongs to
+       the route rather than to the panel underneath it, which is what lets a
+       panel be moved in and out of the document without taking its own name
+       with it. */
+    .admin__heading { margin: .9rem 0 -.35rem; font-size: .95rem; letter-spacing: -.01em; }
+    .admin:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: -3px; }
     .admin__note { max-width: 84ch; margin: 0; color: #56647a; font-size: .8rem; line-height: 1.5; }
     .admin__note strong { color: #34425a; }
     .admin__note code { font-size: .72rem; }
@@ -141,35 +166,35 @@
     .admin__status:empty { display: none; }
     .admin__status p { margin: 0; }
     .admin__status[data-kind="error"] { color: #8f1d1d; }
-    .admin__status [data-vocabulary-panel-warning] { color: #7c3b08; }
+    .admin__status [data-panel-warning] { color: #7c3b08; }
     .admin-statuses { display: grid; gap: .4rem; margin: 0; padding: 0; list-style: none; }
-    .admin-status { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .45rem .75rem; padding: .6rem .7rem; border: 1px solid #d5deea; border-radius: 4px; background: #fff; cursor: grab; }
+    .admin-status { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .45rem .75rem; padding: .6rem .7rem; border: 1px solid var(--wb-hairline); border-radius: 4px; background: #fff; cursor: grab; }
     .admin-status:active { cursor: grabbing; }
     .admin-status[data-dragging="true"] { opacity: .5; }
-    .admin-status[data-drop-target="true"] { border-color: #2457d6; box-shadow: inset 0 0 0 1px #2457d6; }
+    .admin-status[data-drop-target="true"] { border-color: var(--wb-primary); box-shadow: inset 0 0 0 1px var(--wb-primary); }
     .admin-status__name { display: flex; flex-wrap: wrap; align-items: baseline; gap: .45rem; min-width: 0; font-size: .9rem; font-weight: 750; }
-    .admin-status__token { color: #526b9b; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .74rem; font-weight: 400; overflow-wrap: anywhere; }
+    .admin-status__token { color: var(--wb-primary-ink); font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .74rem; font-weight: 400; overflow-wrap: anywhere; }
     .admin-tag { padding: .08rem .32rem; border: 1px solid #b9c6d8; border-radius: 3px; color: #34425a; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .66rem; font-weight: 400; }
     .admin-status__controls { display: flex; flex-wrap: wrap; gap: .35rem; }
     .admin-button { border: 1px solid #9eafc5; border-radius: 4px; background: #fff; color: #34425a; cursor: pointer; font: inherit; font-size: .78rem; font-weight: 700; padding: .35rem .65rem; }
-    .admin-button:hover:enabled { border-color: #2457d6; color: #2457d6; }
+    .admin-button:hover:enabled { border-color: var(--wb-primary); color: var(--wb-primary); }
     .admin-button:disabled { cursor: default; opacity: .52; }
-    .admin-button--primary { border-color: #173f9e; background: #2457d6; color: #fff; }
-    .admin-button--primary:hover:enabled { background: #1d49b7; color: #fff; }
+    .admin-button--primary { border-color: var(--wb-primary-edge); background: var(--wb-primary); color: #fff; }
+    .admin-button--primary:hover:enabled { background: var(--wb-primary-hover); color: #fff; }
     .admin-button--danger { border-color: #8f1d1d; background: #b42318; color: #fff; }
     .admin-button--danger:hover:enabled { background: #8f1d1d; color: #fff; }
-    .admin-button:focus-visible, .admin input:focus-visible, .admin select:focus-visible { outline: 3px solid #2457d6; outline-offset: 1px; }
-    .admin input, .admin select { border: 1px solid #9eafc5; border-radius: 4px; background: #fff; color: #172033; font: inherit; font-size: .82rem; padding: .4rem .5rem; }
-    .admin input:focus, .admin select:focus { border-color: #2457d6; }
+    .admin-button:focus-visible, .admin input:focus-visible, .admin select:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 1px; }
+    .admin input, .admin select { border: 1px solid #9eafc5; border-radius: 4px; background: #fff; color: var(--wb-text); font: inherit; font-size: .82rem; padding: .4rem .5rem; }
+    .admin input:focus, .admin select:focus { border-color: var(--wb-primary); }
     .admin-form { display: flex; flex-wrap: wrap; align-items: end; gap: .55rem .8rem; grid-column: 1 / -1; margin-top: .2rem; padding-top: .6rem; border-top: 1px dashed #b9c6d8; }
     .admin-field { display: grid; gap: .2rem; }
     .admin-field label { color: #34425a; font-size: .74rem; font-weight: 750; }
     .admin-tags { display: flex; flex-wrap: wrap; align-items: center; gap: .1rem .7rem; margin: 0; padding: 0; border: 0; }
     .admin-tags legend { padding: 0; color: #34425a; font-size: .74rem; font-weight: 750; }
     .admin-tag-choice { display: inline-flex; align-items: center; gap: .3rem; color: #34425a; cursor: pointer; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .76rem; }
-    .admin-tag-choice input { width: 1rem; height: 1rem; margin: 0; accent-color: #2457d6; cursor: pointer; padding: 0; }
+    .admin-tag-choice input { width: 1rem; height: 1rem; margin: 0; accent-color: var(--wb-primary); cursor: pointer; padding: 0; }
     .admin-note { margin: 0; color: #7c3b08; font-size: .76rem; }
-    .admin-add { display: grid; gap: .5rem; margin-top: .6rem; padding: .8rem; border: 1px solid #d5deea; border-radius: 4px; background: #f8faff; }
+    .admin-add { display: grid; gap: .5rem; margin-top: .6rem; padding: .8rem; border: 1px solid var(--wb-hairline); border-radius: 4px; background: var(--wb-primary-tint-4); }
     .admin-add__title { margin: 0; font-size: .88rem; }
     .admin-add .admin-form { grid-column: auto; margin-top: 0; padding-top: 0; border-top: 0; }
     .stale { display: none; margin: 0 0 1rem; padding: .55rem .7rem; border-left: 3px solid #b45309; background: #fff6e8; color: #7c3b08; font-size: .875rem; }
@@ -224,10 +249,10 @@
        applied to nothing. A floor could not have squared the headers up anyway
        — it can only raise a header that is short, never pull five of them up to
        one that grew. */
-    .column__header { padding: .7rem .75rem .6rem; border-top: 3px solid #2457d6; border-bottom: 1px solid #b9c6d8; background: #f8faff; }
+    .column__header { padding: .7rem .75rem .6rem; border-top: 3px solid var(--wb-primary); border-bottom: 1px solid #b9c6d8; background: var(--wb-primary-tint-4); }
     .column__heading { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; margin: 0; font-size: .92rem; }
-    .count { color: #2457d6; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .8rem; }
-    .new-task-link { display: inline-block; margin-top: .45rem; color: #2457d6; font-size: .73rem; font-weight: 750; text-decoration-thickness: 1px; text-underline-offset: .18em; }
+    .count { color: var(--wb-primary); font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .8rem; }
+    .new-task-link { display: inline-block; margin-top: .45rem; color: var(--wb-primary); font-size: .73rem; font-weight: 750; text-decoration-thickness: 1px; text-underline-offset: .18em; }
     /* overflow-anchor: none guards against browser scroll anchoring walking a scrolled column downward when a render rebuilds its cards. The renderer reconciles by task ID and reuses nodes, so nothing should churn here any more; keep the declaration anyway, so a future code path that rebuilds a column cannot silently reintroduce the drift. */
     .task-list { display: grid; align-content: start; gap: .55rem; min-height: 0; overflow-anchor: none; overflow-y: auto; padding: .55rem; }
     /* min-width, because a card is a grid item and a grid item's automatic
@@ -238,11 +263,11 @@
        374px wide inside a 268px column, over the top of the column beside it.
        The description under it is already clipped and clamped, so nothing
        inside a card needs the card to be any wider than the column it is in. */
-    .task-card { min-width: 0; border: 1px solid #b9c6d8; border-radius: 4px; background: #fff; padding: .7rem; box-shadow: 0 1px 0 rgba(23,32,51,.05); cursor: grab; }
+    .task-card { min-width: 0; border: 1px solid #b9c6d8; border-radius: 4px; background: #fff; padding: .7rem; box-shadow: 0 1px 0 var(--wb-text-shadow-faint); cursor: grab; }
     .task-card:active { cursor: grabbing; }
     /* A card whose save is still in flight has no ID to place, so it must not offer the grab cursor a drag would promise. draggable is a reflected attribute, so the selector tracks the property the client sets — and it is now the pending stand-in alone, since an unknown-status card drags out to the column that files it. */
     .task-card[draggable="false"], .task-card[draggable="false"]:active { cursor: default; }
-    .task-card:focus-visible { outline: 3px solid #2457d6; outline-offset: 2px; }
+    .task-card:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 2px; }
     .task-card.is-dragging { opacity: .5; }
     .task-card[data-pending-create] { border-style: dashed; cursor: default; }
     .task-card__pending { color: #7c3b08; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-weight: 800; }
@@ -250,9 +275,9 @@
     .task-card code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .task-id-copy-group { position: relative; display: inline-flex; align-items: baseline; min-width: 0; }
     .task-id-copy { max-width: 100%; border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; padding: 0; }
-    .task-id-copy:hover { color: #2457d6; }
-    .task-id-copy:focus-visible { outline: 3px solid #2457d6; outline-offset: 2px; }
-    .copy-status { position: absolute; left: 100%; top: 50%; margin-left: .35rem; color: #173f9e; font-size: .65rem; font-weight: 800; line-height: 1; pointer-events: none; transform: translateY(-50%); white-space: nowrap; }
+    .task-id-copy:hover { color: var(--wb-primary); }
+    .task-id-copy:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 2px; }
+    .copy-status { position: absolute; left: 100%; top: 50%; margin-left: .35rem; color: var(--wb-primary-edge); font-size: .65rem; font-weight: 800; line-height: 1; pointer-events: none; transform: translateY(-50%); white-space: nowrap; }
     .copy-status:empty { display: none; }
     .copy-status[data-kind="error"] { color: #8f1d1d; }
     .priority { flex: 0 0 auto; font-size: .64rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
@@ -263,9 +288,9 @@
        underline to be told apart from the text around it. It carries none, and
        hover turns it blue — which the keyboard reaches too, because focus draws
        the card's own outline. */
-    .task-card h3 a { color: #172033; text-decoration: none; }
-    .task-card h3 a:hover { color: #2457d6; }
-    .task-card h3 a:focus-visible, .new-task-link:focus-visible, .board-link:focus-visible { outline: 3px solid #2457d6; outline-offset: 2px; }
+    .task-card h3 a { color: var(--wb-text); text-decoration: none; }
+    .task-card h3 a:hover { color: var(--wb-primary); }
+    .task-card h3 a:focus-visible, .new-task-link:focus-visible, .board-link:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 2px; }
     /* A card is an ID, a title, and its labels. The description is the one field
        with no length the column can rely on, so six clamped lines of it push the
        next card off the screen; the board hides it and the header setting brings
@@ -297,7 +322,7 @@
        plain text wrapped. Measured both ways; this is the difference. */
     .task-card p code { overflow: visible; text-overflow: clip; white-space: normal; padding: 0 .18rem; border-radius: 3px; background: #eef2f8; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .95em; }
     .labels { display: flex; flex-wrap: wrap; gap: .25rem; margin-top: .65rem; }
-    .label { max-width: 100%; overflow: hidden; padding: .14rem .28rem; border: 1px solid #d5deea; border-radius: 3px; color: #4e5d73; font-size: .64rem; text-overflow: ellipsis; white-space: nowrap; }
+    .label { max-width: 100%; overflow: hidden; padding: .14rem .28rem; border: 1px solid var(--wb-hairline); border-radius: 3px; color: #4e5d73; font-size: .64rem; text-overflow: ellipsis; white-space: nowrap; }
     /* The assignee row takes the label row's geometry exactly — same flex wrap,
        same gap, same top margin — because it is the same kind of thing on the
        same card and a second geometry would read as a second kind. What differs
@@ -312,7 +337,7 @@
        the whole page into horizontal scroll. Clamped, it ends in an ellipsis
        inside its column, and the task page below prints the whole value. */
     .assignees { display: flex; flex-wrap: wrap; gap: .25rem; margin-top: .65rem; }
-    .assignee { max-width: 100%; overflow: hidden; padding: .14rem .28rem; border: 1px solid #b7c9ea; border-radius: 3px; background: #edf3ff; color: #34425a; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .64rem; text-overflow: ellipsis; white-space: nowrap; }
+    .assignee { max-width: 100%; overflow: hidden; padding: .14rem .28rem; border: 1px solid var(--wb-primary-muted); border-radius: 3px; background: var(--wb-primary-tint-1); color: #34425a; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .64rem; text-overflow: ellipsis; white-space: nowrap; }
     .assignee--more { border-style: dashed; background: transparent; color: #56647a; }
     .dependency-progress { display: grid; gap: .18rem; margin-top: .65rem; color: #4e5d73; font-size: .72rem; }
     .dependency-progress strong { color: #9c2f25; font-size: .72rem; }
@@ -326,8 +351,8 @@
     .task-card__failure[data-visible="true"] { display: flex; }
     .task-card__failure span { flex: 1 1 auto; line-height: 1.35; overflow-wrap: anywhere; }
     .task-card__failure button { flex: 0 0 auto; border: 1px solid currentcolor; border-radius: 3px; background: transparent; color: inherit; cursor: pointer; font: inherit; font-size: .66rem; font-weight: 800; padding: .08rem .32rem; }
-    .task-card__failure button:focus-visible { outline: 3px solid #2457d6; outline-offset: 2px; }
-    .drop-marker { height: 0; margin: -.1rem 0; border-top: 3px solid #2457d6; border-radius: 3px; pointer-events: none; }
+    .task-card__failure button:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 2px; }
+    .drop-marker { height: 0; margin: -.1rem 0; border-top: 3px solid var(--wb-primary); border-radius: 3px; pointer-events: none; }
     /* The Deleted column. It is a .column and takes the board's track sizing
        untouched — no width, no minimum, no maximum of its own — so a project
        with five statuses and a project with twelve widen and scroll exactly as
@@ -355,46 +380,46 @@
     .column__empty { margin: 0; color: #56647a; font-size: .78rem; line-height: 1.4; }
     .column__empty[hidden] { display: none; }
     .restore-button { margin-top: .65rem; border: 1px solid #9eafc5; border-radius: 3px; background: #fff; color: #34425a; cursor: pointer; font: inherit; font-size: .72rem; font-weight: 800; padding: .22rem .5rem; }
-    .restore-button:hover { border-color: #2457d6; color: #2457d6; }
-    .restore-button:focus-visible { outline: 3px solid #2457d6; outline-offset: 2px; }
+    .restore-button:hover { border-color: var(--wb-primary); color: var(--wb-primary); }
+    .restore-button:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 2px; }
     .restore-button:disabled { cursor: default; opacity: .55; }
     .restore-button[hidden] { display: none; }
-    .task-route { display: flex; flex-direction: column; height: 100%; min-height: 0; width: min(100%, 84rem); margin: 0 auto; border: 1px solid #b9c6d8; background: #fff; box-shadow: 0 12px 32px rgba(23,32,51,.08); }
-    .task-route__header { padding: 1rem 1.15rem; border-top: 3px solid #2457d6; border-bottom: 1px solid #d5deea; background: #f8faff; }
+    .task-route { display: flex; flex-direction: column; height: 100%; min-height: 0; width: min(100%, 84rem); margin: 0 auto; border: 1px solid #b9c6d8; background: #fff; box-shadow: 0 12px 32px var(--wb-text-shadow-soft); }
+    .task-route__header { padding: 1rem 1.15rem; border-top: 3px solid var(--wb-primary); border-bottom: 1px solid var(--wb-hairline); background: var(--wb-primary-tint-4); }
     .task-route__header h2 { margin: .15rem 0 0; font-size: clamp(1.15rem, 3vw, 1.55rem); letter-spacing: -.025em; }
-    .task-route__header code { display: block; margin-top: .35rem; color: #526b9b; font-size: .72rem; overflow-wrap: anywhere; }
+    .task-route__header code { display: block; margin-top: .35rem; color: var(--wb-primary-ink); font-size: .72rem; overflow-wrap: anywhere; }
     .task-route__header .task-id-copy-group { margin-top: .35rem; }
     .task-route__header .task-id-copy code { display: inline; margin-top: 0; }
     .task-route__header .copy-status { top: calc(50% + .1rem); }
     .task-layout { display: grid; flex: 1 1 auto; grid-template-columns: minmax(0, 1fr) 20rem; grid-template-rows: minmax(0, 1fr) auto; min-height: 0; }
     .task-editor { display: grid; grid-template-rows: auto minmax(8rem, 1fr); gap: 1rem; min-width: 0; min-height: 0; padding: 1.15rem; }
-    .task-sidebar { min-width: 0; min-height: 0; overflow-y: auto; padding: 1.15rem; border-left: 1px solid #d5deea; background: #fafbfd; }
+    .task-sidebar { min-width: 0; min-height: 0; overflow-y: auto; padding: 1.15rem; border-left: 1px solid var(--wb-hairline); background: #fafbfd; }
     .task-properties { display: grid; gap: .85rem; }
     /* The footer is a rule, a line of feedback, and a row of buttons. It was
        padded like a page section and stood a finger tall on a laptop, taking
        the height from the description it sits under. */
-    .task-actions { display: grid; grid-column: 1 / -1; gap: .4rem; padding: .5rem 1.15rem .6rem; border-top: 1px solid #d5deea; }
+    .task-actions { display: grid; grid-column: 1 / -1; gap: .4rem; padding: .5rem 1.15rem .6rem; border-top: 1px solid var(--wb-hairline); }
     .field { display: grid; gap: .35rem; }
     .field--wide { grid-column: 1 / -1; }
     .field--description { grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
     .field label { color: #34425a; font-size: .78rem; font-weight: 750; }
-    .field input, .field textarea, .field select { width: 100%; border: 1px solid #9eafc5; border-radius: 4px; background: #fff; color: #172033; font: inherit; padding: .62rem .68rem; }
+    .field input, .field textarea, .field select { width: 100%; border: 1px solid #9eafc5; border-radius: 4px; background: #fff; color: var(--wb-text); font: inherit; padding: .62rem .68rem; }
     .field textarea { min-height: 8rem; resize: vertical; line-height: 1.45; }
     .field--description textarea { height: 100%; min-height: 0; overflow-y: auto; resize: none; }
-    .field input:focus, .field textarea:focus, .field select:focus { border-color: #2457d6; outline: 3px solid rgba(36,87,214,.18); }
+    .field input:focus, .field textarea:focus, .field select:focus { border-color: var(--wb-primary); outline: 3px solid var(--wb-primary-glow); }
     /* A caption with an action beside it. The row is still the field's first
        grid track, so the control underneath keeps the flexible one it had. */
     .field__header { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; }
     .description-edit-toggle { flex: 0 0 auto; min-height: 1.5rem; border: 1px solid #9eafc5; border-radius: 3px; background: #fff; color: #34425a; cursor: pointer; font: inherit; font-size: .72rem; font-weight: 800; padding: .12rem .5rem; }
-    .description-edit-toggle:hover { border-color: #2457d6; color: #2457d6; }
-    .description-edit-toggle:focus-visible { outline: 3px solid #2457d6; outline-offset: 1px; }
+    .description-edit-toggle:hover { border-color: var(--wb-primary); color: var(--wb-primary); }
+    .description-edit-toggle:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 1px; }
     /* The description as it reads, which is what the page shows until somebody
        asks to edit it. It takes the flexible row the textarea takes and scrolls
        inside itself for the same reason: the form's footer must stay on the
        screen. It is focusable because it scrolls — a region a pointer can scroll
        and a keyboard cannot is one the keyboard cannot read the bottom of. */
-    .description-read { min-height: 0; overflow-y: auto; padding: .62rem .68rem; border: 1px solid #d5deea; border-radius: 4px; background: #fbfcfe; font-size: .84rem; line-height: 1.5; }
-    .description-read:focus-visible { outline: 3px solid #2457d6; outline-offset: -1px; }
+    .description-read { min-height: 0; overflow-y: auto; padding: .62rem .68rem; border: 1px solid var(--wb-hairline); border-radius: 4px; background: #fbfcfe; font-size: .84rem; line-height: 1.5; }
+    .description-read:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: -1px; }
     .description-read__empty { margin: 0; color: #56647a; font-size: .82rem; }
     /* Whichever of the two is not in use is hidden by the attribute, and these
        two rules are what that attribute means here. They are written after the
@@ -406,14 +431,14 @@
     .label-editor { display: grid; gap: .35rem; }
     .label-chips { display: flex; flex-wrap: wrap; gap: .3rem; margin: 0; padding: 0; list-style: none; }
     .label-chips:empty { display: none; }
-    .label-chip { display: inline-flex; align-items: center; gap: .2rem; max-width: 100%; padding: 0 .1rem 0 .44rem; border: 1px solid #b9c6d8; border-radius: 999px; background: #edf3ff; color: #34425a; font-size: .7rem; }
+    .label-chip { display: inline-flex; align-items: center; gap: .2rem; max-width: 100%; padding: 0 .1rem 0 .44rem; border: 1px solid #b9c6d8; border-radius: 999px; background: var(--wb-primary-tint-1); color: #34425a; font-size: .7rem; }
     .label-chip__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     /* 1.5rem square, because removal is immediate and has no undo: a 24px
        target is what WCAG 2.2 asks for, and the chiclets wrap too tightly for
        the spacing exception to cover anything smaller. */
-    .label-chip__remove { display: inline-flex; align-items: center; justify-content: center; width: 1.5rem; height: 1.5rem; padding: 0; border: 0; border-radius: 999px; background: transparent; color: #526b9b; cursor: pointer; font: inherit; font-size: .85rem; line-height: 1; }
-    .label-chip__remove:hover { background: #d3e0fa; color: #172033; }
-    .label-chip__remove:focus-visible { outline: 2px solid #2457d6; outline-offset: 1px; }
+    .label-chip__remove { display: inline-flex; align-items: center; justify-content: center; width: 1.5rem; height: 1.5rem; padding: 0; border: 0; border-radius: 999px; background: transparent; color: var(--wb-primary-ink); cursor: pointer; font: inherit; font-size: .85rem; line-height: 1; }
+    .label-chip__remove:hover { background: var(--wb-primary-chip); color: var(--wb-text); }
+    .label-chip__remove:focus-visible { outline: 2px solid var(--wb-primary); outline-offset: 1px; }
     .label-editor__hint, .label-editor__status { margin: 0; color: #56647a; font-size: .72rem; }
     /* Drawn while empty rather than created when there is something to say: an
        unrendered element is not in the accessibility tree, and a live region
@@ -436,11 +461,11 @@
        caption would reach the far side of the footer and a click meant for the
        empty space beside it would toggle the box. */
     .create-more { display: inline-flex; align-items: center; justify-self: start; gap: .4rem; color: #34425a; cursor: pointer; font-size: .82rem; font-weight: 700; }
-    .create-more input { width: .95rem; height: .95rem; margin: 0; accent-color: #2457d6; cursor: pointer; }
-    .create-more input:focus-visible { outline: 3px solid rgba(36,87,214,.28); outline-offset: 2px; }
-    .save-button { border: 1px solid #173f9e; border-radius: 4px; background: #2457d6; color: #fff; cursor: pointer; font: inherit; font-size: .86rem; font-weight: 750; padding: .62rem .95rem; }
-    .save-button:hover { background: #1d49b7; }
-    .save-button:focus-visible { outline: 3px solid rgba(36,87,214,.28); outline-offset: 2px; }
+    .create-more input { width: .95rem; height: .95rem; margin: 0; accent-color: var(--wb-primary); cursor: pointer; }
+    .create-more input:focus-visible { outline: 3px solid var(--wb-primary-glow-strong); outline-offset: 2px; }
+    .save-button { border: 1px solid var(--wb-primary-edge); border-radius: 4px; background: var(--wb-primary); color: #fff; cursor: pointer; font: inherit; font-size: .86rem; font-weight: 750; padding: .62rem .95rem; }
+    .save-button:hover { background: var(--wb-primary-hover); }
+    .save-button:focus-visible { outline: 3px solid var(--wb-primary-glow-strong); outline-offset: 2px; }
     .save-button:disabled { cursor: wait; opacity: .62; }
     .delete-button { border: 1px solid #8f1d1d; border-radius: 4px; background: #b42318; color: #fff; cursor: pointer; font: inherit; font-size: .86rem; font-weight: 750; padding: .62rem .95rem; }
     .delete-button:hover { background: #8f1d1d; }
@@ -450,14 +475,14 @@
     .route-message { padding: 1.15rem; color: #56647a; }
     .route-message p { margin: 0 0 1rem; }
     .task-relationships { display: grid; gap: .7rem; padding: .7rem 0 0; }
-    .relationship-group { border-top: 1px solid #d5deea; padding-top: .7rem; }
+    .relationship-group { border-top: 1px solid var(--wb-hairline); padding-top: .7rem; }
     .relationship-group h3 { margin: 0; font-size: .88rem; }
     .relationship-list { display: grid; gap: .35rem; margin: .45rem 0 .5rem; }
-    .relationship-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .35rem .75rem; border: 1px solid #d5deea; border-radius: 4px; padding: .7rem; }
+    .relationship-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .35rem .75rem; border: 1px solid var(--wb-hairline); border-radius: 4px; padding: .7rem; }
     .relationship-row h4, .relationship-row p { margin: 0; }
     .relationship-row h4 { font-size: .84rem; overflow-wrap: anywhere; }
-    .relationship-row h4 a { color: #172033; text-decoration-color: #a9b7ca; text-underline-offset: .16em; }
-    .relationship-row h4 a:hover { color: #2457d6; text-decoration-color: currentcolor; }
+    .relationship-row h4 a { color: var(--wb-text); text-decoration-color: #a9b7ca; text-underline-offset: .16em; }
+    .relationship-row h4 a:hover { color: var(--wb-primary); text-decoration-color: currentcolor; }
     .relationship-row__metadata, .relationship-row__note { color: #56647a; font-size: .75rem; overflow-wrap: anywhere; }
     .relationship-remove { align-self: center; grid-column: 2; grid-row: 1 / span 2; }
     .relationship-state { color: #9c2f25; font-size: .75rem; }
@@ -469,16 +494,16 @@
        name; the placeholder repeats that name exactly, so what is seen and what
        is announced stay the same words. */
     .relationship-editor__label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-    .relationship-editor input { min-width: 0; width: 100%; border: 1px solid #9eafc5; border-radius: 4px; background: #fff; color: #172033; font: inherit; padding: .55rem .62rem; }
-    .relationship-editor input:focus { border-color: #2457d6; outline: 3px solid rgba(36,87,214,.18); }
-    .relationship-editor button { border: 1px solid #173f9e; border-radius: 4px; background: #2457d6; color: #fff; cursor: pointer; font: inherit; font-size: .78rem; font-weight: 750; padding: .58rem .75rem; }
+    .relationship-editor input { min-width: 0; width: 100%; border: 1px solid #9eafc5; border-radius: 4px; background: #fff; color: var(--wb-text); font: inherit; padding: .55rem .62rem; }
+    .relationship-editor input:focus { border-color: var(--wb-primary); outline: 3px solid var(--wb-primary-glow); }
+    .relationship-editor button { border: 1px solid var(--wb-primary-edge); border-radius: 4px; background: var(--wb-primary); color: #fff; cursor: pointer; font: inherit; font-size: .78rem; font-weight: 750; padding: .58rem .75rem; }
     .relationship-editor button:disabled { cursor: default; opacity: .52; }
-    .relationship-listbox { position: fixed; z-index: 20; max-height: 18rem; overflow-y: auto; border: 1px solid #9eafc5; border-radius: 4px; background: #fff; box-shadow: 0 8px 20px rgba(23,32,51,.12); }
+    .relationship-listbox { position: fixed; z-index: 20; max-height: 18rem; overflow-y: auto; border: 1px solid #9eafc5; border-radius: 4px; background: #fff; box-shadow: 0 8px 20px var(--wb-text-shadow); }
     .relationship-listbox[hidden] { display: none; }
     .relationship-row--compact { grid-template-columns: minmax(0, 1fr) auto; gap: .16rem .45rem; padding: .38rem 0; border: 0; border-top: 1px solid #e1e7f0; border-radius: 0; }
     .relationship-option { display: grid; gap: .18rem; padding: .55rem .62rem; border-bottom: 1px solid #e1e7f0; cursor: pointer; }
     .relationship-option:last-child { border-bottom: 0; }
-    .relationship-option[aria-selected="true"], .relationship-option.is-active { background: #edf3ff; }
+    .relationship-option[aria-selected="true"], .relationship-option.is-active { background: var(--wb-primary-tint-1); }
     .relationship-option strong { font-size: .8rem; }
     .relationship-option span { color: #56647a; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .68rem; overflow-wrap: anywhere; }
     .relationship-empty { grid-column: 1 / -1; min-height: 1rem; margin: 0; color: #56647a; font-size: .75rem; }
@@ -500,7 +525,7 @@
     .relationship-editor:focus-within .relationship-empty:empty { min-height: 1rem; }
     .task-route--history { height: auto; min-height: 100%; }
     .task-route--history .task-layout { min-height: min(60vh, 34rem); }
-    /* The statuses route, which grows with its list the way the history route
+    /* The configuration route, which grows with its lists the way the history route
        does and lets main scroll. Both of these are as specific as .task-route
        itself, so they only take effect written after it: the same rule text up
        beside the .admin rules lost to the height: 100% above, and the route's
@@ -522,7 +547,7 @@
        They sit between the form and the history for the same reason the history
        sits last: the form is what the reader came to change, the thread is what
        has been said about it, and the change log is the record underneath both. */
-    .task-panel { display: grid; gap: .55rem; padding: 1.15rem; border-top: 1px solid #d5deea; }
+    .task-panel { display: grid; gap: .55rem; padding: 1.15rem; border-top: 1px solid var(--wb-hairline); }
     .task-panel--comments { background: #fff; }
     .task-panel--attachments { background: #fafbfd; }
     /* The same panel drawn inside the New Task form's sidebar, which supplies
@@ -574,12 +599,12 @@
        where the whole value is legible, which is what makes the card's chip above
        it safe to truncate. */
     .task-panel--assignments { background: #fafbfd; }
-    .assignment { display: grid; gap: .15rem; padding: .55rem .7rem; border: 1px solid #d5deea; border-radius: 4px; background: #fff; }
+    .assignment { display: grid; gap: .15rem; padding: .55rem .7rem; border: 1px solid var(--wb-hairline); border-radius: 4px; background: #fff; }
     .assignment__who { margin: 0; min-width: 0; font-size: .84rem; overflow-wrap: anywhere; }
     .assignment__principal { font-weight: 700; }
-    .assignment__label { color: #2457d6; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .8rem; font-weight: 700; }
+    .assignment__label { color: var(--wb-primary); font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .8rem; font-weight: 700; }
     .assignment__meta { margin: 0; color: #56647a; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .68rem; overflow-wrap: anywhere; }
-    .comment { display: grid; gap: .25rem; padding: .6rem .7rem; border: 1px solid #d5deea; border-radius: 4px; background: #fff; }
+    .comment { display: grid; gap: .25rem; padding: .6rem .7rem; border: 1px solid var(--wb-hairline); border-radius: 4px; background: #fff; }
     .comment__attribution { margin: 0; color: #56647a; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .68rem; overflow-wrap: anywhere; }
     /* overflow-wrap, because a body with no spaces in it is not a reason for the
        page to scroll sideways. There is no white-space: pre-wrap here any more:
@@ -590,12 +615,12 @@
     .comment__note { margin: 0; color: #7c3b08; font-size: .74rem; }
     .comment__actions { display: flex; flex-wrap: wrap; gap: .4rem; }
     .comment__editor { display: grid; gap: .35rem; }
-    .comment__editor textarea, .comment-add textarea { width: 100%; min-height: 4.5rem; border: 1px solid #9eafc5; border-radius: 4px; background: #fff; color: #172033; font: inherit; font-size: .84rem; line-height: 1.45; padding: .5rem .6rem; resize: vertical; }
-    .comment__editor textarea:focus, .comment-add textarea:focus, .attachment-add input:focus { border-color: #2457d6; outline: 3px solid rgba(36,87,214,.18); }
+    .comment__editor textarea, .comment-add textarea { width: 100%; min-height: 4.5rem; border: 1px solid #9eafc5; border-radius: 4px; background: #fff; color: var(--wb-text); font: inherit; font-size: .84rem; line-height: 1.45; padding: .5rem .6rem; resize: vertical; }
+    .comment__editor textarea:focus, .comment-add textarea:focus, .attachment-add input:focus { border-color: var(--wb-primary); outline: 3px solid var(--wb-primary-glow); }
     .comment-add { display: grid; gap: .35rem; }
     .comment-add label, .attachment-add label { color: #34425a; font-size: .74rem; font-weight: 750; }
     .comment-add__actions, .attachment-add__actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
-    .attachment { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .2rem .75rem; padding: .55rem .7rem; border: 1px solid #d5deea; border-radius: 4px; background: #fff; }
+    .attachment { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .2rem .75rem; padding: .55rem .7rem; border: 1px solid var(--wb-hairline); border-radius: 4px; background: #fff; }
     .attachment__name { grid-column: 1; min-width: 0; font-size: .84rem; font-weight: 700; overflow-wrap: anywhere; }
     /* inline-block with padding and a floor on both axes, so the one action in
        an attachment's row is a 24px target whatever it is called. Measured on
@@ -605,8 +630,8 @@
        target, and this is the control that downloads the file. The minimum only
        decides anything for a name of one or two characters; every longer one is
        already past it. */
-    .attachment__name a { display: inline-block; min-width: 1.5rem; padding: .2rem 0; color: #172033; text-decoration-color: #a9b7ca; text-underline-offset: .16em; }
-    .attachment__name a:hover { color: #2457d6; text-decoration-color: currentcolor; }
+    .attachment__name a { display: inline-block; min-width: 1.5rem; padding: .2rem 0; color: var(--wb-text); text-decoration-color: #a9b7ca; text-underline-offset: .16em; }
+    .attachment__name a:hover { color: var(--wb-primary); text-decoration-color: currentcolor; }
     .attachment__meta { grid-column: 1; margin: 0; color: #56647a; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .68rem; overflow-wrap: anywhere; }
     .attachment__remove { grid-column: 2; grid-row: 1 / span 2; }
     /* Why a staged attachment did not attach, on the row it belongs to rather
@@ -624,14 +649,14 @@
        have spare, and a target that reflows as the cursor crosses it is a
        target that shifts out from under the drop. Inset, so it reads as this
        panel rather than as the page. */
-    [data-attachment-drop][data-drop-state="active"] { outline: 2px dashed #2457d6; outline-offset: -3px; background: #eef3ff; }
+    [data-attachment-drop][data-drop-state="active"] { outline: 2px dashed var(--wb-primary); outline-offset: -3px; background: var(--wb-primary-tint-2); }
     /* Refused: the same shape in the colour every refusal on this page uses, so
        a reader who cannot drop right now can see that without reading. */
     [data-attachment-drop][data-drop-state="refused"] { outline: 2px dashed #9c2f25; outline-offset: -3px; }
     .attachment-add__hint { margin: 0; color: #56647a; font-size: .72rem; }
     .attachment-add { display: grid; gap: .55rem; padding-top: .1rem; }
     .attachment-add__group { display: grid; gap: .3rem; margin: 0; }
-    .attachment-add input[type="text"], .attachment-add input[type="url"] { width: 100%; border: 1px solid #9eafc5; border-radius: 4px; background: #fff; color: #172033; font: inherit; font-size: .82rem; padding: .45rem .55rem; }
+    .attachment-add input[type="text"], .attachment-add input[type="url"] { width: 100%; border: 1px solid #9eafc5; border-radius: 4px; background: #fff; color: var(--wb-text); font: inherit; font-size: .82rem; padding: .45rem .55rem; }
     /* The file control is drawn by the browser, so its target size is decided
        by the font it inherits rather than by any padding here: at .78rem the
        whole control measured 20px tall, under what WCAG 2.2 asks. It keeps the
@@ -643,11 +668,11 @@
        no confirmation — the page's other direct removals do not either — so it
        is the one that must not be a sliver. */
     .thread-button { min-height: 2rem; border: 1px solid #9eafc5; border-radius: 4px; background: #fff; color: #34425a; cursor: pointer; font: inherit; font-size: .78rem; font-weight: 700; padding: .35rem .7rem; }
-    .thread-button:hover:enabled { border-color: #2457d6; color: #2457d6; }
+    .thread-button:hover:enabled { border-color: var(--wb-primary); color: var(--wb-primary); }
     .thread-button:disabled { cursor: default; opacity: .52; }
-    .thread-button:focus-visible { outline: 3px solid #2457d6; outline-offset: 1px; }
-    .thread-button--primary { border-color: #173f9e; background: #2457d6; color: #fff; }
-    .thread-button--primary:hover:enabled { background: #1d49b7; color: #fff; }
+    .thread-button:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 1px; }
+    .thread-button--primary { border-color: var(--wb-primary-edge); background: var(--wb-primary); color: #fff; }
+    .thread-button--primary:hover:enabled { background: var(--wb-primary-hover); color: #fff; }
     /* Rendered markdown, wherever it is drawn. The container carries no font of
        its own: a comment body and a description read pane each size their own
        text, and a .markdown rule that named a size would win over one of them by
@@ -680,21 +705,21 @@
        would otherwise break a line of code at an arbitrary column, which is the
        one thing a code block must not do. Written after .markdown, which is what
        makes the reset win. */
-    .markdown pre { margin: 0 0 .55rem; padding: .5rem .6rem; border: 1px solid #d5deea; border-radius: 4px; background: #f6f8fc; overflow-x: auto; overflow-wrap: normal; white-space: pre; }
+    .markdown pre { margin: 0 0 .55rem; padding: .5rem .6rem; border: 1px solid var(--wb-hairline); border-radius: 4px; background: #f6f8fc; overflow-x: auto; overflow-wrap: normal; white-space: pre; }
     .markdown pre code { padding: 0; border-radius: 0; background: transparent; font-size: .78rem; }
-    .markdown a { color: #2457d6; text-underline-offset: .16em; }
+    .markdown a { color: var(--wb-primary); text-underline-offset: .16em; }
     .markdown a:hover { text-decoration-color: currentcolor; }
     /* An attachment drawn inline. It is bounded by the column it is in rather
        than by its own pixels, because the image is somebody's upload and a
        4000-pixel screenshot in a description must not decide how wide this page
        is. */
-    .markdown img { display: block; max-width: 100%; height: auto; margin: .1rem 0 .55rem; border: 1px solid #d5deea; border-radius: 4px; }
-    .task-history { display: grid; gap: .8rem; padding: 1.15rem; border-top: 1px solid #d5deea; background: #fafbfd; }
+    .markdown img { display: block; max-width: 100%; height: auto; margin: .1rem 0 .55rem; border: 1px solid var(--wb-hairline); border-radius: 4px; }
+    .task-history { display: grid; gap: .8rem; padding: 1.15rem; border-top: 1px solid var(--wb-hairline); background: #fafbfd; }
     .task-history h3 { margin: 0; font-size: .88rem; }
     .lifecycle { display: flex; flex-wrap: wrap; gap: .3rem 1.1rem; margin: 0; padding: 0; list-style: none; }
-    .lifecycle__stop { position: relative; display: grid; gap: .1rem; min-width: 0; padding: .42rem .6rem; border: 1px solid #d5deea; border-radius: 4px; background: #fff; }
+    .lifecycle__stop { position: relative; display: grid; gap: .1rem; min-width: 0; padding: .42rem .6rem; border: 1px solid var(--wb-hairline); border-radius: 4px; background: #fff; }
     .lifecycle__stop + .lifecycle__stop::before { position: absolute; top: 50%; left: -.85rem; color: #8496b0; content: "→"; font-size: .8rem; transform: translateY(-50%); }
-    .lifecycle__stop[data-current="true"] { border-color: #2457d6; background: #edf3ff; box-shadow: inset 0 0 0 1px #2457d6; }
+    .lifecycle__stop[data-current="true"] { border-color: var(--wb-primary); background: var(--wb-primary-tint-1); box-shadow: inset 0 0 0 1px var(--wb-primary); }
     .lifecycle__label { font-size: .78rem; font-weight: 750; }
     .lifecycle__meta { color: #56647a; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .65rem; }
     .history-state { margin: 0; color: #56647a; font-size: .78rem; }
@@ -702,15 +727,15 @@
     .history-truncation { margin: 0; padding: .5rem .62rem; border-left: 3px solid #b45309; background: #fff6e8; color: #7c3b08; font-size: .78rem; }
     .change-summary { margin: 0; color: #56647a; font-size: .76rem; }
     .change-list { display: grid; gap: .3rem; margin: 0; padding: 0; list-style: none; }
-    .change-row { border: 1px solid #d5deea; border-radius: 4px; background: #fff; }
+    .change-row { border: 1px solid var(--wb-hairline); border-radius: 4px; background: #fff; }
     .change-row__summary { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: baseline; gap: .55rem; width: 100%; padding: .5rem .6rem; border: 0; border-radius: 4px; background: transparent; color: inherit; cursor: pointer; font: inherit; text-align: left; }
-    .change-row__summary:hover { background: #f3f7ff; }
-    .change-row__summary:focus-visible { outline: 3px solid #2457d6; outline-offset: -1px; }
+    .change-row__summary:hover { background: var(--wb-primary-tint-3); }
+    .change-row__summary:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: -1px; }
     .change-row__when, .change-row__who { color: #56647a; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .67rem; }
     .change-row__what { font-size: .8rem; overflow-wrap: anywhere; }
     .change-comparison { display: grid; gap: .45rem; padding: .6rem; border-top: 1px solid #e1e7f0; }
     .change-comparison[hidden] { display: none; }
-    .change-comparison__commit { color: #526b9b; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .66rem; overflow-wrap: anywhere; }
+    .change-comparison__commit { color: var(--wb-primary-ink); font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .66rem; overflow-wrap: anywhere; }
     .field-change { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); gap: .1rem .5rem; font-size: .78rem; }
     .field-change__label { color: #34425a; font-weight: 750; }
     .field-change__value { min-width: 0; line-height: 1.4; overflow-wrap: anywhere; white-space: pre-wrap; }
@@ -755,7 +780,7 @@
       .task-route { height: auto; min-height: 100%; }
       .task-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto; }
       .task-editor { grid-template-rows: auto auto; }
-      .task-sidebar { overflow-y: visible; border-top: 1px solid #d5deea; border-left: 0; }
+      .task-sidebar { overflow-y: visible; border-top: 1px solid var(--wb-hairline); border-left: 0; }
       .task-actions { grid-column: 1; }
       .field--description textarea { min-height: 12rem; }
       .task-route--history .task-layout { min-height: 0; }
@@ -770,13 +795,20 @@
       .attachment__remove { grid-column: 1; grid-row: auto; justify-self: start; margin-top: .35rem; }
     }
   </style>
-</head>
+  <!-- The colors this project chose, as an override composed by the server. It
+       is a second stylesheet rather than values interpolated into the one above
+       because html/template refuses to interpolate a CSS value it cannot vouch
+       for and writes ZgotmplZ in its place — see boardTheme, which is where the
+       vouching is done for real. A project that chose nothing is served nothing
+       here, so its board is the board it always was. -->
+  {{ if .Theme }}<style data-board-theme>{{ .Theme }}</style>
+  {{ end }}</head>
 <body>
   <a class="skip-link" href="#board">Skip to task board</a>
   <header class="app-header">
     <!-- The routes, beside the title and before anything that comes and goes,
          so they are in the same place on every page this board serves. -->
-    <div class="app-header__lead"><div><p class="eyebrow">Repository workbench</p><h1>Workbook board</h1></div><nav class="header-links" aria-label="Primary"><a class="header-link" href="/">Board</a>{{ if .Administrable }}<a class="header-link" href="/statuses">Statuses</a>{{ end }}</nav></div>
+    <div class="app-header__lead"><div><p class="eyebrow">{{ .Eyebrow }}</p><h1>{{ .ProjectName }}</h1></div><nav class="header-links" aria-label="Primary"><a class="header-link" href="/">Board</a>{{ if .Administrable }}<a class="header-link" href="/config">Config</a>{{ end }}</nav></div>
     <!-- The three settings, and above them the reading of when the board last
          heard from the server.
 
@@ -817,7 +849,7 @@
        that it is out of date, and lets the reader choose the moment. -->
   <div class="notice" data-vocabulary-notice role="status" aria-live="polite" hidden>
     <div class="notice__report">
-      <p>This project's statuses have changed. The columns on this page are the ones it was opened with.</p>
+      <p>This project's configuration has changed. The columns and colors on this page are the ones it was opened with.</p>
       <button type="button" data-vocabulary-reload>Reload the board</button>
     </div>
   </div>
@@ -828,7 +860,7 @@
          the script needs before its first fetch comes from an attribute here,
          data-vocabulary-head included, so a page and its script never disagree
          about which vocabulary they were built from. -->
-    <div class="board-view" data-board-view data-default-status="{{ .DefaultStatus }}" data-vocabulary-head="{{ .VocabularyHead }}" data-attachment-limit="{{ .AttachmentFileLimit }}" data-attachment-total-limit="{{ .AttachmentTotalLimit }}" data-attachment-name-limit="{{ .AttachmentNameLimit }}" data-attachment-label-limit="{{ .AttachmentLabelLimit }}" data-attachment-url-limit="{{ .AttachmentURLLimit }}" data-inline-media="{{ .InlineImageMediaTypes }}">
+    <div class="board-view" data-board-view data-project-name="{{ .ProjectName }}" data-default-project-name="{{ .DefaultProjectName }}" data-title-suffix="{{ .TitleSuffix }}" data-default-status="{{ .DefaultStatus }}" data-vocabulary-head="{{ .VocabularyHead }}" data-attachment-limit="{{ .AttachmentFileLimit }}" data-attachment-total-limit="{{ .AttachmentTotalLimit }}" data-attachment-name-limit="{{ .AttachmentNameLimit }}" data-attachment-label-limit="{{ .AttachmentLabelLimit }}" data-attachment-url-limit="{{ .AttachmentURLLimit }}" data-inline-media="{{ .InlineImageMediaTypes }}">
       <p class="stale" data-stale role="status">Task refresh failed. Showing the last successful board.</p>
       <!-- data-board is where the client appends the Deleted column, after the
            last vocabulary column the server rendered. It is a client-built
@@ -906,7 +938,7 @@
        data-status-tags carries the roles for the forms, and this element's
        presence is the whole of the client's capability gate — a board built
        without the four vocabulary mutations serves none of this, its header
-       offers no Statuses link, and the route answers as a page that does not
+       offers no Config link, and the route answers as a page that does not
        exist on both sides.
 
        The list inside it is the client's, drawn from `GET /api/vocabulary` on
@@ -930,6 +962,29 @@
     <p class="admin__note">These are this project's columns, in board order. Renaming one forwards the old name, so tasks written by a clone that has not fetched the change still land in the right column, and removing one names where its tasks belong. A tag says what a column means rather than what it is called: <strong>default</strong> is where a new task lands and exactly one column carries it, <strong>next</strong> marks the columns <code>workbook next</code> claims from, and <strong>done</strong> marks the ones that satisfy a dependency. Drag a row, or use its Up and Down controls, to reorder the columns. The board keeps the columns it was opened with until you reload it.</p>
     <div class="admin__status" data-vocabulary-panel-status role="status" aria-live="polite"></div>
     <div data-vocabulary-panel-body></div>
+  </div>
+  {{ end }}
+  {{ if .DisplayAdministrable }}
+  <!-- What this project calls its board and the colors it draws it in: the
+       second section of the configuration route, served beside the statuses and
+       mounted into main by the same render.
+
+       It is its own element with its own live region rather than a form inside
+       the panel above, because the two are separate writes against separate
+       endpoints: a status change that is refused must not blank a name the
+       reader has just typed, and a save of the name must not clear what the
+       status change had to say.
+
+       Its shell is served for the reason the statuses' is — the presence of this
+       element is the whole of the client's capability gate — and its fields are
+       the client's, filled from the same GET /api/vocabulary the statuses are
+       read from. One read, one head: a page that asked for the name separately
+       could be answered from either side of a change and would offer a Save
+       composed against a configuration it never showed anybody. -->
+  <div class="admin" data-display-panel role="group" aria-labelledby="display-title" tabindex="-1" hidden>
+    <p class="admin__note">These are this project's own name for this board and the colors it is drawn in, recorded in the same configuration every clone fetches. Every field is optional: an empty <strong>name</strong> is the generic heading every Workbook board carries, and an empty color is this board's own palette. Colors are written as <code>#rrggbb</code>. Saving sends all three at once, and only what actually changed is recorded — a save you have not edited records nothing at all. A board already open elsewhere keeps the name and colors it was opened with until it is reloaded.</p>
+    <div class="admin__status" data-display-panel-status role="status" aria-live="polite"></div>
+    <div data-display-panel-body></div>
   </div>
   {{ end }}
   <script>
@@ -980,16 +1035,36 @@
       // offered instead of taken.
       const vocabularyNotice = document.querySelector("[data-vocabulary-notice]");
       const vocabularyReload = document.querySelector("[data-vocabulary-reload]");
-      // The body of the statuses route and its parts, served with the page and
-      // mounted into main by the render for that route. Every one of them is
-      // absent on a board built without the four vocabulary mutations, which is
-      // why each is asked for separately and everything below is guarded: such a
-      // page has no statuses route at all — the server answers the address with
-      // a 404 and route() below answers it as a page that does not exist — and
-      // the script must not depend on markup it was not served.
+      // The statuses section of the configuration route and its parts, served
+      // with the page and mounted into main by the render for that route. Every
+      // one of them is absent on a board built without the four vocabulary
+      // mutations, which is why each is asked for separately and everything
+      // below is guarded: such a page has no configuration route at all — the
+      // server answers the address with a 404 and route() below answers it as a
+      // page that does not exist — and the script must not depend on markup it
+      // was not served.
       const vocabularyPanel = document.querySelector("[data-vocabulary-panel]");
       const vocabularyPanelBody = document.querySelector("[data-vocabulary-panel-body]");
       const vocabularyPanelStatus = document.querySelector("[data-vocabulary-panel-status]");
+      // The board settings section, beside the statuses on the same route. It is
+      // asked for separately from the panel above because a board may be built
+      // with the vocabulary mutations and without this one, in which case the
+      // page has statuses to administer and no settings to change.
+      const displayPanel = document.querySelector("[data-display-panel]");
+      const displayPanelBody = document.querySelector("[data-display-panel-body]");
+      const displayPanelStatus = document.querySelector("[data-display-panel-status]");
+      // What this board is called, and what every route that is not the board
+      // appends to its own name. Both are the server's answers rather than
+      // derived here: the fallbacks are core's, and a client that spelled them
+      // would go on saying the old word the day core's changed.
+      const boardName = boardView.dataset.projectName || "Workbook board";
+      // What this board would be called if its name were cleared, which is what
+      // the settings form's own placeholder says. It is not boardName: a project
+      // called Atlas whose name field is emptied gets the generic heading, so a
+      // placeholder reading "Atlas" would be advertising the value the field no
+      // longer holds — and would go on doing so after a save that cleared it.
+      const boardDefaultName = boardView.dataset.defaultProjectName || "Workbook board";
+      const boardTitleSuffix = " · " + (boardView.dataset.titleSuffix || "Workbook");
       // The configuration ledger tip these columns were built from. The server
       // renders it into the page and repeats it on every poll, so the poll can
       // notice a change without fetching the vocabulary itself once a second.
@@ -1570,11 +1645,13 @@
         // navigation.
         if (url.pathname === "/") return { view: "board", deleted: url.searchParams.get("deleted") === "1" };
         // A board built without the four vocabulary mutations was served none of
-        // the statuses page, so this address is not a route on it. The server
-        // answers it with a 404 for the same reason; a client that drew the
-        // route anyway would be offering controls the page has no markup for.
-        if (url.pathname === "/statuses") {
-          return vocabularyPanel ? { view: "statuses" } : { view: "unknown" };
+        // the configuration page, so this address is not a route on it. The
+        // server answers it with a 404 for the same reason; a client that drew
+        // the route anyway would be offering controls the page has no markup
+        // for. The address used to be /statuses and nothing forwards it: it is
+        // an unknown path here exactly as it is on the server.
+        if (url.pathname === "/config") {
+          return vocabularyPanel ? { view: "config" } : { view: "unknown" };
         }
         if (url.pathname === "/tasks/new") {
           const requestedStatus = url.searchParams.get("status");
@@ -5011,7 +5088,7 @@
           // has ever followed the title field's keystrokes — so they follow the
           // task the board holds even while the field carries an edit.
           text(heading, held.title || "");
-          document.title = (held.title || "") + " · Workbook";
+          document.title = (held.title || "") + boardTitleSuffix;
           if (!("status" in edited)) showStatus(controls.status, held.status);
           // A correction that cannot be shown must not move the baseline with
           // it. The control would still be displaying the value this form
@@ -5965,29 +6042,35 @@
       // than folded into the sentence — `docs-refresh-incomplete` and
       // `auto-sync-incomplete` are about the repository rather than about the
       // change, and they are the reason a later command behaves oddly.
-      function panelReport(kind, message, warnings = []) {
-        if (!vocabularyPanelStatus) return;
-        vocabularyPanelStatus.dataset.kind = kind;
+      function reportInto(region, kind, message, warnings = []) {
+        if (!region) return;
+        region.dataset.kind = kind;
         const lines = [message].concat(warnings.filter(Boolean));
-        vocabularyPanelStatus.replaceChildren(...lines.map((line, index) => {
+        region.replaceChildren(...lines.map((line, index) => {
           const paragraph = document.createElement("p");
-          if (index > 0) paragraph.dataset.vocabularyPanelWarning = "";
+          if (index > 0) paragraph.dataset.panelWarning = "";
           text(paragraph, line);
           return paragraph;
         }));
+      }
+      function panelReport(kind, message, warnings = []) {
+        reportInto(vocabularyPanelStatus, kind, message, warnings);
       }
       // A control the panel disables for the length of a change, and one it
       // disables for a reason of its own — the Up control on the first row, a
       // Save with an empty name beside it. The two are separate states because
       // a change finishing must not enable a control that was never enabled.
+      // Busy is the route's rather than the section's: both sections write the
+      // same ref against the same head, so a change in either disables the
+      // controls of both.
       function applyPanelBusy() {
         panelControls.forEach((control) => {
-          control.disabled = panelBusy || control.dataset.blocked === "true";
+          control.disabled = configBusy() || control.dataset.blocked === "true";
         });
       }
       function blockPanelControl(control, blocked) {
         control.dataset.blocked = blocked ? "true" : "false";
-        control.disabled = panelBusy || blocked;
+        control.disabled = configBusy() || blocked;
       }
       // Settles when no task has work in flight.
       //
@@ -6023,6 +6106,13 @@
         panelVocabulary = vocabulary;
         panelHead = typeof vocabulary.head === "string" ? vocabulary.head : "";
         noteVocabularyChange(panelHead);
+        // The display settings ride in the same document, from the same commit,
+        // which is why the board settings form never asks for them separately: a
+        // second read could be answered from either side of a change and would
+        // offer a Save composed against a configuration nobody was shown. A
+        // document with no display member is a project that has configured none
+        // of them, which is a real state and not a missing answer.
+        adoptDisplay(vocabulary.display || { head: panelHead });
         renderVocabularyPanel();
       }
       async function readVocabulary() {
@@ -6053,9 +6143,9 @@
       // send, because a removal's sentence prices the change in tasks and only
       // the answer knows that number.
       async function changeVocabulary(method, path, body, describe) {
-        if (panelBusy || !panelVocabulary) return;
+        if (configBusy() || !panelVocabulary) return;
         panelBusy = true;
-        applyPanelBusy();
+        applyConfigBusy();
         let answer = null;
         try {
           // Quiescence. A pending intent may be carrying the very status this
@@ -6087,7 +6177,7 @@
         }
         panelBusy = false;
         if (!answer) {
-          applyPanelBusy();
+          applyConfigBusy();
           panelReport("error", "This status change could not be sent. Nothing about this project's statuses has changed.");
           return;
         }
@@ -6099,7 +6189,7 @@
           // whole of the recovery: no refetch, no re-base, no retry.
           panelForm = payload.vocabulary ? null : panelForm;
           if (payload.vocabulary) adoptVocabulary(payload.vocabulary);
-          applyPanelBusy();
+          applyConfigBusy();
           // A conflict is described rather than quoted, as it is everywhere
           // else in this client: the server's sentence names the head the
           // request carried, which is this client's bookkeeping. Every other
@@ -6113,7 +6203,7 @@
         }
         panelForm = null;
         adoptVocabulary(payload.vocabulary);
-        applyPanelBusy();
+        applyConfigBusy();
         panelReport("", describe(payload), (payload.warnings || []).map((warning) => warning.message));
       }
       function panelButton(caption, description, onClick, { modifier = "", blocked = false } = {}) {
@@ -6131,22 +6221,27 @@
       // own: the form's submit does the work, so pressing Enter in a field and
       // pressing the button are the same gesture rather than two paths that
       // could drift, and a browser that fires both would not send twice.
-      function panelSubmitButton(caption, description, { modifier = "", blocked = false } = {}) {
+      //
+      // `controls` is the list the control joins, which is the statuses panel's
+      // unless a caller says otherwise. The board settings section keeps its own
+      // list because its form is rebuilt on its own schedule; both lists are
+      // disabled together, which is what configBusy above is for.
+      function panelSubmitButton(caption, description, { modifier = "", blocked = false, controls = panelControls } = {}) {
         const control = document.createElement("button");
         control.type = "submit";
         control.className = modifier ? "admin-button " + modifier : "admin-button";
         text(control, caption);
         if (description) control.setAttribute("aria-label", description);
-        panelControls.push(control);
+        controls.push(control);
         blockPanelControl(control, blocked);
         return control;
       }
-      function panelTextInput(id, value, placeholder) {
+      function panelTextInput(id, value, placeholder, controls = panelControls) {
         const control = document.createElement("input");
         control.id = id;
         control.value = value || "";
         if (placeholder) control.placeholder = placeholder;
-        panelControls.push(control);
+        controls.push(control);
         return control;
       }
       function panelSelect(id, options) {
@@ -6612,20 +6707,231 @@
         if (!inside || !vocabularyPanel || vocabularyPanel.contains(document.activeElement)) return;
         if (typeof vocabularyPanel.focus === "function") vocabularyPanel.focus();
       }
-      // The statuses page, in the shell every other route is drawn in: a header
-      // that names it and offers the way back to the board, and under it the
-      // body the server rendered.
+      // The board's own settings: what this project calls itself, and the two
+      // colors it is drawn in.
       //
-      // The body is moved rather than copied. It is one element with one
+      // It is the statuses panel's sibling in every way that matters — its
+      // controls are disabled while a change is in flight, the change waits for
+      // the board's own writes to settle first, a stale write is terminal and
+      // the current settings are adopted from the refusal — and it differs in
+      // the one way its change differs: a save is a full replacement. The three
+      // fields say what the configuration should be, an empty field is a setting
+      // cleared, and one Save sends all three.
+      //
+      // What the server does with that is the reason the form can be this
+      // simple, and it is worth saying here: it records only the settings that
+      // actually changed, and a save nobody edited records nothing at all. A
+      // display operation marks this project's ledger as needing a newer
+      // Workbook — permanently, for every clone that fetches it — so a Save
+      // pressed twice must cost nothing the second time.
+      //
+      // The two sections write the same ref against the same head, so neither
+      // starts while the other is in flight and each greys the other's controls
+      // while it runs. They keep their own live regions, though: a refused
+      // status change must not blank a name the reader has just typed, and a
+      // saved name must not erase what the status change had to say.
+      let displaySettings = null;
+      let displayBusy = false;
+      let displayControls = [];
+      // The fields, held out here so a save reads what is in them and a render
+      // can put them back. They are rebuilt with the form.
+      let displayFields = null;
+      const displaySendingMessage = "Sending this project's board settings.";
+      function configBusy() {
+        return panelBusy || displayBusy;
+      }
+      function displayReport(kind, message, warnings = []) {
+        reportInto(displayPanelStatus, kind, message, warnings);
+      }
+      function applyDisplayBusy() {
+        displayControls.forEach((control) => { control.disabled = configBusy(); });
+      }
+      function applyConfigBusy() {
+        applyPanelBusy();
+        applyDisplayBusy();
+      }
+      function adoptDisplay(settings) {
+        displaySettings = settings;
+        renderDisplayPanel();
+      }
+      // Takes a display document as the panel's own, and takes its head as the
+      // page's: there is one configuration ledger, so a display change moves the
+      // tip a status change has to name, and the standing notice above main is
+      // what tells the board it has moved.
+      function adoptDisplayAtHead(settings) {
+        panelHead = typeof settings.head === "string" ? settings.head : "";
+        noteVocabularyChange(panelHead);
+        adoptDisplay(settings);
+      }
+      // One save, sent as the whole configuration and against the head the page
+      // read it at. The head is the statuses panel's, asked for rather than kept
+      // twice, because one ledger has one tip.
+      async function saveDisplaySettings() {
+        if (configBusy() || !displaySettings || !displayFields) return;
+        displayBusy = true;
+        applyConfigBusy();
+        const proposed = {
+          name: displayFields.name.value.trim(),
+          primaryColor: displayFields.primaryColor.value.trim(),
+          textColor: displayFields.textColor.value.trim()
+        };
+        let answer = null;
+        try {
+          // Quiescence, for the reason a status change waits: a pending intent
+          // was composed against this project's configuration, and a write that
+          // moved the ledger tip out from under it would have that intent
+          // refused as a stale write nothing was actually wrong with.
+          if (pendingIntents.size > 0) {
+            displayReport("", panelWaitingMessage);
+            await settledIntents();
+          }
+          const response = await fetch("/api/display", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(Object.assign({}, proposed, { expectedHead: panelHead }))
+          });
+          const payload = await response.json();
+          answer = {
+            applied: response.ok && payload.format === "workbook.display-mutation" &&
+              payload.version === 1,
+            payload
+          };
+        } catch (_) {
+          // Only the exchange is guarded, so a defect in the rendering below
+          // cannot be reported as a request that never went.
+          answer = null;
+        }
+        displayBusy = false;
+        if (!answer) {
+          applyConfigBusy();
+          displayReport("error", "These board settings could not be sent. Nothing about this project's configuration has changed.");
+          return;
+        }
+        const payload = answer.payload;
+        if (!answer.applied) {
+          const stale = payload.error && payload.error.category === "stale-write";
+          // A refusal that carries the settings is a stale write, and the
+          // settings it carries are the current ones. Adopting them is the whole
+          // of the recovery, exactly as it is for a status change — and the copy
+          // names the configuration rather than the statuses, because what moved
+          // may have been either.
+          if (payload.display) adoptDisplayAtHead(payload.display);
+          applyConfigBusy();
+          displayReport("error", stale
+            ? "This project's configuration changed in another clone, so these settings were not applied. This page now shows them as they stand; review them and save again."
+            : payload.error && payload.error.message || "These board settings were not applied.");
+          return;
+        }
+        adoptDisplayAtHead(payload.display);
+        applyConfigBusy();
+        displayReport("", describeDisplaySave(payload.display),
+          (payload.warnings || []).map((warning) => warning.message));
+      }
+      // What a save says it did. It reports the settings as they now stand
+      // rather than what changed, for the reason the statuses panel re-renders
+      // wholesale: the server decides what is recorded, and a sentence composed
+      // from what the form sent could describe a change the server declined to
+      // make.
+      function describeDisplaySave(settings) {
+        const named = [];
+        if (settings.name) named.push("named " + JSON.stringify(settings.name));
+        if (settings.primaryColor) named.push("drawn in " + settings.primaryColor);
+        if (settings.textColor) named.push("set in " + settings.textColor);
+        return named.length === 0
+          ? "This board has no settings of its own. Reload the board to draw it as it now stands."
+          : "This board is " + named.join(", ") + ". Reload the board to draw it as it now stands.";
+      }
+      function renderDisplayPanel() {
+        if (!displayPanel || !displayPanelBody) return;
+        // Focus is caught and parked the way the statuses panel catches it: the
+        // control the reader pressed is one of the nodes this drops.
+        const held = document.activeElement;
+        const inside = Boolean(held && displayPanel.contains(held));
+        displayControls = [];
+        displayFields = null;
+        if (!displaySettings) {
+          const message = document.createElement("p");
+          message.className = "admin-note";
+          message.dataset.displayPanelEmpty = "";
+          text(message, "This project's board settings are not available.");
+          displayPanelBody.replaceChildren(message);
+          restoreDisplayFocus(inside);
+          return;
+        }
+        const form = document.createElement("form");
+        form.className = "admin-form";
+        form.dataset.displayForm = "";
+        form.addEventListener("submit", (event) => {
+          event.preventDefault();
+          saveDisplaySettings();
+        });
+        // Text inputs for the colors rather than a colour well. `#rrggbb` is
+        // what the ledger stores, what `workbook config set` takes and what a
+        // brand's palette is written in — and a picker has no empty value, so a
+        // reader could never take a colour back off a board that had one. The
+        // placeholders say the shape rather than naming this board's own blue,
+        // which is a literal the stylesheet owns and the script must not keep a
+        // second copy of.
+        displayFields = {
+          name: displayInput("display-name", "name", displaySettings.name, boardDefaultName),
+          primaryColor: displayInput("display-primary-color", "primaryColor", displaySettings.primaryColor, "#rrggbb"),
+          textColor: displayInput("display-text-color", "textColor", displaySettings.textColor, "#rrggbb")
+        };
+        form.append(
+          panelField("Project name", displayFields.name),
+          panelField("Accent color", displayFields.primaryColor),
+          panelField("Text color", displayFields.textColor),
+          panelSubmitButton("Save", "Save this project's board settings",
+            { modifier: "admin-button--primary", controls: displayControls })
+        );
+        displayPanelBody.replaceChildren(form);
+        applyDisplayBusy();
+        restoreDisplayFocus(inside);
+      }
+      // One field of the settings form, marked with the member of the change it
+      // carries so the save reads the form rather than three variables that
+      // could fall out of step with it.
+      function displayInput(id, member, value, placeholder) {
+        const control = panelTextInput(id, value, placeholder, displayControls);
+        control.dataset.displayField = member;
+        return control;
+      }
+      function restoreDisplayFocus(inside) {
+        if (!inside || !displayPanel || displayPanel.contains(document.activeElement)) return;
+        if (typeof displayPanel.focus === "function") displayPanel.focus();
+      }
+      // Leaving the route takes the settings section with it, for the reason it
+      // takes the statuses: the next visit reads them again rather than offering
+      // a Save composed against values that may be minutes old.
+      function leaveDisplaySection() {
+        if (!displayPanel || displayPanel.hidden) return;
+        displayPanel.hidden = true;
+        displayPanel.remove();
+        displaySettings = null;
+        displayFields = null;
+        displayPanelBody.replaceChildren();
+        displayPanelStatus.replaceChildren();
+        displayPanelStatus.dataset.kind = "";
+      }
+      // The configuration page, in the shell every other route is drawn in: a
+      // header that names it and offers the way back to the board, and under it
+      // the two bodies the server rendered, each under a heading of its own.
+      //
+      // The headings are the page's, not the panels'. The route holds two
+      // sections now — the project's statuses and the board's own settings —
+      // and a page whose h2 named one of them would be a page that grew a second
+      // section nobody announced.
+      //
+      // The bodies are moved rather than copied. Each is one element with one
       // identity for the length of the visit, which is what lets the list, the
-      // live region and the focus the rebuilds park on it survive a re-render —
-      // and what a change that answers after the reader has left writes into
-      // harmlessly, off the document, instead of into a second copy of a page
-      // nobody is looking at.
-      function statusesView() {
+      // live regions and the focus the rebuilds park on them survive a
+      // re-render — and what a change that answers after the reader has left
+      // writes into harmlessly, off the document, instead of into a second copy
+      // of a page nobody is looking at.
+      function configView() {
         const section = document.createElement("section");
         section.className = "task-route task-route--admin";
-        section.setAttribute("aria-labelledby", "statuses-title");
+        section.setAttribute("aria-labelledby", "config-title");
         const header = document.createElement("header");
         header.className = "task-route__header";
         const naming = document.createElement("div");
@@ -6633,8 +6939,8 @@
         eyebrow.className = "eyebrow";
         text(eyebrow, "Project configuration");
         const heading = document.createElement("h2");
-        heading.id = "statuses-title";
-        text(heading, "Statuses");
+        heading.id = "config-title";
+        text(heading, "Configuration");
         naming.append(eyebrow, heading);
         // The way back, where a task's page keeps it: a link to the board, in
         // the same words and the same class, rather than a control that only
@@ -6644,8 +6950,20 @@
         back.href = "/";
         text(back, "Back");
         header.append(naming, back);
+        section.append(header);
+        // The statuses, under the heading the panel already points at with
+        // aria-labelledby.
+        section.append(sectionHeading("statuses-title", "Statuses"));
         vocabularyPanel.hidden = false;
-        section.append(header, vocabularyPanel);
+        section.append(vocabularyPanel);
+        // The board's own settings, on a board that was given the capability to
+        // change them. A board without it is served no panel and gets no
+        // heading, rather than a heading over nothing.
+        if (displayPanel) {
+          section.append(sectionHeading("display-title", "Board settings"));
+          displayPanel.hidden = false;
+          section.append(displayPanel);
+        }
         // A change the reader left in flight is still in flight, and the render
         // below will draw its list with every control disabled. Leaving cleared
         // what the last visit had to say, so the reason is said again here
@@ -6654,19 +6972,28 @@
         if (panelBusy) {
           panelReport("", pendingIntents.size > 0 ? panelWaitingMessage : panelSendingMessage);
         }
+        if (displayBusy) displayReport("", displaySendingMessage);
         return section;
       }
-      // Leaving the statuses route. The body goes back out of the document with
-      // the render that replaces it, and what it was drawing goes with it: the
-      // form the reader had open, and the statuses themselves, because the next
-      // visit reads them again rather than drawing a list that may be minutes
-      // old. A change composed against what this page happens to remember is the
-      // stale write it would rather not have to report.
+      function sectionHeading(id, caption) {
+        const heading = document.createElement("h3");
+        heading.className = "admin__heading";
+        heading.id = id;
+        text(heading, caption);
+        return heading;
+      }
+      // Leaving the configuration route. The bodies go back out of the document
+      // with the render that replaces them, and what they were drawing goes with
+      // them: the form the reader had open, and the statuses themselves, because
+      // the next visit reads them again rather than drawing a list that may be
+      // minutes old. A change composed against what this page happens to
+      // remember is the stale write it would rather not have to report.
       //
       // A change still in flight is deliberately not cancelled. It finishes,
       // hands its head to noteVocabularyChange for the notice, and renders into
       // a body that is no longer in the document.
-      function leaveStatusesRoute() {
+      function leaveConfigRoute() {
+        leaveDisplaySection();
         if (!vocabularyPanel || vocabularyPanel.hidden) return;
         vocabularyPanel.hidden = true;
         vocabularyPanel.remove();
@@ -7115,15 +7442,15 @@
         // see.
         if (descriptionToggle) descriptionToggle.hidden = current.view !== "board";
         if (deletedToggle) deletedToggle.hidden = current.view !== "board";
-        // The statuses page's body is a served element rather than a built one,
-        // so leaving that route has to put it away — the render below would drop
-        // it from the document either way, and what it was drawing has to go
-        // with it.
-        if (current.view !== "statuses") leaveStatusesRoute();
+        // The configuration page's bodies are served elements rather than built
+        // ones, so leaving that route has to put them away — the render below
+        // would drop them from the document either way, and what they were
+        // drawing has to go with them.
+        if (current.view !== "config") leaveConfigRoute();
         if (current.view === "board") {
-          document.title = "Workbook board";
+          document.title = boardName;
           // The board is re-attached rather than rebuilt, which is what makes
-          // coming back from the statuses page cost nothing: every card node the
+          // coming back from the configuration page cost nothing: every card node the
           // reader left is the node they return to, holding whatever it was
           // holding. The columns are the ones this page was served with even
           // when the statuses have moved on since — the standing notice above
@@ -7137,14 +7464,14 @@
           focusCreatedCard();
           return;
         }
-        if (current.view === "statuses") {
-          document.title = "Statuses · Workbook";
+        if (current.view === "config") {
+          document.title = "Configuration" + boardTitleSuffix;
           // Mounted once per visit, the way the board is re-attached rather than
           // rebuilt: this render runs again for the same route when the first
           // task refresh lands, and a reader who had a form open on a hard load
           // would otherwise watch it disappear a moment later.
           if (!main.contains(vocabularyPanel)) {
-            main.replaceChildren(statusesView());
+            main.replaceChildren(configView());
             // Read on entry rather than once. This page is visited seldom and a
             // clone can have changed the statuses since the last look, and a
             // change composed against what this client happens to remember is
@@ -7154,22 +7481,22 @@
           return;
         }
         if (current.view === "unknown") {
-          document.title = "Page not found · Workbook";
+          document.title = "Page not found" + boardTitleSuffix;
           main.replaceChildren(routeMessage("Page not found", "This Workbook route does not exist."));
           return;
         }
         if (!tasksLoaded) {
           if (taskLoadFailed) {
-            document.title = "Unable to load task · Workbook";
+            document.title = "Unable to load task" + boardTitleSuffix;
             main.replaceChildren(routeMessage("Unable to load task", "Task data could not be loaded. Retry now or return to the board.", true));
             return;
           }
-          document.title = "Loading task · Workbook";
+          document.title = "Loading task" + boardTitleSuffix;
           main.replaceChildren(routeMessage("Loading task", "Reading the latest task state from this checkout."));
           return;
         }
         if (current.view === "new") {
-          document.title = "New task · Workbook";
+          document.title = "New task" + boardTitleSuffix;
           // A refused create's values are handed to the next New Task render
           // and consumed by it, so a Back or a reload opens an empty form
           // rather than resurrecting a draft the user already dealt with.
@@ -7194,11 +7521,11 @@
         // openable again.
         const task = projectTasks(latestTasks).find((candidate) => candidate.id === current.id && !candidate.deleted);
         if (!task) {
-          document.title = "Task not found · Workbook";
+          document.title = "Task not found" + boardTitleSuffix;
           main.replaceChildren(routeMessage("Task not found", "No task has the full ID " + current.id + "."));
           return;
         }
-        document.title = task.title + " · Workbook";
+        document.title = task.title + boardTitleSuffix;
         const detail = taskForm("detail", task);
         const controller = activeDependencyController;
         const relationshipGeneration = relationshipRefreshGeneration;

@@ -61,14 +61,14 @@ func TestHandlerBoardColumnsOmitWorkbookRefPaths(t *testing.T) {
 func TestHandlerBoardCardTitlesAreNotUnderlined(t *testing.T) {
 	body := boardPage(t)
 	for _, fragment := range []string{
-		`.task-card h3 a { color: #172033; text-decoration: none; }`,
-		`.task-card h3 a:hover { color: #2457d6; }`,
+		`.task-card h3 a { color: var(--wb-text); text-decoration: none; }`,
+		`.task-card h3 a:hover { color: var(--wb-primary); }`,
 	} {
 		if !strings.Contains(body, fragment) {
 			t.Errorf("card title styling does not contain %q", fragment)
 		}
 	}
-	if strings.Contains(body, `.task-card h3 a { color: #172033; text-decoration-color`) {
+	if strings.Contains(body, `.task-card h3 a { color: var(--wb-text); text-decoration-color`) {
 		t.Error("card titles still draw an underline")
 	}
 }

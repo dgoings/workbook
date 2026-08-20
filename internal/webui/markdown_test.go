@@ -897,7 +897,7 @@ func TestHandlerPinsMarkdownBlockRules(t *testing.T) {
 		// Both halves are load-bearing: without the scroll a long line of code
 		// widens the page, and without the overflow-wrap reset the container's
 		// `anywhere` breaks code at an arbitrary column.
-		`.markdown pre { margin: 0 0 .55rem; padding: .5rem .6rem; border: 1px solid #d5deea; border-radius: 4px; background: #f6f8fc; overflow-x: auto; overflow-wrap: normal; white-space: pre; }`,
+		`.markdown pre { margin: 0 0 .55rem; padding: .5rem .6rem; border: 1px solid var(--wb-hairline); border-radius: 4px; background: #f6f8fc; overflow-x: auto; overflow-wrap: normal; white-space: pre; }`,
 		// Prose with a 900-character word in it is not a reason for the page to
 		// scroll sideways.
 		`.markdown { min-width: 0; overflow-wrap: anywhere; }`,

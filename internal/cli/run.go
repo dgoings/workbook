@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -1512,7 +1513,7 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 		if err != nil {
 			return webui.VocabularyState{}, err
 		}
-		return webui.VocabularyState{Vocabulary: state.Vocabulary, Head: state.Head}, nil
+		return webui.VocabularyState{Vocabulary: state.Vocabulary, Head: state.Head, Display: state.Display}, nil
 	}
 	current := func(requestContext context.Context) (core.Service, error) {
 		state, carried := webui.VocabularyFrom(requestContext)
@@ -1541,12 +1542,27 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 			return reader
 		},
 	}
+	// The board's display settings go through a writer of their own rather than
+	// through the status planners, because a save is not a status change: what it
+	// records is the difference between what it proposes and what the ledger
+	// already holds, which is a question only the settings themselves have.
+	display := &boardDisplay{
+		repository: repository,
+		config:     service.Config,
+		publisher:  publisher,
+	}
 	handler := webui.NewHandler(webui.Options{
 		Vocabulary:    readVocabulary,
 		AddStatus:     statuses.add,
 		EditStatus:    statuses.edit,
 		RemoveStatus:  statuses.remove,
 		ReorderStatus: statuses.reorder,
+		SetDisplay:    display.set,
+		// Which checkout this board is serving, as its header's eyebrow names
+		// it. A value rather than a reader: `serve` is bound to one worktree for
+		// its whole life, and a checkout that moved out from under it has taken
+		// every other answer with it.
+		RepoName: filepath.Base(repository.Root),
 		List: func(requestContext context.Context) ([]core.Task, error) {
 			reader, err := current(requestContext)
 			if err != nil {
