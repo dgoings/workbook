@@ -88,11 +88,32 @@ const (
 // SyncState is what the board reports about publication. Watcher is false when
 // no trustworthy watcher answers, in which case a deferred board still falls
 // back to publishing inline and the indicator says so.
+//
+// Reason names why Watcher is false in a form a program can branch on, because
+// the two cases are not the same news and Detail is prose. A clone with no
+// origin publishes nothing in either mode and no watcher will ever change that;
+// a clone with an origin and nobody answering is one `workbook sync --watch`
+// away from deferring again. A reader told the second when the first is true is
+// being sent to start a watcher that cannot help.
 type SyncState struct {
 	Mode    string `json:"mode"`
 	Watcher bool   `json:"watcher"`
+	Reason  string `json:"reason,omitempty"`
 	Detail  string `json:"detail,omitempty"`
 }
+
+// The reasons a board reports for having no watcher to defer to. Both are
+// absent while Watcher is true, and a client that does not recognize the value
+// it is given still has Detail to show.
+const (
+	// SyncReasonNoOrigin means this clone has no origin, so nothing is
+	// published in either mode and a watcher would have nowhere to push.
+	SyncReasonNoOrigin = "no-origin"
+	// SyncReasonNoWatcher means no watcher answers for the board to defer to —
+	// none running, none reachable, or one whose last synchronization left it
+	// untrustworthy — so both modes publish inline.
+	SyncReasonNoWatcher = "no-watcher"
+)
 
 type SyncDocument struct {
 	Format  string    `json:"format"`

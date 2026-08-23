@@ -18,7 +18,54 @@ import (
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/syncloop"
 	"github.com/dgoings/workbook/internal/syncloop/watchertest"
+	"github.com/dgoings/workbook/internal/webui"
 )
+
+// Having nobody to defer to is two different pieces of news, and the board
+// reports which one it is rather than leaving a reader to parse prose.
+//
+// A clone with no origin publishes nothing in either mode, and no watcher will
+// ever change that; a clone with an origin and nobody answering is one
+// `workbook sync --watch` away from deferring again. A surface told only
+// watcher:false has to guess, and the board guessed wrong: it read a clone with
+// no remote as a missing watcher and sent its reader to start one.
+//
+// The watcherless sentence says "answering" rather than "running" because this
+// probe cannot see the reader's terminal: a watcher that is running and whose
+// last synchronization failed is disqualified here too, and telling that reader
+// nothing is running would be a claim about their machine that is false.
+func TestBoardPublicationStateNamesWhyNoWatcherAnswers(t *testing.T) {
+	ctx := context.Background()
+	repository := initializedRepository(t)
+	service, store, err := openBoardServiceParts(ctx, repository)
+	if err != nil {
+		t.Fatalf("open the board's service: %v", err)
+	}
+	publisher := &boardPublisher{repository: store, config: service.Config}
+
+	state := publisher.state(ctx)
+	if state.Watcher {
+		t.Fatalf("a clone with no origin reports a watcher: %+v", state)
+	}
+	if state.Reason != webui.SyncReasonNoOrigin {
+		t.Fatalf("reason with no origin = %q, want %q", state.Reason, webui.SyncReasonNoOrigin)
+	}
+	if !strings.Contains(state.Detail, "no origin is configured") {
+		t.Fatalf("detail with no origin = %q", state.Detail)
+	}
+
+	cliGit(t, repository, "remote", "add", "origin", filepath.Join(t.TempDir(), "missing.git"))
+	state = publisher.state(ctx)
+	if state.Watcher {
+		t.Fatalf("a clone with no watcher running reports one: %+v", state)
+	}
+	if state.Reason != webui.SyncReasonNoWatcher {
+		t.Fatalf("reason with no watcher = %q, want %q", state.Reason, webui.SyncReasonNoWatcher)
+	}
+	if state.Detail != "no watcher is answering, so changes publish inline" {
+		t.Fatalf("detail with no watcher = %q", state.Detail)
+	}
+}
 
 func TestSyncWatchRejectsInvalidInvocations(t *testing.T) {
 	_, second := cliSyncRepositories(t)
