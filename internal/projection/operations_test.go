@@ -382,6 +382,120 @@ func TestStoreReportsADuplicateOperationIDAsCorruptDataNamingTheTask(t *testing.
 	}
 }
 
+func TestStoreNamesTheOtherTaskWhenAnOperationIDIsRepeatedAcrossTasks(t *testing.T) {
+	// Mutation caught: blaming the task being projected for a ULID the operations
+	// primary key is global over. The row already holding it can belong to a
+	// different task, and telling somebody to repair the history in front of them
+	// points them at a chain that repeats nothing.
+	ctx := context.Background()
+	repository, config := initializeWorkbook(t, testrepo.New(t))
+	first := createTask(t, repository, config, "First task")
+	second := createTaskWithIDs(t, repository, config, "Second task",
+		"01K0M6B8A4FTT8C39MXXYTW7E1", "01K0M6B8A4FTT8C39MXXYTW7E2", "01K0M6B8A4FTT8C39MXXYTW7E3")
+
+	store, err := openStore(ctx, &crossTaskDuplicatingSource{repository: repository}, config, t.TempDir()+"/cache.sqlite")
+	if err != nil {
+		t.Fatalf("openStore() error = %v", err)
+	}
+	_, err = store.List(ctx, config)
+	if category := core.CategoryOf(err); category != core.CategoryCorruptData {
+		t.Fatalf("List() category = %q, want corrupt-data; error = %v", category, err)
+	}
+	if !strings.Contains(err.Error(), first.ID) || !strings.Contains(err.Error(), second.ID) {
+		t.Fatalf("List() error = %v, want both %q and %q named", err, first.ID, second.ID)
+	}
+	if !strings.Contains(err.Error(), "unique across the project") {
+		t.Fatalf("List() error = %v, want the project-wide key explained", err)
+	}
+	if strings.Contains(err.Error(), cacheRecoveryHint) {
+		t.Fatalf("List() error = %v, want no rebuild hint for damage a rebuild repeats", err)
+	}
+}
+
+// createTaskWithIDs creates a task from an explicit ID sequence, so a test that
+// needs two tasks in one repository can give the second one identifiers the
+// first has not already claimed.
+func createTaskWithIDs(
+	t *testing.T,
+	repository *gitstore.Repository,
+	config core.ProjectConfig,
+	title string,
+	ids ...string,
+) core.Task {
+	t.Helper()
+	index := 0
+	service := core.Service{
+		Config: config, Reader: repository, Writer: repository,
+		Actor: "test@example.test",
+		Now:   func() time.Time { return time.Date(2026, time.July, 26, 12, 2, 0, 0, time.UTC) },
+		IDs: core.IDSourceFunc(func() (string, error) {
+			if index >= len(ids) {
+				return "", fmt.Errorf("createTaskWithIDs ran out of identifiers after %d", index)
+			}
+			value := ids[index]
+			index++
+			return value, nil
+		}),
+	}
+	result, err := service.CreateMutation(context.Background(), core.CreateInput{Title: title})
+	if err != nil {
+		t.Fatalf("CreateMutation() error = %v", err)
+	}
+	return result.Task
+}
+
+// crossTaskDuplicatingSource stamps one task's operation ULID onto another
+// task's operation, which the operations table refuses exactly as it refuses a
+// repeat inside one chain: its key carries no task.
+type crossTaskDuplicatingSource struct {
+	repository *gitstore.Repository
+	borrowed   string
+}
+
+func (s *crossTaskDuplicatingSource) ListTaskHeads(ctx context.Context, config core.ProjectConfig) ([]gitstore.TaskHead, error) {
+	return s.repository.ListTaskHeads(ctx, config)
+}
+
+func (s *crossTaskDuplicatingSource) InspectTaskHead(ctx context.Context, config core.ProjectConfig, taskID string) (gitstore.TaskHead, bool, error) {
+	return s.repository.InspectTaskHead(ctx, config, taskID)
+}
+
+func (s *crossTaskDuplicatingSource) ReadTaskHeads(ctx context.Context, config core.ProjectConfig, heads []gitstore.TaskHead) ([]core.Snapshot, error) {
+	return s.repository.ReadTaskHeads(ctx, config, heads)
+}
+
+func (s *crossTaskDuplicatingSource) ValidateTaskHeadAdvances(ctx context.Context, config core.ProjectConfig, advances []gitstore.HeadAdvance) error {
+	return s.repository.ValidateTaskHeadAdvances(ctx, config, advances)
+}
+
+func (s *crossTaskDuplicatingSource) ReadTaskOperations(
+	ctx context.Context,
+	config core.ProjectConfig,
+	requests []gitstore.TaskHistoryRequest,
+) ([]gitstore.TaskOperationsResult, error) {
+	results, err := s.repository.ReadTaskOperations(ctx, config, requests)
+	if err != nil {
+		return nil, err
+	}
+	for index := range results {
+		for _, commit := range results[index].Commits {
+			if len(commit.Operation.Operations) == 0 {
+				continue
+			}
+			if s.borrowed == "" {
+				s.borrowed = commit.Operation.Operations[0].ID
+				continue
+			}
+			if index == 0 {
+				continue
+			}
+			commit.Operation.Operations[0].ID = s.borrowed
+			return results, nil
+		}
+	}
+	return results, nil
+}
+
 // duplicatingSource repeats one operation ULID later in the same chain, the
 // shape a hand-edited or hostile ref can carry and no Workbook build writes.
 type duplicatingSource struct {

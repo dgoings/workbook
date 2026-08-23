@@ -530,8 +530,115 @@ func TestValidateReportsARepeatedOperationIDAcrossACachedBoundary(t *testing.T) 
 	if got.Invalid != 1 || len(got.Failures) != 1 || got.Failures[0].Commit != history[2].ObjectID {
 		t.Fatalf("incremental result = %#v, want the appended commit reported invalid", got)
 	}
-	if !strings.Contains(got.Failures[0].Message, history[0].Operation.Operations[0].ID) {
-		t.Fatalf("failure message = %q, want the repeated operation named", got.Failures[0].Message)
+	if !strings.Contains(got.Failures[0].Message, history[0].Operation.Operations[0].ID) ||
+		!strings.Contains(got.Failures[0].Message, history[0].ObjectID) {
+		t.Fatalf("failure message = %q, want the repeated operation and its first commit named", got.Failures[0].Message)
+	}
+}
+
+func TestValidateReportsAnOperationIDRepeatedAcrossTwoTasks(t *testing.T) {
+	// Production mutation: scoping the seen-operation set to one task. The
+	// projection keys operations on the ULID alone, with no task in the key, so a
+	// ULID shared by two chains is exactly as unprojectable as one repeated inside
+	// a single chain — and a per-task check reports the project VALID while every
+	// projecting command, `rebuild` included, refuses it.
+	ctx := context.Background()
+	cache := openTestCache(t, ctx, testConfig())
+	first := validationHistory(t, taskID(1), generationID(1), 200, 3)
+	second := validationHistory(t, taskID(2), generationID(2), 300, 3)
+	// Nothing inside either chain repeats; the collision is between them.
+	second[1].Operation.Operations[0].ID = first[1].Operation.Operations[0].ID
+	source := &validatorSource{heads: headsFor(first, second), histories: map[string]gitstore.TaskHistoryResult{
+		taskID(1): historyResult(taskID(1), first[2].ObjectID, false, first),
+		taskID(2): historyResult(taskID(2), second[2].ObjectID, false, second),
+	}}
+
+	got, err := (&Validator{source: source, cache: cache, config: testConfig()}).Validate(ctx, true)
+	if category := core.CategoryOf(err); category != core.CategoryCorruptData {
+		t.Fatalf("Validate() category = %q, want corrupt-data; error = %v", category, err)
+	}
+	if got.Invalid != 1 || len(got.Failures) != 1 {
+		t.Fatalf("cross-task duplicate result = %#v, want one invalid task", got)
+	}
+	failure := got.Failures[0]
+	if failure.TaskID != taskID(2) || failure.Commit != second[1].ObjectID {
+		t.Fatalf("failure = %#v, want the second chain's repeating commit", failure)
+	}
+	if !strings.Contains(failure.Message, first[1].Operation.Operations[0].ID) ||
+		!strings.Contains(failure.Message, first[1].ObjectID) ||
+		!strings.Contains(failure.Message, taskID(1)) {
+		t.Fatalf("failure message = %q, want the operation, its commit, and the owning task named", failure.Message)
+	}
+}
+
+func TestValidateReportsACrossTaskRepeatAgainstATaskItTookFromCache(t *testing.T) {
+	// Production mutation: seeding the project-wide set only from the tasks one
+	// run reads. A task whose head has not moved is answered from the cache and
+	// never streamed, so a new task repeating one of its ULIDs would meet an empty
+	// set and the run would call the project valid.
+	ctx := context.Background()
+	cache := openTestCache(t, ctx, testConfig())
+	first := validationHistory(t, taskID(1), generationID(1), 400, 3)
+	source := &validatorSource{
+		heads:     headsFor(first),
+		histories: map[string]gitstore.TaskHistoryResult{taskID(1): historyResult(taskID(1), first[2].ObjectID, false, first)},
+	}
+	v := &Validator{source: source, cache: cache, config: testConfig()}
+	if _, err := v.Validate(ctx, false); err != nil {
+		t.Fatalf("first Validate() error = %v", err)
+	}
+
+	second := validationHistory(t, taskID(2), generationID(2), 500, 3)
+	second[2].Operation.Operations[0].ID = first[1].Operation.Operations[0].ID
+	source.heads = headsFor(first, second)
+	source.histories[taskID(2)] = historyResult(taskID(2), second[2].ObjectID, false, second)
+
+	got, err := v.Validate(ctx, false)
+	if category := core.CategoryOf(err); category != core.CategoryCorruptData {
+		t.Fatalf("second Validate() category = %q, want corrupt-data; error = %v", category, err)
+	}
+	if got.CacheHits != 1 {
+		t.Fatalf("second Validate() cache hits = %d, want the unchanged task answered from cache", got.CacheHits)
+	}
+	if got.Invalid != 1 || len(got.Failures) != 1 || got.Failures[0].TaskID != taskID(2) {
+		t.Fatalf("second Validate() result = %#v, want the new task reported invalid", got)
+	}
+	if !strings.Contains(got.Failures[0].Message, taskID(1)) ||
+		!strings.Contains(got.Failures[0].Message, first[1].ObjectID) {
+		t.Fatalf("failure message = %q, want the cached task and its commit named", got.Failures[0].Message)
+	}
+}
+
+func TestValidateDoesNotReportATaskAsRepeatingItsOwnRecordedOperations(t *testing.T) {
+	// Production mutation: seeding the project-wide set from the cached rows of a
+	// task this run is about to re-read. Those rows are replaced, not extended, so
+	// every commit of a `--full` rerun would look like a repeat of itself and a
+	// healthy project would be reported corrupt.
+	ctx := context.Background()
+	cache := openTestCache(t, ctx, testConfig())
+	first := validationHistory(t, taskID(1), generationID(1), 600, 3)
+	second := validationHistory(t, taskID(2), generationID(2), 700, 3)
+	source := &validatorSource{heads: headsFor(first, second), histories: map[string]gitstore.TaskHistoryResult{
+		taskID(1): historyResult(taskID(1), first[2].ObjectID, false, first),
+		taskID(2): historyResult(taskID(2), second[2].ObjectID, false, second),
+	}}
+	v := &Validator{source: source, cache: cache, config: testConfig()}
+	for run := 0; run < 3; run++ {
+		got, err := v.Validate(ctx, true)
+		if err != nil {
+			t.Fatalf("Validate(full, run %d) error = %v", run, err)
+		}
+		if got.Valid != 2 || got.Invalid != 0 {
+			t.Fatalf("Validate(full, run %d) result = %#v, want both tasks valid", run, got)
+		}
+	}
+	// The incremental path re-reads nothing and must agree.
+	got, err := v.Validate(ctx, false)
+	if err != nil {
+		t.Fatalf("Validate(incremental) error = %v", err)
+	}
+	if got.Valid != 2 || got.Invalid != 0 {
+		t.Fatalf("Validate(incremental) result = %#v, want both tasks valid", got)
 	}
 }
 

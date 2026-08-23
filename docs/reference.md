@@ -901,15 +901,18 @@ canonical heads change before the final inventory check, affected results remain
 pending and the command exits nonzero. Validation never mutates canonical or
 tracking Git refs.
 
-Validation also checks that no operation ULID appears twice in one task's chain.
-Checkpoint comparison cannot see that on its own — repeating a ULID changes no
-projected state, so every checkpoint still folds — while the disposable SQLite
-projection keys its operation rows on exactly that ULID. A chain that repeats
-one is therefore a chain no clone can project, and `workbook rebuild` reads the
-same duplicate and stops in the same place, so reporting it `corrupt-data` is
-what keeps `validate` from vouching for a repository nothing else can read. The
-check spans the whole chain, including the prefix a resumed run took from cache,
-and it names the repeated operation and the commit that first recorded it.
+Validation also checks that no operation ULID is recorded twice, whether within
+one task's chain or across two of them. Checkpoint comparison cannot see that on
+its own — repeating a ULID changes no projected state, so every checkpoint still
+folds — while the disposable SQLite projection keys its operation rows on
+exactly that ULID, with no task in the key. A repeat is therefore unprojectable
+by any clone, and `workbook rebuild` reads the same duplicate and stops in the
+same place, so reporting it `corrupt-data` is what keeps `validate` from
+vouching for a repository nothing else can read. The check spans the whole
+project: the chain being read, the prefix a resumed run took from cache, and the
+tasks a run answered from cache without reading them. It names the repeated
+operation, the commit that first recorded it, and, when the two are different
+tasks, the task that already owns the ULID.
 
 Validation cost is measured by the benchmark harness's `validate-full-history`,
 `validate-cached-unchanged`, and `validate-five-changed` scenarios against the
