@@ -296,6 +296,23 @@ type TaskMutationDocument struct {
 	Version  int            `json:"version"`
 	Task     core.Task      `json:"task"`
 	Warnings []core.Warning `json:"warnings,omitempty"`
+	// Assignments is the task's assignment section as the page draws it, carried
+	// only by the two routes that move one. Every other mutation leaves it out,
+	// so the answer they send is the one they have always sent.
+	//
+	// It is here rather than derived by the client for the reason the poll's
+	// presentation is: a row's staleness hint is presentation.AssignedAgo's
+	// wording and its withdrawal is core's removal rule, and neither is a member
+	// of core.Task. A panel that composed them from the task it was handed would
+	// be the second copy of two rules the server owns.
+	//
+	// A pointer, because the member has three states and a slice has two. Absent
+	// is "this answer says nothing about assignments", which is every other
+	// mutation on this board; `[]` is "nobody holds this task", which is what a
+	// withdrawal of the last one produces. Collapsing those two would send the
+	// page that emptied a task's assignments an answer indistinguishable from a
+	// title save, and it would redraw the row it had just removed.
+	Assignments *[]AssignmentPresentation `json:"assignments,omitempty"`
 }
 
 type TaskPresentation struct {
@@ -332,11 +349,28 @@ type TaskPresentation struct {
 // along beside it because the exact time is what a reader settling a stale
 // assignment between themselves actually needs, and a phrase in whole days
 // cannot carry it.
+// Removable is whether the identity this board writes as may withdraw this
+// assignment. It is core.Assignment.RemovableBy, asked on the server, because
+// the rule is decided from the assignment's own principal and creator and the
+// page must not draw a control the service would refuse. A board that cannot
+// assign at all carries the member on nothing, so its document is the one it
+// has always published.
+// Value is the whole assignment as one token — principal[/label] — which is what
+// `--unassign` takes and what the withdrawal route's `from` member carries. It
+// rides along beside the two parts rather than being re-composed on the client
+// for the reason assignTaskRequest gives for not splitting it: the separator is
+// core's, and a second place that decided where the first slash falls would
+// address a different assignment than the row the reader pointed at. It is
+// carried on the same boards Removable is, and for the same reason — it exists
+// for the control, so a board that draws none publishes the document it always
+// did.
 type AssignmentPresentation struct {
 	Principal string    `json:"principal"`
 	Label     string    `json:"label,omitempty"`
+	Value     string    `json:"value,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
 	Ago       string    `json:"ago"`
+	Removable bool      `json:"removable,omitempty"`
 }
 
 // AssignmentRow is the chip row one card draws: the chips themselves and how
@@ -377,17 +411,29 @@ func assignmentRow(assignments []core.Assignment) AssignmentRow {
 // assignmentPresentation renders a task's assignments for the task page, in the
 // stored order — by principal, then label — so the section and the chip row
 // above it agree about which comes first.
-func assignmentPresentation(assignments []core.Assignment, now time.Time) []AssignmentPresentation {
+//
+// The actor is the identity this board writes as, empty for a board that writes
+// none. It decides the two members the withdrawal control needs — the token the
+// route takes and whether the row may be withdrawn from here — and an empty one
+// leaves both off every row, which is what keeps a read-only board's document
+// byte-for-byte what it was.
+func assignmentPresentation(assignments []core.Assignment, now time.Time, actor string) []AssignmentPresentation {
 	if len(assignments) == 0 {
 		return nil
 	}
 	rendered := make([]AssignmentPresentation, 0, len(assignments))
 	for _, assignment := range assignments {
+		value := ""
+		if actor != "" {
+			value = assignment.Value()
+		}
 		rendered = append(rendered, AssignmentPresentation{
 			Principal: assignment.Principal,
 			Label:     assignment.Label,
+			Value:     value,
 			CreatedAt: assignment.CreatedAt,
 			Ago:       presentation.AssignedAgo(assignment, now),
+			Removable: actor != "" && assignment.RemovableBy(actor),
 		})
 	}
 	return rendered
@@ -497,9 +543,24 @@ type Options struct {
 	RemoveAttachment  TaskAttachmentRemover
 	Attachment        TaskAttachmentFinder
 	AttachmentContent AttachmentContentReader
-	History           TaskHistoryReader
-	SyncState         SyncStateReporter
-	SetSyncMode       SyncModeSetter
+	// The two assignment mutations, and the identity they are recorded against.
+	//
+	// The identity is a value rather than a reader for the reason RepoName is:
+	// `workbook serve` is bound to one worktree, and the `user.email` an
+	// assignment made from that worktree's command line would carry is the one
+	// this board carries. It is what dissolves the objection the display half of
+	// this feature was built under — that a browser is not a principal — because
+	// nothing here asks the browser to be one: the checkout asserts its own
+	// identity, exactly as it does for a commit.
+	//
+	// A board given the mutations without an identity, or an identity without
+	// the mutations, draws no assignment control at all. See assignIdentity.
+	Assign      TaskAssigner
+	Unassign    TaskUnassigner
+	Identity    string
+	History     TaskHistoryReader
+	SyncState   SyncStateReporter
+	SetSyncMode SyncModeSetter
 }
 
 // handler embeds Options rather than copying it field by field, so there is no
@@ -585,6 +646,14 @@ type pageData struct {
 	// only for a type that comes back as pixels, and the set of those types is
 	// the download route's to decide.
 	InlineImageMediaTypes string
+	// AssignIdentity is the identity this board would record an assignment
+	// against, and empty for a board that can record none. It is one value doing
+	// two jobs, which is why it is not a boolean beside a name: the section
+	// draws its controls only where there is an identity, and the field's
+	// placeholder has to say which one, so a page that carried the flag and not
+	// the name could offer to assign somebody it could not name. See
+	// handler.assignIdentity for what makes it empty.
+	AssignIdentity string
 	// StatusTags are the three roles a status may carry, rendered into the
 	// configuration page's forms for the reason the columns are rendered into
 	// the board: the client must not carry a second copy of a set the server
@@ -830,6 +899,8 @@ func NewHandler(options Options) http.Handler {
 	handler.mux.HandleFunc("POST /api/tasks/{id}/comments", handler.addTaskComment)
 	handler.mux.HandleFunc("PATCH /api/tasks/{id}/comments/{comment}", handler.editTaskComment)
 	handler.mux.HandleFunc("DELETE /api/tasks/{id}/comments/{comment}", handler.removeTaskComment)
+	handler.mux.HandleFunc("POST /api/tasks/{id}/assignments", handler.addTaskAssignment)
+	handler.mux.HandleFunc("DELETE /api/tasks/{id}/assignments", handler.removeTaskAssignment)
 	handler.mux.HandleFunc("POST /api/tasks/{id}/attachments", handler.addTaskAttachment)
 	handler.mux.HandleFunc("GET /api/tasks/{id}/attachments/{attachment}", handler.serveTaskAttachment)
 	handler.mux.HandleFunc("DELETE /api/tasks/{id}/attachments/{attachment}", handler.removeTaskAttachment)
@@ -944,6 +1015,12 @@ func allowedMethod(path string) (string, bool) {
 		}
 		if _, _, ok := taskAttachmentPathIDs(path); ok {
 			return http.MethodGet + ", " + http.MethodDelete, true
+		}
+		// Both verbs at the collection's own address, because an assignment's
+		// name carries the separator a path segment cannot. See
+		// taskAssignmentsPathID.
+		if taskAssignmentsPathID(path) != "" {
+			return http.MethodPost + ", " + http.MethodDelete, true
 		}
 		if taskCommentsPathID(path) != "" || taskAttachmentsPathID(path) != "" {
 			return http.MethodPost, true
@@ -1152,6 +1229,7 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 		AttachmentLabelLimit:  core.MaxAttachmentLabelBytes,
 		AttachmentURLLimit:    core.MaxAttachmentURLBytes,
 		InlineImageMediaTypes: strings.Join(InlineAttachmentMediaTypes(), " "),
+		AssignIdentity:        handler.assignIdentity(),
 		StatusTags:            core.StatusTags(),
 		Administrable:         handler.administrable(),
 		DisplayAdministrable:  handler.administrable() && handler.SetDisplay != nil,
@@ -1475,7 +1553,7 @@ func (handler *handler) serveTasks(writer http.ResponseWriter, request *http.Req
 		Version:        1,
 		VocabularyHead: vocabulary.Head,
 		Tasks:          tasks,
-		Presentation:   taskPresentation(tasks, vocabulary.Vocabulary),
+		Presentation:   taskPresentation(tasks, vocabulary.Vocabulary, handler.assignIdentity()),
 	})
 }
 
@@ -1832,7 +1910,7 @@ func (handler *handler) writeTaskMutation(writer http.ResponseWriter, result cor
 	})
 }
 
-func taskPresentation(tasks []core.Task, vocabulary core.Vocabulary) []TaskPresentation {
+func taskPresentation(tasks []core.Task, vocabulary core.Vocabulary, actor string) []TaskPresentation {
 	views := presentation.TaskViews(tasks, vocabulary)
 	// One clock for the whole document, read once. A staleness hint computed per
 	// task could cross a minute boundary halfway down the board and report two
@@ -1849,7 +1927,7 @@ func taskPresentation(tasks []core.Task, vocabulary core.Vocabulary) []TaskPrese
 			WaitingOnDependencies: view.WaitingOnDependencies,
 			AssignmentChips:       row.Chips,
 			MoreAssignments:       row.More,
-			Assignments:           assignmentPresentation(view.Task.Assignments, now),
+			Assignments:           assignmentPresentation(view.Task.Assignments, now, actor),
 		}
 	}
 	return result
