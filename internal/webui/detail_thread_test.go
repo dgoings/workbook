@@ -943,6 +943,20 @@ class TestFile {
     this.contents = contents;
   }
 }
+// Naming a file is building a new one over the same bytes, because File.name is
+// read-only in every engine. The harness's File is the same shape as the
+// TestFile it is handed, so everything downstream — the ceilings, the reader,
+// the upload — sees exactly what it saw before under a name somebody chose.
+globalThis.File = class {
+  constructor(parts, name, options = {}) {
+    const source = parts[0] || {};
+    this.name = String(name);
+    this.type = options.type || source.type || "";
+    this.size = source.size || 0;
+    this.contents = source.contents || "";
+    this.lastModified = options.lastModified || 0;
+  }
+};
 globalThis.FileReader = class {
   readAsDataURL(file) {
     readCalls.push(file.name);

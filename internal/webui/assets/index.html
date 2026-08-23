@@ -4122,22 +4122,31 @@
       // scrolling was silently discarded; dragDestination() carries the
       // measurement. Two handlers answering one question in two places is how
       // they come to disagree, so there is one question here.
-      function draggingFiles(event) {
-        const transfer = event.dataTransfer;
+      // Asked of a DataTransfer rather than of an event, because a clipboard is
+      // one too: a paste carries its flavours in exactly the shape a drag does,
+      // and the two gestures must not come to hold different ideas of what a
+      // transfer carrying a file looks like.
+      function transferHasFiles(transfer) {
         if (!transfer || !transfer.types) return false;
         // A DOMStringList in one browser and a frozen array in another. indexOf
         // through Array's prototype answers both, which `includes` does not.
         return Array.prototype.indexOf.call(transfer.types, "Files") >= 0;
       }
-      // The files a drop is carrying, with folders counted rather than mistaken
-      // for them.
+      function draggingFiles(event) {
+        return transferHasFiles(event.dataTransfer);
+      }
+      // The files a transfer is carrying — a drop's or a paste's — with folders
+      // counted rather than mistaken for them.
       //
       // A folder arrives in `files` looking like a file — it has a name, and on
       // some platforms a size — and only the entry API tells them apart. Left
       // undetected it stages, uploads, and fails on the read: a loud failure,
       // several seconds later, over something this page could have answered the
-      // instant it was dropped.
-      function droppedFiles(transfer) {
+      // instant it arrived. A clipboard is asked the same question because a
+      // folder can be copied as readily as dragged, and because a paste's item
+      // list holds the text flavours too, which are skipped here by the same
+      // kind check that has always been here.
+      function transferredFiles(transfer) {
         const files = [];
         let folders = 0;
         const items = transfer && transfer.items;
@@ -4163,6 +4172,25 @@
         return folders === 1
           ? "One folder was skipped: a folder cannot be attached, only the files inside it."
           : folders + " folders were skipped: a folder cannot be attached, only the files inside it.";
+      }
+      // What a surface says while a run is already walking its list. Both
+      // gestures are refused for the same reason and say so in the same words,
+      // naming only the gesture the reader is to try again.
+      function attachmentBusyRefusal(gesture) {
+        return "Those attachments are still being sent; wait for that to finish and " +
+          gesture + " again.";
+      }
+      // Files a gesture handed over, given to the surface and then accounted
+      // for. The same call for a drop and for a paste, because the door is the
+      // same door and the accounting is the same accounting.
+      async function takeTransferredFiles(config, transferred) {
+        await config.acceptFiles(transferred.files);
+        if (!transferred.folders) return;
+        // Said after the files are dealt with, because acceptFiles clears this
+        // line as it starts — and never over the top of what it wrote there. A
+        // file that was too large to attach is a better thing to be told about
+        // than a folder that was never attachable at all.
+        if (!config.status()) config.report(skippedFolderNote(transferred.folders));
       }
       // How long a leave that might be a cancel waits to find out.
       //
@@ -4195,7 +4223,7 @@
         zone.dataset.attachmentDrop = "";
         // What a refused zone is saying, held so it can be taken back down
         // without taking down anything written since.
-        const busyRefusal = "Those attachments are still being sent; wait for that to finish and drop again.";
+        const busyRefusal = attachmentBusyRefusal("drop");
         let departure = null;
         // The one decision. "" is a drag this zone has nothing to do with — a
         // card being dragged across the page, or text — and it is left entirely
@@ -4304,24 +4332,176 @@
             // must not put a file into a list a run is already walking.
             return;
           }
-          const dropped = droppedFiles(event.dataTransfer);
+          const dropped = transferredFiles(event.dataTransfer);
           if (dropped.files.length === 0) {
             config.report(dropped.folders
               ? skippedFolderNote(dropped.folders)
               : "That drop carried no file to attach.");
             return;
           }
-          return takeDroppedFiles(dropped);
+          return takeTransferredFiles(config, dropped);
         });
-        async function takeDroppedFiles(dropped) {
-          await config.acceptFiles(dropped.files);
-          if (!dropped.folders) return;
-          // Said after the files are dealt with, because acceptFiles clears this
-          // line as it starts — and never over the top of what it wrote there. A
-          // file that was too large to attach is a better thing to be told about
-          // than a folder that was never attachable at all.
-          if (!config.status()) config.report(skippedFolderNote(dropped.folders));
+      }
+      // ─── Pasting a file onto the attachment controls ────────────────────────
+      //
+      // Cmd+V of a screenshot is the same intent as dropping the file, so it
+      // ends at the same door — acceptFiles() — and is asked every ceiling by
+      // the same call, refused mid-run by the same rule, and told about folders
+      // in the same words.
+      //
+      // What it cannot share is where it is heard. A paste is dispatched at
+      // whatever has focus, and a panel of rows and buttons never has any, so a
+      // listener on the zone itself would fire only while the caret sat in one
+      // of the two fields inside it — which is the one moment a reader pasting
+      // a screenshot is least likely to be in. The page listens once, at the
+      // document, and the surface that would have taken a drop takes the paste.
+      //
+      // Only one surface is ever on screen: a task page draws one attachment
+      // panel, a New Task form draws one staging panel, and the route that
+      // replaces either takes its panel with it. So the latest registration is
+      // the current one — and it is checked against the document before it is
+      // used, so a panel that has been rendered away takes nothing and is let
+      // go of rather than held for the life of the page.
+      let attachmentPasteSurface = null;
+      function attachmentPasteTarget(zone, config) {
+        attachmentPasteSurface = { zone, config };
+      }
+      function livePasteSurface() {
+        const surface = attachmentPasteSurface;
+        if (!surface) return null;
+        if (main.contains(surface.zone)) return surface;
+        attachmentPasteSurface = null;
+        return null;
+      }
+      // Whether the caret is somewhere that takes typed text, which decides who
+      // a paste belongs to below. Asked of what the paste was dispatched at,
+      // which is that element or something inside it.
+      function takesTypedText(element) {
+        for (let node = element; node; node = node.parentElement) {
+          if (node.isContentEditable) return true;
+          if (node.tagName === "TEXTAREA") return true;
+          if (node.tagName === "INPUT") {
+            const kind = String(node.type || "text").toLowerCase();
+            return kind !== "checkbox" && kind !== "radio" && kind !== "file" &&
+              kind !== "button" && kind !== "submit" && kind !== "reset" &&
+              kind !== "range" && kind !== "color";
+          }
         }
+        return false;
+      }
+      // A paste that carries text as well as files belongs to the caret.
+      //
+      // A clipboard does not hold a file or text; it holds one thing in several
+      // flavours at once, and ordinary copies carry both. A range of spreadsheet
+      // cells is text and a picture of itself; a copied region of a web page is
+      // markup and a picture of itself. A page that attached every paste
+      // carrying an image would answer Cmd+V in the description field by
+      // attaching a PNG of the words the reader meant to paste — silently, since
+      // the field would stay empty.
+      //
+      // A screenshot carries no text flavour at all, which is what makes the
+      // discrimination cheap: the paste that is only a file is only ever an
+      // attachment, wherever the caret is, and the paste that is also text is
+      // left to the field the caret is in.
+      function pasteBelongsToTheCaret(event, clipboard) {
+        if (!takesTypedText(event.target)) return false;
+        return Array.prototype.some.call(clipboard.types || [],
+          (flavour) => String(flavour).indexOf("text/") === 0);
+      }
+      // What a pasted image is called, since nobody called it anything.
+      //
+      // A file copied out of a folder arrives named. An image put on the
+      // clipboard by a screenshot key does not: the engines invent the same
+      // placeholder for it, so a task that took three screenshots would hold
+      // three rows called image.png and a reader would have to open each one to
+      // tell them apart. Those are named for the moment they were pasted, which
+      // is the only thing that distinguishes them and the only thing this page
+      // knows about them.
+      //
+      // The rule is deliberately narrow — no name at all, or exactly the
+      // placeholder on something that really is an image — so the one file it
+      // takes a name from is a real image.png copied out of a folder, which
+      // keeps its bytes, its type and its place in the list and loses only a
+      // name that reads as an invention anyway.
+      const synthesizedPasteName = /^image\.[a-z0-9]+$/i;
+      function needsPastedName(file) {
+        const name = String((file && file.name) || "").trim();
+        if (!name) return true;
+        return synthesizedPasteName.test(name) && String(file.type || "").indexOf("image/") === 0;
+      }
+      // 2026-08-16T13:10:57.412Z → 20260816-131057: sortable, readable, and
+      // legal in a file name on every platform an attachment may be saved to.
+      function pastedNameStamp(when) {
+        return when.toISOString().slice(0, 19).replace(/[-:]/g, "").replace("T", "-");
+      }
+      function pastedNameExtension(file) {
+        const name = String((file && file.name) || "");
+        const dot = name.lastIndexOf(".");
+        if (dot > 0) return name.slice(dot).toLowerCase();
+        // No name to take one from, so the media type is the only description of
+        // these bytes there is. A subtype may carry a suffix — image/svg+xml —
+        // and only the part before it names the format.
+        const subtype = String((file && file.type) || "").split("/")[1] || "";
+        const extension = subtype.split("+")[0].replace(/[^a-z0-9]/gi, "").toLowerCase();
+        return extension ? "." + extension : "";
+      }
+      // A File's name is read-only, so naming one is building a new one over the
+      // same bytes. A browser that will not build one keeps the file it had: an
+      // unhelpful name is worth far less than the attachment.
+      function namedFile(file, name) {
+        if (typeof File !== "function") return file;
+        try {
+          return new File([file], name, {
+            type: file.type || "",
+            lastModified: file.lastModified || Date.now()
+          });
+        } catch (error) {
+          return file;
+        }
+      }
+      function namePastedFiles(files, when) {
+        let named = 0;
+        return files.map((file) => {
+          if (!needsPastedName(file)) return file;
+          named += 1;
+          // One paste happens at one moment, so a second file named by it would
+          // otherwise take the same name to the second.
+          return namedFile(file, "pasted-" + pastedNameStamp(when) +
+            (named > 1 ? "-" + named : "") + pastedNameExtension(file));
+        });
+      }
+      function attachmentPaste(event) {
+        const clipboard = event.clipboardData;
+        // Every other paste on this page — text into the title, a URL into the
+        // link field, anything at all on the board — is left exactly as it was.
+        if (!transferHasFiles(clipboard)) return;
+        const surface = livePasteSurface();
+        if (!surface) return;
+        if (pasteBelongsToTheCaret(event, clipboard)) return;
+        // Answered whether or not it is taken, for the reason a refused drag is
+        // answered: left to the browser, a pasted file lands wherever the caret
+        // is, and over a description that is a screenshot's bytes where a
+        // sentence should be.
+        event.preventDefault();
+        const config = surface.config;
+        if (config.busy()) {
+          // Said out loud, because a paste has no outline to turn red and no
+          // disabled button to have been stopped by: silence would read as the
+          // file having been taken.
+          config.report(attachmentBusyRefusal("paste"));
+          return;
+        }
+        const pasted = transferredFiles(clipboard);
+        if (pasted.files.length === 0) {
+          config.report(pasted.folders
+            ? skippedFolderNote(pasted.folders)
+            : "That paste carried no file to attach.");
+          return;
+        }
+        return takeTransferredFiles(config, {
+          files: namePastedFiles(pasted.files, new Date()),
+          folders: pasted.folders
+        });
       }
       // What a task's attachments weigh, which is the unit the total ceiling is
       // in: a link stores nothing.
@@ -4432,12 +4612,16 @@
         // The whole section takes a drop, not just the chooser inside it: a
         // reader dragging a screenshot out of Finder aims at the list of things
         // already attached, which is the biggest and most obvious part of this.
-        attachmentDropZone(panel.section, {
+        // A paste is the same surface reached with the keyboard, so it is given
+        // the same terms rather than a second copy of them.
+        const intake = {
           busy: () => panel.busy,
           report: (message) => panel.report(message),
           status: () => panel.status.textContent,
           acceptFiles: (files) => acceptFiles(files)
-        });
+        };
+        attachmentDropZone(panel.section, intake);
+        attachmentPasteTarget(panel.section, intake);
 
         let attachments = [];
         function attachmentPath(attachmentID) {
@@ -4636,16 +4820,19 @@
           acceptLink: (destination, label) => acceptLink(destination, label)
         });
         panel.section.append(adder.region, panel.status);
-        // The same zone over the same controls. A drop here stages, because
-        // that is what acceptFiles does on this surface — and it is refused
-        // while a create run is walking the list, for the reason a mid-run add
-        // is: the walk has already read past anything that arrives now.
-        attachmentDropZone(panel.section, {
+        // The same zone over the same controls, and the same paste. A drop or a
+        // paste here stages, because that is what acceptFiles does on this
+        // surface — and either is refused while a create run is walking the
+        // list, for the reason a mid-run add is: the walk has already read past
+        // anything that arrives now.
+        const intake = {
           busy: () => panel.busy,
           report: (message) => panel.report(message),
           status: () => panel.status.textContent,
           acceptFiles: (files) => acceptFiles(files)
-        });
+        };
+        attachmentDropZone(panel.section, intake);
+        attachmentPasteTarget(panel.section, intake);
         // Take these files and stage them. The entry point a drop target hands
         // a DataTransfer's files to, and the one the chooser goes through, so
         // both arrive by the same door and are judged by the same rules.
@@ -8483,6 +8670,11 @@
         event.preventDefault();
         navigate(destination.pathname + destination.search + destination.hash);
       });
+      // Heard at the document because that is the only place a paste can be
+      // heard: it is dispatched at whatever has focus, and the attachment panel
+      // never has any. The handler answers only a paste carrying a file, and
+      // only while a surface that takes one is on screen.
+      document.addEventListener("paste", attachmentPaste);
       document.addEventListener("dragstart", (event) => {
         const item = event.target.closest(".task-card");
         if (!item) return;
