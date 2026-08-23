@@ -21,10 +21,11 @@ import (
 // arrives within a poll tick without moving anything the reader is holding; and
 // that a principal somebody else asserted is drawn as text whatever it contains.
 //
-// Nothing here writes. This client has no route that can carry an assignment
-// intent and gains none: the assignment surface is `workbook update --assign` and
-// `workbook next --claim`, and the last case in this file is the standing check
-// that it stayed that way.
+// Nothing here writes, and every board built here is one that cannot: these are
+// read-only boards, wired with a lister and no assignment mutations, which is
+// what the display half of this feature has to keep doing unchanged now that a
+// board wired for them draws a form. Making one is assignment_mutation_test.go's
+// subject.
 
 const (
 	assignedTaskID   = "WB-01J0000000000000000000AS01"
@@ -399,8 +400,8 @@ setTimeout(() => {
   }
   const count = findElement(assignmentsPanel(), (element) => hasDataKey(element, "panelCount"));
   if (count.textContent !== "2 assignments") throw new Error("count = " + JSON.stringify(count.textContent));
-  // Read-only: this section offers no control, because this client has no
-  // identity to assert and no route that could carry an assignment intent.
+  // Read-only: this board was built with no assignment mutations and no
+  // identity to record one against, so the section offers no control at all.
   if (findElements(assignmentsPanel(), (element) => element.tagName === "BUTTON" || element.tagName === "FORM" || element.tagName === "INPUT").length) {
     throw new Error("the assignments section drew a control");
   }
@@ -513,14 +514,15 @@ setTimeout(() => {
 	}
 }
 
-// The standing check that this stayed a display.
+// The standing check that the task update endpoint carries no assignment intent.
 //
-// Mutations are the CLI's in this story, and the reason is not squeamishness: an
-// assignment is recorded against the actor's asserted git identity and the
-// browser has none to assert. The web update endpoint maps its request onto
-// core.UpdateInput field by field for exactly this class of accident — a member
-// added to the service input must not become part of this API by inheritance —
-// and this is that mapping asserted from the outside.
+// It is not a claim that this board cannot assign — it can, through two routes
+// of its own — but a claim about this route. PATCH /api/tasks/{id} maps its
+// request onto core.UpdateInput field by field for exactly this class of
+// accident: core's update input carries assignment changes, and a member added
+// to the service input must not become part of this API by inheritance. An
+// assignment made here would ride an unrelated field save, and a save is what
+// this endpoint is for. This is that mapping asserted from the outside.
 func TestUpdateEndpointCarriesNoAssignmentIntent(t *testing.T) {
 	for _, body := range []string{
 		`{"title":"Renamed","assignments":[{"add":"someone@example.com"}]}`,

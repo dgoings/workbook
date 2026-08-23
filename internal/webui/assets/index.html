@@ -596,9 +596,9 @@
     /* One line of feedback per panel, and it is the same live region the form
        uses so a refusal reads the same wherever it happens on this page. */
     .task-panel .form-status { min-height: 0; }
-    /* The assignments section reads rather than writes, so its rows are the
-       attachment row's geometry without the control column: one line naming who
-       holds the task, one line saying when that was recorded and how long ago.
+    /* An assignment row is the attachment row's geometry: one line naming who
+       holds the task, one line saying when that was recorded and how long ago,
+       and — where this board may withdraw it — the control under both.
 
        overflow-wrap: anywhere on both, for the reason the comment body carries
        it — a 254-byte principal with no space in it is not a reason for this page
@@ -611,6 +611,18 @@
     .assignment__principal { font-weight: 700; }
     .assignment__label { color: var(--wb-primary); font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .8rem; font-weight: 700; }
     .assignment__meta { margin: 0; color: #56647a; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .68rem; overflow-wrap: anywhere; }
+    .assignment__actions { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .25rem; }
+    /* The form under the rows, on a board with an identity to record an
+       assignment against. It is the comment form's grid, with the hint the
+       placeholder cannot carry: a placeholder names the identity, and this is
+       where the /label half of the value is explained without a reader having to
+       find the reference for it. */
+    .assignment-add { display: grid; gap: .35rem; padding-top: .1rem; }
+    .assignment-add label { color: #34425a; font-size: .74rem; font-weight: 750; }
+    .assignment-add input { width: 100%; border: 1px solid #9eafc5; border-radius: 4px; background: #fff; color: var(--wb-text); font: inherit; font-size: .82rem; padding: .45rem .55rem; }
+    .assignment-add input:focus { border-color: var(--wb-primary); outline: 3px solid var(--wb-primary-glow); }
+    .assignment-add__hint { margin: 0; color: #56647a; font-size: .72rem; overflow-wrap: anywhere; }
+    .assignment-add__actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
     .comment { display: grid; gap: .25rem; padding: .6rem .7rem; border: 1px solid var(--wb-hairline); border-radius: 4px; background: #fff; }
     .comment__attribution { margin: 0; color: #56647a; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .68rem; overflow-wrap: anywhere; }
     /* overflow-wrap, because a body with no spaces in it is not a reason for the
@@ -867,7 +879,7 @@
          the script needs before its first fetch comes from an attribute here,
          data-vocabulary-head included, so a page and its script never disagree
          about which vocabulary they were built from. -->
-    <div class="board-view" data-board-view data-project-name="{{ .ProjectName }}" data-default-project-name="{{ .DefaultProjectName }}" data-title-suffix="{{ .TitleSuffix }}" data-default-status="{{ .DefaultStatus }}" data-vocabulary-head="{{ .VocabularyHead }}" data-attachment-limit="{{ .AttachmentFileLimit }}" data-attachment-total-limit="{{ .AttachmentTotalLimit }}" data-attachment-name-limit="{{ .AttachmentNameLimit }}" data-attachment-label-limit="{{ .AttachmentLabelLimit }}" data-attachment-url-limit="{{ .AttachmentURLLimit }}" data-inline-media="{{ .InlineImageMediaTypes }}">
+    <div class="board-view" data-board-view data-project-name="{{ .ProjectName }}" data-default-project-name="{{ .DefaultProjectName }}" data-title-suffix="{{ .TitleSuffix }}" data-default-status="{{ .DefaultStatus }}" data-vocabulary-head="{{ .VocabularyHead }}" data-attachment-limit="{{ .AttachmentFileLimit }}" data-attachment-total-limit="{{ .AttachmentTotalLimit }}" data-attachment-name-limit="{{ .AttachmentNameLimit }}" data-attachment-label-limit="{{ .AttachmentLabelLimit }}" data-attachment-url-limit="{{ .AttachmentURLLimit }}" data-inline-media="{{ .InlineImageMediaTypes }}" data-assign-identity="{{ .AssignIdentity }}">
       <p class="stale" data-stale role="status">Task refresh failed. Showing the last successful board.</p>
       <!-- data-board is where the client appends the Deleted column, after the
            last vocabulary column the server rendered. It is a client-built
@@ -1111,6 +1123,19 @@
       // download. A page served without the attribute renders no image at all,
       // which is the safe end of the failure.
       const inlineImageMedia = new Set((boardView.dataset.inlineMedia || "").split(/\s+/).filter(Boolean));
+      // The identity this board records an assignment against, which is the
+      // checkout's own `user.email` — the same one a commit made in this
+      // worktree carries, and the same one `workbook update --assign self`
+      // resolves. It is read from the page rather than asked for, because it is
+      // fixed for the life of the server and the assignment form has to be able
+      // to name it before anybody has typed anything.
+      //
+      // Empty is the whole gate. A board built without the two assignment
+      // mutations, or without an identity to write them as, renders the
+      // attribute empty and this page draws no assignment control at all —
+      // which is exactly the read-only section this board shipped with, node
+      // for node.
+      const assignIdentity = boardView.dataset.assignIdentity || "";
       let vocabularyChanged = false;
       const syncToggle = document.querySelector("[data-sync-toggle]");
       const descriptionToggle = document.querySelector("[data-description-toggle]");
@@ -3488,7 +3513,12 @@
           replaceProjectedTask(answer.task);
           rerender();
           if (!panel.owns()) return answer;
-          panel.follow(answer.task);
+          // The answer travels beside the task because one panel is not drawn
+          // from the task: an assignment row's staleness hint and its withdrawal
+          // are the server's derivations, and the assignments route carries them
+          // in the answer. Every other panel takes the task and ignores the
+          // second argument, exactly as it did before there was one.
+          panel.follow(answer.task, answer);
           const warnings = mutationWarnings(answer);
           if (warnings.length) panel.report("Saved durably. " + warnings.join(" "));
           return answer;
@@ -3533,43 +3563,83 @@
               : (error instanceof Error ? error.message : "The change failed.")),
           open);
       }
-      // Who holds this task, read-only.
+      // Who holds this task, and — on a board that has an identity to write one
+      // against — who is about to.
       //
-      // Read-only is the whole design of this section rather than a stage of it.
-      // An assignment is recorded against the actor's asserted git identity, and
-      // this page has no identity to assert: the browser is not a principal, the
-      // server would have to invent one on its behalf, and an assignment nobody
-      // can be held to is worse than none. `workbook update --assign` and
-      // `workbook next --claim` are where an assignment is made, and this is
-      // where the board reads one. So there is no form here, no control, and no
-      // route behind it.
+      // The section shipped read-only, under a reason that was true of the
+      // browser and not of the server: an assignment is recorded against an
+      // asserted Git identity, and a page has none. What it has is a server
+      // bound to one worktree, which asserts exactly the identity a commit made
+      // in that worktree asserts. So the identity is the checkout's, the write
+      // goes through core's own assign and unassign mutations, and what this
+      // board records is indistinguishable from what `workbook update --assign`
+      // records from the same directory.
       //
-      // It is built out of the thread panels' parts — the same section, header,
-      // count and list classes — because it is the same kind of block on the same
-      // page, and it is not built by taskPanel itself because every other thing
-      // that function provides is for a panel that writes: a busy state, a status
-      // line, a control register, and an empty message that this section has no
-      // use for. This one has no empty state at all. A task nobody holds draws
-      // nothing — not a heading over an empty list, which is the convention the
-      // comment thread's empty message deliberately does not extend to a section
-      // a reader cannot act on.
-      function taskAssignments() {
-        const section = document.createElement("section");
-        section.className = "task-panel task-panel--assignments";
-        section.dataset.taskPanel = "assignments";
-        section.setAttribute("aria-label", "Assignments");
-        const header = document.createElement("div");
-        header.className = "task-panel__header";
-        const heading = document.createElement("h3");
-        text(heading, "Assignments");
-        const count = document.createElement("p");
-        count.className = "task-panel__count";
-        count.dataset.panelCount = "";
-        header.append(heading, count);
-        const list = document.createElement("ul");
-        list.className = "task-panel__list";
-        list.dataset.panelList = "";
-        section.append(header, list);
+      // Whether any of that is drawn is one question, asked once: assignIdentity
+      // is empty for a board built without both mutations or without an
+      // identity, and an empty one leaves this section exactly what it was — no
+      // form, no control, no route behind it, and nothing at all on a task
+      // nobody holds.
+      //
+      // It is built out of taskPanel, like the two panels below it, because it
+      // now has what a writing panel has: a busy state, a status line, and a
+      // control register a request in flight disables. The one thing it does not
+      // take from taskPanel is the decision to be in the document at all — a
+      // section nobody can act on removes itself when there is nothing to read,
+      // which no other panel on this page does.
+      function taskAssignments(taskID, head, owner) {
+        const assignable = Boolean(assignIdentity);
+        const panel = taskPanel(taskID, "assignments", "Assignments", owner);
+        panel.adoptHead = head.adopt;
+        const path = "/api/tasks/" + encodeURIComponent(taskID) + "/assignments";
+        let field = null;
+        let submit = null;
+        if (assignable) {
+          const form = document.createElement("form");
+          form.className = "assignment-add";
+          form.dataset.assignmentForm = "";
+          const label = document.createElement("label");
+          label.setAttribute("for", "assignment-to");
+          text(label, "Assign someone");
+          field = document.createElement("input");
+          field.type = "text";
+          field.id = "assignment-to";
+          field.name = "assignee";
+          // The identity this board writes as, offered rather than filled in. A
+          // placeholder says "leave this alone and it is you" without putting a
+          // value in the field that a reader who meant somebody else would have
+          // to clear first — and the empty value is what core resolves, so who
+          // is acting is decided in one place rather than two.
+          field.placeholder = assignIdentity;
+          const hint = document.createElement("p");
+          hint.className = "assignment-add__hint";
+          text(hint, "Leave blank to assign yourself. Add a /label to name one agent, as in " +
+            assignIdentity + "/impl-1.");
+          const actions = document.createElement("div");
+          actions.className = "assignment-add__actions";
+          submit = threadButton("Assign", true);
+          submit.type = "submit";
+          actions.append(submit);
+          form.append(label, field, hint, actions);
+          panel.section.append(form, panel.status);
+          form.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            if (panel.busy) return;
+            // A field trimmed to nothing is the empty value, which is this
+            // board's own identity. Nothing else is judged here: every rule
+            // about what an assignment may be is core's, and a client that
+            // pre-judged one would be a second copy of a grammar that can only
+            // drift from the one that decides.
+            const answer = await writeThreadChange(
+              panel, "POST", path, headed(head, { to: field.value.trim() }), "your assignment");
+            if (answer) field.value = "";
+          });
+        } else {
+          // A read-only section has no empty state at all: a task nobody holds
+          // draws nothing, so the message this element exists to carry is one it
+          // is never in the document to say.
+          panel.empty.hidden = true;
+        }
         // What the section was last drawn from. A poll that changed nothing
         // costs one string comparison and touches no node, which is what keeps
         // the rows from being rebuilt under a reader's caret once a second — the
@@ -3586,52 +3656,97 @@
           const next = JSON.stringify(held);
           if (next === signature) return;
           signature = next;
-          if (!held.length) {
-            section.remove();
-            list.replaceChildren();
+          // A board that cannot assign draws nothing where there is nothing to
+          // read — not a heading over an empty list, which is the convention the
+          // comment thread's empty message deliberately does not extend to a
+          // section a reader cannot act on. A board that can assign keeps the
+          // section, because the form is the thing a task nobody holds needs.
+          if (!held.length && !assignable) {
+            panel.section.remove();
+            panel.list.replaceChildren();
             return;
           }
-          text(count, held.length === 1 ? "1 assignment" : held.length + " assignments");
-          list.replaceChildren(...held.map((assignment) => {
-            const item = document.createElement("li");
-            item.className = "assignment";
-            // The principal and the label, drawn as the one value somebody types
-            // into `--unassign` and still visibly two things: the slash is the
-            // separator core composes the value with, and the label is styled
-            // apart from the address so a reader can see which agent of that
-            // person holds the task without having to parse the string.
-            //
-            // Both are somebody else's asserted identity, unverified by design,
-            // and both reach the document through text(). A principal that is
-            // markup is drawn as the characters it is, exactly as a title is.
-            const who = document.createElement("p");
-            who.className = "assignment__who";
-            const principal = document.createElement("span");
-            principal.className = "assignment__principal";
-            text(principal, assignment.principal);
-            who.append(principal);
-            if (assignment.label) {
-              const label = document.createElement("span");
-              label.className = "assignment__label";
-              text(label, "/" + assignment.label);
-              who.append(label);
-            }
-            // The exact time it was recorded and how long ago that was. The
-            // phrase is the server's — presentation.AssignedAgo, the same words
-            // `workbook show` prints — and it is recomputed on every poll, so an
-            // open page's hint ages without a reload. Nothing expires and this is
-            // not a warning: an assignment three weeks old is a fact for people
-            // to settle between themselves.
-            const meta = document.createElement("p");
-            meta.className = "assignment__meta";
-            text(meta, recordedAt(assignment.createdAt) + " · " + assignment.ago);
-            item.append(who, meta);
-            return item;
-          }));
-          if (parent && !parent.contains(section)) parent.insertBefore(section, anchor);
+          panel.resetControls();
+          panel.setCount(held.length === 1 ? "1 assignment" : held.length + " assignments");
+          panel.list.replaceChildren(...held.map(assignmentRow));
+          if (assignable) {
+            panel.claim(submit);
+            text(panel.empty, "Nobody is assigned to this task yet.");
+            panel.empty.hidden = held.length > 0;
+          }
+          if (parent && !parent.contains(panel.section)) parent.insertBefore(panel.section, anchor);
         }
+        function assignmentRow(assignment) {
+          const item = document.createElement("li");
+          item.className = "assignment";
+          // The principal and the label, drawn as the one value somebody types
+          // into `--unassign` and still visibly two things: the slash is the
+          // separator core composes the value with, and the label is styled
+          // apart from the address so a reader can see which agent of that
+          // person holds the task without having to parse the string.
+          //
+          // Both are somebody else's asserted identity, unverified by design,
+          // and both reach the document through text(). A principal that is
+          // markup is drawn as the characters it is, exactly as a title is.
+          const who = document.createElement("p");
+          who.className = "assignment__who";
+          const principal = document.createElement("span");
+          principal.className = "assignment__principal";
+          text(principal, assignment.principal);
+          who.append(principal);
+          if (assignment.label) {
+            const label = document.createElement("span");
+            label.className = "assignment__label";
+            text(label, "/" + assignment.label);
+            who.append(label);
+          }
+          // The exact time it was recorded and how long ago that was. The
+          // phrase is the server's — presentation.AssignedAgo, the same words
+          // `workbook show` prints — and it is recomputed on every poll, so an
+          // open page's hint ages without a reload. Nothing expires and this is
+          // not a warning: an assignment three weeks old is a fact for people
+          // to settle between themselves.
+          const meta = document.createElement("p");
+          meta.className = "assignment__meta";
+          text(meta, recordedAt(assignment.createdAt) + " · " + assignment.ago);
+          item.append(who, meta);
+          // Withdrawal is offered only where the server said this board may make
+          // one. The rule is core's — the assignee may release what they hold,
+          // and so may whoever recorded it — and it is decided there rather than
+          // by comparing addresses here, so every control this page draws is one
+          // the service would accept. A row without it is not a row anybody is
+          // stuck with: the identity it names withdraws it from their own clone,
+          // which is what makes the rule a rule rather than a lock.
+          if (assignable && assignment.removable) {
+            const actions = document.createElement("div");
+            actions.className = "assignment__actions";
+            const value = assignment.label
+              ? assignment.principal + "/" + assignment.label
+              : assignment.principal;
+            const withdraw = panel.claim(threadButton("Unassign"));
+            withdraw.addEventListener("click", () => writeThreadChange(
+              panel, "DELETE", path, headed(head, { from: value }), "that withdrawal"));
+            actions.append(withdraw);
+            item.append(actions);
+          }
+          return item;
+        }
+        // How a write redraws this section. It takes the answer rather than the
+        // task because the task does not carry what a row draws: the staleness
+        // hint is the server's wording and the withdrawal is the server's rule,
+        // and the assignment routes send both back beside the task they changed.
+        // A refusal has no answer to draw from and falls back to the last poll's
+        // view, which is the truth about the task the write did not change.
+        panel.follow = (held, answer) => {
+          if (answer && Array.isArray(answer.assignments)) {
+            draw(answer.assignments);
+            return;
+          }
+          const view = latestPresentation.get(taskID);
+          if (view) draw(view.assignments);
+        };
         return {
-          section,
+          section: panel.section,
           // Mounted by its owner rather than appended by it, because whether the
           // section is in the document at all is this controller's answer and it
           // changes with every poll.
@@ -5477,7 +5592,7 @@
           const owner = () => main.firstElementChild === section;
           const attachments = taskAttachments(task.id, task, head, owner);
           const comments = taskComments(task.id, task, head, owner);
-          const assignments = taskAssignments();
+          const assignments = taskAssignments(task.id, head, owner);
           openThreadPanels = {
             taskID: task.id,
             // The description above these panels follows the same read, for the

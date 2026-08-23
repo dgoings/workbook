@@ -934,6 +934,22 @@ func reportedSharing(result core.MutationResult) string {
 	return result.Task.ID
 }
 
+// sharedAssignment adds the warning the command line prints when an assignment
+// lands beside somebody else's, so a reader assigning from the board hears what
+// an agent assigning from a terminal hears.
+//
+// It is the same channel and the same words: the board draws a mutation's
+// warnings under the panel the change was made in, and this is the one warning
+// an assignment can produce. Others is populated only by a mutation that carried
+// an assignment, so a result with nothing to say is returned untouched.
+func sharedAssignment(result core.MutationResult) core.MutationResult {
+	if len(result.Others) == 0 {
+		return result
+	}
+	result.Warnings = append(result.Warnings, sharedAssignmentWarning(result.Task.ID, result.Others))
+	return result
+}
+
 func sharedAssignmentWarning(taskID string, others []core.Assignment) core.Warning {
 	held := make([]string, 0, len(others))
 	for _, assignment := range others {
@@ -1644,6 +1660,34 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 				return core.MutationResult{}, err
 			}
 			result, err := writer.CommentRemoveMutation(requestContext, id, input)
+			return publisher.publish(requestContext, result, err)
+		},
+		// The board's assignments go through core's own single-intent doors, so
+		// what they record and what they refuse are what `workbook update
+		// --assign` records and refuses from this same worktree.
+		//
+		// Identity is what makes that true rather than merely similar: it is
+		// this checkout's configured `user.email`, the identity every mutation
+		// through this server already carries, and it is handed to the board so
+		// the page can say whose assignment it is about to make before anybody
+		// has typed anything. A checkout with none configured leaves it empty,
+		// and the board draws no assignment control at all — which is the honest
+		// answer, because core refuses to record an assignment with no creator.
+		Identity: service.Actor,
+		Assign: func(requestContext context.Context, id string, input core.AssignInput) (core.MutationResult, error) {
+			writer, err := current(requestContext)
+			if err != nil {
+				return core.MutationResult{}, err
+			}
+			result, err := writer.AssignMutation(requestContext, id, input)
+			return publisher.publish(requestContext, sharedAssignment(result), err)
+		},
+		Unassign: func(requestContext context.Context, id string, input core.UnassignInput) (core.MutationResult, error) {
+			writer, err := current(requestContext)
+			if err != nil {
+				return core.MutationResult{}, err
+			}
+			result, err := writer.UnassignMutation(requestContext, id, input)
 			return publisher.publish(requestContext, result, err)
 		},
 		AddAttachment: func(requestContext context.Context, id string, input core.AttachmentAddInput) (core.MutationResult, error) {

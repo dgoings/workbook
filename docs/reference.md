@@ -357,15 +357,30 @@ at three chips with a `+N more` beside them: a task may hold fifty assignments
 and a card is one box in one column. A long identity is truncated to its column
 and never widens it. The task's own page carries the whole list under
 **Assignments** — the full value, the time it was recorded, and the same
-"assigned 3 days ago" phrasing `workbook show` prints — above the attachments,
-and a task nobody holds draws no section at all. It follows the poll, so an
-assignment made from the CLI in another terminal appears on an open page within
-a second without disturbing anything being typed into it.
+"assigned 3 days ago" phrasing `workbook show` prints — above the attachments.
+It follows the poll, so an assignment made from the CLI in another terminal
+appears on an open page within a second without disturbing anything being typed
+into it.
 
-The web board displays assignments and does not make them. An assignment is
-recorded against the actor's asserted git identity, and a browser has none to
-assert; `workbook update --assign` and `workbook next --claim` are where one is
-made.
+The section also makes assignments. Type an identity into **Assign someone** and
+press Assign; leave the field blank and the assignment is `serve`'s own
+identity, which is this checkout's `user.email` — the same one `--assign self`
+resolves from the same directory. Add a `/label` to name one agent, exactly as
+on the command line. Assigning from the board is additive and never takes the
+claim gate: the section in front of you already names everybody who holds the
+task, so nothing is refused for being shared, and a warning names the others
+when your assignment lands beside one.
+
+Each row carries **Unassign** where this checkout may withdraw it — its own
+assignments, and the ones it recorded against somebody else. A row without the
+control is somebody else's to release, under the same rule `workbook update
+--unassign` enforces; the button is drawn from the server's answer, so a control
+this page offers is one the write would accept.
+
+A board serving a checkout with no configured `user.email` draws none of this:
+an assignment records its creator, so there is nothing to record one against.
+That board is the read-only section — no form, no control, and no section at all
+on a task nobody holds.
 
 ### Claiming work as an agent
 
@@ -1186,6 +1201,11 @@ DELETE /api/tasks/<id>/comments/<cid>     remove a comment
 POST /api/tasks/<id>/attachments          attach a file or a link
 GET /api/tasks/<id>/attachments/<aid>     download an attached file's bytes
 DELETE /api/tasks/<id>/attachments/<aid>  remove an attachment
+POST /api/tasks/<id>/assignments          assign, naming the assignee in the
+                                          body as `to`; an empty value is the
+                                          serving checkout's own identity
+DELETE /api/tasks/<id>/assignments        withdraw, naming the assignment in
+                                          the body as `from`
 GET /api/sync                 versioned publication-mode JSON
 PUT /api/sync                 change this board's publication mode
 GET /healthz                  versioned health JSON
@@ -1209,6 +1229,23 @@ have no flag to be the counterpart of. Each takes an optional `expectedHead` and
 answers with the whole task, thread and attachment list included, the way every
 other task mutation does; the two removals also accept no body at all, which is
 the bare verb.
+
+The two assignment mutations are `workbook update --assign` and `--unassign`
+reached over HTTP, through the same planners and the same refusals. Both take an
+optional `expectedHead` and answer with the whole task; the answer also carries
+an `assignments` array — the section as the page draws it, with each row's
+staleness phrasing and whether this checkout may withdraw it — because neither is
+a field of the task and neither is a client's to compose. Neither takes the claim
+gate: assigning from a board is additive, as `--assign` without `--force` is, and
+an assignment that lands beside somebody else's answers 200 with an
+`assignment-shared` warning.
+
+Both verbs address the collection rather than one assignment, because an
+assignment's name carries a slash — `sam@example.com/impl-1` is one value with a
+separator core owns — and a path segment holding it is a request this board
+refuses everywhere else. A board built without both mutations, or serving a
+checkout with no configured `user.email`, answers these two addresses with an
+operational error and renders a page that offers neither.
 
 An upload carries the file base64-encoded in a JSON member rather than as a
 multipart part, and that is the same-origin guard's doing rather than a
