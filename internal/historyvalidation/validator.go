@@ -126,9 +126,20 @@ func (v *Validator) Validate(ctx context.Context, full bool) (Result, error) {
 	}
 
 	if len(requests) > 0 {
-		seen, retained, err := v.loadRecordedOperations(ctx, requests)
-		if err != nil {
-			return v.partialResult(ctx, initialHeads, result), err
+		// A full run re-reads every task from its root, so nothing the cache
+		// recorded is authoritative and the seeded set would be empty anyway.
+		// Skipping the read keeps `validate --full` from scanning the whole
+		// validated_operations table to build two maps it never consults.
+		var seen map[string]ValidatedOperation
+		var seeded map[string][]ValidatedOperation
+		if !full {
+			var err error
+			seen, seeded, err = v.loadRecordedOperations(ctx, requests)
+			if err != nil {
+				return v.partialResult(ctx, initialHeads, result), err
+			}
+		} else {
+			seen = make(map[string]ValidatedOperation)
 		}
 		fold := &historyFold{
 			validator:      v,
@@ -139,7 +150,7 @@ func (v *Validator) Validate(ctx context.Context, full bool) (Result, error) {
 			full:           full,
 			result:         &result,
 			seenOperations: seen,
-			retained:       retained,
+			seededPrefixes: seeded,
 		}
 		streamErr := v.source.ReadTaskHistoriesStream(ctx, v.config, requests, gitstore.TaskHistoryStream{
 			Begin:  fold.begin,
@@ -226,15 +237,27 @@ func (v *Validator) Validate(ctx context.Context, full bool) (Result, error) {
 	return result, nil
 }
 
-// loadRecordedOperations splits the cache's recorded operation ULIDs into the
-// two things a run needs from them.
+// loadRecordedOperations builds the project-wide seen set every task in this
+// run is folded against, before any of them is read.
 //
-// A task this run is not reading contributes to the project-wide seen set
-// directly: its chain is being taken on the cache's word, and a ULID it already
-// owns is one no chain being read may repeat. A task this run is reading
-// contributes nothing up front, because its own stored rows are about to be
-// re-read or replaced; those are handed back separately and seeded only for a
-// task that actually resumes at its cached boundary.
+// Two kinds of task contribute their recorded ULIDs to it. A task this run is
+// not reading at all contributes because its chain is being taken on the
+// cache's word. A task this run resumes at a cached boundary contributes its
+// prefix for the same reason: the run will never re-read those commits, so the
+// cache is the only witness that the task owns them.
+//
+// Seeding a resuming task's prefix up front rather than at its own Begin is
+// what makes the verdict independent of task order. Tasks are streamed in task
+// ID order, so a prefix seeded at its owner's Begin is invisible to every
+// lower-sorting task in the same run — and a new task repeating a ULID from a
+// resuming task's prefix would be reported valid purely because it sorts first.
+//
+// A task this run re-reads from its root contributes nothing: its stored rows
+// are about to be replaced wholesale, and seeding them would report each of its
+// own commits as a repeat of itself. Those rows are handed back separately so
+// that a task whose cached boundary turns out to be unreachable — the one case
+// where a request asks to resume and the read starts at the root anyway — can
+// have its seed withdrawn at Begin.
 func (v *Validator) loadRecordedOperations(
 	ctx context.Context,
 	requests []gitstore.TaskHistoryRequest,
@@ -243,30 +266,37 @@ func (v *Validator) loadRecordedOperations(
 	if err != nil {
 		return nil, nil, err
 	}
-	reading := make(map[string]bool, len(requests))
+	resuming := make(map[string]bool, len(requests))
+	rereading := make(map[string]bool, len(requests))
 	for _, request := range requests {
-		reading[request.Head.TaskID] = true
-	}
-	seen := make(map[string]ValidatedOperation, len(recorded))
-	var retained map[string][]ValidatedOperation
-	for _, operation := range recorded {
-		if reading[operation.TaskID] {
-			if retained == nil {
-				retained = make(map[string][]ValidatedOperation, len(requests))
-			}
-			retained[operation.TaskID] = append(retained[operation.TaskID], operation)
+		if request.StopAt != "" {
+			resuming[request.Head.TaskID] = true
 			continue
 		}
+		rereading[request.Head.TaskID] = true
+	}
+	seen := make(map[string]ValidatedOperation, len(recorded))
+	var seeded map[string][]ValidatedOperation
+	for _, operation := range recorded {
+		if rereading[operation.TaskID] {
+			continue
+		}
+		if resuming[operation.TaskID] {
+			if seeded == nil {
+				seeded = make(map[string][]ValidatedOperation, len(resuming))
+			}
+			seeded[operation.TaskID] = append(seeded[operation.TaskID], operation)
+		}
 		// Rows arrive ordered, so the first owner of a ULID is the same one on
-		// every run. A collision between two chains the cache already called
-		// valid cannot be attributed to a commit this run reads, and cannot
-		// arise either: whichever of them was read second was checked against
-		// the first before its rows were written.
+		// every run. A collision between two chains the cache already holds
+		// cannot be attributed to a commit this run reads, so the run reports
+		// the chains it can read and leaves that pair to `validate --full`,
+		// which takes nothing from the cache.
 		if _, exists := seen[operation.OperationID]; !exists {
 			seen[operation.OperationID] = operation
 		}
 	}
-	return seen, retained, nil
+	return seen, seeded, nil
 }
 
 // historyFold turns the streamed history of every pending task into one
@@ -305,10 +335,12 @@ type historyFold struct {
 	// valid would be vouching for a repository that `workbook rebuild` cannot
 	// repair.
 	seenOperations map[string]ValidatedOperation
-	// retained holds the operations the cache already recorded for the tasks
-	// this run is reading, consulted only when a task actually resumes at its
-	// cached boundary and therefore never re-reads them.
-	retained map[string][]ValidatedOperation
+	// seededPrefixes holds, per resuming task, the recorded operations already
+	// folded into seenOperations on its behalf. It exists so that a task whose
+	// cached boundary the read could not reach — and which is therefore
+	// re-reading its own prefix — can have that seed withdrawn before its
+	// commits arrive.
+	seededPrefixes map[string][]ValidatedOperation
 }
 
 func (f *historyFold) begin(start gitstore.TaskHistoryStart) error {
@@ -339,6 +371,14 @@ func (f *historyFold) begin(start gitstore.TaskHistoryStart) error {
 		// A retained boundary that Git cannot reach is no longer a safe
 		// prefix. Rebuilding this task's immutable-commit set avoids duplicate
 		// rows while preserving Record's duplicate-delivery guard.
+		//
+		// Record's full path also drops this task's recorded operation ULIDs,
+		// which is more than rebuilding its own set: a task whose tip read
+		// failed reaches here too, and it forgets ULIDs its ref still owns, so
+		// a sibling repeating one of them is not caught until the broken task
+		// is repaired and re-read. The run still exits nonzero, because the
+		// task that failed is counted invalid, so `validate` never vouches for
+		// the repository on the strength of the forgotten rows.
 		Full: f.full || (!start.BoundaryReached && cached.LastValidCommit != ""),
 	}
 	if boundary := f.boundaries[start.TaskID]; start.BoundaryReached && boundary != nil {
@@ -348,14 +388,18 @@ func (f *historyFold) begin(start gitstore.TaskHistoryStart) error {
 		f.completion.LastValidGeneration = cached.LastValidGeneration
 		f.completion.LastValidState = append([]byte(nil), cached.LastValidState...)
 		f.completion.ValidatedCommitCount = cached.ValidatedCommitCount
-		// Only a resumed task takes its prefix from the cache, and it is the one
-		// case where the operations that decide uniqueness are not the ones
-		// being read. A task re-read from its root instead replaces its stored
-		// rows, so seeding them here would report every commit as a repeat of
-		// itself.
-		for _, operation := range f.retained[start.TaskID] {
-			if _, exists := f.seenOperations[operation.OperationID]; !exists {
-				f.seenOperations[operation.OperationID] = operation
+		// The prefix's ULIDs are already in seenOperations: they were seeded
+		// before any task was streamed, so that every task in this run — not
+		// only the ones sorted after this one — is folded against them.
+	} else {
+		// The request asked to resume, but the read started at the root, so
+		// this task is about to re-record the very operations that were seeded
+		// on its behalf. Withdraw the seed first, or each of its own commits
+		// is reported as a repeat of itself. Entries a different task owns are
+		// left alone; only this task's claim is withdrawn.
+		for _, operation := range f.seededPrefixes[start.TaskID] {
+			if first, exists := f.seenOperations[operation.OperationID]; exists && first.TaskID == start.TaskID {
+				delete(f.seenOperations, operation.OperationID)
 			}
 		}
 	}

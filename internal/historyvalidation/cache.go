@@ -493,9 +493,15 @@ func (c *Cache) Record(ctx context.Context, completion Completion) error {
 // It is read whole rather than task by task because the property it defends is
 // project-wide: the projection keys its operation rows on the ULID alone, so a
 // run checking a single task still has to see the ULIDs of the tasks it is
-// about to skip. The rows are one short string triple per operation, which is
-// the same order of magnitude as the validated-commit set the cache already
-// keeps for the whole project.
+// about to skip.
+//
+// The caller turns the result into a map that stays resident for the whole
+// fold, which is the one whole-corpus resident set in a code path that
+// otherwise streams a commit at a time. The rows are one short string triple
+// per operation — roughly 250 bytes each once mapped, so a few megabytes at the
+// 500-task, 20-operation size the benchmark fixture uses, and linear in the
+// project's operation count above it. `validate --full` takes nothing from the
+// cache and does not call this at all.
 func (c *Cache) ValidatedOperations(ctx context.Context) ([]ValidatedOperation, error) {
 	if c == nil || c.db == nil {
 		return nil, core.Errorf(core.CategoryOperational, "validation cache is closed")

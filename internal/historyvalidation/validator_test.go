@@ -609,6 +609,70 @@ func TestValidateReportsACrossTaskRepeatAgainstATaskItTookFromCache(t *testing.T
 	}
 }
 
+func TestValidateReportsACrossTaskRepeatAgainstAResumingTaskWhicheverSortsFirst(t *testing.T) {
+	// Production mutation: seeding a resuming task's cached prefix at its own
+	// Begin instead of before the stream starts. Tasks are streamed in task ID
+	// order, so a prefix seeded that late is invisible to every lower-sorting
+	// task in the same run: a new task repeating one of those ULIDs would be
+	// reported valid purely because its ID sorts first, and the same repository
+	// would validate or fail on task ID order alone.
+	for _, order := range []struct {
+		name     string
+		resuming string
+		newcomer string
+	}{
+		{name: "newcomer sorts first", resuming: taskID(2), newcomer: taskID(1)},
+		{name: "resuming task sorts first", resuming: taskID(1), newcomer: taskID(2)},
+	} {
+		t.Run(order.name, func(t *testing.T) {
+			ctx := context.Background()
+			cache := openTestCache(t, ctx, testConfig())
+			resuming := validationHistory(t, order.resuming, generationID(1), 900, 3)
+			source := &validatorSource{
+				heads: []gitstore.TaskHead{{TaskID: order.resuming, ObjectID: resuming[1].ObjectID}},
+				histories: map[string]gitstore.TaskHistoryResult{
+					order.resuming: historyResult(order.resuming, resuming[1].ObjectID, false, resuming[:2]),
+				},
+			}
+			v := &Validator{source: source, cache: cache, config: testConfig()}
+			if _, err := v.Validate(ctx, false); err != nil {
+				t.Fatalf("first Validate() error = %v", err)
+			}
+
+			// The resuming task gains a commit, so it is pending again and stops
+			// at its cached boundary; the newcomer's second commit repeats a ULID
+			// from the prefix that resumed run never re-reads.
+			newcomer := validationHistory(t, order.newcomer, generationID(2), 950, 2)
+			newcomer[1].Operation.Operations[0].ID = resuming[0].Operation.Operations[0].ID
+			heads := []gitstore.TaskHead{
+				{TaskID: order.resuming, ObjectID: resuming[2].ObjectID},
+				{TaskID: order.newcomer, ObjectID: newcomer[1].ObjectID},
+			}
+			sort.Slice(heads, func(i, j int) bool { return heads[i].TaskID < heads[j].TaskID })
+			source.heads = heads
+			source.histories[order.resuming] = historyResult(order.resuming, resuming[2].ObjectID, true, resuming[2:])
+			source.histories[order.newcomer] = historyResult(order.newcomer, newcomer[1].ObjectID, false, newcomer)
+
+			got, err := v.Validate(ctx, false)
+			if category := core.CategoryOf(err); category != core.CategoryCorruptData {
+				t.Fatalf("second Validate() category = %q, want corrupt-data; error = %v; result = %#v", category, err, got)
+			}
+			if got.Valid != 1 || got.Invalid != 1 || len(got.Failures) != 1 {
+				t.Fatalf("second Validate() result = %#v, want the newcomer alone reported invalid", got)
+			}
+			failure := got.Failures[0]
+			if failure.TaskID != order.newcomer || failure.Commit != newcomer[1].ObjectID {
+				t.Fatalf("failure = %#v, want the newcomer's repeating commit", failure)
+			}
+			if !strings.Contains(failure.Message, resuming[0].Operation.Operations[0].ID) ||
+				!strings.Contains(failure.Message, resuming[0].ObjectID) ||
+				!strings.Contains(failure.Message, order.resuming) {
+				t.Fatalf("failure message = %q, want the operation, its commit, and the resuming task named", failure.Message)
+			}
+		})
+	}
+}
+
 func TestValidateDoesNotReportATaskAsRepeatingItsOwnRecordedOperations(t *testing.T) {
 	// Production mutation: seeding the project-wide set from the cached rows of a
 	// task this run is about to re-read. Those rows are replaced, not extended, so
