@@ -10,6 +10,8 @@ import (
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 // Rows are keyed on the operation ULID rather than the commit object ID.
@@ -168,11 +170,46 @@ func insertOperations(
 				pack.Actor.ID, formatTime(pack.WallTime),
 				string(operation.Type), operation.Field, operation.Value, taskData, payload,
 			); err != nil {
+				if duplicateOperationID(err) {
+					return duplicateOperationError(taskID, operation.ID)
+				}
 				return cacheError("insert projected task operation", err)
 			}
 		}
 	}
 	return nil
+}
+
+// duplicateOperationID reports the operations table refusing a second row for
+// one operation ULID. That table's only key is operation_id, so a constraint
+// this statement violates is always that one, and it means the history handed
+// to the projection repeats a ULID the data model promises is unique.
+func duplicateOperationID(err error) bool {
+	var sqliteError *sqlite.Error
+	if !errors.As(err, &sqliteError) {
+		return false
+	}
+	switch sqliteError.Code() {
+	case sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY, sqlite3.SQLITE_CONSTRAINT_UNIQUE:
+		return true
+	}
+	return false
+}
+
+// duplicateOperationError names the damage rather than the cache. Every other
+// insert failure here is a cache fault whose answer is `workbook rebuild`, and
+// this one is the exact opposite: the rows are a faithful copy of what Git
+// holds, so a rebuild reads the same duplicate and stops in the same place. The
+// hint is therefore withheld and the operation is named, because repairing the
+// ref is the only thing that helps.
+func duplicateOperationError(taskID, operationID string) error {
+	return core.Errorf(
+		core.CategoryCorruptData,
+		"cannot project task %q: operation %q is recorded more than once; "+
+			"its task history repeats an operation ID, which no rebuild can resolve",
+		taskID,
+		operationID,
+	)
 }
 
 type operationScan struct {

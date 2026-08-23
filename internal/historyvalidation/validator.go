@@ -242,6 +242,17 @@ type historyFold struct {
 	// commit would repeat work whose result only the final commit keeps.
 	lastValidState *core.StateDocument
 	failed         bool
+	// seenOperations maps every operation ULID the validated prefix contains to
+	// the commit that first recorded it, or to the empty string for one this run
+	// restored from the cache instead of reading.
+	//
+	// Uniqueness is a property of the chain, not of any one commit, so no amount
+	// of checkpoint comparison can see a violation: repeating a ULID changes no
+	// projected state, and every checkpoint still folds. The projection keys its
+	// operation rows on the ULID, so a chain that repeats one is a chain no
+	// clone can hold, and a run that reported it valid would be vouching for a
+	// repository that `workbook rebuild` cannot repair.
+	seenOperations map[string]string
 }
 
 func (f *historyFold) begin(start gitstore.TaskHistoryStart) error {
@@ -274,6 +285,7 @@ func (f *historyFold) begin(start gitstore.TaskHistoryStart) error {
 		// rows while preserving Record's duplicate-delivery guard.
 		Full: f.full || (!start.BoundaryReached && cached.LastValidCommit != ""),
 	}
+	f.seenOperations = make(map[string]string, 16)
 	if boundary := f.boundaries[start.TaskID]; start.BoundaryReached && boundary != nil {
 		state := *boundary
 		f.parent = &state
@@ -281,6 +293,15 @@ func (f *historyFold) begin(start gitstore.TaskHistoryStart) error {
 		f.completion.LastValidGeneration = cached.LastValidGeneration
 		f.completion.LastValidState = append([]byte(nil), cached.LastValidState...)
 		f.completion.ValidatedCommitCount = cached.ValidatedCommitCount
+		// Only a resumed task pays for this read, and it is the one case where
+		// the operations that decide uniqueness are not the ones being read.
+		retained, err := f.validator.cache.ValidatedOperationIDs(f.ctx, start.TaskID)
+		if err != nil {
+			return err
+		}
+		for _, operationID := range retained {
+			f.seenOperations[operationID] = ""
+		}
 	}
 	f.result.TasksChecked++
 	return nil
@@ -296,11 +317,20 @@ func (f *historyFold) commit(taskID string, record gitstore.HistoryCommit) error
 	if f.failed {
 		return nil
 	}
+	if err := f.checkOperationIDs(record); err != nil {
+		f.completion.Status = StatusInvalid
+		f.completion.Failure = validationFailure(taskID, record.ObjectID, err)
+		f.failed = true
+		return nil
+	}
 	if err := core.ValidateCheckpoint(f.parent, record.Operation, record.State, f.validator.config.Key); err != nil {
 		f.completion.Status = StatusInvalid
 		f.completion.Failure = validationFailure(taskID, record.ObjectID, err)
 		f.failed = true
 		return nil
+	}
+	for _, operation := range record.Operation.Operations {
+		f.seenOperations[operation.ID] = record.ObjectID
 	}
 	state := record.State
 	f.parent = &state
@@ -310,6 +340,47 @@ func (f *historyFold) commit(taskID string, record gitstore.HistoryCommit) error
 	f.completion.ValidatedCommitCount++
 	f.completion.ValidatedCommitIDs = append(f.completion.ValidatedCommitIDs, record.ObjectID)
 	return nil
+}
+
+// checkOperationIDs refuses a commit that repeats an operation ULID an earlier
+// commit of the same chain already recorded. Duplicates inside one pack are
+// already refused by the pack's own document validation, so this sees only the
+// across-commit case that validation had no other way to reach.
+func (f *historyFold) checkOperationIDs(record gitstore.HistoryCommit) error {
+	for _, operation := range record.Operation.Operations {
+		first, repeated := f.seenOperations[operation.ID]
+		if !repeated {
+			continue
+		}
+		if first == "" {
+			return core.Errorf(
+				core.CategoryCorruptData,
+				"operation ID %q already appears earlier in this task history",
+				operation.ID,
+			)
+		}
+		return core.Errorf(
+			core.CategoryCorruptData,
+			"operation ID %q is already recorded by commit %s earlier in this task history",
+			operation.ID,
+			first,
+		)
+	}
+	return nil
+}
+
+// validatedOperationIDs is the seen set in a stable order, so two runs over the
+// same prefix store the same bytes.
+func (f *historyFold) validatedOperationIDs() []string {
+	if len(f.seenOperations) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(f.seenOperations))
+	for operationID := range f.seenOperations {
+		ids = append(ids, operationID)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 func (f *historyFold) end(history gitstore.TaskHistoryResult) error {
@@ -327,6 +398,7 @@ func (f *historyFold) end(history gitstore.TaskHistoryResult) error {
 		f.completion.Status = StatusInvalid
 		f.completion.Failure = validationFailure(history.TaskID, history.Failure.Commit, history.Failure.Err)
 	}
+	f.completion.ValidatedOperationIDs = f.validatedOperationIDs()
 	f.result.CommitsChecked += history.CheckedCommits
 	if err := f.validator.cache.Record(f.ctx, f.completion); err != nil {
 		return err
@@ -336,6 +408,7 @@ func (f *historyFold) end(history gitstore.TaskHistoryResult) error {
 	f.completion = Completion{}
 	f.parent = nil
 	f.lastValidState = nil
+	f.seenOperations = nil
 	if f.validator.afterRecord != nil {
 		f.validator.afterRecord()
 	}

@@ -21,9 +21,11 @@ import (
 
 const (
 	ValidatorVersion = 1
-	// schemaVersion 2 adds validatedCommitsByTaskIndex. The cache is
-	// disposable, so a bump simply rebuilds it.
-	schemaVersion              = "2"
+	// schemaVersion 2 adds validatedCommitsByTaskIndex. Version 3 adds
+	// task_validation.validated_operations, which carries the operation ULIDs a
+	// resumed run must already consider seen. The cache is disposable, so a bump
+	// simply rebuilds it.
+	schemaVersion              = "3"
 	cacheFilename              = "validation.sqlite"
 	initializationLockFilename = cacheFilename + ".lock"
 
@@ -95,8 +97,14 @@ type Completion struct {
 	LastValidState       []byte
 	ValidatedCommitIDs   []string
 	ValidatedCommitCount int
-	Failure              *Failure
-	Full                 bool
+	// ValidatedOperationIDs is every operation ULID the validated prefix
+	// contains, not only the ones this run read. A resumed run trusts the
+	// prefix's checkpoints but must still be able to tell that a newly appended
+	// commit repeats a ULID from it, and that is a property of the whole chain
+	// rather than of any one commit, so the set is carried forward whole.
+	ValidatedOperationIDs []string
+	Failure               *Failure
+	Full                  bool
 }
 
 type Cache struct {
@@ -120,7 +128,8 @@ CREATE TABLE task_validation (
   validated_commit_count INTEGER NOT NULL,
   failure_commit TEXT NOT NULL,
   failure_category TEXT NOT NULL,
-  failure_message TEXT NOT NULL
+  failure_message TEXT NOT NULL,
+  validated_operations TEXT NOT NULL
 );
 CREATE TABLE validated_commits (
   validator_version INTEGER NOT NULL,
@@ -132,6 +141,11 @@ CREATE TABLE validated_commits (
 CREATE INDEX ` + validatedCommitsByTaskIndex + ` ON validated_commits (validator_version, task_id);
 `
 
+// validated_operations is deliberately absent. Every other column is bounded
+// per task, and a preparation loads them for the whole project at once, while
+// this one grows with a task's depth. It is read one task at a time through
+// ValidatedOperationIDs, and only by a run that actually resumes from that
+// task's boundary.
 const taskColumns = `
 	task_id, observed_head, validator_version, status,
 	last_valid_commit, last_valid_generation, last_valid_state,
@@ -218,8 +232,9 @@ func (c *Cache) Prepare(
 				INSERT INTO task_validation (
 					task_id, observed_head, validator_version, status,
 					last_valid_commit, last_valid_generation, last_valid_state,
-					validated_commit_count, failure_commit, failure_category, failure_message
-				) VALUES (?, ?, ?, ?, '', '', x'', 0, '', '', '')
+					validated_commit_count, failure_commit, failure_category, failure_message,
+					validated_operations
+				) VALUES (?, ?, ?, ?, '', '', x'', 0, '', '', '', '')
 			`, head.TaskID, head.ObjectID, ValidatorVersion, StatusPending); err != nil {
 				return nil, cacheError("insert pending validation task", err)
 			}
@@ -242,7 +257,8 @@ func (c *Cache) Prepare(
 				    validated_commit_count = 0,
 				    failure_commit = '',
 				    failure_category = '',
-				    failure_message = ''
+				    failure_message = '',
+				    validated_operations = ''
 				WHERE task_id = ?
 			`, head.ObjectID, ValidatorVersion, StatusPending, head.TaskID); err != nil {
 				return nil, cacheError("invalidate prior-version validation task", err)
@@ -398,7 +414,8 @@ func (c *Cache) Record(ctx context.Context, completion Completion) error {
 		    validated_commit_count = ?,
 		    failure_commit = ?,
 		    failure_category = ?,
-		    failure_message = ?
+		    failure_message = ?,
+		    validated_operations = ?
 		WHERE task_id = ? AND observed_head = ? AND status = ?
 	`,
 		ValidatorVersion,
@@ -410,6 +427,7 @@ func (c *Cache) Record(ctx context.Context, completion Completion) error {
 		failureCommit,
 		failureCategory,
 		failureMessage,
+		strings.Join(completion.ValidatedOperationIDs, "\n"),
 		completion.TaskID,
 		completion.ObservedHead,
 		StatusPending,
@@ -428,6 +446,30 @@ func (c *Cache) Record(ctx context.Context, completion Completion) error {
 		return cacheError("commit validation completion", err)
 	}
 	return nil
+}
+
+// ValidatedOperationIDs returns the operation ULIDs recorded for one task's
+// validated prefix. A task the cache does not hold, or one recorded before any
+// operation set existed, reports none, which leaves the caller checking only
+// what it reads itself.
+func (c *Cache) ValidatedOperationIDs(ctx context.Context, taskID string) ([]string, error) {
+	if c == nil || c.db == nil {
+		return nil, core.Errorf(core.CategoryOperational, "validation cache is closed")
+	}
+	var encoded string
+	err := c.db.QueryRowContext(ctx, `
+		SELECT validated_operations FROM task_validation WHERE task_id = ?
+	`, taskID).Scan(&encoded)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, cacheError("read validated operation IDs", err)
+	}
+	if encoded == "" {
+		return nil, nil
+	}
+	return strings.Split(encoded, "\n"), nil
 }
 
 func (c *Cache) Snapshot(ctx context.Context, taskIDs []string) ([]CachedTask, error) {
@@ -482,6 +524,14 @@ func validateCompletion(completion Completion) error {
 	}
 	if completion.ValidatedCommitCount < 0 {
 		return core.Errorf(core.CategoryValidation, "validated commit count must not be negative")
+	}
+	// The set is stored newline-separated, and an operation ULID contains
+	// neither a newline nor a blank. Refusing one here keeps a malformed entry
+	// from splitting into two on the way back out.
+	for _, operationID := range completion.ValidatedOperationIDs {
+		if strings.TrimSpace(operationID) == "" || strings.ContainsAny(operationID, "\r\n") {
+			return core.Errorf(core.CategoryValidation, "validated operation ID %q is not a usable identifier", operationID)
+		}
 	}
 	switch completion.Status {
 	case StatusValid:

@@ -3,7 +3,7 @@ package projection
 import (
 	"context"
 	"fmt"
-
+	"strings"
 	"testing"
 	"time"
 
@@ -355,6 +355,77 @@ func TestStoreDropsIncompleteOperationRowsRatherThanLeavingAHole(t *testing.T) {
 	if rows := countOperationRows(t, store, created.ID); rows != 0 {
 		t.Fatalf("projected operation rows = %d, want none once the tail no longer matches", rows)
 	}
+}
+
+func TestStoreReportsADuplicateOperationIDAsCorruptDataNamingTheTask(t *testing.T) {
+	// Mutation caught: letting the operations table's primary key reject the row
+	// as an operational cache fault, which tells the user to run `workbook
+	// rebuild` — the one command guaranteed to hit the same wall.
+	ctx := context.Background()
+	repository, config := initializeWorkbook(t, testrepo.New(t))
+	created := createTask(t, repository, config, "Initial title")
+	advanceTaskTitle(t, repository, config, created.ID, "Second title", 0)
+
+	store, err := openStore(ctx, duplicatingSource{repository: repository}, config, t.TempDir()+"/cache.sqlite")
+	if err != nil {
+		t.Fatalf("openStore() error = %v", err)
+	}
+	_, err = store.List(ctx, config)
+	if category := core.CategoryOf(err); category != core.CategoryCorruptData {
+		t.Fatalf("List() category = %q, want corrupt-data; error = %v", category, err)
+	}
+	if !strings.Contains(err.Error(), created.ID) {
+		t.Fatalf("List() error = %v, want the offending task named", err)
+	}
+	if strings.Contains(err.Error(), cacheRecoveryHint) {
+		t.Fatalf("List() error = %v, want no rebuild hint for damage a rebuild repeats", err)
+	}
+}
+
+// duplicatingSource repeats one operation ULID later in the same chain, the
+// shape a hand-edited or hostile ref can carry and no Workbook build writes.
+type duplicatingSource struct {
+	repository *gitstore.Repository
+}
+
+func (s duplicatingSource) ListTaskHeads(ctx context.Context, config core.ProjectConfig) ([]gitstore.TaskHead, error) {
+	return s.repository.ListTaskHeads(ctx, config)
+}
+
+func (s duplicatingSource) InspectTaskHead(ctx context.Context, config core.ProjectConfig, taskID string) (gitstore.TaskHead, bool, error) {
+	return s.repository.InspectTaskHead(ctx, config, taskID)
+}
+
+func (s duplicatingSource) ReadTaskHeads(ctx context.Context, config core.ProjectConfig, heads []gitstore.TaskHead) ([]core.Snapshot, error) {
+	return s.repository.ReadTaskHeads(ctx, config, heads)
+}
+
+func (s duplicatingSource) ValidateTaskHeadAdvances(ctx context.Context, config core.ProjectConfig, advances []gitstore.HeadAdvance) error {
+	return s.repository.ValidateTaskHeadAdvances(ctx, config, advances)
+}
+
+func (s duplicatingSource) ReadTaskOperations(
+	ctx context.Context,
+	config core.ProjectConfig,
+	requests []gitstore.TaskHistoryRequest,
+) ([]gitstore.TaskOperationsResult, error) {
+	results, err := s.repository.ReadTaskOperations(ctx, config, requests)
+	if err != nil {
+		return nil, err
+	}
+	for index := range results {
+		commits := results[index].Commits
+		if len(commits) < 2 {
+			continue
+		}
+		first := commits[0].Operation.Operations
+		last := commits[len(commits)-1].Operation.Operations
+		if len(first) == 0 || len(last) == 0 {
+			continue
+		}
+		last[0].ID = first[0].ID
+	}
+	return results, nil
 }
 
 func advanceTaskTitle(
