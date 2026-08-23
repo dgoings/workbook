@@ -690,6 +690,178 @@ func canonicalState(t *testing.T, taskID, generation, title string) []byte {
 	return encoded
 }
 
+func TestOpenCacheRebuildsACacheMissingTheValidatedOperationsTable(t *testing.T) {
+	// Production mutation: leaving validated_operations out of the shape probe.
+	// A file stamped with the current schema version but missing the table then
+	// passes as usable, every Record fails on a raw SQL error, and nothing
+	// rebuilds it — so `workbook validate` stays broken until somebody deletes a
+	// cache the tool insists is disposable.
+	ctx := context.Background()
+	config := testConfig()
+	commonGitDir := t.TempDir()
+	cache, err := OpenCache(ctx, commonGitDir, config)
+	if err != nil {
+		t.Fatalf("OpenCache() error = %v", err)
+	}
+	head := gitstore.TaskHead{TaskID: taskID(1), ObjectID: "head-1"}
+	if _, err := cache.Prepare(ctx, []gitstore.TaskHead{head}, false); err != nil {
+		t.Fatalf("Prepare() error = %v", err)
+	}
+	recordWithOperations(t, ctx, cache, head, "commit-1", generationID(1), "OP1A")
+	if _, err := cache.db.ExecContext(ctx, `DROP TABLE validated_operations`); err != nil {
+		t.Fatalf("DROP TABLE error = %v", err)
+	}
+	if err := cache.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	reopened, err := OpenCache(ctx, commonGitDir, config)
+	if err != nil {
+		t.Fatalf("OpenCache(reopen) error = %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	rows, err := reopened.Snapshot(ctx, []string{taskID(1)})
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("Snapshot() = %#v, want the unusable cache discarded", rows)
+	}
+	if _, err := reopened.Prepare(ctx, []gitstore.TaskHead{head}, false); err != nil {
+		t.Fatalf("Prepare(reopen) error = %v", err)
+	}
+	recordWithOperations(t, ctx, reopened, head, "commit-1", generationID(1), "OP1A")
+}
+
+func TestCacheCarriesValidatedOperationsAcrossTasksAndRuns(t *testing.T) {
+	// Mutation caught: recording the operation set without reading it back
+	// project-wide, or letting a full rerun's replacement drop the other task's
+	// rows. The validator's cross-task check is only as good as this round trip.
+	ctx := context.Background()
+	cache := openTestCache(t, ctx, testConfig())
+	first := gitstore.TaskHead{TaskID: taskID(1), ObjectID: "head-1"}
+	second := gitstore.TaskHead{TaskID: taskID(2), ObjectID: "head-2"}
+	if _, err := cache.Prepare(ctx, []gitstore.TaskHead{first, second}, false); err != nil {
+		t.Fatalf("Prepare() error = %v", err)
+	}
+	recordWithOperations(t, ctx, cache, first, "commit-1", generationID(1), "OP1A", "OP1B")
+	recordWithOperations(t, ctx, cache, second, "commit-2", generationID(2), "OP2A")
+
+	got, err := cache.ValidatedOperations(ctx)
+	if err != nil {
+		t.Fatalf("ValidatedOperations() error = %v", err)
+	}
+	want := []ValidatedOperation{
+		{TaskID: taskID(1), OperationID: "OP1A", CommitID: "commit-1"},
+		{TaskID: taskID(1), OperationID: "OP1B", CommitID: "commit-1"},
+		{TaskID: taskID(2), OperationID: "OP2A", CommitID: "commit-2"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ValidatedOperations() = %#v, want %#v", got, want)
+	}
+
+	// A full rerun replaces only the task it re-read.
+	if _, err := cache.Prepare(ctx, []gitstore.TaskHead{first, second}, true); err != nil {
+		t.Fatalf("Prepare(full) error = %v", err)
+	}
+	if err := cache.Record(ctx, Completion{
+		TaskID: first.TaskID, ObservedHead: first.ObjectID, Status: StatusValid,
+		LastValidCommit: "commit-1b", LastValidGeneration: generationID(1),
+		LastValidState:       canonicalState(t, first.TaskID, generationID(1), "completed"),
+		ValidatedCommitIDs:   []string{"commit-1b"},
+		ValidatedCommitCount: 1,
+		ValidatedOperations:  []ValidatedOperation{{TaskID: first.TaskID, OperationID: "OP1C", CommitID: "commit-1b"}},
+		Full:                 true,
+	}); err != nil {
+		t.Fatalf("Record(full) error = %v", err)
+	}
+	got, err = cache.ValidatedOperations(ctx)
+	if err != nil {
+		t.Fatalf("ValidatedOperations(after full) error = %v", err)
+	}
+	want = []ValidatedOperation{
+		{TaskID: taskID(1), OperationID: "OP1C", CommitID: "commit-1b"},
+		{TaskID: taskID(2), OperationID: "OP2A", CommitID: "commit-2"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ValidatedOperations(after full) = %#v, want %#v", got, want)
+	}
+
+	// A task whose ref is gone takes its ULIDs with it, so they are not reported
+	// against a chain that still exists.
+	if _, err := cache.Prepare(ctx, []gitstore.TaskHead{first}, false); err != nil {
+		t.Fatalf("Prepare(absent) error = %v", err)
+	}
+	got, err = cache.ValidatedOperations(ctx)
+	if err != nil {
+		t.Fatalf("ValidatedOperations(after absence) error = %v", err)
+	}
+	want = []ValidatedOperation{{TaskID: taskID(1), OperationID: "OP1C", CommitID: "commit-1b"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ValidatedOperations(after absence) = %#v, want %#v", got, want)
+	}
+}
+
+func TestCacheRefusesAnUnusableValidatedOperation(t *testing.T) {
+	// Mutation caught: storing an entry that names no operation, no recording
+	// commit, or another task. Each one is read back on behalf of a different
+	// task, so a bad entry misattributes a later corruption report.
+	ctx := context.Background()
+	head := gitstore.TaskHead{TaskID: taskID(1), ObjectID: "head-1"}
+	for name, operation := range map[string]ValidatedOperation{
+		"blank operation": {TaskID: taskID(1), OperationID: "  ", CommitID: "commit-1"},
+		"no commit":       {TaskID: taskID(1), OperationID: "OP1A", CommitID: ""},
+		"other task":      {TaskID: taskID(2), OperationID: "OP1A", CommitID: "commit-1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cache := openTestCache(t, ctx, testConfig())
+			if _, err := cache.Prepare(ctx, []gitstore.TaskHead{head}, false); err != nil {
+				t.Fatalf("Prepare() error = %v", err)
+			}
+			err := cache.Record(ctx, Completion{
+				TaskID: head.TaskID, ObservedHead: head.ObjectID, Status: StatusValid,
+				LastValidCommit: "commit-1", LastValidGeneration: generationID(1),
+				LastValidState:       canonicalState(t, head.TaskID, generationID(1), "completed"),
+				ValidatedCommitIDs:   []string{"commit-1"},
+				ValidatedCommitCount: 1,
+				ValidatedOperations:  []ValidatedOperation{operation},
+			})
+			if category := core.CategoryOf(err); category != core.CategoryValidation {
+				t.Fatalf("Record() category = %q, want validation; error = %v", category, err)
+			}
+		})
+	}
+}
+
+func recordWithOperations(
+	t *testing.T,
+	ctx context.Context,
+	cache *Cache,
+	head gitstore.TaskHead,
+	commitID string,
+	generation string,
+	operationIDs ...string,
+) {
+	t.Helper()
+	operations := make([]ValidatedOperation, 0, len(operationIDs))
+	for _, operationID := range operationIDs {
+		operations = append(operations, ValidatedOperation{TaskID: head.TaskID, OperationID: operationID, CommitID: commitID})
+	}
+	if err := cache.Record(ctx, Completion{
+		TaskID:               head.TaskID,
+		ObservedHead:         head.ObjectID,
+		Status:               StatusValid,
+		LastValidCommit:      commitID,
+		LastValidGeneration:  generation,
+		LastValidState:       canonicalState(t, head.TaskID, generation, "completed"),
+		ValidatedCommitIDs:   []string{commitID},
+		ValidatedCommitCount: 1,
+		ValidatedOperations:  operations,
+	}); err != nil {
+		t.Fatalf("Record(%s) error = %v", head.TaskID, err)
+	}
+}
+
 func recordSimpleValid(
 	t *testing.T,
 	ctx context.Context,

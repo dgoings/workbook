@@ -126,14 +126,31 @@ func (v *Validator) Validate(ctx context.Context, full bool) (Result, error) {
 	}
 
 	if len(requests) > 0 {
+		// A full run re-reads every task from its root, so nothing the cache
+		// recorded is authoritative and the seeded set would be empty anyway.
+		// Skipping the read keeps `validate --full` from scanning the whole
+		// validated_operations table to build two maps it never consults.
+		var seen map[string]ValidatedOperation
+		var seeded map[string][]ValidatedOperation
+		if !full {
+			var err error
+			seen, seeded, err = v.loadRecordedOperations(ctx, requests)
+			if err != nil {
+				return v.partialResult(ctx, initialHeads, result), err
+			}
+		} else {
+			seen = make(map[string]ValidatedOperation)
+		}
 		fold := &historyFold{
-			validator:  v,
-			ctx:        ctx,
-			requests:   requests,
-			prepared:   prepared,
-			boundaries: boundaries,
-			full:       full,
-			result:     &result,
+			validator:      v,
+			ctx:            ctx,
+			requests:       requests,
+			prepared:       prepared,
+			boundaries:     boundaries,
+			full:           full,
+			result:         &result,
+			seenOperations: seen,
+			seededPrefixes: seeded,
 		}
 		streamErr := v.source.ReadTaskHistoriesStream(ctx, v.config, requests, gitstore.TaskHistoryStream{
 			Begin:  fold.begin,
@@ -220,6 +237,68 @@ func (v *Validator) Validate(ctx context.Context, full bool) (Result, error) {
 	return result, nil
 }
 
+// loadRecordedOperations builds the project-wide seen set every task in this
+// run is folded against, before any of them is read.
+//
+// Two kinds of task contribute their recorded ULIDs to it. A task this run is
+// not reading at all contributes because its chain is being taken on the
+// cache's word. A task this run resumes at a cached boundary contributes its
+// prefix for the same reason: the run will never re-read those commits, so the
+// cache is the only witness that the task owns them.
+//
+// Seeding a resuming task's prefix up front rather than at its own Begin is
+// what makes the verdict independent of task order. Tasks are streamed in task
+// ID order, so a prefix seeded at its owner's Begin is invisible to every
+// lower-sorting task in the same run — and a new task repeating a ULID from a
+// resuming task's prefix would be reported valid purely because it sorts first.
+//
+// A task this run re-reads from its root contributes nothing: its stored rows
+// are about to be replaced wholesale, and seeding them would report each of its
+// own commits as a repeat of itself. Those rows are handed back separately so
+// that a task whose cached boundary turns out to be unreachable — the one case
+// where a request asks to resume and the read starts at the root anyway — can
+// have its seed withdrawn at Begin.
+func (v *Validator) loadRecordedOperations(
+	ctx context.Context,
+	requests []gitstore.TaskHistoryRequest,
+) (map[string]ValidatedOperation, map[string][]ValidatedOperation, error) {
+	recorded, err := v.cache.ValidatedOperations(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	resuming := make(map[string]bool, len(requests))
+	rereading := make(map[string]bool, len(requests))
+	for _, request := range requests {
+		if request.StopAt != "" {
+			resuming[request.Head.TaskID] = true
+			continue
+		}
+		rereading[request.Head.TaskID] = true
+	}
+	seen := make(map[string]ValidatedOperation, len(recorded))
+	var seeded map[string][]ValidatedOperation
+	for _, operation := range recorded {
+		if rereading[operation.TaskID] {
+			continue
+		}
+		if resuming[operation.TaskID] {
+			if seeded == nil {
+				seeded = make(map[string][]ValidatedOperation, len(resuming))
+			}
+			seeded[operation.TaskID] = append(seeded[operation.TaskID], operation)
+		}
+		// Rows arrive ordered, so the first owner of a ULID is the same one on
+		// every run. A collision between two chains the cache already holds
+		// cannot be attributed to a commit this run reads, so the run reports
+		// the chains it can read and leaves that pair to `validate --full`,
+		// which takes nothing from the cache.
+		if _, exists := seen[operation.OperationID]; !exists {
+			seen[operation.OperationID] = operation
+		}
+	}
+	return seen, seeded, nil
+}
+
 // historyFold turns the streamed history of every pending task into one
 // completion at a time. The audit is an incremental fold over each chain that
 // needs only the parent state and the current record, so nothing above one
@@ -242,6 +321,26 @@ type historyFold struct {
 	// commit would repeat work whose result only the final commit keeps.
 	lastValidState *core.StateDocument
 	failed         bool
+	// seenOperations maps every operation ULID this run knows about to the task
+	// and commit that recorded it. It spans the whole project and the whole run:
+	// it is seeded from the cache for the tasks this run is not reading, and it
+	// is never reset at a task boundary.
+	//
+	// Uniqueness is a property of the project, not of any one commit or chain,
+	// so no amount of checkpoint comparison can see a violation: repeating a
+	// ULID changes no projected state, and every checkpoint still folds. The
+	// projection keys its operation rows on the ULID alone, with no task in the
+	// key, so any chain that repeats one — whether within itself or against a
+	// sibling task — is a chain no clone can hold, and a run that reported it
+	// valid would be vouching for a repository that `workbook rebuild` cannot
+	// repair.
+	seenOperations map[string]ValidatedOperation
+	// seededPrefixes holds, per resuming task, the recorded operations already
+	// folded into seenOperations on its behalf. It exists so that a task whose
+	// cached boundary the read could not reach — and which is therefore
+	// re-reading its own prefix — can have that seed withdrawn before its
+	// commits arrive.
+	seededPrefixes map[string][]ValidatedOperation
 }
 
 func (f *historyFold) begin(start gitstore.TaskHistoryStart) error {
@@ -272,6 +371,14 @@ func (f *historyFold) begin(start gitstore.TaskHistoryStart) error {
 		// A retained boundary that Git cannot reach is no longer a safe
 		// prefix. Rebuilding this task's immutable-commit set avoids duplicate
 		// rows while preserving Record's duplicate-delivery guard.
+		//
+		// Record's full path also drops this task's recorded operation ULIDs,
+		// which is more than rebuilding its own set: a task whose tip read
+		// failed reaches here too, and it forgets ULIDs its ref still owns, so
+		// a sibling repeating one of them is not caught until the broken task
+		// is repaired and re-read. The run still exits nonzero, because the
+		// task that failed is counted invalid, so `validate` never vouches for
+		// the repository on the strength of the forgotten rows.
 		Full: f.full || (!start.BoundaryReached && cached.LastValidCommit != ""),
 	}
 	if boundary := f.boundaries[start.TaskID]; start.BoundaryReached && boundary != nil {
@@ -281,6 +388,20 @@ func (f *historyFold) begin(start gitstore.TaskHistoryStart) error {
 		f.completion.LastValidGeneration = cached.LastValidGeneration
 		f.completion.LastValidState = append([]byte(nil), cached.LastValidState...)
 		f.completion.ValidatedCommitCount = cached.ValidatedCommitCount
+		// The prefix's ULIDs are already in seenOperations: they were seeded
+		// before any task was streamed, so that every task in this run — not
+		// only the ones sorted after this one — is folded against them.
+	} else {
+		// The request asked to resume, but the read started at the root, so
+		// this task is about to re-record the very operations that were seeded
+		// on its behalf. Withdraw the seed first, or each of its own commits
+		// is reported as a repeat of itself. Entries a different task owns are
+		// left alone; only this task's claim is withdrawn.
+		for _, operation := range f.seededPrefixes[start.TaskID] {
+			if first, exists := f.seenOperations[operation.OperationID]; exists && first.TaskID == start.TaskID {
+				delete(f.seenOperations, operation.OperationID)
+			}
+		}
 	}
 	f.result.TasksChecked++
 	return nil
@@ -296,11 +417,25 @@ func (f *historyFold) commit(taskID string, record gitstore.HistoryCommit) error
 	if f.failed {
 		return nil
 	}
+	// The checkpoint is compared first so that the pack this reads has already
+	// been validated as a document, and so a commit this build cannot fold keeps
+	// its own newer-writer verdict instead of being restated as damage.
 	if err := core.ValidateCheckpoint(f.parent, record.Operation, record.State, f.validator.config.Key); err != nil {
 		f.completion.Status = StatusInvalid
 		f.completion.Failure = validationFailure(taskID, record.ObjectID, err)
 		f.failed = true
 		return nil
+	}
+	if err := f.checkOperationIDs(taskID, record); err != nil {
+		f.completion.Status = StatusInvalid
+		f.completion.Failure = validationFailure(taskID, record.ObjectID, err)
+		f.failed = true
+		return nil
+	}
+	for _, operation := range record.Operation.Operations {
+		recorded := ValidatedOperation{TaskID: taskID, OperationID: operation.ID, CommitID: record.ObjectID}
+		f.seenOperations[operation.ID] = recorded
+		f.completion.ValidatedOperations = append(f.completion.ValidatedOperations, recorded)
 	}
 	state := record.State
 	f.parent = &state
@@ -309,6 +444,36 @@ func (f *historyFold) commit(taskID string, record gitstore.HistoryCommit) error
 	f.completion.LastValidGeneration = state.History.Generation
 	f.completion.ValidatedCommitCount++
 	f.completion.ValidatedCommitIDs = append(f.completion.ValidatedCommitIDs, record.ObjectID)
+	return nil
+}
+
+// checkOperationIDs refuses a commit that repeats an operation ULID any commit
+// of any task already recorded. Duplicates inside one pack are already refused
+// by the pack's own document validation, so this sees only the across-commit
+// case that validation had no other way to reach — and, because the projection
+// keys operations globally, the across-task case as well.
+func (f *historyFold) checkOperationIDs(taskID string, record gitstore.HistoryCommit) error {
+	for _, operation := range record.Operation.Operations {
+		first, repeated := f.seenOperations[operation.ID]
+		if !repeated {
+			continue
+		}
+		if first.TaskID == taskID {
+			return core.Errorf(
+				core.CategoryCorruptData,
+				"operation ID %q is already recorded by commit %s earlier in this task history",
+				operation.ID,
+				first.CommitID,
+			)
+		}
+		return core.Errorf(
+			core.CategoryCorruptData,
+			"operation ID %q is already recorded by commit %s in task %q, and operation IDs are unique across the project",
+			operation.ID,
+			first.CommitID,
+			first.TaskID,
+		)
+	}
 	return nil
 }
 

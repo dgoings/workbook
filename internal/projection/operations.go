@@ -10,6 +10,8 @@ import (
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 // Rows are keyed on the operation ULID rather than the commit object ID.
@@ -168,11 +170,83 @@ func insertOperations(
 				pack.Actor.ID, formatTime(pack.WallTime),
 				string(operation.Type), operation.Field, operation.Value, taskData, payload,
 			); err != nil {
+				if duplicateOperationID(err) {
+					return duplicateOperationError(ctx, transaction, taskID, operation.ID)
+				}
 				return cacheError("insert projected task operation", err)
 			}
 		}
 	}
 	return nil
+}
+
+// duplicateOperationID reports the operations table refusing a second row for
+// one operation ULID. The table's only key is the operation_id primary key, so
+// that is the only constraint this statement can violate, and violating it
+// means the history handed to the projection repeats a ULID the data model
+// promises is unique. A unique-index violation is deliberately not accepted
+// here: the table has no unique index today, and one added later would be on
+// some other column, so treating it as this damage would send the reader after
+// a ref that is fine.
+func duplicateOperationID(err error) bool {
+	var sqliteError *sqlite.Error
+	if !errors.As(err, &sqliteError) {
+		return false
+	}
+	return sqliteError.Code() == sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY
+}
+
+// duplicateOperationError names the damage rather than the cache. Every other
+// insert failure here is a cache fault whose answer is `workbook rebuild`, and
+// this one is the exact opposite: the rows are a faithful copy of what Git
+// holds, so a rebuild reads the same duplicate and stops in the same place. The
+// hint is therefore withheld and the operation is named, because repairing the
+// ref is the only thing that helps.
+//
+// Which ref, though, is not something the rejected insert knows. The key is
+// global, so the row already holding the ULID may belong to another task
+// entirely, and pointing at the task being projected would send somebody to
+// repair a history that repeats nothing. The owner is therefore read back
+// before the message is written; SQLite aborts the statement rather than the
+// transaction on a constraint failure, so the read is available. If it fails
+// for any reason the message says only what is known.
+func duplicateOperationError(ctx context.Context, transaction *sql.Tx, taskID, operationID string) error {
+	var owner string
+	if err := transaction.QueryRowContext(
+		ctx,
+		`SELECT task_id FROM operations WHERE operation_id = ?`,
+		operationID,
+	).Scan(&owner); err != nil {
+		owner = ""
+	}
+	switch owner {
+	case taskID:
+		return core.Errorf(
+			core.CategoryCorruptData,
+			"cannot project task %q: operation %q is recorded more than once; "+
+				"its task history repeats an operation ID, which no rebuild can resolve",
+			taskID,
+			operationID,
+		)
+	case "":
+		return core.Errorf(
+			core.CategoryCorruptData,
+			"cannot project task %q: operation %q is already recorded; "+
+				"operation IDs are unique across the project, and no rebuild can resolve a history that repeats one",
+			taskID,
+			operationID,
+		)
+	default:
+		return core.Errorf(
+			core.CategoryCorruptData,
+			"cannot project task %q: operation %q is already recorded under task %q; "+
+				"operation IDs are unique across the project, so one of the two histories must be repaired "+
+				"and no rebuild can resolve it",
+			taskID,
+			operationID,
+			owner,
+		)
+	}
 }
 
 type operationScan struct {

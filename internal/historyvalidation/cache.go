@@ -21,9 +21,11 @@ import (
 
 const (
 	ValidatorVersion = 1
-	// schemaVersion 2 adds validatedCommitsByTaskIndex. The cache is
-	// disposable, so a bump simply rebuilds it.
-	schemaVersion              = "2"
+	// schemaVersion 2 adds validatedCommitsByTaskIndex. Version 3 adds the
+	// validated_operations table, which carries the operation ULIDs already
+	// recorded for each task so a run can tell that a commit repeats one. The
+	// cache is disposable, so a bump simply rebuilds it.
+	schemaVersion              = "3"
 	cacheFilename              = "validation.sqlite"
 	initializationLockFilename = cacheFilename + ".lock"
 
@@ -95,8 +97,27 @@ type Completion struct {
 	LastValidState       []byte
 	ValidatedCommitIDs   []string
 	ValidatedCommitCount int
-	Failure              *Failure
-	Full                 bool
+	// ValidatedOperations is every operation ULID this run read for the task,
+	// each paired with the commit that recorded it. Uniqueness is a property of
+	// the whole project rather than of any one commit, so the set outlives the
+	// run: a later run resuming at a cached boundary, or skipping the task
+	// entirely on a cache hit, still has to be able to tell that a commit it
+	// does read repeats one of these.
+	//
+	// It carries only what this run read, exactly like ValidatedCommitIDs, and
+	// Full decides whether the recorded set replaces the stored one or extends
+	// it.
+	ValidatedOperations []ValidatedOperation
+	Failure             *Failure
+	Full                bool
+}
+
+// ValidatedOperation names one operation ULID a validated task history
+// recorded, and the commit of that history that recorded it.
+type ValidatedOperation struct {
+	TaskID      string
+	OperationID string
+	CommitID    string
 }
 
 type Cache struct {
@@ -130,6 +151,13 @@ CREATE TABLE validated_commits (
   PRIMARY KEY (validator_version, commit_id)
 );
 CREATE INDEX ` + validatedCommitsByTaskIndex + ` ON validated_commits (validator_version, task_id);
+CREATE TABLE validated_operations (
+  validator_version INTEGER NOT NULL,
+  task_id TEXT NOT NULL,
+  operation_id TEXT NOT NULL,
+  commit_id TEXT NOT NULL,
+  PRIMARY KEY (validator_version, task_id, operation_id)
+);
 `
 
 const taskColumns = `
@@ -289,6 +317,12 @@ func (c *Cache) Prepare(
 		if _, err := tx.ExecContext(ctx, `DELETE FROM task_validation WHERE task_id = ?`, taskID); err != nil {
 			return nil, cacheError("remove absent validation task", err)
 		}
+		// This task's operation set is consulted on behalf of every other task,
+		// so a ref that is gone takes its ULIDs with it rather than leaving them
+		// to be reported against a chain that still exists.
+		if _, err := tx.ExecContext(ctx, `DELETE FROM validated_operations WHERE task_id = ?`, taskID); err != nil {
+			return nil, cacheError("remove absent validation task operations", err)
+		}
 	}
 
 	prepared := make(map[string]CachedTask, len(heads))
@@ -358,6 +392,28 @@ func (c *Cache) Record(ctx context.Context, completion Completion) error {
 			WHERE validator_version = ? AND task_id = ?
 		`, ValidatorVersion, completion.TaskID); err != nil {
 			return cacheError("replace full validation commit set", err)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM validated_operations
+			WHERE validator_version = ? AND task_id = ?
+		`, ValidatorVersion, completion.TaskID); err != nil {
+			return cacheError("replace full validation operation set", err)
+		}
+	}
+	if len(completion.ValidatedOperations) > 0 {
+		insert, err := tx.PrepareContext(ctx, `
+			INSERT INTO validated_operations (
+				validator_version, task_id, operation_id, commit_id
+			) VALUES (?, ?, ?, ?)
+		`)
+		if err != nil {
+			return cacheError("prepare validated operation insert", err)
+		}
+		defer insert.Close()
+		for _, operation := range completion.ValidatedOperations {
+			if _, err := insert.ExecContext(ctx, ValidatorVersion, completion.TaskID, operation.OperationID, operation.CommitID); err != nil {
+				return cacheError("record validated operation", err)
+			}
 		}
 	}
 	// One prepared insert serves the whole task. A deep history otherwise pays
@@ -430,6 +486,50 @@ func (c *Cache) Record(ctx context.Context, completion Completion) error {
 	return nil
 }
 
+// ValidatedOperations returns every operation ULID this validator version has
+// recorded, for every task the cache holds, each with the task and commit that
+// recorded it.
+//
+// It is read whole rather than task by task because the property it defends is
+// project-wide: the projection keys its operation rows on the ULID alone, so a
+// run checking a single task still has to see the ULIDs of the tasks it is
+// about to skip.
+//
+// The caller turns the result into a map that stays resident for the whole
+// fold, which is the one whole-corpus resident set in a code path that
+// otherwise streams a commit at a time. The rows are one short string triple
+// per operation — roughly 250 bytes each once mapped, so a few megabytes at the
+// 500-task, 20-operation size the benchmark fixture uses, and linear in the
+// project's operation count above it. `validate --full` takes nothing from the
+// cache and does not call this at all.
+func (c *Cache) ValidatedOperations(ctx context.Context) ([]ValidatedOperation, error) {
+	if c == nil || c.db == nil {
+		return nil, core.Errorf(core.CategoryOperational, "validation cache is closed")
+	}
+	rows, err := c.db.QueryContext(ctx, `
+		SELECT task_id, operation_id, commit_id
+		FROM validated_operations
+		WHERE validator_version = ?
+		ORDER BY task_id, operation_id
+	`, ValidatorVersion)
+	if err != nil {
+		return nil, cacheError("read validated operations", err)
+	}
+	defer rows.Close()
+	var operations []ValidatedOperation
+	for rows.Next() {
+		var operation ValidatedOperation
+		if err := rows.Scan(&operation.TaskID, &operation.OperationID, &operation.CommitID); err != nil {
+			return nil, cacheError("read validated operation row", err)
+		}
+		operations = append(operations, operation)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, cacheError("read validated operations", err)
+	}
+	return operations, nil
+}
+
 func (c *Cache) Snapshot(ctx context.Context, taskIDs []string) ([]CachedTask, error) {
 	if c == nil || c.db == nil {
 		return nil, core.Errorf(core.CategoryOperational, "validation cache is closed")
@@ -482,6 +582,25 @@ func validateCompletion(completion Completion) error {
 	}
 	if completion.ValidatedCommitCount < 0 {
 		return core.Errorf(core.CategoryValidation, "validated commit count must not be negative")
+	}
+	// The stored row is read back on behalf of every other task, so an entry
+	// that names no operation, no recording commit, or a task other than the one
+	// being recorded would misattribute a later report rather than merely be
+	// useless.
+	for _, operation := range completion.ValidatedOperations {
+		if strings.TrimSpace(operation.OperationID) == "" {
+			return core.Errorf(core.CategoryValidation, "validated operation ID must not be blank")
+		}
+		if strings.TrimSpace(operation.CommitID) == "" {
+			return core.Errorf(core.CategoryValidation, "validated operation %q must name the commit that recorded it", operation.OperationID)
+		}
+		if operation.TaskID != completion.TaskID {
+			return core.Errorf(
+				core.CategoryValidation,
+				"validated operation %q belongs to task %q, not %q",
+				operation.OperationID, operation.TaskID, completion.TaskID,
+			)
+		}
 	}
 	switch completion.Status {
 	case StatusValid:
@@ -723,6 +842,7 @@ func databaseUsable(ctx context.Context, db *sql.DB, projectID string) bool {
 		`SELECT key, value FROM validation_meta LIMIT 0`,
 		`SELECT ` + taskColumns + ` FROM task_validation LIMIT 0`,
 		`SELECT validator_version, commit_id, task_id, history_generation FROM validated_commits LIMIT 0`,
+		`SELECT validator_version, task_id, operation_id, commit_id FROM validated_operations LIMIT 0`,
 	} {
 		rows, err := db.QueryContext(ctx, query)
 		if err != nil {

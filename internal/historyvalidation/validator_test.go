@@ -471,6 +471,241 @@ func TestValidateNeverMutatesCanonicalRefs(t *testing.T) {
 	}
 }
 
+func TestValidateReportsARepeatedOperationIDAsCorruptData(t *testing.T) {
+	// Production mutation: checking each checkpoint alone vouches for a chain the
+	// projection's operation-ID key cannot hold, so `validate --full` reports
+	// VALID for a repository every projecting command already refuses.
+	ctx := context.Background()
+	cache := openTestCache(t, ctx, testConfig())
+	history := validationHistory(t, taskID(1), generationID(1), 140, 3)
+	// Every checkpoint still folds: a repeated ULID changes no projected state,
+	// which is exactly why checkpoint comparison cannot see it.
+	history[2].Operation.Operations[0].ID = history[0].Operation.Operations[0].ID
+	source := &validatorSource{heads: headsFor(history), histories: map[string]gitstore.TaskHistoryResult{
+		taskID(1): historyResult(taskID(1), history[2].ObjectID, false, history),
+	}}
+
+	got, err := (&Validator{source: source, cache: cache, config: testConfig()}).Validate(ctx, true)
+	if category := core.CategoryOf(err); category != core.CategoryCorruptData {
+		t.Fatalf("Validate() category = %q, want corrupt-data; error = %v", category, err)
+	}
+	if got.Valid != 0 || got.Invalid != 1 || len(got.Failures) != 1 {
+		t.Fatalf("duplicate-ULID result = %#v, want one invalid task", got)
+	}
+	failure := got.Failures[0]
+	if failure.Commit != history[2].ObjectID || failure.Category != string(core.CategoryCorruptData) {
+		t.Fatalf("failure = %#v, want corrupt data at the repeating commit", failure)
+	}
+	if !strings.Contains(failure.Message, history[0].Operation.Operations[0].ID) ||
+		!strings.Contains(failure.Message, history[0].ObjectID) {
+		t.Fatalf("failure message = %q, want the repeated operation and its first commit named", failure.Message)
+	}
+}
+
+func TestValidateReportsARepeatedOperationIDAcrossACachedBoundary(t *testing.T) {
+	// Production mutation: keeping the seen-operation set only for the commits one
+	// run reads. The incremental run resumes at the cached boundary, so a new
+	// commit repeating a ULID from the already-validated prefix passes unseen and
+	// the default `workbook validate` reports VALID.
+	ctx := context.Background()
+	cache := openTestCache(t, ctx, testConfig())
+	history := validationHistory(t, taskID(1), generationID(1), 150, 3)
+	source := &validatorSource{
+		heads:     []gitstore.TaskHead{{TaskID: taskID(1), ObjectID: history[1].ObjectID}},
+		histories: map[string]gitstore.TaskHistoryResult{taskID(1): historyResult(taskID(1), history[1].ObjectID, false, history[:2])},
+	}
+	v := &Validator{source: source, cache: cache, config: testConfig()}
+	if _, err := v.Validate(ctx, false); err != nil {
+		t.Fatalf("first Validate() error = %v", err)
+	}
+
+	history[2].Operation.Operations[0].ID = history[0].Operation.Operations[0].ID
+	source.heads = []gitstore.TaskHead{{TaskID: taskID(1), ObjectID: history[2].ObjectID}}
+	source.histories[taskID(1)] = historyResult(taskID(1), history[2].ObjectID, true, history[2:])
+
+	got, err := v.Validate(ctx, false)
+	if category := core.CategoryOf(err); category != core.CategoryCorruptData {
+		t.Fatalf("incremental Validate() category = %q, want corrupt-data; error = %v", category, err)
+	}
+	if got.Invalid != 1 || len(got.Failures) != 1 || got.Failures[0].Commit != history[2].ObjectID {
+		t.Fatalf("incremental result = %#v, want the appended commit reported invalid", got)
+	}
+	if !strings.Contains(got.Failures[0].Message, history[0].Operation.Operations[0].ID) ||
+		!strings.Contains(got.Failures[0].Message, history[0].ObjectID) {
+		t.Fatalf("failure message = %q, want the repeated operation and its first commit named", got.Failures[0].Message)
+	}
+}
+
+func TestValidateReportsAnOperationIDRepeatedAcrossTwoTasks(t *testing.T) {
+	// Production mutation: scoping the seen-operation set to one task. The
+	// projection keys operations on the ULID alone, with no task in the key, so a
+	// ULID shared by two chains is exactly as unprojectable as one repeated inside
+	// a single chain — and a per-task check reports the project VALID while every
+	// projecting command, `rebuild` included, refuses it.
+	ctx := context.Background()
+	cache := openTestCache(t, ctx, testConfig())
+	first := validationHistory(t, taskID(1), generationID(1), 200, 3)
+	second := validationHistory(t, taskID(2), generationID(2), 300, 3)
+	// Nothing inside either chain repeats; the collision is between them.
+	second[1].Operation.Operations[0].ID = first[1].Operation.Operations[0].ID
+	source := &validatorSource{heads: headsFor(first, second), histories: map[string]gitstore.TaskHistoryResult{
+		taskID(1): historyResult(taskID(1), first[2].ObjectID, false, first),
+		taskID(2): historyResult(taskID(2), second[2].ObjectID, false, second),
+	}}
+
+	got, err := (&Validator{source: source, cache: cache, config: testConfig()}).Validate(ctx, true)
+	if category := core.CategoryOf(err); category != core.CategoryCorruptData {
+		t.Fatalf("Validate() category = %q, want corrupt-data; error = %v", category, err)
+	}
+	if got.Invalid != 1 || len(got.Failures) != 1 {
+		t.Fatalf("cross-task duplicate result = %#v, want one invalid task", got)
+	}
+	failure := got.Failures[0]
+	if failure.TaskID != taskID(2) || failure.Commit != second[1].ObjectID {
+		t.Fatalf("failure = %#v, want the second chain's repeating commit", failure)
+	}
+	if !strings.Contains(failure.Message, first[1].Operation.Operations[0].ID) ||
+		!strings.Contains(failure.Message, first[1].ObjectID) ||
+		!strings.Contains(failure.Message, taskID(1)) {
+		t.Fatalf("failure message = %q, want the operation, its commit, and the owning task named", failure.Message)
+	}
+}
+
+func TestValidateReportsACrossTaskRepeatAgainstATaskItTookFromCache(t *testing.T) {
+	// Production mutation: seeding the project-wide set only from the tasks one
+	// run reads. A task whose head has not moved is answered from the cache and
+	// never streamed, so a new task repeating one of its ULIDs would meet an empty
+	// set and the run would call the project valid.
+	ctx := context.Background()
+	cache := openTestCache(t, ctx, testConfig())
+	first := validationHistory(t, taskID(1), generationID(1), 400, 3)
+	source := &validatorSource{
+		heads:     headsFor(first),
+		histories: map[string]gitstore.TaskHistoryResult{taskID(1): historyResult(taskID(1), first[2].ObjectID, false, first)},
+	}
+	v := &Validator{source: source, cache: cache, config: testConfig()}
+	if _, err := v.Validate(ctx, false); err != nil {
+		t.Fatalf("first Validate() error = %v", err)
+	}
+
+	second := validationHistory(t, taskID(2), generationID(2), 500, 3)
+	second[2].Operation.Operations[0].ID = first[1].Operation.Operations[0].ID
+	source.heads = headsFor(first, second)
+	source.histories[taskID(2)] = historyResult(taskID(2), second[2].ObjectID, false, second)
+
+	got, err := v.Validate(ctx, false)
+	if category := core.CategoryOf(err); category != core.CategoryCorruptData {
+		t.Fatalf("second Validate() category = %q, want corrupt-data; error = %v", category, err)
+	}
+	if got.CacheHits != 1 {
+		t.Fatalf("second Validate() cache hits = %d, want the unchanged task answered from cache", got.CacheHits)
+	}
+	if got.Invalid != 1 || len(got.Failures) != 1 || got.Failures[0].TaskID != taskID(2) {
+		t.Fatalf("second Validate() result = %#v, want the new task reported invalid", got)
+	}
+	if !strings.Contains(got.Failures[0].Message, taskID(1)) ||
+		!strings.Contains(got.Failures[0].Message, first[1].ObjectID) {
+		t.Fatalf("failure message = %q, want the cached task and its commit named", got.Failures[0].Message)
+	}
+}
+
+func TestValidateReportsACrossTaskRepeatAgainstAResumingTaskWhicheverSortsFirst(t *testing.T) {
+	// Production mutation: seeding a resuming task's cached prefix at its own
+	// Begin instead of before the stream starts. Tasks are streamed in task ID
+	// order, so a prefix seeded that late is invisible to every lower-sorting
+	// task in the same run: a new task repeating one of those ULIDs would be
+	// reported valid purely because its ID sorts first, and the same repository
+	// would validate or fail on task ID order alone.
+	for _, order := range []struct {
+		name     string
+		resuming string
+		newcomer string
+	}{
+		{name: "newcomer sorts first", resuming: taskID(2), newcomer: taskID(1)},
+		{name: "resuming task sorts first", resuming: taskID(1), newcomer: taskID(2)},
+	} {
+		t.Run(order.name, func(t *testing.T) {
+			ctx := context.Background()
+			cache := openTestCache(t, ctx, testConfig())
+			resuming := validationHistory(t, order.resuming, generationID(1), 900, 3)
+			source := &validatorSource{
+				heads: []gitstore.TaskHead{{TaskID: order.resuming, ObjectID: resuming[1].ObjectID}},
+				histories: map[string]gitstore.TaskHistoryResult{
+					order.resuming: historyResult(order.resuming, resuming[1].ObjectID, false, resuming[:2]),
+				},
+			}
+			v := &Validator{source: source, cache: cache, config: testConfig()}
+			if _, err := v.Validate(ctx, false); err != nil {
+				t.Fatalf("first Validate() error = %v", err)
+			}
+
+			// The resuming task gains a commit, so it is pending again and stops
+			// at its cached boundary; the newcomer's second commit repeats a ULID
+			// from the prefix that resumed run never re-reads.
+			newcomer := validationHistory(t, order.newcomer, generationID(2), 950, 2)
+			newcomer[1].Operation.Operations[0].ID = resuming[0].Operation.Operations[0].ID
+			heads := []gitstore.TaskHead{
+				{TaskID: order.resuming, ObjectID: resuming[2].ObjectID},
+				{TaskID: order.newcomer, ObjectID: newcomer[1].ObjectID},
+			}
+			sort.Slice(heads, func(i, j int) bool { return heads[i].TaskID < heads[j].TaskID })
+			source.heads = heads
+			source.histories[order.resuming] = historyResult(order.resuming, resuming[2].ObjectID, true, resuming[2:])
+			source.histories[order.newcomer] = historyResult(order.newcomer, newcomer[1].ObjectID, false, newcomer)
+
+			got, err := v.Validate(ctx, false)
+			if category := core.CategoryOf(err); category != core.CategoryCorruptData {
+				t.Fatalf("second Validate() category = %q, want corrupt-data; error = %v; result = %#v", category, err, got)
+			}
+			if got.Valid != 1 || got.Invalid != 1 || len(got.Failures) != 1 {
+				t.Fatalf("second Validate() result = %#v, want the newcomer alone reported invalid", got)
+			}
+			failure := got.Failures[0]
+			if failure.TaskID != order.newcomer || failure.Commit != newcomer[1].ObjectID {
+				t.Fatalf("failure = %#v, want the newcomer's repeating commit", failure)
+			}
+			if !strings.Contains(failure.Message, resuming[0].Operation.Operations[0].ID) ||
+				!strings.Contains(failure.Message, resuming[0].ObjectID) ||
+				!strings.Contains(failure.Message, order.resuming) {
+				t.Fatalf("failure message = %q, want the operation, its commit, and the resuming task named", failure.Message)
+			}
+		})
+	}
+}
+
+func TestValidateDoesNotReportATaskAsRepeatingItsOwnRecordedOperations(t *testing.T) {
+	// Production mutation: seeding the project-wide set from the cached rows of a
+	// task this run is about to re-read. Those rows are replaced, not extended, so
+	// every commit of a `--full` rerun would look like a repeat of itself and a
+	// healthy project would be reported corrupt.
+	ctx := context.Background()
+	cache := openTestCache(t, ctx, testConfig())
+	first := validationHistory(t, taskID(1), generationID(1), 600, 3)
+	second := validationHistory(t, taskID(2), generationID(2), 700, 3)
+	source := &validatorSource{heads: headsFor(first, second), histories: map[string]gitstore.TaskHistoryResult{
+		taskID(1): historyResult(taskID(1), first[2].ObjectID, false, first),
+		taskID(2): historyResult(taskID(2), second[2].ObjectID, false, second),
+	}}
+	v := &Validator{source: source, cache: cache, config: testConfig()}
+	for run := 0; run < 3; run++ {
+		got, err := v.Validate(ctx, true)
+		if err != nil {
+			t.Fatalf("Validate(full, run %d) error = %v", run, err)
+		}
+		if got.Valid != 2 || got.Invalid != 0 {
+			t.Fatalf("Validate(full, run %d) result = %#v, want both tasks valid", run, got)
+		}
+	}
+	// The incremental path re-reads nothing and must agree.
+	got, err := v.Validate(ctx, false)
+	if err != nil {
+		t.Fatalf("Validate(incremental) error = %v", err)
+	}
+	if got.Valid != 2 || got.Invalid != 0 {
+		t.Fatalf("Validate(incremental) result = %#v, want both tasks valid", got)
+	}
+}
+
 type validatorSource struct {
 	heads             []gitstore.TaskHead
 	headLists         [][]gitstore.TaskHead
