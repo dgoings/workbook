@@ -204,6 +204,35 @@ func TestHandlerStylesheetMovesTheSwitchKnobWithItsState(t *testing.T) {
 	}
 }
 
+// A switch with nothing to set has to look like one. The knob is the promise
+// this control makes, and a knob that cannot move must not be drawn as though a
+// click were about to move it — so the words dim, the pointer stops offering a
+// click, and the track stops lighting up under the cursor.
+func TestHandlerStylesheetDrawsASwitchWithNothingToSetAsUnavailable(t *testing.T) {
+	body := administrableBoardPage(t, core.DefaultVocabulary())
+
+	unavailable := cssRule(t, body, `.nav-switch[aria-disabled="true"]`)
+	if !strings.Contains(unavailable, "cursor: default") {
+		t.Errorf("an unavailable switch still offers the pointer of a control that acts: %s", unavailable)
+	}
+	if !strings.Contains(unavailable, "color:") {
+		t.Errorf("an unavailable switch reads as brightly as one that works: %s", unavailable)
+	}
+	if track := cssRule(t, body, `.nav-switch[aria-disabled="true"] .nav-switch__track`); !strings.Contains(track, "background:") {
+		t.Errorf("an unavailable switch draws the track of a live one: %s", track)
+	}
+	// The hover highlight is an offer, and this control has nothing to offer.
+	// Written after the plain hover rule so it wins the cascade rather than
+	// relying on a reader to notice which came first.
+	hover := `.nav-switch[aria-disabled="true"]:hover .nav-switch__track`
+	if rule := cssRule(t, body, hover); !strings.Contains(rule, "border-color:") {
+		t.Errorf("an unavailable switch lights its track under the cursor: %s", rule)
+	}
+	if strings.Index(body, hover) < strings.Index(body, ".nav-switch:hover .nav-switch__track") {
+		t.Error("the unavailable switch's hover rule is written before the one it has to override")
+	}
+}
+
 // The two groups are laid out apart, the settings stack their freshness reading
 // above their row, and the row wraps instead of widening the document. The last
 // is the rule a phone depends on: this row was 454px wide at a 390px viewport
@@ -292,6 +321,11 @@ func TestHandlerClientDrawsThePublishingSwitchFromTheServersMode(t *testing.T) {
     throw new Error("a board handing publication to a watcher does not read as on: " +
       syncLabel.textContent + " " + syncToggle.getAttribute("aria-checked"));
   }
+  // A watcher is answering, so the flip this switch offers is one it can make.
+  if (syncToggle.getAttribute("aria-disabled") !== "false") {
+    throw new Error("a switch with a mode to set says it is unavailable: " +
+      syncToggle.getAttribute("aria-disabled"));
+  }
 
   syncToggle.click();
   await Promise.resolve();
@@ -319,37 +353,117 @@ func TestHandlerClientDrawsThePublishingSwitchFromTheServersMode(t *testing.T) {
 `)
 }
 
-// A board whose deferred mode has no watcher answering it publishes inline, and
-// the switch says so: it reports what the next mutation will do, not what the
-// configuration asked for.
-func TestHandlerClientReadsAWatcherlessDeferralAsPushing(t *testing.T) {
+// A board with nobody to defer to cannot hand publication anywhere, and the
+// switch says so rather than offering a flip that does nothing.
+//
+// This is what the control used to do instead: it read off, a click set the
+// server's mode to inline, the mode it reports did not change because the mode
+// was never what made it read off, and the next click set the mode back. A
+// reader saw a knob that would not move and left the server's publishing
+// preference wherever their clicking had landed it, to be discovered later by
+// starting a watcher. So the switch is marked unavailable, names the reason,
+// and refuses to write a setting whose effect nobody can see — and because a
+// watcher can start at any moment, activating it asks the server again instead.
+func TestHandlerClientRefusesThePublishingSwitchWhileNoWatcherAnswers(t *testing.T) {
 	runBoardClientWithSetup(t, "a deferral no watcher answers", reconcileBoardTasks(), `
 `+syncFetchStub+`
 syncWatcher = false;
+syncDetail = "no watcher is running, so changes publish inline";
 `, `
   await Promise.resolve();
   await Promise.resolve();
   if (syncToggle.hidden) throw new Error("a board told a publishing mode drew no switch for it");
-  if (syncLabel.textContent !== "Publish" || syncToggle.getAttribute("aria-checked") !== "false") {
+  if (syncToggle.getAttribute("aria-checked") !== "false") {
     throw new Error("a deferral with nobody to defer to does not read as pushing: " +
-      syncLabel.textContent + " " + syncToggle.getAttribute("aria-checked"));
+      syncToggle.getAttribute("aria-checked"));
+  }
+  if (syncToggle.getAttribute("aria-disabled") !== "true") {
+    throw new Error("a switch with nothing to set does not say it is unavailable: " +
+      syncToggle.getAttribute("aria-disabled"));
+  }
+  // The words are the other half of a switch, and there is no next flip to
+  // offer here, so they report the absence instead.
+  if (syncLabel.textContent !== "No watcher") {
+    throw new Error("the switch still offers a flip it cannot make: " + syncLabel.textContent);
+  }
+  if (!syncToggle.title.includes("no watcher is running, so changes publish inline")) {
+    throw new Error("the switch does not say why it cannot be flipped: " + syncToggle.title);
   }
 
-  // And the switch that reads off here is off in the only sense it can be: the
-  // mode is what the server holds, and the server holds a deferral, so asking
-  // to change it asks for inline and the knob has nowhere to go. This is the
-  // behaviour the text button had before it was a switch — a click that
-  // relabelled it from "Publishing: inline" to "Publishing: inline" — and it is
-  // pinned rather than endorsed, so that a fix has to come back and say so.
+  const readsBefore = syncReads;
+  syncToggle.click();
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  if (syncModes.length !== 0) {
+    throw new Error("a switch that cannot move still changed the server's mode: " + JSON.stringify(syncModes));
+  }
+  if (syncReads !== readsBefore + 1) {
+    throw new Error("activating the stalled switch did not ask the server again: " + syncReads);
+  }
+
+  // A watcher that starts while the page is open is found by the next
+  // activation, which is what a reader who sees a dead control does anyway.
+  syncWatcher = true;
+  syncDetail = "";
+  syncToggle.click();
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  if (syncModes.length !== 0) {
+    throw new Error("the look-again click wrote a mode: " + JSON.stringify(syncModes));
+  }
+  if (syncLabel.textContent !== "Push" || syncToggle.getAttribute("aria-checked") !== "true") {
+    throw new Error("a watcher that answered did not bring the switch back on: " +
+      syncLabel.textContent + " " + syncToggle.getAttribute("aria-checked"));
+  }
+  if (syncToggle.getAttribute("aria-disabled") !== "false") {
+    throw new Error("the switch is still unavailable with a watcher answering: " +
+      syncToggle.getAttribute("aria-disabled"));
+  }
+
   syncToggle.click();
   await Promise.resolve();
   await Promise.resolve();
   await Promise.resolve();
   if (syncModes[syncModes.length - 1] !== "inline") {
-    throw new Error("a watcherless deferral asked for " + JSON.stringify(syncModes));
+    throw new Error("the switch that came back does not write: " + JSON.stringify(syncModes));
+  }
+`)
+}
+
+// The same is true of the other parity. Watcher absence, not the mode, is what
+// empties this control: a board already pushing inline cannot hand publication
+// to a watcher that is not there either, so a click on it must not quietly
+// leave the server configured to defer to nobody.
+func TestHandlerClientRefusesTheWatcherlessPublishingSwitchInEitherMode(t *testing.T) {
+	runBoardClientWithSetup(t, "an inline board with no watcher", reconcileBoardTasks(), `
+`+syncFetchStub+`
+syncMode = "inline";
+syncWatcher = false;
+`, `
+  await Promise.resolve();
+  await Promise.resolve();
+  if (syncToggle.getAttribute("aria-disabled") !== "true" || syncLabel.textContent !== "No watcher") {
+    throw new Error("an inline board with no watcher offers a flip: " +
+      syncLabel.textContent + " " + syncToggle.getAttribute("aria-disabled"));
+  }
+  // The stub says nothing about why, and the switch still has to explain
+  // itself: the server's sentence is an addition to the reading, not the whole
+  // of it.
+  if (!syncToggle.title.toLowerCase().includes("watcher")) {
+    throw new Error("the switch does not say why it cannot be flipped: " + syncToggle.title);
+  }
+
+  syncToggle.click();
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  if (syncModes.length !== 0) {
+    throw new Error("a watcherless inline board was configured to defer: " + JSON.stringify(syncModes));
   }
   if (syncToggle.getAttribute("aria-checked") !== "false") {
-    throw new Error("the switch moved on a mode change that changed nothing it reports");
+    throw new Error("the switch moved on a click it refused: " + syncToggle.getAttribute("aria-checked"));
   }
 `)
 }
@@ -362,16 +476,19 @@ syncWatcher = false;
 const syncFetchStub = `
 let syncMode = "deferred";
 let syncWatcher = true;
+let syncDetail = "";
 const syncModes = [];
+let syncReads = 0;
 const boardFetch = globalThis.fetch;
 const syncDocument = () => ({
   format: "workbook.sync",
   version: 1,
-  sync: { mode: syncMode, watcher: syncWatcher, detail: "" }
+  sync: { mode: syncMode, watcher: syncWatcher, detail: syncDetail }
 });
 globalThis.fetch = async (url, options = {}) => {
   if (url !== "/api/sync") return boardFetch(url, options);
-  if ((options.method || "GET") !== "GET") {
+  if ((options.method || "GET") === "GET") syncReads += 1;
+  else {
     syncMode = JSON.parse(options.body).mode;
     syncModes.push(syncMode);
   }

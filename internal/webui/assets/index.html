@@ -104,6 +104,12 @@
     .nav-switch[aria-checked="true"] .nav-switch__track { border-color: var(--wb-primary); background: var(--wb-primary); }
     .nav-switch[aria-checked="true"] .nav-switch__knob { left: calc(100% - .9rem - .13rem); }
     .nav-switch:hover .nav-switch__track { border-color: var(--wb-primary); }
+    /* A switch with nothing to set, written after the rules it overrides: the
+       words dim, the pointer stops promising a click, and the track is left
+       alone under the cursor, because the knob is not going to move. */
+    .nav-switch[aria-disabled="true"] { color: #6c7a91; cursor: default; }
+    .nav-switch[aria-disabled="true"] .nav-switch__track { border-color: #c9d3e0; background: #f2f5f9; }
+    .nav-switch[aria-disabled="true"]:hover .nav-switch__track { border-color: #c9d3e0; }
     .nav-switch:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 2px; border-radius: 4px; }
     /* Every label reads two ways, and the two are not the same width, so each
        reserves the width of its longer reading. Without this the row moves under
@@ -121,7 +127,7 @@
     .nav-switch__label { display: inline-block; text-align: right; }
     .nav-switch__label--deleted { min-width: 6.25rem; }
     .nav-switch__label--descriptions { min-width: 8.25rem; }
-    .nav-switch__label--sync { min-width: 3.5rem; }
+    .nav-switch__label--sync { min-width: 5rem; }
     @media (prefers-reduced-motion: reduce) { .nav-switch__track, .nav-switch__knob { transition: none; } }
     main { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 1.25rem; }
     /* Reports leave only by being dismissed, so the notice has to be able to run
@@ -6097,13 +6103,41 @@
       // offers when it is off is "Publish", the thing turning it on arranges,
       // and the word it offers when it is on is "Push", which is what taking it
       // back means here and what the inline mode's own description calls it.
+      //
+      // With nobody answering there is no third mode to report and no flip to
+      // offer: both modes publish inline, so neither knob position is a lie and
+      // neither is a choice. The switch used to read off and take the click
+      // anyway — it set the server's mode, the reading did not change because
+      // the mode was never what made it read off, and the next click set the
+      // mode back. What the reader saw was a knob that would not move; what they
+      // left behind was a publishing preference at whatever parity their
+      // clicking landed on, for whoever started a watcher next to discover. So
+      // the control says it is unavailable and why instead, in its words as well
+      // as in aria-disabled, because a label still offering a flip would be
+      // contradicting the rest of it.
+      //
+      // aria-disabled rather than the disabled property, because the reason is
+      // the whole point of the state: a disabled button leaves the tab order and
+      // takes its explanation with it, and a title on one is not reliably shown.
+      // This one stays reachable, and toggleSyncMode refuses the write.
       function renderSyncState() {
         if (!syncToggle) return;
         if (!syncState) { syncToggle.hidden = true; return; }
         syncToggle.hidden = false;
-        const deferring = syncState.mode === "deferred" && syncState.watcher;
+        const answering = Boolean(syncState.watcher);
+        const deferring = syncState.mode === "deferred" && answering;
         syncToggle.setAttribute("aria-checked", deferring ? "true" : "false");
-        text(syncLabel, deferring ? "Push" : "Publish");
+        syncToggle.setAttribute("aria-disabled", answering ? "false" : "true");
+        text(syncLabel, answering ? (deferring ? "Push" : "Publish") : "No watcher");
+        if (!answering) {
+          // The server's own sentence names the reason — no watcher running, or
+          // no origin to publish to at all — and the board adds what follows from
+          // it, which the server has no way to know: that this control is inert,
+          // and that activating it looks again rather than setting anything.
+          syncToggle.title = (syncState.detail || "no watcher is answering, so changes publish inline") +
+            ". Publication cannot be handed to a watcher until one answers; activate this to look again.";
+          return;
+        }
         syncToggle.title = syncState.detail ||
           (deferring
             ? "A watcher publishes each change just after it is recorded. Click to wait for the push instead."
@@ -6122,6 +6156,15 @@
       }
       async function toggleSyncMode() {
         if (!syncState) return;
+        // Nothing to set while nobody answers, so this asks rather than writes.
+        // A watcher can start at any moment and the board reads this state when
+        // it loads, so the activation a reader aims at a stalled switch is the
+        // one moment worth reading it again: if one has appeared since, the
+        // switch comes back live and the activation after it flips for real.
+        if (!syncState.watcher) {
+          await refreshSyncState();
+          return;
+        }
         const wanted = syncState.mode === "inline" ? "deferred" : "inline";
         try {
           const response = await fetch("/api/sync", {

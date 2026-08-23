@@ -1478,9 +1478,13 @@ a response says the operation commit exists in Git, never that `origin` has it.
 The indicator is read from `GET /api/sync` rather than assumed, because it
 reports what the next mutation will really do: a board set to defer publishes
 inline when no watcher answers, and a repository with no `origin` publishes
-nothing in either mode. The mode is a preference held in memory for the life of
-the server, not a project setting, which is why it is separate from
-`workbook config set auto-sync`.
+nothing in either mode. In either of those cases the switch has nothing to set —
+both modes publish inline — so it reads **No watcher**, marks itself
+`aria-disabled`, says in its title why it cannot be flipped, and changes no mode.
+Activating it reads `GET /api/sync` again instead, so a watcher started after the
+page was opened brings the switch back to life without a reload. The mode is a
+preference held in memory for the life of the server, not a project setting,
+which is why it is separate from `workbook config set auto-sync`.
 
 The executable embeds its HTML, CSS, and JavaScript, and the page polls
 `/api/tasks` every second. Each poll reconciles the board by task ID instead of
