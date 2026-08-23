@@ -894,6 +894,35 @@ func TestShowSanitizesThreadTextAndKeepsJSONExact(t *testing.T) {
 	}
 }
 
+func TestShowNeutralizesBidiControlsInACommentBody(t *testing.T) {
+	// Mutation caught: neutralizing Cc but passing Cf through, which leaves
+	// U+202E RIGHT-TO-LEFT OVERRIDE in the printed line. A comment is the
+	// easiest sink to reach with one, and the terminal renders everything after
+	// it in reverse, so "open \u202Egpj.exe" reads as "open exe.jpg".
+	repository := initializedRepository(t)
+	task := createThreadTask(t, repository)
+	body := "open \u202Egpj.exe \u202A\u202B\u202C\u202D \u2066\u2067\u2068\u2069 \u200E\u200F\u061C and \U0001F469\u200D\U0001F4BB stays"
+	run(t, repository, "update", task.ID, "--comment", body, "--no-sync")
+
+	code, stdout, stderr := run(t, repository, "show", task.ID)
+	if code != 0 {
+		t.Fatalf("show code = %d, want 0; stderr = %q", code, stderr)
+	}
+	for _, control := range []rune{0x202A, 0x202B, 0x202C, 0x202D, 0x202E, 0x2066, 0x2067, 0x2068, 0x2069, 0x200E, 0x200F, 0x061C} {
+		if strings.ContainsRune(stdout, control) {
+			t.Fatalf("show output = %q, want no bidi control %U", stdout, control)
+		}
+	}
+	if want := "\t\topen gpj.exe and \U0001F469\u200D\U0001F4BB stays\n"; !strings.Contains(stdout, want) {
+		t.Fatalf("show output = %q, want the neutralized body line %q", stdout, want)
+	}
+
+	shown := showTask(t, repository, task.ID)
+	if shown.Comments[0].Body != body {
+		t.Fatalf("JSON body = %q, want the stored bytes %q", shown.Comments[0].Body, body)
+	}
+}
+
 func TestUpdateThreadOutcomeSanitizesWhatItEchoes(t *testing.T) {
 	// Mutation caught: the confirmation line echoing a comment body verbatim,
 	// which is the same sink createForgedTask covers for a title.

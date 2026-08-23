@@ -1097,9 +1097,14 @@ Task titles, descriptions, and labels are authored by whoever can push to the
 shared refs, so text-mode rendering treats them as untrusted. Every control rune
 becomes a space and whitespace runs collapse, so a stored value renders on one
 line and an escape sequence in a title cannot redraw the row into a task that
-does not exist. The same rule already shaped Git commit subjects and now applies
-to `list`, `board`, `show`, its history and comparison output, conflict detail,
-and the line a mutation prints.
+does not exist. Unicode's bidi controls — the overrides, embeddings, isolates,
+and directional marks — are replaced the same way, because U+202E in a comment
+body makes a terminal draw the rest of the line backwards and an attachment
+named `gpj.exe` then reads as `exe.jpg`. Format runes that carry meaning rather
+than direction, such as the zero-width joiner inside an emoji sequence, print as
+they were written. The same rule already shaped Git commit subjects and now
+applies to `list`, `board`, `show`, its history and comparison output, conflict
+detail, and the line a mutation prints.
 
 The description `workbook show` prints is the one place where structure is worth
 keeping — most descriptions are several paragraphs, and collapsing them makes
