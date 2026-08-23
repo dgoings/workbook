@@ -143,3 +143,100 @@ func decodeServeAssignment(t *testing.T, body []byte, status int) (core.Task, []
 	}
 	return task, document.Assignments
 }
+
+// The one place the board and `workbook update --assign` diverge, executed on
+// one repository rather than asserted in prose.
+//
+// `--assign` sets core's claim gate unless `--force` is given, so the command
+// line refuses a task somebody else holds with the `assigned` category. The
+// board never sets it, so the same value over `POST /api/tasks/{id}/assignments`
+// is recorded and answered 200 with an `assignment-shared` warning. Both halves
+// have been written backwards in this repository's own reference before — as
+// "additive, as `--assign` without `--force` is" — so the divergence is pinned
+// here, where a change to either surface fails a test rather than quietly making
+// a paragraph wrong.
+func TestBoardAssignmentSkipsTheClaimGateTheCommandLineTakes(t *testing.T) {
+	repository := initializedRepository(t)
+	code, stdout, stderr := run(t, repository, "create", "Held by somebody else", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("create = (%d, %q, %q)", code, stdout, stderr)
+	}
+	task := decodeMutationTask(t, stdout, "create")
+
+	// Somebody else holds it, and this checkout does not.
+	if code, _, stderr := run(t, repository, "update", task.ID, "--assign", "sam@example.com", "--no-sync", "--json"); code != 0 {
+		t.Fatalf("seed assignment = %d; stderr = %q", code, stderr)
+	}
+
+	// The command line refuses to add a principal that does not already hold it.
+	code, stdout, stderr = run(t, repository, "update", task.ID, "--assign", "pat@example.com", "--no-sync", "--json")
+	if code == 0 {
+		t.Fatalf("`--assign` without --force was accepted on a task held by somebody else; stdout = %q", stdout)
+	}
+	assertJSONError(t, stderr, core.CategoryAssigned, "")
+	if !strings.Contains(stderr, "--force") {
+		t.Fatalf("the refusal does not name the flag that clears the gate: %q", stderr)
+	}
+
+	// The board records exactly that value, and reports the sharing rather than
+	// refusing it.
+	addr := startServeBoard(t, repository)
+	body, status := boardRequest(t, http.MethodPost,
+		"http://"+addr+"/api/tasks/"+task.ID+"/assignments", `{"to":"pat@example.com"}`)
+	shared, views := decodeServeAssignment(t, body, status)
+	if len(shared.Assignments) != 2 {
+		t.Fatalf("the board left %#v, want the two the command line refused to make", shared.Assignments)
+	}
+	if len(views) != 2 {
+		t.Fatalf("the answer carried %#v assignment views, want 2", views)
+	}
+	var warned struct {
+		Warnings []struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"warnings"`
+	}
+	if err := json.Unmarshal(body, &warned); err != nil {
+		t.Fatalf("decode the warnings: %v; body = %s", err, body)
+	}
+	if len(warned.Warnings) != 1 || warned.Warnings[0].Code != "assignment-shared" {
+		t.Fatalf("the shared assignment warned %#v, want one assignment-shared", warned.Warnings)
+	}
+	if !strings.Contains(warned.Warnings[0].Message, "sam@example.com") {
+		t.Fatalf("the warning does not name the other holder: %q", warned.Warnings[0].Message)
+	}
+}
+
+// The withdrawal takes the bare verb, exactly as the two comment removals do.
+//
+// `core.UnassignInput.From` reads an empty value as the acting identity, so a
+// body-less DELETE releases what this checkout holds and nothing else. The page
+// never sends one — it withdraws the row a reader pointed at — but an agent
+// releasing its own claim has nothing to spell out, and this route refusing the
+// shape every other removal on this board accepts would be an inconsistency the
+// reference has to apologize for.
+func TestBoardWithdrawalTakesTheBareVerb(t *testing.T) {
+	repository := initializedRepository(t)
+	code, stdout, stderr := run(t, repository, "create", "Released bare", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("create = (%d, %q, %q)", code, stdout, stderr)
+	}
+	task := decodeMutationTask(t, stdout, "create")
+	if code, _, stderr := run(t, repository, "update", task.ID, "--assign", "self", "--no-sync", "--json"); code != 0 {
+		t.Fatalf("seed own assignment = %d; stderr = %q", code, stderr)
+	}
+	if code, _, stderr := run(t, repository, "update", task.ID, "--assign", "sam@example.com", "--force", "--no-sync", "--json"); code != 0 {
+		t.Fatalf("seed somebody else's assignment = %d; stderr = %q", code, stderr)
+	}
+
+	addr := startServeBoard(t, repository)
+	body, status := boardRequest(t, http.MethodDelete,
+		"http://"+addr+"/api/tasks/"+task.ID+"/assignments", "")
+	left, views := decodeServeAssignment(t, body, status)
+	if len(left.Assignments) != 1 || left.Assignments[0].Principal != "sam@example.com" {
+		t.Fatalf("the bare withdrawal left %#v, want only sam@example.com", left.Assignments)
+	}
+	if len(views) != 1 {
+		t.Fatalf("the answer carried %#v assignment views, want 1", views)
+	}
+}

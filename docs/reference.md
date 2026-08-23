@@ -369,7 +369,11 @@ resolves from the same directory. Add a `/label` to name one agent, exactly as
 on the command line. Assigning from the board is additive and never takes the
 claim gate: the section in front of you already names everybody who holds the
 task, so nothing is refused for being shared, and a warning names the others
-when your assignment lands beside one.
+when your assignment lands beside one. That is the one place this surface
+differs from the command line, and it is worth knowing if your habits come from
+there: plain `workbook update --assign` refuses a task somebody else holds, and
+`--force` is what assigns you beside them. The board always behaves the way
+`--force` does, and offers no way to ask for the gate.
 
 Each row carries **Unassign** where this checkout may withdraw it — its own
 assignments, and the ones it recorded against somebody else. A row without the
@@ -377,10 +381,14 @@ control is somebody else's to release, under the same rule `workbook update
 --unassign` enforces; the button is drawn from the server's answer, so a control
 this page offers is one the write would accept.
 
-A board serving a checkout with no configured `user.email` draws none of this:
-an assignment records its creator, so there is nothing to record one against.
-That board is the read-only section — no form, no control, and no section at all
-on a task nobody holds.
+A board with no identity to record an assignment against draws none of this: an
+assignment records its creator, so there is nothing to write one as. That board
+is the read-only section — no form, no control, and no section at all on a task
+nobody holds — and both assignment addresses answer it with an operational
+error rather than staging a write nothing could be attributed to. `workbook
+serve` never reaches that state by accident: a checkout with no configured
+`user.email` fails to start at all, because every command opens the service
+through the same identity this one would have assigned as.
 
 ### Claiming work as an agent
 
@@ -1234,18 +1242,28 @@ The two assignment mutations are `workbook update --assign` and `--unassign`
 reached over HTTP, through the same planners and the same refusals. Both take an
 optional `expectedHead` and answer with the whole task; the answer also carries
 an `assignments` array — the section as the page draws it, with each row's
-staleness phrasing and whether this checkout may withdraw it — because neither is
-a field of the task and neither is a client's to compose. Neither takes the claim
-gate: assigning from a board is additive, as `--assign` without `--force` is, and
-an assignment that lands beside somebody else's answers 200 with an
-`assignment-shared` warning.
+staleness phrasing, the `value` a withdrawal names it by, and whether this
+checkout may withdraw it — because none of them is a field of the task and none
+of them is a client's to compose. Neither takes the claim
+gate, and that is the one place the two surfaces diverge: plain `workbook update
+--assign` refuses a task somebody else holds with the `assigned` category, and
+`--force` is what clears that gate, while assigning from a board is always
+additive — it behaves as `--assign --force` does, never as bare `--assign`. An
+assignment that lands beside somebody else's answers 200 with an
+`assignment-shared` warning. The board offers no way to make a gated claim: the
+section a reader is looking at already names everybody who holds the task, so
+there is no unseen holder for a gate to protect them from.
 
 Both verbs address the collection rather than one assignment, because an
 assignment's name carries a slash — `sam@example.com/impl-1` is one value with a
 separator core owns — and a path segment holding it is a request this board
-refuses everywhere else. A board built without both mutations, or serving a
-checkout with no configured `user.email`, answers these two addresses with an
-operational error and renders a page that offers neither.
+refuses everywhere else. The withdrawal also accepts no body at all, which is
+the bare verb the comment removals accept: it releases whatever this checkout's
+own identity holds, the same value `UnassignInput.From` reads an empty string
+as. A board built without either mutation, or built without an identity to
+record one against, answers these two addresses with an operational error and
+renders a page that offers neither. The route asks the same question the page
+does, so a board that draws no control accepts no write.
 
 An upload carries the file base64-encoded in a JSON member rather than as a
 multipart part, and that is the same-origin guard's doing rather than a

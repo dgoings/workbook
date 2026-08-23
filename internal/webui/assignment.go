@@ -3,6 +3,7 @@ package webui
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -61,12 +62,35 @@ func (handler *handler) assignIdentity() string {
 	if handler.Assign == nil || handler.Unassign == nil {
 		return ""
 	}
-	return handler.Identity
+	return strings.TrimSpace(handler.Identity)
+}
+
+// assignmentRefusal is why this board can record no assignment, and nil when it
+// can.
+//
+// It asks assignIdentity's question rather than one of its own, so the route and
+// the page cannot disagree. A guard that only checked its own closure would
+// leave a board wired with one mutation drawing no control and still accepting
+// the write behind it: a surface the page deliberately hides is not a surface
+// the server should answer. The identity counts for the same reason it counts
+// there — an assignment records its creator, and a board with nothing to record
+// one against would stage a write nobody could be held to or withdraw.
+//
+// The category is operational because nothing about the request is wrong: this
+// deployment cannot answer, and no rewording of the body will change that.
+func (handler *handler) assignmentRefusal(what string) error {
+	if handler.assignIdentity() != "" {
+		return nil
+	}
+	if handler.Assign == nil || handler.Unassign == nil {
+		return core.Errorf(core.CategoryOperational, "%s is not configured", what)
+	}
+	return core.Errorf(core.CategoryOperational, "%s needs a configured user.email to record it against", what)
 }
 
 func (handler *handler) addTaskAssignment(writer http.ResponseWriter, request *http.Request) {
-	if handler.Assign == nil {
-		handler.writeError(writer, core.Errorf(core.CategoryOperational, "assignment is not configured"))
+	if err := handler.assignmentRefusal("assignment"); err != nil {
+		handler.writeError(writer, err)
 		return
 	}
 	var body assignTaskRequest
@@ -74,12 +98,16 @@ func (handler *handler) addTaskAssignment(writer http.ResponseWriter, request *h
 		handler.writeError(writer, decodeRequestError("decode assignment", err))
 		return
 	}
-	// OnlyIfUnheld is deliberately never set. The claim gate belongs to an agent
-	// selecting work it has not seen; a person assigning from this page is
-	// looking at the section that names everybody who already holds the task, so
-	// refusing the write would refuse a decision they made with the evidence in
-	// front of them. Assignment is additive, exactly as it is on the command
-	// line without --force.
+	// OnlyIfUnheld is deliberately never set, and this is the one place the two
+	// surfaces diverge. `workbook update --assign` sets it unless --force is
+	// given, so the command line refuses a task somebody else holds; this board
+	// behaves the way `--assign --force` does, never the way bare `--assign`
+	// does. The claim gate belongs to an agent selecting work it has not seen; a
+	// person assigning from this page is looking at the section that names
+	// everybody who already holds the task, so refusing the write would refuse a
+	// decision they made with the evidence in front of them. The divergence is
+	// documented in docs/reference.md beside the routes, because a reader whose
+	// habits come from the CLI would otherwise expect the refusal.
 	result, err := handler.Assign(request.Context(), taskCollectionID(request, taskAssignmentsPathID), core.AssignInput{
 		To:           body.To,
 		ExpectedHead: body.ExpectedHead,
@@ -92,12 +120,18 @@ func (handler *handler) addTaskAssignment(writer http.ResponseWriter, request *h
 }
 
 func (handler *handler) removeTaskAssignment(writer http.ResponseWriter, request *http.Request) {
-	if handler.Unassign == nil {
-		handler.writeError(writer, core.Errorf(core.CategoryOperational, "assignment withdrawal is not configured"))
+	if err := handler.assignmentRefusal("assignment withdrawal"); err != nil {
+		handler.writeError(writer, err)
 		return
 	}
+	// No body at all is the bare verb, exactly as it is on the two comment
+	// removals: core.UnassignInput reads an empty From as the acting identity,
+	// so `DELETE /api/tasks/{id}/assignments` with nothing in it releases what
+	// this checkout holds. The page always sends the value, because it is
+	// withdrawing a row a reader pointed at rather than whatever happens to be
+	// theirs; an agent releasing its own claim has nothing to spell out.
 	var body unassignTaskRequest
-	if err := decodeRequest(request.Body, &body); err != nil {
+	if err := decodeOptionalRequest(request.Body, &body); err != nil {
 		handler.writeError(writer, decodeRequestError("decode assignment withdrawal", err))
 		return
 	}

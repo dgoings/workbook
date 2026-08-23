@@ -1130,11 +1130,14 @@
       // fixed for the life of the server and the assignment form has to be able
       // to name it before anybody has typed anything.
       //
-      // Empty is the whole gate. A board built without the two assignment
-      // mutations, or without an identity to write them as, renders the
-      // attribute empty and this page draws no assignment control at all —
-      // which is exactly the read-only section this board shipped with, node
-      // for node.
+      // Empty is the whole gate, and the routes ask the same question, so a page
+      // that draws no control is served by a board that would refuse the write.
+      // A board built without either assignment mutation, or without an identity
+      // to write them as, renders the attribute empty and this page draws no
+      // assignment control at all — the read-only section this board shipped
+      // with. The one node that differs is taskPanel's empty-state paragraph,
+      // which the shared scaffolding always appends: on this path it is hidden,
+      // never given text, and never unhidden.
       const assignIdentity = boardView.dataset.assignIdentity || "";
       let vocabularyChanged = false;
       const syncToggle = document.querySelector("[data-sync-toggle]");
@@ -3644,7 +3647,35 @@
         // costs one string comparison and touches no node, which is what keeps
         // the rows from being rebuilt under a reader's caret once a second — the
         // same contract a card holds through cardSignature.
+        //
+        // The signature deliberately leaves out each row's `ago` phrase. That
+        // phrase is recomputed from the server's clock on every poll, so a
+        // recent assignment rewords itself about once a minute with nothing
+        // about the assignment having changed; counting it would rebuild every
+        // row on that tick. That was invisible while the rows held only text,
+        // but a row now holds a focusable Unassign button, and destroying it
+        // takes a keyboard reader's focus to <body> mid-tab. So an `ago` that
+        // moved alone is written into the existing meta lines instead.
         let signature = null;
+        // The meta line of each row currently drawn, in the order the rows are
+        // in, so an ago-only change can be written in place without walking the
+        // list back out of the document.
+        let ages = [];
+        function assignmentSignature(held) {
+          return JSON.stringify(held.map((assignment) => [
+            assignment.value, assignment.principal, assignment.label || "",
+            assignment.createdAt, assignment.removable === true
+          ]));
+        }
+        function assignmentMetaText(assignment) {
+          return recordedAt(assignment.createdAt) + " · " + assignment.ago;
+        }
+        function refreshAges(held) {
+          held.forEach((assignment, index) => {
+            const meta = ages[index];
+            if (meta) text(meta, assignmentMetaText(assignment));
+          });
+        }
         // Where the section belongs when there is something to draw: this parent,
         // immediately before this sibling. Held rather than looked up so that a
         // task assigned, unassigned and assigned again from the CLI returns to
@@ -3653,8 +3684,11 @@
         let anchor = null;
         function draw(assignments) {
           const held = Array.isArray(assignments) ? assignments : [];
-          const next = JSON.stringify(held);
-          if (next === signature) return;
+          const next = assignmentSignature(held);
+          if (next === signature) {
+            refreshAges(held);
+            return;
+          }
           signature = next;
           // A board that cannot assign draws nothing where there is nothing to
           // read — not a heading over an empty list, which is the convention the
@@ -3664,10 +3698,12 @@
           if (!held.length && !assignable) {
             panel.section.remove();
             panel.list.replaceChildren();
+            ages = [];
             return;
           }
           panel.resetControls();
           panel.setCount(held.length === 1 ? "1 assignment" : held.length + " assignments");
+          ages = [];
           panel.list.replaceChildren(...held.map(assignmentRow));
           if (assignable) {
             panel.claim(submit);
@@ -3708,7 +3744,8 @@
           // to settle between themselves.
           const meta = document.createElement("p");
           meta.className = "assignment__meta";
-          text(meta, recordedAt(assignment.createdAt) + " · " + assignment.ago);
+          text(meta, assignmentMetaText(assignment));
+          ages.push(meta);
           item.append(who, meta);
           // Withdrawal is offered only where the server said this board may make
           // one. The rule is core's — the assignee may release what they hold,
@@ -3720,12 +3757,14 @@
           if (assignable && assignment.removable) {
             const actions = document.createElement("div");
             actions.className = "assignment__actions";
-            const value = assignment.label
-              ? assignment.principal + "/" + assignment.label
-              : assignment.principal;
+            // The value the route takes is the server's own composition, sent
+            // down beside the two parts it is made of. Re-assembling it here
+            // would put a copy of core's separator on the client, and a copy
+            // that disagreed about where the first slash falls would withdraw a
+            // different assignment than the row this button sits in.
             const withdraw = panel.claim(threadButton("Unassign"));
             withdraw.addEventListener("click", () => writeThreadChange(
-              panel, "DELETE", path, headed(head, { from: value }), "that withdrawal"));
+              panel, "DELETE", path, headed(head, { from: assignment.value }), "that withdrawal"));
             actions.append(withdraw);
             item.append(actions);
           }

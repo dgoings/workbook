@@ -103,10 +103,12 @@ func TestAssignRouteRecordsTheAssignmentTheBodyNames(t *testing.T) {
 	if got, want := board.assigned[0].ExpectedHead, "head-1"; got != want {
 		t.Fatalf("the expected head = %q, want %q", got, want)
 	}
-	// Never the claim gate. Assigning from a board is additive, exactly as
-	// `workbook update --assign` is: the section the reader is looking at
-	// already names everybody who holds the task, so refusing the write would
-	// refuse a decision they have already seen the evidence for.
+	// Never the claim gate. Assigning from a board is additive the way
+	// `workbook update --assign --force` is, and deliberately not the way bare
+	// `--assign` is — that one sets OnlyIfUnheld and refuses a task somebody
+	// else holds. The section the reader is looking at already names everybody
+	// who holds the task, so refusing the write here would refuse a decision
+	// they have already seen the evidence for.
 	if board.assigned[0].OnlyIfUnheld {
 		t.Fatal("the board's assign asked for the claim gate")
 	}
@@ -229,15 +231,70 @@ func TestAssignmentRouteRefusesWhatItDoesNotAccept(t *testing.T) {
 	}
 }
 
-// A board built without the two mutations answers the address the way it answers
-// every other unwired one, rather than pretending to record something.
-func TestAssignmentRoutesReportABoardBuiltWithoutThem(t *testing.T) {
-	handler := listHandler(t, func(context.Context) ([]core.Task, error) { return []core.Task{heldTask()}, nil })
-	for _, method := range []string{http.MethodPost, http.MethodDelete} {
-		response := requestJSON(t, handler, method, assignmentsPath(assignableTaskID), `{}`)
-		if response.Code != http.StatusInternalServerError {
-			t.Fatalf("%s on an unwired board status = %d, want %d", method, response.Code, http.StatusInternalServerError)
+// A board that cannot assign answers the address the way it answers every other
+// unwired one, rather than pretending to record something.
+//
+// The route asks assignIdentity's question rather than one of its own, so every
+// board this page draws no control on is a board these two addresses refuse.
+// Half-wiring is the case worth naming: a board given Assign and not Unassign
+// renders `data-assign-identity=""` and draws the read-only section, so a live
+// POST behind it would be a write surface the page deliberately hides. An empty
+// identity is the same shape — the page hides the controls because there is
+// nothing to record a creator as, and the route must not stage a write nobody
+// could withdraw.
+func TestAssignmentRoutesReportABoardThatCannotAssign(t *testing.T) {
+	tasks := []core.Task{heldTask()}
+	list := func(context.Context) ([]core.Task, error) { return tasks, nil }
+	board := &assignableBoard{task: heldTask()}
+	wired := board.options(t, tasks)
+
+	noAssign := wired
+	noAssign.Assign = nil
+	noUnassign := wired
+	noUnassign.Unassign = nil
+	noIdentity := wired
+	noIdentity.Identity = "   "
+
+	for name, options := range map[string]Options{
+		"neither mutation":   {List: list},
+		"an identity only":   {List: list, Identity: boardIdentity},
+		"no withdrawal":      noUnassign,
+		"no assignment":      noAssign,
+		"no configured name": noIdentity,
+	} {
+		handler := NewHandler(options)
+		page := request(t, handler, http.MethodGet, "/").Body.String()
+		if !strings.Contains(page, `data-assign-identity=""`) {
+			t.Fatalf("a board with %s advertised an identity to the page", name)
 		}
+		for _, method := range []string{http.MethodPost, http.MethodDelete} {
+			response := requestJSON(t, handler, method, assignmentsPath(assignableTaskID), `{"to":"sam@example.com"}`)
+			if response.Code != http.StatusInternalServerError {
+				t.Fatalf("%s on a board with %s status = %d, want %d: %s",
+					method, name, response.Code, http.StatusInternalServerError, response.Body)
+			}
+		}
+	}
+	if len(board.assigned) != 0 || len(board.unassigned) != 0 {
+		t.Fatalf("a board the page draws no control on recorded %d assignments and %d withdrawals",
+			len(board.assigned), len(board.unassigned))
+	}
+}
+
+// The withdrawal accepts no body at all, which is the bare verb the two comment
+// removals accept and which core reads as "whatever the acting identity holds".
+func TestUnassignRouteTakesTheBareVerb(t *testing.T) {
+	board := &assignableBoard{task: heldTask()}
+	handler := NewHandler(board.options(t, []core.Task{heldTask()}))
+	response := requestJSON(t, handler, http.MethodDelete, assignmentsPath(assignableTaskID), "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("a body-less withdrawal status = %d, want %d: %s", response.Code, http.StatusOK, response.Body)
+	}
+	if len(board.unassigned) != 1 {
+		t.Fatalf("the route made %d withdrawals, want 1", len(board.unassigned))
+	}
+	if got := board.unassigned[0].From; got != "" {
+		t.Fatalf("the bare withdrawal named %q, want the acting identity's empty value", got)
 	}
 }
 
@@ -269,13 +326,26 @@ func TestAssignmentPresentationSaysWhichAssignmentsThisBoardMayWithdraw(t *testi
 	if views[2].Removable {
 		t.Fatalf("this board offered to withdraw a stranger's assignment: %+v", views[2])
 	}
+	// The token the withdrawal route takes is composed here, by core, rather
+	// than re-assembled from the two parts on the client: the separator is
+	// core's grammar, and a second copy of it would address a different
+	// assignment than the row a reader pointed at.
+	if got, want := views[0].Value, boardIdentity+"/impl-1"; got != want {
+		t.Fatalf("the row's withdrawal value = %q, want %q", got, want)
+	}
+	if got, want := views[1].Value, "sam@example.com"; got != want {
+		t.Fatalf("an unlabelled row's withdrawal value = %q, want %q", got, want)
+	}
 
-	// And a board with no identity carries the member on nothing at all, so the
-	// document a read-only board polls is byte-for-byte the one it always was.
+	// And a board with no identity carries neither member on anything at all, so
+	// the document a read-only board polls is byte-for-byte the one it always was.
 	readOnly := listHandler(t, func(context.Context) ([]core.Task, error) { return []core.Task{heldTask()}, nil })
 	encoded := request(t, readOnly, http.MethodGet, "/api/tasks").Body.String()
 	if strings.Contains(encoded, "removable") {
 		t.Fatalf("a board that cannot assign published a removal rule: %s", encoded)
+	}
+	if strings.Contains(encoded, `"value"`) {
+		t.Fatalf("a board that cannot withdraw published a withdrawal token: %s", encoded)
 	}
 }
 
@@ -294,20 +364,6 @@ func TestBoardPageCarriesTheIdentityItAssignsAs(t *testing.T) {
 	readOnlyBody := request(t, readOnly, http.MethodGet, "/").Body.String()
 	if !strings.Contains(readOnlyBody, `data-assign-identity=""`) {
 		t.Fatal("a board that cannot assign did not say so")
-	}
-}
-
-// An identity with nothing to write it through is no identity at all: a board
-// given the name and neither mutation must draw no control, because every one
-// of them would be refused.
-func TestABoardWithAnIdentityAndNoMutationsCannotAssign(t *testing.T) {
-	handler := NewHandler(Options{
-		Identity: boardIdentity,
-		List:     func(context.Context) ([]core.Task, error) { return []core.Task{heldTask()}, nil },
-	})
-	body := request(t, handler, http.MethodGet, "/").Body.String()
-	if !strings.Contains(body, `data-assign-identity=""`) {
-		t.Fatal("a board with no assignment mutations advertised an identity")
 	}
 }
 
@@ -590,6 +646,83 @@ setTimeout(async () => {
 `)
 	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
 		t.Fatalf("execute the assignable poll: %v\n%s", err, output)
+	}
+}
+
+// A poll that changed only the staleness phrasing keeps the rows it drew.
+//
+// `ago` is recomputed from the server's clock on every poll, so a recent
+// assignment rewords itself about once a minute with nothing about the
+// assignment having changed. While the section was read-only that cost nothing:
+// rebuilding a paragraph is invisible. A row now holds a focusable Unassign
+// button, and replacing it takes a keyboard reader's focus to the document body
+// mid-tab and cancels a click in progress. So the signature ignores the phrase
+// and the existing meta line is written in place instead.
+func TestHandlerClientKeepsAssignmentRowsWhenOnlyTheAgeChanged(t *testing.T) {
+	node := requireNode(t)
+	tasks := []core.Task{heldTask()}
+	board := &assignableBoard{task: heldTask()}
+	aged := presentationForTasksAs(tasks, boardIdentity)
+	for index := range aged[0].Assignments {
+		aged[0].Assignments[index].Ago = "assigned 4 days ago"
+	}
+	program := assignablePageProgram(t, board, tasks, `
+const aged = `+string(mustJSON(t, TasksDocument{
+		Format: "workbook.tasks", Version: 1, Tasks: tasks, Presentation: aged,
+	}))+`;
+setTimeout(async () => {
+  const before = Array.from(assignmentRows());
+  if (before.length !== 3) throw new Error("assignment rows = " + before.length);
+  const control = withdrawControl(before[0]);
+  if (!control) throw new Error("the first row drew no withdrawal to lose");
+
+  taskResponse = aged;
+  await intervalCallback();
+
+  const after = assignmentRows();
+  if (after.length !== before.length) throw new Error("the section redrew a different number of rows");
+  for (let index = 0; index < after.length; index += 1) {
+    if (after[index] !== before[index]) {
+      throw new Error("row " + index + " was rebuilt by a poll that only changed its age");
+    }
+  }
+  if (withdrawControl(after[0]) !== control) throw new Error("the withdrawal button was replaced under the reader");
+  if (!after[0].textContent.includes("assigned 4 days ago")) {
+    throw new Error("the age was not written into the row: " + after[0].textContent);
+  }
+}, 0);
+`)
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute the ageing poll: %v\n%s", err, output)
+	}
+}
+
+// A poll that changed the assignments themselves still redraws, which is the
+// half the signature must not lose in ignoring the staleness phrasing.
+func TestHandlerClientRedrawsAssignmentsWhenTheyActuallyChange(t *testing.T) {
+	node := requireNode(t)
+	tasks := []core.Task{heldTask()}
+	board := &assignableBoard{task: heldTask()}
+	released := heldTask()
+	released.Assignments = released.Assignments[:2]
+	program := assignablePageProgram(t, board, tasks, `
+const released = `+string(mustJSON(t, TasksDocument{
+		Format: "workbook.tasks", Version: 1, Tasks: []core.Task{released},
+		Presentation: presentationForTasksAs([]core.Task{released}, boardIdentity),
+	}))+`;
+setTimeout(async () => {
+  if (assignmentRows().length !== 3) throw new Error("assignment rows = " + assignmentRows().length);
+  taskResponse = released;
+  await intervalCallback();
+  const rows = assignmentRows();
+  if (rows.length !== 2) throw new Error("a withdrawal elsewhere did not reach the section: " + rows.length);
+  if (rows.some((row) => row.textContent.includes("stranger@example.com"))) {
+    throw new Error("the released assignment is still drawn");
+  }
+}, 0);
+`)
+	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+		t.Fatalf("execute the changed poll: %v\n%s", err, output)
 	}
 }
 

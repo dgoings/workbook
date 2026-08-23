@@ -355,9 +355,19 @@ type TaskPresentation struct {
 // page must not draw a control the service would refuse. A board that cannot
 // assign at all carries the member on nothing, so its document is the one it
 // has always published.
+// Value is the whole assignment as one token — principal[/label] — which is what
+// `--unassign` takes and what the withdrawal route's `from` member carries. It
+// rides along beside the two parts rather than being re-composed on the client
+// for the reason assignTaskRequest gives for not splitting it: the separator is
+// core's, and a second place that decided where the first slash falls would
+// address a different assignment than the row the reader pointed at. It is
+// carried on the same boards Removable is, and for the same reason — it exists
+// for the control, so a board that draws none publishes the document it always
+// did.
 type AssignmentPresentation struct {
 	Principal string    `json:"principal"`
 	Label     string    `json:"label,omitempty"`
+	Value     string    `json:"value,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
 	Ago       string    `json:"ago"`
 	Removable bool      `json:"removable,omitempty"`
@@ -403,18 +413,24 @@ func assignmentRow(assignments []core.Assignment) AssignmentRow {
 // above it agree about which comes first.
 //
 // The actor is the identity this board writes as, empty for a board that writes
-// none. It decides one member — whether the row may be withdrawn from here — and
-// an empty one leaves that member off every row, which is what keeps a
-// read-only board's document byte-for-byte what it was.
+// none. It decides the two members the withdrawal control needs — the token the
+// route takes and whether the row may be withdrawn from here — and an empty one
+// leaves both off every row, which is what keeps a read-only board's document
+// byte-for-byte what it was.
 func assignmentPresentation(assignments []core.Assignment, now time.Time, actor string) []AssignmentPresentation {
 	if len(assignments) == 0 {
 		return nil
 	}
 	rendered := make([]AssignmentPresentation, 0, len(assignments))
 	for _, assignment := range assignments {
+		value := ""
+		if actor != "" {
+			value = assignment.Value()
+		}
 		rendered = append(rendered, AssignmentPresentation{
 			Principal: assignment.Principal,
 			Label:     assignment.Label,
+			Value:     value,
 			CreatedAt: assignment.CreatedAt,
 			Ago:       presentation.AssignedAgo(assignment, now),
 			Removable: actor != "" && assignment.RemovableBy(actor),
