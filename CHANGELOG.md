@@ -12,6 +12,30 @@ not, has notes on the
 
 Releases through v0.4.1 predate this file.
 
+## v0.5.1 — 2026-08-23
+
+Five stories from adversarially reviewed pull requests: the web board learns
+to edit assignments and accept pasted images, and three defects found in
+earlier reviews are closed.
+
+### Added
+- Assignments can be added and withdrawn from the web board, through the same
+  claim semantics the CLI uses (#121).
+- An image in the clipboard pastes straight onto the attachment controls, with
+  a generated filename and the same ceilings as drag-and-drop (#124).
+
+### Fixed
+- With no sync watcher answering, the board's Publishing switch shows a
+  stalled state naming why, instead of silently flipping server configuration
+  it cannot apply (#123).
+- Terminal output neutralizes Unicode bidi-control format characters, so a
+  hostile title or comment can no longer visually reorder a rendered line
+  (RTLO spoofing); benign format characters like emoji ZWJ pass through
+  (#122).
+- `workbook validate` now refuses a history containing duplicate operation
+  ULIDs as corrupt-data, and the projection reports the offending task instead
+  of crashing with a raw SQLite constraint error (#120).
+
 ## v0.5.0 — 2026-08-18
 
 A project now owns its statuses, tasks carry comments, attachments and
