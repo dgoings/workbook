@@ -1235,7 +1235,9 @@ POST /api/tasks/<id>/assignments          assign, naming the assignee in the
                                           serving checkout's own identity
 DELETE /api/tasks/<id>/assignments        withdraw, naming the assignment in
                                           the body as `from`
-GET /api/sync                 versioned publication-mode JSON
+GET /api/sync                 versioned publication-mode JSON, reporting the
+                              mode, whether a watcher answers, and a `reason` of
+                              `no-watcher` or `no-origin` when none does
 PUT /api/sync                 change this board's publication mode
 GET /healthz                  versioned health JSON
 ```
@@ -1478,13 +1480,21 @@ a response says the operation commit exists in Git, never that `origin` has it.
 The indicator is read from `GET /api/sync` rather than assumed, because it
 reports what the next mutation will really do: a board set to defer publishes
 inline when no watcher answers, and a repository with no `origin` publishes
-nothing in either mode. In either of those cases the switch has nothing to set —
-both modes publish inline — so it reads **No watcher**, marks itself
+nothing at all. In either case the switch has nothing to set, so it marks itself
 `aria-disabled`, says in its title why it cannot be flipped, and changes no mode.
-Activating it reads `GET /api/sync` again instead, so a watcher started after the
-page was opened brings the switch back to life without a reload. The mode is a
-preference held in memory for the life of the server, not a project setting,
-which is why it is separate from `workbook config set auto-sync`.
+The two cases are not the same news, and the document's `reason` tells them
+apart so the switch can read each in its own words. With an `origin` configured
+and nobody answering — none running, none reachable, or one whose last
+synchronization failed — the reason is `no-watcher`, both modes publish inline,
+and the switch reads **No watcher**, because starting one brings it back. With
+no `origin` the reason is `no-origin`, nothing is published in either mode, and
+the switch reads **No origin**, because no watcher can help until a remote is
+added. Activating it in either state reads `GET /api/sync` again rather than
+writing, so a watcher started — or an `origin` added — after the page was opened
+brings the switch back to life without a reload; a read that fails changes
+nothing and leaves the switch where it was. The mode is a preference held in
+memory for the life of the server, not a project setting, which is why it is
+separate from `workbook config set auto-sync`.
 
 The executable embeds its HTML, CSS, and JavaScript, and the page polls
 `/api/tasks` every second. Each poll reconciles the board by task ID instead of

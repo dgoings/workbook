@@ -1865,10 +1865,22 @@ type boardPublisher struct {
 // instead of a cached opinion that may have gone stale.
 func (p *boardPublisher) state(ctx context.Context) webui.SyncState {
 	if !p.repository.HasOrigin(ctx) {
-		return webui.SyncState{Mode: p.mode(), Detail: "no origin is configured, so nothing is published"}
+		return webui.SyncState{
+			Mode:   p.mode(),
+			Reason: webui.SyncReasonNoOrigin,
+			Detail: "no origin is configured, so nothing is published",
+		}
 	}
+	// "answering" rather than "running", because a watcher that is running and
+	// whose last synchronization failed is disqualified here too: saying nothing
+	// is running would be a claim about the reader's terminal this probe cannot
+	// make, and the mode is what the sentence is really about.
 	if watching := p.watcherAnswers(); !watching {
-		return webui.SyncState{Mode: p.mode(), Detail: "no watcher is running, so changes publish inline"}
+		return webui.SyncState{
+			Mode:   p.mode(),
+			Reason: webui.SyncReasonNoWatcher,
+			Detail: "no watcher is answering, so changes publish inline",
+		}
 	}
 	return webui.SyncState{Mode: p.mode(), Watcher: true}
 }

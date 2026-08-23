@@ -106,13 +106,23 @@
     .nav-switch:hover .nav-switch__track { border-color: var(--wb-primary); }
     /* A switch with nothing to set, written after the rules it overrides: the
        words dim, the pointer stops promising a click, and the track is left
-       alone under the cursor, because the knob is not going to move. */
-    .nav-switch[aria-disabled="true"] { color: #6c7a91; cursor: default; }
-    .nav-switch[aria-disabled="true"] .nav-switch__track { border-color: #c9d3e0; background: #f2f5f9; }
-    .nav-switch[aria-disabled="true"]:hover .nav-switch__track { border-color: #c9d3e0; }
+       alone under the cursor, because the knob is not going to move.
+
+       Dim, not faint. This control keeps its place in the tab order and still
+       answers an activation by re-reading the server, and the reason it gives is
+       carried in its words and its title, so the usual licence to drop an
+       inactive control below the contrast floor does not apply: at .82rem the
+       label is not large text, and #5f6c85 on the header's white clears AA at
+       5.3:1 while still reading a good deal quieter than the live #34425a. The
+       track's border is dimmed on the same terms — enough darker than its fill
+       to still read as a switch that is off rather than as a smudge. */
+    .nav-switch[aria-disabled="true"] { color: #5f6c85; cursor: default; }
+    .nav-switch[aria-disabled="true"] .nav-switch__track { border-color: #aab8cc; background: #f2f5f9; }
+    .nav-switch[aria-disabled="true"]:hover .nav-switch__track { border-color: #aab8cc; }
     .nav-switch:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 2px; border-radius: 4px; }
-    /* Every label reads two ways, and the two are not the same width, so each
-       reserves the width of its longer reading. Without this the row moves under
+    /* Every label reads at least two ways, and the readings are not the same
+       width, so each reserves the width of its widest. Without this the row
+       moves under
        the cursor when a setting is flipped: it is right-aligned, so a label that
        shrinks pulls everything drawn before it rightwards, and on a phone, where
        the row wraps and aligns left, it pushes everything after it instead —
@@ -120,10 +130,13 @@
 
        The numbers are the readings measured in this page's own font, rounded up:
        Show Deleted 5.99rem against Hide Deleted 5.62, Show Descriptions 7.96
-       against Hide Descriptions 7.59, Publish 3.17 against Push 2.04. Each keeps
-       a little headroom, so a machine that falls back to a wider font loses the
-       reservation gradually rather than all at once. The space a reservation
-       leaves over falls to the left of the words, where it is only more gap. */
+       against Hide Descriptions 7.59, Publish 3.17 against Push 2.04. The
+       publishing switch has two more readings for a board with nothing to set,
+       No watcher and No origin, and its reservation is measured against No
+       watcher, the widest of its four. Each keeps a little headroom, so a
+       machine that falls back to a wider font loses the reservation gradually
+       rather than all at once. The space a reservation leaves over falls to the
+       left of the words, where it is only more gap. */
     .nav-switch__label { display: inline-block; text-align: right; }
     .nav-switch__label--deleted { min-width: 6.25rem; }
     .nav-switch__label--descriptions { min-width: 8.25rem; }
@@ -6128,14 +6141,26 @@
         const deferring = syncState.mode === "deferred" && answering;
         syncToggle.setAttribute("aria-checked", deferring ? "true" : "false");
         syncToggle.setAttribute("aria-disabled", answering ? "false" : "true");
-        text(syncLabel, answering ? (deferring ? "Push" : "Publish") : "No watcher");
+        // The two ways to have nobody to defer to are not the same news, so they
+        // do not get the same words. With no origin nothing is published in
+        // either mode and no watcher can change that, so telling that reader to
+        // wait for one to answer would send them after a fix that cannot work.
+        // A server that names no reason is read as the watcher case, which is
+        // the one a board with an origin is in.
+        const originless = syncState.reason === "no-origin";
+        text(syncLabel, answering ? (deferring ? "Push" : "Publish") : (originless ? "No origin" : "No watcher"));
         if (!answering) {
-          // The server's own sentence names the reason — no watcher running, or
-          // no origin to publish to at all — and the board adds what follows from
-          // it, which the server has no way to know: that this control is inert,
-          // and that activating it looks again rather than setting anything.
-          syncToggle.title = (syncState.detail || "no watcher is answering, so changes publish inline") +
-            ". Publication cannot be handed to a watcher until one answers; activate this to look again.";
+          // The server's own sentence names the reason, and the board adds what
+          // follows from it, which the server has no way to know: that this
+          // control is inert, and that activating it looks again rather than
+          // setting anything. Both readings are worth re-reading, because an
+          // origin can be added to a clone as easily as a watcher can be
+          // started, and the server probes for both every time it is asked.
+          syncToggle.title = originless
+            ? (syncState.detail || "no origin is configured, so nothing is published") +
+              ". Publication has nowhere to go until this clone has an origin; activate this to look again."
+            : (syncState.detail || "no watcher is answering, so changes publish inline") +
+              ". Publication cannot be handed to a watcher until one answers; activate this to look again.";
           return;
         }
         syncToggle.title = syncState.detail ||
@@ -6143,15 +6168,33 @@
             ? "A watcher publishes each change just after it is recorded. Click to wait for the push instead."
             : "Each change is pushed before the response returns. Click to hand publication to a watcher.");
       }
+      // Every answer that would write syncState claims a number first and drops
+      // itself if a later one has already landed. A stalled switch invites
+      // repeated activation, so two reads in flight is the ordinary case now,
+      // and without this the reading is whichever reply is slowest: a stale
+      // watcher:false arriving after a fresh watcher:true would repaint a live
+      // switch as stalled and cost the reader the flip they were making. The
+      // write below claims a number too, so a read issued before it cannot
+      // overwrite the mode the server just confirmed.
+      let syncStateSequence = 0;
       async function refreshSyncState() {
+        const sequence = ++syncStateSequence;
+        let read = null;
         try {
           const response = await fetch("/api/sync", { cache: "no-store" });
           const document = await response.json();
-          if (!response.ok || document.format !== "workbook.sync" || document.version !== 1) return;
-          syncState = document.sync;
+          if (response.ok && document.format === "workbook.sync" && document.version === 1) read = document.sync;
         } catch (_) {
-          syncState = null;
         }
+        if (sequence !== syncStateSequence) return;
+        // A re-read that failed says nothing about the server's mode, so it does
+        // not get to change the reading — and it must not clear it. Nothing else
+        // in this page reads /api/sync, so a syncState of null after a failure
+        // would hide the switch for the life of the page, taking away the one
+        // control the reader had just activated with no way back but a reload.
+        // At load there is nothing to keep and the switch stays hidden, which is
+        // the right reading for a server that answers no sync document at all.
+        if (read) syncState = read;
         renderSyncState();
       }
       async function toggleSyncMode() {
@@ -6166,6 +6209,8 @@
           return;
         }
         const wanted = syncState.mode === "inline" ? "deferred" : "inline";
+        const sequence = ++syncStateSequence;
+        let written = null;
         try {
           const response = await fetch("/api/sync", {
             method: "PUT",
@@ -6173,9 +6218,11 @@
             body: JSON.stringify({ mode: wanted }),
           });
           const document = await response.json();
-          if (response.ok && document.format === "workbook.sync") syncState = document.sync;
+          if (response.ok && document.format === "workbook.sync") written = document.sync;
         } catch (_) {
         }
+        if (sequence !== syncStateSequence) return;
+        if (written) syncState = written;
         renderSyncState();
       }
       if (syncToggle) syncToggle.addEventListener("click", toggleSyncMode);

@@ -368,7 +368,8 @@ func TestHandlerClientRefusesThePublishingSwitchWhileNoWatcherAnswers(t *testing
 	runBoardClientWithSetup(t, "a deferral no watcher answers", reconcileBoardTasks(), `
 `+syncFetchStub+`
 syncWatcher = false;
-syncDetail = "no watcher is running, so changes publish inline";
+syncReason = "no-watcher";
+syncDetail = "no watcher is answering, so changes publish inline";
 `, `
   await Promise.resolve();
   await Promise.resolve();
@@ -386,7 +387,7 @@ syncDetail = "no watcher is running, so changes publish inline";
   if (syncLabel.textContent !== "No watcher") {
     throw new Error("the switch still offers a flip it cannot make: " + syncLabel.textContent);
   }
-  if (!syncToggle.title.includes("no watcher is running, so changes publish inline")) {
+  if (!syncToggle.title.includes("no watcher is answering, so changes publish inline")) {
     throw new Error("the switch does not say why it cannot be flipped: " + syncToggle.title);
   }
 
@@ -405,6 +406,7 @@ syncDetail = "no watcher is running, so changes publish inline";
   // A watcher that starts while the page is open is found by the next
   // activation, which is what a reader who sees a dead control does anyway.
   syncWatcher = true;
+  syncReason = "";
   syncDetail = "";
   syncToggle.click();
   await Promise.resolve();
@@ -468,6 +470,199 @@ syncWatcher = false;
 `)
 }
 
+// The only thing a stalled switch still does is ask the server again, so that
+// activation is the one this control cannot afford to mishandle — and a read
+// is the request most likely to fail, because the reader activates a stalled
+// switch precisely when something is wrong. A failed re-read used to clear the
+// board's copy of the state, and a cleared state hides the switch: the reader
+// activated the control and it disappeared, with nothing to say why and nothing
+// to bring it back, because this activation is the only thing on the page that
+// reads /api/sync after load and a hidden switch cannot be activated. A reload
+// was the only way back. A read that failed knows nothing about the server's
+// mode, so it now changes nothing and the switch stays where it was, still
+// stalled, still able to look again.
+func TestHandlerClientKeepsTheStalledPublishingSwitchWhenTheLookAgainFails(t *testing.T) {
+	runBoardClientWithSetup(t, "a stalled switch whose look-again fails", reconcileBoardTasks(), `
+`+syncFetchStub+`
+syncWatcher = false;
+syncReason = "no-watcher";
+syncDetail = "no watcher is answering, so changes publish inline";
+let syncUnreachable = false;
+const reachableSyncFetch = globalThis.fetch;
+globalThis.fetch = async (url, options = {}) => {
+  if (url === "/api/sync" && syncUnreachable) throw new Error("the server is unreachable");
+  return reachableSyncFetch(url, options);
+};
+`, `
+  await Promise.resolve();
+  await Promise.resolve();
+  if (syncToggle.hidden || syncLabel.textContent !== "No watcher") {
+    throw new Error("the board did not draw a stalled switch to begin with: " +
+      syncToggle.hidden + " " + syncLabel.textContent);
+  }
+
+  syncUnreachable = true;
+  syncToggle.click();
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  if (syncToggle.hidden) {
+    throw new Error("a failed look-again took the publishing switch off the header");
+  }
+  if (syncLabel.textContent !== "No watcher" || syncToggle.getAttribute("aria-disabled") !== "true") {
+    throw new Error("a failed look-again changed the reading it learned nothing about: " +
+      syncLabel.textContent + " " + syncToggle.getAttribute("aria-disabled"));
+  }
+  if (syncModes.length !== 0) {
+    throw new Error("a look-again wrote a mode: " + JSON.stringify(syncModes));
+  }
+
+  // And the switch that survived is still the working control it was: the next
+  // activation reaches a server that answers, and finds the watcher that
+  // started meanwhile.
+  syncUnreachable = false;
+  syncWatcher = true;
+  syncReason = "";
+  syncDetail = "";
+  syncToggle.click();
+  for (let tick = 0; tick < 8; tick += 1) await Promise.resolve();
+  if (syncLabel.textContent !== "Push" || syncToggle.getAttribute("aria-disabled") !== "false") {
+    throw new Error("the switch that survived a failed look-again cannot come back: " +
+      syncLabel.textContent + " " + syncToggle.getAttribute("aria-disabled"));
+  }
+
+  syncToggle.click();
+  for (let tick = 0; tick < 8; tick += 1) await Promise.resolve();
+  if (syncModes[syncModes.length - 1] !== "inline") {
+    throw new Error("the recovered switch does not write: " + JSON.stringify(syncModes));
+  }
+`)
+}
+
+// A clone with no origin has nobody to defer to either, but for a reason no
+// watcher can fix: nothing is published in either mode because there is nowhere
+// to publish to. Reading that as "No watcher" names the wrong cause and sends
+// the reader to start a watcher the server will go on ignoring, so the two
+// cases are told apart by the reason the server reports and read in their own
+// words. Looking again is still worth offering — an origin can be added to a
+// clone while the board is open, and the server probes for one every time it is
+// asked — but it is not offered as waiting for a watcher.
+func TestHandlerClientNamesAMissingOriginRatherThanAMissingWatcher(t *testing.T) {
+	runBoardClientWithSetup(t, "a board with no origin", reconcileBoardTasks(), `
+`+syncFetchStub+`
+syncWatcher = false;
+syncReason = "no-origin";
+syncDetail = "no origin is configured, so nothing is published";
+`, `
+  await Promise.resolve();
+  await Promise.resolve();
+  if (syncToggle.hidden) throw new Error("a board told a publishing mode drew no switch for it");
+  if (syncToggle.getAttribute("aria-disabled") !== "true") {
+    throw new Error("a switch with nothing to set does not say it is unavailable: " +
+      syncToggle.getAttribute("aria-disabled"));
+  }
+  if (syncLabel.textContent !== "No origin") {
+    throw new Error("a clone with no origin reads as something else: " + syncLabel.textContent);
+  }
+  if (!syncToggle.title.includes("no origin is configured, so nothing is published")) {
+    throw new Error("the switch does not say why it cannot be flipped: " + syncToggle.title);
+  }
+  // The clause the board adds is the board's own, so it is the board's job not
+  // to promise a watcher will bring this switch back. One never can here.
+  if (syncToggle.title.includes("watcher")) {
+    throw new Error("a clone with no origin is told to wait for a watcher: " + syncToggle.title);
+  }
+
+  const readsBefore = syncReads;
+  syncToggle.click();
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  if (syncModes.length !== 0) {
+    throw new Error("a board with nowhere to publish was configured anyway: " + JSON.stringify(syncModes));
+  }
+  if (syncReads !== readsBefore + 1) {
+    throw new Error("activating the switch did not ask the server again: " + syncReads);
+  }
+
+  // An origin added while the board is open is found the same way a watcher is.
+  syncWatcher = true;
+  syncReason = "";
+  syncDetail = "";
+  syncToggle.click();
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  if (syncLabel.textContent !== "Push" || syncToggle.getAttribute("aria-disabled") !== "false") {
+    throw new Error("an origin that appeared did not bring the switch back: " +
+      syncLabel.textContent + " " + syncToggle.getAttribute("aria-disabled"));
+  }
+`)
+}
+
+// A stalled switch invites repeated activation, so two reads in flight is its
+// ordinary case rather than a rare one, and the network does not promise to
+// answer them in order. Whichever reply landed last used to win: a slow first
+// reply still carrying watcher:false, arriving after a fast second that found
+// the watcher, would repaint a live switch as stalled and cost the reader the
+// flip they were about to make. Each answer now claims a number and drops
+// itself if a later one has already landed.
+func TestHandlerClientIgnoresAStalePublishingReadThatLandsLast(t *testing.T) {
+	runBoardClientWithSetup(t, "publishing reads answered out of order", reconcileBoardTasks(), `
+`+syncFetchStub+`
+syncWatcher = false;
+syncReason = "no-watcher";
+syncDetail = "no watcher is answering, so changes publish inline";
+`, `
+  await Promise.resolve();
+  await Promise.resolve();
+  if (syncLabel.textContent !== "No watcher") {
+    throw new Error("the board did not draw a stalled switch to begin with: " + syncLabel.textContent);
+  }
+
+  // Hold every read open, and snapshot the server as each one is issued, so the
+  // two below can be answered in the order a network would pick rather than the
+  // order they were asked in.
+  const promptSyncFetch = globalThis.fetch;
+  const heldReads = [];
+  globalThis.fetch = (url, options = {}) => {
+    if (url !== "/api/sync" || (options.method || "GET") !== "GET") return promptSyncFetch(url, options);
+    syncReads += 1;
+    const answered = {
+      format: "workbook.sync",
+      version: 1,
+      sync: { mode: syncMode, watcher: syncWatcher, reason: syncReason, detail: syncDetail }
+    };
+    return new Promise((resolve) => heldReads.push(() => resolve({ ok: true, json: async () => answered })));
+  };
+
+  syncToggle.click();
+  await Promise.resolve();
+  syncWatcher = true;
+  syncReason = "";
+  syncDetail = "";
+  syncToggle.click();
+  await Promise.resolve();
+  if (heldReads.length !== 2) {
+    throw new Error("expected two reads in flight, held " + heldReads.length);
+  }
+
+  heldReads[1]();
+  for (let tick = 0; tick < 8; tick += 1) await Promise.resolve();
+  if (syncLabel.textContent !== "Push" || syncToggle.getAttribute("aria-disabled") !== "false") {
+    throw new Error("the second read did not bring the switch back: " +
+      syncLabel.textContent + " " + syncToggle.getAttribute("aria-disabled"));
+  }
+
+  heldReads[0]();
+  for (let tick = 0; tick < 8; tick += 1) await Promise.resolve();
+  if (syncLabel.textContent !== "Push" || syncToggle.getAttribute("aria-disabled") !== "false") {
+    throw new Error("a stale read repainted a live switch as stalled: " +
+      syncLabel.textContent + " " + syncToggle.getAttribute("aria-disabled"));
+  }
+`)
+}
+
 // syncFetchStub is a server with a publishing mode, wrapped around the harness's
 // own fetch so that everything else this page asks for is answered as it always
 // was. The harness answers /api/sync with the task document, which is not a sync
@@ -476,6 +671,7 @@ syncWatcher = false;
 const syncFetchStub = `
 let syncMode = "deferred";
 let syncWatcher = true;
+let syncReason = "";
 let syncDetail = "";
 const syncModes = [];
 let syncReads = 0;
@@ -483,7 +679,7 @@ const boardFetch = globalThis.fetch;
 const syncDocument = () => ({
   format: "workbook.sync",
   version: 1,
-  sync: { mode: syncMode, watcher: syncWatcher, detail: syncDetail }
+  sync: { mode: syncMode, watcher: syncWatcher, reason: syncReason, detail: syncDetail }
 });
 globalThis.fetch = async (url, options = {}) => {
   if (url !== "/api/sync") return boardFetch(url, options);
