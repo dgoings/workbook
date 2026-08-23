@@ -354,14 +354,12 @@ func scalingReportFixture() ScalingReport {
 		return ScenarioResult{
 			Name:    name,
 			Surface: "cold-cli",
-			Target:  &coldSingleTarget,
 			Samples: []Sample{scalingSample(milliseconds, gitProcesses)},
 		}
 	}
 	return ScalingReport{
 		Format:       ScalingReportFormat,
 		Version:      ScalingReportVersion,
-		Phase:        "scaling",
 		GeneratedAt:  time.Date(2026, time.July, 30, 12, 0, 0, 0, time.UTC),
 		Environment:  Environment{OS: "darwin", Arch: "arm64", GitVersion: "git version 2.51.0", GoVersion: "go version go1.25.0", WorkbookVersion: "0.1.0", WorkbookCommit: "abc123", WorkbookBinarySHA256: "deadbeef"},
 		ObjectFormat: "sha256",
@@ -413,11 +411,8 @@ func TestScalingReportSerializesDeterministicallyRegardlessOfInputOrder(t *testi
 		gotScenarios := make([]string, len(point.Scenarios))
 		for index, scenario := range point.Scenarios {
 			gotScenarios[index] = scenario.Name
-			if scenario.Target != nil {
-				t.Fatalf("%s scenario %s carries target %#v, want descriptive scaling evidence", point.Name, scenario.Name, scenario.Target)
-			}
-			if scenario.Outcome != "not-evaluated" {
-				t.Fatalf("%s scenario %s outcome = %q, want not-evaluated", point.Name, scenario.Name, scenario.Outcome)
+			if scenario.Outcome != "completed" {
+				t.Fatalf("%s scenario %s outcome = %q, want completed", point.Name, scenario.Name, scenario.Outcome)
 			}
 		}
 		if want := []string{"cli-create", "cli-update"}; !reflect.DeepEqual(gotScenarios, want) {

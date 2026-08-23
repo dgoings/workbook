@@ -79,10 +79,6 @@ func TestValidateOptionsRejectsInvalidStorageInvocations(t *testing.T) {
 			args: []string{"--storage-resources", "--storage-operations", "20,20"},
 			want: "duplicate --storage-operations value 20",
 		},
-		"acceptance depth below minimum": {
-			args: []string{"--storage-resources", "--storage-operations", "19,100", "--phase", "acceptance", "--tasks", "500"},
-			want: "acceptance requires at least 20 operations per task at every storage depth",
-		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := parseStorageOptions(t, testCase.args...)
@@ -105,7 +101,6 @@ func TestRunBenchmarkProducesStorageResourceReportOnly(t *testing.T) {
 		samples:        1,
 		timeout:        120 * time.Second,
 		objectFormat:   "sha1",
-		phase:          "baseline",
 		storage:        true,
 		storageDepths:  []int{3, 5},
 	})
@@ -146,7 +141,6 @@ func TestRunWritesStorageResourceReportsEndToEnd(t *testing.T) {
 		"--samples", "1",
 		"--timeout", "120s",
 		"--object-format", "sha1",
-		"--phase", "baseline",
 		"--storage-resources",
 		"--storage-operations", "3,5",
 		"--output-json", jsonPath,

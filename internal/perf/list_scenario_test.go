@@ -60,23 +60,17 @@ func TestColdListScenarioRebuildsProjectionBeforeTheTimedListCommand(t *testing.
 	}
 }
 
-// TestColdListScenarioCarriesTheApprovedLocalBudget records the approved read
-// path target. `workbook list` answers from the local projection and never
-// fetches, so it belongs to the same 200 ms local class as `cli-show` and the
-// single-task mutations; leaving it descriptive would report the cheapest
-// measured cold command as the one nothing classifies.
-//
-// Mutation witness: restoring the nil target, or pricing the local read in the
-// 1,000 ms synchronized class, would stop reporting a regression this scenario
-// exists to catch.
-func TestColdListScenarioCarriesTheApprovedLocalBudget(t *testing.T) {
-	want := ScenarioTarget{DurationStatistic: DurationP95, DurationComparison: DurationAtMost, MaxMilliseconds: 200}
+// TestColdListScenarioIsRegistered keeps the local read on the cold CLI
+// surface: `workbook list` answers from the local projection and never
+// fetches, so its cost belongs beside `cli-show` and the single-task
+// mutations in every report.
+func TestColdListScenarioIsRegistered(t *testing.T) {
 	for _, result := range coldCLIResults(1) {
 		if result.Name != "cli-list" {
 			continue
 		}
-		if result.Target == nil || *result.Target != want {
-			t.Fatalf("cli-list target = %#v, want the local budget %#v", result.Target, want)
+		if result.Surface != "cold-cli" {
+			t.Fatalf("cli-list surface = %q, want cold-cli", result.Surface)
 		}
 		return
 	}

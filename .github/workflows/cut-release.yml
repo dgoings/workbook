@@ -31,6 +31,7 @@ permissions:
 jobs:
   tag:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: write
       # Reading the check runs that decide whether this commit was verified.
@@ -90,4 +91,7 @@ jobs:
     uses: ./.github/workflows/release.yml
     with:
       tag: ${{ needs.tag.outputs.tag }}
-    secrets: inherit
+    # Passed explicitly rather than inherited, so a secret added to the
+    # repository later is not silently exposed to the release job.
+    secrets:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

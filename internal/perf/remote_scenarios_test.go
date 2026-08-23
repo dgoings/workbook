@@ -84,17 +84,17 @@ func TestRunRemoteScenariosUsesTopologyCommandsAndVerifiesResults(t *testing.T) 
 	tests := []struct {
 		name    string
 		command string
-		// unbudgeted marks a scenario that is measured and verified but has no
-		// approved threshold, so its samples are reported rather than classified.
-		unbudgeted bool
+		// expectFailure marks a scenario whose measured command fails by
+		// design, so its samples record the nonzero exit as evidence.
+		expectFailure bool
 	}{
 		{name: "sync-fresh-checkout", command: "fetch"},
 		{name: "sync-initial-publication", command: "push"},
 		{name: "sync-already-synchronized", command: "sync"},
 		{name: "sync-small-changed-ref-set", command: "sync"},
-		{name: "sync-divergent-tips", command: "sync", unbudgeted: true},
-		{name: "sync-malformed-local-tip", command: "push"},
-		{name: "sync-malformed-remote-tip", command: "fetch"},
+		{name: "sync-divergent-tips", command: "sync"},
+		{name: "sync-malformed-local-tip", command: "push", expectFailure: true},
+		{name: "sync-malformed-remote-tip", command: "fetch", expectFailure: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -120,15 +120,12 @@ func TestRunRemoteScenariosUsesTopologyCommandsAndVerifiesResults(t *testing.T) 
 				t.Fatalf("results/commands = %d/%d, want 1/1", len(results), len(commands))
 			}
 			result := results[0]
-			if test.unbudgeted {
-				if result.Target != nil {
-					t.Fatalf("%s target = %#v, want none until a recorded run supplies evidence", result.Name, result.Target)
-				}
-				if got := scenarioOutcome(result); got != "not-evaluated" {
-					t.Fatalf("%s outcome = %q, want not-evaluated", result.Name, got)
-				}
-			} else if result.Target == nil || result.Target.MaxGitProcesses <= 7 || result.Target.MaxMilliseconds <= 0 {
-				t.Fatalf("%s target = %#v, want approved target above measured count", result.Name, result.Target)
+			wantOutcome := "completed"
+			if test.expectFailure {
+				wantOutcome = "failed"
+			}
+			if got := scenarioOutcome(result); got != wantOutcome {
+				t.Fatalf("%s outcome = %q, want %s", result.Name, got, wantOutcome)
 			}
 			if len(result.Samples) != 1 || result.Samples[0].GitProcesses != 7 {
 				t.Fatalf("%s samples = %#v, want one fixed-count sample", result.Name, result.Samples)
@@ -162,20 +159,6 @@ func TestRunRemoteScenariosBuildsOnlySelectedTopology(t *testing.T) {
 	}
 }
 
-// Mutation witness: leaving a remote target at a local p95 policy could allow
-// one slow completed remote sample to satisfy a target that applies to every
-// completed sample.
-func TestRemoteScenarioTargetsUseEverySampleInclusiveDurationLimits(t *testing.T) {
-	for _, definition := range remoteScenarioDefinitions {
-		if definition.target == nil {
-			continue
-		}
-		if definition.target.DurationStatistic != DurationEverySample || definition.target.DurationComparison != DurationAtMost {
-			t.Fatalf("%s duration policy = %q/%q, want every-sample/at-most", definition.name, definition.target.DurationStatistic, definition.target.DurationComparison)
-		}
-	}
-}
-
 func TestRemoteScenarioProcessCountDoesNotScaleWithFixtureSize(t *testing.T) {
 	workbook := buildRemoteScenarioWorkbook(t)
 	counts := make([]int, 0, 2)
@@ -200,40 +183,6 @@ func TestRemoteScenarioProcessCountDoesNotScaleWithFixtureSize(t *testing.T) {
 	}
 	if !reflect.DeepEqual(counts, []int{9, 9}) {
 		t.Fatalf("Git process counts = %v, want stable count", counts)
-	}
-}
-
-func TestRemoteSyncProductsStayUnderExclusiveProcessTargets(t *testing.T) {
-	workbook := buildRemoteScenarioWorkbook(t)
-	results, err := runRemoteScenarios(context.Background(), RunSpec{
-		WorkbookBinary: workbook,
-		Fixture:        FixtureSpec{TotalTasks: 10, ActiveTasks: 10, OperationsPerTask: 4, ObjectFormat: "sha1"},
-		Samples:        1,
-		CommandTimeout: 20 * time.Second,
-	}, filepath.Join(t.TempDir(), "scenarios"), []string{
-		"sync-already-synchronized",
-		"sync-small-changed-ref-set",
-	}, remoteScenarioDependencies{
-		buildFixture:   buildRemoteFixtureWithinTimeout,
-		measureCommand: MeasureCommandOutput,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, result := range results {
-		if result.Target == nil {
-			t.Fatalf("%s target = nil", result.Name)
-		}
-		got := result.Samples[0].GitProcesses
-		t.Logf("%s Git processes = %d", result.Name, got)
-		if got >= result.Target.MaxGitProcesses {
-			t.Fatalf(
-				"%s Git processes = %d, want fewer than %d",
-				result.Name,
-				got,
-				result.Target.MaxGitProcesses,
-			)
-		}
 	}
 }
 

@@ -2,7 +2,7 @@
 
 ## Project context
 
-Workbook is a design-stage, repository-native project tracker for humans and coding agents. Read `README.md` before making changes. The repository may initially contain only design documentation; do not imply that proposed commands or formats are already implemented.
+Workbook is a repository-native project tracker for humans and coding agents. Read `README.md` before making changes; the command surface is documented in `docs/reference.md` and the storage model in `docs/architecture.md`. Do not imply that proposed commands or formats are already implemented.
 
 ## Product priorities
 
