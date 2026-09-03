@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // The socket name is derived from the repository path, so it is guessable. The
@@ -243,10 +244,10 @@ func TestSocketPathFallsBackWhenTheCandidateIsTooLong(t *testing.T) {
 	}
 }
 
-// The socket is never world-connectable, at any instant. The chmod that
-// follows the listen closes the window only after it has opened, so this
-// asserts the mode the listen itself produced, under the umask 0 that made the
-// window observable.
+// The socket is never world-connectable, at any instant. It is bound under a
+// name nobody dials and renamed into place already restricted, so the mode
+// asserted here is the only one the advertised path has ever had — under the
+// umask 0 that would otherwise have left it open.
 func TestListenPrivateCreatesASocketNobodyElseCanConnectTo(t *testing.T) {
 	previous := syscall.Umask(0)
 	defer syscall.Umask(previous)
@@ -267,6 +268,115 @@ func TestListenPrivateCreatesASocketNobodyElseCanConnectTo(t *testing.T) {
 	}
 	if got := syscall.Umask(0); got != 0 {
 		t.Fatalf("listenPrivate() left the process umask at %#o, want it restored", got)
+	}
+}
+
+// A bind must not change what any other file this process creates comes out as.
+// It used to: a umask of 0177 was set around the listen and restored after, and
+// syscall.Umask is process-wide. `workbook serve` binds this socket on its
+// watcher goroutine while the board runs git on another, so a `git hash-object
+// -w --stdin` that landed in the window created its loose-object fan-out
+// directory with mode 0600 — mkdir asks for 0777 and the umask took the owner's
+// search bit along with everyone else's. Git could not then write into the
+// directory it had just made, and every later object sharing those two hex
+// digits failed with "insufficient permission for adding an object to
+// repository database" in a repository that stayed broken after the watcher
+// exited, because the directory did.
+//
+// The window is where beforeRename runs, so the directory is created exactly
+// where the umask used to be in force rather than racing for it.
+func TestListenPrivateDoesNotRestrictWhatTheRestOfTheProcessCreates(t *testing.T) {
+	previous := syscall.Umask(0)
+	defer syscall.Umask(previous)
+
+	directory := filepath.Join(t.TempDir(), "objects-fanout")
+	restore := beforeRename
+	beforeRename = func() {
+		if err := os.Mkdir(directory, 0o777); err != nil {
+			t.Errorf("Mkdir() during the bind: %v", err)
+		}
+	}
+	defer func() { beforeRename = restore }()
+
+	path := filepath.Join(shortTempDir(t), "w.sock")
+	listener, err := listenPrivate(path)
+	if err != nil {
+		t.Fatalf("listenPrivate() error = %v", err)
+	}
+	defer listener.Close()
+
+	info, err := os.Stat(directory)
+	if err != nil {
+		t.Fatalf("Stat(%q) error = %v", directory, err)
+	}
+	// The search bit is the one that matters. Without it the directory can be
+	// created and never written to again, which is the failure git reports.
+	if mode := info.Mode().Perm(); mode&0o700 != 0o700 {
+		t.Fatalf("a directory created during the bind has mode %v, want the owner's own rwx intact", mode)
+	}
+}
+
+// The socket serves at the path clients dial, not at the one it was bound
+// under. Renaming a bound socket keeps the listener working because the
+// listener holds the inode rather than the name, and nothing is left behind at
+// the temporary name for the next bind to trip over.
+func TestListenPrivateServesAtTheRenamedPath(t *testing.T) {
+	path := filepath.Join(shortTempDir(t), "w.sock")
+	listener, err := listenPrivate(path)
+	if err != nil {
+		t.Fatalf("listenPrivate() error = %v", err)
+	}
+	defer listener.Close()
+
+	served := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			served <- err
+			return
+		}
+		defer conn.Close()
+		_, err = conn.Write([]byte("ok\n"))
+		served <- err
+	}()
+
+	conn, err := net.DialTimeout("unix", path, time.Second)
+	if err != nil {
+		t.Fatalf("Dial(%q) after the rename: %v", path, err)
+	}
+	defer conn.Close()
+	if err := <-served; err != nil {
+		t.Fatalf("serving the renamed socket: %v", err)
+	}
+
+	if _, err := os.Lstat(path + bindSuffix); !os.IsNotExist(err) {
+		t.Fatalf("Lstat(%q) error = %v, want the temporary bind name to be gone", path+bindSuffix, err)
+	}
+}
+
+// A watcher killed between the bind and the rename leaves the temporary name
+// behind. A leftover socket file fails the next bind with "address already in
+// use", so the next bind clears it rather than refusing to start.
+func TestListenPrivateBindsOverALeftoverTemporaryName(t *testing.T) {
+	path := filepath.Join(shortTempDir(t), "w.sock")
+	abandoned, err := net.Listen("unix", path+bindSuffix)
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+	// Closing normally would unlink the file, which is the opposite of the
+	// state under test: a killed watcher leaves the socket on disk.
+	abandoned.(*net.UnixListener).SetUnlinkOnClose(false)
+	if err := abandoned.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	listener, err := listenPrivate(path)
+	if err != nil {
+		t.Fatalf("listenPrivate() over a leftover %q: %v", path+bindSuffix, err)
+	}
+	defer listener.Close()
+	if _, err := os.Lstat(path); err != nil {
+		t.Fatalf("Lstat(%q) error = %v, want the socket at the advertised path", path, err)
 	}
 }
 
