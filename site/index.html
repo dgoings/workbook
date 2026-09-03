@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workbook — a project tracker that lives in your Git repo</title>
+<meta name="description" content="Workbook is a repository-native project tracker for humans and coding agents. Task history lives in Git refs beside your code, with a CLI that speaks JSON. No hosted service, no extra account.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Workbook — a project tracker that lives in your Git repo">
+<meta property="og:description" content="Repository-native task tracking for humans and coding agents. Task history lives in Git refs beside your code, with a CLI that speaks JSON.">
+<meta name="twitter:card" content="summary">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232457d6'/%3E%3Cg fill='%23fff'%3E%3Crect x='7' y='8' width='5' height='16' rx='2'/%3E%3Crect x='14' y='8' width='5' height='11' rx='2'/%3E%3Crect x='21' y='8' width='5' height='7' rx='2'/%3E%3C/g%3E%3C/svg%3E">
+
+<style>
+:root {
+  --blue: #2457d6;
+  --blue-dark: #1d49b7;
+  --blue-tint: #edf3ff;
+  --ink: #172033;
+  --ink-soft: #4b5a72;
+  --ink-faint: #6b7a92;
+  --page: #e9eef5;
+  --card: #ffffff;
+  --hairline: #d5deea;
+  --term: #131a29;
+  --term-ink: #dbe4f2;
+  --term-hairline: #2a3448;
+  --radius: 14px;
+  --measure: 62ch;
+  color-scheme: light;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font-family: ui-rounded, "Avenir Next", system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 17px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+code, kbd, pre, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; }
+
+a { color: var(--blue); text-underline-offset: 3px; }
+a:hover { color: var(--blue-dark); }
+
+.wrap { width: min(100% - 3rem, 62rem); margin-inline: auto; }
+@media (max-width: 30rem) { .wrap { width: min(100% - 2rem, 62rem); } }
+
+.skip-link { position: absolute; left: 1rem; top: -4rem; z-index: 5; background: var(--ink); color: #fff; padding: .55rem .8rem; border-radius: 6px; }
+.skip-link:focus { top: 1rem; }
+
+/* ---------- header ---------- */
+
+.site-header {
+  position: sticky; top: 0; z-index: 4;
+  background: rgba(233,238,245,.86);
+  backdrop-filter: saturate(1.4) blur(10px);
+  border-bottom: 1px solid transparent;
+  transition: border-color .2s ease;
+}
+.site-header[data-scrolled] { border-bottom-color: var(--hairline); }
+.site-header .wrap { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .85rem 0; }
+
+.wordmark { display: inline-flex; align-items: center; gap: .55rem; font-weight: 700; letter-spacing: -.02em; color: var(--ink); text-decoration: none; font-size: 1.05rem; }
+.wordmark svg { display: block; border-radius: 7px; }
+
+.nav { display: flex; align-items: center; gap: 1.15rem; }
+.nav a { color: var(--ink-soft); text-decoration: none; font-size: .92rem; font-weight: 600; }
+.nav a:hover { color: var(--blue); }
+.nav .icon-link { display: inline-flex; color: var(--ink-soft); }
+.nav .icon-link:hover { color: var(--ink); }
+.nav .icon-link svg { display: block; width: 22px; height: 22px; fill: currentColor; }
+@media (max-width: 34rem) { .nav a.hide-sm { display: none; } }
+
+/* ---------- hero ---------- */
+
+.hero { padding: clamp(3rem, 9vw, 6rem) 0 clamp(2.5rem, 6vw, 4rem); text-align: center; }
+/* `p` carries a reading measure, and a centered line inside a narrower box is
+   centered on that box, not on the page. The eyebrow is a label, not prose. */
+.eyebrow { margin: 0 0 1rem; max-width: none; color: var(--blue); font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .72rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+.hero h1 { margin: 0 0 .75rem; font-size: clamp(2.4rem, 8vw, 4.25rem); line-height: 1.05; letter-spacing: -.045em; }
+/* The break is a wide-screen composition, not part of the sentence. A phone
+   that honours it strands "belong" on a line of its own, so below this width
+   the headline wraps wherever it lands. */
+@media (max-width: 40rem) { .hero h1 br { display: none; } }
+.hero .lede { margin: 0 auto; max-width: 34ch; font-size: clamp(1.1rem, 2.4vw, 1.35rem); line-height: 1.45; color: var(--ink-soft); letter-spacing: -.01em; }
+
+.install { margin: 2.5rem auto 1rem; max-width: 34rem; }
+.command {
+  display: flex; align-items: center; gap: .75rem;
+  background: var(--term); color: var(--term-ink);
+  border-radius: var(--radius);
+  padding: .95rem 1rem .95rem 1.15rem;
+  box-shadow: 0 12px 30px rgba(23,32,51,.14), 0 2px 6px rgba(23,32,51,.08);
+  text-align: left;
+}
+.command code { flex: 1; min-width: 0; font-size: clamp(.85rem, 2.6vw, 1rem); overflow-x: auto; white-space: nowrap; scrollbar-width: none; }
+.command code::-webkit-scrollbar { display: none; }
+.command .prompt { color: #7f8ea8; user-select: none; margin-right: .55rem; }
+.copy {
+  flex: none; display: inline-flex; align-items: center; gap: .35rem;
+  border: 1px solid var(--term-hairline); background: #1c2436; color: var(--term-ink);
+  border-radius: 8px; padding: .4rem .6rem; font: inherit; font-size: .8rem; cursor: pointer;
+}
+.copy:hover { background: #26314a; }
+.copy:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.copy svg { width: 14px; height: 14px; fill: currentColor; }
+.install .note { margin: .9rem 0 0; color: var(--ink-faint); font-size: .88rem; }
+.install .note a { font-weight: 600; white-space: nowrap; }
+/* The one command the page most wants read is the one a narrow phone has the
+   least room for. Shrinking it enough to fit on one line put it at 11px beside
+   a copy button, so it wraps at its space instead: two whole lines a reader can
+   retype, rather than one line scrolled halfway out of the box. */
+@media (max-width: 30rem) {
+  .command { align-items: flex-start; gap: .5rem; padding: .85rem .8rem .85rem .95rem; }
+  .command code { font-size: .8rem; white-space: normal; overflow-wrap: anywhere; }
+  .command .prompt { margin-right: .4rem; }
+  .copy { padding: .35rem .5rem; font-size: .75rem; }
+}
+
+/* ---------- sections ---------- */
+
+section { padding: clamp(2.5rem, 6vw, 4rem) 0; }
+.section-head { max-width: var(--measure); }
+h2 { margin: 0 0 .6rem; font-size: clamp(1.5rem, 3.4vw, 1.9rem); letter-spacing: -.03em; }
+h3 { margin: 0 0 .35rem; font-size: 1.02rem; letter-spacing: -.015em; }
+p { margin: 0 0 1rem; max-width: var(--measure); }
+p:last-child { margin-bottom: 0; }
+.muted { color: var(--ink-soft); }
+
+.divider { border: 0; border-top: 1px solid var(--hairline); margin: 0; }
+
+.cards { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); margin-top: 2rem; }
+.card { background: var(--card); border: 1px solid var(--hairline); border-radius: var(--radius); padding: 1.35rem; }
+.card p { color: var(--ink-soft); font-size: .95rem; margin: 0; }
+.card .dot { display: block; width: 28px; height: 28px; border-radius: 8px; background: var(--blue-tint); color: var(--blue); display: grid; place-items: center; margin-bottom: .85rem; font-family: ui-monospace, monospace; font-size: .8rem; font-weight: 700; }
+.card .dot--glyph { font-size: 1.05rem; font-weight: 400; }
+
+/* ---------- steps ---------- */
+
+.steps { margin-top: 2rem; display: grid; gap: 1.75rem; }
+/* Grid items default to min-width:auto, so a wide `pre` that scrolls inside its
+   own box still widens the track holding it. Every grid item on this page is
+   allowed to be narrower than its content; the terminal blocks scroll. */
+.step { display: grid; grid-template-columns: 2rem 1fr; gap: 0 1rem; align-items: start; }
+.step > *, .card, .method { min-width: 0; }
+.step .num {
+  grid-row: span 2; width: 2rem; height: 2rem; border-radius: 50%;
+  background: var(--blue); color: #fff; display: grid; place-items: center;
+  font-family: ui-monospace, monospace; font-size: .85rem; font-weight: 700;
+}
+.step h3 { margin-top: .2rem; }
+.step > p { color: var(--ink-soft); font-size: .95rem; margin-bottom: .85rem; }
+@media (max-width: 34rem) {
+  .step { grid-template-columns: 1fr; gap: .5rem; }
+  .step .num { grid-row: auto; }
+}
+
+/* ---------- terminal block ---------- */
+
+.terminal {
+  background: var(--term); border-radius: var(--radius); overflow: hidden;
+  box-shadow: 0 10px 26px rgba(23,32,51,.12);
+}
+.terminal__bar { display: flex; align-items: center; gap: .4rem; padding: .6rem .9rem; border-bottom: 1px solid var(--term-hairline); }
+.terminal__bar span { width: 10px; height: 10px; border-radius: 50%; background: #39445c; }
+.terminal__bar .title { width: auto; height: auto; border-radius: 0; background: none; margin-left: .5rem; color: #7f8ea8; font-family: ui-monospace, monospace; font-size: .72rem; letter-spacing: .04em; }
+.terminal pre { margin: 0; padding: 1rem 1.15rem; overflow-x: auto; color: var(--term-ink); font-size: .87rem; line-height: 1.75; }
+.terminal .p { color: #7f8ea8; user-select: none; }
+.terminal .c { color: #8fa4c9; font-style: normal; }
+.terminal .o { color: #93e6b6; }
+
+/* ---------- install grid ---------- */
+
+/* Three narrow columns clipped every command they held, and a command the
+   reader has to scroll is a command they cannot copy by eye. The methods are
+   full-width rows instead: the name and its caveat on the left, the whole
+   command on the right. */
+.install-methods { display: grid; gap: 1rem; margin-top: 2rem; }
+.method {
+  background: var(--card); border: 1px solid var(--hairline); border-radius: var(--radius); padding: 1.35rem;
+  display: grid; grid-template-columns: minmax(0, 15rem) minmax(0, 1fr); gap: 1.25rem 2rem; align-items: center;
+}
+.method p { font-size: .93rem; color: var(--ink-soft); margin: 0; }
+.method .terminal { box-shadow: none; min-width: 0; }
+.method .terminal pre { font-size: .82rem; padding: .85rem 1rem; }
+@media (max-width: 46rem) { .method { grid-template-columns: 1fr; gap: .9rem; align-items: start; } }
+
+/* ---------- footer ---------- */
+
+.site-footer { border-top: 1px solid var(--hairline); padding: 2.5rem 0 3.5rem; }
+.site-footer .wrap { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; }
+.site-footer p { margin: 0; color: var(--ink-faint); font-size: .88rem; }
+.footer-links { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1.15rem; }
+.footer-links a { color: var(--ink-soft); font-size: .88rem; font-weight: 600; text-decoration: none; }
+.footer-links a:hover { color: var(--blue); }
+.footer-links .icon-link { display: inline-flex; }
+.footer-links .icon-link svg { width: 20px; height: 20px; fill: currentColor; display: block; }
+</style>
+</head>
+<body>
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header" id="site-header">
+  <div class="wrap">
+    <a class="wordmark" href="/">
+      <svg width="26" height="26" viewBox="0 0 32 32" aria-hidden="true">
+        <rect width="32" height="32" rx="8" fill="#2457d6"/>
+        <g fill="#fff">
+          <rect x="7" y="8" width="5" height="16" rx="2"/>
+          <rect x="14" y="8" width="5" height="11" rx="2"/>
+          <rect x="21" y="8" width="5" height="7" rx="2"/>
+        </g>
+      </svg>
+      Workbook
+    </a>
+    <nav class="nav" aria-label="Primary">
+      <a href="#install">Install</a>
+      <a href="#start" class="hide-sm">Get started</a>
+      <a class="hide-sm" href="https://github.com/dgoings/workbook/blob/main/docs/reference.md">Docs</a>
+      <a class="icon-link" href="https://github.com/dgoings/workbook" aria-label="Workbook on GitHub" rel="noopener">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+      </a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+  <div class="hero">
+    <div class="wrap">
+      <p class="eyebrow">Repository-native project tracker</p>
+      <h1>Your tasks belong <br>next to your code.</h1>
+      <p class="lede">Workbook keeps project state in Git, beside the work it describes — for you and for the agents you hand work to.</p>
+
+      <div class="install">
+        <div class="command">
+          <span class="prompt" aria-hidden="true">$</span>
+          <code id="install-command">brew install dgoings/tap/workbook</code>
+          <button class="copy" type="button" data-copy="install-command">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 1H4a2 2 0 0 0-2 2v7h1.5V3a.5.5 0 0 1 .5-.5h6V1Z"/><path d="M6 4h6a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm0 1.5a.5.5 0 0 0-.5.5v7a.5.5 0 0 0 .5.5h6a.5.5 0 0 0 .5-.5V6a.5.5 0 0 0-.5-.5H6Z"/></svg>
+            <span data-copy-label>Copy</span>
+          </button>
+        </div>
+        <p class="note">macOS and Linux, Apple Silicon and Intel. <a href="#install">Other ways to install &rarr;</a></p>
+      </div>
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <section id="what">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>A tracker with no service behind it</h2>
+        <p class="muted">A <code>TODO.md</code> travels with the repository and any agent can read it, but it has no structure, no validation, no dependencies, no useful queries, and no safe way for two people to edit it at once. A hosted tracker has all of that, and asks for an account, an API, a network, and a second place for context to drift away from the code.</p>
+        <p class="muted">Workbook sits in the middle. Task history is a chain of append-only operations stored in Git refs under <code>refs/workbook/</code>, pushed and fetched through the same <code>origin</code> your code already uses. Your checked-out branch never sees them. A disposable SQLite projection makes reads fast, and you can delete it at any time — Git stays canonical.</p>
+      </div>
+
+      <div class="cards">
+        <div class="card">
+          <span class="dot" aria-hidden="true">git</span>
+          <h3>Travels with the repo</h3>
+          <p>Clone, run one bootstrap command, and the project's tasks are there. No invite, no token, no second source of truth.</p>
+        </div>
+        <div class="card">
+          <span class="dot" aria-hidden="true">{ }</span>
+          <h3>JSON is a first interface</h3>
+          <p>Every mutating command takes <code>--json</code> and returns a versioned envelope, so scripts and agents get the same surface you do.</p>
+        </div>
+        <div class="card">
+          <span class="dot dot--glyph" aria-hidden="true">&#8644;</span>
+          <h3>Syncs on its own</h3>
+          <p>Commands fetch, replay onto the fresh tip, and publish the one ref they changed. An unreachable remote is a warning, not a failure.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <section id="start">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>Get started</h2>
+        <p class="muted">Three commands from a fresh clone to a working board.</p>
+      </div>
+
+      <div class="steps">
+
+        <div class="step">
+          <span class="num" aria-hidden="true">1</span>
+          <div>
+            <h3>Install Workbook</h3>
+            <p>From the Homebrew tap, or from source with Go — see <a href="#install">below</a>.</p>
+            <div class="terminal">
+              <div class="terminal__bar" aria-hidden="true"><span></span><span></span><span></span><span class="title">install</span></div>
+              <pre><code><span class="p">$</span> brew install dgoings/tap/workbook</code></pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="step">
+          <span class="num" aria-hidden="true">2</span>
+          <div>
+            <h3>Bootstrap a repository</h3>
+            <p><code>workbook setup</code> creates or validates the project's identity, installs agent documentation into the repo, and exchanges task refs with <code>origin</code>.</p>
+            <div class="terminal">
+              <div class="terminal__bar" aria-hidden="true"><span></span><span></span><span></span><span class="title">setup</span></div>
+              <pre><code><span class="p">$</span> git clone https://github.com/you/your-project.git
+<span class="p">$</span> cd your-project
+<span class="p">$</span> workbook setup
+<span class="o">Project ID:</span>  01JQ8T4W9C7X2M0B6RGDVE5HKZ
+<span class="o">Key:</span>         WB
+<span class="o">Docs:</span>        .workbook/guidelines.md  written
+<span class="o">Sync:</span>        completed</code></pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="step">
+          <span class="num" aria-hidden="true">3</span>
+          <div>
+            <h3>Work from the terminal</h3>
+            <p>Create, query, and move tasks. <code>workbook board</code> draws a board in your terminal; <code>workbook serve</code> opens the same board in a browser.</p>
+            <div class="terminal">
+              <div class="terminal__bar" aria-hidden="true"><span></span><span></span><span></span><span class="title">daily use</span></div>
+              <pre><code><span class="p">$</span> workbook create <span class="c">"Fix the login redirect"</span> --priority high
+<span class="p">$</span> workbook list
+<span class="p">$</span> workbook board            <span class="c"># one column per status</span>
+<span class="p">$</span> workbook serve            <span class="c"># the same board, in a browser</span>
+<span class="p">$</span> workbook show WB-14
+<span class="p">$</span> workbook update WB-14 --status in-progress</code></pre>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <section id="agents">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>Built for coding agents too</h2>
+        <p class="muted">An ephemeral agent clones the repo, claims a task remotely, reads its context, does the work, and disappears. <code>workbook next --claim</code> chooses the task and assigns it in the same command, publishing the claim as it goes, so two agents asking at once do not both walk away with the same task.</p>
+      </div>
+
+      <div class="terminal" style="margin-top:2rem">
+        <div class="terminal__bar" aria-hidden="true"><span></span><span></span><span></span><span class="title">the agent loop</span></div>
+        <pre><code><span class="p">$</span> workbook next --claim --json                  <span class="c"># take the next eligible task</span>
+<span class="p">$</span> workbook show WB-14 --json                    <span class="c"># read its full context</span>
+<span class="p">$</span> workbook update WB-14 --status in-progress --json
+<span class="c">#   ... implement ...</span>
+<span class="p">$</span> workbook update WB-14 --status in-review --json</code></pre>
+      </div>
+
+      <p class="muted" style="margin-top:1.5rem"><code>workbook setup</code> writes this loop into the repository as managed agent documentation and a Workbook skill, so the agents you point at the project learn it without being told.</p>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <section id="install">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>Install</h2>
+        <p class="muted">Workbook is a single Go binary. Git is the only thing it needs at runtime.</p>
+      </div>
+
+      <div class="install-methods">
+
+        <div class="method">
+          <div>
+            <h3>Homebrew</h3>
+            <p>Bottles for macOS and Linux, Apple Silicon and Intel.</p>
+          </div>
+          <div class="terminal">
+            <pre><code><span class="p">$</span> brew install dgoings/tap/workbook</code></pre>
+          </div>
+        </div>
+
+        <div class="method">
+          <div>
+            <h3>Prebuilt archive</h3>
+            <p>Every <a href="https://github.com/dgoings/workbook/releases">release</a> ships macOS and Linux archives with checksums.</p>
+          </div>
+          <div class="terminal">
+            <pre><code><span class="p">$</span> tar -xzf workbook_&lt;version&gt;_darwin_arm64.tar.gz
+<span class="p">$</span> mv workbook ~/.local/bin/</code></pre>
+          </div>
+        </div>
+
+        <div class="method">
+          <div>
+            <h3>From source</h3>
+            <p>Needs Go 1.26 or newer. Installs to <code>~/.local/bin</code>, stamped with the commit it came from.</p>
+          </div>
+          <div class="terminal">
+            <pre><code><span class="p">$</span> git clone https://github.com/dgoings/workbook.git
+<span class="p">$</span> cd workbook
+<span class="p">$</span> ./scripts/install.sh</code></pre>
+          </div>
+        </div>
+
+      </div>
+
+      <p class="muted" style="margin-top:1.5rem">Then <code>workbook --help</code>, <code>workbook help &lt;command&gt;</code>, or the <a href="https://github.com/dgoings/workbook/blob/main/docs/reference.md">command reference</a> for everything else. The <a href="https://github.com/dgoings/workbook/blob/main/docs/architecture.md">architecture notes</a> cover the ref layout, operation packs, and synchronization semantics.</p>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <p>Workbook is free software under the <a href="https://github.com/dgoings/workbook/blob/main/LICENSE">MIT License</a>.</p>
+    <div class="footer-links">
+      <a href="https://github.com/dgoings/workbook/blob/main/docs/reference.md">Reference</a>
+      <a href="https://github.com/dgoings/workbook/blob/main/docs/architecture.md">Architecture</a>
+      <a href="https://github.com/dgoings/workbook/blob/main/CONTRIBUTING.md">Contributing</a>
+      <a class="icon-link" href="https://github.com/dgoings/workbook" aria-label="Workbook on GitHub" rel="noopener">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+      </a>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var header = document.getElementById('site-header');
+  var onScroll = function () {
+    if (window.scrollY > 4) { header.setAttribute('data-scrolled', ''); }
+    else { header.removeAttribute('data-scrolled'); }
+  };
+  onScroll();
+  window.addEventListener('scroll', onScroll, { passive: true });
+
+  Array.prototype.forEach.call(document.querySelectorAll('[data-copy]'), function (button) {
+    var source = document.getElementById(button.getAttribute('data-copy'));
+    var label = button.querySelector('[data-copy-label]');
+    if (!source || !label) { return; }
+    var reset;
+    button.addEventListener('click', function () {
+      var text = source.textContent.trim();
+      var done = function () {
+        label.textContent = 'Copied';
+        clearTimeout(reset);
+        reset = setTimeout(function () { label.textContent = 'Copy'; }, 1800);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, function () { label.textContent = 'Press ⌘C'; });
+        return;
+      }
+      var field = document.createElement('textarea');
+      field.value = text;
+      field.setAttribute('readonly', '');
+      field.style.position = 'absolute';
+      field.style.left = '-9999px';
+      document.body.appendChild(field);
+      field.select();
+      try { document.execCommand('copy'); done(); } catch (error) { label.textContent = 'Press ⌘C'; }
+      document.body.removeChild(field);
+    });
+  });
+})();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,36 @@
+# Render Blueprint for the Workbook marketing site.
+#
+# The site is hand-written static HTML with no build step, so this describes a
+# static service that publishes site/ verbatim. Render redeploys it when a push
+# to the tracked branch touches site/ or this file, and ignores every push that
+# only changes the Go program.
+#
+# See site/README.md for how to point a Render workspace at this file.
+
+services:
+  - name: workbook-site
+    type: web
+    runtime: static
+    rootDir: site
+    staticPublishPath: .
+    # A pull request that changes the site gets its own preview URL.
+    previewsGeneration: automatic
+    buildFilter:
+      paths:
+        - site/**
+        - render.yaml
+    headers:
+      # The page embeds its own CSS and script and loads nothing from anywhere
+      # else, so it can say so and be held to it.
+      - path: /*
+        name: Content-Security-Policy
+        value: "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
+      - path: /*
+        name: Strict-Transport-Security
+        value: "max-age=31536000; includeSubDomains"
