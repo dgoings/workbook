@@ -1,4 +1,4 @@
-<!-- workbook:begin generator=dev sha256=5c9b725704e3d22913671a1562bc7f0fd4468c5ac55be0bd5aee0c289efb46c3 -->
+<!-- workbook:begin generator=d1a6fc2 sha256=18959083026841ce054953b648026f6cb9234cc1d36757c1a7d44e24735ae36b -->
 # Workbook guidelines
 
 Workbook tracks this project's tasks in Git refs under `refs/workbook/tasks/`.
@@ -58,13 +58,42 @@ New tasks land in `backlog`.
 `workbook next` claims from `ready`.
 A dependency is satisfied once it reaches `done`.
 
-1. Select work with `workbook next --json`, or read a known task with
-   `workbook show <id> --json`. Keep the canonical full ID from `data.id`.
-2. Claim it with `workbook update <id> --status <status> --json` before
-   editing files, naming the status this project uses for work under way.
+1. Select work with `workbook next --claim --json`, which picks the next
+   eligible task and assigns it to you in one command, or read a known task
+   with `workbook show <id> --json`. Keep the full ID from `data.id`.
+2. Take it up with `workbook update <id> --status <status> --assign self
+   --json` before editing files, naming the status this project uses for
+   work under way. Both changes are recorded as one, so neither lands
+   without the other.
 3. Move it along the statuses above as the work progresses, including the
    one this project uses for review, and into a status tagged `done` only
    after the work is accepted and merged.
+4. Give it back with `workbook update <id> --unassign self` if you stop
+   without finishing.
+
+## Assignments say who is responsible
+
+An assignment is `self`, an email address, or either followed by `/label`
+naming one agent of that identity — `--assign self/impl-1`. It blocks
+nothing and expires never, and only the identity it names or whoever
+recorded it may take it away.
+
+`workbook next` skips tasks another identity is assigned to and you are
+not, so a fleet does not hand two agents the same work; `--any` offers the
+whole eligible set. A task you already hold is still offered to you, and
+claiming it again records nothing.
+
+`workbook update <id> --assign self` exits 10 when somebody else holds
+that task and you do not, and records nothing: pick another task, or pass
+`--force` to work on it alongside them deliberately. `workbook next
+--claim` never exits 10 — it has already skipped what somebody else holds
+— and answers a fully claimed board with a null `data` and a
+`next-held-by-others` warning instead.
+
+An `assignment-shared` warning means you hold the task together with
+somebody else, either because you forced it or because two claims raced
+and both were kept. The work was recorded; decide with the other party
+rather than removing their assignment, which Workbook refuses anyway.
 
 ## Machine-readable output
 
@@ -86,6 +115,7 @@ Check the result of every mutation; do not assume it succeeded.
 | 6 | `stale-write` | retry the identical command; it will probably succeed |
 | 7 | `corrupt-data` | read the message; repair or rebuild before continuing |
 | 8 | `conflict` | read the envelope's `conflict` list, change the input, then retry |
+| 10 | `assigned` | somebody else holds that task; pick another one, or `--force` to share it |
 
 ## Publication is automatic
 
