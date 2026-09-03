@@ -76,6 +76,19 @@ against it, on `ubuntu-24.04` and `macos-15` because Workbook publishes darwin
 and linux archives. Each job verifies formatting with `gofmt -l .`, runs
 `go vet ./...`, and runs `go test ./...`.
 
+The one change that does not pay for all of that is a change to the marketing
+site. Nothing builds `site/` or `render.yaml`, no package embeds them, and no
+test reads them, so a step after the checkout diffs the change and skips the
+toolchain installs, the capability preflight and the three verification
+commands when every changed file is one of those two paths. The triggers stay
+unfiltered on purpose: `Verify on ubuntu-24.04` and `Verify on macos-15` are
+required checks, and `paths-ignore` would keep the run from starting at all,
+leaving a site-only pull request waiting forever on a status GitHub was never
+going to send. The gate fails open, so an event it does not model, a base
+commit that is missing or all zeros, a force push, a failed diff, or an empty
+diff all verify everything. Documentation is not exempt, because the suite
+asserts on what these guides say.
+
 A suite that skips is the failure this workflow is built to prevent. The
 embedded web board tests execute the rendered client with `node`, and the
 cross-object-format tests need a Git that can create SHA-256 repositories;
