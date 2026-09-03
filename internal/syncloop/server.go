@@ -64,8 +64,14 @@ func bind(commonGitDir string) (net.Listener, string, error) {
 	if err != nil {
 		return nil, "", core.Wrap(core.CategoryOperational, "bind the watcher socket", err)
 	}
+	// listenPrivate has already set this mode, on a name nobody could dial; the
+	// chmod is the caller asserting the guarantee it depends on rather than
+	// trusting rename to have carried it. Closing the listener no longer unlinks
+	// this path, because the listener was bound under the temporary name and
+	// that is the one it knows about, so the socket file is removed here too.
 	if err := os.Chmod(path, 0o600); err != nil {
 		_ = listener.Close()
+		_ = os.Remove(path)
 		return nil, "", core.Wrap(core.CategoryOperational, "restrict the watcher socket", err)
 	}
 	return listener, path, nil

@@ -4,11 +4,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
-	"sync"
 	"syscall"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -27,6 +27,12 @@ const (
 	// which is 104 bytes on darwin and 108 on Linux. The margin is deliberate:
 	// exceeding it fails the bind rather than truncating.
 	maxSocketPath = 100
+
+	// bindSuffix names the socket while it is being bound, before it is renamed
+	// onto the path clients dial. See listenPrivate for why the bind happens
+	// somewhere else at all. The suffixed name is the longest path this package
+	// ever hands to the kernel, so it is the one that has to fit sun_path.
+	bindSuffix = ".bind"
 )
 
 // pointer publishes where a watcher listens. It lives at a canonical path
@@ -158,7 +164,7 @@ func socketPath(commonGitDir string) (string, error) {
 			continue
 		}
 		path := filepath.Join(directory, candidate.name)
-		if len(path) > maxSocketPath {
+		if len(path)+len(bindSuffix) > maxSocketPath {
 			continue
 		}
 		if err := usableSocketDir(directory); err != nil {
@@ -169,31 +175,66 @@ func socketPath(commonGitDir string) (string, error) {
 	return "", core.Errorf(
 		core.CategoryOperational,
 		"no socket path for this repository is both private to you and under %d bytes; run the watcher from a shorter path in a directory only you can write",
-		maxSocketPath,
+		maxSocketPath-len(bindSuffix),
 	)
 }
 
-// umaskMu serializes the umask window in listenPrivate. syscall.Umask is
-// process-wide, so two binds must not overlap it.
-var umaskMu sync.Mutex
+// beforeRename runs in the one window listenPrivate has, between the bind and
+// the rename. It is a variable only so a test can create a file inside that
+// window and prove the bind did not change the mode it comes out with; nothing
+// in production replaces it.
+var beforeRename = func() {}
 
-// listenPrivate creates the socket with a umask that denies everyone but the
-// owner, so there is no instant at which another user could connect. The chmod
-// that follows still matters, because a platform may ignore umask for sockets;
-// the umask is what closes the window before it. Under the usual umask 022 the
-// interim mode denies connect anyway, but under umask 0 the socket was briefly
-// world-connectable, and anything that connects can read the repository's
-// status or silently drop a recorded conflict.
+// listenPrivate binds the watcher socket so that no instant exists in which
+// another user could connect to it. A socket anyone can connect to is a socket
+// anyone can read the repository's status through, or silently drop a recorded
+// conflict into.
 //
-// The window is one Listen call, and a watcher binds once at startup, so no
-// other file this process creates is realistically affected.
+// This used to set a umask of 0177 around the bind and restore it after. That
+// closed the window, but syscall.Umask is process-wide and this process forks
+// git: `workbook serve` binds this socket on its watcher goroutine while the
+// board's own goroutine runs `git hash-object -w --stdin` for a mutation. A git
+// run that inherited 0177 and had to create a loose-object fan-out directory
+// created it with mode 0600, because mkdir asks for 0777 and the umask takes
+// the owner's search bit with everyone else's. Git then cannot create a file in
+// the directory it just made:
+//
+//	error: insufficient permission for adding an object to repository database .git/objects
+//
+// and every later object whose hash begins with those two hex digits fails the
+// same way, in a repository that stays broken long after the watcher exits,
+// because the directory outlives it. A serialized umask does not help: the
+// mutex only holds off another bind, not the rest of the process.
+//
+// So the mode is applied to a name nobody dials. The socket is bound as
+// path+bindSuffix, chmodded there, and renamed onto path. Renaming a bound
+// socket keeps the listener serving — the listener holds the inode, not the
+// name — the advertised path never exists in a mode another user could connect
+// through, and no global process state is touched at all.
 func listenPrivate(path string) (net.Listener, error) {
-	umaskMu.Lock()
-	previous := syscall.Umask(0o177)
-	listener, err := net.Listen("unix", path)
-	syscall.Umask(previous)
-	umaskMu.Unlock()
-	return listener, err
+	temporary := path + bindSuffix
+	// A watcher killed between the bind and the rename leaves this name behind,
+	// and a leftover socket file fails the next bind with "address already in
+	// use". Clearing it first is the same courtesy bind() already does for the
+	// advertised path, and exclusivity is decided there rather than here.
+	if err := os.Remove(temporary); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	listener, err := net.Listen("unix", temporary)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(temporary, 0o600); err != nil {
+		_ = listener.Close()
+		return nil, err
+	}
+	beforeRename()
+	if err := os.Rename(temporary, path); err != nil {
+		_ = listener.Close()
+		_ = os.Remove(temporary)
+		return nil, err
+	}
+	return listener, nil
 }
 
 // userTempRoot is where the private per-user directory is created. It is a
