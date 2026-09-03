@@ -11,10 +11,11 @@ services:
   - name: workbook-site
     type: web
     runtime: static
-    rootDir: site
-    staticPublishPath: .
+    rootDir: ./site
+    staticPublishPath: ./
     # A pull request that changes the site gets its own preview URL.
-    previewsGeneration: automatic
+    previews:
+      generation: automatic
     buildFilter:
       paths:
         - site/**
