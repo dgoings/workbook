@@ -38,7 +38,107 @@ jobs:
         with:
           fetch-depth: 0
 
+      # A change confined to the marketing site cannot change how the Go
+      # program behaves: nothing builds site/ or render.yaml, no package embeds
+      # them, and no test reads them, so the whole matrix spends six to eight
+      # minutes per runner proving something an HTML edit could not have
+      # broken.
+      #
+      # The obvious fix, paths-ignore on the triggers, is the wrong one here.
+      # `Verify on ubuntu-24.04` and `Verify on macos-15` are required status
+      # checks, and a run that never starts never reports them, so a site-only
+      # pull request would wait forever on a check GitHub was never going to
+      # send. The job therefore keeps triggering on everything and keeps
+      # reporting; only the expensive steps below are skipped, which brings a
+      # site-only run in at around twenty seconds.
+      #
+      # Every uncertainty here resolves to "run everything". Wrongly running
+      # the suite costs a few minutes, while wrongly skipping it lands an
+      # unverified commit on main behind a green tick, so an event this does
+      # not understand, a base commit that is missing or all zeros, a force
+      # push, a failed diff, and an empty diff all decide to verify.
+      - name: Decide whether the Go verification has to run
+        id: scope
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+
+          run_everything() {
+            echo "verifying everything: $1"
+            echo "code_changed=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          }
+
+          event="${EVENT_NAME:-}"
+          case "${event}" in
+            pull_request)
+              base="${PULL_REQUEST_BASE_SHA:-}"
+              # Three dots, so the comparison starts at the merge base: a pull
+              # request answers for the commits it added, not for whatever
+              # landed on main while it was open. Two dots would report main's
+              # own commits as differences of this branch and verify work that
+              # another run has already verified.
+              separator="..."
+              ;;
+            push)
+              base="${PUSH_BEFORE_SHA:-}"
+              # Two dots, comparing the two states directly, because a push
+              # replaces one tip with another and a force push can leave those
+              # two commits without the shared history three dots start from.
+              separator=".."
+              ;;
+            *)
+              run_everything "no diff is defined for a ${event:-missing} event"
+              ;;
+          esac
+
+          if [ -z "${base}" ]; then
+            run_everything "the ${event} event carried no base commit"
+          fi
+          # A push that creates a branch reports all zeros as its previous
+          # commit, and so does the very first push to a repository.
+          case "${base}" in
+            *[!0]*) ;;
+            *) run_everything "the ${event} event reports no previous commit (${base})" ;;
+          esac
+          # Checkout fetched the full history, so a base that is still absent
+          # means something unexpected happened -- a force push that discarded
+          # it, or a shallow fetch -- and the diff cannot be trusted.
+          if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            run_everything "base commit ${base} is not in the fetched history"
+          fi
+
+          if ! changed="$(git diff --name-only "${base}${separator}HEAD" 2>&1)"; then
+            run_everything "git diff ${base}${separator}HEAD failed: ${changed}"
+          fi
+          if [ -z "${changed}" ]; then
+            run_everything "the diff against ${base} is empty"
+          fi
+
+          echo "changed files:"
+          printf '%s\n' "${changed}"
+
+          # These two paths are the whole exemption and nothing joins them.
+          # Prose is not inert here: the suite asserts on the contents of the
+          # top-level guides and of the reference and architecture documents,
+          # so a writing change is a change this workflow has to verify.
+          #
+          # grep exits 1 when it matches nothing, which here is precisely the
+          # site-only case, so it is asked inside an if rather than left to
+          # kill the step under set -e.
+          if printf '%s\n' "${changed}" | grep -qvE '^(site/|render\.yaml$)'; then
+            echo "code_changed=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "code_changed=false" >> "${GITHUB_OUTPUT}"
+            echo "only the static site changed; skipping the Go verification"
+          fi
+
       - name: Set up Go
+        if: steps.scope.outputs.code_changed == 'true'
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.5"
@@ -46,6 +146,7 @@ jobs:
       # The embedded web client behavior tests execute the rendered script with
       # node. Without one they skip, and a skipped suite reports "ok".
       - name: Set up Node
+        if: steps.scope.outputs.code_changed == 'true'
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
@@ -53,9 +154,11 @@ jobs:
       # Fail before the suite runs when a capability it depends on is absent,
       # so the reason is a named missing tool rather than a shrunken run.
       - name: Verify test capabilities
+        if: steps.scope.outputs.code_changed == 'true'
         run: scripts/check-ci-capabilities.sh
 
       - name: Check formatting
+        if: steps.scope.outputs.code_changed == 'true'
         shell: bash
         run: |
           unformatted=$(gofmt -l .)
@@ -66,12 +169,14 @@ jobs:
           fi
 
       - name: Vet
+        if: steps.scope.outputs.code_changed == 'true'
         run: go vet ./...
 
       # WORKBOOK_TEST_REQUIRE_CAPABILITIES turns a missing-capability skip into
       # a failure, and skipreport writes every skip to the job summary, so a
       # suite that quietly stopped covering something cannot report success.
       - name: Test
+        if: steps.scope.outputs.code_changed == 'true'
         shell: bash
         env:
           WORKBOOK_TEST_REQUIRE_CAPABILITIES: "1"
