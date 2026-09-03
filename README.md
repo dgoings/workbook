@@ -120,13 +120,17 @@ An agent discovers, claims, and updates work through the same CLI with `--json`
 output. The loop it runs continuously is:
 
 ```sh
-workbook next --json           # acquire the next eligible task; fetches first
-                               # so two agents cannot claim the same one
+workbook next --claim --json   # take the next eligible task: fetch, pick,
+                               # assign, and publish in one command, so two
+                               # agents cannot walk away with the same one
 workbook show <task> --json    # read its full context
 workbook update <task> --status in-progress --json
 # ... implement ...
 workbook update <task> --status in-review --json
 ```
+
+Bare `workbook next` shows what it would pick without taking it, and skips
+tasks another identity already holds. `--claim` is what assigns and publishes.
 
 `workbook setup` installs managed agent documentation and a Workbook skill into
 the project so agents learn this loop on their own; see
