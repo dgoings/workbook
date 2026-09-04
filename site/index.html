@@ -90,7 +90,7 @@ a:hover { color: var(--blue-dark); }
    that honours it strands "belong" on a line of its own, so below this width
    the headline wraps wherever it lands. */
 @media (max-width: 40rem) { .hero h1 br { display: none; } }
-.hero .lede { margin: 0 auto; max-width: 34ch; font-size: clamp(1.1rem, 2.4vw, 1.35rem); line-height: 1.45; color: var(--ink-soft); letter-spacing: -.01em; }
+.hero .lede { margin: 0 auto; font-size: clamp(1.1rem, 2.4vw, 1.35rem); line-height: 1.45; color: var(--ink-soft); letter-spacing: -.01em; }
 
 .install { margin: 2.5rem auto 1rem; max-width: 34rem; }
 .command {
@@ -128,7 +128,7 @@ a:hover { color: var(--blue-dark); }
 /* ---------- sections ---------- */
 
 section { padding: clamp(2.5rem, 6vw, 4rem) 0; }
-.section-head { max-width: var(--measure); }
+/* .section-head { max-width: var(--measure); } */
 h2 { margin: 0 0 .6rem; font-size: clamp(1.5rem, 3.4vw, 1.9rem); letter-spacing: -.03em; }
 h3 { margin: 0 0 .35rem; font-size: 1.02rem; letter-spacing: -.015em; }
 p { margin: 0 0 1rem; max-width: var(--measure); }
@@ -137,10 +137,16 @@ p:last-child { margin-bottom: 0; }
 
 .divider { border: 0; border-top: 1px solid var(--hairline); margin: 0; }
 
+.split { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr); gap: clamp(1.5rem, 4vw, 3rem); align-items: start; }
+@media (max-width: 56rem) { .split { grid-template-columns: 1fr; } }
+
 .cards { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); margin-top: 2rem; }
-.card { background: var(--card); border: 1px solid var(--hairline); border-radius: var(--radius); padding: 1.35rem; }
-.card p { color: var(--ink-soft); font-size: .95rem; margin: 0; }
-.card .dot { display: block; width: 28px; height: 28px; border-radius: 8px; background: var(--blue-tint); color: var(--blue); display: grid; place-items: center; margin-bottom: .85rem; font-family: ui-monospace, monospace; font-size: .8rem; font-weight: 700; }
+.split .cards { grid-template-columns: 1fr; margin-top: 0; }
+@media (max-width: 56rem) { .split .cards { margin-top: 2rem; } }
+.card { background: var(--card); border: 1px solid var(--hairline); border-radius: var(--radius); padding: 1.35rem; display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: .7rem; row-gap: .6rem; align-items: center; }
+.card h3 { margin: 0; }
+.card p { color: var(--ink-soft); font-size: .95rem; margin: 0; grid-column: 1 / -1; }
+.card .dot { width: 28px; height: 28px; border-radius: 8px; background: var(--blue-tint); color: var(--blue); display: grid; place-items: center; font-family: ui-monospace, monospace; font-size: .8rem; font-weight: 700; }
 .card .dot--glyph { font-size: 1.05rem; font-weight: 400; }
 
 /* ---------- steps ---------- */
@@ -239,7 +245,7 @@ p:last-child { margin-bottom: 0; }
     <div class="wrap">
       <p class="eyebrow">Repository-native project tracker</p>
       <h1>Your tasks belong <br>next to your code.</h1>
-      <p class="lede">Workbook keeps project state in Git, beside the work it describes — for you and for the agents you hand work to.</p>
+      <p class="lede">Workbook keeps project state in Git,<br />alongside the work it describes.<br />For you, and for the agents you hand work to.</p>
 
       <div class="install">
         <div class="command">
@@ -259,27 +265,24 @@ p:last-child { margin-bottom: 0; }
 
   <section id="what">
     <div class="wrap">
-      <div class="section-head">
-        <h2>A tracker with no service behind it</h2>
-        <p class="muted">A <code>TODO.md</code> travels with the repository and any agent can read it, but it has no structure, no validation, no dependencies, no useful queries, and no safe way for two people to edit it at once. A hosted tracker has all of that, and asks for an account, an API, a network, and a second place for context to drift away from the code.</p>
-        <p class="muted">Workbook sits in the middle. Task history is a chain of append-only operations stored in Git refs under <code>refs/workbook/</code>, pushed and fetched through the same <code>origin</code> your code already uses. Your checked-out branch never sees them. A disposable SQLite projection makes reads fast, and you can delete it at any time — Git stays canonical.</p>
-      </div>
+      <div class="split">
+        <div class="section-head">
+          <h2>A tracker with no service behind it</h2>
+          <p class="muted">A <code>TODO.md</code> travels with the repository and any agent can read it, but it has no structure, no validation, no dependencies, no useful queries, and no safe way for two people to edit it at once. A hosted tracker has all of that, but asks for an account, an API, a network, and a second place for context to drift away from the code.</p>
+          <p class="muted">Workbook sits in the middle. Task history is a chain of append-only operations stored in Git refs under <code>refs/workbook/</code>, pushed and fetched through the same <code>origin</code> your code already uses. Your task state persists across any branch, any worktree, sandboxed, etc. Edits from your teammates sync automatically in the background. The Go CLI is fast and works at the speed of git, and it's offline-native.</p>
+        </div>
 
-      <div class="cards">
-        <div class="card">
-          <span class="dot" aria-hidden="true">git</span>
-          <h3>Travels with the repo</h3>
-          <p>Clone, run one bootstrap command, and the project's tasks are there. No invite, no token, no second source of truth.</p>
-        </div>
-        <div class="card">
-          <span class="dot" aria-hidden="true">{ }</span>
-          <h3>JSON is a first interface</h3>
-          <p>Every mutating command takes <code>--json</code> and returns a versioned envelope, so scripts and agents get the same surface you do.</p>
-        </div>
-        <div class="card">
-          <span class="dot dot--glyph" aria-hidden="true">&#8644;</span>
-          <h3>Syncs on its own</h3>
-          <p>Commands fetch, replay onto the fresh tip, and publish the one ref they changed. An unreachable remote is a warning, not a failure.</p>
+        <div class="cards">
+          <div class="card">
+            <span class="dot" aria-hidden="true">git</span>
+            <h3>Travels with the repo</h3>
+            <p>Clone, run one bootstrap command, and the project's tasks are there. No invite, no token, no second source of truth.</p>
+          </div>
+          <div class="card">
+            <span class="dot dot--glyph" aria-hidden="true">&#8644;</span>
+            <h3>Independent, automated sync</h3>
+            <p>Commands fetch, replay onto the fresh tip, and publish the one ref they changed. An unreachable remote is a warning, not a failure.</p>
+          </div>
         </div>
       </div>
     </div>
@@ -330,13 +333,13 @@ p:last-child { margin-bottom: 0; }
           <span class="num" aria-hidden="true">3</span>
           <div>
             <h3>Work from the terminal</h3>
-            <p>Create, query, and move tasks. <code>workbook board</code> draws a board in your terminal; <code>workbook serve</code> opens the same board in a browser.</p>
+            <p><code>workbook serve</code> gives you a human-friendly interface.
+            <br />Or create, query, and move tasks directly from the CLI.</p>
             <div class="terminal">
               <div class="terminal__bar" aria-hidden="true"><span></span><span></span><span></span><span class="title">daily use</span></div>
               <pre><code><span class="p">$</span> workbook create <span class="c">"Fix the login redirect"</span> --priority high
 <span class="p">$</span> workbook list
-<span class="p">$</span> workbook board            <span class="c"># one column per status</span>
-<span class="p">$</span> workbook serve            <span class="c"># the same board, in a browser</span>
+<span class="p">$</span> workbook serve            <span class="c"># interact in a browser</span>
 <span class="p">$</span> workbook show WB-14
 <span class="p">$</span> workbook update WB-14 --status in-progress</code></pre>
             </div>
@@ -351,9 +354,24 @@ p:last-child { margin-bottom: 0; }
 
   <section id="agents">
     <div class="wrap">
-      <div class="section-head">
-        <h2>Built for coding agents too</h2>
-        <p class="muted">An ephemeral agent clones the repo, claims a task remotely, reads its context, does the work, and disappears. <code>workbook next --claim</code> chooses the task and assigns it in the same command, publishing the claim as it goes, so two agents asking at once do not both walk away with the same task.</p>
+      <div class="split">
+        <div class="section-head">
+          <h2>Built for coding agents too</h2>
+          <p class="muted">Workbook is designed specifically to be freindly in high-throughput, parallel agentic development. <code>workbook next --claim</code> is a deterministic rubric that chooses the next task to work on, assigns it in the same command, publishing the claim as it goes, so two agents asking at once do not both walk away with the same task. In a sandbox, an agent clones the repo, runs `workbook sync`, claims a task, reads its context, does the work updates the board, and disappears.</p>
+          <p class="muted" style="margin-top:1.5rem"><code>workbook setup</code> writes this loop into the repository as managed agent documentation and a Workbook skill, so the agents you point at the project learn it without being told.</p>
+        </div>
+        <div class="cards">
+          <div class="card">
+            <span class="dot" aria-hidden="true">{ }</span>
+            <h3>JSON is a first-class interface</h3>
+            <p>Every mutating command takes <code>--json</code> and returns a versioned envelope, so scripts and agents get the same surface you do.</p>
+          </div>
+          <div class="card">
+            <span class="dot" aria-hidden="true">$$</span>
+            <h3>Extremely fast performance</h3>
+            <p>No grepping through giant TODO.md files. No multi-round trip MCP commands. Workbook meets agents where they are: on the command line. Save time, save tokens.</p>
+          </div>
+        </div>
       </div>
 
       <div class="terminal" style="margin-top:2rem">
@@ -365,7 +383,7 @@ p:last-child { margin-bottom: 0; }
 <span class="p">$</span> workbook update WB-14 --status in-review --json</code></pre>
       </div>
 
-      <p class="muted" style="margin-top:1.5rem"><code>workbook setup</code> writes this loop into the repository as managed agent documentation and a Workbook skill, so the agents you point at the project learn it without being told.</p>
+      
     </div>
   </section>
 
