@@ -200,7 +200,13 @@ func TestHandlerStylesheetDeclaresTheLegacyPaletteAsItsDefaults(t *testing.T) {
 func TestHandlerStylesheetDeclaresTheSchemePaletteAsItsDefaults(t *testing.T) {
 	body := displayBoardPage(t, core.DisplaySettings{}, "workbook")
 
+	// Counted across every table that declares a default, not just this one:
+	// #2457d6 is the accent's default as well as the priority triad's blue, so a
+	// count taken from schemeTokens alone would call the second one a stray.
 	declarations := map[string]int{}
+	for _, token := range append(append([]themeToken{}, primaryThemeTokens...), textThemeTokens...) {
+		declarations[token.legacy]++
+	}
 	for _, token := range schemeTokens {
 		declarations[token.legacy]++
 		if declaration := token.property + ": " + token.legacy + ";"; !strings.Contains(body, declaration) {
@@ -223,6 +229,216 @@ func TestHandlerStylesheetDeclaresTheSchemePaletteAsItsDefaults(t *testing.T) {
 // hex digit, or the end of the page".
 func countColorLiteral(body, literal string) int {
 	return len(regexp.MustCompile(regexp.QuoteMeta(literal)+`([^0-9a-fA-F]|$)`).FindAllStringIndex(body, -1))
+}
+
+// Every property the board is drawn from has a reading in dark, and they are
+// all in one place.
+//
+// This is the test that earns the whole shape of this change. A dark mode
+// written as a sheet of per-selector overrides drifts the moment a rule is
+// added, and drifts silently — the board still renders, with one light patch
+// nobody notices until a screenshot. Here a property with no dark reading is a
+// test failure, and the check is a set comparison rather than a reading of the
+// board, so it cannot miss a route the way an eye can.
+func TestHandlerStylesheetGivesEveryPalettePropertyADarkReading(t *testing.T) {
+	dark := darkSchemeBlock(t, displayBoardPage(t, core.DisplaySettings{}, "workbook"))
+
+	if !strings.Contains(dark, "color-scheme: dark;") {
+		t.Error("the dark block does not set color-scheme, so the browser draws its own widgets light")
+	}
+	for _, token := range schemeTokens {
+		if !strings.Contains(dark, token.property+": "+token.dark+";") {
+			t.Errorf("the dark block does not declare %q as %s", token.property, token.dark)
+		}
+	}
+	for _, variant := range append(append([]schemeVariant{}, darkPrimaryVariants...), darkTextVariants...) {
+		if !strings.Contains(dark, variant.property+": "+variant.dark+";") {
+			t.Errorf("the dark block does not declare %q as %s", variant.property, variant.dark)
+		}
+	}
+}
+
+// The two statements of the dark palette agree, property for property.
+//
+// CSS cannot share a declaration block across a media boundary, so the palette
+// is written twice: once for a reader whose system asks for dark, and once for
+// a reader who asked for it outright. A copy is exactly the thing that drifts —
+// somebody adds a property to the block they are looking at, the other keeps
+// the light value, and the board is correct in one direction and wrong in the
+// other for whoever chose the scheme by hand rather than by system.
+//
+// Both are generated from the same tables, and this is what makes that a fact
+// rather than an intention.
+func TestHandlerStylesheetStatesBothDarkSchemesIdentically(t *testing.T) {
+	body := displayBoardPage(t, core.DisplaySettings{}, "workbook")
+
+	system := declarationsIn(t, darkSchemeBlock(t, body), `:root:not([data-scheme="light"])`)
+	chosen := declarationsIn(t, body, `:root[data-scheme="dark"]`)
+
+	if len(system) == 0 {
+		t.Fatal("the system dark block declares nothing")
+	}
+	if len(system) != len(chosen) {
+		t.Errorf("the two dark schemes declare %d and %d properties", len(system), len(chosen))
+	}
+	for property, value := range system {
+		switch other, declared := chosen[property]; {
+		case !declared:
+			t.Errorf("a reader who chose dark is never told %s", property)
+		case other != value:
+			t.Errorf("%s is %s by system and %s by choice", property, value, other)
+		}
+	}
+	for property := range chosen {
+		if _, declared := system[property]; !declared {
+			t.Errorf("%s is declared for a chosen dark scheme but not for a system one", property)
+		}
+	}
+}
+
+// declarationsIn reads the properties one rule sets, given the selector that
+// opens it.
+func declarationsIn(t *testing.T, body, selector string) map[string]string {
+	t.Helper()
+	opening := selector + " {"
+	start := strings.Index(body, opening)
+	if start < 0 {
+		t.Fatalf("the stylesheet has no rule for %s", selector)
+	}
+	rest := body[start+len(opening):]
+	end := strings.Index(rest, "}")
+	if end < 0 {
+		t.Fatalf("the rule for %s is never closed", selector)
+	}
+	declarations := map[string]string{}
+	for _, declaration := range strings.Split(rest[:end], ";") {
+		property, value, found := strings.Cut(declaration, ":")
+		if !found {
+			continue
+		}
+		declarations[strings.TrimSpace(property)] = strings.TrimSpace(value)
+	}
+	return declarations
+}
+
+// darkSchemeBlock is the stylesheet's `prefers-color-scheme: dark` block.
+func darkSchemeBlock(t *testing.T, body string) string {
+	t.Helper()
+	const opening = "@media (prefers-color-scheme: dark) {"
+	start := strings.Index(body, opening)
+	if start < 0 {
+		t.Fatal("the stylesheet has no dark block at all")
+	}
+	depth, i := 0, start+len(opening)-1
+	for ; i < len(body); i++ {
+		switch body[i] {
+		case '{':
+			depth++
+		case '}':
+			if depth--; depth == 0 {
+				return body[start : i+1]
+			}
+		}
+	}
+	t.Fatal("the dark block is never closed")
+	return ""
+}
+
+// A project that chose a colour is served that colour in both schemes.
+//
+// The stylesheet's own dark block cannot answer for this one: the override is
+// served in a later <style> element, and a media query buys no specificity, so
+// a light accent declared there would win in dark mode over a dark accent
+// declared in the stylesheet. The override has to carry its own dark half.
+func TestBoardThemeServesADarkReadingOfAChosenColor(t *testing.T) {
+	theme := string(boardTheme(core.DisplaySettings{PrimaryColor: "#2457d6"}))
+
+	if !strings.Contains(theme, "@media (prefers-color-scheme: dark)") {
+		t.Fatalf("a configured project is served no dark reading:\n%s", theme)
+	}
+	light, dark, found := strings.Cut(theme, "@media (prefers-color-scheme: dark)")
+	if !found {
+		t.Fatal("the two schemes did not separate")
+	}
+	if !strings.Contains(light, "--wb-primary: #2457d6;") {
+		t.Errorf("the light half does not carry the chosen colour:\n%s", light)
+	}
+	// The point of the dark half is that it is not the chosen colour: #2457d6
+	// sits at 49% lightness and disappears into a dark card.
+	if strings.Contains(dark, "--wb-primary: #2457d6;") {
+		t.Errorf("the dark half serves the unlifted colour:\n%s", dark)
+	}
+	lifted, ok := parseThemeColor(declaredValue(t, dark, "--wb-primary"))
+	if !ok {
+		t.Fatal("the dark accent is not a colour")
+	}
+	chosen, _ := parseThemeColor("#2457d6")
+	if lifted.light <= chosen.light {
+		t.Errorf("the dark accent is no lighter than the colour it lifts: %v vs %v", lifted.light, chosen.light)
+	}
+	// A lifted accent is a light fill, so the ink on it has to be the dark one.
+	// That is the property split the palette carries for exactly this.
+	if !strings.Contains(darkSchemeBlock(t, displayBoardPage(t, core.DisplaySettings{}, "workbook")), "--wb-on-accent: #0f141c;") {
+		t.Error("dark mode keeps white ink on a light accent fill")
+	}
+}
+
+// A themed project's override answers the reader's chosen scheme, not only
+// their system's.
+//
+// This is a regression test for a board that came out half converted. The
+// stylesheet holds its dark palette off a reader who chose light, but the
+// override served after it was written against a bare `:root` inside the media
+// query — so on a dark system a reader who asked for light got light neutrals
+// with the project's dark accent still sitting on them: a pale page with a
+// near-black panel in the middle of it. Nothing failed; it just looked wrong,
+// which is exactly the kind of defect a selector this easy to write invites.
+func TestBoardThemeAnswersTheSchemeTheReaderChose(t *testing.T) {
+	theme := string(boardTheme(core.DisplaySettings{PrimaryColor: "#2457d6"}))
+
+	// Held off a reader who asked for light, whatever their system says.
+	if !strings.Contains(theme, `@media (prefers-color-scheme: dark) { :root:not([data-scheme="light"]) {`) {
+		t.Errorf("the override's system-dark block does not stand aside for a reader who chose light:\n%s", theme)
+	}
+	// And applied to one who asked for dark on a system that did not.
+	if !strings.Contains(theme, `:root[data-scheme="dark"] {`) {
+		t.Errorf("the override never answers a reader who chose dark:\n%s", theme)
+	}
+	// The two dark statements are the same palette, for the reason the
+	// stylesheet's two are.
+	system := declarationsIn(t, theme, `:root:not([data-scheme="light"])`)
+	chosen := declarationsIn(t, theme, `:root[data-scheme="dark"]`)
+	if len(system) == 0 {
+		t.Fatal("the override's dark block declares nothing")
+	}
+	for property, value := range system {
+		if other := chosen[property]; other != value {
+			t.Errorf("the override says %s is %s by system and %s by choice", property, value, other)
+		}
+	}
+	// And the light block stays unconditional: it is what a reader who chose
+	// light falls back to, and what a light system gets with no choice at all.
+	if !strings.HasPrefix(theme, ":root { --wb-primary: #2457d6;") {
+		t.Errorf("the override no longer opens with the project's light palette:\n%s", theme)
+	}
+}
+
+// And a project that chose nothing is still served nothing at all, in either
+// scheme — the stylesheet's own defaults are the whole answer.
+func TestBoardThemeServesNoDarkReadingForAnUnconfiguredProject(t *testing.T) {
+	if theme := boardTheme(core.DisplaySettings{}); theme != "" {
+		t.Errorf("an unconfigured project is served %q", theme)
+	}
+}
+
+func declaredValue(t *testing.T, block, property string) string {
+	t.Helper()
+	_, after, found := strings.Cut(block, property+": ")
+	if !found {
+		t.Fatalf("%s is not declared in %q", property, block)
+	}
+	value, _, _ := strings.Cut(after, ";")
+	return value
 }
 
 // expectedLegacyMentions is how many times a legacy literal may still appear in
@@ -260,9 +476,14 @@ const priorityLowBlue = "#2457d6"
 func TestHandlerStylesheetKeepsThePriorityTriadOffTheProjectsAccent(t *testing.T) {
 	body := displayBoardPage(t, core.DisplaySettings{PrimaryColor: "#b42318"}, "workbook")
 
-	const rule = ".priority--low { color: " + priorityLowBlue + "; }"
+	const rule = ".priority--low { color: var(--wb-priority-low); }"
 	if !strings.Contains(body, rule) {
 		t.Errorf("the stylesheet no longer carries %q, so a red-ish accent makes \"low\" read as \"high\"", rule)
+	}
+	// And the property it reads is still this blue, rather than a second name
+	// for the accent — which is the whole of the claim.
+	if !strings.Contains(body, "--wb-priority-low: "+priorityLowBlue+";") {
+		t.Errorf("--wb-priority-low is no longer declared as %s", priorityLowBlue)
 	}
 	// The other two are held off the accent for the same reason, and are here so
 	// the triad is asserted as a triad. They read scheme tokens rather than
