@@ -463,8 +463,15 @@ func boardTheme(settings core.DisplaySettings) template.CSS {
 	dark = append(dark, schemeDeclarations(settings.PrimaryColor, darkPrimaryVariants)...)
 	dark = append(dark, schemeDeclarations(settings.TextColor, darkTextVariants)...)
 
+	// The same two selectors the stylesheet states its own dark palette in, and
+	// for the same reason. A reader who chose light has to beat their system's
+	// dark, and one who chose dark has to beat a system that did not. An
+	// override written against a bare `:root` inside the media query wins over
+	// the stylesheet in exactly the case the reader asked it not to, and the
+	// board comes out with light neutrals under a dark accent.
 	return template.CSS(":root { " + strings.Join(declarations, " ") + " }" +
-		" @media (prefers-color-scheme: dark) { :root { " + strings.Join(dark, " ") + " } }")
+		` @media (prefers-color-scheme: dark) { :root:not([data-scheme="light"]) { ` + strings.Join(dark, " ") + " } }" +
+		` :root[data-scheme="dark"] { ` + strings.Join(dark, " ") + " }")
 }
 
 // schemeDeclarations is themeDeclarations for a scheme's variants, and refuses

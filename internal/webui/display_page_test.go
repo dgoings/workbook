@@ -258,6 +258,69 @@ func TestHandlerStylesheetGivesEveryPalettePropertyADarkReading(t *testing.T) {
 	}
 }
 
+// The two statements of the dark palette agree, property for property.
+//
+// CSS cannot share a declaration block across a media boundary, so the palette
+// is written twice: once for a reader whose system asks for dark, and once for
+// a reader who asked for it outright. A copy is exactly the thing that drifts —
+// somebody adds a property to the block they are looking at, the other keeps
+// the light value, and the board is correct in one direction and wrong in the
+// other for whoever chose the scheme by hand rather than by system.
+//
+// Both are generated from the same tables, and this is what makes that a fact
+// rather than an intention.
+func TestHandlerStylesheetStatesBothDarkSchemesIdentically(t *testing.T) {
+	body := displayBoardPage(t, core.DisplaySettings{}, "workbook")
+
+	system := declarationsIn(t, darkSchemeBlock(t, body), `:root:not([data-scheme="light"])`)
+	chosen := declarationsIn(t, body, `:root[data-scheme="dark"]`)
+
+	if len(system) == 0 {
+		t.Fatal("the system dark block declares nothing")
+	}
+	if len(system) != len(chosen) {
+		t.Errorf("the two dark schemes declare %d and %d properties", len(system), len(chosen))
+	}
+	for property, value := range system {
+		switch other, declared := chosen[property]; {
+		case !declared:
+			t.Errorf("a reader who chose dark is never told %s", property)
+		case other != value:
+			t.Errorf("%s is %s by system and %s by choice", property, value, other)
+		}
+	}
+	for property := range chosen {
+		if _, declared := system[property]; !declared {
+			t.Errorf("%s is declared for a chosen dark scheme but not for a system one", property)
+		}
+	}
+}
+
+// declarationsIn reads the properties one rule sets, given the selector that
+// opens it.
+func declarationsIn(t *testing.T, body, selector string) map[string]string {
+	t.Helper()
+	opening := selector + " {"
+	start := strings.Index(body, opening)
+	if start < 0 {
+		t.Fatalf("the stylesheet has no rule for %s", selector)
+	}
+	rest := body[start+len(opening):]
+	end := strings.Index(rest, "}")
+	if end < 0 {
+		t.Fatalf("the rule for %s is never closed", selector)
+	}
+	declarations := map[string]string{}
+	for _, declaration := range strings.Split(rest[:end], ";") {
+		property, value, found := strings.Cut(declaration, ":")
+		if !found {
+			continue
+		}
+		declarations[strings.TrimSpace(property)] = strings.TrimSpace(value)
+	}
+	return declarations
+}
+
 // darkSchemeBlock is the stylesheet's `prefers-color-scheme: dark` block.
 func darkSchemeBlock(t *testing.T, body string) string {
 	t.Helper()
@@ -317,6 +380,46 @@ func TestBoardThemeServesADarkReadingOfAChosenColor(t *testing.T) {
 	// That is the property split the palette carries for exactly this.
 	if !strings.Contains(darkSchemeBlock(t, displayBoardPage(t, core.DisplaySettings{}, "workbook")), "--wb-on-accent: #0f141c;") {
 		t.Error("dark mode keeps white ink on a light accent fill")
+	}
+}
+
+// A themed project's override answers the reader's chosen scheme, not only
+// their system's.
+//
+// This is a regression test for a board that came out half converted. The
+// stylesheet holds its dark palette off a reader who chose light, but the
+// override served after it was written against a bare `:root` inside the media
+// query — so on a dark system a reader who asked for light got light neutrals
+// with the project's dark accent still sitting on them: a pale page with a
+// near-black panel in the middle of it. Nothing failed; it just looked wrong,
+// which is exactly the kind of defect a selector this easy to write invites.
+func TestBoardThemeAnswersTheSchemeTheReaderChose(t *testing.T) {
+	theme := string(boardTheme(core.DisplaySettings{PrimaryColor: "#2457d6"}))
+
+	// Held off a reader who asked for light, whatever their system says.
+	if !strings.Contains(theme, `@media (prefers-color-scheme: dark) { :root:not([data-scheme="light"]) {`) {
+		t.Errorf("the override's system-dark block does not stand aside for a reader who chose light:\n%s", theme)
+	}
+	// And applied to one who asked for dark on a system that did not.
+	if !strings.Contains(theme, `:root[data-scheme="dark"] {`) {
+		t.Errorf("the override never answers a reader who chose dark:\n%s", theme)
+	}
+	// The two dark statements are the same palette, for the reason the
+	// stylesheet's two are.
+	system := declarationsIn(t, theme, `:root:not([data-scheme="light"])`)
+	chosen := declarationsIn(t, theme, `:root[data-scheme="dark"]`)
+	if len(system) == 0 {
+		t.Fatal("the override's dark block declares nothing")
+	}
+	for property, value := range system {
+		if other := chosen[property]; other != value {
+			t.Errorf("the override says %s is %s by system and %s by choice", property, value, other)
+		}
+	}
+	// And the light block stays unconditional: it is what a reader who chose
+	// light falls back to, and what a light system gets with no choice at all.
+	if !strings.HasPrefix(theme, ":root { --wb-primary: #2457d6;") {
+		t.Errorf("the override no longer opens with the project's light palette:\n%s", theme)
 	}
 }
 

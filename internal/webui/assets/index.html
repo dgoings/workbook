@@ -877,19 +877,24 @@
       .attachment { grid-template-columns: minmax(0, 1fr); }
       .attachment__remove { grid-column: 1; grid-row: auto; justify-self: start; margin-top: .35rem; }
     }
-    /* Dark, for a reader whose system asks for it.
+    /* Dark, stated twice, and the duplication is the point of the tables.
 
-       Every property above is restated here and nothing else is: the board's
-       sizes, radii and layout are the same board, and a scheme that moved one
-       of them would be a second design to maintain rather than a second
-       palette. That is also what makes this block reviewable — it is exactly
-       the palette, in the same order.
+       CSS cannot share one declaration block across a media boundary, and a
+       reader who has chosen a scheme has to beat their system's. So the
+       palette is written once for `prefers-color-scheme: dark` — held off by
+       a reader who asked for light — and once for a reader who asked for
+       dark outright, whatever their system says.
 
-       color-scheme tells the browser to draw the form controls, scrollbars and
-       focus rings it owns in dark too. Without it the page goes dark around a
-       set of white native widgets. */
+       Both are generated from the same tables in internal/webui/display.go,
+       and a test asserts they declare the same properties at the same
+       values, so the copy cannot drift from the original. Writing the second
+       one by hand is precisely the failure this palette exists to prevent.
+
+       color-scheme tells the browser to draw the form controls, scrollbars
+       and focus rings it owns in dark too. Without it the page goes dark
+       around a set of white native widgets. */
     @media (prefers-color-scheme: dark) {
-      :root {
+      :root:not([data-scheme="light"]) {
         color-scheme: dark;
         --wb-surface: #161c26;
         --wb-on-accent: #0f141c;
@@ -928,10 +933,6 @@
         --wb-success-ink: #7fc79b;
         --wb-success-surface: #12241a;
         --wb-priority-low: #6f9bf5;
-
-        /* The two families internal/webui/display.go derives, as a project that
-           has chosen no colour receives them. One that has chosen one is served
-           its own dark block after this stylesheet — see boardTheme. */
         --wb-primary: #5c8bff;
         --wb-primary-hover: #8aabff;
         --wb-primary-edge: #3669e8;
@@ -952,19 +953,76 @@
         --wb-text-shadow-faint: rgba(0,0,0,.30);
       }
 
-      /* Three places where the colour alone does not carry the role.
-
-         The switch knob is the part you are meant to see against the track, and
-         'the raised one' is not a colour — on white it is the whitest thing on
-         the control, and on black it has to become the lightest. Mapping its
-         surface the way every other surface is mapped lands it a few units from
-         the track and the control stops reading as a switch. Checked, the track
-         carries the accent, which this scheme has lifted to a light colour, so
-         the knob has to go dark to stay visible on it. */
-      .nav-switch__knob { background: var(--wb-ink); }
-      .nav-switch[aria-checked="true"] .nav-switch__knob { background: var(--wb-ground); }
-      .nav-switch[aria-disabled="true"] .nav-switch__knob { background: var(--wb-ink-muted); }
+      :root:not([data-scheme="light"]) .nav-switch__knob { background: var(--wb-ink); }
+      :root:not([data-scheme="light"])[aria-checked="true"] .nav-switch__knob,
+      :root:not([data-scheme="light"]) .nav-switch[aria-checked="true"] .nav-switch__knob { background: var(--wb-ground); }
+      :root:not([data-scheme="light"]) .nav-switch[aria-disabled="true"] .nav-switch__knob { background: var(--wb-ink-muted); }
     }
+
+    /* And for a reader who asked for dark on a system that is not. */
+    :root[data-scheme="dark"] {
+      color-scheme: dark;
+      --wb-surface: #161c26;
+      --wb-on-accent: #0f141c;
+      --wb-surface-1: #151b24;
+      --wb-surface-2: #151b24;
+      --wb-surface-3: #141a22;
+      --wb-surface-4: #141a22;
+      --wb-surface-5: #131820;
+      --wb-surface-6: #131820;
+      --wb-ground: #0f141c;
+      --wb-column-ground: rgba(22,28,38,.36);
+      --wb-column-ground-deleted: rgba(15,20,28,.5);
+      --wb-border: #2f3a4a;
+      --wb-border-strong: #3d4b5f;
+      --wb-border-firm: #3d4b5f;
+      --wb-border-soft: #2f3a4a;
+      --wb-border-muted: #232c39;
+      --wb-border-underline: #3d4b5f;
+      --wb-border-quiet: #3d4b5f;
+      --wb-ink: #c2ccdc;
+      --wb-ink-muted: #8593ab;
+      --wb-ink-soft: #9aa7bd;
+      --wb-ink-faint: #9aa7bd;
+      --wb-ink-dim: #8593ab;
+      --wb-ink-quiet: #8593ab;
+      --wb-danger: #f0806c;
+      --wb-danger-ink: #f0806c;
+      --wb-danger-strong: #e08a7c;
+      --wb-danger-surface: #2a1614;
+      --wb-danger-surface-alt: #2a1614;
+      --wb-danger-glow: rgba(240,128,108,.32);
+      --wb-warning: #e0a45c;
+      --wb-warning-ink: #e8c07a;
+      --wb-warning-surface: #241d12;
+      --wb-warning-border: #5a4520;
+      --wb-success-ink: #7fc79b;
+      --wb-success-surface: #12241a;
+      --wb-priority-low: #6f9bf5;
+      --wb-primary: #5c8bff;
+      --wb-primary-hover: #8aabff;
+      --wb-primary-edge: #3669e8;
+      --wb-primary-glow: rgba(92,139,255,.28);
+      --wb-primary-glow-strong: rgba(92,139,255,.40);
+      --wb-primary-tint-1: #141f3b;
+      --wb-primary-tint-2: #131d37;
+      --wb-primary-tint-3: #121c32;
+      --wb-primary-tint-4: #121a2e;
+      --wb-primary-chip: #28375d;
+      --wb-primary-muted: #33487a;
+      --wb-primary-ink: #7c99de;
+      --wb-hairline: #282f3e;
+      --wb-text: #dee3ed;
+      --wb-text-shadow-strong: rgba(0,0,0,.55);
+      --wb-text-shadow: rgba(0,0,0,.45);
+      --wb-text-shadow-soft: rgba(0,0,0,.35);
+      --wb-text-shadow-faint: rgba(0,0,0,.30);
+    }
+
+    :root[data-scheme="dark"] .nav-switch__knob { background: var(--wb-ink); }
+    :root[data-scheme="dark"][aria-checked="true"] .nav-switch__knob,
+    :root[data-scheme="dark"] .nav-switch[aria-checked="true"] .nav-switch__knob { background: var(--wb-ground); }
+    :root[data-scheme="dark"] .nav-switch[aria-disabled="true"] .nav-switch__knob { background: var(--wb-ink-muted); }
   </style>
   <!-- The colors this project chose, as an override composed by the server. It
        is a second stylesheet rather than values interpolated into the one above
@@ -1473,6 +1531,53 @@
       // refused outright — a Safari private window throws on the first read — and
       // a board that cannot remember the choice still has to draw, so every
       // access is guarded and an unreadable preference simply means the default.
+      // Which of the board's two palettes this reader sees.
+      //
+      // A browser preference, like the descriptions setting below, and for the
+      // same reason stated more strongly: a colour scheme answers what the room
+      // someone is sitting in needs, not what the project is. It is offered on
+      // the configuration route because that is where the board's appearance is
+      // decided and where a reader goes looking for it — but unlike the
+      // settings above it on that page, it is never published to the
+      // repository, so one reader working at night does not darken the board
+      // for everybody who fetches.
+      //
+      // The empty string is the third state and the default: follow the
+      // system. It is the absence of a choice rather than a word of its own,
+      // which is what lets the stylesheet's own media query answer for it.
+      const colorSchemePreferenceKey = "workbook.board.scheme";
+      const colorSchemes = ["", "light", "dark"];
+      function rememberedColorScheme() {
+        try {
+          const stored = window.localStorage ? window.localStorage.getItem(colorSchemePreferenceKey) : null;
+          return colorSchemes.includes(stored) ? stored : "";
+        } catch (_) {
+          return "";
+        }
+      }
+      function rememberColorScheme(value) {
+        try {
+          if (!window.localStorage) return;
+          if (value) window.localStorage.setItem(colorSchemePreferenceKey, value);
+          else window.localStorage.removeItem(colorSchemePreferenceKey);
+        } catch (_) {
+        }
+      }
+      // The attribute the stylesheet reads. Removed rather than emptied for the
+      // system default, so `:root:not([data-scheme="light"])` is answered by the
+      // absence of the attribute rather than by a value that has to be spelled.
+      // Guarded like every other environment capability here: the root element
+      // is the one node this function needs and the one it cannot assume, and a
+      // board that cannot reach it still has to draw. Without a choice applied
+      // the stylesheet's media query is already the right answer.
+      function applyColorScheme(value) {
+        const root = document.documentElement;
+        if (!root || !root.dataset) return;
+        if (value) root.dataset.scheme = value;
+        else delete root.dataset.scheme;
+      }
+      applyColorScheme(rememberedColorScheme());
+
       const descriptionPreferenceKey = "workbook.board.descriptions";
       let descriptionsShown = false;
       function rememberedDescriptionPreference() {
@@ -7568,6 +7673,10 @@
           displayPanel.hidden = false;
           section.append(displayPanel);
         }
+        // Appearance is this reader's, and gets a heading of its own rather
+        // than a place inside the panel above, whose Save publishes.
+        section.append(sectionHeading("appearance-title", "Appearance"));
+        section.append(colorSchemeSection());
         // A change the reader left in flight is still in flight, and the render
         // below will draw its list with every control disabled. Leaving cleared
         // what the last visit had to say, so the reason is said again here
@@ -7578,6 +7687,45 @@
         }
         if (displayBusy) displayReport("", displaySendingMessage);
         return section;
+      }
+      // The scheme control, built the way the panel builds its own fields so it
+      // reads as part of the page rather than as something bolted beside it.
+      //
+      // It acts on change rather than on a Save, and that is the honest shape:
+      // there is nothing to send, nothing to conflict with, and no head to
+      // compose against. The note says so, because a control sitting under a
+      // form whose button publishes to every clone would otherwise look like it
+      // does the same.
+      function colorSchemeSection() {
+        const wrapper = document.createElement("div");
+        wrapper.className = "admin";
+        const note = document.createElement("p");
+        note.className = "admin__note";
+        note.append(document.createTextNode("Which palette this board is drawn in. "));
+        const emphasis = document.createElement("strong");
+        text(emphasis, "Remembered in this browser only");
+        note.append(emphasis);
+        note.append(document.createTextNode(
+          " — unlike the settings above, it is not recorded in the project's configuration, " +
+          "so nobody else sees it. Following the system leaves it to your operating system's " +
+          "own light or dark setting, which is what an unconfigured board already does."
+        ));
+        const select = document.createElement("select");
+        select.id = "board-color-scheme";
+        for (const [value, caption] of [["", "Follow the system"], ["light", "Light"], ["dark", "Dark"]]) {
+          const option = document.createElement("option");
+          option.value = value;
+          text(option, caption);
+          select.append(option);
+        }
+        select.value = rememberedColorScheme();
+        select.addEventListener("change", () => {
+          const chosen = colorSchemes.includes(select.value) ? select.value : "";
+          rememberColorScheme(chosen);
+          applyColorScheme(chosen);
+        });
+        wrapper.append(note, panelField("Color scheme", select));
+        return wrapper;
       }
       function sectionHeading(id, caption) {
         const heading = document.createElement("h3");
