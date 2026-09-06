@@ -303,6 +303,10 @@ var textThemeTokens = []themeToken{
 type schemeToken struct {
 	property string
 	legacy   string
+	// dark is what this property becomes where the reader asked for a dark
+	// scheme. Stated rather than derived: these are not a project's colours to
+	// choose, so there is no chosen colour to derive them from.
+	dark string
 }
 
 // The neutral surfaces, the rules drawn on them, the ink written on them, and
@@ -315,51 +319,118 @@ type schemeToken struct {
 // are separate properties that happen to agree today. #8496b0 is a quiet rule
 // in one place and quiet ink in another, on the same terms.
 var schemeTokens = []schemeToken{
-	{"--wb-surface", "#fff"},
-	{"--wb-on-accent", "#fff"},
-	{"--wb-surface-1", "#fbfcfe"},
-	{"--wb-surface-2", "#fafbfd"},
-	{"--wb-surface-3", "#f6f8fc"},
-	{"--wb-surface-4", "#f2f5f9"},
-	{"--wb-surface-5", "#f1f4f8"},
-	{"--wb-surface-6", "#eef2f8"},
-	{"--wb-ground", "#e9eef5"},
-	{"--wb-column-ground", "rgba(255,255,255,.36)"},
-	{"--wb-column-ground-deleted", "rgba(232,237,244,.5)"},
+	{"--wb-surface", "#fff", "#161c26"},
+	{"--wb-on-accent", "#fff", "#0f141c"},
+	{"--wb-surface-1", "#fbfcfe", "#151b24"},
+	{"--wb-surface-2", "#fafbfd", "#151b24"},
+	{"--wb-surface-3", "#f6f8fc", "#141a22"},
+	{"--wb-surface-4", "#f2f5f9", "#141a22"},
+	{"--wb-surface-5", "#f1f4f8", "#131820"},
+	{"--wb-surface-6", "#eef2f8", "#131820"},
+	{"--wb-ground", "#e9eef5", "#0f141c"},
+	{"--wb-column-ground", "rgba(255,255,255,.36)", "rgba(22,28,38,.36)"},
+	{"--wb-column-ground-deleted", "rgba(232,237,244,.5)", "rgba(15,20,28,.5)"},
 
-	{"--wb-border", "#b9c6d8"},
-	{"--wb-border-strong", "#9eafc5"},
-	{"--wb-border-firm", "#aab8cc"},
-	{"--wb-border-soft", "#cbd5e2"},
-	{"--wb-border-muted", "#e1e7f0"},
-	{"--wb-border-underline", "#a9b7ca"},
-	{"--wb-border-quiet", "#8496b0"},
+	{"--wb-border", "#b9c6d8", "#2f3a4a"},
+	{"--wb-border-strong", "#9eafc5", "#3d4b5f"},
+	{"--wb-border-firm", "#aab8cc", "#3d4b5f"},
+	{"--wb-border-soft", "#cbd5e2", "#2f3a4a"},
+	{"--wb-border-muted", "#e1e7f0", "#232c39"},
+	{"--wb-border-underline", "#a9b7ca", "#3d4b5f"},
+	{"--wb-border-quiet", "#8496b0", "#3d4b5f"},
 
-	{"--wb-ink", "#34425a"},
-	{"--wb-ink-muted", "#56647a"},
-	{"--wb-ink-soft", "#4e5d73"},
-	{"--wb-ink-faint", "#5f6c85"},
-	{"--wb-ink-dim", "#526075"},
-	{"--wb-ink-quiet", "#8496b0"},
+	{"--wb-ink", "#34425a", "#c2ccdc"},
+	{"--wb-ink-muted", "#56647a", "#8593ab"},
+	{"--wb-ink-soft", "#4e5d73", "#9aa7bd"},
+	{"--wb-ink-faint", "#5f6c85", "#9aa7bd"},
+	{"--wb-ink-dim", "#526075", "#8593ab"},
+	{"--wb-ink-quiet", "#8496b0", "#8593ab"},
 
-	{"--wb-danger", "#b42318"},
-	{"--wb-danger-ink", "#9c2f25"},
-	{"--wb-danger-strong", "#8f1d1d"},
-	{"--wb-danger-surface", "#fdecea"},
+	{"--wb-danger", "#b42318", "#f0806c"},
+	{"--wb-danger-ink", "#9c2f25", "#f0806c"},
+	{"--wb-danger-strong", "#8f1d1d", "#e08a7c"},
+	{"--wb-danger-surface", "#fdecea", "#2a1614"},
 	// One unit of blue from --wb-danger-surface, which is much more likely to
 	// be a slip than a decision. It is kept as its own property because
 	// collapsing the two would change what the board renders, and this change
 	// deliberately changes nothing.
-	{"--wb-danger-surface-alt", "#fdeceb"},
-	{"--wb-danger-glow", "rgba(180,35,24,.28)"},
+	{"--wb-danger-surface-alt", "#fdeceb", "#2a1614"},
+	{"--wb-danger-glow", "rgba(180,35,24,.28)", "rgba(240,128,108,.32)"},
 
-	{"--wb-warning", "#b45309"},
-	{"--wb-warning-ink", "#7c3b08"},
-	{"--wb-warning-surface", "#fff6e8"},
-	{"--wb-warning-border", "#e0b483"},
+	{"--wb-warning", "#b45309", "#e0a45c"},
+	{"--wb-warning-ink", "#7c3b08", "#e8c07a"},
+	{"--wb-warning-surface", "#fff6e8", "#241d12"},
+	{"--wb-warning-border", "#e0b483", "#5a4520"},
 
-	{"--wb-success-ink", "#14663c"},
-	{"--wb-success-surface", "#e8f4ec"},
+	{"--wb-success-ink", "#14663c", "#7fc79b"},
+	{"--wb-success-surface", "#e8f4ec", "#12241a"},
+
+	// The third of the priority triad. It was the one literal the stylesheet
+	// deliberately kept, because it must not follow a project's accent — and it
+	// still does not: a scheme property is not derived from one. What it could
+	// not go on doing is staying a mid blue on a near-black card, which is the
+	// one thing a colour scheme has to be able to say about it.
+	{"--wb-priority-low", "#2457d6", "#6f9bf5"},
+}
+
+// schemeVariant is what one derived property becomes under a colour scheme
+// other than the one the stylesheet is written in.
+//
+// It is a type of its own rather than two more fields on themeToken because the
+// two answer different questions. themeToken says what a project's colour makes
+// of a property; this says what the *scheme* makes of it, and the scheme is not
+// something a project chooses. Keeping them apart also keeps the light families
+// exactly as they were, which is worth more than the shared struct: they are the
+// board as it renders today.
+type schemeVariant struct {
+	property string
+	// dark is the literal the stylesheet declares for a project that has chosen
+	// no colour of its own.
+	dark string
+	// derive answers what a configured color makes of this property in dark.
+	derive func(themeColor) string
+}
+
+// The accent family, lifted.
+//
+// A blue that reads on white does not read on near-black: #2457d6 sits at 49%
+// lightness and disappears into a dark card. So every solid step states its
+// lightness outright, in the band a dark ground leaves legible, and keeps the
+// hue the project chose — a themed board stays itself in dark mode rather than
+// being flattened to one generic blue.
+//
+// The tints invert their role rather than their value. On white they are pale
+// surfaces a shade off the page; on black they are dark surfaces a shade off it,
+// which is the same relationship rendered in the other direction.
+var darkPrimaryVariants = []schemeVariant{
+	{"--wb-primary", "#5c8bff", func(color themeColor) string { return color.toned(1, .68) }},
+	{"--wb-primary-hover", "#8aabff", func(color themeColor) string { return color.toned(1, .77) }},
+	{"--wb-primary-edge", "#3669e8", func(color themeColor) string { return color.toned(1, .56) }},
+	{"--wb-primary-glow", "rgba(92,139,255,.28)", func(color themeColor) string { return color.tonedAlpha(1, .68, ".28") }},
+	{"--wb-primary-glow-strong", "rgba(92,139,255,.40)", func(color themeColor) string { return color.tonedAlpha(1, .68, ".40") }},
+	{"--wb-primary-tint-1", "#141f3b", func(color themeColor) string { return color.toned(.22, .155) }},
+	{"--wb-primary-tint-2", "#131d37", func(color themeColor) string { return color.toned(.20, .145) }},
+	{"--wb-primary-tint-3", "#121c32", func(color themeColor) string { return color.toned(.18, .135) }},
+	{"--wb-primary-tint-4", "#121a2e", func(color themeColor) string { return color.toned(.16, .125) }},
+	{"--wb-primary-chip", "#28375d", func(color themeColor) string { return color.toned(.30, .26) }},
+	{"--wb-primary-muted", "#33487a", func(color themeColor) string { return color.toned(.40, .34) }},
+	{"--wb-primary-ink", "#7c99de", func(color themeColor) string { return color.toned(.55, .68) }},
+	{"--wb-hairline", "#282f3e", func(color themeColor) string { return color.toned(.118, .20) }},
+}
+
+// The ink family, lifted — and its shadows are not derived at all.
+//
+// On white, a shadow is the ink at a low opacity, because what a page casts is
+// its own darkness. On a dark ground the darkness is already there and a shadow
+// made of the ink would be a light smear; what separates a raised surface from
+// the one behind it is black. So the four shadows are stated rather than
+// derived, and stay black under prose of any colour.
+var darkTextVariants = []schemeVariant{
+	{"--wb-text", "#dee3ed", func(color themeColor) string { return color.toned(.55, .90) }},
+	{"--wb-text-shadow-strong", "rgba(0,0,0,.55)", func(themeColor) string { return "rgba(0,0,0,.55)" }},
+	{"--wb-text-shadow", "rgba(0,0,0,.45)", func(themeColor) string { return "rgba(0,0,0,.45)" }},
+	{"--wb-text-shadow-soft", "rgba(0,0,0,.35)", func(themeColor) string { return "rgba(0,0,0,.35)" }},
+	{"--wb-text-shadow-faint", "rgba(0,0,0,.30)", func(themeColor) string { return "rgba(0,0,0,.30)" }},
 }
 
 // boardTheme renders the `:root` block a project's chosen colors ask for, and
@@ -380,7 +451,35 @@ func boardTheme(settings core.DisplaySettings) template.CSS {
 	if len(declarations) == 0 {
 		return ""
 	}
-	return template.CSS(":root { " + strings.Join(declarations, " ") + " }")
+
+	// And the same families again for a reader in dark mode.
+	//
+	// This block is not optional garnish. The stylesheet states its own dark
+	// palette in a media query, but this override is served in a later <style>
+	// element, and a media query buys no specificity — so a project that chose a
+	// colour would otherwise have its light accent win in dark mode, which is
+	// the one place that accent cannot be read.
+	dark := make([]string, 0, len(darkPrimaryVariants)+len(darkTextVariants))
+	dark = append(dark, schemeDeclarations(settings.PrimaryColor, darkPrimaryVariants)...)
+	dark = append(dark, schemeDeclarations(settings.TextColor, darkTextVariants)...)
+
+	return template.CSS(":root { " + strings.Join(declarations, " ") + " }" +
+		" @media (prefers-color-scheme: dark) { :root { " + strings.Join(dark, " ") + " } }")
+}
+
+// schemeDeclarations is themeDeclarations for a scheme's variants, and refuses
+// the same colour for the same reason: a value core could not validate
+// contributes nothing, and the family keeps the defaults the stylesheet states.
+func schemeDeclarations(value string, variants []schemeVariant) []string {
+	color, parsed := parseThemeColor(value)
+	if !parsed {
+		return nil
+	}
+	declarations := make([]string, 0, len(variants))
+	for _, variant := range variants {
+		declarations = append(declarations, variant.property+": "+variant.derive(color)+";")
+	}
+	return declarations
 }
 
 func themeDeclarations(value string, tokens []themeToken) []string {
@@ -479,6 +578,15 @@ func (color themeColor) alpha(opacity string) string {
 	return fmt.Sprintf("rgba(%d,%d,%d,%s)", color.red, color.green, color.blue, opacity)
 }
 
+// tonedAlpha is toned() written as a ring rather than a fill: the colour a dark
+// step lifts to, at an opacity. alpha() cannot answer this — it rings in the
+// colour as chosen, which on a dark ground is the one lightness that does not
+// show.
+func (color themeColor) tonedAlpha(chroma, light float64, opacity string) string {
+	red, green, blue := renderChannels(color.hue, clampChroma(color.chroma*chroma, light), light)
+	return fmt.Sprintf("rgba(%d,%d,%d,%s)", red, green, blue, opacity)
+}
+
 // scaled moves both chroma and lightness by a factor, which is how the two
 // darker steps of a filled control stay in proportion to the color they darken:
 // a pale accent's hover has to be pale enough to still read as the same button.
@@ -498,7 +606,7 @@ func (color themeColor) toned(chroma, light float64) string {
 	return renderColor(color.hue, color.chroma*chroma, light)
 }
 
-func renderColor(hue, chroma, light float64) string {
+func renderChannels(hue, chroma, light float64) (int, int, int) {
 	// The lightness is brought into range before anything is asked of it, which
 	// is what makes this function total rather than conditionally correct. No
 	// step asks for one outside it today — every scaled factor is below one and
@@ -526,7 +634,13 @@ func renderColor(hue, chroma, light float64) string {
 		red, green, blue = chroma, 0, middle
 	}
 	base := light - chroma/2
-	return fmt.Sprintf("#%02x%02x%02x", channelByte(red+base), channelByte(green+base), channelByte(blue+base))
+	return channelByte(red + base), channelByte(green + base), channelByte(blue + base)
+}
+
+// renderColor is renderChannels written the way a solid declaration takes it.
+func renderColor(hue, chroma, light float64) string {
+	red, green, blue := renderChannels(hue, chroma, light)
+	return fmt.Sprintf("#%02x%02x%02x", red, green, blue)
 }
 
 // clampChroma bounds a step's chroma by the room its lightness has for one, and

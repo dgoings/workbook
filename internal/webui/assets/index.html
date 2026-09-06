@@ -81,6 +81,7 @@
       --wb-warning-border: #e0b483;
       --wb-success-ink: #14663c;
       --wb-success-surface: #e8f4ec;
+      --wb-priority-low: #2457d6;
     }
     /* The narrowest a status column is allowed to be drawn. Six columns sharing
        whatever the window happens to be gave a 1280-wide browser 12rem of card:
@@ -351,7 +352,7 @@
     .copy-status:empty { display: none; }
     .copy-status[data-kind="error"] { color: var(--wb-danger-strong); }
     .priority { flex: 0 0 auto; font-size: .64rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
-    .priority--high { color: var(--wb-danger); } .priority--medium { color: var(--wb-warning); } .priority--low { color: #2457d6; }
+    .priority--high { color: var(--wb-danger); } .priority--medium { color: var(--wb-warning); } .priority--low { color: var(--wb-priority-low); }
     .task-card h3 { margin: .55rem 0 .3rem; font-size: .9rem; line-height: 1.24; overflow-wrap: anywhere; }
     /* A card title is a heading, not a link inside a sentence: every card is one
        link and the whole card is focusable, so nothing here depends on an
@@ -875,6 +876,94 @@
          after the rule it overrides, which is the only place it wins. */
       .attachment { grid-template-columns: minmax(0, 1fr); }
       .attachment__remove { grid-column: 1; grid-row: auto; justify-self: start; margin-top: .35rem; }
+    }
+    /* Dark, for a reader whose system asks for it.
+
+       Every property above is restated here and nothing else is: the board's
+       sizes, radii and layout are the same board, and a scheme that moved one
+       of them would be a second design to maintain rather than a second
+       palette. That is also what makes this block reviewable — it is exactly
+       the palette, in the same order.
+
+       color-scheme tells the browser to draw the form controls, scrollbars and
+       focus rings it owns in dark too. Without it the page goes dark around a
+       set of white native widgets. */
+    @media (prefers-color-scheme: dark) {
+      :root {
+        color-scheme: dark;
+        --wb-surface: #161c26;
+        --wb-on-accent: #0f141c;
+        --wb-surface-1: #151b24;
+        --wb-surface-2: #151b24;
+        --wb-surface-3: #141a22;
+        --wb-surface-4: #141a22;
+        --wb-surface-5: #131820;
+        --wb-surface-6: #131820;
+        --wb-ground: #0f141c;
+        --wb-column-ground: rgba(22,28,38,.36);
+        --wb-column-ground-deleted: rgba(15,20,28,.5);
+        --wb-border: #2f3a4a;
+        --wb-border-strong: #3d4b5f;
+        --wb-border-firm: #3d4b5f;
+        --wb-border-soft: #2f3a4a;
+        --wb-border-muted: #232c39;
+        --wb-border-underline: #3d4b5f;
+        --wb-border-quiet: #3d4b5f;
+        --wb-ink: #c2ccdc;
+        --wb-ink-muted: #8593ab;
+        --wb-ink-soft: #9aa7bd;
+        --wb-ink-faint: #9aa7bd;
+        --wb-ink-dim: #8593ab;
+        --wb-ink-quiet: #8593ab;
+        --wb-danger: #f0806c;
+        --wb-danger-ink: #f0806c;
+        --wb-danger-strong: #e08a7c;
+        --wb-danger-surface: #2a1614;
+        --wb-danger-surface-alt: #2a1614;
+        --wb-danger-glow: rgba(240,128,108,.32);
+        --wb-warning: #e0a45c;
+        --wb-warning-ink: #e8c07a;
+        --wb-warning-surface: #241d12;
+        --wb-warning-border: #5a4520;
+        --wb-success-ink: #7fc79b;
+        --wb-success-surface: #12241a;
+        --wb-priority-low: #6f9bf5;
+
+        /* The two families internal/webui/display.go derives, as a project that
+           has chosen no colour receives them. One that has chosen one is served
+           its own dark block after this stylesheet — see boardTheme. */
+        --wb-primary: #5c8bff;
+        --wb-primary-hover: #8aabff;
+        --wb-primary-edge: #3669e8;
+        --wb-primary-glow: rgba(92,139,255,.28);
+        --wb-primary-glow-strong: rgba(92,139,255,.40);
+        --wb-primary-tint-1: #141f3b;
+        --wb-primary-tint-2: #131d37;
+        --wb-primary-tint-3: #121c32;
+        --wb-primary-tint-4: #121a2e;
+        --wb-primary-chip: #28375d;
+        --wb-primary-muted: #33487a;
+        --wb-primary-ink: #7c99de;
+        --wb-hairline: #282f3e;
+        --wb-text: #dee3ed;
+        --wb-text-shadow-strong: rgba(0,0,0,.55);
+        --wb-text-shadow: rgba(0,0,0,.45);
+        --wb-text-shadow-soft: rgba(0,0,0,.35);
+        --wb-text-shadow-faint: rgba(0,0,0,.30);
+      }
+
+      /* Three places where the colour alone does not carry the role.
+
+         The switch knob is the part you are meant to see against the track, and
+         'the raised one' is not a colour — on white it is the whitest thing on
+         the control, and on black it has to become the lightest. Mapping its
+         surface the way every other surface is mapped lands it a few units from
+         the track and the control stops reading as a switch. Checked, the track
+         carries the accent, which this scheme has lifted to a light colour, so
+         the knob has to go dark to stay visible on it. */
+      .nav-switch__knob { background: var(--wb-ink); }
+      .nav-switch[aria-checked="true"] .nav-switch__knob { background: var(--wb-ground); }
+      .nav-switch[aria-disabled="true"] .nav-switch__knob { background: var(--wb-ink-muted); }
     }
   </style>
   <!-- The colors this project chose, as an override composed by the server. It
