@@ -3,6 +3,7 @@ package webui
 import (
 	"context"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -182,6 +183,48 @@ func TestHandlerStylesheetDeclaresTheLegacyPaletteAsItsDefaults(t *testing.T) {
 	}
 }
 
+// The same claim, for the palette no project chooses: every scheme token is
+// declared as the literal the board was drawn in, and that literal is written
+// out nowhere else on the page.
+//
+// A token missing from the stylesheet would render the property unset, which
+// `var()` answers with nothing at all rather than with the old colour — a
+// missing surface is an invisible card, not a slightly wrong one. A literal
+// still written out is the other failure: one control that keeps its light
+// colour when the scheme moves, which is exactly the class of miss this table
+// exists to make impossible.
+//
+// Counted per literal rather than per token, because two of them are declared
+// twice on purpose: see schemeTokens for why #fff and #8496b0 each carry two
+// properties.
+func TestHandlerStylesheetDeclaresTheSchemePaletteAsItsDefaults(t *testing.T) {
+	body := displayBoardPage(t, core.DisplaySettings{}, "workbook")
+
+	declarations := map[string]int{}
+	for _, token := range schemeTokens {
+		declarations[token.legacy]++
+		if declaration := token.property + ": " + token.legacy + ";"; !strings.Contains(body, declaration) {
+			t.Errorf("the stylesheet does not declare %q", declaration)
+		}
+	}
+
+	for literal, declared := range declarations {
+		if got := countColorLiteral(body, literal); got != declared {
+			t.Errorf("the page writes %s out %d times, want %d — once for each property that declares it as its default",
+				literal, got, declared)
+		}
+	}
+}
+
+// countColorLiteral counts a colour literal without counting a longer one that
+// starts with it. `strings.Count` cannot do this here: #fff is a prefix of
+// #fff6e8, so counting it naively finds the warning surface as well as the
+// white one. RE2 has no lookahead, so the boundary is spelled as "not another
+// hex digit, or the end of the page".
+func countColorLiteral(body, literal string) int {
+	return len(regexp.MustCompile(regexp.QuoteMeta(literal)+`([^0-9a-fA-F]|$)`).FindAllStringIndex(body, -1))
+}
+
 // expectedLegacyMentions is how many times a legacy literal may still appear in
 // the served page: once as the property's own default, and — for the accent —
 // once more in `.priority--low`, which keeps a static blue on purpose.
@@ -221,11 +264,15 @@ func TestHandlerStylesheetKeepsThePriorityTriadOffTheProjectsAccent(t *testing.T
 	if !strings.Contains(body, rule) {
 		t.Errorf("the stylesheet no longer carries %q, so a red-ish accent makes \"low\" read as \"high\"", rule)
 	}
-	// The other two are literal for the same reason and have always been; they
-	// are here so the triad is asserted as a triad.
+	// The other two are held off the accent for the same reason, and are here so
+	// the triad is asserted as a triad. They read scheme tokens rather than
+	// literals now, which does not weaken the claim: a scheme token is not
+	// derived from a project's colour either, so a red-ish accent still leaves
+	// all three where they are. This test proves that directly — the accent it
+	// configures is the very red --wb-danger resolves to.
 	for _, sibling := range []string{
-		".priority--high { color: #b42318; }",
-		".priority--medium { color: #b45309; }",
+		".priority--high { color: var(--wb-danger); }",
+		".priority--medium { color: var(--wb-warning); }",
 	} {
 		if !strings.Contains(body, sibling) {
 			t.Errorf("the stylesheet no longer carries %q", sibling)
