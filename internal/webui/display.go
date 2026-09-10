@@ -288,6 +288,101 @@ var textThemeTokens = []themeToken{
 	{"--wb-text-shadow-faint", "rgba(23,32,51,.05)", func(color themeColor) string { return color.alpha(".05") }},
 }
 
+// schemeToken is a colour the board is drawn in that no project chooses.
+//
+// The three families above follow a reader's chosen accent and ink. These do
+// not, and that is the same decision stated from the other side: the neutral
+// greys and the semantic red, amber and green are properties of the colour
+// scheme the board is rendered in, not of the project rendered on it.
+//
+// They carry no derive for that reason. They are declared here anyway, rather
+// than living only in the stylesheet, so the guard that holds the derived
+// families to their defaults can hold these to the same claim — declared once
+// as the default, and written out nowhere else — which is what keeps one
+// control from being missed when the palette next moves.
+type schemeToken struct {
+	property string
+	legacy   string
+}
+
+// The neutral surfaces, the rules drawn on them, the ink written on them, the
+// semantic three, and the priority triad. Surfaces are numbered rather than
+// named because they are one ramp of six near-identical greys, the way the
+// primary tints already are.
+//
+// Three literals appear more than once, because a value that carries two roles
+// has to be two properties before either role can move:
+//
+//	#fff     a surface where it is a background (--wb-surface), and ink where
+//	         it is a colour — on a saturated accent fill (--wb-on-accent) or on
+//	         the derived --wb-text (--wb-on-text). The surface moves with the
+//	         scheme; each ink answers to whatever it is written on, and
+//	         --wb-text is derived from a colour a project chose, so the two
+//	         inks cannot be one property.
+//	#8496b0  a quiet rule (--wb-border-quiet) in one place and quiet ink
+//	         (--wb-ink-quiet) in another.
+//	#2457d6  the accent a project may replace (--wb-primary) and the triad's
+//	         blue that no project reaches (--wb-priority-low). These two agree
+//	         only for as long as nobody chooses an accent.
+//
+// --wb-danger-strong is deliberately not on that list any more: it used to be
+// both the fill under --wb-danger and error ink on a pale surface, which in a
+// dark scheme pull in opposite directions. The ink sites read --wb-danger-ink
+// now, alongside the five that always did.
+var schemeTokens = []schemeToken{
+	{"--wb-surface", "#fff"},
+	{"--wb-on-accent", "#fff"},
+	{"--wb-on-text", "#fff"},
+	{"--wb-surface-1", "#fbfcfe"},
+	{"--wb-surface-2", "#fafbfd"},
+	{"--wb-surface-3", "#f6f8fc"},
+	{"--wb-surface-4", "#f2f5f9"},
+	{"--wb-surface-5", "#f1f4f8"},
+	{"--wb-surface-6", "#eef2f8"},
+	{"--wb-ground", "#e9eef5"},
+	{"--wb-column-ground", "rgba(255,255,255,.36)"},
+	{"--wb-column-ground-deleted", "rgba(232,237,244,.5)"},
+
+	{"--wb-border", "#b9c6d8"},
+	{"--wb-border-strong", "#9eafc5"},
+	{"--wb-border-firm", "#aab8cc"},
+	{"--wb-border-soft", "#cbd5e2"},
+	{"--wb-border-muted", "#e1e7f0"},
+	{"--wb-border-underline", "#a9b7ca"},
+	{"--wb-border-quiet", "#8496b0"},
+
+	{"--wb-ink", "#34425a"},
+	{"--wb-ink-muted", "#56647a"},
+	{"--wb-ink-soft", "#4e5d73"},
+	{"--wb-ink-faint", "#5f6c85"},
+	{"--wb-ink-dim", "#526075"},
+	{"--wb-ink-quiet", "#8496b0"},
+
+	{"--wb-danger", "#b42318"},
+	{"--wb-danger-ink", "#9c2f25"},
+	{"--wb-danger-strong", "#8f1d1d"},
+	{"--wb-danger-surface", "#fdecea"},
+	// One unit of blue from --wb-danger-surface, which is much more likely to
+	// be a slip than a decision. It is kept as its own property because
+	// collapsing the two would change what the board renders, and this change
+	// deliberately changes nothing.
+	{"--wb-danger-surface-alt", "#fdeceb"},
+	{"--wb-danger-glow", "rgba(180,35,24,.28)"},
+
+	{"--wb-warning", "#b45309"},
+	{"--wb-warning-ink", "#7c3b08"},
+	{"--wb-warning-surface", "#fff6e8"},
+	{"--wb-warning-border", "#e0b483"},
+
+	{"--wb-success", "#1a7f4b"},
+	{"--wb-success-ink", "#14663c"},
+	{"--wb-success-surface", "#e8f4ec"},
+
+	{"--wb-priority-high", "#b42318"},
+	{"--wb-priority-medium", "#b45309"},
+	{"--wb-priority-low", "#2457d6"},
+}
+
 // boardTheme renders the `:root` block a project's chosen colors ask for, and
 // nothing at all for a project that has chosen none.
 //
