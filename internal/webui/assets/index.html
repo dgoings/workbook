@@ -40,13 +40,35 @@
        interpolated. Nothing here changes for it; the later rule simply wins. */
     :root { --wb-primary: #2457d6; --wb-primary-hover: #1d49b7; --wb-primary-edge: #173f9e; --wb-primary-glow: rgba(36,87,214,.18); --wb-primary-glow-strong: rgba(36,87,214,.28); --wb-primary-tint-1: #edf3ff; --wb-primary-tint-2: #eef3ff; --wb-primary-tint-3: #f3f7ff; --wb-primary-tint-4: #f8faff; --wb-primary-chip: #d3e0fa; --wb-primary-muted: #b7c9ea; --wb-primary-ink: #526b9b; --wb-hairline: #d5deea; --wb-text: #172033; --wb-text-shadow-strong: rgba(23,32,51,.35); --wb-text-shadow: rgba(23,32,51,.12); --wb-text-shadow-soft: rgba(23,32,51,.08); --wb-text-shadow-faint: rgba(23,32,51,.05); }
     /* The scheme's own palette: the neutral surfaces, rules and ink the
-       board is drawn on, and the semantic three. These are deliberately not
-       in the families internal/webui/display.go derives from a project's
-       chosen colour — picking a green accent does not make your danger
-       colour green — so they are declared once here and read everywhere. */
+       board is drawn on, the semantic three, and the priority triad. These are
+       deliberately not in the families internal/webui/display.go derives from a
+       project's chosen colour — picking a green accent does not make your
+       danger colour green — so they are declared once here and read everywhere.
+
+       Three literals are declared more than once, because one value was doing
+       more than one job and the jobs have to be able to part company:
+
+         #fff     --wb-surface is a background, --wb-on-accent is the ink on a
+                  saturated accent fill, and --wb-on-text is the ink on the
+                  derived --wb-text. The surface has to move when the scheme
+                  does; the two inks answer to whatever they are written on.
+         #8496b0  --wb-border-quiet is a rule, --wb-ink-quiet is ink.
+         #2457d6  --wb-primary is the accent a project may replace;
+                  --wb-priority-low is the triad's blue, which no project
+                  reaches. They agree only until an accent is chosen.
+
+       A scheme that overrides this block is not yet a whole dark mode. The
+       accent and ink families are derived in display.go at fixed near-white
+       lightnesses — --wb-primary-tint-1..4 most of all — and nothing here can
+       move them. Ink from this block is written on those tints in several
+       places (.assignee, .label-chip, .column__header, .task-route__header,
+       .relationship-option, .lifecycle__stop, .change-row__summary:hover), so
+       flipping these properties alone leaves light ink on a near-white chip.
+       The derivation has to gain a dark counterpart in the same change. */
     :root {
       --wb-surface: #fff;
       --wb-on-accent: #fff;
+      --wb-on-text: #fff;
       --wb-surface-1: #fbfcfe;
       --wb-surface-2: #fafbfd;
       --wb-surface-3: #f6f8fc;
@@ -82,6 +104,15 @@
       --wb-success: #1a7f4b;
       --wb-success-ink: #14663c;
       --wb-success-surface: #e8f4ec;
+
+      /* The priority triad, read against each other rather than each on its own,
+         which is why it is a family and not three borrowings from the semantic
+         one. A project's accent does not reach it — see the rule below — and
+         these are scheme properties for the same reason the rest of this block
+         is: nothing here is derived from a colour a project chose. */
+      --wb-priority-high: #b42318;
+      --wb-priority-medium: #b45309;
+      --wb-priority-low: #2457d6;
     }
     /* The narrowest a status column is allowed to be drawn. Six columns sharing
        whatever the window happens to be gave a 1280-wide browser 12rem of card:
@@ -102,7 +133,7 @@
     * { box-sizing: border-box; }
     html, body { height: 100%; }
     body { display: flex; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden; margin: 0; min-width: 20rem; background: var(--wb-ground); }
-    .skip-link { position: fixed; left: 1rem; top: -4rem; z-index: 2; background: var(--wb-text); color: var(--wb-on-accent); padding: .55rem .75rem; border-radius: 4px; }
+    .skip-link { position: fixed; left: 1rem; top: -4rem; z-index: 2; background: var(--wb-text); color: var(--wb-on-text); padding: .55rem .75rem; border-radius: 4px; }
     .skip-link:focus { top: 1rem; }
     .app-header { display: flex; flex: 0 0 auto; align-items: end; justify-content: space-between; gap: 1.25rem; padding: 1.25rem; border-bottom: 1px solid var(--wb-border); background: var(--wb-surface); }
     .eyebrow, code, .priority, .label, .label-chip, .updated { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
@@ -162,11 +193,16 @@
        answers an activation by re-reading the server, and the reason it gives is
        carried in its words and its title, so the usual licence to drop an
        inactive control below the contrast floor does not apply: at .82rem the
-       label is not large text, and --wb-ink-faint on the header's white clears AA
-       at 5.3:1 while still reading a good deal quieter than the live
-       --wb-ink. The
-       track's border is dimmed on the same terms — enough darker than its fill
-       to still read as a switch that is off rather than as a smudge. */
+       label is not large text, so --wb-ink-faint has to clear AA against the
+       --wb-surface the header is drawn on while still reading a good deal
+       quieter than the live --wb-ink. It did, at 5.3:1, in the light scheme
+       those three were measured in. The requirement is written as a ratio
+       between three properties rather than as the numbers behind them because
+       all three move when the scheme does: a palette that changes any of them
+       owes this ratio again, and the numbers it was first met with would only
+       say what it used to be. The track's border is dimmed on the same terms —
+       enough darker than its fill to still read as a switch that is off rather
+       than as a smudge. */
     .nav-switch[aria-disabled="true"] { color: var(--wb-ink-faint); cursor: default; }
     .nav-switch[aria-disabled="true"] .nav-switch__track { border-color: var(--wb-border-firm); background: var(--wb-surface-4); }
     .nav-switch[aria-disabled="true"]:hover .nav-switch__track { border-color: var(--wb-border-firm); }
@@ -201,7 +237,7 @@
     .notice { display: grid; flex: 0 1 auto; gap: .4rem; max-height: 40vh; overflow: auto; padding: .6rem 1.25rem; border-bottom: 1px solid var(--wb-hairline); background: var(--wb-surface); font-size: .85rem; }
     .notice[hidden] { display: none; }
     .notice__report { display: flex; align-items: baseline; gap: .75rem; padding: .35rem .6rem; border-left: 3px solid currentcolor; background: var(--wb-warning-surface); color: var(--wb-warning-ink); }
-    .notice__report[data-kind="error"] { background: var(--wb-danger-surface); color: var(--wb-danger-strong); }
+    .notice__report[data-kind="error"] { background: var(--wb-danger-surface); color: var(--wb-danger-ink); }
     .notice p { flex: 1 1 auto; margin: 0; }
     .notice a { color: inherit; font-weight: 750; text-underline-offset: .18em; }
     .notice button { border: 1px solid currentcolor; border-radius: 4px; background: transparent; color: inherit; cursor: pointer; font: inherit; font-size: .8rem; font-weight: 700; padding: .25rem .6rem; }
@@ -237,7 +273,7 @@
     .admin__status { display: grid; gap: .2rem; font-size: .8rem; }
     .admin__status:empty { display: none; }
     .admin__status p { margin: 0; }
-    .admin__status[data-kind="error"] { color: var(--wb-danger-strong); }
+    .admin__status[data-kind="error"] { color: var(--wb-danger-ink); }
     .admin__status [data-panel-warning] { color: var(--wb-warning-ink); }
     .admin-statuses { display: grid; gap: .4rem; margin: 0; padding: 0; list-style: none; }
     .admin-status { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .45rem .75rem; padding: .6rem .7rem; border: 1px solid var(--wb-hairline); border-radius: 4px; background: var(--wb-surface); cursor: grab; }
@@ -356,9 +392,9 @@
     .task-id-copy:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 2px; }
     .copy-status { position: absolute; left: 100%; top: 50%; margin-left: .35rem; color: var(--wb-primary-edge); font-size: .65rem; font-weight: 800; line-height: 1; pointer-events: none; transform: translateY(-50%); white-space: nowrap; }
     .copy-status:empty { display: none; }
-    .copy-status[data-kind="error"] { color: var(--wb-danger-strong); }
+    .copy-status[data-kind="error"] { color: var(--wb-danger-ink); }
     .priority { flex: 0 0 auto; font-size: .64rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
-    .priority--high { color: var(--wb-danger); } .priority--medium { color: var(--wb-warning); } .priority--low { color: #2457d6; }
+    .priority--high { color: var(--wb-priority-high); } .priority--medium { color: var(--wb-priority-medium); } .priority--low { color: var(--wb-priority-low); }
     .task-card h3 { margin: .55rem 0 .3rem; font-size: .9rem; line-height: 1.24; overflow-wrap: anywhere; }
     /* A card title is a heading, not a link inside a sentence: every card is one
        link and the whole card is focusable, so nothing here depends on an
@@ -828,7 +864,7 @@
     .field-change { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); gap: .1rem .5rem; font-size: .78rem; }
     .field-change__label { color: var(--wb-ink); font-weight: 750; }
     .field-change__value { min-width: 0; line-height: 1.4; overflow-wrap: anywhere; white-space: pre-wrap; }
-    .field-change del { background: var(--wb-danger-surface-alt); color: var(--wb-danger-strong); text-decoration-thickness: 1px; }
+    .field-change del { background: var(--wb-danger-surface-alt); color: var(--wb-danger-ink); text-decoration-thickness: 1px; }
     .field-change ins { background: var(--wb-success-surface); color: var(--wb-success-ink); text-decoration: none; }
     @media (prefers-reduced-motion: no-preference) { .task-list { transition: opacity 120ms ease; } }
     /* A phone gets a wider column than a desktop, not a narrower one: 18rem of

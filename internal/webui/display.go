@@ -305,18 +305,34 @@ type schemeToken struct {
 	legacy   string
 }
 
-// The neutral surfaces, the rules drawn on them, the ink written on them, and
-// the semantic three. Surfaces are numbered rather than named because they are
-// one ramp of six near-identical greys, the way the primary tints already are.
+// The neutral surfaces, the rules drawn on them, the ink written on them, the
+// semantic three, and the priority triad. Surfaces are numbered rather than
+// named because they are one ramp of six near-identical greys, the way the
+// primary tints already are.
 //
-// Two literals appear twice because they carry two roles. #fff is a surface
-// where it is a background and the ink on a saturated fill where it is a
-// colour: one has to move when the scheme does and the other must not, so they
-// are separate properties that happen to agree today. #8496b0 is a quiet rule
-// in one place and quiet ink in another, on the same terms.
+// Three literals appear more than once, because a value that carries two roles
+// has to be two properties before either role can move:
+//
+//	#fff     a surface where it is a background (--wb-surface), and ink where
+//	         it is a colour — on a saturated accent fill (--wb-on-accent) or on
+//	         the derived --wb-text (--wb-on-text). The surface moves with the
+//	         scheme; each ink answers to whatever it is written on, and
+//	         --wb-text is derived from a colour a project chose, so the two
+//	         inks cannot be one property.
+//	#8496b0  a quiet rule (--wb-border-quiet) in one place and quiet ink
+//	         (--wb-ink-quiet) in another.
+//	#2457d6  the accent a project may replace (--wb-primary) and the triad's
+//	         blue that no project reaches (--wb-priority-low). These two agree
+//	         only for as long as nobody chooses an accent.
+//
+// --wb-danger-strong is deliberately not on that list any more: it used to be
+// both the fill under --wb-danger and error ink on a pale surface, which in a
+// dark scheme pull in opposite directions. The ink sites read --wb-danger-ink
+// now, alongside the five that always did.
 var schemeTokens = []schemeToken{
 	{"--wb-surface", "#fff"},
 	{"--wb-on-accent", "#fff"},
+	{"--wb-on-text", "#fff"},
 	{"--wb-surface-1", "#fbfcfe"},
 	{"--wb-surface-2", "#fafbfd"},
 	{"--wb-surface-3", "#f6f8fc"},
@@ -361,6 +377,10 @@ var schemeTokens = []schemeToken{
 	{"--wb-success", "#1a7f4b"},
 	{"--wb-success-ink", "#14663c"},
 	{"--wb-success-surface", "#e8f4ec"},
+
+	{"--wb-priority-high", "#b42318"},
+	{"--wb-priority-medium", "#b45309"},
+	{"--wb-priority-low", "#2457d6"},
 }
 
 // boardTheme renders the `:root` block a project's chosen colors ask for, and
