@@ -56,6 +56,9 @@
          #2457d6  --wb-primary is the accent a project may replace;
                   --wb-priority-low is the triad's blue, which no project
                   reaches. They agree only until an accent is chosen.
+         #8f1d1d  --wb-danger-edge is the border under --wb-danger,
+                  --wb-danger-hover its pressed fill. Both darken in light; in
+                  dark an edge darkens and a press lightens, so they part.
 
        A scheme that overrides this block is not yet a whole dark mode. The
        accent and ink families are derived in display.go at fixed near-white
@@ -93,7 +96,8 @@
       --wb-ink-quiet: #8496b0;
       --wb-danger: #b42318;
       --wb-danger-ink: #9c2f25;
-      --wb-danger-strong: #8f1d1d;
+      --wb-danger-edge: #8f1d1d;
+      --wb-danger-hover: #8f1d1d;
       --wb-danger-surface: #fdecea;
       --wb-danger-surface-alt: #fdeceb;
       --wb-danger-glow: rgba(180,35,24,.28);
@@ -223,7 +227,11 @@
        watcher, the widest of its four. Each keeps a little headroom, so a
        machine that falls back to a wider font loses the reservation gradually
        rather than all at once. The space a reservation leaves over falls to the
-       left of the words, where it is only more gap. */
+       left of the words, where it is only more gap.
+
+       The scheme switch reserves nothing and has no modifier here, because its
+       words do not change: it names the palette it offers and lets aria-checked
+       say which one is on, so there is no second reading to hold room for. */
     .nav-switch__label { display: inline-block; text-align: right; }
     .nav-switch__label--deleted { min-width: 6.25rem; }
     .nav-switch__label--descriptions { min-width: 8.25rem; }
@@ -289,8 +297,8 @@
     .admin-button:disabled { cursor: default; opacity: .52; }
     .admin-button--primary { border-color: var(--wb-primary-edge); background: var(--wb-primary); color: var(--wb-on-accent); }
     .admin-button--primary:hover:enabled { background: var(--wb-primary-hover); color: var(--wb-on-accent); }
-    .admin-button--danger { border-color: var(--wb-danger-strong); background: var(--wb-danger); color: var(--wb-on-accent); }
-    .admin-button--danger:hover:enabled { background: var(--wb-danger-strong); color: var(--wb-on-accent); }
+    .admin-button--danger { border-color: var(--wb-danger-edge); background: var(--wb-danger); color: var(--wb-on-accent); }
+    .admin-button--danger:hover:enabled { background: var(--wb-danger-hover); color: var(--wb-on-accent); }
     .admin-button:focus-visible, .admin input:focus-visible, .admin select:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 1px; }
     .admin input, .admin select { border: 1px solid var(--wb-border-strong); border-radius: 4px; background: var(--wb-surface); color: var(--wb-text); font: inherit; font-size: .82rem; padding: .4rem .5rem; }
     .admin input:focus, .admin select:focus { border-color: var(--wb-primary); }
@@ -580,8 +588,8 @@
     .save-button:hover { background: var(--wb-primary-hover); }
     .save-button:focus-visible { outline: 3px solid var(--wb-primary-glow-strong); outline-offset: 2px; }
     .save-button:disabled { cursor: wait; opacity: .62; }
-    .delete-button { border: 1px solid var(--wb-danger-strong); border-radius: 4px; background: var(--wb-danger); color: var(--wb-on-accent); cursor: pointer; font: inherit; font-size: .86rem; font-weight: 750; padding: .62rem .95rem; }
-    .delete-button:hover { background: var(--wb-danger-strong); }
+    .delete-button { border: 1px solid var(--wb-danger-edge); border-radius: 4px; background: var(--wb-danger); color: var(--wb-on-accent); cursor: pointer; font: inherit; font-size: .86rem; font-weight: 750; padding: .62rem .95rem; }
+    .delete-button:hover { background: var(--wb-danger-hover); }
     .delete-button:focus-visible { outline: 3px solid var(--wb-danger-glow); outline-offset: 2px; }
     .delete-button:disabled { cursor: wait; opacity: .62; }
     .board-link { color: var(--wb-ink); font-size: .84rem; font-weight: 700; text-underline-offset: .18em; }
@@ -919,6 +927,162 @@
       .attachment { grid-template-columns: minmax(0, 1fr); }
       .attachment__remove { grid-column: 1; grid-row: auto; justify-self: start; margin-top: .35rem; }
     }
+    /* Dark, stated twice, and the duplication is the point of the tables.
+
+       CSS cannot share one declaration block across a media boundary, and a
+       reader who has chosen a scheme has to beat their system's. So the
+       palette is written once for `prefers-color-scheme: dark` — held off by
+       a reader who asked for light — and once for a reader who asked for
+       dark outright, whatever their system says.
+
+       Both are generated from the same tables in internal/webui/display.go,
+       and a test asserts they declare the same properties at the same
+       values, so the copy cannot drift from the original. Writing the second
+       one by hand is precisely the failure this palette exists to prevent.
+
+       color-scheme tells the browser to draw the form controls, scrollbars
+       and focus rings it owns in dark too. Without it the page goes dark
+       around a set of white native widgets. */
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-scheme="light"]) {
+        color-scheme: dark;
+        --wb-surface: #161c26;
+        --wb-on-accent: #0f141c;
+        --wb-on-text: #0f141c;
+        --wb-surface-1: #151b24;
+        --wb-surface-2: #151b24;
+        --wb-surface-3: #141a22;
+        --wb-surface-4: #141a22;
+        --wb-surface-5: #131820;
+        --wb-surface-6: #131820;
+        --wb-ground: #0f141c;
+        --wb-column-ground: rgba(22,28,38,.36);
+        --wb-column-ground-deleted: rgba(15,20,28,.5);
+        --wb-border: #2f3a4a;
+        --wb-border-strong: #3d4b5f;
+        --wb-border-firm: #3d4b5f;
+        --wb-border-soft: #2f3a4a;
+        --wb-border-muted: #232c39;
+        --wb-border-underline: #3d4b5f;
+        --wb-border-quiet: #3d4b5f;
+        --wb-ink: #c2ccdc;
+        --wb-ink-muted: #8593ab;
+        --wb-ink-soft: #9aa7bd;
+        --wb-ink-faint: #9aa7bd;
+        --wb-ink-dim: #8593ab;
+        --wb-ink-quiet: #8593ab;
+        --wb-danger: #f0806c;
+        --wb-danger-ink: #f0806c;
+        --wb-danger-edge: #ea5035;
+        --wb-danger-hover: #f4a496;
+        --wb-danger-surface: #2a1614;
+        --wb-danger-surface-alt: #2a1614;
+        --wb-danger-glow: rgba(240,128,108,.32);
+        --wb-warning: #e0a45c;
+        --wb-warning-ink: #e8c07a;
+        --wb-warning-surface: #241d12;
+        --wb-warning-border: #5a4520;
+        --wb-success: #7fc79b;
+        --wb-success-ink: #7fc79b;
+        --wb-success-surface: #12241a;
+        --wb-priority-high: #f0806c;
+        --wb-priority-medium: #e0a45c;
+        --wb-priority-low: #6f9bf5;
+        --wb-primary: #5c8bff;
+        --wb-primary-hover: #8aabff;
+        --wb-primary-edge: #3669e8;
+        --wb-primary-glow: rgba(92,139,255,.28);
+        --wb-primary-glow-strong: rgba(92,139,255,.40);
+        --wb-primary-tint-1: #141f3b;
+        --wb-primary-tint-2: #131d37;
+        --wb-primary-tint-3: #121c32;
+        --wb-primary-tint-4: #121a2e;
+        --wb-primary-chip: #28375d;
+        --wb-primary-muted: #33487a;
+        --wb-primary-ink: #7c99de;
+        --wb-hairline: #282f3e;
+        --wb-text: #dee3ed;
+        --wb-text-shadow-strong: rgba(0,0,0,.55);
+        --wb-text-shadow: rgba(0,0,0,.45);
+        --wb-text-shadow-soft: rgba(0,0,0,.35);
+        --wb-text-shadow-faint: rgba(0,0,0,.30);
+      }
+
+      :root:not([data-scheme="light"]) .nav-switch__knob { background: var(--wb-ink); }
+      :root:not([data-scheme="light"])[aria-checked="true"] .nav-switch__knob,
+      :root:not([data-scheme="light"]) .nav-switch[aria-checked="true"] .nav-switch__knob { background: var(--wb-ground); }
+      :root:not([data-scheme="light"]) .nav-switch[aria-disabled="true"] .nav-switch__knob { background: var(--wb-ink-muted); }
+    }
+
+    /* And for a reader who asked for dark on a system that is not. */
+    :root[data-scheme="dark"] {
+      color-scheme: dark;
+      --wb-surface: #161c26;
+      --wb-on-accent: #0f141c;
+      --wb-on-text: #0f141c;
+      --wb-surface-1: #151b24;
+      --wb-surface-2: #151b24;
+      --wb-surface-3: #141a22;
+      --wb-surface-4: #141a22;
+      --wb-surface-5: #131820;
+      --wb-surface-6: #131820;
+      --wb-ground: #0f141c;
+      --wb-column-ground: rgba(22,28,38,.36);
+      --wb-column-ground-deleted: rgba(15,20,28,.5);
+      --wb-border: #2f3a4a;
+      --wb-border-strong: #3d4b5f;
+      --wb-border-firm: #3d4b5f;
+      --wb-border-soft: #2f3a4a;
+      --wb-border-muted: #232c39;
+      --wb-border-underline: #3d4b5f;
+      --wb-border-quiet: #3d4b5f;
+      --wb-ink: #c2ccdc;
+      --wb-ink-muted: #8593ab;
+      --wb-ink-soft: #9aa7bd;
+      --wb-ink-faint: #9aa7bd;
+      --wb-ink-dim: #8593ab;
+      --wb-ink-quiet: #8593ab;
+      --wb-danger: #f0806c;
+      --wb-danger-ink: #f0806c;
+      --wb-danger-edge: #ea5035;
+      --wb-danger-hover: #f4a496;
+      --wb-danger-surface: #2a1614;
+      --wb-danger-surface-alt: #2a1614;
+      --wb-danger-glow: rgba(240,128,108,.32);
+      --wb-warning: #e0a45c;
+      --wb-warning-ink: #e8c07a;
+      --wb-warning-surface: #241d12;
+      --wb-warning-border: #5a4520;
+      --wb-success: #7fc79b;
+      --wb-success-ink: #7fc79b;
+      --wb-success-surface: #12241a;
+      --wb-priority-high: #f0806c;
+      --wb-priority-medium: #e0a45c;
+      --wb-priority-low: #6f9bf5;
+      --wb-primary: #5c8bff;
+      --wb-primary-hover: #8aabff;
+      --wb-primary-edge: #3669e8;
+      --wb-primary-glow: rgba(92,139,255,.28);
+      --wb-primary-glow-strong: rgba(92,139,255,.40);
+      --wb-primary-tint-1: #141f3b;
+      --wb-primary-tint-2: #131d37;
+      --wb-primary-tint-3: #121c32;
+      --wb-primary-tint-4: #121a2e;
+      --wb-primary-chip: #28375d;
+      --wb-primary-muted: #33487a;
+      --wb-primary-ink: #7c99de;
+      --wb-hairline: #282f3e;
+      --wb-text: #dee3ed;
+      --wb-text-shadow-strong: rgba(0,0,0,.55);
+      --wb-text-shadow: rgba(0,0,0,.45);
+      --wb-text-shadow-soft: rgba(0,0,0,.35);
+      --wb-text-shadow-faint: rgba(0,0,0,.30);
+    }
+
+    :root[data-scheme="dark"] .nav-switch__knob { background: var(--wb-ink); }
+    :root[data-scheme="dark"][aria-checked="true"] .nav-switch__knob,
+    :root[data-scheme="dark"] .nav-switch[aria-checked="true"] .nav-switch__knob { background: var(--wb-ground); }
+    :root[data-scheme="dark"] .nav-switch[aria-disabled="true"] .nav-switch__knob { background: var(--wb-ink-muted); }
   </style>
   <!-- The colors this project chose, as an override composed by the server. It
        is a second stylesheet rather than values interpolated into the one above
@@ -954,7 +1118,7 @@
          The label is a child rather than the control's own text because the
          control is no longer only text: writing to it would take the track and
          the knob with it. -->
-    <div class="header-settings"><p class="updated" data-updated><span class="sync-dot" data-sync-dot aria-hidden="true"></span><span data-updated-text>Loaded from this checkout</span></p><div class="header-switches"><a class="nav-switch" href="/?deleted=1" role="switch" aria-checked="false" data-deleted-toggle hidden><span class="nav-switch__label nav-switch__label--deleted" data-deleted-label>Show Deleted</span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></a><button type="button" class="nav-switch" role="switch" aria-checked="false" data-description-toggle hidden><span class="nav-switch__label nav-switch__label--descriptions" data-description-label>Show Descriptions</span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></button><button type="button" class="nav-switch" role="switch" aria-checked="false" data-sync-toggle hidden><span class="nav-switch__label nav-switch__label--sync" data-sync-label></span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></button></div></div>
+    <div class="header-settings"><p class="updated" data-updated><span class="sync-dot" data-sync-dot aria-hidden="true"></span><span data-updated-text>Loaded from this checkout</span></p><div class="header-switches"><a class="nav-switch" href="/?deleted=1" role="switch" aria-checked="false" data-deleted-toggle hidden><span class="nav-switch__label nav-switch__label--deleted" data-deleted-label>Show Deleted</span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></a><button type="button" class="nav-switch" role="switch" aria-checked="false" data-scheme-toggle><span class="nav-switch__label" data-scheme-label>Dark Mode</span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></button><button type="button" class="nav-switch" role="switch" aria-checked="false" data-description-toggle hidden><span class="nav-switch__label nav-switch__label--descriptions" data-description-label>Show Descriptions</span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></button><button type="button" class="nav-switch" role="switch" aria-checked="false" data-sync-toggle hidden><span class="nav-switch__label nav-switch__label--sync" data-sync-label></span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></button></div></div>
   </header>
   <!-- What the board has to say to a reader who has moved on: a save that
        already returned, or a refused change whose card the board has since
@@ -1251,6 +1415,8 @@
       const syncToggle = document.querySelector("[data-sync-toggle]");
       const descriptionToggle = document.querySelector("[data-description-toggle]");
       const deletedToggle = document.querySelector("[data-deleted-toggle]");
+      const schemeToggle = document.querySelector("[data-scheme-toggle]");
+      const schemeLabel = document.querySelector("[data-scheme-label]");
       // The words in front of each switch. They are written to instead of the
       // control itself, which now holds a track and a knob that writing its
       // text would throw away.
@@ -1475,6 +1641,134 @@
       // refused outright — a Safari private window throws on the first read — and
       // a board that cannot remember the choice still has to draw, so every
       // access is guarded and an unreadable preference simply means the default.
+      // Which of the board's two palettes this reader sees.
+      //
+      // A browser preference, like the descriptions setting below, and for the
+      // same reason stated more strongly: a colour scheme answers what the room
+      // someone is sitting in needs, not what the project is. It is never
+      // published to the repository, so one reader working at night does not
+      // darken the board for everybody who fetches.
+      //
+      // It sits in the header beside the other two browser preferences rather
+      // than on the configuration route. Appearance is a thing a reader changes
+      // because the light in the room changed, which is not an errand worth a
+      // page; and the configuration route is where a board's *published*
+      // settings are decided, so a control that publishes nothing was reading
+      // as though it might.
+      //
+      // The empty string is the third state and the default: follow the
+      // system. It is the absence of a choice rather than a word of its own,
+      // which is what lets the stylesheet's own media query answer for it. See
+      // toggleColorScheme for how one switch reaches a state it has no
+      // position for.
+      const colorSchemePreferenceKey = "workbook.board.scheme";
+      const colorSchemes = ["", "light", "dark"];
+      function rememberedColorScheme() {
+        try {
+          const stored = window.localStorage ? window.localStorage.getItem(colorSchemePreferenceKey) : null;
+          return colorSchemes.includes(stored) ? stored : "";
+        } catch (_) {
+          return "";
+        }
+      }
+      function rememberColorScheme(value) {
+        try {
+          if (!window.localStorage) return;
+          if (value) window.localStorage.setItem(colorSchemePreferenceKey, value);
+          else window.localStorage.removeItem(colorSchemePreferenceKey);
+        } catch (_) {
+        }
+      }
+      // The attribute the stylesheet reads. Removed rather than emptied for the
+      // system default, so `:root:not([data-scheme="light"])` is answered by the
+      // absence of the attribute rather than by a value that has to be spelled.
+      // Guarded like every other environment capability here: the root element
+      // is the one node this function needs and the one it cannot assume, and a
+      // board that cannot reach it still has to draw. Without a choice applied
+      // the stylesheet's media query is already the right answer.
+      function applyColorScheme(value) {
+        const root = document.documentElement;
+        if (!root || !root.dataset) return;
+        if (value) root.dataset.scheme = value;
+        else delete root.dataset.scheme;
+      }
+      applyColorScheme(rememberedColorScheme());
+
+      // What the operating system is asking for right now.
+      //
+      // Guarded like every other environment capability here: a browser that
+      // cannot answer is treated as a light one, which is what the stylesheet
+      // draws when its media query never matches. The query object is kept
+      // rather than rebuilt, because the listener below is on it.
+      const darkSystemQuery = window.matchMedia
+        ? window.matchMedia("(prefers-color-scheme: dark)")
+        : null;
+      function systemColorScheme() {
+        return darkSystemQuery && darkSystemQuery.matches ? "dark" : "light";
+      }
+      // The scheme the reader is actually looking at: their choice if they made
+      // one, and the system's answer if they did not.
+      function effectiveColorScheme() {
+        return rememberedColorScheme() || systemColorScheme();
+      }
+      // One switch for a setting with three states, and the third is reachable
+      // without a third position.
+      //
+      // The stored preference is light, dark, or absent — and absent is
+      // "follow the system", which is what makes the media query the answer
+      // rather than a value that always wins. A three-way control would say
+      // all of that out loud and cost a reader a decision they mostly do not
+      // have: what they want is the other palette, now.
+      //
+      // So the switch offers the two palettes and infers the third state from
+      // which way they are moving. Choosing the scheme their system is *not*
+      // asking for is a real preference and is stored. Choosing the one it *is*
+      // asking for is indistinguishable from having no preference at all — so
+      // rather than store a value that happens to agree today and stops
+      // agreeing the next time they change their system, the choice is cleared
+      // and they go back to following it.
+      //
+      // The cost is that a reader cannot pin the scheme their system already
+      // has. That state is unobservable until the system changes, and when it
+      // does, following is what almost everybody meant.
+      function toggleColorScheme() {
+        const wanted = effectiveColorScheme() === "dark" ? "light" : "dark";
+        rememberColorScheme(wanted === systemColorScheme() ? "" : wanted);
+        applyColorScheme(rememberedColorScheme());
+        renderColorSchemePreference();
+      }
+      // The label names the switch rather than the next action, unlike its
+      // siblings. "Hide Descriptions" works because descriptions are a noun the
+      // verb acts on; "Light Mode, switch, on" would be a control announcing
+      // the palette it is not showing. So the words stay put and aria-checked
+      // carries the state, which is how a switch is meant to say it.
+      //
+      // The title is where the third state is disclosed, because it is the part
+      // a reader cannot see: whether they are following the system or have
+      // stepped away from it, and — when they have — that the way back is to
+      // choose the palette their system is already asking for.
+      function renderColorSchemePreference() {
+        if (!schemeToggle) return;
+        const effective = effectiveColorScheme();
+        const following = rememberedColorScheme() === "";
+        schemeToggle.setAttribute("aria-checked", effective === "dark" ? "true" : "false");
+        text(schemeLabel, "Dark Mode");
+        schemeToggle.title = following
+          ? "Following your system, which is " + effective + " right now. Click for " +
+            (effective === "dark" ? "light" : "dark") + "."
+          : "Fixed to " + effective + ", whatever your system asks for. Click for " +
+            (effective === "dark" ? "light" : "dark") + " to follow your system again.";
+      }
+      renderColorSchemePreference();
+      if (schemeToggle) schemeToggle.addEventListener("click", toggleColorScheme);
+      // A reader who is following the system and whose system changes under
+      // them has a board that repaints itself — the media query does that with
+      // no help. What it cannot do is rewrite the switch, which is still
+      // announcing the palette that was on screen a moment ago.
+      if (darkSystemQuery && darkSystemQuery.addEventListener) {
+        darkSystemQuery.addEventListener("change", renderColorSchemePreference);
+      }
+
       const descriptionPreferenceKey = "workbook.board.descriptions";
       let descriptionsShown = false;
       function rememberedDescriptionPreference() {
