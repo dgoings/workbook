@@ -9,7 +9,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"syscall"
 
 	"github.com/dgoings/workbook/internal/core"
 )
@@ -238,14 +237,15 @@ func listenPrivate(path string) (net.Listener, error) {
 }
 
 // userTempRoot is where the private per-user directory is created. It is a
-// variable only so a test can point it at a root it controls.
-var userTempRoot = "/tmp"
+// variable only so a test can point it at a root it controls. Its default is
+// platform-specific: /tmp is shared on Unix and does not exist on Windows.
+var userTempRoot = defaultUserTempRoot
 
 // currentUID reports the user a socket directory must belong to. It is a
 // variable only so a test can exercise the foreign-owner rejection, which is
 // the one check no fixture can otherwise reach: a test process cannot chown a
 // directory to a second user, so the reported uid is what has to move.
-var currentUID = os.Getuid
+var currentUID = defaultCurrentUID
 
 // userTempDir returns a private per-user directory under userTempRoot,
 // refusing one that is not exactly what it should be. The root is
@@ -303,12 +303,11 @@ func socketDirInfo(dir string) (os.FileInfo, error) {
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return nil, fmt.Errorf("%s is not a directory", dir)
 	}
-	if info.Mode().Perm()&0o022 != 0 {
-		return nil, fmt.Errorf("%s is writable by other users", dir)
-	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || int(stat.Uid) != currentUID() {
-		return nil, fmt.Errorf("%s belongs to another user", dir)
+	// Whether a directory is private to this user is answered from facts only
+	// the platform has: mode bits and an owner uid on Unix, an inherited ACL
+	// under the user's own profile on Windows.
+	if err := dirIsPrivate(dir, info); err != nil {
+		return nil, err
 	}
 	return info, nil
 }

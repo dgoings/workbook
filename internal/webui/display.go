@@ -358,6 +358,7 @@ var schemeTokens = []schemeToken{
 	{"--wb-warning-surface", "#fff6e8"},
 	{"--wb-warning-border", "#e0b483"},
 
+	{"--wb-success", "#1a7f4b"},
 	{"--wb-success-ink", "#14663c"},
 	{"--wb-success-surface", "#e8f4ec"},
 }
