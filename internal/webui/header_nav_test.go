@@ -82,7 +82,7 @@ func TestHandlerHeaderDrawsTheRouteLinksBeforeEverySettingThatComesAndGoes(t *te
 	if strings.Contains(nav, "hidden") {
 		t.Errorf("the header's navigation holds something a route can take away: %s", nav)
 	}
-	for _, setting := range []string{"data-deleted-toggle", "data-description-toggle", "data-sync-toggle"} {
+	for _, setting := range []string{"data-deleted-toggle", "data-description-toggle", "data-sync-toggle", "data-scheme-toggle"} {
 		at := strings.Index(header, setting)
 		if at < 0 {
 			t.Fatalf("the header carries no %s", setting)
@@ -137,6 +137,7 @@ func TestHandlerHeaderDrawsEverySettingAsASwitch(t *testing.T) {
 		"data-deleted-toggle":     "data-deleted-label",
 		"data-description-toggle": "data-description-label",
 		"data-sync-toggle":        "data-sync-label",
+		"data-scheme-toggle":      "data-scheme-label",
 	} {
 		element := switchElement(t, header, marker)
 		for _, want := range []string{
@@ -153,8 +154,6 @@ func TestHandlerHeaderDrawsEverySettingAsASwitch(t *testing.T) {
 			// The track is decoration for the state the control already states.
 			// Announced twice it would be announced once too often.
 			`aria-hidden="true"`,
-			// Revealed by the render that has something for it to act on.
-			" hidden",
 		} {
 			if !strings.Contains(element, want) {
 				t.Errorf("the %s switch does not carry %s: %s", marker, want, element)
@@ -165,6 +164,31 @@ func TestHandlerHeaderDrawsEverySettingAsASwitch(t *testing.T) {
 		if strings.Contains(element, "aria-pressed") {
 			t.Errorf("the %s switch states itself twice: %s", marker, element)
 		}
+	}
+}
+
+// Three of the four settings ship hidden, and the fourth does not.
+//
+// Hidden is how a setting says it acts on something the current route may not be
+// showing: Deleted adds a column to the board, Descriptions redraws its cards,
+// and the sync switch names what the board is doing. A header that offered any
+// of them from a task's page would be naming a state the reader cannot see.
+//
+// The scheme is not about the board. It is about the room the reader is sitting
+// in, and it is true of every route the same way — so it ships visible and no
+// route takes it away. Together with the header being identical everywhere
+// (see TestHandlerServesOneHeaderToEveryRoute) that is what puts it on all of
+// them.
+func TestHandlerHeaderHidesTheBoardSettingsAndNotTheScheme(t *testing.T) {
+	header := headerElement(t, administrableBoardPage(t, core.DefaultVocabulary()))
+
+	for _, marker := range []string{"data-deleted-toggle", "data-description-toggle", "data-sync-toggle"} {
+		if element := switchElement(t, header, marker); !strings.Contains(element, " hidden") {
+			t.Errorf("the %s switch ships visible, so a route that cannot act on it still offers it: %s", marker, element)
+		}
+	}
+	if element := switchElement(t, header, "data-scheme-toggle"); strings.Contains(element, " hidden") {
+		t.Errorf("the scheme switch ships hidden, so the routes decide where a reader can change the palette: %s", element)
 	}
 }
 
