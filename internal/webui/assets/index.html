@@ -40,13 +40,38 @@
        interpolated. Nothing here changes for it; the later rule simply wins. */
     :root { --wb-primary: #2457d6; --wb-primary-hover: #1d49b7; --wb-primary-edge: #173f9e; --wb-primary-glow: rgba(36,87,214,.18); --wb-primary-glow-strong: rgba(36,87,214,.28); --wb-primary-tint-1: #edf3ff; --wb-primary-tint-2: #eef3ff; --wb-primary-tint-3: #f3f7ff; --wb-primary-tint-4: #f8faff; --wb-primary-chip: #d3e0fa; --wb-primary-muted: #b7c9ea; --wb-primary-ink: #526b9b; --wb-hairline: #d5deea; --wb-text: #172033; --wb-text-shadow-strong: rgba(23,32,51,.35); --wb-text-shadow: rgba(23,32,51,.12); --wb-text-shadow-soft: rgba(23,32,51,.08); --wb-text-shadow-faint: rgba(23,32,51,.05); }
     /* The scheme's own palette: the neutral surfaces, rules and ink the
-       board is drawn on, and the semantic three. These are deliberately not
-       in the families internal/webui/display.go derives from a project's
-       chosen colour — picking a green accent does not make your danger
-       colour green — so they are declared once here and read everywhere. */
+       board is drawn on, the semantic three, and the priority triad. These are
+       deliberately not in the families internal/webui/display.go derives from a
+       project's chosen colour — picking a green accent does not make your
+       danger colour green — so they are declared once here and read everywhere.
+
+       Three literals are declared more than once, because one value was doing
+       more than one job and the jobs have to be able to part company:
+
+         #fff     --wb-surface is a background, --wb-on-accent is the ink on a
+                  saturated accent fill, and --wb-on-text is the ink on the
+                  derived --wb-text. The surface has to move when the scheme
+                  does; the two inks answer to whatever they are written on.
+         #8496b0  --wb-border-quiet is a rule, --wb-ink-quiet is ink.
+         #2457d6  --wb-primary is the accent a project may replace;
+                  --wb-priority-low is the triad's blue, which no project
+                  reaches. They agree only until an accent is chosen.
+         #8f1d1d  --wb-danger-edge is the border under --wb-danger,
+                  --wb-danger-hover its pressed fill. Both darken in light; in
+                  dark an edge darkens and a press lightens, so they part.
+
+       A scheme that overrides this block is not yet a whole dark mode. The
+       accent and ink families are derived in display.go at fixed near-white
+       lightnesses — --wb-primary-tint-1..4 most of all — and nothing here can
+       move them. Ink from this block is written on those tints in several
+       places (.assignee, .label-chip, .column__header, .task-route__header,
+       .relationship-option, .lifecycle__stop, .change-row__summary:hover), so
+       flipping these properties alone leaves light ink on a near-white chip.
+       The derivation has to gain a dark counterpart in the same change. */
     :root {
       --wb-surface: #fff;
       --wb-on-accent: #fff;
+      --wb-on-text: #fff;
       --wb-surface-1: #fbfcfe;
       --wb-surface-2: #fafbfd;
       --wb-surface-3: #f6f8fc;
@@ -71,7 +96,8 @@
       --wb-ink-quiet: #8496b0;
       --wb-danger: #b42318;
       --wb-danger-ink: #9c2f25;
-      --wb-danger-strong: #8f1d1d;
+      --wb-danger-edge: #8f1d1d;
+      --wb-danger-hover: #8f1d1d;
       --wb-danger-surface: #fdecea;
       --wb-danger-surface-alt: #fdeceb;
       --wb-danger-glow: rgba(180,35,24,.28);
@@ -79,8 +105,17 @@
       --wb-warning-ink: #7c3b08;
       --wb-warning-surface: #fff6e8;
       --wb-warning-border: #e0b483;
+      --wb-success: #1a7f4b;
       --wb-success-ink: #14663c;
       --wb-success-surface: #e8f4ec;
+
+      /* The priority triad, read against each other rather than each on its own,
+         which is why it is a family and not three borrowings from the semantic
+         one. A project's accent does not reach it — see the rule below — and
+         these are scheme properties for the same reason the rest of this block
+         is: nothing here is derived from a colour a project chose. */
+      --wb-priority-high: #b42318;
+      --wb-priority-medium: #b45309;
       --wb-priority-low: #2457d6;
     }
     /* The narrowest a status column is allowed to be drawn. Six columns sharing
@@ -102,13 +137,19 @@
     * { box-sizing: border-box; }
     html, body { height: 100%; }
     body { display: flex; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden; margin: 0; min-width: 20rem; background: var(--wb-ground); }
-    .skip-link { position: fixed; left: 1rem; top: -4rem; z-index: 2; background: var(--wb-text); color: var(--wb-on-accent); padding: .55rem .75rem; border-radius: 4px; }
+    .skip-link { position: fixed; left: 1rem; top: -4rem; z-index: 2; background: var(--wb-text); color: var(--wb-on-text); padding: .55rem .75rem; border-radius: 4px; }
     .skip-link:focus { top: 1rem; }
     .app-header { display: flex; flex: 0 0 auto; align-items: end; justify-content: space-between; gap: 1.25rem; padding: 1.25rem; border-bottom: 1px solid var(--wb-border); background: var(--wb-surface); }
     .eyebrow, code, .priority, .label, .label-chip, .updated { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
     .eyebrow { margin: 0 0 .2rem; color: var(--wb-primary); font-size: .7rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
     h1 { margin: 0; font-size: clamp(1.25rem, 2vw, 1.65rem); letter-spacing: -.03em; }
     .updated { margin: 0; color: var(--wb-ink-muted); font-size: .75rem; text-align: right; }
+    /* Green while polls are landing, amber once they have stopped for long
+       enough to matter. The dot carries the state so the text beside it can be
+       an age rather than a status word. */
+    .sync-dot { display: inline-block; width: .45rem; height: .45rem; margin-right: .35rem; border-radius: 50%; background: var(--wb-success); vertical-align: middle; transition: background-color .2s ease; }
+    .sync-dot[data-state="stale"] { background: var(--wb-warning); }
+    .sync-dot[data-state="lost"] { background: var(--wb-danger); }
     /* The routes sit on the left, beside the title, and the settings on the
        right. They were one row once, and the row's contents changed with the
        route: the Deleted setting belongs to the board, so leaving for the
@@ -156,11 +197,16 @@
        answers an activation by re-reading the server, and the reason it gives is
        carried in its words and its title, so the usual licence to drop an
        inactive control below the contrast floor does not apply: at .82rem the
-       label is not large text, and --wb-ink-faint on the header's white clears AA
-       at 5.3:1 while still reading a good deal quieter than the live
-       --wb-ink. The
-       track's border is dimmed on the same terms — enough darker than its fill
-       to still read as a switch that is off rather than as a smudge. */
+       label is not large text, so --wb-ink-faint has to clear AA against the
+       --wb-surface the header is drawn on while still reading a good deal
+       quieter than the live --wb-ink. It did, at 5.3:1, in the light scheme
+       those three were measured in. The requirement is written as a ratio
+       between three properties rather than as the numbers behind them because
+       all three move when the scheme does: a palette that changes any of them
+       owes this ratio again, and the numbers it was first met with would only
+       say what it used to be. The track's border is dimmed on the same terms —
+       enough darker than its fill to still read as a switch that is off rather
+       than as a smudge. */
     .nav-switch[aria-disabled="true"] { color: var(--wb-ink-faint); cursor: default; }
     .nav-switch[aria-disabled="true"] .nav-switch__track { border-color: var(--wb-border-firm); background: var(--wb-surface-4); }
     .nav-switch[aria-disabled="true"]:hover .nav-switch__track { border-color: var(--wb-border-firm); }
@@ -195,7 +241,7 @@
     .notice { display: grid; flex: 0 1 auto; gap: .4rem; max-height: 40vh; overflow: auto; padding: .6rem 1.25rem; border-bottom: 1px solid var(--wb-hairline); background: var(--wb-surface); font-size: .85rem; }
     .notice[hidden] { display: none; }
     .notice__report { display: flex; align-items: baseline; gap: .75rem; padding: .35rem .6rem; border-left: 3px solid currentcolor; background: var(--wb-warning-surface); color: var(--wb-warning-ink); }
-    .notice__report[data-kind="error"] { background: var(--wb-danger-surface); color: var(--wb-danger-strong); }
+    .notice__report[data-kind="error"] { background: var(--wb-danger-surface); color: var(--wb-danger-ink); }
     .notice p { flex: 1 1 auto; margin: 0; }
     .notice a { color: inherit; font-weight: 750; text-underline-offset: .18em; }
     .notice button { border: 1px solid currentcolor; border-radius: 4px; background: transparent; color: inherit; cursor: pointer; font: inherit; font-size: .8rem; font-weight: 700; padding: .25rem .6rem; }
@@ -231,7 +277,7 @@
     .admin__status { display: grid; gap: .2rem; font-size: .8rem; }
     .admin__status:empty { display: none; }
     .admin__status p { margin: 0; }
-    .admin__status[data-kind="error"] { color: var(--wb-danger-strong); }
+    .admin__status[data-kind="error"] { color: var(--wb-danger-ink); }
     .admin__status [data-panel-warning] { color: var(--wb-warning-ink); }
     .admin-statuses { display: grid; gap: .4rem; margin: 0; padding: 0; list-style: none; }
     .admin-status { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .45rem .75rem; padding: .6rem .7rem; border: 1px solid var(--wb-hairline); border-radius: 4px; background: var(--wb-surface); cursor: grab; }
@@ -247,8 +293,8 @@
     .admin-button:disabled { cursor: default; opacity: .52; }
     .admin-button--primary { border-color: var(--wb-primary-edge); background: var(--wb-primary); color: var(--wb-on-accent); }
     .admin-button--primary:hover:enabled { background: var(--wb-primary-hover); color: var(--wb-on-accent); }
-    .admin-button--danger { border-color: var(--wb-danger-strong); background: var(--wb-danger); color: var(--wb-on-accent); }
-    .admin-button--danger:hover:enabled { background: var(--wb-danger-strong); color: var(--wb-on-accent); }
+    .admin-button--danger { border-color: var(--wb-danger-edge); background: var(--wb-danger); color: var(--wb-on-accent); }
+    .admin-button--danger:hover:enabled { background: var(--wb-danger-hover); color: var(--wb-on-accent); }
     .admin-button:focus-visible, .admin input:focus-visible, .admin select:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 1px; }
     .admin input, .admin select { border: 1px solid var(--wb-border-strong); border-radius: 4px; background: var(--wb-surface); color: var(--wb-text); font: inherit; font-size: .82rem; padding: .4rem .5rem; }
     .admin input:focus, .admin select:focus { border-color: var(--wb-primary); }
@@ -350,9 +396,9 @@
     .task-id-copy:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 2px; }
     .copy-status { position: absolute; left: 100%; top: 50%; margin-left: .35rem; color: var(--wb-primary-edge); font-size: .65rem; font-weight: 800; line-height: 1; pointer-events: none; transform: translateY(-50%); white-space: nowrap; }
     .copy-status:empty { display: none; }
-    .copy-status[data-kind="error"] { color: var(--wb-danger-strong); }
+    .copy-status[data-kind="error"] { color: var(--wb-danger-ink); }
     .priority { flex: 0 0 auto; font-size: .64rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
-    .priority--high { color: var(--wb-danger); } .priority--medium { color: var(--wb-warning); } .priority--low { color: var(--wb-priority-low); }
+    .priority--high { color: var(--wb-priority-high); } .priority--medium { color: var(--wb-priority-medium); } .priority--low { color: var(--wb-priority-low); }
     .task-card h3 { margin: .55rem 0 .3rem; font-size: .9rem; line-height: 1.24; overflow-wrap: anywhere; }
     /* A card title is a heading, not a link inside a sentence: every card is one
        link and the whole card is focusable, so nothing here depends on an
@@ -538,8 +584,8 @@
     .save-button:hover { background: var(--wb-primary-hover); }
     .save-button:focus-visible { outline: 3px solid var(--wb-primary-glow-strong); outline-offset: 2px; }
     .save-button:disabled { cursor: wait; opacity: .62; }
-    .delete-button { border: 1px solid var(--wb-danger-strong); border-radius: 4px; background: var(--wb-danger); color: var(--wb-on-accent); cursor: pointer; font: inherit; font-size: .86rem; font-weight: 750; padding: .62rem .95rem; }
-    .delete-button:hover { background: var(--wb-danger-strong); }
+    .delete-button { border: 1px solid var(--wb-danger-edge); border-radius: 4px; background: var(--wb-danger); color: var(--wb-on-accent); cursor: pointer; font: inherit; font-size: .86rem; font-weight: 750; padding: .62rem .95rem; }
+    .delete-button:hover { background: var(--wb-danger-hover); }
     .delete-button:focus-visible { outline: 3px solid var(--wb-danger-glow); outline-offset: 2px; }
     .delete-button:disabled { cursor: wait; opacity: .62; }
     .board-link { color: var(--wb-ink); font-size: .84rem; font-weight: 700; text-underline-offset: .18em; }
@@ -822,7 +868,7 @@
     .field-change { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); gap: .1rem .5rem; font-size: .78rem; }
     .field-change__label { color: var(--wb-ink); font-weight: 750; }
     .field-change__value { min-width: 0; line-height: 1.4; overflow-wrap: anywhere; white-space: pre-wrap; }
-    .field-change del { background: var(--wb-danger-surface-alt); color: var(--wb-danger-strong); text-decoration-thickness: 1px; }
+    .field-change del { background: var(--wb-danger-surface-alt); color: var(--wb-danger-ink); text-decoration-thickness: 1px; }
     .field-change ins { background: var(--wb-success-surface); color: var(--wb-success-ink); text-decoration: none; }
     @media (prefers-reduced-motion: no-preference) { .task-list { transition: opacity 120ms ease; } }
     /* A phone gets a wider column than a desktop, not a narrower one: 18rem of
@@ -898,6 +944,7 @@
         color-scheme: dark;
         --wb-surface: #161c26;
         --wb-on-accent: #0f141c;
+        --wb-on-text: #0f141c;
         --wb-surface-1: #151b24;
         --wb-surface-2: #151b24;
         --wb-surface-3: #141a22;
@@ -922,7 +969,8 @@
         --wb-ink-quiet: #8593ab;
         --wb-danger: #f0806c;
         --wb-danger-ink: #f0806c;
-        --wb-danger-strong: #e08a7c;
+        --wb-danger-edge: #ea5035;
+        --wb-danger-hover: #f4a496;
         --wb-danger-surface: #2a1614;
         --wb-danger-surface-alt: #2a1614;
         --wb-danger-glow: rgba(240,128,108,.32);
@@ -930,8 +978,11 @@
         --wb-warning-ink: #e8c07a;
         --wb-warning-surface: #241d12;
         --wb-warning-border: #5a4520;
+        --wb-success: #7fc79b;
         --wb-success-ink: #7fc79b;
         --wb-success-surface: #12241a;
+        --wb-priority-high: #f0806c;
+        --wb-priority-medium: #e0a45c;
         --wb-priority-low: #6f9bf5;
         --wb-primary: #5c8bff;
         --wb-primary-hover: #8aabff;
@@ -964,6 +1015,7 @@
       color-scheme: dark;
       --wb-surface: #161c26;
       --wb-on-accent: #0f141c;
+      --wb-on-text: #0f141c;
       --wb-surface-1: #151b24;
       --wb-surface-2: #151b24;
       --wb-surface-3: #141a22;
@@ -988,7 +1040,8 @@
       --wb-ink-quiet: #8593ab;
       --wb-danger: #f0806c;
       --wb-danger-ink: #f0806c;
-      --wb-danger-strong: #e08a7c;
+      --wb-danger-edge: #ea5035;
+      --wb-danger-hover: #f4a496;
       --wb-danger-surface: #2a1614;
       --wb-danger-surface-alt: #2a1614;
       --wb-danger-glow: rgba(240,128,108,.32);
@@ -996,8 +1049,11 @@
       --wb-warning-ink: #e8c07a;
       --wb-warning-surface: #241d12;
       --wb-warning-border: #5a4520;
+      --wb-success: #7fc79b;
       --wb-success-ink: #7fc79b;
       --wb-success-surface: #12241a;
+      --wb-priority-high: #f0806c;
+      --wb-priority-medium: #e0a45c;
       --wb-priority-low: #6f9bf5;
       --wb-primary: #5c8bff;
       --wb-primary-hover: #8aabff;
@@ -1058,7 +1114,7 @@
          The label is a child rather than the control's own text because the
          control is no longer only text: writing to it would take the track and
          the knob with it. -->
-    <div class="header-settings"><p class="updated" data-updated>Loaded from this checkout</p><div class="header-switches"><a class="nav-switch" href="/?deleted=1" role="switch" aria-checked="false" data-deleted-toggle hidden><span class="nav-switch__label nav-switch__label--deleted" data-deleted-label>Show Deleted</span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></a><button type="button" class="nav-switch" role="switch" aria-checked="false" data-description-toggle hidden><span class="nav-switch__label nav-switch__label--descriptions" data-description-label>Show Descriptions</span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></button><button type="button" class="nav-switch" role="switch" aria-checked="false" data-sync-toggle hidden><span class="nav-switch__label nav-switch__label--sync" data-sync-label></span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></button></div></div>
+    <div class="header-settings"><p class="updated" data-updated><span class="sync-dot" data-sync-dot aria-hidden="true"></span><span data-updated-text>Loaded from this checkout</span></p><div class="header-switches"><a class="nav-switch" href="/?deleted=1" role="switch" aria-checked="false" data-deleted-toggle hidden><span class="nav-switch__label nav-switch__label--deleted" data-deleted-label>Show Deleted</span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></a><button type="button" class="nav-switch" role="switch" aria-checked="false" data-description-toggle hidden><span class="nav-switch__label nav-switch__label--descriptions" data-description-label>Show Descriptions</span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></button><button type="button" class="nav-switch" role="switch" aria-checked="false" data-sync-toggle hidden><span class="nav-switch__label nav-switch__label--sync" data-sync-label></span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></button></div></div>
   </header>
   <!-- What the board has to say to a reader who has moved on: a save that
        already returned, or a refused change whose card the board has since
@@ -1258,6 +1314,8 @@
       const unknownList = boardView.querySelector("[data-unknown-list]");
       const unknownCount = boardView.querySelector("[data-unknown-count]");
       const updated = document.querySelector("[data-updated]");
+      const updatedText = document.querySelector("[data-updated-text]");
+      const syncDot = document.querySelector("[data-sync-dot]");
       const notice = document.querySelector("[data-notice]");
       // The standing announcement that this page's columns are out of date, and
       // the control that acts on it. See the element itself for why a reload is
@@ -1524,6 +1582,52 @@
       let openThreadPanels = null;
 
       function text(element, value) { element.textContent = value || ""; return element; }
+
+      // How long ago the board last read the repository successfully.
+      //
+      // A wall-clock stamp answered a question nobody asks: what matters is not
+      // when the last poll landed but whether one landed recently. An age says
+      // that directly, and says it without the reader doing arithmetic against
+      // their own clock.
+      //
+      // The age is reported in five-second steps. Polls land every second, so a
+      // live counter would be a digit flickering between 0 and 1 forever;
+      // quantising it means the text only changes when something has actually
+      // changed, and the steady state is a green dot beside a fixed word.
+      const SYNC_STEP_MS = 5000;
+      const SYNC_STALE_MS = 15000;   // two missed polls is noise; fifteen seconds is not
+      const SYNC_LOST_MS = 60000;
+
+      let lastSynchronizedAt = null;
+
+      function markSynchronized() {
+        lastSynchronizedAt = Date.now();
+        renderSyncAge();
+      }
+
+      function describeSyncAge(age) {
+        if (age < SYNC_STEP_MS) return "in sync";
+        const seconds = Math.floor(age / SYNC_STEP_MS) * (SYNC_STEP_MS / 1000);
+        if (seconds < 60) return seconds + "s ago";
+        const minutes = Math.floor(seconds / 60);
+        if (minutes < 60) return minutes + "m ago";
+        return Math.floor(minutes / 60) + "h ago";
+      }
+
+      function renderSyncAge() {
+        if (!updatedText) return;
+        if (lastSynchronizedAt === null) {
+          text(updatedText, "Loaded from this checkout");
+          if (syncDot) syncDot.dataset.state = "stale";
+          return;
+        }
+        const age = Date.now() - lastSynchronizedAt;
+        text(updatedText, describeSyncAge(age));
+        if (syncDot) {
+          syncDot.dataset.state =
+            age >= SYNC_LOST_MS ? "lost" : age >= SYNC_STALE_MS ? "stale" : "fresh";
+        }
+      }
       // Card descriptions are hidden by default and this setting brings them
       // back. It is a browser preference rather than project state: it says how
       // one reader wants this board drawn, so it is remembered per browser and
@@ -8988,7 +9092,7 @@
             // page are drawn from one answer rather than from two derivations of
             // the same read.
             const projectedPresentation = projectPresentation(presentation, projected);
-            render(projected, projectedPresentation); stale.dataset.visible = "false"; text(updated, "Updated " + new Date().toLocaleTimeString());
+            render(projected, projectedPresentation); stale.dataset.visible = "false"; markSynchronized();
             // The open task page's thread and attachments follow this read in
             // place, the way the relationship sidebar below does. Nothing else
             // about that form moves on a poll: a field is corrected only by a
@@ -9315,7 +9419,13 @@
       renderRoute();
       refresh();
       refreshSyncState();
-      window.setInterval(refresh, 1000);
+      renderSyncAge();
+      // One timer, not two. The age is redrawn on the poll's own tick rather
+      // than on a second interval of its own: a board left alone still ages
+      // visibly, and there is only ever one scheduled callback to reason about.
+      // The poll's promise is returned, not swallowed: callers await this tick
+      // to know the refresh has finished.
+      window.setInterval(() => { renderSyncAge(); return refresh(); }, 1000);
     })();
   </script>
 </body>

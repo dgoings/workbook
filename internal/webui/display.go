@@ -309,18 +309,41 @@ type schemeToken struct {
 	dark string
 }
 
-// The neutral surfaces, the rules drawn on them, the ink written on them, and
-// the semantic three. Surfaces are numbered rather than named because they are
-// one ramp of six near-identical greys, the way the primary tints already are.
+// The neutral surfaces, the rules drawn on them, the ink written on them, the
+// semantic three, and the priority triad. Surfaces are numbered rather than
+// named because they are one ramp of six near-identical greys, the way the
+// primary tints already are.
 //
-// Two literals appear twice because they carry two roles. #fff is a surface
-// where it is a background and the ink on a saturated fill where it is a
-// colour: one has to move when the scheme does and the other must not, so they
-// are separate properties that happen to agree today. #8496b0 is a quiet rule
-// in one place and quiet ink in another, on the same terms.
+// Three literals appear more than once, because a value that carries two roles
+// has to be two properties before either role can move:
+//
+//	#fff     a surface where it is a background (--wb-surface), and ink where
+//	         it is a colour — on a saturated accent fill (--wb-on-accent) or on
+//	         the derived --wb-text (--wb-on-text). The surface moves with the
+//	         scheme; each ink answers to whatever it is written on, and
+//	         --wb-text is derived from a colour a project chose, so the two
+//	         inks cannot be one property.
+//	#8496b0  a quiet rule (--wb-border-quiet) in one place and quiet ink
+//	         (--wb-ink-quiet) in another.
+//	#2457d6  the accent a project may replace (--wb-primary) and the triad's
+//	         blue that no project reaches (--wb-priority-low). These two agree
+//	         only for as long as nobody chooses an accent.
+//
+//	#8f1d1d  the edge under --wb-danger (--wb-danger-edge) and its pressed fill
+//	         (--wb-danger-hover). Both go darker than the fill in light and part
+//	         company in dark, where an edge darkens and a press lightens.
+//
+// --wb-danger-strong is gone. It was both the fill under --wb-danger and error
+// ink on a pale surface, which in a dark scheme pull in opposite directions;
+// the ink sites read --wb-danger-ink now, and what was left of the fill role
+// split again into the edge and the press above.
 var schemeTokens = []schemeToken{
 	{"--wb-surface", "#fff", "#161c26"},
 	{"--wb-on-accent", "#fff", "#0f141c"},
+	// Ink on the derived --wb-text, which a dark scheme lifts to a pale grey. So
+	// this goes the other way with it: dark ink on a light chip, the same
+	// inversion --wb-on-accent makes under a lifted accent.
+	{"--wb-on-text", "#fff", "#0f141c"},
 	{"--wb-surface-1", "#fbfcfe", "#151b24"},
 	{"--wb-surface-2", "#fafbfd", "#151b24"},
 	{"--wb-surface-3", "#f6f8fc", "#141a22"},
@@ -348,7 +371,16 @@ var schemeTokens = []schemeToken{
 
 	{"--wb-danger", "#b42318", "#f0806c"},
 	{"--wb-danger-ink", "#9c2f25", "#f0806c"},
-	{"--wb-danger-strong", "#8f1d1d", "#e08a7c"},
+	// The edge and the pressed fill were one property, because in a light scheme
+	// both go darker than --wb-danger and one value served. A dark scheme pulls
+	// them apart the way the accent family already shows: --wb-primary-edge goes
+	// darker than its fill and --wb-primary-hover goes lighter, in opposite
+	// directions, and a single value between them is 1.01:1 against the fill —
+	// an invisible border and a hover that does not read as a press.
+	//
+	// They keep one literal in light, where they genuinely agree.
+	{"--wb-danger-edge", "#8f1d1d", "#ea5035"},
+	{"--wb-danger-hover", "#8f1d1d", "#f4a496"},
 	{"--wb-danger-surface", "#fdecea", "#2a1614"},
 	// One unit of blue from --wb-danger-surface, which is much more likely to
 	// be a slip than a decision. It is kept as its own property because
@@ -362,14 +394,24 @@ var schemeTokens = []schemeToken{
 	{"--wb-warning-surface", "#fff6e8", "#241d12"},
 	{"--wb-warning-border", "#e0b483", "#5a4520"},
 
+	// --wb-success shares its dark reading with --wb-success-ink, the way
+	// --wb-danger shares one with --wb-danger-ink: a fill and an ink of the same
+	// family land in the same band once both have to read against a dark ground.
+	{"--wb-success", "#1a7f4b", "#7fc79b"},
 	{"--wb-success-ink", "#14663c", "#7fc79b"},
 	{"--wb-success-surface", "#e8f4ec", "#12241a"},
 
-	// The third of the priority triad. It was the one literal the stylesheet
-	// deliberately kept, because it must not follow a project's accent — and it
-	// still does not: a scheme property is not derived from one. What it could
-	// not go on doing is staying a mid blue on a near-black card, which is the
-	// one thing a colour scheme has to be able to say about it.
+	// The priority triad. It does not follow a project's accent in either scheme
+	// — a scheme property is not derived from one — and what it could not go on
+	// doing is staying three mid tones on a near-black card, which is the one
+	// thing a colour scheme has to be able to say about it.
+	//
+	// High and medium take the readings --wb-danger and --wb-warning take, which
+	// is the relationship they already had in light: the triad is drawn in the
+	// semantic colours without being derived from them, so the two families move
+	// together and stay separate properties.
+	{"--wb-priority-high", "#b42318", "#f0806c"},
+	{"--wb-priority-medium", "#b45309", "#e0a45c"},
 	{"--wb-priority-low", "#2457d6", "#6f9bf5"},
 }
 

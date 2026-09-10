@@ -1,3 +1,5 @@
+//go:build !windows
+
 // Package proctest builds the shell helpers and assertions a descendant-reaping
 // test needs. The measurement harness gives every command it runs a process
 // group of its own, so proving that a finished command leaves nothing behind
@@ -5,6 +7,11 @@
 // is identical wherever the harness execs, and cmd/workbook-bench runs its own
 // exec site outside package perf, so it lives here rather than in one package's
 // test files.
+//
+// The helpers are POSIX: they drive /bin/sh, signal process groups, and read
+// /proc. Windows gets the stubs in proctest_windows.go, which exist so the
+// package compiles there — the descendant-reaping behaviour they assert is
+// itself a POSIX process-group property and has no Windows equivalent to test.
 package proctest
 
 import (

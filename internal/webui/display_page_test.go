@@ -164,7 +164,8 @@ func TestHandlerServesOneNamedHeaderToEveryRoute(t *testing.T) {
 // It is asserted against the same table the generator reads, so a property
 // added to one and not the other is caught here rather than in a browser.
 func TestHandlerStylesheetDeclaresTheLegacyPaletteAsItsDefaults(t *testing.T) {
-	body := displayBoardPage(t, core.DisplaySettings{}, "workbook")
+	body := pageWithoutStyleComments(t, displayBoardPage(t, core.DisplaySettings{}, "workbook"))
+	declared := declaredLiteralCounts()
 
 	for _, token := range append(append([]themeToken{}, primaryThemeTokens...), textThemeTokens...) {
 		declaration := token.property + ": " + token.legacy + ";"
@@ -176,9 +177,9 @@ func TestHandlerStylesheetDeclaresTheLegacyPaletteAsItsDefaults(t *testing.T) {
 		// choice while every other one followed it. Counted exactly rather than
 		// bounded: a literal that stopped appearing is a default that stopped
 		// being declared, which is the other half of the same claim.
-		if got := strings.Count(body, token.legacy); got != expectedLegacyMentions(token.legacy) {
-			t.Errorf("the page writes %s out %d times, want %d — once as this property's default%s",
-				token.legacy, got, expectedLegacyMentions(token.legacy), priorityException(token.legacy))
+		if got, want := countColorLiteral(body, token.legacy), declared[token.legacy]; got != want {
+			t.Errorf("the page writes %s out %d times, want %d — once for each property that declares it as its default",
+				token.legacy, got, want)
 		}
 	}
 }
@@ -194,33 +195,155 @@ func TestHandlerStylesheetDeclaresTheLegacyPaletteAsItsDefaults(t *testing.T) {
 // colour when the scheme moves, which is exactly the class of miss this table
 // exists to make impossible.
 //
-// Counted per literal rather than per token, because two of them are declared
-// twice on purpose: see schemeTokens for why #fff and #8496b0 each carry two
-// properties.
+// Counted per literal rather than per token, because three of them are declared
+// more than once on purpose: see schemeTokens for why #fff carries three
+// properties and #8496b0 and #2457d6 two each.
 func TestHandlerStylesheetDeclaresTheSchemePaletteAsItsDefaults(t *testing.T) {
-	body := displayBoardPage(t, core.DisplaySettings{}, "workbook")
+	body := pageWithoutStyleComments(t, displayBoardPage(t, core.DisplaySettings{}, "workbook"))
+	declared := declaredLiteralCounts()
 
-	// Counted across every table that declares a default, not just this one:
-	// #2457d6 is the accent's default as well as the priority triad's blue, so a
-	// count taken from schemeTokens alone would call the second one a stray.
-	declarations := map[string]int{}
-	for _, token := range append(append([]themeToken{}, primaryThemeTokens...), textThemeTokens...) {
-		declarations[token.legacy]++
-	}
 	for _, token := range schemeTokens {
-		declarations[token.legacy]++
 		if declaration := token.property + ": " + token.legacy + ";"; !strings.Contains(body, declaration) {
 			t.Errorf("the stylesheet does not declare %q", declaration)
 		}
-	}
-
-	for literal, declared := range declarations {
-		if got := countColorLiteral(body, literal); got != declared {
+		if got, want := countColorLiteral(body, token.legacy), declared[token.legacy]; got != want {
 			t.Errorf("the page writes %s out %d times, want %d — once for each property that declares it as its default",
-				literal, got, declared)
+				token.legacy, got, want)
 		}
 	}
 }
+
+// declaredLiteralCounts is how many times each literal is allowed to appear on
+// the served page: once for every property, in any of the three tables, that
+// declares it as its default.
+//
+// Spanning all three is what makes this a count rather than a licence. A
+// literal two families both name — #2457d6 is the accent and the priority
+// triad's blue — appears twice legitimately, and a per-table count would have
+// to be told so by hand. That hand-kept exception is what used to live here,
+// and it was the same shape as the thing these guards exist to prevent.
+func declaredLiteralCounts() map[string]int {
+	declared := map[string]int{}
+	for _, token := range primaryThemeTokens {
+		declared[token.legacy]++
+	}
+	for _, token := range textThemeTokens {
+		declared[token.legacy]++
+	}
+	for _, token := range schemeTokens {
+		declared[token.legacy]++
+	}
+	return declared
+}
+
+// The guard above runs one way: it proves the literals the table names are not
+// written out anywhere else. It says nothing about a literal the table has
+// never heard of, and that is the gap a colour arrives through. The relative
+// sync indicator walked straight into it — of the three literals it added, two
+// collided with tokens and were caught, and its green was simply new, so
+// nothing objected to a raw colour sitting in the stylesheet.
+//
+// So this asserts the other direction, and asserts it as a closed set rather
+// than a budget: outside the two `:root` blocks that declare the palette, the
+// stylesheet writes no colour at all. There is no exception list to keep in
+// step — a rule that wants a colour has to name a property, and a colour that
+// has no property has to become one before it can be used.
+func TestHandlerStylesheetWritesNoColourOutsideTheRootBlocks(t *testing.T) {
+	body := pageWithoutStyleComments(t, displayBoardPage(t, core.DisplaySettings{}, "workbook"))
+
+	rules := rootBlocks.ReplaceAllString(styleSheet(t, body), "")
+	if written := colorLiteral.FindAllString(rules, -1); len(written) > 0 {
+		t.Errorf("the stylesheet writes %v outside :root — every colour a rule uses has to be read from a property, so that one block moves the whole board",
+			written)
+	}
+}
+
+// Every palette property the stylesheet declares is one of the tables', and the
+// tables are where a dark reading comes from.
+//
+// This is the other half of the dark-reading guard above. That one walks the
+// tables and demands a dark declaration for each; without this one, a property
+// declared straight into the light `:root` is in no table, so nothing demands
+// anything of it — and `var()` answers an unset property with nothing at all,
+// so in dark it is an invisible control rather than a wrong-coloured one. The
+// two together close the loop: a colour cannot enter the stylesheet without
+// entering a table, and cannot enter a table without stating what it becomes.
+func TestHandlerStylesheetDeclaresNoPalettePropertyOutsideItsTables(t *testing.T) {
+	body := pageWithoutStyleComments(t, displayBoardPage(t, core.DisplaySettings{}, "workbook"))
+
+	stray := map[string]bool{}
+	for _, block := range lightRootBlocks.FindAllStringSubmatch(styleSheet(t, body), -1) {
+		for _, declaration := range paletteProperty.FindAllStringSubmatch(block[1], -1) {
+			stray[declaration[1]] = true
+		}
+	}
+	for _, token := range schemeTokens {
+		delete(stray, token.property)
+	}
+	for _, token := range append(append([]themeToken{}, primaryThemeTokens...), textThemeTokens...) {
+		delete(stray, token.property)
+	}
+	for property := range stray {
+		t.Errorf("the stylesheet declares %s but no table does, so nothing gives it a dark reading", property)
+	}
+}
+
+// The light `:root` blocks: the ones whose selector carries no scheme qualifier.
+var lightRootBlocks = regexp.MustCompile(`(?s):root \{(.*?)\}`)
+
+// A palette property. Scoped to the --wb- prefix so the board's own layout
+// properties — --board-column-min and its sibling — are not colours to answer
+// for.
+var paletteProperty = regexp.MustCompile(`(--wb-[a-z0-9-]+):`)
+
+// The `:root` blocks are where the palette is allowed to say a colour out loud:
+// the derived families' defaults, the scheme block beneath them, and the dark
+// readings of both.
+//
+// A dark block is still a palette block, so the selector may carry the
+// attribute and `:not()` qualifiers that decide which scheme it answers to —
+// `:root[data-scheme="dark"]`, `:root:not([data-scheme="light"])`. What it may
+// not carry is a descendant: `:root[data-scheme="dark"] .nav-switch__knob` is a
+// rule about one control, not a palette, and a literal written there is exactly
+// the kind this guard exists to refuse. So the qualifiers are matched and a
+// space before the brace is not.
+var rootBlocks = regexp.MustCompile(`(?s):root(?::not\(\[[^\]]*\]\)|\[[^\]]*\])*\s*\{.*?\}`)
+
+// Hex in any of its lengths, and the functional notations. Deliberately not
+// anchored to a property, because the point is to find a colour wherever it was
+// written rather than only where one was expected.
+var colorLiteral = regexp.MustCompile(`#[0-9a-fA-F]{3,8}\b|(?:rgba?|hsla?|color-mix|oklch|lab)\([^)]*\)`)
+
+// styleSheet returns the board's own stylesheet — the first <style> element,
+// which is the one this file is about. The theme block a configured project is
+// served is a second element after it, and is composed in Go rather than
+// written here.
+func styleSheet(t *testing.T, body string) string {
+	t.Helper()
+	open := strings.Index(body, "<style>")
+	shut := strings.Index(body, "</style>")
+	if open < 0 || shut < open {
+		t.Fatal("the page serves no stylesheet")
+	}
+	return body[open+len("<style>") : shut]
+}
+
+// pageWithoutStyleComments is the served page with the stylesheet's comments
+// taken out. Every guard in this file counts colour literals, and a colour
+// named in prose is not one the browser draws — the block above `:root` says
+// which literals are declared twice and why, and would otherwise be caught
+// declaring them a third time.
+func pageWithoutStyleComments(t *testing.T, body string) string {
+	t.Helper()
+	open := strings.Index(body, "<style>")
+	shut := strings.Index(body, "</style>")
+	if open < 0 || shut < open {
+		t.Fatal("the page serves no stylesheet")
+	}
+	return body[:open] + cssComment.ReplaceAllString(body[open:shut], "") + body[shut:]
+}
+
+var cssComment = regexp.MustCompile(`(?s)/\*.*?\*/`)
 
 // countColorLiteral counts a colour literal without counting a longer one that
 // starts with it. `strings.Count` cannot do this here: #fff is a prefix of
@@ -441,63 +564,49 @@ func declaredValue(t *testing.T, block, property string) string {
 	return value
 }
 
-// expectedLegacyMentions is how many times a legacy literal may still appear in
-// the served page: once as the property's own default, and — for the accent —
-// once more in `.priority--low`, which keeps a static blue on purpose.
-func expectedLegacyMentions(literal string) int {
-	switch literal {
-	case priorityLowBlue:
-		return 2
-	default:
-		return 1
-	}
-}
-
-func priorityException(literal string) string {
-	if literal == priorityLowBlue {
-		return ", and once in the priority triad"
-	}
-	return ""
-}
-
-// priorityLowBlue is the accent, and the one place in this stylesheet that keeps
-// it written out.
+// priorityLowBlue is the accent, and also the triad's blue. Two properties
+// declare it, and they agree only until a project chooses an accent.
 const priorityLowBlue = "#2457d6"
 
-// `.priority--low` does not follow a project's accent, and this is the only
-// place in the stylesheet that is true of.
+// The priority triad does not follow a project's accent.
 //
 // It is not an oversight to be tidied up later. The three priority colours are a
-// triad read against each other — the danger red for high, the warning amber for
-// medium, this blue for low — and a project that picks a red-ish accent would
-// make "low" read as "high" on every card on the board. The rule is stated here
-// because the conversion that took every other occurrence of this literal was
-// mechanical, and the next such sweep will reach this one too.
+// triad read against each other — a red for high, an amber for medium, a blue
+// for low — and a project that picks a red-ish accent would make "low" read as
+// "high" on every card on the board.
+//
+// The triad used to make that claim by writing its blue out where no derivation
+// could reach it. It has its own scheme family now, which does not weaken the
+// claim but does move where the claim lives: a scheme property is not derived
+// from a project's colour either, so what has to be true is that these three
+// resolve to the triad's own properties and that nothing overrides them. Both
+// halves are asserted below, against a project whose accent is the very red the
+// high priority is drawn in.
 func TestHandlerStylesheetKeepsThePriorityTriadOffTheProjectsAccent(t *testing.T) {
 	body := displayBoardPage(t, core.DisplaySettings{PrimaryColor: "#b42318"}, "workbook")
 
-	const rule = ".priority--low { color: var(--wb-priority-low); }"
-	if !strings.Contains(body, rule) {
-		t.Errorf("the stylesheet no longer carries %q, so a red-ish accent makes \"low\" read as \"high\"", rule)
-	}
-	// And the property it reads is still this blue, rather than a second name
-	// for the accent — which is the whole of the claim.
-	if !strings.Contains(body, "--wb-priority-low: "+priorityLowBlue+";") {
-		t.Errorf("--wb-priority-low is no longer declared as %s", priorityLowBlue)
-	}
-	// The other two are held off the accent for the same reason, and are here so
-	// the triad is asserted as a triad. They read scheme tokens rather than
-	// literals now, which does not weaken the claim: a scheme token is not
-	// derived from a project's colour either, so a red-ish accent still leaves
-	// all three where they are. This test proves that directly — the accent it
-	// configures is the very red --wb-danger resolves to.
-	for _, sibling := range []string{
-		".priority--high { color: var(--wb-danger); }",
-		".priority--medium { color: var(--wb-warning); }",
+	for _, rule := range []string{
+		".priority--high { color: var(--wb-priority-high); }",
+		".priority--medium { color: var(--wb-priority-medium); }",
+		".priority--low { color: var(--wb-priority-low); }",
 	} {
-		if !strings.Contains(body, sibling) {
-			t.Errorf("the stylesheet no longer carries %q", sibling)
+		if !strings.Contains(body, rule) {
+			t.Errorf("the stylesheet no longer carries %q, so the triad is no longer read as a triad", rule)
 		}
+	}
+	// And nothing a project chose reaches those three properties. This is the
+	// half the literal used to carry on its own: a rule that reads
+	// --wb-priority-low is only held off the accent for as long as the theme
+	// block declines to declare it.
+	for _, property := range []string{"--wb-priority-high", "--wb-priority-medium", "--wb-priority-low"} {
+		if strings.Contains(themeBlock(t, body), property+":") {
+			t.Errorf("the theme block declares %s, so a project's accent now reaches the priority triad", property)
+		}
+	}
+	// The blue in particular is still the blue, rather than having quietly
+	// become the accent when it stopped being written at the rule.
+	if !strings.Contains(body, "--wb-priority-low: "+priorityLowBlue+";") {
+		t.Errorf("the scheme no longer declares --wb-priority-low as %s, so a red-ish accent makes \"low\" read as \"high\"", priorityLowBlue)
 	}
 	// And the accent this project chose really is in force elsewhere, so the
 	// rule above is an exception rather than a board that ignored the setting.
