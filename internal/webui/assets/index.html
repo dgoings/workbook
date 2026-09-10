@@ -65,6 +65,12 @@
     .eyebrow { margin: 0 0 .2rem; color: var(--wb-primary); font-size: .7rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
     h1 { margin: 0; font-size: clamp(1.25rem, 2vw, 1.65rem); letter-spacing: -.03em; }
     .updated { margin: 0; color: #56647a; font-size: .75rem; text-align: right; }
+    /* Green while polls are landing, amber once they have stopped for long
+       enough to matter. The dot carries the state so the text beside it can be
+       an age rather than a status word. */
+    .sync-dot { display: inline-block; width: .45rem; height: .45rem; margin-right: .35rem; border-radius: 50%; background: #1a7f4b; vertical-align: middle; transition: background-color .2s ease; }
+    .sync-dot[data-state="stale"] { background: #b45309; }
+    .sync-dot[data-state="lost"] { background: #b42318; }
     /* The routes sit on the left, beside the title, and the settings on the
        right. They were one row once, and the row's contents changed with the
        route: the Deleted setting belongs to the board, so leaving for the
@@ -867,7 +873,7 @@
          The label is a child rather than the control's own text because the
          control is no longer only text: writing to it would take the track and
          the knob with it. -->
-    <div class="header-settings"><p class="updated" data-updated>Loaded from this checkout</p><div class="header-switches"><a class="nav-switch" href="/?deleted=1" role="switch" aria-checked="false" data-deleted-toggle hidden><span class="nav-switch__label nav-switch__label--deleted" data-deleted-label>Show Deleted</span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></a><button type="button" class="nav-switch" role="switch" aria-checked="false" data-description-toggle hidden><span class="nav-switch__label nav-switch__label--descriptions" data-description-label>Show Descriptions</span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></button><button type="button" class="nav-switch" role="switch" aria-checked="false" data-sync-toggle hidden><span class="nav-switch__label nav-switch__label--sync" data-sync-label></span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></button></div></div>
+    <div class="header-settings"><p class="updated" data-updated><span class="sync-dot" data-sync-dot aria-hidden="true"></span><span data-updated-text>Loaded from this checkout</span></p><div class="header-switches"><a class="nav-switch" href="/?deleted=1" role="switch" aria-checked="false" data-deleted-toggle hidden><span class="nav-switch__label nav-switch__label--deleted" data-deleted-label>Show Deleted</span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></a><button type="button" class="nav-switch" role="switch" aria-checked="false" data-description-toggle hidden><span class="nav-switch__label nav-switch__label--descriptions" data-description-label>Show Descriptions</span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></button><button type="button" class="nav-switch" role="switch" aria-checked="false" data-sync-toggle hidden><span class="nav-switch__label nav-switch__label--sync" data-sync-label></span><span class="nav-switch__track" aria-hidden="true"><span class="nav-switch__knob"></span></span></button></div></div>
   </header>
   <!-- What the board has to say to a reader who has moved on: a save that
        already returned, or a refused change whose card the board has since
@@ -1067,6 +1073,8 @@
       const unknownList = boardView.querySelector("[data-unknown-list]");
       const unknownCount = boardView.querySelector("[data-unknown-count]");
       const updated = document.querySelector("[data-updated]");
+      const updatedText = document.querySelector("[data-updated-text]");
+      const syncDot = document.querySelector("[data-sync-dot]");
       const notice = document.querySelector("[data-notice]");
       // The standing announcement that this page's columns are out of date, and
       // the control that acts on it. See the element itself for why a reload is
@@ -1333,6 +1341,52 @@
       let openThreadPanels = null;
 
       function text(element, value) { element.textContent = value || ""; return element; }
+
+      // How long ago the board last read the repository successfully.
+      //
+      // A wall-clock stamp answered a question nobody asks: what matters is not
+      // when the last poll landed but whether one landed recently. An age says
+      // that directly, and says it without the reader doing arithmetic against
+      // their own clock.
+      //
+      // The age is reported in five-second steps. Polls land every second, so a
+      // live counter would be a digit flickering between 0 and 1 forever;
+      // quantising it means the text only changes when something has actually
+      // changed, and the steady state is a green dot beside a fixed word.
+      const SYNC_STEP_MS = 5000;
+      const SYNC_STALE_MS = 15000;   // two missed polls is noise; fifteen seconds is not
+      const SYNC_LOST_MS = 60000;
+
+      let lastSynchronizedAt = null;
+
+      function markSynchronized() {
+        lastSynchronizedAt = Date.now();
+        renderSyncAge();
+      }
+
+      function describeSyncAge(age) {
+        if (age < SYNC_STEP_MS) return "in sync";
+        const seconds = Math.floor(age / SYNC_STEP_MS) * (SYNC_STEP_MS / 1000);
+        if (seconds < 60) return seconds + "s ago";
+        const minutes = Math.floor(seconds / 60);
+        if (minutes < 60) return minutes + "m ago";
+        return Math.floor(minutes / 60) + "h ago";
+      }
+
+      function renderSyncAge() {
+        if (!updatedText) return;
+        if (lastSynchronizedAt === null) {
+          text(updatedText, "Loaded from this checkout");
+          if (syncDot) syncDot.dataset.state = "stale";
+          return;
+        }
+        const age = Date.now() - lastSynchronizedAt;
+        text(updatedText, describeSyncAge(age));
+        if (syncDot) {
+          syncDot.dataset.state =
+            age >= SYNC_LOST_MS ? "lost" : age >= SYNC_STALE_MS ? "stale" : "fresh";
+        }
+      }
       // Card descriptions are hidden by default and this setting brings them
       // back. It is a browser preference rather than project state: it says how
       // one reader wants this board drawn, so it is remembered per browser and
@@ -8707,7 +8761,7 @@
             // page are drawn from one answer rather than from two derivations of
             // the same read.
             const projectedPresentation = projectPresentation(presentation, projected);
-            render(projected, projectedPresentation); stale.dataset.visible = "false"; text(updated, "Updated " + new Date().toLocaleTimeString());
+            render(projected, projectedPresentation); stale.dataset.visible = "false"; markSynchronized();
             // The open task page's thread and attachments follow this read in
             // place, the way the relationship sidebar below does. Nothing else
             // about that form moves on a poll: a field is corrected only by a
@@ -9034,7 +9088,13 @@
       renderRoute();
       refresh();
       refreshSyncState();
-      window.setInterval(refresh, 1000);
+      renderSyncAge();
+      // One timer, not two. The age is redrawn on the poll's own tick rather
+      // than on a second interval of its own: a board left alone still ages
+      // visibly, and there is only ever one scheduled callback to reason about.
+      // The poll's promise is returned, not swallowed: callers await this tick
+      // to know the refresh has finished.
+      window.setInterval(() => { renderSyncAge(); return refresh(); }, 1000);
     })();
   </script>
 </body>
