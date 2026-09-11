@@ -1291,24 +1291,11 @@ func setDifference(left, right []string) []string {
 // ranked against everything already drawn there — otherwise the new task
 // lands on top of a neighbour it shares a bucket with, because the walk that
 // looked for the highest rank never saw it.
-//
-// priorities is variadic so that this keeps its original four-argument shape
-// for TestNextRankAppendsAfterMaximumRationalRank, a test that predates
-// per-project priorities and — like every test in its file — must not be
-// edited. Every production caller passes exactly one: its own. Passing none,
-// as that test does, resolves through the zero PriorityVocabulary, which is
-// exactly the built-in substitution CreateMutation would fall back to for an
-// unconfigured Service anyway, so the test's two identically-tagged
-// PriorityHigh tasks compare equal either way and its answer is unchanged.
-func nextRank(vocabulary Vocabulary, snapshots []Snapshot, status Status, priority Priority, priorities ...PriorityVocabulary) (string, error) {
-	var priorityVocabulary PriorityVocabulary
-	if len(priorities) > 0 {
-		priorityVocabulary = priorities[0]
-	}
+func nextRank(vocabulary Vocabulary, snapshots []Snapshot, status Status, priority Priority, priorities PriorityVocabulary) (string, error) {
 	maximum := big.NewRat(0, 1)
 	for _, snapshot := range snapshots {
 		task := snapshot.State.Task
-		if task.Deleted || !sameBucket(vocabulary, priorityVocabulary, task, status, priority) {
+		if task.Deleted || !sameBucket(vocabulary, priorities, task, status, priority) {
 			continue
 		}
 		rank, err := parseRank(task.Rank)
