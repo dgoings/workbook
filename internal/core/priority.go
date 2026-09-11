@@ -381,7 +381,11 @@ func (vocabulary PriorityVocabulary) Validate() error {
 // collection an empty slice rather than a null — the same canonicalization
 // normalizeVocabularyDocument performs for statuses, including the charset
 // and label-length rules ValidatePriorityToken and ValidatePriorityLabel give
-// a priority.
+// a priority. A stored color, if present, must also be a valid theme color
+// already in its canonical lowercase form — the same double check
+// normalizeDisplayDocument performs on a stored color, and for the same
+// reason: an unvalidated stored value in that field is not just a bad value,
+// it is CSS a later stage composes verbatim into a template.CSS block.
 //
 // It checks shape and never counts, for the reason normalizeVocabularyDocument
 // records at length: a size ceiling enforced inside the fold can brick a
@@ -401,6 +405,27 @@ func normalizePriorityDocument(document PriorityDocument) (PriorityDocument, err
 		}
 		if err := ValidatePriorityLabel(definition.Label); err != nil {
 			return PriorityDocument{}, err
+		}
+		// Color is the one field a priority carries that ends up in a
+		// template.CSS block once stage 3 composes the board's theme — the
+		// safety argument for bypassing Go's contextual escaping there rests
+		// entirely on every byte in that block being something this package
+		// already validated, so an unvalidated stored color would be a CSS
+		// injection path from a malicious or corrupted peer, not merely a bad
+		// value a browser ignores. Mirrors normalizeDisplayDocument's own
+		// validate-and-require-canonical check on a stored color, and
+		// priority.recolor's identical check at the operation-document
+		// boundary in configop.go.
+		if definition.Color != "" {
+			canonical, err := ValidateThemeColor(definition.Color)
+			if err != nil {
+				return PriorityDocument{}, err
+			}
+			if canonical != definition.Color {
+				return PriorityDocument{}, Errorf(
+					CategoryValidation, "priority %q color is not stored canonically", definition.Priority,
+				)
+			}
 		}
 		rank, err := parseRank(definition.Rank)
 		if err != nil {

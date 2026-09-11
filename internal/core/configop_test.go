@@ -1401,6 +1401,27 @@ func TestValidateConfigStateDocumentRefusesANonCanonicalPrioritiesSection(t *tes
 			Aliases:    []PriorityAlias{},
 			Retired:    []RetiredPriority{},
 		},
+		// Color is the one field in this section that ends up composed
+		// verbatim into a template.CSS block once a later stage renders the
+		// board's theme, so an unvalidated or non-canonical stored color is
+		// not merely a bad value — it is a CSS injection path from a
+		// malicious or corrupted peer. These two mirror the malformed-color
+		// and non-canonical-color cases normalizeDisplayDocument is already
+		// held to for a stored color.
+		"malformed color": {
+			Priorities: []PriorityDefinition{
+				{Priority: PriorityHigh, Label: "High", Rank: "1/1", Tags: []PriorityTag{PriorityTagDefault}, Color: "not-a-color"},
+			},
+			Aliases: []PriorityAlias{},
+			Retired: []RetiredPriority{},
+		},
+		"non-canonically-stored color": {
+			Priorities: []PriorityDefinition{
+				{Priority: PriorityHigh, Label: "High", Rank: "1/1", Tags: []PriorityTag{PriorityTagDefault}, Color: "#ABC123"},
+			},
+			Aliases: []PriorityAlias{},
+			Retired: []RetiredPriority{},
+		},
 	}
 	for name, document := range tests {
 		t.Run(name, func(t *testing.T) {

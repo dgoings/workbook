@@ -150,7 +150,7 @@ type ConfigOperation struct {
 	// Config is the whole configuration a config.genesis carries.
 	Config *ConfigData `json:"config,omitempty"`
 
-	// The eight priority members below are the priority section's counterparts
+	// The seven priority members below are the priority section's counterparts
 	// to Name/From/To/Status/Destination/Tag/Tags above. They are separate
 	// fields rather than a shared one, because Priority is a distinct type
 	// from Status — the same distinction that keeps a task's priority and its
@@ -1682,9 +1682,12 @@ func validateConfigOperationDocument(operation ConfigOperation) error {
 	if operation.Label != "" {
 		// priority.add and priority.relabel are the only priority types that
 		// carry a label, so a Priority-domain type is otherwise
-		// indistinguishable from a Status-domain one here — the switch is
-		// what keeps a priority label held to ValidatePriorityLabel's own
-		// byte ceiling rather than the status column's.
+		// indistinguishable from a Status-domain one here — the switch is what
+		// keeps the two domains' label ceilings independent of each other.
+		// Both are 60 bytes today, set separately and by coincidence equal, so
+		// this has no observable effect yet beyond the noun in the error
+		// message; it matters the day one of the two ceilings moves and the
+		// other must not follow it.
 		validateLabel := ValidateStatusLabel
 		if operation.Type == ConfigPriorityAdd || operation.Type == ConfigPriorityRelabel {
 			validateLabel = ValidatePriorityLabel

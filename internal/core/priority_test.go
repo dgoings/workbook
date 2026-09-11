@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -103,6 +104,46 @@ func TestPriorityVocabularyValidateRefusesAnEmptySet(t *testing.T) {
 	}
 	if err := vocabulary.Validate(); err == nil {
 		t.Error("Validate accepted a project with no priorities")
+	}
+}
+
+// manyPriorities builds count distinct, validly-shaped priorities, the
+// priority-flavoured twin of vocabulary_test.go's manyStatuses.
+func manyPriorities(count int) []PriorityDefinition {
+	definitions := make([]PriorityDefinition, count)
+	for index := range definitions {
+		definitions[index] = PriorityDefinition{
+			Priority: Priority("p" + strconv.Itoa(index)),
+			Label:    "P",
+			Rank:     strconv.Itoa(index+1) + "/1",
+		}
+	}
+	return definitions
+}
+
+// validatePriorityGrowth's own test, the priority side of
+// TestValidateVocabularyGrowthRefusesOnlyGrowth: refuse only what pushes the
+// live count past MaxPriorityCount, and only when the pack is what does it —
+// shrinking back down, or holding an already-over count steady, must never be
+// refused by the same rule that refuses growth.
+func TestValidatePriorityGrowthRefusesOnlyGrowth(t *testing.T) {
+	over := PriorityDocument{Priorities: manyPriorities(MaxPriorityCount + 1)}
+	atCeiling := PriorityDocument{Priorities: manyPriorities(MaxPriorityCount)}
+	further := PriorityDocument{Priorities: manyPriorities(MaxPriorityCount + 2)}
+
+	if err := validatePriorityGrowth(atCeiling, over); err == nil {
+		t.Fatal("growth past the priority ceiling was allowed, want a refusal")
+	} else if !strings.Contains(err.Error(), "workbook priority delete") {
+		t.Fatalf("refusal = %q, want it to name the removing command", err)
+	}
+	if err := validatePriorityGrowth(over, further); err == nil {
+		t.Fatal("further growth while over the ceiling was allowed, want a refusal")
+	}
+	if err := validatePriorityGrowth(over, atCeiling); err != nil {
+		t.Fatalf("shrinking back to the ceiling was refused: %v", err)
+	}
+	if err := validatePriorityGrowth(over, over); err != nil {
+		t.Fatalf("a pack that holds the count steady while over was refused: %v", err)
 	}
 }
 
