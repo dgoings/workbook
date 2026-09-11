@@ -1693,3 +1693,45 @@ func TestValidateConfigAuthoringAcceptsAnUnconfiguredPriorityProject(t *testing.
 		t.Fatalf("ValidateConfigAuthoring() error = %v, want an unconfigured priorities section to pass", err)
 	}
 }
+
+// A pack carrying a priority operation tells an older clone to upgrade.
+func TestPriorityOperationsRequireGenerationThree(t *testing.T) {
+	got := ConfigPackMinReader([]ConfigOperation{{Type: ConfigPriorityAdd, Name: "blocker"}})
+	if got != 3 {
+		t.Errorf("ConfigPackMinReader = %d, want 3", got)
+	}
+}
+
+// And so does a genesis that carries the section, even though no priority
+// operation appears in the pack — the same guard display has.
+func TestGenesisCarryingPrioritiesRequiresGenerationThree(t *testing.T) {
+	operation := ConfigOperation{Type: ConfigGenesis, Config: &ConfigData{Priorities: &PriorityDocument{}}}
+	if got := ConfigPackMinReader([]ConfigOperation{operation}); got != 3 {
+		t.Errorf("ConfigPackMinReader = %d, want 3", got)
+	}
+}
+
+// A genesis carrying both the display and priorities sections still reports
+// 3, not 2: ConfigPackMinReader tracks a running maximum across both guards,
+// and this pins that composition against the natural-looking regression — an
+// if/else-if chain between the two guards — that would silently drop it back
+// to whichever section's check ran last.
+func TestGenesisCarryingDisplayAndPrioritiesRequiresGenerationThree(t *testing.T) {
+	operation := ConfigOperation{
+		Type: ConfigGenesis,
+		Config: &ConfigData{
+			Display:    &DisplayDocument{Name: "Atlas"},
+			Priorities: &PriorityDocument{},
+		},
+	}
+	if got := ConfigPackMinReader([]ConfigOperation{operation}); got != 3 {
+		t.Errorf("ConfigPackMinReader = %d, want 3", got)
+	}
+}
+
+// A project that configured nothing still writes no marker at all.
+func TestStatusOnlyPackStillRequiresGenerationZero(t *testing.T) {
+	if got := ConfigPackMinReader([]ConfigOperation{{Type: ConfigStatusAdd, Name: "triage"}}); got != 0 {
+		t.Errorf("ConfigPackMinReader = %d, want 0", got)
+	}
+}

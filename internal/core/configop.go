@@ -272,17 +272,31 @@ type ConfigStateDocument struct {
 // configuration from the same bytes — so it is told to upgrade instead, and
 // only about a project that has configured something. A project that has not
 // keeps a ledger those builds fold exactly as they always did.
+//
+// The priority entries are three, the generation the priority vocabulary
+// introduced, for the identical reason the display entries are two: a build
+// that predates them would compute a different — or no — configuration from a
+// checkpoint carrying a `priorities` section, so it is told to upgrade rather
+// than left to misfold silently.
 var configOperationMinReader = map[ConfigOperationType]int{
-	ConfigGenesis:       0,
-	ConfigStatusAdd:     0,
-	ConfigStatusRename:  0,
-	ConfigStatusRelabel: 0,
-	ConfigStatusRemove:  0,
-	ConfigStatusReorder: 0,
-	ConfigStatusTag:     0,
-	ConfigStatusUntag:   0,
-	ConfigDisplaySet:    2,
-	ConfigDisplayUnset:  2,
+	ConfigGenesis:         0,
+	ConfigStatusAdd:       0,
+	ConfigStatusRename:    0,
+	ConfigStatusRelabel:   0,
+	ConfigStatusRemove:    0,
+	ConfigStatusReorder:   0,
+	ConfigStatusTag:       0,
+	ConfigStatusUntag:     0,
+	ConfigDisplaySet:      2,
+	ConfigDisplayUnset:    2,
+	ConfigPriorityAdd:     3,
+	ConfigPriorityRename:  3,
+	ConfigPriorityRelabel: 3,
+	ConfigPriorityRemove:  3,
+	ConfigPriorityReorder: 3,
+	ConfigPriorityTag:     3,
+	ConfigPriorityUntag:   3,
+	ConfigPriorityRecolor: 3,
 }
 
 // ConfigPackMinReader returns the generation a reader needs to fold these
@@ -290,11 +304,12 @@ var configOperationMinReader = map[ConfigOperationType]int{
 //
 // A config.genesis is judged by what it carries rather than by its type alone,
 // which is the one place the table above is not the whole answer. A genesis
-// carries a whole ConfigData as data, so one carrying a display section is a
-// document an older reader cannot read even though no display operation appears
-// in the pack. Nothing this build writes seeds a genesis that way — the section
-// is only ever reached by an operation — and the check is here so that a build
-// which one day does cannot ship the marker off by one.
+// carries a whole ConfigData as data, so one carrying a display or priorities
+// section is a document an older reader cannot read even though no display or
+// priority operation appears in the pack. Nothing this build writes seeds a
+// genesis that way — each section is only ever reached by an operation — and
+// the check is here so that a build which one day does cannot ship the marker
+// off by one.
 func ConfigPackMinReader(operations []ConfigOperation) int {
 	generation := 0
 	for _, operation := range operations {
@@ -303,6 +318,11 @@ func ConfigPackMinReader(operations []ConfigOperation) int {
 		}
 		if operation.Config != nil && operation.Config.Display != nil {
 			if required := configOperationMinReader[ConfigDisplaySet]; required > generation {
+				generation = required
+			}
+		}
+		if operation.Config != nil && operation.Config.Priorities != nil {
+			if required := configOperationMinReader[ConfigPriorityAdd]; required > generation {
 				generation = required
 			}
 		}

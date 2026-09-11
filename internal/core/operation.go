@@ -55,11 +55,22 @@ const (
 // cannot decode strictly, which is exactly what the marker exists to turn from
 // a corruption report into an upgrade notice.
 //
+// Three is the generation the configurable priority vocabulary introduced. It
+// is a new number rather than a join to generation two for the same reason two
+// was not a join to one: a build that folds the display section does not
+// thereby know what `priority.add` or `priority.recolor` mean, and there are
+// real builds — every clone before this one — that fold generation two and
+// cannot fold this. The eight priority operation types all declare it, not
+// only the ones that look load-bearing, because a build that could fold seven
+// of the eight and silently misfold the eighth would be worse than a build
+// that refuses all eight: partial folding is exactly the failure the marker
+// exists to rule out.
+//
 // Raising this constant is the last step of shipping a new operation type, not
 // the first: the build has to be able to fold generation N before it may claim
 // to. It is also inseparable from the table that declares N — a pack this build
 // would refuse to fold is a pack it must not write — so configOperationMinReader's
-// display entries move in the same commit as this line.
+// priority entries move in the same commit as this line.
 //
 // COUPLING. Anything that caches a verdict about a history has to record this
 // value alongside it, because a verdict is a property of the history and of the
@@ -70,7 +81,7 @@ const (
 // has already happened, from cache, while the mutations it refused now succeed.
 // See historyvalidation.readerGeneration. Any future cache of a fold's outcome
 // owes the same.
-const SupportedFormatGeneration = 2
+const SupportedFormatGeneration = 3
 
 type Actor struct {
 	ID string `json:"id"`
