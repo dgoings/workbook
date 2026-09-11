@@ -1321,3 +1321,24 @@ func TestGenesisAcceptsBothTheLegacyAndDefaultVocabularies(t *testing.T) {
 		})
 	}
 }
+
+// A project that configured no priorities encodes exactly the bytes it did
+// before this section existed. This is the property golden_config_test.go
+// pins for real commits; this states it directly.
+func TestConfigDataOmitsAnUnconfiguredPrioritiesSection(t *testing.T) {
+	encoded, err := json.Marshal(ConfigData{Vocabulary: VocabularyDocument{}})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(encoded), "priorities") {
+		t.Errorf("an unconfigured project encodes a priorities section: %s", encoded)
+	}
+}
+
+// And a checkpoint carrying none reads as the built-in set.
+func TestCheckpointWithoutPrioritiesReadsAsBuiltIn(t *testing.T) {
+	var state ConfigStateDocument
+	if got := state.PriorityVocabulary().Default(); got != PriorityMedium {
+		t.Errorf("Default() = %q, want medium", got)
+	}
+}

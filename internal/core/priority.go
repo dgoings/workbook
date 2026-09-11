@@ -214,6 +214,14 @@ func copyPriorityTags(tags []PriorityTag) []PriorityTag {
 // Document returns the vocabulary in the canonical shape a configuration
 // checkpoint stores. Every member comes back as a non-nil slice, empty where
 // there is nothing to report, for the reason Vocabulary.Document's does.
+//
+// This is a reading substitution, not a storage one: like every accessor but
+// Validate, it substitutes the built-in three for the zero value. Storing its
+// result for a vocabulary that was zero — unconfigured — writes those
+// built-ins into the ledger as if a project had chosen them, which is
+// irreversible for every clone that fetches the pack. ConfigData.Priorities
+// stays nil for an unconfigured project; never populate it by calling
+// Document on a PriorityVocabulary you have not first checked with IsZero.
 func (vocabulary PriorityVocabulary) Document() PriorityDocument {
 	vocabulary = vocabulary.effective()
 	aliases := make([]PriorityAlias, len(vocabulary.aliases))

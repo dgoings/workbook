@@ -167,6 +167,13 @@ type ConfigData struct {
 	// checkpoint written before this section existed still encodes to exactly
 	// the bytes it was stored as. See DisplayDocument.
 	Display *DisplayDocument `json:"display,omitempty"`
+	// Priorities is this project's configured priority vocabulary, the sibling
+	// of Display on the same terms: a pointer with omitempty, and nil — not an
+	// empty document — is the canonical value for a project that has
+	// configured none, so every checkpoint written before this section existed
+	// still encodes to exactly the bytes it was stored as. See
+	// PriorityVocabulary.Document's warning before populating this from one.
+	Priorities *PriorityDocument `json:"priorities,omitempty"`
 }
 
 // ConfigStateDocument is a resolved configuration checkpoint, written beside
@@ -273,6 +280,18 @@ func (state ConfigStateDocument) Display() DisplaySettings {
 	return ResolveDisplaySettings(state.Config.Display)
 }
 
+// PriorityVocabulary reads the checkpoint's priority vocabulary, the sibling
+// of Vocabulary and Display and normalized on the same terms. A checkpoint
+// carrying no priorities section decodes to the zero PriorityVocabulary,
+// whose own accessors substitute the built-in three — the same way an
+// unconfigured status Vocabulary reads as DefaultVocabulary.
+func (state ConfigStateDocument) PriorityVocabulary() PriorityVocabulary {
+	if state.Config.Priorities == nil {
+		return PriorityVocabulary{}
+	}
+	return newPriorityVocabularyFromCanonical(*state.Config.Priorities)
+}
+
 // NewConfigOperationPack stamps one authored batch of configuration operations
 // with the durable format this version writes, and refuses a batch that is not
 // a well formed pack.
@@ -353,7 +372,7 @@ func ApplyConfig(parent *ConfigStateDocument, pack ConfigOperationPack) (ConfigS
 		ProjectID:    pack.ProjectID,
 		History:      History{Generation: generation},
 		LogicalClock: pack.LogicalClock,
-		Config:       ConfigData{Vocabulary: document, Display: folded.display.canonical()},
+		Config:       ConfigData{Vocabulary: document, Display: folded.display.canonical(), Priorities: folded.priorities},
 	}, nil
 }
 
@@ -421,6 +440,12 @@ func ValidateConfigCheckpoint(parent *ConfigStateDocument, pack ConfigOperationP
 type configFold struct {
 	vocabulary *configVocabulary
 	display    *configDisplay
+	// priorities carries the stored priorities section through a fold
+	// unchanged. No operation type touches it yet — that is the next task —
+	// so this is a pass-through rather than a section with its own apply
+	// method, the same shape configVocabulary and configDisplay will have
+	// once priority operations exist.
+	priorities *PriorityDocument
 }
 
 // applyConfigOperations folds a pack over its parent and returns the raw
@@ -508,7 +533,7 @@ func newConfigFold(config ConfigData) (configFold, error) {
 	if err != nil {
 		return configFold{}, err
 	}
-	return configFold{vocabulary: vocabulary, display: display}, nil
+	return configFold{vocabulary: vocabulary, display: display, priorities: config.Priorities}, nil
 }
 
 // apply routes one operation to the section that owns it.
