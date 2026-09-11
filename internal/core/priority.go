@@ -212,27 +212,50 @@ func copyPriorityTags(tags []PriorityTag) []PriorityTag {
 }
 
 // Document returns the vocabulary in the canonical shape a configuration
-// checkpoint stores. Every member comes back as a non-nil slice, empty where
-// there is nothing to report, for the reason Vocabulary.Document's does.
+// checkpoint stores, exactly as this value holds it. Every member comes back
+// as a non-nil slice, empty where there is nothing to report, for the reason
+// Vocabulary.Document's does — and, like Vocabulary.Document, that is the
+// whole of it: the zero value documents as the empty document, with no
+// substitution.
 //
-// This is a reading substitution, not a storage one: like every accessor but
-// Validate, it substitutes the built-in three for the zero value. Storing its
-// result for a vocabulary that was zero — unconfigured — writes those
-// built-ins into the ledger as if a project had chosen them, which is
-// irreversible for every clone that fetches the pack. ConfigData.Priorities
-// stays nil for an unconfigured project; never populate it by calling
-// Document on a PriorityVocabulary you have not first checked with IsZero.
+// This is deliberately the one accessor here, besides Validate, that does not
+// read the zero value as the built-in three: it is the one whose result is
+// meant to be stored. ConfigData.Priorities stays nil for an unconfigured
+// project, and populating it from a substituted document would write the
+// built-in three into the ledger as if a project had chosen them — an
+// irreversible change for every clone that later folds the pack, and the
+// exact mistake this split exists to make unrepresentable rather than merely
+// documented: a caller who wants "what does this project actually have on
+// file" now gets it by construction, without first having to check IsZero and
+// remember why. A caller who instead wants the substituted reading — what a
+// board renders, what a command describes, anything that is not headed for a
+// checkpoint — wants EffectiveDocument.
 func (vocabulary PriorityVocabulary) Document() PriorityDocument {
-	vocabulary = vocabulary.effective()
+	definitions := make([]PriorityDefinition, len(vocabulary.definitions))
+	for index, definition := range vocabulary.definitions {
+		definition.Tags = copyPriorityTags(definition.Tags)
+		definitions[index] = definition
+	}
 	aliases := make([]PriorityAlias, len(vocabulary.aliases))
 	copy(aliases, vocabulary.aliases)
 	retired := make([]RetiredPriority, len(vocabulary.retired))
 	copy(retired, vocabulary.retired)
 	return PriorityDocument{
-		Priorities: vocabulary.Definitions(),
+		Priorities: definitions,
 		Aliases:    aliases,
 		Retired:    retired,
 	}
+}
+
+// EffectiveDocument returns the vocabulary in the same canonical shape
+// Document does, but read the way every other accessor here reads: the zero
+// value substituted for the built-in three. It is Document's reading
+// counterpart, for a caller that wants "what priorities does this project
+// effectively have" — rendering a board, describing a project, comparing
+// against another project's effective set — and must never be used to
+// populate ConfigData.Priorities; see Document's comment for why.
+func (vocabulary PriorityVocabulary) EffectiveDocument() PriorityDocument {
+	return vocabulary.effective().Document()
 }
 
 // Has reports whether a priority is live in this vocabulary.

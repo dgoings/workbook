@@ -588,10 +588,10 @@ func TestServiceCreateMutationRejectsAnUnconfiguredProjectNamingAnotherProjectsP
 	}
 }
 
-// List's priority filter now gets the same relaxation the status filter
-// beside it has always had: a project-defined priority the built-in three
-// does not contain selects the tasks that carry it, rather than being
-// refused before resolution ever runs. Before this, a project that could
+// List's priority filter accepts a project-defined priority the built-in
+// three does not contain, resolving it the same way requirePriorityMember
+// does at the mutation boundary: a live member of s.Priorities is accepted,
+// not only a member of the built-in three. Before this, a project that could
 // create a task under "critical" and sort it correctly still could not list
 // tasks by it — the same non-functional corner task 6c exists to close,
 // surviving at this one remaining call site.
@@ -616,16 +616,22 @@ func TestServiceListFilterAcceptsAProjectDefinedPriority(t *testing.T) {
 	}
 }
 
-// A filter naming a well-formed priority nothing carries — because no
-// project has defined it, the same as a status this clone has not fetched
-// yet — returns an empty result rather than an error, matching the
-// relaxation List's own doc comment already grants a status filter. This also
-// pins the invariant for an unconfigured project: before this fix, "nowhere"
-// would have been refused with a validation error the same as "bogus" is at
-// the mutation boundary; List's filter never asked the mutation boundary's
-// question, so the visible change here is the mechanism (error to empty), not
-// which tasks a caller ends up seeing — none, either way.
-func TestServiceListFilterOnAnUndefinedPriorityReturnsEmptyNotError(t *testing.T) {
+// A filter naming a priority nothing carries — not live, and not reached by
+// any forwarding chain — is refused, the same refusal requirePriorityMember
+// gives a mutation for the identical priority. This is the one place List's
+// permissiveness does NOT mirror the status filter beside it: a status filter
+// outside the vocabulary is accepted because the result envelope now carries
+// the miss (see List's own doc comment, ResolveStatusFilter, and the CLI's
+// warning path); priority has no equivalent resolution report, so relaxing
+// this filter the way the status one was relaxed would silently swap a
+// refusal for an empty result nobody could tell apart from "no tasks in this
+// priority" — which is exactly the regression a whole-branch review caught:
+// `workbook list --priority urgent` used to refuse and, for one commit on
+// this branch, silently returned zero tasks instead. This test pins the
+// refusal back for an unconfigured project, matching pre-branch behavior
+// exactly; TestServiceListFilterAcceptsAProjectDefinedPriority pins the
+// companion behavior for a project that configured the priority named.
+func TestServiceListFilterOnAnUnconfiguredProjectRefusesAnUndefinedPriority(t *testing.T) {
 	store := newMemoryTaskStore(
 		serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F1", TaskData{
 			Title: "Task", Status: StatusBacklog, Priority: PriorityMedium, Rank: "1/1",
@@ -633,12 +639,18 @@ func TestServiceListFilterOnAnUndefinedPriorityReturnsEmptyNotError(t *testing.T
 	)
 	service := serviceUnderTest(store, &sequenceIDSource{})
 
-	nowhere := Priority("nowhere")
-	tasks, err := service.List(context.Background(), ListFilter{Priority: &nowhere})
-	if err != nil {
-		t.Fatalf("List(%q) error = %v, want nil", nowhere, err)
+	urgent := Priority("urgent")
+	tasks, err := service.List(context.Background(), ListFilter{Priority: &urgent})
+	if err == nil {
+		t.Fatalf("List(%q) error = nil, tasks = %#v, want a rejection", urgent, tasks)
 	}
-	if len(tasks) != 0 {
-		t.Fatalf("List(%q) = %#v, want empty", nowhere, tasks)
+	if got := CategoryOf(err); got != CategoryValidation {
+		t.Fatalf("List(%q) category = %q, want %q", urgent, got, CategoryValidation)
+	}
+	if got, want := err.Error(), `invalid task priority "urgent"`; got != want {
+		t.Fatalf("List(%q) error = %q, want %q", urgent, got, want)
+	}
+	if tasks != nil {
+		t.Fatalf("List(%q) tasks = %#v, want nil", urgent, tasks)
 	}
 }

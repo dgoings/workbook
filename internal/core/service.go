@@ -288,16 +288,23 @@ func (s Service) ResolveStatusFilter(status Status) StatusFilterResolution {
 
 // List returns the project's tasks, filtered and ordered.
 //
-// A status or priority filter outside its vocabulary is accepted and returns
-// the tasks it selects, which is usually none. That relaxation is PR-C's half
-// of a decision PR-B deferred: under a distributed vocabulary, naming a
-// status or priority this clone has not fetched yet is an ordinary thing to
-// type, and failing tells the caller their repository is broken when it is
-// merely behind. It is only honest because the result envelope now carries
-// the miss for status — see ResolveStatusFilter and the CLI's warning path —
-// so a script that greps the output is told why it found nothing rather than
-// left to infer it; priority has no equivalent resolution report yet, so a
-// caller only sees the empty result, not why.
+// A status filter outside its vocabulary is accepted and returns the tasks it
+// selects, which is usually none. That relaxation is PR-C's half of a
+// decision PR-B deferred: under a distributed vocabulary, naming a status
+// this clone has not fetched yet is an ordinary thing to type, and failing
+// tells the caller their repository is broken when it is merely behind. It is
+// only honest because the result envelope now carries the miss — see
+// ResolveStatusFilter and the CLI's warning path — so a script that greps the
+// output is told why it found nothing rather than left to infer it.
+//
+// A priority filter outside its vocabulary is refused, the same as it always
+// has been. Priority has no equivalent resolution report to carry the miss —
+// PriorityVocabulary has no Forwarding() sibling for a caller to build one
+// from — so relaxing this filter the way the status one was relaxed would
+// replace a refusal with silence nobody could explain: a script would read
+// "no tasks" and have no way to tell an empty priority from a mistyped one.
+// This filter can be relaxed the same way once that reporting exists; until
+// then, refusing is the honest answer.
 //
 // A filter that names a retired status or priority is applied to the value it
 // now means rather than to nothing. A task's status and priority are resolved
@@ -305,7 +312,9 @@ func (s Service) ResolveStatusFilter(status Status) StatusFilterResolution {
 // the comparison would ask "is this task's live value equal to a token nobody
 // carries any more" — the same wrong answer resolving only one side would give
 // for "no tasks are in ready" about a project whose ready column was merely
-// renamed.
+// renamed. A priority filter argument is resolved the same way, but only after
+// this refusal: a token that resolves to a live priority is never the one
+// being refused, since resolving it is exactly how it is found to be live.
 func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
 	snapshots, err := s.Reader.List(ctx, s.Config)
 	if err != nil {
@@ -322,7 +331,11 @@ func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
 	wantedPriority := Priority("")
 	if filter.Priority != nil {
 		wantedPriority = *filter.Priority
-		if resolved, live := s.Priorities.Resolve(wantedPriority); live {
+		if !s.Priorities.Has(wantedPriority) {
+			resolved, live := s.Priorities.Resolve(wantedPriority)
+			if !live {
+				return nil, Errorf(CategoryValidation, "invalid task priority %q", wantedPriority)
+			}
 			wantedPriority = resolved
 		}
 	}

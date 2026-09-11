@@ -233,8 +233,9 @@ type ConfigData struct {
 	// of Display on the same terms: a pointer with omitempty, and nil — not an
 	// empty document — is the canonical value for a project that has
 	// configured none, so every checkpoint written before this section existed
-	// still encodes to exactly the bytes it was stored as. See
-	// PriorityVocabulary.Document's warning before populating this from one.
+	// still encodes to exactly the bytes it was stored as. Populate this from
+	// PriorityVocabulary.Document, never from EffectiveDocument — see their
+	// comments for why the two must not be confused here.
 	Priorities *PriorityDocument `json:"priorities,omitempty"`
 }
 
@@ -1131,6 +1132,50 @@ type configPriorityEntry struct {
 // refuses to remove the last live status, so a non-empty section never folds
 // back to empty; normalizeArity's default repair can therefore assume at
 // least one candidate whenever there is anything to repair at all.
+//
+// That empty start is a hazard the status side does not have, and it is worth
+// naming precisely because nothing in this stage can reach it yet. A
+// project's config.genesis always carries a whole VocabularyDocument — every
+// build that creates a project writes DefaultVocabulary or LegacyVocabulary
+// into it explicitly — so newConfigVocabulary's fold never starts from
+// nothing a live status could be missing from. Priorities have no genesis
+// step: newConfigPriorities, just below, folds a nil section into an empty
+// configPriorities, while PriorityVocabulary.effective() (priority.go) reads
+// that same nil section as the built-in three. Those two readings of "nothing
+// configured" agree only by accident, for exactly as long as nothing writes to
+// the section: the moment a fold has folded even one priority operation, the
+// checkpoint's priorities section is no longer nil, so every accessor stops
+// substituting the built-in three and starts reading this fold's actual
+// contents instead — which is whatever operations have been folded, not the
+// built-in three plus those operations.
+//
+// Concretely: a project that has configured nothing is, today, every task
+// filed under high, medium, or low. The first priority.add a future stage
+// authors against that project — say, priority.add critical --tag default —
+// folds against an empty configPriorities and produces a vocabulary of
+// exactly {critical}. Every task still stored as high, medium, or low is now
+// unresolvable: not live, not forwarded, sorted last by Order's stranded-token
+// fallback, and invisible to any priority filter. The vocabulary was never
+// wrong by the fold's own rules — normalizeArity has nothing to repair,
+// because a single live default-tagged priority is a perfectly valid
+// vocabulary — but it is wrong for the project, because the fold was never
+// told about the three priorities every existing task actually depends on.
+//
+// This is unreachable in this stage: nothing here authors a priority
+// operation, so no fold anywhere is asked to take this step. It is stage 2's
+// problem, and it has to be solved before stage 2 ships any authoring path
+// (a CLI command, an agent tool, anything that can produce a first
+// ConfigPriorityAdd against a project that has never had one) — not discovered
+// after. The fix is not obviously "seed the built-ins into the ledger"; that
+// begs the question of when, since a genesis-time seed would give every prior
+// stage-1 project a retroactive priorities section it never asked for, and a
+// lazy seed on first-write has to decide atomically with that same write or
+// reintroduce the identical race between two clones. Whatever the mechanism,
+// it has to guarantee that the fold a first priority.add runs against already
+// contains the three priorities every task in the project is depending on —
+// not trust that the built-in substitution a *reader* performs will somehow
+// also cover a *fold in progress*, which is precisely the confusion this
+// comment exists to head off.
 type configPriorities struct {
 	priorities map[Priority]*configPriorityEntry
 	aliases    map[Priority]Priority
