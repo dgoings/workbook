@@ -146,19 +146,14 @@ const (
 	PriorityHigh   Priority = "high"
 )
 
-type PriorityDefinition struct {
-	Priority Priority
-	Label    string
-}
-
-var priorities = [...]PriorityDefinition{
-	{Priority: PriorityLow, Label: "Low"},
-	{Priority: PriorityMedium, Label: "Medium"},
-	{Priority: PriorityHigh, Label: "High"},
-}
-
+// Priorities returns the built-in priority set: today's three, most urgent
+// first. It is the durable PriorityDefinition shape — see priority.go — kept
+// under its original name and signature because it has a caller outside this
+// package that cannot reach an unexported function. Teaching it to report a
+// project's configured priorities instead of the built-in set is a later
+// stage's change; this one only moves the shape it already returned.
 func Priorities() []PriorityDefinition {
-	return append([]PriorityDefinition(nil), priorities[:]...)
+	return builtInPriorityDefinitions()
 }
 
 type TaskData struct {
@@ -314,7 +309,7 @@ func formatRank(rank *big.Rat) string {
 }
 
 func isValidPriority(priority Priority) bool {
-	for _, definition := range priorities {
+	for _, definition := range builtInPriorityDefinitions() {
 		if priority == definition.Priority {
 			return true
 		}

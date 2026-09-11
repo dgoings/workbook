@@ -165,10 +165,14 @@ func mustNormalize(task TaskData) error {
 }
 
 func TestPrioritiesExposesOrderedCanonicalValues(t *testing.T) {
+	// Priorities() is builtInPriorityDefinitions() (see priority.go), which
+	// orders most urgent first rather than the low-to-high order the
+	// package-level array used to declare, so this pins that order rather
+	// than the old one.
 	want := []PriorityDefinition{
-		{Priority: PriorityLow, Label: "Low"},
-		{Priority: PriorityMedium, Label: "Medium"},
-		{Priority: PriorityHigh, Label: "High"},
+		{Priority: PriorityHigh, Label: "High", Rank: "1/1"},
+		{Priority: PriorityMedium, Label: "Medium", Rank: "2/1", Tags: []PriorityTag{PriorityTagDefault}},
+		{Priority: PriorityLow, Label: "Low", Rank: "3/1"},
 	}
 	if got := Priorities(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Priorities() = %#v, want %#v", got, want)
@@ -179,8 +183,8 @@ func TestPrioritiesReturnsDefensiveCopy(t *testing.T) {
 	// Production mutation: returning the backing array would let one caller
 	// corrupt the canonical priority list for every other caller.
 	Priorities()[0].Priority = "tampered"
-	if got := Priorities()[0].Priority; got != PriorityLow {
-		t.Fatalf("Priorities()[0].Priority = %q, want %q", got, PriorityLow)
+	if got := Priorities()[0].Priority; got != PriorityHigh {
+		t.Fatalf("Priorities()[0].Priority = %q, want %q", got, PriorityHigh)
 	}
 }
 
