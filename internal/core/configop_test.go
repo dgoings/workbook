@@ -1433,3 +1433,151 @@ func TestNormalizeStoredPriorityDocumentCanonicalizesAnEmptySectionToNil(t *test
 		t.Errorf("normalizeStoredPriorityDocument(empty) = %#v, want nil", got)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// The eight priority operations and their fold.
+// ---------------------------------------------------------------------------
+
+// seededPriorityCheckpoint returns a checkpoint whose priorities section is
+// configured with three priorities — high, medium (default), low — reached
+// through the fold itself, the way a real project's history would reach this
+// state. It plays testVocabulary's role for the priority section.
+func seededPriorityCheckpoint(t *testing.T) ConfigStateDocument {
+	t.Helper()
+	base := genesisState(t, testVocabulary(t))
+	return fold(t, base, []ConfigOperation{
+		{Type: ConfigPriorityAdd, PriorityName: PriorityHigh, Label: "High", Rank: "1/1"},
+		{Type: ConfigPriorityAdd, PriorityName: PriorityMedium, Label: "Medium", Rank: "2/1", PriorityTags: []PriorityTag{PriorityTagDefault}},
+		{Type: ConfigPriorityAdd, PriorityName: PriorityLow, Label: "Low", Rank: "3/1"},
+	})
+}
+
+// priorityPack builds a one-batch configuration pack whose clock advances the
+// given parent by exactly one — the arithmetic every configPack in this file
+// performs — so a test can build a pack from whatever state its previous
+// ApplyConfig call produced, the way a real caller builds its next pack from
+// its own last checkpoint.
+func priorityPack(t *testing.T, parent ConfigStateDocument, operations ...ConfigOperation) ConfigOperationPack {
+	t.Helper()
+	return configPack(parent.LogicalClock+1, identify(0, operations)...)
+}
+
+// Folding a rename leaves the new name live and the old one forwarding, which
+// is the whole mechanism that stops a rename rewriting task history.
+func TestApplyConfigFoldsAPriorityRename(t *testing.T) {
+	parent := seededPriorityCheckpoint(t)
+	pack := priorityPack(t, parent, ConfigOperation{
+		Type: ConfigPriorityRename, PriorityFrom: PriorityHigh, PriorityTo: "critical",
+	})
+
+	state, err := ApplyConfig(&parent, pack)
+	if err != nil {
+		t.Fatalf("ApplyConfig: %v", err)
+	}
+	vocabulary := state.PriorityVocabulary()
+	if !vocabulary.Has("critical") {
+		t.Error("the rename did not define the new priority")
+	}
+	if got, ok := vocabulary.Resolve(PriorityHigh); !ok || got != "critical" {
+		t.Errorf("Resolve(high) = %q,%v; want critical,true", got, ok)
+	}
+}
+
+// A duplicated add is a no-op, which is what makes two clones adding the same
+// priority converge on one definition instead of erroring.
+func TestApplyConfigFoldsADuplicatedPriorityAddOnce(t *testing.T) {
+	parent := seededPriorityCheckpoint(t)
+	blocker := ConfigOperation{Type: ConfigPriorityAdd, PriorityName: "blocker", Label: "Blocker", Rank: "9/1"}
+
+	once, err := ApplyConfig(&parent, priorityPack(t, parent, blocker))
+	if err != nil {
+		t.Fatalf("ApplyConfig: %v", err)
+	}
+	twice, err := ApplyConfig(&once, priorityPack(t, once, blocker))
+	if err != nil {
+		t.Fatalf("ApplyConfig (replay): %v", err)
+	}
+	if len(twice.PriorityVocabulary().Definitions()) != len(once.PriorityVocabulary().Definitions()) {
+		t.Error("replaying an add defined the priority twice")
+	}
+}
+
+// Recolor clears back to the derived ramp, which is why it is set/unset
+// rather than a field on relabel.
+func TestApplyConfigClearsAPriorityColor(t *testing.T) {
+	parent := seededPriorityCheckpoint(t)
+	colored, err := ApplyConfig(&parent, priorityPack(t, parent, ConfigOperation{
+		Type: ConfigPriorityRecolor, Priority: PriorityHigh, Value: "#b42318",
+	}))
+	if err != nil {
+		t.Fatalf("ApplyConfig: %v", err)
+	}
+	cleared, err := ApplyConfig(&colored, priorityPack(t, colored, ConfigOperation{
+		Type: ConfigPriorityRecolor, Priority: PriorityHigh,
+	}))
+	if err != nil {
+		t.Fatalf("ApplyConfig (clear): %v", err)
+	}
+	if got := cleared.PriorityVocabulary().Color(PriorityHigh); got != "" {
+		t.Errorf("Color(high) = %q after clearing, want empty", got)
+	}
+}
+
+// The arity hazard: ApplyConfig deliberately does not call Validate, so a
+// replay that leaves no priority tagged default must still produce a usable
+// vocabulary — Default() must never come back "", which is what
+// normalizeCanonicalTask would reject as an invalid task priority. The repair
+// picks the lowest-ranked priority, the one untagged here, so the project
+// ends up back where it started.
+func TestApplyConfigRepairsAPriorityLeftWithNoDefault(t *testing.T) {
+	parent := seededPriorityCheckpoint(t)
+	pack := priorityPack(t, parent, ConfigOperation{
+		Type: ConfigPriorityUntag, Priority: PriorityMedium, PriorityTag: PriorityTagDefault,
+	})
+
+	state, err := ApplyConfig(&parent, pack)
+	if err != nil {
+		t.Fatalf("ApplyConfig: %v", err)
+	}
+	vocabulary := state.PriorityVocabulary()
+	if got := vocabulary.Default(); got == "" {
+		t.Fatal(`Default() = "", want the repair to have chosen one`)
+	}
+	if err := vocabulary.Validate(); err != nil {
+		t.Fatalf("ApplyConfig left an unusable priority vocabulary: %v", err)
+	}
+}
+
+// The other half of the same hazard: a genesis document can carry two
+// priorities both tagged default — ValidateConfigAuthoring is not in the
+// replay path that decodes one — and the fold must still converge on exactly
+// one rather than reproducing the corrupt-data question Default() would
+// otherwise have no good answer to.
+func TestApplyConfigRepairsAPriorityGenesisWithTwoDefaults(t *testing.T) {
+	config := ConfigData{
+		Vocabulary: testVocabulary(t).Document(),
+		Priorities: &PriorityDocument{
+			Priorities: []PriorityDefinition{
+				{Priority: PriorityHigh, Label: "High", Rank: "1/1", Tags: []PriorityTag{PriorityTagDefault}},
+				{Priority: PriorityLow, Label: "Low", Rank: "2/1", Tags: []PriorityTag{PriorityTagDefault}},
+			},
+			Aliases: []PriorityAlias{},
+			Retired: []RetiredPriority{},
+		},
+	}
+	pack := configPack(1, identify(0, []ConfigOperation{{Type: ConfigGenesis, Config: &config}})...)
+
+	state, err := ApplyConfig(nil, pack)
+	if err != nil {
+		t.Fatalf("ApplyConfig: %v", err)
+	}
+	vocabulary := state.PriorityVocabulary()
+	if err := vocabulary.Validate(); err != nil {
+		t.Fatalf("ApplyConfig left an unusable priority vocabulary: %v", err)
+	}
+	// The repair keeps the lowest-ranked of the two that already carried the
+	// tag, the same rule configVocabulary.normalizeArity documents.
+	if got, want := vocabulary.Default(), PriorityHigh; got != want {
+		t.Errorf("Default() = %q, want %q", got, want)
+	}
+}

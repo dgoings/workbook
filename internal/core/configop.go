@@ -67,6 +67,39 @@ const (
 	// existed — the same arithmetic the writer-format generation makes.
 	ConfigDisplaySet   ConfigOperationType = "display.set"
 	ConfigDisplayUnset ConfigOperationType = "display.unset"
+	// The eight priority operations are the third section's mutations, the
+	// same eight shapes the status vocabulary has plus one: statuses have no
+	// equivalent of ConfigPriorityRecolor, because a priority carries a field —
+	// color — that a status does not, and that field is the one thing on a
+	// priority that can be explicitly cleared back to a derived default rather
+	// than merely reassigned. See ConfigPriorityRecolor's own comment.
+	//
+	// ConfigPriorityAdd defines a new priority.
+	ConfigPriorityAdd ConfigOperationType = "priority.add"
+	// ConfigPriorityRename gives a priority a new token, leaving an alias
+	// behind, mirroring ConfigStatusRename.
+	ConfigPriorityRename ConfigOperationType = "priority.rename"
+	// ConfigPriorityRelabel changes a priority's display label.
+	ConfigPriorityRelabel ConfigOperationType = "priority.relabel"
+	// ConfigPriorityRemove retires a priority and forwards its tasks
+	// elsewhere.
+	ConfigPriorityRemove ConfigOperationType = "priority.remove"
+	// ConfigPriorityReorder moves a priority to a literal rank.
+	ConfigPriorityReorder ConfigOperationType = "priority.reorder"
+	// ConfigPriorityTag gives a priority a role.
+	ConfigPriorityTag ConfigOperationType = "priority.tag"
+	// ConfigPriorityUntag takes a role away.
+	ConfigPriorityUntag ConfigOperationType = "priority.untag"
+	// ConfigPriorityRecolor sets or clears a priority's stored color.
+	//
+	// It is its own operation rather than a member of priority.relabel because
+	// color is the one field on a priority that can be cleared back to the
+	// board's derived ramp — the same set/unset shape display.set and
+	// display.unset give the display section, collapsed into one type here
+	// because there is only one field to set or clear rather than three: an
+	// empty Value means clear, the same convention ConfigOperation.Value
+	// already carries for display.set.
+	ConfigPriorityRecolor ConfigOperationType = "priority.recolor"
 )
 
 // ConfigOperation is one immutable configuration change.
@@ -108,13 +141,42 @@ type ConfigOperation struct {
 	// Setting names the display setting a display.set or display.unset acts on:
 	// project-name, primary-color, or text-color.
 	Setting string `json:"setting,omitempty"`
-	// Value is what a display.set records. It is stored in the canonical form
-	// the boundary produced — a trimmed name, a lowercase color — because the
-	// checkpoint these fold into is compared by bytes, so a value with two
-	// spellings would be two configurations.
+	// Value is what a display.set records, or the color a priority.recolor
+	// sets — empty clears it back to the derived ramp. It is stored in the
+	// canonical form the boundary produced — a trimmed name, a lowercase color
+	// — because the checkpoint these fold into is compared by bytes, so a
+	// value with two spellings would be two configurations.
 	Value string `json:"value,omitempty"`
 	// Config is the whole configuration a config.genesis carries.
 	Config *ConfigData `json:"config,omitempty"`
+
+	// The eight priority members below are the priority section's counterparts
+	// to Name/From/To/Status/Destination/Tag/Tags above. They are separate
+	// fields rather than a shared one, because Priority is a distinct type
+	// from Status — the same distinction that keeps a task's priority and its
+	// status from being typo'd into each other anywhere else in this package —
+	// and a field can only ever hold one of the two.
+	//
+	// PriorityName is the priority a priority.add creates.
+	PriorityName Priority `json:"priorityName,omitempty"`
+	// PriorityFrom and PriorityTo are a priority.rename's subject and its
+	// replacement.
+	PriorityFrom Priority `json:"priorityFrom,omitempty"`
+	PriorityTo   Priority `json:"priorityTo,omitempty"`
+	// Priority is the subject of every other priority operation. Like Status
+	// above, it is resolved through the rename chain before it is applied, so
+	// an operation authored against a name a concurrent rename has since
+	// replaced still lands on the priority the author meant, and it stops at a
+	// retirement for the same reason Status's does.
+	Priority Priority `json:"priority,omitempty"`
+	// PriorityDestination is where a priority.remove forwards the retired
+	// priority's tasks.
+	PriorityDestination Priority `json:"priorityDestination,omitempty"`
+	// PriorityTag carries the single role of a priority.tag or
+	// priority.untag.
+	PriorityTag PriorityTag `json:"priorityTag,omitempty"`
+	// PriorityTags carries the initial roles of a priority.add.
+	PriorityTags []PriorityTag `json:"priorityTags,omitempty"`
 }
 
 // ConfigOperationPack is one commit's worth of configuration changes.
@@ -346,6 +408,14 @@ func NewConfigOperationPack(
 // the authoring boundary instead, by ValidateConfigAuthoring, where somebody
 // can still choose differently.
 //
+// The priorities section is held to the same rule, for the same reason: a
+// replay can leave it with no default tagged, or — a genesis is the only way
+// to reach this, since every tagging operation transfers the tag rather than
+// adding one — with two. Left alone, a configured-but-default-less vocabulary
+// would answer Default() with "", which is not a priority any task can be
+// created with; normalizeArity repairs it the same deterministic way the
+// vocabulary's does, by position, so replay never produces that state.
+//
 // Structural failure is still failure. An unsupported operation type, a
 // malformed token, a pack whose clock does not advance its parent — those are
 // corrupt data, and folding past them would invent a state no author ever
@@ -361,6 +431,11 @@ func ApplyConfig(parent *ConfigStateDocument, pack ConfigOperationPack) (ConfigS
 	if err != nil {
 		return ConfigStateDocument{}, Wrap(CategoryCorruptData, "configuration pack produced an invalid vocabulary", err)
 	}
+	folded.priorities.normalizeArity()
+	priorities, err := folded.priorities.document()
+	if err != nil {
+		return ConfigStateDocument{}, Wrap(CategoryCorruptData, "configuration pack produced an invalid priority vocabulary", err)
+	}
 	minReader := pack.MinReader
 	if parent != nil && parent.MinReader > minReader {
 		minReader = parent.MinReader
@@ -372,7 +447,7 @@ func ApplyConfig(parent *ConfigStateDocument, pack ConfigOperationPack) (ConfigS
 		ProjectID:    pack.ProjectID,
 		History:      History{Generation: generation},
 		LogicalClock: pack.LogicalClock,
-		Config:       ConfigData{Vocabulary: document, Display: folded.display.canonical(), Priorities: folded.priorities},
+		Config:       ConfigData{Vocabulary: document, Display: folded.display.canonical(), Priorities: priorities},
 	}, nil
 }
 
@@ -440,13 +515,12 @@ func ValidateConfigCheckpoint(parent *ConfigStateDocument, pack ConfigOperationP
 type configFold struct {
 	vocabulary *configVocabulary
 	display    *configDisplay
-	// priorities carries the stored priorities section through a fold,
-	// normalized on the way in by normalizeStoredPriorityDocument the same
-	// way Display is. No operation type touches it yet — that is the next
-	// task — so this is a pass-through rather than a section with its own
-	// apply method, the same shape configVocabulary and configDisplay will
-	// have once priority operations exist.
-	priorities *PriorityDocument
+	// priorities is the mutable working form of the priorities section, the
+	// sibling of vocabulary rather than of display: like the status
+	// vocabulary it has an apply method routing eight operation types and an
+	// arity invariant ApplyConfig repairs after the fold, which display's
+	// three independent, arity-free settings have no equivalent of.
+	priorities *configPriorities
 }
 
 // applyConfigOperations folds a pack over its parent and returns the raw
@@ -534,12 +608,12 @@ func newConfigFold(config ConfigData) (configFold, error) {
 	if err != nil {
 		return configFold{}, err
 	}
-	// Normalized on the way in, the same as Display, so a fold never carries a
-	// non-canonical or aliasing priorities document forward — see
-	// normalizeStoredPriorityDocument.
-	priorities, err := normalizeStoredPriorityDocument(config.Priorities)
+	// Normalized on the way in, the same as Display and Vocabulary, so a fold
+	// never carries a non-canonical or aliasing priorities document forward —
+	// see normalizeStoredPriorityDocument.
+	priorities, err := newConfigPriorities(config.Priorities)
 	if err != nil {
-		return configFold{}, Wrap(CategoryCorruptData, "configuration contains an invalid priority vocabulary", err)
+		return configFold{}, err
 	}
 	return configFold{vocabulary: vocabulary, display: display, priorities: priorities}, nil
 }
@@ -555,6 +629,9 @@ func (folded configFold) apply(operation ConfigOperation) error {
 	switch operation.Type {
 	case ConfigDisplaySet, ConfigDisplayUnset:
 		return folded.display.apply(operation)
+	case ConfigPriorityAdd, ConfigPriorityRename, ConfigPriorityRelabel, ConfigPriorityRemove,
+		ConfigPriorityReorder, ConfigPriorityTag, ConfigPriorityUntag, ConfigPriorityRecolor:
+		return folded.priorities.apply(operation)
 	default:
 		return folded.vocabulary.apply(operation)
 	}
@@ -975,6 +1052,429 @@ func (vocabulary *configVocabulary) sortedStatuses() []*configStatus {
 	return sorted
 }
 
+// configPriorityEntry is a live priority plus its parsed rank, mirroring
+// configStatus: the rank is parsed once, where it enters the fold, so that
+// sorting and normalization are total.
+type configPriorityEntry struct {
+	definition PriorityDefinition
+	rank       *big.Rat
+}
+
+// configPriorities is the mutable working form of a priority vocabulary
+// during a fold, the sibling of configVocabulary.
+//
+// Unlike configVocabulary it can genuinely hold zero live priorities: a
+// project that has never run a priority operation folds every pack with an
+// empty configPriorities, and document() reports that state as nil, the same
+// "configured nothing" normalizeStoredPriorityDocument enforces at rest —
+// mirroring the same substitution PriorityVocabulary.effective() performs for
+// a caller reading it. Once the first priority.add lands, applyRemove refuses
+// to take the count back to zero the same way the vocabulary's applyRemove
+// refuses to remove the last live status, so a non-empty section never folds
+// back to empty; normalizeArity's default repair can therefore assume at
+// least one candidate whenever there is anything to repair at all.
+type configPriorities struct {
+	priorities map[Priority]*configPriorityEntry
+	aliases    map[Priority]Priority
+	retired    map[Priority]Priority
+}
+
+// newConfigPriorities builds the working form from a stored priorities
+// section. A nil document — the canonical "configured nothing" — builds an
+// empty working form rather than failing, because an unconfigured project is
+// exactly the state a fold must be able to start from.
+func newConfigPriorities(document *PriorityDocument) (*configPriorities, error) {
+	normalized, err := normalizeStoredPriorityDocument(document)
+	if err != nil {
+		return nil, Wrap(CategoryCorruptData, "configuration contains an invalid priority vocabulary", err)
+	}
+	priorities := &configPriorities{
+		priorities: make(map[Priority]*configPriorityEntry),
+		aliases:    make(map[Priority]Priority),
+		retired:    make(map[Priority]Priority),
+	}
+	if normalized == nil {
+		return priorities, nil
+	}
+	for _, definition := range normalized.Priorities {
+		rank, err := parseRank(definition.Rank)
+		if err != nil {
+			return nil, Wrap(CategoryCorruptData, "priority rank is invalid", err)
+		}
+		priorities.priorities[definition.Priority] = &configPriorityEntry{definition: definition, rank: rank}
+	}
+	for _, alias := range normalized.Aliases {
+		priorities.aliases[alias.From] = alias.To
+	}
+	for _, entry := range normalized.Retired {
+		priorities.retired[entry.Priority] = entry.Destination
+	}
+	return priorities, nil
+}
+
+// document returns the section in the canonical stored form: nil when there
+// is nothing configured, matching normalizeStoredPriorityDocument's rule that
+// an all-empty section canonicalizes to the absent member rather than an
+// empty-but-present one.
+func (priorities *configPriorities) document() (*PriorityDocument, error) {
+	document := PriorityDocument{
+		Priorities: make([]PriorityDefinition, 0, len(priorities.priorities)),
+		Aliases:    make([]PriorityAlias, 0, len(priorities.aliases)),
+		Retired:    make([]RetiredPriority, 0, len(priorities.retired)),
+	}
+	for _, entry := range priorities.priorities {
+		document.Priorities = append(document.Priorities, entry.definition)
+	}
+	for from, to := range priorities.aliases {
+		document.Aliases = append(document.Aliases, PriorityAlias{From: from, To: to})
+	}
+	for priority, destination := range priorities.retired {
+		document.Retired = append(document.Retired, RetiredPriority{Priority: priority, Destination: destination})
+	}
+	// Map iteration delivered these in an arbitrary order; normalization is
+	// what makes the result a function of the configuration rather than of
+	// this process's hash seed, and what collapses an empty result to nil.
+	return normalizeStoredPriorityDocument(&document)
+}
+
+// resolveSubject walks an operation's subject through rename aliases only,
+// and stops at a retirement, mirroring configVocabulary.resolveSubject for
+// the same reason: an operation authored against a name a concurrent rename
+// replaced still means the priority it named, while one against a name a
+// concurrent removal retired means a priority that no longer exists.
+func (priorities *configPriorities) resolveSubject(priority Priority) (Priority, bool) {
+	if _, live := priorities.priorities[priority]; live {
+		return priority, true
+	}
+	seen := make(map[Priority]struct{}, len(priorities.aliases))
+	current := priority
+	for range len(priorities.aliases) + 1 {
+		next, aliased := priorities.aliases[current]
+		if !aliased {
+			return priority, false
+		}
+		if _, repeated := seen[next]; repeated {
+			return priority, false
+		}
+		seen[next] = struct{}{}
+		if _, live := priorities.priorities[next]; live {
+			return next, true
+		}
+		current = next
+	}
+	return priority, false
+}
+
+// resolve walks a stored priority to the live priority it now means, through
+// both chains, mirroring configVocabulary.resolve. It is what a removal's
+// destination goes through: a destination that has itself since been retired
+// should forward to wherever it went.
+func (priorities *configPriorities) resolve(priority Priority) (Priority, bool) {
+	if _, live := priorities.priorities[priority]; live {
+		return priority, true
+	}
+	seen := make(map[Priority]struct{}, len(priorities.aliases)+len(priorities.retired))
+	current := priority
+	for range len(priorities.aliases) + len(priorities.retired) + 1 {
+		next, forwarded := priorities.forwarded(current)
+		if !forwarded {
+			return priority, false
+		}
+		if _, repeated := seen[next]; repeated {
+			return priority, false
+		}
+		seen[next] = struct{}{}
+		if _, live := priorities.priorities[next]; live {
+			return next, true
+		}
+		current = next
+	}
+	return priority, false
+}
+
+func (priorities *configPriorities) forwarded(priority Priority) (Priority, bool) {
+	if to, aliased := priorities.aliases[priority]; aliased {
+		return to, true
+	}
+	to, retired := priorities.retired[priority]
+	return to, retired
+}
+
+func (priorities *configPriorities) apply(operation ConfigOperation) error {
+	switch operation.Type {
+	case ConfigPriorityAdd:
+		return priorities.applyAdd(operation)
+	case ConfigPriorityRename:
+		priorities.applyRename(operation)
+		return nil
+	case ConfigPriorityRelabel:
+		priorities.applyRelabel(operation)
+		return nil
+	case ConfigPriorityRemove:
+		priorities.applyRemove(operation)
+		return nil
+	case ConfigPriorityReorder:
+		return priorities.applyReorder(operation)
+	case ConfigPriorityTag:
+		priorities.applyTag(operation)
+		return nil
+	case ConfigPriorityUntag:
+		priorities.applyUntag(operation)
+		return nil
+	case ConfigPriorityRecolor:
+		priorities.applyRecolor(operation)
+		return nil
+	default:
+		return corrupt("unsupported configuration operation type %q", operation.Type)
+	}
+}
+
+// applyAdd defines a priority, and does nothing at all when the name is
+// already live — the same no-op rule configVocabulary.applyAdd documents at
+// length: it is what makes a duplicated pack a no-op, and it is the
+// concurrent rule that two clones adding the same priority converge on one
+// definition, the first upstream one, rather than on an error.
+func (priorities *configPriorities) applyAdd(operation ConfigOperation) error {
+	if _, live := priorities.priorities[operation.PriorityName]; live {
+		return nil
+	}
+	rank, err := parseRank(operation.Rank)
+	if err != nil {
+		return Wrap(CategoryCorruptData, "priority.add rank is invalid", err)
+	}
+	tags, err := normalizePriorityTags(operation.PriorityTags)
+	if err != nil {
+		return Wrap(CategoryCorruptData, "priority.add tags are invalid", err)
+	}
+	// The name is live again, so any forwarding pointer still aimed away from
+	// it has to go: leaving one would make every stored task under this name
+	// resolve past the priority the author just created.
+	delete(priorities.aliases, operation.PriorityName)
+	delete(priorities.retired, operation.PriorityName)
+	priorities.priorities[operation.PriorityName] = &configPriorityEntry{
+		definition: PriorityDefinition{
+			Priority: operation.PriorityName,
+			Label:    operation.Label,
+			Rank:     operation.Rank,
+			Tags:     tags,
+		},
+		rank: rank,
+	}
+	for _, tag := range tags {
+		if tag == PriorityTagDefault {
+			priorities.clearDefaultExcept(operation.PriorityName)
+		}
+	}
+	return nil
+}
+
+// applyRename mirrors configVocabulary.applyRename: renaming onto a name that
+// is already live is a no-op rather than a merge, because two priorities
+// cannot share a token and picking a winner here would silently discard one
+// priority's tasks.
+func (priorities *configPriorities) applyRename(operation ConfigOperation) {
+	from, live := priorities.resolveSubject(operation.PriorityFrom)
+	if !live || from == operation.PriorityTo {
+		return
+	}
+	if _, taken := priorities.priorities[operation.PriorityTo]; taken {
+		return
+	}
+	entry := priorities.priorities[from]
+	entry.definition.Priority = operation.PriorityTo
+	delete(priorities.priorities, from)
+	priorities.priorities[operation.PriorityTo] = entry
+	delete(priorities.aliases, operation.PriorityTo)
+	delete(priorities.retired, operation.PriorityTo)
+	priorities.aliases[from] = operation.PriorityTo
+}
+
+func (priorities *configPriorities) applyRelabel(operation ConfigOperation) {
+	subject, live := priorities.resolveSubject(operation.Priority)
+	if !live {
+		return
+	}
+	priorities.priorities[subject].definition.Label = operation.Label
+}
+
+func (priorities *configPriorities) applyReorder(operation ConfigOperation) error {
+	subject, live := priorities.resolveSubject(operation.Priority)
+	if !live {
+		return nil
+	}
+	rank, err := parseRank(operation.Rank)
+	if err != nil {
+		return Wrap(CategoryCorruptData, "priority.reorder rank is invalid", err)
+	}
+	// The recorded rank is literal, not relative, for the same convergence
+	// reason configVocabulary.applyReorder's comment gives.
+	priorities.priorities[subject].definition.Rank = operation.Rank
+	priorities.priorities[subject].rank = rank
+	return nil
+}
+
+// applyRemove retires a priority and leaves a forwarding pointer to where its
+// tasks belong, mirroring configVocabulary.applyRemove including its refusal
+// to remove the last live priority: a project with no priorities has no
+// value a task's priority field could hold, and no default a create could
+// fall back to, and there is no later operation that could repair it from the
+// outside.
+func (priorities *configPriorities) applyRemove(operation ConfigOperation) {
+	subject, live := priorities.resolveSubject(operation.Priority)
+	if !live || len(priorities.priorities) == 1 {
+		return
+	}
+	destination, resolved := priorities.resolve(operation.PriorityDestination)
+	if !resolved || destination == subject {
+		return
+	}
+	// No cycle can be built here, for exactly the reason
+	// configVocabulary.applyRemove's comment gives: the destination is live at
+	// this moment, a live priority forwards nowhere, and the subject is not
+	// the destination, so the chain that now starts at the subject terminates
+	// one hop later.
+	delete(priorities.priorities, subject)
+	priorities.retired[subject] = destination
+}
+
+// applyTag gives a priority a role, and transfers the default tag atomically
+// the same way configVocabulary.applyTag does, and for the same reason: an
+// intermediate state with no default at all is not one a concurrent clone
+// should ever be able to fetch and normalize into a choice nobody made.
+func (priorities *configPriorities) applyTag(operation ConfigOperation) {
+	subject, live := priorities.resolveSubject(operation.Priority)
+	if !live {
+		return
+	}
+	if operation.PriorityTag == PriorityTagDefault {
+		priorities.clearDefaultExcept(subject)
+	}
+	entry := priorities.priorities[subject]
+	if entry.definition.HasTag(operation.PriorityTag) {
+		return
+	}
+	tags := append(append([]PriorityTag(nil), entry.definition.Tags...), operation.PriorityTag)
+	// The tag was validated by the operation document check, so this cannot
+	// fail.
+	entry.definition.Tags, _ = normalizePriorityTags(tags)
+}
+
+func (priorities *configPriorities) applyUntag(operation ConfigOperation) {
+	subject, live := priorities.resolveSubject(operation.Priority)
+	if !live {
+		return
+	}
+	entry := priorities.priorities[subject]
+	tags := make([]PriorityTag, 0, len(entry.definition.Tags))
+	for _, existing := range entry.definition.Tags {
+		if existing != operation.PriorityTag {
+			tags = append(tags, existing)
+		}
+	}
+	entry.definition.Tags = tags
+}
+
+// applyRecolor sets or clears a priority's stored color, reusing
+// ConfigOperation.Value the same way display.set and display.unset share it:
+// an empty value means clear, back to the board's derived ramp. It is folded
+// as a plain assignment rather than judged, for the same reason
+// configDisplay.apply never judges a color a future build would refuse to
+// author — by the time it reaches here somebody has already recorded it, and
+// refusing would strand the clone that fetched it rather than the person who
+// wrote it.
+func (priorities *configPriorities) applyRecolor(operation ConfigOperation) {
+	subject, live := priorities.resolveSubject(operation.Priority)
+	if !live {
+		return
+	}
+	priorities.priorities[subject].definition.Color = operation.Value
+}
+
+func (priorities *configPriorities) clearDefaultExcept(keep Priority) {
+	for name, entry := range priorities.priorities {
+		if name == keep || !entry.definition.HasTag(PriorityTagDefault) {
+			continue
+		}
+		tags := make([]PriorityTag, 0, len(entry.definition.Tags))
+		for _, existing := range entry.definition.Tags {
+			if existing != PriorityTagDefault {
+				tags = append(tags, existing)
+			}
+		}
+		entry.definition.Tags = tags
+	}
+}
+
+// normalizeArity repairs the one invariant a fold may break: more than one
+// priority tagged default, or none. It is configVocabulary.normalizeArity's
+// rule stripped to its "default" case, because a priority carries only that
+// one tag — there is no next/done equivalent to keep in step.
+//
+// Like the vocabulary's repair it picks its subject by position, the
+// lowest-ranked priority, so that two clones folding the same history reach
+// the same answer without consulting anything outside the section. It does
+// not itself report what it changed — a configPriorities has no channel to
+// report through during a fold — which is why the repair has to be this
+// deterministic: it is what lets a reconcile-time classifier, comparing a
+// replay's result against what the local author would have gotten from
+// ValidateConfigAuthoring, name exactly what was normalized after the fact.
+//
+// A configPriorities holding no live priorities has nothing to repair: there
+// is no candidate to promote, and document() reports that state as nil, the
+// same "configured nothing" a project that has never run a priority
+// operation always was.
+func (priorities *configPriorities) normalizeArity() {
+	live := priorities.sortedPriorities()
+	if len(live) == 0 {
+		return
+	}
+
+	// 1. More than one default: keep the lowest-ranked and clear the rest.
+	for _, entry := range live {
+		if entry.definition.HasTag(PriorityTagDefault) {
+			priorities.clearDefaultExcept(entry.definition.Priority)
+			break
+		}
+	}
+	// 2. No default: the lowest-ranked priority, the most urgent, which is
+	// where a task with none named most plausibly belongs.
+	if priorities.taggedCount(PriorityTagDefault) == 0 {
+		priorities.addTag(live[0].definition.Priority, PriorityTagDefault)
+	}
+}
+
+func (priorities *configPriorities) addTag(priority Priority, tag PriorityTag) {
+	priorities.applyTag(ConfigOperation{Type: ConfigPriorityTag, Priority: priority, PriorityTag: tag})
+}
+
+func (priorities *configPriorities) taggedCount(tag PriorityTag) int {
+	count := 0
+	for _, entry := range priorities.priorities {
+		if entry.definition.HasTag(tag) {
+			count++
+		}
+	}
+	return count
+}
+
+// sortedPriorities orders the live priorities by rank and then by name,
+// mirroring configVocabulary.sortedStatuses for the same tiebreak reason: two
+// priorities that land on the same rank, reachable whenever two clones insert
+// concurrently, sort in the same order everywhere.
+func (priorities *configPriorities) sortedPriorities() []*configPriorityEntry {
+	sorted := make([]*configPriorityEntry, 0, len(priorities.priorities))
+	for _, entry := range priorities.priorities {
+		sorted = append(sorted, entry)
+	}
+	sort.SliceStable(sorted, func(left, right int) bool {
+		if compare := sorted[left].rank.Cmp(sorted[right].rank); compare != 0 {
+			return compare < 0
+		}
+		return sorted[left].definition.Priority < sorted[right].definition.Priority
+	})
+	return sorted
+}
+
 func validateConfigOperationPackDocument(pack ConfigOperationPack) error {
 	if pack.Format != configOperationPackFormat {
 		return corrupt("unsupported configuration operation pack format %q", pack.Format)
@@ -1037,19 +1537,40 @@ type configOperationMembers struct {
 	setting     bool
 	value       bool
 	config      bool
+	// The seven priority members below are the priority section's
+	// counterparts to name/from/to/status/destination/tag/tags above, one per
+	// distinctly-typed ConfigOperation field. Label, rank and value are
+	// reused as-is: they are already plain strings, and the priority
+	// operations that carry a label, a rank or a color mean exactly what the
+	// status and display operations above mean by them.
+	priorityName        bool
+	priorityFrom        bool
+	priorityTo          bool
+	priority            bool
+	priorityDestination bool
+	priorityTag         bool
+	priorityTags        bool
 }
 
 var configOperationShapes = map[ConfigOperationType]configOperationMembers{
-	ConfigGenesis:       {config: true},
-	ConfigStatusAdd:     {name: true, label: true, rank: true, tags: true},
-	ConfigStatusRename:  {from: true, to: true},
-	ConfigStatusRelabel: {status: true, label: true},
-	ConfigStatusRemove:  {status: true, destination: true},
-	ConfigStatusReorder: {status: true, rank: true},
-	ConfigStatusTag:     {status: true, tag: true},
-	ConfigStatusUntag:   {status: true, tag: true},
-	ConfigDisplaySet:    {setting: true, value: true},
-	ConfigDisplayUnset:  {setting: true},
+	ConfigGenesis:         {config: true},
+	ConfigStatusAdd:       {name: true, label: true, rank: true, tags: true},
+	ConfigStatusRename:    {from: true, to: true},
+	ConfigStatusRelabel:   {status: true, label: true},
+	ConfigStatusRemove:    {status: true, destination: true},
+	ConfigStatusReorder:   {status: true, rank: true},
+	ConfigStatusTag:       {status: true, tag: true},
+	ConfigStatusUntag:     {status: true, tag: true},
+	ConfigDisplaySet:      {setting: true, value: true},
+	ConfigDisplayUnset:    {setting: true},
+	ConfigPriorityAdd:     {priorityName: true, label: true, rank: true, priorityTags: true},
+	ConfigPriorityRename:  {priorityFrom: true, priorityTo: true},
+	ConfigPriorityRelabel: {priority: true, label: true},
+	ConfigPriorityRemove:  {priority: true, priorityDestination: true},
+	ConfigPriorityReorder: {priority: true, rank: true},
+	ConfigPriorityTag:     {priority: true, priorityTag: true},
+	ConfigPriorityUntag:   {priority: true, priorityTag: true},
+	ConfigPriorityRecolor: {priority: true, value: true},
 }
 
 func validateConfigOperationDocument(operation ConfigOperation) error {
@@ -1061,24 +1582,41 @@ func validateConfigOperationDocument(operation ConfigOperation) error {
 		return corrupt("unsupported configuration operation type %q", operation.Type)
 	}
 	present := configOperationMembers{
-		name:        operation.Name != "",
-		from:        operation.From != "",
-		to:          operation.To != "",
-		status:      operation.Status != "",
-		label:       operation.Label != "",
-		rank:        operation.Rank != "",
-		tags:        operation.Tags != nil,
-		tag:         operation.Tag != "",
-		destination: operation.Destination != "",
-		setting:     operation.Setting != "",
-		value:       operation.Value != "",
-		config:      operation.Config != nil,
+		name:                operation.Name != "",
+		from:                operation.From != "",
+		to:                  operation.To != "",
+		status:              operation.Status != "",
+		label:               operation.Label != "",
+		rank:                operation.Rank != "",
+		tags:                operation.Tags != nil,
+		tag:                 operation.Tag != "",
+		destination:         operation.Destination != "",
+		setting:             operation.Setting != "",
+		value:               operation.Value != "",
+		config:              operation.Config != nil,
+		priorityName:        operation.PriorityName != "",
+		priorityFrom:        operation.PriorityFrom != "",
+		priorityTo:          operation.PriorityTo != "",
+		priority:            operation.Priority != "",
+		priorityDestination: operation.PriorityDestination != "",
+		priorityTag:         operation.PriorityTag != "",
+		priorityTags:        operation.PriorityTags != nil,
 	}
-	// status.add is the one type with an optional member: a status may
-	// legitimately carry no tags, and an absent list and an empty one mean the
-	// same thing.
+	// status.add and priority.add are the two types with an optional member:
+	// a status or priority may legitimately carry no tags, and an absent list
+	// and an empty one mean the same thing.
 	if operation.Type == ConfigStatusAdd {
 		present.tags = true
+	}
+	if operation.Type == ConfigPriorityAdd {
+		present.priorityTags = true
+	}
+	// priority.recolor is the one type whose value is optional in the other
+	// direction: an empty Value is not absent, it is the clear instruction,
+	// the same set/unset meaning display.unset gives an absent member. See
+	// configPriorities.applyRecolor.
+	if operation.Type == ConfigPriorityRecolor {
+		present.value = true
 	}
 	if present != shape {
 		return corrupt("%s carries the wrong members", operation.Type)
@@ -1092,8 +1630,28 @@ func validateConfigOperationDocument(operation ConfigOperation) error {
 			return Wrap(CategoryCorruptData, string(operation.Type)+" names an invalid status", err)
 		}
 	}
+	for _, token := range []Priority{
+		operation.PriorityName, operation.PriorityFrom, operation.PriorityTo,
+		operation.Priority, operation.PriorityDestination,
+	} {
+		if token == "" {
+			continue
+		}
+		if err := ValidatePriorityToken(token); err != nil {
+			return Wrap(CategoryCorruptData, string(operation.Type)+" names an invalid priority", err)
+		}
+	}
 	if operation.Label != "" {
-		if err := ValidateStatusLabel(operation.Label); err != nil {
+		// priority.add and priority.relabel are the only priority types that
+		// carry a label, so a Priority-domain type is otherwise
+		// indistinguishable from a Status-domain one here — the switch is
+		// what keeps a priority label held to ValidatePriorityLabel's own
+		// byte ceiling rather than the status column's.
+		validateLabel := ValidateStatusLabel
+		if operation.Type == ConfigPriorityAdd || operation.Type == ConfigPriorityRelabel {
+			validateLabel = ValidatePriorityLabel
+		}
+		if err := validateLabel(operation.Label); err != nil {
 			return Wrap(CategoryCorruptData, string(operation.Type)+" carries an invalid label", err)
 		}
 	}
@@ -1109,6 +1667,16 @@ func validateConfigOperationDocument(operation ConfigOperation) error {
 	}
 	for _, tag := range operation.Tags {
 		if err := ValidateStatusTag(tag); err != nil {
+			return Wrap(CategoryCorruptData, string(operation.Type)+" carries an invalid tag", err)
+		}
+	}
+	if operation.PriorityTag != "" {
+		if err := ValidatePriorityTag(operation.PriorityTag); err != nil {
+			return Wrap(CategoryCorruptData, string(operation.Type)+" carries an invalid tag", err)
+		}
+	}
+	for _, tag := range operation.PriorityTags {
+		if err := ValidatePriorityTag(tag); err != nil {
 			return Wrap(CategoryCorruptData, string(operation.Type)+" carries an invalid tag", err)
 		}
 	}
@@ -1132,11 +1700,30 @@ func validateConfigOperationDocument(operation ConfigOperation) error {
 			return corrupt("display.set value for %s is not canonical", operation.Setting)
 		}
 	}
+	// priority.recolor's value is a color like display.set's, canonicalized
+	// the same way, except that an empty value is the valid "clear" case
+	// rather than a member that must be present — see the shape override
+	// above.
+	if operation.Type == ConfigPriorityRecolor && operation.Value != "" {
+		canonical, err := ValidateThemeColor(operation.Value)
+		if err != nil {
+			return Wrap(CategoryCorruptData, "priority.recolor carries an invalid color", err)
+		}
+		if canonical != operation.Value {
+			return corrupt("priority.recolor color is not stored canonically")
+		}
+	}
 	if operation.Type == ConfigStatusRename && operation.From == operation.To {
 		return corrupt("status.rename must name a different status")
 	}
 	if operation.Type == ConfigStatusRemove && operation.Status == operation.Destination {
 		return corrupt("status.remove must name a different destination")
+	}
+	if operation.Type == ConfigPriorityRename && operation.PriorityFrom == operation.PriorityTo {
+		return corrupt("priority.rename must name a different priority")
+	}
+	if operation.Type == ConfigPriorityRemove && operation.Priority == operation.PriorityDestination {
+		return corrupt("priority.remove must name a different destination")
 	}
 	if operation.Config != nil {
 		normalized, err := normalizeVocabularyDocument(operation.Config.Vocabulary)
