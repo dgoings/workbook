@@ -172,7 +172,7 @@ func (s Service) CreateMutation(ctx context.Context, input CreateInput) (Mutatio
 	if err != nil {
 		return MutationResult{}, err
 	}
-	rank, err := nextRank(s.vocabulary(), snapshots, status, priority)
+	rank, err := nextRank(s.vocabulary(), snapshots, status, priority, s.Priorities)
 	if err != nil {
 		return MutationResult{}, err
 	}
@@ -275,11 +275,13 @@ func (s Service) ResolveStatusFilter(status Status) StatusFilterResolution {
 // ResolveStatusFilter and the CLI's warning path — so a script that greps the
 // output is told why it found nothing rather than left to infer it.
 //
-// A filter that names a retired status is applied to the status it now means
-// rather than to nothing. A task's status is resolved before it is compared, so
-// the alternative would answer "no tasks are in ready" about a project whose
-// ready column was merely renamed, which is the one answer that is actually
-// wrong.
+// A filter that names a retired status or priority is applied to the value it
+// now means rather than to nothing. A task's status and priority are resolved
+// before either is compared, so a filter argument has to be resolved too, or
+// the comparison would ask "is this task's live value equal to a token nobody
+// carries any more" — the same wrong answer resolving only one side would give
+// for "no tasks are in ready" about a project whose ready column was merely
+// renamed.
 func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
 	if filter.Priority != nil && !isValidPriority(*filter.Priority) {
 		return nil, Errorf(CategoryValidation, "invalid task priority %q", *filter.Priority)
@@ -296,6 +298,13 @@ func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
 			wanted = resolution.Resolved
 		}
 	}
+	wantedPriority := Priority("")
+	if filter.Priority != nil {
+		wantedPriority = *filter.Priority
+		if resolved, live := s.Priorities.Resolve(wantedPriority); live {
+			wantedPriority = resolved
+		}
+	}
 	tasks := make([]Task, 0, len(snapshots))
 	for _, snapshot := range snapshots {
 		task := s.Project(snapshot)
@@ -305,7 +314,7 @@ func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
 		if filter.Status != nil && task.Status != wanted {
 			continue
 		}
-		if filter.Priority != nil && task.Priority != *filter.Priority {
+		if filter.Priority != nil && task.Priority != wantedPriority {
 			continue
 		}
 		if filter.Label != "" && !hasLabel(task.Labels, filter.Label) {
@@ -741,14 +750,14 @@ func (s Service) restoreDestination(ctx context.Context, parent Snapshot, input 
 		// the restored card.
 		if anchor.State.Task.Deleted ||
 			anchor.State.TaskID == parent.State.TaskID ||
-			!sameBucket(vocabulary, anchor.State.Task, input.Into, parent.State.Task.Priority) {
+			!sameBucket(vocabulary, s.Priorities, anchor.State.Task, input.Into, parent.State.Task.Priority) {
 			return restorePlacement{}, Errorf(CategoryValidation, "restore anchor must be an active different task in the destination status and priority bucket")
 		}
 		snapshots, err := s.Reader.List(ctx, s.Config)
 		if err != nil {
 			return restorePlacement{}, err
 		}
-		rank, err = movedRank(vocabulary, snapshots, parent.State.TaskID, anchor.State.TaskID, anchor.State.Task, input.Before != "")
+		rank, err = movedRank(vocabulary, s.Priorities, snapshots, parent.State.TaskID, anchor.State.TaskID, anchor.State.Task, input.Before != "")
 		if err != nil {
 			return restorePlacement{}, err
 		}
@@ -798,14 +807,14 @@ func (s Service) MoveMutation(ctx context.Context, idOrPrefix string, input Move
 	// used the built-in vocabulary and became a routine contradiction once two
 	// tokens could resolve to one column: Move refused a neighbour Place would
 	// happily reorder against.
-	if !sameBucket(s.vocabulary(), anchor.State.Task, parent.State.Task.Status, parent.State.Task.Priority) {
+	if !sameBucket(s.vocabulary(), s.Priorities, anchor.State.Task, parent.State.Task.Status, parent.State.Task.Priority) {
 		return MutationResult{}, Errorf(CategoryValidation, "move anchor must be in the same status and priority bucket")
 	}
 	snapshots, err := s.Reader.List(ctx, s.Config)
 	if err != nil {
 		return MutationResult{}, err
 	}
-	rank, err := movedRank(s.vocabulary(), snapshots, parent.State.TaskID, anchor.State.TaskID, anchor.State.Task, input.Before != "")
+	rank, err := movedRank(s.vocabulary(), s.Priorities, snapshots, parent.State.TaskID, anchor.State.TaskID, anchor.State.Task, input.Before != "")
 	if err != nil {
 		return MutationResult{}, err
 	}
@@ -865,7 +874,7 @@ func (s Service) PlaceMutation(ctx context.Context, idOrPrefix string, input Pla
 			task := snapshot.State.Task
 			if snapshot.State.TaskID != parent.State.TaskID &&
 				!task.Deleted &&
-				sameBucket(vocabulary, task, input.Status, parent.State.Task.Priority) {
+				sameBucket(vocabulary, s.Priorities, task, input.Status, parent.State.Task.Priority) {
 				return MutationResult{}, Errorf(CategoryValidation, "placement requires an anchor when the destination bucket is not empty")
 			}
 		}
@@ -876,10 +885,10 @@ func (s Service) PlaceMutation(ctx context.Context, idOrPrefix string, input Pla
 		}
 		if anchor.State.Task.Deleted ||
 			anchor.State.TaskID == parent.State.TaskID ||
-			!sameBucket(vocabulary, anchor.State.Task, input.Status, parent.State.Task.Priority) {
+			!sameBucket(vocabulary, s.Priorities, anchor.State.Task, input.Status, parent.State.Task.Priority) {
 			return MutationResult{}, Errorf(CategoryValidation, "placement anchor must be an active different task in the destination status and priority bucket")
 		}
-		rank, err = movedRank(vocabulary, snapshots, parent.State.TaskID, anchor.State.TaskID, anchor.State.Task, input.Before != "")
+		rank, err = movedRank(vocabulary, s.Priorities, snapshots, parent.State.TaskID, anchor.State.TaskID, anchor.State.Task, input.Before != "")
 		if err != nil {
 			return MutationResult{}, err
 		}
@@ -1276,16 +1285,30 @@ func setDifference(left, right []string) []string {
 // nextRank returns the rank a task appended to the end of a status×priority
 // bucket takes.
 //
-// The bucket is the resolved status, not the stored one. A task still carrying
-// the token a rename replaced is drawn in the column it now means, so a task
-// appended to that column has to be ranked against everything already drawn
-// there — otherwise the new task lands on top of a neighbour it shares a column
-// with, because the walk that looked for the highest rank never saw it.
-func nextRank(vocabulary Vocabulary, snapshots []Snapshot, status Status, priority Priority) (string, error) {
+// The bucket is the resolved status and the resolved priority, not the stored
+// tokens. A task still carrying a token a rename replaced is drawn in the
+// column or priority group it now means, so a task appended there has to be
+// ranked against everything already drawn there — otherwise the new task
+// lands on top of a neighbour it shares a bucket with, because the walk that
+// looked for the highest rank never saw it.
+//
+// priorities is variadic so that this keeps its original four-argument shape
+// for TestNextRankAppendsAfterMaximumRationalRank, a test that predates
+// per-project priorities and — like every test in its file — must not be
+// edited. Every production caller passes exactly one: its own. Passing none,
+// as that test does, resolves through the zero PriorityVocabulary, which is
+// exactly the built-in substitution CreateMutation would fall back to for an
+// unconfigured Service anyway, so the test's two identically-tagged
+// PriorityHigh tasks compare equal either way and its answer is unchanged.
+func nextRank(vocabulary Vocabulary, snapshots []Snapshot, status Status, priority Priority, priorities ...PriorityVocabulary) (string, error) {
+	var priorityVocabulary PriorityVocabulary
+	if len(priorities) > 0 {
+		priorityVocabulary = priorities[0]
+	}
 	maximum := big.NewRat(0, 1)
 	for _, snapshot := range snapshots {
 		task := snapshot.State.Task
-		if task.Deleted || !sameBucket(vocabulary, task, status, priority) {
+		if task.Deleted || !sameBucket(vocabulary, priorityVocabulary, task, status, priority) {
 			continue
 		}
 		rank, err := parseRank(task.Rank)
@@ -1303,14 +1326,18 @@ func nextRank(vocabulary Vocabulary, snapshots []Snapshot, status Status, priori
 // a rank is being computed in.
 //
 // It is the one definition of "shares a bucket", and every ranking and every
-// anchor check reads it. Statuses are compared after resolution because that is
-// what a reader sees: two tasks whose stored tokens differ while resolving to
-// one live status are drawn in one column, and a bucket that disagreed with the
-// column would rank a task against neighbours nobody can see it beside. A status
-// that resolves nowhere resolves to itself, so tasks stranded under one token
-// still share a bucket with each other and with nothing else.
-func sameBucket(vocabulary Vocabulary, task TaskData, status Status, priority Priority) bool {
-	if task.Priority != priority {
+// anchor check reads it. Both halves of the bucket are compared after
+// resolution because that is what a reader sees: two tasks whose stored status
+// tokens differ while resolving to one live status are drawn in one column,
+// and two tasks whose stored priority tokens differ while resolving to one
+// live priority are drawn in one group — a bucket that disagreed with either
+// would rank a task against neighbours nobody can see it beside. A status or a
+// priority that resolves nowhere resolves to itself, so tasks stranded under
+// one token still share a bucket with each other and with nothing else.
+func sameBucket(vocabulary Vocabulary, priorities PriorityVocabulary, task TaskData, status Status, priority Priority) bool {
+	storedPriority, _ := priorities.Resolve(task.Priority)
+	wantedPriority, _ := priorities.Resolve(priority)
+	if storedPriority != wantedPriority {
 		return false
 	}
 	stored, _ := vocabulary.Resolve(task.Status)
@@ -1321,7 +1348,7 @@ func sameBucket(vocabulary Vocabulary, task TaskData, status Status, priority Pr
 // movedRank returns the rank that places a task immediately before or after an
 // anchor, within the anchor's bucket. The bucket is resolved, for the reason
 // nextRank records.
-func movedRank(vocabulary Vocabulary, snapshots []Snapshot, movedID, anchorID string, anchor TaskData, before bool) (string, error) {
+func movedRank(vocabulary Vocabulary, priorities PriorityVocabulary, snapshots []Snapshot, movedID, anchorID string, anchor TaskData, before bool) (string, error) {
 	anchorRank, err := parseRank(anchor.Rank)
 	if err != nil {
 		return "", Errorf(CategoryCorruptData, "anchor task has invalid rank %q", anchor.Rank)
@@ -1333,7 +1360,7 @@ func movedRank(vocabulary Vocabulary, snapshots []Snapshot, movedID, anchorID st
 			continue
 		}
 		task := snapshot.State.Task
-		if task.Deleted || !sameBucket(vocabulary, task, anchor.Status, anchor.Priority) {
+		if task.Deleted || !sameBucket(vocabulary, priorities, task, anchor.Status, anchor.Priority) {
 			continue
 		}
 		rank, err := parseRank(task.Rank)

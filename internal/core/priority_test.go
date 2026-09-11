@@ -314,3 +314,101 @@ func TestServiceListOrdersAStoredPriorityByItsResolvedRankNotLast(t *testing.T) 
 		t.Fatalf("List()[0].Priority = %q, want %q", got, want)
 	}
 }
+
+// priorityVocabularyRenamingHighToMedium collapses high into medium, keeping
+// every live priority a built-in token. It exists alongside
+// customPriorityVocabulary for the tests below that exercise a mutation path:
+// isValidPriority (task.go) checks built-in shape, not project membership, so
+// a task field or a filter argument naming a project-only token such as
+// "critical" is refused before forwarding ever runs. Renaming among the
+// built-in three sidesteps that unrelated limitation while still exercising
+// real forwarding.
+func priorityVocabularyRenamingHighToMedium(t *testing.T) PriorityVocabulary {
+	t.Helper()
+	vocabulary, err := NewPriorityVocabulary(
+		[]PriorityDefinition{
+			{Priority: PriorityMedium, Label: "Medium", Rank: "1/1", Tags: []PriorityTag{PriorityTagDefault}},
+			{Priority: PriorityLow, Label: "Low", Rank: "2/1"},
+		},
+		[]PriorityAlias{{From: PriorityHigh, To: PriorityMedium}},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("NewPriorityVocabulary() error = %v", err)
+	}
+	return vocabulary
+}
+
+// A priority filter naming a retired token matches the tasks a reader would
+// say carry it: everything that resolves to the live priority, whichever
+// token each is actually stored under. Comparing the filter argument against
+// an already-resolved stored priority without resolving the argument too
+// would silently stop matching the moment a project renamed anything, which
+// is the "no tasks are in ready" mistake List's own doc comment warns against
+// for statuses.
+func TestServiceListFilterResolvesAStoredPriorityFilterThroughTheChains(t *testing.T) {
+	store := newMemoryTaskStore(
+		serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F1", TaskData{
+			Title: "Stored under the renamed priority", Status: StatusBacklog, Priority: PriorityHigh, Rank: "1/1",
+		}),
+		serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F2", TaskData{
+			Title: "Stored under the live priority", Status: StatusBacklog, Priority: PriorityMedium, Rank: "2/1",
+		}),
+		serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F3", TaskData{
+			Title: "A different priority entirely", Status: StatusBacklog, Priority: PriorityLow, Rank: "3/1",
+		}),
+	)
+	service := priorityServiceUnderTest(store, &sequenceIDSource{}, priorityVocabularyRenamingHighToMedium(t))
+
+	// The retired token ("high") must select both tasks that read as medium,
+	// not only the one literally stored under "high".
+	retired := Priority(PriorityHigh)
+	tasks, err := service.List(context.Background(), ListFilter{Priority: &retired})
+	if err != nil {
+		t.Fatalf("List(%q) error = %v", retired, err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("List(%q) returned %d tasks, want 2 (both tasks resolving to medium)", retired, len(tasks))
+	}
+
+	// The live token selects the same two tasks, by construction: a filter
+	// and the tasks it names must agree on which priority a token means.
+	live := Priority(PriorityMedium)
+	sameTasks, err := service.List(context.Background(), ListFilter{Priority: &live})
+	if err != nil {
+		t.Fatalf("List(%q) error = %v", live, err)
+	}
+	if len(sameTasks) != 2 {
+		t.Fatalf("List(%q) returned %d tasks, want 2", live, len(sameTasks))
+	}
+}
+
+// sameBucket must resolve both sides of the priority comparison, the same way
+// it already resolves both sides of the status comparison beside it: two
+// tasks whose stored priority tokens differ while resolving to one live
+// priority are drawn in one group on the board, so an anchor check that
+// disagreed would refuse a neighbour the board draws right beside it.
+func TestServicePlaceMutationAcceptsAnAnchorSharingAResolvedPriorityBucket(t *testing.T) {
+	parent := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F1", TaskData{
+		Title: "Parent", Status: StatusBacklog, Priority: PriorityMedium, Rank: "1/1",
+	})
+	anchor := serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F2", TaskData{
+		// "high" was renamed to "medium"; this task has not been touched
+		// since, so it is still stored under the retired name.
+		Title: "Anchor", Status: StatusBacklog, Priority: PriorityHigh, Rank: "2/1",
+	})
+	store := newMemoryTaskStore(parent, anchor)
+	ids := &sequenceIDSource{values: []string{
+		"01K0M6B8A4FTT8C39MXXYTW7E1",
+		"01K0M6B8A4FTT8C39MXXYTW7E2",
+	}}
+	service := priorityServiceUnderTest(store, ids, priorityVocabularyRenamingHighToMedium(t))
+
+	_, err := service.PlaceMutation(context.Background(), parent.State.TaskID, PlaceInput{
+		Status: StatusBacklog,
+		After:  anchor.State.TaskID,
+	})
+	if err != nil {
+		t.Fatalf("PlaceMutation() error = %v, want the anchor accepted as sharing the resolved priority bucket", err)
+	}
+}
