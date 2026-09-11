@@ -1,6 +1,9 @@
 package core
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 type testRanked struct {
 	name string
@@ -87,10 +90,15 @@ func TestForwardTerminatesRejectsACycle(t *testing.T) {
 	}
 }
 
+// noValidation is a validate func that accepts every value, for the tests
+// below that are about the sort and the self-forward check rather than about
+// any particular field rule.
+func noValidation(string) error { return nil }
+
 // A canonical document sorts its forwardings by source, because the bytes are
 // compared for equality by the sync path.
 func TestNormalizeForwardingsSortsBySource(t *testing.T) {
-	got, err := normalizeForwardings([]forwarding[string]{{"z", "a"}, {"b", "c"}}, "priority")
+	got, err := normalizeForwardings([]forwarding[string]{{"z", "a"}, {"b", "c"}}, noValidation, "priority", "alias")
 	if err != nil {
 		t.Fatalf("normalizeForwardings: %v", err)
 	}
@@ -99,9 +107,35 @@ func TestNormalizeForwardingsSortsBySource(t *testing.T) {
 	}
 }
 
-func TestNormalizeForwardingsRefusesADuplicateSource(t *testing.T) {
-	if _, err := normalizeForwardings([]forwarding[string]{{"a", "b"}, {"a", "c"}}, "priority"); err == nil {
-		t.Error("normalizeForwardings accepted one source forwarding to two destinations")
+// noun and verb reproduce a caller's own self-forward wording; a duplicate
+// source is deliberately not tested here — neither normalizeStatusAliases
+// nor normalizeRetiredStatuses ever caught it, and normalizeVocabularyDocument
+// still does downstream.
+func TestNormalizeForwardingsRefusesASelfForward(t *testing.T) {
+	_, err := normalizeForwardings([]forwarding[string]{{"a", "a"}}, noValidation, "priority", "alias")
+	if err == nil {
+		t.Fatal("normalizeForwardings accepted a source that forwards to itself")
+	}
+	if want := `priority "a" cannot alias itself`; err.Error() != want {
+		t.Errorf("normalizeForwardings self-forward message = %q, want %q", err, want)
+	}
+}
+
+// A malformed field in a later pair and a self-forward in an earlier one are
+// both real problems in the same document; the earlier pair's problem is
+// reported, because normalizeForwardings validates and self-checks one pair
+// at a time rather than validating every pair before self-checking any of
+// them.
+func TestNormalizeForwardingsInterleavesValidationWithTheSelfForwardCheck(t *testing.T) {
+	refuseB := func(value string) error {
+		if value == "b" {
+			return Errorf(CategoryValidation, "value %q is refused", value)
+		}
+		return nil
+	}
+	_, err := normalizeForwardings([]forwarding[string]{{"a", "a"}, {"b", "c"}}, refuseB, "priority", "alias")
+	if want := `priority "a" cannot alias itself`; err == nil || err.Error() != want {
+		t.Errorf("normalizeForwardings error = %v, want the earlier pair's self-forward: %q", err, want)
 	}
 }
 
@@ -131,5 +165,72 @@ func TestForwardingsGrewAllowsAtOrUnderTheCeiling(t *testing.T) {
 	after := []forwarding[string]{{"a", "b"}, {"c", "d"}}
 	if err := forwardingsGrew(before, after, 2, "priority", "alias", "old"); err != nil {
 		t.Errorf("forwardingsGrew refused a pack that only reached the ceiling: %v", err)
+	}
+}
+
+// validateVocabularyGrowth's two forwarding-ceiling messages are quoted in
+// this stage's own design notes as byte-identical to what the pre-extraction
+// code produced. Nothing else pins the literal text, and message drift is
+// exactly this task's risk, so this asserts both exactly rather than just
+// checking that an error came back.
+func TestValidateVocabularyGrowthMessagesAreByteIdenticalToTheOriginal(t *testing.T) {
+	aliases := make([]StatusAlias, MaxStatusAliasCount+1)
+	for index := range aliases {
+		aliases[index] = StatusAlias{From: Status(fmt.Sprintf("a%d", index)), To: "todo"}
+	}
+	err := validateVocabularyGrowth(VocabularyDocument{}, VocabularyDocument{Aliases: aliases})
+	wantAlias := fmt.Sprintf(
+		"the project has recorded %d status renames and must not exceed %d; "+
+			"nothing can drop a rename yet, because a clone that has not fetched it "+
+			"still needs it to read tasks stored under the old name",
+		MaxStatusAliasCount+1, MaxStatusAliasCount,
+	)
+	if err == nil || err.Error() != wantAlias {
+		t.Errorf("alias growth message = %q, want %q", err, wantAlias)
+	}
+
+	retired := make([]RetiredStatus, MaxStatusRetiredCount+1)
+	for index := range retired {
+		retired[index] = RetiredStatus{Status: Status(fmt.Sprintf("r%d", index)), Destination: "todo"}
+	}
+	err = validateVocabularyGrowth(VocabularyDocument{}, VocabularyDocument{Retired: retired})
+	wantRetired := fmt.Sprintf(
+		"the project has recorded %d status removals and must not exceed %d; "+
+			"nothing can drop a removal yet, because a clone that has not fetched it "+
+			"still needs it to read tasks stored under the removed name",
+		MaxStatusRetiredCount+1, MaxStatusRetiredCount,
+	)
+	if err == nil || err.Error() != wantRetired {
+		t.Errorf("retired growth message = %q, want %q", err, wantRetired)
+	}
+}
+
+// The golden fixtures each carry exactly one alias and one retirement (the
+// review that caught this checked), so they never exercise the comparator
+// that decides canonical order among several. This does, with both lists
+// supplied scrambled.
+func TestNormalizeVocabularyDocumentSortsAliasesAndRetiredByStatus(t *testing.T) {
+	document := VocabularyDocument{
+		Statuses: []StatusDefinition{
+			{Status: "todo", Label: "Todo", Rank: "1/1", Tags: []StatusTag{StatusTagDefault, StatusTagNext, StatusTagDone}},
+		},
+		Aliases: []StatusAlias{
+			{From: "zeta", To: "todo"},
+			{From: "alpha", To: "todo"},
+		},
+		Retired: []RetiredStatus{
+			{Status: "yankee", Destination: "todo"},
+			{Status: "bravo", Destination: "todo"},
+		},
+	}
+	normalized, err := normalizeVocabularyDocument(document)
+	if err != nil {
+		t.Fatalf("normalizeVocabularyDocument: %v", err)
+	}
+	if len(normalized.Aliases) != 2 || normalized.Aliases[0].From != "alpha" || normalized.Aliases[1].From != "zeta" {
+		t.Errorf("aliases not sorted by source: %+v", normalized.Aliases)
+	}
+	if len(normalized.Retired) != 2 || normalized.Retired[0].Status != "bravo" || normalized.Retired[1].Status != "yankee" {
+		t.Errorf("retired not sorted by source: %+v", normalized.Retired)
 	}
 }

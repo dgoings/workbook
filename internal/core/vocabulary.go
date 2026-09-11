@@ -695,23 +695,16 @@ func normalizeStatusTags(tags []StatusTag) ([]StatusTag, error) {
 // make a legitimate concurrent pair unfoldable forever. It is an authoring
 // ceiling, in validateVocabularyGrowth.
 //
-// Token validation stays here rather than moving into normalizeForwardings:
-// ValidateStatusToken's charset and length are a status rule, not a
-// forwarding-chain rule, so a later priority vocabulary validates its own
-// tokens the same way without this function knowing anything about it. The
-// sort, the self-forward check and the duplicate-source check are the parts
-// that do not depend on what is being forwarded, which is why they are
-// shared.
+// Token validation is passed to normalizeForwardings as validate rather than
+// living here as its own loop: ValidateStatusToken's charset and length are
+// a status rule, not a forwarding-chain rule, so a later priority vocabulary
+// hands normalizeForwardings its own validator without either function
+// knowing about the other. Passing it in, instead of running it in a
+// separate pass before normalizeForwardings is even called, is what keeps
+// token validation interleaved with the self-forward check in the original
+// per-entry order.
 func normalizeStatusAliases(aliases []StatusAlias) ([]StatusAlias, error) {
-	for _, alias := range aliases {
-		if err := ValidateStatusToken(alias.From); err != nil {
-			return nil, err
-		}
-		if err := ValidateStatusToken(alias.To); err != nil {
-			return nil, err
-		}
-	}
-	normalized, err := normalizeForwardings(statusAliasForwardings(aliases), "status")
+	normalized, err := normalizeForwardings(statusAliasForwardings(aliases), ValidateStatusToken, "status", "alias")
 	if err != nil {
 		return nil, err
 	}
@@ -724,15 +717,7 @@ func normalizeStatusAliases(aliases []StatusAlias) ([]StatusAlias, error) {
 
 // MaxStatusRetiredCount is not checked here either; see normalizeStatusAliases.
 func normalizeRetiredStatuses(retired []RetiredStatus) ([]RetiredStatus, error) {
-	for _, entry := range retired {
-		if err := ValidateStatusToken(entry.Status); err != nil {
-			return nil, err
-		}
-		if err := ValidateStatusToken(entry.Destination); err != nil {
-			return nil, err
-		}
-	}
-	normalized, err := normalizeForwardings(retiredStatusForwardings(retired), "status")
+	normalized, err := normalizeForwardings(retiredStatusForwardings(retired), ValidateStatusToken, "status", "retire into")
 	if err != nil {
 		return nil, err
 	}

@@ -191,42 +191,54 @@ type forwarding[T ~string] struct {
 	To   T
 }
 
-// normalizeForwardings puts a forwarding list into canonical form: sorted by
-// source, with every source appearing at most once and no source forwarding
-// to itself. It is normalizeStatusAliases and normalizeRetiredStatuses's
-// shared body — they differ only in which of StatusAlias's or RetiredStatus's
-// two fields is the source and which is the destination, which is exactly
-// what converting to forwarding[Status] before calling this erases.
+// normalizeForwardings puts a forwarding list into canonical form: every
+// pair's own fields validated, no source forwarding to itself, sorted by
+// source. It is normalizeStatusAliases and normalizeRetiredStatuses's shared
+// body — they differ only in which of StatusAlias's or RetiredStatus's two
+// fields is the source and which is the destination, which is exactly what
+// converting to forwarding[Status] before calling this erases.
 //
-// Sorting by source is what makes the canonical document's bytes a property
-// of the configuration instead of a property of whoever wrote it, the same
-// reason normalizeVocabularyDocument sorts statuses by rank. A source
-// forwarding to itself or recorded twice are both shapes no forwarding chain
-// can represent — the first is a no-op that would strand nothing but is never
-// a value an author meant, and the second would leave resolveForward's walk
-// no way to choose between two destinations — so both are refused here rather
-// than deferred to whatever reads the chain later.
+// validate checks one field's own well-formedness — ValidateStatusToken for
+// a status vocabulary — and is a parameter rather than something this file
+// owns because that rule is not generic: a later priority vocabulary
+// validates its own tokens by its own rule, unrelated to a status's charset
+// and length. Running it on both of a pair's fields and then the
+// self-forward check, per pair, in list order, is what reproduces the
+// original per-entry ordering: normalizeStatusAliases and
+// normalizeRetiredStatuses validated token, token, self-check for one entry
+// before ever looking at the next, so a document with a malformed token in a
+// later entry and a self-forward in an earlier one reports the earlier
+// entry's problem — and this has to walk the list the same interleaved way
+// to keep reporting the same one.
 //
-// A source repeated across two different lists — a rename and a retirement
-// both naming the same value — is not caught here, because normalizeForwardings
-// only ever sees one list at a time; normalizeVocabularyDocument catches that
-// case itself while it builds the combined forward map.
+// Sorting happens once at the end, after every pair has passed, which is
+// what makes the canonical document's bytes a property of the configuration
+// instead of a property of whoever wrote it — the same reason
+// normalizeVocabularyDocument sorts statuses by rank.
 //
-// noun names what is being forwarded ("status", eventually "priority") for
-// the messages below, so the status caller's text stays byte-identical to
-// what normalizeStatusAliases and normalizeRetiredStatuses produced before
-// this was shared.
-func normalizeForwardings[T ~string](pairs []forwarding[T], noun string) ([]forwarding[T], error) {
+// A source recorded twice is not caught here. Neither normalizeStatusAliases
+// nor normalizeRetiredStatuses ever checked it before either was shared;
+// normalizeVocabularyDocument already does, while it builds the combined
+// forward map — across the alias list and the retirement list at once,
+// which normalizeForwardings could not do anyway, since it only ever sees
+// one list at a time.
+//
+// noun and verb build the self-forward message out of the two words the
+// alias and retirement callers disagree on ("status"/"alias" and
+// "status"/"retire into"), the same shape forwardingsGrew's noun, kind and
+// location build its own message.
+func normalizeForwardings[T ~string](pairs []forwarding[T], validate func(T) error, noun, verb string) ([]forwarding[T], error) {
 	normalized := make([]forwarding[T], 0, len(pairs))
-	seen := make(map[T]struct{}, len(pairs))
 	for _, pair := range pairs {
+		if err := validate(pair.From); err != nil {
+			return nil, err
+		}
+		if err := validate(pair.To); err != nil {
+			return nil, err
+		}
 		if pair.From == pair.To {
-			return nil, Errorf(CategoryValidation, "%s %q cannot forward to itself", noun, pair.From)
+			return nil, Errorf(CategoryValidation, "%s %q cannot %s itself", noun, pair.From, verb)
 		}
-		if _, duplicate := seen[pair.From]; duplicate {
-			return nil, Errorf(CategoryValidation, "%s %q is forwarded twice", noun, pair.From)
-		}
-		seen[pair.From] = struct{}{}
 		normalized = append(normalized, pair)
 	}
 	sort.SliceStable(normalized, func(left, right int) bool {
@@ -238,21 +250,21 @@ func normalizeForwardings[T ~string](pairs []forwarding[T], noun string) ([]forw
 // forwardingsGrew is validateVocabularyGrowth's ceiling check, shared between
 // the alias half and the retirement half the same way normalizeForwardings is
 // shared between normalizeStatusAliases and normalizeRetiredStatuses: refuse
-// a pack only when it is what pushes the list past max, exactly the shape the
-// status-definition ceiling above it in validateVocabularyGrowth uses for
+// a pack only when it is what pushes the list past ceiling, exactly the shape
+// the status-definition ceiling above it in validateVocabularyGrowth uses for
 // statuses.
 //
-// Comparing against before rather than against max alone is the whole design,
-// carried over unchanged from before this was shared: a folded state may
-// already sit over a ceiling — two clones each renaming a different status
-// concurrently is enough — and a rule that refused every pack while over one
-// would refuse the very shrinkage that could bring it back under. So growth
-// past the ceiling is refused and everything else — including a same-size or
-// smaller pack left over the ceiling — is allowed. This does not inspect
-// content: a pack that reused or discarded a specific forwarding pointer
-// without changing the list's length is not caught here. It is a real gap —
-// recorded, not fixed, because fixing it is a behavior change this task does
-// not make.
+// Comparing against before rather than against ceiling alone is the whole
+// design, carried over unchanged from before this was shared: a folded state
+// may already sit over a ceiling — two clones each renaming a different
+// status concurrently is enough — and a rule that refused every pack while
+// over one would refuse the very shrinkage that could bring it back under.
+// So growth past the ceiling is refused and everything else — including a
+// same-size or smaller pack left over the ceiling — is allowed. This does
+// not inspect content: a pack that reused or discarded a specific forwarding
+// pointer without changing the list's length is not caught here. It is a
+// real gap — recorded, not fixed, because fixing it is a behavior change
+// this task does not make.
 //
 // noun, kind and location build the message out of the three words the alias
 // and retirement callers disagree on: noun is what is forwarded ("status"),
@@ -260,14 +272,14 @@ func normalizeForwardings[T ~string](pairs []forwarding[T], noun string) ([]forw
 // ("rename"/"removal"), and location is the adjective before "name"
 // ("old"/"removed"). Together they reproduce validateVocabularyGrowth's two
 // original messages byte-for-byte.
-func forwardingsGrew[T ~string](before, after []forwarding[T], max int, noun, kind, location string) error {
-	if len(after) > max && len(after) > len(before) {
+func forwardingsGrew[T ~string](before, after []forwarding[T], ceiling int, noun, kind, location string) error {
+	if len(after) > ceiling && len(after) > len(before) {
 		return Errorf(
 			CategoryValidation,
 			"the project has recorded %d %s %ss and must not exceed %d; "+
 				"nothing can drop a %s yet, because a clone that has not fetched it "+
 				"still needs it to read tasks stored under the %s name",
-			len(after), noun, kind, max, kind, location,
+			len(after), noun, kind, ceiling, kind, location,
 		)
 	}
 	return nil
