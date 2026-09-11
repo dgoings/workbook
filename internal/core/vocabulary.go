@@ -444,13 +444,6 @@ func (vocabulary Vocabulary) Validate() error {
 // cannot name a command, because nothing drops a forwarding pointer yet: they
 // stand in for a compaction pass, and the message says so rather than sending
 // somebody looking for a flag that does not exist.
-//
-// "Nothing drops a forwarding pointer yet" is checked, not just asserted: the
-// forwardingsGrew call ahead of each ceiling is what actually keeps that true,
-// catching a pack that reused or repointed a source even when the resulting
-// list is smaller than its ceiling — a case the length comparison below it
-// cannot see, because a list can lose one pointer and gain a different one
-// without changing size.
 func validateVocabularyGrowth(before, after VocabularyDocument) error {
 	if len(after.Statuses) > MaxStatusCount && len(after.Statuses) > len(before.Statuses) {
 		return Errorf(
@@ -460,29 +453,17 @@ func validateVocabularyGrowth(before, after VocabularyDocument) error {
 			len(after.Statuses), MaxStatusCount,
 		)
 	}
-	if err := forwardingsGrew(statusAliasForwardings(before.Aliases), statusAliasForwardings(after.Aliases), "status"); err != nil {
+	if err := forwardingsGrew(
+		statusAliasForwardings(before.Aliases), statusAliasForwardings(after.Aliases),
+		MaxStatusAliasCount, "status", "rename", "old",
+	); err != nil {
 		return err
 	}
-	if len(after.Aliases) > MaxStatusAliasCount && len(after.Aliases) > len(before.Aliases) {
-		return Errorf(
-			CategoryValidation,
-			"the project has recorded %d status renames and must not exceed %d; "+
-				"nothing can drop a rename yet, because a clone that has not fetched it "+
-				"still needs it to read tasks stored under the old name",
-			len(after.Aliases), MaxStatusAliasCount,
-		)
-	}
-	if err := forwardingsGrew(retiredStatusForwardings(before.Retired), retiredStatusForwardings(after.Retired), "status"); err != nil {
+	if err := forwardingsGrew(
+		retiredStatusForwardings(before.Retired), retiredStatusForwardings(after.Retired),
+		MaxStatusRetiredCount, "status", "removal", "removed",
+	); err != nil {
 		return err
-	}
-	if len(after.Retired) > MaxStatusRetiredCount && len(after.Retired) > len(before.Retired) {
-		return Errorf(
-			CategoryValidation,
-			"the project has recorded %d status removals and must not exceed %d; "+
-				"nothing can drop a removal yet, because a clone that has not fetched it "+
-				"still needs it to read tasks stored under the removed name",
-			len(after.Retired), MaxStatusRetiredCount,
-		)
 	}
 	return nil
 }

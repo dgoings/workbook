@@ -235,36 +235,40 @@ func normalizeForwardings[T ~string](pairs []forwarding[T], noun string) ([]forw
 	return normalized, nil
 }
 
-// forwardingsGrew reports whether after still carries every pointer before
-// did, unchanged. It is the rule behind the comment on
-// MaxStatusAliasCount and MaxStatusRetiredCount that "nothing drops a
-// forwarding pointer yet": a rename or a retirement is what lets a clone that
-// has not fetched the latest name still land a stored task in the right
-// column, so a pack that reused or discarded a source would strand exactly
-// the tasks that were counting on it still being there — a correctness
-// failure no ceiling would catch, because it can drop a pointer while
-// shrinking a list that was always under its limit.
+// forwardingsGrew is validateVocabularyGrowth's ceiling check, shared between
+// the alias half and the retirement half the same way normalizeForwardings is
+// shared between normalizeStatusAliases and normalizeRetiredStatuses: refuse
+// a pack only when it is what pushes the list past max, exactly the shape the
+// status-definition ceiling above it in validateVocabularyGrowth uses for
+// statuses.
 //
-// It is checked at authoring time only, the same boundary the size ceilings
-// are checked at and for the same reason: a fold cannot be allowed to fail on
-// it without risking a history no clone can ever read, so ApplyConfig itself
-// stays permissive and this runs from ValidateConfigAuthoring instead.
+// Comparing against before rather than against max alone is the whole design,
+// carried over unchanged from before this was shared: a folded state may
+// already sit over a ceiling — two clones each renaming a different status
+// concurrently is enough — and a rule that refused every pack while over one
+// would refuse the very shrinkage that could bring it back under. So growth
+// past the ceiling is refused and everything else — including a same-size or
+// smaller pack left over the ceiling — is allowed. This does not inspect
+// content: a pack that reused or discarded a specific forwarding pointer
+// without changing the list's length is not caught here. It is a real gap —
+// recorded, not fixed, because fixing it is a behavior change this task does
+// not make.
 //
-// noun names what is being forwarded ("status", eventually "priority") for
-// the message below.
-func forwardingsGrew[T ~string](before, after []forwarding[T], noun string) error {
-	kept := make(map[forwarding[T]]struct{}, len(after))
-	for _, pair := range after {
-		kept[pair] = struct{}{}
-	}
-	for _, pair := range before {
-		if _, still := kept[pair]; !still {
-			return Errorf(
-				CategoryValidation,
-				"%s %q must still forward to %q; a forwarding pointer cannot be dropped or repointed",
-				noun, pair.From, pair.To,
-			)
-		}
+// noun, kind and location build the message out of the three words the alias
+// and retirement callers disagree on: noun is what is forwarded ("status"),
+// kind is the singular action, pluralized here for the count
+// ("rename"/"removal"), and location is the adjective before "name"
+// ("old"/"removed"). Together they reproduce validateVocabularyGrowth's two
+// original messages byte-for-byte.
+func forwardingsGrew[T ~string](before, after []forwarding[T], max int, noun, kind, location string) error {
+	if len(after) > max && len(after) > len(before) {
+		return Errorf(
+			CategoryValidation,
+			"the project has recorded %d %s %ss and must not exceed %d; "+
+				"nothing can drop a %s yet, because a clone that has not fetched it "+
+				"still needs it to read tasks stored under the %s name",
+			len(after), noun, kind, max, kind, location,
+		)
 	}
 	return nil
 }

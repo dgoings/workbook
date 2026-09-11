@@ -105,11 +105,31 @@ func TestNormalizeForwardingsRefusesADuplicateSource(t *testing.T) {
 	}
 }
 
-// Forwardings are append-only: a fold that drops one would strand the tasks
-// that still carry the old value.
-func TestForwardingsGrewRefusesALostForwarding(t *testing.T) {
+// forwardingsGrew refuses a pack only when it is what pushes the list both
+// over its ceiling and past what the parent already had.
+func TestForwardingsGrewRefusesOverTheCeilingAndGrown(t *testing.T) {
 	before := []forwarding[string]{{"a", "b"}}
-	if err := forwardingsGrew(before, nil, "priority"); err == nil {
-		t.Error("forwardingsGrew accepted a document that dropped a forwarding")
+	after := []forwarding[string]{{"a", "b"}, {"c", "d"}}
+	if err := forwardingsGrew(before, after, 1, "priority", "alias", "old"); err == nil {
+		t.Error("forwardingsGrew accepted a pack that pushed the list over its ceiling")
+	}
+}
+
+// A project already over its ceiling — two clones each adding one
+// concurrently is enough — must still be able to fold further packs that do
+// not make the list any bigger; this is the only way back under it.
+func TestForwardingsGrewAllowsOverTheCeilingWhenTheSizeDidNotGrow(t *testing.T) {
+	before := []forwarding[string]{{"a", "b"}, {"c", "d"}}
+	after := []forwarding[string]{{"a", "b"}, {"c", "d"}}
+	if err := forwardingsGrew(before, after, 1, "priority", "alias", "old"); err != nil {
+		t.Errorf("forwardingsGrew refused a same-size pack over the ceiling: %v", err)
+	}
+}
+
+func TestForwardingsGrewAllowsAtOrUnderTheCeiling(t *testing.T) {
+	before := []forwarding[string]{{"a", "b"}}
+	after := []forwarding[string]{{"a", "b"}, {"c", "d"}}
+	if err := forwardingsGrew(before, after, 2, "priority", "alias", "old"); err != nil {
+		t.Errorf("forwardingsGrew refused a pack that only reached the ceiling: %v", err)
 	}
 }
