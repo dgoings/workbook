@@ -122,17 +122,13 @@ type PriorityVocabulary struct {
 }
 
 // NewPriorityVocabulary builds a vocabulary from a priority set and its
-// forwarding chains, mirroring NewVocabulary: it validates shape — rank
-// syntax, tag membership, uniqueness, and the absence of a forwarding cycle —
-// but neither arity nor a size ceiling, both being states a fold can reach
-// from a peer's operations that this must still be able to represent. Validate
-// covers arity; there is no priority equivalent of ValidateConfigAuthoring's
-// ceilings yet, so there is nothing for this to defer a ceiling check to.
-//
-// Priorities do not yet have their own charset rule the way ValidateStatusToken
-// gives statuses one — no command exists yet that would ask a person to type a
-// priority name — so shape validation here stops at "not blank" rather than
-// reaching for a rule this stage has no use for.
+// forwarding chains, mirroring NewVocabulary: it validates shape — token and
+// label well-formedness, rank syntax, tag membership, uniqueness, and the
+// absence of a forwarding cycle — but neither arity nor a size ceiling, both
+// being states a fold can reach from a peer's operations that this must
+// still be able to represent. Validate covers arity; there is no priority
+// equivalent of ValidateConfigAuthoring's ceilings yet, so there is nothing
+// for this to defer a ceiling check to.
 func NewPriorityVocabulary(definitions []PriorityDefinition, aliases []PriorityAlias, retired []RetiredPriority) (PriorityVocabulary, error) {
 	normalized, err := normalizePriorityDocument(PriorityDocument{
 		Priorities: definitions,
@@ -305,7 +301,7 @@ func (vocabulary PriorityVocabulary) AppendRank() string {
 // for statuses.
 func (vocabulary PriorityVocabulary) InsertRank(moved, anchor Priority, before bool) (string, error) {
 	vocabulary = vocabulary.effective()
-	return insertRank(rankedPriorities(vocabulary.definitions), moved, anchor, before, "priority")
+	return insertRank(rankedPriorities(vocabulary.definitions), moved, anchor, before, "priority", "priorities")
 }
 
 // rankedPriorities adapts a vocabulary's definitions to the shared ranked[T]
@@ -370,8 +366,9 @@ func (vocabulary PriorityVocabulary) Validate() error {
 // canonical form: priorities ordered by rank then name, aliases by source,
 // retirements by source, tags in their fixed order, and every empty
 // collection an empty slice rather than a null — the same canonicalization
-// normalizeVocabularyDocument performs for statuses, minus the charset and
-// label-length rules a priority does not have yet.
+// normalizeVocabularyDocument performs for statuses, including the charset
+// and label-length rules ValidatePriorityToken and ValidatePriorityLabel give
+// a priority.
 //
 // It checks shape and never counts, for the reason normalizeVocabularyDocument
 // records at length: a size ceiling enforced inside the fold can brick a
@@ -385,7 +382,10 @@ func normalizePriorityDocument(document PriorityDocument) (PriorityDocument, err
 	ranks := make(map[Priority]*big.Rat, len(document.Priorities))
 	seen := make(map[Priority]struct{}, len(document.Priorities))
 	for _, definition := range document.Priorities {
-		if err := validatePriorityToken(definition.Priority); err != nil {
+		if err := ValidatePriorityToken(definition.Priority); err != nil {
+			return PriorityDocument{}, err
+		}
+		if err := ValidatePriorityLabel(definition.Label); err != nil {
 			return PriorityDocument{}, err
 		}
 		rank, err := parseRank(definition.Rank)
@@ -466,19 +466,6 @@ func normalizePriorityTags(tags []PriorityTag) ([]PriorityTag, error) {
 	return normalized, nil
 }
 
-// validatePriorityToken is normalizePriorityDocument's and
-// normalizeForwardings' validate function for a Priority value. This stage
-// gives priorities no charset rule of their own — no command exists yet that
-// would ask a person to type one — so the only shape every use of a Priority
-// as a live key or a forwarding endpoint has in common is that it is not
-// blank.
-func validatePriorityToken(priority Priority) error {
-	if priority == "" {
-		return Errorf(CategoryValidation, "priority must not be blank")
-	}
-	return nil
-}
-
 // priorityAliasForwardings and retiredPriorityForwardings convert a
 // document's own field names to forwarding[Priority] at the boundary into the
 // shared normalization, the same conversion statusAliasForwardings and
@@ -500,7 +487,7 @@ func retiredPriorityForwardings(retired []RetiredPriority) []forwarding[Priority
 }
 
 func normalizePriorityAliases(aliases []PriorityAlias) ([]PriorityAlias, error) {
-	normalized, err := normalizeForwardings(priorityAliasForwardings(aliases), validatePriorityToken, "priority", "alias")
+	normalized, err := normalizeForwardings(priorityAliasForwardings(aliases), ValidatePriorityToken, "priority", "alias")
 	if err != nil {
 		return nil, err
 	}
@@ -512,7 +499,7 @@ func normalizePriorityAliases(aliases []PriorityAlias) ([]PriorityAlias, error) 
 }
 
 func normalizeRetiredPriorities(retired []RetiredPriority) ([]RetiredPriority, error) {
-	normalized, err := normalizeForwardings(retiredPriorityForwardings(retired), validatePriorityToken, "priority", "retire into")
+	normalized, err := normalizeForwardings(retiredPriorityForwardings(retired), ValidatePriorityToken, "priority", "retire into")
 	if err != nil {
 		return nil, err
 	}

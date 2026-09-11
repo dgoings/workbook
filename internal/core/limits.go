@@ -109,6 +109,17 @@ const (
 	// has renamed and removed statuses hundreds of times.
 	MaxStatusAliasCount   = 256
 	MaxStatusRetiredCount = 256
+	// MaxPriorityNameBytes bounds one priority name, matching
+	// MaxStatusNameBytes for the same reason and one more of its own: a
+	// priority name is typed as a flag value and matched in a filter the way a
+	// status name is, and it is also read as a CSS class name and a
+	// custom-property name once a later stage renders per-priority color —
+	// which is why a priority is held to the same charset a status is, not
+	// just the same length.
+	MaxPriorityNameBytes = 40
+	// MaxPriorityLabelBytes bounds one priority display label, matching
+	// MaxStatusLabelBytes: a label is a short chip's text, not prose.
+	MaxPriorityLabelBytes = 60
 	// MaxProjectNameBytes bounds the display name a project may give itself.
 	//
 	// It sits with the status ceilings rather than with the task ceilings above
@@ -388,6 +399,14 @@ const (
 // adopts rather than one it introduces.
 var statusTokenPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
+// priorityTokenPattern is statusTokenPattern's rule, held by a priority name
+// for every reason statusTokenPattern's own comment gives — plus one that is
+// a priority's alone: once a later stage renders per-priority color, the name
+// is read as a CSS class name and a custom-property name, where the same
+// unescaped charset is what keeps it valid in both without a translation step
+// this codebase would then have to keep in sync with the stored value.
+var priorityTokenPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+
 // ValidateStatusToken reports whether a status is well formed as a token. It is
 // deliberately not a membership check: a stored status names whatever the clone
 // that wrote it had configured, and a build that rejected an unknown-but-well-
@@ -434,6 +453,60 @@ func ValidateStatusLabel(label string) error {
 			CategoryValidation,
 			"status label is %d bytes and must not exceed %d",
 			len(label), MaxStatusLabelBytes,
+		)
+	}
+	return nil
+}
+
+// ValidatePriorityToken reports whether a priority is well formed as a token,
+// the same check ValidateStatusToken is for a status and for the same reason:
+// it is deliberately not a membership check. A stored priority names whatever
+// the clone that wrote it had configured, and a build that rejected an
+// unknown-but-well-formed name would refuse to read a repository a teammate
+// can read. Membership belongs at the mutation boundary, where a person is
+// choosing a value and can be told which ones exist.
+//
+// It is exported for that boundary. The priority verbs build a configuration
+// operation out of a word somebody typed, and every check inside the
+// operation document reports a malformed member as corrupt data — the right
+// verdict for a document read off a ref, and the wrong one for a typo. Asking
+// here first is what makes `workbook priority add "Not A Token"` a validation
+// failure that quotes the rule.
+func ValidatePriorityToken(priority Priority) error {
+	if priority == "" {
+		return Errorf(CategoryValidation, "priority must not be blank")
+	}
+	if len(priority) > MaxPriorityNameBytes {
+		return Errorf(
+			CategoryValidation,
+			"priority is %d bytes and must not exceed %d",
+			len(priority), MaxPriorityNameBytes,
+		)
+	}
+	if !priorityTokenPattern.MatchString(string(priority)) {
+		return Errorf(
+			CategoryValidation,
+			"priority %q must be lowercase letters and digits separated by single hyphens",
+			priority,
+		)
+	}
+	return nil
+}
+
+// ValidatePriorityLabel bounds a priority display label, the same check
+// ValidateStatusLabel is for a status column heading. A blank label is
+// rejected rather than defaulted, for the reason ValidateStatusLabel's own
+// comment gives: a priority chip with no text is a rendering bug that would
+// otherwise reach every consumer before anyone noticed.
+func ValidatePriorityLabel(label string) error {
+	if strings.TrimSpace(label) == "" {
+		return Errorf(CategoryValidation, "priority label must not be blank")
+	}
+	if len(label) > MaxPriorityLabelBytes {
+		return Errorf(
+			CategoryValidation,
+			"priority label is %d bytes and must not exceed %d",
+			len(label), MaxPriorityLabelBytes,
 		)
 	}
 	return nil

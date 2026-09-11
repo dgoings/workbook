@@ -26,7 +26,7 @@ func rankedItems(pairs ...[2]string) []ranked[string] {
 func TestInsertRankFindsRoomBetweenNeighbours(t *testing.T) {
 	items := rankedItems([2]string{"a", "1/1"}, [2]string{"b", "2/1"})
 
-	got, err := insertRank(items, "", "b", true, "status")
+	got, err := insertRank(items, "", "b", true, "status", "statuses")
 	if err != nil {
 		t.Fatalf("insertRank: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestAppendRankFollowsTheHighest(t *testing.T) {
 }
 
 func TestInsertRankRefusesAnUndefinedAnchor(t *testing.T) {
-	if _, err := insertRank(rankedItems([2]string{"a", "1/1"}), "", "missing", true, "status"); err == nil {
+	if _, err := insertRank(rankedItems([2]string{"a", "1/1"}), "", "missing", true, "status", "statuses"); err == nil {
 		t.Error("insertRank accepted an anchor the list does not define")
 	}
 }
@@ -52,12 +52,12 @@ func TestInsertRankRefusesAnUndefinedAnchor(t *testing.T) {
 // categories because a category maps to a CLI exit code. Collapsing them into
 // one category is exactly the regression this test guards against.
 func TestInsertRankCategorizesUndefinedAnchorAndCorruptRankDifferently(t *testing.T) {
-	_, undefinedAnchorErr := insertRank(rankedItems([2]string{"a", "1/1"}), "", "missing", true, "status")
+	_, undefinedAnchorErr := insertRank(rankedItems([2]string{"a", "1/1"}), "", "missing", true, "status", "statuses")
 	if CategoryOf(undefinedAnchorErr) != CategoryValidation {
 		t.Errorf("insertRank(undefined anchor) category = %v, want CategoryValidation", CategoryOf(undefinedAnchorErr))
 	}
 
-	_, corruptRankErr := insertRank(rankedItems([2]string{"a", "not-a-rank"}), "", "a", true, "status")
+	_, corruptRankErr := insertRank(rankedItems([2]string{"a", "not-a-rank"}), "", "a", true, "status", "statuses")
 	if CategoryOf(corruptRankErr) != CategoryCorruptData {
 		t.Errorf("insertRank(unparseable rank) category = %v, want CategoryCorruptData", CategoryOf(corruptRankErr))
 	}

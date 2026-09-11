@@ -54,15 +54,21 @@ func appendRank[T ~string](items []ranked[T]) string {
 // same way: two items may share a rank, and the insertion is representable
 // only when the keys already fall in the order the caller asked for.
 //
-// noun names the kind of item being placed — "status", eventually "priority"
-// — for both the messages below and their categories: an undefined anchor is
+// noun names the kind of item being placed — "status", "priority" — for both
+// the messages below and their categories: an undefined anchor is
 // CategoryValidation (the caller typed something that was never there), while
 // an unparseable rank is CategoryCorruptData (a value that was there is
 // broken), and those categories map to different CLI exit codes. Collapsing
 // them into one would report the wrong exit code for a corrupt rank, not just
 // the wrong string, so insertRank returns errors already carrying the
 // category a caller must pass through unwrapped.
-func insertRank[T ~string](items []ranked[T], moved, anchor T, before bool, noun string) (string, error) {
+//
+// plural is noun's plural, spelled out by the caller rather than derived:
+// "status" becomes "statuses" and "priority" becomes "priorities", two
+// irregular forms with nothing in common for a rule to generalize from, so
+// asking each caller for its own plural is the straightforward choice next
+// to inferring English morphology inside a data-model package.
+func insertRank[T ~string](items []ranked[T], moved, anchor T, before bool, noun, plural string) (string, error) {
 	var anchorRank *big.Rat
 	var anchorFound bool
 	for _, item := range items {
@@ -132,38 +138,12 @@ func insertRank[T ~string](items []ranked[T], moved, anchor T, before bool, noun
 			return "", Errorf(
 				CategoryValidation,
 				"%s %q and %q share a rank, so %q cannot be placed between them; move one of them first",
-				pluralNoun(noun), neighborKey, anchor, moved,
+				plural, neighborKey, anchor, moved,
 			)
 		}
 		return formatRank(anchorRank), nil
 	}
 	return formatRank(new(big.Rat).Quo(new(big.Rat).Add(anchorRank, neighbor), big.NewRat(2, 1))), nil
-}
-
-// pluralNoun derives the plural insertRank's exhausted-gap message needs from
-// the singular noun a caller passes, by the ordinary English rule that covers
-// both nouns that call it today: a word ending in "s" takes "es" ("status" ->
-// "statuses"), and a word ending in a consonant then "y" swaps the "y" for
-// "ies" ("priority" -> "priorities").
-//
-// It exists so that message can stay a single fixed string inside this
-// function rather than gaining its own parameter: insertRank's five-argument
-// signature is already exercised positionally by tests that predate a
-// priority caller, and every one of them would need editing for a sixth
-// parameter that only one of its two callers' messages actually needs.
-// Deriving the plural keeps that signature exactly as it is.
-func pluralNoun(noun string) string {
-	if strings.HasSuffix(noun, "s") {
-		return noun + "es"
-	}
-	if len(noun) > 1 && strings.HasSuffix(noun, "y") {
-		switch noun[len(noun)-2] {
-		case 'a', 'e', 'i', 'o', 'u':
-		default:
-			return noun[:len(noun)-1] + "ies"
-		}
-	}
-	return noun + "s"
 }
 
 // resolveForward follows a stored value through a forwarding chain to the
