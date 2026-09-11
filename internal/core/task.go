@@ -213,8 +213,9 @@ type TaskData struct {
 //
 // Status is the resolved status — the live status the stored value means under
 // the project's vocabulary today, not necessarily the token stored in the ref.
-// Resolution happens once, in Project, so that no consumer has to remember to
-// do it and none of them can disagree about the answer.
+// Priority is resolved the same way, against the project's priority
+// vocabulary. Both resolutions happen once, in Project, so that no consumer
+// has to remember to do it and none of them can disagree about the answer.
 type Task struct {
 	ID        string `json:"id"`
 	ProjectID string `json:"projectId"`
@@ -228,9 +229,16 @@ type Task struct {
 	// something writes to it. Reporting both values is what keeps that honest:
 	// the board shows the column the task belongs in, and a caller that needs
 	// to explain why can say what is actually on disk.
-	StoredStatus      Status `json:"storedStatus,omitempty"`
-	HistoryGeneration string `json:"historyGeneration"`
-	Head              string `json:"head"`
+	StoredStatus Status `json:"storedStatus,omitempty"`
+	// StoredPriority is the priority the task's ref actually holds, populated
+	// only when it differs from the resolved Priority. It mirrors StoredStatus
+	// for the same reason: a priority rename cannot rewrite another clone's
+	// task ref either, so a task keeps its old token until something writes to
+	// it, and reporting both values lets a caller explain why an urgent-looking
+	// task is stored under a name the project no longer defines.
+	StoredPriority    Priority `json:"storedPriority,omitempty"`
+	HistoryGeneration string   `json:"historyGeneration"`
+	Head              string   `json:"head"`
 	// NewerWriter reports a task whose history carries a writer-format
 	// generation this build cannot fold. Everything shown about such a task
 	// comes from its stored checkpoint, which is exactly where every read gets
@@ -328,10 +336,17 @@ func formatRank(rank *big.Rat) string {
 }
 
 // isValidPriority reports whether a priority is a member of the built-in set.
-// It has no access to a project's configured vocabulary — its callers
-// (NormalizeTask and the replay-time field.set check) run without a Service
-// in scope, the same reason ValidateStatusToken rather than a status
-// vocabulary's Has is what those paths ask of a status. Passing the zero
+// It asks the built-in shape, not project membership, which is what each of
+// its three callers needs: NormalizeTask (task.go) and the replay-time
+// field.set check (validateFieldSetOperation in operation.go) run over
+// history another clone already committed, where refusing a value this
+// clone's vocabulary does not happen to contain would turn a fetched history
+// into corrupt data rather than merely unfamiliar configuration; the filter
+// check in Service.List (service.go) accepts a priority outside the
+// vocabulary the same way it accepts a status outside it, for the reason
+// List's own doc comment gives. All three ask the same "is this a priority
+// token at all" question ValidateStatusToken, rather than a status
+// vocabulary's Has, asks of a status. Passing the zero
 // PriorityVocabulary is what makes this "consult the vocabulary" rather than
 // a second copy of the built-in set: PriorityVocabulary.Has already reads its
 // own zero value as "not configured" and substitutes the built-in three, so

@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -183,5 +184,133 @@ func TestConfiguredPriorityOrderDrivesSorting(t *testing.T) {
 	}
 	if got := vocabulary.Default(); got != PriorityHigh {
 		t.Errorf("Default() = %q, want high", got)
+	}
+}
+
+// The zero vocabulary's ordinals are today's built-in three, most urgent
+// first, and a priority nothing defines or forwards sorts last. Nothing
+// asserted these exact numbers before; they were only guaranteed by reading
+// the deleted priorityOrder switch this vocabulary replaced, whose default
+// arm returned 3.
+func TestZeroPriorityVocabularyOrderPinsTheBuiltInOrdinals(t *testing.T) {
+	var vocabulary PriorityVocabulary
+	tests := []struct {
+		priority Priority
+		want     int
+	}{
+		{PriorityHigh, 0},
+		{PriorityMedium, 1},
+		{PriorityLow, 2},
+		{Priority("nobody-defined-this"), 3},
+	}
+	for _, tt := range tests {
+		if got := vocabulary.Order(tt.priority); got != tt.want {
+			t.Errorf("Order(%q) = %d, want %d", tt.priority, got, tt.want)
+		}
+	}
+}
+
+// customPriorityVocabulary is a project that renamed high to critical,
+// keeping medium and low as they were. It is the priority-flavoured twin of
+// service_vocabulary_test.go's customVocabulary, used to exercise Service's
+// read path the same way that file exercises it for statuses.
+func customPriorityVocabulary(t *testing.T) PriorityVocabulary {
+	t.Helper()
+	vocabulary, err := NewPriorityVocabulary(
+		[]PriorityDefinition{
+			{Priority: "critical", Label: "Critical", Rank: "1/1", Tags: []PriorityTag{PriorityTagDefault}},
+			{Priority: PriorityMedium, Label: "Medium", Rank: "2/1"},
+			{Priority: PriorityLow, Label: "Low", Rank: "3/1"},
+		},
+		[]PriorityAlias{{From: PriorityHigh, To: "critical"}},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("NewPriorityVocabulary() error = %v", err)
+	}
+	return vocabulary
+}
+
+func priorityServiceUnderTest(store *memoryTaskStore, ids IDSource, priorities PriorityVocabulary) Service {
+	service := serviceUnderTest(store, ids)
+	service.Priorities = priorities
+	return service
+}
+
+// A task stored under a priority a rename replaced reads as the live one, and
+// reports what was actually stored — Project's priority half of
+// TestServiceProjectResolvesStoredStatusesAndReportsTheStoredValue.
+func TestServiceProjectResolvesAStoredPriorityAndReportsTheStoredValue(t *testing.T) {
+	store := newMemoryTaskStore(
+		serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F1", TaskData{
+			Title: "Renamed", Status: StatusBacklog, Priority: PriorityHigh, Rank: "1/1",
+		}),
+		serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F2", TaskData{
+			Title: "Live", Status: StatusBacklog, Priority: "critical", Rank: "2/1",
+		}),
+	)
+	service := priorityServiceUnderTest(store, &sequenceIDSource{}, customPriorityVocabulary(t))
+
+	tasks, err := service.List(context.Background(), ListFilter{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	byID := make(map[string]Task, len(tasks))
+	for _, task := range tasks {
+		byID[task.ID] = task
+	}
+
+	tests := map[string]struct {
+		priority Priority
+		stored   Priority
+	}{
+		"WB-01K0M6B8A4FTT8C39MXXYTW7F1": {priority: "critical", stored: PriorityHigh},
+		"WB-01K0M6B8A4FTT8C39MXXYTW7F2": {priority: "critical"},
+	}
+	for id, want := range tests {
+		task := byID[id]
+		if task.Priority != want.priority || task.StoredPriority != want.stored {
+			t.Errorf(
+				"%s: priority = %q, storedPriority = %q, want %q and %q",
+				id, task.Priority, task.StoredPriority, want.priority, want.stored,
+			)
+		}
+	}
+}
+
+// A task stored under a renamed priority sorts where the live priority
+// sorts, not last. Before Project resolved a stored priority, every task
+// under a rename's old name fell into Order's unknown arm and sorted after
+// even the project's least urgent live priority — precisely the stranding
+// forwarding exists to prevent.
+func TestServiceListOrdersAStoredPriorityByItsResolvedRankNotLast(t *testing.T) {
+	store := newMemoryTaskStore(
+		serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F1", TaskData{
+			Title: "Stored under the low priority", Status: StatusBacklog, Priority: PriorityLow, Rank: "1/1",
+		}),
+		serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F2", TaskData{
+			// "high" was renamed to "critical"; this task has not been touched
+			// since, so it is still stored under the retired name.
+			Title: "Stored under the renamed priority", Status: StatusBacklog, Priority: PriorityHigh, Rank: "2/1",
+		}),
+	)
+	service := priorityServiceUnderTest(store, &sequenceIDSource{}, customPriorityVocabulary(t))
+
+	tasks, err := service.List(context.Background(), ListFilter{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("List() returned %d tasks, want 2", len(tasks))
+	}
+	// critical (the renamed task's live priority) outranks low, so the
+	// renamed task must sort first despite having a later rank and despite
+	// being stored second. Sorting by the stored token, or falling into
+	// Order's unknown arm, would both put it last instead.
+	if got, want := tasks[0].ID, "WB-01K0M6B8A4FTT8C39MXXYTW7F2"; got != want {
+		t.Fatalf("List()[0].ID = %q, want %q (the task resolving to critical, sorted ahead of low)", got, want)
+	}
+	if got, want := tasks[0].Priority, Priority("critical"); got != want {
+		t.Fatalf("List()[0].Priority = %q, want %q", got, want)
 	}
 }

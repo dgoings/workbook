@@ -236,7 +236,12 @@ func (vocabulary PriorityVocabulary) Has(priority Priority) bool {
 
 // Order returns a priority's position for sorting, lower meaning more urgent.
 // An unknown priority sorts after every live one rather than failing, which is
-// what keeps a board readable while a rename is still propagating.
+// what keeps a board readable for a priority no chain reaches. Callers read a
+// task's priority through Project first, which resolves a renamed or retired
+// token to the live priority it now means, so this arm is reached only by a
+// priority genuinely stranded — one this vocabulary neither defines nor
+// forwards — and not, as it once was, by every task still stored under a name
+// a rename replaced.
 func (vocabulary PriorityVocabulary) Order(priority Priority) int {
 	vocabulary = vocabulary.effective()
 	if index, exists := vocabulary.byPriority[priority]; exists {

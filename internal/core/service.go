@@ -991,13 +991,13 @@ func (s Service) FreeMutation(ctx context.Context, idOrPrefix, dependencyOrPrefi
 }
 
 // Project turns a stored snapshot into the task a caller sees, and is the one
-// place a stored status is resolved.
+// place a stored status or priority is resolved.
 //
 // Resolution has to happen exactly once, and this is the only constructor of a
 // Task, so this is where. Doing it in each consumer would let a board and a
-// filter disagree about which column a task is in; doing it in the fold would
-// bake one clone's configuration into shared history, which is precisely what
-// the forwarding chains exist to avoid.
+// filter disagree about which column or priority a task is in; doing it in the
+// fold would bake one clone's configuration into shared history, which is
+// precisely what the forwarding chains exist to avoid.
 func (s Service) Project(snapshot Snapshot) Task {
 	task := Task{
 		ID:                snapshot.State.TaskID,
@@ -1010,6 +1010,10 @@ func (s Service) Project(snapshot Snapshot) Task {
 	if resolved, live := s.vocabulary().Resolve(task.Status); live && resolved != task.Status {
 		task.StoredStatus = task.Status
 		task.Status = resolved
+	}
+	if resolved, live := s.Priorities.Resolve(task.Priority); live && resolved != task.Priority {
+		task.StoredPriority = task.Priority
+		task.Priority = resolved
 	}
 	return task
 }
