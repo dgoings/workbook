@@ -910,8 +910,16 @@ func validateFieldSetOperation(operation Operation) error {
 			return Wrap(CategoryCorruptData, "field.set status is invalid", err)
 		}
 	case "priority":
-		if !isValidPriority(Priority(operation.Value)) {
-			return corrupt("field.set priority %q is invalid", operation.Value)
+		// Structural, not membership, for the same reason the status case
+		// above gives: this gate runs during replay, over operations another
+		// clone already committed under its own priority vocabulary, which
+		// this clone may not have fetched. Refusing a well-formed priority
+		// this clone's vocabulary does not happen to contain would turn a
+		// fetched history into corrupt data rather than unfamiliar
+		// configuration. What it still refuses is a value that is not a
+		// priority token at all, because no build ever wrote one.
+		if err := ValidatePriorityToken(Priority(operation.Value)); err != nil {
+			return Wrap(CategoryCorruptData, "field.set priority is invalid", err)
 		}
 	case "rank":
 		// The value is not quoted here. parseRank names it when it is small

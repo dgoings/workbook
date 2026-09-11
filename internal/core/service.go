@@ -72,6 +72,25 @@ func (s Service) requireStatusMember(status Status) error {
 	return nil
 }
 
+// requirePriorityMember rejects a priority the project does not define, the
+// same mutation boundary requireStatusMember is for a status and for the same
+// reason: at this point a person or an agent is choosing a value and can be
+// told it does not exist, whereas NormalizeTask also runs over documents
+// written elsewhere that are not anybody's to choose. Unlike
+// requireStatusMember it needs no unconfigured-project substitution of its
+// own — s.Priorities is read directly, and PriorityVocabulary.Has already
+// substitutes the built-in three for its own zero value — so an unconfigured
+// project still refuses exactly the priorities it refuses today.
+func (s Service) requirePriorityMember(priority Priority) error {
+	if err := ValidatePriorityToken(priority); err != nil {
+		return err
+	}
+	if !s.Priorities.Has(priority) {
+		return Errorf(CategoryValidation, "invalid task priority %q", priority)
+	}
+	return nil
+}
+
 type CreateInput struct {
 	Title       string
 	Description string
@@ -167,12 +186,15 @@ func (s Service) CreateMutation(ctx context.Context, input CreateInput) (Mutatio
 	if priority == "" {
 		priority = s.Priorities.Default()
 	}
+	if err := s.requirePriorityMember(priority); err != nil {
+		return MutationResult{}, err
+	}
 
 	snapshots, err := s.Reader.List(ctx, s.Config)
 	if err != nil {
 		return MutationResult{}, err
 	}
-	rank, err := nextRank(s.vocabulary(), snapshots, status, priority, s.Priorities)
+	rank, err := nextRank(s.vocabulary(), s.Priorities, snapshots, status, priority)
 	if err != nil {
 		return MutationResult{}, err
 	}
@@ -274,6 +296,12 @@ func (s Service) ResolveStatusFilter(status Status) StatusFilterResolution {
 // because the result envelope now carries the miss — see
 // ResolveStatusFilter and the CLI's warning path — so a script that greps the
 // output is told why it found nothing rather than left to infer it.
+//
+// A priority filter does not get that relaxation: it is refused unless it
+// names one of the built-in three, even for a project that has configured
+// something else. That is narrower than the status filter above it, not an
+// oversight this paragraph is glossing over — isValidPriority's doc comment
+// records the gap.
 //
 // A filter that names a retired status or priority is applied to the value it
 // now means rather than to nothing. A task's status and priority are resolved
@@ -515,6 +543,9 @@ func (s Service) UpdateMutation(ctx context.Context, idOrPrefix string, input Up
 		next.Status = *input.Status
 	}
 	if input.Priority != nil {
+		if err := s.requirePriorityMember(*input.Priority); err != nil {
+			return MutationResult{}, err
+		}
 		next.Priority = *input.Priority
 	}
 	if input.Labels != nil {
@@ -1291,7 +1322,7 @@ func setDifference(left, right []string) []string {
 // ranked against everything already drawn there — otherwise the new task
 // lands on top of a neighbour it shares a bucket with, because the walk that
 // looked for the highest rank never saw it.
-func nextRank(vocabulary Vocabulary, snapshots []Snapshot, status Status, priority Priority, priorities PriorityVocabulary) (string, error) {
+func nextRank(vocabulary Vocabulary, priorities PriorityVocabulary, snapshots []Snapshot, status Status, priority Priority) (string, error) {
 	maximum := big.NewRat(0, 1)
 	for _, snapshot := range snapshots {
 		task := snapshot.State.Task

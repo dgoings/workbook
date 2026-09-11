@@ -316,13 +316,19 @@ func TestServiceListOrdersAStoredPriorityByItsResolvedRankNotLast(t *testing.T) 
 }
 
 // priorityVocabularyRenamingHighToMedium collapses high into medium, keeping
-// every live priority a built-in token. It exists alongside
-// customPriorityVocabulary for the tests below that exercise a mutation path:
-// isValidPriority (task.go) checks built-in shape, not project membership, so
-// a task field or a filter argument naming a project-only token such as
-// "critical" is refused before forwarding ever runs. Renaming among the
-// built-in three sidesteps that unrelated limitation while still exercising
-// real forwarding.
+// every live priority a built-in token.
+// TestServiceListFilterResolvesAStoredPriorityFilterThroughTheChains below
+// needs that: List's filter argument is still gated on isValidPriority's
+// built-in-three membership (task.go's doc comment on it records this as a
+// narrower, standing behavior, unlike a task field's own mutation-boundary
+// check), so a filter naming a project-only token such as
+// customPriorityVocabulary's "critical" would be refused before forwarding
+// ever ran. Renaming among the built-in three sidesteps that while still
+// exercising real forwarding.
+// TestServicePlaceMutationAcceptsAnAnchorSharingAResolvedPriorityBucket
+// reuses it for an unrelated reason: it needs the anchor's stored "high" and
+// the parent's stored "medium" to resolve into the one bucket this
+// vocabulary's forwarding produces.
 func priorityVocabularyRenamingHighToMedium(t *testing.T) PriorityVocabulary {
 	t.Helper()
 	vocabulary, err := NewPriorityVocabulary(
@@ -410,5 +416,139 @@ func TestServicePlaceMutationAcceptsAnAnchorSharingAResolvedPriorityBucket(t *te
 	})
 	if err != nil {
 		t.Fatalf("PlaceMutation() error = %v, want the anchor accepted as sharing the resolved priority bucket", err)
+	}
+}
+
+// A stored priority is checked for shape, not for membership — task.go's half
+// of the split this restores. Before it, a ref written by a clone that
+// configured "critical" read as corrupt data on a clone that had not fetched
+// that configuration; a well-formed priority no build ever hands out today
+// (a real project's clone tomorrow might) has to read the same way an
+// already-shipped unfamiliar status does.
+func TestNormalizeTaskAcceptsAPriorityTheVocabularyDoesNotDefine(t *testing.T) {
+	_, err := NormalizeTask("WB", TaskData{
+		Title: "Task", Status: StatusReady, Priority: "critical", Rank: "1/1",
+	})
+	if err != nil {
+		t.Fatalf("NormalizeTask() error = %v, want a well-formed unfamiliar priority accepted", err)
+	}
+}
+
+// The replay-time field.set check gets the same question, for the same
+// reason the status case beside it already does: this gate runs over an
+// operation another clone already committed under its own priority
+// vocabulary, which this clone may not have fetched. Asking membership here
+// would turn that clone's valid history into this clone's corrupt data.
+func TestValidateFieldSetOperationAcceptsAPriorityThisBuildDoesNotDefine(t *testing.T) {
+	err := validateFieldSetOperation(Operation{
+		ID: operationID2, Type: OperationFieldSet, Field: "priority", Value: "critical",
+	})
+	if err != nil {
+		t.Fatalf("validateFieldSetOperation() error = %v, want a well-formed unfamiliar priority accepted", err)
+	}
+}
+
+// The membership check moved to the mutation boundary along with the status
+// one, and for an unconfigured project it has to keep refusing exactly what
+// it refuses today: this is the invariant that keeps the shape/membership
+// split invisible to every project holding valid history.
+func TestServiceMutationsRejectAPriorityTheProjectDoesNotDefine(t *testing.T) {
+	bogus := Priority("bogus")
+	tests := map[string]func(Service) error{
+		"create": func(service Service) error {
+			_, err := service.CreateMutation(context.Background(), CreateInput{Title: "Task", Priority: bogus})
+			return err
+		},
+		"update": func(service Service) error {
+			_, err := service.UpdateMutation(
+				context.Background(),
+				"WB-01K0M6B8A4FTT8C39MXXYTW7F1",
+				UpdateInput{Priority: &bogus},
+			)
+			return err
+		},
+	}
+
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			store := newMemoryTaskStore(serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F1", TaskData{
+				Title: "Task", Status: StatusBacklog, Priority: PriorityMedium, Rank: "1/1",
+			}))
+			service := serviceUnderTest(store, &sequenceIDSource{})
+
+			err := mutate(service)
+			if err == nil {
+				t.Fatal("mutation error = nil, want a rejection")
+			}
+			if got := CategoryOf(err); got != CategoryValidation {
+				t.Fatalf("mutation category = %q, want %q", got, CategoryValidation)
+			}
+			if got, want := err.Error(), `invalid task priority "bogus"`; got != want {
+				t.Fatalf("mutation error = %q, want %q", got, want)
+			}
+			if got := len(store.writes); got != 0 {
+				t.Fatalf("mutation wrote %d packs, want none", got)
+			}
+		})
+	}
+}
+
+// This is the deliverable task-6c exists to restore: a project whose
+// vocabulary defines a priority the built-in three does not can create a task
+// carrying it — explicitly, and as the default a bare create falls back to.
+// An unconfigured project's clone, which substitutes the built-in three for
+// its missing vocabulary, still cannot create one under that name, because it
+// genuinely does not know the token.
+func TestServiceCreateMutationAcceptsAProjectDefinedPriority(t *testing.T) {
+	store := newMemoryTaskStore()
+	service := priorityServiceUnderTest(store, &sequenceIDSource{values: []string{
+		"01K0M6B8A4FTT8C39MXXYTW7E1", "01K0M6B8A4FTT8C39MXXYTW7E2", "01K0M6B8A4FTT8C39MXXYTW7E3",
+	}}, customPriorityVocabulary(t))
+
+	result, err := service.CreateMutation(context.Background(), CreateInput{Title: "Task", Priority: "critical"})
+	if err != nil {
+		t.Fatalf("CreateMutation() error = %v, want a project-defined priority accepted", err)
+	}
+	if got, want := result.Task.Priority, Priority("critical"); got != want {
+		t.Fatalf("CreateMutation() priority = %q, want %q", got, want)
+	}
+}
+
+// The project's own default — "critical" here, via customPriorityVocabulary's
+// default tag — is what a bare create with no priority named falls back to.
+// Before this fix, that fallback still failed NormalizeTask's membership
+// check, which is what made "a project whose default priority is critical
+// cannot create a task at all" literally true.
+func TestServiceCreateMutationUsesAProjectDefinedDefaultPriority(t *testing.T) {
+	store := newMemoryTaskStore()
+	service := priorityServiceUnderTest(store, &sequenceIDSource{values: []string{
+		"01K0M6B8A4FTT8C39MXXYTW7E1", "01K0M6B8A4FTT8C39MXXYTW7E2", "01K0M6B8A4FTT8C39MXXYTW7E3",
+	}}, customPriorityVocabulary(t))
+
+	result, err := service.CreateMutation(context.Background(), CreateInput{Title: "Task"})
+	if err != nil {
+		t.Fatalf("CreateMutation() error = %v, want the project's default priority accepted", err)
+	}
+	if got, want := result.Task.Priority, Priority("critical"); got != want {
+		t.Fatalf("CreateMutation() priority = %q, want %q", got, want)
+	}
+}
+
+func TestServiceCreateMutationRejectsAnUnconfiguredProjectNamingAnotherProjectsPriority(t *testing.T) {
+	store := newMemoryTaskStore()
+	service := serviceUnderTest(store, &sequenceIDSource{})
+
+	_, err := service.CreateMutation(context.Background(), CreateInput{Title: "Task", Priority: "critical"})
+	if err == nil {
+		t.Fatal("CreateMutation() error = nil, want a rejection")
+	}
+	if got := CategoryOf(err); got != CategoryValidation {
+		t.Fatalf("CreateMutation() category = %q, want %q", got, CategoryValidation)
+	}
+	if got, want := err.Error(), `invalid task priority "critical"`; got != want {
+		t.Fatalf("CreateMutation() error = %q, want %q", got, want)
+	}
+	if got := len(store.writes); got != 0 {
+		t.Fatalf("CreateMutation() wrote %d packs, want none", got)
 	}
 }

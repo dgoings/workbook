@@ -118,8 +118,14 @@ func TestNormalizeTaskRejectsInvalidValues(t *testing.T) {
 			task: TaskData{Title: "Task", Status: "In Progress", Priority: PriorityMedium, Rank: "1/1"},
 		},
 		{
-			name: "unknown priority",
-			task: TaskData{Title: "Task", Status: StatusReady, Priority: "urgent", Rank: "1/1"},
+			// Not "unknown": mirroring the status case above, a well-formed
+			// priority this build does not recognize is now something
+			// NormalizeTask must accept, because a teammate's project may
+			// define it. What it still rejects is a value that is not a
+			// priority token — here, the display label somebody typed instead
+			// of the machine value.
+			name: "malformed priority",
+			task: TaskData{Title: "Task", Status: StatusReady, Priority: "Very Urgent", Rank: "1/1"},
 		},
 		{
 			name: "empty label",

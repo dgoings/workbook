@@ -270,8 +270,15 @@ func NormalizeTask(projectKey string, task TaskData) (TaskData, error) {
 	if err := ValidateStatusToken(task.Status); err != nil {
 		return TaskData{}, err
 	}
-	if !isValidPriority(task.Priority) {
-		return TaskData{}, Errorf(CategoryValidation, "invalid task priority %q", task.Priority)
+	// A stored priority is checked the same way, for the same reason: the
+	// vocabulary that minted it may be one this build has not fetched, and
+	// while priorities were a fixed three membership and shape happened to be
+	// the same question. They no longer are, so asking membership here — as
+	// isValidPriority used to — would make a teammate's task unreadable
+	// rather than merely unfamiliar the moment a project configures anything
+	// beyond the built-in set.
+	if err := ValidatePriorityToken(task.Priority); err != nil {
+		return TaskData{}, err
 	}
 	if _, err := parseRank(task.Rank); err != nil {
 		return TaskData{}, err
@@ -335,22 +342,22 @@ func formatRank(rank *big.Rat) string {
 	return rank.Num().String() + "/" + rank.Denom().String()
 }
 
-// isValidPriority reports whether a priority is a member of the built-in set.
-// It asks the built-in shape, not project membership, which is what each of
-// its three callers needs: NormalizeTask (task.go) and the replay-time
-// field.set check (validateFieldSetOperation in operation.go) run over
-// history another clone already committed, where refusing a value this
-// clone's vocabulary does not happen to contain would turn a fetched history
-// into corrupt data rather than merely unfamiliar configuration; the filter
-// check in Service.List (service.go) accepts a priority outside the
-// vocabulary the same way it accepts a status outside it, for the reason
-// List's own doc comment gives. All three ask the same "is this a priority
-// token at all" question ValidateStatusToken, rather than a status
-// vocabulary's Has, asks of a status. Passing the zero
-// PriorityVocabulary is what makes this "consult the vocabulary" rather than
-// a second copy of the built-in set: PriorityVocabulary.Has already reads its
-// own zero value as "not configured" and substitutes the built-in three, so
-// this and that substitution can never drift apart.
+// isValidPriority reports whether a priority is a member of the built-in
+// three — low, medium, high — regardless of what the project actually has
+// configured. That is a membership question, not a shape one, and it is the
+// wrong question for a stored value or a replayed operation, which is why
+// NormalizeTask (task.go) and the replay-time field.set check
+// (validateFieldSetOperation in operation.go) no longer call this: both ask
+// ValidatePriorityToken instead, the same shape-only question
+// ValidateStatusToken asks of a status. This function's one remaining caller
+// is the filter check in Service.List (service.go), which still refuses a
+// priority outside the built-in three even though the equivalent status
+// filter refuses nothing — a narrower, pre-existing behavior this function
+// preserves rather than one this comment endorses. Passing the zero
+// PriorityVocabulary rather than duplicating the built-in set as a literal is
+// what keeps that "built-in three" reading anchored to
+// PriorityVocabulary.Has's own zero-value substitution, so the two can never
+// drift apart.
 func isValidPriority(priority Priority) bool {
 	return PriorityVocabulary{}.Has(priority)
 }
