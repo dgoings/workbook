@@ -1342,3 +1342,94 @@ func TestCheckpointWithoutPrioritiesReadsAsBuiltIn(t *testing.T) {
 		t.Errorf("Default() = %q, want medium", got)
 	}
 }
+
+// The non-nil branch: a checkpoint carrying a real priorities section reads
+// back as that configuration, not a substitution. Has(medium) is the
+// distinguishing check — the built-in three would answer true, but this
+// vocabulary never defined it, so a false answer proves the round trip
+// through ConfigData actually reached the stored document rather than falling
+// through to the built-in the zero value would have produced.
+func TestCheckpointWithPrioritiesReadsTheConfiguredVocabulary(t *testing.T) {
+	var state ConfigStateDocument
+	state.Config.Priorities = &PriorityDocument{
+		Priorities: []PriorityDefinition{
+			{Priority: "urgent", Label: "Urgent", Rank: "1/1", Tags: []PriorityTag{PriorityTagDefault}},
+		},
+		Aliases: []PriorityAlias{},
+		Retired: []RetiredPriority{},
+	}
+
+	vocabulary := state.PriorityVocabulary()
+	if got, want := vocabulary.Default(), Priority("urgent"); got != want {
+		t.Errorf("Default() = %q, want %q", got, want)
+	}
+	if !vocabulary.Has("urgent") {
+		t.Error(`Has("urgent") = false, want true`)
+	}
+	if vocabulary.Has(PriorityMedium) {
+		t.Error("Has(medium) = true, want false: this vocabulary never defined it")
+	}
+}
+
+// A stored priorities section has to be canonical, the same rule Vocabulary
+// and Display are held to: normalizeStoredPriorityDocument recomputes the
+// canonical form and validateConfigStateDocument refuses a checkpoint whose
+// stored bytes differ from it. Without this a peer's ref could carry an
+// unsorted or duplicate-bearing section and nothing would object — exactly
+// the gap ValidateConfigCheckpoint's self-agreement (it recomputes the same
+// pass-through) could not have caught on its own.
+func TestValidateConfigStateDocumentRefusesANonCanonicalPrioritiesSection(t *testing.T) {
+	tests := map[string]*PriorityDocument{
+		"unsorted": {
+			Priorities: []PriorityDefinition{
+				{Priority: PriorityLow, Label: "Low", Rank: "2/1", Tags: []PriorityTag{}},
+				{Priority: PriorityHigh, Label: "High", Rank: "1/1", Tags: []PriorityTag{PriorityTagDefault}},
+			},
+			Aliases: []PriorityAlias{},
+			Retired: []RetiredPriority{},
+		},
+		"duplicate-bearing": {
+			Priorities: []PriorityDefinition{
+				{Priority: PriorityHigh, Label: "High", Rank: "1/1", Tags: []PriorityTag{PriorityTagDefault}},
+				{Priority: PriorityHigh, Label: "High Again", Rank: "2/1", Tags: []PriorityTag{}},
+			},
+			Aliases: []PriorityAlias{},
+			Retired: []RetiredPriority{},
+		},
+		"empty but present": {
+			Priorities: []PriorityDefinition{},
+			Aliases:    []PriorityAlias{},
+			Retired:    []RetiredPriority{},
+		},
+	}
+	for name, document := range tests {
+		t.Run(name, func(t *testing.T) {
+			state := genesisState(t, testVocabulary(t))
+			state.Config.Priorities = document
+			if err := validateConfigStateDocument(state); err == nil {
+				t.Fatal("validateConfigStateDocument() error = nil, want a corrupt-data refusal")
+			} else if got := CategoryOf(err); got != CategoryCorruptData {
+				t.Fatalf("validateConfigStateDocument() category = %q, want %q", got, CategoryCorruptData)
+			}
+		})
+	}
+}
+
+// A stored section that is empty — no priorities, aliases, or retirements —
+// canonicalizes to nil, so "configured nothing" keeps exactly one
+// representation rather than gaining a second one that happens to read the
+// same today only because every PriorityVocabulary accessor but Validate
+// substitutes for the zero value.
+func TestNormalizeStoredPriorityDocumentCanonicalizesAnEmptySectionToNil(t *testing.T) {
+	got, err := normalizeStoredPriorityDocument(&PriorityDocument{
+		Priorities: []PriorityDefinition{},
+		Aliases:    []PriorityAlias{},
+		Retired:    []RetiredPriority{},
+	})
+	if err != nil {
+		t.Fatalf("normalizeStoredPriorityDocument() error = %v", err)
+	}
+	if got != nil {
+		t.Errorf("normalizeStoredPriorityDocument(empty) = %#v, want nil", got)
+	}
+}

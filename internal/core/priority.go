@@ -462,6 +462,32 @@ func normalizePriorityDocument(document PriorityDocument) (PriorityDocument, err
 	return PriorityDocument{Priorities: priorities, Aliases: aliases, Retired: retired}, nil
 }
 
+// normalizeStoredPriorityDocument is the pointer-aware form of
+// normalizePriorityDocument used at a configuration checkpoint's boundary,
+// mirroring normalizeDisplayDocument: nil in, nil out, and a section that
+// normalizes to nothing — no priorities, aliases, or retirements —
+// canonicalizes to nil rather than an empty-but-present document, so
+// "configured nothing" has exactly one representation.
+//
+// Without this, a stored empty document (`{"priorities":[],"aliases":[],
+// "retired":[]}`) would pass validation, change the checkpoint's bytes
+// relative to an unconfigured project, and read back through IsZero as the
+// built-in three — indistinguishable from a project that configured nothing,
+// which is exactly the invariant this section exists to protect.
+func normalizeStoredPriorityDocument(document *PriorityDocument) (*PriorityDocument, error) {
+	if document == nil {
+		return nil, nil
+	}
+	normalized, err := normalizePriorityDocument(*document)
+	if err != nil {
+		return nil, err
+	}
+	if len(normalized.Priorities) == 0 && len(normalized.Aliases) == 0 && len(normalized.Retired) == 0 {
+		return nil, nil
+	}
+	return &normalized, nil
+}
+
 func normalizePriorityTags(tags []PriorityTag) ([]PriorityTag, error) {
 	present := make(map[PriorityTag]struct{}, len(tags))
 	for _, tag := range tags {

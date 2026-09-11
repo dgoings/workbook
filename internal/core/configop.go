@@ -440,11 +440,12 @@ func ValidateConfigCheckpoint(parent *ConfigStateDocument, pack ConfigOperationP
 type configFold struct {
 	vocabulary *configVocabulary
 	display    *configDisplay
-	// priorities carries the stored priorities section through a fold
-	// unchanged. No operation type touches it yet — that is the next task —
-	// so this is a pass-through rather than a section with its own apply
-	// method, the same shape configVocabulary and configDisplay will have
-	// once priority operations exist.
+	// priorities carries the stored priorities section through a fold,
+	// normalized on the way in by normalizeStoredPriorityDocument the same
+	// way Display is. No operation type touches it yet — that is the next
+	// task — so this is a pass-through rather than a section with its own
+	// apply method, the same shape configVocabulary and configDisplay will
+	// have once priority operations exist.
 	priorities *PriorityDocument
 }
 
@@ -533,7 +534,14 @@ func newConfigFold(config ConfigData) (configFold, error) {
 	if err != nil {
 		return configFold{}, err
 	}
-	return configFold{vocabulary: vocabulary, display: display, priorities: config.Priorities}, nil
+	// Normalized on the way in, the same as Display, so a fold never carries a
+	// non-canonical or aliasing priorities document forward — see
+	// normalizeStoredPriorityDocument.
+	priorities, err := normalizeStoredPriorityDocument(config.Priorities)
+	if err != nil {
+		return configFold{}, Wrap(CategoryCorruptData, "configuration contains an invalid priority vocabulary", err)
+	}
+	return configFold{vocabulary: vocabulary, display: display, priorities: priorities}, nil
 }
 
 // apply routes one operation to the section that owns it.
@@ -1145,6 +1153,13 @@ func validateConfigOperationDocument(operation ConfigOperation) error {
 		if !reflect.DeepEqual(operation.Config.Display, display) {
 			return corrupt("config.genesis configuration is not canonical")
 		}
+		priorities, err := normalizeStoredPriorityDocument(operation.Config.Priorities)
+		if err != nil {
+			return Wrap(CategoryCorruptData, "config.genesis carries an invalid priority vocabulary", err)
+		}
+		if !reflect.DeepEqual(operation.Config.Priorities, priorities) {
+			return corrupt("config.genesis configuration is not canonical")
+		}
 	}
 	return nil
 }
@@ -1186,6 +1201,13 @@ func validateConfigStateDocument(state ConfigStateDocument) error {
 		return Wrap(CategoryCorruptData, "configuration state contains invalid display settings", err)
 	}
 	if !reflect.DeepEqual(state.Config.Display, display) {
+		return corrupt("configuration state is not canonical")
+	}
+	priorities, err := normalizeStoredPriorityDocument(state.Config.Priorities)
+	if err != nil {
+		return Wrap(CategoryCorruptData, "configuration state contains an invalid priority vocabulary", err)
+	}
+	if !reflect.DeepEqual(state.Config.Priorities, priorities) {
 		return corrupt("configuration state is not canonical")
 	}
 	return nil
