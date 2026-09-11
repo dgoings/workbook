@@ -109,11 +109,12 @@ type ResultEnvelope struct {
 	// on several of them, and it lives on the envelope so one command reports
 	// one list whatever mix of phases produced it.
 	Conflict []core.Conflict `json:"conflict,omitempty"`
-	// ConfigConflict lists every status change whose local operations could not
-	// be replayed. It is a second list rather than more members on the first
-	// because a task conflict is reported against a task ID and a
-	// configuration conflict against a status, and merging them would give
-	// every consumer of one a member that can never be populated for it.
+	// ConfigConflict lists every status or priority change whose local
+	// operations could not be replayed. It is a second list rather than more
+	// members on the first because a task conflict is reported against a task
+	// ID and a configuration conflict against a status or a priority, and
+	// merging them would give every consumer of one a member that can never be
+	// populated for it.
 	ConfigConflict []core.ConfigConflict `json:"configConflict,omitempty"`
 	Warnings       []core.Warning        `json:"warnings,omitempty"`
 	Sync           *syncReport           `json:"sync,omitempty"`

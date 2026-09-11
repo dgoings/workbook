@@ -41,6 +41,10 @@ func untagPriorityOperation(priority core.Priority, tag core.PriorityTag) core.C
 	return core.ConfigOperation{Type: core.ConfigPriorityUntag, Priority: priority, PriorityTag: tag}
 }
 
+func recolorPriorityOperation(priority core.Priority, color string) core.ConfigOperation {
+	return core.ConfigOperation{Type: core.ConfigPriorityRecolor, Priority: priority, Value: color}
+}
+
 // priorityConfigData wraps a priority document as a whole configuration, the
 // shape newConfigView reads. The vocabulary section is filled with the
 // default statuses purely so this is a valid ConfigData; nothing here reads
@@ -183,6 +187,38 @@ func TestClassifyConfigPriorityOperations(t *testing.T) {
 				Type: core.ConfigConflictPriorityDefinition, Priority: core.PriorityHigh,
 				Ours: "a local priority.relabel of this priority", Theirs: "not defined",
 			},
+		},
+		{
+			// priority.recolor dispatches through classifyConfigOperation to
+			// classifyConfigPrioritySubject exactly like relabel/reorder/tag/
+			// untag — nothing distinguishes it in the switch — so a recolor
+			// landing on a priority origin already retired is reported the
+			// same way a relabel landing there is, rather than silently
+			// falling through to `default: return nil`.
+			name: "priority.recolor lands on a priority origin removed",
+			document: core.PriorityDocument{
+				Priorities: []core.PriorityDefinition{{Priority: core.PriorityLow, Label: "Low", Rank: "1"}},
+				Retired:    []core.RetiredPriority{{Priority: core.PriorityHigh, Destination: core.PriorityLow}},
+			},
+			operation: recolorPriorityOperation(core.PriorityHigh, "#ff0000"),
+			want: &core.ConfigConflict{
+				Type: core.ConfigConflictPriorityRetired, Priority: core.PriorityHigh, Theirs: "low",
+			},
+		},
+		{
+			// A recolor of a priority that still exists converges silently,
+			// like every other in-place edit: classifyConfigPrioritySubject
+			// never compares the edit's value (the new color) against what is
+			// stored, only whether the subject exists. This is the concrete
+			// case ConfigConflictPriorityDefinition's own doc comment points
+			// to when it says a color disagreement cannot reach a conflict
+			// through this classifier.
+			name: "priority.recolor on a live priority converges silently",
+			document: core.PriorityDocument{
+				Priorities: []core.PriorityDefinition{{Priority: core.PriorityHigh, Label: "High", Rank: "1", Color: "#00ff00"}},
+			},
+			operation: recolorPriorityOperation(core.PriorityHigh, "#ff0000"),
+			want:      nil,
 		},
 		{
 			name: "two clones add the same priority with the same definition",

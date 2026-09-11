@@ -93,9 +93,9 @@ func ConflictDetail(conflict Conflict) string {
 // ConflictType, and deliberately so. The task union names situations that stop
 // one task's replay and are reported against a task ID; these name situations
 // that stop the project's configuration replay and are reported against a
-// status. Merging them would give every consumer of a task conflict a member
-// that can never be populated for it, and would make the task union — which is
-// documented as closed and small — open.
+// status or a priority. Merging them would give every consumer of a task
+// conflict a member that can never be populated for it, and would make the
+// task union — which is documented as closed and small — open.
 type ConfigConflictType string
 
 const (
@@ -163,9 +163,19 @@ const (
 	//
 	// A color disagreement lands here rather than getting a type of its own.
 	// Color is a field inside a priority's definition, the same as its label,
-	// and converges the way a label does — by the fold keeping whichever
-	// definition applied first. ConfigConflictDisplaySetting needed its own
-	// type only because that fold is last-write-wins; a priority's fold is not.
+	// and neither a color nor a label disagreement is a decision worth
+	// stopping for: both arrive through an in-place edit — priority.recolor,
+	// priority.relabel — that is last-write-wins, exactly like a display
+	// setting's fold. What earns ConfigConflictDisplaySetting a type of its
+	// own is not that its fold is last-write-wins while a priority's is not —
+	// applyRecolor and applyRelabel are last-write-wins too — it is that a
+	// display setting's classifier compares the edit's value against what is
+	// stored and stops for a disagreement, while classifyConfigPrioritySubject
+	// (like classifyConfigSubject for a relabel) never does: it only asks
+	// whether the subject still exists. A color could only reach this type
+	// through the one classifier that does compare values,
+	// classifyConfigPriorityAdd, and priority.add can never carry a color —
+	// see its own comment.
 	ConfigConflictPriorityDefinition ConfigConflictType = "priority-definition"
 	// ConfigConflictPriorityArity reports a replay whose result violates the
 	// one arity rule a priority vocabulary carries: exactly one priority
@@ -176,7 +186,8 @@ const (
 	ConfigConflictPriorityArity ConfigConflictType = "priority-arity"
 )
 
-// ConfigConflict names one status whose configuration replay needs a decision.
+// ConfigConflict names one status or priority whose configuration replay
+// needs a decision.
 //
 // Ours and Theirs carry the two competing values in whatever form the type
 // implies — two rename targets, two destinations, two labels — as strings,
@@ -217,7 +228,7 @@ func ConfigConflictError(conflicts []ConfigConflict) error {
 	}
 	return Errorf(
 		CategoryConflict,
-		"%d status change(s) need a decision before the project configuration can be replayed",
+		"%d configuration change(s) need a decision before the project configuration can be replayed",
 		len(conflicts),
 	)
 }
