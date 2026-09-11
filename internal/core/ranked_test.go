@@ -59,3 +59,30 @@ func TestInsertRankCategorizesUndefinedAnchorAndCorruptRankDifferently(t *testin
 		t.Errorf("insertRank(unparseable rank) category = %v, want CategoryCorruptData", CategoryOf(corruptRankErr))
 	}
 }
+
+// A stored value that was renamed twice still reads into the live one.
+func TestResolveForwardWalksAChain(t *testing.T) {
+	forward := map[string]string{"old": "middle", "middle": "current"}
+	live := func(name string) bool { return name == "current" }
+
+	got, ok := resolveForward(forward, live, "old")
+	if !ok || got != "current" {
+		t.Errorf("resolveForward(old) = %q,%v; want current,true", got, ok)
+	}
+}
+
+// A cycle must not hang, and must not claim a resolution.
+func TestResolveForwardRefusesACycle(t *testing.T) {
+	forward := map[string]string{"a": "b", "b": "a"}
+	live := func(string) bool { return false }
+
+	if got, ok := resolveForward(forward, live, "a"); ok {
+		t.Errorf("resolveForward resolved a cycle to %q", got)
+	}
+}
+
+func TestForwardTerminatesRejectsACycle(t *testing.T) {
+	if err := forwardTerminates(map[string]string{"a": "b", "b": "a"}, "a"); err == nil {
+		t.Error("forwardTerminates accepted a cycle")
+	}
+}

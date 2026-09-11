@@ -138,3 +138,62 @@ func insertRank[T ~string](items []ranked[T], moved, anchor T, before bool, noun
 	}
 	return formatRank(new(big.Rat).Quo(new(big.Rat).Add(anchorRank, neighbor), big.NewRat(2, 1))), nil
 }
+
+// resolveForward follows a stored value through a forwarding chain to the
+// live value it now means, reporting whether the walk terminated at one.
+//
+// It is transitive: a rename to an intermediate name followed by a later
+// rename or retirement resolves the original in one call, because a clone
+// that was offline across both changes stored the original and must still
+// land in a real column. It is cycle-safe by bounding the walk and
+// remembering where it has been, even though a document that built the
+// forward map already refused to create a cycle — a checkpoint is data read
+// from a ref, and a total function on data from a ref is worth more than an
+// invariant nobody can check at read time.
+//
+// A value that is already live resolves to itself. A value with no
+// forwarding entry resolves to itself with ok false, which is the ordinary
+// state of a value written by a newer build.
+func resolveForward[T ~string](forward map[T]T, live func(T) bool, from T) (T, bool) {
+	if live(from) {
+		return from, true
+	}
+	seen := make(map[T]struct{}, len(forward))
+	current := from
+	for range len(forward) + 1 {
+		next, forwarded := forward[current]
+		if !forwarded {
+			return from, false
+		}
+		if _, repeated := seen[next]; repeated {
+			return from, false
+		}
+		seen[next] = struct{}{}
+		if live(next) {
+			return next, true
+		}
+		current = next
+	}
+	return from, false
+}
+
+// forwardTerminates rejects a forwarding cycle. ApplyConfig cannot build one —
+// every chain it extends ends at a live value, and a live value forwards
+// nowhere — so reaching this is a hand-edited or corrupted checkpoint, which is
+// exactly what a decoder is for.
+func forwardTerminates[T ~string](forward map[T]T, source T) error {
+	seen := map[T]struct{}{source: {}}
+	current := source
+	for range len(forward) + 1 {
+		next, forwarded := forward[current]
+		if !forwarded {
+			return nil
+		}
+		if _, repeated := seen[next]; repeated {
+			return Errorf(CategoryValidation, "status %q forwards to itself through a cycle", source)
+		}
+		seen[next] = struct{}{}
+		current = next
+	}
+	return Errorf(CategoryValidation, "status %q forwards to itself through a cycle", source)
+}

@@ -366,26 +366,7 @@ func (definition StatusDefinition) rank() string { return definition.Rank }
 // entry resolves to itself with ok false, which is the ordinary state of a
 // status written by a newer build.
 func (vocabulary Vocabulary) Resolve(status Status) (Status, bool) {
-	if vocabulary.Has(status) {
-		return status, true
-	}
-	seen := make(map[Status]struct{}, len(vocabulary.forward))
-	current := status
-	for range len(vocabulary.forward) + 1 {
-		next, forwarded := vocabulary.forward[current]
-		if !forwarded {
-			return status, false
-		}
-		if _, repeated := seen[next]; repeated {
-			return status, false
-		}
-		seen[next] = struct{}{}
-		if vocabulary.Has(next) {
-			return next, true
-		}
-		current = next
-	}
-	return status, false
+	return resolveForward(vocabulary.forward, vocabulary.Has, status)
 }
 
 // Validate reports the arity violations that make a vocabulary unusable.
@@ -676,27 +657,6 @@ func normalizeVocabularyDocument(document VocabularyDocument) (VocabularyDocumen
 	}
 
 	return VocabularyDocument{Statuses: statuses, Aliases: aliases, Retired: retired}, nil
-}
-
-// forwardTerminates rejects a forwarding cycle. ApplyConfig cannot build one —
-// every chain it extends ends at a live status, and a live status forwards
-// nowhere — so reaching this is a hand-edited or corrupted checkpoint, which is
-// exactly what a decoder is for.
-func forwardTerminates(forward map[Status]Status, source Status) error {
-	seen := map[Status]struct{}{source: {}}
-	current := source
-	for range len(forward) + 1 {
-		next, forwarded := forward[current]
-		if !forwarded {
-			return nil
-		}
-		if _, repeated := seen[next]; repeated {
-			return Errorf(CategoryValidation, "status %q forwards to itself through a cycle", source)
-		}
-		seen[next] = struct{}{}
-		current = next
-	}
-	return Errorf(CategoryValidation, "status %q forwards to itself through a cycle", source)
 }
 
 func normalizeStatusTags(tags []StatusTag) ([]StatusTag, error) {
