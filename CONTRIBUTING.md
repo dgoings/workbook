@@ -151,6 +151,18 @@ no label releases nothing, so an erroneous edit to the file is inert. A
 version it implies. `release:patch` may be cut without one, for a fix that does
 not warrant prose.
 
+Raising `SupportedFormatGeneration` implies at least `release:minor`. It
+withdraws a capability from clones already in the field: they keep fetching,
+keep reading, and keep publishing their own tasks, but they can no longer
+change the configuration of a project that uses one of the new operations,
+because folding that change would need rules an older build does not have.
+`release:patch` is described above as a fix that does not warrant prose, and a
+withdrawn capability always warrants prose. v0.5.1 shipped generation 2 as a
+patch, and its changelog never mentioned the bump, even though the commit that
+raised the constant (`cacaa1c`) wrote a full account of what it costs a team —
+a cost that never reached anyone reading the release. This rule exists so it
+does not happen again.
+
 The check runs on the pull request itself, so a disagreement blocks the merge
 rather than failing after it. It runs again against the merged commit before
 tagging, because another release landing in between changes which version comes
