@@ -146,14 +146,33 @@ const (
 	PriorityHigh   Priority = "high"
 )
 
-// Priorities returns the built-in priority set: today's three, most urgent
-// first. It is the durable PriorityDefinition shape — see priority.go — kept
-// under its original name and signature because it has a caller outside this
-// package that cannot reach an unexported function. Teaching it to report a
-// project's configured priorities instead of the built-in set is a later
-// stage's change; this one only moves the shape it already returned.
+// Priorities returns the three built-in priorities in the order and shape
+// this function has reported since before ranks existed: ascending urgency
+// (Low, Medium, High), with only Priority and Label set.
+//
+// builtInPriorityDefinitions orders most urgent first because that is what
+// the vocabulary sorts by — rank order means urgency. Priorities does not
+// follow it there: its one caller, agentdocs/render.go, renders exactly this
+// order into the "Canonical priorities" table in .workbook/guidelines.md, a
+// file people read, so changing the order — or handing back the ranks and
+// tags builtInPriorityDefinitions now carries — would rewrite that file for
+// every project that has never touched its priority vocabulary. It still
+// derives its names and labels from builtInPriorityDefinitions rather than
+// restating them, so there is one source of truth for what the three
+// built-in priorities are called; only the order and the shape exposed here
+// differ, deliberately, until the stage that teaches guidelines.md to read a
+// project's configured priorities converges the two.
 func Priorities() []PriorityDefinition {
-	return builtInPriorityDefinitions()
+	order := [...]Priority{PriorityLow, PriorityMedium, PriorityHigh}
+	labels := make(map[Priority]string, len(order))
+	for _, definition := range builtInPriorityDefinitions() {
+		labels[definition.Priority] = definition.Label
+	}
+	result := make([]PriorityDefinition, len(order))
+	for index, priority := range order {
+		result[index] = PriorityDefinition{Priority: priority, Label: labels[priority]}
+	}
+	return result
 }
 
 type TaskData struct {
