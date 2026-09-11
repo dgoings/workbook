@@ -22,6 +22,14 @@ type Service struct {
 	// this build does not get to drop a column out from under it. A caller that
 	// has read the project's configuration ledger sets this.
 	Vocabulary Vocabulary
+	// Priorities is the project's priority configuration, read the same way
+	// Vocabulary is. Unlike Vocabulary, its zero value needs no substitution
+	// here: every PriorityVocabulary accessor already reads its own zero value
+	// as "not configured" and substitutes the built-in three priorities
+	// itself, so a Service that never sets this field — every caller today —
+	// keeps exactly today's behavior without this type needing a vocabulary()
+	// equivalent.
+	Priorities PriorityVocabulary
 	Reader     TaskReader
 	Writer     CanonicalTaskWriter
 	// Blobs records an attached file's bytes. A Service without one refuses to
@@ -157,7 +165,7 @@ func (s Service) CreateMutation(ctx context.Context, input CreateInput) (Mutatio
 	}
 	priority := input.Priority
 	if priority == "" {
-		priority = PriorityMedium
+		priority = s.Priorities.Default()
 	}
 
 	snapshots, err := s.Reader.List(ctx, s.Config)
@@ -306,7 +314,7 @@ func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
 		tasks = append(tasks, task)
 	}
 	sort.Slice(tasks, func(i, j int) bool {
-		return compareTasks(vocabulary, tasks[i], tasks[j]) < 0
+		return compareTasks(vocabulary, s.Priorities, tasks[i], tasks[j]) < 0
 	})
 	return tasks, nil
 }
@@ -350,6 +358,7 @@ func (s Service) Next(ctx context.Context, options NextOptions) (*Task, error) {
 		return nil, err
 	}
 	vocabulary := s.vocabulary()
+	priorities := s.Priorities
 
 	active := make(map[string]TaskData, len(snapshots))
 	for _, snapshot := range snapshots {
@@ -376,8 +385,8 @@ func (s Service) Next(ctx context.Context, options NextOptions) (*Task, error) {
 			return nil, Errorf(CategoryCorruptData, "task %q has invalid rank %q", snapshot.State.TaskID, task.Rank)
 		}
 		projected := s.Project(snapshot)
-		if selected == nil || priorityOrder(projected.Priority) < priorityOrder(selected.Priority) ||
-			(priorityOrder(projected.Priority) == priorityOrder(selected.Priority) &&
+		if selected == nil || priorities.Order(projected.Priority) < priorities.Order(selected.Priority) ||
+			(priorities.Order(projected.Priority) == priorities.Order(selected.Priority) &&
 				(rank.Cmp(selectedRank) < 0 || (rank.Cmp(selectedRank) == 0 && projected.ID < selected.ID))) {
 			selected = &projected
 			selectedRank = rank
@@ -1444,11 +1453,11 @@ func dependenciesDone(vocabulary Vocabulary, dependencies []string, active map[s
 	return true
 }
 
-func compareTasks(vocabulary Vocabulary, left, right Task) int {
+func compareTasks(vocabulary Vocabulary, priorities PriorityVocabulary, left, right Task) int {
 	if compare := vocabulary.Order(left.Status) - vocabulary.Order(right.Status); compare != 0 {
 		return compare
 	}
-	if compare := priorityOrder(left.Priority) - priorityOrder(right.Priority); compare != 0 {
+	if compare := priorities.Order(left.Priority) - priorities.Order(right.Priority); compare != 0 {
 		return compare
 	}
 	leftRank, leftErr := parseRank(left.Rank)
@@ -1464,19 +1473,6 @@ func compareTasks(vocabulary Vocabulary, left, right Task) int {
 		return 1
 	}
 	return strings.Compare(left.ID, right.ID)
-}
-
-func priorityOrder(priority Priority) int {
-	switch priority {
-	case PriorityHigh:
-		return 0
-	case PriorityMedium:
-		return 1
-	case PriorityLow:
-		return 2
-	default:
-		return 3
-	}
 }
 
 func hasLabel(labels []string, wanted string) bool {

@@ -349,13 +349,13 @@ func (vocabulary PriorityVocabulary) Validate() error {
 		return Errorf(
 			CategoryValidation,
 			"no priority is tagged default, so a new task would have no priority to land on; "+
-				"tag one first: workbook priority tag <priority> --default",
+				"tag one first: workbook priority tag <priority> --tag default",
 		)
 	case len(defaults) > 1:
 		return Errorf(
 			CategoryValidation,
 			"priorities %s are all tagged default, but exactly one may be; "+
-				"move the tag instead: workbook priority tag <priority> --default",
+				"move the tag instead: workbook priority tag <priority> --tag default",
 			strings.Join(defaults, ", "),
 		)
 	}

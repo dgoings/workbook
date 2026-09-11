@@ -327,13 +327,17 @@ func formatRank(rank *big.Rat) string {
 	return rank.Num().String() + "/" + rank.Denom().String()
 }
 
+// isValidPriority reports whether a priority is a member of the built-in set.
+// It has no access to a project's configured vocabulary — its callers
+// (NormalizeTask and the replay-time field.set check) run without a Service
+// in scope, the same reason ValidateStatusToken rather than a status
+// vocabulary's Has is what those paths ask of a status. Passing the zero
+// PriorityVocabulary is what makes this "consult the vocabulary" rather than
+// a second copy of the built-in set: PriorityVocabulary.Has already reads its
+// own zero value as "not configured" and substitutes the built-in three, so
+// this and that substitution can never drift apart.
 func isValidPriority(priority Priority) bool {
-	for _, definition := range builtInPriorityDefinitions() {
-		if priority == definition.Priority {
-			return true
-		}
-	}
-	return false
+	return PriorityVocabulary{}.Has(priority)
 }
 
 func normalizeLabels(labels []string) ([]string, error) {

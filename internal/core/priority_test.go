@@ -32,7 +32,11 @@ func TestBuiltInPrioritiesAreTodaysThree(t *testing.T) {
 }
 
 // Color is omitted when unset, so a definition that chose no color encodes to
-// the same bytes it would have before the field existed.
+// the same bytes it would have before the field existed. The "tags":null this
+// pins is a bare literal marshaled directly, without passing through
+// normalization — normalization always produces a non-nil slice, so no
+// production path can ever emit these bytes; that does not make them wrong to
+// pin here, only unreachable elsewhere.
 func TestPriorityDefinitionOmitsAnUnsetColor(t *testing.T) {
 	encoded, err := json.Marshal(PriorityDefinition{Priority: PriorityHigh, Label: "High", Rank: "1/1"})
 	if err != nil {
@@ -110,7 +114,7 @@ func rankedPriorityVocabulary(t *testing.T, ranks ...string) PriorityVocabulary 
 	for index, rank := range ranks {
 		definitions = append(definitions, PriorityDefinition{
 			Priority: Priority(string(rune('a' + index))),
-			Label:    "Column",
+			Label:    "Priority",
 			Rank:     rank,
 			Tags:     []PriorityTag{},
 		})
@@ -161,5 +165,23 @@ func TestNewPriorityVocabularyRejectsAForwardingCycleNamingPriorities(t *testing
 	}
 	if strings.Contains(err.Error(), "status") {
 		t.Errorf("cycle error = %q, wrongly names a status", err)
+	}
+}
+
+// A project that configured priorities sorts by its own order, not by the
+// built-in one.
+func TestConfiguredPriorityOrderDrivesSorting(t *testing.T) {
+	vocabulary, err := NewPriorityVocabulary([]PriorityDefinition{
+		{Priority: "blocker", Label: "Blocker", Rank: "1/1"},
+		{Priority: PriorityHigh, Label: "High", Rank: "2/1", Tags: []PriorityTag{PriorityTagDefault}},
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("NewPriorityVocabulary: %v", err)
+	}
+	if vocabulary.Order("blocker") >= vocabulary.Order(PriorityHigh) {
+		t.Error("blocker does not sort ahead of high under the project's own order")
+	}
+	if got := vocabulary.Default(); got != PriorityHigh {
+		t.Errorf("Default() = %q, want high", got)
 	}
 }
