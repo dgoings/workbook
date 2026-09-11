@@ -1,5 +1,12 @@
 package core
 
+import (
+	"math/big"
+	"sort"
+	"strings"
+	"sync"
+)
+
 // PriorityTag marks a priority's role. There is one today: where a task lands
 // when nobody names a priority. It is a tag rather than a boolean so it shares
 // the normalization statuses use, and so a second role can be added without
@@ -7,6 +14,34 @@ package core
 type PriorityTag string
 
 const PriorityTagDefault PriorityTag = "default"
+
+// priorityTags lists every tag in the canonical order a document stores them.
+// The order is alphabetical, mirroring statusTags for the same reason:
+// canonical bytes need one answer, not a good one. There is exactly one tag
+// today, so the order only starts to matter once a second one exists.
+var priorityTags = [...]PriorityTag{PriorityTagDefault}
+
+// PriorityTags returns every tag a priority may carry, in the canonical order
+// a document stores them. It exists so that a command refusing an unknown tag
+// can list the ones that exist without keeping a second copy of the set.
+func PriorityTags() []PriorityTag {
+	tags := make([]PriorityTag, len(priorityTags))
+	copy(tags, priorityTags[:])
+	return tags
+}
+
+// ValidatePriorityTag reports whether a tag is one of the roles a project may
+// assign to a priority. It is exported for the same reason ValidateStatusTag
+// is: a word somebody typed has to be refused as a typo before it becomes a
+// member of a durable operation, where the same check reports corrupt data.
+func ValidatePriorityTag(tag PriorityTag) error {
+	for _, known := range priorityTags {
+		if tag == known {
+			return nil
+		}
+	}
+	return Errorf(CategoryValidation, "unsupported priority tag %q", tag)
+}
 
 // PriorityDefinition is one priority as the ledger stores it.
 type PriorityDefinition struct {
@@ -24,6 +59,7 @@ type PriorityDefinition struct {
 	Color string `json:"color,omitempty"`
 }
 
+// HasTag reports whether the definition carries a tag.
 func (definition PriorityDefinition) HasTag(tag PriorityTag) bool {
 	for _, candidate := range definition.Tags {
 		if candidate == tag {
@@ -57,9 +93,434 @@ type RetiredPriority struct {
 // bytes are compared for equality, so the sort has to be something this package
 // decides rather than a property of the encoder.
 type PriorityDocument struct {
+	// Priorities are the live priorities, ordered by rank and then by name.
 	Priorities []PriorityDefinition `json:"priorities"`
-	Aliases    []PriorityAlias      `json:"aliases"`
-	Retired    []RetiredPriority    `json:"retired"`
+	// Aliases are rename forwardings, ordered by source.
+	Aliases []PriorityAlias `json:"aliases"`
+	// Retired are removal forwardings, ordered by source.
+	Retired []RetiredPriority `json:"retired"`
+}
+
+// PriorityVocabulary is a project's resolved priority configuration: the live
+// priorities in their configured order, plus the forwarding chains that map a
+// stored priority no longer live onto one that is.
+//
+// Its fields are unexported so that a value in hand is always one that came
+// through NewPriorityVocabulary or a decoded configuration checkpoint, which is
+// what lets every accessor be total. The zero value is the empty vocabulary,
+// and unlike Vocabulary — whose zero value a caller such as Service reads as
+// "unconfigured" and substitutes for — every accessor here does the
+// substitution itself: there is no other layer yet that resolves a project's
+// priority configuration the way Service resolves its status configuration.
+type PriorityVocabulary struct {
+	definitions []PriorityDefinition
+	aliases     []PriorityAlias
+	retired     []RetiredPriority
+
+	byPriority map[Priority]int
+	forward    map[Priority]Priority
+}
+
+// NewPriorityVocabulary builds a vocabulary from a priority set and its
+// forwarding chains, mirroring NewVocabulary: it validates shape — rank
+// syntax, tag membership, uniqueness, and the absence of a forwarding cycle —
+// but neither arity nor a size ceiling, both being states a fold can reach
+// from a peer's operations that this must still be able to represent. Validate
+// covers arity; there is no priority equivalent of ValidateConfigAuthoring's
+// ceilings yet, so there is nothing for this to defer a ceiling check to.
+//
+// Priorities do not yet have their own charset rule the way ValidateStatusToken
+// gives statuses one — no command exists yet that would ask a person to type a
+// priority name — so shape validation here stops at "not blank" rather than
+// reaching for a rule this stage has no use for.
+func NewPriorityVocabulary(definitions []PriorityDefinition, aliases []PriorityAlias, retired []RetiredPriority) (PriorityVocabulary, error) {
+	normalized, err := normalizePriorityDocument(PriorityDocument{
+		Priorities: definitions,
+		Aliases:    aliases,
+		Retired:    retired,
+	})
+	if err != nil {
+		return PriorityVocabulary{}, err
+	}
+	return newPriorityVocabularyFromCanonical(normalized), nil
+}
+
+// newPriorityVocabularyFromCanonical indexes an already-normalized document.
+// It cannot fail, which is why decoding a checkpoint and reading its
+// vocabulary are two steps rather than one fallible one.
+func newPriorityVocabularyFromCanonical(document PriorityDocument) PriorityVocabulary {
+	vocabulary := PriorityVocabulary{
+		definitions: document.Priorities,
+		aliases:     document.Aliases,
+		retired:     document.Retired,
+		byPriority:  make(map[Priority]int, len(document.Priorities)),
+		forward:     make(map[Priority]Priority, len(document.Aliases)+len(document.Retired)),
+	}
+	for index, definition := range document.Priorities {
+		vocabulary.byPriority[definition.Priority] = index
+	}
+	for _, alias := range document.Aliases {
+		vocabulary.forward[alias.From] = alias.To
+	}
+	for _, entry := range document.Retired {
+		vocabulary.forward[entry.Priority] = entry.Destination
+	}
+	return vocabulary
+}
+
+// IsZero reports whether this is the empty vocabulary, which is how a caller
+// that never configured one is distinguished from one that configured a
+// project down to a single priority.
+func (vocabulary PriorityVocabulary) IsZero() bool {
+	return len(vocabulary.definitions) == 0 && len(vocabulary.aliases) == 0 && len(vocabulary.retired) == 0
+}
+
+// builtInPriorityVocabulary is what every accessor but Validate substitutes
+// for the zero value. It is cached behind sync.OnceValue the way
+// DefaultVocabulary is, rather than rebuilt — with its two maps — on every
+// accessor call a rendering path makes per task.
+var builtInPriorityVocabulary = sync.OnceValue(func() PriorityVocabulary {
+	return newPriorityVocabularyFromCanonical(PriorityDocument{Priorities: builtInPriorityDefinitions()})
+})
+
+// effective is the vocabulary every accessor but Validate actually reads: the
+// receiver, unless it is the zero value, in which case the built-in set — the
+// substitution the doc comment on PriorityVocabulary describes.
+func (vocabulary PriorityVocabulary) effective() PriorityVocabulary {
+	if vocabulary.IsZero() {
+		return builtInPriorityVocabulary()
+	}
+	return vocabulary
+}
+
+// Definitions returns the live priorities in configured order. The slice is a
+// copy: callers hand it to templates and sort it.
+func (vocabulary PriorityVocabulary) Definitions() []PriorityDefinition {
+	vocabulary = vocabulary.effective()
+	definitions := make([]PriorityDefinition, len(vocabulary.definitions))
+	for index, definition := range vocabulary.definitions {
+		definition.Tags = copyPriorityTags(definition.Tags)
+		definitions[index] = definition
+	}
+	return definitions
+}
+
+// copyPriorityTags copies a tag list, keeping an empty list empty rather than
+// letting it become nil. The distinction is durable: a canonical document
+// encodes "tags":[], and an appended nil would encode "tags":null and fail the
+// checkpoint's byte comparison.
+func copyPriorityTags(tags []PriorityTag) []PriorityTag {
+	copied := make([]PriorityTag, len(tags))
+	copy(copied, tags)
+	return copied
+}
+
+// Document returns the vocabulary in the canonical shape a configuration
+// checkpoint stores. Every member comes back as a non-nil slice, empty where
+// there is nothing to report, for the reason Vocabulary.Document's does.
+func (vocabulary PriorityVocabulary) Document() PriorityDocument {
+	vocabulary = vocabulary.effective()
+	aliases := make([]PriorityAlias, len(vocabulary.aliases))
+	copy(aliases, vocabulary.aliases)
+	retired := make([]RetiredPriority, len(vocabulary.retired))
+	copy(retired, vocabulary.retired)
+	return PriorityDocument{
+		Priorities: vocabulary.Definitions(),
+		Aliases:    aliases,
+		Retired:    retired,
+	}
+}
+
+// Has reports whether a priority is live in this vocabulary.
+func (vocabulary PriorityVocabulary) Has(priority Priority) bool {
+	vocabulary = vocabulary.effective()
+	_, exists := vocabulary.byPriority[priority]
+	return exists
+}
+
+// Order returns a priority's position for sorting, lower meaning more urgent.
+// An unknown priority sorts after every live one rather than failing, which is
+// what keeps a board readable while a rename is still propagating.
+func (vocabulary PriorityVocabulary) Order(priority Priority) int {
+	vocabulary = vocabulary.effective()
+	if index, exists := vocabulary.byPriority[priority]; exists {
+		return index
+	}
+	return len(vocabulary.definitions)
+}
+
+// Default returns the priority a task with none named is given.
+func (vocabulary PriorityVocabulary) Default() Priority {
+	vocabulary = vocabulary.effective()
+	for _, definition := range vocabulary.definitions {
+		if definition.HasTag(PriorityTagDefault) {
+			return definition.Priority
+		}
+	}
+	return ""
+}
+
+// Label returns a priority's display label, and the raw value for a priority
+// this vocabulary does not define, so a board never hides a priority another
+// clone recorded.
+func (vocabulary PriorityVocabulary) Label(priority Priority) string {
+	vocabulary = vocabulary.effective()
+	if index, exists := vocabulary.byPriority[priority]; exists {
+		return vocabulary.definitions[index].Label
+	}
+	return string(priority)
+}
+
+// Color returns a priority's stored ink, or the empty string when it is
+// unknown or has none stored — the same "nothing stores a default" reading
+// PriorityDefinition.Color's doc comment describes.
+func (vocabulary PriorityVocabulary) Color(priority Priority) string {
+	vocabulary = vocabulary.effective()
+	if index, exists := vocabulary.byPriority[priority]; exists {
+		return vocabulary.definitions[index].Color
+	}
+	return ""
+}
+
+// Resolve follows a stored priority through the rename and retirement chains
+// to the live priority it now means, reporting whether the walk terminated at
+// one. It is transitive and cycle-safe for the same reasons Vocabulary.Resolve
+// is.
+func (vocabulary PriorityVocabulary) Resolve(priority Priority) (Priority, bool) {
+	vocabulary = vocabulary.effective()
+	return resolveForward(vocabulary.forward, vocabulary.Has, priority)
+}
+
+// AppendRank returns the rank a priority added after every existing one
+// takes. It is nextRank's rule for priorities, the same rule
+// Vocabulary.AppendRank applies for statuses.
+func (vocabulary PriorityVocabulary) AppendRank() string {
+	vocabulary = vocabulary.effective()
+	return appendRank(rankedPriorities(vocabulary.definitions))
+}
+
+// InsertRank returns the rank that places a priority immediately before or
+// after an anchor, leaving every other priority where it is. It is
+// movedRank's rule for priorities, the same rule Vocabulary.InsertRank applies
+// for statuses.
+func (vocabulary PriorityVocabulary) InsertRank(moved, anchor Priority, before bool) (string, error) {
+	vocabulary = vocabulary.effective()
+	return insertRank(rankedPriorities(vocabulary.definitions), moved, anchor, before, "priority")
+}
+
+// rankedPriorities adapts a vocabulary's definitions to the shared ranked[T]
+// interface, which is how AppendRank and InsertRank reach the rank arithmetic
+// they share with Vocabulary without either depending on the other's item
+// type.
+func rankedPriorities(definitions []PriorityDefinition) []ranked[Priority] {
+	items := make([]ranked[Priority], 0, len(definitions))
+	for _, definition := range definitions {
+		items = append(items, definition)
+	}
+	return items
+}
+
+// Validate reports the arity violations that make a priority vocabulary
+// unusable: no priorities at all, or the default tag on anything but exactly
+// one. It mirrors Vocabulary.Validate's arity half — a priority carries only
+// the one tag, so there is no next/done equivalent to check.
+//
+// This is the authoring gate, not the read gate, the same distinction
+// Vocabulary.Validate draws: it is called by a command that is about to write
+// a pack, not while one is folded, so every message names the command that
+// fixes the state it describes. It does not substitute the built-in set for
+// the zero value the way every other accessor does — a project caught with no
+// priorities configured is exactly the state this exists to refuse, and
+// reading it as the built-in three would hide the very thing it is asked
+// about.
+func (vocabulary PriorityVocabulary) Validate() error {
+	if len(vocabulary.definitions) == 0 {
+		return Errorf(
+			CategoryValidation,
+			"the project has no priorities; add one first: workbook priority add <priority> --label <label>",
+		)
+	}
+
+	var defaults []string
+	for _, definition := range vocabulary.definitions {
+		if definition.HasTag(PriorityTagDefault) {
+			defaults = append(defaults, string(definition.Priority))
+		}
+	}
+
+	switch {
+	case len(defaults) == 0:
+		return Errorf(
+			CategoryValidation,
+			"no priority is tagged default, so a new task would have no priority to land on; "+
+				"tag one first: workbook priority tag <priority> --default",
+		)
+	case len(defaults) > 1:
+		return Errorf(
+			CategoryValidation,
+			"priorities %s are all tagged default, but exactly one may be; "+
+				"move the tag instead: workbook priority tag <priority> --default",
+			strings.Join(defaults, ", "),
+		)
+	}
+	return nil
+}
+
+// normalizePriorityDocument validates a priority document and returns it in
+// canonical form: priorities ordered by rank then name, aliases by source,
+// retirements by source, tags in their fixed order, and every empty
+// collection an empty slice rather than a null — the same canonicalization
+// normalizeVocabularyDocument performs for statuses, minus the charset and
+// label-length rules a priority does not have yet.
+//
+// It checks shape and never counts, for the reason normalizeVocabularyDocument
+// records at length: a size ceiling enforced inside the fold can brick a
+// repository two clones pushed over it concurrently, permanently, because
+// neither did anything a ceiling checked here would have refused alone. There
+// is no ValidateConfigAuthoring-equivalent authoring gate for priorities yet
+// to defer a ceiling to; this is recorded so that whenever one exists, it
+// lands beside this comment rather than inside this function.
+func normalizePriorityDocument(document PriorityDocument) (PriorityDocument, error) {
+	priorities := make([]PriorityDefinition, 0, len(document.Priorities))
+	ranks := make(map[Priority]*big.Rat, len(document.Priorities))
+	seen := make(map[Priority]struct{}, len(document.Priorities))
+	for _, definition := range document.Priorities {
+		if err := validatePriorityToken(definition.Priority); err != nil {
+			return PriorityDocument{}, err
+		}
+		rank, err := parseRank(definition.Rank)
+		if err != nil {
+			return PriorityDocument{}, Wrap(CategoryValidation, "priority rank is invalid", err)
+		}
+		if _, duplicate := seen[definition.Priority]; duplicate {
+			return PriorityDocument{}, Errorf(CategoryValidation, "priority %q is defined twice", definition.Priority)
+		}
+		seen[definition.Priority] = struct{}{}
+		ranks[definition.Priority] = rank
+
+		tags, err := normalizePriorityTags(definition.Tags)
+		if err != nil {
+			return PriorityDocument{}, err
+		}
+		definition.Tags = tags
+		priorities = append(priorities, definition)
+	}
+	sort.SliceStable(priorities, func(left, right int) bool {
+		if compare := ranks[priorities[left].Priority].Cmp(ranks[priorities[right].Priority]); compare != 0 {
+			return compare < 0
+		}
+		return priorities[left].Priority < priorities[right].Priority
+	})
+
+	aliases, err := normalizePriorityAliases(document.Aliases)
+	if err != nil {
+		return PriorityDocument{}, err
+	}
+	retired, err := normalizeRetiredPriorities(document.Retired)
+	if err != nil {
+		return PriorityDocument{}, err
+	}
+	forward := make(map[Priority]Priority, len(aliases)+len(retired))
+	for _, alias := range aliases {
+		if _, duplicate := forward[alias.From]; duplicate {
+			return PriorityDocument{}, Errorf(CategoryValidation, "priority %q is forwarded twice", alias.From)
+		}
+		forward[alias.From] = alias.To
+	}
+	for _, entry := range retired {
+		if _, duplicate := forward[entry.Priority]; duplicate {
+			return PriorityDocument{}, Errorf(CategoryValidation, "priority %q is forwarded twice", entry.Priority)
+		}
+		forward[entry.Priority] = entry.Destination
+	}
+	for source := range forward {
+		if _, live := seen[source]; live {
+			return PriorityDocument{}, Errorf(
+				CategoryValidation,
+				"priority %q is both live and forwarded elsewhere",
+				source,
+			)
+		}
+		if err := forwardTerminates(forward, source, "priority"); err != nil {
+			return PriorityDocument{}, err
+		}
+	}
+
+	return PriorityDocument{Priorities: priorities, Aliases: aliases, Retired: retired}, nil
+}
+
+func normalizePriorityTags(tags []PriorityTag) ([]PriorityTag, error) {
+	present := make(map[PriorityTag]struct{}, len(tags))
+	for _, tag := range tags {
+		if err := ValidatePriorityTag(tag); err != nil {
+			return nil, err
+		}
+		present[tag] = struct{}{}
+	}
+	normalized := make([]PriorityTag, 0, len(present))
+	for _, tag := range priorityTags {
+		if _, tagged := present[tag]; tagged {
+			normalized = append(normalized, tag)
+		}
+	}
+	return normalized, nil
+}
+
+// validatePriorityToken is normalizePriorityDocument's and
+// normalizeForwardings' validate function for a Priority value. This stage
+// gives priorities no charset rule of their own — no command exists yet that
+// would ask a person to type one — so the only shape every use of a Priority
+// as a live key or a forwarding endpoint has in common is that it is not
+// blank.
+func validatePriorityToken(priority Priority) error {
+	if priority == "" {
+		return Errorf(CategoryValidation, "priority must not be blank")
+	}
+	return nil
+}
+
+// priorityAliasForwardings and retiredPriorityForwardings convert a
+// document's own field names to forwarding[Priority] at the boundary into the
+// shared normalization, the same conversion statusAliasForwardings and
+// retiredStatusForwardings do for statuses.
+func priorityAliasForwardings(aliases []PriorityAlias) []forwarding[Priority] {
+	pairs := make([]forwarding[Priority], len(aliases))
+	for index, alias := range aliases {
+		pairs[index] = forwarding[Priority]{From: alias.From, To: alias.To}
+	}
+	return pairs
+}
+
+func retiredPriorityForwardings(retired []RetiredPriority) []forwarding[Priority] {
+	pairs := make([]forwarding[Priority], len(retired))
+	for index, entry := range retired {
+		pairs[index] = forwarding[Priority]{From: entry.Priority, To: entry.Destination}
+	}
+	return pairs
+}
+
+func normalizePriorityAliases(aliases []PriorityAlias) ([]PriorityAlias, error) {
+	normalized, err := normalizeForwardings(priorityAliasForwardings(aliases), validatePriorityToken, "priority", "alias")
+	if err != nil {
+		return nil, err
+	}
+	result := make([]PriorityAlias, len(normalized))
+	for index, pair := range normalized {
+		result[index] = PriorityAlias{From: pair.From, To: pair.To}
+	}
+	return result, nil
+}
+
+func normalizeRetiredPriorities(retired []RetiredPriority) ([]RetiredPriority, error) {
+	normalized, err := normalizeForwardings(retiredPriorityForwardings(retired), validatePriorityToken, "priority", "retire into")
+	if err != nil {
+		return nil, err
+	}
+	result := make([]RetiredPriority, len(normalized))
+	for index, pair := range normalized {
+		result[index] = RetiredPriority{Priority: pair.From, Destination: pair.To}
+	}
+	return result, nil
 }
 
 // builtInPriorityDefinitions is the set a project that configured none is read
@@ -67,8 +528,8 @@ type PriorityDocument struct {
 // the service used to hardcode.
 func builtInPriorityDefinitions() []PriorityDefinition {
 	return []PriorityDefinition{
-		{Priority: PriorityHigh, Label: "High", Rank: "1/1"},
+		{Priority: PriorityHigh, Label: "High", Rank: "1/1", Tags: []PriorityTag{}},
 		{Priority: PriorityMedium, Label: "Medium", Rank: "2/1", Tags: []PriorityTag{PriorityTagDefault}},
-		{Priority: PriorityLow, Label: "Low", Rank: "3/1"},
+		{Priority: PriorityLow, Label: "Low", Rank: "3/1", Tags: []PriorityTag{}},
 	}
 }

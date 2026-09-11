@@ -131,13 +131,39 @@ func insertRank[T ~string](items []ranked[T], moved, anchor T, before bool, noun
 		if !representable {
 			return "", Errorf(
 				CategoryValidation,
-				"statuses %q and %q share a rank, so %q cannot be placed between them; move one of them first",
-				neighborKey, anchor, moved,
+				"%s %q and %q share a rank, so %q cannot be placed between them; move one of them first",
+				pluralNoun(noun), neighborKey, anchor, moved,
 			)
 		}
 		return formatRank(anchorRank), nil
 	}
 	return formatRank(new(big.Rat).Quo(new(big.Rat).Add(anchorRank, neighbor), big.NewRat(2, 1))), nil
+}
+
+// pluralNoun derives the plural insertRank's exhausted-gap message needs from
+// the singular noun a caller passes, by the ordinary English rule that covers
+// both nouns that call it today: a word ending in "s" takes "es" ("status" ->
+// "statuses"), and a word ending in a consonant then "y" swaps the "y" for
+// "ies" ("priority" -> "priorities").
+//
+// It exists so that message can stay a single fixed string inside this
+// function rather than gaining its own parameter: insertRank's five-argument
+// signature is already exercised positionally by tests that predate a
+// priority caller, and every one of them would need editing for a sixth
+// parameter that only one of its two callers' messages actually needs.
+// Deriving the plural keeps that signature exactly as it is.
+func pluralNoun(noun string) string {
+	if strings.HasSuffix(noun, "s") {
+		return noun + "es"
+	}
+	if len(noun) > 1 && strings.HasSuffix(noun, "y") {
+		switch noun[len(noun)-2] {
+		case 'a', 'e', 'i', 'o', 'u':
+		default:
+			return noun[:len(noun)-1] + "ies"
+		}
+	}
+	return noun + "s"
 }
 
 // resolveForward follows a stored value through a forwarding chain to the
@@ -289,7 +315,10 @@ func forwardingsGrew[T ~string](before, after []forwarding[T], ceiling int, noun
 // every chain it extends ends at a live value, and a live value forwards
 // nowhere — so reaching this is a hand-edited or corrupted checkpoint, which is
 // exactly what a decoder is for.
-func forwardTerminates[T ~string](forward map[T]T, source T) error {
+//
+// noun names the kind of value cycling, "status" or "priority", the same
+// treatment insertRank's noun parameter already gives its own messages.
+func forwardTerminates[T ~string](forward map[T]T, source T, noun string) error {
 	seen := map[T]struct{}{source: {}}
 	current := source
 	for range len(forward) + 1 {
@@ -298,10 +327,10 @@ func forwardTerminates[T ~string](forward map[T]T, source T) error {
 			return nil
 		}
 		if _, repeated := seen[next]; repeated {
-			return Errorf(CategoryValidation, "status %q forwards to itself through a cycle", source)
+			return Errorf(CategoryValidation, "%s %q forwards to itself through a cycle", noun, source)
 		}
 		seen[next] = struct{}{}
 		current = next
 	}
-	return Errorf(CategoryValidation, "status %q forwards to itself through a cycle", source)
+	return Errorf(CategoryValidation, "%s %q forwards to itself through a cycle", noun, source)
 }

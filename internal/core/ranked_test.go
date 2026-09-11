@@ -85,7 +85,7 @@ func TestResolveForwardRefusesACycle(t *testing.T) {
 }
 
 func TestForwardTerminatesRejectsACycle(t *testing.T) {
-	if err := forwardTerminates(map[string]string{"a": "b", "b": "a"}, "a"); err == nil {
+	if err := forwardTerminates(map[string]string{"a": "b", "b": "a"}, "a", "status"); err == nil {
 		t.Error("forwardTerminates accepted a cycle")
 	}
 }

@@ -665,7 +665,7 @@ func normalizeVocabularyDocument(document VocabularyDocument) (VocabularyDocumen
 				source,
 			)
 		}
-		if err := forwardTerminates(forward, source); err != nil {
+		if err := forwardTerminates(forward, source, "status"); err != nil {
 			return VocabularyDocument{}, err
 		}
 	}
