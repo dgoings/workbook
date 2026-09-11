@@ -444,6 +444,13 @@ func (vocabulary Vocabulary) Validate() error {
 // cannot name a command, because nothing drops a forwarding pointer yet: they
 // stand in for a compaction pass, and the message says so rather than sending
 // somebody looking for a flag that does not exist.
+//
+// "Nothing drops a forwarding pointer yet" is checked, not just asserted: the
+// forwardingsGrew call ahead of each ceiling is what actually keeps that true,
+// catching a pack that reused or repointed a source even when the resulting
+// list is smaller than its ceiling — a case the length comparison below it
+// cannot see, because a list can lose one pointer and gain a different one
+// without changing size.
 func validateVocabularyGrowth(before, after VocabularyDocument) error {
 	if len(after.Statuses) > MaxStatusCount && len(after.Statuses) > len(before.Statuses) {
 		return Errorf(
@@ -453,6 +460,9 @@ func validateVocabularyGrowth(before, after VocabularyDocument) error {
 			len(after.Statuses), MaxStatusCount,
 		)
 	}
+	if err := forwardingsGrew(statusAliasForwardings(before.Aliases), statusAliasForwardings(after.Aliases), "status"); err != nil {
+		return err
+	}
 	if len(after.Aliases) > MaxStatusAliasCount && len(after.Aliases) > len(before.Aliases) {
 		return Errorf(
 			CategoryValidation,
@@ -461,6 +471,9 @@ func validateVocabularyGrowth(before, after VocabularyDocument) error {
 				"still needs it to read tasks stored under the old name",
 			len(after.Aliases), MaxStatusAliasCount,
 		)
+	}
+	if err := forwardingsGrew(retiredStatusForwardings(before.Retired), retiredStatusForwardings(after.Retired), "status"); err != nil {
+		return err
 	}
 	if len(after.Retired) > MaxStatusRetiredCount && len(after.Retired) > len(before.Retired) {
 		return Errorf(
@@ -472,6 +485,26 @@ func validateVocabularyGrowth(before, after VocabularyDocument) error {
 		)
 	}
 	return nil
+}
+
+// statusAliasForwardings and retiredStatusForwardings convert a document's
+// own field names to forwarding[Status] at the boundary into the shared
+// growth rule, the same conversion normalizeStatusAliases and
+// normalizeRetiredStatuses do on the way into normalizeForwardings.
+func statusAliasForwardings(aliases []StatusAlias) []forwarding[Status] {
+	pairs := make([]forwarding[Status], len(aliases))
+	for index, alias := range aliases {
+		pairs[index] = forwarding[Status]{From: alias.From, To: alias.To}
+	}
+	return pairs
+}
+
+func retiredStatusForwardings(retired []RetiredStatus) []forwarding[Status] {
+	pairs := make([]forwarding[Status], len(retired))
+	for index, entry := range retired {
+		pairs[index] = forwarding[Status]{From: entry.Status, To: entry.Destination}
+	}
+	return pairs
 }
 
 // StatusBlocked is the status the built-in vocabulary carried until task
@@ -680,8 +713,15 @@ func normalizeStatusTags(tags []StatusTag) ([]StatusTag, error) {
 // normalizeVocabularyDocument records: a count enforced inside the fold can
 // make a legitimate concurrent pair unfoldable forever. It is an authoring
 // ceiling, in validateVocabularyGrowth.
+//
+// Token validation stays here rather than moving into normalizeForwardings:
+// ValidateStatusToken's charset and length are a status rule, not a
+// forwarding-chain rule, so a later priority vocabulary validates its own
+// tokens the same way without this function knowing anything about it. The
+// sort, the self-forward check and the duplicate-source check are the parts
+// that do not depend on what is being forwarded, which is why they are
+// shared.
 func normalizeStatusAliases(aliases []StatusAlias) ([]StatusAlias, error) {
-	normalized := make([]StatusAlias, 0, len(aliases))
 	for _, alias := range aliases {
 		if err := ValidateStatusToken(alias.From); err != nil {
 			return nil, err
@@ -689,20 +729,20 @@ func normalizeStatusAliases(aliases []StatusAlias) ([]StatusAlias, error) {
 		if err := ValidateStatusToken(alias.To); err != nil {
 			return nil, err
 		}
-		if alias.From == alias.To {
-			return nil, Errorf(CategoryValidation, "status %q cannot alias itself", alias.From)
-		}
-		normalized = append(normalized, alias)
 	}
-	sort.SliceStable(normalized, func(left, right int) bool {
-		return normalized[left].From < normalized[right].From
-	})
-	return normalized, nil
+	normalized, err := normalizeForwardings(statusAliasForwardings(aliases), "status")
+	if err != nil {
+		return nil, err
+	}
+	result := make([]StatusAlias, len(normalized))
+	for index, pair := range normalized {
+		result[index] = StatusAlias{From: pair.From, To: pair.To}
+	}
+	return result, nil
 }
 
 // MaxStatusRetiredCount is not checked here either; see normalizeStatusAliases.
 func normalizeRetiredStatuses(retired []RetiredStatus) ([]RetiredStatus, error) {
-	normalized := make([]RetiredStatus, 0, len(retired))
 	for _, entry := range retired {
 		if err := ValidateStatusToken(entry.Status); err != nil {
 			return nil, err
@@ -710,13 +750,14 @@ func normalizeRetiredStatuses(retired []RetiredStatus) ([]RetiredStatus, error) 
 		if err := ValidateStatusToken(entry.Destination); err != nil {
 			return nil, err
 		}
-		if entry.Status == entry.Destination {
-			return nil, Errorf(CategoryValidation, "status %q cannot retire into itself", entry.Status)
-		}
-		normalized = append(normalized, entry)
 	}
-	sort.SliceStable(normalized, func(left, right int) bool {
-		return normalized[left].Status < normalized[right].Status
-	})
-	return normalized, nil
+	normalized, err := normalizeForwardings(retiredStatusForwardings(retired), "status")
+	if err != nil {
+		return nil, err
+	}
+	result := make([]RetiredStatus, len(normalized))
+	for index, pair := range normalized {
+		result[index] = RetiredStatus{Status: pair.From, Destination: pair.To}
+	}
+	return result, nil
 }

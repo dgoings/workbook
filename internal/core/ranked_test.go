@@ -86,3 +86,30 @@ func TestForwardTerminatesRejectsACycle(t *testing.T) {
 		t.Error("forwardTerminates accepted a cycle")
 	}
 }
+
+// A canonical document sorts its forwardings by source, because the bytes are
+// compared for equality by the sync path.
+func TestNormalizeForwardingsSortsBySource(t *testing.T) {
+	got, err := normalizeForwardings([]forwarding[string]{{"z", "a"}, {"b", "c"}}, "priority")
+	if err != nil {
+		t.Fatalf("normalizeForwardings: %v", err)
+	}
+	if got[0].From != "b" || got[1].From != "z" {
+		t.Errorf("normalizeForwardings did not sort by source: %+v", got)
+	}
+}
+
+func TestNormalizeForwardingsRefusesADuplicateSource(t *testing.T) {
+	if _, err := normalizeForwardings([]forwarding[string]{{"a", "b"}, {"a", "c"}}, "priority"); err == nil {
+		t.Error("normalizeForwardings accepted one source forwarding to two destinations")
+	}
+}
+
+// Forwardings are append-only: a fold that drops one would strand the tasks
+// that still carry the old value.
+func TestForwardingsGrewRefusesALostForwarding(t *testing.T) {
+	before := []forwarding[string]{{"a", "b"}}
+	if err := forwardingsGrew(before, nil, "priority"); err == nil {
+		t.Error("forwardingsGrew accepted a document that dropped a forwarding")
+	}
+}

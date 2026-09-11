@@ -2,6 +2,7 @@ package core
 
 import (
 	"math/big"
+	"sort"
 	"strings"
 )
 
@@ -175,6 +176,97 @@ func resolveForward[T ~string](forward map[T]T, live func(T) bool, from T) (T, b
 		current = next
 	}
 	return from, false
+}
+
+// forwarding is one source-to-destination pointer in a vocabulary's
+// forwarding chain: a rename's old value to its new one, or a retirement's
+// removed value to the value its tasks belong in now. StatusAlias and
+// RetiredStatus convert to and from it at the package boundary — their own
+// field names and JSON tags are part of the durable checkpoint shape and stay
+// exactly as they are — so the normalization and growth rules below serve
+// every project-configured vocabulary that has a forwarding chain, without
+// either type depending on the other's field names.
+type forwarding[T ~string] struct {
+	From T
+	To   T
+}
+
+// normalizeForwardings puts a forwarding list into canonical form: sorted by
+// source, with every source appearing at most once and no source forwarding
+// to itself. It is normalizeStatusAliases and normalizeRetiredStatuses's
+// shared body — they differ only in which of StatusAlias's or RetiredStatus's
+// two fields is the source and which is the destination, which is exactly
+// what converting to forwarding[Status] before calling this erases.
+//
+// Sorting by source is what makes the canonical document's bytes a property
+// of the configuration instead of a property of whoever wrote it, the same
+// reason normalizeVocabularyDocument sorts statuses by rank. A source
+// forwarding to itself or recorded twice are both shapes no forwarding chain
+// can represent — the first is a no-op that would strand nothing but is never
+// a value an author meant, and the second would leave resolveForward's walk
+// no way to choose between two destinations — so both are refused here rather
+// than deferred to whatever reads the chain later.
+//
+// A source repeated across two different lists — a rename and a retirement
+// both naming the same value — is not caught here, because normalizeForwardings
+// only ever sees one list at a time; normalizeVocabularyDocument catches that
+// case itself while it builds the combined forward map.
+//
+// noun names what is being forwarded ("status", eventually "priority") for
+// the messages below, so the status caller's text stays byte-identical to
+// what normalizeStatusAliases and normalizeRetiredStatuses produced before
+// this was shared.
+func normalizeForwardings[T ~string](pairs []forwarding[T], noun string) ([]forwarding[T], error) {
+	normalized := make([]forwarding[T], 0, len(pairs))
+	seen := make(map[T]struct{}, len(pairs))
+	for _, pair := range pairs {
+		if pair.From == pair.To {
+			return nil, Errorf(CategoryValidation, "%s %q cannot forward to itself", noun, pair.From)
+		}
+		if _, duplicate := seen[pair.From]; duplicate {
+			return nil, Errorf(CategoryValidation, "%s %q is forwarded twice", noun, pair.From)
+		}
+		seen[pair.From] = struct{}{}
+		normalized = append(normalized, pair)
+	}
+	sort.SliceStable(normalized, func(left, right int) bool {
+		return normalized[left].From < normalized[right].From
+	})
+	return normalized, nil
+}
+
+// forwardingsGrew reports whether after still carries every pointer before
+// did, unchanged. It is the rule behind the comment on
+// MaxStatusAliasCount and MaxStatusRetiredCount that "nothing drops a
+// forwarding pointer yet": a rename or a retirement is what lets a clone that
+// has not fetched the latest name still land a stored task in the right
+// column, so a pack that reused or discarded a source would strand exactly
+// the tasks that were counting on it still being there — a correctness
+// failure no ceiling would catch, because it can drop a pointer while
+// shrinking a list that was always under its limit.
+//
+// It is checked at authoring time only, the same boundary the size ceilings
+// are checked at and for the same reason: a fold cannot be allowed to fail on
+// it without risking a history no clone can ever read, so ApplyConfig itself
+// stays permissive and this runs from ValidateConfigAuthoring instead.
+//
+// noun names what is being forwarded ("status", eventually "priority") for
+// the message below.
+func forwardingsGrew[T ~string](before, after []forwarding[T], noun string) error {
+	kept := make(map[forwarding[T]]struct{}, len(after))
+	for _, pair := range after {
+		kept[pair] = struct{}{}
+	}
+	for _, pair := range before {
+		if _, still := kept[pair]; !still {
+			return Errorf(
+				CategoryValidation,
+				"%s %q must still forward to %q; a forwarding pointer cannot be dropped or repointed",
+				noun, pair.From, pair.To,
+			)
+		}
+	}
+	return nil
 }
 
 // forwardTerminates rejects a forwarding cycle. ApplyConfig cannot build one —
