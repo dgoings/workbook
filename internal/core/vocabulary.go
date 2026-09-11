@@ -316,17 +316,7 @@ func DerivedStatusLabel(status Status) string {
 // normalizeVocabularyDocument, so an unparseable one cannot reach here; one
 // that somehow did is skipped rather than allowed to fail a total function.
 func (vocabulary Vocabulary) AppendRank() string {
-	maximum := new(big.Rat)
-	for _, definition := range vocabulary.definitions {
-		rank, err := parseRank(definition.Rank)
-		if err != nil {
-			continue
-		}
-		if rank.Cmp(maximum) > 0 {
-			maximum = rank
-		}
-	}
-	return formatRank(new(big.Rat).Add(maximum, big.NewRat(1, 1)))
+	return appendRank(rankedStatuses(vocabulary.definitions))
 }
 
 // InsertRank returns the rank that places a status immediately before or after
@@ -344,73 +334,27 @@ func (vocabulary Vocabulary) AppendRank() string {
 // same way: two statuses may share a rank, and the insertion is representable
 // only when the names already fall in the order the caller asked for.
 func (vocabulary Vocabulary) InsertRank(moved, anchor Status, before bool) (string, error) {
-	index, live := vocabulary.byStatus[anchor]
-	if !live {
-		return "", Errorf(CategoryValidation, "status %q is not defined by this project", anchor)
-	}
-	anchorRank, err := parseRank(vocabulary.definitions[index].Rank)
+	rank, err := insertRank(rankedStatuses(vocabulary.definitions), moved, anchor, before)
 	if err != nil {
-		return "", Wrap(CategoryCorruptData, "status rank is invalid", err)
+		return "", Wrap(CategoryValidation, "status "+string(anchor)+" is not defined by this project", err)
 	}
-
-	var neighbor *big.Rat
-	var neighborStatus Status
-	for _, definition := range vocabulary.definitions {
-		if definition.Status == moved || definition.Status == anchor {
-			continue
-		}
-		rank, err := parseRank(definition.Rank)
-		if err != nil {
-			return "", Wrap(CategoryCorruptData, "status rank is invalid", err)
-		}
-		anchorComparison := rank.Cmp(anchorRank)
-		if anchorComparison == 0 {
-			anchorComparison = strings.Compare(string(definition.Status), string(anchor))
-		}
-		neighborComparison := 0
-		if neighbor != nil {
-			neighborComparison = rank.Cmp(neighbor)
-			if neighborComparison == 0 {
-				neighborComparison = strings.Compare(string(definition.Status), string(neighborStatus))
-			}
-		}
-		if before {
-			if anchorComparison < 0 && (neighbor == nil || neighborComparison > 0) {
-				neighbor, neighborStatus = rank, definition.Status
-			}
-			continue
-		}
-		if anchorComparison > 0 && (neighbor == nil || neighborComparison < 0) {
-			neighbor, neighborStatus = rank, definition.Status
-		}
-	}
-
-	if neighbor == nil {
-		if before {
-			return formatRank(new(big.Rat).Quo(anchorRank, big.NewRat(2, 1))), nil
-		}
-		next := new(big.Int).Quo(anchorRank.Num(), anchorRank.Denom())
-		next.Add(next, big.NewInt(1))
-		return formatRank(new(big.Rat).SetInt(next)), nil
-	}
-	if neighbor.Cmp(anchorRank) == 0 {
-		representable := strings.Compare(string(neighborStatus), string(moved)) < 0 &&
-			strings.Compare(string(moved), string(anchor)) < 0
-		if !before {
-			representable = strings.Compare(string(anchor), string(moved)) < 0 &&
-				strings.Compare(string(moved), string(neighborStatus)) < 0
-		}
-		if !representable {
-			return "", Errorf(
-				CategoryValidation,
-				"statuses %q and %q share a rank, so %q cannot be placed between them; move one of them first",
-				neighborStatus, anchor, moved,
-			)
-		}
-		return formatRank(anchorRank), nil
-	}
-	return formatRank(new(big.Rat).Quo(new(big.Rat).Add(anchorRank, neighbor), big.NewRat(2, 1))), nil
+	return rank, nil
 }
+
+// rankedStatuses adapts a vocabulary's definitions to the shared ranked[T]
+// interface, which is how AppendRank and InsertRank reach the rank arithmetic
+// a second vocabulary will share without either depending on the other's
+// item type.
+func rankedStatuses(definitions []StatusDefinition) []ranked[Status] {
+	items := make([]ranked[Status], 0, len(definitions))
+	for _, definition := range definitions {
+		items = append(items, definition)
+	}
+	return items
+}
+
+func (definition StatusDefinition) key() Status  { return definition.Status }
+func (definition StatusDefinition) rank() string { return definition.Rank }
 
 // Resolve follows a stored status through the rename and retirement chains to
 // the live status it now means, reporting whether the walk terminated at one.
