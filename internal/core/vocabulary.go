@@ -334,11 +334,7 @@ func (vocabulary Vocabulary) AppendRank() string {
 // same way: two statuses may share a rank, and the insertion is representable
 // only when the names already fall in the order the caller asked for.
 func (vocabulary Vocabulary) InsertRank(moved, anchor Status, before bool) (string, error) {
-	rank, err := insertRank(rankedStatuses(vocabulary.definitions), moved, anchor, before)
-	if err != nil {
-		return "", Wrap(CategoryValidation, "status "+string(anchor)+" is not defined by this project", err)
-	}
-	return rank, nil
+	return insertRank(rankedStatuses(vocabulary.definitions), moved, anchor, before, "status")
 }
 
 // rankedStatuses adapts a vocabulary's definitions to the shared ranked[T]

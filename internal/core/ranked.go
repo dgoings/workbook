@@ -52,7 +52,16 @@ func appendRank[T ~string](items []ranked[T]) string {
 // Items sort by rank and then by key, so an exhausted gap is decided the
 // same way: two items may share a rank, and the insertion is representable
 // only when the keys already fall in the order the caller asked for.
-func insertRank[T ~string](items []ranked[T], moved, anchor T, before bool) (string, error) {
+//
+// noun names the kind of item being placed — "status", eventually "priority"
+// — for both the messages below and their categories: an undefined anchor is
+// CategoryValidation (the caller typed something that was never there), while
+// an unparseable rank is CategoryCorruptData (a value that was there is
+// broken), and those categories map to different CLI exit codes. Collapsing
+// them into one would report the wrong exit code for a corrupt rank, not just
+// the wrong string, so insertRank returns errors already carrying the
+// category a caller must pass through unwrapped.
+func insertRank[T ~string](items []ranked[T], moved, anchor T, before bool, noun string) (string, error) {
 	var anchorRank *big.Rat
 	var anchorFound bool
 	for _, item := range items {
@@ -61,14 +70,14 @@ func insertRank[T ~string](items []ranked[T], moved, anchor T, before bool) (str
 		}
 		rank, err := parseRank(item.rank())
 		if err != nil {
-			return "", Wrap(CategoryCorruptData, "status rank is invalid", err)
+			return "", Wrap(CategoryCorruptData, noun+" rank is invalid", err)
 		}
 		anchorRank = rank
 		anchorFound = true
 		break
 	}
 	if !anchorFound {
-		return "", Errorf(CategoryValidation, "%q is not defined by this project", anchor)
+		return "", Errorf(CategoryValidation, "%s %q is not defined by this project", noun, anchor)
 	}
 
 	var neighbor *big.Rat
@@ -79,7 +88,7 @@ func insertRank[T ~string](items []ranked[T], moved, anchor T, before bool) (str
 		}
 		rank, err := parseRank(item.rank())
 		if err != nil {
-			return "", Wrap(CategoryCorruptData, "status rank is invalid", err)
+			return "", Wrap(CategoryCorruptData, noun+" rank is invalid", err)
 		}
 		anchorComparison := rank.Cmp(anchorRank)
 		if anchorComparison == 0 {

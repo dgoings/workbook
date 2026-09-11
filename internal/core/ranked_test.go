@@ -23,7 +23,7 @@ func rankedItems(pairs ...[2]string) []ranked[string] {
 func TestInsertRankFindsRoomBetweenNeighbours(t *testing.T) {
 	items := rankedItems([2]string{"a", "1/1"}, [2]string{"b", "2/1"})
 
-	got, err := insertRank(items, "", "b", true)
+	got, err := insertRank(items, "", "b", true, "status")
 	if err != nil {
 		t.Fatalf("insertRank: %v", err)
 	}
@@ -39,7 +39,23 @@ func TestAppendRankFollowsTheHighest(t *testing.T) {
 }
 
 func TestInsertRankRefusesAnUndefinedAnchor(t *testing.T) {
-	if _, err := insertRank(rankedItems([2]string{"a", "1/1"}), "", "missing", true); err == nil {
+	if _, err := insertRank(rankedItems([2]string{"a", "1/1"}), "", "missing", true, "status"); err == nil {
 		t.Error("insertRank accepted an anchor the list does not define")
+	}
+}
+
+// An undefined anchor and an unparseable rank are different failures — one is
+// a caller mistake, the other is corrupt data — and they must keep different
+// categories because a category maps to a CLI exit code. Collapsing them into
+// one category is exactly the regression this test guards against.
+func TestInsertRankCategorizesUndefinedAnchorAndCorruptRankDifferently(t *testing.T) {
+	_, undefinedAnchorErr := insertRank(rankedItems([2]string{"a", "1/1"}), "", "missing", true, "status")
+	if CategoryOf(undefinedAnchorErr) != CategoryValidation {
+		t.Errorf("insertRank(undefined anchor) category = %v, want CategoryValidation", CategoryOf(undefinedAnchorErr))
+	}
+
+	_, corruptRankErr := insertRank(rankedItems([2]string{"a", "not-a-rank"}), "", "a", true, "status")
+	if CategoryOf(corruptRankErr) != CategoryCorruptData {
+		t.Errorf("insertRank(unparseable rank) category = %v, want CategoryCorruptData", CategoryOf(corruptRankErr))
 	}
 }
