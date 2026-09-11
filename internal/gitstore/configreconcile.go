@@ -392,7 +392,9 @@ func (r *Repository) classifyConfigRoots(
 // exactly the second followed by a relabel of the new token whenever the display
 // label follows the machine value, which is the default for every derived label
 // — so an ordinary rename is a pack whose second operation names a status only
-// its first operation created.
+// its first operation created. `priority.add` and `priority.rename` create a
+// priority token the same way, tracked in a second map because Priority is a
+// distinct type from Status.
 func markPackSubjects(view configView, operations []core.ConfigOperation) {
 	for _, operation := range operations {
 		switch operation.Type {
@@ -400,6 +402,10 @@ func markPackSubjects(view configView, operations []core.ConfigOperation) {
 			view.pending[operation.Name] = struct{}{}
 		case core.ConfigStatusRename:
 			view.pending[operation.To] = struct{}{}
+		case core.ConfigPriorityAdd:
+			view.pendingPriorities[operation.PriorityName] = struct{}{}
+		case core.ConfigPriorityRename:
+			view.pendingPriorities[operation.PriorityTo] = struct{}{}
 		}
 	}
 }
@@ -471,6 +477,15 @@ func (replay *configReplay) next(ctx context.Context, r *Repository, local confi
 		replay.conflicts = append(replay.conflicts, conflicts...)
 		return true, nil
 	}
+	// The priority section carries the same kind of repair, on its own arity
+	// rule (exactly one default), and is checked the same way: out of the
+	// fold's own result, before anything is written.
+	if conflicts := classifyConfigPriorityArity(
+		priorityDocumentOf(replay.parent.State.Config), priorityDocumentOf(state.Config), pack,
+	); len(conflicts) > 0 {
+		replay.conflicts = append(replay.conflicts, conflicts...)
+		return true, nil
+	}
 	if reflect.DeepEqual(replay.parent.State.Config, state.Config) {
 		// The fetched history already contains this pack's effect. Recording it
 		// again would add a commit that says nothing.
@@ -521,6 +536,16 @@ type configView struct {
 	// operation in the same pack created would read as an edit to a status
 	// nobody defines.
 	pending map[core.Status]struct{}
+
+	// livePriorities, priorityAliases and priorityRetired are the priority
+	// section's counterparts to live, aliases and retired above, kept as
+	// separate maps rather than folded into the status ones because Priority is
+	// a distinct type from Status — the same distinction ConfigOperation keeps
+	// with two field sets rather than one shared pair.
+	livePriorities    map[core.Priority]core.PriorityDefinition
+	priorityAliases   map[core.Priority]core.Priority
+	priorityRetired   map[core.Priority]core.Priority
+	pendingPriorities map[core.Priority]struct{}
 }
 
 // newConfigView takes the whole configuration rather than the vocabulary alone,
@@ -537,13 +562,18 @@ type configView struct {
 // has an answer that came from the same commit as this one's.
 func newConfigView(config, fork core.ConfigData) configView {
 	document := config.Vocabulary
+	priorities := priorityDocumentOf(config)
 	view := configView{
-		live:    make(map[core.Status]core.StatusDefinition, len(document.Statuses)),
-		aliases: make(map[core.Status]core.Status, len(document.Aliases)),
-		retired: make(map[core.Status]core.Status, len(document.Retired)),
-		display: core.ResolveDisplaySettings(config.Display),
-		fork:    core.ResolveDisplaySettings(fork.Display),
-		pending: make(map[core.Status]struct{}),
+		live:              make(map[core.Status]core.StatusDefinition, len(document.Statuses)),
+		aliases:           make(map[core.Status]core.Status, len(document.Aliases)),
+		retired:           make(map[core.Status]core.Status, len(document.Retired)),
+		display:           core.ResolveDisplaySettings(config.Display),
+		fork:              core.ResolveDisplaySettings(fork.Display),
+		pending:           make(map[core.Status]struct{}),
+		livePriorities:    make(map[core.Priority]core.PriorityDefinition, len(priorities.Priorities)),
+		priorityAliases:   make(map[core.Priority]core.Priority, len(priorities.Aliases)),
+		priorityRetired:   make(map[core.Priority]core.Priority, len(priorities.Retired)),
+		pendingPriorities: make(map[core.Priority]struct{}),
 	}
 	for _, definition := range document.Statuses {
 		view.live[definition.Status] = definition
@@ -554,7 +584,29 @@ func newConfigView(config, fork core.ConfigData) configView {
 	for _, entry := range document.Retired {
 		view.retired[entry.Status] = entry.Destination
 	}
+	for _, definition := range priorities.Priorities {
+		view.livePriorities[definition.Priority] = definition
+	}
+	for _, alias := range priorities.Aliases {
+		view.priorityAliases[alias.From] = alias.To
+	}
+	for _, entry := range priorities.Retired {
+		view.priorityRetired[entry.Priority] = entry.Destination
+	}
 	return view
+}
+
+// priorityDocumentOf reads the priority section out of a whole configuration,
+// substituting the empty document for the nil ConfigData carries when a
+// project has configured no priorities. Every question this file asks of a
+// priority document — is this one live, what does it forward to — has the
+// same answer for "never configured" as for "configured and empty", so the
+// substitution costs nothing a caller needs to tell apart.
+func priorityDocumentOf(config core.ConfigData) core.PriorityDocument {
+	if config.Priorities == nil {
+		return core.PriorityDocument{}
+	}
+	return *config.Priorities
 }
 
 // resolveSubject walks a status through rename aliases only, and stops at a
@@ -640,6 +692,90 @@ func (view configView) retirementOf(status core.Status) (core.Status, bool) {
 	return "", false
 }
 
+// resolvePrioritySubject walks a priority through rename aliases only, and
+// stops at a retirement, exactly as resolveSubject does for a status.
+func (view configView) resolvePrioritySubject(priority core.Priority) (core.Priority, bool) {
+	if _, live := view.livePriorities[priority]; live {
+		return priority, true
+	}
+	seen := make(map[core.Priority]struct{}, len(view.priorityAliases))
+	current := priority
+	for range len(view.priorityAliases) + 1 {
+		next, aliased := view.priorityAliases[current]
+		if !aliased {
+			return priority, false
+		}
+		if _, repeated := seen[next]; repeated {
+			return priority, false
+		}
+		seen[next] = struct{}{}
+		if _, live := view.livePriorities[next]; live {
+			return next, true
+		}
+		current = next
+	}
+	return priority, false
+}
+
+// resolvePriority walks a priority through both chains to the live priority it
+// now means, mirroring resolve for a status.
+func (view configView) resolvePriority(priority core.Priority) (core.Priority, bool) {
+	if _, live := view.livePriorities[priority]; live {
+		return priority, true
+	}
+	seen := make(map[core.Priority]struct{}, len(view.priorityAliases)+len(view.priorityRetired))
+	current := priority
+	for range len(view.priorityAliases) + len(view.priorityRetired) + 1 {
+		next, forwarded := view.forwardedPriority(current)
+		if !forwarded {
+			return priority, false
+		}
+		if _, repeated := seen[next]; repeated {
+			return priority, false
+		}
+		seen[next] = struct{}{}
+		if _, live := view.livePriorities[next]; live {
+			return next, true
+		}
+		current = next
+	}
+	return priority, false
+}
+
+func (view configView) forwardedPriority(priority core.Priority) (core.Priority, bool) {
+	if to, aliased := view.priorityAliases[priority]; aliased {
+		return to, true
+	}
+	to, retired := view.priorityRetired[priority]
+	return to, retired
+}
+
+// priorityRetirementOf reports the destination the fetched history forwarded a
+// priority into, following renames on the way. A priority that is live, or
+// unknown, has none. It mirrors retirementOf for a status.
+func (view configView) priorityRetirementOf(priority core.Priority) (core.Priority, bool) {
+	seen := make(map[core.Priority]struct{}, len(view.priorityAliases)+len(view.priorityRetired))
+	current := priority
+	for range len(view.priorityAliases) + len(view.priorityRetired) + 1 {
+		if _, live := view.livePriorities[current]; live {
+			return "", false
+		}
+		if destination, retired := view.priorityRetired[current]; retired {
+			return destination, true
+		}
+		next, aliased := view.priorityAliases[current]
+		if !aliased {
+			return "", false
+		}
+		if _, repeated := seen[next]; repeated {
+			return "", false
+		}
+		seen[next] = struct{}{}
+		current = next
+	}
+	return "", false
+}
+
 // classifyConfigOperation reports the one situation, if any, in which a local
 // operation expresses intent the fetched history already contradicts.
 //
@@ -659,6 +795,15 @@ func classifyConfigOperation(view configView, operation core.ConfigOperation) *c
 		return classifyConfigSubject(view, operation)
 	case core.ConfigDisplaySet, core.ConfigDisplayUnset:
 		return classifyConfigDisplay(view, operation)
+	case core.ConfigPriorityAdd:
+		return classifyConfigPriorityAdd(view, operation)
+	case core.ConfigPriorityRename:
+		return classifyConfigPriorityRename(view, operation)
+	case core.ConfigPriorityRemove:
+		return classifyConfigPriorityRemove(view, operation)
+	case core.ConfigPriorityRelabel, core.ConfigPriorityReorder, core.ConfigPriorityTag,
+		core.ConfigPriorityUntag, core.ConfigPriorityRecolor:
+		return classifyConfigPrioritySubject(view, operation)
 	default:
 		return nil
 	}
@@ -1022,6 +1167,284 @@ func describeStatusDefinition(label, rank string, tags []core.StatusTag) string 
 	described := fmt.Sprintf("%q at rank %s", label, rank)
 	if len(names) > 0 {
 		described += " tagged " + strings.Join(names, ",")
+	}
+	return described
+}
+
+// The four functions below classify the priority operations exactly as their
+// status counterparts above classify the status ones — same shape, same
+// convergence rules, a distinct set of maps because Priority is a distinct
+// type from Status.
+
+// classifyConfigPriorityAdd reports two clones defining the same priority
+// differently. The fold keeps whichever applied first, which after a
+// reconciliation is always upstream's, so the local definition is the one
+// that would vanish silently. Mirrors classifyConfigAdd.
+func classifyConfigPriorityAdd(view configView, operation core.ConfigOperation) *core.ConfigConflict {
+	definition, live := view.livePriorities[operation.PriorityName]
+	if !live {
+		return nil
+	}
+	if definition.Label == operation.Label &&
+		definition.Rank == operation.Rank &&
+		samePriorityTags(definition.Tags, operation.PriorityTags) {
+		return nil
+	}
+	return &core.ConfigConflict{
+		Type:     core.ConfigConflictPriorityDefinition,
+		Priority: operation.PriorityName,
+		// priority.add never carries a color — see configOperationShapes — so
+		// the local side of the comparison never has one to show, even when the
+		// priority origin already defined has since been recolored.
+		Ours:   describePriorityDefinition(operation.Label, operation.Rank, operation.PriorityTags, ""),
+		Theirs: describePriorityDefinition(definition.Label, definition.Rank, definition.Tags, definition.Color),
+	}
+}
+
+// classifyConfigPriorityRename mirrors classifyConfigRename.
+func classifyConfigPriorityRename(view configView, operation core.ConfigOperation) *core.ConfigConflict {
+	subject, live := view.resolvePrioritySubject(operation.PriorityFrom)
+	if !live {
+		if destination, retired := view.priorityRetirementOf(operation.PriorityFrom); retired {
+			return &core.ConfigConflict{
+				Type:     core.ConfigConflictPriorityRetired,
+				Priority: operation.PriorityFrom,
+				Ours:     string(operation.PriorityTo),
+				Theirs:   string(destination),
+				Detail: fmt.Sprintf(
+					"this priority was renamed to %s here and removed into %s on origin, so the rename was dropped",
+					operation.PriorityTo, destination),
+			}
+		}
+		// Origin never had it. Reachable only after a root adoption; see
+		// classifyConfigPrioritySubject.
+		return undefinedPrioritySubjectConflict(view, operation.PriorityFrom, operation.Type)
+	}
+	if subject == operation.PriorityTo {
+		// Both sides renamed it to the same token, in either order.
+		return nil
+	}
+	if subject != operation.PriorityFrom {
+		return &core.ConfigConflict{
+			Type:     core.ConfigConflictPriorityRename,
+			Priority: operation.PriorityFrom,
+			Ours:     string(operation.PriorityTo),
+			Theirs:   string(subject),
+		}
+	}
+	if _, taken := view.livePriorities[operation.PriorityTo]; taken {
+		return &core.ConfigConflict{
+			Type:     core.ConfigConflictPriorityRename,
+			Priority: operation.PriorityFrom,
+			Ours:     string(operation.PriorityTo),
+			Theirs:   string(operation.PriorityTo),
+			Detail: fmt.Sprintf(
+				"renaming this priority to %s would collide with the priority origin already defines under that "+
+					"name, so the rename was dropped",
+				operation.PriorityTo),
+		}
+	}
+	return nil
+}
+
+// classifyConfigPriorityRemove mirrors classifyConfigRemove.
+func classifyConfigPriorityRemove(view configView, operation core.ConfigOperation) *core.ConfigConflict {
+	subject, live := view.resolvePrioritySubject(operation.Priority)
+	if !live {
+		destination, retired := view.priorityRetirementOf(operation.Priority)
+		if !retired {
+			// Origin never had it; see classifyConfigPrioritySubject.
+			return undefinedPrioritySubjectConflict(view, operation.Priority, operation.Type)
+		}
+		ours, oursLive := view.resolvePriority(operation.PriorityDestination)
+		theirs, theirsLive := view.resolvePriority(destination)
+		if oursLive && theirsLive && ours == theirs {
+			// Both sides removed it into the same place. Recording that twice
+			// says nothing.
+			return nil
+		}
+		return &core.ConfigConflict{
+			Type:     core.ConfigConflictPriorityRetired,
+			Priority: operation.Priority,
+			Ours:     string(operation.PriorityDestination),
+			Theirs:   string(destination),
+		}
+	}
+	if len(view.livePriorities) == 1 {
+		return &core.ConfigConflict{
+			Type:     core.ConfigConflictPriorityArity,
+			Priority: subject,
+			Detail:   "removing this priority would leave the project with no priorities at all, so the removal was dropped",
+		}
+	}
+	destination, resolved := view.resolvePriority(operation.PriorityDestination)
+	if !resolved {
+		return nil
+	}
+	if destination == subject {
+		return &core.ConfigConflict{
+			Type:     core.ConfigConflictPriorityRetired,
+			Priority: operation.Priority,
+			Ours:     string(operation.PriorityDestination),
+			Theirs:   string(subject),
+			Detail: fmt.Sprintf(
+				"origin already removed %s into this priority, so removing this one into %s would forward it to "+
+					"itself",
+				operation.PriorityDestination, operation.PriorityDestination),
+		}
+	}
+	return nil
+}
+
+// classifyConfigPrioritySubject covers priority.relabel, priority.reorder,
+// priority.tag, priority.untag and priority.recolor — the operations that
+// only edit a priority in place. Mirrors classifyConfigSubject: it does not
+// compare the edit's value against what is stored, only whether the subject
+// still exists, so two clones recoloring or relabeling the same priority
+// differently converge without a conflict the same way two relabels of one
+// status do.
+func classifyConfigPrioritySubject(view configView, operation core.ConfigOperation) *core.ConfigConflict {
+	if operation.Priority == "" {
+		return nil
+	}
+	if _, live := view.resolvePrioritySubject(operation.Priority); live {
+		return nil
+	}
+	if destination, retired := view.priorityRetirementOf(operation.Priority); retired {
+		return &core.ConfigConflict{
+			Type:     core.ConfigConflictPriorityRetired,
+			Priority: operation.Priority,
+			Theirs:   string(destination),
+			Detail: fmt.Sprintf("origin removed this priority into %s, so the local %s was dropped",
+				destination, operation.Type),
+		}
+	}
+	return undefinedPrioritySubjectConflict(view, operation.Priority, operation.Type)
+}
+
+// undefinedPrioritySubjectConflict mirrors undefinedSubjectConflict.
+func undefinedPrioritySubjectConflict(
+	view configView,
+	subject core.Priority,
+	operationType core.ConfigOperationType,
+) *core.ConfigConflict {
+	if _, pending := view.pendingPriorities[subject]; pending {
+		return nil
+	}
+	return &core.ConfigConflict{
+		Type:     core.ConfigConflictPriorityDefinition,
+		Priority: subject,
+		Ours:     fmt.Sprintf("a local %s of this priority", operationType),
+		Theirs:   "not defined",
+		Detail: fmt.Sprintf(
+			"origin's configuration does not define this priority and never retired it, so the local %s changed "+
+				"nothing; define it again with `workbook priority add` before reapplying the change",
+			operationType),
+	}
+}
+
+// classifyConfigPriorityArity mirrors classifyConfigArity, reporting the one
+// role ApplyConfig's priority repair can move: default. See
+// (*configPriorities).normalizeArity — the repair itself lives there and picks
+// its subject by position, exactly as the vocabulary's does, so this reads the
+// repair out of the result rather than predicting it, for the same reason
+// classifyConfigArity does.
+func classifyConfigPriorityArity(
+	before, after core.PriorityDocument,
+	pack core.ConfigOperationPack,
+) []core.ConfigConflict {
+	afterConfig := core.ConfigData{Priorities: &after}
+	afterView := newConfigView(afterConfig, afterConfig)
+	conflicts := make([]core.ConfigConflict, 0, len(priorityRoleTags))
+	for _, tag := range priorityRoleTags {
+		allowed := make(map[core.Priority]struct{})
+		for _, definition := range before.Priorities {
+			if !hasPriorityTag(definition.Tags, tag) {
+				continue
+			}
+			if resolved, live := afterView.resolvePriority(definition.Priority); live {
+				allowed[resolved] = struct{}{}
+			}
+		}
+		for _, operation := range pack.Operations {
+			switch operation.Type {
+			case core.ConfigPriorityTag:
+				if operation.PriorityTag == tag {
+					if resolved, live := afterView.resolvePriority(operation.Priority); live {
+						allowed[resolved] = struct{}{}
+					}
+				}
+			case core.ConfigPriorityAdd:
+				if hasPriorityTag(operation.PriorityTags, tag) {
+					allowed[operation.PriorityName] = struct{}{}
+				}
+			}
+		}
+		gained := make([]core.Priority, 0, 1)
+		for _, definition := range after.Priorities {
+			if !hasPriorityTag(definition.Tags, tag) {
+				continue
+			}
+			if _, expected := allowed[definition.Priority]; !expected {
+				gained = append(gained, definition.Priority)
+			}
+		}
+		sort.Slice(gained, func(left, right int) bool { return gained[left] < gained[right] })
+		for _, priority := range gained {
+			conflicts = append(conflicts, core.ConfigConflict{
+				Type:     core.ConfigConflictPriorityArity,
+				Priority: priority,
+				Theirs:   string(tag),
+				Detail: fmt.Sprintf(
+					"replaying this change left no priority tagged %s, so the fold tagged %s by position",
+					tag, priority),
+			})
+		}
+	}
+	return conflicts
+}
+
+// priorityRoleTags is the set of roles arity repair can move. It mirrors
+// core's own tag set — one member today — for the same reason statusRoleTags
+// mirrors core's three: a tag added there without being added here would
+// simply not be reported, never mis-reported.
+var priorityRoleTags = [...]core.PriorityTag{core.PriorityTagDefault}
+
+func hasPriorityTag(tags []core.PriorityTag, wanted core.PriorityTag) bool {
+	for _, tag := range tags {
+		if tag == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func samePriorityTags(left, right []core.PriorityTag) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+// describePriorityDefinition mirrors describeStatusDefinition, plus color: a
+// priority carries a field statuses do not, and it is part of the definition
+// this renders, the same as the label and the tags.
+func describePriorityDefinition(label, rank string, tags []core.PriorityTag, color string) string {
+	names := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		names = append(names, string(tag))
+	}
+	described := fmt.Sprintf("%q at rank %s", label, rank)
+	if len(names) > 0 {
+		described += " tagged " + strings.Join(names, ",")
+	}
+	if color != "" {
+		described += " colored " + color
 	}
 	return described
 }
