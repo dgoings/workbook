@@ -120,6 +120,21 @@ const (
 	// MaxPriorityLabelBytes bounds one priority display label, matching
 	// MaxStatusLabelBytes: a label is a short chip's text, not prose.
 	MaxPriorityLabelBytes = 60
+	// MaxPriorityCount bounds how many live priorities one project may
+	// define, mirroring MaxStatusCount for the same usability reason stated
+	// there: every live priority is a distinct chip color in the board's
+	// legend, and a legend nobody can tell apart at a glance has stopped
+	// being a legend.
+	MaxPriorityCount = 24
+	// MaxPriorityAliasCount bounds how many rename aliases the priorities
+	// section may carry, and MaxPriorityRetiredCount how many retirements —
+	// mirroring MaxStatusAliasCount and MaxStatusRetiredCount for the
+	// identical reason given there: both stand in for the same compaction
+	// pass that does not exist yet, so nothing may drop a priority's
+	// forwarding pointer while any unsynced clone might still hold the old
+	// value.
+	MaxPriorityAliasCount   = 256
+	MaxPriorityRetiredCount = 256
 	// MaxProjectNameBytes bounds the display name a project may give itself.
 	//
 	// It sits with the status ceilings rather than with the task ceilings above

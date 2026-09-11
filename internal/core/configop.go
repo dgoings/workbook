@@ -472,12 +472,6 @@ func ValidateConfigAuthoring(parent *ConfigStateDocument, pack ConfigOperationPa
 	if err != nil {
 		return err
 	}
-	// The display section has no arity to violate and no collection to grow:
-	// three optional values, each bounded where it is authored and each already
-	// refused by the operation document check if it is not. There is therefore
-	// nothing for this gate to ask about it that the fold has not already
-	// settled, and inventing a question would be a second rule to keep in step
-	// with the first.
 	var before VocabularyDocument
 	if parent != nil {
 		before = parent.Config.Vocabulary
@@ -485,7 +479,51 @@ func ValidateConfigAuthoring(parent *ConfigStateDocument, pack ConfigOperationPa
 	if err := validateVocabularyGrowth(before, document); err != nil {
 		return err
 	}
-	return newVocabularyFromCanonical(document).Validate()
+	if err := newVocabularyFromCanonical(document).Validate(); err != nil {
+		return err
+	}
+
+	// The display section, by contrast, has no arity to violate and no
+	// collection to grow: three optional values, each bounded where it is
+	// authored and each already refused by the operation document check if it
+	// is not. There is therefore nothing for this gate to ask about it that
+	// the fold has not already settled, and inventing a question would be a
+	// second rule to keep in step with the first — which is exactly why
+	// priorities, unlike display, get the same two questions statuses just
+	// answered above: priorities have both an arity rule (exactly one
+	// default) and three collections that grow (the live set, aliases,
+	// retirements), the identical shape the status vocabulary has.
+	priorityDocument, err := folded.priorities.document()
+	if err != nil {
+		return err
+	}
+	var beforePriorities PriorityDocument
+	if parent != nil && parent.Config.Priorities != nil {
+		beforePriorities = *parent.Config.Priorities
+	}
+	var afterPriorities PriorityDocument
+	if priorityDocument != nil {
+		afterPriorities = *priorityDocument
+	}
+	if err := validatePriorityGrowth(beforePriorities, afterPriorities); err != nil {
+		return err
+	}
+	// A nil priorityDocument means the project has configured no priorities
+	// at all — the canonical "use the built-in three" state
+	// normalizeStoredPriorityDocument enforces — and that is a perfectly
+	// valid configuration, not an arity violation. Validate() on the zero
+	// PriorityVocabulary would say "the project has no priorities", which is
+	// the wrong answer for a project that simply never touched this section;
+	// asking it is what distinguishes "configured nothing" from "configured
+	// down to nothing", the same distinction PriorityVocabulary.Validate's own
+	// doc comment draws. So this only asks once the section is actually
+	// configured.
+	if priorityDocument != nil {
+		if err := newPriorityVocabularyFromCanonical(*priorityDocument).Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ValidateConfigCheckpoint verifies that a stored configuration state is the

@@ -1581,3 +1581,94 @@ func TestApplyConfigRepairsAPriorityGenesisWithTwoDefaults(t *testing.T) {
 		t.Errorf("Default() = %q, want %q", got, want)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// The priorities authoring gate.
+// ---------------------------------------------------------------------------
+
+// A batch that would leave no priority tagged default is refused at
+// authoring, with a message naming the command that fixes it — the same
+// treatment status.untag(default) already gets. The identical pack folds
+// cleanly when it arrives from a peer (TestApplyConfigRepairsAPriorityLeftWithNoDefault),
+// because a peer's clone already treats it as history rather than as
+// something it is still free to refuse.
+func TestValidateConfigAuthoringRefusesAPriorityBatchLeavingNoDefault(t *testing.T) {
+	parent := seededPriorityCheckpoint(t)
+	pack := priorityPack(t, parent, ConfigOperation{
+		Type: ConfigPriorityUntag, Priority: PriorityMedium, PriorityTag: PriorityTagDefault,
+	})
+
+	err := ValidateConfigAuthoring(&parent, pack)
+	if err == nil {
+		t.Fatal("ValidateConfigAuthoring() error = nil, want a refusal")
+	}
+	if got := CategoryOf(err); got != CategoryValidation {
+		t.Fatalf("ValidateConfigAuthoring() category = %q, want %q", got, CategoryValidation)
+	}
+	const wantCommand = "workbook priority tag <priority> --tag default"
+	if !strings.Contains(err.Error(), wantCommand) {
+		t.Fatalf("ValidateConfigAuthoring() = %q, want it to name %q", err, wantCommand)
+	}
+
+	// The same pack still folds cleanly, because ApplyConfig never refuses on
+	// arity — it repairs. Confirms the gate and the fold disagree on purpose.
+	if _, err := ApplyConfig(&parent, pack); err != nil {
+		t.Fatalf("ApplyConfig() error = %v, want the same pack to fold", err)
+	}
+}
+
+// The other arity violation: two priorities tagged default at once. Every
+// tagging operation transfers the tag atomically (configPriorities.applyTag),
+// so the only way authoring can produce this is a config.genesis that
+// carries two defaults directly — the same "genesis is the only way to reach
+// this" case configVocabulary.normalizeArity's own comment documents for
+// statuses.
+func TestValidateConfigAuthoringRefusesAPriorityBatchLeavingTwoDefaults(t *testing.T) {
+	config := ConfigData{
+		Vocabulary: testVocabulary(t).Document(),
+		Priorities: &PriorityDocument{
+			Priorities: []PriorityDefinition{
+				{Priority: PriorityHigh, Label: "High", Rank: "1/1", Tags: []PriorityTag{PriorityTagDefault}},
+				{Priority: PriorityLow, Label: "Low", Rank: "2/1", Tags: []PriorityTag{PriorityTagDefault}},
+			},
+			Aliases: []PriorityAlias{},
+			Retired: []RetiredPriority{},
+		},
+	}
+	pack := configPack(1, identify(0, []ConfigOperation{{Type: ConfigGenesis, Config: &config}})...)
+
+	err := ValidateConfigAuthoring(nil, pack)
+	if err == nil {
+		t.Fatal("ValidateConfigAuthoring() error = nil, want a refusal")
+	}
+	if got := CategoryOf(err); got != CategoryValidation {
+		t.Fatalf("ValidateConfigAuthoring() category = %q, want %q", got, CategoryValidation)
+	}
+	const wantCommand = "workbook priority tag <priority> --tag default"
+	if !strings.Contains(err.Error(), wantCommand) {
+		t.Fatalf("ValidateConfigAuthoring() = %q, want it to name %q", err, wantCommand)
+	}
+
+	// The same genesis still folds cleanly, repaired down to one default.
+	if _, err := ApplyConfig(nil, pack); err != nil {
+		t.Fatalf("ApplyConfig() error = %v, want the same pack to fold", err)
+	}
+}
+
+// A project that has configured no priorities at all — the checkpoint's
+// Priorities member is nil, the canonical "use the built-in three" state —
+// must pass this gate cleanly. Nil is a valid configuration, not an arity
+// violation, and a batch that never touches the priorities section (an
+// ordinary status.add here) must not suddenly be told the project "has no
+// priorities" merely because it never configured any.
+func TestValidateConfigAuthoringAcceptsAnUnconfiguredPriorityProject(t *testing.T) {
+	parent := genesisState(t, testVocabulary(t))
+	if parent.Config.Priorities != nil {
+		t.Fatalf("seeded parent already has a priorities section: %#v", parent.Config.Priorities)
+	}
+	pack := priorityPack(t, parent, add("triage", "Triage", "1/2"))
+
+	if err := ValidateConfigAuthoring(&parent, pack); err != nil {
+		t.Fatalf("ValidateConfigAuthoring() error = %v, want an unconfigured priorities section to pass", err)
+	}
+}

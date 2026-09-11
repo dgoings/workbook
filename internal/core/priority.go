@@ -126,9 +126,9 @@ type PriorityVocabulary struct {
 // label well-formedness, rank syntax, tag membership, uniqueness, and the
 // absence of a forwarding cycle — but neither arity nor a size ceiling, both
 // being states a fold can reach from a peer's operations that this must
-// still be able to represent. Validate covers arity; there is no priority
-// equivalent of ValidateConfigAuthoring's ceilings yet, so there is nothing
-// for this to defer a ceiling check to.
+// still be able to represent. Validate covers arity, and
+// ValidateConfigAuthoring covers the ceiling via validatePriorityGrowth, the
+// same split NewVocabulary's own comment describes for statuses.
 func NewPriorityVocabulary(definitions []PriorityDefinition, aliases []PriorityAlias, retired []RetiredPriority) (PriorityVocabulary, error) {
 	normalized, err := normalizePriorityDocument(PriorityDocument{
 		Priorities: definitions,
@@ -386,10 +386,11 @@ func (vocabulary PriorityVocabulary) Validate() error {
 // It checks shape and never counts, for the reason normalizeVocabularyDocument
 // records at length: a size ceiling enforced inside the fold can brick a
 // repository two clones pushed over it concurrently, permanently, because
-// neither did anything a ceiling checked here would have refused alone. There
-// is no ValidateConfigAuthoring-equivalent authoring gate for priorities yet
-// to defer a ceiling to; this is recorded so that whenever one exists, it
-// lands beside this comment rather than inside this function.
+// neither did anything a ceiling checked here would have refused alone. The
+// ceiling is instead enforced at the authoring boundary by
+// validatePriorityGrowth below, the priority equivalent of
+// validateVocabularyGrowth, which ValidateConfigAuthoring calls the same way
+// it calls the status one.
 func normalizePriorityDocument(document PriorityDocument) (PriorityDocument, error) {
 	priorities := make([]PriorityDefinition, 0, len(document.Priorities))
 	ranks := make(map[Priority]*big.Rat, len(document.Priorities))
@@ -460,6 +461,40 @@ func normalizePriorityDocument(document PriorityDocument) (PriorityDocument, err
 	}
 
 	return PriorityDocument{Priorities: priorities, Aliases: aliases, Retired: retired}, nil
+}
+
+// validatePriorityGrowth is validateVocabularyGrowth's counterpart for the
+// priorities section, called from ValidateConfigAuthoring the same way and
+// for the same reason: refuse a pack only when it is what pushes a
+// collection past its ceiling, and never refuse shrinkage or a pack that
+// merely leaves an already-over-ceiling count unchanged — a ceiling enforced
+// inside the fold instead could brick a repository two clones pushed over it
+// concurrently, permanently, since append-only means the very operation that
+// would bring the count back down sits behind a fold that already refused to
+// run. See validateVocabularyGrowth's own comment for the full argument;
+// this is the identical rule over priorities instead of statuses.
+func validatePriorityGrowth(before, after PriorityDocument) error {
+	if len(after.Priorities) > MaxPriorityCount && len(after.Priorities) > len(before.Priorities) {
+		return Errorf(
+			CategoryValidation,
+			"the project would define %d priorities and must not exceed %d; "+
+				"remove one first: workbook priority delete <priority> --into <priority>",
+			len(after.Priorities), MaxPriorityCount,
+		)
+	}
+	if err := forwardingsGrew(
+		priorityAliasForwardings(before.Aliases), priorityAliasForwardings(after.Aliases),
+		MaxPriorityAliasCount, "priority", "rename", "old",
+	); err != nil {
+		return err
+	}
+	if err := forwardingsGrew(
+		retiredPriorityForwardings(before.Retired), retiredPriorityForwardings(after.Retired),
+		MaxPriorityRetiredCount, "priority", "removal", "removed",
+	); err != nil {
+		return err
+	}
+	return nil
 }
 
 // normalizeStoredPriorityDocument is the pointer-aware form of
