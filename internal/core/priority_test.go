@@ -316,19 +316,13 @@ func TestServiceListOrdersAStoredPriorityByItsResolvedRankNotLast(t *testing.T) 
 }
 
 // priorityVocabularyRenamingHighToMedium collapses high into medium, keeping
-// every live priority a built-in token.
-// TestServiceListFilterResolvesAStoredPriorityFilterThroughTheChains below
-// needs that: List's filter argument is still gated on isValidPriority's
-// built-in-three membership (task.go's doc comment on it records this as a
-// narrower, standing behavior, unlike a task field's own mutation-boundary
-// check), so a filter naming a project-only token such as
-// customPriorityVocabulary's "critical" would be refused before forwarding
-// ever ran. Renaming among the built-in three sidesteps that while still
-// exercising real forwarding.
-// TestServicePlaceMutationAcceptsAnAnchorSharingAResolvedPriorityBucket
-// reuses it for an unrelated reason: it needs the anchor's stored "high" and
-// the parent's stored "medium" to resolve into the one bucket this
-// vocabulary's forwarding produces.
+// every live priority a built-in token, which is convenient rather than
+// required: the two tests below only need a rename to resolve through, not a
+// project-only live name, so reusing built-in tokens keeps their task data
+// reading as ordinary Priority values instead of ad hoc strings.
+// TestServicePlaceMutationAcceptsAnAnchorSharingAResolvedPriorityBucket needs
+// the anchor's stored "high" and the parent's stored "medium" to resolve into
+// the one bucket this vocabulary's forwarding produces.
 func priorityVocabularyRenamingHighToMedium(t *testing.T) PriorityVocabulary {
 	t.Helper()
 	vocabulary, err := NewPriorityVocabulary(
@@ -550,5 +544,60 @@ func TestServiceCreateMutationRejectsAnUnconfiguredProjectNamingAnotherProjectsP
 	}
 	if got := len(store.writes); got != 0 {
 		t.Fatalf("CreateMutation() wrote %d packs, want none", got)
+	}
+}
+
+// List's priority filter now gets the same relaxation the status filter
+// beside it has always had: a project-defined priority the built-in three
+// does not contain selects the tasks that carry it, rather than being
+// refused before resolution ever runs. Before this, a project that could
+// create a task under "critical" and sort it correctly still could not list
+// tasks by it — the same non-functional corner task 6c exists to close,
+// surviving at this one remaining call site.
+func TestServiceListFilterAcceptsAProjectDefinedPriority(t *testing.T) {
+	store := newMemoryTaskStore(
+		serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F1", TaskData{
+			Title: "Critical", Status: StatusBacklog, Priority: "critical", Rank: "1/1",
+		}),
+		serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F2", TaskData{
+			Title: "Not critical", Status: StatusBacklog, Priority: PriorityLow, Rank: "2/1",
+		}),
+	)
+	service := priorityServiceUnderTest(store, &sequenceIDSource{}, customPriorityVocabulary(t))
+
+	critical := Priority("critical")
+	tasks, err := service.List(context.Background(), ListFilter{Priority: &critical})
+	if err != nil {
+		t.Fatalf("List(%q) error = %v, want a project-defined priority accepted", critical, err)
+	}
+	if len(tasks) != 1 || tasks[0].ID != "WB-01K0M6B8A4FTT8C39MXXYTW7F1" {
+		t.Fatalf("List(%q) = %#v, want only the task stored under it", critical, tasks)
+	}
+}
+
+// A filter naming a well-formed priority nothing carries — because no
+// project has defined it, the same as a status this clone has not fetched
+// yet — returns an empty result rather than an error, matching the
+// relaxation List's own doc comment already grants a status filter. This also
+// pins the invariant for an unconfigured project: before this fix, "nowhere"
+// would have been refused with a validation error the same as "bogus" is at
+// the mutation boundary; List's filter never asked the mutation boundary's
+// question, so the visible change here is the mechanism (error to empty), not
+// which tasks a caller ends up seeing — none, either way.
+func TestServiceListFilterOnAnUndefinedPriorityReturnsEmptyNotError(t *testing.T) {
+	store := newMemoryTaskStore(
+		serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F1", TaskData{
+			Title: "Task", Status: StatusBacklog, Priority: PriorityMedium, Rank: "1/1",
+		}),
+	)
+	service := serviceUnderTest(store, &sequenceIDSource{})
+
+	nowhere := Priority("nowhere")
+	tasks, err := service.List(context.Background(), ListFilter{Priority: &nowhere})
+	if err != nil {
+		t.Fatalf("List(%q) error = %v, want nil", nowhere, err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("List(%q) = %#v, want empty", nowhere, tasks)
 	}
 }

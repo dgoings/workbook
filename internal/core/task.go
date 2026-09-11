@@ -345,19 +345,20 @@ func formatRank(rank *big.Rat) string {
 // isValidPriority reports whether a priority is a member of the built-in
 // three — low, medium, high — regardless of what the project actually has
 // configured. That is a membership question, not a shape one, and it is the
-// wrong question for a stored value or a replayed operation, which is why
+// wrong question everywhere a priority now gets checked in production:
 // NormalizeTask (task.go) and the replay-time field.set check
-// (validateFieldSetOperation in operation.go) no longer call this: both ask
-// ValidatePriorityToken instead, the same shape-only question
-// ValidateStatusToken asks of a status. This function's one remaining caller
-// is the filter check in Service.List (service.go), which still refuses a
-// priority outside the built-in three even though the equivalent status
-// filter refuses nothing — a narrower, pre-existing behavior this function
-// preserves rather than one this comment endorses. Passing the zero
-// PriorityVocabulary rather than duplicating the built-in set as a literal is
-// what keeps that "built-in three" reading anchored to
-// PriorityVocabulary.Has's own zero-value substitution, so the two can never
-// drift apart.
+// (validateFieldSetOperation in operation.go) ask ValidatePriorityToken
+// instead (shape only, the same question ValidateStatusToken asks of a
+// status), List's filter guard (service.go) asks nothing at all, matching the
+// equivalent status filter beside it, and the mutation boundary
+// (Service.requirePriorityMember) asks the project's actual
+// PriorityVocabulary. This function has no production caller left; it
+// persists because TestPriorityValidationAgreesWithPriorities exercises it
+// directly, pinning that the built-in three's own membership check agrees
+// with Priorities(). Passing the zero PriorityVocabulary rather than
+// duplicating the built-in set as a literal is what keeps that reading
+// anchored to PriorityVocabulary.Has's own zero-value substitution, so the
+// two can never drift apart.
 func isValidPriority(priority Priority) bool {
 	return PriorityVocabulary{}.Has(priority)
 }

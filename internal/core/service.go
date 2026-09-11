@@ -288,20 +288,16 @@ func (s Service) ResolveStatusFilter(status Status) StatusFilterResolution {
 
 // List returns the project's tasks, filtered and ordered.
 //
-// A status filter outside the vocabulary is accepted and returns the tasks it
-// selects, which is usually none. That relaxation is PR-C's half of a decision
-// PR-B deferred: under a distributed vocabulary, naming a status this clone has
-// not fetched yet is an ordinary thing to type, and failing tells the caller
-// their repository is broken when it is merely behind. It is only honest
-// because the result envelope now carries the miss — see
-// ResolveStatusFilter and the CLI's warning path — so a script that greps the
-// output is told why it found nothing rather than left to infer it.
-//
-// A priority filter does not get that relaxation: it is refused unless it
-// names one of the built-in three, even for a project that has configured
-// something else. That is narrower than the status filter above it, not an
-// oversight this paragraph is glossing over — isValidPriority's doc comment
-// records the gap.
+// A status or priority filter outside its vocabulary is accepted and returns
+// the tasks it selects, which is usually none. That relaxation is PR-C's half
+// of a decision PR-B deferred: under a distributed vocabulary, naming a
+// status or priority this clone has not fetched yet is an ordinary thing to
+// type, and failing tells the caller their repository is broken when it is
+// merely behind. It is only honest because the result envelope now carries
+// the miss for status — see ResolveStatusFilter and the CLI's warning path —
+// so a script that greps the output is told why it found nothing rather than
+// left to infer it; priority has no equivalent resolution report yet, so a
+// caller only sees the empty result, not why.
 //
 // A filter that names a retired status or priority is applied to the value it
 // now means rather than to nothing. A task's status and priority are resolved
@@ -311,9 +307,6 @@ func (s Service) ResolveStatusFilter(status Status) StatusFilterResolution {
 // for "no tasks are in ready" about a project whose ready column was merely
 // renamed.
 func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
-	if filter.Priority != nil && !isValidPriority(*filter.Priority) {
-		return nil, Errorf(CategoryValidation, "invalid task priority %q", *filter.Priority)
-	}
 	snapshots, err := s.Reader.List(ctx, s.Config)
 	if err != nil {
 		return nil, err
