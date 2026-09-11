@@ -189,16 +189,3 @@ func TestPrioritiesReturnsDefensiveCopy(t *testing.T) {
 		t.Fatalf("Priorities()[0].Priority = %q, want %q", got, PriorityLow)
 	}
 }
-
-func TestPriorityValidationAgreesWithPriorities(t *testing.T) {
-	// Production mutation: validating priorities from a switch independent of
-	// Priorities() lets generated documentation drift from what the CLI accepts.
-	for _, definition := range Priorities() {
-		if !isValidPriority(definition.Priority) {
-			t.Errorf("isValidPriority(%q) = false, want true", definition.Priority)
-		}
-	}
-	if isValidPriority("urgent") {
-		t.Error("isValidPriority(\"urgent\") = true, want false")
-	}
-}

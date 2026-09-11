@@ -553,17 +553,29 @@ func TestUnresolvedStatusRecovery(t *testing.T) {
 	// somebody rebuilds, which is the guard doing its job.
 	other, _ := cliSyncRepositories(t)
 	second := writeTaskInAForeignStatus(t, other, "Also written elsewhere", "ghost")
-	overwriteStoredTask(t, other, second.ID, `"priority":"medium"`, `"priority":"urgent"`)
+	// Not "urgent": since priorities gained the same shape/membership split
+	// statuses have, a well-formed-but-unfamiliar priority is no longer
+	// corrupt data on this path — it is what NormalizeTask now exists to
+	// accept. What is still corrupt here is a value that is not a priority
+	// token at all.
+	overwriteStoredTask(t, other, second.ID, `"priority":"medium"`, `"priority":"Not A Priority"`)
 	code, _, stderr = run(t, other, "update", second.ID, "--status", "ready", "--no-sync", "--json")
 	if code != 7 {
 		t.Fatalf("update on a corrupt priority = code %d, want 7; stderr = %q", code, stderr)
 	}
-	// The message is pinned, not just the category. There is a second
-	// corrupt-data failure within reach here — the projection's "current head is
-	// not a descendant of its previous head" guard, which fires if
-	// overwriteStoredTask ever stops discarding the cache — and it would satisfy
-	// an assertion that only checked the exit code. Naming the message is what
-	// keeps this leg about the tampered field.
+	// The message is pinned, not just the category. There are two other
+	// corrupt-data failures within reach here, either of which would satisfy
+	// an assertion that only checked the exit code: the projection's "current
+	// head is not a descendant of its previous head" guard, which fires if
+	// overwriteStoredTask ever stops discarding the cache, and
+	// ValidateCheckpoint's "stored checkpoint differs from computed state"
+	// guard, which is what a merely unfamiliar-but-well-formed priority would
+	// now trip instead — normalizeCanonicalTask would accept it and let the
+	// tamper through, and only the recomputed-versus-stored comparison would
+	// catch that nothing in the operation pack ever wrote it. Naming the
+	// message, and choosing a tamper that is not a priority token at all
+	// rather than merely an unrecognized one, is what keeps this leg about
+	// the field being malformed rather than about either of those.
 	assertJSONError(t, stderr, core.CategoryCorruptData, "task state contains an invalid task")
 }
 
