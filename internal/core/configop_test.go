@@ -1321,3 +1321,417 @@ func TestGenesisAcceptsBothTheLegacyAndDefaultVocabularies(t *testing.T) {
 		})
 	}
 }
+
+// A project that configured no priorities encodes exactly the bytes it did
+// before this section existed. This is the property golden_config_test.go
+// pins for real commits; this states it directly.
+func TestConfigDataOmitsAnUnconfiguredPrioritiesSection(t *testing.T) {
+	encoded, err := json.Marshal(ConfigData{Vocabulary: VocabularyDocument{}})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(encoded), "priorities") {
+		t.Errorf("an unconfigured project encodes a priorities section: %s", encoded)
+	}
+}
+
+// And a checkpoint carrying none reads as the built-in set.
+func TestCheckpointWithoutPrioritiesReadsAsBuiltIn(t *testing.T) {
+	var state ConfigStateDocument
+	if got := state.PriorityVocabulary().Default(); got != PriorityMedium {
+		t.Errorf("Default() = %q, want medium", got)
+	}
+}
+
+// The non-nil branch: a checkpoint carrying a real priorities section reads
+// back as that configuration, not a substitution. Has(medium) is the
+// distinguishing check — the built-in three would answer true, but this
+// vocabulary never defined it, so a false answer proves the round trip
+// through ConfigData actually reached the stored document rather than falling
+// through to the built-in the zero value would have produced.
+func TestCheckpointWithPrioritiesReadsTheConfiguredVocabulary(t *testing.T) {
+	var state ConfigStateDocument
+	state.Config.Priorities = &PriorityDocument{
+		Priorities: []PriorityDefinition{
+			{Priority: "urgent", Label: "Urgent", Rank: "1/1", Tags: []PriorityTag{PriorityTagDefault}},
+		},
+		Aliases: []PriorityAlias{},
+		Retired: []RetiredPriority{},
+	}
+
+	vocabulary := state.PriorityVocabulary()
+	if got, want := vocabulary.Default(), Priority("urgent"); got != want {
+		t.Errorf("Default() = %q, want %q", got, want)
+	}
+	if !vocabulary.Has("urgent") {
+		t.Error(`Has("urgent") = false, want true`)
+	}
+	if vocabulary.Has(PriorityMedium) {
+		t.Error("Has(medium) = true, want false: this vocabulary never defined it")
+	}
+}
+
+// A stored priorities section has to be canonical, the same rule Vocabulary
+// and Display are held to: normalizeStoredPriorityDocument recomputes the
+// canonical form and validateConfigStateDocument refuses a checkpoint whose
+// stored bytes differ from it. Without this a peer's ref could carry an
+// unsorted or duplicate-bearing section and nothing would object — exactly
+// the gap ValidateConfigCheckpoint's self-agreement (it recomputes the same
+// pass-through) could not have caught on its own.
+func TestValidateConfigStateDocumentRefusesANonCanonicalPrioritiesSection(t *testing.T) {
+	tests := map[string]*PriorityDocument{
+		"unsorted": {
+			Priorities: []PriorityDefinition{
+				{Priority: PriorityLow, Label: "Low", Rank: "2/1", Tags: []PriorityTag{}},
+				{Priority: PriorityHigh, Label: "High", Rank: "1/1", Tags: []PriorityTag{PriorityTagDefault}},
+			},
+			Aliases: []PriorityAlias{},
+			Retired: []RetiredPriority{},
+		},
+		"duplicate-bearing": {
+			Priorities: []PriorityDefinition{
+				{Priority: PriorityHigh, Label: "High", Rank: "1/1", Tags: []PriorityTag{PriorityTagDefault}},
+				{Priority: PriorityHigh, Label: "High Again", Rank: "2/1", Tags: []PriorityTag{}},
+			},
+			Aliases: []PriorityAlias{},
+			Retired: []RetiredPriority{},
+		},
+		"empty but present": {
+			Priorities: []PriorityDefinition{},
+			Aliases:    []PriorityAlias{},
+			Retired:    []RetiredPriority{},
+		},
+		// Color is the one field in this section that ends up composed
+		// verbatim into a template.CSS block once a later stage renders the
+		// board's theme, so an unvalidated or non-canonical stored color is
+		// not merely a bad value — it is a CSS injection path from a
+		// malicious or corrupted peer. These two mirror the malformed-color
+		// and non-canonical-color cases normalizeDisplayDocument is already
+		// held to for a stored color.
+		"malformed color": {
+			Priorities: []PriorityDefinition{
+				{Priority: PriorityHigh, Label: "High", Rank: "1/1", Tags: []PriorityTag{PriorityTagDefault}, Color: "not-a-color"},
+			},
+			Aliases: []PriorityAlias{},
+			Retired: []RetiredPriority{},
+		},
+		"non-canonically-stored color": {
+			Priorities: []PriorityDefinition{
+				{Priority: PriorityHigh, Label: "High", Rank: "1/1", Tags: []PriorityTag{PriorityTagDefault}, Color: "#ABC123"},
+			},
+			Aliases: []PriorityAlias{},
+			Retired: []RetiredPriority{},
+		},
+	}
+	for name, document := range tests {
+		t.Run(name, func(t *testing.T) {
+			state := genesisState(t, testVocabulary(t))
+			state.Config.Priorities = document
+			if err := validateConfigStateDocument(state); err == nil {
+				t.Fatal("validateConfigStateDocument() error = nil, want a corrupt-data refusal")
+			} else if got := CategoryOf(err); got != CategoryCorruptData {
+				t.Fatalf("validateConfigStateDocument() category = %q, want %q", got, CategoryCorruptData)
+			}
+		})
+	}
+}
+
+// A stored section that is empty — no priorities, aliases, or retirements —
+// canonicalizes to nil, so "configured nothing" keeps exactly one
+// representation rather than gaining a second one that happens to read the
+// same today only because every PriorityVocabulary accessor but Validate
+// substitutes for the zero value.
+func TestNormalizeStoredPriorityDocumentCanonicalizesAnEmptySectionToNil(t *testing.T) {
+	got, err := normalizeStoredPriorityDocument(&PriorityDocument{
+		Priorities: []PriorityDefinition{},
+		Aliases:    []PriorityAlias{},
+		Retired:    []RetiredPriority{},
+	})
+	if err != nil {
+		t.Fatalf("normalizeStoredPriorityDocument() error = %v", err)
+	}
+	if got != nil {
+		t.Errorf("normalizeStoredPriorityDocument(empty) = %#v, want nil", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The eight priority operations and their fold.
+// ---------------------------------------------------------------------------
+
+// seededPriorityCheckpoint returns a checkpoint whose priorities section is
+// configured with three priorities — high, medium (default), low — reached
+// through the fold itself, the way a real project's history would reach this
+// state. It plays testVocabulary's role for the priority section.
+func seededPriorityCheckpoint(t *testing.T) ConfigStateDocument {
+	t.Helper()
+	base := genesisState(t, testVocabulary(t))
+	return fold(t, base, []ConfigOperation{
+		{Type: ConfigPriorityAdd, PriorityName: PriorityHigh, Label: "High", Rank: "1/1"},
+		{Type: ConfigPriorityAdd, PriorityName: PriorityMedium, Label: "Medium", Rank: "2/1", PriorityTags: []PriorityTag{PriorityTagDefault}},
+		{Type: ConfigPriorityAdd, PriorityName: PriorityLow, Label: "Low", Rank: "3/1"},
+	})
+}
+
+// priorityPack builds a one-batch configuration pack whose clock advances the
+// given parent by exactly one — the arithmetic every configPack in this file
+// performs — so a test can build a pack from whatever state its previous
+// ApplyConfig call produced, the way a real caller builds its next pack from
+// its own last checkpoint.
+func priorityPack(t *testing.T, parent ConfigStateDocument, operations ...ConfigOperation) ConfigOperationPack {
+	t.Helper()
+	return configPack(parent.LogicalClock+1, identify(0, operations)...)
+}
+
+// Folding a rename leaves the new name live and the old one forwarding, which
+// is the whole mechanism that stops a rename rewriting task history.
+func TestApplyConfigFoldsAPriorityRename(t *testing.T) {
+	parent := seededPriorityCheckpoint(t)
+	pack := priorityPack(t, parent, ConfigOperation{
+		Type: ConfigPriorityRename, PriorityFrom: PriorityHigh, PriorityTo: "critical",
+	})
+
+	state, err := ApplyConfig(&parent, pack)
+	if err != nil {
+		t.Fatalf("ApplyConfig: %v", err)
+	}
+	vocabulary := state.PriorityVocabulary()
+	if !vocabulary.Has("critical") {
+		t.Error("the rename did not define the new priority")
+	}
+	if got, ok := vocabulary.Resolve(PriorityHigh); !ok || got != "critical" {
+		t.Errorf("Resolve(high) = %q,%v; want critical,true", got, ok)
+	}
+}
+
+// A duplicated add is a no-op, which is what makes two clones adding the same
+// priority converge on one definition instead of erroring.
+func TestApplyConfigFoldsADuplicatedPriorityAddOnce(t *testing.T) {
+	parent := seededPriorityCheckpoint(t)
+	blocker := ConfigOperation{Type: ConfigPriorityAdd, PriorityName: "blocker", Label: "Blocker", Rank: "9/1"}
+
+	once, err := ApplyConfig(&parent, priorityPack(t, parent, blocker))
+	if err != nil {
+		t.Fatalf("ApplyConfig: %v", err)
+	}
+	twice, err := ApplyConfig(&once, priorityPack(t, once, blocker))
+	if err != nil {
+		t.Fatalf("ApplyConfig (replay): %v", err)
+	}
+	if len(twice.PriorityVocabulary().Definitions()) != len(once.PriorityVocabulary().Definitions()) {
+		t.Error("replaying an add defined the priority twice")
+	}
+}
+
+// Recolor clears back to the derived ramp, which is why it is set/unset
+// rather than a field on relabel.
+func TestApplyConfigClearsAPriorityColor(t *testing.T) {
+	parent := seededPriorityCheckpoint(t)
+	colored, err := ApplyConfig(&parent, priorityPack(t, parent, ConfigOperation{
+		Type: ConfigPriorityRecolor, Priority: PriorityHigh, Value: "#b42318",
+	}))
+	if err != nil {
+		t.Fatalf("ApplyConfig: %v", err)
+	}
+	cleared, err := ApplyConfig(&colored, priorityPack(t, colored, ConfigOperation{
+		Type: ConfigPriorityRecolor, Priority: PriorityHigh,
+	}))
+	if err != nil {
+		t.Fatalf("ApplyConfig (clear): %v", err)
+	}
+	if got := cleared.PriorityVocabulary().Color(PriorityHigh); got != "" {
+		t.Errorf("Color(high) = %q after clearing, want empty", got)
+	}
+}
+
+// The arity hazard: ApplyConfig deliberately does not call Validate, so a
+// replay that leaves no priority tagged default must still produce a usable
+// vocabulary — Default() must never come back "", which is what
+// normalizeCanonicalTask would reject as an invalid task priority. The repair
+// picks the lowest-ranked priority, the one untagged here, so the project
+// ends up back where it started.
+func TestApplyConfigRepairsAPriorityLeftWithNoDefault(t *testing.T) {
+	parent := seededPriorityCheckpoint(t)
+	pack := priorityPack(t, parent, ConfigOperation{
+		Type: ConfigPriorityUntag, Priority: PriorityMedium, PriorityTag: PriorityTagDefault,
+	})
+
+	state, err := ApplyConfig(&parent, pack)
+	if err != nil {
+		t.Fatalf("ApplyConfig: %v", err)
+	}
+	vocabulary := state.PriorityVocabulary()
+	if got := vocabulary.Default(); got == "" {
+		t.Fatal(`Default() = "", want the repair to have chosen one`)
+	}
+	if err := vocabulary.Validate(); err != nil {
+		t.Fatalf("ApplyConfig left an unusable priority vocabulary: %v", err)
+	}
+}
+
+// The other half of the same hazard: a genesis document can carry two
+// priorities both tagged default — ValidateConfigAuthoring is not in the
+// replay path that decodes one — and the fold must still converge on exactly
+// one rather than reproducing the corrupt-data question Default() would
+// otherwise have no good answer to.
+func TestApplyConfigRepairsAPriorityGenesisWithTwoDefaults(t *testing.T) {
+	config := ConfigData{
+		Vocabulary: testVocabulary(t).Document(),
+		Priorities: &PriorityDocument{
+			Priorities: []PriorityDefinition{
+				{Priority: PriorityHigh, Label: "High", Rank: "1/1", Tags: []PriorityTag{PriorityTagDefault}},
+				{Priority: PriorityLow, Label: "Low", Rank: "2/1", Tags: []PriorityTag{PriorityTagDefault}},
+			},
+			Aliases: []PriorityAlias{},
+			Retired: []RetiredPriority{},
+		},
+	}
+	pack := configPack(1, identify(0, []ConfigOperation{{Type: ConfigGenesis, Config: &config}})...)
+
+	state, err := ApplyConfig(nil, pack)
+	if err != nil {
+		t.Fatalf("ApplyConfig: %v", err)
+	}
+	vocabulary := state.PriorityVocabulary()
+	if err := vocabulary.Validate(); err != nil {
+		t.Fatalf("ApplyConfig left an unusable priority vocabulary: %v", err)
+	}
+	// The repair keeps the lowest-ranked of the two that already carried the
+	// tag, the same rule configVocabulary.normalizeArity documents.
+	if got, want := vocabulary.Default(), PriorityHigh; got != want {
+		t.Errorf("Default() = %q, want %q", got, want)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The priorities authoring gate.
+// ---------------------------------------------------------------------------
+
+// A batch that would leave no priority tagged default is refused at
+// authoring, with a message naming the command that fixes it — the same
+// treatment status.untag(default) already gets. The identical pack folds
+// cleanly when it arrives from a peer (TestApplyConfigRepairsAPriorityLeftWithNoDefault),
+// because a peer's clone already treats it as history rather than as
+// something it is still free to refuse.
+func TestValidateConfigAuthoringRefusesAPriorityBatchLeavingNoDefault(t *testing.T) {
+	parent := seededPriorityCheckpoint(t)
+	pack := priorityPack(t, parent, ConfigOperation{
+		Type: ConfigPriorityUntag, Priority: PriorityMedium, PriorityTag: PriorityTagDefault,
+	})
+
+	err := ValidateConfigAuthoring(&parent, pack)
+	if err == nil {
+		t.Fatal("ValidateConfigAuthoring() error = nil, want a refusal")
+	}
+	if got := CategoryOf(err); got != CategoryValidation {
+		t.Fatalf("ValidateConfigAuthoring() category = %q, want %q", got, CategoryValidation)
+	}
+	const wantCommand = "workbook priority tag <priority> --tag default"
+	if !strings.Contains(err.Error(), wantCommand) {
+		t.Fatalf("ValidateConfigAuthoring() = %q, want it to name %q", err, wantCommand)
+	}
+
+	// The same pack still folds cleanly, because ApplyConfig never refuses on
+	// arity — it repairs. Confirms the gate and the fold disagree on purpose.
+	if _, err := ApplyConfig(&parent, pack); err != nil {
+		t.Fatalf("ApplyConfig() error = %v, want the same pack to fold", err)
+	}
+}
+
+// The other arity violation: two priorities tagged default at once. Every
+// tagging operation transfers the tag atomically (configPriorities.applyTag),
+// so the only way authoring can produce this is a config.genesis that
+// carries two defaults directly — the same "genesis is the only way to reach
+// this" case configVocabulary.normalizeArity's own comment documents for
+// statuses.
+func TestValidateConfigAuthoringRefusesAPriorityBatchLeavingTwoDefaults(t *testing.T) {
+	config := ConfigData{
+		Vocabulary: testVocabulary(t).Document(),
+		Priorities: &PriorityDocument{
+			Priorities: []PriorityDefinition{
+				{Priority: PriorityHigh, Label: "High", Rank: "1/1", Tags: []PriorityTag{PriorityTagDefault}},
+				{Priority: PriorityLow, Label: "Low", Rank: "2/1", Tags: []PriorityTag{PriorityTagDefault}},
+			},
+			Aliases: []PriorityAlias{},
+			Retired: []RetiredPriority{},
+		},
+	}
+	pack := configPack(1, identify(0, []ConfigOperation{{Type: ConfigGenesis, Config: &config}})...)
+
+	err := ValidateConfigAuthoring(nil, pack)
+	if err == nil {
+		t.Fatal("ValidateConfigAuthoring() error = nil, want a refusal")
+	}
+	if got := CategoryOf(err); got != CategoryValidation {
+		t.Fatalf("ValidateConfigAuthoring() category = %q, want %q", got, CategoryValidation)
+	}
+	const wantCommand = "workbook priority tag <priority> --tag default"
+	if !strings.Contains(err.Error(), wantCommand) {
+		t.Fatalf("ValidateConfigAuthoring() = %q, want it to name %q", err, wantCommand)
+	}
+
+	// The same genesis still folds cleanly, repaired down to one default.
+	if _, err := ApplyConfig(nil, pack); err != nil {
+		t.Fatalf("ApplyConfig() error = %v, want the same pack to fold", err)
+	}
+}
+
+// A project that has configured no priorities at all — the checkpoint's
+// Priorities member is nil, the canonical "use the built-in three" state —
+// must pass this gate cleanly. Nil is a valid configuration, not an arity
+// violation, and a batch that never touches the priorities section (an
+// ordinary status.add here) must not suddenly be told the project "has no
+// priorities" merely because it never configured any.
+func TestValidateConfigAuthoringAcceptsAnUnconfiguredPriorityProject(t *testing.T) {
+	parent := genesisState(t, testVocabulary(t))
+	if parent.Config.Priorities != nil {
+		t.Fatalf("seeded parent already has a priorities section: %#v", parent.Config.Priorities)
+	}
+	pack := priorityPack(t, parent, add("triage", "Triage", "1/2"))
+
+	if err := ValidateConfigAuthoring(&parent, pack); err != nil {
+		t.Fatalf("ValidateConfigAuthoring() error = %v, want an unconfigured priorities section to pass", err)
+	}
+}
+
+// A pack carrying a priority operation tells an older clone to upgrade.
+func TestPriorityOperationsRequireGenerationThree(t *testing.T) {
+	got := ConfigPackMinReader([]ConfigOperation{{Type: ConfigPriorityAdd, Name: "blocker"}})
+	if got != 3 {
+		t.Errorf("ConfigPackMinReader = %d, want 3", got)
+	}
+}
+
+// And so does a genesis that carries the section, even though no priority
+// operation appears in the pack — the same guard display has.
+func TestGenesisCarryingPrioritiesRequiresGenerationThree(t *testing.T) {
+	operation := ConfigOperation{Type: ConfigGenesis, Config: &ConfigData{Priorities: &PriorityDocument{}}}
+	if got := ConfigPackMinReader([]ConfigOperation{operation}); got != 3 {
+		t.Errorf("ConfigPackMinReader = %d, want 3", got)
+	}
+}
+
+// A genesis carrying both the display and priorities sections still reports
+// 3, not 2: ConfigPackMinReader tracks a running maximum across both guards,
+// and this pins that composition against the natural-looking regression — an
+// if/else-if chain between the two guards — that would silently drop it back
+// to whichever section's check ran last.
+func TestGenesisCarryingDisplayAndPrioritiesRequiresGenerationThree(t *testing.T) {
+	operation := ConfigOperation{
+		Type: ConfigGenesis,
+		Config: &ConfigData{
+			Display:    &DisplayDocument{Name: "Atlas"},
+			Priorities: &PriorityDocument{},
+		},
+	}
+	if got := ConfigPackMinReader([]ConfigOperation{operation}); got != 3 {
+		t.Errorf("ConfigPackMinReader = %d, want 3", got)
+	}
+}
+
+// A project that configured nothing still writes no marker at all.
+func TestStatusOnlyPackStillRequiresGenerationZero(t *testing.T) {
+	if got := ConfigPackMinReader([]ConfigOperation{{Type: ConfigStatusAdd, Name: "triage"}}); got != 0 {
+		t.Errorf("ConfigPackMinReader = %d, want 0", got)
+	}
+}

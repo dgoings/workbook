@@ -93,9 +93,9 @@ func ConflictDetail(conflict Conflict) string {
 // ConflictType, and deliberately so. The task union names situations that stop
 // one task's replay and are reported against a task ID; these name situations
 // that stop the project's configuration replay and are reported against a
-// status. Merging them would give every consumer of a task conflict a member
-// that can never be populated for it, and would make the task union — which is
-// documented as closed and small — open.
+// status or a priority. Merging them would give every consumer of a task
+// conflict a member that can never be populated for it, and would make the
+// task union — which is documented as closed and small — open.
 type ConfigConflictType string
 
 const (
@@ -125,10 +125,10 @@ const (
 	// project — a column can vanish with tasks in it, or appear in a project
 	// that never had it.
 	//
-	// It is the one member that names no status, because the two intents
-	// disagree about the starting point rather than about one column. Consumers
-	// that render a status render nothing for it; both vocabularies are in Ours
-	// and Theirs.
+	// It is the one status-set member that names no status, because the two
+	// intents disagree about the starting point rather than about one column.
+	// Consumers that render a status render nothing for it; both vocabularies
+	// are in Ours and Theirs.
 	ConfigConflictRootVocabulary ConfigConflictType = "root-vocabulary"
 	// ConfigConflictDisplaySetting reports two clones setting the same display
 	// setting to different things, or one setting it while the other cleared it.
@@ -146,9 +146,48 @@ const (
 	// for anybody to decide — and two clones that changed different settings are
 	// not either, because the section holds three independent values.
 	ConfigConflictDisplaySetting ConfigConflictType = "display-setting"
+	// ConfigConflictPriorityRename reports two renames of the same priority to
+	// different tokens. The fold keeps whichever applied first and leaves the
+	// other's token unclaimed, which converges but discards an intent — the
+	// same loss ConfigConflictStatusRename reports for a status.
+	ConfigConflictPriorityRename ConfigConflictType = "priority-rename"
+	// ConfigConflictPriorityRetired reports a priority removed on both sides
+	// into different destinations, or an operation whose subject the fetched
+	// history had already retired. Where a task's priority lands is not
+	// something a tiebreak should decide.
+	ConfigConflictPriorityRetired ConfigConflictType = "priority-retired"
+	// ConfigConflictPriorityDefinition reports two definitions of the same
+	// priority name that disagree — most often two clones adding the same
+	// priority with different labels, ranks or colors. The fold keeps the
+	// first; this reports the discarded one so it is not lost silently.
+	//
+	// A color disagreement lands here rather than getting a type of its own.
+	// Color is a field inside a priority's definition, the same as its label,
+	// and neither a color nor a label disagreement is a decision worth
+	// stopping for: both arrive through an in-place edit — priority.recolor,
+	// priority.relabel — that is last-write-wins, exactly like a display
+	// setting's fold. What earns ConfigConflictDisplaySetting a type of its
+	// own is not that its fold is last-write-wins while a priority's is not —
+	// applyRecolor and applyRelabel are last-write-wins too — it is that a
+	// display setting's classifier compares the edit's value against what is
+	// stored and stops for a disagreement, while classifyConfigPrioritySubject
+	// (like classifyConfigSubject for a relabel) never does: it only asks
+	// whether the subject still exists. A color could only reach this type
+	// through the one classifier that does compare values,
+	// classifyConfigPriorityAdd, and priority.add can never carry a color —
+	// see its own comment.
+	ConfigConflictPriorityDefinition ConfigConflictType = "priority-definition"
+	// ConfigConflictPriorityArity reports a replay whose result violates the
+	// one arity rule a priority vocabulary carries: exactly one priority
+	// tagged default. ApplyConfig normalizes it so the project stays usable;
+	// this names what was normalized, because the repair picked a priority by
+	// position and nobody chose it — the same report ConfigConflictStatusArity
+	// makes for a status role.
+	ConfigConflictPriorityArity ConfigConflictType = "priority-arity"
 )
 
-// ConfigConflict names one status whose configuration replay needs a decision.
+// ConfigConflict names one status or priority whose configuration replay
+// needs a decision.
 //
 // Ours and Theirs carry the two competing values in whatever form the type
 // implies — two rename targets, two destinations, two labels — as strings,
@@ -157,25 +196,39 @@ const (
 type ConfigConflict struct {
 	Type   ConfigConflictType `json:"type"`
 	Status Status             `json:"status"`
-	Ours   string             `json:"ours,omitempty"`
-	Theirs string             `json:"theirs,omitempty"`
-	Detail string             `json:"detail,omitempty"`
+	// Priority names the priority a priority-set conflict is about, populated
+	// instead of Status. Status cannot hold a priority — it is a distinct type,
+	// the same distinction that keeps a task's status and its priority from
+	// colliding everywhere else — so reusing it would mislabel every priority
+	// conflict as a status. omitempty keeps every conflict recorded before this
+	// field existed, and every status conflict recorded after, byte-identical.
+	Priority Priority `json:"priority,omitempty"`
+	Ours     string   `json:"ours,omitempty"`
+	Theirs   string   `json:"theirs,omitempty"`
+	Detail   string   `json:"detail,omitempty"`
 }
 
 // ConfigConflictError summarizes a configuration conflict list as the command's
 // failure.
 func ConfigConflictError(conflicts []ConfigConflict) error {
 	if len(conflicts) == 1 {
+		conflict := conflicts[0]
+		// A priority conflict names its subject in Priority, not Status, so it
+		// gets its own prefix rather than falling into the status-shaped
+		// branches below — reusing "status %s" would mislabel it.
+		if conflict.Priority != "" {
+			return Errorf(CategoryConflict, "priority %s: %s", conflict.Priority, ConfigConflictDetail(conflict))
+		}
 		// A conflict about the ledger's starting point names no status, so the
 		// message leads with what happened rather than with an empty name.
-		if conflicts[0].Status == "" {
-			return Errorf(CategoryConflict, "%s", ConfigConflictDetail(conflicts[0]))
+		if conflict.Status == "" {
+			return Errorf(CategoryConflict, "%s", ConfigConflictDetail(conflict))
 		}
-		return Errorf(CategoryConflict, "status %s: %s", conflicts[0].Status, ConfigConflictDetail(conflicts[0]))
+		return Errorf(CategoryConflict, "status %s: %s", conflict.Status, ConfigConflictDetail(conflict))
 	}
 	return Errorf(
 		CategoryConflict,
-		"%d status change(s) need a decision before the project configuration can be replayed",
+		"%d configuration change(s) need a decision before the project configuration can be replayed",
 		len(conflicts),
 	)
 }
@@ -202,6 +255,14 @@ func ConfigConflictDetail(conflict ConfigConflict) string {
 		// classifier always writes one, because the setting's name is the whole
 		// subject and this union has no member to put it in.
 		return "this display setting was changed here and on origin"
+	case ConfigConflictPriorityRename:
+		return "this priority was renamed to " + conflict.Ours + " here and to " + conflict.Theirs + " on origin"
+	case ConfigConflictPriorityRetired:
+		return "this priority was removed into " + conflict.Ours + " here and into " + conflict.Theirs + " on origin"
+	case ConfigConflictPriorityDefinition:
+		return "this priority was defined as " + conflict.Ours + " here and as " + conflict.Theirs + " on origin"
+	case ConfigConflictPriorityArity:
+		return "replaying this change left the project without a required priority role"
 	default:
 		return string(conflict.Type)
 	}

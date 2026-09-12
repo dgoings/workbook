@@ -316,17 +316,7 @@ func DerivedStatusLabel(status Status) string {
 // normalizeVocabularyDocument, so an unparseable one cannot reach here; one
 // that somehow did is skipped rather than allowed to fail a total function.
 func (vocabulary Vocabulary) AppendRank() string {
-	maximum := new(big.Rat)
-	for _, definition := range vocabulary.definitions {
-		rank, err := parseRank(definition.Rank)
-		if err != nil {
-			continue
-		}
-		if rank.Cmp(maximum) > 0 {
-			maximum = rank
-		}
-	}
-	return formatRank(new(big.Rat).Add(maximum, big.NewRat(1, 1)))
+	return appendRank(rankedStatuses(vocabulary.definitions))
 }
 
 // InsertRank returns the rank that places a status immediately before or after
@@ -344,73 +334,23 @@ func (vocabulary Vocabulary) AppendRank() string {
 // same way: two statuses may share a rank, and the insertion is representable
 // only when the names already fall in the order the caller asked for.
 func (vocabulary Vocabulary) InsertRank(moved, anchor Status, before bool) (string, error) {
-	index, live := vocabulary.byStatus[anchor]
-	if !live {
-		return "", Errorf(CategoryValidation, "status %q is not defined by this project", anchor)
-	}
-	anchorRank, err := parseRank(vocabulary.definitions[index].Rank)
-	if err != nil {
-		return "", Wrap(CategoryCorruptData, "status rank is invalid", err)
-	}
-
-	var neighbor *big.Rat
-	var neighborStatus Status
-	for _, definition := range vocabulary.definitions {
-		if definition.Status == moved || definition.Status == anchor {
-			continue
-		}
-		rank, err := parseRank(definition.Rank)
-		if err != nil {
-			return "", Wrap(CategoryCorruptData, "status rank is invalid", err)
-		}
-		anchorComparison := rank.Cmp(anchorRank)
-		if anchorComparison == 0 {
-			anchorComparison = strings.Compare(string(definition.Status), string(anchor))
-		}
-		neighborComparison := 0
-		if neighbor != nil {
-			neighborComparison = rank.Cmp(neighbor)
-			if neighborComparison == 0 {
-				neighborComparison = strings.Compare(string(definition.Status), string(neighborStatus))
-			}
-		}
-		if before {
-			if anchorComparison < 0 && (neighbor == nil || neighborComparison > 0) {
-				neighbor, neighborStatus = rank, definition.Status
-			}
-			continue
-		}
-		if anchorComparison > 0 && (neighbor == nil || neighborComparison < 0) {
-			neighbor, neighborStatus = rank, definition.Status
-		}
-	}
-
-	if neighbor == nil {
-		if before {
-			return formatRank(new(big.Rat).Quo(anchorRank, big.NewRat(2, 1))), nil
-		}
-		next := new(big.Int).Quo(anchorRank.Num(), anchorRank.Denom())
-		next.Add(next, big.NewInt(1))
-		return formatRank(new(big.Rat).SetInt(next)), nil
-	}
-	if neighbor.Cmp(anchorRank) == 0 {
-		representable := strings.Compare(string(neighborStatus), string(moved)) < 0 &&
-			strings.Compare(string(moved), string(anchor)) < 0
-		if !before {
-			representable = strings.Compare(string(anchor), string(moved)) < 0 &&
-				strings.Compare(string(moved), string(neighborStatus)) < 0
-		}
-		if !representable {
-			return "", Errorf(
-				CategoryValidation,
-				"statuses %q and %q share a rank, so %q cannot be placed between them; move one of them first",
-				neighborStatus, anchor, moved,
-			)
-		}
-		return formatRank(anchorRank), nil
-	}
-	return formatRank(new(big.Rat).Quo(new(big.Rat).Add(anchorRank, neighbor), big.NewRat(2, 1))), nil
+	return insertRank(rankedStatuses(vocabulary.definitions), moved, anchor, before, "status", "statuses")
 }
+
+// rankedStatuses adapts a vocabulary's definitions to the shared ranked[T]
+// interface, which is how AppendRank and InsertRank reach the rank arithmetic
+// a second vocabulary will share without either depending on the other's
+// item type.
+func rankedStatuses(definitions []StatusDefinition) []ranked[Status] {
+	items := make([]ranked[Status], 0, len(definitions))
+	for _, definition := range definitions {
+		items = append(items, definition)
+	}
+	return items
+}
+
+func (definition StatusDefinition) key() Status  { return definition.Status }
+func (definition StatusDefinition) rank() string { return definition.Rank }
 
 // Resolve follows a stored status through the rename and retirement chains to
 // the live status it now means, reporting whether the walk terminated at one.
@@ -426,26 +366,7 @@ func (vocabulary Vocabulary) InsertRank(moved, anchor Status, before bool) (stri
 // entry resolves to itself with ok false, which is the ordinary state of a
 // status written by a newer build.
 func (vocabulary Vocabulary) Resolve(status Status) (Status, bool) {
-	if vocabulary.Has(status) {
-		return status, true
-	}
-	seen := make(map[Status]struct{}, len(vocabulary.forward))
-	current := status
-	for range len(vocabulary.forward) + 1 {
-		next, forwarded := vocabulary.forward[current]
-		if !forwarded {
-			return status, false
-		}
-		if _, repeated := seen[next]; repeated {
-			return status, false
-		}
-		seen[next] = struct{}{}
-		if vocabulary.Has(next) {
-			return next, true
-		}
-		current = next
-	}
-	return status, false
+	return resolveForward(vocabulary.forward, vocabulary.Has, status)
 }
 
 // Validate reports the arity violations that make a vocabulary unusable.
@@ -532,25 +453,39 @@ func validateVocabularyGrowth(before, after VocabularyDocument) error {
 			len(after.Statuses), MaxStatusCount,
 		)
 	}
-	if len(after.Aliases) > MaxStatusAliasCount && len(after.Aliases) > len(before.Aliases) {
-		return Errorf(
-			CategoryValidation,
-			"the project has recorded %d status renames and must not exceed %d; "+
-				"nothing can drop a rename yet, because a clone that has not fetched it "+
-				"still needs it to read tasks stored under the old name",
-			len(after.Aliases), MaxStatusAliasCount,
-		)
+	if err := forwardingsGrew(
+		statusAliasForwardings(before.Aliases), statusAliasForwardings(after.Aliases),
+		MaxStatusAliasCount, "status", "rename", "old",
+	); err != nil {
+		return err
 	}
-	if len(after.Retired) > MaxStatusRetiredCount && len(after.Retired) > len(before.Retired) {
-		return Errorf(
-			CategoryValidation,
-			"the project has recorded %d status removals and must not exceed %d; "+
-				"nothing can drop a removal yet, because a clone that has not fetched it "+
-				"still needs it to read tasks stored under the removed name",
-			len(after.Retired), MaxStatusRetiredCount,
-		)
+	if err := forwardingsGrew(
+		retiredStatusForwardings(before.Retired), retiredStatusForwardings(after.Retired),
+		MaxStatusRetiredCount, "status", "removal", "removed",
+	); err != nil {
+		return err
 	}
 	return nil
+}
+
+// statusAliasForwardings and retiredStatusForwardings convert a document's
+// own field names to forwarding[Status] at the boundary into the shared
+// growth rule, the same conversion normalizeStatusAliases and
+// normalizeRetiredStatuses do on the way into normalizeForwardings.
+func statusAliasForwardings(aliases []StatusAlias) []forwarding[Status] {
+	pairs := make([]forwarding[Status], len(aliases))
+	for index, alias := range aliases {
+		pairs[index] = forwarding[Status]{From: alias.From, To: alias.To}
+	}
+	return pairs
+}
+
+func retiredStatusForwardings(retired []RetiredStatus) []forwarding[Status] {
+	pairs := make([]forwarding[Status], len(retired))
+	for index, entry := range retired {
+		pairs[index] = forwarding[Status]{From: entry.Status, To: entry.Destination}
+	}
+	return pairs
 }
 
 // StatusBlocked is the status the built-in vocabulary carried until task
@@ -730,33 +665,12 @@ func normalizeVocabularyDocument(document VocabularyDocument) (VocabularyDocumen
 				source,
 			)
 		}
-		if err := forwardTerminates(forward, source); err != nil {
+		if err := forwardTerminates(forward, source, "status"); err != nil {
 			return VocabularyDocument{}, err
 		}
 	}
 
 	return VocabularyDocument{Statuses: statuses, Aliases: aliases, Retired: retired}, nil
-}
-
-// forwardTerminates rejects a forwarding cycle. ApplyConfig cannot build one —
-// every chain it extends ends at a live status, and a live status forwards
-// nowhere — so reaching this is a hand-edited or corrupted checkpoint, which is
-// exactly what a decoder is for.
-func forwardTerminates(forward map[Status]Status, source Status) error {
-	seen := map[Status]struct{}{source: {}}
-	current := source
-	for range len(forward) + 1 {
-		next, forwarded := forward[current]
-		if !forwarded {
-			return nil
-		}
-		if _, repeated := seen[next]; repeated {
-			return Errorf(CategoryValidation, "status %q forwards to itself through a cycle", source)
-		}
-		seen[next] = struct{}{}
-		current = next
-	}
-	return Errorf(CategoryValidation, "status %q forwards to itself through a cycle", source)
 }
 
 func normalizeStatusTags(tags []StatusTag) ([]StatusTag, error) {
@@ -780,43 +694,36 @@ func normalizeStatusTags(tags []StatusTag) ([]StatusTag, error) {
 // normalizeVocabularyDocument records: a count enforced inside the fold can
 // make a legitimate concurrent pair unfoldable forever. It is an authoring
 // ceiling, in validateVocabularyGrowth.
+//
+// Token validation is passed to normalizeForwardings as validate rather than
+// living here as its own loop: ValidateStatusToken's charset and length are
+// a status rule, not a forwarding-chain rule, so a later priority vocabulary
+// hands normalizeForwardings its own validator without either function
+// knowing about the other. Passing it in, instead of running it in a
+// separate pass before normalizeForwardings is even called, is what keeps
+// token validation interleaved with the self-forward check in the original
+// per-entry order.
 func normalizeStatusAliases(aliases []StatusAlias) ([]StatusAlias, error) {
-	normalized := make([]StatusAlias, 0, len(aliases))
-	for _, alias := range aliases {
-		if err := ValidateStatusToken(alias.From); err != nil {
-			return nil, err
-		}
-		if err := ValidateStatusToken(alias.To); err != nil {
-			return nil, err
-		}
-		if alias.From == alias.To {
-			return nil, Errorf(CategoryValidation, "status %q cannot alias itself", alias.From)
-		}
-		normalized = append(normalized, alias)
+	normalized, err := normalizeForwardings(statusAliasForwardings(aliases), ValidateStatusToken, "status", "alias")
+	if err != nil {
+		return nil, err
 	}
-	sort.SliceStable(normalized, func(left, right int) bool {
-		return normalized[left].From < normalized[right].From
-	})
-	return normalized, nil
+	result := make([]StatusAlias, len(normalized))
+	for index, pair := range normalized {
+		result[index] = StatusAlias{From: pair.From, To: pair.To}
+	}
+	return result, nil
 }
 
 // MaxStatusRetiredCount is not checked here either; see normalizeStatusAliases.
 func normalizeRetiredStatuses(retired []RetiredStatus) ([]RetiredStatus, error) {
-	normalized := make([]RetiredStatus, 0, len(retired))
-	for _, entry := range retired {
-		if err := ValidateStatusToken(entry.Status); err != nil {
-			return nil, err
-		}
-		if err := ValidateStatusToken(entry.Destination); err != nil {
-			return nil, err
-		}
-		if entry.Status == entry.Destination {
-			return nil, Errorf(CategoryValidation, "status %q cannot retire into itself", entry.Status)
-		}
-		normalized = append(normalized, entry)
+	normalized, err := normalizeForwardings(retiredStatusForwardings(retired), ValidateStatusToken, "status", "retire into")
+	if err != nil {
+		return nil, err
 	}
-	sort.SliceStable(normalized, func(left, right int) bool {
-		return normalized[left].Status < normalized[right].Status
-	})
-	return normalized, nil
+	result := make([]RetiredStatus, len(normalized))
+	for index, pair := range normalized {
+		result[index] = RetiredStatus{Status: pair.From, Destination: pair.To}
+	}
+	return result, nil
 }

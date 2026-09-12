@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
 )
 
@@ -132,6 +133,64 @@ func TestWriteSyncReportStaysOneLineWithoutIgnoredRefs(t *testing.T) {
 
 	if want := "Sync:\t" + syncStatusCompleted + "\n"; output.String() != want {
 		t.Fatalf("output = %q, want exactly %q", output.String(), want)
+	}
+}
+
+// A config conflict must say what it is about: a status-set member names its
+// status, a priority-set member names its priority — Status and Priority are
+// distinct types, so a conflict carries at most one of them, the same
+// distinction ConfigConflictError's own "status %s: " / "priority %s: " split
+// rests on — and only the root-vocabulary conflict names neither, because it
+// is a disagreement about where the whole ledger started rather than about
+// one column.
+func TestWriteConfigConflictsNamesTheSubjectItIsAbout(t *testing.T) {
+	statusConflict := core.ConfigConflict{
+		Type:   core.ConfigConflictStatusRename,
+		Status: core.Status("blocked"),
+		Ours:   "todo",
+		Theirs: "doing",
+	}
+	priorityConflict := core.ConfigConflict{
+		Type:     core.ConfigConflictPriorityRename,
+		Priority: core.PriorityHigh,
+		Ours:     "critical",
+		Theirs:   "urgent",
+	}
+	rootConflict := core.ConfigConflict{
+		Type:   core.ConfigConflictRootVocabulary,
+		Ours:   "one vocabulary",
+		Theirs: "another vocabulary",
+	}
+
+	for _, test := range []struct {
+		name     string
+		conflict core.ConfigConflict
+		wantLine string
+	}{
+		{
+			name:     "status subject",
+			conflict: statusConflict,
+			wantLine: "Config conflict:\tblocked\tstatus-rename\t" + core.ConfigConflictDetail(statusConflict) + "\n",
+		},
+		{
+			name:     "priority subject",
+			conflict: priorityConflict,
+			wantLine: "Config conflict:\thigh\tpriority-rename\t" + core.ConfigConflictDetail(priorityConflict) + "\n",
+		},
+		{
+			name:     "genuinely subjectless",
+			conflict: rootConflict,
+			wantLine: "Config conflict:\troot-vocabulary\t" + core.ConfigConflictDetail(rootConflict) + "\n",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			writeConfigConflicts(&output, []core.ConfigConflict{test.conflict})
+			got := output.String()
+			if !strings.HasPrefix(got, test.wantLine) {
+				t.Fatalf("output = %q, want it to start with %q", got, test.wantLine)
+			}
+		})
 	}
 }
 

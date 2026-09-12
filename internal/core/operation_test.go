@@ -351,7 +351,11 @@ func TestApplyValidatesOperationFieldsAndValues(t *testing.T) {
 		// by a clone whose configuration this one may not have fetched. A value
 		// that is not a status token at all is still corrupt data.
 		{"field set malformed status", Operation{ID: operationID2, Type: OperationFieldSet, Field: "status", Value: "Later Maybe"}},
-		{"field set invalid priority", Operation{ID: operationID2, Type: OperationFieldSet, Field: "priority", Value: "urgent"}},
+		// "urgent" would now be accepted too, for the same reason as "later"
+		// above: the replay gate checks a priority's shape, not this build's
+		// vocabulary, mirroring the status case. A value that is not a
+		// priority token at all is still corrupt data.
+		{"field set malformed priority", Operation{ID: operationID2, Type: OperationFieldSet, Field: "priority", Value: "Really Urgent"}},
 		{"field set blank title", Operation{ID: operationID2, Type: OperationFieldSet, Field: "title", Value: "  "}},
 		{"field set malformed rank", Operation{ID: operationID2, Type: OperationFieldSet, Field: "rank", Value: "2/2"}},
 		{"set add unknown field", Operation{ID: operationID2, Type: OperationSetAdd, Field: "title", Value: "x"}},

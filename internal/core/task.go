@@ -146,19 +146,33 @@ const (
 	PriorityHigh   Priority = "high"
 )
 
-type PriorityDefinition struct {
-	Priority Priority
-	Label    string
-}
-
-var priorities = [...]PriorityDefinition{
-	{Priority: PriorityLow, Label: "Low"},
-	{Priority: PriorityMedium, Label: "Medium"},
-	{Priority: PriorityHigh, Label: "High"},
-}
-
+// Priorities returns the three built-in priorities in the order and shape
+// this function has reported since before ranks existed: ascending urgency
+// (Low, Medium, High), with only Priority and Label set.
+//
+// builtInPriorityDefinitions orders most urgent first because that is what
+// the vocabulary sorts by — rank order means urgency. Priorities does not
+// follow it there: its one caller, agentdocs/render.go, renders exactly this
+// order into the "Canonical priorities" table in .workbook/guidelines.md, a
+// file people read, so changing the order — or handing back the ranks and
+// tags builtInPriorityDefinitions now carries — would rewrite that file for
+// every project that has never touched its priority vocabulary. It still
+// derives its names and labels from builtInPriorityDefinitions rather than
+// restating them, so there is one source of truth for what the three
+// built-in priorities are called; only the order and the shape exposed here
+// differ, deliberately, until the stage that teaches guidelines.md to read a
+// project's configured priorities converges the two.
 func Priorities() []PriorityDefinition {
-	return append([]PriorityDefinition(nil), priorities[:]...)
+	order := [...]Priority{PriorityLow, PriorityMedium, PriorityHigh}
+	labels := make(map[Priority]string, len(order))
+	for _, definition := range builtInPriorityDefinitions() {
+		labels[definition.Priority] = definition.Label
+	}
+	result := make([]PriorityDefinition, len(order))
+	for index, priority := range order {
+		result[index] = PriorityDefinition{Priority: priority, Label: labels[priority]}
+	}
+	return result
 }
 
 type TaskData struct {
@@ -199,8 +213,9 @@ type TaskData struct {
 //
 // Status is the resolved status — the live status the stored value means under
 // the project's vocabulary today, not necessarily the token stored in the ref.
-// Resolution happens once, in Project, so that no consumer has to remember to
-// do it and none of them can disagree about the answer.
+// Priority is resolved the same way, against the project's priority
+// vocabulary. Both resolutions happen once, in Project, so that no consumer
+// has to remember to do it and none of them can disagree about the answer.
 type Task struct {
 	ID        string `json:"id"`
 	ProjectID string `json:"projectId"`
@@ -214,9 +229,16 @@ type Task struct {
 	// something writes to it. Reporting both values is what keeps that honest:
 	// the board shows the column the task belongs in, and a caller that needs
 	// to explain why can say what is actually on disk.
-	StoredStatus      Status `json:"storedStatus,omitempty"`
-	HistoryGeneration string `json:"historyGeneration"`
-	Head              string `json:"head"`
+	StoredStatus Status `json:"storedStatus,omitempty"`
+	// StoredPriority is the priority the task's ref actually holds, populated
+	// only when it differs from the resolved Priority. It mirrors StoredStatus
+	// for the same reason: a priority rename cannot rewrite another clone's
+	// task ref either, so a task keeps its old token until something writes to
+	// it, and reporting both values lets a caller explain why an urgent-looking
+	// task is stored under a name the project no longer defines.
+	StoredPriority    Priority `json:"storedPriority,omitempty"`
+	HistoryGeneration string   `json:"historyGeneration"`
+	Head              string   `json:"head"`
 	// NewerWriter reports a task whose history carries a writer-format
 	// generation this build cannot fold. Everything shown about such a task
 	// comes from its stored checkpoint, which is exactly where every read gets
@@ -248,8 +270,14 @@ func NormalizeTask(projectKey string, task TaskData) (TaskData, error) {
 	if err := ValidateStatusToken(task.Status); err != nil {
 		return TaskData{}, err
 	}
-	if !isValidPriority(task.Priority) {
-		return TaskData{}, Errorf(CategoryValidation, "invalid task priority %q", task.Priority)
+	// A stored priority is checked the same way, for the same reason: the
+	// vocabulary that minted it may be one this build has not fetched, and
+	// while priorities were a fixed three membership and shape happened to be
+	// the same question. They no longer are, so asking membership here would
+	// make a teammate's task unreadable rather than merely unfamiliar the
+	// moment a project configures anything beyond the built-in set.
+	if err := ValidatePriorityToken(task.Priority); err != nil {
+		return TaskData{}, err
 	}
 	if _, err := parseRank(task.Rank); err != nil {
 		return TaskData{}, err
@@ -311,15 +339,6 @@ func parseRank(rank string) (*big.Rat, error) {
 
 func formatRank(rank *big.Rat) string {
 	return rank.Num().String() + "/" + rank.Denom().String()
-}
-
-func isValidPriority(priority Priority) bool {
-	for _, definition := range priorities {
-		if priority == definition.Priority {
-			return true
-		}
-	}
-	return false
 }
 
 func normalizeLabels(labels []string) ([]string, error) {
