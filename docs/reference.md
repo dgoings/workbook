@@ -509,10 +509,12 @@ stored status, and it happens on any write to the task — a title edit, a move,
 dependency change — not only on a status change.
 
 Reading and writing treat a stale value differently, and deliberately.
-Everything that reads a *stored* status resolves it. Everything that takes a
-status a caller *supplies* requires a live member: `workbook update <id>
---status ready` is refused with `validation` (exit `5`) once `ready` is no
-longer a status this project defines. The `workbook status` verbs answer the
+Everything that reads a *stored* status resolves it. Everything that *writes* a
+status a caller supplies requires a live member, without forwarding: `workbook
+update <id> --status ready` is refused with `validation` (exit `5`) once `ready`
+is no longer a status this project defines. A status a caller supplies to
+*filter* by is resolved first and refused only if it resolves to nothing, so
+`workbook list --status ready` still lists the renamed column's tasks. The `workbook status` verbs answer the
 same value with what became of it — which rename or removal retired it, on what
 date, and which live status it resolves to now — rather than with a bare "not
 found". A task holding a status no chain leads out of is still fully editable;
@@ -542,10 +544,16 @@ seeded the first time anybody changes a status and published wherever a task is
 published. A project that has never changed a status has no ledger at all, which
 `workbook status list --json` reports as `"seeded": false`.
 
-Reading with a status this project does not have is not an error: `workbook list
---status <value>` returns what it selects and warns that the value names no
-status here, because a clone that has not fetched a teammate's rename is behind
-rather than broken.
+Reading with a status this project does not have is refused the same way
+supplying one is: `workbook list --status <value>` exits `5` and names the
+value. An empty table cannot be told apart from an empty column, so answering
+with one would throw away the only interesting fact there was — that this
+checkout has never heard of that name. If you expected the status because a
+teammate mentioned it, you are out of sync rather than looking at an empty
+column, and the error points at the fix, which is to fetch. A value a rename or
+a removal still forwards is not this case: it resolves, the tasks come back, and
+a warning says what the name now means. `--priority` answers an unknown priority
+the same way.
 
 `.workbook/guidelines.md` is a generated rendering of this configuration, not a
 document to maintain. Its status table lists each status's position, machine
@@ -1064,14 +1072,14 @@ of failure:
 
 | Question | Where it is asked | Failure |
 | --- | --- | --- |
-| Is this status one the project defines? | The mutation boundary, over a value a caller supplied | `validation`, exit `5` |
+| Is this status one the project defines? | Wherever a caller supplies one, to write or to filter by | `validation`, exit `5` |
 | Is this string a status token at all? | Every read, over a value already stored | `corrupt-data`, exit `7` |
 
 Membership is a decision, so it is asked only where somebody is still making
-one: `create`, `update`, `place` and the board's saves. It is deliberately not
-asked on the way in from a ref, because a status this clone has not heard of is
-an ordinary thing for a teammate to have written, and refusing to read their
-task would report a broken repository over a stale configuration.
+one: `create`, `update`, `place`, the board's saves, and `list --status`. It is
+deliberately not asked on the way in from a ref, because a status this clone has
+not heard of is an ordinary thing for a teammate to have written, and refusing
+to read their task would report a broken repository over a stale configuration.
 
 Shape is not a decision. A status is lowercase letters and digits separated by
 single hyphens (`core.ValidateStatusToken`), and every build that has ever

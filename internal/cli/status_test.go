@@ -2103,11 +2103,12 @@ func TestStatusListReportsTheOverCeilingAdvisory(t *testing.T) {
 			core.MaxStatusCount+2, core.MaxStatusCount))
 }
 
-// The list filter accepts a value this project does not have, answers with the
-// tasks it selects, and says what it did — on both surfaces. Refusing it would
-// fail a caller whose clone is merely behind; saying nothing would leave an
-// empty table indistinguishable from an empty column.
-func TestListStatusFilterWarnsWithoutFailing(t *testing.T) {
+// The list filter refuses a value this project does not have — on both
+// surfaces — and follows one it can still resolve, saying what it did. An empty
+// table is indistinguishable from an empty column, so the refusal is what
+// reports the one fact worth reporting: this checkout has never heard of that
+// name, which means it is out of sync rather than looking at an empty column.
+func TestListStatusFilterRefusesAnUnknownStatusAndFollowsAResolvableOne(t *testing.T) {
 	repository := initializedRepository(t)
 	task := cliCreateTask(t, repository, "Alpha")
 	mustRunStatus(t, repository, "update", task.ID, "--status", "ready", "--no-sync")
@@ -2115,33 +2116,25 @@ func TestListStatusFilterWarnsWithoutFailing(t *testing.T) {
 
 	t.Run("unknown status in JSON", func(t *testing.T) {
 		code, stdout, stderr := run(t, repository, "list", "--status", "typoo", "--json")
-		if code != 0 || stderr != "" {
-			t.Fatalf("list --status typoo = code %d, stderr %q", code, stderr)
+		if code != 5 {
+			t.Fatalf("list --status typoo = code %d, want 5; stderr = %q", code, stderr)
 		}
-		result := assertJSONResult(t, stdout, "list")
-		var tasks []core.Task
-		if err := json.Unmarshal(result.Data, &tasks); err != nil {
-			t.Fatal(err)
+		if stdout != "" {
+			t.Fatalf("list --status typoo stdout = %q, want nothing listed", stdout)
 		}
-		if len(tasks) != 0 {
-			t.Fatalf("list --status typoo returned %d tasks, want none", len(tasks))
-		}
-		if len(result.Warnings) != 1 || result.Warnings[0].Code != core.WarningStatusFilter ||
-			result.Warnings[0].Message != `no status "typoo" in this project's vocabulary` {
-			t.Fatalf("warnings = %#v, want the missing status named", result.Warnings)
-		}
+		assertJSONError(t, stderr, core.CategoryValidation, `invalid task status "typoo"`)
 	})
 
 	t.Run("unknown status in text", func(t *testing.T) {
 		code, stdout, stderr := run(t, repository, "list", "--status", "typoo")
-		if code != 0 {
-			t.Fatalf("list --status typoo = code %d; stderr = %q", code, stderr)
+		if code != 5 {
+			t.Fatalf("list --status typoo = code %d, want 5; stderr = %q", code, stderr)
 		}
 		if strings.Contains(stdout, task.ID) {
 			t.Fatalf("list --status typoo listed %q", stdout)
 		}
-		if stderr != "workbook: warning: no status \"typoo\" in this project's vocabulary\n" {
-			t.Fatalf("stderr = %q, want one warning line", stderr)
+		if stderr != "workbook: invalid task status \"typoo\"\n" {
+			t.Fatalf("stderr = %q, want one refusal line naming the status", stderr)
 		}
 	})
 

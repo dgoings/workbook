@@ -71,8 +71,9 @@ func TestCommandsReadTheProjectsOwnVocabulary(t *testing.T) {
 	if code != 0 || stderr != "" {
 		t.Fatalf("list --status todo = code %d, stderr %q", code, stderr)
 	}
-	// The retired token is followed rather than refused, and the warning says
-	// so; see the List relaxation this PR completes.
+	// The retired token still resolves, so it is followed rather than refused,
+	// and the warning says what it now means. Only a token that resolves to
+	// nothing is refused; see List's own comment.
 	code, stdout, stderr = run(t, repository, "list", "--status", "ready", "--json")
 	if code != 0 || stderr != "" {
 		t.Fatalf("list --status ready = code %d, stderr %q", code, stderr)

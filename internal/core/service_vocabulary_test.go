@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"testing"
 )
@@ -118,11 +119,12 @@ func TestServiceMutationsRejectAStatusTheProjectDoesNotDefine(t *testing.T) {
 	}
 }
 
-// The filter accepts a status the project does not define and reports what it
-// did with it. This is the relaxation PR-B deferred: a filter authors nothing,
-// so refusing one buys nothing, and the empty result it produces is only honest
-// because ResolveStatusFilter lets the caller say why it is empty.
-func TestServiceListAcceptsAStatusOutsideTheVocabularyAndReportsIt(t *testing.T) {
+// The filter refuses a status that resolves to nothing, the same refusal a
+// mutation gives for the identical status and the same one the priority filter
+// beside it gives. An empty list would be indistinguishable from an empty
+// column, so it would lose the one fact worth reporting: this clone has never
+// heard of the name that was typed.
+func TestServiceListRefusesAStatusOutsideTheVocabulary(t *testing.T) {
 	store := newMemoryTaskStore(serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F1", TaskData{
 		Title: "Task", Status: "triage", Priority: PriorityMedium, Rank: "1/1",
 	}))
@@ -131,11 +133,17 @@ func TestServiceListAcceptsAStatusOutsideTheVocabularyAndReportsIt(t *testing.T)
 	for _, filtered := range []Status{"awaiting-review", "backlog", "Awaiting Review"} {
 		status := filtered
 		tasks, err := service.List(context.Background(), ListFilter{Status: &status})
-		if err != nil {
-			t.Fatalf("List(%q) error = %v, want the filter accepted", status, err)
+		if err == nil {
+			t.Fatalf("List(%q) error = nil, tasks = %#v, want a rejection", status, tasks)
 		}
-		if len(tasks) != 0 {
-			t.Fatalf("List(%q) returned %d tasks, want none", status, len(tasks))
+		if got := CategoryOf(err); got != CategoryValidation {
+			t.Fatalf("List(%q) category = %q, want %q", status, got, CategoryValidation)
+		}
+		if got, want := err.Error(), fmt.Sprintf("invalid task status %q", status); got != want {
+			t.Fatalf("List(%q) error = %q, want %q", status, got, want)
+		}
+		if tasks != nil {
+			t.Fatalf("List(%q) tasks = %#v, want nil", status, tasks)
 		}
 		resolution := service.ResolveStatusFilter(status)
 		if resolution.Known {

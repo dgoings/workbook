@@ -580,36 +580,28 @@ func runList(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 // statusFilterWarnings says what a status filter turned out to select, when
 // that is not what the caller typed.
 //
-// A filter outside the vocabulary succeeds and returns an empty list, which is
-// the honest answer to "which tasks are in a status this project does not
-// have". It is also indistinguishable from an empty column, so the miss is
-// named here; a filter that had to be forwarded says so too, because the tasks
-// that came back are not stored under the value that was asked for.
+// A filter that resolves to nothing never reaches here: List refuses it, so
+// that caller is told by an error naming the value rather than by a warning
+// over an empty table nobody could tell from an empty column. What is left is
+// the forwarded case, where tasks did come back but are not stored under the
+// value that was asked for, and only a warning can say so.
 func statusFilterWarnings(service core.Service, filter core.ListFilter) []core.Warning {
 	if filter.Status == nil {
 		return nil
 	}
 	resolution := service.ResolveStatusFilter(*filter.Status)
-	switch {
-	case !resolution.Known:
-		return []core.Warning{{
-			Code:    core.WarningStatusFilter,
-			Message: fmt.Sprintf("no status %q in this project's vocabulary", resolution.Requested),
-		}}
-	case resolution.Forwarded:
-		// The verb belongs to the one hop it describes, and the end of the
-		// chain gets its own clause; see statusChainClause. Pairing the first
-		// hop's verb with the last hop's destination reported a rename that
-		// never happened.
-		return []core.Warning{{
-			Code: core.WarningStatusFilter,
-			Message: fmt.Sprintf("no status %q in this project's vocabulary; it was %s %q%s, and %q is what was listed",
-				resolution.Requested, forwardingVerb(resolution.Operation), resolution.Via,
-				statusChainClause(resolution.Via, resolution.Resolved), resolution.Resolved),
-		}}
-	default:
+	if !resolution.Forwarded {
 		return nil
 	}
+	// The verb belongs to the one hop it describes, and the end of the chain
+	// gets its own clause; see statusChainClause. Pairing the first hop's verb
+	// with the last hop's destination reported a rename that never happened.
+	return []core.Warning{{
+		Code: core.WarningStatusFilter,
+		Message: fmt.Sprintf("no status %q in this project's vocabulary; it was %s %q%s, and %q is what was listed",
+			resolution.Requested, forwardingVerb(resolution.Operation), resolution.Via,
+			statusChainClause(resolution.Via, resolution.Resolved), resolution.Resolved),
+	}}
 }
 
 // forwardingVerb names how a status or priority stopped being live, in the
@@ -622,13 +614,11 @@ func forwardingVerb(operation core.ConfigOperationType) string {
 }
 
 // priorityFilterWarnings says what a priority filter turned out to select,
-// when that is not what the caller typed. Unlike statusFilterWarnings, a
-// priority filter that resolves to nothing never reaches here: List refuses
-// that case before runList gets to warnings, and that refusal's exit code is
-// deliberately unchanged — see List's own comment for why. So this only ever
-// reports the forwarded case, a filter that had to be resolved through a
-// rename or a removal, the same way statusFilterWarnings reports it for
-// statuses.
+// when that is not what the caller typed. It reads exactly like
+// statusFilterWarnings: a filter that resolves to nothing never reaches here,
+// because List refuses it before runList gets to warnings, so this only ever
+// reports the forwarded case — a filter that had to be resolved through a
+// rename or a removal.
 func priorityFilterWarnings(service core.Service, filter core.ListFilter) []core.Warning {
 	if filter.Priority == nil {
 		return nil

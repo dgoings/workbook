@@ -681,19 +681,15 @@ func TestServiceListFilterAcceptsAProjectDefinedPriority(t *testing.T) {
 
 // A filter naming a priority nothing carries — not live, and not reached by
 // any forwarding chain — is refused, the same refusal requirePriorityMember
-// gives a mutation for the identical priority. This is the one place List's
-// permissiveness does NOT mirror the status filter beside it: a status filter
-// outside the vocabulary is accepted because the result envelope now carries
-// the miss (see List's own doc comment, ResolveStatusFilter, and the CLI's
-// warning path); priority has no equivalent resolution report, so relaxing
-// this filter the way the status one was relaxed would silently swap a
+// gives a mutation for the identical priority, and the same refusal the status
+// filter beside it now gives (see List's own doc comment and
+// TestServiceListRefusesAStatusOutsideTheVocabulary). Accepting it would swap a
 // refusal for an empty result nobody could tell apart from "no tasks in this
 // priority" — which is exactly the regression a whole-branch review caught:
-// `workbook list --priority urgent` used to refuse and, for one commit on
-// this branch, silently returned zero tasks instead. This test pins the
-// refusal back for an unconfigured project, matching pre-branch behavior
-// exactly; TestServiceListFilterAcceptsAProjectDefinedPriority pins the
-// companion behavior for a project that configured the priority named.
+// `workbook list --priority urgent` used to refuse and, for one commit on this
+// branch, silently returned zero tasks instead. This test pins the refusal for
+// an unconfigured project; TestServiceListFilterAcceptsAProjectDefinedPriority
+// pins the companion behavior for a project that configured the priority named.
 func TestServiceListFilterOnAnUnconfiguredProjectRefusesAnUndefinedPriority(t *testing.T) {
 	store := newMemoryTaskStore(
 		serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F1", TaskData{

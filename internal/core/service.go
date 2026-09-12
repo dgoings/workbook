@@ -233,12 +233,12 @@ func (s Service) CreateMutation(ctx context.Context, input CreateInput) (Mutatio
 
 // StatusFilterResolution reports what a status filter turned out to mean.
 //
-// A filter is not a mutation: it never authors anything, so refusing an
-// unrecognized one buys nothing and costs the ordinary case of naming a status
-// this clone has not fetched yet. But an empty table and a zero exit status is
-// a worse answer than a clear refusal if nothing says why, so List reports what
-// it did with the value and the CLI turns that into a warning beside the empty
-// result. Nothing here decides how loudly to say it; that is the caller's.
+// A value that resolves to nothing is refused by List, so what this reports is
+// how a value that does resolve got there: as itself, or through a rename or a
+// removal. The CLI turns the forwarded case into a warning beside the tasks
+// that came back, because those tasks are not stored under the value that was
+// asked for and nothing else in the answer says so. Nothing here decides how
+// loudly to say it; that is the caller's.
 type StatusFilterResolution struct {
 	// Requested is the value the caller typed.
 	Requested Status
@@ -287,11 +287,10 @@ func (s Service) ResolveStatusFilter(status Status) StatusFilterResolution {
 }
 
 // PriorityFilterResolution reports what a priority filter turned out to mean,
-// mirroring StatusFilterResolution's members. Unlike the status filter, a
-// priority filter that resolves to nothing (Known false) is still refused by
-// List rather than accepted as an empty result — see List's own comment for
-// why — so this exists only to let the refusal and a forwarded-name report
-// agree by construction, not to relax anything.
+// mirroring StatusFilterResolution's members and read the same way: a value
+// that resolves to nothing (Known false) is refused by List — see List's own
+// comment for why — so this exists to let that refusal and a forwarded-name
+// report agree by construction about what the filter selected.
 type PriorityFilterResolution struct {
 	// Requested is the value the caller typed.
 	Requested Priority
@@ -342,33 +341,26 @@ func (s Service) ResolvePriorityFilter(priority Priority) PriorityFilterResoluti
 
 // List returns the project's tasks, filtered and ordered.
 //
-// A status filter outside its vocabulary is accepted and returns the tasks it
-// selects, which is usually none. That relaxation is PR-C's half of a
-// decision PR-B deferred: under a distributed vocabulary, naming a status
-// this clone has not fetched yet is an ordinary thing to type, and failing
-// tells the caller their repository is broken when it is merely behind. It is
-// only honest because the result envelope now carries the miss — see
-// ResolveStatusFilter and the CLI's warning path — so a script that greps the
-// output is told why it found nothing rather than left to infer it.
+// A status or a priority filter that resolves to nothing is refused with
+// CategoryValidation, and the two are refused by one rule rather than by two
+// that disagree. An empty list is indistinguishable from a genuinely empty
+// column, so answering with one throws away the only interesting fact there
+// was: this clone has never heard of the name that was typed. A checkout that
+// has not fetched a teammate's new status does not have that status, and
+// saying so names the value and points at the fix, which is to fetch; a
+// zero-task answer instead tells the caller their column is empty when what is
+// empty is their vocabulary.
 //
-// A priority filter outside its vocabulary is refused, the same as it always
-// has been. Priority has no equivalent resolution report to carry the miss —
-// PriorityVocabulary has no Forwarding() sibling for a caller to build one
-// from — so relaxing this filter the way the status one was relaxed would
-// replace a refusal with silence nobody could explain: a script would read
-// "no tasks" and have no way to tell an empty priority from a mistyped one.
-// This filter can be relaxed the same way once that reporting exists; until
-// then, refusing is the honest answer.
-//
-// A filter that names a retired status or priority is applied to the value it
-// now means rather than to nothing. A task's status and priority are resolved
-// before either is compared, so a filter argument has to be resolved too, or
-// the comparison would ask "is this task's live value equal to a token nobody
-// carries any more" — the same wrong answer resolving only one side would give
-// for "no tasks are in ready" about a project whose ready column was merely
-// renamed. A priority filter argument is resolved the same way, but only after
-// this refusal: a token that resolves to a live priority is never the one
-// being refused, since resolving it is exactly how it is found to be live.
+// A filter that names a retired status or priority is not that case. It is
+// applied to the value it now means rather than to nothing. A task's status and
+// priority are resolved before either is compared, so a filter argument has to
+// be resolved too, or the comparison would ask "is this task's live value equal
+// to a token nobody carries any more" — the same wrong answer resolving only
+// one side would give for "no tasks are in ready" about a project whose ready
+// column was merely renamed. Resolving is also what decides the refusal above
+// rather than something that happens after it: a token that resolves to a live
+// value is never one being refused, since resolving it is exactly how it is
+// found to be live.
 func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
 	snapshots, err := s.Reader.List(ctx, s.Config)
 	if err != nil {
@@ -378,9 +370,11 @@ func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
 	wanted := Status("")
 	if filter.Status != nil {
 		wanted = *filter.Status
-		if resolution := s.ResolveStatusFilter(wanted); resolution.Known {
-			wanted = resolution.Resolved
+		resolution := s.ResolveStatusFilter(wanted)
+		if !resolution.Known {
+			return nil, Errorf(CategoryValidation, "invalid task status %q", wanted)
 		}
+		wanted = resolution.Resolved
 	}
 	wantedPriority := Priority("")
 	if filter.Priority != nil {

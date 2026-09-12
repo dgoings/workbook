@@ -1201,9 +1201,9 @@ type configPriorityEntry struct {
 // folds against an empty configPriorities and produces a vocabulary of
 // exactly {critical}. Every task still stored as high, medium, or low is now
 // unresolvable: not live, not forwarded, sorted last by Order's stranded-token
-// fallback, and refused by name from any priority filter that names it (List's
-// priority filter has no relaxed reading for an unknown token the way the
-// status filter does; see its comment). The vocabulary was never wrong by the
+// fallback, and refused by name from any priority filter that names it (List
+// refuses a filter token that resolves to nothing, priority and status alike;
+// see its comment). The vocabulary was never wrong by the
 // fold's own rules — normalizeArity has nothing to repair, because a single
 // live default-tagged priority is a perfectly valid vocabulary — but it is
 // wrong for the project, because the fold was never told about the three

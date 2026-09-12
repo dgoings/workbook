@@ -70,23 +70,25 @@ const WarningProjectionUpdate = "projection-update-failed"
 // behind, such as a ref on origin it could not validate.
 const WarningAutoSync = "auto-sync-incomplete"
 
-// WarningStatusFilter reports that a status filter did not name a live status
-// of this project: either nothing at all, or a value that had to be forwarded
-// through a rename or a removal to select anything.
+// WarningStatusFilter reports that a status filter had to be forwarded through
+// a rename or a removal to select anything.
 //
-// It is a warning rather than a refusal because a filter authors nothing, and a
-// warning rather than silence because the result it accompanies is usually
-// empty, and an empty table with a zero exit status is exactly the answer a
-// script cannot tell from "there is genuinely nothing here".
+// It never accompanies an empty result from a status nothing resolves to: List
+// refuses that case outright, so a caller sees this warning only alongside
+// tasks that came back under a different name than the one it typed — which is
+// the part of the answer the answer itself does not show. The code says
+// "unresolved" because it was minted when this warning also carried that
+// refused case; it is part of the JSON envelope callers match on, so it keeps
+// the spelling it shipped with.
 const WarningStatusFilter = "status-filter-unresolved"
 
 // WarningPriorityFilter reports that a priority filter had to be forwarded
 // through a rename or a removal to select anything.
 //
-// Unlike WarningStatusFilter, it never accompanies an empty result from a
-// priority nothing resolves to: List still refuses that case outright, so a
-// caller sees this warning only alongside tasks that came back under a
-// different name than the one it typed.
+// It is WarningStatusFilter's mirror and carries the same rule: a priority
+// nothing resolves to is refused by List rather than warned about, so a caller
+// sees this warning only alongside tasks that came back under a different name
+// than the one it typed.
 const WarningPriorityFilter = "priority-filter-forwarded"
 
 // WarningDocsRefresh reports that generated documentation this change
