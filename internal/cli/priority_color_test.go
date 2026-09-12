@@ -2,8 +2,10 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dgoings/workbook/internal/core"
 )
@@ -146,5 +148,226 @@ func TestPriorityColorRefusesAMalformedValueInJSONMode(t *testing.T) {
 	after := cliPriorityList(t, repository)
 	if after.Head != before.Head {
 		t.Fatalf("ledger head moved from %q to %q on a refused color", before.Head, after.Head)
+	}
+}
+
+// A recolor that would record nothing is refused before anything is
+// authored, the same shape `priority label` uses for the label it already
+// has (internal/cli/priority_label.go's planPriorityRelabel). Setting the
+// color to the value already stored is one of the two directions that
+// counts as nothing to record; the case-only spelling is folded to the same
+// canonical value first (TestPriorityColorNormalizesAnUppercaseValue), so it
+// refuses too.
+func TestPriorityColorRefusesSettingTheColorItAlreadyHas(t *testing.T) {
+	repository := initializedRepository(t)
+	cliPriorityColorMutation(t, repository, "priority", "color", "high", "#0f62fe", "--json")
+
+	before := cliPriorityList(t, repository)
+	code, stdout, stderr := run(t, repository, "priority", "color", "high", "#0f62fe", "--json")
+	if code == 0 {
+		t.Fatalf("priority color with the color it already has = code 0, want a refusal")
+	}
+	assertJSONError(t, stderr, core.CategoryValidation, `priority "high" already has that color`)
+	if stdout != "" {
+		t.Fatalf("priority color already-has stdout = %q, want nothing written", stdout)
+	}
+	after := cliPriorityList(t, repository)
+	if after.Head != before.Head {
+		t.Fatalf("ledger head moved from %q to %q on a refused no-op color", before.Head, after.Head)
+	}
+	if got := priorityColorOf(t, repository, "high"); got != "#0f62fe" {
+		t.Fatalf("stored color after the refusal = %q, want the untouched #0f62fe", got)
+	}
+
+	// The same value spelled with a different case folds to the same
+	// canonical color, so it is refused for the identical reason.
+	code, stdout, stderr = run(t, repository, "priority", "color", "high", "#0F62FE", "--json")
+	if code == 0 {
+		t.Fatalf("priority color with the same color uppercased = code 0, want a refusal")
+	}
+	assertJSONError(t, stderr, core.CategoryValidation, `priority "high" already has that color`)
+	if stdout != "" {
+		t.Fatalf("priority color uppercase-already-has stdout = %q, want nothing written", stdout)
+	}
+}
+
+// The other direction that counts as nothing to record: clearing a priority
+// that has no color stored already.
+func TestPriorityColorRefusesClearingAPriorityWithNoColor(t *testing.T) {
+	repository := initializedRepository(t)
+	before := cliPriorityList(t, repository)
+
+	code, stdout, stderr := run(t, repository, "priority", "color", "medium", "--json")
+	if code == 0 {
+		t.Fatalf("priority color clear on an uncolored priority = code 0, want a refusal")
+	}
+	assertJSONError(t, stderr, core.CategoryValidation, `priority "medium" has no color to clear`)
+	if stdout != "" {
+		t.Fatalf("priority color clear-nothing stdout = %q, want nothing written", stdout)
+	}
+
+	after := cliPriorityList(t, repository)
+	if after.Head != before.Head {
+		t.Fatalf("ledger head moved from %q to %q on a refused clear", before.Head, after.Head)
+	}
+	if got := priorityColorOf(t, repository, "medium"); got != "" {
+		t.Fatalf("stored color after the refused clear = %q, want it to stay empty", got)
+	}
+}
+
+// legacyDisplayConfiguredRepository builds the real shape a v0.5 project
+// reaches when it recorded a display setting before this build's priority
+// work shipped: a configuration ledger whose immutable genesis carries no
+// priorities section at all, and whose only later commit is a display change
+// that already spent this project's one generation-two marker
+// (core.ConfigDisplaySet, per configOperationMinReader in
+// internal/core/configop.go).
+//
+// No path through this build's own write functions can reach that shape any
+// more: every genesis this build writes packs core.BuiltInPriorityVocabulary
+// in with it, deliberately (see writeConfigGenesis's comment in
+// internal/gitstore/configledger.go), so seeding a project the ordinary way
+// and then running `config set` always starts from minReader 3, not 2. The
+// only way to test the case that actually costs a real team something is to
+// forge the ledger a pre-priorities build would have left, the same way
+// internal/cli/newerwriter_test.go forges a project ahead of this build (its
+// writeFutureConfigCommit) — real git objects, built from the same core
+// encoding functions gitstore itself calls, pointed at a project behind this
+// build instead of ahead of it.
+func legacyDisplayConfiguredRepository(t *testing.T) string {
+	t.Helper()
+	repository := preLedgerRepository(t)
+
+	task := cliCreateTask(t, repository, "Predates the priorities section")
+	taskHead := cliGitOutput(t, repository, "rev-parse", "refs/workbook/tasks/"+task.ID)
+	taskState, err := core.DecodeStateDocument(
+		[]byte(cliGitOutput(t, repository, "show", taskHead+":state.json") + "\n"))
+	if err != nil {
+		t.Fatalf("decode task state: %v", err)
+	}
+
+	const actor = "legacy@example.test"
+	ids := core.CryptoULIDSource{}
+	generation, err := ids.New()
+	if err != nil {
+		t.Fatalf("history generation id: %v", err)
+	}
+	genesisID, err := ids.New()
+	if err != nil {
+		t.Fatalf("genesis operation id: %v", err)
+	}
+
+	genesisPack, err := core.NewConfigOperationPack(taskState.ProjectID, generation, actor, 1, time.Now().UTC(),
+		[]core.ConfigOperation{{
+			ID:     genesisID,
+			Type:   core.ConfigGenesis,
+			Config: &core.ConfigData{Vocabulary: core.LegacyVocabulary().Document()},
+		}})
+	if err != nil {
+		t.Fatalf("legacy genesis pack: %v", err)
+	}
+	genesisState, err := core.ApplyConfig(nil, genesisPack)
+	if err != nil {
+		t.Fatalf("apply legacy genesis: %v", err)
+	}
+	genesisCommit := writeForgedConfigCommit(t, repository, "", genesisPack, genesisState, "workbook: legacy genesis")
+
+	displayID, err := ids.New()
+	if err != nil {
+		t.Fatalf("display operation id: %v", err)
+	}
+	displayPack, err := core.NewConfigOperationPack(taskState.ProjectID, generation, actor, 2, time.Now().UTC(),
+		[]core.ConfigOperation{{
+			ID:      displayID,
+			Type:    core.ConfigDisplaySet,
+			Setting: core.DisplayProjectName,
+			Value:   "Atlas",
+		}})
+	if err != nil {
+		t.Fatalf("display pack: %v", err)
+	}
+	displayState, err := core.ApplyConfig(&genesisState, displayPack)
+	if err != nil {
+		t.Fatalf("apply display change: %v", err)
+	}
+	displayCommit := writeForgedConfigCommit(
+		t, repository, genesisCommit, displayPack, displayState, "workbook: set project-name to Atlas")
+
+	cliGit(t, repository, "update-ref", "refs/workbook/config", displayCommit)
+	return repository
+}
+
+// writeForgedConfigCommit writes one configuration ledger commit with raw git
+// plumbing, the same technique internal/cli/newerwriter_test.go's
+// writeFutureConfigCommit uses, generalized to a parent that may be empty (a
+// genesis has none) and to a pack and state this build produced normally
+// rather than forged into a shape it does not recognize.
+func writeForgedConfigCommit(
+	t *testing.T,
+	repository, parent string,
+	pack core.ConfigOperationPack,
+	state core.ConfigStateDocument,
+	subject string,
+) string {
+	t.Helper()
+	packBytes, err := core.EncodeDocument(pack)
+	if err != nil {
+		t.Fatalf("encode configuration operation pack: %v", err)
+	}
+	stateBytes, err := core.EncodeDocument(state)
+	if err != nil {
+		t.Fatalf("encode configuration state document: %v", err)
+	}
+	operationBlob := hashObject(t, repository, string(packBytes))
+	stateBlob := hashObject(t, repository, string(stateBytes))
+	tree := gitWithInput(t, repository, fmt.Sprintf("100644 blob %s\toperation.json\n100644 blob %s\tstate.json\n",
+		operationBlob, stateBlob), "mktree")
+	args := []string{"commit-tree", tree}
+	if parent != "" {
+		args = append(args, "-p", parent)
+	}
+	return gitWithInput(t, repository, subject, args...)
+}
+
+// The test this fix exists for: a project that behaves exactly like a real
+// v0.5 project sitting at minReader 2 — configured once, through `config
+// set`, and never through a priority verb. Clearing a color on a priority
+// that never had one is nothing to record, and must cost this project
+// nothing: not a commit, not the permanent generation-three marker a real
+// priority write would backfill in. Asserting only the exit code would not
+// catch a regression that refused correctly on the surface but still wrote —
+// the ledger head and the stored minReader are what a corrupted compatibility
+// promise would actually move.
+func TestPriorityColorNoOpRefusalDoesNotBumpAnUnconfiguredProjectsLedger(t *testing.T) {
+	repository := legacyDisplayConfiguredRepository(t)
+
+	before := cliGitOutput(t, repository, "rev-parse", "refs/workbook/config")
+	beforeState := cliGitOutput(t, repository, "show", before+":state.json")
+	if !strings.Contains(beforeState, `"minReader":2`) {
+		t.Fatalf("forged ledger state.json = %s, want minReader 2 before the refusal", beforeState)
+	}
+	if strings.Contains(beforeState, "priorities") {
+		t.Fatalf("forged ledger state.json = %s, want no priorities section before the refusal", beforeState)
+	}
+
+	code, stdout, stderr := run(t, repository, "priority", "color", "low", "--json")
+	if code == 0 {
+		t.Fatalf("priority color clear on an unconfigured project = code 0, want a refusal")
+	}
+	assertJSONError(t, stderr, core.CategoryValidation, `priority "low" has no color to clear`)
+	if stdout != "" {
+		t.Fatalf("priority color clear stdout = %q, want nothing written", stdout)
+	}
+
+	after := cliGitOutput(t, repository, "rev-parse", "refs/workbook/config")
+	if after != before {
+		t.Fatalf("configuration ledger head moved from %q to %q on a refused no-op recolor", before, after)
+	}
+	afterState := cliGitOutput(t, repository, "show", after+":state.json")
+	if !strings.Contains(afterState, `"minReader":2`) {
+		t.Fatalf("ledger state.json after the refusal = %s, want minReader still 2, not bumped to 3", afterState)
+	}
+	if strings.Contains(afterState, "priorities") {
+		t.Fatalf("ledger state.json after the refusal = %s, want no priorities section backfilled in", afterState)
 	}
 }

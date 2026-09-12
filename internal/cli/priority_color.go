@@ -60,10 +60,29 @@ func runPriorityColor(ctx context.Context, args []string, cwd string, stdout, st
 }
 
 // planPriorityColor authors the one operation a recolor ever needs: a plain
-// assignment of the new color, or of an empty value to clear it. It is folded
-// the same way in internal/core — see configPriorities.applyRecolor's own
-// comment — so there is nothing here to judge about the value already having
-// that color; only that the value has already passed validation.
+// assignment of the new color, or of an empty value to clear it — unless the
+// assignment would record nothing, which it refuses before anything is
+// authored, the same way planPriorityRelabel refuses the label a priority
+// already has.
+//
+// That refusal was not part of this verb when it was designed, and the
+// original reasoning was sound for what it weighed: the fold in internal/core
+// — see configPriorities.applyRecolor's own comment — treats a recolor as a
+// plain assignment rather than something to judge, so refusing here meant
+// fighting that model for a value the CLI itself had no other reason to
+// compare. What changed is not the fold, but what a priority write costs.
+// core.BuiltInPriorityVocabulary now backfills into the very commit that
+// first touches a project's priorities, and that commit's operation carries
+// the priority section's own generation-three marker — see
+// configOperationMinReader's comment in internal/core/configop.go — which is
+// permanent: every clone below that generation cannot change the project's
+// configuration again until it upgrades. config.go's refuseUnchangedDisplay
+// already documents the identical trade for the display section's
+// generation-two marker. A recolor that changes nothing would spend that
+// cost — on every teammate, for the life of the project — to record a value
+// nobody asked to change, which is a real cost the original reasoning did
+// not have in front of it. Both directions count: setting a color to the one
+// already stored, and clearing a priority that has none.
 func planPriorityColor(
 	ctx context.Context,
 	scope priorityScope,
@@ -77,6 +96,14 @@ func planPriorityColor(
 	}
 	definition, _ := priorityDefinition(vocabulary, subject)
 	current := definition.Color
+	if color == current {
+		if color == "" {
+			return priorityPlan{}, core.Errorf(core.CategoryValidation,
+				"priority %q has no color to clear", subject)
+		}
+		return priorityPlan{}, core.Errorf(core.CategoryValidation,
+			"priority %q already has that color", subject)
+	}
 
 	operation := core.ConfigOperation{Type: core.ConfigPriorityRecolor, Priority: subject, Value: color}
 	return priorityPlan{
