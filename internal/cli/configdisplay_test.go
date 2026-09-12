@@ -154,12 +154,17 @@ const configLedgerRefName = "refs/workbook/config"
 // anything at all is written.
 //
 // This is the rule the status family already applies — `workbook status untag`
-// on a tag a status does not carry exits 5 and moves no ref — and here it
-// carries a second weight. Every display pack stamps generation two into the
-// project's checkpoint permanently, so a `config unset` of a setting nobody has
+// on a tag a status does not carry exits 5 and moves no ref.
+//
+// It once carried a second weight: a display pack stamps generation two into
+// the checkpoint permanently, so a `config unset` of a setting nobody had
 // configured that authored a pack anyway would park every un-upgraded clone
-// forever in exchange for recording nothing. The cost of the marker is only
-// opt-in while a command that changes nothing writes nothing.
+// forever in exchange for recording nothing, and the refusal was what kept that
+// cost opt-in. That argument is retired — every project this build creates now
+// stamps its genesis, so the cost is universal from creation, and
+// TestAGenerationOneReaderParksOnEveryProjectThisBuildCreates is where that is
+// pinned. What survives is the plain rule: a command that changes nothing
+// writes nothing, whatever the marker is doing.
 func TestConfigRefusesADisplayChangeThatChangesNothing(t *testing.T) {
 	repository := initializedRepository(t)
 
@@ -454,15 +459,7 @@ func TestAGenerationOneReaderParksOnADisplayConfiguredProject(t *testing.T) {
 // configuration command — the opposite of the project shape under test.
 func cliSetupPublishedProject(t *testing.T) (string, string) {
 	t.Helper()
-	bare := filepath.Join(t.TempDir(), "origin.git")
-	cliGit(t, t.TempDir(), "init", "--bare", "--quiet", bare)
-	// Background auto-gc spawned by receive-pack can outlive the test and race
-	// t.TempDir cleanup with "directory not empty" on slow runners.
-	for _, setting := range [][]string{
-		{"receive.autogc", "false"}, {"gc.auto", "0"}, {"maintenance.auto", "false"},
-	} {
-		cliGit(t, bare, "config", setting[0], setting[1])
-	}
+	bare := cliBareOrigin(t)
 
 	writer := testrepo.New(t)
 	cliGit(t, writer, "branch", "-M", "main")

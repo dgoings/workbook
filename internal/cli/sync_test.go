@@ -478,13 +478,7 @@ func TestRunSyncCommandsRejectUnexpectedArguments(t *testing.T) {
 
 func cliSyncRepositories(t *testing.T) (string, string) {
 	t.Helper()
-	bare := filepath.Join(t.TempDir(), "origin.git")
-	cliGit(t, t.TempDir(), "init", "--bare", "--quiet", bare)
-	// Background auto-gc spawned by receive-pack can outlive the test and race
-	// t.TempDir cleanup with "directory not empty" on slow runners.
-	cliGit(t, bare, "config", "receive.autogc", "false")
-	cliGit(t, bare, "config", "gc.auto", "0")
-	cliGit(t, bare, "config", "maintenance.auto", "false")
+	bare := cliBareOrigin(t)
 
 	seed := testrepo.New(t)
 	cliGit(t, seed, "branch", "-M", "main")
@@ -497,6 +491,24 @@ func cliSyncRepositories(t *testing.T) (string, string) {
 	cliGit(t, seed, "push", "--quiet", "-u", "origin", "main")
 	cliGit(t, bare, "symbolic-ref", "HEAD", "refs/heads/main")
 	return cliClone(t, bare), cliClone(t, bare)
+}
+
+// cliBareOrigin creates the bare repository every two-clone test pushes
+// through.
+//
+// The three settings are one workaround with one reason: background auto-gc
+// spawned by receive-pack can outlive the test and race t.TempDir cleanup,
+// failing it with "directory not empty" on slow runners. It lives here rather
+// than in each caller because a workaround copied per caller is a workaround
+// fixed in one of them.
+func cliBareOrigin(t *testing.T) string {
+	t.Helper()
+	bare := filepath.Join(t.TempDir(), "origin.git")
+	cliGit(t, t.TempDir(), "init", "--bare", "--quiet", bare)
+	cliGit(t, bare, "config", "receive.autogc", "false")
+	cliGit(t, bare, "config", "gc.auto", "0")
+	cliGit(t, bare, "config", "maintenance.auto", "false")
+	return bare
 }
 
 func cliClone(t *testing.T, bare string) string {

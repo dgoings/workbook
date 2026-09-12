@@ -84,6 +84,15 @@ func storedMinReader(t *testing.T, document storedDocument) (int, bool) {
 // The checkpoints are checked too, against a rule with no exceptions: a
 // checkpoint carries the running maximum, so it is never absent once the
 // genesis has stamped one and never above what this build can read back.
+//
+// A note for whoever raises the generation next. Both genesis assertions below
+// read core.SupportedFormatGeneration, and that is right only while the newest
+// section is one a genesis records — today the priorities. Add a generation
+// that a genesis does not carry and the genesis will keep asking for the older
+// number, and these will fail. The fix then is to name the generation the
+// genesis's own sections require, not to relax the comparison to "at least": an
+// under-marked genesis is exactly what this test is here to catch, and ">="
+// cannot see one.
 func TestTheWriterFormatMarkerIsSpentOnlyAtTheConfigurationGenesis(t *testing.T) {
 	repository := initializedRepository(t)
 

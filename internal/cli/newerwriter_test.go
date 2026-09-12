@@ -42,10 +42,13 @@ const futureGeneration = core.SupportedFormatGeneration + 1
 // as corruption.
 var storedMarkerPattern = regexp.MustCompile(`"minReader":\d+`)
 
+// Generation zero is forged explicitly, as `"minReader":0`, rather than by
+// leaving the member out. The two are different documents to a reader — absence
+// is the canonical spelling and an explicit zero is one this build refuses —
+// and a forge that silently returned the document untouched for zero would
+// produce an unforged document, failing whatever test used it with a shape
+// complaint rather than the refusal it was checking for.
 func markGeneration(document string, generation int) string {
-	if generation == 0 {
-		return document
-	}
 	marker := fmt.Sprintf(`"minReader":%d`, generation)
 	if storedMarkerPattern.MatchString(document) {
 		return storedMarkerPattern.ReplaceAllString(document, marker)
