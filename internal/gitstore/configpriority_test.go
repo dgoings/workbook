@@ -2,6 +2,7 @@ package gitstore
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -447,10 +448,16 @@ func TestConfigSyncReportsPriorityArityRepair(t *testing.T) {
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 
+	// The genesis now carries the built-in three outright (medium tagged
+	// default; see writeConfigGenesis), so adding high, medium and low here
+	// would be three no-ops under applyAdd's idempotency rule — the names are
+	// already live — and would never move the default onto high the way this
+	// test's precondition needs. Moving it explicitly is what actually
+	// establishes "high is the default" before the rest of the test relies on
+	// it.
 	writeConfig(t, first, config,
-		addPriorityOperation(core.PriorityHigh, "High", "1/1", core.PriorityTagDefault),
-		addPriorityOperation(core.PriorityMedium, "Medium", "2/1"),
-		addPriorityOperation(core.PriorityLow, "Low", "3/1"),
+		untagPriorityOperation(core.PriorityMedium, core.PriorityTagDefault),
+		tagPriorityOperation(core.PriorityHigh, core.PriorityTagDefault),
 	)
 	if _, err := first.Sync(ctx, config); err != nil {
 		t.Fatalf("first Sync() (seed) error = %v", err)
@@ -488,5 +495,72 @@ func TestConfigSyncReportsPriorityArityRepair(t *testing.T) {
 	if conflict.Priority != core.PriorityHigh {
 		t.Fatalf("arity conflict priority = %q, want %q, the lowest-ranked survivor the repair picked by position",
 			conflict.Priority, core.PriorityHigh)
+	}
+}
+
+// MintConfigLedger records core.BuiltInPriorityVocabulary() into the genesis
+// alongside the vocabulary, the priority counterpart to
+// TestMintConfigLedgerRecordsTheDefaultVocabulary. Because that document is
+// exactly what an older reader falling back to its own built-ins would
+// compute, the pack's minimum version stays 0 — recording it does not, by
+// itself, ask anyone to upgrade.
+func TestMintConfigLedgerRecordsBuiltInPriorities(t *testing.T) {
+	repo, config := writeRepository(t)
+	ctx := context.Background()
+
+	seeded, err := repo.MintConfigLedger(ctx, config, core.CryptoULIDSource{})
+	if err != nil {
+		t.Fatalf("MintConfigLedger() error = %v", err)
+	}
+	if !seeded {
+		t.Fatal("MintConfigLedger() = false, want a genesis written for a project with no ledger")
+	}
+
+	records := configChain(t, repo, config)
+	if len(records) != 1 {
+		t.Fatalf("ledger holds %d commit(s), want the genesis alone", len(records))
+	}
+	root := records[0]
+	genesis := root.Operation.Operations[0]
+	if genesis.Type != core.ConfigGenesis || genesis.Config.Priorities == nil {
+		t.Fatalf("root pack = %#v, want one config.genesis carrying a priorities section", root.Operation.Operations)
+	}
+	if got := *genesis.Config.Priorities; !reflect.DeepEqual(got, core.BuiltInPriorityVocabulary().Document()) {
+		t.Fatalf("genesis priorities = %#v, want the built-in three", got)
+	}
+	if got := root.Operation.MinReader; got != 0 {
+		t.Fatalf("genesis pack MinReader = %d, want 0: a genesis-carried document identical to the built-ins "+
+			"must not tell an older reader to upgrade", got)
+	}
+}
+
+// A project with no ledger whose first authored change is an ordinary status
+// operation still gets a genesis recording the built-in three priorities —
+// the lazy-seed counterpart to TestMintConfigLedgerRecordsBuiltInPriorities —
+// and the pack it seeds with still carries a minimum version of 0: an
+// unrelated status change must not be told it needs a newer reader merely
+// because the genesis it triggers now always carries a priorities section.
+func TestWriteConfigOperationSeedsGenesisWithBuiltInPriorities(t *testing.T) {
+	repo, config := writeRepository(t)
+
+	result := writeConfig(t, repo, config, configOperations(renameOperation("ready", "todo"))...)
+	if !result.Seeded {
+		t.Fatal("WriteConfigOperation() did not report seeding the ledger")
+	}
+
+	records := configChain(t, repo, config)
+	if len(records) != 2 {
+		t.Fatalf("ledger holds %d commit(s), want a genesis root and the author's pack", len(records))
+	}
+	root := records[0]
+	genesis := root.Operation.Operations[0]
+	if genesis.Type != core.ConfigGenesis || genesis.Config.Priorities == nil {
+		t.Fatalf("root pack = %#v, want one config.genesis carrying a priorities section", root.Operation.Operations)
+	}
+	if got := *genesis.Config.Priorities; !reflect.DeepEqual(got, core.BuiltInPriorityVocabulary().Document()) {
+		t.Fatalf("genesis priorities = %#v, want the built-in three", got)
+	}
+	if got := root.Operation.MinReader; got != 0 {
+		t.Fatalf("genesis pack MinReader = %d, want 0", got)
 	}
 }

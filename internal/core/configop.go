@@ -305,12 +305,27 @@ var configOperationMinReader = map[ConfigOperationType]int{
 //
 // A config.genesis is judged by what it carries rather than by its type alone,
 // which is the one place the table above is not the whole answer. A genesis
-// carries a whole ConfigData as data, so one carrying a display or priorities
-// section is a document an older reader cannot read even though no display or
-// priority operation appears in the pack. Nothing this build writes seeds a
-// genesis that way — each section is only ever reached by an operation — and
-// the check is here so that a build which one day does cannot ship the marker
-// off by one.
+// carries a whole ConfigData as data, so one carrying a display section is a
+// document an older reader cannot read even though no display operation
+// appears in the pack.
+//
+// Priorities are judged differently, because — unlike display — every genesis
+// this build writes carries a priorities section: seedConfigLedger and
+// MintConfigLedger both record core.BuiltInPriorityVocabulary() at creation,
+// so "the section is present" is no longer a fact about whether the project
+// configured anything. What still is a fact is whether the recorded set
+// differs from the built-ins: when it holds exactly the built-in three, an
+// older build that ignores the section and falls back to its own built-in
+// three reaches the identical answer, so nothing is misread and the marker
+// would be a lie. The guard therefore compares the genesis-carried document
+// against BuiltInPriorityVocabulary().Document() and fires only on a
+// difference — a different label, a different rank, an extra or missing
+// entry, a different default, any alias or retirement — not merely on the
+// section's presence. A pack keeps whatever its writing build decided even if
+// a later release changes the built-in set, because ConfigPackMinReader is
+// only ever called once, at write time (NewConfigOperationPack), and the
+// verdict is then carried forward from the stored MinReader rather than
+// recomputed from content.
 func ConfigPackMinReader(operations []ConfigOperation) int {
 	generation := 0
 	for _, operation := range operations {
@@ -322,7 +337,8 @@ func ConfigPackMinReader(operations []ConfigOperation) int {
 				generation = required
 			}
 		}
-		if operation.Config != nil && operation.Config.Priorities != nil {
+		if operation.Config != nil && operation.Config.Priorities != nil &&
+			!reflect.DeepEqual(*operation.Config.Priorities, BuiltInPriorityVocabulary().Document()) {
 			if required := configOperationMinReader[ConfigPriorityAdd]; required > generation {
 				generation = required
 			}

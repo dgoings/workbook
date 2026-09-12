@@ -502,7 +502,16 @@ func (r *Repository) seedConfigLedger(
 	// existed without a ledger, and what such a project is using is a fact about
 	// it rather than a decision this release gets to make; `workbook setup`
 	// seeds the minting default only when it mints the project itself.
-	genesisState, genesisHead, err := r.writeConfigGenesis(ctx, config, ids, generation, actor, core.LegacyVocabulary())
+	//
+	// Priorities get the same reasoning in their own voice: unlike statuses,
+	// there is no legacy priority set to diverge from the built-in one — every
+	// project, ledger or not, has always used today's built-in three (see
+	// core.BuiltInPriorityVocabulary's comment) — so recording
+	// core.BuiltInPriorityVocabulary() here is not this release choosing a
+	// vocabulary for the project, it is writing down the fact that was already
+	// true of it.
+	genesisState, genesisHead, err := r.writeConfigGenesis(
+		ctx, config, ids, generation, actor, core.LegacyVocabulary(), core.BuiltInPriorityVocabulary())
 	if err != nil {
 		return ConfigWriteResult{}, false, err
 	}
@@ -542,7 +551,15 @@ func (r *Repository) seedConfigLedger(
 // defaults" is what makes the ledger version independent: the built-in defaults
 // change between releases — `blocked` left them once dependencies said what a
 // task waits on — and a later clone folding this root has to reproduce this
-// project rather than its own build's idea of a new one.
+// project rather than its own build's idea of a new one. Priorities are
+// recorded the same way and for the same reason, now that both callers below
+// have a vocabulary to hand it.
+//
+// Recording priorities here does not, by itself, reintroduce the
+// compatibility break narrowing ConfigPackMinReader fixed: both callers pass
+// core.BuiltInPriorityVocabulary(), so every genesis this build writes carries
+// a document identical to what an older reader would substitute on its own,
+// and the guard only fires once a later change makes the two diverge.
 func (r *Repository) writeConfigGenesis(
 	ctx context.Context,
 	config core.ProjectConfig,
@@ -550,17 +567,22 @@ func (r *Repository) writeConfigGenesis(
 	generation string,
 	actor string,
 	vocabulary core.Vocabulary,
+	priorities core.PriorityVocabulary,
 ) (core.ConfigStateDocument, string, error) {
 	genesisID, err := ids.New()
 	if err != nil {
 		return core.ConfigStateDocument{}, "", core.Wrap(core.CategoryOperational,
 			"cannot generate configuration operation ID", err)
 	}
+	priorityDocument := priorities.Document()
 	pack, err := core.NewConfigOperationPack(config.ProjectID, generation, actor, 1, configWallTime(),
 		[]core.ConfigOperation{{
-			ID:     genesisID,
-			Type:   core.ConfigGenesis,
-			Config: &core.ConfigData{Vocabulary: vocabulary.Document()},
+			ID:   genesisID,
+			Type: core.ConfigGenesis,
+			Config: &core.ConfigData{
+				Vocabulary: vocabulary.Document(),
+				Priorities: &priorityDocument,
+			},
 		}})
 	if err != nil {
 		return core.ConfigStateDocument{}, "", err
@@ -619,7 +641,8 @@ func (r *Repository) MintConfigLedger(
 		return false, core.Wrap(core.CategoryOperational,
 			"cannot generate configuration history generation", err)
 	}
-	state, head, err := r.writeConfigGenesis(ctx, config, ids, generation, actor, core.DefaultVocabulary())
+	state, head, err := r.writeConfigGenesis(
+		ctx, config, ids, generation, actor, core.DefaultVocabulary(), core.BuiltInPriorityVocabulary())
 	if err != nil {
 		return false, err
 	}
