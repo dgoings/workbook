@@ -76,11 +76,14 @@ const WarningAutoSync = "auto-sync-incomplete"
 // It never accompanies an empty result from a status nothing resolves to: List
 // refuses that case outright, so a caller sees this warning only alongside
 // tasks that came back under a different name than the one it typed — which is
-// the part of the answer the answer itself does not show. The code says
-// "unresolved" because it was minted when this warning also carried that
-// refused case; it is part of the JSON envelope callers match on, so it keeps
-// the spelling it shipped with.
-const WarningStatusFilter = "status-filter-unresolved"
+// the part of the answer the answer itself does not show.
+//
+// The code was spelled "status-filter-unresolved" until 0.6.0, when the
+// refusal took that case away and left the name describing the one thing this
+// warning no longer reports. It is a value callers match on, so renaming it is
+// a breaking change, and it rides the release that broke the behavior anyway
+// rather than leaving a permanent mismatch with its priority sibling.
+const WarningStatusFilter = "status-filter-forwarded"
 
 // WarningPriorityFilter reports that a priority filter had to be forwarded
 // through a rename or a removal to select anything.

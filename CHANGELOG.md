@@ -12,6 +12,48 @@ not, has notes on the
 
 Releases through v0.4.1 predate this file.
 
+An `## Unreleased` heading collects what has landed since the last release, so
+work that needs prose can write it while the reasoning is fresh rather than
+reconstruct it in the release pull request. Retitle that heading to the version
+being cut — `## v0.6.0 — 2026-09-30` — in the pull request that carries the
+bump label. The heading is deliberately not a version until then: the release check
+reads the topmost `## vX.Y.Z` heading and refuses a label that disagrees with
+it, so an early version heading would block every patch release until that
+version was cut.
+
+## Unreleased
+
+Priorities become a per-project vocabulary, the way statuses already are. Two
+of the changes below break scripts; both are described under Changed.
+
+### Added
+- A priority filter naming a priority that was renamed or removed away now says
+  what the name resolves to, instead of quietly listing a different priority's
+  tasks. It carries a `priority-filter-forwarded` warning beside the results,
+  mirroring what a status filter has always done.
+
+### Changed
+- **Every project created by this release records its priorities, and so
+  requires a v0.6.0 or newer clone to change its configuration at all** — not
+  only its priorities, because the configuration ledger carries one version
+  requirement for the whole document rather than one per section. Older clones
+  keep fetching, keep reading, and keep publishing their own tasks; what they
+  cannot do is rename a status, change a display setting, or touch a priority
+  until they upgrade. A teammate on an older build sees a message saying to
+  upgrade rather than one saying the project is corrupt.
+- **`workbook list --status <name>` now exits `5` for a status this project
+  does not define**, where it returned an empty list at exit `0` with a
+  warning. An empty table cannot be told apart from an empty column, so the
+  old answer threw away the one fact worth having: this checkout has never
+  heard of that name, which usually means it has not fetched. A name that a
+  rename or a removal still forwards is unaffected — it resolves, the tasks
+  come back, and a warning says what the name now means. `--priority` has
+  always answered an unknown priority this way.
+- **The warning code `status-filter-unresolved` is now
+  `status-filter-forwarded`.** It was minted when that warning also covered the
+  case the refusal above has taken away, so its name described the one thing it
+  no longer reports.
+
 ## v0.5.1 — 2026-08-23
 
 Five stories from adversarially reviewed pull requests: the web board learns
