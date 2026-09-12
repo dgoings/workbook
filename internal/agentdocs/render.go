@@ -22,7 +22,16 @@ const GuidelinesPath = ".workbook/guidelines.md"
 // renders core.LegacyVocabulary, exactly as core.Service reads it, so a project
 // with no configuration ledger still gets the six statuses it is using rather
 // than the five this build would mint a new project with.
-func RenderGuidelines(project core.ProjectConfig, vocabulary core.Vocabulary) string {
+//
+// The priorities come from the project's own priority vocabulary the same
+// way, so a project that configured its own gets its own "Canonical
+// priorities" table rather than the built-in high/medium/low every project
+// used to be documented as having regardless of what it actually configured.
+// The zero PriorityVocabulary needs no substitution here the way the zero
+// Vocabulary above does: PriorityVocabulary.Definitions() already reads its
+// own zero value as "this caller configured none" and substitutes the
+// built-in three itself.
+func RenderGuidelines(project core.ProjectConfig, vocabulary core.Vocabulary, priorities core.PriorityVocabulary) string {
 	if vocabulary.IsZero() {
 		vocabulary = core.LegacyVocabulary()
 	}
@@ -66,8 +75,8 @@ func RenderGuidelines(project core.ProjectConfig, vocabulary core.Vocabulary) st
 
 	builder.WriteString("## Canonical priorities\n\n")
 	builder.WriteString("| Machine value | Display label |\n| --- | --- |\n")
-	for _, definition := range core.Priorities() {
-		builder.WriteString("| `" + string(definition.Priority) + "` | " + definition.Label + " |\n")
+	for _, definition := range priorities.Definitions() {
+		builder.WriteString("| `" + string(definition.Priority) + "` | " + tableCell(definition.Label) + " |\n")
 	}
 	builder.WriteString("\n")
 
