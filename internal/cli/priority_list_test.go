@@ -224,9 +224,14 @@ func TestPriorityWithATaskReferenceNamesShow(t *testing.T) {
 	}
 }
 
-// Every verb this group declares is dispatched. The seven that are not
-// implemented yet refuse with an invocation error rather than an unknown
-// command, which is what proves the switch names them.
+// Every verb this group declares is dispatched.
+//
+// The second half feeds each mutating verb two placeholder arguments it cannot
+// accept. What it asserts is not the refusal but its KIND: anything other than
+// "unknown priority command" means the dispatch switch named the verb and the
+// verb itself did the refusing. A verb dropped from the switch while its schema
+// entry survives would still pass the --help half above, and this is what
+// catches it.
 func TestPriorityDispatchesEveryDeclaredVerb(t *testing.T) {
 	repository := initializedRepository(t)
 	for _, verb := range prioritySubcommands() {
@@ -238,7 +243,7 @@ func TestPriorityDispatchesEveryDeclaredVerb(t *testing.T) {
 	for _, verb := range []string{"add", "rename", "label", "move", "tag", "delete", "color"} {
 		code, _, stderr := run(t, repository, "priority", verb, "placeholder", "placeholder")
 		if code == 0 {
-			t.Errorf("priority %s = code 0, want a refusal while it is a stub", verb)
+			t.Errorf("priority %s = code 0, want a refusal for two placeholder arguments", verb)
 		}
 		if strings.Contains(stderr, "unknown priority command") {
 			t.Errorf("priority %s = %q, want the verb dispatched rather than unknown", verb, stderr)

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/dgoings/workbook/internal/core"
 )
 
 type priorityLogDocument struct {
@@ -101,5 +103,46 @@ func TestPriorityLogRefusesANonPositiveLimit(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "priority log --limit must be a positive whole number") {
 		t.Errorf("priority log stderr = %q, want the limit refusal", stderr)
+	}
+}
+
+// A peer's priority.untag is described, but its inverse is offered only for a
+// role this build can name.
+//
+// This build cannot author a priority.untag at all — the verb was dropped
+// because a priority has one role and one priority must carry it, so every
+// call refused. The operation still arrives from a peer on a build with a wider
+// set of roles, and `priority log` still has to describe it. What it must not
+// do is print `priority tag <p> --tag next` as the undo: `--tag` refuses every
+// word but default, so that command exits 5 the moment somebody pastes it, and
+// an inverse nobody can run is worse than no inverse at all.
+func TestPriorityLogOffersNoInverseForARoleThisBuildCannotName(t *testing.T) {
+	before := configBefore{priorities: core.BuiltInPriorityVocabulary()}
+
+	foreign := []core.ConfigOperation{{
+		ID:          "01M2FOREIGNUNTAGOPERATION1",
+		Type:        core.ConfigPriorityUntag,
+		Priority:    core.PriorityMedium,
+		PriorityTag: core.PriorityTag("next"),
+	}}
+	if inverse := priorityPackInverse(before, foreign); inverse != nil {
+		t.Fatalf("inverse for a foreign role = %#v, want none: %q cannot be pasted",
+			inverse, inverse.Command)
+	}
+
+	// The role this build does know still gets its exact inverse, because
+	// giving the default back is a command that runs.
+	known := []core.ConfigOperation{{
+		ID:          "01M2KNOWNUNTAGOPERATION123",
+		Type:        core.ConfigPriorityUntag,
+		Priority:    core.PriorityMedium,
+		PriorityTag: core.PriorityTagDefault,
+	}}
+	inverse := priorityPackInverse(before, known)
+	if inverse == nil {
+		t.Fatal("inverse for the default role = nil, want the command that gives it back")
+	}
+	if !inverse.Exact || inverse.Command != "workbook priority tag medium --tag default" {
+		t.Fatalf("inverse = %#v, want an exact `priority tag medium --tag default`", inverse)
 	}
 }

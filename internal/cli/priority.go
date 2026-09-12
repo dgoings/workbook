@@ -790,8 +790,18 @@ func priorityPackInverse(before configBefore, operations []core.ConfigOperation)
 	case core.ConfigPriorityTag:
 		return priorityTagInverse(vocabulary, operation)
 	case core.ConfigPriorityUntag:
+		// This build has no way to author a priority.untag, but a peer on a
+		// build with more than one role can, and its operation still has to be
+		// described here. The inverse is only worth printing for a role this
+		// build can name: `--tag` refuses anything but default, so offering
+		// `priority tag <p> --tag next` would print a command that exits 5 when
+		// pasted — the same unrunnable-inverse problem dropping the untag verb
+		// was meant to end, and an inverse nobody can run is worse than none.
+		if operation.PriorityTag != core.PriorityTagDefault {
+			return nil
+		}
 		return &priorityInverse{
-			Command: priorityCommand("tag", string(subject), "--tag", string(operation.PriorityTag)),
+			Command: priorityCommand("tag", string(subject), "--tag", string(core.PriorityTagDefault)),
 			Exact:   true,
 		}
 	case core.ConfigPriorityRecolor:
