@@ -57,12 +57,16 @@ func newerWriterState(t *testing.T, document string, generation int) string {
 // the fixture would have claimed the generation it was trying to exceed. That
 // is exactly what happened to internal/cli's forgeries once the configuration
 // genesis started carrying a marker.
+//
+// One difference from internal/gitstore's helper: generation zero is written
+// out rather than treated as "leave the document alone". An explicit
+// `"minReader":0` is a fixture worth forging here, because it says exactly what
+// absence says and so folds identically, while the canonicality rule still
+// refuses it — a pair of claims the tests below make and gitstore's helper has
+// no use for.
 var storedMarkerPattern = regexp.MustCompile(`"minReader":\d+`)
 
 func markGeneration(document string, generation int) string {
-	if generation == 0 {
-		return document
-	}
 	marker := `"minReader":` + itoa(generation)
 	if storedMarkerPattern.MatchString(document) {
 		return storedMarkerPattern.ReplaceAllString(document, marker)
