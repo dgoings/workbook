@@ -305,27 +305,27 @@ var configOperationMinReader = map[ConfigOperationType]int{
 //
 // A config.genesis is judged by what it carries rather than by its type alone,
 // which is the one place the table above is not the whole answer. A genesis
-// carries a whole ConfigData as data, so one carrying a display section is a
-// document an older reader cannot read even though no display operation
-// appears in the pack.
+// carries a whole ConfigData as data, so one carrying a display or priorities
+// section is a document an older reader cannot read even though no display or
+// priority operation appears in the pack — decoding is strict, so an unknown
+// section is a corruption report to a build that has never heard of it,
+// unless the marker turns that report into an upgrade notice first; see
+// operation.go's comment on the same trade for display.
 //
-// Priorities are judged differently, because — unlike display — every genesis
-// this build writes carries a priorities section: seedConfigLedger and
-// MintConfigLedger both record core.BuiltInPriorityVocabulary() at creation,
-// so "the section is present" is no longer a fact about whether the project
-// configured anything. What still is a fact is whether the recorded set
-// differs from the built-ins: when it holds exactly the built-in three, an
-// older build that ignores the section and falls back to its own built-in
-// three reaches the identical answer, so nothing is misread and the marker
-// would be a lie. The guard therefore compares the genesis-carried document
-// against BuiltInPriorityVocabulary().Document() and fires only on a
-// difference — a different label, a different rank, an extra or missing
-// entry, a different default, any alias or retirement — not merely on the
-// section's presence. A pack keeps whatever its writing build decided even if
-// a later release changes the built-in set, because ConfigPackMinReader is
-// only ever called once, at write time (NewConfigOperationPack), and the
-// verdict is then carried forward from the stored MinReader rather than
-// recomputed from content.
+// Every genesis this build writes now carries a priorities section:
+// seedConfigLedger and MintConfigLedger both record
+// core.BuiltInPriorityVocabulary() at creation, so every project this build
+// creates or first configures is marked, whether or not anyone ever touches
+// priorities. That is deliberate rather than incidental. The alternative —
+// narrowing this guard to fire only when the recorded set differs from the
+// built-ins — was tried and reverted: an older build does not ignore a
+// section it does not recognize and fall back to its own defaults, it
+// refuses the checkpoint outright, so an unmarked genesis carrying the
+// section would tell that build the project is corrupt rather than that it
+// needs to upgrade. Firing on presence, the same rule the display guard
+// applies beside it, is what keeps that failure graceful. Workbook targets
+// teams working closely together on one project; asking everyone to upgrade
+// together once anyone has is the accepted cost.
 func ConfigPackMinReader(operations []ConfigOperation) int {
 	generation := 0
 	for _, operation := range operations {
@@ -337,8 +337,7 @@ func ConfigPackMinReader(operations []ConfigOperation) int {
 				generation = required
 			}
 		}
-		if operation.Config != nil && operation.Config.Priorities != nil &&
-			!reflect.DeepEqual(*operation.Config.Priorities, BuiltInPriorityVocabulary().Document()) {
+		if operation.Config != nil && operation.Config.Priorities != nil {
 			if required := configOperationMinReader[ConfigPriorityAdd]; required > generation {
 				generation = required
 			}

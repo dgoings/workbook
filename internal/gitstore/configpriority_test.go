@@ -500,10 +500,12 @@ func TestConfigSyncReportsPriorityArityRepair(t *testing.T) {
 
 // MintConfigLedger records core.BuiltInPriorityVocabulary() into the genesis
 // alongside the vocabulary, the priority counterpart to
-// TestMintConfigLedgerRecordsTheDefaultVocabulary. Because that document is
-// exactly what an older reader falling back to its own built-ins would
-// compute, the pack's minimum version stays 0 — recording it does not, by
-// itself, ask anyone to upgrade.
+// TestMintConfigLedgerRecordsTheDefaultVocabulary. The written pack's minimum
+// version is 3, the same as any other priorities section: an older reader
+// does not fall back to its own built-ins for a section it does not
+// recognize, it refuses the checkpoint, so recording priorities at creation
+// marks every project this build creates — the deliberate trade
+// ConfigPackMinReader's comment describes.
 func TestMintConfigLedgerRecordsBuiltInPriorities(t *testing.T) {
 	repo, config := writeRepository(t)
 	ctx := context.Background()
@@ -528,18 +530,18 @@ func TestMintConfigLedgerRecordsBuiltInPriorities(t *testing.T) {
 	if got := *genesis.Config.Priorities; !reflect.DeepEqual(got, core.BuiltInPriorityVocabulary().Document()) {
 		t.Fatalf("genesis priorities = %#v, want the built-in three", got)
 	}
-	if got := root.Operation.MinReader; got != 0 {
-		t.Fatalf("genesis pack MinReader = %d, want 0: a genesis-carried document identical to the built-ins "+
-			"must not tell an older reader to upgrade", got)
+	if got := root.Operation.MinReader; got != 3 {
+		t.Fatalf("genesis pack MinReader = %d, want 3", got)
 	}
 }
 
 // A project with no ledger whose first authored change is an ordinary status
 // operation still gets a genesis recording the built-in three priorities —
 // the lazy-seed counterpart to TestMintConfigLedgerRecordsBuiltInPriorities —
-// and the pack it seeds with still carries a minimum version of 0: an
-// unrelated status change must not be told it needs a newer reader merely
-// because the genesis it triggers now always carries a priorities section.
+// and the genesis pack it seeds with still carries a minimum version of 3:
+// an ordinary status change is what triggers the seed, but the genesis it
+// produces is marked on its own terms because it, too, now carries a
+// priorities section.
 func TestWriteConfigOperationSeedsGenesisWithBuiltInPriorities(t *testing.T) {
 	repo, config := writeRepository(t)
 
@@ -560,7 +562,7 @@ func TestWriteConfigOperationSeedsGenesisWithBuiltInPriorities(t *testing.T) {
 	if got := *genesis.Config.Priorities; !reflect.DeepEqual(got, core.BuiltInPriorityVocabulary().Document()) {
 		t.Fatalf("genesis priorities = %#v, want the built-in three", got)
 	}
-	if got := root.Operation.MinReader; got != 0 {
-		t.Fatalf("genesis pack MinReader = %d, want 0", got)
+	if got := root.Operation.MinReader; got != 3 {
+		t.Fatalf("genesis pack MinReader = %d, want 3", got)
 	}
 }

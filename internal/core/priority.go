@@ -183,11 +183,15 @@ func (vocabulary PriorityVocabulary) IsZero() bool {
 // the status ones did, that is the day this splits into two, mirroring
 // vocabulary.go's pair.
 //
-// It is exported so gitstore can record it durably the moment a project's
-// priorities first need writing down — not at genesis, which would force a
-// priorities section (and the compatibility marker that comes with it) onto
-// every project this build creates or first configures, whether or not it
-// ever touches priorities at all. It is cached behind sync.OnceValue the way
+// It is exported so gitstore can record it durably in every genesis it
+// writes — seedConfigLedger and MintConfigLedger both call this at project
+// creation, the same moment DefaultVocabulary and LegacyVocabulary are
+// recorded — so a genesis's priorities section states a fact about the
+// project from the start rather than being synthesized later from an absence.
+// That every genesis now carries the section, and so carries the
+// compatibility marker ConfigPackMinReader stamps for it, is an accepted
+// cost, not an oversight: see that function's comment for why firing on
+// presence is the safe reading. It is cached behind sync.OnceValue the way
 // DefaultVocabulary is, rather than rebuilt — with its two maps — on every
 // accessor call a rendering path makes per task.
 var BuiltInPriorityVocabulary = sync.OnceValue(func() PriorityVocabulary {

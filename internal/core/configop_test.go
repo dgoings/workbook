@@ -1736,78 +1736,29 @@ func TestStatusOnlyPackStillRequiresGenerationZero(t *testing.T) {
 	}
 }
 
-// A genesis records priorities at creation now (see writeConfigGenesis), so
-// "the section is present" can no longer be the guard's question — every
-// genesis this build writes would fail it. When the recorded document holds
-// exactly the built-in three, an older reader that ignores the section and
-// falls back to its own built-in three lands on the identical answer, so the
-// marker would be a lie if it fired here.
-func TestGenesisCarryingBuiltInPrioritiesRequiresGenerationZero(t *testing.T) {
+// A genesis carrying the built-in three still requires generation 3, the same
+// as any other priorities section: the guard fires on presence, not on
+// content, because an older reader does not fall back to its own built-ins
+// for a section it does not recognize — it refuses the checkpoint as
+// corrupt. Recording the built-in three at creation (writeConfigGenesis) does
+// not soften that; it is the same section any customised project would
+// carry, and this pins that a genesis using it is marked exactly like one
+// that is not.
+func TestGenesisCarryingBuiltInPrioritiesRequiresGenerationThree(t *testing.T) {
 	document := BuiltInPriorityVocabulary().Document()
 	operation := ConfigOperation{Type: ConfigGenesis, Config: &ConfigData{Priorities: &document}}
-	if got := ConfigPackMinReader([]ConfigOperation{operation}); got != 0 {
-		t.Errorf("ConfigPackMinReader = %d, want 0", got)
+	if got := ConfigPackMinReader([]ConfigOperation{operation}); got != 3 {
+		t.Errorf("ConfigPackMinReader = %d, want 3", got)
 	}
 }
 
-// A genesis-carried priorities section that differs from the built-in three —
-// in any of the ways two documents can differ, not just "has more entries" —
-// still requires generation 3: an older reader falling back to its own
-// built-ins would compute a project that does not match what this one
-// recorded. Covering several kinds of difference here is deliberate: a guard
-// that only compared, say, entry count would pass a single "extra priority"
-// case while still misreading a same-count document with a relabeled entry,
-// a moved rank, or a different default as unchanged.
-func TestGenesisCarryingDivergentPrioritiesRequiresGenerationThree(t *testing.T) {
-	builtIn := BuiltInPriorityVocabulary().Document()
-
-	mutate := func(mutation func(*PriorityDocument)) PriorityDocument {
-		document := builtIn
-		document.Priorities = append([]PriorityDefinition(nil), builtIn.Priorities...)
-		for index := range document.Priorities {
-			document.Priorities[index].Tags = append([]PriorityTag(nil), builtIn.Priorities[index].Tags...)
-		}
-		document.Aliases = append([]PriorityAlias(nil), builtIn.Aliases...)
-		document.Retired = append([]RetiredPriority(nil), builtIn.Retired...)
-		mutation(&document)
-		return document
-	}
-
-	cases := map[string]PriorityDocument{
-		"different label": mutate(func(document *PriorityDocument) {
-			document.Priorities[0].Label = "Urgent"
-		}),
-		"different rank": mutate(func(document *PriorityDocument) {
-			document.Priorities[0].Rank = "1/2"
-		}),
-		"extra priority": mutate(func(document *PriorityDocument) {
-			document.Priorities = append(document.Priorities,
-				PriorityDefinition{Priority: "urgent", Label: "Urgent", Rank: "0/1", Tags: []PriorityTag{}})
-		}),
-		"different default": mutate(func(document *PriorityDocument) {
-			document.Priorities[1].Tags = []PriorityTag{}
-			document.Priorities[0].Tags = []PriorityTag{PriorityTagDefault}
-		}),
-	}
-
-	for name, document := range cases {
-		t.Run(name, func(t *testing.T) {
-			operation := ConfigOperation{Type: ConfigGenesis, Config: &ConfigData{Priorities: &document}}
-			if got := ConfigPackMinReader([]ConfigOperation{operation}); got != 3 {
-				t.Errorf("ConfigPackMinReader = %d, want 3", got)
-			}
-		})
-	}
-}
-
-// A genesis carrying both a display section and a built-in-equal priorities
-// section still reports the display generation, not 0: narrowing the
-// priorities guard must not swallow a different section's unrelated
-// requirement. The two guards compose as a running maximum, and this pins
-// that composition from the priorities side the way
-// TestGenesisCarryingDisplayAndPrioritiesRequiresGenerationThree pins it from
-// the display side.
-func TestGenesisCarryingDisplayAndBuiltInPrioritiesRequiresDisplayGeneration(t *testing.T) {
+// A genesis carrying both a display section and a priorities section built
+// from the built-in three still reports 3, not 2: the two guards compose as
+// a running maximum, and using a real, valid priorities document here (rather
+// than the empty stub TestGenesisCarryingDisplayAndPrioritiesRequiresGenerationThree
+// uses) rules out a guard that special-cases "looks like the built-ins" back
+// down to the display generation alone.
+func TestGenesisCarryingDisplayAndBuiltInPrioritiesRequiresGenerationThree(t *testing.T) {
 	document := BuiltInPriorityVocabulary().Document()
 	operation := ConfigOperation{
 		Type: ConfigGenesis,
@@ -1816,16 +1767,17 @@ func TestGenesisCarryingDisplayAndBuiltInPrioritiesRequiresDisplayGeneration(t *
 			Priorities: &document,
 		},
 	}
-	if got := ConfigPackMinReader([]ConfigOperation{operation}); got != 2 {
-		t.Errorf("ConfigPackMinReader = %d, want 2", got)
+	if got := ConfigPackMinReader([]ConfigOperation{operation}); got != 3 {
+		t.Errorf("ConfigPackMinReader = %d, want 3", got)
 	}
 }
 
 // A pack containing a priority operation stamps generation 3 unconditionally,
-// even on a project whose genesis-carried priorities equal the built-ins:
-// operations are judged by type alone (configOperationMinReader), and only
-// the genesis's carried document is ever compared against the built-in set.
-func TestPriorityOperationRequiresGenerationThreeEvenOverBuiltInGenesis(t *testing.T) {
+// even over a genesis whose carried priorities are the built-in three:
+// operations are judged by type alone (configOperationMinReader), the same
+// table a genesis's carried sections are judged against, so there is no path
+// by which one lowers what the other requires.
+func TestPriorityOperationRequiresGenerationThreeOverBuiltInGenesis(t *testing.T) {
 	document := BuiltInPriorityVocabulary().Document()
 	genesis := ConfigOperation{Type: ConfigGenesis, Config: &ConfigData{Priorities: &document}}
 	add := ConfigOperation{Type: ConfigPriorityAdd, Name: "blocker"}
