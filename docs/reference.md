@@ -514,10 +514,11 @@ status a caller supplies requires a live member, without forwarding: `workbook
 update <id> --status ready` is refused with `validation` (exit `5`) once `ready`
 is no longer a status this project defines. A status a caller supplies to
 *filter* by is resolved first and refused only if it resolves to nothing, so
-`workbook list --status ready` still lists the renamed column's tasks. The `workbook status` verbs answer the
-same value with what became of it — which rename or removal retired it, on what
-date, and which live status it resolves to now — rather than with a bare "not
-found". A task holding a status no chain leads out of is still fully editable;
+`workbook list --status ready` still lists the renamed column's tasks. The
+`workbook status` verbs answer the same value with what became of it — which
+rename or removal retired it, on what date, and which live status it resolves
+to now — rather than with a bare "not found". A task holding a status no chain
+leads out of is still fully editable;
 only supplying that status again is refused. See
 [Statuses a project does not define](#statuses-a-project-does-not-define) for
 how to file such a task, and
