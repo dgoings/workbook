@@ -286,6 +286,60 @@ func (s Service) ResolveStatusFilter(status Status) StatusFilterResolution {
 	return resolution
 }
 
+// PriorityFilterResolution reports what a priority filter turned out to mean,
+// mirroring StatusFilterResolution's members. Unlike the status filter, a
+// priority filter that resolves to nothing (Known false) is still refused by
+// List rather than accepted as an empty result — see List's own comment for
+// why — so this exists only to let the refusal and a forwarded-name report
+// agree by construction, not to relax anything.
+type PriorityFilterResolution struct {
+	// Requested is the value the caller typed.
+	Requested Priority
+	// Resolved is the live priority the filter was applied as. It equals
+	// Requested for a live priority, and is empty when the value resolves to
+	// nothing at all.
+	Resolved Priority
+	// Via is the one hop the requested value takes, which is what actually
+	// happened to it. It differs from Resolved when the chain continues —
+	// renamed, then the new name removed — and a message that paired this
+	// hop's verb with Resolved's destination would describe a change nobody
+	// made.
+	Via Priority
+	// Known reports that the filter names a live priority, directly or
+	// through the forwarding chains.
+	Known bool
+	// Forwarded reports that the requested value is not itself live, so the
+	// filter was applied to the priority it now means.
+	Forwarded bool
+	// Operation names how the value was retired — a rename or a removal — for
+	// a Forwarded resolution, so a message can say which.
+	Operation ConfigOperationType
+}
+
+// ResolvePriorityFilter reports what a priority filter names in this project.
+//
+// It is exported so a caller can explain the answer List gives without
+// re-deriving the vocabulary's chains itself, and so both agree by
+// construction about which priority a filter selected — the same reason
+// ResolveStatusFilter is exported. List calls this for the resolution it
+// already performs, rather than walking the chain a second time.
+func (s Service) ResolvePriorityFilter(priority Priority) PriorityFilterResolution {
+	resolution := PriorityFilterResolution{Requested: priority}
+	resolved, live := s.Priorities.Resolve(priority)
+	if !live {
+		return resolution
+	}
+	resolution.Resolved = resolved
+	resolution.Known = true
+	if resolved != priority {
+		resolution.Forwarded = true
+		via, operation, _ := s.Priorities.Forwarding(priority)
+		resolution.Via = via
+		resolution.Operation = operation
+	}
+	return resolution
+}
+
 // List returns the project's tasks, filtered and ordered.
 //
 // A status filter outside its vocabulary is accepted and returns the tasks it
@@ -331,13 +385,11 @@ func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
 	wantedPriority := Priority("")
 	if filter.Priority != nil {
 		wantedPriority = *filter.Priority
-		if !s.Priorities.Has(wantedPriority) {
-			resolved, live := s.Priorities.Resolve(wantedPriority)
-			if !live {
-				return nil, Errorf(CategoryValidation, "invalid task priority %q", wantedPriority)
-			}
-			wantedPriority = resolved
+		resolution := s.ResolvePriorityFilter(wantedPriority)
+		if !resolution.Known {
+			return nil, Errorf(CategoryValidation, "invalid task priority %q", wantedPriority)
 		}
+		wantedPriority = resolution.Resolved
 	}
 	tasks := make([]Task, 0, len(snapshots))
 	for _, snapshot := range snapshots {

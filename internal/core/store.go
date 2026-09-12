@@ -80,6 +80,15 @@ const WarningAutoSync = "auto-sync-incomplete"
 // script cannot tell from "there is genuinely nothing here".
 const WarningStatusFilter = "status-filter-unresolved"
 
+// WarningPriorityFilter reports that a priority filter had to be forwarded
+// through a rename or a removal to select anything.
+//
+// Unlike WarningStatusFilter, it never accompanies an empty result from a
+// priority nothing resolves to: List still refuses that case outright, so a
+// caller sees this warning only alongside tasks that came back under a
+// different name than the one it typed.
+const WarningPriorityFilter = "priority-filter-forwarded"
+
 // WarningDocsRefresh reports that generated documentation this change
 // invalidated could not be rewritten — usually because somebody edited the
 // generated file, which Workbook never overwrites without being told to.

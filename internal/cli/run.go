@@ -564,7 +564,8 @@ func runList(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	if err != nil {
 		return err
 	}
-	warnings := append(statusFilterWarnings(service, filter), newerWriterWarnings(tasks)...)
+	warnings := append(statusFilterWarnings(service, filter), priorityFilterWarnings(service, filter)...)
+	warnings = append(warnings, newerWriterWarnings(tasks)...)
 	if *jsonMode {
 		writeResultWithWarnings(stdout, "list", tasks, warnings)
 	} else {
@@ -611,13 +612,53 @@ func statusFilterWarnings(service core.Service, filter core.ListFilter) []core.W
 	}
 }
 
-// forwardingVerb names how a status stopped being live, in the voice a message
-// about the value somebody typed reads in.
+// forwardingVerb names how a status or priority stopped being live, in the
+// voice a message about the value somebody typed reads in.
 func forwardingVerb(operation core.ConfigOperationType) string {
-	if operation == core.ConfigStatusRemove {
+	if operation == core.ConfigStatusRemove || operation == core.ConfigPriorityRemove {
 		return "removed into"
 	}
 	return "renamed to"
+}
+
+// priorityFilterWarnings says what a priority filter turned out to select,
+// when that is not what the caller typed. Unlike statusFilterWarnings, a
+// priority filter that resolves to nothing never reaches here: List refuses
+// that case before runList gets to warnings, and that refusal's exit code is
+// deliberately unchanged — see List's own comment for why. So this only ever
+// reports the forwarded case, a filter that had to be resolved through a
+// rename or a removal, the same way statusFilterWarnings reports it for
+// statuses.
+func priorityFilterWarnings(service core.Service, filter core.ListFilter) []core.Warning {
+	if filter.Priority == nil {
+		return nil
+	}
+	resolution := service.ResolvePriorityFilter(*filter.Priority)
+	if !resolution.Forwarded {
+		return nil
+	}
+	// The verb belongs to the one hop it describes, and the end of the chain
+	// gets its own clause; see priorityChainClause. Pairing the first hop's
+	// verb with the last hop's destination reported a rename that never
+	// happened.
+	return []core.Warning{{
+		Code: core.WarningPriorityFilter,
+		Message: fmt.Sprintf("no priority %q in this project's vocabulary; it was %s %q%s, and %q is what was listed",
+			resolution.Requested, forwardingVerb(resolution.Operation), resolution.Via,
+			priorityChainClause(resolution.Via, resolution.Resolved), resolution.Resolved),
+	}}
+}
+
+// priorityChainClause is statusChainClause's mirror for priorities: it says
+// where a chain ends when that is not where its first hop went, for the same
+// reason statusChainClause exists — Forwarding answers about one hop only, so
+// pairing that hop's verb with the chain's final destination would describe a
+// change nobody made.
+func priorityChainClause(via, resolved core.Priority) string {
+	if resolved == "" || resolved == via {
+		return ""
+	}
+	return fmt.Sprintf(", which now resolves to %q", resolved)
 }
 
 func runShow(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {

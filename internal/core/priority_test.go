@@ -83,6 +83,40 @@ func TestPriorityVocabularyResolvesARename(t *testing.T) {
 	}
 }
 
+// Forwarding is what lets a message say "renamed to" rather than the vaguer
+// "resolves to", and it answers about the first hop because that is what
+// happened to the value somebody typed. Mirrors
+// TestVocabularyForwardingNamesTheHopAndItsKind for priorities.
+func TestPriorityVocabularyForwardingNamesTheHopAndItsKind(t *testing.T) {
+	vocabulary, err := NewPriorityVocabulary(
+		[]PriorityDefinition{
+			{Priority: "critical", Label: "Critical", Rank: "1/1", Tags: []PriorityTag{PriorityTagDefault}},
+			{Priority: PriorityMedium, Label: "Medium", Rank: "2/1"},
+			{Priority: PriorityLow, Label: "Low", Rank: "3/1"},
+		},
+		[]PriorityAlias{{From: PriorityHigh, To: "critical"}},
+		[]RetiredPriority{{Priority: "urgent", Destination: PriorityLow}},
+	)
+	if err != nil {
+		t.Fatalf("NewPriorityVocabulary() error = %v", err)
+	}
+
+	destination, operation, forwarded := vocabulary.Forwarding(PriorityHigh)
+	if !forwarded || destination != "critical" || operation != ConfigPriorityRename {
+		t.Fatalf("Forwarding(high) = %q, %q, %t; want critical renamed", destination, operation, forwarded)
+	}
+	destination, operation, forwarded = vocabulary.Forwarding("urgent")
+	if !forwarded || destination != PriorityLow || operation != ConfigPriorityRemove {
+		t.Fatalf("Forwarding(urgent) = %q, %q, %t; want low removed", destination, operation, forwarded)
+	}
+	if _, _, forwarded := vocabulary.Forwarding("critical"); forwarded {
+		t.Fatal("Forwarding(critical) reported a live priority as forwarded")
+	}
+	if _, _, forwarded := vocabulary.Forwarding("nonsense"); forwarded {
+		t.Fatal("Forwarding(nonsense) reported an unknown priority as forwarded")
+	}
+}
+
 // Arity: exactly one default, at least one priority.
 func TestPriorityVocabularyValidateRefusesTwoDefaults(t *testing.T) {
 	vocabulary, err := NewPriorityVocabulary([]PriorityDefinition{
@@ -421,6 +455,35 @@ func TestServiceListFilterResolvesAStoredPriorityFilterThroughTheChains(t *testi
 	}
 	if len(sameTasks) != 2 {
 		t.Fatalf("List(%q) returned %d tasks, want 2", live, len(sameTasks))
+	}
+}
+
+// ResolvePriorityFilter reports what List's own resolution of a priority
+// filter found, mirroring TestServiceListResolvesAStoredFilterThroughTheChains
+// for priorities: a filter naming a renamed-away priority reports itself
+// known, forwarded, resolved to the live priority, and names the rename as the
+// operation that did it. A well-formed but genuinely unknown name reports as
+// not known — List still refuses that case outright (see
+// TestServiceListFilterOnAnUnconfiguredProjectRefusesAnUndefinedPriority), so
+// this asserts the resolution directly rather than through List.
+func TestResolvePriorityFilterNamesTheHopThatForwardedAFilter(t *testing.T) {
+	service := priorityServiceUnderTest(newMemoryTaskStore(), &sequenceIDSource{}, priorityVocabularyRenamingHighToMedium(t))
+
+	renamed := Priority(PriorityHigh)
+	resolution := service.ResolvePriorityFilter(renamed)
+	if !resolution.Known || !resolution.Forwarded ||
+		resolution.Resolved != PriorityMedium || resolution.Operation != ConfigPriorityRename {
+		t.Fatalf("ResolvePriorityFilter(%q) = %#v, want a rename forwarded to medium", renamed, resolution)
+	}
+
+	live := Priority(PriorityMedium)
+	if resolution := service.ResolvePriorityFilter(live); !resolution.Known || resolution.Forwarded {
+		t.Fatalf("ResolvePriorityFilter(%q) = %#v, want a live priority", live, resolution)
+	}
+
+	unknown := Priority("nonsense")
+	if resolution := service.ResolvePriorityFilter(unknown); resolution.Known {
+		t.Fatalf("ResolvePriorityFilter(%q) = %#v, want an unknown priority", unknown, resolution)
 	}
 }
 

@@ -342,6 +342,28 @@ func (vocabulary PriorityVocabulary) Resolve(priority Priority) (Priority, bool)
 	return resolveForward(vocabulary.forward, vocabulary.Has, priority)
 }
 
+// Forwarding reports the one hop a retired priority takes, and how it was
+// retired, so a caller can say "renamed to" or "removed into" rather than the
+// vaguer "resolves to". It is Vocabulary.Forwarding's mirror for priorities.
+//
+// It answers about the first hop only, deliberately. A chain's later hops are
+// somebody else's later decisions, and the message a person needs names what
+// happened to the value they typed.
+func (vocabulary PriorityVocabulary) Forwarding(priority Priority) (Priority, ConfigOperationType, bool) {
+	vocabulary = vocabulary.effective()
+	for _, alias := range vocabulary.aliases {
+		if alias.From == priority {
+			return alias.To, ConfigPriorityRename, true
+		}
+	}
+	for _, entry := range vocabulary.retired {
+		if entry.Priority == priority {
+			return entry.Destination, ConfigPriorityRemove, true
+		}
+	}
+	return "", "", false
+}
+
 // AppendRank returns the rank a priority added after every existing one
 // takes. It is nextRank's rule for priorities, the same rule
 // Vocabulary.AppendRank applies for statuses.
