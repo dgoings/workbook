@@ -758,13 +758,22 @@ func priorityChangeInverse(before core.PriorityVocabulary, operations []core.Con
 // priorityPackInverse is the command that undoes one recorded pack's priority
 // change, and the only place a priority inverse is decided.
 //
-// It answers about the first priority operation in the pack rather than about
+// It answers about the first operation somebody authored rather than about
 // operations[0], which is the one way it departs from statusPackInverse: a
 // ledger commit can carry a project's built-in priorities backfilled ahead of
 // its first priority change — see gitstore's prependBuiltInPriorities — and
-// answering about the first operation would describe the backfill instead of
-// the change somebody made.
+// answering about the first operation would offer `priority delete high --into
+// medium` as the undo for a command that added something else entirely.
+//
+// Which operations those are is authoredPriorityOperations's to say. Being a
+// priority operation is not the distinction and never was: the backfill is
+// three of them.
 func priorityPackInverse(before configBefore, operations []core.ConfigOperation) *priorityInverse {
+	// The whole function reads the authored operations, not the recorded pack:
+	// a companion clause that scans for a relabel or counts a drag's moves must
+	// see the same change the subject came from. Stripping is idempotent, so a
+	// caller that already stripped loses nothing by not having to know.
+	operations = authoredPriorityOperations(before, operations)
 	operation, found := subjectPriorityOperation(operations)
 	if !found {
 		return nil
@@ -813,8 +822,14 @@ func priorityPackInverse(before configBefore, operations []core.ConfigOperation)
 	}
 }
 
-// subjectPriorityOperation is the operation in a pack that the commit is about,
-// for the priority section: the first one that touches priorities.
+// subjectPriorityOperation is the operation a commit is about, for the priority
+// section: the first one in what it is handed that touches priorities.
+//
+// It decides nothing about the backfill, and a caller must not hand it a
+// recorded pack expecting it to. The built-in three that a project's first
+// priority change records ahead of itself are priority operations too, so this
+// would answer about one of them — which is the bug it was once wrongly claimed
+// to avoid. Strip them with authoredPriorityOperations first.
 func subjectPriorityOperation(operations []core.ConfigOperation) (core.ConfigOperation, bool) {
 	for _, operation := range operations {
 		if operation.Type.TouchesPriorities() {
@@ -822,6 +837,73 @@ func subjectPriorityOperation(operations []core.ConfigOperation) (core.ConfigOpe
 		}
 	}
 	return core.ConfigOperation{}, false
+}
+
+// authoredPriorityOperations is one recorded pack with gitstore's built-in
+// backfill removed: the operations somebody actually ran.
+//
+// A project whose ledger predates the priorities section has the built-in three
+// recorded as three priority.add operations at the front of its first priority
+// commit — see gitstore's prependBuiltInPriorities — and everything in the log
+// that names, counts or inverts a change has to answer about what follows them.
+// Two facts identify that prefix, and neither would do alone:
+//
+//   - The commit's previous state had no priorities section at all. That is
+//     exactly when gitstore prepends, and exactly the zero PriorityVocabulary
+//     configBefore carries for such a parent.
+//   - Its leading operations are the built-in three, as adds, in the built-in
+//     order, with the labels, ranks and tags that vocabulary defines.
+//
+// Nothing authored can be mistaken for that prefix. planPriorityAdd refuses a
+// priority the project already defines, and a project with no priorities
+// section is read as having the built-in three, so `priority add high` on the
+// one kind of project where the backfill fires never reaches the ledger at all.
+//
+// A pack that is nothing but the prefix comes back whole rather than emptied.
+// gitstore prepends only ahead of an authored priority operation, so no such
+// pack exists; should one ever arrive from a peer, describing it by its first
+// operation beats dropping the commit out of the log entirely.
+//
+// It is idempotent: what it returns no longer carries the prefix.
+func authoredPriorityOperations(before configBefore, operations []core.ConfigOperation) []core.ConfigOperation {
+	if !before.priorities.IsZero() {
+		return operations
+	}
+	definitions := core.BuiltInPriorityVocabulary().Definitions()
+	if len(operations) <= len(definitions) {
+		return operations
+	}
+	for index, definition := range definitions {
+		if !isBuiltInPriorityBackfill(operations[index], definition) {
+			return operations
+		}
+	}
+	return operations[len(definitions):]
+}
+
+// isBuiltInPriorityBackfill reports whether one operation is the add gitstore
+// writes for one built-in priority.
+//
+// Every member the backfill sets is compared, rather than the name alone: a
+// peer's authored add that happened to reuse a built-in name would carry its
+// own label, rank or tags, and answering about it as though it were bookkeeping
+// would hide a change somebody made.
+func isBuiltInPriorityBackfill(operation core.ConfigOperation, definition core.PriorityDefinition) bool {
+	if operation.Type != core.ConfigPriorityAdd {
+		return false
+	}
+	if operation.PriorityName != definition.Priority ||
+		operation.Label != definition.Label ||
+		operation.Rank != definition.Rank ||
+		len(operation.PriorityTags) != len(definition.Tags) {
+		return false
+	}
+	for index, tag := range operation.PriorityTags {
+		if tag != definition.Tags[index] {
+			return false
+		}
+	}
+	return true
 }
 
 // priorityAddInverse removes what an add defined, and names where the tasks
@@ -1083,7 +1165,9 @@ func priorityOperationSummary(operation core.ConfigOperation) (string, bool) {
 //
 // It counts only this section's operations, so a commit that also changed a
 // status does not report that column's edit as "+1 more change" in a log about
-// priorities.
+// priorities. It counts what it is handed and nothing else, which is how the
+// log keeps gitstore's backfill out of both the clause and the count: see
+// authoredPriorityOperations.
 func priorityPackSummary(operations []core.ConfigOperation) string {
 	subject, found := subjectPriorityOperation(operations)
 	if !found {

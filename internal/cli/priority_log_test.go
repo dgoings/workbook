@@ -2,6 +2,8 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -144,5 +146,131 @@ func TestPriorityLogOffersNoInverseForARoleThisBuildCannotName(t *testing.T) {
 	}
 	if !inverse.Exact || inverse.Command != "workbook priority tag medium --tag default" {
 		t.Fatalf("inverse = %#v, want an exact `priority tag medium --tag default`", inverse)
+	}
+}
+
+// writeLegacyPriorityLessLedger replaces a project's configuration ledger with
+// the one shape that reaches gitstore's built-in backfill: a ledger whose
+// genesis carries a status vocabulary and no priorities section at all.
+//
+// No path in this build writes such a root. `setup` mints one carrying
+// core.BuiltInPriorityVocabulary(), and so does the lazy seed a project with no
+// ledger takes — which is why deleting the configuration ref, the way
+// preLedgerRepository does, reaches the seed rather than the backfill. Only a
+// project configured by a build that predates the priorities section has this
+// root, and a genesis is immutable, so the first priority.* operation authored
+// against it is recorded together with the built-in three. Writing that root by
+// hand is the only way to drive the command line over one.
+//
+// The objects are the two blobs, one tree and one commit every configuration
+// commit is made of; see gitstore's writeConfigObjects for the shape being
+// reproduced.
+func writeLegacyPriorityLessLedger(t *testing.T, repository string) {
+	t.Helper()
+	root := gitOutput(t, repository, "rev-list", "--max-parents=0", configLedgerRefName)
+	minted := gitOutput(t, repository, "cat-file", "blob", root+":operation.json")
+	var existing core.ConfigOperationPack
+	if err := json.Unmarshal([]byte(minted), &existing); err != nil {
+		t.Fatalf("decode the minted genesis: %v", err)
+	}
+
+	ids := core.CryptoULIDSource{}
+	generation, err := ids.New()
+	if err != nil {
+		t.Fatalf("generation ID: %v", err)
+	}
+	genesisID, err := ids.New()
+	if err != nil {
+		t.Fatalf("genesis operation ID: %v", err)
+	}
+	pack, err := core.NewConfigOperationPack(
+		existing.ProjectID, generation, existing.Actor.ID, 1, existing.WallTime,
+		[]core.ConfigOperation{{
+			ID:     genesisID,
+			Type:   core.ConfigGenesis,
+			Config: &core.ConfigData{Vocabulary: core.LegacyVocabulary().Document()},
+		}})
+	if err != nil {
+		t.Fatalf("NewConfigOperationPack() error = %v", err)
+	}
+	state, err := core.ApplyConfig(nil, pack)
+	if err != nil {
+		t.Fatalf("ApplyConfig() error = %v", err)
+	}
+	if state.Config.Priorities != nil {
+		t.Fatalf("legacy genesis state carries a priorities section: %#v", state.Config.Priorities)
+	}
+	packBytes, err := core.EncodeDocument(pack)
+	if err != nil {
+		t.Fatalf("encode the legacy genesis pack: %v", err)
+	}
+	stateBytes, err := core.EncodeDocument(state)
+	if err != nil {
+		t.Fatalf("encode the legacy genesis state: %v", err)
+	}
+
+	operationBlob := gitWithInput(t, repository, string(packBytes), "hash-object", "-w", "-t", "blob", "--stdin")
+	stateBlob := gitWithInput(t, repository, string(stateBytes), "hash-object", "-w", "-t", "blob", "--stdin")
+	tree := gitWithInput(t, repository, fmt.Sprintf(
+		"100644 blob %s\toperation.json\n100644 blob %s\tstate.json\n", operationBlob, stateBlob), "mktree")
+	commit := gitOutput(t, repository, "commit-tree", tree, "-m", "Record the Workbook configuration genesis")
+	gitOutput(t, repository, "update-ref", configLedgerRefName, commit)
+}
+
+// The log names the change somebody authored, not the backfill recorded beside
+// it, and the inverse it prints undoes that change and nothing else.
+//
+// A project whose ledger predates the priorities section records its first
+// priority change together with the built-in three, as three priority.add
+// operations ahead of the authored one. Those adds are priority operations, so
+// a rule that answers about the first priority operation in the pack answers
+// about `high` — and prints `priority delete high --into medium` as the undo
+// for a command that added `urgent`. An inverse is printed so somebody can
+// paste it, so such an entry destroys a priority the project still uses and
+// forwards its tasks away from it.
+func TestPriorityLogDescribesTheAuthoredChangeRatherThanTheBackfill(t *testing.T) {
+	repository := initializedRepository(t)
+	writeLegacyPriorityLessLedger(t, repository)
+	urgentWork := cliCreateTaskAtPriority(t, repository, "Ship the fix", "high")
+	ordinaryWork := cliCreateTask(t, repository, "Write the notes")
+
+	mustRunStatus(t, repository, "priority", "add", "urgent", "--before", "high", "--no-sync")
+
+	document := cliPriorityLog(t, repository)
+	if len(document.Entries) != 1 {
+		t.Fatalf("log = %#v, want the one change this project made", document)
+	}
+	entry := document.Entries[0]
+	if entry.Summary != "added priority urgent" {
+		t.Errorf("summary = %q, want the authored add named with no backfill counted", entry.Summary)
+	}
+	if entry.Collapsed != 0 {
+		t.Errorf("collapsed = %d, want 0: the backfill changed none of this project's priorities", entry.Collapsed)
+	}
+	if entry.Inverse == nil {
+		t.Fatal("inverse = nil, want the command that removes the added priority")
+	}
+	if entry.Inverse.Command != "workbook priority delete urgent --into medium" {
+		t.Fatalf("inverse = %q, want the undo for the add somebody ran", entry.Inverse.Command)
+	}
+
+	// An inverse is printed to be pasted, so paste it: the project is back to
+	// the built-in three and every task is still filed where it was.
+	mustRunStatus(t, repository, "priority", "delete", "urgent", "--into", "medium", "--no-sync")
+	if got, want := cliPriorityNames(t, repository), []string{"high", "medium", "low"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("priorities after the inverse = %v, want %v", got, want)
+	}
+	list := cliPriorityList(t, repository)
+	if list.Default != "medium" {
+		t.Errorf("default after the inverse = %q, want medium", list.Default)
+	}
+	if len(list.Unresolved) != 0 {
+		t.Errorf("unresolved after the inverse = %#v, want every task still resolving", list.Unresolved)
+	}
+	if got := showTask(t, repository, urgentWork.ID).Priority; got != core.PriorityHigh {
+		t.Errorf("the task filed under high reads back at %q, want high", got)
+	}
+	if got := showTask(t, repository, ordinaryWork.ID).Priority; got != core.PriorityMedium {
+		t.Errorf("the task filed under medium reads back at %q, want medium", got)
 	}
 }

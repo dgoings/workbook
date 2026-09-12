@@ -85,7 +85,13 @@ func runPriorityLog(ctx context.Context, args []string, cwd string, stdout, stde
 func buildPriorityLog(ledger configLedgerWindow, window int) priorityLogResult {
 	entries := make([]priorityLogEntry, 0, len(ledger.Commits))
 	for _, commit := range ledger.Commits {
-		primary, found := subjectPriorityOperation(commit.Pack.Operations)
+		// Every member below is read from the authored operations rather than
+		// from the recorded pack, because an entry is an account of what
+		// somebody ran. The one commit where the two differ is a project's first
+		// priority change, which gitstore records together with the built-in
+		// three it had been using all along; see authoredPriorityOperations.
+		authored := authoredPriorityOperations(commit.Before, commit.Pack.Operations)
+		primary, found := subjectPriorityOperation(authored)
 		if !found {
 			continue
 		}
@@ -95,9 +101,17 @@ func buildPriorityLog(ledger configLedgerWindow, window int) priorityLogResult {
 			WallTime:    commit.Pack.WallTime,
 			Actor:       commit.Pack.Actor.ID,
 			Operation:   primary.Type,
-			Summary:     priorityPackSummary(commit.Pack.Operations),
-			Collapsed:   priorityOperationCount(commit.Pack.Operations) - 1,
-			Inverse:     priorityPackInverse(commit.Before, commit.Pack.Operations),
+			Summary:     priorityPackSummary(authored),
+			// The backfill is left out of this count as well as out of the
+			// summary, and that is the honest number rather than a convenient
+			// one: "+3 more priority change(s)" would claim the commit changed
+			// three priorities it did not. The project's priorities were the
+			// built-in three before the commit — every reader substituted them —
+			// and they are the built-in three plus the authored change after it.
+			// What the backfill changed is where they are written down, which is
+			// not news about a priority.
+			Collapsed: priorityOperationCount(authored) - 1,
+			Inverse:   priorityPackInverse(commit.Before, commit.Pack.Operations),
 		})
 	}
 	total := len(entries)
