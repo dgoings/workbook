@@ -54,6 +54,18 @@ of the changes below break scripts; both are described under Changed.
   case the refusal above has taken away, so its name described the one thing it
   no longer reports.
 
+### Fixed
+- **Ctrl+C on `workbook serve` now exits at once, and exits cleanly.** With a
+  browser tab open on the board it used to sit for five seconds and then print
+  `serve board: context deadline exceeded` and exit non-zero, with nothing
+  actually wrong: browsers open spare connections they never send a request on,
+  and the shutdown was waiting for requests that were never coming. It now drops
+  those connections immediately and gives only a request already under way a
+  couple of seconds to answer. A change made on the board is recorded locally
+  before it is published, so quitting in the middle of a publish leaves the
+  project where a failed publish leaves it — recorded, and picked up by the next
+  sync.
+
 ## v0.5.1 — 2026-08-23
 
 Five stories from adversarially reviewed pull requests: the web board learns
