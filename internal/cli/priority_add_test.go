@@ -264,3 +264,74 @@ func TestPriorityAddRefusesADuplicateAndTwoAnchors(t *testing.T) {
 		t.Fatalf("priorities after the refusals = %v, want %v", got, want)
 	}
 }
+
+// The same guarantee on the other road into a first priority change: a project
+// whose configuration ledger already exists, written before a priorities
+// section did.
+//
+// The test above uses a project with no ledger at all, and that reaches
+// seedConfigLedger — which writes a genesis carrying the built-in three from
+// the start, so nothing is ever missing from it. This one reaches the harder
+// case. The genesis exists and is immutable, so the built-ins cannot be put
+// into it after the fact; gitstore's prependBuiltInPriorities writes them as
+// ordinary operations in the same pack as the first priority change instead.
+// That mechanism is what stands between a project like this and a fold that
+// starts from an empty section and produces a vocabulary of exactly one,
+// stranding every task already filed at high, medium or low.
+//
+// Both roads are real — most projects have a ledger, because one is seeded the
+// first time anybody changes a status — and only this one has to get the
+// backfill right.
+func TestPriorityAddLeavesEveryExistingTaskResolvingOnALegacyLedger(t *testing.T) {
+	// The ledger setup minted is what writeLegacyPriorityLessLedger rewrites
+	// into a pre-priorities root, so this starts from a configured project
+	// rather than from preLedgerRepository's ledgerless one.
+	repository := initializedRepository(t)
+	urgentWork := cliCreateTaskAtPriority(t, repository, "Ship the fix", "high")
+	ordinaryWork := cliCreateTask(t, repository, "Write the notes")
+	laterWork := cliCreateTaskAtPriority(t, repository, "Rename the thing", "low")
+	writeLegacyPriorityLessLedger(t, repository)
+
+	added := cliPriorityNamingMutation(t, repository, "priority add",
+		"priority", "add", "urgent", "--before", "high", "--no-sync", "--json")
+	if !added.Vocabulary.Seeded {
+		t.Fatalf("add vocabulary = %#v, want the project's first priority commit", added.Vocabulary)
+	}
+
+	document := cliPriorityList(t, repository)
+	if got, want := cliPriorityNames(t, repository), []string{
+		"urgent", "high", "medium", "low",
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("priorities after the first add = %v, want %v: the backfill has to carry the built-in "+
+			"three into the same pack", got, want)
+	}
+	if document.Default != "medium" {
+		t.Fatalf("default after the first add = %q, want medium", document.Default)
+	}
+	if len(document.Unresolved) != 0 {
+		t.Fatalf("unresolved after the first add = %#v, want every task still resolving", document.Unresolved)
+	}
+	for priority, want := range map[string]int{"urgent": 0, "high": 1, "medium": 1, "low": 1} {
+		if got := priorityTaskCount(t, document, priority); got != want {
+			t.Errorf("tasks at %s = %d, want %d", priority, got, want)
+		}
+	}
+
+	for _, want := range []struct {
+		task     core.Task
+		priority core.Priority
+	}{
+		{urgentWork, core.PriorityHigh},
+		{ordinaryWork, core.PriorityMedium},
+		{laterWork, core.PriorityLow},
+	} {
+		task := showTask(t, repository, want.task.ID)
+		if task.Priority != want.priority {
+			t.Errorf("%s priority = %q, want %q", task.ID, task.Priority, want.priority)
+		}
+		if task.StoredPriority != "" {
+			t.Errorf("%s stored priority = %q, want the stored value to still be the live one",
+				task.ID, task.StoredPriority)
+		}
+	}
+}
