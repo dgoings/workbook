@@ -2,6 +2,7 @@ package core
 
 import (
 	"bytes"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -17,10 +18,11 @@ import (
 func newerWriterPack(t *testing.T, generation int, operationType string) string {
 	t.Helper()
 	document := goldenTaskRefs[1].operation
-	marked := strings.Replace(document, `"version":1,`, `"version":1,"minReader":`+itoa(generation)+`,`, 1)
+	marked := markGeneration(document, generation)
 	if marked == document {
 		t.Fatal("the fixture substitution matched nothing; the golden table changed shape")
 	}
+	assertOneMarker(t, "the forged pack", marked)
 	if operationType == "" {
 		return marked
 	}
@@ -34,11 +36,47 @@ func newerWriterPack(t *testing.T, generation int, operationType string) string 
 
 func newerWriterState(t *testing.T, document string, generation int) string {
 	t.Helper()
-	marked := strings.Replace(document, `"version":1,`, `"version":1,"minReader":`+itoa(generation)+`,`, 1)
+	marked := markGeneration(document, generation)
 	if marked == document {
 		t.Fatal("the fixture substitution matched nothing; the golden table changed shape")
 	}
+	assertOneMarker(t, "the forged checkpoint", marked)
 	return marked
+}
+
+// markGeneration sets a fixture's writer-format marker: it replaces the marker
+// the document already carries, or inserts one after the envelope version if it
+// carries none. internal/cli and internal/gitstore keep the same helper in the
+// same shape; the three packages cannot share a test file, so they share a
+// shape instead.
+//
+// Replace-if-present is not decoration here. These golden task fixtures carry
+// no marker today, which is the only reason the insert-only form this replaced
+// was correct — one non-zero entry in operationMinReader and it would have
+// produced two minReader members, which Go's decoder resolves to the last, so
+// the fixture would have claimed the generation it was trying to exceed. That
+// is exactly what happened to internal/cli's forgeries once the configuration
+// genesis started carrying a marker.
+var storedMarkerPattern = regexp.MustCompile(`"minReader":\d+`)
+
+func markGeneration(document string, generation int) string {
+	if generation == 0 {
+		return document
+	}
+	marker := `"minReader":` + itoa(generation)
+	if storedMarkerPattern.MatchString(document) {
+		return storedMarkerPattern.ReplaceAllString(document, marker)
+	}
+	return strings.Replace(document, `"version":1,`, `"version":1,`+marker+`,`, 1)
+}
+
+// assertOneMarker fails loudly when a forged document carries anything but one
+// writer-format marker, so a silent duplicate cannot read as a production bug.
+func assertOneMarker(t *testing.T, what, document string) {
+	t.Helper()
+	if count := strings.Count(document, `"minReader"`); count != 1 {
+		t.Fatalf("%s carries %d minReader members, want exactly 1: %s", what, count, document)
+	}
 }
 
 func itoa(value int) string { return strconv.Itoa(value) }
