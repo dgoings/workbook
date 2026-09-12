@@ -27,10 +27,26 @@ Priorities become a per-project vocabulary, the way statuses already are. Two
 of the changes below break scripts; both are described under Changed.
 
 ### Added
+- **A project defines its own priorities.** `high`, `medium` and `low` stop
+  being the only ones there are: `workbook priority` gains `list`, `add`,
+  `rename`, `label`, `move`, `tag`, `delete`, `color` and `log`, the same verbs
+  `workbook status` has, and every mutating one prints the command that reverses
+  it. A project that changes nothing keeps the three it has always had, and its
+  stored history does not change by a byte.
+- A priority carries a color, set with `workbook priority color <priority>
+  #rrggbb` and cleared by omitting the value, which returns it to one derived
+  from its position.
+- `workbook priority delete` requires `--into`, naming where the removed
+  priority's tasks belong. It is never guessed, and removing the last remaining
+  priority is refused outright — every task has to be at one.
 - A priority filter naming a priority that was renamed or removed away now says
   what the name resolves to, instead of quietly listing a different priority's
   tasks. It carries a `priority-filter-forwarded` warning beside the results,
   mirroring what a status filter has always done.
+- `.workbook/guidelines.md` documents the priorities a project actually uses.
+  Its "Canonical priorities" table always printed the built-in three, so the one
+  document an agent reads to learn a project's vocabulary described a different
+  project.
 
 ### Changed
 - **Every project created by this release records its priorities, and so
