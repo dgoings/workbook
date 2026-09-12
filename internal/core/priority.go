@@ -171,11 +171,24 @@ func (vocabulary PriorityVocabulary) IsZero() bool {
 	return len(vocabulary.definitions) == 0 && len(vocabulary.aliases) == 0 && len(vocabulary.retired) == 0
 }
 
-// builtInPriorityVocabulary is what every accessor but Validate substitutes
-// for the zero value. It is cached behind sync.OnceValue the way
-// DefaultVocabulary is, rather than rebuilt — with its two maps — on every
-// accessor call a rendering path makes per task.
-var builtInPriorityVocabulary = sync.OnceValue(func() PriorityVocabulary {
+// BuiltInPriorityVocabulary is the priority vocabulary every project is using
+// until something changes one: today's three, medium carrying the default
+// tag the service used to hardcode.
+//
+// Unlike statuses, there is no DefaultVocabulary/LegacyVocabulary split here.
+// A freshly minted project and one that predates the configuration ledger
+// entirely are both, today, using the same built-in three — nothing has ever
+// shipped a different starting set the way `blocked` once diverged from
+// legacyStatusDefinitions — so gitstore's MintConfigLedger and its lazy
+// seedConfigLedger both read this one accessor for their genesis. Should the
+// built-ins ever need to diverge the way the status ones did, that is the
+// day this splits into two, mirroring vocabulary.go's pair.
+//
+// It is exported so gitstore can write it into a genesis's ConfigData, and
+// cached behind sync.OnceValue the way DefaultVocabulary is, rather than
+// rebuilt — with its two maps — on every accessor call a rendering path
+// makes per task.
+var BuiltInPriorityVocabulary = sync.OnceValue(func() PriorityVocabulary {
 	return newPriorityVocabularyFromCanonical(PriorityDocument{Priorities: builtInPriorityDefinitions()})
 })
 
@@ -184,7 +197,7 @@ var builtInPriorityVocabulary = sync.OnceValue(func() PriorityVocabulary {
 // substitution the doc comment on PriorityVocabulary describes.
 func (vocabulary PriorityVocabulary) effective() PriorityVocabulary {
 	if vocabulary.IsZero() {
-		return builtInPriorityVocabulary()
+		return BuiltInPriorityVocabulary()
 	}
 	return vocabulary
 }
