@@ -1716,10 +1716,13 @@ func runStatusMutation(
 		return err
 	}
 	session.fetchBefore(ctx)
-	// The vocabulary the fetch settled on is the one this change is authored
+	// The configuration the fetch settled on is the one this change is authored
 	// against, which is what makes `status rename` land on a teammate's newer
-	// name rather than on the one this clone opened with.
-	if err := session.refreshVocabulary(ctx); err != nil {
+	// name rather than on the one this clone opened with. It refreshes the
+	// priorities in the same read, because the guidelines this mutation
+	// regenerates document them beside the statuses and would otherwise be
+	// rewritten from a section the fetch had already superseded.
+	if err := session.refreshConfiguration(ctx); err != nil {
 		return err
 	}
 	before := session.service.Vocabulary

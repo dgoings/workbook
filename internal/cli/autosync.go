@@ -91,15 +91,25 @@ func openTaskSession(ctx context.Context, cwd string, noSync, withWriter bool, s
 	if err != nil {
 		return nil, err
 	}
-	// The session opens on the vocabulary this clone currently holds, and
-	// refreshes it after the fetch; see refreshVocabulary.
-	vocabulary, err := repository.LoadVocabulary(ctx)
+	// The session opens on the configuration this clone currently holds, and
+	// refreshes it after the fetch; see refreshConfiguration.
+	//
+	// Both sections, from one read. The statuses alone were enough only while
+	// nothing could configure a priority: a Service that left Priorities at the
+	// zero value substitutes the built-in three, which is what an unconfigured
+	// project has, so the omission was invisible. It stops being invisible the
+	// moment a project puts its own priority on file — `create --priority` would
+	// refuse it, `next` would rank against the wrong vocabulary, and a status
+	// change would regenerate guidelines that document priorities this project
+	// does not use.
+	state, err := repository.LoadVocabularyState(ctx, config)
 	if err != nil {
 		return nil, err
 	}
 	service := core.Service{
 		Config:     config,
-		Vocabulary: vocabulary,
+		Vocabulary: state.Vocabulary,
+		Priorities: state.Priorities,
 		Reader:     store,
 		IDs:        core.CryptoULIDSource{},
 		Now:        time.Now,
@@ -328,25 +338,35 @@ func (session *taskSession) pushInline(ctx context.Context, taskID string) {
 	session.report.Status = syncStatusCompleted
 }
 
-// refreshVocabulary re-reads the project's statuses after the fetch that may
-// have changed them.
+// refreshConfiguration re-reads the project's statuses and priorities after the
+// fetch that may have changed them, from one read of one tip.
 //
-// A mutation must be validated against the vocabulary this command ends up
+// A mutation must be validated against the configuration this command ends up
 // writing into, not the one it started with. A teammate who renamed `ready` to
 // `todo` an hour ago means that `--status todo` typed here should be accepted
-// and that a task still stored under `ready` should be settled on this write.
-// Both of those are properties of the fetched configuration, and the fetch
-// happens after the session was opened.
+// and that a task still stored under `ready` should be settled on this write;
+// the same is true of a teammate who added `urgent`. Both are properties of the
+// fetched configuration, and the fetch happens after the session was opened.
 //
-// It costs nothing when nothing changed: the repository memoizes the
-// vocabulary, and the fetch's configuration stage replaced the memoized value
-// in place when it moved the ledger.
-func (session *taskSession) refreshVocabulary(ctx context.Context) error {
-	vocabulary, err := session.repository.LoadVocabulary(ctx)
+// It is one refresher for both sections rather than one per section, and that
+// is the point. Reading the statuses and the priorities separately would let a
+// fetch land between them and render a project out of two configurations, which
+// is what gitstore.VocabularyState exists to prevent — and a task mutation that
+// refreshed only the statuses would author against priorities the fetch had
+// already superseded, which is the same bug in the half nobody was looking at.
+//
+// It costs one ref enumeration: LoadVocabularyState skips the repository's
+// vocabulary memo on purpose, because that memo records no head, and memoizes
+// the decode instead, keyed on the tip it decoded. A command that reaches here
+// has just run a fetch, so one local `for-each-ref` beside a network round trip
+// is not the expensive part of this path.
+func (session *taskSession) refreshConfiguration(ctx context.Context) error {
+	state, err := session.repository.LoadVocabularyState(ctx, session.config)
 	if err != nil {
 		return err
 	}
-	session.service.Vocabulary = vocabulary
+	session.service.Vocabulary = state.Vocabulary
+	session.service.Priorities = state.Priorities
 	return nil
 }
 
@@ -387,7 +407,7 @@ func (session *taskSession) mutate(
 	apply func(context.Context) (core.MutationResult, error),
 ) (core.MutationResult, error) {
 	session.fetchBefore(ctx)
-	if err := session.refreshVocabulary(ctx); err != nil {
+	if err := session.refreshConfiguration(ctx); err != nil {
 		return core.MutationResult{}, err
 	}
 	if conflict := session.conflictFor(ctx, target); conflict != nil {

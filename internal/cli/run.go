@@ -1215,7 +1215,7 @@ func runNext(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	}
 
 	session.fetchBefore(ctx)
-	if err := session.refreshVocabulary(ctx); err != nil {
+	if err := session.refreshConfiguration(ctx); err != nil {
 		return err
 	}
 	task, err := session.service.Next(ctx, options)
@@ -2128,17 +2128,24 @@ func openServiceParts(ctx context.Context, cwd string, stderr io.Writer) (core.S
 	if err != nil {
 		return core.Service{}, nil, nil, err
 	}
-	// The project's own status vocabulary, not the built-in default. This is
-	// what turns the per-project statuses on for real: every projected task
-	// resolves its stored status through the configured forwarding chains, and
-	// every mutation settles a stale token against them.
-	vocabulary, err := repository.LoadVocabulary(ctx)
+	// The project's own statuses and priorities, not the built-in defaults.
+	// This is what turns the per-project vocabularies on for real: every
+	// projected task resolves its stored status and its stored priority through
+	// the configured forwarding chains, every mutation settles a stale token
+	// against them, and the board's columns and priority order are the
+	// project's own.
+	//
+	// Both from one read, for the reason gitstore.VocabularyState exists: a
+	// caller answered from either side of a fetch would draw one board out of
+	// two configurations.
+	state, err := repository.LoadVocabularyState(ctx, config)
 	if err != nil {
 		return core.Service{}, nil, nil, err
 	}
 	return core.Service{
 		Config:     config,
-		Vocabulary: vocabulary,
+		Vocabulary: state.Vocabulary,
+		Priorities: state.Priorities,
 		Reader:     store,
 		Writer:     repository,
 		Blobs:      repository,
@@ -2168,13 +2175,19 @@ func openReadService(ctx context.Context, cwd string, stderr io.Writer) (core.Se
 	if err != nil {
 		return core.Service{}, err
 	}
-	vocabulary, err := repository.LoadVocabulary(ctx)
+	// Both configured vocabularies, from one read, exactly as the write
+	// service above opens on both. A read service that loaded only the statuses
+	// would refuse `list --priority` for a priority the project configured and
+	// sort every task it did list against a vocabulary the project does not
+	// use.
+	state, err := repository.LoadVocabularyState(ctx, config)
 	if err != nil {
 		return core.Service{}, err
 	}
 	return core.Service{
 		Config:     config,
-		Vocabulary: vocabulary,
+		Vocabulary: state.Vocabulary,
+		Priorities: state.Priorities,
 		Reader:     store,
 		History:    store,
 		// A read service reads attachments too: their bytes are Git objects

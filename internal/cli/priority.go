@@ -378,25 +378,6 @@ func runPriorityMutation(
 	return nil
 }
 
-// refreshConfiguration re-reads both configuration sections after the fetch
-// that may have changed them, from one read of one tip.
-//
-// refreshVocabulary answers the same question for the statuses alone, and is
-// what a task mutation needs. A priority mutation needs both — it authors
-// against the priorities and regenerates guidelines that document the statuses
-// beside them — and reading the two separately would let a fetch land between
-// them and describe a project out of two configurations, which is exactly what
-// VocabularyState exists to prevent.
-func (session *taskSession) refreshConfiguration(ctx context.Context) error {
-	state, err := session.repository.LoadVocabularyState(ctx, session.config)
-	if err != nil {
-		return err
-	}
-	session.service.Vocabulary = state.Vocabulary
-	session.service.Priorities = state.Priorities
-	return nil
-}
-
 // priorityReadService builds a read-only service on a repository that is
 // already open, with both vocabularies, so a priority command holds one
 // projection handle rather than two and every task it lists has had its stored
