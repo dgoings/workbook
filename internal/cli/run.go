@@ -100,6 +100,8 @@ func Run(ctx context.Context, args []string, cwd string, stdout, stderr io.Write
 		err = runSync(ctx, commandArgs, cwd, stdout, stderr)
 	case "status":
 		err = runStatus(ctx, commandArgs, cwd, stdout, stderr)
+	case "priority":
+		err = runPriority(ctx, commandArgs, cwd, stdout, stderr)
 	case "config":
 		err = runConfig(ctx, commandArgs, cwd, stdout, stderr)
 	case "docs":

@@ -717,6 +717,11 @@ type configLedgerCommit struct {
 type configBefore struct {
 	vocabulary core.Vocabulary
 	display    core.DisplaySettings
+	// priorities is the third section, carried for the reason the other two
+	// are: a priority inverse is a statement about what the change replaced,
+	// and reading it from a different commit than the pack would describe a
+	// configuration that never existed.
+	priorities core.PriorityVocabulary
 }
 
 // configLedgerWindow is what one bounded read of the ledger saw: the commits it
@@ -772,7 +777,11 @@ func readConfigLedgerWindow(
 				Pack:   commit.Operation,
 				Before: previous,
 			})
-			previous = configBefore{vocabulary: commit.State.Vocabulary(), display: commit.State.Display()}
+			previous = configBefore{
+				vocabulary: commit.State.Vocabulary(),
+				display:    commit.State.Display(),
+				priorities: commit.State.PriorityVocabulary(),
+			}
 			return nil
 		},
 		End: func(outcome gitstore.ConfigHistoryResult) error {
@@ -2412,6 +2421,14 @@ func configOperationSummary(operation core.ConfigOperation) string {
 	case core.ConfigDisplayUnset:
 		return fmt.Sprintf("cleared %s", operation.Setting)
 	default:
+		// The priority section words its own operations, in priority.go beside
+		// the verbs that author them, rather than growing eight more arms on a
+		// switch the status verbs own. A type neither section claims falls
+		// through to its wire name, which is what an older ledger's unknown
+		// operation has always rendered as.
+		if summary, worded := priorityOperationSummary(operation); worded {
+			return summary
+		}
 		return string(operation.Type)
 	}
 }

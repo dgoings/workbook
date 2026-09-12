@@ -52,6 +52,12 @@ type Advisory struct {
 // project's documented status ceilings.
 const AdvisoryStatusCeiling = "status-ceiling-exceeded"
 
+// AdvisoryPriorityCeiling reports the same condition in the priority section.
+// It is a separate code rather than a shared one because a caller acting on an
+// advisory has to know which vocabulary to shrink, and the message alone is
+// not something a program should have to parse for that.
+const AdvisoryPriorityCeiling = "priority-ceiling-exceeded"
+
 type configSource interface {
 	ReadConfigHistoryStream(context.Context, core.ProjectConfig, gitstore.ConfigHistoryStream) (bool, error)
 }
@@ -157,6 +163,55 @@ func StatusCeilingAdvisories(document core.VocabularyDocument) []Advisory {
 					"nothing can drop a removal yet, because a clone that has not fetched it "+
 					"still needs it to read tasks stored under the removed name",
 				count, core.MaxStatusRetiredCount),
+		})
+	}
+	if len(advisories) == 0 {
+		return nil
+	}
+	return advisories
+}
+
+// PriorityCeilingAdvisories reports a folded priority section over one of the
+// authoring ceilings. It is StatusCeilingAdvisories for the other vocabulary,
+// exported for the same reason and reached from the same kind of place:
+// `workbook priority list` is where a person is already looking at the
+// priorities they would shrink.
+//
+// Reaching one of these is never anybody's mistake and never makes the
+// checkpoint wrong, exactly as the status ceilings are not: the authoring gate
+// refuses the pack that would push a project over one, but only on the clone
+// authoring it, and two clones authoring concurrently are each refused
+// nothing. Shrinkage is always allowed, so the way back is always open.
+func PriorityCeilingAdvisories(document core.PriorityDocument) []Advisory {
+	advisories := make([]Advisory, 0, 3)
+	if count := len(document.Priorities); count > core.MaxPriorityCount {
+		advisories = append(advisories, Advisory{
+			Code: AdvisoryPriorityCeiling,
+			Message: fmt.Sprintf(
+				"the project defines %d priorities, over the ceiling of %d; "+
+					"concurrent additions can reach this without either author being refused, "+
+					"and removing one brings it back under",
+				count, core.MaxPriorityCount),
+		})
+	}
+	if count := len(document.Aliases); count > core.MaxPriorityAliasCount {
+		advisories = append(advisories, Advisory{
+			Code: AdvisoryPriorityCeiling,
+			Message: fmt.Sprintf(
+				"the project has recorded %d priority renames, over the ceiling of %d; "+
+					"nothing can drop a rename yet, because a clone that has not fetched it "+
+					"still needs it to read tasks stored under the old name",
+				count, core.MaxPriorityAliasCount),
+		})
+	}
+	if count := len(document.Retired); count > core.MaxPriorityRetiredCount {
+		advisories = append(advisories, Advisory{
+			Code: AdvisoryPriorityCeiling,
+			Message: fmt.Sprintf(
+				"the project has recorded %d priority removals, over the ceiling of %d; "+
+					"nothing can drop a removal yet, because a clone that has not fetched it "+
+					"still needs it to read tasks stored under the removed name",
+				count, core.MaxPriorityRetiredCount),
 		})
 	}
 	if len(advisories) == 0 {

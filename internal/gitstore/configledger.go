@@ -105,6 +105,13 @@ func (result ConfigWriteResult) Vocabulary() core.Vocabulary {
 	return result.State.Vocabulary()
 }
 
+// PriorityVocabulary reads the written checkpoint's priority vocabulary, so a
+// priority change reports the priorities its own write produced rather than the
+// ones the session opened with.
+func (result ConfigWriteResult) PriorityVocabulary() core.PriorityVocabulary {
+	return result.State.PriorityVocabulary()
+}
+
 // LoadVocabulary returns the project's configured status vocabulary, resolving
 // it once per opened repository exactly as LoadConfig and LoadIdentity resolve
 // theirs.
@@ -166,6 +173,14 @@ type VocabularyState struct {
 	// could be answered from either side of a fetch that moved the ledger, and
 	// would render a board out of two configurations.
 	Display core.DisplaySettings
+	// Priorities is the project's configured priority vocabulary, read from
+	// the same tip and carried here for the same reason Display is. It is the
+	// zero vocabulary for a project that has configured none, which every
+	// PriorityVocabulary accessor but Document and Validate reads as the
+	// built-in three — so a caller that wants "what is this project using"
+	// needs no substitution of its own, and a caller writing a checkpoint
+	// still has the un-substituted answer.
+	Priorities core.PriorityVocabulary
 }
 
 // LoadVocabularyState reads the project's statuses and reports whether a ledger
@@ -194,15 +209,31 @@ func (r *Repository) LoadVocabularyState(ctx context.Context, config core.Projec
 		return VocabularyState{Vocabulary: core.LegacyVocabulary()}, nil
 	}
 	if decoded, found := r.decodedConfigAt(head); found {
-		return VocabularyState{Head: head, Seeded: true, Vocabulary: decoded.vocabulary, Display: decoded.display}, nil
+		return vocabularyStateAt(head, decoded), nil
 	}
 	record, err := r.readConfigRecordAt(ctx, config, configRef, head)
 	if err != nil {
 		return VocabularyState{}, unreadableConfigLedger(err)
 	}
-	decoded := decodedConfig{vocabulary: record.State.Vocabulary(), display: record.State.Display()}
+	decoded := decodedConfig{
+		vocabulary: record.State.Vocabulary(),
+		display:    record.State.Display(),
+		priorities: record.State.PriorityVocabulary(),
+	}
 	r.rememberDecodedConfig(head, decoded)
-	return VocabularyState{Head: head, Seeded: true, Vocabulary: decoded.vocabulary, Display: decoded.display}, nil
+	return vocabularyStateAt(head, decoded), nil
+}
+
+// vocabularyStateAt assembles the state from a decoded tip, so the memo hit and
+// the cold read cannot disagree about which sections a state carries.
+func vocabularyStateAt(head string, decoded decodedConfig) VocabularyState {
+	return VocabularyState{
+		Head:       head,
+		Seeded:     true,
+		Vocabulary: decoded.vocabulary,
+		Display:    decoded.display,
+		Priorities: decoded.priorities,
+	}
 }
 
 // decodedConfig is one ledger tip's resolved sections, memoized together
@@ -211,6 +242,12 @@ func (r *Repository) LoadVocabularyState(ctx context.Context, config core.Projec
 type decodedConfig struct {
 	vocabulary core.Vocabulary
 	display    core.DisplaySettings
+	// priorities is the third section of the same tip, memoized beside the
+	// other two for the reason they are memoized together: a caller that asked
+	// for the statuses and then for the priorities could otherwise be answered
+	// from either side of a fetch that moved the ledger, and would describe a
+	// project out of two configurations.
+	priorities core.PriorityVocabulary
 }
 
 // decodedConfigAt returns the configuration this process already decoded from a

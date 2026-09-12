@@ -36,6 +36,7 @@ Commands:
   push [--json]
   sync [--watch [--interval <duration>]] [--status] [--json]
   status <command> [options]
+  priority <command> [options]
   config <command> [options]
   docs <command> [options]
   hooks install [--json]

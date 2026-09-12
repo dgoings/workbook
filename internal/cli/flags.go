@@ -330,6 +330,139 @@ var commandSchemas = map[string]commandMetadata{
 			},
 		},
 	},
+	"priority": {
+		Name:     "priority",
+		Synopsis: "workbook priority <command> [options]",
+		Description: "Inspect and change this project's task priorities.\n\n" +
+			"Priorities are project configuration, recorded in the same synchronized\n" +
+			"history as the statuses and shared with everyone who fetches. A priority has\n" +
+			"a machine value typed as `--priority high`, a display label, a position from\n" +
+			"most urgent to least, an optional color the board draws it in, and one tag:\n" +
+			"`default` for where a task with no priority named lands.\n\n" +
+			"Renaming or removing a priority never rewrites a task. Stored values keep\n" +
+			"resolving through the change, and each task settles the next time something\n" +
+			"writes to it.\n\n" +
+			"Every change regenerates `.workbook/guidelines.md`, which documents these\n" +
+			"priorities for agents; `--no-docs` leaves it alone, and a file somebody edited\n" +
+			"is reported rather than overwritten.",
+		Positionals:     []string{"<command>"},
+		SubcommandOrder: []string{"list", "add", "rename", "label", "move", "tag", "untag", "delete", "color", "log"},
+		Subcommands: map[string]commandMetadata{
+			"list": {
+				Name:        "list",
+				Synopsis:    "workbook priority list [--json]",
+				Description: "List this project's priorities, with the tasks in each.",
+				Options:     []optionMetadata{{Name: "json", Kind: boolFlag, Description: "emit JSON"}},
+			},
+			"add": {
+				Name:        "add",
+				Synopsis:    "workbook priority add <priority> [--label <label>] [--before <priority> | --after <priority>] [--no-sync] [--no-docs] [--json]",
+				Description: "Define a priority.\n\nIt is added last — least urgent — unless --before or --after names where it\ngoes, and its label is derived from its name unless --label gives one.",
+				Positionals: []string{"<priority>"},
+				Options: []optionMetadata{
+					{Name: "label", Kind: stringFlag, Value: "<label>", Description: "display label (default: derived from the priority)"},
+					{Name: "before", Kind: stringFlag, Value: "<priority>", Description: "place before this priority"},
+					{Name: "after", Kind: stringFlag, Value: "<priority>", Description: "place after this priority"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "no-docs", Kind: boolFlag, Description: "skip regenerating .workbook/guidelines.md"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
+			"rename": {
+				Name:        "rename",
+				Synopsis:    "workbook priority rename <priority> <new-priority> [--label <label>] [--no-sync] [--no-docs] [--json]",
+				Description: "Give a priority a new machine value.\n\nTasks stored under the old value keep resolving to this priority. The display\nlabel follows the new name when it was the one the old name implied, and is\nkept when somebody chose it.",
+				Positionals: []string{"<priority>", "<new-priority>"},
+				Options: []optionMetadata{
+					{Name: "label", Kind: stringFlag, Value: "<label>", Description: "display label to set with the rename"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "no-docs", Kind: boolFlag, Description: "skip regenerating .workbook/guidelines.md"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
+			"label": {
+				Name:        "label",
+				Synopsis:    "workbook priority label <priority> <display-label> [--no-sync] [--no-docs] [--json]",
+				Description: "Change a priority's display label. Nothing else changes.",
+				Positionals: []string{"<priority>", "<display-label>"},
+				Options: []optionMetadata{
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "no-docs", Kind: boolFlag, Description: "skip regenerating .workbook/guidelines.md"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
+			"move": {
+				Name:        "move",
+				Synopsis:    "workbook priority move <priority> (--before <priority> | --after <priority>) [--no-sync] [--no-docs] [--json]",
+				Description: "Move a priority among its peers, most urgent first.",
+				Positionals: []string{"<priority>"},
+				Options: []optionMetadata{
+					{Name: "before", Kind: stringFlag, Value: "<priority>", Description: "move before this priority"},
+					{Name: "after", Kind: stringFlag, Value: "<priority>", Description: "move after this priority"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "no-docs", Kind: boolFlag, Description: "skip regenerating .workbook/guidelines.md"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
+			"tag": {
+				Name:        "tag",
+				Synopsis:    "workbook priority tag <priority> --tag <tag> [--no-sync] [--no-docs] [--json]",
+				Description: "Give a priority a role.\n\nThere is one role: `default`, where a task lands when nobody names a priority.\nGiving it takes it from whichever priority held it, in one operation, because a\nproject is never without a default.",
+				Positionals: []string{"<priority>"},
+				Options: []optionMetadata{
+					{Name: "tag", Kind: stringFlag, Value: "<tag>", Description: "role to give it: default"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "no-docs", Kind: boolFlag, Description: "skip regenerating .workbook/guidelines.md"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
+			"untag": {
+				Name:        "untag",
+				Synopsis:    "workbook priority untag <priority> --tag <tag> [--no-sync] [--no-docs] [--json]",
+				Description: "Take one role away from a priority.",
+				Positionals: []string{"<priority>"},
+				Options: []optionMetadata{
+					{Name: "tag", Kind: stringFlag, Value: "<tag>", Description: "role to take away: default"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "no-docs", Kind: boolFlag, Description: "skip regenerating .workbook/guidelines.md"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
+			"delete": {
+				Name:        "delete",
+				Synopsis:    "workbook priority delete <priority> --into <priority> [--no-sync] [--no-docs] [--json]",
+				Description: "Remove a priority and forward its tasks.\n\n--into is required and never guessed: every task at the removed priority reads\nas being at the one it names, on every clone, including the ones that have not\nfetched the removal yet.",
+				Positionals: []string{"<priority>"},
+				Options: []optionMetadata{
+					{Name: "into", Kind: stringFlag, Value: "<priority>", Description: "where the removed priority's tasks belong"},
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "no-docs", Kind: boolFlag, Description: "skip regenerating .workbook/guidelines.md"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
+			"color": {
+				Name:        "color",
+				Synopsis:    "workbook priority color <priority> [<color>] [--no-sync] [--no-docs] [--json]",
+				Description: "Choose the color the board draws a priority in.\n\nA color is six hexadecimal digits behind a hash, as in `#b42318`. Giving no\ncolor clears the stored one and returns the priority to the color its position\nimplies; nothing stores a default.",
+				Positionals: []string{"<priority>", "<color>"},
+				Options: []optionMetadata{
+					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "no-docs", Kind: boolFlag, Description: "skip regenerating .workbook/guidelines.md"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
+			"log": {
+				Name:        "log",
+				Synopsis:    "workbook priority log [--limit <n>] [--all] [--json]",
+				Description: "List the recorded priority changes, oldest first, with the command that\nreverses each one.",
+				Options: []optionMetadata{
+					{Name: "limit", Kind: stringFlag, Value: "<n>", Description: "show this many recent changes (default 10)"},
+					{Name: "all", Kind: boolFlag, Description: "show every change"},
+					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
+				},
+			},
+		},
+	},
 	"docs": {
 		Name:            "docs",
 		Synopsis:        "workbook docs <command> [options]",
@@ -630,7 +763,7 @@ var commandSchemas = map[string]commandMetadata{
 }
 
 var commandOrder = []string{
-	"setup", "create", "list", "board", "show", "update", "delete", "restore", "move", "depend", "free", "next", "rebuild", "validate", "version", "fetch", "push", "sync", "status", "config", "docs", "hooks", "serve",
+	"setup", "create", "list", "board", "show", "update", "delete", "restore", "move", "depend", "free", "next", "rebuild", "validate", "version", "fetch", "push", "sync", "status", "priority", "config", "docs", "hooks", "serve",
 }
 
 type commandFlagSet struct {

@@ -673,6 +673,19 @@ func normalizeRetiredPriorities(retired []RetiredPriority) ([]RetiredPriority, e
 	return result, nil
 }
 
+// DerivedPriorityLabel is the display label a priority name implies: hyphens
+// become spaces and every word is title-cased. It is DerivedStatusLabel's rule
+// for priorities, and exists for the same reason that one does.
+//
+// It reproduces all three built-in labels from their tokens, which is the
+// property that makes it a rule rather than a convenience: `priority rename`
+// can ask whether the current label is still the one the old name implied and
+// re-derive only in that case, so a project that never chose a label keeps
+// getting sensible ones and a project that chose "Drop Everything" keeps it.
+func DerivedPriorityLabel(priority Priority) string {
+	return DerivedStatusLabel(Status(priority))
+}
+
 // builtInPriorityDefinitions is the set a project that configured none is read
 // as having: today's three, most urgent first, with medium carrying the default
 // the service used to hardcode.
