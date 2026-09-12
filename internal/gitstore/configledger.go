@@ -555,11 +555,14 @@ func (r *Repository) seedConfigLedger(
 // recorded the same way and for the same reason, now that both callers below
 // have a vocabulary to hand it.
 //
-// Recording priorities here does not, by itself, reintroduce the
-// compatibility break narrowing ConfigPackMinReader fixed: both callers pass
-// core.BuiltInPriorityVocabulary(), so every genesis this build writes carries
-// a document identical to what an older reader would substitute on its own,
-// and the guard only fires once a later change makes the two diverge.
+// Recording priorities here does mark every genesis this build writes as
+// minReader 3 (ConfigPackMinReader fires on the section's presence, not on
+// its content), so an older clone of a project this build creates cannot
+// touch its configuration until it upgrades. That is accepted, not
+// incidental: README.md:114 states the project's synchronization design —
+// "A team can require synchronization by committing a tracked project
+// policy that outranks personal preferences" — and consistency with how
+// statuses are already recorded was chosen over sparing un-upgraded clones.
 func (r *Repository) writeConfigGenesis(
 	ctx context.Context,
 	config core.ProjectConfig,

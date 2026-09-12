@@ -1170,27 +1170,33 @@ type configPriorityEntry struct {
 // folds against an empty configPriorities and produces a vocabulary of
 // exactly {critical}. Every task still stored as high, medium, or low is now
 // unresolvable: not live, not forwarded, sorted last by Order's stranded-token
-// fallback, and invisible to any priority filter. The vocabulary was never
-// wrong by the fold's own rules — normalizeArity has nothing to repair,
-// because a single live default-tagged priority is a perfectly valid
-// vocabulary — but it is wrong for the project, because the fold was never
-// told about the three priorities every existing task actually depends on.
+// fallback, and refused by name from any priority filter that names it (List's
+// priority filter has no relaxed reading for an unknown token the way the
+// status filter does; see its comment). The vocabulary was never wrong by the
+// fold's own rules — normalizeArity has nothing to repair, because a single
+// live default-tagged priority is a perfectly valid vocabulary — but it is
+// wrong for the project, because the fold was never told about the three
+// priorities every existing task actually depends on.
 //
-// This is unreachable in this stage: nothing here authors a priority
-// operation, so no fold anywhere is asked to take this step. It is stage 2's
-// problem, and it has to be solved before stage 2 ships any authoring path
-// (a CLI command, an agent tool, anything that can produce a first
-// ConfigPriorityAdd against a project that has never had one) — not discovered
-// after. The fix is not obviously "seed the built-ins into the ledger"; that
-// begs the question of when, since a genesis-time seed would give every prior
-// stage-1 project a retroactive priorities section it never asked for, and a
-// lazy seed on first-write has to decide atomically with that same write or
-// reintroduce the identical race between two clones. Whatever the mechanism,
-// it has to guarantee that the fold a first priority.add runs against already
-// contains the three priorities every task in the project is depending on —
-// not trust that the built-in substitution a *reader* performs will somehow
-// also cover a *fold in progress*, which is precisely the confusion this
-// comment exists to head off.
+// Two of the three ways a project reaches its first priority.add are handled:
+// a project with no configuration ledger at all gets the built-in three
+// written into its genesis (seedConfigLedger), and so does a brand-new one
+// (MintConfigLedger) — both pass core.BuiltInPriorityVocabulary() to
+// writeConfigGenesis, so the fold a first priority.add runs against already
+// contains them before any authoring path exists to add a fourth. The
+// remaining gap is the project that already has a configuration ledger — from
+// before this build — but whose genesis predates the priorities section and
+// so carries none: that genesis is immutable, so the built-in three cannot be
+// backfilled into it, and have to be written as operations inside the same
+// pack as that project's first priority change instead. This must be closed
+// before any authoring path ships (a CLI command, an agent tool, anything
+// that can produce a first ConfigPriorityAdd against such a project) — not
+// discovered after. Whatever the mechanism, it has to guarantee that the fold
+// runs against a configPriorities that already contains the three priorities
+// every task in the project is depending on — not trust that the built-in
+// substitution a *reader* performs will somehow also cover a *fold in
+// progress*, which is precisely the confusion this comment exists to head
+// off.
 type configPriorities struct {
 	priorities map[Priority]*configPriorityEntry
 	aliases    map[Priority]Priority
