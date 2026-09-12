@@ -700,14 +700,35 @@ func newConfigFold(config ConfigData) (configFold, error) {
 // section is corrupt data, which is what stops a build from folding a future
 // generation's operation as if it were an older one.
 func (folded configFold) apply(operation ConfigOperation) error {
-	switch operation.Type {
-	case ConfigDisplaySet, ConfigDisplayUnset:
+	switch {
+	case operation.Type == ConfigDisplaySet || operation.Type == ConfigDisplayUnset:
 		return folded.display.apply(operation)
-	case ConfigPriorityAdd, ConfigPriorityRename, ConfigPriorityRelabel, ConfigPriorityRemove,
-		ConfigPriorityReorder, ConfigPriorityTag, ConfigPriorityUntag, ConfigPriorityRecolor:
+	case operation.Type.TouchesPriorities():
 		return folded.priorities.apply(operation)
 	default:
 		return folded.vocabulary.apply(operation)
+	}
+}
+
+// TouchesPriorities reports whether an operation type belongs to the priority
+// section.
+//
+// This is the single enumeration of that set, and it is exported because a
+// second reader outside this package depends on agreeing with the fold
+// exactly: gitstore backfills the built-in priorities into the same pack as a
+// project's first priority change, for ledgers whose genesis predates the
+// section. Were that trigger to keep its own copy of this list, adding a
+// ninth priority operation would route correctly here while going unnoticed
+// there — and that project's first priority change would land without the
+// three priorities every one of its tasks is still filed under, stranding all
+// of them. The two must be the same list, so there is only one.
+func (operationType ConfigOperationType) TouchesPriorities() bool {
+	switch operationType {
+	case ConfigPriorityAdd, ConfigPriorityRename, ConfigPriorityRelabel, ConfigPriorityRemove,
+		ConfigPriorityReorder, ConfigPriorityTag, ConfigPriorityUntag, ConfigPriorityRecolor:
+		return true
+	default:
+		return false
 	}
 }
 

@@ -422,7 +422,7 @@ func (r *Repository) writeConfigOperation(
 			return ConfigWriteResult{}, supersededConfigLedger(*expected, tip.Head)
 		}
 	}
-	return r.appendConfigOperation(ctx, tip, authored, actor, reason)
+	return r.appendConfigOperation(ctx, tip, ids, authored, actor, reason)
 }
 
 // supersededConfigLedger refuses a write whose caller named a tip that is no
@@ -666,10 +666,15 @@ func (r *Repository) MintConfigLedger(
 func (r *Repository) appendConfigOperation(
 	ctx context.Context,
 	tip configRecord,
+	ids core.IDSource,
 	operations []core.ConfigOperation,
 	actor string,
 	reason string,
 ) (ConfigWriteResult, error) {
+	operations, err := prependBuiltInPriorities(tip, ids, operations)
+	if err != nil {
+		return ConfigWriteResult{}, err
+	}
 	pack, err := core.NewConfigOperationPack(
 		tip.State.ProjectID,
 		tip.State.History.Generation,
@@ -705,6 +710,73 @@ func (r *Repository) appendConfigOperation(
 	}
 	r.replaceVocabulary(state.Vocabulary(), head)
 	return ConfigWriteResult{Head: head, State: state}, nil
+}
+
+// prependBuiltInPriorities backfills the built-in three into the same pack as
+// a project's first priority change, for the one case seedConfigLedger and
+// MintConfigLedger cannot reach: a ledger whose genesis was written before
+// this build existed, and so carries no priorities section at all.
+//
+// That project's tasks have always been high, medium, or low — every one of
+// them was filed under the built-in three before anything here could ask
+// otherwise — and the genesis that could have said so is immutable now. The
+// first priority.* operation authored against it is the last moment the
+// ledger can still be told what those tasks already depend on: once this
+// pack folds, the section is no longer nil, and every later reader stops
+// substituting the built-ins and starts reading only what has been folded —
+// so a pack that recorded the caller's change without also recording the
+// three would leave every task still on high, medium, or low unresolvable by
+// the very next read. Writing both in one pack is what makes that outcome
+// unreachable rather than merely unlikely: one pack is one commit, so there
+// is no folded state in which the caller's change exists without the
+// priorities it depends on.
+func prependBuiltInPriorities(
+	tip configRecord,
+	ids core.IDSource,
+	operations []core.ConfigOperation,
+) ([]core.ConfigOperation, error) {
+	if tip.State.Config.Priorities != nil {
+		return operations, nil
+	}
+	if !operationsTouchPriorities(operations) {
+		return operations, nil
+	}
+	definitions := core.BuiltInPriorityVocabulary().Definitions()
+	backfilled := make([]core.ConfigOperation, 0, len(definitions)+len(operations))
+	for _, definition := range definitions {
+		id, err := ids.New()
+		if err != nil {
+			return nil, core.Wrap(core.CategoryOperational, "cannot generate configuration operation ID", err)
+		}
+		backfilled = append(backfilled, core.ConfigOperation{
+			ID:           id,
+			Type:         core.ConfigPriorityAdd,
+			PriorityName: definition.Priority,
+			Label:        definition.Label,
+			Rank:         definition.Rank,
+			PriorityTags: definition.Tags,
+		})
+	}
+	return append(backfilled, operations...), nil
+}
+
+// operationsTouchPriorities reports whether any operation in the batch belongs
+// to the priority section. The trigger is deliberately this narrow: a status
+// or display change reaching a ledger that predates priorities must come out
+// with no priorities section at all, so only a priority.* operation may cause
+// one to be written.
+//
+// Which types those are is ConfigOperationType.TouchesPriorities's to say,
+// not this package's — it is the same question the fold asks when routing an
+// operation to a section, and the two answers have to be identical. See that
+// method's comment for what a divergence would cost.
+func operationsTouchPriorities(operations []core.ConfigOperation) bool {
+	for _, operation := range operations {
+		if operation.Type.TouchesPriorities() {
+			return true
+		}
+	}
+	return false
 }
 
 // configWallTime stamps a pack's display timestamp. Wall time is attribution
