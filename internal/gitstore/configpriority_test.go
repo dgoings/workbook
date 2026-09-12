@@ -2,7 +2,6 @@ package gitstore
 
 import (
 	"context"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -448,16 +447,10 @@ func TestConfigSyncReportsPriorityArityRepair(t *testing.T) {
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 
-	// The genesis this write seeds already defines high, medium and low —
-	// the built-in three — with medium carrying the default tag, so what
-	// this bootstrap has to establish is not the priorities themselves but
-	// this test's precondition: high, not medium, is the default the rest
-	// of the test builds on. Moving the tag (rather than re-adding the
-	// three, which would now no-op against the genesis's own definitions
-	// under applyAdd's idempotency rule) is what actually lands that state.
 	writeConfig(t, first, config,
-		untagPriorityOperation(core.PriorityMedium, core.PriorityTagDefault),
-		tagPriorityOperation(core.PriorityHigh, core.PriorityTagDefault),
+		addPriorityOperation(core.PriorityHigh, "High", "1/1", core.PriorityTagDefault),
+		addPriorityOperation(core.PriorityMedium, "Medium", "2/1"),
+		addPriorityOperation(core.PriorityLow, "Low", "3/1"),
 	)
 	if _, err := first.Sync(ctx, config); err != nil {
 		t.Fatalf("first Sync() (seed) error = %v", err)
@@ -495,60 +488,5 @@ func TestConfigSyncReportsPriorityArityRepair(t *testing.T) {
 	if conflict.Priority != core.PriorityHigh {
 		t.Fatalf("arity conflict priority = %q, want %q, the lowest-ranked survivor the repair picked by position",
 			conflict.Priority, core.PriorityHigh)
-	}
-}
-
-// TestSeedConfigLedgerRecordsTheBuiltInPriorities mirrors
-// TestWriteConfigOperationSeedsGenesisLazily's status coverage for priorities:
-// a project with no configuration ledger at all is already using high, medium
-// and low, so the genesis the first priority change seeds has to say so
-// rather than leave a slot the change itself would fill with something
-// narrower. Without that, a task already filed under `medium` would point at
-// a priority the project's own configuration no longer lists.
-func TestSeedConfigLedgerRecordsTheBuiltInPriorities(t *testing.T) {
-	repo, config := writeRepository(t)
-
-	if refExists(t, repo, configRef) {
-		t.Fatalf("%s exists before anything configured a priority", configRef)
-	}
-
-	result := writeConfig(t, repo, config, addPriorityOperation("critical", "Critical", "4/1"))
-	if !result.Seeded {
-		t.Fatal("WriteConfigOperation() did not report seeding the ledger")
-	}
-
-	records := configChain(t, repo, config)
-	if len(records) != 2 {
-		t.Fatalf("ledger holds %d commit(s), want a genesis root and the author's pack", len(records))
-	}
-	root := records[0]
-	if len(root.Operation.Operations) != 1 || root.Operation.Operations[0].Type != core.ConfigGenesis {
-		t.Fatalf("root pack = %#v, want one config.genesis", root.Operation.Operations)
-	}
-	genesisConfig := root.Operation.Operations[0].Config
-	if genesisConfig.Priorities == nil {
-		t.Fatal("genesis config.priorities = nil, want the built-in three recorded")
-	}
-	if got, want := *genesisConfig.Priorities, core.BuiltInPriorityVocabulary().Document(); !reflect.DeepEqual(got, want) {
-		t.Fatalf("genesis priorities = %#v, want the built-in three this project was already using: %#v", got, want)
-	}
-
-	priorities := result.State.PriorityVocabulary()
-	definitions := priorities.Definitions()
-	if len(definitions) != 4 {
-		t.Fatalf("priority definitions = %#v, want 4 (the built-in three plus the one just added)", definitions)
-	}
-	for _, want := range []core.Priority{core.PriorityHigh, core.PriorityMedium, core.PriorityLow, "critical"} {
-		if !priorities.Has(want) {
-			t.Fatalf("priorities.Has(%q) = false, want true among %#v", want, definitions)
-		}
-	}
-
-	// A task already filed under `medium` — the built-in default, and a
-	// priority nobody just added — must still resolve, because that is
-	// exactly the project this genesis is describing: one that was already
-	// using it.
-	if resolved, live := priorities.Resolve(core.PriorityMedium); !live || resolved != core.PriorityMedium {
-		t.Fatalf("priorities.Resolve(medium) = (%q, %t), want (medium, true)", resolved, live)
 	}
 }

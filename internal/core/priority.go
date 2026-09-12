@@ -179,15 +179,17 @@ func (vocabulary PriorityVocabulary) IsZero() bool {
 // A freshly minted project and one that predates the configuration ledger
 // entirely are both, today, using the same built-in three — nothing has ever
 // shipped a different starting set the way `blocked` once diverged from
-// legacyStatusDefinitions — so gitstore's MintConfigLedger and its lazy
-// seedConfigLedger both read this one accessor for their genesis. Should the
-// built-ins ever need to diverge the way the status ones did, that is the
-// day this splits into two, mirroring vocabulary.go's pair.
+// legacyStatusDefinitions. Should the built-ins ever need to diverge the way
+// the status ones did, that is the day this splits into two, mirroring
+// vocabulary.go's pair.
 //
-// It is exported so gitstore can write it into a genesis's ConfigData, and
-// cached behind sync.OnceValue the way DefaultVocabulary is, rather than
-// rebuilt — with its two maps — on every accessor call a rendering path
-// makes per task.
+// It is exported so gitstore can record it durably the moment a project's
+// priorities first need writing down — not at genesis, which would force a
+// priorities section (and the compatibility marker that comes with it) onto
+// every project this build creates or first configures, whether or not it
+// ever touches priorities at all. It is cached behind sync.OnceValue the way
+// DefaultVocabulary is, rather than rebuilt — with its two maps — on every
+// accessor call a rendering path makes per task.
 var BuiltInPriorityVocabulary = sync.OnceValue(func() PriorityVocabulary {
 	return newPriorityVocabularyFromCanonical(PriorityDocument{Priorities: builtInPriorityDefinitions()})
 })
