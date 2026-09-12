@@ -671,9 +671,23 @@ func (r *Repository) appendConfigOperation(
 	actor string,
 	reason string,
 ) (ConfigWriteResult, error) {
+	authored := len(operations)
 	operations, err := prependBuiltInPriorities(tip, ids, operations)
 	if err != nil {
 		return ConfigWriteResult{}, err
+	}
+	// writeConfigOperation already refused a batch over the ceiling, but it
+	// counted what the caller asked for, and the backfill above has since
+	// added to it. The ceiling has to hold against what is actually written:
+	// the reader's budget check refuses an oversized pack, and a ledger is
+	// append-only, so a pack written past it is a configuration no clone can
+	// ever fold again — including the one that wrote it.
+	if len(operations) > core.MaxConfigOperationsPerPack {
+		return ConfigWriteResult{}, core.Errorf(core.CategoryValidation,
+			"a configuration write carries %d operations and must not exceed %d: %d were authored, and this project's "+
+				"first priority change also records the %d built-in priorities its existing tasks depend on; "+
+				"split it into several commands",
+			len(operations), core.MaxConfigOperationsPerPack, authored, len(operations)-authored)
 	}
 	pack, err := core.NewConfigOperationPack(
 		tip.State.ProjectID,

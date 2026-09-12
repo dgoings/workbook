@@ -711,17 +711,27 @@ func (folded configFold) apply(operation ConfigOperation) error {
 }
 
 // TouchesPriorities reports whether an operation type belongs to the priority
-// section.
+// section. It is the single answer to which section owns a type — not the
+// only place in this file that lists the priority operations, which is the
+// point of the warning below.
 //
-// This is the single enumeration of that set, and it is exported because a
-// second reader outside this package depends on agreeing with the fold
-// exactly: gitstore backfills the built-in priorities into the same pack as a
-// project's first priority change, for ledgers whose genesis predates the
-// section. Were that trigger to keep its own copy of this list, adding a
-// ninth priority operation would route correctly here while going unnoticed
-// there — and that project's first priority change would land without the
-// three priorities every one of its tasks is still filed under, stranding all
-// of them. The two must be the same list, so there is only one.
+// It is exported because a reader outside this package depends on agreeing
+// with the fold exactly: gitstore backfills the built-in priorities into the
+// same pack as a project's first priority change, for ledgers whose genesis
+// predates the section. Were that trigger to keep its own copy of this list,
+// adding a ninth priority operation would route correctly here while going
+// unnoticed there — and that project's first priority change would land
+// without the three priorities every one of its tasks is still filed under,
+// stranding all of them.
+//
+// Three other places in this file enumerate the same eight types, and adding
+// a ninth means adding it to all of them: configPriorities.apply decides what
+// each type does, configOperationShapes says which members it may carry, and
+// configOperationMinReader says what generation a reader needs. The last is
+// the one to get right — a type missing from that map takes the zero value,
+// so its pack ships unstamped and an older build folds it as though it
+// understood it, which is worse than any routing mistake. The compiler
+// catches none of the four; priorityoptype_test.go does.
 func (operationType ConfigOperationType) TouchesPriorities() bool {
 	switch operationType {
 	case ConfigPriorityAdd, ConfigPriorityRename, ConfigPriorityRelabel, ConfigPriorityRemove,

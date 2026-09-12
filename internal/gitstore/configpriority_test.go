@@ -2,6 +2,7 @@ package gitstore
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -717,5 +718,65 @@ func TestAppendConfigOperationStatusChangeLeavesPrioritiesSectionAbsent(t *testi
 	stateJSON := gitOutput(t, repo, "show", result.Head+":state.json")
 	if strings.Contains(stateJSON, "priorities") {
 		t.Fatalf("stored state.json = %s, want no priorities section for an unrelated status change", stateJSON)
+	}
+}
+
+// The backfill adds to the pack, so the pack-size ceiling has to hold against
+// what is written rather than against what the caller asked for.
+//
+// This is the one failure in this area that cannot be walked back. A ledger is
+// append-only: an oversized pack passes the write path, gets a commit, and is
+// then refused by the budget check every reader runs — including the reader in
+// the clone that wrote it — so the project's configuration becomes unfoldable
+// forever. Refusing the write costs the caller one error message.
+func TestAppendConfigOperationRefusesAWriteTheBackfillWouldPushOverTheCeiling(t *testing.T) {
+	repo, config := writeRepository(t)
+	writeLegacyConfigGenesis(t, repo, config)
+
+	operations := make([]core.ConfigOperation, 0, core.MaxConfigOperationsPerPack)
+	for i := 0; i < core.MaxConfigOperationsPerPack; i++ {
+		operations = append(operations, relabelPriorityOperation(core.PriorityHigh, fmt.Sprintf("High %d", i)))
+	}
+
+	_, err := repo.WriteConfigOperation(context.Background(), config, core.CryptoULIDSource{}, operations, "")
+	if err == nil {
+		t.Fatal("WriteConfigOperation() error = nil, want a refusal: 64 authored operations plus the three " +
+			"backfilled built-ins is 67, over the pack ceiling")
+	}
+	if got := core.CategoryOf(err); got != core.CategoryValidation {
+		t.Fatalf("WriteConfigOperation() error category = %v, want %v", got, core.CategoryValidation)
+	}
+
+	// The refusal has to come before anything is written. A ledger that gained
+	// a commit here is the unrepairable state this test exists to prevent, so
+	// the tip must still be the genesis.
+	records := configChain(t, repo, config)
+	if len(records) != 1 {
+		t.Fatalf("configuration ledger has %d commits, want only the genesis: the refused write must not have "+
+			"appended anything", len(records))
+	}
+}
+
+// A write that fits once the backfill is counted still goes through, so the
+// check above is a ceiling rather than a new, lower one.
+func TestAppendConfigOperationAcceptsAWriteThatFitsWithTheBackfill(t *testing.T) {
+	repo, config := writeRepository(t)
+	writeLegacyConfigGenesis(t, repo, config)
+
+	operations := make([]core.ConfigOperation, 0, core.MaxConfigOperationsPerPack-3)
+	for i := 0; i < core.MaxConfigOperationsPerPack-3; i++ {
+		operations = append(operations, relabelPriorityOperation(core.PriorityHigh, fmt.Sprintf("High %d", i)))
+	}
+
+	result := writeConfig(t, repo, config, operations...)
+
+	records := configChain(t, repo, config)
+	last := records[len(records)-1]
+	if got := len(last.Operation.Operations); got != core.MaxConfigOperationsPerPack {
+		t.Fatalf("written pack carries %d operations, want exactly the ceiling of %d",
+			got, core.MaxConfigOperationsPerPack)
+	}
+	if result.State.Config.Priorities == nil {
+		t.Fatal("state.Config.Priorities = nil, want the backfilled built-ins")
 	}
 }
