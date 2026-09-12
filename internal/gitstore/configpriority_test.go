@@ -448,10 +448,16 @@ func TestConfigSyncReportsPriorityArityRepair(t *testing.T) {
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 
+	// The genesis this write seeds already defines high, medium and low —
+	// the built-in three — with medium carrying the default tag, so what
+	// this bootstrap has to establish is not the priorities themselves but
+	// this test's precondition: high, not medium, is the default the rest
+	// of the test builds on. Moving the tag (rather than re-adding the
+	// three, which would now no-op against the genesis's own definitions
+	// under applyAdd's idempotency rule) is what actually lands that state.
 	writeConfig(t, first, config,
-		addPriorityOperation(core.PriorityHigh, "High", "1/1", core.PriorityTagDefault),
-		addPriorityOperation(core.PriorityMedium, "Medium", "2/1"),
-		addPriorityOperation(core.PriorityLow, "Low", "3/1"),
+		untagPriorityOperation(core.PriorityMedium, core.PriorityTagDefault),
+		tagPriorityOperation(core.PriorityHigh, core.PriorityTagDefault),
 	)
 	if _, err := first.Sync(ctx, config); err != nil {
 		t.Fatalf("first Sync() (seed) error = %v", err)
