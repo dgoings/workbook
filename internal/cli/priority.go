@@ -21,7 +21,7 @@ import (
 //
 // It is statusChange's counterpart, member for member, plus the one field a
 // priority has that a status does not — its color — and minus nothing. One
-// shape for ten verbs is deliberate for the reason statusChange's comment
+// shape for nine verbs is deliberate for the reason statusChange's comment
 // gives: a caller that reads `change.priority` and `change.operation` can
 // handle a verb it has never heard of, and the members a verb does not use are
 // omitted rather than zeroed, so the presence of `into` is what says a removal
@@ -240,8 +240,6 @@ func runPriority(ctx context.Context, args []string, cwd string, stdout, stderr 
 		return runPriorityMove(ctx, args, cwd, stdout, stderr)
 	case "tag":
 		return runPriorityTag(ctx, args, cwd, stdout, stderr)
-	case "untag":
-		return runPriorityUntag(ctx, args, cwd, stdout, stderr)
 	case "delete":
 		return runPriorityDelete(ctx, args, cwd, stdout, stderr)
 	case "color":
@@ -705,8 +703,6 @@ func (change priorityChange) summary() string {
 		return fmt.Sprintf("move priority %s", change.Priority)
 	case "tag":
 		return fmt.Sprintf("tag priority %s", change.Priority)
-	case "untag":
-		return fmt.Sprintf("untag priority %s", change.Priority)
 	case "delete":
 		return fmt.Sprintf("remove priority %s into %s", change.Priority, change.Into)
 	case "color":
@@ -892,20 +888,33 @@ func priorityRelabelled(pack []core.ConfigOperation, priority core.Priority) boo
 // a command valid on its own — where restoring only the subject's old set would
 // leave the project with no default at all, which the authoring gate refuses
 // outright.
+//
+// A tag operation that describes no transfer has no inverse, and reports none.
+// Nothing takes a role away from a priority: the group has nine verbs and
+// `untag` is not among them. So the alternative is naming a command that cannot
+// be run, which is worse than saying nothing — the whole point of printing an
+// inverse is that somebody can paste it. An absent inverse is how this file
+// already says a change cannot be expressed: the log omits the line and
+// priorityChangeInverse renders the empty one.
 func priorityTagInverse(before core.PriorityVocabulary, operation core.ConfigOperation) *priorityInverse {
 	subject := priorityOperationSubject(operation)
 	if operation.PriorityTag != core.PriorityTagDefault {
-		return &priorityInverse{
-			Command: priorityCommand("untag", string(subject), "--tag", string(operation.PriorityTag)),
-			Exact:   true,
-		}
+		// A role this build's vocabulary does not contain, so the operation was
+		// authored by a build whose vocabulary is wider. It still folds and the
+		// log still describes it; but this build knows neither that role's arity
+		// rule nor whom the tag was taken from, and will not name a command in a
+		// vocabulary it does not have.
+		return nil
 	}
 	previous := before.Default()
 	if previous == "" || previous == subject {
-		return &priorityInverse{
-			Command: priorityCommand("untag", string(subject), "--tag", string(core.PriorityTagDefault)),
-			Exact:   true,
-		}
+		// The tag took nothing from anybody. Either no priority carried it — a
+		// state the authoring gate refuses to write, so such an operation
+		// reached the log as somebody else's history — and undoing it would put
+		// the project back to having no default, which nothing here can author;
+		// or the subject already carried it, making the operation a no-op whose
+		// inverse is to do nothing. Neither is a command.
+		return nil
 	}
 	return &priorityInverse{
 		Command: priorityCommand("tag", string(previous), "--tag", string(core.PriorityTagDefault)),

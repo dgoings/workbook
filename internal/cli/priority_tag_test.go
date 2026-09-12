@@ -153,3 +153,85 @@ func TestPriorityTagRefusesARoleItCannotGive(t *testing.T) {
 		t.Fatalf("configuration head moved from %q to %q on a refused tag", before, after)
 	}
 }
+
+// A tag operation that transferred nothing has no inverse, and says so by
+// offering none.
+//
+// Every branch here used to name `workbook priority untag`, which no longer
+// exists; a printed command that cannot be run is worse than a blank, because
+// the inverse is printed so somebody can paste it. Each case below is
+// unreachable from this build's own authoring — `priority tag` refuses an
+// unknown role and refuses a no-op, and the authoring gate never leaves a
+// project without a default — so each describes an operation that arrived as
+// history, from a peer or a later build, which this build must still fold and
+// describe without pretending it can reverse it.
+func TestPriorityTagInverseOffersNoCommandItCannotName(t *testing.T) {
+	builtIn := core.BuiltInPriorityVocabulary()
+
+	// The transfer, which is the one case with an inverse: the tag came from
+	// medium, and giving it back is the whole change, exactly.
+	inverse := priorityTagInverse(builtIn, core.ConfigOperation{
+		Type:        core.ConfigPriorityTag,
+		Priority:    core.Priority("high"),
+		PriorityTag: core.PriorityTagDefault,
+	})
+	if inverse == nil {
+		t.Fatal("tag of high = no inverse, want the transfer back to medium")
+	}
+	if got, want := inverse.Command, "workbook priority tag medium --tag default"; got != want {
+		t.Errorf("inverse = %q, want %q", got, want)
+	}
+	if !inverse.Exact {
+		t.Error("inverse = not exact, want exact; giving the tag back restores the whole change")
+	}
+
+	// A role this build's vocabulary does not have. It knows neither that
+	// role's arity rule nor whom the tag was taken from, and `--tag` would
+	// refuse the word anyway.
+	if got := priorityTagInverse(builtIn, core.ConfigOperation{
+		Type:        core.ConfigPriorityTag,
+		Priority:    core.Priority("high"),
+		PriorityTag: core.PriorityTag("next"),
+	}); got != nil {
+		t.Errorf("inverse of a foreign role = %#v, want none", got)
+	}
+
+	// The subject already carried the tag, so the operation changed nothing and
+	// its inverse is to do nothing.
+	if got := priorityTagInverse(builtIn, core.ConfigOperation{
+		Type:        core.ConfigPriorityTag,
+		Priority:    builtIn.Default(),
+		PriorityTag: core.PriorityTagDefault,
+	}); got != nil {
+		t.Errorf("inverse of a no-op tag = %#v, want none", got)
+	}
+
+	// Nothing held the tag beforehand, so undoing the operation would mean
+	// returning the project to having no default — which no command authors.
+	if got := priorityTagInverse(untaggedPriorityVocabulary(t), core.ConfigOperation{
+		Type:        core.ConfigPriorityTag,
+		Priority:    core.Priority("high"),
+		PriorityTag: core.PriorityTagDefault,
+	}); got != nil {
+		t.Errorf("inverse of a tag that took nothing = %#v, want none", got)
+	}
+}
+
+// untaggedPriorityVocabulary is the built-in set with the default tag taken
+// off every priority — a vocabulary this CLI will not write, and one a fold of
+// a peer's pack can nonetheless be holding partway through.
+func untaggedPriorityVocabulary(t *testing.T) core.PriorityVocabulary {
+	t.Helper()
+	definitions := core.BuiltInPriorityVocabulary().Definitions()
+	for index := range definitions {
+		definitions[index].Tags = nil
+	}
+	vocabulary, err := core.NewPriorityVocabulary(definitions, nil, nil)
+	if err != nil {
+		t.Fatalf("build an untagged vocabulary: %v", err)
+	}
+	if vocabulary.Default() != "" {
+		t.Fatalf("default = %q, want none", vocabulary.Default())
+	}
+	return vocabulary
+}

@@ -346,7 +346,7 @@ var commandSchemas = map[string]commandMetadata{
 			"priorities for agents; `--no-docs` leaves it alone, and a file somebody edited\n" +
 			"is reported rather than overwritten.",
 		Positionals:     []string{"<command>"},
-		SubcommandOrder: []string{"list", "add", "rename", "label", "move", "tag", "untag", "delete", "color", "log"},
+		SubcommandOrder: []string{"list", "add", "rename", "label", "move", "tag", "delete", "color", "log"},
 		Subcommands: map[string]commandMetadata{
 			"list": {
 				Name:        "list",
@@ -411,18 +411,6 @@ var commandSchemas = map[string]commandMetadata{
 				Positionals: []string{"<priority>"},
 				Options: []optionMetadata{
 					{Name: "tag", Kind: stringFlag, Value: "<tag>", Description: "role to give it: default"},
-					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
-					{Name: "no-docs", Kind: boolFlag, Description: "skip regenerating .workbook/guidelines.md"},
-					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
-				},
-			},
-			"untag": {
-				Name:        "untag",
-				Synopsis:    "workbook priority untag <priority> --tag <tag> [--no-sync] [--no-docs] [--json]",
-				Description: "Take one role away from a priority.",
-				Positionals: []string{"<priority>"},
-				Options: []optionMetadata{
-					{Name: "tag", Kind: stringFlag, Value: "<tag>", Description: "role to take away: default"},
 					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
 					{Name: "no-docs", Kind: boolFlag, Description: "skip regenerating .workbook/guidelines.md"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},

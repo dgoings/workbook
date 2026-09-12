@@ -149,7 +149,7 @@ func TestPriorityListReportsTheMintedVocabularyOnAFreshProject(t *testing.T) {
 }
 
 // A bare `workbook priority` names its verbs rather than failing silently, and
-// the refusal is derived from the help schema so all ten are always listed.
+// the refusal is derived from the help schema so all nine are always listed.
 func TestPriorityWithoutASubcommandNamesEveryVerb(t *testing.T) {
 	repository := initializedRepository(t)
 	code, stdout, stderr := run(t, repository, "priority")
@@ -161,10 +161,50 @@ func TestPriorityWithoutASubcommandNamesEveryVerb(t *testing.T) {
 	}
 	for _, want := range []string{
 		"priority takes a subcommand",
-		"list, add, rename, label, move, tag, untag, delete, color, log",
+		"list, add, rename, label, move, tag, delete, color, log",
 	} {
 		if !strings.Contains(stderr, want) {
 			t.Errorf("priority stderr = %q, want %q", stderr, want)
+		}
+	}
+}
+
+// `untag` is not one of this group's verbs, and is refused the way any other
+// word would be.
+//
+// A priority carries exactly one role and exactly one priority must carry it,
+// so taking the role away has no outcome the vocabulary permits: taking it from
+// a priority that does not hold it is a typo, and taking it from the one that
+// does would leave a new task nowhere to land. Shipping a verb whose every call
+// refuses is worse than not shipping it, so the group has nine. The durable
+// `priority.untag` operation is untouched — a peer or a later build can still
+// author one, and this build still folds, validates and describes it.
+func TestPriorityDoesNotAcceptUntag(t *testing.T) {
+	repository := initializedRepository(t)
+	code, stdout, stderr := run(t, repository, "priority", "untag", "medium", "--tag", "default")
+	if code != 2 {
+		t.Fatalf("priority untag = code %d, want 2; stderr = %q", code, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("priority untag stdout = %q, want empty", stdout)
+	}
+	for _, want := range []string{
+		`unknown priority command "untag"`,
+		"the subcommands are list, add, rename, label, move, tag, delete, color, log",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("priority untag stderr = %q, want %q", stderr, want)
+		}
+	}
+
+	// The help schema does not offer it either, so no rendered usage and no
+	// generated document can advertise a verb the dispatch refuses.
+	if _, known := commandMetadataFor([]string{"priority", "untag"}); known {
+		t.Error("the priority help schema still declares untag")
+	}
+	for _, verb := range prioritySubcommands() {
+		if verb == "untag" {
+			t.Error("prioritySubcommands still lists untag")
 		}
 	}
 }
@@ -184,7 +224,7 @@ func TestPriorityWithATaskReferenceNamesShow(t *testing.T) {
 	}
 }
 
-// Every verb this group declares is dispatched. The eight that are not
+// Every verb this group declares is dispatched. The seven that are not
 // implemented yet refuse with an invocation error rather than an unknown
 // command, which is what proves the switch names them.
 func TestPriorityDispatchesEveryDeclaredVerb(t *testing.T) {
@@ -195,7 +235,7 @@ func TestPriorityDispatchesEveryDeclaredVerb(t *testing.T) {
 			t.Errorf("priority %s --help = code %d, stdout %q, stderr %q", verb, code, stdout, stderr)
 		}
 	}
-	for _, verb := range []string{"add", "rename", "label", "move", "tag", "untag", "delete", "color"} {
+	for _, verb := range []string{"add", "rename", "label", "move", "tag", "delete", "color"} {
 		code, _, stderr := run(t, repository, "priority", verb, "placeholder", "placeholder")
 		if code == 0 {
 			t.Errorf("priority %s = code 0, want a refusal while it is a stub", verb)

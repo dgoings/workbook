@@ -13,8 +13,9 @@ import (
 // `--clear-tags`, and the difference is the vocabulary's rather than this
 // command's: a status has three roles and is therefore described by a set,
 // while a priority has one. There is no set to replace, so there is nothing for
-// a repeated flag or a clearing flag to mean — the role is taken away by
-// `workbook priority untag`.
+// a repeated flag or a clearing flag to mean, and no verb that takes the role
+// away: exactly one priority must carry `default`, so moving it is the only
+// change the role admits, and moving it is this command.
 func runPriorityTag(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
 	values, args, err := requiredArguments("priority tag", []string{"<priority>"}, args)
 	if err != nil {
