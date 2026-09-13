@@ -1332,14 +1332,14 @@
   {{ end }}
   {{ if .DisplayAdministrable }}
   <!-- What this project calls its board and the colors it draws it in: the
-       second section of the configuration route, served beside the statuses and
-       mounted into main by the same render.
+       third section of the configuration route, served after the statuses and
+       the priorities and mounted into main by the same render.
 
        It is its own element with its own live region rather than a form inside
-       the panel above, because the two are separate writes against separate
-       endpoints: a status change that is refused must not blank a name the
-       reader has just typed, and a save of the name must not clear what the
-       status change had to say.
+       the panels above, because each is a separate write against its own
+       endpoint: a status or priority change that is refused must not blank a
+       name the reader has just typed, and a save of the name must not clear
+       what that change had to say.
 
        Its shell is served for the reason the statuses' is — the presence of this
        element is the whole of the client's capability gate — and its fields are
@@ -8459,11 +8459,12 @@
       // Workbook — permanently, for every clone that fetches it — so a Save
       // pressed twice must cost nothing the second time.
       //
-      // The two sections write the same ref against the same head, so neither
-      // starts while the other is in flight and each greys the other's controls
-      // while it runs. They keep their own live regions, though: a refused
-      // status change must not blank a name the reader has just typed, and a
-      // saved name must not erase what the status change had to say.
+      // All three sections write the same ref against the same head, so none of
+      // them starts while another is in flight and each greys the others'
+      // controls while it runs — which is what configBusy below is. They keep
+      // their own live regions, though: a refused status or priority change must
+      // not blank a name the reader has just typed, and a saved name must not
+      // erase what that change had to say.
       let displaySettings = null;
       let displayBusy = false;
       let displayControls = [];
