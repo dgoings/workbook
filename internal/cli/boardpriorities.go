@@ -122,10 +122,14 @@ type boardPriorityMutation struct {
 	// not say "this change was about priorities", it would say "this project's
 	// statuses are the built-in set".
 	//
-	// Its Display member is left zero, exactly as a status mutation leaves it.
-	// The display section did not move, and the document these render into
-	// omits an unconfigured one rather than writing an empty one, so a reader
-	// keeps what it already has.
+	// Its Display member is filled from the same write, exactly as a status
+	// mutation fills it, and the reason is the same one the paragraph above
+	// gives: a client adopts this answer wholesale. Left zero, it rendered as
+	// a null display, the panel adopted an empty settings object, the board's
+	// name and colors vanished from the form, and the next save wrote those
+	// blanks into the ledger — a person lost their project's name by pressing
+	// Up on a priority row. An answer that reports half a configuration is an
+	// answer that invites the other half to be erased.
 	State    webui.VocabularyState
 	Tasks    priorityTaskCounts
 	Warnings []core.Warning
