@@ -2,7 +2,9 @@ package webui
 
 import (
 	"context"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"html/template"
@@ -136,9 +138,14 @@ type TasksDocument struct {
 	// compares it with the head it rendered under and says so; it deliberately
 	// does not carry the vocabulary itself, which is what /api/vocabulary is
 	// for and is far larger than a poll should move every second.
-	VocabularyHead string             `json:"vocabularyHead"`
-	Tasks          []core.Task        `json:"tasks"`
-	Presentation   []TaskPresentation `json:"presentation"`
+	VocabularyHead string `json:"vocabularyHead"`
+	// VocabularyShape is the digest of the columns and priorities that head
+	// stands for, so a client can tell a change it is already drawing from one
+	// it is not. See vocabularyShape, which also says why this is a digest and
+	// what it deliberately leaves out.
+	VocabularyShape string             `json:"vocabularyShape"`
+	Tasks           []core.Task        `json:"tasks"`
+	Presentation    []TaskPresentation `json:"presentation"`
 }
 
 // VocabularyState is what a resolver reports: the project's statuses, the
@@ -195,9 +202,14 @@ type VocabularyResolver func(context.Context) (VocabularyState, error)
 // It is what GET /api/vocabulary serves and what every vocabulary mutation
 // answers with, so a client hands both to the same renderer.
 type VocabularyDocument struct {
-	Format   string                  `json:"format"`
-	Version  int                     `json:"version"`
-	Head     string                  `json:"head"`
+	Format  string `json:"format"`
+	Version int    `json:"version"`
+	Head    string `json:"head"`
+	// Shape is the digest of the configuration this head stands for, riding
+	// beside it for the reason TasksDocument.VocabularyShape does: a client
+	// adopting this document has to know whether the board behind it is already
+	// drawing what the document says.
+	Shape    string                  `json:"shape"`
 	Default  core.Status             `json:"default"`
 	Statuses []core.StatusDefinition `json:"statuses"`
 	Aliases  []core.StatusAlias      `json:"aliases"`
@@ -868,6 +880,10 @@ type pageData struct {
 	// VocabularyHead is the ledger tip these columns were built from, so the
 	// poll can tell that the columns it is looking at have been superseded.
 	VocabularyHead string
+	// VocabularyShape is the digest of what those columns and this page's
+	// priorities actually are, so the poll can tell a tip that moved past them
+	// from one that moved without touching them. See vocabularyShape.
+	VocabularyShape string
 	// Priorities are this project's priorities in configured order, as JSON,
 	// rendered into the page for the reason DefaultStatus and StatusTags are:
 	// the client needs them before it has fetched anything and must not guess.
@@ -1659,6 +1675,7 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 		PriorityInk:           priorityInk(vocabulary.Priorities),
 		DefaultStatus:         vocabulary.Vocabulary.Default(),
 		VocabularyHead:        vocabulary.Head,
+		VocabularyShape:       vocabularyShape(vocabulary),
 		Priorities:            pagePriorities(vocabulary.Priorities),
 		DefaultPriority:       vocabulary.Priorities.Default(),
 		AttachmentFileLimit:   core.MaxAttachmentFileBytes,
@@ -1734,6 +1751,7 @@ func vocabularyDocument(state VocabularyState) VocabularyDocument {
 		Format:   "workbook.vocabulary",
 		Version:  1,
 		Head:     state.Head,
+		Shape:    vocabularyShape(state),
 		Default:  state.Vocabulary.Default(),
 		Statuses: document.Statuses,
 		Aliases:  document.Aliases,
@@ -1749,6 +1767,63 @@ func vocabularyDocument(state VocabularyState) VocabularyDocument {
 		rendered.Display = &display
 	}
 	return rendered
+}
+
+// vocabularyShape is a digest of what a board draws of a project's
+// configuration: its columns and its priorities, each by token, order and
+// label.
+//
+// It rides beside the head everywhere the head rides, and it answers the
+// question the head cannot. The head moves for every configuration write, a
+// recolor included, and since a page swaps the stylesheet a change answers with,
+// a recolor is on screen the moment it lands — so a client that raised its
+// standing notice whenever the head moved was asking the reader to reload for
+// something they were already looking at. The notice belongs to what the page
+// cannot take on live, and this is what says whether anything of that kind
+// moved.
+//
+// Colors are deliberately not in it, and neither are tags, ranks or the display
+// settings. What the notice protects is the card nodes: rebuilding the columns
+// to show a new status or a new priority would destroy a reader's open form, a
+// change staged against a head, and a refusal they have not read. A color is
+// none of that — it is either already drawn or is a difference nobody loses
+// work over.
+//
+// A digest rather than the two lists themselves because this rides on the task
+// poll, which the board makes once a second and which deliberately carries no
+// vocabulary for exactly that reason.
+func vocabularyShape(state VocabularyState) string {
+	// The same substitution the board itself draws: a project that has recorded
+	// no statuses is drawing the legacy six, so that is the configuration its
+	// page is showing. Without it every unconfigured project would compare its
+	// own columns against an empty list and be told forever that they had
+	// changed.
+	statuses := state.Vocabulary
+	if statuses.IsZero() {
+		statuses = core.LegacyVocabulary()
+	}
+	drawn := struct {
+		Statuses   [][2]string `json:"statuses"`
+		Priorities [][2]string `json:"priorities"`
+	}{}
+	for _, definition := range statuses.Definitions() {
+		drawn.Statuses = append(drawn.Statuses, [2]string{string(definition.Status), definition.Label})
+	}
+	// The effective reading for the same reason: a project that configured no
+	// priorities is drawing the built-in three.
+	for _, definition := range state.Priorities.EffectiveDocument().Priorities {
+		drawn.Priorities = append(drawn.Priorities, [2]string{string(definition.Priority), definition.Label})
+	}
+	encoded, err := json.Marshal(drawn)
+	if err != nil {
+		// Two lists of string pairs, so there is nothing here encoding/json can
+		// refuse. An empty shape is read by the client as "this cannot be
+		// compared", which puts the notice up — the conservative end of a
+		// failure that cannot happen.
+		return ""
+	}
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:])
 }
 
 // priorityVocabularyDocument renders one read of the project's priorities, in
@@ -2310,11 +2385,12 @@ func (handler *handler) serveTasks(writer http.ResponseWriter, request *http.Req
 		tasks = activeTasks(tasks)
 	}
 	writeJSON(writer, http.StatusOK, TasksDocument{
-		Format:         "workbook.tasks",
-		Version:        1,
-		VocabularyHead: vocabulary.Head,
-		Tasks:          tasks,
-		Presentation:   taskPresentation(tasks, vocabulary.Vocabulary, handler.assignIdentity()),
+		Format:          "workbook.tasks",
+		Version:         1,
+		VocabularyHead:  vocabulary.Head,
+		VocabularyShape: vocabularyShape(vocabulary),
+		Tasks:           tasks,
+		Presentation:    taskPresentation(tasks, vocabulary.Vocabulary, handler.assignIdentity()),
 	})
 }
 

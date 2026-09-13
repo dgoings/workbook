@@ -1182,17 +1182,17 @@
        So the page keeps drawing the vocabulary it was served with, says plainly
        that it is out of date, and lets the reader choose the moment.
 
-       Colors are the one thing it no longer says that about, and only for a
-       change made on this page: a configuration answer carries the stylesheet
-       the server composed, and the page swaps it without touching a card. That
-       costs a card node nothing, which is the whole reason the columns cannot
-       have the same treatment. A change another clone made reaches this page as
-       a moved head and nothing else, so its colors are as stale as its columns
-       are — which is why the sentence below names where a change came from
-       rather than only what it was. -->
+       Colors are no longer among the things it says that about, whoever
+       changed them: one set on this page is drawn at once, because a
+       configuration answer carries the stylesheet the server composed and the
+       page swaps it without touching a card, and one another clone set is a
+       difference nobody loses work over. So what raises this is the columns or
+       the priorities differing from the ones the page is drawing — see
+       noteVocabularyChange — and the sentence below says exactly that rather
+       than naming where a change came from. -->
   <div class="notice" data-vocabulary-notice role="status" aria-live="polite" hidden>
     <div class="notice__report">
-      <p>This project's configuration has changed. A color set on this page is drawn at once; the columns, the priorities, and anything changed in another clone are the ones it was opened with.</p>
+      <p>This project's columns or priorities have changed. The board is still drawing the ones it was opened with.</p>
       <button type="button" data-vocabulary-reload>Reload the board</button>
     </div>
   </div>
@@ -1216,7 +1216,7 @@
          default role is the server's answer, and a script that went looking for
          that role among the published tags would be spelling the name of a role
          core owns. -->
-    <div class="board-view" data-board-view data-priorities="{{ .Priorities }}" data-default-priority="{{ .DefaultPriority }}" data-project-name="{{ .ProjectName }}" data-default-project-name="{{ .DefaultProjectName }}" data-title-suffix="{{ .TitleSuffix }}" data-default-status="{{ .DefaultStatus }}" data-vocabulary-head="{{ .VocabularyHead }}" data-attachment-limit="{{ .AttachmentFileLimit }}" data-attachment-total-limit="{{ .AttachmentTotalLimit }}" data-attachment-name-limit="{{ .AttachmentNameLimit }}" data-attachment-label-limit="{{ .AttachmentLabelLimit }}" data-attachment-url-limit="{{ .AttachmentURLLimit }}" data-inline-media="{{ .InlineImageMediaTypes }}" data-assign-identity="{{ .AssignIdentity }}">
+    <div class="board-view" data-board-view data-priorities="{{ .Priorities }}" data-default-priority="{{ .DefaultPriority }}" data-project-name="{{ .ProjectName }}" data-default-project-name="{{ .DefaultProjectName }}" data-title-suffix="{{ .TitleSuffix }}" data-default-status="{{ .DefaultStatus }}" data-vocabulary-head="{{ .VocabularyHead }}" data-vocabulary-shape="{{ .VocabularyShape }}" data-attachment-limit="{{ .AttachmentFileLimit }}" data-attachment-total-limit="{{ .AttachmentTotalLimit }}" data-attachment-name-limit="{{ .AttachmentNameLimit }}" data-attachment-label-limit="{{ .AttachmentLabelLimit }}" data-attachment-url-limit="{{ .AttachmentURLLimit }}" data-inline-media="{{ .InlineImageMediaTypes }}" data-assign-identity="{{ .AssignIdentity }}">
       <p class="stale" data-stale role="status">Task refresh failed. Showing the last successful board.</p>
       <!-- data-board is where the client appends the Deleted column, after the
            last vocabulary column the server rendered. It is a client-built
@@ -1530,7 +1530,16 @@
       // An empty value is a project that has recorded no statuses, which is a
       // real state and not a missing answer, so the comparison is against
       // whatever this page was served with rather than against emptiness.
-      const renderedVocabularyHead = boardView.dataset.vocabularyHead || "";
+      //
+      // It moves: a head that arrives over a configuration this page is already
+      // drawing is recorded here, so the next answer carrying it is not
+      // compared all over again. See noteVocabularyChange.
+      let renderedVocabularyHead = boardView.dataset.vocabularyHead || "";
+      // And what that head stands for: the digest of the columns and the
+      // priorities this page is drawing, which is what a change is actually
+      // compared against. Empty from a build that states none, which reads as
+      // "nothing here can be compared" — see noteVocabularyChange.
+      const renderedVocabularyShape = boardView.dataset.vocabularyShape || "";
       // The ceiling on one attached file, as the server renders it into the
       // page. The upload control refuses a file over it before spending the
       // encode and the round trip on one the server would refuse anyway, and it
@@ -7191,7 +7200,7 @@
       function adoptVocabulary(vocabulary) {
         panelVocabulary = vocabulary;
         panelHead = typeof vocabulary.head === "string" ? vocabulary.head : "";
-        noteVocabularyChange(panelHead);
+        noteVocabularyChange(panelHead, typeof vocabulary.shape === "string" ? vocabulary.shape : "");
         // The display settings ride in the same document, from the same commit,
         // which is why the board settings form never asks for them separately: a
         // second read could be answered from either side of a change and would
@@ -8514,9 +8523,13 @@
       // page's: there is one configuration ledger, so a display change moves the
       // tip a status change has to name, and the standing notice above main is
       // what tells the board it has moved.
-      function adoptDisplayAtHead(settings) {
+      function adoptDisplayAtHead(settings, shape) {
         panelHead = typeof settings.head === "string" ? settings.head : "";
-        noteVocabularyChange(panelHead);
+        // The answer states the shape of the configuration it wrote into, beside
+        // the settings rather than in them, because one save moves the one
+        // ledger tip and the board has to be told whether anything it is drawing
+        // moved with it — which, for a board settings save, it did not.
+        noteVocabularyChange(panelHead, typeof shape === "string" ? shape : "");
         adoptDisplay(settings);
       }
       // One save, sent as the whole configuration and against the head the page
@@ -8571,14 +8584,14 @@
           // of the recovery, exactly as it is for a status change — and the copy
           // names the configuration rather than the statuses, because what moved
           // may have been either.
-          if (payload.display) adoptDisplayAtHead(payload.display);
+          if (payload.display) adoptDisplayAtHead(payload.display, payload.shape);
           applyConfigBusy();
           displayReport("error", stale
             ? "This project's configuration changed in another clone, so these settings were not applied. This page now shows them as they stand; review them and save again."
             : payload.error && payload.error.message || "These board settings were not applied.");
           return;
         }
-        adoptDisplayAtHead(payload.display);
+        adoptDisplayAtHead(payload.display, payload.shape);
         applyConfigBusy();
         displayReport("", describeDisplaySave(payload.display),
           (payload.warnings || []).map((warning) => warning.message));
@@ -9970,8 +9983,34 @@
       // head, a refusal they have not read yet. None of that can be moved to a
       // new node, and all of it is lost with the old one. A reload loses it
       // too, which is exactly why the reader chooses when.
-      function noteVocabularyChange(head) {
+      //
+      // What raises it is the configuration that arrived differing from the one
+      // this page is drawing, not the head having moved. Those were the same
+      // question until a change could be drawn without a reload; a color can
+      // be, because every answer carries the stylesheet the server would have
+      // served and the page swaps it in place — so a head-based notice asked
+      // the reader to reload for a board they were already looking at. The
+      // server states the shape of what a head stands for, the columns and the
+      // priorities by membership, order and label, and a head that arrives over
+      // a shape this page already has is recorded and passed over in silence.
+      //
+      // By content rather than by who made the change, which is what makes it
+      // right for a teammate's: their recolor is as quiet as the reader's own,
+      // and their rename is as loud.
+      //
+      // A change that states no shape — an older build, or a document composed
+      // without one — is announced. Nothing here can tell whether it is on
+      // screen, and the end of that failure the reader can act on is the notice.
+      function noteVocabularyChange(head, shape) {
         if (vocabularyChanged || head === renderedVocabularyHead) return;
+        if (shape && shape === renderedVocabularyShape) {
+          // Current, so the head this page answers for moves up to it. Without
+          // that, every later answer carrying the same head would be compared
+          // again — and a poll that fell back to a document with no shape on it
+          // would then announce a change this page had already accepted.
+          renderedVocabularyHead = head;
+          return;
+        }
         vocabularyChanged = true;
         vocabularyNotice.hidden = false;
       }
@@ -10030,7 +10069,9 @@
             // check above: a refresh that lost the race never touches the
             // model, so it never has a read to report.
             boardRead = true;
-            noteVocabularyChange(typeof document.vocabularyHead === "string" ? document.vocabularyHead : "");
+            noteVocabularyChange(
+              typeof document.vocabularyHead === "string" ? document.vocabularyHead : "",
+              typeof document.vocabularyShape === "string" ? document.vocabularyShape : "");
             // A poll deliberately does not touch a pending queue's head. The
             // queue re-bases when a write is actually refused, where the answer
             // is known to be newer than the head that failed; a poll that left

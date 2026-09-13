@@ -4443,6 +4443,14 @@ const boardDefaultStatus = ` + strconv.Quote(string(vocabulary.Default())) + `;
 const boardPriorities = ` + strconv.Quote(pagePriorities(core.PriorityVocabulary{})) + `;
 const boardDefaultPriority = ` + strconv.Quote(string(core.PriorityVocabulary{}.Default())) + `;
 const boardVocabularyHead = ` + strconv.Quote(vocabularyHead) + `;
+// The digest of the columns and priorities this page was drawn from, as the
+// served page states it. It is composed by the server's own function over the
+// same two readings the harness draws, so a test cannot pass by comparing a
+// shape this file invented — see vocabularyShape.
+const boardVocabularyShape = ` + strconv.Quote(vocabularyShape(VocabularyState{
+		Vocabulary: vocabulary,
+		Head:       vocabularyHead,
+	})) + `;
 const boardProjectName = ` + strconv.Quote(core.DefaultProjectName) + `;
 const boardDefaultProjectName = ` + strconv.Quote(core.DefaultProjectName) + `;
 const boardTitleSuffixName = "Workbook";
@@ -4698,6 +4706,7 @@ boardView.dataset.defaultStatus = boardDefaultStatus;
 boardView.dataset.priorities = boardPriorities;
 boardView.dataset.defaultPriority = boardDefaultPriority;
 boardView.dataset.vocabularyHead = boardVocabularyHead;
+boardView.dataset.vocabularyShape = boardVocabularyShape;
 // What the board is called and what every other route's title ends in, as the
 // server resolves them. A harness that invented either would be testing a
 // fallback core owns rather than the one the page is served with.

@@ -1175,7 +1175,11 @@ the server composed and the page can swap it without rebuilding a single card.
 That covers a priority nobody colored, too: its ink is derived from its
 position, so adding one here redraws the ones carrying no color of their own.
 A color another clone set is not, for the same reason its columns are not: that
-change reaches this page as a moved head and nothing else. Every section of the
+change reaches this page as a moved head and nothing else. The notice follows
+the same division rather than the head: it is raised when the statuses or the
+priorities an answer carries differ from the ones the page is drawing — which
+there are, their order, or their labels — and stays down when only a color
+moved, whoever moved it. Every section of the
 page shares one ledger and one tip, so none of them can be changed while another
 is changing, and a save of the board's settings, or of a priority, is as much a
 reason for a status change to be refused as another status change would be.

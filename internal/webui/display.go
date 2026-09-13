@@ -87,10 +87,19 @@ type DisplayDocument struct {
 // VocabularyMutationDocument: the whole document the read serves, so a client
 // renders the result of a change through the code that rendered the page.
 type DisplayMutationDocument struct {
-	Format   string          `json:"format"`
-	Version  int             `json:"version"`
-	Display  DisplayDocument `json:"display"`
-	Warnings []core.Warning  `json:"warnings,omitempty"`
+	Format  string          `json:"format"`
+	Version int             `json:"version"`
+	Display DisplayDocument `json:"display"`
+	// Shape is the digest of the configuration this save wrote into: the columns
+	// and the priorities as they now stand, which a board settings save does not
+	// touch. It rides on the envelope rather than in the settings because it is a
+	// fact about the whole configuration rather than about these three values —
+	// the settings document is also what a vocabulary read carries, where the
+	// shape is already stated once. The client compares it with what the page is
+	// drawing and stays quiet when the two agree: see vocabularyShape, and
+	// noteVocabularyChange for what the notice is actually for.
+	Shape    string         `json:"shape"`
+	Warnings []core.Warning `json:"warnings,omitempty"`
 }
 
 // DisplayErrorDocument is the error envelope with the settings a refused save
@@ -103,6 +112,11 @@ type DisplayErrorDocument struct {
 	Version int              `json:"version"`
 	Error   ErrorBody        `json:"error"`
 	Display *DisplayDocument `json:"display,omitempty"`
+	// Shape is the configuration the refused save was answered against, riding
+	// here for the reason it rides on the mutation envelope: a stale write means
+	// somebody else has configured this project, and the client adopts what they
+	// configured — including whether the board behind the page still draws it.
+	Shape string `json:"shape,omitempty"`
 }
 
 // displayDocument renders one read of the project's display settings. The head
@@ -178,6 +192,7 @@ func (handler *handler) updateDisplay(writer http.ResponseWriter, request *http.
 		Format:   "workbook.display-mutation",
 		Version:  1,
 		Display:  displayDocument(mutation.State),
+		Shape:    vocabularyShape(mutation.State),
 		Warnings: mutation.Warnings,
 	})
 }
@@ -218,6 +233,7 @@ func (handler *handler) writeDisplayError(writer http.ResponseWriter, request *h
 		Version: 1,
 		Error:   body,
 		Display: &document,
+		Shape:   vocabularyShape(state),
 	})
 }
 
