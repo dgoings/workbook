@@ -157,6 +157,21 @@ type VocabularyState struct {
 	// draw one page out of two configurations. gitstore.LoadVocabularyState
 	// answers both from one read for exactly that reason.
 	Display core.DisplaySettings
+	// Priorities is this project's priority vocabulary, recorded in the same
+	// ledger section beside the statuses and the display settings and read from
+	// the same commit, for the reason Display is: a board that read its columns
+	// and then its priorities could be answered from either side of a fetch and
+	// would sort one page's cards against another page's order.
+	//
+	// It is the zero vocabulary for a project that has configured none, which
+	// every PriorityVocabulary accessor but Document and Validate reads as the
+	// built-in three. That substitution is why every producer of this state has
+	// to fill this field or say in a comment that it means not to: a producer
+	// that leaves it zero does not answer "I did not read the priorities", it
+	// answers "this project's priorities are high, medium and low" — and a
+	// client that adopts an answer wholesale would write that over a project's
+	// own priorities on the strength of a status rename.
+	Priorities core.PriorityVocabulary
 }
 
 // VocabularyResolver reads the project's current statuses.
@@ -201,6 +216,33 @@ type VocabularyDocument struct {
 	// this route gave before display settings existed is the response it gives
 	// now, byte for byte.
 	Display *DisplayDocument `json:"display,omitempty"`
+	// Priorities is this project's priority vocabulary, riding here for the
+	// reason Display does: the two are sections of one ledger, and a client that
+	// asked for them separately could be answered from either side of a change
+	// and would offer a Save composed against a configuration nobody was shown.
+	//
+	// Present always rather than omitted when unconfigured, which is where it
+	// differs from Display: a board that has not been given a name has no name,
+	// and a project that has not configured its priorities still has priorities
+	// — the built-in three, which is what core substitutes and what the board
+	// draws. So this member is the effective reading, and a client never has to
+	// carry a fallback set of its own.
+	Priorities PriorityVocabularyDocument `json:"priorities"`
+}
+
+// PriorityVocabularyDocument is a project's priority configuration as the board
+// reads it: the live priorities in configured order, the forwarding chains a
+// stored priority is resolved through, and the derived default.
+//
+// It mirrors the status half above member for member, Default included, and for
+// the same reason — "the priority tagged default" is a rule, and a client that
+// re-derived it could disagree with the server about the priority a new task is
+// given.
+type PriorityVocabularyDocument struct {
+	Default    core.Priority             `json:"default"`
+	Priorities []core.PriorityDefinition `json:"priorities"`
+	Aliases    []core.PriorityAlias      `json:"aliases"`
+	Retired    []core.RetiredPriority    `json:"retired"`
 }
 
 // VocabularyStatusAddition is a status the board asks this project to define.
@@ -634,6 +676,17 @@ type pageData struct {
 	// VocabularyHead is the ledger tip these columns were built from, so the
 	// poll can tell that the columns it is looking at have been superseded.
 	VocabularyHead string
+	// Priorities are this project's priorities in configured order, as JSON,
+	// rendered into the page for the reason DefaultStatus and StatusTags are:
+	// the client needs them before it has fetched anything and must not guess.
+	// A board whose project renamed its priorities, added a fourth or colored
+	// one of them draws what the project configured; nothing here is a set the
+	// script keeps a copy of.
+	//
+	// It is already-encoded JSON rather than the values because the page has one
+	// template derivation and the comment on pageFuncs says why; see
+	// pagePriorities for what it carries.
+	Priorities string
 	// AttachmentFileLimit is core's ceiling on one attached file, rendered into
 	// the page for the same reason StatusTags is: the upload control refuses a
 	// file this large before it spends a minute encoding and sending one the
@@ -871,6 +924,13 @@ func VocabularyFrom(ctx context.Context) (VocabularyState, bool) {
 // papered over: drawing the built-in six for a project that renamed half of
 // them would put every task in the wrong column and accept drops the server
 // would refuse.
+//
+// That fallback deliberately names no priorities, and it is the one producer of
+// a VocabularyState that means to leave the field zero: a board with no
+// resolver has no project to read them from, and the zero vocabulary is read
+// everywhere as the built-in three — which is precisely what a board built
+// without a resolver is using. It is left zero rather than filled with them so
+// that the substitution stays in the one place core makes it.
 func (handler *handler) vocabulary(request *http.Request) (VocabularyState, *http.Request, error) {
 	if state, carried := VocabularyFrom(request.Context()); carried {
 		return state, request, nil
@@ -1244,6 +1304,7 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 		Theme:                 boardTheme(vocabulary.Display),
 		DefaultStatus:         vocabulary.Vocabulary.Default(),
 		VocabularyHead:        vocabulary.Head,
+		Priorities:            pagePriorities(vocabulary.Priorities),
 		AttachmentFileLimit:   core.MaxAttachmentFileBytes,
 		AttachmentTotalLimit:  core.MaxLiveAttachmentBytes,
 		AttachmentNameLimit:   core.MaxAttachmentNameBytes,
@@ -1316,12 +1377,49 @@ func vocabularyDocument(state VocabularyState) VocabularyDocument {
 		Statuses: document.Statuses,
 		Aliases:  document.Aliases,
 		Retired:  document.Retired,
+		// EffectiveDocument rather than Document, because this is a reading:
+		// what the board draws for a project that has configured no priorities
+		// is the built-in three, not an empty list. Document is for a caller
+		// writing a checkpoint, which this is not.
+		Priorities: priorityVocabularyDocument(state.Priorities),
 	}
 	if state.Display.Configured() {
 		display := displayDocument(state)
 		rendered.Display = &display
 	}
 	return rendered
+}
+
+// priorityVocabularyDocument renders one read of the project's priorities, in
+// the shape the read route and every mutation answer with.
+func priorityVocabularyDocument(priorities core.PriorityVocabulary) PriorityVocabularyDocument {
+	document := priorities.EffectiveDocument()
+	return PriorityVocabularyDocument{
+		Default:    priorities.Default(),
+		Priorities: document.Priorities,
+		Aliases:    document.Aliases,
+		Retired:    document.Retired,
+	}
+}
+
+// pagePriorities encodes a project's priorities for the attribute the page
+// carries them in.
+//
+// It is JSON rather than the space-separated list StatusTags uses because a
+// priority is four facts — its token, its label, its role and its ink — and the
+// client must not carry a second copy of any of them. It is encoded here rather
+// than in the template because the template has one derivation and the comment
+// on pageFuncs says why it has one.
+func pagePriorities(priorities core.PriorityVocabulary) string {
+	encoded, err := json.Marshal(priorities.EffectiveDocument().Priorities)
+	if err != nil {
+		// A priority definition is three strings, a tag list and a color, so
+		// there is nothing here encoding/json can refuse. A board that drew no
+		// priorities at all is a better answer to the impossible case than a
+		// page that will not load.
+		return "[]"
+	}
+	return string(encoded)
 }
 
 // addVocabularyStatus defines a status this project does not have.

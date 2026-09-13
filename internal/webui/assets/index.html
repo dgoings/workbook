@@ -1148,8 +1148,15 @@
          default, which no client can derive from the columns alone. Anything
          the script needs before its first fetch comes from an attribute here,
          data-vocabulary-head included, so a page and its script never disagree
-         about which vocabulary they were built from. -->
-    <div class="board-view" data-board-view data-project-name="{{ .ProjectName }}" data-default-project-name="{{ .DefaultProjectName }}" data-title-suffix="{{ .TitleSuffix }}" data-default-status="{{ .DefaultStatus }}" data-vocabulary-head="{{ .VocabularyHead }}" data-attachment-limit="{{ .AttachmentFileLimit }}" data-attachment-total-limit="{{ .AttachmentTotalLimit }}" data-attachment-name-limit="{{ .AttachmentNameLimit }}" data-attachment-label-limit="{{ .AttachmentLabelLimit }}" data-attachment-url-limit="{{ .AttachmentURLLimit }}" data-inline-media="{{ .InlineImageMediaTypes }}" data-assign-identity="{{ .AssignIdentity }}">
+         about which vocabulary they were built from.
+
+         data-priorities is the same answer for the other half of the
+         vocabulary: this project's priorities in configured order, each with
+         its label, its tags and its ink, as JSON because a priority is more
+         facts than a space-separated list can carry. A project that renamed
+         its priorities or added a fourth is described here and nowhere in the
+         script. -->
+    <div class="board-view" data-board-view data-priorities="{{ .Priorities }}" data-project-name="{{ .ProjectName }}" data-default-project-name="{{ .DefaultProjectName }}" data-title-suffix="{{ .TitleSuffix }}" data-default-status="{{ .DefaultStatus }}" data-vocabulary-head="{{ .VocabularyHead }}" data-attachment-limit="{{ .AttachmentFileLimit }}" data-attachment-total-limit="{{ .AttachmentTotalLimit }}" data-attachment-name-limit="{{ .AttachmentNameLimit }}" data-attachment-label-limit="{{ .AttachmentLabelLimit }}" data-attachment-url-limit="{{ .AttachmentURLLimit }}" data-inline-media="{{ .InlineImageMediaTypes }}" data-assign-identity="{{ .AssignIdentity }}">
       <p class="stale" data-stale role="status">Task refresh failed. Showing the last successful board.</p>
       <!-- data-board is where the client appends the Deleted column, after the
            last vocabulary column the server rendered. It is a client-built

@@ -1562,7 +1562,12 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 		if err != nil {
 			return webui.VocabularyState{}, err
 		}
-		return webui.VocabularyState{Vocabulary: state.Vocabulary, Head: state.Head, Display: state.Display}, nil
+		return webui.VocabularyState{
+			Vocabulary: state.Vocabulary,
+			Head:       state.Head,
+			Display:    state.Display,
+			Priorities: state.Priorities,
+		}, nil
 	}
 	current := func(requestContext context.Context) (core.Service, error) {
 		state, carried := webui.VocabularyFrom(requestContext)
@@ -1575,6 +1580,14 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 		}
 		fresh := service
 		fresh.Vocabulary = state.Vocabulary
+		// And the priorities from the same read, for the reason the statuses
+		// are re-read at all. A service refreshed in one half would author
+		// against priorities that read was already past: it would sort the
+		// board's cards in an order nobody configured, land a new task on a
+		// default somebody replaced, and refuse a priority a teammate added an
+		// hour ago. The single-command paths refresh both together and say so;
+		// see taskSession.refreshConfiguration.
+		fresh.Priorities = state.Priorities
 		return fresh, nil
 	}
 	// The board's status administration goes through the verb family's own

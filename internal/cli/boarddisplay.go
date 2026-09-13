@@ -66,7 +66,11 @@ func (board *boardDisplay) set(
 		// configuration as it already stands. This is the whole of the no-op
 		// rule: no pack, no commit, no ref update, no generation marker.
 		return webui.DisplayMutation{
-			State: webui.VocabularyState{Head: state.Head, Display: state.Display},
+			State: webui.VocabularyState{
+				Head:       state.Head,
+				Display:    state.Display,
+				Priorities: state.Priorities,
+			},
 		}, nil
 	}
 	written, err := board.repository.WriteConfigOperationOnto(
@@ -82,7 +86,15 @@ func (board *boardDisplay) set(
 		return webui.DisplayMutation{}, err
 	}
 	return webui.DisplayMutation{
-		State:    webui.VocabularyState{Head: written.Head, Display: written.State.Display()},
+		// The priorities come off the checkpoint this write recorded, the way
+		// the settings do, so a state that leaves this route carries the
+		// project's own priorities rather than the zero value every accessor
+		// reads as the built-in three.
+		State: webui.VocabularyState{
+			Head:       written.Head,
+			Display:    written.State.Display(),
+			Priorities: written.State.PriorityVocabulary(),
+		},
 		Warnings: board.publisher.publishConfig(ctx),
 	}, nil
 }

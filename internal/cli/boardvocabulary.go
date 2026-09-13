@@ -175,7 +175,12 @@ func (board *boardVocabulary) apply(
 	// project's priorities.
 	priorities := written.PriorityVocabulary()
 	return webui.VocabularyMutation{
-		State: webui.VocabularyState{Vocabulary: after, Head: written.Head},
+		// The priorities travel with the statuses because the answer is the
+		// whole vocabulary and the client adopts it wholesale: a state that
+		// left them zero would not say "this answer is about statuses", it
+		// would say "this project's priorities are the built-in three", and a
+		// project that named its own would watch a status rename replace them.
+		State: webui.VocabularyState{Vocabulary: after, Head: written.Head, Priorities: priorities},
 		Tasks: webui.VocabularyTaskCounts{
 			Affected:       plan.tasks.Affected,
 			ClaimableAfter: plan.tasks.ClaimableAfter,
