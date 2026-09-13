@@ -1364,6 +1364,10 @@
       // builds both selects the same way and a select is where a person reads a
       // name rather than a token.
       const priorityDefinitions = publishedPriorities.map((definition) => [definition.priority, definition.label || definition.priority]);
+      // The priorities this project can resolve, which is the question a task's
+      // stored priority has to be asked before a select is told to show it.
+      // `statuses` is the same set for the same reason.
+      const priorities = new Set(priorityDefinitions.map(([priority]) => priority));
       // Where a priority sits, for the one thing that needs to know: placing a
       // dragged card in a column that holds no card of its own priority.
       //
@@ -2480,6 +2484,48 @@
           control.insertBefore(placeholder, control.firstElementChild);
         }
         text(placeholder, "Choose one of this project's statuses (current: " + status + ")");
+        showSelected(control, "");
+      }
+      // The priority half of the same problem. A task's priority can be one this
+      // project's vocabulary cannot resolve — a teammate on a newer build
+      // authored it and filed a task under it — and the select, built from the
+      // priorities the server published, has no option for it.
+      //
+      // Left alone that is worse here than a blank field. A select showing none
+      // of its options shows the first one, so the form would display a priority
+      // nobody chose, and the next save would send it: changedTaskValues asks
+      // whether the control disagrees with the task, and a control the client
+      // could not draw always does. A reader editing the title would silently
+      // reassign the priority. Selecting the placeholder sends nothing instead.
+      function priorityPlaceholder() {
+        const option = document.createElement("option");
+        option.value = "";
+        option.disabled = true;
+        return option;
+      }
+      // Makes a priority select show a priority, whether or not this project
+      // defines it, so it is also how a select already on screen adopts one.
+      // The placeholder is added and removed as the priority needs it, for the
+      // reason showStatus's is: one naming a priority the task has since left is
+      // a worse label than none.
+      //
+      // It asks for one of this project's priorities. There is no canonical set
+      // — the priorities are the project's — and the select is the place a
+      // person reads a priority as a name rather than as the token the card's
+      // chip carries, so the current value is named in a sentence.
+      function showPriority(control, priority) {
+        const first = control.firstElementChild;
+        let placeholder = first && first.value === "" ? first : null;
+        if (priorities.has(priority)) {
+          if (placeholder) placeholder.remove();
+          showSelected(control, priority);
+          return;
+        }
+        if (!placeholder) {
+          placeholder = priorityPlaceholder();
+          control.insertBefore(placeholder, control.firstElementChild);
+        }
+        text(placeholder, "Choose one of this project's priorities (current: " + priority + ")");
         showSelected(control, "");
       }
       function select(name, options, value) {
@@ -5824,6 +5870,7 @@
         const status = select("status", statusDefinitions, task.status); status.required = true;
         showStatus(status, task.status);
         const priority = select("priority", priorityDefinitions, task.priority);
+        showPriority(priority, task.priority);
         const labels = labelEditor(task.labels || []);
         // Named, because the relationship region carries a form-status of its
         // own and "the first .form-status in the route" is the wrong element
@@ -5944,7 +5991,6 @@
         // that exists rather than against one the server refused.
         function reviseAgainstTask(held) {
           const edited = changedTaskValues(task, controls);
-          const adopted = Object.assign({}, held);
           if (!("title" in edited)) title.value = held.title || "";
           if (!("description" in edited)) description.value = held.description || "";
           // Labels are asked a different question than the rest. A save folds
@@ -5964,18 +6010,17 @@
           text(heading, held.title || "");
           document.title = (held.title || "") + boardTitleSuffix;
           if (!("status" in edited)) showStatus(controls.status, held.status);
-          // A correction that cannot be shown must not move the baseline with
-          // it. The control would still be displaying the value this form
-          // rendered while the baseline said otherwise, which is the one thing
-          // that would turn a refused value into an edit the next save sends.
-          // Status is always showable — showStatus builds an option for a
-          // status this client does not know — so what is left here is a
-          // priority from outside this project's vocabulary, which the select
-          // has no option for and the served ink no color for either.
-          if (!("priority" in edited) && !showSelected(controls.priority, held.priority)) {
-            adopted.priority = task.priority;
-          }
-          task = adopted;
+          // Both vocabulary fields are always showable: each builds a
+          // placeholder naming a value this project cannot resolve, so the
+          // control and the baseline agree whatever the board hands over. That
+          // agreement is the whole point of routing through these rather than
+          // showSelected — a control still displaying the value this form
+          // rendered while the baseline had moved is exactly what turns a
+          // correction nobody asked for into an edit the next save sends.
+          if (!("priority" in edited)) showPriority(controls.priority, held.priority);
+          // A copy, because the board holds this task too: the baseline this
+          // form measures its next save against is the form's own.
+          task = Object.assign({}, held);
           // Drawn after the task is adopted, so the pane follows both halves of
           // what a poll can move: the description itself, when this reader has
           // not touched the field, and the attachment list an image reference
@@ -6422,7 +6467,10 @@
         // A status the client does not know renders as an unselected
         // placeholder. Leaving it alone is not a request to clear the status.
         if (controls.status.value && controls.status.value !== task.status) values.status = controls.status.value;
-        if (controls.priority.value !== task.priority) values.priority = controls.priority.value;
+        // And a priority this project cannot resolve renders as the same
+        // unselected placeholder, for the same reason: leaving it alone is not a
+        // request to move the task off the priority it was filed under.
+        if (controls.priority.value && controls.priority.value !== task.priority) values.priority = controls.priority.value;
         const labels = controls.labels.values();
         if (!sameLabels(labels, task.labels || [])) values.labels = labels;
         return values;

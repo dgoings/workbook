@@ -68,6 +68,15 @@ func priorityBoardHandler(priorities core.PriorityVocabulary, tasks []core.Task)
 // all, which is what every test that is not about them wants.
 func runPriorityClient(t *testing.T, purpose, url string, priorities core.PriorityVocabulary, tasks []core.Task, body string) {
 	t.Helper()
+	runPriorityClientReporting(t, purpose, url, priorities, tasks, body)
+}
+
+// runPriorityClientReporting is runPriorityClient, handing back what the script
+// printed. A test that has to answer a request the client built — rather than
+// only inspect what it drew — reads the request off this output and puts it
+// through the server in Go.
+func runPriorityClientReporting(t *testing.T, purpose, url string, priorities core.PriorityVocabulary, tasks []core.Task, body string) string {
+	t.Helper()
 	node := requireNode(t)
 	handler := priorityBoardHandler(priorities, tasks)
 	response := request(t, handler, http.MethodGet, url)
@@ -87,9 +96,11 @@ setTimeout(async () => {
 ` + body + `
 }, 0);
 `
-	if output, err := nodeCommand(node, program).CombinedOutput(); err != nil {
+	output, err := nodeCommand(node, program).CombinedOutput()
+	if err != nil {
 		t.Fatalf("execute %s: %v\n%s", purpose, err, output)
 	}
+	return string(output)
 }
 
 // priorityPairs is what the form's select has to offer: this project's
