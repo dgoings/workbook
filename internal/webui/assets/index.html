@@ -8208,12 +8208,22 @@
         const label = panelTextInput("priority-new-label", "", "derived from the name", priorityControls);
         // One control for the placement, because a placement is one decision and
         // the route takes one anchor. The writer refuses a change naming both.
-        const placement = panelSelect("priority-new-placement", [["", "Least urgent"]].concat(
-          definitions.flatMap((candidate) => [
-            ["before:" + candidate.priority, "Above " + candidate.label],
-            ["after:" + candidate.priority, "Below " + candidate.label]
-          ])
-        ), priorityControls);
+        //
+        // One option per position rather than one per priority. A list of n
+        // priorities has n+1 positions, and naming both neighbours of every one
+        // of them spells most of those twice: "Above X" is the position "Below
+        // the one before X" already names, and the end of the list is the
+        // position the default option names. So the most urgent is the only
+        // priority something is offered above, and the least urgent is the only
+        // one nothing is offered below — "Least urgent" is that place, in the
+        // words a reader picking it would use.
+        const placement = panelSelect("priority-new-placement", [["", "Least urgent"]]
+          .concat(definitions.length
+            ? [["before:" + definitions[0].priority, "Above " + definitions[0].label]]
+            : [])
+          .concat(definitions.slice(0, -1).map((candidate) =>
+            ["after:" + candidate.priority, "Below " + candidate.label])),
+          priorityControls);
         const add = panelSubmitButton("Add priority", "",
           { modifier: "admin-button--primary", blocked: true, controls: priorityControls });
         const guard = () => blockPanelControl(add, !name.value.trim());
