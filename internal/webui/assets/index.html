@@ -408,18 +408,23 @@
     .copy-status { position: absolute; left: 100%; top: 50%; margin-left: .35rem; color: var(--wb-primary-edge); font-size: .65rem; font-weight: 800; line-height: 1; pointer-events: none; transform: translateY(-50%); white-space: nowrap; }
     .copy-status:empty { display: none; }
     .copy-status[data-kind="error"] { color: var(--wb-danger-ink); }
-    /* A priority is a badge rather than a word: the label sits on a background
-       of its own, padded and rounded so the color behind it reads as a chip.
-       The background itself is per-priority and is composed in Go with the ink
-       — see priorityChip, which derives it by measuring contrast rather than by
-       choosing a tint that looked right, because a label on the card's own
-       surface is legible only for a color that was chosen against that surface
-       and every color here is now a project's to choose.
+    /* A priority is a word, and a badge only where the word alone cannot be
+       read. The geometry is stated here for both: the padding and the 4px
+       radius the rest of this page's boxes carry, which show where a background
+       is drawn behind them and cost nothing where none is.
 
-       No background is stated here. A priority with none declared keeps the
-       card's own surface, which is what this row was before, and that is the
-       right answer for the one case the block below is absent. */
-    .priority { flex: 0 0 auto; font-size: .64rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; border-radius: .28rem; padding: .1rem .34rem; }
+       Whether one is drawn is per priority and per scheme, and is composed in Go
+       with the ink — see priorityChipFor, which asks the only question the card
+       actually poses, whether this label clears AA where it sits, and answers a
+       No with a background far enough past the bar to look deliberate. Most
+       colors are a Yes and are left as the bare colored word this row has always
+       drawn; a pale yellow on a white card is not, and it gets a deep chip.
+
+       No background is stated here, and none is stated for a priority that needs
+       none. Both leave the card's own surface showing, which is the same answer
+       as before any of this — and is the right one for the case the block below
+       is absent entirely. */
+    .priority { flex: 0 0 auto; font-size: .64rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; border-radius: 4px; padding: .1rem .34rem; }
     /* The served page carries a third <style> element after the theme block,
        giving every priority this project defines its own ink and overriding
        these three by cascade. These stay as the standing answer for the one

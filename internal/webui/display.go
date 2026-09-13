@@ -608,12 +608,11 @@ func priorityInk(priorities core.PriorityVocabulary) template.CSS {
 	rules := make([]string, 0, 2*len(live))
 	dark := make([]string, 0, 2*len(live))
 	declared := make(map[core.Priority]struct{}, len(live))
+	chipped := make(map[core.Priority]struct{}, len(live))
 	for index, definition := range live {
 		property := priorityInkProperty(definition.Priority)
-		chip := priorityChipProperty(definition.Priority)
 		if color, parsed := parseThemeColor(definition.Color); parsed {
 			declarations = append(declarations, property+": "+color.hex()+";")
-			declarations = append(declarations, chip+": "+priorityChip(color)+";")
 			// A stored color is one value, and the board has three palette
 			// statements. A mid-toned red chosen against white is the very thing
 			// that disappears into a near-black card, so it is lifted for a dark
@@ -621,20 +620,35 @@ func priorityInk(priorities core.PriorityVocabulary) template.CSS {
 			// reason the priority triad's own comment above gives.
 			lifted := color.tonedColor(1, .68)
 			dark = append(dark, property+": "+lifted.hex()+";")
-			// And the chip is derived from the ink as the scheme reads it, not
-			// lifted along with it: the offset that makes a label legible runs
-			// the other way once the label itself has moved.
-			dark = append(dark, chip+": "+priorityChip(lifted)+";")
+			// And whether there is a chip behind it at all is asked once per
+			// scheme, of the ink as that scheme draws it: a color that is read on
+			// a white card is not the same color that is read on a near-black
+			// one, and neither reading has anything to say about the other.
+			light, deep := priorityChipFor(color, false), priorityChipFor(lifted, true)
+			if light != "" || deep != "" {
+				// One scheme needing a chip is enough to declare the property and
+				// write the rule, so the scheme that needs none says so outright
+				// rather than leaving the property unset: an undeclared `var()` is
+				// a declaration a browser throws away, which arrives at the same
+				// painted card by a route nobody reading this could check.
+				chip := priorityChipProperty(definition.Priority)
+				declarations = append(declarations, chip+": "+chipDeclaration(light)+";")
+				dark = append(dark, chip+": "+chipDeclaration(deep)+";")
+				rules = append(rules, ".priority--"+string(definition.Priority)+" { background: var("+chip+"); }")
+				chipped[definition.Priority] = struct{}{}
+			}
 		} else {
+			// A priority with no stored color is drawn in one of the triad's three
+			// or in a mix of two, and every one of those reads on the card it is
+			// drawn on in both schemes — TestPriorityChipLeavesADerivedInkOnTheCard
+			// measures all of them. So this family composes no chip at all, which
+			// is also what keeps it out of the guards that count literals.
 			declarations = append(declarations, property+": "+derivedPriorityInk(index, len(live))+";")
-			declarations = append(declarations, chip+": "+derivedPriorityChip(property, priorityChipLightWash)+";")
-			dark = append(dark, chip+": "+derivedPriorityChip(property, priorityChipDarkWash)+";")
 		}
 		rules = append(rules, ".priority--"+string(definition.Priority)+" { color: var("+property+"); }")
-		rules = append(rules, ".priority--"+string(definition.Priority)+" { background: var("+chip+"); }")
 		declared[definition.Priority] = struct{}{}
 	}
-	rules = append(rules, forwardedPriorityRules(priorities, document, declared)...)
+	rules = append(rules, forwardedPriorityRules(priorities, document, declared, chipped)...)
 
 	block := ":root { " + strings.Join(declarations, " ") + " }"
 	if len(dark) > 0 {
@@ -682,6 +696,7 @@ func forwardedPriorityRules(
 	priorities core.PriorityVocabulary,
 	document core.PriorityDocument,
 	declared map[core.Priority]struct{},
+	chipped map[core.Priority]struct{},
 ) []string {
 	retired := make([]core.Priority, 0, len(document.Aliases)+len(document.Retired))
 	for _, alias := range document.Aliases {
@@ -717,8 +732,13 @@ func forwardedPriorityRules(
 		rules = append(rules, ".priority--"+string(name)+" { color: var("+priorityInkProperty(destination)+"); }")
 		// And the chip behind it, for the same reason and from the same
 		// priority: a card left at the old name is drawn as that priority, so it
-		// is drawn on that priority's badge rather than on a bare card.
-		rules = append(rules, ".priority--"+string(name)+" { background: var("+priorityChipProperty(destination)+"); }")
+		// is drawn on that priority's badge rather than on a bare card. A
+		// destination that was given no chip — the ordinary case now, since most
+		// colors read on the card unaided — is forwarded no background rule
+		// either, which is the same answer: the card's own surface.
+		if _, hasChip := chipped[destination]; hasChip {
+			rules = append(rules, ".priority--"+string(name)+" { background: var("+priorityChipProperty(destination)+"); }")
+		}
 	}
 	return rules
 }
@@ -740,72 +760,188 @@ func priorityInkProperty(priority core.Priority) string {
 // It is a family of its own beside the ink rather than a shade of it, because a
 // chip is not a lighter version of a color: it is whatever that color can be
 // read against, which for a pale priority is dark and for a dark one is pale.
+//
+// Not every priority declares one. See priorityChipFor: a color the card already
+// carries is drawn on the card, and only a color the card loses gets a property
+// here.
 func priorityChipProperty(priority core.Priority) string {
 	return "--wb-priority-chip-" + string(priority)
 }
 
-// The contrast a chip's label has to clear against the chip behind it.
+// The contrast a priority's label has to clear against the card it is drawn on
+// before the board leaves it there with no chip behind it.
 //
-// WCAG AA for text below 18pt, which the .64rem chip certainly is, and the bar
-// this project states. It is the whole reason the chip exists: a priority's
-// label used to be drawn straight onto the card's own surface, which is legible
-// for a color chosen against that surface and illegible for the pale ones a
-// project can now choose — the report this answers was a pale yellow at 1.4:1.
-const priorityChipContrast = 4.5
+// WCAG AA for text below 18pt, which the .64rem label certainly is, and the bar
+// this project states. It is the whole question a chip answers: a label drawn
+// straight onto the card's own surface is legible for a color chosen against
+// that surface and illegible for the pale ones a project can now choose — the
+// report this answers was a pale yellow at 1.4:1 on a white card.
+const priorityInkContrast = 4.5
+
+// The contrast a label has to clear against a chip, where a chip is drawn at
+// all: WCAG AAA, not the AA bar above.
+//
+// The two bars are deliberately different, and the difference is the whole
+// shape of this. AA decides a question — can this color be read where it is? —
+// and a chip is what answers it when it cannot. An answer that stopped at AA
+// again would be the least that passes, which on a real board reads as a wash
+// nobody can see the point of: the light-mode chip behind a pale yellow landed
+// at #6a654e, a mid grey-brown, and the verdict on it was that it "doesn't
+// provide enough distinction". At AAA the same yellow gets #4e4932 — half the
+// luminance, and 9:1 against the card rather than 5.9:1 — so the chip reads as a
+// decision rather than a hedge. The separation from the card comes with it
+// rather than being a second knob: a chip 7:1 from a light ink is further from
+// the white card than the ink was, well past the 3:1 WCAG asks of a non-text
+// boundary.
+const priorityChipContrast = 7
 
 // How far past the bar a chip is taken before the search stops. A step is a
-// whole 8-bit color either way, so landing exactly on 4.5 leaves a chip one
-// rounding away from being under it — and a value that reads 4.499 in somebody
-// else's checker is a defect report whatever this file computed.
+// whole 8-bit color either way, so landing exactly on the target leaves a chip
+// one rounding away from being under it — and a value that reads 6.999 in
+// somebody else's checker is a defect report whatever this file computed.
 const priorityChipMargin = .1
 
-// How much of the chip's own color a chip keeps. A badge that went all the way
-// to white or black to clear the bar would be a grey pill telling the reader
-// nothing about which priority it is, so the chip carries a third of the ink's
-// chroma — capped by clampChroma at whatever lightness it lands on, so a
-// saturated ink gets all the color that lightness can hold and a near-grey one
-// gets nearly none.
+// How much of the chip's own color a chip keeps. A badge stepped straight to
+// white or black would be a grey pill telling the reader nothing about which
+// priority it is, so the chip carries a third of the ink's chroma — capped by
+// clampChroma at whatever lightness it lands on, so a saturated ink gets all the
+// color that lightness can hold and a near-grey one gets nearly none. The ends
+// of the ramp hold none at all, which is the price of the fallback below: a chip
+// that had to go the whole way is black or white, and being read is worth more
+// there than being colored.
 const priorityChipChroma = .34
 
-// priorityChip is the background one priority's label is drawn on: the ink's own
-// hue, moved far enough along lightness that the label clears AA against it.
+// priorityChipFor is the background one priority's label is drawn on in one
+// scheme, and the empty string where that scheme needs none.
 //
-// The direction is the hue's and the scheme's rather than a constant, which is
-// the half a fixed tint cannot do. A dark ink is read on a pale chip and a light
-// one on a deep chip, and "dark" here means the ink as *this scheme draws it* —
-// the dark scheme lifts a chosen color, so the same project's chip goes pale in
-// light and deep in dark off two different inks.
+// The empty answer is the common one and it is the point of this function. A
+// label is a color on a card, and a color chosen to be read on that card is read
+// on it: giving it a chip anyway adds a shape around a word that was already
+// legible, and a board of identical pills says less about its priorities than
+// the bare colors did. So the question asked here is the one the card actually
+// poses — can this label be read where it sits? — and only a No is answered with
+// a chip.
 //
-// The step is searched rather than stated, and stops at the first lightness that
-// clears the bar, which is the most color a chip can carry and still be read:
+// It is asked once per scheme, against that scheme's own card, of the ink as
+// that scheme draws it. Both halves move: the dark scheme lifts a chosen color
+// and changes the card out from under it, so a yellow that needs a chip on white
+// needs nothing at all on near-black, and a saturated blue is the other way
+// round. The two answers are independent and a priority may well have a chip in
+// one scheme and none in the other.
+func priorityChipFor(ink themeColor, dark bool) string {
+	card := cardSurface(dark)
+	if contrastBetween(ink, card) >= priorityInkContrast {
+		return ""
+	}
+	return priorityChip(ink, card)
+}
+
+// chipDeclaration is what a chip property is declared as in one scheme: the
+// color, or `transparent` where that scheme draws no chip. `transparent` is the
+// card showing through, which is precisely the answer — the label on the card's
+// own surface, as it was drawn before any of this.
+func chipDeclaration(chip string) string {
+	if chip == "" {
+		return "transparent"
+	}
+	return chip
+}
+
+// cardSurface is the card a priority's label sits on in one scheme: --wb-surface
+// in that scheme's reading.
+//
+// Read out of the table the stylesheet is generated from rather than stated
+// here, so the measurement cannot drift from the board — a palette that moves
+// its surfaces moves what counts as legible on them in the same commit.
+//
+// A table that no longer declares the property, or declares it as something this
+// file cannot parse, is answered with the ends of the ramp: white in light and
+// black in dark. That is the nearest honest stand-in — the board's two surfaces
+// are #fff and a near-black — and it errs the safe way, since a color measured
+// against the more extreme card is the one more likely to be given a chip.
+func cardSurface(dark bool) themeColor {
+	fallback := "#ffffff"
+	if dark {
+		fallback = "#000000"
+	}
+	declared := fallback
+	for _, token := range schemeTokens {
+		if token.property != "--wb-surface" {
+			continue
+		}
+		declared = token.legacy
+		if dark {
+			declared = token.dark
+		}
+		break
+	}
+	if color, parsed := parseThemeColor(expandShortHex(declared)); parsed {
+		return color
+	}
+	color, _ := parseThemeColor(fallback)
+	return color
+}
+
+// expandShortHex writes `#rgb` out as `#rrggbb`. parseThemeColor reads what a
+// project stored, which core validates at six digits; the palette table is
+// hand-written CSS, where white is spelled `#fff`.
+func expandShortHex(value string) string {
+	if len(value) != 4 || value[0] != '#' {
+		return value
+	}
+	return fmt.Sprintf("#%c%c%c%c%c%c", value[1], value[1], value[2], value[2], value[3], value[3])
+}
+
+// priorityChip is the background a label that the card cannot carry is drawn on:
+// the ink's own hue, moved away from the card until the label clears AAA
+// against it.
+//
+// The direction is not the ink's lightness but the card's. A chip is only ever
+// composed for an ink the card nearly matches — that is what failing AA against
+// it means — so the way out is the way away from the card, and the scheme
+// settles it: a light card is left downwards and a near-black one upwards. The
+// same move buys both of the chip's jobs at once, because the ink and the card
+// are close together: every step away from the card is a step away from the ink.
+//
+// The step is searched rather than stated, and stops at the first lightness past
+// the target, which is the most color a chip can carry and still clear it:
 // stating an offset would be the same eyeballing that shipped the defect, and
 // would fail for the colors whose luminance leaves the least room.
-func priorityChip(ink themeColor) string {
-	toward := 1.
-	if ink.light >= .5 {
-		toward = -1
+func priorityChip(ink, card themeColor) string {
+	away := 1.
+	if luminance(ink) < luminance(card) {
+		away = -1
 	}
-	if chip, found := offsetPriorityChip(ink, toward); found {
+	if chip, found := offsetPriorityChip(ink, away); found {
 		return chip
 	}
-	// A mid-luminance ink has little room on the side its lightness suggests —
-	// #b45309 is 4.83:1 against white and 4.35:1 against black — so the other
-	// side is tried rather than assumed.
-	if chip, found := offsetPriorityChip(ink, -toward); found {
-		return chip
+	// The ramp ran out before the target did, and for a mid-toned ink that is the
+	// ordinary answer rather than an edge case: no color at all is 7:1 from an ink
+	// of relative luminance .098 to .30, in either direction — black is not far
+	// enough below it and white is not far enough above. The chip is then the
+	// end of the ramp — black away from a light card, white away from a dark one —
+	// which is the most contrast that color has to give and the furthest a chip
+	// can sit from the card.
+	//
+	// Where that end is the one the label cannot be read on, the other end
+	// answers instead. That happens only in the dark scheme, to the saturated
+	// blues and violets whose lifted ink sits just under AA on a near-black card:
+	// white leaves them under 4.5:1, and the chip goes deeper than the card
+	// rather than paler than it. Legibility is the floor here and separation is
+	// what is traded — a black chip on a #161c26 card is 1.2:1, a well rather
+	// than a badge, and it is still the best reading available for that color.
+	far, near := ink.tonedColor(priorityChipChroma, 1), ink.tonedColor(priorityChipChroma, 0)
+	if away < 0 {
+		far, near = near, far
 	}
-	// Unreachable, and stated anyway. Every color clears the bar against white
-	// below a luminance of .1833 and against black above .175, and those two
-	// bands overlap, so one end of the ramp always answers; this is what the
-	// search returns if a rounding step ever lands between them.
-	if luminance(ink) > .18 {
-		return renderColor(ink.hue, 0, 0)
+	if contrastBetween(ink, far) >= priorityInkContrast {
+		return far.hex()
 	}
-	return renderColor(ink.hue, 0, 1)
+	return near.hex()
 }
 
 // offsetPriorityChip walks the lightness ramp away from an ink in one direction
-// and answers with the first step whose contrast against it clears the bar.
+// and answers with the first step whose contrast against it clears the target.
 func offsetPriorityChip(ink themeColor, direction float64) (string, bool) {
 	const step = .004
 	for offset := step; offset <= 1; offset += step {
@@ -819,34 +955,6 @@ func offsetPriorityChip(ink themeColor, direction float64) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-// How much of a derived ink a derived chip is washed with, in whole percent, in
-// each of the two schemes. See derivedPriorityChip for why these are so far
-// apart, and why the light one is so small.
-const (
-	priorityChipLightWash = 5
-	priorityChipDarkWash  = 18
-)
-
-// derivedPriorityChip is the chip behind a priority that stores no color: its
-// own ink, washed into the card's surface.
-//
-// It is composed in CSS rather than searched in Go because a derived ink is a
-// reference to the scheme's triad rather than a value this file holds — that is
-// what gives it a dark reading without stating one, and what keeps this family
-// out of the guards that count every literal the page writes. Mixing against
-// --wb-surface keeps that property: the surface is the card's own ground, so the
-// wash is pale in light and deep in dark without either being stated as a color.
-//
-// The two percentages are far apart because the triad they wash has very
-// different room in the two schemes. The amber is 4.83:1 against a white card to
-// begin with, so a light wash of more than a few percent takes the board's own
-// built-in three below AA — the chip is a hint there, and the badge's shape is
-// what reads. Lifted onto a near-black card those inks have twice the headroom,
-// and the chip can be a chip.
-func derivedPriorityChip(inkProperty string, wash int) string {
-	return "color-mix(in oklab, var(" + inkProperty + ") " + strconv.Itoa(wash) + "%, var(--wb-surface))"
 }
 
 // luminance is the WCAG relative luminance of a color, and contrastBetween the

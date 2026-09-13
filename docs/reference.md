@@ -1092,11 +1092,15 @@ to choose: it is recorded against the priority itself rather than derived from
 the accent, by `workbook priority color` or by the configuration page's
 Priorities section, and a priority that has none is drawn in a color the board
 derives from its position — see [Project priorities](#project-priorities). On a
-card that ink is drawn as a badge rather than as a bare word: the label sits on
-a background the board derives from the ink itself — pale behind a dark color,
-deep behind a light one, from the reading each scheme gives that color — so the
-label clears the 4.5:1 contrast bar whichever color a project picks, including
-the pale ones that are invisible on a white card.
+card that ink is drawn straight onto the card, and is given a background of its
+own only where the card cannot carry it. The board measures each priority's
+color against the card it sits on, in each scheme separately: a color that
+clears the 4.5:1 contrast bar there is left as a bare word, and one that does
+not — a pale yellow is 1.4:1 on a white card — is drawn on a chip deep enough
+behind it to clear 7:1, which is also far enough from the card to read as a
+badge rather than a wash. So a board's priorities do not all look alike, and
+that is the intent: the same yellow is a filled pill in light mode and a bare
+word in dark, because that is what each of those cards can carry.
 
 The `Config` link in the board's header goes to `/config`, where each section
 administers one part of what a project configures. **Statuses** administers the

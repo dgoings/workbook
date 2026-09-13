@@ -11,91 +11,160 @@ import (
 	"github.com/dgoings/workbook/internal/core"
 )
 
-// What a priority's chip has to be readable against, measured rather than
+// What a priority's label has to be readable against, measured rather than
 // looked at.
 //
-// A priority is drawn as a badge: its label in the priority's own color, on a
-// background this package derives from that color. The background is the whole
-// of the fix — the label used to sit on the card's own white surface, which
-// works for the three colors that were chosen against white and fails for every
-// pale color a project can now pick. A chip whose label is #f5e6a3 on white is
-// 1.4:1, which is not a chip anybody can read.
+// A priority is drawn in its own color on the card. Where that color can be read
+// on the card it is left there, and where it cannot — the report this answers is
+// a pale yellow at 1.4:1 on a white card — it is given a background of its own
+// to be read on. Which of the two a priority gets is decided per color and per
+// scheme, so a board's priorities deliberately do not all look alike: the same
+// yellow is a filled pill on a white card and a bare word on a near-black one,
+// because that is what each of those cards can carry.
 //
-// So the claim these tests make is the accessibility bar this project states,
-// WCAG AA at 4.5:1, held for any color a person can choose and in both schemes.
-// It is measured off the served stylesheet: the declarations are read out of the
-// block, `var()` and `color-mix()` are resolved the way a browser resolves them,
-// and the two colors are put through the WCAG contrast formula. Eyeballing a
+// So there are two claims here rather than one, and which of them applies is
+// itself the thing being tested:
+//
+//   - Where no chip is drawn, the label clears WCAG AA against the card. That is
+//     the measurement that decided it, so it is asserted rather than assumed.
+//   - Where a chip is drawn, the label clears the stronger target the chip is
+//     composed to, and the chip is far enough from the card that a reader can
+//     see there is one.
+//
+// Both are measured off the served stylesheet: the declarations are read out of
+// the block, `var()` and `color-mix()` are resolved the way a browser resolves
+// them, and the colors are put through the WCAG contrast formula. Eyeballing a
 // badge is how the defect shipped, so nothing here is eyeballed.
 
-// The bar: WCAG 2 AA for text below 18pt, which a .64rem chip certainly is.
-const chipContrastBar = 4.5
+const (
+	// The floor, wherever a label is drawn: WCAG 2 AA for text below 18pt, which
+	// a .64rem label certainly is. It is also the threshold — a label that clears
+	// it against the card is left on the card.
+	chipContrastBar = 4.5
+	// What a chip, where one is drawn at all, is composed to: WCAG AAA. See
+	// priorityChipContrast for why a chip aims past the bar that called for it.
+	chipTarget = 7.
+	// How far a chip has to sit from the card behind it. WCAG 1.4.11 asks 3:1 of
+	// a non-text boundary, and a chip is one — "so light as to not be adding
+	// anything" is the verdict this number exists to fail.
+	chipSeparation = 3.
+	// Except where the only legible chip is on the card's own side of the ramp,
+	// which is what happens to the saturated blues in the dark scheme: their chip
+	// goes deeper than a #161c26 card, and there is no more room below it than
+	// that. See priorityChip. A chip that close is still a well the eye can see —
+	// the wash this change replaced was 1.02:1.
+	chipDeepSeparation = 1.2
+)
 
-// A priority whose color a project chose, and the ones worth choosing: the pale
-// yellow from the report, the two ends of the lightness range, a saturated
-// mid-tone, and one of the built-in three so a regression there is visible.
-var chipColorCases = []struct{ name, color string }{
-	{"the pale yellow the report was written about", "#f5e6a3"},
-	{"a near-white", "#fbfbf7"},
-	{"a near-black", "#06070b"},
-	{"a saturated mid-tone", "#2457d6"},
-	{"one of the built-in three", "#b42318"},
+// The colors the board was reviewed on, and the branch each of them takes.
+//
+// The first four are the acceptance cases: the red a project set Critical to,
+// the pale yellow from the report, the board's own amber, and a violet-blue of
+// this file's choosing — which is here because it is the one shape the other
+// three do not cover, a color that reads on a white card and is lost on a
+// near-black one, so the decision is shown running both ways. The last two are
+// the ends of the lightness range, where the search has least room.
+//
+// The branches are stated rather than logged. The complaint that produced this
+// rule was that every priority looked alike; a change that quietly went back to
+// giving every one of them a background would pass a test that only measured
+// contrast, and fails this one.
+var chipColorCases = []struct {
+	name, color string
+	// light and dark are the branch each scheme's reading takes: true where the
+	// priority is given a chip, false where its label is left on the card.
+	light, dark bool
+}{
+	{"a red, set to Critical — reads on the card in both schemes", "#d92d20", false, false},
+	{"the pale yellow the report was written about", "#f5e6a3", true, false},
+	{"the built-in amber, which needs nothing in either scheme", "#b45309", false, false},
+	{"a violet-blue, which the near-black card loses", "#3b3bd4", false, true},
+	{"a near-white", "#fbfbf7", true, false},
+	{"a near-black", "#06070b", false, false},
 }
 
-// Every color a project can choose leaves its chip's label readable on the chip,
-// in the scheme the reader is in and in the other one.
-func TestPriorityChipMeetsTheContrastBarForAChosenColor(t *testing.T) {
+// Every color a project can choose is drawn so that its label can be read: on
+// the card where the card carries it, and on a chip where it does not.
+func TestPriorityChipIsDrawnOnlyForAColorTheCardCannotCarry(t *testing.T) {
 	for _, test := range chipColorCases {
 		t.Run(test.name, func(t *testing.T) {
 			block := priorityInkBlock(t, priorityInkBoardPage(t, fourPriorityVocabulary(t, test.color), nil))
 			for _, scheme := range []string{"light", "dark"} {
-				ink, chip := drawnPriority(t, block, "high", scheme)
-				ratio := contrastRatio(t, ink, chip)
-				t.Logf("%s in %s: label %s on chip %s = %.2f:1", test.color, scheme, ink, chip, ratio)
-				if ratio < chipContrastBar {
-					t.Errorf("a %s chip in %s draws %s on %s, %.2f:1, under the %.1f:1 bar",
-						test.color, scheme, ink, chip, ratio, chipContrastBar)
+				drawn := drawnPriority(t, block, "high", scheme)
+				reading := measurePriority(t, drawn, scheme)
+				t.Logf("%s in %s: %s", test.color, scheme, reading)
+				want := test.light
+				if scheme == "dark" {
+					want = test.dark
+				}
+				if drawn.chipped != want {
+					t.Errorf("a %s priority in %s is drawn %s, want %s — %s",
+						test.color, scheme, branchName(drawn.chipped), branchName(want), reading)
 				}
 			}
 		})
 	}
 }
 
-// The same claim across the whole hue circle, at every lightness a person can
+// The same claims across the whole hue circle, at every lightness a person can
 // land on. The report was about one pale yellow; what is actually being fixed is
 // that nothing about the old rule depended on the color, so nothing about the
 // new one may depend on the color either.
-func TestPriorityChipMeetsTheContrastBarAroundTheHueCircle(t *testing.T) {
-	worst := math.Inf(1)
-	var worstCase string
-	for hue := 0; hue < 360; hue += 15 {
-		for _, light := range []float64{.04, .2, .4, .5, .6, .8, .96} {
-			for _, chroma := range []float64{.2, 1} {
-				chosen := renderColor(float64(hue), chroma, light)
-				block := string(priorityInk(fourPriorityVocabulary(t, chosen)))
-				for _, scheme := range []string{"light", "dark"} {
-					ink, chip := drawnPriority(t, block, "high", scheme)
-					ratio := contrastRatio(t, ink, chip)
-					if ratio < worst {
-						worst, worstCase = ratio, fmt.Sprintf("%s in %s: %s on %s", chosen, scheme, ink, chip)
+//
+// Both branches have to appear in both schemes. A sweep this wide that took one
+// branch throughout would mean the threshold is not where this file thinks it
+// is — either every color is being given a background again, which is the
+// complaint this answers, or none is, which is the defect it answers.
+func TestPriorityChipDecidesEachHueOnItsOwn(t *testing.T) {
+	for _, scheme := range []string{"light", "dark"} {
+		card := schemePalette(scheme)["--wb-surface"]
+		bare, chips := 0, 0
+		worstBare, worstLabel, worstSeparation := math.Inf(1), math.Inf(1), math.Inf(1)
+		var barest, faintest, closest string
+		for hue := 0; hue < 360; hue += 15 {
+			for _, light := range []float64{.04, .2, .4, .5, .6, .8, .96} {
+				for _, chroma := range []float64{.2, 1} {
+					chosen := renderColor(float64(hue), chroma, light)
+					block := string(priorityInk(fourPriorityVocabulary(t, chosen)))
+					drawn := drawnPriority(t, block, "high", scheme)
+					measurePriority(t, drawn, scheme)
+					if !drawn.chipped {
+						bare++
+						if ratio := contrastRatio(t, drawn.ink, card); ratio < worstBare {
+							worstBare, barest = ratio, chosen
+						}
+						continue
 					}
-					if ratio < chipContrastBar {
-						t.Errorf("a %s chip in %s draws %s on %s, %.2f:1, under the %.1f:1 bar",
-							chosen, scheme, ink, chip, ratio, chipContrastBar)
+					chips++
+					if ratio := contrastRatio(t, drawn.ink, drawn.chip); ratio < worstLabel {
+						worstLabel, faintest = ratio, chosen
+					}
+					if ratio := contrastRatio(t, drawn.chip, card); ratio < worstSeparation {
+						worstSeparation, closest = ratio, chosen
 					}
 				}
 			}
 		}
+		if bare == 0 || chips == 0 {
+			t.Errorf("the %s sweep drew %d labels on the card and %d on a chip — one branch of the rule is never taken",
+				scheme, bare, chips)
+		}
+		t.Logf("%s: %d bare (worst %.2f:1 on the card, %s), %d chips (worst label %.2f:1, %s; closest to the card %.2f:1, %s)",
+			scheme, bare, worstBare, barest, chips, worstLabel, faintest, worstSeparation, closest)
 	}
-	t.Logf("worst of the sweep: %.2f:1 (%s)", worst, worstCase)
 }
 
-// And for a priority that stores no color at all, whose ink is the one its
-// position among its peers derives. Those are written as references to the
-// scheme's own triad rather than as literals, so the chip behind them is written
-// as a mix of the same reference — and that mix has to clear the bar for every
-// position a vocabulary of any size can produce.
-func TestPriorityChipMeetsTheContrastBarForADerivedColor(t *testing.T) {
+// And a priority that stores no color at all, whose ink is the one its position
+// among its peers derives, is never given a chip.
+//
+// That is a measurement rather than a policy. The derived family is the triad
+// this board has always drawn priorities in, or a mix of two of them, and every
+// one of those was chosen to be read on the card it sits on — the worst is the
+// amber at 5.02:1 on white. So the rule answers "no chip" for all of them, which
+// is also what keeps this family out of the guards that count every literal the
+// page writes: there is nothing to compose in Go, because there is nothing to
+// compose.
+func TestPriorityChipLeavesADerivedInkOnTheCard(t *testing.T) {
 	worst := math.Inf(1)
 	var worstCase string
 	for count := 1; count <= core.MaxPriorityCount; count++ {
@@ -103,14 +172,21 @@ func TestPriorityChipMeetsTheContrastBarForADerivedColor(t *testing.T) {
 		for index := range count {
 			token := fmt.Sprintf("p%d", index)
 			for _, scheme := range []string{"light", "dark"} {
-				ink, chip := drawnPriority(t, block, token, scheme)
-				ratio := contrastRatio(t, ink, chip)
+				card := schemePalette(scheme)["--wb-surface"]
+				drawn := drawnPriority(t, block, token, scheme)
+				if drawn.chipped {
+					t.Errorf("priority %d of %d in %s is given the chip %s, but a derived ink reads on the card unaided",
+						index+1, count, scheme, drawn.chip)
+					continue
+				}
+				ratio := contrastRatio(t, drawn.ink, card)
 				if ratio < worst {
-					worst, worstCase = ratio, fmt.Sprintf("%d of %d in %s: %s on %s", index+1, count, scheme, ink, chip)
+					worst, worstCase = ratio, fmt.Sprintf("%d of %d in %s: %s on %s", index+1, count, scheme, drawn.ink, card)
 				}
 				if ratio < chipContrastBar {
-					t.Errorf("priority %d of %d in %s draws %s on %s, %.2f:1, under the %.1f:1 bar",
-						index+1, count, scheme, ink, chip, ratio, chipContrastBar)
+					t.Errorf("priority %d of %d in %s draws %s on the %s card, %.2f:1, under the %.1f:1 bar — "+
+						"a derived ink that needs a chip is one this family cannot compose",
+						index+1, count, scheme, drawn.ink, card, ratio, chipContrastBar)
 				}
 			}
 		}
@@ -118,23 +194,55 @@ func TestPriorityChipMeetsTheContrastBarForADerivedColor(t *testing.T) {
 	t.Logf("worst of the derived family: %.2f:1 (%s)", worst, worstCase)
 }
 
-// A chip is a background the card's own surface does not provide, so it has to
-// be a color of its own rather than the surface repeated: a "badge" the same
-// color as the card is the state this fix exists to leave.
-func TestPriorityChipIsOffsetFromTheSurfaceItSitsOn(t *testing.T) {
-	for _, test := range chipColorCases {
-		t.Run(test.name, func(t *testing.T) {
-			block := string(priorityInk(fourPriorityVocabulary(t, test.color)))
-			for _, scheme := range []string{"light", "dark"} {
-				_, chip := drawnPriority(t, block, "high", scheme)
-				surface := schemePalette(scheme)["--wb-surface"]
-				if ratio := contrastRatio(t, chip, surface); ratio < 1.03 {
-					t.Errorf("a %s chip in %s is %s on a %s card, %.3f:1 — the badge is invisible",
-						test.color, scheme, chip, surface, ratio)
-				}
-			}
-		})
+// measurePriority holds one drawn priority to whichever claim its branch makes,
+// and answers with the reading it took, so a test can log what decided it.
+func measurePriority(t *testing.T, drawn drawnChip, scheme string) string {
+	t.Helper()
+	card := schemePalette(scheme)["--wb-surface"]
+	if !drawn.chipped {
+		ratio := contrastRatio(t, drawn.ink, card)
+		if ratio < chipContrastBar {
+			t.Errorf("%s is drawn bare on the %s card %s at %.2f:1, under the %.1f:1 bar that decides it",
+				drawn.ink, scheme, card, ratio, chipContrastBar)
+		}
+		return fmt.Sprintf("bare, %s on the card %s = %.2f:1", drawn.ink, card, ratio)
 	}
+
+	label := contrastRatio(t, drawn.ink, drawn.chip)
+	if label < chipContrastBar {
+		t.Errorf("the chip %s draws %s at %.2f:1 in %s, under the %.1f:1 bar",
+			drawn.chip, drawn.ink, label, scheme, chipContrastBar)
+	}
+	// A chip stops at the target, or at the end of the ramp where no color at all
+	// is that far from the ink — pure black or pure white, which is the most that
+	// color has to give. Anything in between is a chip that stopped short of a
+	// target it could have reached.
+	if label < chipTarget && drawn.chip != "#000000" && drawn.chip != "#ffffff" {
+		t.Errorf("the chip %s draws %s at %.2f:1 in %s, under the %.1f:1 target, without having run out of ramp",
+			drawn.chip, drawn.ink, label, scheme, chipTarget)
+	}
+
+	separation := contrastRatio(t, drawn.chip, card)
+	floor := chipSeparation
+	if (relativeLuminance(t, drawn.chip) > relativeLuminance(t, card)) !=
+		(relativeLuminance(t, drawn.ink) > relativeLuminance(t, card)) {
+		// The chip is on the far side of the card from the ink rather than beyond
+		// the ink, which is the one case with no room to be further away.
+		floor = chipDeepSeparation
+	}
+	if separation < floor {
+		t.Errorf("the chip %s sits on the %s card %s at %.2f:1, under the %.1f:1 a reader needs to see it is there",
+			drawn.chip, scheme, card, separation, floor)
+	}
+	return fmt.Sprintf("chip %s, label %s = %.2f:1, card %s = %.2f:1",
+		drawn.chip, drawn.ink, label, card, separation)
+}
+
+func branchName(chipped bool) string {
+	if chipped {
+		return "on a chip"
+	}
+	return "bare on the card"
 }
 
 // uncoloredPriorities is a vocabulary of `count` priorities, none of which
@@ -159,14 +267,27 @@ func uncoloredPriorities(t *testing.T, count int) core.PriorityVocabulary {
 	return vocabulary
 }
 
-// drawnPriority is the pair of colors a browser would paint one priority's chip
-// in: the label's color and the background behind it, as `#rrggbb`.
+// drawnChip is one priority as a browser would paint it in one scheme: the
+// label's color, and the background behind it where there is one.
+type drawnChip struct {
+	// ink is the label's color as `#rrggbb`.
+	ink string
+	// chipped is whether this priority is drawn on a chip in this scheme at all.
+	// A priority whose label reads on the card is given no background, and a
+	// priority given one in the other scheme declares this one `transparent`;
+	// both are the card, and both answer false.
+	chipped bool
+	// chip is the background's color as `#rrggbb`, meaningful only where chipped.
+	chip string
+}
+
+// drawnPriority is what a browser would paint for one priority.
 //
-// It reads them out of the served stylesheet rather than out of the composer, so
-// what is measured is what is served — the declarations for the scheme asked
-// for, resolved through the scheme's own palette exactly as `var()` and
-// `color-mix()` resolve.
-func drawnPriority(t *testing.T, block, token, scheme string) (string, string) {
+// It reads the colors out of the served stylesheet rather than out of the
+// composer, so what is measured is what is served — the declarations for the
+// scheme asked for, resolved through the scheme's own palette exactly as `var()`
+// and `color-mix()` resolve.
+func drawnPriority(t *testing.T, block, token, scheme string) drawnChip {
 	t.Helper()
 	palette := schemePalette(scheme)
 	for property, value := range blockDeclarations(t, block, ":root") {
@@ -177,9 +298,18 @@ func drawnPriority(t *testing.T, block, token, scheme string) (string, string) {
 			palette[property] = value
 		}
 	}
-	ink := ruleValue(t, block, ".priority--"+token, "color")
-	chip := ruleValue(t, block, ".priority--"+token, "background")
-	return resolveColor(t, ink, palette), resolveColor(t, chip, palette)
+	drawn := drawnChip{ink: resolveColor(t, ruleValue(t, block, ".priority--"+token, "color"), palette)}
+	background, given := optionalRuleValue(block, ".priority--"+token, "background")
+	if !given || strings.TrimSpace(background) == "transparent" {
+		return drawn
+	}
+	property := strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(background), "var("), ")")
+	if declared, found := palette[strings.TrimSpace(property)]; found && strings.TrimSpace(declared) == "transparent" {
+		return drawn
+	}
+	drawn.chipped = true
+	drawn.chip = resolveColor(t, background, palette)
+	return drawn
 }
 
 // schemePalette is the scheme's own colors — the ones no project chooses — in
@@ -228,12 +358,22 @@ func blockDeclarations(t *testing.T, block, selector string) map[string]string {
 // ruleValue is what one rule in a composed block sets one property to.
 func ruleValue(t *testing.T, block, selector, property string) string {
 	t.Helper()
+	value, found := optionalRuleValue(block, selector, property)
+	if !found {
+		t.Fatalf("the composed stylesheet sets no %s for %s: %s", property, selector, block)
+	}
+	return value
+}
+
+// optionalRuleValue is ruleValue for a property a rule may not set at all, which
+// is what a background now is: most priorities are given none.
+func optionalRuleValue(block, selector, property string) (string, bool) {
 	pattern := regexp.MustCompile(regexp.QuoteMeta(selector) + ` \{ ` + regexp.QuoteMeta(property) + `: ([^;]+); \}`)
 	found := pattern.FindStringSubmatch(block)
 	if found == nil {
-		t.Fatalf("the composed stylesheet sets no %s for %s: %s", property, selector, block)
+		return "", false
 	}
-	return found[1]
+	return found[1], true
 }
 
 // resolveColor computes what a browser paints for a value the composer wrote:
