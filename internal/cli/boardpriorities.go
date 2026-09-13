@@ -168,37 +168,7 @@ func (board *boardPriorities) edit(
 ) (boardPriorityMutation, error) {
 	return board.apply(ctx, change.ExpectedHead,
 		func(scope priorityScope, vocabulary core.PriorityVocabulary) (priorityPlan, error) {
-			subject, err := requireLivePriority(ctx, scope, vocabulary, priority)
-			if err != nil {
-				return priorityPlan{}, err
-			}
-			if change.Name == nil && change.Label == nil {
-				return priorityPlan{}, core.Errorf(core.CategoryValidation,
-					"priority %q was given nothing to change", subject)
-			}
-			// A label somebody sent is a label they chose, blank included, so it
-			// is validated before the rename sees it: planPriorityRename reads an
-			// empty label as "nothing was asked for" and derives one, which is
-			// right for a flag nobody typed and wrong for a member somebody
-			// emptied.
-			if change.Label != nil {
-				if err := core.ValidatePriorityLabel(*change.Label); err != nil {
-					return priorityPlan{}, err
-				}
-			}
-			if change.Name != nil && *change.Name != subject {
-				label := ""
-				if change.Label != nil {
-					label = *change.Label
-				}
-				return planPriorityRename(ctx, scope, vocabulary, subject, *change.Name, label)
-			}
-			if change.Label != nil {
-				return planPriorityRelabel(ctx, scope, vocabulary, subject, *change.Label)
-			}
-			// The name this priority already has, and nothing else: the verb's
-			// own refusal, in the verb's own words.
-			return planPriorityRename(ctx, scope, vocabulary, subject, *change.Name, "")
+			return planPriorityEdit(ctx, scope, vocabulary, priority, change.Name, change.Label)
 		})
 }
 
