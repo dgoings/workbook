@@ -297,7 +297,7 @@ func TestClientRedrawsTheThemeWhenTheAccentChanges(t *testing.T) {
   const before = boardThemeStyle.textContent;
   displayField("primaryColor").value = "#7f1a4b";
   displayField("textColor").value = "#3b2a1a";
-  displayAnswer = { body: `+displayMutationJSON(t, "head-10", saved)+` };
+  displayAnswer = { body: `+displayMutationJSON(t, VocabularyState{Vocabulary: vocabulary, Head: "head-10", Display: saved})+` };
   await saveDisplay();
 
   const want = `+quotedJSON(string(boardTheme(saved)))+`;

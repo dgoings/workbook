@@ -388,7 +388,7 @@ func TestClientPrioritiesSectionWritesNothingForAProjectThatConfiguredNone(t *te
 	unconfigured := core.PriorityVocabulary{}
 	runPriorityPanelClient(t, "opening the priorities section on an unconfigured project", vocabulary, unconfigured, "head-1", nil, `
   vocabularyRead = `+priorityVocabularyJSON(t, vocabulary, unconfigured, "head-1")+`;
-  displayAnswer = { body: `+displayMutationJSON(t, "head-2", core.DisplaySettings{Name: "Atlas"})+` };
+  displayAnswer = { body: `+displayMutationJSON(t, VocabularyState{Vocabulary: vocabulary, Head: "head-2", Priorities: unconfigured, Display: core.DisplaySettings{Name: "Atlas"}})+` };
   await openStatuses();
 
   // The built-in three are drawn, because they are what the board draws.
