@@ -68,6 +68,7 @@ func (board *boardDisplay) set(
 		return webui.DisplayMutation{
 			State: webui.VocabularyState{
 				Head:       state.Head,
+				Vocabulary: state.Vocabulary,
 				Display:    state.Display,
 				Priorities: state.Priorities,
 			},
@@ -86,12 +87,20 @@ func (board *boardDisplay) set(
 		return webui.DisplayMutation{}, err
 	}
 	return webui.DisplayMutation{
-		// The priorities come off the checkpoint this write recorded, the way
-		// the settings do, so a state that leaves this route carries the
-		// project's own priorities rather than the zero value every accessor
-		// reads as the built-in three.
+		// Every section comes off the checkpoint this write recorded, so a
+		// state leaving this route describes one configuration rather than this
+		// project's settings beside somebody's defaults.
+		//
+		// The statuses are not in the document this route answers with today,
+		// and are filled anyway. A zero Vocabulary is read everywhere as the
+		// legacy six, and the sibling route's answer did not carry the display
+		// settings either — until it did, at which point the zero it had been
+		// carrying all along became a project's name and colors being erased.
+		// A state that reports half a configuration is one answer shape away
+		// from doing the same thing here.
 		State: webui.VocabularyState{
 			Head:       written.Head,
+			Vocabulary: written.Vocabulary(),
 			Display:    written.State.Display(),
 			Priorities: written.State.PriorityVocabulary(),
 		},
