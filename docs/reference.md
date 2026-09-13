@@ -642,7 +642,12 @@ v0.6.0 clone to change; see
 
 A color is optional. `workbook priority color <priority> "#rrggbb"` records one
 and the same command with no value clears it, returning that priority to a
-color the board derives from its position. There is no stored default to go
+color the board derives from its position. Derived means derived from the
+position a priority holds *now*, so adding or removing one restyles the others
+that carry no color of their own — they are spread across the board's
+palette, and a list of four is spread differently from a list of three. A priority with
+a recorded color keeps it whatever moves around it, which is the other reason
+to record one. There is no stored default to go
 back to, which is why clearing is what it is: nothing was written, so nothing
 is written back. Recording the color a priority already has, or clearing one it
 does not have, is refused rather than recorded — a priority operation against a

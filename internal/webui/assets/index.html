@@ -402,6 +402,12 @@
     .copy-status:empty { display: none; }
     .copy-status[data-kind="error"] { color: var(--wb-danger-ink); }
     .priority { flex: 0 0 auto; font-size: .64rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+    /* The served page carries a third <style> element after the theme block,
+       giving every priority this project defines its own ink and overriding
+       these three by cascade. These stay as the standing answer for the one
+       case that block is absent — no priority with a valid token, which the
+       built-in three cannot produce — so a board is never served with its
+       priorities drawn in body text. */
     .priority--high { color: var(--wb-priority-high); } .priority--medium { color: var(--wb-priority-medium); } .priority--low { color: var(--wb-priority-low); }
     .task-card h3 { margin: .55rem 0 .3rem; font-size: .9rem; line-height: 1.24; overflow-wrap: anywhere; }
     /* A card title is a heading, not a link inside a sentence: every card is one

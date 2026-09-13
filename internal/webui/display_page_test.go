@@ -315,9 +315,17 @@ var rootBlocks = regexp.MustCompile(`(?s):root(?::not\(\[[^\]]*\]\)|\[[^\]]*\])*
 var colorLiteral = regexp.MustCompile(`#[0-9a-fA-F]{3,8}\b|(?:rgba?|hsla?|color-mix|oklch|lab)\([^)]*\)`)
 
 // styleSheet returns the board's own stylesheet — the first <style> element,
-// which is the one this file is about. The theme block a configured project is
-// served is a second element after it, and is composed in Go rather than
-// written here.
+// which is the one this file is about.
+//
+// A served page now carries three. The theme block a configured project gets is
+// the second, and the per-priority ink is the third; both are composed in Go
+// rather than written here, and both are guarded by the tests that compose
+// them rather than by the ones below. The distinction is deliberate and worth
+// stating, because "the page declares no color outside the root blocks" reads
+// like a claim about the whole document and is a claim about this element: a
+// guard that silently stopped covering what it was written for would be worse
+// than no guard, and a reader deciding where a new rule belongs needs to know
+// which of the three they are looking at.
 func styleSheet(t *testing.T, body string) string {
 	t.Helper()
 	open := strings.Index(body, "<style>")
