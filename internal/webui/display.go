@@ -588,24 +588,34 @@ func priorityInk(priorities core.PriorityVocabulary) template.CSS {
 		return ""
 	}
 
-	declarations := make([]string, 0, len(live))
-	rules := make([]string, 0, len(live))
-	dark := make([]string, 0, len(live))
+	declarations := make([]string, 0, 2*len(live))
+	rules := make([]string, 0, 2*len(live))
+	dark := make([]string, 0, 2*len(live))
 	declared := make(map[core.Priority]struct{}, len(live))
 	for index, definition := range live {
 		property := priorityInkProperty(definition.Priority)
+		chip := priorityChipProperty(definition.Priority)
 		if color, parsed := parseThemeColor(definition.Color); parsed {
 			declarations = append(declarations, property+": "+color.hex()+";")
+			declarations = append(declarations, chip+": "+priorityChip(color)+";")
 			// A stored color is one value, and the board has three palette
 			// statements. A mid-toned red chosen against white is the very thing
 			// that disappears into a near-black card, so it is lifted for a dark
 			// ground the way a chosen accent is — the same transform, for the
 			// reason the priority triad's own comment above gives.
-			dark = append(dark, property+": "+color.toned(1, .68)+";")
+			lifted := color.tonedColor(1, .68)
+			dark = append(dark, property+": "+lifted.hex()+";")
+			// And the chip is derived from the ink as the scheme reads it, not
+			// lifted along with it: the offset that makes a label legible runs
+			// the other way once the label itself has moved.
+			dark = append(dark, chip+": "+priorityChip(lifted)+";")
 		} else {
 			declarations = append(declarations, property+": "+derivedPriorityInk(index, len(live))+";")
+			declarations = append(declarations, chip+": "+derivedPriorityChip(property, priorityChipLightWash)+";")
+			dark = append(dark, chip+": "+derivedPriorityChip(property, priorityChipDarkWash)+";")
 		}
 		rules = append(rules, ".priority--"+string(definition.Priority)+" { color: var("+property+"); }")
+		rules = append(rules, ".priority--"+string(definition.Priority)+" { background: var("+chip+"); }")
 		declared[definition.Priority] = struct{}{}
 	}
 	rules = append(rules, forwardedPriorityRules(priorities, document, declared)...)
@@ -689,6 +699,10 @@ func forwardedPriorityRules(
 			continue
 		}
 		rules = append(rules, ".priority--"+string(name)+" { color: var("+priorityInkProperty(destination)+"); }")
+		// And the chip behind it, for the same reason and from the same
+		// priority: a card left at the old name is drawn as that priority, so it
+		// is drawn on that priority's badge rather than on a bare card.
+		rules = append(rules, ".priority--"+string(name)+" { background: var("+priorityChipProperty(destination)+"); }")
 	}
 	return rules
 }
@@ -702,6 +716,149 @@ func forwardedPriorityRules(
 // otherwise be declaring them.
 func priorityInkProperty(priority core.Priority) string {
 	return "--wb-priority-ink-" + string(priority)
+}
+
+// priorityChipProperty is the custom property one priority's chip — the
+// background its label is drawn on — is declared in.
+//
+// It is a family of its own beside the ink rather than a shade of it, because a
+// chip is not a lighter version of a color: it is whatever that color can be
+// read against, which for a pale priority is dark and for a dark one is pale.
+func priorityChipProperty(priority core.Priority) string {
+	return "--wb-priority-chip-" + string(priority)
+}
+
+// The contrast a chip's label has to clear against the chip behind it.
+//
+// WCAG AA for text below 18pt, which the .64rem chip certainly is, and the bar
+// this project states. It is the whole reason the chip exists: a priority's
+// label used to be drawn straight onto the card's own surface, which is legible
+// for a color chosen against that surface and illegible for the pale ones a
+// project can now choose — the report this answers was a pale yellow at 1.4:1.
+const priorityChipContrast = 4.5
+
+// How far past the bar a chip is taken before the search stops. A step is a
+// whole 8-bit color either way, so landing exactly on 4.5 leaves a chip one
+// rounding away from being under it — and a value that reads 4.499 in somebody
+// else's checker is a defect report whatever this file computed.
+const priorityChipMargin = .1
+
+// How much of the chip's own color a chip keeps. A badge that went all the way
+// to white or black to clear the bar would be a grey pill telling the reader
+// nothing about which priority it is, so the chip carries a third of the ink's
+// chroma — capped by clampChroma at whatever lightness it lands on, so a
+// saturated ink gets all the color that lightness can hold and a near-grey one
+// gets nearly none.
+const priorityChipChroma = .34
+
+// priorityChip is the background one priority's label is drawn on: the ink's own
+// hue, moved far enough along lightness that the label clears AA against it.
+//
+// The direction is the hue's and the scheme's rather than a constant, which is
+// the half a fixed tint cannot do. A dark ink is read on a pale chip and a light
+// one on a deep chip, and "dark" here means the ink as *this scheme draws it* —
+// the dark scheme lifts a chosen color, so the same project's chip goes pale in
+// light and deep in dark off two different inks.
+//
+// The step is searched rather than stated, and stops at the first lightness that
+// clears the bar, which is the most color a chip can carry and still be read:
+// stating an offset would be the same eyeballing that shipped the defect, and
+// would fail for the colors whose luminance leaves the least room.
+func priorityChip(ink themeColor) string {
+	toward := 1.
+	if ink.light >= .5 {
+		toward = -1
+	}
+	if chip, found := offsetPriorityChip(ink, toward); found {
+		return chip
+	}
+	// A mid-luminance ink has little room on the side its lightness suggests —
+	// #b45309 is 4.83:1 against white and 4.35:1 against black — so the other
+	// side is tried rather than assumed.
+	if chip, found := offsetPriorityChip(ink, -toward); found {
+		return chip
+	}
+	// Unreachable, and stated anyway. Every color clears the bar against white
+	// below a luminance of .1833 and against black above .175, and those two
+	// bands overlap, so one end of the ramp always answers; this is what the
+	// search returns if a rounding step ever lands between them.
+	if luminance(ink) > .18 {
+		return renderColor(ink.hue, 0, 0)
+	}
+	return renderColor(ink.hue, 0, 1)
+}
+
+// offsetPriorityChip walks the lightness ramp away from an ink in one direction
+// and answers with the first step whose contrast against it clears the bar.
+func offsetPriorityChip(ink themeColor, direction float64) (string, bool) {
+	const step = .004
+	for offset := step; offset <= 1; offset += step {
+		light := ink.light + direction*offset
+		if light < 0 || light > 1 {
+			break
+		}
+		chip := ink.tonedColor(priorityChipChroma, light)
+		if contrastBetween(ink, chip) >= priorityChipContrast+priorityChipMargin {
+			return chip.hex(), true
+		}
+	}
+	return "", false
+}
+
+// How much of a derived ink a derived chip is washed with, in whole percent, in
+// each of the two schemes. See derivedPriorityChip for why these are so far
+// apart, and why the light one is so small.
+const (
+	priorityChipLightWash = 5
+	priorityChipDarkWash  = 18
+)
+
+// derivedPriorityChip is the chip behind a priority that stores no color: its
+// own ink, washed into the card's surface.
+//
+// It is composed in CSS rather than searched in Go because a derived ink is a
+// reference to the scheme's triad rather than a value this file holds — that is
+// what gives it a dark reading without stating one, and what keeps this family
+// out of the guards that count every literal the page writes. Mixing against
+// --wb-surface keeps that property: the surface is the card's own ground, so the
+// wash is pale in light and deep in dark without either being stated as a color.
+//
+// The two percentages are far apart because the triad they wash has very
+// different room in the two schemes. The amber is 4.83:1 against a white card to
+// begin with, so a light wash of more than a few percent takes the board's own
+// built-in three below AA — the chip is a hint there, and the badge's shape is
+// what reads. Lifted onto a near-black card those inks have twice the headroom,
+// and the chip can be a chip.
+func derivedPriorityChip(inkProperty string, wash int) string {
+	return "color-mix(in oklab, var(" + inkProperty + ") " + strconv.Itoa(wash) + "%, var(--wb-surface))"
+}
+
+// luminance is the WCAG relative luminance of a color, and contrastBetween the
+// WCAG contrast ratio of two. They are here rather than in a test because the
+// chip above is chosen by measuring rather than by eye: the composer has to be
+// able to ask what it just derived.
+func luminance(color themeColor) float64 {
+	channels := [3]int{color.red, color.green, color.blue}
+	weights := [3]float64{.2126, .7152, .0722}
+	total := 0.
+	for index, channel := range channels {
+		value := float64(channel) / 255
+		if value <= .04045 {
+			value /= 12.92
+		} else {
+			value = math.Pow((value+.055)/1.055, 2.4)
+		}
+		total += weights[index] * value
+	}
+	return total
+}
+
+func contrastBetween(first, second themeColor) float64 {
+	lighter, darker := luminance(first), luminance(second)
+	if lighter < darker {
+		lighter, darker = darker, lighter
+	}
+	return (lighter + .05) / (darker + .05)
 }
 
 // derivedPriorityInk is the color a priority with none stored is drawn in: the
@@ -900,7 +1057,18 @@ func (color themeColor) scaled(chroma, light float64) string {
 // the colour a 96%-light surface can hold, and a nearly-grey one gets nearly
 // none, out of the same number.
 func (color themeColor) toned(chroma, light float64) string {
-	return renderColor(color.hue, color.chroma*chroma, light)
+	return color.tonedColor(chroma, light).hex()
+}
+
+// tonedColor is toned() answered as a color rather than as a declaration, which
+// is what a step that has to be measured needs: the chip search asks what the
+// contrast of the step it just derived is, and a formatted string cannot be
+// asked.
+func (color themeColor) tonedColor(chroma, light float64) themeColor {
+	light = math.Min(math.Max(light, 0), 1)
+	chroma = clampChroma(color.chroma*chroma, light)
+	red, green, blue := renderChannels(color.hue, chroma, light)
+	return themeColor{red: red, green: green, blue: blue, hue: color.hue, chroma: chroma, light: light}
 }
 
 func renderChannels(hue, chroma, light float64) (int, int, int) {

@@ -408,7 +408,18 @@
     .copy-status { position: absolute; left: 100%; top: 50%; margin-left: .35rem; color: var(--wb-primary-edge); font-size: .65rem; font-weight: 800; line-height: 1; pointer-events: none; transform: translateY(-50%); white-space: nowrap; }
     .copy-status:empty { display: none; }
     .copy-status[data-kind="error"] { color: var(--wb-danger-ink); }
-    .priority { flex: 0 0 auto; font-size: .64rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+    /* A priority is a badge rather than a word: the label sits on a background
+       of its own, padded and rounded so the color behind it reads as a chip.
+       The background itself is per-priority and is composed in Go with the ink
+       — see priorityChip, which derives it by measuring contrast rather than by
+       choosing a tint that looked right, because a label on the card's own
+       surface is legible only for a color that was chosen against that surface
+       and every color here is now a project's to choose.
+
+       No background is stated here. A priority with none declared keeps the
+       card's own surface, which is what this row was before, and that is the
+       right answer for the one case the block below is absent. */
+    .priority { flex: 0 0 auto; font-size: .64rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; border-radius: .28rem; padding: .1rem .34rem; }
     /* The served page carries a third <style> element after the theme block,
        giving every priority this project defines its own ink and overriding
        these three by cascade. These stay as the standing answer for the one

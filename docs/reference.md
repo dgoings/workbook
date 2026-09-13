@@ -1091,7 +1091,12 @@ whatever accent a project picks. A priority's ink is nonetheless the project's
 to choose: it is recorded against the priority itself rather than derived from
 the accent, by `workbook priority color` or by the configuration page's
 Priorities section, and a priority that has none is drawn in a color the board
-derives from its position — see [Project priorities](#project-priorities).
+derives from its position — see [Project priorities](#project-priorities). On a
+card that ink is drawn as a badge rather than as a bare word: the label sits on
+a background the board derives from the ink itself — pale behind a dark color,
+deep behind a light one, from the reading each scheme gives that color — so the
+label clears the 4.5:1 contrast bar whichever color a project picks, including
+the pale ones that are invisible on a white card.
 
 The `Config` link in the board's header goes to `/config`, where each section
 administers one part of what a project configures. **Statuses** administers the
