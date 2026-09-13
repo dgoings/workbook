@@ -243,6 +243,24 @@ type PriorityVocabularyDocument struct {
 	Priorities []core.PriorityDefinition `json:"priorities"`
 	Aliases    []core.PriorityAlias      `json:"aliases"`
 	Retired    []core.RetiredPriority    `json:"retired"`
+	// Ink is the per-priority stylesheet the board draws these priorities with,
+	// composed here by the same priorityInk the page's own `<style>` block is
+	// rendered from. It rides on the document so that a page that adopts a
+	// change adopts what the change looks like: the client replaces the text of
+	// that element and the board is drawn in the new colors without a reload.
+	//
+	// It is the composed CSS rather than the colors it was composed from, and
+	// that is the whole of why this is safe. Every byte of it is a property name
+	// this package wrote or a number it formatted out of three integers parsed
+	// from a value core had already validated — see priorityInk, which answers
+	// for all of them. A member that carried the stored colors instead would
+	// leave the composition to a client that can vouch for none of that, and a
+	// stored string would reach the page.
+	//
+	// It is not omitted when empty. A project whose priorities compose no ink at
+	// all is a real reading, and a client handed no member would go on drawing
+	// the ink it was opened with.
+	Ink string `json:"ink"`
 }
 
 // VocabularyStatusAddition is a status the board asks this project to define.
@@ -1742,6 +1760,10 @@ func priorityVocabularyDocument(priorities core.PriorityVocabulary) PriorityVoca
 		Priorities: document.Priorities,
 		Aliases:    document.Aliases,
 		Retired:    document.Retired,
+		// The same composer the page's own stylesheet is rendered from, called
+		// on the same priorities, so the board a change produces is drawn by the
+		// code that drew the board the change was made from.
+		Ink: string(priorityInk(priorities)),
 	}
 }
 

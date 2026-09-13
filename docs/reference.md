@@ -1122,9 +1122,15 @@ It composes each change against the head it read, so a change made from a stale
 page is refused rather than applied over somebody else's — and the refusal is
 final: the page shows the statuses as they now stand and asks you to look
 again, because two people renaming the same column mean two different things.
-And the board you walk back to keeps the columns you left it with — and the
-name and colours it was opened with; the notice above it offers the reload that
-redraws them, exactly as it does for a change another clone made. The two
+And the board you walk back to keeps the columns you left it with, and the name
+it was opened with; the notice above it offers the reload that redraws them,
+exactly as it does for a change another clone made. Colors are the exception:
+a color you set here — a priority's ink, or the project's accent and text
+colors — is drawn on the board the moment it is saved, because a configuration
+answer carries the stylesheet the server composed and the page can swap it
+without rebuilding a single card. A color another clone set is not, for the
+same reason its columns are not: that change reaches this page as a moved head
+and nothing else. The two
 sections share one ledger and one tip, so neither can be changed while the other
 is changing, and a save of the board's settings is as much a reason for a status
 change to be refused as another status change would be.

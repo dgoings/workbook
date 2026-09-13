@@ -4814,6 +4814,15 @@ displayPanel.hidden = true;
 const displayPanelStatus = new TestElement("div");
 const displayPanelBody = new TestElement("div");
 displayPanel.append(displayPanelStatus, displayPanelBody);
+// The two stylesheets the server composed for this page: the colors the project
+// chose, and the ink each of its priorities is drawn in. They are served as
+// elements whatever the project configured — empty is a real reading — because
+// a configuration change answers with the stylesheet it produces and the client
+// writes it into the element rather than composing one. They start empty here,
+// which is what a project that has configured nothing is served, and a test that
+// is about them states what it was opened with.
+const boardThemeStyle = new TestElement("style");
+const boardPriorityInkStyle = new TestElement("style");
 const documentEventListeners = {};
 	globalThis.document = {
 	  title: "",
@@ -4840,6 +4849,8 @@ const documentEventListeners = {};
     if (selector === "[data-display-panel]") return displayPanel;
     if (selector === "[data-display-panel-status]") return displayPanelStatus;
     if (selector === "[data-display-panel-body]") return displayPanelBody;
+    if (selector === "style[data-board-theme]") return boardThemeStyle;
+    if (selector === "style[data-board-priority-ink]") return boardPriorityInkStyle;
     return null;
   },
   querySelectorAll() { return []; },

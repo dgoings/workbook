@@ -242,7 +242,13 @@
        out of room rather than out of page: it shares a viewport-height flex
        column with main, and the body never scrolls. The cap keeps the route
        underneath reachable while a run of refusals stacks up inside it. */
-    .notice { display: grid; flex: 0 1 auto; gap: .4rem; max-height: 40vh; overflow: auto; padding: .6rem 1.25rem; border-bottom: 1px solid var(--wb-hairline); background: var(--wb-surface); font-size: .85rem; }
+    /* flex-shrink is 0 rather than the default 1, which is what `max-height`
+       and `overflow` here were always assuming: a notice that wraps to a second
+       line is one the column would otherwise squeeze back to one and hide the
+       rest of behind its own scrollbar — a message nobody can read without
+       discovering that the box scrolls. 40vh is the real ceiling, and past it
+       the notice does scroll. */
+    .notice { display: grid; flex: 0 0 auto; gap: .4rem; max-height: 40vh; overflow: auto; padding: .6rem 1.25rem; border-bottom: 1px solid var(--wb-hairline); background: var(--wb-surface); font-size: .85rem; }
     .notice[hidden] { display: none; }
     .notice__report { display: flex; align-items: baseline; gap: .75rem; padding: .35rem .6rem; border-left: 3px solid currentcolor; background: var(--wb-warning-surface); color: var(--wb-warning-ink); }
     .notice__report[data-kind="error"] { background: var(--wb-danger-surface); color: var(--wb-danger-ink); }
@@ -1096,9 +1102,17 @@
        because html/template refuses to interpolate a CSS value it cannot vouch
        for and writes ZgotmplZ in its place — see boardTheme, which is where the
        vouching is done for real. A project that chose nothing is served nothing
-       here, so its board is the board it always was. -->
-  {{ if .Theme }}<style data-board-theme>{{ .Theme }}</style>
-  {{ end }}<!-- And the ink each of this project's priorities is drawn in.
+       here, so its board is the board it always was.
+
+       The element itself is always served, empty or not, and that is what lets
+       a save on the configuration page redraw the board it is standing on: the
+       answer carries the stylesheet this same composer rendered, and the client
+       replaces the text of this element with it. An element served only for a
+       project that had already chosen a color would leave the client creating
+       one — and deciding where in the cascade it belongs, which is a decision
+       the order of these two blocks makes here. -->
+  <style data-board-theme>{{ .Theme }}</style>
+  <!-- And the ink each of this project's priorities is drawn in.
        The triad above names three priorities by hand, which is every priority a
        project could have until it could configure its own. A project that added
        a fourth was drawing it in the meta row's dim ink, with nothing chosen or
@@ -1106,9 +1120,12 @@
        rule that reads it, composed in Go from the vocabulary. A priority that
        stores no color of its own is given one derived from its position along
        the triad, which is what `workbook priority color` has always promised
-       clearing a color returns it to. See priorityInk. -->
-  {{ if .PriorityInk }}<style data-board-priority-ink>{{ .PriorityInk }}</style>
-  {{ end }}</head>
+       clearing a color returns it to. See priorityInk.
+
+       Served unconditionally for the reason the block above it is: a priority
+       change answers with this stylesheet, and the client writes it here. -->
+  <style data-board-priority-ink>{{ .PriorityInk }}</style>
+</head>
 <body>
   <a class="skip-link" href="#board">Skip to task board</a>
   <header class="app-header">
@@ -1152,10 +1169,19 @@
        a refusal banner they have not read — and rebuilding the board to add a
        column would destroy all of it to show a column they may not care about.
        So the page keeps drawing the vocabulary it was served with, says plainly
-       that it is out of date, and lets the reader choose the moment. -->
+       that it is out of date, and lets the reader choose the moment.
+
+       Colors are the one thing it no longer says that about, and only for a
+       change made on this page: a configuration answer carries the stylesheet
+       the server composed, and the page swaps it without touching a card. That
+       costs a card node nothing, which is the whole reason the columns cannot
+       have the same treatment. A change another clone made reaches this page as
+       a moved head and nothing else, so its colors are as stale as its columns
+       are — which is why the sentence below names where a change came from
+       rather than only what it was. -->
   <div class="notice" data-vocabulary-notice role="status" aria-live="polite" hidden>
     <div class="notice__report">
-      <p>This project's configuration has changed. The columns and colors on this page are the ones it was opened with.</p>
+      <p>This project's configuration has changed. A color set on this page is drawn at once; the columns, the priorities, and anything changed in another clone are the ones it was opened with.</p>
       <button type="button" data-vocabulary-reload>Reload the board</button>
     </div>
   </div>
@@ -1299,7 +1325,7 @@
        and the board's settings are sections of one ledger, and a page that asked
        for them separately could be answered from either side of a change. -->
   <div class="admin" data-priority-panel data-priority-tags="{{ range $index, $tag := .PriorityTags }}{{ if $index }} {{ end }}{{ $tag }}{{ end }}" role="group" aria-labelledby="priorities-title" tabindex="-1" hidden>
-    <p class="admin__note">These are this project's priorities, most urgent first, and they are what a task is filed at rather than where it sits. Renaming one forwards the old name, so tasks written by a clone that has not fetched the change still land at the right priority, and removing one names where its tasks belong. Exactly one priority is the <strong>default</strong> — where a task created without one lands — and the role is given rather than taken: make another priority the default to move it. Each priority is drawn on the board in the color its row is given, written as <code>#rrggbb</code>; one with no color of its own is drawn in a color the board derives from its position, which is what an emptied field returns it to. Drag a row, or use its Up and Down controls, to reorder them. The board keeps the priorities and the colors it was opened with until you reload it.</p>
+    <p class="admin__note">These are this project's priorities, most urgent first, and they are what a task is filed at rather than where it sits. Renaming one forwards the old name, so tasks written by a clone that has not fetched the change still land at the right priority, and removing one names where its tasks belong. Exactly one priority is the <strong>default</strong> — where a task created without one lands — and the role is given rather than taken: make another priority the default to move it. Each priority is drawn on the board in the color its row is given, written as <code>#rrggbb</code>; one with no color of its own is drawn in a color the board derives from its position, which is what an emptied field returns it to. Drag a row, or use its Up and Down controls, to reorder them. A color set here is drawn on the board at once; the board keeps the priorities it was opened with — their order, and which ones there are — until you reload it.</p>
     <div class="admin__status" data-priority-panel-status role="status" aria-live="polite"></div>
     <div data-priority-panel-body></div>
   </div>
@@ -1322,7 +1348,7 @@
        could be answered from either side of a change and would offer a Save
        composed against a configuration it never showed anybody. -->
   <div class="admin" data-display-panel role="group" aria-labelledby="display-title" tabindex="-1" hidden>
-    <p class="admin__note">These are this project's own name for this board and the colors it is drawn in, recorded in the same configuration every clone fetches. Every field is optional: an empty <strong>name</strong> is the generic heading every Workbook board carries, and an empty color is this board's own palette. Colors are written as <code>#rrggbb</code>. Saving sends all three at once, and only what actually changed is recorded — a save you have not edited records nothing at all. A board already open elsewhere keeps the name and colors it was opened with until it is reloaded.</p>
+    <p class="admin__note">These are this project's own name for this board and the colors it is drawn in, recorded in the same configuration every clone fetches. Every field is optional: an empty <strong>name</strong> is the generic heading every Workbook board carries, and an empty color is this board's own palette. Colors are written as <code>#rrggbb</code>. Saving sends all three at once, and only what actually changed is recorded — a save you have not edited records nothing at all. Saving draws this board in its new colors at once; its name, and a board already open elsewhere, keep what they were opened with until reloaded.</p>
     <div class="admin__status" data-display-panel-status role="status" aria-live="polite"></div>
     <div data-display-panel-body></div>
   </div>
@@ -1423,6 +1449,32 @@
       // offered instead of taken.
       const vocabularyNotice = document.querySelector("[data-vocabulary-notice]");
       const vocabularyReload = document.querySelector("[data-vocabulary-reload]");
+      // The two stylesheets the server composed for this board: the colors the
+      // project chose, and the ink each of its priorities is drawn in. Held so
+      // that a configuration change can redraw the board it was made from.
+      const boardThemeStyle = document.querySelector("style[data-board-theme]");
+      const boardPriorityInkStyle = document.querySelector("style[data-board-priority-ink]");
+      // Redraws one of them from a stylesheet the server composed.
+      //
+      // What is written is the answer's own bytes, and nothing here reads what
+      // they say. That is the whole of why a color a project chose can reach the
+      // board without a reload: the server validated it, parsed it to three
+      // integers and re-rendered it, and every other byte of the block is a
+      // property name it wrote or a number it formatted. A client that was
+      // handed the color instead — and composed `--wb-…: ` around it — would be
+      // writing a stylesheet with none of that behind it, out of a stored string
+      // that had reached this page as text. So this function composes nothing,
+      // and it sets textContent, which cannot be markup, rather than innerHTML,
+      // which can.
+      //
+      // A member that is not a string is a document that does not carry one, and
+      // the board keeps what it is drawing: only a real answer moves the board,
+      // and an empty string is a real answer — it is what a project that has
+      // cleared its colors is served.
+      function redrawBoardStyle(element, composed) {
+        if (!element || typeof composed !== "string") return;
+        element.textContent = composed;
+      }
       // The statuses section of the configuration route and its parts, served
       // with the page and mounted into main by the render for that route. Every
       // one of them is absent on a board built without the four vocabulary
@@ -7144,6 +7196,14 @@
         // on here, and nothing this panel does with what it reads may amount to
         // writing it back.
         renderPriorityPanel();
+        // And the board behind this page is redrawn in the colors the document
+        // carries. Every priority change moves this stylesheet, not only a
+        // recolor: the color a priority with none of its own is drawn in is
+        // derived from its position among its peers, so adding or removing one
+        // restyles every uncolored priority on the board. The server composed
+        // the whole block for the priorities this answer carries, which is why
+        // the arithmetic behind that derivation lives in one place.
+        redrawBoardStyle(boardPriorityInkStyle, vocabulary.priorities && vocabulary.priorities.ink);
       }
       async function readVocabulary() {
         panelReading = true;
@@ -8428,6 +8488,14 @@
       function adoptDisplay(settings) {
         displaySettings = settings;
         renderDisplayPanel();
+        // And the board behind this page is redrawn in the accent and the ink
+        // the answer carries, composed by the server for the reason the
+        // priority ink is. A document with no display member carries no theme,
+        // and redrawBoardStyle leaves the board alone rather than clearing it:
+        // that is a project that has configured no settings, not a project whose
+        // settings were cleared — which arrives as an empty stylesheet and does
+        // clear the board.
+        redrawBoardStyle(boardThemeStyle, settings && settings.theme);
       }
       // Takes a display document as the panel's own, and takes its head as the
       // page's: there is one configuration ledger, so a display change moves the
@@ -8513,8 +8581,8 @@
         if (settings.primaryColor) named.push("drawn in " + settings.primaryColor);
         if (settings.textColor) named.push("set in " + settings.textColor);
         return named.length === 0
-          ? "This board has no settings of its own. Reload the board to draw it as it now stands."
-          : "This board is " + named.join(", ") + ". Reload the board to draw it as it now stands.";
+          ? "This board has no settings of its own. Its colors are drawn as they now stand; reload the board to draw its name."
+          : "This board is " + named.join(", ") + ". Its colors are drawn as they now stand; reload the board to draw its name.";
       }
       function renderDisplayPanel() {
         if (!displayPanel || !displayPanelBody) return;

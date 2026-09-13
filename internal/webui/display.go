@@ -65,6 +65,22 @@ type DisplayDocument struct {
 	Name         string `json:"name,omitempty"`
 	PrimaryColor string `json:"primaryColor,omitempty"`
 	TextColor    string `json:"textColor,omitempty"`
+	// Theme is the `:root` override these settings ask for, composed here by the
+	// same boardTheme the page's own `<style>` block is rendered from, and empty
+	// for a project that has chosen no colors.
+	//
+	// It rides on the document for the reason PriorityVocabularyDocument.Ink
+	// does: a page that adopts a save adopts what the save looks like, by
+	// replacing the text of that element, so the board is drawn in the new
+	// colors without a reload. And it is the composed CSS rather than the colors
+	// it was composed from for the same reason too — every byte of it is
+	// answered for by boardTheme, and a client handed the colors could vouch for
+	// none of it.
+	//
+	// Unlike the three settings above it is not omitted when empty: clearing a
+	// color is a change the board has to draw, and a client handed no member
+	// would leave the accent it was opened with in place.
+	Theme string `json:"theme"`
 }
 
 // DisplayMutationDocument is what a save answers with, mirroring
@@ -102,6 +118,10 @@ func displayDocument(state VocabularyState) DisplayDocument {
 		Name:         state.Display.Name,
 		PrimaryColor: state.Display.PrimaryColor,
 		TextColor:    state.Display.TextColor,
+		// The same composer the page's own override is rendered from, called on
+		// the same settings, so a saved board is drawn by the code that drew the
+		// board it was saved from.
+		Theme: string(boardTheme(state.Display)),
 	}
 }
 
