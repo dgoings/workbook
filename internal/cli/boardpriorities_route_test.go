@@ -365,3 +365,59 @@ func boardPriorityChange(t *testing.T, method, url, body string) webui.Vocabular
 	}
 	return document
 }
+
+// The board refuses a drop that puts a priority back where it already was, in
+// the verb's own words, and records nothing for it.
+//
+// A drag that ends where it started is the ordinary way a person reaches this
+// on a board — far more ordinary than typing the move out — and the panel
+// shares planPriorityMove with the CLI precisely so the two cannot disagree
+// about it. What the refusal protects is the same thing the CLI's protects: the
+// first priority write on a project that never configured its priorities
+// backfills the built-in three and stamps the generation-three marker.
+func TestBoardRefusesAPriorityMoveToThePositionItAlreadyHolds(t *testing.T) {
+	repository := initializedRepository(t)
+	addr := startServeBoard(t, repository)
+	head := boardVocabularyDocument(t, addr).Head
+
+	for _, test := range []struct {
+		name      string
+		path      string
+		body      string
+		wantError string
+	}{
+		{
+			name:      "dropped back after the priority above it",
+			path:      "/api/vocabulary/priorities/medium/position",
+			body:      `{"after":"high","expectedHead":` + quoteJSON(head) + `}`,
+			wantError: `priority "medium" is already directly after "high"`,
+		},
+		{
+			name:      "dropped back before the priority below it",
+			path:      "/api/vocabulary/priorities/medium/position",
+			body:      `{"before":"low","expectedHead":` + quoteJSON(head) + `}`,
+			wantError: `priority "medium" is already directly before "low"`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			body, status := boardRequest(t, http.MethodPatch, "http://"+addr+test.path, test.body)
+			if status != http.StatusBadRequest {
+				t.Fatalf("PATCH %s = %d, want %d; body = %s", test.path, status, http.StatusBadRequest, body)
+			}
+			var document webui.VocabularyErrorDocument
+			if err := json.Unmarshal(body, &document); err != nil {
+				t.Fatalf("decode error document: %v; body = %s", err, body)
+			}
+			if document.Format != "workbook.error" || document.Version != 1 {
+				t.Fatalf("error envelope = %#v, want workbook.error v1", document)
+			}
+			if document.Error.Message != test.wantError {
+				t.Fatalf("error message = %q, want %q", document.Error.Message, test.wantError)
+			}
+		})
+	}
+
+	if after := boardVocabularyDocument(t, addr).Head; after != head {
+		t.Fatalf("configuration head moved to %q from %q; a drop that moved nothing wrote something", after, head)
+	}
+}
