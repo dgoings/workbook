@@ -894,3 +894,77 @@ func TestPriorityInkWritesNoLiteralForAPriorityWithNoStoredColor(t *testing.T) {
 		}
 	}
 }
+
+// forwardedPriorityVocabulary is a project that renamed `low` to `later` and
+// removed `someday` into it, plus a chain that ends nowhere: `ancient` was
+// renamed to `gone`, and `gone` is not a priority this project has.
+func forwardedPriorityVocabulary(t *testing.T) core.PriorityVocabulary {
+	t.Helper()
+	vocabulary, err := core.NewPriorityVocabulary(
+		[]core.PriorityDefinition{
+			{Priority: "urgent", Label: "Urgent", Rank: "1/1", Tags: []core.PriorityTag{}},
+			{Priority: core.PriorityHigh, Label: "High", Rank: "2/1", Tags: []core.PriorityTag{}},
+			{Priority: core.PriorityMedium, Label: "Medium", Rank: "3/1", Tags: []core.PriorityTag{core.PriorityTagDefault}},
+			{Priority: "later", Label: "Later", Rank: "4/1", Tags: []core.PriorityTag{}},
+		},
+		[]core.PriorityAlias{{From: core.PriorityLow, To: "later"}, {From: "ancient", To: "gone"}},
+		[]core.RetiredPriority{{Priority: "someday", Destination: "later"}},
+	)
+	if err != nil {
+		t.Fatalf("NewPriorityVocabulary() error = %v", err)
+	}
+	return vocabulary
+}
+
+// A card is rendered with the priority it is stored under, and a rename or a
+// removal retires that name out from under it: the board an open page is
+// showing is deliberately not rebuilt when the vocabulary changes, and a page
+// served to a clone that has not folded the rename carries the old name too. So
+// a retired name is drawn in the ink of the priority it now means, rather than
+// matching no rule at all and dropping to the meta row's dim ink.
+func TestPriorityInkKeepsACardColoredThroughARenameOrARemoval(t *testing.T) {
+	block := priorityInkBlock(t, priorityInkBoardPage(t, forwardedPriorityVocabulary(t), nil))
+
+	if block == "" {
+		t.Fatal("a project with four priorities was served no per-priority ink at all")
+	}
+	for name, meaning := range map[string]string{
+		"low":     "renamed to later",
+		"someday": "removed into later",
+	} {
+		rule := ".priority--" + name + " { color: var(--wb-priority-ink-later); }"
+		if !strings.Contains(block, rule) {
+			t.Errorf(
+				"the ink block carries no %q, so a card rendered at %q (%s) matches no rule "+
+					"and falls to the meta row's dim ink: %s",
+				rule, name, meaning, block,
+			)
+		}
+	}
+	// The forwarding is a rule of its own, never a second declaration: a retired
+	// name owns no color, it borrows the live priority's.
+	if strings.Contains(block, "--wb-priority-ink-low:") || strings.Contains(block, "--wb-priority-ink-someday:") {
+		t.Errorf("the ink block declares a property for a priority that is no longer live: %s", block)
+	}
+}
+
+// A retired name whose chain ends outside the live set is given no rule at all.
+// There is no property to point it at, and a rule reading one this file never
+// declared would leave the card exactly as dim while putting a dangling
+// reference on every board that carries it.
+func TestPriorityInkPointsNoRuleAtAPropertyItNeverDeclared(t *testing.T) {
+	block := priorityInkBlock(t, priorityInkBoardPage(t, forwardedPriorityVocabulary(t), nil))
+
+	if strings.Contains(block, ".priority--ancient") {
+		t.Errorf("the ink block draws a priority whose forwarding chain reaches no live priority: %s", block)
+	}
+	for _, reference := range priorityInkReference.FindAllStringSubmatch(block, -1) {
+		if !strings.Contains(block, reference[1]+":") {
+			t.Errorf("the ink block reads %s, which nothing in it declares: %s", reference[1], block)
+		}
+	}
+}
+
+// priorityInkReference finds every per-priority property a rule in the ink
+// block reads, so each can be held to having been declared there.
+var priorityInkReference = regexp.MustCompile(`var\((--wb-priority-ink-[a-z0-9-]+)\)`)

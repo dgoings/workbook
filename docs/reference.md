@@ -1093,8 +1093,9 @@ the accent, by `workbook priority color` or by the configuration page's
 Priorities section, and a priority that has none is drawn in a color the board
 derives from its position — see [Project priorities](#project-priorities).
 
-The `Config` link in the board's header goes to `/config`, a page with three
-sections. **Statuses** administers the board's columns: add one, rename, relabel
+The `Config` link in the board's header goes to `/config`, where each section
+administers one part of what a project configures. **Statuses** administers the
+board's columns: add one, rename, relabel
 or retag one, remove one into the column its tasks belong in, and reorder them
 by dragging a row or with the Up and Down controls beside it. **Priorities**
 administers the project's priorities the same way, most urgent first: add one
@@ -1111,8 +1112,8 @@ rather than the swatch is the control — a swatch has no empty value to pick.
 one Save; an empty field is a setting cleared, and a save records only the
 settings that actually changed — a Save you have not edited records nothing at
 all, which matters because a display setting is what marks a project's
-configuration as needing Workbook 0.6 or newer. All three write the same ledger
-the command line writes, so `workbook status`, `workbook priority` and
+configuration as needing Workbook 0.6 or newer. Every section writes the same
+ledger the command line writes, so `workbook status`, `workbook priority` and
 `workbook config set` see exactly what the page records.
 
 It is a page rather than a drawer over the board, so its forms have room, and it
@@ -1136,7 +1137,7 @@ The route was `/statuses` before it held more than statuses, and nothing
 forwards the old address: a bookmark to it now lands on this board's
 `Page not found`.
 
-Four things about it are worth knowing before you use it on a busy board.
+A few things about it are worth knowing before you use it on a busy board.
 A status change is not queued the way a task change is: the page waits for any
 card change still in flight — including one you started on the board a moment
 before walking here — sends, and re-draws itself from the answer, because
@@ -1169,9 +1170,9 @@ the server composed and the page can swap it without rebuilding a single card.
 That covers a priority nobody colored, too: its ink is derived from its
 position, so adding one here redraws the ones carrying no color of their own.
 A color another clone set is not, for the same reason its columns are not: that
-change reaches this page as a moved head and nothing else. The three sections
-share one ledger and one tip, so none of them can be changed while another is
-changing, and a save of the board's settings, or of a priority, is as much a
+change reaches this page as a moved head and nothing else. Every section of the
+page shares one ledger and one tip, so none of them can be changed while another
+is changing, and a save of the board's settings, or of a priority, is as much a
 reason for a status change to be refused as another status change would be.
 
 ## Statuses a project does not define
@@ -1352,9 +1353,11 @@ GET /api/tasks                versioned task JSON: the active tasks, or
 GET /api/vocabulary           versioned status vocabulary JSON: the project's
                               statuses in order, their labels and tags, the
                               forwarding chains, the configuration ledger head
-                              they were read from, and — for a project that has
-                              recorded any — a `display` member carrying its
-                              name and colours at that same head
+                              they were read from, a `priorities` member carrying
+                              the project's priorities, their labels, tags and
+                              colors, and — for a project that has recorded
+                              any — a `display` member carrying its name and
+                              colors at that same head
 POST /api/vocabulary/statuses            define a status, optionally placed
                                          before or after an existing one
 PATCH /api/vocabulary/statuses/<status>  rename, relabel and retag a status,
@@ -1362,7 +1365,21 @@ PATCH /api/vocabulary/statuses/<status>  rename, relabel and retag a status,
 DELETE /api/vocabulary/statuses/<status> remove a status, naming in the body
                                          where its tasks belong
 PUT /api/vocabulary/order                set the whole column order at once
-PATCH /api/display                       record the project's name and colours;
+POST /api/vocabulary/priorities          define a priority, optionally placed
+                                         before or after an existing one
+PATCH /api/vocabulary/priorities/<priority>
+                                         rename and relabel a priority
+DELETE /api/vocabulary/priorities/<priority>
+                                         remove a priority, naming in the body
+                                         where its tasks belong
+PATCH /api/vocabulary/priorities/<priority>/position
+                                         move a priority before or after another
+PATCH /api/vocabulary/priorities/<priority>/default
+                                         give a priority the `default` role
+PATCH /api/vocabulary/priorities/<priority>/color
+                                         record the color a priority is drawn
+                                         in, or clear it with an empty value
+PATCH /api/display                       record the project's name and colors;
                                          the body states all three, an empty
                                          value clears a setting, and only what
                                          changed is recorded
@@ -1489,10 +1506,11 @@ produce — is answered `404`. So is an identifier the addressed task does not
 carry: an attachment is read out of that task's own live list, so naming another
 task's attachment, or a comment, reaches nothing.
 
-The four vocabulary routes are `workbook status` reached over HTTP: they run the
-same planners, so they refuse what the verbs refuse, in the same words, and
-record the same operations into the same configuration ledger. Three things
-follow from being a server rather than a command, and each is deliberate:
+The vocabulary routes are `workbook status` and `workbook priority` reached over
+HTTP: they run the same planners, so they refuse what the verbs refuse, in the
+same words, and record the same operations into the same configuration ledger.
+Three things follow from being a server rather than a command, and each is
+deliberate:
 
 - Every one of them requires an `expectedHead` member naming the vocabulary head
   the change was composed against — the `head` that `GET /api/vocabulary`
@@ -1503,12 +1521,15 @@ follow from being a server rather than a command, and each is deliberate:
   them would invent a third that neither author chose.
 - Each answers with the whole vocabulary document, in the same shape
   `GET /api/vocabulary` serves, including the head the next change must name. A
-  removal also reports how many tasks it moved and how many of those become
-  claimable where they land, which is what `workbook status delete` reports.
+  status removal also reports how many tasks it moved and how many of those
+  become claimable where they land, which is what `workbook status delete`
+  reports; a priority removal reports the tasks it moved, claimability being a
+  property of a status rather than of a priority.
 - None of them writes the generated `.workbook/guidelines.md`. The board is a
   long-running server that may be answering while somebody rebases the checkout
   it lives in, so it records the change and reports that the file is stale; the
-  next `workbook status` verb or `workbook docs update` rewrites it.
+  next `workbook status` or `workbook priority` verb, or `workbook docs update`,
+  rewrites it.
 
 The board answers only its own pages. It has no accounts and no tokens, so three
 checks stand in for them and every route is subject to all three:

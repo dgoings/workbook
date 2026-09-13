@@ -565,14 +565,21 @@ func boardTheme(settings core.DisplaySettings) template.CSS {
 //     this file formatted rather than the stored string. A value core's
 //     ValidateThemeColor would not have accepted does not parse, contributes
 //     nothing, and leaves that priority on the color its position derives.
+//   - A retired name's rule is built from a token out of the forwarding chains
+//     rather than out of the priority list, so it is put through the same
+//     ValidatePriorityToken check rather than assumed to have had one. Those
+//     chains are normalized against that very function when a document is
+//     authored, but a vocabulary decoded from a checkpoint is indexed without
+//     re-normalizing, so a peer's corrupted chain arrives here unchecked the
+//     same way a corrupted priority list would.
 //   - Everything else is a property name from this file or a number formatted
 //     here.
 func priorityInk(priorities core.PriorityVocabulary) template.CSS {
 	// The effective reading, which is what the board draws either way: a project
 	// that configured no priorities is using the built-in three.
-	definitions := priorities.EffectiveDocument().Priorities
-	live := make([]core.PriorityDefinition, 0, len(definitions))
-	for _, definition := range definitions {
+	document := priorities.EffectiveDocument()
+	live := make([]core.PriorityDefinition, 0, len(document.Priorities))
+	for _, definition := range document.Priorities {
 		if core.ValidatePriorityToken(definition.Priority) == nil {
 			live = append(live, definition)
 		}
@@ -584,6 +591,7 @@ func priorityInk(priorities core.PriorityVocabulary) template.CSS {
 	declarations := make([]string, 0, len(live))
 	rules := make([]string, 0, len(live))
 	dark := make([]string, 0, len(live))
+	declared := make(map[core.Priority]struct{}, len(live))
 	for index, definition := range live {
 		property := priorityInkProperty(definition.Priority)
 		if color, parsed := parseThemeColor(definition.Color); parsed {
@@ -598,7 +606,9 @@ func priorityInk(priorities core.PriorityVocabulary) template.CSS {
 			declarations = append(declarations, property+": "+derivedPriorityInk(index, len(live))+";")
 		}
 		rules = append(rules, ".priority--"+string(definition.Priority)+" { color: var("+property+"); }")
+		declared[definition.Priority] = struct{}{}
 	}
+	rules = append(rules, forwardedPriorityRules(priorities, document, declared)...)
 
 	block := ":root { " + strings.Join(declarations, " ") + " }"
 	if len(dark) > 0 {
@@ -610,6 +620,77 @@ func priorityInk(priorities core.PriorityVocabulary) template.CSS {
 			` :root[data-scheme="dark"] { ` + strings.Join(dark, " ") + " }"
 	}
 	return template.CSS(block + " " + strings.Join(rules, " "))
+}
+
+// forwardedPriorityRules is the ink a card rendered under a priority that is no
+// longer live is drawn in: the ink of the priority that name now means.
+//
+// It exists because a card carries the priority it was *stored* under, while the
+// block above names only the priorities that are *live*. Those are the same set
+// right up until somebody renames or removes one. The answer to a vocabulary
+// change carries this stylesheet recomposed from the live definitions, and the
+// board behind the page is deliberately not rebuilt, so without this every card
+// at the old name matches no rule at all and falls to the meta row's dim ink
+// until a reload — the exact state this stylesheet exists to end. The static
+// rules for high, medium and low are why that was never seen on an ordinary
+// project: a board can only lose a color this way at a name outside that triad.
+//
+// A rename and a removal ask the same question here, so both chains answer it
+// together, and what is asked of a retired name is what the vocabulary already
+// knows: what it resolves to. A renamed-away name resolves to the name that
+// replaced it and a removed one to the priority its tasks went into; either way
+// the card means that priority, so it is drawn in that priority's ink. The live
+// window is only the nearest instance — this equally covers a client holding a
+// page rendered before a rename this checkout has since folded.
+//
+// A name that resolves to nothing — a chain ending outside the live set, or one
+// whose destination the block above dropped as unwritable — is given no rule,
+// and that is the decision rather than an oversight. There is no property to
+// point it at: `var(--wb-priority-ink-gone)` names nothing, which leaves the
+// declaration invalid at computed-value time and `color` inheriting regardless,
+// so such a rule would buy the card nothing and put a dangling reference on
+// every board that carries it. A card stranded that way is drawn in the meta
+// row's ordinary ink, which is the honest reading — this board has no priority
+// that name means any more.
+func forwardedPriorityRules(
+	priorities core.PriorityVocabulary,
+	document core.PriorityDocument,
+	declared map[core.Priority]struct{},
+) []string {
+	retired := make([]core.Priority, 0, len(document.Aliases)+len(document.Retired))
+	for _, alias := range document.Aliases {
+		retired = append(retired, alias.From)
+	}
+	for _, entry := range document.Retired {
+		retired = append(retired, entry.Priority)
+	}
+
+	rules := make([]string, 0, len(retired))
+	seen := make(map[core.Priority]struct{}, len(retired))
+	for _, name := range retired {
+		if _, repeated := seen[name]; repeated {
+			continue
+		}
+		seen[name] = struct{}{}
+		if _, isLive := declared[name]; isLive {
+			// A name forwarded away and then taken again by a new priority. The
+			// loop above already wrote its rule, and the live reading is the one
+			// that stands.
+			continue
+		}
+		if core.ValidatePriorityToken(name) != nil {
+			continue
+		}
+		destination, resolves := priorities.Resolve(name)
+		if !resolves {
+			continue
+		}
+		if _, written := declared[destination]; !written {
+			continue
+		}
+		rules = append(rules, ".priority--"+string(name)+" { color: var("+priorityInkProperty(destination)+"); }")
+	}
+	return rules
 }
 
 // priorityInkProperty is the custom property one priority's ink is declared in.

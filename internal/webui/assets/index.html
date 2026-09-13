@@ -1493,10 +1493,11 @@
       const priorityPanel = document.querySelector("[data-priority-panel]");
       const priorityPanelBody = document.querySelector("[data-priority-panel-body]");
       const priorityPanelStatus = document.querySelector("[data-priority-panel-status]");
-      // The board settings section, beside the statuses on the same route. It is
-      // asked for separately from the panel above because a board may be built
-      // with the vocabulary mutations and without this one, in which case the
-      // page has statuses to administer and no settings to change.
+      // The board settings section, beside the statuses and the priorities on
+      // the same route. It is asked for separately from the sections above
+      // because a board may be built with the vocabulary mutations and without
+      // this one, in which case the page has a vocabulary to administer and no
+      // settings to change.
       const displayPanel = document.querySelector("[data-display-panel]");
       const displayPanelBody = document.querySelector("[data-display-panel-body]");
       const displayPanelStatus = document.querySelector("[data-display-panel-status]");
@@ -7134,9 +7135,9 @@
       // disables for a reason of its own — the Up control on the first row, a
       // Save with an empty name beside it. The two are separate states because
       // a change finishing must not enable a control that was never enabled.
-      // Busy is the route's rather than the section's: both sections write the
-      // same ref against the same head, so a change in either disables the
-      // controls of both.
+      // Busy is the route's rather than the section's: every section of the
+      // configuration route writes the same ref against the same head, so a
+      // change in any of them disables the controls of all of them.
       function applyPanelBusy() {
         panelControls.forEach((control) => {
           control.disabled = configBusy() || control.dataset.blocked === "true";
@@ -8696,12 +8697,12 @@
       }
       // The configuration page, in the shell every other route is drawn in: a
       // header that names it and offers the way back to the board, and under it
-      // the two bodies the server rendered, each under a heading of its own.
+      // the bodies the server rendered, each under a heading of its own.
       //
-      // The headings are the page's, not the panels'. The route holds two
-      // sections now — the project's statuses and the board's own settings —
-      // and a page whose h2 named one of them would be a page that grew a second
-      // section nobody announced.
+      // The headings are the page's, not the panels'. What the route holds is
+      // whatever this board was built to administer — the project's statuses,
+      // its priorities, the board's own settings — and a page whose h2 named one
+      // of them would be a page that grew a section nobody announced.
       //
       // The bodies are moved rather than copied. Each is one element with one
       // identity for the length of the visit, which is what lets the list, the
