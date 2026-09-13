@@ -338,6 +338,157 @@ type VocabularyMutationDocument struct {
 	Warnings   []core.Warning       `json:"warnings,omitempty"`
 }
 
+// VocabularyPriorityAddition is a priority the board asks this project to
+// define. It is the status addition's counterpart minus the tags: a priority
+// carries exactly one role, and giving it is a change of its own — see
+// VocabularyPriorityDefault.
+type VocabularyPriorityAddition struct {
+	Priority core.Priority
+	// Label is what the priority is called on screen. Empty means the client
+	// named none, and the label is derived from the token exactly as `workbook
+	// priority add` derives one when --label is not given.
+	Label string
+	// Before and After place the new priority next to a live one. Naming both
+	// is a contradiction, and it is refused by the writer rather than here: the
+	// priority verbs already refuse it in one sentence, and a second check at
+	// this layer would be a second place that sentence could change.
+	Before core.Priority
+	After  core.Priority
+	// ExpectedHead is the configuration ledger tip the client composed this
+	// change against. See vocabularyHead for why it is required here and
+	// optional on a task mutation.
+	ExpectedHead string
+}
+
+// VocabularyPriorityEdit renames and relabels one priority, in either subset: a
+// nil member is a member this change does not touch, which is what lets one
+// form send one intent.
+//
+// It has no Tags member where a status edit has one, and no role member
+// either. A priority holds exactly one role, taking it is a transfer rather
+// than a set to reconcile, and the route that does it is the default route —
+// so a panel offering "rename this and make it the default" in one Save makes
+// two requests, the second against the head the first answered with.
+type VocabularyPriorityEdit struct {
+	Name         *core.Priority
+	Label        *string
+	ExpectedHead string
+}
+
+// VocabularyPriorityRemoval removes a priority. Into is where its tasks belong
+// and is never guessed: a removal with nowhere to forward to is a removal
+// nobody could have meant.
+type VocabularyPriorityRemoval struct {
+	Into         core.Priority
+	ExpectedHead string
+}
+
+// VocabularyPriorityMove moves one priority among its peers, naming the
+// neighbor it goes next to.
+//
+// There is no whole-order counterpart to VocabularyOrder here, and the
+// asymmetry is deliberate rather than an omission: a status drag is authored by
+// a planner that sets every rank at once, and the priority section's planner
+// names a neighbor. A drag on a priorities panel therefore has to reduce "this
+// is the new order" to one anchor before it is sent. A second way to say where
+// a priority goes is a second thing that can disagree with the first.
+type VocabularyPriorityMove struct {
+	Before       core.Priority
+	After        core.Priority
+	ExpectedHead string
+}
+
+// VocabularyPriorityDefault gives one priority the role a task with no priority
+// lands on. It carries only a head because the change is its subject: the
+// priority that held the role gives it up in the same operation.
+//
+// There is no clearing counterpart, because a project with no default priority
+// is a project where a new task has nowhere to land, and the vocabulary's own
+// validation refuses it.
+type VocabularyPriorityDefault struct {
+	ExpectedHead string
+}
+
+// VocabularyPriorityRecolor sets or clears the ink one priority is drawn in. An
+// empty Color clears the stored value and returns the priority to the color the
+// board derives from its position.
+//
+// The value travels as the client typed it: trimming it and reading what a
+// color is belongs to the verb family, and the board keeps exactly one reading
+// of that.
+type VocabularyPriorityRecolor struct {
+	Color        string
+	ExpectedHead string
+}
+
+// VocabularyPriorityTaskCounts prices a priority change in the one term a
+// priority change has: the tasks that were filed under a priority somebody
+// removed.
+//
+// It carries one member where VocabularyTaskCounts carries two, and the missing
+// one is missing on purpose rather than by oversight. `claimableAfter` reports
+// how many moved tasks became eligible for `workbook next`, and eligibility is
+// decided by a status's tags and a task's dependencies — nothing about a
+// priority gates it. Reusing the status envelope would therefore ship
+// `"claimableAfter": 0` on every priority change this project will ever record,
+// which invites a client to branch on it and tells a reader that priorities
+// take part in something they do not.
+type VocabularyPriorityTaskCounts struct {
+	// Affected counts the active tasks that resolved through the removed
+	// priority. It is stated rather than omitted, so a client reading
+	// `tasks.affected` gets an answer from every priority change.
+	Affected int `json:"affected"`
+}
+
+// VocabularyPriorityMutation is what one priority change produced: the
+// configuration as it now stands, the tip it was written to, and what it cost.
+type VocabularyPriorityMutation struct {
+	State    VocabularyState
+	Tasks    VocabularyPriorityTaskCounts
+	Warnings []core.Warning
+}
+
+// The six capabilities behind the priority mutation routes. Each answers with
+// the whole configuration rather than with what it changed, for the reason the
+// status mutations do: a priority change can move a priority the client did not
+// name — the default role transfers, a removal retires a token — and a client
+// that patched its own model from a description of one change would disagree
+// with the server about the rest.
+//
+// There are six where the statuses have four because the priority verbs are
+// six: a rename and a relabel are one edit, but a move, a role and a color are
+// each their own change with their own refusal, and folding them into the edit
+// would be this package inventing a change the verb family has no reading of.
+type (
+	VocabularyPriorityAdder     func(context.Context, VocabularyPriorityAddition) (VocabularyPriorityMutation, error)
+	VocabularyPriorityEditor    func(context.Context, core.Priority, VocabularyPriorityEdit) (VocabularyPriorityMutation, error)
+	VocabularyPriorityRemover   func(context.Context, core.Priority, VocabularyPriorityRemoval) (VocabularyPriorityMutation, error)
+	VocabularyPriorityMover     func(context.Context, core.Priority, VocabularyPriorityMove) (VocabularyPriorityMutation, error)
+	VocabularyPriorityDefaulter func(context.Context, core.Priority, VocabularyPriorityDefault) (VocabularyPriorityMutation, error)
+	VocabularyPriorityRecolorer func(context.Context, core.Priority, VocabularyPriorityRecolor) (VocabularyPriorityMutation, error)
+)
+
+// VocabularyPriorityMutationDocument is what every priority mutation answers
+// with.
+//
+// It carries the whole vocabulary document, in the shape GET /api/vocabulary
+// serves it — both halves of one configuration, because they are recorded in
+// one commit and the client adopts what it is handed — so the client renders
+// the result of a change through the same code that rendered the page,
+// including the new head, which is what its next change has to name.
+//
+// Its format names the priority half rather than reusing the status mutation's,
+// because the two documents differ where it counts: this one prices a change in
+// the one number a priority change has. A client that read this as a status
+// mutation would be reading a `tasks` member that is not the one it expects.
+type VocabularyPriorityMutationDocument struct {
+	Format     string                       `json:"format"`
+	Version    int                          `json:"version"`
+	Vocabulary VocabularyDocument           `json:"vocabulary"`
+	Tasks      VocabularyPriorityTaskCounts `json:"tasks"`
+	Warnings   []core.Warning               `json:"warnings,omitempty"`
+}
+
 // VocabularyErrorDocument is the error envelope with the statuses a refused
 // change should be recomposed against.
 //
@@ -565,6 +716,21 @@ type Options struct {
 	EditStatus    VocabularyStatusEditor
 	RemoveStatus  VocabularyStatusRemover
 	ReorderStatus VocabularyReorderer
+	// The six priority mutations, which administer the other section of the
+	// same configuration ledger. A board given none of them draws its
+	// priorities and refuses to change them, which is every board that predates
+	// the routes that administer them.
+	//
+	// They are six fields rather than one because they are six capabilities,
+	// and the surface that offers them decides for itself what a partial set
+	// means: each route reports the one it was not given, the way every route
+	// here reports a capability it does not have.
+	AddPriority        VocabularyPriorityAdder
+	EditPriority       VocabularyPriorityEditor
+	RemovePriority     VocabularyPriorityRemover
+	MovePriority       VocabularyPriorityMover
+	SetDefaultPriority VocabularyPriorityDefaulter
+	RecolorPriority    VocabularyPriorityRecolorer
 	// SetDisplay records what this project calls its board and the colors it
 	// draws it in. A board given none draws no board settings section on its
 	// configuration page, the way a board given no vocabulary mutations draws
@@ -860,6 +1026,53 @@ type reorderStatusesRequest struct {
 	ExpectedHead *string       `json:"expectedHead"`
 }
 
+// The six priority mutation bodies. expectedHead is a member of each for the
+// reason it is a member of the status bodies: it is part of the change, and the
+// two travel together.
+type addPriorityRequest struct {
+	Priority     core.Priority `json:"priority"`
+	Label        string        `json:"label"`
+	Before       core.Priority `json:"before"`
+	After        core.Priority `json:"after"`
+	ExpectedHead *string       `json:"expectedHead"`
+}
+
+// editPriorityRequest takes pointers for the reason editStatusRequest does: no
+// `label` leaves the label alone, and `"label": ""` is a blank label the
+// vocabulary refuses.
+type editPriorityRequest struct {
+	Name         *core.Priority `json:"name"`
+	Label        *string        `json:"label"`
+	ExpectedHead *string        `json:"expectedHead"`
+}
+
+type removePriorityRequest struct {
+	Into         core.Priority `json:"into"`
+	ExpectedHead *string       `json:"expectedHead"`
+}
+
+type movePriorityRequest struct {
+	Before       core.Priority `json:"before"`
+	After        core.Priority `json:"after"`
+	ExpectedHead *string       `json:"expectedHead"`
+}
+
+// defaultPriorityRequest carries a head and nothing else: the priority is the
+// address, and the role is the route.
+type defaultPriorityRequest struct {
+	ExpectedHead *string `json:"expectedHead"`
+}
+
+// recolorPriorityRequest takes a pointer so that clearing a priority's ink is
+// something a client says rather than something it omits. `"color": ""` returns
+// the priority to the color the board derives for it; no `color` member at all
+// is a client that named no intention, and the route refuses it rather than
+// clearing on its behalf.
+type recolorPriorityRequest struct {
+	Color        *string `json:"color"`
+	ExpectedHead *string `json:"expectedHead"`
+}
+
 // updateTaskRequest is the shape this endpoint accepts, which is deliberately
 // narrower than core.UpdateInput and no longer tied to it.
 //
@@ -984,6 +1197,17 @@ func NewHandler(options Options) http.Handler {
 	handler.mux.HandleFunc("PATCH /api/vocabulary/statuses/{status}", handler.editVocabularyStatus)
 	handler.mux.HandleFunc("DELETE /api/vocabulary/statuses/{status}", handler.removeVocabularyStatus)
 	handler.mux.HandleFunc("PUT /api/vocabulary/order", handler.reorderVocabulary)
+	// The priority half of the same ledger. A move, a role and a color each get
+	// an address of their own under the priority they change, because each is
+	// its own change with its own head and its own refusal — the verb family
+	// has no planner that takes two of them at once, and a route that accepted
+	// two would be this package inventing one.
+	handler.mux.HandleFunc("POST /api/vocabulary/priorities", handler.addVocabularyPriority)
+	handler.mux.HandleFunc("PATCH /api/vocabulary/priorities/{priority}", handler.editVocabularyPriority)
+	handler.mux.HandleFunc("DELETE /api/vocabulary/priorities/{priority}", handler.removeVocabularyPriority)
+	handler.mux.HandleFunc("PATCH /api/vocabulary/priorities/{priority}/position", handler.moveVocabularyPriority)
+	handler.mux.HandleFunc("PATCH /api/vocabulary/priorities/{priority}/default", handler.setDefaultVocabularyPriority)
+	handler.mux.HandleFunc("PATCH /api/vocabulary/priorities/{priority}/color", handler.recolorVocabularyPriority)
 	handler.mux.HandleFunc("PATCH /api/display", handler.updateDisplay)
 	handler.mux.HandleFunc("GET /api/tasks/{id}/history", handler.serveTaskHistory)
 	handler.mux.HandleFunc("POST /api/tasks", handler.createTask)
@@ -1095,6 +1319,8 @@ func allowedMethod(path string) (string, bool) {
 		return http.MethodGet, true
 	case "/api/vocabulary/statuses":
 		return http.MethodPost, true
+	case "/api/vocabulary/priorities":
+		return http.MethodPost, true
 	case "/api/vocabulary/order":
 		return http.MethodPut, true
 	case "/api/display":
@@ -1104,6 +1330,16 @@ func allowedMethod(path string) (string, bool) {
 	default:
 		if vocabularyStatusPathName(path) != "" {
 			return http.MethodPatch + ", " + http.MethodDelete, true
+		}
+		if vocabularyPriorityPathName(path) != "" {
+			return http.MethodPatch + ", " + http.MethodDelete, true
+		}
+		// The three per-member addresses answer PATCH alone. A member nobody
+		// defined is deliberately not known here, so it reaches the mux and is
+		// answered 404: a method refusal naming what it allows would be this
+		// table claiming a route exists.
+		if _, _, ok := vocabularyPriorityMemberPath(path); ok {
+			return http.MethodPatch, true
 		}
 		if _, _, ok := taskDependencyPathIDs(path); ok {
 			return http.MethodPut + ", " + http.MethodDelete, true
@@ -1222,6 +1458,64 @@ func vocabularyStatusPathName(path string) string {
 		return ""
 	}
 	return status
+}
+
+// vocabularyPriorityPathName reads the priority the per-priority routes
+// address, and vocabularyPriorityMemberPath reads the priority and the member
+// one of the three per-member routes addresses. They are the priority half of
+// vocabularyStatusPathName and exist for what that comment says: the method
+// table has to answer for a path the mux has not matched yet, and a request
+// built without the mux's pattern variables falls back to them.
+//
+// Neither asks whether the priority is a priority. What every priority name
+// goes through instead is core.ValidatePriorityToken, at the planner, on both
+// surfaces — which is where a name that is not a token gets an answer that says
+// so, in the words the command line would use.
+func vocabularyPriorityPathName(path string) string {
+	priority, member := vocabularyPrioritySegments(path)
+	if member != "" {
+		return ""
+	}
+	return priority
+}
+
+// vocabularyPriorityMemberPath reports a member address only for the three
+// members these routes actually define. An undefined member is reported as no
+// member at all, so it is answered where an address nobody defined should be
+// answered: by the mux, with a 404.
+func vocabularyPriorityMemberPath(path string) (string, string, bool) {
+	priority, member := vocabularyPrioritySegments(path)
+	if priority == "" || member == "" {
+		return "", "", false
+	}
+	switch member {
+	case "position", "default", "color":
+		return priority, member, true
+	default:
+		return "", "", false
+	}
+}
+
+// vocabularyPrioritySegments splits a priority route's path into the priority
+// it addresses and the member beneath it, either of which may be empty for a
+// path that is not one of these routes.
+func vocabularyPrioritySegments(path string) (string, string) {
+	const prefix = "/api/vocabulary/priorities/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", ""
+	}
+	rest := strings.TrimPrefix(path, prefix)
+	priority, member, split := strings.Cut(rest, "/")
+	if priority == "" {
+		return "", ""
+	}
+	if !split {
+		return priority, ""
+	}
+	if member == "" || strings.Contains(member, "/") {
+		return "", ""
+	}
+	return priority, member
 }
 
 func taskPagePathID(path string) string {
@@ -1605,6 +1899,248 @@ func (handler *handler) reorderVocabulary(writer http.ResponseWriter, request *h
 		return
 	}
 	handler.writeVocabularyMutation(writer, mutation)
+}
+
+// The six priority mutation routes.
+//
+// Each is the status routes' shape with one difference worth stating once here
+// rather than six times below: almost nothing about a request is refused at
+// this layer. The priority writer already refuses a placement naming both
+// neighbors, a move naming none, a removal with nowhere to forward to, an edit
+// that changes nothing, a recolor that records nothing and the removal of a
+// project's last priority — each in the sentence `workbook priority` uses, each
+// tested once against the real planners. A check repeated here would be a
+// second place those sentences could change, and a body this layer flattened
+// into "a configuration write must carry at least one operation" would be true
+// and would tell a person nothing.
+//
+// What these routes do decide is what only a route can: that a change names the
+// configuration it was composed against, that a recolor says whether it is
+// setting or clearing, and which HTTP status a category reads as.
+
+// addVocabularyPriority defines a priority this project does not have.
+func (handler *handler) addVocabularyPriority(writer http.ResponseWriter, request *http.Request) {
+	if handler.AddPriority == nil {
+		handler.writeError(writer, core.Errorf(core.CategoryOperational, "priority addition is not configured"))
+		return
+	}
+	var body addPriorityRequest
+	if err := decodeRequest(request.Body, &body); err != nil {
+		handler.writeError(writer, decodeRequestError("decode priority add", err))
+		return
+	}
+	head, err := vocabularyHead(body.ExpectedHead)
+	if err != nil {
+		handler.writeError(writer, err)
+		return
+	}
+	mutation, err := handler.AddPriority(request.Context(), VocabularyPriorityAddition{
+		Priority:     body.Priority,
+		Label:        body.Label,
+		Before:       body.Before,
+		After:        body.After,
+		ExpectedHead: head,
+	})
+	if err != nil {
+		handler.writeVocabularyError(writer, request, err)
+		return
+	}
+	handler.writePriorityMutation(writer, mutation)
+}
+
+// editVocabularyPriority renames and relabels one priority, because a panel
+// edits a priority as one form and a form is one intent.
+//
+// It does not take the default role, and a panel offering "rename this and make
+// it the default" in one Save therefore makes two requests: this one, and then
+// the default route against the head this one answered with. That is faithful
+// to the section rather than convenient — the role is one operation that the
+// fold transfers off whoever held it, and there is no planner that renames and
+// transfers in one pack.
+func (handler *handler) editVocabularyPriority(writer http.ResponseWriter, request *http.Request) {
+	if handler.EditPriority == nil {
+		handler.writeError(writer, core.Errorf(core.CategoryOperational, "priority editing is not configured"))
+		return
+	}
+	var body editPriorityRequest
+	if err := decodeRequest(request.Body, &body); err != nil {
+		handler.writeError(writer, decodeRequestError("decode priority change", err))
+		return
+	}
+	head, err := vocabularyHead(body.ExpectedHead)
+	if err != nil {
+		handler.writeError(writer, err)
+		return
+	}
+	mutation, err := handler.EditPriority(request.Context(), vocabularyPriorityOf(request), VocabularyPriorityEdit{
+		Name:         body.Name,
+		Label:        body.Label,
+		ExpectedHead: head,
+	})
+	if err != nil {
+		handler.writeVocabularyError(writer, request, err)
+		return
+	}
+	handler.writePriorityMutation(writer, mutation)
+}
+
+// removeVocabularyPriority retires a priority and forwards its tasks.
+//
+// The destination travels in the body of a DELETE for the reason a status
+// removal's does: a removal is meaningless without somewhere for the work at
+// that priority to go, so the one member the route cannot do without is the one
+// member a bare DELETE would have no room for.
+func (handler *handler) removeVocabularyPriority(writer http.ResponseWriter, request *http.Request) {
+	if handler.RemovePriority == nil {
+		handler.writeError(writer, core.Errorf(core.CategoryOperational, "priority removal is not configured"))
+		return
+	}
+	var body removePriorityRequest
+	if err := decodeRequest(request.Body, &body); err != nil {
+		handler.writeError(writer, decodeRequestError("decode priority removal", err))
+		return
+	}
+	head, err := vocabularyHead(body.ExpectedHead)
+	if err != nil {
+		handler.writeError(writer, err)
+		return
+	}
+	mutation, err := handler.RemovePriority(request.Context(), vocabularyPriorityOf(request), VocabularyPriorityRemoval{
+		Into:         body.Into,
+		ExpectedHead: head,
+	})
+	if err != nil {
+		handler.writeVocabularyError(writer, request, err)
+		return
+	}
+	handler.writePriorityMutation(writer, mutation)
+}
+
+// moveVocabularyPriority moves one priority next to one of its peers.
+//
+// It takes an anchor rather than an order, which is the one place a priorities
+// panel cannot be written as a copy of the statuses panel: there is no planner
+// that takes a whole sequence, so a drag has to be reduced to "before X" or
+// "after X" before it is sent. See VocabularyPriorityMove.
+func (handler *handler) moveVocabularyPriority(writer http.ResponseWriter, request *http.Request) {
+	if handler.MovePriority == nil {
+		handler.writeError(writer, core.Errorf(core.CategoryOperational, "priority ordering is not configured"))
+		return
+	}
+	var body movePriorityRequest
+	if err := decodeRequest(request.Body, &body); err != nil {
+		handler.writeError(writer, decodeRequestError("decode priority move", err))
+		return
+	}
+	head, err := vocabularyHead(body.ExpectedHead)
+	if err != nil {
+		handler.writeError(writer, err)
+		return
+	}
+	mutation, err := handler.MovePriority(request.Context(), vocabularyPriorityOf(request), VocabularyPriorityMove{
+		Before:       body.Before,
+		After:        body.After,
+		ExpectedHead: head,
+	})
+	if err != nil {
+		handler.writeVocabularyError(writer, request, err)
+		return
+	}
+	handler.writePriorityMutation(writer, mutation)
+}
+
+// setDefaultVocabularyPriority gives one priority the role a task created with
+// no priority lands on. The priority that held it gives it up in the same
+// operation, which is why there is nothing in the body but the head.
+func (handler *handler) setDefaultVocabularyPriority(writer http.ResponseWriter, request *http.Request) {
+	if handler.SetDefaultPriority == nil {
+		handler.writeError(writer, core.Errorf(core.CategoryOperational, "the default priority is not configurable here"))
+		return
+	}
+	var body defaultPriorityRequest
+	if err := decodeRequest(request.Body, &body); err != nil {
+		handler.writeError(writer, decodeRequestError("decode default priority", err))
+		return
+	}
+	head, err := vocabularyHead(body.ExpectedHead)
+	if err != nil {
+		handler.writeError(writer, err)
+		return
+	}
+	mutation, err := handler.SetDefaultPriority(request.Context(), vocabularyPriorityOf(request), VocabularyPriorityDefault{
+		ExpectedHead: head,
+	})
+	if err != nil {
+		handler.writeVocabularyError(writer, request, err)
+		return
+	}
+	handler.writePriorityMutation(writer, mutation)
+}
+
+// recolorVocabularyPriority sets or clears the ink one priority is drawn in.
+//
+// The color member is required, and an empty one is the clearing. An absent one
+// is refused rather than read as a clearing, because clearing a priority's ink
+// is a decision somebody makes: the value the writer refuses to record twice is
+// the value a client must be explicit about sending.
+func (handler *handler) recolorVocabularyPriority(writer http.ResponseWriter, request *http.Request) {
+	if handler.RecolorPriority == nil {
+		handler.writeError(writer, core.Errorf(core.CategoryOperational, "priority colors are not configurable here"))
+		return
+	}
+	var body recolorPriorityRequest
+	if err := decodeRequest(request.Body, &body); err != nil {
+		handler.writeError(writer, decodeRequestError("decode priority color", err))
+		return
+	}
+	if body.Color == nil {
+		handler.writeError(writer, core.Errorf(core.CategoryInvocation,
+			"a priority color change must name a color; send an empty one to clear it"))
+		return
+	}
+	head, err := vocabularyHead(body.ExpectedHead)
+	if err != nil {
+		handler.writeError(writer, err)
+		return
+	}
+	mutation, err := handler.RecolorPriority(request.Context(), vocabularyPriorityOf(request), VocabularyPriorityRecolor{
+		// Handed on as it was sent. Trimming a color and deciding what one is
+		// belongs to the verb family, and the board keeps exactly one reading of
+		// that — the one whose refusal a person has already seen on a terminal.
+		Color:        *body.Color,
+		ExpectedHead: head,
+	})
+	if err != nil {
+		handler.writeVocabularyError(writer, request, err)
+		return
+	}
+	handler.writePriorityMutation(writer, mutation)
+}
+
+// vocabularyPriorityOf reads the priority a per-priority route addresses, from
+// the mux's pattern where there is one and from the path where a caller built
+// the request itself.
+func vocabularyPriorityOf(request *http.Request) core.Priority {
+	if priority := request.PathValue("priority"); priority != "" {
+		return core.Priority(priority)
+	}
+	if priority, _, ok := vocabularyPriorityMemberPath(request.URL.Path); ok {
+		return core.Priority(priority)
+	}
+	return core.Priority(vocabularyPriorityPathName(request.URL.Path))
+}
+
+// writePriorityMutation answers a recorded priority change with the whole
+// configuration, in its own envelope rather than the status mutation's. See
+// VocabularyPriorityTaskCounts for what that envelope is not carrying and why.
+func (handler *handler) writePriorityMutation(writer http.ResponseWriter, mutation VocabularyPriorityMutation) {
+	writeJSON(writer, http.StatusOK, VocabularyPriorityMutationDocument{
+		Format:     "workbook.priority-mutation",
+		Version:    1,
+		Vocabulary: vocabularyDocument(mutation.State),
+		Tasks:      mutation.Tasks,
+		Warnings:   mutation.Warnings,
+	})
 }
 
 // vocabularyStatusOf reads the status a per-status route addresses, from the
