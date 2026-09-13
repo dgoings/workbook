@@ -918,6 +918,13 @@ type pageData struct {
 	// It is also what keeps the script from naming `done`, which is a tag here
 	// and a status name in most projects.
 	StatusTags []core.StatusTag
+	// PriorityTags are the roles a priority may carry — one of them today —
+	// rendered into the priorities section for the reason StatusTags is
+	// rendered into the statuses one: the set belongs to the vocabulary, and a
+	// script holding its own copy is a script that can disagree with it. The two
+	// sets are separate and happen to share a word, which is the other half of
+	// the reason this is published rather than spelled in the client.
+	PriorityTags []core.PriorityTag
 	// Administrable is whether this board was built with all four vocabulary
 	// mutations. It decides whether the page carries the configuration route's
 	// link and its statuses section at all, and serveConfig answers the address
@@ -947,6 +954,25 @@ type pageData struct {
 	// can reach is a section that is never seen and never taken away.
 	// `workbook serve` supplies both, so a person meets them together.
 	DisplayAdministrable bool
+	// PrioritiesAdministrable is whether this board was built with the priority
+	// mutations the configuration page's priorities section drives, and it
+	// decides whether that section is served at all.
+	//
+	// It is asked separately from Administrable for the reason
+	// DisplayAdministrable is: the capabilities are separate, and a board that
+	// could draw a list of priorities but change none of them would draw four
+	// controls per row that could only ever answer "this board has no such
+	// capability". It still requires Administrable, because /config answers 404
+	// without the status mutations and a section served onto a page nobody can
+	// reach is a section that is never seen.
+	//
+	// The recolor is deliberately not among the capabilities counted here. This
+	// section offers no color control yet, so a board wired for the other five
+	// can serve every control it draws, and a gate that asked for a sixth would
+	// withhold a working section over a capability nothing on it uses. The
+	// control that changes that belongs in the row's edit form, and the gate
+	// grows a term when it lands.
+	PrioritiesAdministrable bool
 }
 
 // expectedHead is the task tip the browser rendered before proposing a change.
@@ -1626,8 +1652,12 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 		InlineImageMediaTypes: strings.Join(InlineAttachmentMediaTypes(), " "),
 		AssignIdentity:        handler.assignIdentity(),
 		StatusTags:            core.StatusTags(),
+		PriorityTags:          core.PriorityTags(),
 		Administrable:         handler.administrable(),
 		DisplayAdministrable:  handler.administrable() && handler.SetDisplay != nil,
+		PrioritiesAdministrable: handler.administrable() && handler.AddPriority != nil &&
+			handler.EditPriority != nil && handler.RemovePriority != nil &&
+			handler.MovePriority != nil && handler.SetDefaultPriority != nil,
 	}); err != nil {
 		return
 	}
