@@ -516,6 +516,153 @@ func boardTheme(settings core.DisplaySettings) template.CSS {
 		` :root[data-scheme="dark"] { ` + strings.Join(dark, " ") + " }")
 }
 
+// priorityInk renders the ink every one of a project's priorities is drawn in:
+// one custom property per priority and the rule that reads it.
+//
+// It is a stylesheet of its own rather than more of boardTheme because the two
+// answer different questions. A theme is what a project's *chosen* colors ask
+// for, and a project that chose none is served none — that is the rule
+// boardTheme's own comment states and its tests hold it to. A priority's ink is
+// not a choice a project has to have made: every board has priorities, the
+// stylesheet above can only name three of them by hand, and a project that
+// added a fourth was drawing it in the meta row's dim ink with nothing chosen
+// or wrong anywhere.
+//
+// It is composed in Go rather than interpolated for the reason boardTheme gives,
+// and it is written into the page's markup by the same `template.CSS` route,
+// which bypasses contextual escaping by design. So every byte of what follows is
+// answered for here:
+//
+//   - The property and class names are built from a priority token, which core
+//     validates as lowercase letters and digits separated by single hyphens —
+//     exactly the charset a CSS identifier takes unescaped, which is the reason
+//     priorityTokenPattern's own comment gives for the rule. A name that does
+//     not pass that check is dropped rather than written, so a token a corrupted
+//     or hostile peer put in the ledger cannot close a declaration and open a
+//     rule of its own.
+//   - A stored color is parsed by parseThemeColor and then *re-rendered* from
+//     the three integers it yielded, so what reaches the page is a hex triple
+//     this file formatted rather than the stored string. A value core's
+//     ValidateThemeColor would not have accepted does not parse, contributes
+//     nothing, and leaves that priority on the color its position derives.
+//   - Everything else is a property name from this file or a number formatted
+//     here.
+func priorityInk(priorities core.PriorityVocabulary) template.CSS {
+	// The effective reading, which is what the board draws either way: a project
+	// that configured no priorities is using the built-in three.
+	definitions := priorities.EffectiveDocument().Priorities
+	live := make([]core.PriorityDefinition, 0, len(definitions))
+	for _, definition := range definitions {
+		if core.ValidatePriorityToken(definition.Priority) == nil {
+			live = append(live, definition)
+		}
+	}
+	if len(live) == 0 {
+		return ""
+	}
+
+	declarations := make([]string, 0, len(live))
+	rules := make([]string, 0, len(live))
+	dark := make([]string, 0, len(live))
+	for index, definition := range live {
+		property := priorityInkProperty(definition.Priority)
+		if color, parsed := parseThemeColor(definition.Color); parsed {
+			declarations = append(declarations, property+": "+color.hex()+";")
+			// A stored color is one value, and the board has three palette
+			// statements. A mid-toned red chosen against white is the very thing
+			// that disappears into a near-black card, so it is lifted for a dark
+			// ground the way a chosen accent is — the same transform, for the
+			// reason the priority triad's own comment above gives.
+			dark = append(dark, property+": "+color.toned(1, .68)+";")
+		} else {
+			declarations = append(declarations, property+": "+derivedPriorityInk(index, len(live))+";")
+		}
+		rules = append(rules, ".priority--"+string(definition.Priority)+" { color: var("+property+"); }")
+	}
+
+	block := ":root { " + strings.Join(declarations, " ") + " }"
+	if len(dark) > 0 {
+		// Both dark selectors, for the reason boardTheme states both. A derived
+		// ink is deliberately absent from them: it is written as a reference to
+		// the triad's properties, which the scheme already moves, so restating it
+		// here would be a second copy of a reading that is already correct.
+		block += ` @media (prefers-color-scheme: dark) { :root:not([data-scheme="light"]) { ` + strings.Join(dark, " ") + " } }" +
+			` :root[data-scheme="dark"] { ` + strings.Join(dark, " ") + " }"
+	}
+	return template.CSS(block + " " + strings.Join(rules, " "))
+}
+
+// priorityInkProperty is the custom property one priority's ink is declared in.
+//
+// The family is namespaced away from `--wb-priority-high` and its two siblings
+// rather than reusing them, and that is load-bearing rather than tidy: those
+// three are the scheme's own triad, which no project's color reaches, and a
+// project whose priorities are literally named high, medium and low would
+// otherwise be declaring them.
+func priorityInkProperty(priority core.Priority) string {
+	return "--wb-priority-ink-" + string(priority)
+}
+
+// derivedPriorityInk is the color a priority with none stored is drawn in: the
+// one its position among its peers derives.
+//
+// This is a documented promise rather than an invention. `workbook priority
+// color` with no value clears a color, and both docs/reference.md and
+// core.PriorityDefinition.Color say that returns the priority "to a color the
+// board derives from its position" — there is no stored default to go back to.
+//
+// The derivation runs along the triad the stylesheet already states, because
+// that triad is what a position *means* on this board: most urgent is the red,
+// least urgent is the blue, and the middle is the amber between them. A
+// vocabulary of three therefore lands exactly on today's three colors, which is
+// what keeps the first `workbook priority` verb — which writes the built-in
+// three into the ledger before anything else — from quietly recoloring a board
+// nobody asked to change. A vocabulary of more lands between them.
+//
+// It is written as a reference to those properties rather than as a literal this
+// function computed, and that buys two things at once. The scheme already states
+// a dark reading for all three, so a derived ink follows the board into dark
+// without this file stating anything twice; and a family that writes no color
+// literal cannot collide with the counts the stylesheet's guards keep over every
+// literal the page writes.
+func derivedPriorityInk(index, count int) string {
+	const (
+		high   = "var(--wb-priority-high)"
+		medium = "var(--wb-priority-medium)"
+		low    = "var(--wb-priority-low)"
+	)
+	if count < 2 {
+		// A single priority is both the most and the least urgent one, which is
+		// no position at all; it takes the middle rather than an end.
+		return medium
+	}
+	position := float64(index) / float64(count-1)
+	switch {
+	case position == 0:
+		return high
+	case position == 1:
+		return low
+	case position == .5:
+		return medium
+	case position < .5:
+		// Mixed in oklab rather than sRGB: a straight channel average of the red
+		// and the amber passes through a muddier, darker color than either, and
+		// a perceptual space is what keeps the band between two priorities
+		// reading as a step between them.
+		return "color-mix(in oklab, " + high + ", " + medium + " " + mixWeight(2*position) + ")"
+	default:
+		return "color-mix(in oklab, " + medium + ", " + low + " " + mixWeight(2*position-1) + ")"
+	}
+}
+
+// mixWeight is how much of the second color a mix takes, as a percentage.
+// Rounded to whole points because the ceiling on a vocabulary is 24 priorities
+// (core.MaxPriorityCount), so the smallest step between two positions is several
+// points wide and a fraction of one would be precision nobody can see.
+func mixWeight(fraction float64) string {
+	return strconv.Itoa(int(math.Round(fraction*100))) + "%"
+}
+
 // schemeDeclarations is themeDeclarations for a scheme's variants, and refuses
 // the same colour for the same reason: a value core could not validate
 // contributes nothing, and the family keeps the defaults the stylesheet states.

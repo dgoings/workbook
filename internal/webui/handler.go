@@ -670,6 +670,14 @@ type pageData struct {
 	// in Go out of validated values — see boardTheme for why the page cannot
 	// interpolate the values themselves.
 	Theme template.CSS
+	// PriorityInk is the stylesheet that draws each of this project's priorities
+	// in its own color: one custom property per priority and the rule that reads
+	// it. It is separate from Theme because it answers a different question — a
+	// theme is what a project's chosen colors ask for and is empty when none were
+	// chosen, while every board has priorities and the stylesheet can only name
+	// three of them by hand. See priorityInk, which is also where every byte of
+	// this template.CSS is answered for.
+	PriorityInk template.CSS
 	// DefaultStatus is where a new task lands, rendered as an attribute because
 	// the client needs it before it has fetched anything and must not guess.
 	DefaultStatus core.Status
@@ -1302,6 +1310,7 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 		DefaultProjectName:    core.DefaultProjectName,
 		Eyebrow:               boardEyebrow(handler.RepoName),
 		Theme:                 boardTheme(vocabulary.Display),
+		PriorityInk:           priorityInk(vocabulary.Priorities),
 		DefaultStatus:         vocabulary.Vocabulary.Default(),
 		VocabularyHead:        vocabulary.Head,
 		Priorities:            pagePriorities(vocabulary.Priorities),

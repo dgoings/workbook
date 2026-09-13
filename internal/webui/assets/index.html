@@ -1091,6 +1091,16 @@
        vouching is done for real. A project that chose nothing is served nothing
        here, so its board is the board it always was. -->
   {{ if .Theme }}<style data-board-theme>{{ .Theme }}</style>
+  {{ end }}<!-- And the ink each of this project's priorities is drawn in.
+       The triad above names three priorities by hand, which is every priority a
+       project could have until it could configure its own. A project that added
+       a fourth was drawing it in the meta row's dim ink, with nothing chosen or
+       wrong anywhere — so this block declares one property per priority and the
+       rule that reads it, composed in Go from the vocabulary. A priority that
+       stores no color of its own is given one derived from its position along
+       the triad, which is what `workbook priority color` has always promised
+       clearing a color returns it to. See priorityInk. -->
+  {{ if .PriorityInk }}<style data-board-priority-ink>{{ .PriorityInk }}</style>
   {{ end }}</head>
 <body>
   <a class="skip-link" href="#board">Skip to task board</a>

@@ -703,3 +703,186 @@ func TestHandlerServesTheBoardSettingsSectionOnlyWhenItCanBeWritten(t *testing.T
 		t.Error("the board settings section was rendered inside main, which the board occupies")
 	}
 }
+
+// What a project's priority vocabulary does to the ink its cards are drawn in.
+//
+// The board used to name three priority colors and no more, so a project that
+// added a fourth drew it in the meta row's ordinary dim ink. Two places already
+// promised otherwise — docs/reference.md, where clearing a color "returns that
+// priority to a color the board derives from its position", and
+// core.PriorityDefinition.Color, which says the same — so what is asserted here
+// is that promise rather than a scheme these tests invented.
+
+// priorityInkBoardPage renders a board for a project with these priorities.
+func priorityInkBoardPage(t *testing.T, priorities core.PriorityVocabulary, tasks []core.Task) string {
+	t.Helper()
+	handler := NewHandler(Options{
+		Vocabulary: func(context.Context) (VocabularyState, error) {
+			return VocabularyState{
+				Vocabulary: core.DefaultVocabulary(),
+				Head:       "head-1",
+				Priorities: priorities,
+			}, nil
+		},
+		RepoName: "workbook",
+		List:     func(context.Context) ([]core.Task, error) { return tasks, nil },
+	})
+	response := request(t, handler, http.MethodGet, "/")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	return response.Body.String()
+}
+
+// priorityInkBlock returns the served per-priority ink stylesheet, found by its
+// own marker for the reason themeBlock is: the stylesheet above it declares
+// `:root` too, and the display theme between them declares another.
+func priorityInkBlock(t *testing.T, body string) string {
+	t.Helper()
+	const marker = `<style data-board-priority-ink>`
+	at := strings.Index(body, marker)
+	if at < 0 {
+		return ""
+	}
+	end := strings.Index(body[at:], "</style>")
+	if end < 0 {
+		t.Fatal("the served priority ink is never closed")
+	}
+	return body[at+len(marker) : at+end]
+}
+
+// fourPriorityVocabulary is a project that added a priority above the built-in
+// three — the case the board could not draw at all — with an optional stored
+// color on `high`.
+func fourPriorityVocabulary(t *testing.T, highColor string) core.PriorityVocabulary {
+	t.Helper()
+	vocabulary, err := core.NewPriorityVocabulary([]core.PriorityDefinition{
+		{Priority: "urgent", Label: "Urgent", Rank: "1/1", Tags: []core.PriorityTag{}},
+		{Priority: core.PriorityHigh, Label: "High", Rank: "2/1", Tags: []core.PriorityTag{}, Color: highColor},
+		{Priority: core.PriorityMedium, Label: "Medium", Rank: "3/1", Tags: []core.PriorityTag{core.PriorityTagDefault}},
+		{Priority: core.PriorityLow, Label: "Low", Rank: "4/1", Tags: []core.PriorityTag{}},
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("NewPriorityVocabulary() error = %v", err)
+	}
+	return vocabulary
+}
+
+// Every priority a project configured is drawn in a color of its own, and the
+// card the board renders carries the class that reads it.
+func TestPriorityInkDrawsEveryPriorityInTheVocabulary(t *testing.T) {
+	body := priorityInkBoardPage(t, fourPriorityVocabulary(t, ""), []core.Task{{
+		ID: "WB-01J00000000000000000000009",
+		TaskData: core.TaskData{
+			Title:    "Ship it",
+			Status:   core.StatusReady,
+			Priority: "urgent",
+		},
+	}})
+	block := priorityInkBlock(t, body)
+
+	if block == "" {
+		t.Fatal("a project with four priorities was served no per-priority ink at all")
+	}
+	for _, token := range []string{"urgent", "high", "medium", "low"} {
+		if !strings.Contains(block, "--wb-priority-ink-"+token+":") {
+			t.Errorf("the ink block declares nothing for %q: %s", token, block)
+		}
+		rule := ".priority--" + token + " { color: var(--wb-priority-ink-" + token + "); }"
+		if !strings.Contains(block, rule) {
+			t.Errorf("the ink block carries no %q, so nothing reads the property: %s", rule, block)
+		}
+	}
+	// The rule above is only worth anything if the card really is marked with
+	// the class it names — the fourth priority's badge included.
+	if !strings.Contains(body, `class="priority priority--urgent"`) {
+		t.Error("the card at the fourth priority carries no class the ink block can reach")
+	}
+	// And it comes after the stylesheet it overrides, which is the only place a
+	// rule of the same specificity wins.
+	if strings.Index(body, "<style data-board-priority-ink>") < strings.Index(body, "</style>") {
+		t.Error("the priority ink is served before the stylesheet it overrides")
+	}
+}
+
+// A stored color is what the priority is drawn in; a priority with none is
+// drawn in the color its position derives. This is the documented contract:
+// clearing a color returns a priority to a derived one because nothing stores a
+// default to go back to.
+func TestPriorityInkPrefersAStoredColorOverThePositionItDerives(t *testing.T) {
+	body := priorityInkBoardPage(t, fourPriorityVocabulary(t, "#1a7f4b"), nil)
+	block := priorityInkBlock(t, body)
+
+	if want := "--wb-priority-ink-high: #1a7f4b;"; !strings.Contains(block, want) {
+		t.Errorf("the ink block does not carry %q, so a stored color is not what the board draws: %s", want, block)
+	}
+	// The uncolored three name the triad's own properties rather than a literal,
+	// which is what gives them a dark reading without stating one.
+	for _, want := range []string{
+		"--wb-priority-ink-urgent: var(--wb-priority-high);",
+		"--wb-priority-ink-low: var(--wb-priority-low);",
+	} {
+		if !strings.Contains(block, want) {
+			t.Errorf("the ink block does not derive %q from the position: %s", want, block)
+		}
+	}
+	// A stored color is one value and the board has three palette statements, so
+	// the stored one is lifted for a dark ground the way the accent is. Both
+	// dark selectors say so, for the reason boardTheme states both.
+	for _, selector := range []string{`:root:not([data-scheme="light"])`, `:root[data-scheme="dark"]`} {
+		dark := declarationsIn(t, block, selector)
+		value, declared := dark["--wb-priority-ink-high"]
+		if !declared {
+			t.Errorf("%s gives the stored color no dark reading, so it is drawn as chosen on a near-black card", selector)
+			continue
+		}
+		if value == "#1a7f4b" {
+			t.Errorf("%s repeats the stored color rather than lifting it for a dark ground", selector)
+		}
+		if _, derived := dark["--wb-priority-ink-urgent"]; derived {
+			t.Errorf("%s restates a derived ink, which already follows the triad into dark", selector)
+		}
+	}
+}
+
+// A project that configured no priorities at all is drawn exactly as it always
+// was. The built-in three are positions one, two and three of three, so the
+// derivation has to land on the triad itself — otherwise the first `workbook
+// priority` verb, which writes those same three into the ledger, would silently
+// recolor a board nobody asked to change.
+func TestPriorityInkKeepsTheBuiltInThreeOnTheirTriad(t *testing.T) {
+	block := priorityInkBlock(t, priorityInkBoardPage(t, core.PriorityVocabulary{}, nil))
+
+	for _, want := range []string{
+		"--wb-priority-ink-high: var(--wb-priority-high);",
+		"--wb-priority-ink-medium: var(--wb-priority-medium);",
+		"--wb-priority-ink-low: var(--wb-priority-low);",
+	} {
+		if !strings.Contains(block, want) {
+			t.Errorf("the ink block does not carry %q, so seeding the built-in three would recolor the board: %s", want, block)
+		}
+	}
+}
+
+// A derived ink is written as a reference, never as a literal.
+//
+// This is what keeps the per-priority family inside the guards above rather
+// than exempt from them: those count every color literal the page writes and
+// demand a dark reading for every palette property, and a family that states no
+// literal and declares no table property is answerable to neither. It is also
+// why a derived ink is correct in dark without being stated twice — it resolves
+// through the triad, which the scheme already moves.
+func TestPriorityInkWritesNoLiteralForAPriorityWithNoStoredColor(t *testing.T) {
+	block := priorityInkBlock(t, priorityInkBoardPage(t, fourPriorityVocabulary(t, ""), nil))
+
+	for _, literal := range colorLiteral.FindAllString(block, -1) {
+		if !strings.HasPrefix(literal, "color-mix(") {
+			t.Errorf("the ink block writes the literal %s for a priority that stores no color: %s", literal, block)
+		}
+	}
+	for _, token := range schemeTokens {
+		if strings.Contains(block, token.property+":") {
+			t.Errorf("the ink block declares %s, which belongs to the scheme's own palette", token.property)
+		}
+	}
+}
