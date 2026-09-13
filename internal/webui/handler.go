@@ -1402,6 +1402,17 @@ func priorityVocabularyDocument(priorities core.PriorityVocabulary) PriorityVoca
 	}
 }
 
+// pagePriority is one priority as the page carries it: what it is called, what
+// it is called on screen, what role it holds, and what color it is drawn in.
+// Its members mirror core.PriorityDefinition's minus the rank, for the reason
+// pagePriorities gives.
+type pagePriority struct {
+	Priority core.Priority      `json:"priority"`
+	Label    string             `json:"label"`
+	Tags     []core.PriorityTag `json:"tags"`
+	Color    string             `json:"color,omitempty"`
+}
+
 // pagePriorities encodes a project's priorities for the attribute the page
 // carries them in.
 //
@@ -1410,8 +1421,32 @@ func priorityVocabularyDocument(priorities core.PriorityVocabulary) PriorityVoca
 // client must not carry a second copy of any of them. It is encoded here rather
 // than in the template because the template has one derivation and the comment
 // on pageFuncs says why it has one.
+//
+// The rank is deliberately not among them. It is the server's own ordering
+// arithmetic, and the array is already in rank order, so publishing it would
+// invite the client to re-derive a sequence it was handed — and then to
+// disagree with the server about it. The client needs to know what the order
+// IS, never how it was arrived at.
+//
+// What this carries is the EFFECTIVE reading: a project that has configured no
+// priorities is answered with the built-in three rather than with nothing,
+// which is what the board has to draw either way. It therefore cannot tell a
+// configured vocabulary from a substituted one — so a caller that means to
+// write these back has to diff against the ledger rather than round-tripping
+// them, or it would record the built-ins as a decision the project never made
+// and stamp the compatibility marker that parks older clones for it.
 func pagePriorities(priorities core.PriorityVocabulary) string {
-	encoded, err := json.Marshal(priorities.EffectiveDocument().Priorities)
+	definitions := priorities.EffectiveDocument().Priorities
+	published := make([]pagePriority, 0, len(definitions))
+	for _, definition := range definitions {
+		published = append(published, pagePriority{
+			Priority: definition.Priority,
+			Label:    definition.Label,
+			Tags:     definition.Tags,
+			Color:    definition.Color,
+		})
+	}
+	encoded, err := json.Marshal(published)
 	if err != nil {
 		// A priority definition is three strings, a tag list and a color, so
 		// there is nothing here encoding/json can refuse. A board that drew no
