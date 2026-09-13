@@ -343,8 +343,17 @@ func (board *boardPriorities) apply(
 	// one configuration rather than this project's priorities and some other
 	// project's statuses.
 	vocabulary := written.Vocabulary()
+	// And the display settings, off the same result again. The client adopts a
+	// mutation answer wholesale — the board settings form is redrawn from it the
+	// way the panels are — so a state that left them zero would not say "this
+	// answer is about priorities", it would say "this project has no name and no
+	// colors", and the reader's next Save would record that over the board they
+	// named.
+	display := written.Display()
 	return boardPriorityMutation{
-		State: webui.VocabularyState{Vocabulary: vocabulary, Head: written.Head, Priorities: after},
+		State: webui.VocabularyState{
+			Vocabulary: vocabulary, Head: written.Head, Display: display, Priorities: after,
+		},
 		Tasks: plan.tasks,
 		Warnings: append(board.publisher.publishConfig(ctx),
 			stalePriorityGuidelinesWarnings(board, vocabulary, after)...),

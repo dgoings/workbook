@@ -112,6 +112,15 @@ func (result ConfigWriteResult) PriorityVocabulary() core.PriorityVocabulary {
 	return result.State.PriorityVocabulary()
 }
 
+// Display reads the written checkpoint's display settings, the third of the
+// sections one configuration commit carries and read off it for the reason the
+// other two are: a caller that answered with the statuses this write produced
+// and the name some earlier read had would be describing a project that never
+// existed.
+func (result ConfigWriteResult) Display() core.DisplaySettings {
+	return result.State.Display()
+}
+
 // LoadVocabulary returns the project's configured status vocabulary, resolving
 // it once per opened repository exactly as LoadConfig and LoadIdentity resolve
 // theirs.
