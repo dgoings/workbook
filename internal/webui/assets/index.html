@@ -7876,9 +7876,9 @@
         };
         form.append(
           panelField("Project name", displayFields.name),
-          panelField("Accent color", colorWellGroup(displayFields.primaryColor, "Pick an accent color"),
+          panelField("Accent color", colorWellGroup(displayFields.primaryColor, "Pick an accent color", displayControls),
             displayFields.primaryColor),
-          panelField("Text color", colorWellGroup(displayFields.textColor, "Pick a text color"),
+          panelField("Text color", colorWellGroup(displayFields.textColor, "Pick a text color", displayControls),
             displayFields.textColor),
           panelSubmitButton("Save", "Save this project's board settings",
             { modifier: "admin-button--primary", controls: displayControls })
@@ -7895,20 +7895,26 @@
         control.dataset.displayField = member;
         return control;
       }
-      // A colour field and the well that fills it. The well opens the browser's
+      // A color field and the well that fills it. The well opens the browser's
       // picker and only ever writes into the field, which stays the setting the
-      // save reads; it follows the field when a complete colour is typed, and
+      // save reads; it follows the field when a complete color is typed, and
       // leaves an incomplete one alone rather than guessing at what is still
       // arriving. A field holding nothing leaves the well at the control's own
-      // black default: the board's colours are the stylesheet's literals, and
+      // black default: the board's colors are the stylesheet's literals, and
       // the script keeps no copy of them.
-      function colorWellGroup(field, description) {
+      //
+      // `controls` and `key` are the only things a caller outside the display
+      // form has to supply: `controls` is the busy-list this well joins (the
+      // display form passes its own), and `key` is what the well is named
+      // after — the display form's fields already carry it, so its two
+      // callers need not pass it.
+      function colorWellGroup(field, description, controls = panelControls, key = field.dataset.displayField) {
         const group = document.createElement("div");
         group.className = "admin-color";
         const well = document.createElement("input");
         well.type = "color";
         well.className = "admin-color__well";
-        well.dataset.displayWell = field.dataset.displayField;
+        well.dataset.displayWell = key;
         well.setAttribute("aria-label", description);
         well.value = "#000000";
         const follow = () => {
@@ -7918,7 +7924,7 @@
         follow();
         well.addEventListener("input", () => { field.value = well.value; });
         field.addEventListener("input", follow);
-        displayControls.push(well);
+        controls.push(well);
         group.append(field, well);
         return group;
       }
