@@ -7409,14 +7409,20 @@
         controls.push(control);
         return control;
       }
-      function panelSelect(id, options, controls = panelControls) {
+      // `chosen` is the option a caller wants standing when the control is
+      // drawn, for a list whose sensible default is not the one it reads first.
+      // A placement list runs in the order the members are drawn, so its default
+      // is the bottom of it rather than the top, and the alternative — ordering
+      // the list to put the default first — would make the control disagree with
+      // the list it is about.
+      function panelSelect(id, options, controls = panelControls, chosen = null) {
         const control = document.createElement("select");
         control.id = id;
         options.forEach(([value, label], index) => {
           const option = document.createElement("option");
           option.value = value;
           text(option, label);
-          option.selected = index === 0;
+          option.selected = chosen === null ? index === 0 : value === chosen;
           control.append(option);
         });
         controls.push(control);
@@ -7593,15 +7599,31 @@
         const name = panelTextInput("status-new-name", "", "triage");
         const label = panelTextInput("status-new-label", "", "derived from the name");
         const tags = panelTagChoices("status-new", []);
-        // One control for the placement, because a placement is one decision.
-        // The two neighbours a status can be placed against are the same list
-        // twice, and the server refuses a change naming both.
-        const placement = panelSelect("status-new-placement", [["", "At the end"]].concat(
-          definitions.flatMap((candidate) => [
-            ["before:" + candidate.status, "Before " + candidate.label],
-            ["after:" + candidate.status, "After " + candidate.label]
-          ])
-        ));
+        // One control for the placement, because a placement is one decision,
+        // and the server refuses a change naming both neighbours.
+        //
+        // One option per position rather than one per status, and every option
+        // names a column. A list of n statuses has n+1 positions, and naming
+        // both neighbours of every one of them spells most of those twice:
+        // "Before X" is the position "After the one before X" already names. So
+        // the first column is the only status something is offered before, and
+        // everything else is an "After".
+        //
+        // The end of the list is "After <the last column>" rather than a
+        // standing "At the end", for the reason the priorities panel gives: an
+        // entry shaped unlike the rest reads as a member's name to somebody
+        // whose project happens to use those words.
+        //
+        // The list runs in board order and the end is the default, because that
+        // is where a column somebody has not thought about the position of
+        // belongs.
+        const placements = (definitions.length
+          ? [["before:" + definitions[0].status, "Before " + definitions[0].label]]
+          : []
+        ).concat(definitions.map((candidate) =>
+          ["after:" + candidate.status, "After " + candidate.label]));
+        const placement = panelSelect("status-new-placement", placements, panelControls,
+          definitions.length ? "after:" + definitions[definitions.length - 1].status : null);
         const add = panelSubmitButton("Add status", "",
           { modifier: "admin-button--primary", blocked: true });
         const guard = () => blockPanelControl(add, !name.value.trim());
@@ -8212,18 +8234,26 @@
         // One option per position rather than one per priority. A list of n
         // priorities has n+1 positions, and naming both neighbours of every one
         // of them spells most of those twice: "Above X" is the position "Below
-        // the one before X" already names, and the end of the list is the
-        // position the default option names. So the most urgent is the only
-        // priority something is offered above, and the least urgent is the only
-        // one nothing is offered below — "Least urgent" is that place, in the
-        // words a reader picking it would use.
-        const placement = panelSelect("priority-new-placement", [["", "Least urgent"]]
-          .concat(definitions.length
-            ? [["before:" + definitions[0].priority, "Above " + definitions[0].label]]
-            : [])
-          .concat(definitions.slice(0, -1).map((candidate) =>
-            ["after:" + candidate.priority, "Below " + candidate.label])),
-          priorityControls);
+        // the one before X" already names. So the most urgent is the only
+        // priority something is offered above, and everything else is a "Below".
+        //
+        // Every option names a priority, including the bottom of the list. A
+        // standing "Least urgent" would be the one entry shaped differently from
+        // the rest, and worse, it would read as a priority's name to anybody
+        // whose project has one called Urgent — which is the first name people
+        // reach for. "Below Low" says the same place and cannot be mistaken for
+        // a member.
+        //
+        // The list runs in the order the rows are drawn, and the bottom is the
+        // default because that is where a priority somebody has not thought
+        // about the position of belongs.
+        const placements = (definitions.length
+          ? [["before:" + definitions[0].priority, "Above " + definitions[0].label]]
+          : []
+        ).concat(definitions.map((candidate) =>
+          ["after:" + candidate.priority, "Below " + candidate.label]));
+        const placement = panelSelect("priority-new-placement", placements, priorityControls,
+          definitions.length ? "after:" + definitions[definitions.length - 1].priority : null);
         const add = panelSubmitButton("Add priority", "",
           { modifier: "admin-button--primary", blocked: true, controls: priorityControls });
         const guard = () => blockPanelControl(add, !name.value.trim());

@@ -7,8 +7,17 @@ import "testing"
 // A list of n priorities has n+1 positions: above the most urgent, and below
 // each of them. The control used to offer an "Above" and a "Below" for every
 // priority, which is 2n options for n+1 places — every "Above X" is the same
-// position as "Below the one before X", and the default option, "Least urgent",
-// is the same position as "Below the least urgent" a second time.
+// position as "Below the one before X".
+//
+// Every option names a priority, the bottom of the list included. A standing
+// "Least urgent" was the one entry shaped unlike the rest, and it read as a
+// member's name to anybody whose project has a priority called Urgent — the
+// first name people reach for. "Below Low" is the same place and cannot be
+// mistaken for one.
+//
+// The bottom is the default, which is why the control is asked what it has
+// selected rather than only what it offers: the list runs in the order the rows
+// are drawn, so the default is not the option it reads first.
 //
 // The count is asserted rather than only the wording, because the count is what
 // keeps this from regrowing: an option added for a position that already has one
@@ -24,19 +33,30 @@ func TestClientPriorityAddOffersEachPlacementOnce(t *testing.T) {
   const placement = findElement(form, (element) => element.id === "priority-new-placement");
   if (!placement) throw new Error("the add form offers no placement control");
   const offered = placement.children.map((option) => option.value + " | " + option.textContent);
-  // Three priorities, four positions: the end, above the most urgent, and below
-  // each of the two that something can sit below without being the end again.
+  // Three priorities, four positions, in the order the rows are drawn: above
+  // the most urgent, then below each of the three.
   const want = [
-    " | Least urgent",
     "before:urgent | Above Drop everything",
     "after:urgent | Below Drop everything",
-    "after:soon | Below Soon"
+    "after:soon | Below Soon",
+    "after:low | Below Low"
   ];
   if (offered.length !== 4) {
     throw new Error("the control offers " + offered.length + " options for 4 positions: " + JSON.stringify(offered));
   }
   if (JSON.stringify(offered) !== JSON.stringify(want)) {
     throw new Error("the control offers " + JSON.stringify(offered) + ", want " + JSON.stringify(want));
+  }
+  // Nothing is offered that does not name a priority: a standing "Least urgent"
+  // would read as one to a project that has a priority called Urgent.
+  const unnamed = placement.children.filter((option) => option.value === "");
+  if (unnamed.length !== 0) {
+    throw new Error("the control offers an option naming no priority: " + JSON.stringify(unnamed.map((o) => o.textContent)));
+  }
+  // And the bottom of the list is what stands, not the first option read.
+  const standing = placement.children.filter((option) => option.selected).map((option) => option.value);
+  if (JSON.stringify(standing) !== JSON.stringify(["after:low"])) {
+    throw new Error("the control stands at " + JSON.stringify(standing) + ", want the bottom of the list");
   }
 `)
 }
