@@ -33,9 +33,16 @@ func runVocabularyClient(t *testing.T, purpose, url string, vocabulary core.Voca
 		t.Fatalf("GET / status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
 	}
 	script := renderedClientScript(t, response.Body.String())
+	// The document the poll route would answer with for this project, shape and
+	// all. The shape is what the client compares against the one the page was
+	// drawn from, so a fixture that left it out would be answering a question
+	// the route never leaves open — and would put every assertion about the
+	// notice on the "this cannot be compared, so announce" fallback instead of
+	// on the rule being asserted.
 	document := mustJSON(t, TasksDocument{
 		Format: "workbook.tasks", Version: 1, VocabularyHead: head,
-		Tasks: tasks, Presentation: presentationForTasks(tasks),
+		VocabularyShape: vocabularyShape(VocabularyState{Vocabulary: vocabulary, Head: head}),
+		Tasks:           tasks, Presentation: presentationForTasks(tasks),
 	})
 	program := clientDOMHarnessWith(url, string(document), vocabulary, head) + script + `
 setTimeout(async () => {
@@ -140,6 +147,34 @@ func TestHandlerClientDropsIntoAColumnTheProjectInvented(t *testing.T) {
 `)
 }
 
+// vocabularyAddingThawing is handlerVocabulary with one more column, which is
+// what the two tests below stage a mid-session change to.
+//
+// A status added is a change of the kind the notice exists for: the page cannot
+// draw the new column without rebuilding the ones it has, so the reader is told
+// rather than shown. It is also a change the digest can see — the shape is the
+// columns and the priorities by token, order and label — which is what a moved
+// head alone is not. A fixture whose poll only moved the head would be
+// announcing nothing, and the notice it raised would be the fallback for a
+// document that states no shape at all.
+func vocabularyAddingThawing(t *testing.T) core.Vocabulary {
+	t.Helper()
+	vocabulary, err := core.NewVocabulary(
+		[]core.StatusDefinition{
+			{Status: "icebox", Label: "Icebox", Rank: "1/1", Tags: []core.StatusTag{}},
+			{Status: "thawing", Label: "Thawing", Rank: "3/2", Tags: []core.StatusTag{}},
+			{Status: "queued", Label: "Queued Up", Rank: "2/1", Tags: []core.StatusTag{core.StatusTagDefault, core.StatusTagNext}},
+			{Status: "shipped", Label: "Shipped", Rank: "3/1", Tags: []core.StatusTag{core.StatusTagDone}},
+		},
+		[]core.StatusAlias{{From: "done", To: "shipped"}},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("NewVocabulary() error = %v", err)
+	}
+	return vocabulary
+}
+
 // A vocabulary change under an open page is announced and nothing else: the
 // board keeps the columns it was served with, and every card node the reader is
 // looking at is the same node afterwards.
@@ -155,9 +190,15 @@ func TestHandlerClientAnnouncesAVocabularyChangeWithoutRebuildingTheBoard(t *tes
 		clientPlacementTask("WB-01J0000000000000000000A101", "Frozen", core.Status("icebox"), core.PriorityMedium),
 		clientPlacementTask("WB-01J0000000000000000000B202", "Queued", core.Status("queued"), core.PriorityHigh),
 	}
+	// The poll a status added under this page produces: a new head, and the
+	// shape of the vocabulary it stands for — a column this page has not got.
+	// No task is in it yet, which is what separates this test from the one
+	// below; the change is the column's existence and nothing else.
+	changed := vocabularyAddingThawing(t)
 	served := mustJSON(t, TasksDocument{
 		Format: "workbook.tasks", Version: 1, VocabularyHead: "head-2",
-		Tasks: tasks, Presentation: presentationForTasks(tasks),
+		VocabularyShape: vocabularyShape(VocabularyState{Vocabulary: changed, Head: "head-2"}),
+		Tasks:           tasks, Presentation: presentationForTasks(tasks),
 	})
 	runVocabularyClient(t, "mid-session vocabulary change", "/", vocabulary, "head-1", tasks, `
   const held = boardLists.flatMap((list) => list.querySelectorAll(".task-card"));
@@ -218,11 +259,21 @@ func TestHandlerClientFilesACardWhoseColumnArrivedWithTheNewVocabulary(t *testin
 	// One poll, two pieces of news: the vocabulary moved, and a task now
 	// resolves to `thawing` — a status that exists only in the vocabulary this
 	// page has not got.
+	//
+	// The shape states that vocabulary rather than the page's own, because that
+	// is the one the server resolved these tasks under and the one it would
+	// answer this poll with. Stating the page's own would say the columns had
+	// not moved while handing over a task filed in a column only the new one
+	// has — a pair the route cannot produce, and one that leaves the notice
+	// resting on the fallback for a document with no shape rather than on the
+	// difference the test is about.
+	changed := vocabularyAddingThawing(t)
 	moved := []core.Task{tasks[0], tasks[1]}
 	moved[0].Status = core.Status("thawing")
 	served := mustJSON(t, TasksDocument{
 		Format: "workbook.tasks", Version: 1, VocabularyHead: "head-2",
-		Tasks: moved, Presentation: presentationForTasks(moved),
+		VocabularyShape: vocabularyShape(VocabularyState{Vocabulary: changed, Head: "head-2"}),
+		Tasks:           moved, Presentation: presentationForTasks(moved),
 	})
 	runVocabularyClient(t, "vocabulary change carrying a re-resolved task", "/", vocabulary, "head-1", tasks, `
   const listFor = (status) => boardLists.find((list) => list.dataset.status === status);

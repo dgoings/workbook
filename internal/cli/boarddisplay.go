@@ -66,7 +66,12 @@ func (board *boardDisplay) set(
 		// configuration as it already stands. This is the whole of the no-op
 		// rule: no pack, no commit, no ref update, no generation marker.
 		return webui.DisplayMutation{
-			State: webui.VocabularyState{Head: state.Head, Display: state.Display},
+			State: webui.VocabularyState{
+				Head:       state.Head,
+				Vocabulary: state.Vocabulary,
+				Display:    state.Display,
+				Priorities: state.Priorities,
+			},
 		}, nil
 	}
 	written, err := board.repository.WriteConfigOperationOnto(
@@ -82,7 +87,23 @@ func (board *boardDisplay) set(
 		return webui.DisplayMutation{}, err
 	}
 	return webui.DisplayMutation{
-		State:    webui.VocabularyState{Head: written.Head, Display: written.State.Display()},
+		// Every section comes off the checkpoint this write recorded, so a
+		// state leaving this route describes one configuration rather than this
+		// project's settings beside somebody's defaults.
+		//
+		// The statuses are not in the document this route answers with today,
+		// and are filled anyway. A zero Vocabulary is read everywhere as the
+		// legacy six, and the sibling route's answer did not carry the display
+		// settings either — until it did, at which point the zero it had been
+		// carrying all along became a project's name and colors being erased.
+		// A state that reports half a configuration is one answer shape away
+		// from doing the same thing here.
+		State: webui.VocabularyState{
+			Head:       written.Head,
+			Vocabulary: written.Vocabulary(),
+			Display:    written.State.Display(),
+			Priorities: written.State.PriorityVocabulary(),
+		},
 		Warnings: board.publisher.publishConfig(ctx),
 	}, nil
 }

@@ -201,9 +201,16 @@ func runClientOverHandler(
 		t.Fatalf("GET %s status = %d, want %d; body = %s", path, response.Code, http.StatusOK, response.Body.String())
 	}
 	script := renderedClientScript(t, response.Body.String())
+	// The shape is stated because the poll route states it. Nothing here reads
+	// it — the head this serves matches the one the page holds, so the client
+	// settles before it compares — but a fixture that answers differently from
+	// the route it stands for is a fixture that cannot see the rule it is
+	// asserting about, which is how three tests on this branch came to pass for
+	// reasons nobody intended.
 	document := mustJSON(t, TasksDocument{
 		Format: "workbook.tasks", Version: 1, VocabularyHead: head,
-		Tasks: tasks, Presentation: presentationForTasks(tasks),
+		VocabularyShape: vocabularyShape(VocabularyState{Vocabulary: vocabulary, Head: head}),
+		Tasks:           tasks, Presentation: presentationForTasks(tasks),
 	})
 	program := clientDOMHarnessWith(path, string(document), vocabulary, head) +
 		panelFetchHarness + prelude + script + `

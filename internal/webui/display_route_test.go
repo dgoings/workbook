@@ -82,26 +82,43 @@ func configuredVocabularyJSON(t *testing.T, vocabulary core.Vocabulary, head str
 	})))
 }
 
-// displayMutationJSON is what a save answers with.
-func displayMutationJSON(t *testing.T, head string, settings core.DisplaySettings) string {
+// displayMutationJSON is what a save answers with, composed from the whole
+// configuration the save landed at rather than from its three settings alone —
+// which is what writeDisplayMutation composes it from, through these same two
+// builders.
+//
+// The shape is why it takes a state. A save moves the one ledger tip, and the
+// answer states the columns and the priorities that tip stands for so the board
+// can be told whether anything it is drawing moved with them — for a board
+// settings save, nothing did. An answer stating no shape is read by the page as
+// a configuration it cannot compare, which puts the standing notice up; a helper
+// that left it out would therefore raise the notice on every save it stood for,
+// and no test here could see the rule it was asking about. See vocabularyShape,
+// and noteVocabularyChange for what the comparison is for.
+func displayMutationJSON(t *testing.T, state VocabularyState) string {
 	t.Helper()
 	return string(mustJSON(t, DisplayMutationDocument{
 		Format:  "workbook.display-mutation",
 		Version: 1,
-		Display: displayDocument(VocabularyState{Head: head, Display: settings}),
+		Display: displayDocument(state),
+		Shape:   vocabularyShape(state),
 	}))
 }
 
 // displayStaleWriteJSON is the 409 a save composed against a head somebody else
-// has moved past is answered with, carrying the settings as they now stand.
-func displayStaleWriteJSON(t *testing.T, head string, settings core.DisplaySettings, message string) string {
+// has moved past is answered with, carrying the settings as they now stand — and
+// the shape they now stand at, for the reason writeDisplayError carries it: the
+// client adopts the configuration the other clone wrote, including whether the
+// board behind the page still draws it.
+func displayStaleWriteJSON(t *testing.T, state VocabularyState, message string) string {
 	t.Helper()
-	current := displayDocument(VocabularyState{Head: head, Display: settings})
+	current := displayDocument(state)
 	return string(mustJSON(t, DisplayErrorDocument{
 		Format:  "workbook.error",
 		Version: 1,
 		Error:   ErrorBody{Category: core.CategoryStaleWrite, Message: message},
 		Display: &current,
+		Shape:   vocabularyShape(state),
 	}))
 }
 
@@ -155,17 +172,23 @@ func TestClientConfigRouteDrawsBothSectionsFromOneRead(t *testing.T) {
 // head it answers with becomes the head the next change on this page names —
 // there is one ledger, so a saved name moves the tip a status change has to
 // declare.
+//
+// The read carries the columns the board is already drawing, at a head that has
+// moved past the page's. That is the page a question about the standing notice
+// has to be asked on: a read carrying somebody else's rename would raise the
+// notice before the save was made, and everything below about what the save says
+// to the board would pass whatever the save said.
 func TestClientConfigPageSavesEverySettingAgainstTheHeadItRead(t *testing.T) {
 	vocabulary := handlerVocabulary(t)
 	renamed := panelRenamedVocabulary(t)
 	runConfigClient(t, "saving the board settings", vocabulary, "head-1", `
-  vocabularyRead = `+configuredVocabularyJSON(t, renamed, "head-9")+`;
+  vocabularyRead = `+configuredVocabularyJSON(t, vocabulary, "head-9")+`;
   await openStatuses();
 
   displayField("name").value = "  Beta  ";
   displayField("primaryColor").value = "";
   displayField("textColor").value = "#3b2a1a";
-  displayAnswer = { body: `+displayMutationJSON(t, "head-10", core.DisplaySettings{Name: "Beta", TextColor: "#3b2a1a"})+` };
+  displayAnswer = { body: `+displayMutationJSON(t, VocabularyState{Vocabulary: vocabulary, Head: "head-10", Display: core.DisplaySettings{Name: "Beta", TextColor: "#3b2a1a"}})+` };
   await saveDisplay();
 
   if (displayCalls.length !== 1) throw new Error("the save sent " + displayCalls.length + " requests");
@@ -189,10 +212,21 @@ func TestClientConfigPageSavesEverySettingAgainstTheHeadItRead(t *testing.T) {
     throw new Error("the save said " + JSON.stringify(displayPanelStatus.textContent));
   }
 
-  // One ledger, one tip: the board is told its own page is out of date, and the
-  // next status change names the head the save produced rather than the head the
-  // read reported.
-  if (vocabularyNotice.hidden) throw new Error("a change to the configuration raised no notice on the board");
+  // One ledger, one tip — and a notice that speaks for the board rather than for
+  // the tip. The save moved the tip, so the next status change names the head it
+  // produced rather than the head the read reported; it said nothing to the
+  // board, because the colors it changed are the answer's own stylesheet and the
+  // page has already swapped them in. The theme is checked first, so silence
+  // about nothing cannot pass for silence about a color the board is drawing.
+  if (boardThemeStyle.textContent.indexOf("#3b2a1a") < 0) {
+    throw new Error("the save never reached the board's theme, so the silence below proves nothing");
+  }
+  if (vocabularyNotice.hidden !== true) {
+    throw new Error("a board settings save told the reader to reload for colors the page had already drawn");
+  }
+
+  // What the notice is for is still on the same ledger and still says so: a
+  // status added under the board is drawn in columns only a reload rebuilds.
   vocabularyAnswer = { body: `+panelMutationJSON(t, renamed, "head-11", VocabularyTaskCounts{}, nil)+` };
   const addForm = panelAdd();
   const newName = findElement(addForm, (element) => element.id === "status-new-name");
@@ -203,6 +237,9 @@ func TestClientConfigPageSavesEverySettingAgainstTheHeadItRead(t *testing.T) {
   if (!change) throw new Error("the statuses section sent nothing");
   if (change.body.expectedHead !== "head-10") {
     throw new Error("the status change named head " + JSON.stringify(change.body.expectedHead));
+  }
+  if (vocabularyNotice.hidden !== false) {
+    throw new Error("a status added under the board raised no notice that its columns are out of date");
   }
 `)
 }
@@ -230,7 +267,7 @@ func TestClientConfigPageClearsEverySetting(t *testing.T) {
   displayField("name").value = "";
   displayField("primaryColor").value = "";
   displayField("textColor").value = "";
-  displayAnswer = { body: `+displayMutationJSON(t, "head-10", core.DisplaySettings{})+` };
+  displayAnswer = { body: `+displayMutationJSON(t, VocabularyState{Vocabulary: vocabulary, Head: "head-10"})+` };
   await saveDisplay();
 
   const sent = displayCalls[0].body;
@@ -299,7 +336,7 @@ func TestClientConfigPageOffersAColorWellBesideEachColorField(t *testing.T) {
   // server recorded is what the redrawn well opens on, and a colour the answer
   // does not carry takes its well back to the default.
   displayField("textColor").value = "";
-  displayAnswer = { body: `+displayMutationJSON(t, "head-10", core.DisplaySettings{Name: "Atlas", PrimaryColor: "#123abc"})+` };
+  displayAnswer = { body: `+displayMutationJSON(t, VocabularyState{Vocabulary: vocabulary, Head: "head-10", Display: core.DisplaySettings{Name: "Atlas", PrimaryColor: "#123abc"}})+` };
   await saveDisplay();
   const redrawnAccent = wellFor("primaryColor");
   if (!redrawnAccent || redrawnAccent.value !== "#123abc") {
@@ -345,8 +382,8 @@ func TestClientConfigPageStopsAtAStaleDisplaySave(t *testing.T) {
   await openStatuses();
 
   displayField("name").value = "Beta";
-  displayAnswer = { ok: false, body: `+displayStaleWriteJSON(t, "head-12",
-		core.DisplaySettings{Name: "Gamma", PrimaryColor: "#7f1a4b"},
+  displayAnswer = { ok: false, body: `+displayStaleWriteJSON(t,
+		VocabularyState{Vocabulary: vocabulary, Head: "head-12", Display: core.DisplaySettings{Name: "Gamma", PrimaryColor: "#7f1a4b"}},
 		"this project's configuration has changed since head-9; reload and try again")+` };
   await saveDisplay();
 
@@ -397,7 +434,7 @@ func TestClientConfigPageWaitsForPendingBoardChanges(t *testing.T) {
 
   await openStatuses();
   displayField("name").value = "Beta";
-  displayAnswer = { body: `+displayMutationJSON(t, "head-10", core.DisplaySettings{Name: "Beta"})+` };
+  displayAnswer = { body: `+displayMutationJSON(t, VocabularyState{Vocabulary: vocabulary, Head: "head-10", Display: core.DisplaySettings{Name: "Beta"}})+` };
   const saving = displayForm().eventListeners.submit({ preventDefault() {} });
   await settle();
 

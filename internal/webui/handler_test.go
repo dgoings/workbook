@@ -4420,11 +4420,37 @@ func clientDOMHarnessWith(path, taskDocument string, vocabulary core.Vocabulary,
 	for _, tag := range core.StatusTags() {
 		tagNames = append(tagNames, string(tag))
 	}
+	priorityTagNames := make([]string, 0, len(core.PriorityTags()))
+	for _, tag := range core.PriorityTags() {
+		priorityTagNames = append(priorityTagNames, string(tag))
+	}
 	return `
 const boardStatusTags = ` + strconv.Quote(strings.Join(tagNames, " ")) + `;
+// The roles a priority may carry, as the priorities section's own attribute
+// carries them. It is the server's list for the reason the status tags are: the
+// script must not hold a copy of a set the vocabulary owns, and this one shares
+// a word with the status tags.
+const boardPriorityTags = ` + strconv.Quote(strings.Join(priorityTagNames, " ")) + `;
 const boardStatusDefinitions = ` + string(encoded) + `;
 const boardDefaultStatus = ` + strconv.Quote(string(vocabulary.Default())) + `;
+// This project's priorities, as the served page publishes them: token, label,
+// role, in configured order. It is written by the encoder the page itself uses,
+// so the harness cannot drift from the wire format, and it answers for a
+// project that has configured no priorities — the built-in three — because that
+// is what a handler built without a priority vocabulary renders and what every
+// test that is not about priorities wants. A test that is about them overrides
+// the attribute after this harness.
+const boardPriorities = ` + strconv.Quote(pagePriorities(core.PriorityVocabulary{})) + `;
+const boardDefaultPriority = ` + strconv.Quote(string(core.PriorityVocabulary{}.Default())) + `;
 const boardVocabularyHead = ` + strconv.Quote(vocabularyHead) + `;
+// The digest of the columns and priorities this page was drawn from, as the
+// served page states it. It is composed by the server's own function over the
+// same two readings the harness draws, so a test cannot pass by comparing a
+// shape this file invented — see vocabularyShape.
+const boardVocabularyShape = ` + strconv.Quote(vocabularyShape(VocabularyState{
+		Vocabulary: vocabulary,
+		Head:       vocabularyHead,
+	})) + `;
 const boardProjectName = ` + strconv.Quote(core.DefaultProjectName) + `;
 const boardDefaultProjectName = ` + strconv.Quote(core.DefaultProjectName) + `;
 const boardTitleSuffixName = "Workbook";
@@ -4677,7 +4703,10 @@ const boardLists = boardStatusDefinitions.map(([status, label]) => {
   return element;
 });
 boardView.dataset.defaultStatus = boardDefaultStatus;
+boardView.dataset.priorities = boardPriorities;
+boardView.dataset.defaultPriority = boardDefaultPriority;
 boardView.dataset.vocabularyHead = boardVocabularyHead;
+boardView.dataset.vocabularyShape = boardVocabularyShape;
 // What the board is called and what every other route's title ends in, as the
 // server resolves them. A harness that invented either would be testing a
 // fallback core owns rather than the one the page is served with.
@@ -4776,6 +4805,16 @@ vocabularyPanel.dataset.statusTags = boardStatusTags;
 const vocabularyPanelStatus = new TestElement("div");
 const vocabularyPanelBody = new TestElement("div");
 vocabularyPanel.append(vocabularyPanelStatus, vocabularyPanelBody);
+// The priorities section beside it, as the server renders it for a board built
+// with the priority mutations. Its list is the client's, drawn from the
+// priorities member of the same vocabulary document the statuses come from —
+// one read, one head, because the two are sections of one ledger.
+const priorityPanel = new TestElement("div");
+priorityPanel.hidden = true;
+priorityPanel.dataset.priorityTags = boardPriorityTags;
+const priorityPanelStatus = new TestElement("div");
+const priorityPanelBody = new TestElement("div");
+priorityPanel.append(priorityPanelStatus, priorityPanelBody);
 // The board settings section beside it, as the server renders it for a board
 // built with the display writer. Its fields are the client's, filled from the
 // display member of the same vocabulary document the statuses come from.
@@ -4784,6 +4823,15 @@ displayPanel.hidden = true;
 const displayPanelStatus = new TestElement("div");
 const displayPanelBody = new TestElement("div");
 displayPanel.append(displayPanelStatus, displayPanelBody);
+// The two stylesheets the server composed for this page: the colors the project
+// chose, and the ink each of its priorities is drawn in. They are served as
+// elements whatever the project configured — empty is a real reading — because
+// a configuration change answers with the stylesheet it produces and the client
+// writes it into the element rather than composing one. They start empty here,
+// which is what a project that has configured nothing is served, and a test that
+// is about them states what it was opened with.
+const boardThemeStyle = new TestElement("style");
+const boardPriorityInkStyle = new TestElement("style");
 const documentEventListeners = {};
 	globalThis.document = {
 	  title: "",
@@ -4804,9 +4852,14 @@ const documentEventListeners = {};
     if (selector === "[data-vocabulary-panel]") return vocabularyPanel;
     if (selector === "[data-vocabulary-panel-status]") return vocabularyPanelStatus;
     if (selector === "[data-vocabulary-panel-body]") return vocabularyPanelBody;
+    if (selector === "[data-priority-panel]") return priorityPanel;
+    if (selector === "[data-priority-panel-status]") return priorityPanelStatus;
+    if (selector === "[data-priority-panel-body]") return priorityPanelBody;
     if (selector === "[data-display-panel]") return displayPanel;
     if (selector === "[data-display-panel-status]") return displayPanelStatus;
     if (selector === "[data-display-panel-body]") return displayPanelBody;
+    if (selector === "style[data-board-theme]") return boardThemeStyle;
+    if (selector === "style[data-board-priority-ink]") return boardPriorityInkStyle;
     return null;
   },
   querySelectorAll() { return []; },
@@ -5109,6 +5162,20 @@ function panelControl(root, name) {
 // Everything the panel is currently saying, one entry per line.
 function panelMessages() {
   return vocabularyPanelStatus.children.map((line) => line.textContent);
+}
+// The priorities section's row for one priority, the priorities it is listing in
+// the order it drew them, and everything it is currently saying. Its own live
+// region, because a refused priority change must not blank what the statuses
+// section had to say.
+function priorityRow(priority) {
+  return findElement(priorityPanelBody, (element) => element.dataset.vocabularyPriority === priority);
+}
+function panelPriorities() {
+  return findElements(priorityPanelBody, (element) => Boolean(element.dataset.vocabularyPriority))
+    .map((row) => row.dataset.vocabularyPriority);
+}
+function priorityMessages() {
+  return priorityPanelStatus.children.map((line) => line.textContent);
 }
 // Picks an option the way a reader does. A select reports the option that is
 // selected rather than a value written at it, here as in a browser.

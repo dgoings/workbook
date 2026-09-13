@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -177,5 +178,150 @@ func TestPriorityMoveRefusesAnAnchorItCannotUse(t *testing.T) {
 
 	if after := cliPriorityList(t, repository).Head; after != before {
 		t.Fatalf("configuration head moved from %q to %q on a refused move", before, after)
+	}
+}
+
+// A move to the position the priority already holds is refused, from both
+// sides, and nothing is recorded.
+//
+// This is the refusal that matters most in this family. A priority write on a
+// project that has never configured its priorities backfills the built-in
+// three and records a ConfigPriorityReorder, which requires a generation-three
+// reader — so a move that reorders nobody would buy a permanent compatibility
+// marker with a change of nothing. docs/reference.md says it plainly: a command
+// that changes nothing should not be what costs a team its compatibility.
+func TestPriorityMoveRefusesThePositionThePriorityAlreadyHolds(t *testing.T) {
+	repository := initializedRepository(t)
+	before := cliPriorityList(t, repository).Head
+
+	for _, test := range []struct {
+		name    string
+		args    []string
+		message string
+	}{
+		{
+			name:    "already directly after the anchor",
+			args:    []string{"priority", "move", "medium", "--after", "high", "--no-sync", "--json"},
+			message: `priority "medium" is already directly after "high"`,
+		},
+		{
+			name:    "already directly before the anchor",
+			args:    []string{"priority", "move", "medium", "--before", "low", "--no-sync", "--json"},
+			message: `priority "medium" is already directly before "low"`,
+		},
+		{
+			name:    "the first priority, already before the second",
+			args:    []string{"priority", "move", "high", "--before", "medium", "--no-sync", "--json"},
+			message: `priority "high" is already directly before "medium"`,
+		},
+		{
+			name:    "the last priority, already after the one above it",
+			args:    []string{"priority", "move", "low", "--after", "medium", "--no-sync", "--json"},
+			message: `priority "low" is already directly after "medium"`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			code, stdout, stderr := run(t, repository, test.args...)
+			if code != 5 {
+				t.Fatalf("%v = code %d, want 5; stderr = %q", test.args, code, stderr)
+			}
+			if stdout != "" {
+				t.Fatalf("%v stdout = %q, want nothing written", test.args, stdout)
+			}
+			assertJSONError(t, stderr, core.CategoryValidation, test.message)
+		})
+	}
+
+	if after := cliPriorityList(t, repository).Head; after != before {
+		t.Fatalf("configuration head moved from %q to %q on a move that would change nothing", before, after)
+	}
+	if got, want := cliPriorityNames(t, repository), []string{
+		"high", "medium", "low",
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("priorities after the refusals = %v, want %v", got, want)
+	}
+}
+
+// The refusal is positional, so every move that does reorder somebody still
+// goes through: to the front of the list, to the back of it, and between two
+// priorities in the middle.
+//
+// The last of the three is the one a rank comparison would get wrong. A rank is
+// a reduced rational chosen between whatever pair the priority lands between,
+// so a move can produce a rank numerically different from the one the priority
+// held while reordering nobody — it is the neighbours, not the arithmetic, that
+// decide whether anything moved.
+func TestPriorityMoveStillMovesAtBothEndsAndInTheMiddle(t *testing.T) {
+	repository := initializedRepository(t)
+
+	// To the back: high leaves the front and becomes the least urgent.
+	cliPriorityMove(t, repository, "high", "--after", "low", "--no-sync", "--json")
+	if got, want := cliPriorityNames(t, repository), []string{
+		"medium", "low", "high",
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("priorities after a move to the back = %v, want %v", got, want)
+	}
+
+	// To the front: high comes all the way back.
+	cliPriorityMove(t, repository, "high", "--before", "medium", "--no-sync", "--json")
+	if got, want := cliPriorityNames(t, repository), []string{
+		"high", "medium", "low",
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("priorities after a move to the front = %v, want %v", got, want)
+	}
+
+	// Into the middle: low takes the place between the two it was below.
+	cliPriorityMove(t, repository, "low", "--after", "high", "--no-sync", "--json")
+	if got, want := cliPriorityNames(t, repository), []string{
+		"high", "low", "medium",
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("priorities after a move into the middle = %v, want %v", got, want)
+	}
+}
+
+// The harm, asserted where it actually lands: a project whose ledger predates
+// the priorities section, asked for a move that moves nothing.
+//
+// legacyDisplayConfiguredRepository (see priority_color_test.go) forges the
+// real shape — a genesis with no priorities section and a minReader of 2 — and
+// the point of reading the stored marker rather than only the exit code is that
+// a regression which refused on the surface but wrote anyway would still park
+// every teammate on a build that can read generation three.
+func TestPriorityMoveNoOpRefusalDoesNotBumpAnUnconfiguredProjectsLedger(t *testing.T) {
+	repository := legacyDisplayConfiguredRepository(t)
+
+	before := cliGitOutput(t, repository, "rev-parse", configLedgerRefName)
+	beforeState := cliGitOutput(t, repository, "show", before+":state.json")
+	if !strings.Contains(beforeState, `"minReader":2`) {
+		t.Fatalf("forged ledger state.json = %s, want minReader 2 before the refusal", beforeState)
+	}
+	if strings.Contains(beforeState, "priorities") {
+		t.Fatalf("forged ledger state.json = %s, want no priorities section before the refusal", beforeState)
+	}
+
+	// Nothing below stops at the first failure. A build that records the move
+	// fails the exit-code check first, and the useful half of this test is what
+	// comes after it: the stamp itself, printed, so a reader sees what the
+	// no-op cost rather than only that it was allowed.
+	code, stdout, stderr := run(t, repository, "priority", "move", "medium", "--after", "high", "--no-sync", "--json")
+	if code == 0 {
+		t.Errorf("priority move to the position it already holds = code 0, want a refusal")
+	} else {
+		assertJSONError(t, stderr, core.CategoryValidation, `priority "medium" is already directly after "high"`)
+	}
+	if stdout != "" {
+		t.Errorf("priority move no-op stdout = %q, want nothing written", stdout)
+	}
+
+	after := cliGitOutput(t, repository, "rev-parse", configLedgerRefName)
+	if after != before {
+		t.Errorf("configuration ledger head moved from %q to %q on a refused no-op move", before, after)
+	}
+	afterState := cliGitOutput(t, repository, "show", after+":state.json")
+	if !strings.Contains(afterState, `"minReader":2`) {
+		t.Errorf("ledger state.json after the refusal = %s, want minReader still 2, not bumped to 3", afterState)
+	}
+	if strings.Contains(afterState, "priorities") {
+		t.Errorf("ledger state.json after the refusal = %s, want no priorities section backfilled in", afterState)
 	}
 }

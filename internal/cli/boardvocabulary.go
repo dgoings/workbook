@@ -174,8 +174,22 @@ func (board *boardVocabulary) apply(
 	// configuration rather than against this project's statuses and some other
 	// project's priorities.
 	priorities := written.PriorityVocabulary()
+	// And this project's name and colors, off the same result again, for the
+	// same reason: the client redraws the board settings form out of a mutation
+	// answer the way it redraws the panels. A state that left them zero would
+	// not say "this answer is about statuses", it would say "this project has
+	// configured no name and no colors" — and the reader's next Save, pressed
+	// without touching a field, would record that over the board they named.
+	display := written.Display()
 	return webui.VocabularyMutation{
-		State: webui.VocabularyState{Vocabulary: after, Head: written.Head},
+		// The priorities travel with the statuses because the answer is the
+		// whole vocabulary and the client adopts it wholesale: a state that
+		// left them zero would not say "this answer is about statuses", it
+		// would say "this project's priorities are the built-in three", and a
+		// project that named its own would watch a status rename replace them.
+		State: webui.VocabularyState{
+			Vocabulary: after, Head: written.Head, Display: display, Priorities: priorities,
+		},
 		Tasks: webui.VocabularyTaskCounts{
 			Affected:       plan.tasks.Affected,
 			ClaimableAfter: plan.tasks.ClaimableAfter,

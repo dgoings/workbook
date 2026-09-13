@@ -242,7 +242,13 @@
        out of room rather than out of page: it shares a viewport-height flex
        column with main, and the body never scrolls. The cap keeps the route
        underneath reachable while a run of refusals stacks up inside it. */
-    .notice { display: grid; flex: 0 1 auto; gap: .4rem; max-height: 40vh; overflow: auto; padding: .6rem 1.25rem; border-bottom: 1px solid var(--wb-hairline); background: var(--wb-surface); font-size: .85rem; }
+    /* flex-shrink is 0 rather than the default 1, which is what `max-height`
+       and `overflow` here were always assuming: a notice that wraps to a second
+       line is one the column would otherwise squeeze back to one and hide the
+       rest of behind its own scrollbar — a message nobody can read without
+       discovering that the box scrolls. 40vh is the real ceiling, and past it
+       the notice does scroll. */
+    .notice { display: grid; flex: 0 0 auto; gap: .4rem; max-height: 40vh; overflow: auto; padding: .6rem 1.25rem; border-bottom: 1px solid var(--wb-hairline); background: var(--wb-surface); font-size: .85rem; }
     .notice[hidden] { display: none; }
     .notice__report { display: flex; align-items: baseline; gap: .75rem; padding: .35rem .6rem; border-left: 3px solid currentcolor; background: var(--wb-warning-surface); color: var(--wb-warning-ink); }
     .notice__report[data-kind="error"] { background: var(--wb-danger-surface); color: var(--wb-danger-ink); }
@@ -305,7 +311,7 @@
     .admin-form { display: flex; flex-wrap: wrap; align-items: end; gap: .55rem .8rem; grid-column: 1 / -1; margin-top: .2rem; padding-top: .6rem; border-top: 1px dashed var(--wb-border); }
     .admin-field { display: grid; gap: .2rem; }
     .admin-field label { color: var(--wb-ink); font-size: .74rem; font-weight: 750; }
-    /* A colour field and the well beside it. The well takes the row's height
+    /* A color field and the well beside it. The well takes the row's height
        rather than a height of its own, so it stays the size of whatever the
        inputs measure. */
     .admin-color { display: flex; align-items: stretch; gap: .4rem; }
@@ -314,6 +320,7 @@
     .admin-tags legend { padding: 0; color: var(--wb-ink); font-size: .74rem; font-weight: 750; }
     .admin-tag-choice { display: inline-flex; align-items: center; gap: .3rem; color: var(--wb-ink); cursor: pointer; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .76rem; }
     .admin-tag-choice input { width: 1rem; height: 1rem; margin: 0; accent-color: var(--wb-primary); cursor: pointer; padding: 0; }
+    .admin-hint { max-width: 60ch; margin: .15rem 0 0; color: var(--wb-ink-muted); font-size: .72rem; line-height: 1.45; }
     .admin-note { margin: 0; color: var(--wb-warning-ink); font-size: .76rem; }
     .admin-add { display: grid; gap: .5rem; margin-top: .6rem; padding: .8rem; border: 1px solid var(--wb-hairline); border-radius: 4px; background: var(--wb-primary-tint-4); }
     .admin-add__title { margin: 0; font-size: .88rem; }
@@ -401,7 +408,29 @@
     .copy-status { position: absolute; left: 100%; top: 50%; margin-left: .35rem; color: var(--wb-primary-edge); font-size: .65rem; font-weight: 800; line-height: 1; pointer-events: none; transform: translateY(-50%); white-space: nowrap; }
     .copy-status:empty { display: none; }
     .copy-status[data-kind="error"] { color: var(--wb-danger-ink); }
-    .priority { flex: 0 0 auto; font-size: .64rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+    /* A priority is a word, and a badge only where the word alone cannot be
+       read. The geometry is stated here for both: the padding and the 4px
+       radius the rest of this page's boxes carry, which show where a background
+       is drawn behind them and cost nothing where none is.
+
+       Whether one is drawn is per priority and per scheme, and is composed in Go
+       with the ink — see priorityChipFor, which asks the only question the card
+       actually poses, whether this label clears AA where it sits, and answers a
+       No with a background far enough past the bar to look deliberate. Most
+       colors are a Yes and are left as the bare colored word this row has always
+       drawn; a pale yellow on a white card is not, and it gets a deep chip.
+
+       No background is stated here, and none is stated for a priority that needs
+       none. Both leave the card's own surface showing, which is the same answer
+       as before any of this — and is the right one for the case the block below
+       is absent entirely. */
+    .priority { flex: 0 0 auto; font-size: .64rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; border-radius: 4px; padding: .1rem .34rem; }
+    /* The served page carries a third <style> element after the theme block,
+       giving every priority this project defines its own ink and overriding
+       these three by cascade. These stay as the standing answer for the one
+       case that block is absent — no priority with a valid token, which the
+       built-in three cannot produce — so a board is never served with its
+       priorities drawn in body text. */
     .priority--high { color: var(--wb-priority-high); } .priority--medium { color: var(--wb-priority-medium); } .priority--low { color: var(--wb-priority-low); }
     .task-card h3 { margin: .55rem 0 .3rem; font-size: .9rem; line-height: 1.24; overflow-wrap: anywhere; }
     /* A card title is a heading, not a link inside a sentence: every card is one
@@ -1089,9 +1118,30 @@
        because html/template refuses to interpolate a CSS value it cannot vouch
        for and writes ZgotmplZ in its place — see boardTheme, which is where the
        vouching is done for real. A project that chose nothing is served nothing
-       here, so its board is the board it always was. -->
-  {{ if .Theme }}<style data-board-theme>{{ .Theme }}</style>
-  {{ end }}</head>
+       here, so its board is the board it always was.
+
+       The element itself is always served, empty or not, and that is what lets
+       a save on the configuration page redraw the board it is standing on: the
+       answer carries the stylesheet this same composer rendered, and the client
+       replaces the text of this element with it. An element served only for a
+       project that had already chosen a color would leave the client creating
+       one — and deciding where in the cascade it belongs, which is a decision
+       the order of these two blocks makes here. -->
+  <style data-board-theme>{{ .Theme }}</style>
+  <!-- And the ink each of this project's priorities is drawn in.
+       The triad above names three priorities by hand, which is every priority a
+       project could have until it could configure its own. A project that added
+       a fourth was drawing it in the meta row's dim ink, with nothing chosen or
+       wrong anywhere — so this block declares one property per priority and the
+       rule that reads it, composed in Go from the vocabulary. A priority that
+       stores no color of its own is given one derived from its position along
+       the triad, which is what `workbook priority color` has always promised
+       clearing a color returns it to. See priorityInk.
+
+       Served unconditionally for the reason the block above it is: a priority
+       change answers with this stylesheet, and the client writes it here. -->
+  <style data-board-priority-ink>{{ .PriorityInk }}</style>
+</head>
 <body>
   <a class="skip-link" href="#board">Skip to task board</a>
   <header class="app-header">
@@ -1135,10 +1185,19 @@
        a refusal banner they have not read — and rebuilding the board to add a
        column would destroy all of it to show a column they may not care about.
        So the page keeps drawing the vocabulary it was served with, says plainly
-       that it is out of date, and lets the reader choose the moment. -->
+       that it is out of date, and lets the reader choose the moment.
+
+       Colors are no longer among the things it says that about, whoever
+       changed them: one set on this page is drawn at once, because a
+       configuration answer carries the stylesheet the server composed and the
+       page swaps it without touching a card, and one another clone set is a
+       difference nobody loses work over. So what raises this is the columns or
+       the priorities differing from the ones the page is drawing — see
+       noteVocabularyChange — and the sentence below says exactly that rather
+       than naming where a change came from. -->
   <div class="notice" data-vocabulary-notice role="status" aria-live="polite" hidden>
     <div class="notice__report">
-      <p>This project's configuration has changed. The columns and colors on this page are the ones it was opened with.</p>
+      <p>This project's columns or priorities have changed. The board is still drawing the ones it was opened with.</p>
       <button type="button" data-vocabulary-reload>Reload the board</button>
     </div>
   </div>
@@ -1148,8 +1207,21 @@
          default, which no client can derive from the columns alone. Anything
          the script needs before its first fetch comes from an attribute here,
          data-vocabulary-head included, so a page and its script never disagree
-         about which vocabulary they were built from. -->
-    <div class="board-view" data-board-view data-project-name="{{ .ProjectName }}" data-default-project-name="{{ .DefaultProjectName }}" data-title-suffix="{{ .TitleSuffix }}" data-default-status="{{ .DefaultStatus }}" data-vocabulary-head="{{ .VocabularyHead }}" data-attachment-limit="{{ .AttachmentFileLimit }}" data-attachment-total-limit="{{ .AttachmentTotalLimit }}" data-attachment-name-limit="{{ .AttachmentNameLimit }}" data-attachment-label-limit="{{ .AttachmentLabelLimit }}" data-attachment-url-limit="{{ .AttachmentURLLimit }}" data-inline-media="{{ .InlineImageMediaTypes }}" data-assign-identity="{{ .AssignIdentity }}">
+         about which vocabulary they were built from.
+
+         data-priorities is the same answer for the other half of the
+         vocabulary: this project's priorities in configured order, each with
+         its label, its tags and its ink, as JSON because a priority is more
+         facts than a space-separated list can carry. A project that renamed
+         its priorities or added a fourth is described here and nowhere in the
+         script.
+
+         data-default-priority is where a new task lands, and it sits beside
+         data-default-status for the same reason: which priority carries the
+         default role is the server's answer, and a script that went looking for
+         that role among the published tags would be spelling the name of a role
+         core owns. -->
+    <div class="board-view" data-board-view data-priorities="{{ .Priorities }}" data-default-priority="{{ .DefaultPriority }}" data-project-name="{{ .ProjectName }}" data-default-project-name="{{ .DefaultProjectName }}" data-title-suffix="{{ .TitleSuffix }}" data-default-status="{{ .DefaultStatus }}" data-vocabulary-head="{{ .VocabularyHead }}" data-vocabulary-shape="{{ .VocabularyShape }}" data-attachment-limit="{{ .AttachmentFileLimit }}" data-attachment-total-limit="{{ .AttachmentTotalLimit }}" data-attachment-name-limit="{{ .AttachmentNameLimit }}" data-attachment-label-limit="{{ .AttachmentLabelLimit }}" data-attachment-url-limit="{{ .AttachmentURLLimit }}" data-inline-media="{{ .InlineImageMediaTypes }}" data-assign-identity="{{ .AssignIdentity }}">
       <p class="stale" data-stale role="status">Task refresh failed. Showing the last successful board.</p>
       <!-- data-board is where the client appends the Deleted column, after the
            last vocabulary column the server rendered. It is a client-built
@@ -1253,16 +1325,37 @@
     <div data-vocabulary-panel-body></div>
   </div>
   {{ end }}
+  {{ if .PrioritiesAdministrable }}
+  <!-- This project's priorities: the second section of the configuration route,
+       served beside the statuses and mounted into main by the same render.
+
+       It is its own element with its own live region rather than a part of the
+       panel above, for the reason the board settings are: the two are separate
+       writes against separate endpoints, and a refused priority change must not
+       blank a label somebody is typing into a status row.
+
+       Its shell is served for the reason the statuses' is — the presence of this
+       element is the whole of the client's capability gate — and its list is the
+       client's, drawn from the priorities member of the same GET /api/vocabulary
+       the statuses come from. One read, one head: the statuses, the priorities
+       and the board's settings are sections of one ledger, and a page that asked
+       for them separately could be answered from either side of a change. -->
+  <div class="admin" data-priority-panel data-priority-tags="{{ range $index, $tag := .PriorityTags }}{{ if $index }} {{ end }}{{ $tag }}{{ end }}" role="group" aria-labelledby="priorities-title" tabindex="-1" hidden>
+    <p class="admin__note">These are this project's priorities, most urgent first, and they are what a task is filed at rather than where it sits. Renaming one forwards the old name, so tasks written by a clone that has not fetched the change still land at the right priority, and removing one names where its tasks belong. Exactly one priority is the <strong>default</strong> — where a task created without one lands — and the role is given rather than taken: make another priority the default to move it. Each priority is drawn on the board in the color its row is given, written as <code>#rrggbb</code>; one with no color of its own is drawn in a color the board derives from its position, which is what an emptied field returns it to. Drag a row, or use its Up and Down controls, to reorder them. A color set here is drawn on the board at once; the board keeps the priorities it was opened with — their order, and which ones there are — until you reload it.</p>
+    <div class="admin__status" data-priority-panel-status role="status" aria-live="polite"></div>
+    <div data-priority-panel-body></div>
+  </div>
+  {{ end }}
   {{ if .DisplayAdministrable }}
   <!-- What this project calls its board and the colors it draws it in: the
-       second section of the configuration route, served beside the statuses and
-       mounted into main by the same render.
+       third section of the configuration route, served after the statuses and
+       the priorities and mounted into main by the same render.
 
        It is its own element with its own live region rather than a form inside
-       the panel above, because the two are separate writes against separate
-       endpoints: a status change that is refused must not blank a name the
-       reader has just typed, and a save of the name must not clear what the
-       status change had to say.
+       the panels above, because each is a separate write against its own
+       endpoint: a status or priority change that is refused must not blank a
+       name the reader has just typed, and a save of the name must not clear
+       what that change had to say.
 
        Its shell is served for the reason the statuses' is — the presence of this
        element is the whole of the client's capability gate — and its fields are
@@ -1271,14 +1364,13 @@
        could be answered from either side of a change and would offer a Save
        composed against a configuration it never showed anybody. -->
   <div class="admin" data-display-panel role="group" aria-labelledby="display-title" tabindex="-1" hidden>
-    <p class="admin__note">These are this project's own name for this board and the colors it is drawn in, recorded in the same configuration every clone fetches. Every field is optional: an empty <strong>name</strong> is the generic heading every Workbook board carries, and an empty color is this board's own palette. Colors are written as <code>#rrggbb</code>. Saving sends all three at once, and only what actually changed is recorded — a save you have not edited records nothing at all. A board already open elsewhere keeps the name and colors it was opened with until it is reloaded.</p>
+    <p class="admin__note">These are this project's own name for this board and the colors it is drawn in, recorded in the same configuration every clone fetches. Every field is optional: an empty <strong>name</strong> is the generic heading every Workbook board carries, and an empty color is this board's own palette. Colors are written as <code>#rrggbb</code>. Saving sends all three at once, and only what actually changed is recorded — a save you have not edited records nothing at all. Saving draws this board in its new colors at once; its name, and a board already open elsewhere, keep what they were opened with until reloaded.</p>
     <div class="admin__status" data-display-panel-status role="status" aria-live="polite"></div>
     <div data-display-panel-body></div>
   </div>
   {{ end }}
   <script>
     (() => {
-      const priorityOrder = new Map([["high", 0], ["medium", 1], ["low", 2]]);
       const dropMarker = document.createElement("div");
       dropMarker.className = "drop-marker";
       dropMarker.setAttribute("aria-hidden", "true");
@@ -1309,6 +1401,53 @@
       // first column keeps a page served by an older build usable rather than
       // sending it to a status that may not exist.
       const defaultStatus = boardView.dataset.defaultStatus || (statusDefinitions.length ? statusDefinitions[0][0] : "");
+      // The project's priorities, read out of the attribute the server
+      // published them in rather than kept as a list of its own.
+      //
+      // There used to be three answers here to questions the server had already
+      // answered on this page: an order, a set of options and a default, all
+      // three naming the priorities Workbook ships with. A project may define
+      // any priorities it likes, so each of those was wrong for every project
+      // that added or renamed one — a fourth priority could not be assigned from
+      // the board at all, sorted against nothing when a card was dragged, and a
+      // new task landed on a priority the project may not even define.
+      //
+      // A page carrying no such attribute — served by an older build — leaves
+      // this empty rather than substituting three. Offering priorities nobody
+      // has been told this project has is the defect, not the cure.
+      const publishedPriorities = (() => {
+        try {
+          const published = JSON.parse(boardView.dataset.priorities || "[]");
+          if (!Array.isArray(published)) return [];
+          return published.filter((definition) => definition && typeof definition.priority === "string" && definition.priority !== "");
+        } catch (error) {
+          return [];
+        }
+      })();
+      // [token, label] pairs, the shape statusDefinitions has, because the form
+      // builds both selects the same way and a select is where a person reads a
+      // name rather than a token.
+      const priorityDefinitions = publishedPriorities.map((definition) => [definition.priority, definition.label || definition.priority]);
+      // The priorities this project can resolve, which is the question a task's
+      // stored priority has to be asked before a select is told to show it.
+      // `statuses` is the same set for the same reason.
+      const priorities = new Set(priorityDefinitions.map(([priority]) => priority));
+      // Where a priority sits, for the one thing that needs to know: placing a
+      // dragged card in a column that holds no card of its own priority.
+      //
+      // The position in the published array is the whole of it. The server
+      // deliberately publishes no rank — the array is already in the
+      // vocabulary's order — so this is the order the client was handed rather
+      // than one it re-derived and could disagree with the server about.
+      const priorityOrder = new Map(publishedPriorities.map((definition, index) => [definition.priority, index]));
+      // Where a new task lands when nothing named a priority: the priority this
+      // project tagged default, which is the server's answer for the reason
+      // defaultStatus is. The role is among the tags published above, and going
+      // looking for it there would mean spelling the name of a role core owns —
+      // the same rule that keeps this script from naming a status tag. Falling
+      // back to the first keeps a page served by an older build usable rather
+      // than creating tasks at no priority at all.
+      const defaultPriority = boardView.dataset.defaultPriority || (priorityDefinitions.length ? priorityDefinitions[0][0] : "");
       const counts = new Map([...boardView.querySelectorAll("[data-count]")].map((element) => [element.dataset.count, element]));
       const stale = boardView.querySelector("[data-stale]");
       // The region for tasks whose status matches no column. It is part of the
@@ -1326,6 +1465,32 @@
       // offered instead of taken.
       const vocabularyNotice = document.querySelector("[data-vocabulary-notice]");
       const vocabularyReload = document.querySelector("[data-vocabulary-reload]");
+      // The two stylesheets the server composed for this board: the colors the
+      // project chose, and the ink each of its priorities is drawn in. Held so
+      // that a configuration change can redraw the board it was made from.
+      const boardThemeStyle = document.querySelector("style[data-board-theme]");
+      const boardPriorityInkStyle = document.querySelector("style[data-board-priority-ink]");
+      // Redraws one of them from a stylesheet the server composed.
+      //
+      // What is written is the answer's own bytes, and nothing here reads what
+      // they say. That is the whole of why a color a project chose can reach the
+      // board without a reload: the server validated it, parsed it to three
+      // integers and re-rendered it, and every other byte of the block is a
+      // property name it wrote or a number it formatted. A client that was
+      // handed the color instead — and composed `--wb-…: ` around it — would be
+      // writing a stylesheet with none of that behind it, out of a stored string
+      // that had reached this page as text. So this function composes nothing,
+      // and it sets textContent, which cannot be markup, rather than innerHTML,
+      // which can.
+      //
+      // A member that is not a string is a document that does not carry one, and
+      // the board keeps what it is drawing: only a real answer moves the board,
+      // and an empty string is a real answer — it is what a project that has
+      // cleared its colors is served.
+      function redrawBoardStyle(element, composed) {
+        if (!element || typeof composed !== "string") return;
+        element.textContent = composed;
+      }
       // The statuses section of the configuration route and its parts, served
       // with the page and mounted into main by the render for that route. Every
       // one of them is absent on a board built without the four vocabulary
@@ -1337,10 +1502,18 @@
       const vocabularyPanel = document.querySelector("[data-vocabulary-panel]");
       const vocabularyPanelBody = document.querySelector("[data-vocabulary-panel-body]");
       const vocabularyPanelStatus = document.querySelector("[data-vocabulary-panel-status]");
-      // The board settings section, beside the statuses on the same route. It is
-      // asked for separately from the panel above because a board may be built
-      // with the vocabulary mutations and without this one, in which case the
-      // page has statuses to administer and no settings to change.
+      // The priorities section, beside the statuses on the same route and asked
+      // for separately for the same reason: a board may be built with the four
+      // status mutations and without the priority ones, in which case the page
+      // has columns to administer and no priorities to change.
+      const priorityPanel = document.querySelector("[data-priority-panel]");
+      const priorityPanelBody = document.querySelector("[data-priority-panel-body]");
+      const priorityPanelStatus = document.querySelector("[data-priority-panel-status]");
+      // The board settings section, beside the statuses and the priorities on
+      // the same route. It is asked for separately from the sections above
+      // because a board may be built with the vocabulary mutations and without
+      // this one, in which case the page has a vocabulary to administer and no
+      // settings to change.
       const displayPanel = document.querySelector("[data-display-panel]");
       const displayPanelBody = document.querySelector("[data-display-panel-body]");
       const displayPanelStatus = document.querySelector("[data-display-panel-status]");
@@ -1362,7 +1535,16 @@
       // An empty value is a project that has recorded no statuses, which is a
       // real state and not a missing answer, so the comparison is against
       // whatever this page was served with rather than against emptiness.
-      const renderedVocabularyHead = boardView.dataset.vocabularyHead || "";
+      //
+      // It moves: a head that arrives over a configuration this page is already
+      // drawing is recorded here, so the next answer carrying it is not
+      // compared all over again. See noteVocabularyChange.
+      let renderedVocabularyHead = boardView.dataset.vocabularyHead || "";
+      // And what that head stands for: the digest of the columns and the
+      // priorities this page is drawing, which is what a change is actually
+      // compared against. Empty from a build that states none, which reads as
+      // "nothing here can be compared" — see noteVocabularyChange.
+      const renderedVocabularyShape = boardView.dataset.vocabularyShape || "";
       // The ceiling on one attached file, as the server renders it into the
       // page. The upload control refuses a file over it before spending the
       // encode and the round trip on one the server would refuse anyway, and it
@@ -2049,6 +2231,13 @@
         parts.restore.hidden = !task.deleted;
         parts.restore.setAttribute("aria-label", "Restore task " + task.title);
         if (parts.idText) text(parts.idText, view.idPrefix);
+        // The chip is the priority's token, not this project's label for it,
+        // and the server's card template says the same so the two never
+        // disagree about a card the poll redraws. The token is what `--priority`
+        // takes, it sits beside the ID prefix a person copies into a command,
+        // and the chip is a compact uppercase element that a label chosen as
+        // prose would not fit. A project reads its own label in the form's
+        // select and on the configuration page, where a name is what is wanted.
         parts.priority.className = "priority priority--" + task.priority; text(parts.priority, task.priority);
         text(parts.link, task.title);
         text(parts.failure.message, report);
@@ -2402,6 +2591,48 @@
           control.insertBefore(placeholder, control.firstElementChild);
         }
         text(placeholder, "Choose one of this project's statuses (current: " + status + ")");
+        showSelected(control, "");
+      }
+      // The priority half of the same problem. A task's priority can be one this
+      // project's vocabulary cannot resolve — a teammate on a newer build
+      // authored it and filed a task under it — and the select, built from the
+      // priorities the server published, has no option for it.
+      //
+      // Left alone that is worse here than a blank field. A select showing none
+      // of its options shows the first one, so the form would display a priority
+      // nobody chose, and the next save would send it: changedTaskValues asks
+      // whether the control disagrees with the task, and a control the client
+      // could not draw always does. A reader editing the title would silently
+      // reassign the priority. Selecting the placeholder sends nothing instead.
+      function priorityPlaceholder() {
+        const option = document.createElement("option");
+        option.value = "";
+        option.disabled = true;
+        return option;
+      }
+      // Makes a priority select show a priority, whether or not this project
+      // defines it, so it is also how a select already on screen adopts one.
+      // The placeholder is added and removed as the priority needs it, for the
+      // reason showStatus's is: one naming a priority the task has since left is
+      // a worse label than none.
+      //
+      // It asks for one of this project's priorities. There is no canonical set
+      // — the priorities are the project's — and the select is the place a
+      // person reads a priority as a name rather than as the token the card's
+      // chip carries, so the current value is named in a sentence.
+      function showPriority(control, priority) {
+        const first = control.firstElementChild;
+        let placeholder = first && first.value === "" ? first : null;
+        if (priorities.has(priority)) {
+          if (placeholder) placeholder.remove();
+          showSelected(control, priority);
+          return;
+        }
+        if (!placeholder) {
+          placeholder = priorityPlaceholder();
+          control.insertBefore(placeholder, control.firstElementChild);
+        }
+        text(placeholder, "Choose one of this project's priorities (current: " + priority + ")");
         showSelected(control, "");
       }
       function select(name, options, value) {
@@ -5745,7 +5976,8 @@
         });
         const status = select("status", statusDefinitions, task.status); status.required = true;
         showStatus(status, task.status);
-        const priority = select("priority", [["high", "High"], ["medium", "Medium"], ["low", "Low"]], task.priority);
+        const priority = select("priority", priorityDefinitions, task.priority);
+        showPriority(priority, task.priority);
         const labels = labelEditor(task.labels || []);
         // Named, because the relationship region carries a form-status of its
         // own and "the first .form-status in the route" is the wrong element
@@ -5866,7 +6098,6 @@
         // that exists rather than against one the server refused.
         function reviseAgainstTask(held) {
           const edited = changedTaskValues(task, controls);
-          const adopted = Object.assign({}, held);
           if (!("title" in edited)) title.value = held.title || "";
           if (!("description" in edited)) description.value = held.description || "";
           // Labels are asked a different question than the rest. A save folds
@@ -5886,18 +6117,17 @@
           text(heading, held.title || "");
           document.title = (held.title || "") + boardTitleSuffix;
           if (!("status" in edited)) showStatus(controls.status, held.status);
-          // A correction that cannot be shown must not move the baseline with
-          // it. The control would still be displaying the value this form
-          // rendered while the baseline said otherwise, which is the one thing
-          // that would turn a refused value into an edit the next save sends.
-          // Status is always showable — showStatus builds an option for a
-          // status this client does not know — so what is left here is a
-          // priority from outside this client's three, which nothing in the
-          // board renders either.
-          if (!("priority" in edited) && !showSelected(controls.priority, held.priority)) {
-            adopted.priority = task.priority;
-          }
-          task = adopted;
+          // Both vocabulary fields are always showable: each builds a
+          // placeholder naming a value this project cannot resolve, so the
+          // control and the baseline agree whatever the board hands over. That
+          // agreement is the whole point of routing through these rather than
+          // showSelected — a control still displaying the value this form
+          // rendered while the baseline had moved is exactly what turns a
+          // correction nobody asked for into an edit the next save sends.
+          if (!("priority" in edited)) showPriority(controls.priority, held.priority);
+          // A copy, because the board holds this task too: the baseline this
+          // form measures its next save against is the form's own.
+          task = Object.assign({}, held);
           // Drawn after the task is adopted, so the pane follows both halves of
           // what a poll can move: the description itself, when this reader has
           // not touched the field, and the attachment list an image reference
@@ -6344,7 +6574,10 @@
         // A status the client does not know renders as an unselected
         // placeholder. Leaving it alone is not a request to clear the status.
         if (controls.status.value && controls.status.value !== task.status) values.status = controls.status.value;
-        if (controls.priority.value !== task.priority) values.priority = controls.priority.value;
+        // And a priority this project cannot resolve renders as the same
+        // unselected placeholder, for the same reason: leaving it alone is not a
+        // request to move the task off the priority it was filed under.
+        if (controls.priority.value && controls.priority.value !== task.priority) values.priority = controls.priority.value;
         const labels = controls.labels.values();
         if (!sameLabels(labels, task.labels || [])) values.labels = labels;
         return values;
@@ -6927,9 +7160,9 @@
       // disables for a reason of its own — the Up control on the first row, a
       // Save with an empty name beside it. The two are separate states because
       // a change finishing must not enable a control that was never enabled.
-      // Busy is the route's rather than the section's: both sections write the
-      // same ref against the same head, so a change in either disables the
-      // controls of both.
+      // Busy is the route's rather than the section's: every section of the
+      // configuration route writes the same ref against the same head, so a
+      // change in any of them disables the controls of all of them.
       function applyPanelBusy() {
         panelControls.forEach((control) => {
           control.disabled = configBusy() || control.dataset.blocked === "true";
@@ -6972,7 +7205,7 @@
       function adoptVocabulary(vocabulary) {
         panelVocabulary = vocabulary;
         panelHead = typeof vocabulary.head === "string" ? vocabulary.head : "";
-        noteVocabularyChange(panelHead);
+        noteVocabularyChange(panelHead, typeof vocabulary.shape === "string" ? vocabulary.shape : "");
         // The display settings ride in the same document, from the same commit,
         // which is why the board settings form never asks for them separately: a
         // second read could be answered from either side of a change and would
@@ -6981,10 +7214,27 @@
         // of them, which is a real state and not a missing answer.
         adoptDisplay(vocabulary.display || { head: panelHead });
         renderVocabularyPanel();
+        // The priorities ride in the same document, from the same commit, and
+        // are adopted with it for the reason the display settings are. The
+        // member is always present — a project that has configured none is
+        // answered with the built-in three, because that is what the board has
+        // to draw either way — so there is no "not configured" state to branch
+        // on here, and nothing this panel does with what it reads may amount to
+        // writing it back.
+        renderPriorityPanel();
+        // And the board behind this page is redrawn in the colors the document
+        // carries. Every priority change moves this stylesheet, not only a
+        // recolor: the color a priority with none of its own is drawn in is
+        // derived from its position among its peers, so adding or removing one
+        // restyles every uncolored priority on the board. The server composed
+        // the whole block for the priorities this answer carries, which is why
+        // the arithmetic behind that derivation lives in one place.
+        redrawBoardStyle(boardPriorityInkStyle, vocabulary.priorities && vocabulary.priorities.ink);
       }
       async function readVocabulary() {
         panelReading = true;
         renderVocabularyPanel();
+        renderPriorityPanel();
         try {
           const response = await fetch("/api/vocabulary", { cache: "no-store" });
           const payload = await response.json();
@@ -6999,19 +7249,61 @@
           panelReading = false;
           panelVocabulary = null;
           renderVocabularyPanel();
-          panelReport("error", error instanceof Error
+          renderPriorityPanel();
+          const said = error instanceof Error
             ? error.message
-            : "This project's statuses could not be read.");
+            : "This project's statuses could not be read.";
+          panelReport("error", said);
+          // Both sections come out of this one read, so both have to say that it
+          // failed. A section left silent over an empty list is a section that
+          // looks like a project with nothing in it.
+          priorityReport("error", said);
         }
       }
-      // The one path every change the panel makes takes.
+      // The two sections a vocabulary change can be sent from, and everything
+      // about one that the other does not share.
+      //
+      // The protocol is one protocol: the statuses and the priorities are
+      // sections of one ledger, written against one head, so a change to either
+      // waits for the board to settle, greys every control on the page, and
+      // adopts the whole document its answer carries. What is not shared is what
+      // a section has to say for itself — its own live region, so a refused
+      // priority change cannot blank a label somebody is typing into a status
+      // row, its own busy flag, its own open form, and its own words, so a
+      // reader is told which half of their configuration did not move.
+      const statusChanges = {
+        format: "workbook.vocabulary-mutation",
+        report: (kind, message, warnings) => panelReport(kind, message, warnings),
+        busy: (running) => { panelBusy = running; },
+        closeForm: () => { panelForm = null; },
+        unsent: "This status change could not be sent. Nothing about this project's statuses has changed.",
+        stale: "This project's statuses changed in another clone, so this change was not applied. This page now shows them as they stand; review them and make the change again.",
+        refused: "This status change was not applied."
+      };
+      const priorityChanges = {
+        format: "workbook.priority-mutation",
+        report: (kind, message, warnings) => priorityReport(kind, message, warnings),
+        busy: (running) => { priorityBusy = running; },
+        closeForm: () => { priorityForm = null; },
+        unsent: "This priority change could not be sent. Nothing about this project's priorities has changed.",
+        stale: "This project's priorities changed in another clone, so this change was not applied. This page now shows them as they stand; review them and make the change again.",
+        refused: "This priority change was not applied."
+      };
+      // The one path every change either panel makes takes.
       //
       // `describe` is called with the answer rather than composed before the
       // send, because a removal's sentence prices the change in tasks and only
       // the answer knows that number.
-      async function changeVocabulary(method, path, body, describe) {
-        if (configBusy() || !panelVocabulary) return;
-        panelBusy = true;
+      //
+      // It hands back what happened — whether the change landed, the answer it
+      // landed or was refused with, and the sentence it reported — because a
+      // priority change can be the first half of a pair. A Save that renames a
+      // priority and takes the default is two of these in order, and the second
+      // is sent only if the first landed and has to be able to say so when it is
+      // itself refused.
+      async function changeVocabulary(method, path, body, describe, section = statusChanges) {
+        if (configBusy() || !panelVocabulary) return null;
+        section.busy(true);
         applyConfigBusy();
         let answer = null;
         try {
@@ -7019,7 +7311,7 @@
           // change retires, so the change waits for the board to be settled and
           // says that it is waiting.
           if (pendingIntents.size > 0) {
-            panelReport("", panelWaitingMessage);
+            section.report("", panelWaitingMessage);
             await settledIntents();
           }
           const response = await fetch(path, {
@@ -7033,7 +7325,7 @@
           });
           const payload = await response.json();
           answer = {
-            applied: response.ok && payload.format === "workbook.vocabulary-mutation" &&
+            applied: response.ok && payload.format === section.format &&
               payload.version === 1,
             payload
           };
@@ -7042,20 +7334,22 @@
           // cannot be reported as a request that never went.
           answer = null;
         }
-        panelBusy = false;
+        section.busy(false);
         if (!answer) {
           applyConfigBusy();
-          panelReport("error", "This status change could not be sent. Nothing about this project's statuses has changed.");
-          return;
+          section.report("error", section.unsent);
+          return { applied: false, payload: null, message: section.unsent };
         }
         const payload = answer.payload;
         if (!answer.applied) {
           const stale = payload.error && payload.error.category === "stale-write";
-          // A refusal that carries the statuses is a stale write, and the
-          // statuses it carries are the current ones. Adopting them is the
+          // A refusal that carries the vocabulary is a stale write, and the
+          // vocabulary it carries is the current one. Adopting it is the
           // whole of the recovery: no refetch, no re-base, no retry.
-          panelForm = payload.vocabulary ? null : panelForm;
-          if (payload.vocabulary) adoptVocabulary(payload.vocabulary);
+          if (payload.vocabulary) {
+            section.closeForm();
+            adoptVocabulary(payload.vocabulary);
+          }
           applyConfigBusy();
           // A conflict is described rather than quoted, as it is everywhere
           // else in this client: the server's sentence names the head the
@@ -7063,24 +7357,33 @@
           // refusal is the reader's own to read — an unknown tag, a name that
           // is already taken, a removal with nowhere to send its tasks — so it
           // is quoted exactly as the command would have printed it.
-          panelReport("error", stale
-            ? "This project's statuses changed in another clone, so this change was not applied. This page now shows them as they stand; review them and make the change again."
-            : payload.error && payload.error.message || "This status change was not applied.");
-          return;
+          const message = stale
+            ? section.stale
+            : payload.error && payload.error.message || section.refused;
+          section.report("error", message);
+          return { applied: false, payload, message };
         }
-        panelForm = null;
+        section.closeForm();
         adoptVocabulary(payload.vocabulary);
         applyConfigBusy();
-        panelReport("", describe(payload), (payload.warnings || []).map((warning) => warning.message));
+        const said = describe(payload);
+        section.report("", said, (payload.warnings || []).map((warning) => warning.message));
+        return { applied: true, payload, message: said };
       }
-      function panelButton(caption, description, onClick, { modifier = "", blocked = false } = {}) {
+      // `controls` is the busy-list the control joins, which is the statuses
+      // panel's unless a caller says otherwise — the same parameter
+      // panelSubmitButton and panelTextInput already take, for the same reason:
+      // each section's list is rebuilt with that section's own render, and a
+      // control on the list of a section that is re-rendering without it would
+      // be left enabled through the next change.
+      function panelButton(caption, description, onClick, { modifier = "", blocked = false, controls = panelControls } = {}) {
         const control = document.createElement("button");
         control.type = "button";
         control.className = modifier ? "admin-button " + modifier : "admin-button";
         text(control, caption);
         if (description) control.setAttribute("aria-label", description);
         control.addEventListener("click", onClick);
-        panelControls.push(control);
+        controls.push(control);
         blockPanelControl(control, blocked);
         return control;
       }
@@ -7111,17 +7414,23 @@
         controls.push(control);
         return control;
       }
-      function panelSelect(id, options) {
+      // `chosen` is the option a caller wants standing when the control is
+      // drawn, for a list whose sensible default is not the one it reads first.
+      // A placement list runs in the order the members are drawn, so its default
+      // is the bottom of it rather than the top, and the alternative — ordering
+      // the list to put the default first — would make the control disagree with
+      // the list it is about.
+      function panelSelect(id, options, controls = panelControls, chosen = null) {
         const control = document.createElement("select");
         control.id = id;
         options.forEach(([value, label], index) => {
           const option = document.createElement("option");
           option.value = value;
           text(option, label);
-          option.selected = index === 0;
+          option.selected = chosen === null ? index === 0 : value === chosen;
           control.append(option);
         });
-        panelControls.push(control);
+        controls.push(control);
         return control;
       }
       // `labelled` is the control the caption points at, for the field whose
@@ -7295,15 +7604,31 @@
         const name = panelTextInput("status-new-name", "", "triage");
         const label = panelTextInput("status-new-label", "", "derived from the name");
         const tags = panelTagChoices("status-new", []);
-        // One control for the placement, because a placement is one decision.
-        // The two neighbours a status can be placed against are the same list
-        // twice, and the server refuses a change naming both.
-        const placement = panelSelect("status-new-placement", [["", "At the end"]].concat(
-          definitions.flatMap((candidate) => [
-            ["before:" + candidate.status, "Before " + candidate.label],
-            ["after:" + candidate.status, "After " + candidate.label]
-          ])
-        ));
+        // One control for the placement, because a placement is one decision,
+        // and the server refuses a change naming both neighbours.
+        //
+        // One option per position rather than one per status, and every option
+        // names a column. A list of n statuses has n+1 positions, and naming
+        // both neighbours of every one of them spells most of those twice:
+        // "Before X" is the position "After the one before X" already names. So
+        // the first column is the only status something is offered before, and
+        // everything else is an "After".
+        //
+        // The end of the list is "After <the last column>" rather than a
+        // standing "At the end", for the reason the priorities panel gives: an
+        // entry shaped unlike the rest reads as a member's name to somebody
+        // whose project happens to use those words.
+        //
+        // The list runs in board order and the end is the default, because that
+        // is where a column somebody has not thought about the position of
+        // belongs.
+        const placements = (definitions.length
+          ? [["before:" + definitions[0].status, "Before " + definitions[0].label]]
+          : []
+        ).concat(definitions.map((candidate) =>
+          ["after:" + candidate.status, "After " + candidate.label]));
+        const placement = panelSelect("status-new-placement", placements, panelControls,
+          definitions.length ? "after:" + definitions[definitions.length - 1].status : null);
         const add = panelSubmitButton("Add status", "",
           { modifier: "admin-button--primary", blocked: true });
         const guard = () => blockPanelControl(add, !name.value.trim());
@@ -7576,6 +7901,612 @@
         if (!inside || !vocabularyPanel || vocabularyPanel.contains(document.activeElement)) return;
         if (typeof vocabularyPanel.focus === "function") vocabularyPanel.focus();
       }
+      // This project's priorities: the statuses panel's sibling, built out of the
+      // same parts and differing where a priority differs from a status.
+      //
+      // Three differences, and every one of them shows on the page.
+      //
+      // ONE ROLE, GIVEN RATHER THAN HELD. A status carries up to three tags with
+      // lifecycle meaning; a priority carries `default`, exactly one does, and
+      // the only operation is handing it to another priority — there is no
+      // clearing counterpart, because a project with no default is a project
+      // where a new task has nowhere to land. So the row that holds it is drawn
+      // holding it with nothing to offer, and the constraint is rendered rather
+      // than enforced: which priority is the default is the server's derivation,
+      // read off the document, and a client that decided it could disagree.
+      //
+      // ONE OPERATION PER REQUEST. A status form is one PATCH; each of these
+      // changes is its own route against its own head. A Save that renames a
+      // priority AND takes the default is two requests, in order, the second
+      // against the head the first answered with and addressed at the NEW name.
+      // It can half-land, and then the rename stands and the role did not move.
+      // There is no compensating write and this must not invent one: a board
+      // undoing a change nobody asked it to undo is worse than a board that says
+      // what happened.
+      //
+      // AND WHAT IS READ IS NOT WHAT MAY BE WRITTEN. The document carries the
+      // EFFECTIVE priorities: a project that has configured none is answered
+      // with the built-in three, because that is what the board must draw either
+      // way, and nothing in the answer says which it is looking at. So this
+      // section never sends back what it read. Every request carries one
+      // operation a reader actually performed — the way the board settings form
+      // sends only the fields that moved — because the first priority write on a
+      // project records the built-in three as a decision it never made and
+      // stamps the compatibility marker that parks every teammate on an older
+      // build, in exchange for changing nothing.
+      //
+      // The role's name comes from the server, as the status tags' do and for
+      // the same two reasons: the set belongs to the vocabulary, and a client
+      // that spelled it would be a client naming a word that is also a status
+      // tag. There is one today; a second would need a route of its own before
+      // this section could offer it, so the first is the role this draws.
+      const priorityTagNames = priorityPanel
+        ? (priorityPanel.dataset.priorityTags || "").split(" ").filter(Boolean)
+        : [];
+      const priorityRoleName = priorityTagNames.length ? priorityTagNames[0] : "";
+      let priorityForm = null;
+      let priorityBusy = false;
+      let priorityControls = [];
+      // The priority a drag is carrying, and the rows that can be marked while
+      // it is in flight. Its own pair rather than the statuses' — the two lists
+      // are drawn from different vocabularies and reorder through different
+      // routes, and keeping the state apart is what makes each list refuse the
+      // other's gesture: with a column in flight this one has nothing of its
+      // own being dragged, and answers no.
+      let panelDragPriority = null;
+      let panelPriorityRows = [];
+      const prioritySendingMessage = "Sending a change to this project's priorities.";
+      function priorityReport(kind, message, warnings = []) {
+        reportInto(priorityPanelStatus, kind, message, warnings);
+      }
+      function applyPriorityBusy() {
+        priorityControls.forEach((control) => {
+          control.disabled = configBusy() || control.dataset.blocked === "true";
+        });
+      }
+      // The priorities this section is drawing, and the one the server says is
+      // the default. Both are read off the document rather than derived: the
+      // order is the server's and the role is a rule, and a client that
+      // re-derived either could disagree with the board about where a new task
+      // lands.
+      function panelPriorityList() {
+        const priorities = panelVocabulary && panelVocabulary.priorities;
+        return priorities && Array.isArray(priorities.priorities) ? priorities.priorities : [];
+      }
+      function priorityDefault() {
+        const priorities = panelVocabulary && panelVocabulary.priorities;
+        return priorities && priorities.default || "";
+      }
+      function priorityPath(priority) {
+        return "/api/vocabulary/priorities/" + encodeURIComponent(priority);
+      }
+      // What a vocabulary document calls a priority, falling back to the token
+      // for one it does not carry — which is what a removal's destination is once
+      // the answer has taken it out, and what a renamed priority is under the
+      // name it no longer has.
+      function priorityLabelIn(vocabulary, priority) {
+        const priorities = vocabulary && vocabulary.priorities;
+        const definition = (priorities && priorities.priorities || [])
+          .find((candidate) => candidate.priority === priority);
+        return definition ? definition.label : priority;
+      }
+      // The one role a priority has, drawn as the list-wide constraint it is.
+      //
+      // The priority that holds it is shown holding it and is given nothing to
+      // press: there is no operation that clears the role, so a control offering
+      // to would be offering a request this client cannot make. That is a
+      // control with nothing to do, which is what the Up on the first row
+      // already is — not the client refusing a change in words of its own, which
+      // is what the vocabulary is for.
+      function priorityDefaultChoice(definition, holds) {
+        const region = document.createElement("fieldset");
+        region.className = "admin-tags";
+        const caption = document.createElement("legend");
+        text(caption, "Role");
+        region.append(caption);
+        const choice = document.createElement("label");
+        choice.className = "admin-tag-choice";
+        const box = document.createElement("input");
+        box.type = "checkbox";
+        box.id = "priority-" + definition.priority + "-default";
+        box.dataset.priorityDefault = definition.priority;
+        box.checked = holds;
+        const name = document.createElement("span");
+        text(name, priorityRoleName);
+        choice.append(box, name);
+        region.append(choice);
+        priorityControls.push(box);
+        blockPanelControl(box, holds);
+        const hint = document.createElement("p");
+        hint.className = "admin-hint";
+        text(hint, holds
+          ? "This is where a task created without a priority lands. Exactly one priority carries the role, and it is given rather than taken: make another priority the default to move it."
+          : "Where a task created without a priority lands. Giving it here takes it off the priority that holds it now.");
+        region.append(hint);
+        return { region, taken: () => box.checked && !holds };
+      }
+      // A row's edit form: the name, the label, the color and the role.
+      //
+      // The color is a text field with a well beside it, through the same
+      // colorWellGroup the board settings form's two colors use. The field is
+      // the change and the well is only a way into it: `#rrggbb` is what the
+      // ledger stores and what `workbook priority color` takes, and an empty
+      // field is a color taken back off the priority — which a well, having no
+      // empty value, could never say.
+      function priorityEditForm(definition) {
+        const form = document.createElement("form");
+        form.className = "admin-form";
+        form.dataset.priorityEdit = definition.priority;
+        const name = panelTextInput("priority-name-" + definition.priority, definition.priority, "", priorityControls);
+        const label = panelTextInput("priority-label-" + definition.priority, definition.label, "", priorityControls);
+        // A priority with no stored color is drawn in one the board derives from
+        // its position, and there is no stored default to put in the field: the
+        // empty field is the state, and the placeholder says the shape rather
+        // than naming a color this script would then be keeping a copy of.
+        const colorID = "priority-color-" + definition.priority;
+        const color = panelTextInput(colorID, definition.color || "", "#rrggbb", priorityControls);
+        const colorWell = colorWellGroup(color, "Pick a color for " + definition.label,
+          priorityControls, colorID);
+        const holds = definition.priority === priorityDefault();
+        const role = priorityDefaultChoice(definition, holds);
+        const save = panelSubmitButton("Save", "Save changes to " + definition.label,
+          { modifier: "admin-button--primary", controls: priorityControls });
+        const guard = () => blockPanelControl(save, !name.value.trim());
+        name.addEventListener("input", guard);
+        guard();
+        async function submit() {
+          const renamed = name.value.trim();
+          if (!renamed) return;
+          // Only what this form actually changed, for the reason a status form
+          // sends only what it changed and for one more: an edit that sets
+          // nothing is refused, deliberately, because the first priority write
+          // on a project costs it the compatibility marker — so a Save nobody
+          // edited must not become one.
+          const change = {};
+          if (renamed !== definition.priority) change.name = renamed;
+          if (label.value !== definition.label) change.label = label.value;
+          const takes = role.taken();
+          const edited = Object.keys(change).length > 0;
+          // The color as it was typed, and the question of whether it is a
+          // change asked of the trimmed one.
+          //
+          // Two decisions sit in that sentence. What is *sent* is untouched,
+          // because what a color is belongs to the verb family that validates
+          // it: this panel neither trims nor lowercases, so `#B42318` over a
+          // stored `#b42318` goes, and the writer — which does lowercase before
+          // it compares — answers that the priority already has that color, in
+          // its own words.
+          //
+          // What is *compared* is trimmed, which settles the one case the route
+          // leaves open: a field holding nothing but spaces. The writer trims
+          // before it reads, so such a field already clears the color and
+          // answers 200. Refusing it here would be this client refusing in words
+          // of its own, which is the thing this section does not do — so a blank
+          // field is the clearing it looks like. It cannot clear by accident:
+          // the comparison is against what is stored, so spaces in the empty
+          // field of a priority with no color are no change and send nothing,
+          // and a clearing is only ever offered to a reader looking at a color
+          // they set, which typing it back undoes.
+          const recolored = color.value.trim() !== (definition.color || "");
+          if (!edited && !takes && !recolored) {
+            priorityReport("", "Nothing about " + definition.label + " was changed.");
+            return;
+          }
+          // One operation per request, in order — there is no route that does
+          // two, and there should not be one. What makes them one gesture is
+          // that each is composed against the head the one before it answered
+          // with, which is the head this page now holds because adopting that
+          // answer is what took it.
+          //
+          // The color goes first, and that is not arbitrary. It is the only
+          // value in this form whose *shape* the writer checks, so it is the
+          // only one a reader can get wrong without knowing. Sent last, a
+          // mistyped hex code would leave the rename recorded and the Save
+          // refused — a half-landed change, with no compensating write, over a
+          // typo. Sent first, it costs a second press and nothing else.
+          //
+          // Everything after it is addressed at the name the rename gives,
+          // because the old one answers 404 once it is forwarded: a rename
+          // forwards a name so that tasks filed under it still resolve, and a
+          // forwarded name does not resolve as an address.
+          const named = change.name || definition.priority;
+          const steps = [];
+          if (recolored) {
+            steps.push({
+              path: priorityPath(definition.priority) + "/color",
+              body: { color: color.value },
+              describe: (payload) => {
+                const drawn = priorityLabelIn(payload.vocabulary, definition.priority);
+                return color.value.trim()
+                  ? "Recolored " + drawn + "."
+                  : "Cleared the color on " + drawn + "; the board draws it in the color its position derives.";
+              }
+            });
+          }
+          if (edited) {
+            steps.push({
+              path: priorityPath(definition.priority),
+              body: change,
+              describe: (payload) => "Updated " + priorityLabelIn(payload.vocabulary, named) + "."
+            });
+          }
+          if (takes) {
+            steps.push({
+              path: priorityPath(named) + "/default",
+              body: {},
+              describe: () => "New tasks now land at " + priorityLabelIn(panelVocabulary, named) + "."
+            });
+          }
+          // What has already been recorded, carried forward so a refusal can be
+          // reported beside it. Nothing here undoes a step that landed — there
+          // is no write that would, and a board authoring a change nobody asked
+          // for is worse than one that says what happened — so a half-landed
+          // Save reports both halves and stops. The row has already been redrawn
+          // from the priorities as they now stand, so re-opening its form offers
+          // the operations that did not land and not the ones that did, which
+          // would only be refused a second time.
+          let landed = "";
+          for (const step of steps) {
+            const answer = await changeVocabulary("PATCH", step.path, step.body,
+              (payload) => {
+                const said = step.describe(payload);
+                return landed ? landed + " " + said : said;
+              },
+              priorityChanges);
+            if (!answer || !answer.applied) {
+              if (answer && landed) priorityReport("error", landed + " " + answer.message);
+              return;
+            }
+            landed = answer.message;
+          }
+        }
+        form.addEventListener("submit", (event) => { event.preventDefault(); submit(); });
+        form.append(
+          panelField("Name", name),
+          panelField("Label", label),
+          panelField("Color", colorWell, color),
+          role.region,
+          save,
+          panelButton("Cancel", "Stop editing " + definition.label, closePriorityForm,
+            { controls: priorityControls })
+        );
+        return form;
+      }
+      function priorityDeleteForm(definition, definitions) {
+        const form = document.createElement("form");
+        form.className = "admin-form";
+        form.dataset.priorityDelete = definition.priority;
+        const elsewhere = definitions.filter((candidate) => candidate.priority !== definition.priority);
+        // Where the tasks filed at this priority belong. It is required and never
+        // guessed, exactly as `workbook priority delete --into` is, so a project
+        // with one priority has no removal to offer rather than one that would
+        // strand every task at a priority nothing resolves.
+        const into = panelSelect(
+          "priority-into-" + definition.priority,
+          elsewhere.map((candidate) => [candidate.priority, candidate.label]),
+          priorityControls
+        );
+        function submit() {
+          if (!into.value) return;
+          changeVocabulary("DELETE", priorityPath(definition.priority), { into: into.value },
+            (answer) => priorityRemovalSummary(definition, into.value, answer.tasks),
+            priorityChanges);
+        }
+        form.addEventListener("submit", (event) => { event.preventDefault(); submit(); });
+        const remove = panelSubmitButton("Remove", "Remove " + definition.label,
+          { modifier: "admin-button--danger", blocked: elsewhere.length === 0, controls: priorityControls });
+        if (elsewhere.length === 0) {
+          const note = document.createElement("p");
+          note.className = "admin-note";
+          text(note, "This is the only priority this project has, so there is nowhere for its tasks to go.");
+          form.append(note);
+        } else {
+          form.append(panelField("Move its tasks to", into));
+        }
+        form.append(remove, panelButton("Cancel", "Keep " + definition.label, closePriorityForm,
+          { controls: priorityControls }));
+        return form;
+      }
+      // What a removal cost, in the one term a priority removal has: the tasks
+      // that were filed at it and where they went.
+      //
+      // Not in claimability, which is the other half of what a status removal
+      // reports. Whether `workbook next` can claim a task is decided by a
+      // status's tags and the task's dependencies, and nothing about a priority
+      // gates it — the number would be zero for every priority removal forever,
+      // which is why the answer does not carry one.
+      function priorityRemovalSummary(definition, into, counts) {
+        const name = priorityLabelIn(panelVocabulary, into);
+        const affected = counts && counts.affected || 0;
+        if (affected === 0) return "Removed " + definition.label + ". No tasks were at it.";
+        return "Removed " + definition.label + ". " +
+          affected + (affected === 1 ? " task moved to " : " tasks moved to ") + name + ".";
+      }
+      function addPriorityForm(definitions) {
+        const region = document.createElement("div");
+        region.className = "admin-add";
+        const heading = document.createElement("h3");
+        heading.className = "admin-add__title";
+        text(heading, "Add a priority");
+        const form = document.createElement("form");
+        form.className = "admin-form";
+        form.dataset.priorityAdd = "";
+        const name = panelTextInput("priority-new-name", "", "critical", priorityControls);
+        const label = panelTextInput("priority-new-label", "", "derived from the name", priorityControls);
+        // One control for the placement, because a placement is one decision and
+        // the route takes one anchor. The writer refuses a change naming both.
+        //
+        // One option per position rather than one per priority. A list of n
+        // priorities has n+1 positions, and naming both neighbours of every one
+        // of them spells most of those twice: "Above X" is the position "Below
+        // the one before X" already names. So the most urgent is the only
+        // priority something is offered above, and everything else is a "Below".
+        //
+        // Every option names a priority, including the bottom of the list. A
+        // standing "Least urgent" would be the one entry shaped differently from
+        // the rest, and worse, it would read as a priority's name to anybody
+        // whose project has one called Urgent — which is the first name people
+        // reach for. "Below Low" says the same place and cannot be mistaken for
+        // a member.
+        //
+        // The list runs in the order the rows are drawn, and the bottom is the
+        // default because that is where a priority somebody has not thought
+        // about the position of belongs.
+        const placements = (definitions.length
+          ? [["before:" + definitions[0].priority, "Above " + definitions[0].label]]
+          : []
+        ).concat(definitions.map((candidate) =>
+          ["after:" + candidate.priority, "Below " + candidate.label]));
+        const placement = panelSelect("priority-new-placement", placements, priorityControls,
+          definitions.length ? "after:" + definitions[definitions.length - 1].priority : null);
+        const add = panelSubmitButton("Add priority", "",
+          { modifier: "admin-button--primary", blocked: true, controls: priorityControls });
+        const guard = () => blockPanelControl(add, !name.value.trim());
+        name.addEventListener("input", guard);
+        function submit() {
+          const priority = name.value.trim();
+          if (!priority) return;
+          const addition = { priority };
+          // An omitted label is the server deriving one from the name, which is
+          // what `workbook priority add` does without --label. An empty string
+          // would be a blank label, which the vocabulary refuses.
+          if (label.value.trim()) addition.label = label.value.trim();
+          const [side, neighbor] = placement.value ? placement.value.split(":") : ["", ""];
+          if (neighbor) addition[side] = neighbor;
+          changeVocabulary("POST", "/api/vocabulary/priorities", addition,
+            () => "Added " + priority + ".", priorityChanges);
+        }
+        form.addEventListener("submit", (event) => { event.preventDefault(); submit(); });
+        form.append(
+          panelField("Name", name),
+          panelField("Label", label),
+          panelField("Position", placement),
+          add
+        );
+        region.append(heading, form);
+        return region;
+      }
+      function closePriorityForm() {
+        priorityForm = null;
+        renderPriorityPanel();
+      }
+      function openPriorityForm(priority, kind) {
+        priorityForm = priorityForm && priorityForm.priority === priority && priorityForm.kind === kind
+          ? null
+          : { priority, kind };
+        renderPriorityPanel();
+      }
+      // Moving a priority one place names the neighbor it goes next to, because
+      // that is what the route takes: there is no whole-order counterpart here,
+      // and the asymmetry with the statuses is deliberate rather than an
+      // omission. Up places this priority before the one above it; Down places it
+      // after the one below.
+      function movePriority(definition, index, offset, definitions) {
+        const neighbor = definitions[index + offset];
+        if (!neighbor) return;
+        const anchor = offset < 0 ? { before: neighbor.priority } : { after: neighbor.priority };
+        return changeVocabulary("PATCH", priorityPath(definition.priority) + "/position", anchor,
+          () => "Moved " + definition.label + (offset < 0 ? " up." : " down."),
+          priorityChanges);
+      }
+      // A row dropped on another takes that row's place: downward it lands after
+      // the row it was dropped on, upward it lands before it — the same rule the
+      // statuses read a drop by, because it is what both gestures look like they
+      // are asking for.
+      //
+      // That rule is already an anchor. One neighbor and one side of it is
+      // exactly what the move route takes, so a drop needs no whole-order plan
+      // to be sent: this is the request Up and Down send, from a different
+      // gesture.
+      function movePriorityOnto(dragged, target) {
+        const definitions = panelPriorityList();
+        const from = definitions.findIndex((definition) => definition.priority === dragged);
+        const to = definitions.findIndex((definition) => definition.priority === target);
+        if (from < 0 || to < 0 || from === to) return;
+        const falling = from < to;
+        const anchor = falling ? { after: target } : { before: target };
+        return changeVocabulary("PATCH", priorityPath(dragged) + "/position", anchor,
+          () => "Moved " + definitions[from].label + (falling ? " down." : " up."),
+          priorityChanges);
+      }
+      // Where this drag may be dropped on the priority list, or null if it may
+      // not be dropped here. Asked by dragenter, dragover and drop alike, for
+      // the reasons panelDropDestination above sets out: a browser takes its
+      // answer from whichever of the first two it dispatched last, and one rule
+      // is what keeps the three from drifting apart.
+      //
+      // The three refusals are that function's three, read against this list: a
+      // file is not a reorder and must be neither taken nor swallowed, a
+      // gesture that is not this list's — a board card, a column, a drag from
+      // another window — is none of its business, and the row being dragged has
+      // nowhere to arrive.
+      function priorityDropDestination(event, row, priority) {
+        if (draggingFiles(event)) return null;
+        if (!panelDragPriority) return null;
+        if (panelDragPriority === priority) return null;
+        return row;
+      }
+      function clearPriorityDropMarks() {
+        panelPriorityRows.forEach((row) => { delete row.dataset.dropTarget; });
+      }
+      function priorityRow(definition, index, definitions) {
+        const item = document.createElement("li");
+        item.className = "admin-status";
+        item.dataset.vocabularyPriority = definition.priority;
+        const editing = Boolean(priorityForm && priorityForm.priority === definition.priority);
+        // A row with a form open is not draggable, for the reason a status row
+        // with one open is not: selecting the text in an input is a press and a
+        // drag, and inside a draggable ancestor that is the gesture that starts
+        // the drag. The row is still reorderable while its form is open, by the
+        // Up and Down controls.
+        item.draggable = !editing;
+        const name = document.createElement("div");
+        name.className = "admin-status__name";
+        const label = document.createElement("span");
+        text(label, definition.label);
+        const token = document.createElement("code");
+        token.className = "admin-status__token";
+        text(token, definition.priority);
+        name.append(label, token);
+        // The role chips, drawn from the roles the document says this priority
+        // carries. Nothing here names a role: the set is the vocabulary's.
+        (definition.tags || []).forEach((tag) => {
+          const chip = document.createElement("span");
+          chip.className = "admin-tag";
+          chip.dataset.priorityTag = tag;
+          text(chip, tag);
+          name.append(chip);
+        });
+        const controls = document.createElement("div");
+        controls.className = "admin-status__controls";
+        // Reordering has a keyboard path as well as a drag, and both send the
+        // same one request. A drag is not an input everybody has.
+        controls.append(
+          panelButton("Up", "Move " + definition.label + " earlier",
+            () => movePriority(definition, index, -1, definitions),
+            { blocked: index === 0, controls: priorityControls }),
+          panelButton("Down", "Move " + definition.label + " later",
+            () => movePriority(definition, index, 1, definitions),
+            { blocked: index === definitions.length - 1, controls: priorityControls }),
+          panelButton("Edit", "Edit " + definition.label,
+            () => openPriorityForm(definition.priority, "edit"), { controls: priorityControls }),
+          panelButton("Delete", "Delete " + definition.label,
+            () => openPriorityForm(definition.priority, "delete"), { controls: priorityControls })
+        );
+        item.append(name, controls);
+        if (editing) {
+          item.append(priorityForm.kind === "delete"
+            ? priorityDeleteForm(definition, definitions)
+            : priorityEditForm(definition));
+        }
+        // The gesture, listener for listener as the statuses draw it, and for
+        // the reasons written out over their handlers: both of dragenter and
+        // dragover answer, through the one rule above; a leave that is not a
+        // departure leaves the mark alone, since a browser pairs a dragleave
+        // with every dragenter and a row is a name, some chips and four buttons
+        // for a cursor to cross; and a drop this section refuses is left alone
+        // entirely — not marked, not prevented, and above all not turned into a
+        // reorder, which is what a file dropped here over a stale drag would
+        // otherwise become.
+        item.addEventListener("dragstart", (event) => {
+          // The same condition the row's own controls are greyed by: a change
+          // is in flight somewhere on this page, and a gesture that cannot be
+          // sent is not one to start.
+          if (configBusy() || editing) return;
+          panelDragPriority = definition.priority;
+          item.dataset.dragging = "true";
+          if (event.dataTransfer) {
+            event.dataTransfer.effectAllowed = "move";
+            event.dataTransfer.setData("text/plain", definition.priority);
+          }
+        });
+        item.addEventListener("dragend", () => {
+          panelDragPriority = null;
+          clearPriorityDropMarks();
+          delete item.dataset.dragging;
+        });
+        const answerPriorityDrag = (event) => {
+          if (!priorityDropDestination(event, item, definition.priority)) return;
+          event.preventDefault();
+          if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+          // Only when the mark is not already here: rewriting the same
+          // attributes under a drag cursor is a mutation for no change, and it
+          // is mutations under a drag cursor that make a browser re-run its hit
+          // test and churn.
+          if (item.dataset.dropTarget !== "true") {
+            clearPriorityDropMarks();
+            item.dataset.dropTarget = "true";
+          }
+        };
+        item.addEventListener("dragenter", answerPriorityDrag);
+        item.addEventListener("dragover", answerPriorityDrag);
+        item.addEventListener("dragleave", (event) => {
+          if (item.contains(event.relatedTarget)) return;
+          if (cursorWithin(item, event)) return;
+          delete item.dataset.dropTarget;
+        });
+        item.addEventListener("drop", (event) => {
+          if (!priorityDropDestination(event, item, definition.priority)) return;
+          event.preventDefault();
+          clearPriorityDropMarks();
+          const dragged = panelDragPriority;
+          panelDragPriority = null;
+          return movePriorityOnto(dragged, definition.priority);
+        });
+        return item;
+      }
+      function renderPriorityPanel() {
+        if (!priorityPanel || !priorityPanelBody) return;
+        // Focus is caught and parked the way the statuses panel catches it: the
+        // control the reader pressed is one of the nodes this drops.
+        const held = document.activeElement;
+        const inside = Boolean(held && priorityPanel.contains(held));
+        priorityControls = [];
+        panelPriorityRows = [];
+        // A rebuild drops every row a drag could be carrying or landing on, and
+        // a drag whose row no longer exists is not a drag any more — the
+        // statuses drop theirs here for the same reason.
+        panelDragPriority = null;
+        if (!panelVocabulary || !panelVocabulary.priorities) {
+          const message = document.createElement("p");
+          message.className = "admin-note";
+          message.dataset.priorityPanelEmpty = "";
+          text(message, panelReading
+            ? "Reading this project's priorities."
+            : "This project's priorities are not available.");
+          priorityPanelBody.replaceChildren(message);
+          restorePriorityFocus(inside);
+          return;
+        }
+        const definitions = panelPriorityList();
+        const list = document.createElement("ul");
+        list.className = "admin-statuses";
+        list.setAttribute("role", "list");
+        definitions.forEach((definition, index) => {
+          const row = priorityRow(definition, index, definitions);
+          panelPriorityRows.push(row);
+          list.append(row);
+        });
+        priorityPanelBody.replaceChildren(list, addPriorityForm(definitions));
+        applyPriorityBusy();
+        restorePriorityFocus(inside);
+      }
+      function restorePriorityFocus(inside) {
+        if (!inside || !priorityPanel || priorityPanel.contains(document.activeElement)) return;
+        if (typeof priorityPanel.focus === "function") priorityPanel.focus();
+      }
+      // Leaving the route takes the priorities with it, for the reason it takes
+      // the statuses: the next visit reads them again rather than offering a
+      // change composed against values that may be minutes old.
+      function leavePrioritySection() {
+        if (!priorityPanel || priorityPanel.hidden) return;
+        priorityPanel.hidden = true;
+        priorityPanel.remove();
+        priorityForm = null;
+        priorityPanelBody.replaceChildren();
+        priorityPanelStatus.replaceChildren();
+        priorityPanelStatus.dataset.kind = "";
+      }
       // The board's own settings: what this project calls itself, and the two
       // colors it is drawn in.
       //
@@ -7594,11 +8525,12 @@
       // Workbook — permanently, for every clone that fetches it — so a Save
       // pressed twice must cost nothing the second time.
       //
-      // The two sections write the same ref against the same head, so neither
-      // starts while the other is in flight and each greys the other's controls
-      // while it runs. They keep their own live regions, though: a refused
-      // status change must not blank a name the reader has just typed, and a
-      // saved name must not erase what the status change had to say.
+      // All three sections write the same ref against the same head, so none of
+      // them starts while another is in flight and each greys the others'
+      // controls while it runs — which is what configBusy below is. They keep
+      // their own live regions, though: a refused status or priority change must
+      // not blank a name the reader has just typed, and a saved name must not
+      // erase what that change had to say.
       let displaySettings = null;
       let displayBusy = false;
       let displayControls = [];
@@ -7607,7 +8539,7 @@
       let displayFields = null;
       const displaySendingMessage = "Sending this project's board settings.";
       function configBusy() {
-        return panelBusy || displayBusy;
+        return panelBusy || priorityBusy || displayBusy;
       }
       function displayReport(kind, message, warnings = []) {
         reportInto(displayPanelStatus, kind, message, warnings);
@@ -7617,19 +8549,32 @@
       }
       function applyConfigBusy() {
         applyPanelBusy();
+        applyPriorityBusy();
         applyDisplayBusy();
       }
       function adoptDisplay(settings) {
         displaySettings = settings;
         renderDisplayPanel();
+        // And the board behind this page is redrawn in the accent and the ink
+        // the answer carries, composed by the server for the reason the
+        // priority ink is. A document with no display member carries no theme,
+        // and redrawBoardStyle leaves the board alone rather than clearing it:
+        // that is a project that has configured no settings, not a project whose
+        // settings were cleared — which arrives as an empty stylesheet and does
+        // clear the board.
+        redrawBoardStyle(boardThemeStyle, settings && settings.theme);
       }
       // Takes a display document as the panel's own, and takes its head as the
       // page's: there is one configuration ledger, so a display change moves the
       // tip a status change has to name, and the standing notice above main is
       // what tells the board it has moved.
-      function adoptDisplayAtHead(settings) {
+      function adoptDisplayAtHead(settings, shape) {
         panelHead = typeof settings.head === "string" ? settings.head : "";
-        noteVocabularyChange(panelHead);
+        // The answer states the shape of the configuration it wrote into, beside
+        // the settings rather than in them, because one save moves the one
+        // ledger tip and the board has to be told whether anything it is drawing
+        // moved with it — which, for a board settings save, it did not.
+        noteVocabularyChange(panelHead, typeof shape === "string" ? shape : "");
         adoptDisplay(settings);
       }
       // One save, sent as the whole configuration and against the head the page
@@ -7684,14 +8629,14 @@
           // of the recovery, exactly as it is for a status change — and the copy
           // names the configuration rather than the statuses, because what moved
           // may have been either.
-          if (payload.display) adoptDisplayAtHead(payload.display);
+          if (payload.display) adoptDisplayAtHead(payload.display, payload.shape);
           applyConfigBusy();
           displayReport("error", stale
             ? "This project's configuration changed in another clone, so these settings were not applied. This page now shows them as they stand; review them and save again."
             : payload.error && payload.error.message || "These board settings were not applied.");
           return;
         }
-        adoptDisplayAtHead(payload.display);
+        adoptDisplayAtHead(payload.display, payload.shape);
         applyConfigBusy();
         displayReport("", describeDisplaySave(payload.display),
           (payload.warnings || []).map((warning) => warning.message));
@@ -7707,8 +8652,8 @@
         if (settings.primaryColor) named.push("drawn in " + settings.primaryColor);
         if (settings.textColor) named.push("set in " + settings.textColor);
         return named.length === 0
-          ? "This board has no settings of its own. Reload the board to draw it as it now stands."
-          : "This board is " + named.join(", ") + ". Reload the board to draw it as it now stands.";
+          ? "This board has no settings of its own. Its colors are drawn as they now stand; reload the board to draw its name."
+          : "This board is " + named.join(", ") + ". Its colors are drawn as they now stand; reload the board to draw its name.";
       }
       function renderDisplayPanel() {
         if (!displayPanel || !displayPanelBody) return;
@@ -7750,9 +8695,9 @@
         };
         form.append(
           panelField("Project name", displayFields.name),
-          panelField("Accent color", colorWellGroup(displayFields.primaryColor, "Pick an accent color"),
+          panelField("Accent color", colorWellGroup(displayFields.primaryColor, "Pick an accent color", displayControls),
             displayFields.primaryColor),
-          panelField("Text color", colorWellGroup(displayFields.textColor, "Pick a text color"),
+          panelField("Text color", colorWellGroup(displayFields.textColor, "Pick a text color", displayControls),
             displayFields.textColor),
           panelSubmitButton("Save", "Save this project's board settings",
             { modifier: "admin-button--primary", controls: displayControls })
@@ -7769,20 +8714,26 @@
         control.dataset.displayField = member;
         return control;
       }
-      // A colour field and the well that fills it. The well opens the browser's
+      // A color field and the well that fills it. The well opens the browser's
       // picker and only ever writes into the field, which stays the setting the
-      // save reads; it follows the field when a complete colour is typed, and
+      // save reads; it follows the field when a complete color is typed, and
       // leaves an incomplete one alone rather than guessing at what is still
       // arriving. A field holding nothing leaves the well at the control's own
-      // black default: the board's colours are the stylesheet's literals, and
+      // black default: the board's colors are the stylesheet's literals, and
       // the script keeps no copy of them.
-      function colorWellGroup(field, description) {
+      //
+      // `controls` and `key` are the only things a caller outside the display
+      // form has to supply: `controls` is the busy-list this well joins (the
+      // display form passes its own), and `key` is what the well is named
+      // after — the display form's fields already carry it, so its two
+      // callers need not pass it.
+      function colorWellGroup(field, description, controls = panelControls, key = field.dataset.displayField) {
         const group = document.createElement("div");
         group.className = "admin-color";
         const well = document.createElement("input");
         well.type = "color";
         well.className = "admin-color__well";
-        well.dataset.displayWell = field.dataset.displayField;
+        well.dataset.displayWell = key;
         well.setAttribute("aria-label", description);
         well.value = "#000000";
         const follow = () => {
@@ -7792,7 +8743,7 @@
         follow();
         well.addEventListener("input", () => { field.value = well.value; });
         field.addEventListener("input", follow);
-        displayControls.push(well);
+        controls.push(well);
         group.append(field, well);
         return group;
       }
@@ -7815,12 +8766,12 @@
       }
       // The configuration page, in the shell every other route is drawn in: a
       // header that names it and offers the way back to the board, and under it
-      // the two bodies the server rendered, each under a heading of its own.
+      // the bodies the server rendered, each under a heading of its own.
       //
-      // The headings are the page's, not the panels'. The route holds two
-      // sections now — the project's statuses and the board's own settings —
-      // and a page whose h2 named one of them would be a page that grew a second
-      // section nobody announced.
+      // The headings are the page's, not the panels'. What the route holds is
+      // whatever this board was built to administer — the project's statuses,
+      // its priorities, the board's own settings — and a page whose h2 named one
+      // of them would be a page that grew a section nobody announced.
       //
       // The bodies are moved rather than copied. Each is one element with one
       // identity for the length of the visit, which is what lets the list, the
@@ -7856,6 +8807,14 @@
         section.append(sectionHeading("statuses-title", "Statuses"));
         vocabularyPanel.hidden = false;
         section.append(vocabularyPanel);
+        // This project's priorities, on a board that was given the capabilities
+        // to change them. A board without them is served no section and gets no
+        // heading, rather than a heading over nothing.
+        if (priorityPanel) {
+          section.append(sectionHeading("priorities-title", "Priorities"));
+          priorityPanel.hidden = false;
+          section.append(priorityPanel);
+        }
         // The board's own settings, on a board that was given the capability to
         // change them. A board without it is served no panel and gets no
         // heading, rather than a heading over nothing.
@@ -7871,6 +8830,9 @@
         // control and explains none of it.
         if (panelBusy) {
           panelReport("", pendingIntents.size > 0 ? panelWaitingMessage : panelSendingMessage);
+        }
+        if (priorityBusy) {
+          priorityReport("", pendingIntents.size > 0 ? panelWaitingMessage : prioritySendingMessage);
         }
         if (displayBusy) displayReport("", displaySendingMessage);
         return section;
@@ -7893,6 +8855,7 @@
       // hands its head to noteVocabularyChange for the notice, and renders into
       // a body that is no longer in the document.
       function leaveConfigRoute() {
+        leavePrioritySection();
         leaveDisplaySection();
         if (!vocabularyPanel || vocabularyPanel.hidden) return;
         vocabularyPanel.hidden = true;
@@ -8403,7 +9366,7 @@
           const draft = pendingNewTaskDraft;
           pendingNewTaskDraft = null;
           const form = taskForm("new", draft ||
-            { title: "", description: "", status: current.status, priority: "medium", labels: [] });
+            { title: "", description: "", status: current.status, priority: defaultPriority, labels: [] });
           main.replaceChildren(form);
           focusRearmedNewTask(form);
           return;
@@ -9065,8 +10028,34 @@
       // head, a refusal they have not read yet. None of that can be moved to a
       // new node, and all of it is lost with the old one. A reload loses it
       // too, which is exactly why the reader chooses when.
-      function noteVocabularyChange(head) {
+      //
+      // What raises it is the configuration that arrived differing from the one
+      // this page is drawing, not the head having moved. Those were the same
+      // question until a change could be drawn without a reload; a color can
+      // be, because every answer carries the stylesheet the server would have
+      // served and the page swaps it in place — so a head-based notice asked
+      // the reader to reload for a board they were already looking at. The
+      // server states the shape of what a head stands for, the columns and the
+      // priorities by membership, order and label, and a head that arrives over
+      // a shape this page already has is recorded and passed over in silence.
+      //
+      // By content rather than by who made the change, which is what makes it
+      // right for a teammate's: their recolor is as quiet as the reader's own,
+      // and their rename is as loud.
+      //
+      // A change that states no shape — an older build, or a document composed
+      // without one — is announced. Nothing here can tell whether it is on
+      // screen, and the end of that failure the reader can act on is the notice.
+      function noteVocabularyChange(head, shape) {
         if (vocabularyChanged || head === renderedVocabularyHead) return;
+        if (shape && shape === renderedVocabularyShape) {
+          // Current, so the head this page answers for moves up to it. Without
+          // that, every later answer carrying the same head would be compared
+          // again — and a poll that fell back to a document with no shape on it
+          // would then announce a change this page had already accepted.
+          renderedVocabularyHead = head;
+          return;
+        }
         vocabularyChanged = true;
         vocabularyNotice.hidden = false;
       }
@@ -9125,7 +10114,9 @@
             // check above: a refresh that lost the race never touches the
             // model, so it never has a read to report.
             boardRead = true;
-            noteVocabularyChange(typeof document.vocabularyHead === "string" ? document.vocabularyHead : "");
+            noteVocabularyChange(
+              typeof document.vocabularyHead === "string" ? document.vocabularyHead : "",
+              typeof document.vocabularyShape === "string" ? document.vocabularyShape : "");
             // A poll deliberately does not touch a pending queue's head. The
             // queue re-bases when a write is actually refused, where the answer
             // is known to be newer than the head that failed; a poll that left

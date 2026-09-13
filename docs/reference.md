@@ -642,7 +642,12 @@ v0.6.0 clone to change; see
 
 A color is optional. `workbook priority color <priority> "#rrggbb"` records one
 and the same command with no value clears it, returning that priority to a
-color the board derives from its position. There is no stored default to go
+color the board derives from its position. Derived means derived from the
+position a priority holds *now*, so adding or removing one restyles the others
+that carry no color of their own — they are spread across the board's
+palette, and a list of four is spread differently from a list of three. A priority with
+a recorded color keeps it whatever moves around it, which is the other reason
+to record one. There is no stored default to go
 back to, which is why clearing is what it is: nothing was written, so nothing
 is written back. Recording the color a priority already has, or clearing one it
 does not have, is refused rather than recorded — a priority operation against a
@@ -672,6 +677,12 @@ priority's position, machine value, display label, tag, color and task count.
 `.workbook/guidelines.md` carries the same table, and every mutating priority
 verb rewrites it; `--no-docs` skips that for one command and `workbook docs
 update` catches up afterwards.
+
+The web board's **Priorities** section does all of this from the browser —
+adding, renaming, relabeling, recoloring, the `default` role, reordering and
+removal — against this same ledger and with these same refusals, the way its
+**Statuses** section administers the columns; see
+[Terminal board](#terminal-board).
 
 ## Board display settings
 
@@ -1070,45 +1081,72 @@ the header's eyebrow reads `Repository: <the worktree's directory name>`, and
 the heading, the browser tab and every route's title are the project's own name
 where it has recorded one — see
 [Board display settings](#board-display-settings). A project that has
-recorded a primary or a text colour is drawn in it: the server derives the whole
-family that colour implies — the darker steps a filled control takes, the pale
+recorded a primary or a text color is drawn in it: the server derives the whole
+family that color implies — the darker steps a filled control takes, the pale
 surfaces, the hairlines, the focus rings — and serves it as a stylesheet
-override, so a board named and coloured per project is distinguishable from
-another one in a strip of browser tabs. The semantic colours do not move: the
+override, so a board named and colored per project is distinguishable from
+another one in a strip of browser tabs. The semantic colors do not move: the
 danger red, the warning amber and the priority inks mean what they mean
-whatever accent a project picks.
+whatever accent a project picks. A priority's ink is nonetheless the project's
+to choose: it is recorded against the priority itself rather than derived from
+the accent, by `workbook priority color` or by the configuration page's
+Priorities section, and a priority that has none is drawn in a color the board
+derives from its position — see [Project priorities](#project-priorities). On a
+card that ink is drawn straight onto the card, and is given a background of its
+own only where the card cannot carry it. The board measures each priority's
+color against the card it sits on, in each scheme separately: a color that
+clears the 4.5:1 contrast bar there is left as a bare word, and one that does
+not — a pale yellow is 1.4:1 on a white card — is drawn on a chip deep enough
+behind it to clear 7:1, which is also far enough from the card to read as a
+badge rather than a wash. So a board's priorities do not all look alike, and
+that is the intent: the same yellow is a filled pill in light mode and a bare
+word in dark, because that is what each of those cards can carry.
 
-The `Config` link in the board's header goes to `/config`, a page with two
-sections. **Statuses** administers the board's columns: add one, rename, relabel
+The `Config` link in the board's header goes to `/config`, where each section
+administers one part of what a project configures. **Statuses** administers the
+board's columns: add one, rename, relabel
 or retag one, remove one into the column its tasks belong in, and reorder them
-by dragging a row or with the Up and Down controls beside it. **Board settings**
-is the project's name and its two colours, as three fields and one Save; an
-empty field is a setting cleared, and a save records only the settings that
-actually changed — a Save you have not edited records nothing at all, which
-matters because a display setting is what marks a project's configuration as
-needing Workbook 0.6 or newer. Both write the same ledger the command line
-writes, so `workbook status` and `workbook config set` see exactly what the page
-records.
+by dragging a row or with the Up and Down controls beside it. **Priorities**
+administers the project's priorities the same way, most urgent first: add one
+above or below the ones already there, rename, relabel or recolor one, give one
+the `default` role, remove one into the priority its tasks belong at, and
+reorder them by dragging a row or with the Up and Down controls beside it. The
+role is given rather than taken, so the priority that already holds it shows a
+checked box that cannot be cleared — another priority taking it is how it moves.
+A row's color is the `#rrggbb` its edit form holds, with a swatch beside the
+field as a way into it; emptying that field clears the color and returns the
+priority to the one the board derives from its position, which is why the field
+rather than the swatch is the control — a swatch has no empty value to pick.
+**Board settings** is the project's name and its two colors, as three fields and
+one Save; an empty field is a setting cleared, and a save records only the
+settings that actually changed — a Save you have not edited records nothing at
+all, which matters because a display setting is what marks a project's
+configuration as needing Workbook 0.6 or newer. Every section writes the same
+ledger the command line writes, so `workbook status`, `workbook priority` and
+`workbook config set` see exactly what the page records.
 
 It is a page rather than a drawer over the board, so its forms have room, and it
 is a route like any other here — a bookmark, a reload and a middle-click all
-land on it, and `Back` returns to the board. It is `workbook status` and
-`workbook config` reached from the browser — the same rules, the same refusals,
-in the same words — and everything it refuses is refused by the vocabulary or by
-the configuration rather than by the page, so an unknown tag, a name that is
-already taken or a colour that is not six hexadecimal digits reads exactly as it
-does in the terminal. A removal reports how many tasks it moved and how many of
-those `workbook next` can claim where they landed, and any warning a change
-carries, such as generated guidelines the server did not rewrite, is shown
-rather than swallowed. A board served without the four vocabulary mutations has
-no such page: no link, and `/config` is a 404; one served without the display
-writer has the page and not its Board settings section.
+land on it, and `Back` returns to the board. It is `workbook status`, `workbook
+priority` and `workbook config` reached from the browser — the same rules, the
+same refusals, in the same words — and everything it refuses is refused by the
+vocabulary or by the configuration rather than by the page, so an unknown tag, a
+name that is already taken, a color that is not six hexadecimal digits, or a
+color a priority already has reads exactly as it does in the terminal. A removal
+reports how many tasks it moved and how many of those `workbook next` can claim
+where they landed, and any warning a change carries, such as generated
+guidelines the server did not rewrite, is shown rather than swallowed. A board
+served without the four vocabulary mutations has no such page: no link, and
+`/config` is a 404; one served without the display writer has the page and not
+its Board settings section; and one served without all six priority
+mutations — the addition, the rename-and-relabel, the recolor, the `default`
+role, the move and the removal — has the page and not its Priorities section.
 
 The route was `/statuses` before it held more than statuses, and nothing
 forwards the old address: a bookmark to it now lands on this board's
 `Page not found`.
 
-Three things about it are worth knowing before you use it on a busy board.
+A few things about it are worth knowing before you use it on a busy board.
 A status change is not queued the way a task change is: the page waits for any
 card change still in flight — including one you started on the board a moment
 before walking here — sends, and re-draws itself from the answer, because
@@ -1117,12 +1155,38 @@ It composes each change against the head it read, so a change made from a stale
 page is refused rather than applied over somebody else's — and the refusal is
 final: the page shows the statuses as they now stand and asks you to look
 again, because two people renaming the same column mean two different things.
-And the board you walk back to keeps the columns you left it with — and the
-name and colours it was opened with; the notice above it offers the reload that
-redraws them, exactly as it does for a change another clone made. The two
-sections share one ledger and one tip, so neither can be changed while the other
-is changing, and a save of the board's settings is as much a reason for a status
-change to be refused as another status change would be.
+A priority row's Save, unlike a status row's, is not one write. It sends one
+request per operation, in order — the color, then the rename or relabel, then
+the `default` role — each composed against the head the one before it answered
+with, because no route does two of them at once. The color goes first because
+it is the only value in the form whose shape the writer checks, so sending it
+first means a mistyped hex code is refused before a rename is recorded. What
+that ordering cannot prevent is somebody else writing between two of the
+requests. Nothing is rolled back — there is no write that would undo a recorded
+rename, and a board authoring a change nobody asked for is worse than one that
+says what happened — so the row reports both halves in one line: what landed,
+in the words that operation would have reported on its own, followed by the
+refusal in the writer's. The row is redrawn from the priorities as they now
+stand, so re-opening its form offers the operations that did not land and not
+the ones that did, and pressing Save again sends only those.
+And the board you walk back to keeps the columns and the priorities you left it
+with — their order, and which ones there are — and the name it was opened with;
+the notice above it offers the reload that redraws them, exactly as it does for
+a change another clone made. Colors are the exception: a color you set here — a
+priority's ink, or the project's accent and text colors — is drawn on the board
+the moment it is saved, because a configuration answer carries the stylesheet
+the server composed and the page can swap it without rebuilding a single card.
+That covers a priority nobody colored, too: its ink is derived from its
+position, so adding one here redraws the ones carrying no color of their own.
+A color another clone set is not, for the same reason its columns are not: that
+change reaches this page as a moved head and nothing else. The notice follows
+the same division rather than the head: it is raised when the statuses or the
+priorities an answer carries differ from the ones the page is drawing — which
+there are, their order, or their labels — and stays down when only a color
+moved, whoever moved it. Every section of the
+page shares one ledger and one tip, so none of them can be changed while another
+is changing, and a save of the board's settings, or of a priority, is as much a
+reason for a status change to be refused as another status change would be.
 
 ## Statuses a project does not define
 
@@ -1302,9 +1366,11 @@ GET /api/tasks                versioned task JSON: the active tasks, or
 GET /api/vocabulary           versioned status vocabulary JSON: the project's
                               statuses in order, their labels and tags, the
                               forwarding chains, the configuration ledger head
-                              they were read from, and — for a project that has
-                              recorded any — a `display` member carrying its
-                              name and colours at that same head
+                              they were read from, a `priorities` member carrying
+                              the project's priorities, their labels, tags and
+                              colors, and — for a project that has recorded
+                              any — a `display` member carrying its name and
+                              colors at that same head
 POST /api/vocabulary/statuses            define a status, optionally placed
                                          before or after an existing one
 PATCH /api/vocabulary/statuses/<status>  rename, relabel and retag a status,
@@ -1312,7 +1378,21 @@ PATCH /api/vocabulary/statuses/<status>  rename, relabel and retag a status,
 DELETE /api/vocabulary/statuses/<status> remove a status, naming in the body
                                          where its tasks belong
 PUT /api/vocabulary/order                set the whole column order at once
-PATCH /api/display                       record the project's name and colours;
+POST /api/vocabulary/priorities          define a priority, optionally placed
+                                         before or after an existing one
+PATCH /api/vocabulary/priorities/<priority>
+                                         rename and relabel a priority
+DELETE /api/vocabulary/priorities/<priority>
+                                         remove a priority, naming in the body
+                                         where its tasks belong
+PATCH /api/vocabulary/priorities/<priority>/position
+                                         move a priority before or after another
+PATCH /api/vocabulary/priorities/<priority>/default
+                                         give a priority the `default` role
+PATCH /api/vocabulary/priorities/<priority>/color
+                                         record the color a priority is drawn
+                                         in, or clear it with an empty value
+PATCH /api/display                       record the project's name and colors;
                                          the body states all three, an empty
                                          value clears a setting, and only what
                                          changed is recorded
@@ -1439,10 +1519,11 @@ produce — is answered `404`. So is an identifier the addressed task does not
 carry: an attachment is read out of that task's own live list, so naming another
 task's attachment, or a comment, reaches nothing.
 
-The four vocabulary routes are `workbook status` reached over HTTP: they run the
-same planners, so they refuse what the verbs refuse, in the same words, and
-record the same operations into the same configuration ledger. Three things
-follow from being a server rather than a command, and each is deliberate:
+The vocabulary routes are `workbook status` and `workbook priority` reached over
+HTTP: they run the same planners, so they refuse what the verbs refuse, in the
+same words, and record the same operations into the same configuration ledger.
+Three things follow from being a server rather than a command, and each is
+deliberate:
 
 - Every one of them requires an `expectedHead` member naming the vocabulary head
   the change was composed against — the `head` that `GET /api/vocabulary`
@@ -1453,12 +1534,15 @@ follow from being a server rather than a command, and each is deliberate:
   them would invent a third that neither author chose.
 - Each answers with the whole vocabulary document, in the same shape
   `GET /api/vocabulary` serves, including the head the next change must name. A
-  removal also reports how many tasks it moved and how many of those become
-  claimable where they land, which is what `workbook status delete` reports.
+  status removal also reports how many tasks it moved and how many of those
+  become claimable where they land, which is what `workbook status delete`
+  reports; a priority removal reports the tasks it moved, claimability being a
+  property of a status rather than of a priority.
 - None of them writes the generated `.workbook/guidelines.md`. The board is a
   long-running server that may be answering while somebody rebases the checkout
   it lives in, so it records the change and reports that the file is stale; the
-  next `workbook status` verb or `workbook docs update` rewrites it.
+  next `workbook status` or `workbook priority` verb, or `workbook docs update`,
+  rewrites it.
 
 The board answers only its own pages. It has no accounts and no tokens, so three
 checks stand in for them and every route is subject to all three:

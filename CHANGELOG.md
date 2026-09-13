@@ -33,9 +33,21 @@ of the changes below break scripts; both are described under Changed.
   `workbook status` has, and every mutating one prints the command that reverses
   it. A project that changes nothing keeps the three it has always had, and its
   stored history does not change by a byte.
+- **The web board manages priorities too**, on its configuration page, beside
+  the statuses it already managed: define one, rename or relabel it, reorder by
+  dragging a row or with its Up and Down controls, move the `default` role, and
+  remove one by naming where its tasks belong. A priority row also carries the
+  color below.
 - A priority carries a color, set with `workbook priority color <priority>
   #rrggbb` and cleared by omitting the value, which returns it to one derived
-  from its position.
+  from its position. The board offers the same thing as a swatch beside a
+  `#rrggbb` field, and a color chosen there redraws the board at once rather
+  than on the next reload — as does the project's own accent or text color,
+  which used to need one.
+- Every priority is drawn on the board in its own color, where only the
+  built-in three ever were. A priority with no color of its own gets one the
+  board derives from its position, which is what the documentation has
+  described for some time without anything implementing it.
 - `workbook priority delete` requires `--into`, naming where the removed
   priority's tasks belong. It is never guessed, and removing the last remaining
   priority is refused outright — every task has to be at one.
@@ -85,6 +97,25 @@ of the changes below break scripts; both are described under Changed.
   no longer reports.
 
 ### Fixed
+- **Saving the board's settings after changing a status or a priority no longer
+  erases the project's name and colors.** A vocabulary change answered with
+  only half the configuration, so the settings form redrew empty and the next
+  save wrote those blanks into the ledger — a project could lose its name to
+  somebody reordering a column. Both kinds of change now answer with the whole
+  configuration they wrote.
+- **A task could be filed at a priority the board could not offer.** The task
+  form listed `high`, `medium` and `low` whatever a project had defined, so a
+  project that added one could not put a task at it from the board, drag
+  placement used the wrong order, and a new task landed on `medium` rather than
+  the project's own default.
+- A task stored at a priority the project no longer defines is no longer
+  silently moved. The form had no way to show such a value, so it fell to the
+  first one in the list and saving reassigned the task; it now says what the
+  task is at and leaves it alone until somebody chooses.
+- **Moving a priority to the position it already holds is refused** rather than
+  recorded. On a project that had never configured its priorities, that empty
+  change wrote a configuration section and required every teammate to
+  upgrade — for nothing. `workbook status` has always refused the same thing.
 - **Ctrl+C on `workbook serve` now exits at once, and exits cleanly.** With a
   browser tab open on the board it used to sit for five seconds and then print
   `serve board: context deadline exceeded` and exit non-zero, with nothing

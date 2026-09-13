@@ -1353,3 +1353,58 @@ func priorityTagsSummaryLine(tags []core.PriorityTag) string {
 	}
 	return joinPriorityTags(tags)
 }
+
+// planPriorityEdit decides what a caller changing a priority's name, its label,
+// or both actually asked for, and hands the work to the planner that does it.
+//
+// It lives here rather than in the surface that first needed it, which was the
+// board. The rule it carries — that a name and a label together are a rename
+// carrying a label, that a label alone is a relabel, and that a name a priority
+// already has is the rename's own refusal rather than a no-op — is a statement
+// about what an edit MEANS. A second surface that wrote that rule again would
+// be free to write it differently, and the two would disagree about the same
+// project without either being wrong on its own terms. planStatusEdit is the
+// same rule for statuses and lives in the same layer for the same reason.
+//
+// A nil member is one the caller did not mention; an empty one is a value they
+// sent. That distinction is the whole reason both are pointers, and it is what
+// separates "I did not touch the label" from "I cleared it".
+func planPriorityEdit(
+	ctx context.Context,
+	scope priorityScope,
+	vocabulary core.PriorityVocabulary,
+	priority core.Priority,
+	name *core.Priority,
+	label *string,
+) (priorityPlan, error) {
+	subject, err := requireLivePriority(ctx, scope, vocabulary, priority)
+	if err != nil {
+		return priorityPlan{}, err
+	}
+	if name == nil && label == nil {
+		return priorityPlan{}, core.Errorf(core.CategoryValidation,
+			"priority %q was given nothing to change", subject)
+	}
+	// A label somebody sent is a label they chose, blank included, so it is
+	// validated before the rename sees it: planPriorityRename reads an empty
+	// label as "nothing was asked for" and derives one, which is right for a
+	// flag nobody typed and wrong for a member somebody emptied.
+	if label != nil {
+		if err := core.ValidatePriorityLabel(*label); err != nil {
+			return priorityPlan{}, err
+		}
+	}
+	if name != nil && *name != subject {
+		chosen := ""
+		if label != nil {
+			chosen = *label
+		}
+		return planPriorityRename(ctx, scope, vocabulary, subject, *name, chosen)
+	}
+	if label != nil {
+		return planPriorityRelabel(ctx, scope, vocabulary, subject, *label)
+	}
+	// The name this priority already has, and nothing else: the rename's own
+	// refusal, in the rename's own words.
+	return planPriorityRename(ctx, scope, vocabulary, subject, *name, "")
+}

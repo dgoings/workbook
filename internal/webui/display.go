@@ -65,16 +65,41 @@ type DisplayDocument struct {
 	Name         string `json:"name,omitempty"`
 	PrimaryColor string `json:"primaryColor,omitempty"`
 	TextColor    string `json:"textColor,omitempty"`
+	// Theme is the `:root` override these settings ask for, composed here by the
+	// same boardTheme the page's own `<style>` block is rendered from, and empty
+	// for a project that has chosen no colors.
+	//
+	// It rides on the document for the reason PriorityVocabularyDocument.Ink
+	// does: a page that adopts a save adopts what the save looks like, by
+	// replacing the text of that element, so the board is drawn in the new
+	// colors without a reload. And it is the composed CSS rather than the colors
+	// it was composed from for the same reason too — every byte of it is
+	// answered for by boardTheme, and a client handed the colors could vouch for
+	// none of it.
+	//
+	// Unlike the three settings above it is not omitted when empty: clearing a
+	// color is a change the board has to draw, and a client handed no member
+	// would leave the accent it was opened with in place.
+	Theme string `json:"theme"`
 }
 
 // DisplayMutationDocument is what a save answers with, mirroring
 // VocabularyMutationDocument: the whole document the read serves, so a client
 // renders the result of a change through the code that rendered the page.
 type DisplayMutationDocument struct {
-	Format   string          `json:"format"`
-	Version  int             `json:"version"`
-	Display  DisplayDocument `json:"display"`
-	Warnings []core.Warning  `json:"warnings,omitempty"`
+	Format  string          `json:"format"`
+	Version int             `json:"version"`
+	Display DisplayDocument `json:"display"`
+	// Shape is the digest of the configuration this save wrote into: the columns
+	// and the priorities as they now stand, which a board settings save does not
+	// touch. It rides on the envelope rather than in the settings because it is a
+	// fact about the whole configuration rather than about these three values —
+	// the settings document is also what a vocabulary read carries, where the
+	// shape is already stated once. The client compares it with what the page is
+	// drawing and stays quiet when the two agree: see vocabularyShape, and
+	// noteVocabularyChange for what the notice is actually for.
+	Shape    string         `json:"shape"`
+	Warnings []core.Warning `json:"warnings,omitempty"`
 }
 
 // DisplayErrorDocument is the error envelope with the settings a refused save
@@ -87,6 +112,11 @@ type DisplayErrorDocument struct {
 	Version int              `json:"version"`
 	Error   ErrorBody        `json:"error"`
 	Display *DisplayDocument `json:"display,omitempty"`
+	// Shape is the configuration the refused save was answered against, riding
+	// here for the reason it rides on the mutation envelope: a stale write means
+	// somebody else has configured this project, and the client adopts what they
+	// configured — including whether the board behind the page still draws it.
+	Shape string `json:"shape,omitempty"`
 }
 
 // displayDocument renders one read of the project's display settings. The head
@@ -102,6 +132,10 @@ func displayDocument(state VocabularyState) DisplayDocument {
 		Name:         state.Display.Name,
 		PrimaryColor: state.Display.PrimaryColor,
 		TextColor:    state.Display.TextColor,
+		// The same composer the page's own override is rendered from, called on
+		// the same settings, so a saved board is drawn by the code that drew the
+		// board it was saved from.
+		Theme: string(boardTheme(state.Display)),
 	}
 }
 
@@ -158,6 +192,7 @@ func (handler *handler) updateDisplay(writer http.ResponseWriter, request *http.
 		Format:   "workbook.display-mutation",
 		Version:  1,
 		Display:  displayDocument(mutation.State),
+		Shape:    vocabularyShape(mutation.State),
 		Warnings: mutation.Warnings,
 	})
 }
@@ -198,6 +233,7 @@ func (handler *handler) writeDisplayError(writer http.ResponseWriter, request *h
 		Version: 1,
 		Error:   body,
 		Display: &document,
+		Shape:   vocabularyShape(state),
 	})
 }
 
@@ -516,6 +552,539 @@ func boardTheme(settings core.DisplaySettings) template.CSS {
 		` :root[data-scheme="dark"] { ` + strings.Join(dark, " ") + " }")
 }
 
+// priorityInk renders the ink every one of a project's priorities is drawn in:
+// one custom property per priority and the rule that reads it.
+//
+// It is a stylesheet of its own rather than more of boardTheme because the two
+// answer different questions. A theme is what a project's *chosen* colors ask
+// for, and a project that chose none is served none — that is the rule
+// boardTheme's own comment states and its tests hold it to. A priority's ink is
+// not a choice a project has to have made: every board has priorities, the
+// stylesheet above can only name three of them by hand, and a project that
+// added a fourth was drawing it in the meta row's dim ink with nothing chosen
+// or wrong anywhere.
+//
+// It is composed in Go rather than interpolated for the reason boardTheme gives,
+// and it is written into the page's markup by the same `template.CSS` route,
+// which bypasses contextual escaping by design. So every byte of what follows is
+// answered for here:
+//
+//   - The property and class names are built from a priority token, which core
+//     validates as lowercase letters and digits separated by single hyphens —
+//     exactly the charset a CSS identifier takes unescaped, which is the reason
+//     priorityTokenPattern's own comment gives for the rule. A name that does
+//     not pass that check is dropped rather than written, so a token a corrupted
+//     or hostile peer put in the ledger cannot close a declaration and open a
+//     rule of its own.
+//   - A stored color is parsed by parseThemeColor and then *re-rendered* from
+//     the three integers it yielded, so what reaches the page is a hex triple
+//     this file formatted rather than the stored string. A value core's
+//     ValidateThemeColor would not have accepted does not parse, contributes
+//     nothing, and leaves that priority on the color its position derives.
+//   - A retired name's rule is built from a token out of the forwarding chains
+//     rather than out of the priority list, so it is put through the same
+//     ValidatePriorityToken check rather than assumed to have had one. Those
+//     chains are normalized against that very function when a document is
+//     authored, but a vocabulary decoded from a checkpoint is indexed without
+//     re-normalizing, so a peer's corrupted chain arrives here unchecked the
+//     same way a corrupted priority list would.
+//   - Everything else is a property name from this file or a number formatted
+//     here.
+func priorityInk(priorities core.PriorityVocabulary) template.CSS {
+	// The effective reading, which is what the board draws either way: a project
+	// that configured no priorities is using the built-in three.
+	document := priorities.EffectiveDocument()
+	live := make([]core.PriorityDefinition, 0, len(document.Priorities))
+	for _, definition := range document.Priorities {
+		if core.ValidatePriorityToken(definition.Priority) == nil {
+			live = append(live, definition)
+		}
+	}
+	if len(live) == 0 {
+		return ""
+	}
+
+	declarations := make([]string, 0, 2*len(live))
+	rules := make([]string, 0, 2*len(live))
+	dark := make([]string, 0, 2*len(live))
+	declared := make(map[core.Priority]struct{}, len(live))
+	chipped := make(map[core.Priority]struct{}, len(live))
+	for index, definition := range live {
+		property := priorityInkProperty(definition.Priority)
+		if color, parsed := parseThemeColor(definition.Color); parsed {
+			declarations = append(declarations, property+": "+color.hex()+";")
+			// A stored color is one value, and the board has three palette
+			// statements. A mid-toned red chosen against white is the very thing
+			// that disappears into a near-black card, so it is lifted for a dark
+			// ground the way a chosen accent is — the same transform, for the
+			// reason the priority triad's own comment above gives.
+			lifted := color.tonedColor(1, .68)
+			dark = append(dark, property+": "+lifted.hex()+";")
+			// And whether there is a chip behind it at all is asked once per
+			// scheme, of the ink as that scheme draws it: a color that is read on
+			// a white card is not the same color that is read on a near-black
+			// one, and neither reading has anything to say about the other.
+			light, deep := priorityChipFor(color, false), priorityChipFor(lifted, true)
+			if light != "" || deep != "" {
+				// One scheme needing a chip is enough to declare the property and
+				// write the rule, so the scheme that needs none says so outright
+				// rather than leaving the property unset: an undeclared `var()` is
+				// a declaration a browser throws away, which arrives at the same
+				// painted card by a route nobody reading this could check.
+				chip := priorityChipProperty(definition.Priority)
+				declarations = append(declarations, chip+": "+chipDeclaration(light)+";")
+				dark = append(dark, chip+": "+chipDeclaration(deep)+";")
+				rules = append(rules, ".priority--"+string(definition.Priority)+" { background: var("+chip+"); }")
+				chipped[definition.Priority] = struct{}{}
+			}
+		} else {
+			// A priority with no stored color is drawn in one of the triad's three
+			// or in a mix of two, and every one of those reads on the card it is
+			// drawn on in both schemes — TestPriorityChipLeavesADerivedInkOnTheCard
+			// measures all of them. So this family composes no chip at all, which
+			// is also what keeps it out of the guards that count literals.
+			declarations = append(declarations, property+": "+derivedPriorityInk(index, len(live))+";")
+		}
+		rules = append(rules, ".priority--"+string(definition.Priority)+" { color: var("+property+"); }")
+		declared[definition.Priority] = struct{}{}
+	}
+	rules = append(rules, forwardedPriorityRules(priorities, document, declared, chipped)...)
+
+	block := ":root { " + strings.Join(declarations, " ") + " }"
+	if len(dark) > 0 {
+		// Both dark selectors, for the reason boardTheme states both. A derived
+		// ink is deliberately absent from them: it is written as a reference to
+		// the triad's properties, which the scheme already moves, so restating it
+		// here would be a second copy of a reading that is already correct.
+		block += ` @media (prefers-color-scheme: dark) { :root:not([data-scheme="light"]) { ` + strings.Join(dark, " ") + " } }" +
+			` :root[data-scheme="dark"] { ` + strings.Join(dark, " ") + " }"
+	}
+	return template.CSS(block + " " + strings.Join(rules, " "))
+}
+
+// forwardedPriorityRules is the ink a card rendered under a priority that is no
+// longer live is drawn in: the ink of the priority that name now means.
+//
+// It exists because a card carries the priority it was *stored* under, while the
+// block above names only the priorities that are *live*. Those are the same set
+// right up until somebody renames or removes one. The answer to a vocabulary
+// change carries this stylesheet recomposed from the live definitions, and the
+// board behind the page is deliberately not rebuilt, so without this every card
+// at the old name matches no rule at all and falls to the meta row's dim ink
+// until a reload — the exact state this stylesheet exists to end. The static
+// rules for high, medium and low are why that was never seen on an ordinary
+// project: a board can only lose a color this way at a name outside that triad.
+//
+// A rename and a removal ask the same question here, so both chains answer it
+// together, and what is asked of a retired name is what the vocabulary already
+// knows: what it resolves to. A renamed-away name resolves to the name that
+// replaced it and a removed one to the priority its tasks went into; either way
+// the card means that priority, so it is drawn in that priority's ink. The live
+// window is only the nearest instance — this equally covers a client holding a
+// page rendered before a rename this checkout has since folded.
+//
+// A name that resolves to nothing — a chain ending outside the live set, or one
+// whose destination the block above dropped as unwritable — is given no rule,
+// and that is the decision rather than an oversight. There is no property to
+// point it at: `var(--wb-priority-ink-gone)` names nothing, which leaves the
+// declaration invalid at computed-value time and `color` inheriting regardless,
+// so such a rule would buy the card nothing and put a dangling reference on
+// every board that carries it. A card stranded that way is drawn in the meta
+// row's ordinary ink, which is the honest reading — this board has no priority
+// that name means any more.
+func forwardedPriorityRules(
+	priorities core.PriorityVocabulary,
+	document core.PriorityDocument,
+	declared map[core.Priority]struct{},
+	chipped map[core.Priority]struct{},
+) []string {
+	retired := make([]core.Priority, 0, len(document.Aliases)+len(document.Retired))
+	for _, alias := range document.Aliases {
+		retired = append(retired, alias.From)
+	}
+	for _, entry := range document.Retired {
+		retired = append(retired, entry.Priority)
+	}
+
+	rules := make([]string, 0, len(retired))
+	seen := make(map[core.Priority]struct{}, len(retired))
+	for _, name := range retired {
+		if _, repeated := seen[name]; repeated {
+			continue
+		}
+		seen[name] = struct{}{}
+		if _, isLive := declared[name]; isLive {
+			// A name forwarded away and then taken again by a new priority. The
+			// loop above already wrote its rule, and the live reading is the one
+			// that stands.
+			continue
+		}
+		if core.ValidatePriorityToken(name) != nil {
+			continue
+		}
+		destination, resolves := priorities.Resolve(name)
+		if !resolves {
+			continue
+		}
+		if _, written := declared[destination]; !written {
+			continue
+		}
+		rules = append(rules, ".priority--"+string(name)+" { color: var("+priorityInkProperty(destination)+"); }")
+		// And the chip behind it, for the same reason and from the same
+		// priority: a card left at the old name is drawn as that priority, so it
+		// is drawn on that priority's badge rather than on a bare card. A
+		// destination that was given no chip — the ordinary case now, since most
+		// colors read on the card unaided — is forwarded no background rule
+		// either, which is the same answer: the card's own surface.
+		if _, hasChip := chipped[destination]; hasChip {
+			rules = append(rules, ".priority--"+string(name)+" { background: var("+priorityChipProperty(destination)+"); }")
+		}
+	}
+	return rules
+}
+
+// priorityInkProperty is the custom property one priority's ink is declared in.
+//
+// The family is namespaced away from `--wb-priority-high` and its two siblings
+// rather than reusing them, and that is load-bearing rather than tidy: those
+// three are the scheme's own triad, which no project's color reaches, and a
+// project whose priorities are literally named high, medium and low would
+// otherwise be declaring them.
+func priorityInkProperty(priority core.Priority) string {
+	return "--wb-priority-ink-" + string(priority)
+}
+
+// priorityChipProperty is the custom property one priority's chip — the
+// background its label is drawn on — is declared in.
+//
+// It is a family of its own beside the ink rather than a shade of it, because a
+// chip is not a lighter version of a color: it is whatever that color can be
+// read against, which for a pale priority is dark and for a dark one is pale.
+//
+// Not every priority declares one. See priorityChipFor: a color the card already
+// carries is drawn on the card, and only a color the card loses gets a property
+// here.
+func priorityChipProperty(priority core.Priority) string {
+	return "--wb-priority-chip-" + string(priority)
+}
+
+// The contrast a priority's label has to clear against the card it is drawn on
+// before the board leaves it there with no chip behind it.
+//
+// Three, and not the 4.5 WCAG AA asks of text this size. The gap is the
+// decision, not a lapse, and a later reader who finds a 3 where a standard says
+// 4.5 should read the rest of this before changing it.
+//
+// This line does not decide whether text is compliant. It decides whether a
+// color a person chose for their own board needs help being read, and answering
+// that question with the compliance bar overrules a choice that is theirs to
+// make: pure red at #ff0000 measures 3.998:1 on a white card, reads perfectly
+// well, and under AA was handed a chip nobody asked for — #ee0000 at 4.53 went
+// bare and #ef0000 at 4.497 did not, a boundary no one looking at a board could
+// see the sense of. A priority is also named in more places than this label: the
+// same card's detail view spells it out, and the board filters and orders by it.
+// The chip is a small signal and not the only one, so a color that is merely
+// readable rather than certified costs less here than overriding the person who
+// picked it.
+//
+// What this project itself ships is held to the stricter bar all the same — the
+// built-in three, and every color the derived ramp hands a priority nobody has
+// colored. TestShippedPriorityColorsClearAAAgainstTheCard is that bar, and it is
+// deliberately stricter than this constant beside it: standards-compliant in
+// what we ship, lenient about what a person selects.
+//
+// One lever is held in reserve rather than spent here. The label is .64rem; at
+// 18pt, or 14pt bold, WCAG's bar for large text is 3:1, so making the label
+// bigger would make this very number the compliant one for every color on the
+// board. That is the move to reach for before tightening this line again.
+const priorityInkContrast = 3
+
+// The contrast a label has to clear against a chip, where a chip is drawn at
+// all: WCAG AAA, far past the threshold above.
+//
+// The two bars are deliberately different, and the difference is the whole
+// shape of this. The threshold decides a question — can this color be read where
+// it is? — and a chip is what answers it when it cannot. An answer that stopped
+// at the least that passes would be exactly that, which on a real board reads as a wash
+// nobody can see the point of: the light-mode chip behind a pale yellow landed
+// at #6a654e, a mid grey-brown, and the verdict on it was that it "doesn't
+// provide enough distinction". At AAA the same yellow gets #4e4932 — half the
+// luminance, and 9:1 against the card rather than 5.9:1 — so the chip reads as a
+// decision rather than a hedge. The separation from the card comes with it
+// rather than being a second knob: a chip 7:1 from a light ink is further from
+// the white card than the ink was, well past the 3:1 WCAG asks of a non-text
+// boundary.
+const priorityChipContrast = 7
+
+// The contrast a label has to clear against its own chip for that chip to be
+// worth drawing at all — the floor applied where the search ran off the end of
+// the ramp and the two ends of it are all that is left to choose between.
+//
+// WCAG AA for text below 18pt. It used to be priorityInkContrast, and it is
+// written out here because the two stopped meaning the same thing when that one
+// moved to 3. This is not a bar somebody's chosen color has to clear to be left
+// alone; it is the floor under a background this file composed, and what this
+// file composes is held to the stricter bar for the same reason the colors this
+// project ships are.
+const priorityChipFloor = 4.5
+
+// How far past the bar a chip is taken before the search stops. A step is a
+// whole 8-bit color either way, so landing exactly on the target leaves a chip
+// one rounding away from being under it — and a value that reads 6.999 in
+// somebody else's checker is a defect report whatever this file computed.
+const priorityChipMargin = .1
+
+// How much of the chip's own color a chip keeps. A badge stepped straight to
+// white or black would be a grey pill telling the reader nothing about which
+// priority it is, so the chip carries a third of the ink's chroma — capped by
+// clampChroma at whatever lightness it lands on, so a saturated ink gets all the
+// color that lightness can hold and a near-grey one gets nearly none. The ends
+// of the ramp hold none at all, which is the price of the fallback below: a chip
+// that had to go the whole way is black or white, and being read is worth more
+// there than being colored.
+const priorityChipChroma = .34
+
+// priorityChipFor is the background one priority's label is drawn on in one
+// scheme, and the empty string where that scheme needs none.
+//
+// The empty answer is the common one and it is the point of this function. A
+// label is a color on a card, and a color chosen to be read on that card is read
+// on it: giving it a chip anyway adds a shape around a word that was already
+// legible, and a board of identical pills says less about its priorities than
+// the bare colors did. So the question asked here is the one the card actually
+// poses — can this label be read where it sits? — and only a No is answered with
+// a chip.
+//
+// It is asked once per scheme, against that scheme's own card, of the ink as
+// that scheme draws it. Both halves move: the dark scheme lifts a chosen color
+// and changes the card out from under it, so a yellow that needs a chip on white
+// needs nothing at all on near-black, and a saturated blue is the other way
+// round. The two answers are independent and a priority may well have a chip in
+// one scheme and none in the other.
+func priorityChipFor(ink themeColor, dark bool) string {
+	card := cardSurface(dark)
+	if contrastBetween(ink, card) >= priorityInkContrast {
+		return ""
+	}
+	return priorityChip(ink, card)
+}
+
+// chipDeclaration is what a chip property is declared as in one scheme: the
+// color, or `transparent` where that scheme draws no chip. `transparent` is the
+// card showing through, which is precisely the answer — the label on the card's
+// own surface, as it was drawn before any of this.
+func chipDeclaration(chip string) string {
+	if chip == "" {
+		return "transparent"
+	}
+	return chip
+}
+
+// cardSurface is the card a priority's label sits on in one scheme: --wb-surface
+// in that scheme's reading.
+//
+// Read out of the table the stylesheet is generated from rather than stated
+// here, so the measurement cannot drift from the board — a palette that moves
+// its surfaces moves what counts as legible on them in the same commit.
+//
+// A table that no longer declares the property, or declares it as something this
+// file cannot parse, is answered with the ends of the ramp: white in light and
+// black in dark. That is the nearest honest stand-in — the board's two surfaces
+// are #fff and a near-black — and it errs the safe way, since a color measured
+// against the more extreme card is the one more likely to be given a chip.
+func cardSurface(dark bool) themeColor {
+	fallback := "#ffffff"
+	if dark {
+		fallback = "#000000"
+	}
+	declared := fallback
+	for _, token := range schemeTokens {
+		if token.property != "--wb-surface" {
+			continue
+		}
+		declared = token.legacy
+		if dark {
+			declared = token.dark
+		}
+		break
+	}
+	if color, parsed := parseThemeColor(expandShortHex(declared)); parsed {
+		return color
+	}
+	color, _ := parseThemeColor(fallback)
+	return color
+}
+
+// expandShortHex writes `#rgb` out as `#rrggbb`. parseThemeColor reads what a
+// project stored, which core validates at six digits; the palette table is
+// hand-written CSS, where white is spelled `#fff`.
+func expandShortHex(value string) string {
+	if len(value) != 4 || value[0] != '#' {
+		return value
+	}
+	return fmt.Sprintf("#%c%c%c%c%c%c", value[1], value[1], value[2], value[2], value[3], value[3])
+}
+
+// priorityChip is the background a label that the card cannot carry is drawn on:
+// the ink's own hue, moved away from the card until the label clears AAA
+// against it.
+//
+// The direction is not the ink's lightness but the card's. A chip is only ever
+// composed for an ink the card nearly matches — that is what failing AA against
+// it means — so the way out is the way away from the card, and the scheme
+// settles it: a light card is left downwards and a near-black one upwards. The
+// same move buys both of the chip's jobs at once, because the ink and the card
+// are close together: every step away from the card is a step away from the ink.
+//
+// The step is searched rather than stated, and stops at the first lightness past
+// the target, which is the most color a chip can carry and still clear it:
+// stating an offset would be the same eyeballing that shipped the defect, and
+// would fail for the colors whose luminance leaves the least room.
+func priorityChip(ink, card themeColor) string {
+	away := 1.
+	if luminance(ink) < luminance(card) {
+		away = -1
+	}
+	if chip, found := offsetPriorityChip(ink, away); found {
+		return chip
+	}
+	// The ramp ran out before the target did, and for a mid-toned ink that is the
+	// ordinary answer rather than an edge case: no color at all is 7:1 from an ink
+	// of relative luminance .098 to .30, in either direction — black is not far
+	// enough below it and white is not far enough above. The chip is then the
+	// end of the ramp — black away from a light card, white away from a dark one —
+	// which is the most contrast that color has to give and the furthest a chip
+	// can sit from the card.
+	//
+	// Where that end is the one the label cannot be read on, the other end
+	// answers instead. That happens only in the dark scheme, to the saturated
+	// blues and violets whose lifted ink sits just under AA on a near-black card:
+	// white leaves them under 4.5:1, and the chip goes deeper than the card
+	// rather than paler than it. Legibility is the floor here and separation is
+	// what is traded — a black chip on a #161c26 card is 1.2:1, a well rather
+	// than a badge, and it is still the best reading available for that color.
+	//
+	// That arm is unreached as this stands: at the 3:1 threshold no dark reading
+	// is chipped at all, because the lift puts the worst color anyone can choose
+	// at 3.61:1 on the dark card — #5c5cff, from a pure #0000a3. It is kept
+	// because it is the right answer the moment either the threshold or the lift
+	// moves, and because this function should be correct over the colors it could
+	// be handed rather than over the ones it happens to be handed today.
+	far, near := ink.tonedColor(priorityChipChroma, 1), ink.tonedColor(priorityChipChroma, 0)
+	if away < 0 {
+		far, near = near, far
+	}
+	if contrastBetween(ink, far) >= priorityChipFloor {
+		return far.hex()
+	}
+	return near.hex()
+}
+
+// offsetPriorityChip walks the lightness ramp away from an ink in one direction
+// and answers with the first step whose contrast against it clears the target.
+func offsetPriorityChip(ink themeColor, direction float64) (string, bool) {
+	const step = .004
+	for offset := step; offset <= 1; offset += step {
+		light := ink.light + direction*offset
+		if light < 0 || light > 1 {
+			break
+		}
+		chip := ink.tonedColor(priorityChipChroma, light)
+		if contrastBetween(ink, chip) >= priorityChipContrast+priorityChipMargin {
+			return chip.hex(), true
+		}
+	}
+	return "", false
+}
+
+// luminance is the WCAG relative luminance of a color, and contrastBetween the
+// WCAG contrast ratio of two. They are here rather than in a test because the
+// chip above is chosen by measuring rather than by eye: the composer has to be
+// able to ask what it just derived.
+func luminance(color themeColor) float64 {
+	channels := [3]int{color.red, color.green, color.blue}
+	weights := [3]float64{.2126, .7152, .0722}
+	total := 0.
+	for index, channel := range channels {
+		value := float64(channel) / 255
+		if value <= .04045 {
+			value /= 12.92
+		} else {
+			value = math.Pow((value+.055)/1.055, 2.4)
+		}
+		total += weights[index] * value
+	}
+	return total
+}
+
+func contrastBetween(first, second themeColor) float64 {
+	lighter, darker := luminance(first), luminance(second)
+	if lighter < darker {
+		lighter, darker = darker, lighter
+	}
+	return (lighter + .05) / (darker + .05)
+}
+
+// derivedPriorityInk is the color a priority with none stored is drawn in: the
+// one its position among its peers derives.
+//
+// This is a documented promise rather than an invention. `workbook priority
+// color` with no value clears a color, and both docs/reference.md and
+// core.PriorityDefinition.Color say that returns the priority "to a color the
+// board derives from its position" — there is no stored default to go back to.
+//
+// The derivation runs along the triad the stylesheet already states, because
+// that triad is what a position *means* on this board: most urgent is the red,
+// least urgent is the blue, and the middle is the amber between them. A
+// vocabulary of three therefore lands exactly on today's three colors, which is
+// what keeps the first `workbook priority` verb — which writes the built-in
+// three into the ledger before anything else — from quietly recoloring a board
+// nobody asked to change. A vocabulary of more lands between them.
+//
+// It is written as a reference to those properties rather than as a literal this
+// function computed, and that buys two things at once. The scheme already states
+// a dark reading for all three, so a derived ink follows the board into dark
+// without this file stating anything twice; and a family that writes no color
+// literal cannot collide with the counts the stylesheet's guards keep over every
+// literal the page writes.
+func derivedPriorityInk(index, count int) string {
+	const (
+		high   = "var(--wb-priority-high)"
+		medium = "var(--wb-priority-medium)"
+		low    = "var(--wb-priority-low)"
+	)
+	if count < 2 {
+		// A single priority is both the most and the least urgent one, which is
+		// no position at all; it takes the middle rather than an end.
+		return medium
+	}
+	position := float64(index) / float64(count-1)
+	switch {
+	case position == 0:
+		return high
+	case position == 1:
+		return low
+	case position == .5:
+		return medium
+	case position < .5:
+		// Mixed in oklab rather than sRGB: a straight channel average of the red
+		// and the amber passes through a muddier, darker color than either, and
+		// a perceptual space is what keeps the band between two priorities
+		// reading as a step between them.
+		return "color-mix(in oklab, " + high + ", " + medium + " " + mixWeight(2*position) + ")"
+	default:
+		return "color-mix(in oklab, " + medium + ", " + low + " " + mixWeight(2*position-1) + ")"
+	}
+}
+
+// mixWeight is how much of the second color a mix takes, as a percentage.
+// Rounded to whole points because the ceiling on a vocabulary is 24 priorities
+// (core.MaxPriorityCount), so the smallest step between two positions is several
+// points wide and a fraction of one would be precision nobody can see.
+func mixWeight(fraction float64) string {
+	return strconv.Itoa(int(math.Round(fraction*100))) + "%"
+}
+
 // schemeDeclarations is themeDeclarations for a scheme's variants, and refuses
 // the same colour for the same reason: a value core could not validate
 // contributes nothing, and the family keeps the defaults the stylesheet states.
@@ -652,7 +1221,18 @@ func (color themeColor) scaled(chroma, light float64) string {
 // the colour a 96%-light surface can hold, and a nearly-grey one gets nearly
 // none, out of the same number.
 func (color themeColor) toned(chroma, light float64) string {
-	return renderColor(color.hue, color.chroma*chroma, light)
+	return color.tonedColor(chroma, light).hex()
+}
+
+// tonedColor is toned() answered as a color rather than as a declaration, which
+// is what a step that has to be measured needs: the chip search asks what the
+// contrast of the step it just derived is, and a formatted string cannot be
+// asked.
+func (color themeColor) tonedColor(chroma, light float64) themeColor {
+	light = math.Min(math.Max(light, 0), 1)
+	chroma = clampChroma(color.chroma*chroma, light)
+	red, green, blue := renderChannels(color.hue, chroma, light)
+	return themeColor{red: red, green: green, blue: blue, hue: color.hue, chroma: chroma, light: light}
 }
 
 func renderChannels(hue, chroma, light float64) (int, int, int) {

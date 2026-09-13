@@ -49,6 +49,13 @@ func runPriorityMove(ctx context.Context, args []string, cwd string, stdout, std
 // clones inserting between the same pair reach ranks that still order the same
 // way once both are folded.
 //
+// A move to the position the priority already holds is refused rather than
+// recorded, for the reason planStatusOrder refuses an order already in force:
+// the first priority change on a project that has never configured its
+// priorities backfills the built-in three and stamps the generation-three
+// marker, so recording a move that reorders nobody parks every teammate on an
+// older build in exchange for nothing.
+//
 // The change reports the label and the tags a move does not touch, because a
 // caller reading one envelope should not have to list the vocabulary to find
 // out what the priority it just moved is called.
@@ -71,6 +78,14 @@ func planPriorityMove(
 		return priorityPlan{}, core.Errorf(core.CategoryValidation,
 			"cannot move priority %q relative to itself", subject)
 	}
+	if priorityAlreadyPlaced(vocabulary, subject, resolvedAnchor, placeBefore) {
+		if placeBefore {
+			return priorityPlan{}, core.Errorf(core.CategoryValidation,
+				"priority %q is already directly before %q", subject, resolvedAnchor)
+		}
+		return priorityPlan{}, core.Errorf(core.CategoryValidation,
+			"priority %q is already directly after %q", subject, resolvedAnchor)
+	}
 	rank, err := vocabulary.InsertRank(subject, resolvedAnchor, placeBefore)
 	if err != nil {
 		return priorityPlan{}, err
@@ -92,4 +107,36 @@ func planPriorityMove(
 			Tags:      priorityTags(vocabulary, subject),
 		},
 	}, nil
+}
+
+// priorityAlreadyPlaced reports whether the move would leave the order exactly
+// as it found it: the subject already sits directly on the side of the anchor
+// the caller asked for.
+//
+// The question is asked positionally, about neighbours, rather than by
+// comparing the rank InsertRank would return against the one the subject
+// holds. Ranks are reduced rationals chosen between whatever pair the subject
+// is being placed between, so a move that moves nothing can still arrive at a
+// numerically different rank — 2/1 becoming 5/3 reorders nobody, and a rank
+// comparison would call that a change and record one. "Is high already right
+// after urgent?" is the question a person asking for this move is asking, and
+// it is the one with a stable answer.
+func priorityAlreadyPlaced(vocabulary core.PriorityVocabulary, subject, anchor core.Priority, placeBefore bool) bool {
+	definitions := vocabulary.Definitions()
+	subjectIndex, anchorIndex := -1, -1
+	for index, definition := range definitions {
+		switch definition.Priority {
+		case subject:
+			subjectIndex = index
+		case anchor:
+			anchorIndex = index
+		}
+	}
+	if subjectIndex < 0 || anchorIndex < 0 {
+		return false
+	}
+	if placeBefore {
+		return subjectIndex+1 == anchorIndex
+	}
+	return subjectIndex == anchorIndex+1
 }

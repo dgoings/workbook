@@ -1562,7 +1562,12 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 		if err != nil {
 			return webui.VocabularyState{}, err
 		}
-		return webui.VocabularyState{Vocabulary: state.Vocabulary, Head: state.Head, Display: state.Display}, nil
+		return webui.VocabularyState{
+			Vocabulary: state.Vocabulary,
+			Head:       state.Head,
+			Display:    state.Display,
+			Priorities: state.Priorities,
+		}, nil
 	}
 	current := func(requestContext context.Context) (core.Service, error) {
 		state, carried := webui.VocabularyFrom(requestContext)
@@ -1575,6 +1580,14 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 		}
 		fresh := service
 		fresh.Vocabulary = state.Vocabulary
+		// And the priorities from the same read, for the reason the statuses
+		// are re-read at all. A service refreshed in one half would author
+		// against priorities that read was already past: it would sort the
+		// board's cards in an order nobody configured, land a new task on a
+		// default somebody replaced, and refuse a priority a teammate added an
+		// hour ago. The single-command paths refresh both together and say so;
+		// see taskSession.refreshConfiguration.
+		fresh.Priorities = state.Priorities
 		return fresh, nil
 	}
 	// The board's status administration goes through the verb family's own
@@ -1588,6 +1601,21 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 		service: func(vocabulary core.Vocabulary) core.Service {
 			reader := service
 			reader.Vocabulary = vocabulary
+			return reader
+		},
+	}
+	// The board's priority administration goes through the priority verb
+	// family's own planners, for the reason its status administration goes
+	// through the status ones. It is a second writer rather than a member of the
+	// one above because the two sections of the ledger are authored by two
+	// families of planners; see boardPriorities.
+	priorities := &boardPriorities{
+		repository: repository,
+		config:     service.Config,
+		publisher:  publisher,
+		service: func(vocabulary core.PriorityVocabulary) core.Service {
+			reader := service
+			reader.Priorities = vocabulary
 			return reader
 		},
 	}
@@ -1606,7 +1634,55 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 		EditStatus:    statuses.edit,
 		RemoveStatus:  statuses.remove,
 		ReorderStatus: statuses.reorder,
-		SetDisplay:    display.set,
+		// The six priority mutations, each adapting the writer's answer to the
+		// board's envelope. The adapter exists because the two envelopes price a
+		// change differently and must: a status change reports how many tasks
+		// became claimable where they landed, and no priority change ever makes
+		// a task claimable, so a priority answer that carried the member would
+		// carry a permanent zero. See boardPriorityAnswer.
+		AddPriority: func(requestContext context.Context, addition webui.VocabularyPriorityAddition) (webui.VocabularyPriorityMutation, error) {
+			return boardPriorityAnswer(priorities.add(requestContext, boardPriorityAddition{
+				priorityAddition: priorityAddition{
+					Priority: addition.Priority,
+					Label:    addition.Label,
+					Before:   addition.Before,
+					After:    addition.After,
+				},
+				ExpectedHead: addition.ExpectedHead,
+			}))
+		},
+		EditPriority: func(requestContext context.Context, priority core.Priority, change webui.VocabularyPriorityEdit) (webui.VocabularyPriorityMutation, error) {
+			return boardPriorityAnswer(priorities.edit(requestContext, priority, boardPriorityEdit{
+				Name:         change.Name,
+				Label:        change.Label,
+				ExpectedHead: change.ExpectedHead,
+			}))
+		},
+		RemovePriority: func(requestContext context.Context, priority core.Priority, removal webui.VocabularyPriorityRemoval) (webui.VocabularyPriorityMutation, error) {
+			return boardPriorityAnswer(priorities.remove(requestContext, priority, boardPriorityRemoval{
+				Into:         removal.Into,
+				ExpectedHead: removal.ExpectedHead,
+			}))
+		},
+		MovePriority: func(requestContext context.Context, priority core.Priority, move webui.VocabularyPriorityMove) (webui.VocabularyPriorityMutation, error) {
+			return boardPriorityAnswer(priorities.move(requestContext, priority, boardPriorityMove{
+				Before:       move.Before,
+				After:        move.After,
+				ExpectedHead: move.ExpectedHead,
+			}))
+		},
+		SetDefaultPriority: func(requestContext context.Context, priority core.Priority, change webui.VocabularyPriorityDefault) (webui.VocabularyPriorityMutation, error) {
+			return boardPriorityAnswer(priorities.setDefault(requestContext, priority, boardPriorityDefault{
+				ExpectedHead: change.ExpectedHead,
+			}))
+		},
+		RecolorPriority: func(requestContext context.Context, priority core.Priority, change webui.VocabularyPriorityRecolor) (webui.VocabularyPriorityMutation, error) {
+			return boardPriorityAnswer(priorities.recolor(requestContext, priority, boardPriorityRecolor{
+				Color:        change.Color,
+				ExpectedHead: change.ExpectedHead,
+			}))
+		},
+		SetDisplay: display.set,
 		// Which checkout this board is serving, as its header's eyebrow names
 		// it. A value rather than a reader: `serve` is bound to one worktree for
 		// its whole life, and a checkout that moved out from under it has taken
@@ -1825,6 +1901,32 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 		return core.Wrap(core.CategoryOperational, "serve board", err)
 	}
 	return nil
+}
+
+// boardPriorityAnswer carries a priority writer's result across to the board's
+// own envelope, and it exists for one member.
+//
+// The two envelopes are otherwise the same three facts — the configuration as
+// it now stands, what the change cost, and what could not be done about the
+// generated guidelines. What differs is the price: a status change reports how
+// many of the tasks it moved became eligible for `workbook next`, and no
+// priority change ever makes a task eligible for anything, because eligibility
+// is decided by a status's tags and a task's dependencies. Widening the shared
+// envelope to fit both would put `"claimableAfter": 0` in every priority answer
+// this project will ever record.
+//
+// It takes the writer's error as its second argument so a caller is one
+// expression rather than four lines of the same check, and so there is no path
+// where a failed change is adapted into an answer.
+func boardPriorityAnswer(mutation boardPriorityMutation, err error) (webui.VocabularyPriorityMutation, error) {
+	if err != nil {
+		return webui.VocabularyPriorityMutation{}, err
+	}
+	return webui.VocabularyPriorityMutation{
+		State:    mutation.State,
+		Tasks:    webui.VocabularyPriorityTaskCounts{Affected: mutation.Tasks.Affected},
+		Warnings: mutation.Warnings,
+	}, nil
 }
 
 // boardFallbackNotice says why the board is not at the address the user
