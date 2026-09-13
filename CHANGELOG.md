@@ -12,6 +12,90 @@ not, has notes on the
 
 Releases through v0.4.1 predate this file.
 
+An `## Unreleased` heading collects what has landed since the last release, so
+work that needs prose can write it while the reasoning is fresh rather than
+reconstruct it in the release pull request. Retitle that heading to the version
+being cut — `## v0.6.0 — 2026-09-30` — in the pull request that carries the
+bump label. The heading is deliberately not a version until then: the release check
+reads the topmost `## vX.Y.Z` heading and refuses a label that disagrees with
+it, so an early version heading would block every patch release until that
+version was cut.
+
+## Unreleased
+
+Priorities become a per-project vocabulary, the way statuses already are. Two
+of the changes below break scripts; both are described under Changed.
+
+### Added
+- **A project defines its own priorities.** `high`, `medium` and `low` stop
+  being the only ones there are: `workbook priority` gains `list`, `add`,
+  `rename`, `label`, `move`, `tag`, `delete`, `color` and `log`, the same verbs
+  `workbook status` has, and every mutating one prints the command that reverses
+  it. A project that changes nothing keeps the three it has always had, and its
+  stored history does not change by a byte.
+- A priority carries a color, set with `workbook priority color <priority>
+  #rrggbb` and cleared by omitting the value, which returns it to one derived
+  from its position.
+- `workbook priority delete` requires `--into`, naming where the removed
+  priority's tasks belong. It is never guessed, and removing the last remaining
+  priority is refused outright — every task has to be at one.
+- A priority filter naming a priority that was renamed or removed away now says
+  what the name resolves to, instead of quietly listing a different priority's
+  tasks. It carries a `priority-filter-forwarded` warning beside the results,
+  mirroring what a status filter has always done.
+- `.workbook/guidelines.md` documents the priorities a project actually uses.
+  Its "Canonical priorities" table always printed the built-in three, so the one
+  document an agent reads to learn a project's vocabulary described a different
+  project. That table is now headed "Priorities" and carries what the statuses
+  table above it carries — each priority's position, machine value, display
+  label and tag, with a legend saying that a task created without `--priority`
+  lands on the tagged one.
+
+### Changed
+- **Every project created by this release records its priorities, and so
+  requires a v0.6.0 or newer clone to change its configuration at all** — not
+  only its priorities, because the configuration ledger carries one version
+  requirement for the whole document rather than one per section. Older clones
+  keep fetching, keep reading, and keep publishing their own tasks; what they
+  cannot do is rename a status, change a display setting, or touch a priority
+  until they upgrade. A teammate on an older build sees a message saying to
+  upgrade rather than one saying the project is corrupt.
+- **`workbook list --status <name>` now exits `5` for a status this project
+  does not define**, where it returned an empty list at exit `0` with a
+  warning. An empty table cannot be told apart from an empty column, so the
+  old answer threw away the one fact worth having: this checkout has never
+  heard of that name, which usually means it has not fetched. A name that a
+  rename or a removal still forwards is unaffected — it resolves, the tasks
+  come back, and a warning says what the name now means. `--priority` has
+  always answered an unknown priority this way. Both refusals now say which
+  statuses — or priorities — this project does define, and that fetching is
+  what fixes a name a teammate has and this clone does not; supplying a value
+  to a task is still answered with the shorter `invalid task status "…"`,
+  because there the value is the news rather than the clone.
+- **The priorities table in `.workbook/guidelines.md` is now most urgent
+  first**, where it read Low, Medium, High. Every existing project's copy
+  flips to High, Medium, Low the first time anything regenerates it — a
+  priority verb, a status verb, `workbook docs update`, or `workbook setup` —
+  so expect a diff in a generated file nobody edited. It is the order
+  `workbook priority list` and both boards have always used, and the order the
+  statuses table beside it uses; the two now agree.
+- **The warning code `status-filter-unresolved` is now
+  `status-filter-forwarded`.** It was minted when that warning also covered the
+  case the refusal above has taken away, so its name described the one thing it
+  no longer reports.
+
+### Fixed
+- **Ctrl+C on `workbook serve` now exits at once, and exits cleanly.** With a
+  browser tab open on the board it used to sit for five seconds and then print
+  `serve board: context deadline exceeded` and exit non-zero, with nothing
+  actually wrong: browsers open spare connections they never send a request on,
+  and the shutdown was waiting for requests that were never coming. It now drops
+  those connections immediately and gives only a request already under way a
+  couple of seconds to answer. A change made on the board is recorded locally
+  before it is published, so quitting in the middle of a publish leaves the
+  project where a failed publish leaves it — recorded, and picked up by the next
+  sync.
+
 ## v0.5.1 — 2026-08-23
 
 Five stories from adversarially reviewed pull requests: the web board learns

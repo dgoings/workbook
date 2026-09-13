@@ -105,6 +105,13 @@ func (result ConfigWriteResult) Vocabulary() core.Vocabulary {
 	return result.State.Vocabulary()
 }
 
+// PriorityVocabulary reads the written checkpoint's priority vocabulary, so a
+// priority change reports the priorities its own write produced rather than the
+// ones the session opened with.
+func (result ConfigWriteResult) PriorityVocabulary() core.PriorityVocabulary {
+	return result.State.PriorityVocabulary()
+}
+
 // LoadVocabulary returns the project's configured status vocabulary, resolving
 // it once per opened repository exactly as LoadConfig and LoadIdentity resolve
 // theirs.
@@ -166,6 +173,14 @@ type VocabularyState struct {
 	// could be answered from either side of a fetch that moved the ledger, and
 	// would render a board out of two configurations.
 	Display core.DisplaySettings
+	// Priorities is the project's configured priority vocabulary, read from
+	// the same tip and carried here for the same reason Display is. It is the
+	// zero vocabulary for a project that has configured none, which every
+	// PriorityVocabulary accessor but Document and Validate reads as the
+	// built-in three — so a caller that wants "what is this project using"
+	// needs no substitution of its own, and a caller writing a checkpoint
+	// still has the un-substituted answer.
+	Priorities core.PriorityVocabulary
 }
 
 // LoadVocabularyState reads the project's statuses and reports whether a ledger
@@ -194,15 +209,31 @@ func (r *Repository) LoadVocabularyState(ctx context.Context, config core.Projec
 		return VocabularyState{Vocabulary: core.LegacyVocabulary()}, nil
 	}
 	if decoded, found := r.decodedConfigAt(head); found {
-		return VocabularyState{Head: head, Seeded: true, Vocabulary: decoded.vocabulary, Display: decoded.display}, nil
+		return vocabularyStateAt(head, decoded), nil
 	}
 	record, err := r.readConfigRecordAt(ctx, config, configRef, head)
 	if err != nil {
 		return VocabularyState{}, unreadableConfigLedger(err)
 	}
-	decoded := decodedConfig{vocabulary: record.State.Vocabulary(), display: record.State.Display()}
+	decoded := decodedConfig{
+		vocabulary: record.State.Vocabulary(),
+		display:    record.State.Display(),
+		priorities: record.State.PriorityVocabulary(),
+	}
 	r.rememberDecodedConfig(head, decoded)
-	return VocabularyState{Head: head, Seeded: true, Vocabulary: decoded.vocabulary, Display: decoded.display}, nil
+	return vocabularyStateAt(head, decoded), nil
+}
+
+// vocabularyStateAt assembles the state from a decoded tip, so the memo hit and
+// the cold read cannot disagree about which sections a state carries.
+func vocabularyStateAt(head string, decoded decodedConfig) VocabularyState {
+	return VocabularyState{
+		Head:       head,
+		Seeded:     true,
+		Vocabulary: decoded.vocabulary,
+		Display:    decoded.display,
+		Priorities: decoded.priorities,
+	}
 }
 
 // decodedConfig is one ledger tip's resolved sections, memoized together
@@ -211,6 +242,12 @@ func (r *Repository) LoadVocabularyState(ctx context.Context, config core.Projec
 type decodedConfig struct {
 	vocabulary core.Vocabulary
 	display    core.DisplaySettings
+	// priorities is the third section of the same tip, memoized beside the
+	// other two for the reason they are memoized together: a caller that asked
+	// for the statuses and then for the priorities could otherwise be answered
+	// from either side of a fetch that moved the ledger, and would describe a
+	// project out of two configurations.
+	priorities core.PriorityVocabulary
 }
 
 // decodedConfigAt returns the configuration this process already decoded from a
@@ -422,7 +459,7 @@ func (r *Repository) writeConfigOperation(
 			return ConfigWriteResult{}, supersededConfigLedger(*expected, tip.Head)
 		}
 	}
-	return r.appendConfigOperation(ctx, tip, authored, actor, reason)
+	return r.appendConfigOperation(ctx, tip, ids, authored, actor, reason)
 }
 
 // supersededConfigLedger refuses a write whose caller named a tip that is no
@@ -502,7 +539,16 @@ func (r *Repository) seedConfigLedger(
 	// existed without a ledger, and what such a project is using is a fact about
 	// it rather than a decision this release gets to make; `workbook setup`
 	// seeds the minting default only when it mints the project itself.
-	genesisState, genesisHead, err := r.writeConfigGenesis(ctx, config, ids, generation, actor, core.LegacyVocabulary())
+	//
+	// Priorities get the same reasoning in their own voice: unlike statuses,
+	// there is no legacy priority set to diverge from the built-in one — every
+	// project, ledger or not, has always used today's built-in three (see
+	// core.BuiltInPriorityVocabulary's comment) — so recording
+	// core.BuiltInPriorityVocabulary() here is not this release choosing a
+	// vocabulary for the project, it is writing down the fact that was already
+	// true of it.
+	genesisState, genesisHead, err := r.writeConfigGenesis(
+		ctx, config, ids, generation, actor, core.LegacyVocabulary(), core.BuiltInPriorityVocabulary())
 	if err != nil {
 		return ConfigWriteResult{}, false, err
 	}
@@ -542,7 +588,18 @@ func (r *Repository) seedConfigLedger(
 // defaults" is what makes the ledger version independent: the built-in defaults
 // change between releases — `blocked` left them once dependencies said what a
 // task waits on — and a later clone folding this root has to reproduce this
-// project rather than its own build's idea of a new one.
+// project rather than its own build's idea of a new one. Priorities are
+// recorded the same way and for the same reason, now that both callers below
+// have a vocabulary to hand it.
+//
+// Recording priorities here does mark every genesis this build writes as
+// minReader 3 (ConfigPackMinReader fires on the section's presence, not on
+// its content), so an older clone of a project this build creates cannot
+// touch its configuration until it upgrades. That is accepted, not
+// incidental: README.md:114 states the project's synchronization design —
+// "A team can require synchronization by committing a tracked project
+// policy that outranks personal preferences" — and consistency with how
+// statuses are already recorded was chosen over sparing un-upgraded clones.
 func (r *Repository) writeConfigGenesis(
 	ctx context.Context,
 	config core.ProjectConfig,
@@ -550,17 +607,22 @@ func (r *Repository) writeConfigGenesis(
 	generation string,
 	actor string,
 	vocabulary core.Vocabulary,
+	priorities core.PriorityVocabulary,
 ) (core.ConfigStateDocument, string, error) {
 	genesisID, err := ids.New()
 	if err != nil {
 		return core.ConfigStateDocument{}, "", core.Wrap(core.CategoryOperational,
 			"cannot generate configuration operation ID", err)
 	}
+	priorityDocument := priorities.Document()
 	pack, err := core.NewConfigOperationPack(config.ProjectID, generation, actor, 1, configWallTime(),
 		[]core.ConfigOperation{{
-			ID:     genesisID,
-			Type:   core.ConfigGenesis,
-			Config: &core.ConfigData{Vocabulary: vocabulary.Document()},
+			ID:   genesisID,
+			Type: core.ConfigGenesis,
+			Config: &core.ConfigData{
+				Vocabulary: vocabulary.Document(),
+				Priorities: &priorityDocument,
+			},
 		}})
 	if err != nil {
 		return core.ConfigStateDocument{}, "", err
@@ -619,7 +681,8 @@ func (r *Repository) MintConfigLedger(
 		return false, core.Wrap(core.CategoryOperational,
 			"cannot generate configuration history generation", err)
 	}
-	state, head, err := r.writeConfigGenesis(ctx, config, ids, generation, actor, core.DefaultVocabulary())
+	state, head, err := r.writeConfigGenesis(
+		ctx, config, ids, generation, actor, core.DefaultVocabulary(), core.BuiltInPriorityVocabulary())
 	if err != nil {
 		return false, err
 	}
@@ -640,10 +703,29 @@ func (r *Repository) MintConfigLedger(
 func (r *Repository) appendConfigOperation(
 	ctx context.Context,
 	tip configRecord,
+	ids core.IDSource,
 	operations []core.ConfigOperation,
 	actor string,
 	reason string,
 ) (ConfigWriteResult, error) {
+	authored := len(operations)
+	operations, err := prependBuiltInPriorities(tip, ids, operations)
+	if err != nil {
+		return ConfigWriteResult{}, err
+	}
+	// writeConfigOperation already refused a batch over the ceiling, but it
+	// counted what the caller asked for, and the backfill above has since
+	// added to it. The ceiling has to hold against what is actually written:
+	// the reader's budget check refuses an oversized pack, and a ledger is
+	// append-only, so a pack written past it is a configuration no clone can
+	// ever fold again — including the one that wrote it.
+	if len(operations) > core.MaxConfigOperationsPerPack {
+		return ConfigWriteResult{}, core.Errorf(core.CategoryValidation,
+			"a configuration write carries %d operations and must not exceed %d: %d were authored, and this project's "+
+				"first priority change also records the %d built-in priorities its existing tasks depend on; "+
+				"split it into several commands",
+			len(operations), core.MaxConfigOperationsPerPack, authored, len(operations)-authored)
+	}
 	pack, err := core.NewConfigOperationPack(
 		tip.State.ProjectID,
 		tip.State.History.Generation,
@@ -679,6 +761,73 @@ func (r *Repository) appendConfigOperation(
 	}
 	r.replaceVocabulary(state.Vocabulary(), head)
 	return ConfigWriteResult{Head: head, State: state}, nil
+}
+
+// prependBuiltInPriorities backfills the built-in three into the same pack as
+// a project's first priority change, for the one case seedConfigLedger and
+// MintConfigLedger cannot reach: a ledger whose genesis was written before
+// this build existed, and so carries no priorities section at all.
+//
+// That project's tasks have always been high, medium, or low — every one of
+// them was filed under the built-in three before anything here could ask
+// otherwise — and the genesis that could have said so is immutable now. The
+// first priority.* operation authored against it is the last moment the
+// ledger can still be told what those tasks already depend on: once this
+// pack folds, the section is no longer nil, and every later reader stops
+// substituting the built-ins and starts reading only what has been folded —
+// so a pack that recorded the caller's change without also recording the
+// three would leave every task still on high, medium, or low unresolvable by
+// the very next read. Writing both in one pack is what makes that outcome
+// unreachable rather than merely unlikely: one pack is one commit, so there
+// is no folded state in which the caller's change exists without the
+// priorities it depends on.
+func prependBuiltInPriorities(
+	tip configRecord,
+	ids core.IDSource,
+	operations []core.ConfigOperation,
+) ([]core.ConfigOperation, error) {
+	if tip.State.Config.Priorities != nil {
+		return operations, nil
+	}
+	if !operationsTouchPriorities(operations) {
+		return operations, nil
+	}
+	definitions := core.BuiltInPriorityVocabulary().Definitions()
+	backfilled := make([]core.ConfigOperation, 0, len(definitions)+len(operations))
+	for _, definition := range definitions {
+		id, err := ids.New()
+		if err != nil {
+			return nil, core.Wrap(core.CategoryOperational, "cannot generate configuration operation ID", err)
+		}
+		backfilled = append(backfilled, core.ConfigOperation{
+			ID:           id,
+			Type:         core.ConfigPriorityAdd,
+			PriorityName: definition.Priority,
+			Label:        definition.Label,
+			Rank:         definition.Rank,
+			PriorityTags: definition.Tags,
+		})
+	}
+	return append(backfilled, operations...), nil
+}
+
+// operationsTouchPriorities reports whether any operation in the batch belongs
+// to the priority section. The trigger is deliberately this narrow: a status
+// or display change reaching a ledger that predates priorities must come out
+// with no priorities section at all, so only a priority.* operation may cause
+// one to be written.
+//
+// Which types those are is ConfigOperationType.TouchesPriorities's to say,
+// not this package's — it is the same question the fold asks when routing an
+// operation to a section, and the two answers have to be identical. See that
+// method's comment for what a divergence would cost.
+func operationsTouchPriorities(operations []core.ConfigOperation) bool {
+	for _, operation := range operations {
+		if operation.Type.TouchesPriorities() {
+			return true
+		}
+	}
+	return false
 }
 
 // configWallTime stamps a pack's display timestamp. Wall time is attribution

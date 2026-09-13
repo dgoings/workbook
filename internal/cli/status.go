@@ -717,6 +717,11 @@ type configLedgerCommit struct {
 type configBefore struct {
 	vocabulary core.Vocabulary
 	display    core.DisplaySettings
+	// priorities is the third section, carried for the reason the other two
+	// are: a priority inverse is a statement about what the change replaced,
+	// and reading it from a different commit than the pack would describe a
+	// configuration that never existed.
+	priorities core.PriorityVocabulary
 }
 
 // configLedgerWindow is what one bounded read of the ledger saw: the commits it
@@ -772,7 +777,11 @@ func readConfigLedgerWindow(
 				Pack:   commit.Operation,
 				Before: previous,
 			})
-			previous = configBefore{vocabulary: commit.State.Vocabulary(), display: commit.State.Display()}
+			previous = configBefore{
+				vocabulary: commit.State.Vocabulary(),
+				display:    commit.State.Display(),
+				priorities: commit.State.PriorityVocabulary(),
+			}
 			return nil
 		},
 		End: func(outcome gitstore.ConfigHistoryResult) error {
@@ -1707,10 +1716,13 @@ func runStatusMutation(
 		return err
 	}
 	session.fetchBefore(ctx)
-	// The vocabulary the fetch settled on is the one this change is authored
+	// The configuration the fetch settled on is the one this change is authored
 	// against, which is what makes `status rename` land on a teammate's newer
-	// name rather than on the one this clone opened with.
-	if err := session.refreshVocabulary(ctx); err != nil {
+	// name rather than on the one this clone opened with. It refreshes the
+	// priorities in the same read, because the guidelines this mutation
+	// regenerates document them beside the statuses and would otherwise be
+	// rewritten from a section the fetch had already superseded.
+	if err := session.refreshConfiguration(ctx); err != nil {
 		return err
 	}
 	before := session.service.Vocabulary
@@ -1741,21 +1753,30 @@ func runStatusMutation(
 	if position := result.Change.Position; position != nil {
 		position.Order = after.Order(plan.change.Status) + 1
 	}
-	docs, docsErr := regenerateGuidelines(session, after, noDocs)
+	docs, docsErr := regenerateGuidelines(session, after, session.service.Priorities, noDocs)
 	result.Docs = docs
 	writeStatusMutation(stdout, stderr, command, result, session, docsErr, jsonMode)
 	return nil
 }
 
 // regenerateGuidelines rewrites the generated guidelines against the statuses
-// this change produced.
+// and priorities this change produced.
 //
-// The guidelines state a project's statuses, so every status change makes them
-// stale, and a generated file that has to be refreshed by hand is a generated
-// file that is wrong most of the time. It goes through the same Reconcile the
-// documentation commands use, which is what keeps the one promise that matters
-// about a generated file: Workbook rewrites what it wrote, and never overwrites
-// what somebody edited.
+// The guidelines state a project's statuses and priorities, so every status
+// change and every priority change makes them stale, and a generated file
+// that has to be refreshed by hand is a generated file that is wrong most of
+// the time. It goes through the same Reconcile the documentation commands
+// use, which is what keeps the one promise that matters about a generated
+// file: Workbook rewrites what it wrote, and never overwrites what somebody
+// edited.
+//
+// This is called from status mutations as well as priority ones, so both
+// parameters are required at every call site regardless of which vocabulary
+// the caller's own change touched: a status rename that passed only the
+// statuses and let priorities default to the zero value would silently
+// overwrite a project's configured priorities with the built-in three the
+// moment somebody renamed a column. Passing the priorities a caller did not
+// itself change is exactly what keeps that half of the document accurate.
 //
 // It returns its failure rather than raising it. The configuration change is
 // already recorded and published by the time this runs, so a documentation
@@ -1764,6 +1785,7 @@ func runStatusMutation(
 func regenerateGuidelines(
 	session *taskSession,
 	vocabulary core.Vocabulary,
+	priorities core.PriorityVocabulary,
 	noDocs bool,
 ) (*agentdocs.Report, error) {
 	if noDocs {
@@ -1773,6 +1795,7 @@ func regenerateGuidelines(
 		Root:       session.repository.Root,
 		Project:    session.config,
 		Vocabulary: vocabulary,
+		Priorities: priorities,
 		Generator:  release.Version,
 	})
 	return &report, err
@@ -1891,8 +1914,7 @@ func requireLiveStatus(
 	}
 	via, operation, forwarded := vocabulary.Forwarding(status)
 	if !forwarded {
-		return "", core.Errorf(core.CategoryNotFound,
-			"no status %q in this project; the statuses are: %s", status, statusNameList(vocabulary))
+		return "", core.Errorf(core.CategoryNotFound, "%s", core.UnknownStatusMessage(vocabulary, status))
 	}
 	resolved, _ := vocabulary.Resolve(status)
 	return "", core.Errorf(core.CategoryNotFound, "no status %q; it was %s %q%s%s",
@@ -1933,13 +1955,11 @@ func statusForwardedOn(ctx context.Context, scope statusScope, status core.Statu
 	return " on " + when.UTC().Format("2006-01-02")
 }
 
+// statusNameList names this project's statuses for a message. The list lives
+// in core so that the refusals built from it here and the filter's refusal
+// there cannot drift apart.
 func statusNameList(vocabulary core.Vocabulary) string {
-	definitions := vocabulary.Definitions()
-	names := make([]string, 0, len(definitions))
-	for _, definition := range definitions {
-		names = append(names, string(definition.Status))
-	}
-	return strings.Join(names, ", ")
+	return core.StatusNameList(vocabulary)
 }
 
 // parseStatusTags turns the repeated --tag values into a set, refusing an
@@ -2401,6 +2421,14 @@ func configOperationSummary(operation core.ConfigOperation) string {
 	case core.ConfigDisplayUnset:
 		return fmt.Sprintf("cleared %s", operation.Setting)
 	default:
+		// The priority section words its own operations, in priority.go beside
+		// the verbs that author them, rather than growing eight more arms on a
+		// switch the status verbs own. A type neither section claims falls
+		// through to its wire name, which is what an older ledger's unknown
+		// operation has always rendered as.
+		if summary, worded := priorityOperationSummary(operation); worded {
+			return summary
+		}
 		return string(operation.Type)
 	}
 }

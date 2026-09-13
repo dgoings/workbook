@@ -169,13 +169,19 @@ func (board *boardVocabulary) apply(
 		return webui.VocabularyMutation{}, err
 	}
 	after := written.Vocabulary()
+	// The priorities as this write left them, read off the same result the
+	// statuses are, so the staleness report below compares the file against one
+	// configuration rather than against this project's statuses and some other
+	// project's priorities.
+	priorities := written.PriorityVocabulary()
 	return webui.VocabularyMutation{
 		State: webui.VocabularyState{Vocabulary: after, Head: written.Head},
 		Tasks: webui.VocabularyTaskCounts{
 			Affected:       plan.tasks.Affected,
 			ClaimableAfter: plan.tasks.ClaimableAfter,
 		},
-		Warnings: append(board.publisher.publishConfig(ctx), staleGuidelinesWarnings(board, after)...),
+		Warnings: append(board.publisher.publishConfig(ctx),
+			staleGuidelinesWarnings(board, after, priorities)...),
 	}, nil
 }
 
@@ -225,11 +231,24 @@ func staleVocabularyWrite(expected string) error {
 // statuses this project no longer has, since the board deliberately does not
 // rewrite them. It is best-effort: a file it cannot read is not a reason to
 // report a recorded, published change as anything but recorded.
-func staleGuidelinesWarnings(board *boardVocabulary, vocabulary core.Vocabulary) []core.Warning {
+//
+// It takes the priorities as well as the statuses although it changes neither,
+// because the comparison renders the whole document: a reader that supplied
+// only the statuses would render the built-in three over the priorities the
+// project configured, find the difference it had just invented, and tell every
+// project that named its own priorities that its guidelines are stale after
+// every board change — including a change that left them exactly as the
+// installed file describes.
+func staleGuidelinesWarnings(
+	board *boardVocabulary,
+	vocabulary core.Vocabulary,
+	priorities core.PriorityVocabulary,
+) []core.Warning {
 	state, err := agentdocs.GuidelinesState(agentdocs.Options{
 		Root:       board.repository.Root,
 		Project:    board.config,
 		Vocabulary: vocabulary,
+		Priorities: priorities,
 		Generator:  release.Version,
 	})
 	if err != nil {

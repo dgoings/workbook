@@ -100,6 +100,8 @@ func Run(ctx context.Context, args []string, cwd string, stdout, stderr io.Write
 		err = runSync(ctx, commandArgs, cwd, stdout, stderr)
 	case "status":
 		err = runStatus(ctx, commandArgs, cwd, stdout, stderr)
+	case "priority":
+		err = runPriority(ctx, commandArgs, cwd, stdout, stderr)
 	case "config":
 		err = runConfig(ctx, commandArgs, cwd, stdout, stderr)
 	case "docs":
@@ -564,7 +566,8 @@ func runList(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	if err != nil {
 		return err
 	}
-	warnings := append(statusFilterWarnings(service, filter), newerWriterWarnings(tasks)...)
+	warnings := append(statusFilterWarnings(service, filter), priorityFilterWarnings(service, filter)...)
+	warnings = append(warnings, newerWriterWarnings(tasks)...)
 	if *jsonMode {
 		writeResultWithWarnings(stdout, "list", tasks, warnings)
 	} else {
@@ -579,45 +582,75 @@ func runList(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 // statusFilterWarnings says what a status filter turned out to select, when
 // that is not what the caller typed.
 //
-// A filter outside the vocabulary succeeds and returns an empty list, which is
-// the honest answer to "which tasks are in a status this project does not
-// have". It is also indistinguishable from an empty column, so the miss is
-// named here; a filter that had to be forwarded says so too, because the tasks
-// that came back are not stored under the value that was asked for.
+// A filter that resolves to nothing never reaches here: List refuses it, so
+// that caller is told by an error naming the value rather than by a warning
+// over an empty table nobody could tell from an empty column. What is left is
+// the forwarded case, where tasks did come back but are not stored under the
+// value that was asked for, and only a warning can say so.
 func statusFilterWarnings(service core.Service, filter core.ListFilter) []core.Warning {
 	if filter.Status == nil {
 		return nil
 	}
 	resolution := service.ResolveStatusFilter(*filter.Status)
-	switch {
-	case !resolution.Known:
-		return []core.Warning{{
-			Code:    core.WarningStatusFilter,
-			Message: fmt.Sprintf("no status %q in this project's vocabulary", resolution.Requested),
-		}}
-	case resolution.Forwarded:
-		// The verb belongs to the one hop it describes, and the end of the
-		// chain gets its own clause; see statusChainClause. Pairing the first
-		// hop's verb with the last hop's destination reported a rename that
-		// never happened.
-		return []core.Warning{{
-			Code: core.WarningStatusFilter,
-			Message: fmt.Sprintf("no status %q in this project's vocabulary; it was %s %q%s, and %q is what was listed",
-				resolution.Requested, forwardingVerb(resolution.Operation), resolution.Via,
-				statusChainClause(resolution.Via, resolution.Resolved), resolution.Resolved),
-		}}
-	default:
+	if !resolution.Forwarded {
 		return nil
 	}
+	// The verb belongs to the one hop it describes, and the end of the chain
+	// gets its own clause; see statusChainClause. Pairing the first hop's verb
+	// with the last hop's destination reported a rename that never happened.
+	return []core.Warning{{
+		Code: core.WarningStatusFilter,
+		Message: fmt.Sprintf("no status %q in this project's vocabulary; it was %s %q%s, and %q is what was listed",
+			resolution.Requested, forwardingVerb(resolution.Operation), resolution.Via,
+			statusChainClause(resolution.Via, resolution.Resolved), resolution.Resolved),
+	}}
 }
 
-// forwardingVerb names how a status stopped being live, in the voice a message
-// about the value somebody typed reads in.
+// forwardingVerb names how a status or priority stopped being live, in the
+// voice a message about the value somebody typed reads in.
 func forwardingVerb(operation core.ConfigOperationType) string {
-	if operation == core.ConfigStatusRemove {
+	if operation == core.ConfigStatusRemove || operation == core.ConfigPriorityRemove {
 		return "removed into"
 	}
 	return "renamed to"
+}
+
+// priorityFilterWarnings says what a priority filter turned out to select,
+// when that is not what the caller typed. It reads exactly like
+// statusFilterWarnings: a filter that resolves to nothing never reaches here,
+// because List refuses it before runList gets to warnings, so this only ever
+// reports the forwarded case — a filter that had to be resolved through a
+// rename or a removal.
+func priorityFilterWarnings(service core.Service, filter core.ListFilter) []core.Warning {
+	if filter.Priority == nil {
+		return nil
+	}
+	resolution := service.ResolvePriorityFilter(*filter.Priority)
+	if !resolution.Forwarded {
+		return nil
+	}
+	// The verb belongs to the one hop it describes, and the end of the chain
+	// gets its own clause; see priorityChainClause. Pairing the first hop's
+	// verb with the last hop's destination reported a rename that never
+	// happened.
+	return []core.Warning{{
+		Code: core.WarningPriorityFilter,
+		Message: fmt.Sprintf("no priority %q in this project's vocabulary; it was %s %q%s, and %q is what was listed",
+			resolution.Requested, forwardingVerb(resolution.Operation), resolution.Via,
+			priorityChainClause(resolution.Via, resolution.Resolved), resolution.Resolved),
+	}}
+}
+
+// priorityChainClause is statusChainClause's mirror for priorities: it says
+// where a chain ends when that is not where its first hop went, for the same
+// reason statusChainClause exists — Forwarding answers about one hop only, so
+// pairing that hop's verb with the chain's final destination would describe a
+// change nobody made.
+func priorityChainClause(via, resolved core.Priority) string {
+	if resolved == "" || resolved == via {
+		return ""
+	}
+	return fmt.Sprintf(", which now resolves to %q", resolved)
 }
 
 func runShow(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) error {
@@ -1182,7 +1215,7 @@ func runNext(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	}
 
 	session.fetchBefore(ctx)
-	if err := session.refreshVocabulary(ctx); err != nil {
+	if err := session.refreshConfiguration(ctx); err != nil {
 		return err
 	}
 	task, err := session.service.Next(ctx, options)
@@ -2095,17 +2128,24 @@ func openServiceParts(ctx context.Context, cwd string, stderr io.Writer) (core.S
 	if err != nil {
 		return core.Service{}, nil, nil, err
 	}
-	// The project's own status vocabulary, not the built-in default. This is
-	// what turns the per-project statuses on for real: every projected task
-	// resolves its stored status through the configured forwarding chains, and
-	// every mutation settles a stale token against them.
-	vocabulary, err := repository.LoadVocabulary(ctx)
+	// The project's own statuses and priorities, not the built-in defaults.
+	// This is what turns the per-project vocabularies on for real: every
+	// projected task resolves its stored status and its stored priority through
+	// the configured forwarding chains, every mutation settles a stale token
+	// against them, and the board's columns and priority order are the
+	// project's own.
+	//
+	// Both from one read, for the reason gitstore.VocabularyState exists: a
+	// caller answered from either side of a fetch would draw one board out of
+	// two configurations.
+	state, err := repository.LoadVocabularyState(ctx, config)
 	if err != nil {
 		return core.Service{}, nil, nil, err
 	}
 	return core.Service{
 		Config:     config,
-		Vocabulary: vocabulary,
+		Vocabulary: state.Vocabulary,
+		Priorities: state.Priorities,
 		Reader:     store,
 		Writer:     repository,
 		Blobs:      repository,
@@ -2135,13 +2175,19 @@ func openReadService(ctx context.Context, cwd string, stderr io.Writer) (core.Se
 	if err != nil {
 		return core.Service{}, err
 	}
-	vocabulary, err := repository.LoadVocabulary(ctx)
+	// Both configured vocabularies, from one read, exactly as the write
+	// service above opens on both. A read service that loaded only the statuses
+	// would refuse `list --priority` for a priority the project configured and
+	// sort every task it did list against a vocabulary the project does not
+	// use.
+	state, err := repository.LoadVocabularyState(ctx, config)
 	if err != nil {
 		return core.Service{}, err
 	}
 	return core.Service{
 		Config:     config,
-		Vocabulary: vocabulary,
+		Vocabulary: state.Vocabulary,
+		Priorities: state.Priorities,
 		Reader:     store,
 		History:    store,
 		// A read service reads attachments too: their bytes are Git objects

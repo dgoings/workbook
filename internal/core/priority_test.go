@@ -33,6 +33,33 @@ func TestBuiltInPrioritiesAreTodaysThree(t *testing.T) {
 	}
 }
 
+// The built-in three carry the display labels they have always carried, and
+// BuiltInPriorityVocabulary hands back a copy rather than the set it caches.
+//
+// Both assertions came off the deleted core.Priorities, whose whole job was to
+// report the built-in three to the guidelines renderer in a fixed order. The
+// renderer reads a project's own priorities now, so the order that function
+// froze is gone with it; what is still worth pinning is that the labels are
+// what a reader has seen since before ranks existed, and that a caller cannot
+// tamper with a vocabulary every other caller shares — BuiltInPriorityVocabulary
+// is cached behind sync.OnceValue, so handing out the backing array would
+// corrupt the built-in set process-wide.
+func TestBuiltInPriorityVocabularyLabelsAndCopies(t *testing.T) {
+	want := map[Priority]string{PriorityHigh: "High", PriorityMedium: "Medium", PriorityLow: "Low"}
+	for _, definition := range BuiltInPriorityVocabulary().Definitions() {
+		if got := definition.Label; got != want[definition.Priority] {
+			t.Errorf("label of %q = %q, want %q", definition.Priority, got, want[definition.Priority])
+		}
+	}
+
+	// Production mutation: returning the backing array would let one caller
+	// corrupt the built-in priority set for every other caller.
+	BuiltInPriorityVocabulary().Definitions()[0].Priority = "tampered"
+	if got := BuiltInPriorityVocabulary().Definitions()[0].Priority; got != PriorityHigh {
+		t.Fatalf("first built-in priority = %q, want %q", got, PriorityHigh)
+	}
+}
+
 // Color is omitted when unset, so a definition that chose no color encodes to
 // the same bytes it would have before the field existed. The "tags":null this
 // pins is a bare literal marshaled directly, without passing through
@@ -80,6 +107,40 @@ func TestPriorityVocabularyResolvesARename(t *testing.T) {
 	got, ok := vocabulary.Resolve(PriorityHigh)
 	if !ok || got != "critical" {
 		t.Errorf("Resolve(high) = %q,%v; want critical,true", got, ok)
+	}
+}
+
+// Forwarding is what lets a message say "renamed to" rather than the vaguer
+// "resolves to", and it answers about the first hop because that is what
+// happened to the value somebody typed. Mirrors
+// TestVocabularyForwardingNamesTheHopAndItsKind for priorities.
+func TestPriorityVocabularyForwardingNamesTheHopAndItsKind(t *testing.T) {
+	vocabulary, err := NewPriorityVocabulary(
+		[]PriorityDefinition{
+			{Priority: "critical", Label: "Critical", Rank: "1/1", Tags: []PriorityTag{PriorityTagDefault}},
+			{Priority: PriorityMedium, Label: "Medium", Rank: "2/1"},
+			{Priority: PriorityLow, Label: "Low", Rank: "3/1"},
+		},
+		[]PriorityAlias{{From: PriorityHigh, To: "critical"}},
+		[]RetiredPriority{{Priority: "urgent", Destination: PriorityLow}},
+	)
+	if err != nil {
+		t.Fatalf("NewPriorityVocabulary() error = %v", err)
+	}
+
+	destination, operation, forwarded := vocabulary.Forwarding(PriorityHigh)
+	if !forwarded || destination != "critical" || operation != ConfigPriorityRename {
+		t.Fatalf("Forwarding(high) = %q, %q, %t; want critical renamed", destination, operation, forwarded)
+	}
+	destination, operation, forwarded = vocabulary.Forwarding("urgent")
+	if !forwarded || destination != PriorityLow || operation != ConfigPriorityRemove {
+		t.Fatalf("Forwarding(urgent) = %q, %q, %t; want low removed", destination, operation, forwarded)
+	}
+	if _, _, forwarded := vocabulary.Forwarding("critical"); forwarded {
+		t.Fatal("Forwarding(critical) reported a live priority as forwarded")
+	}
+	if _, _, forwarded := vocabulary.Forwarding("nonsense"); forwarded {
+		t.Fatal("Forwarding(nonsense) reported an unknown priority as forwarded")
 	}
 }
 
@@ -424,6 +485,35 @@ func TestServiceListFilterResolvesAStoredPriorityFilterThroughTheChains(t *testi
 	}
 }
 
+// ResolvePriorityFilter reports what List's own resolution of a priority
+// filter found, mirroring TestServiceListResolvesAStoredFilterThroughTheChains
+// for priorities: a filter naming a renamed-away priority reports itself
+// known, forwarded, resolved to the live priority, and names the rename as the
+// operation that did it. A well-formed but genuinely unknown name reports as
+// not known — List still refuses that case outright (see
+// TestServiceListFilterOnAnUnconfiguredProjectRefusesAnUndefinedPriority), so
+// this asserts the resolution directly rather than through List.
+func TestResolvePriorityFilterNamesTheHopThatForwardedAFilter(t *testing.T) {
+	service := priorityServiceUnderTest(newMemoryTaskStore(), &sequenceIDSource{}, priorityVocabularyRenamingHighToMedium(t))
+
+	renamed := Priority(PriorityHigh)
+	resolution := service.ResolvePriorityFilter(renamed)
+	if !resolution.Known || !resolution.Forwarded ||
+		resolution.Resolved != PriorityMedium || resolution.Operation != ConfigPriorityRename {
+		t.Fatalf("ResolvePriorityFilter(%q) = %#v, want a rename forwarded to medium", renamed, resolution)
+	}
+
+	live := Priority(PriorityMedium)
+	if resolution := service.ResolvePriorityFilter(live); !resolution.Known || resolution.Forwarded {
+		t.Fatalf("ResolvePriorityFilter(%q) = %#v, want a live priority", live, resolution)
+	}
+
+	unknown := Priority("nonsense")
+	if resolution := service.ResolvePriorityFilter(unknown); resolution.Known {
+		t.Fatalf("ResolvePriorityFilter(%q) = %#v, want an unknown priority", unknown, resolution)
+	}
+}
+
 // sameBucket must resolve both sides of the priority comparison, the same way
 // it already resolves both sides of the status comparison beside it: two
 // tasks whose stored priority tokens differ while resolving to one live
@@ -618,19 +708,15 @@ func TestServiceListFilterAcceptsAProjectDefinedPriority(t *testing.T) {
 
 // A filter naming a priority nothing carries — not live, and not reached by
 // any forwarding chain — is refused, the same refusal requirePriorityMember
-// gives a mutation for the identical priority. This is the one place List's
-// permissiveness does NOT mirror the status filter beside it: a status filter
-// outside the vocabulary is accepted because the result envelope now carries
-// the miss (see List's own doc comment, ResolveStatusFilter, and the CLI's
-// warning path); priority has no equivalent resolution report, so relaxing
-// this filter the way the status one was relaxed would silently swap a
+// gives a mutation for the identical priority, and the same refusal the status
+// filter beside it now gives (see List's own doc comment and
+// TestServiceListRefusesAStatusOutsideTheVocabulary). Accepting it would swap a
 // refusal for an empty result nobody could tell apart from "no tasks in this
 // priority" — which is exactly the regression a whole-branch review caught:
-// `workbook list --priority urgent` used to refuse and, for one commit on
-// this branch, silently returned zero tasks instead. This test pins the
-// refusal back for an unconfigured project, matching pre-branch behavior
-// exactly; TestServiceListFilterAcceptsAProjectDefinedPriority pins the
-// companion behavior for a project that configured the priority named.
+// `workbook list --priority urgent` used to refuse and, for one commit on this
+// branch, silently returned zero tasks instead. This test pins the refusal for
+// an unconfigured project; TestServiceListFilterAcceptsAProjectDefinedPriority
+// pins the companion behavior for a project that configured the priority named.
 func TestServiceListFilterOnAnUnconfiguredProjectRefusesAnUndefinedPriority(t *testing.T) {
 	store := newMemoryTaskStore(
 		serviceSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7F1", TaskData{
@@ -647,7 +733,14 @@ func TestServiceListFilterOnAnUnconfiguredProjectRefusesAnUndefinedPriority(t *t
 	if got := CategoryOf(err); got != CategoryValidation {
 		t.Fatalf("List(%q) category = %q, want %q", urgent, got, CategoryValidation)
 	}
-	if got, want := err.Error(), `invalid task priority "urgent"`; got != want {
+	// The filter names this project's priorities and the fix, where the
+	// mutation boundary's `invalid task priority %q` names neither: a filter's
+	// likeliest cause is a clone that has not fetched a teammate's new
+	// priority, and the old message was the same words for that, for a typo,
+	// and for a display label.
+	want := `no priority "urgent" in this project; the priorities are: high, medium, low; ` +
+		`fetch if a teammate added it`
+	if got := err.Error(); got != want {
 		t.Fatalf("List(%q) error = %q, want %q", urgent, got, want)
 	}
 	if tasks != nil {

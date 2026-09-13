@@ -147,11 +147,16 @@ func runSetup(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 		}
 	}
 
-	// The vocabulary the guidelines document is the one this clone holds now,
-	// which for a project joining an existing one is the built-in default until
-	// the fetch below delivers the ledger. That is corrected after the sync
-	// rather than before it, because documentation has to be installed even when
-	// origin is unreachable.
+	// The statuses and priorities the guidelines document are the ones this
+	// clone holds now, which for a project joining an existing one are the
+	// built-in defaults until the fetch below delivers the ledger. That is
+	// corrected after the sync rather than before it, because documentation has
+	// to be installed even when origin is unreachable.
+	//
+	// Both halves come from the one read, and both are passed: a run that let
+	// the priorities default would install high/medium/low over the priorities
+	// this project named, which is what `workbook setup` on a configured
+	// project would then do to it every time.
 	state, err := repository.LoadVocabularyState(ctx, config)
 	if err != nil {
 		return err
@@ -160,6 +165,7 @@ func runSetup(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 		Root:       repository.Root,
 		Project:    config,
 		Vocabulary: state.Vocabulary,
+		Priorities: state.Priorities,
 		User:       user,
 		Generator:  release.Version,
 		Force:      *force,
@@ -361,6 +367,11 @@ func refreshFetchedGuidelines(
 		return nil
 	}
 	options.Vocabulary = state.Vocabulary
+	// The priorities travel with the statuses, from the same read and for the
+	// same reason: the fetch delivered one ledger, and a refresh that carried
+	// only half of it would hand a fresh clone a file naming the built-in three
+	// over the priorities the project it just joined actually configured.
+	options.Priorities = state.Priorities
 	refreshed, err := agentdocs.ApplyGuidelines(options)
 	if err != nil {
 		return err
@@ -442,7 +453,12 @@ func runDocs(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	}
 
 	// Read locally, like every other documentation operation: `workbook docs`
-	// renders what this clone knows and never fetches to find out.
+	// renders what this clone knows and never fetches to find out. One read
+	// answers for both halves of the document, so the statuses `docs status`
+	// compares against and the priorities it compares against cannot come from
+	// two different tips — and `docs update` writes back exactly what `docs
+	// status` measured, rather than replacing a project's own priorities with
+	// the built-in three and then calling that current.
 	state, err := repository.LoadVocabularyState(ctx, config)
 	if err != nil {
 		return err
@@ -452,6 +468,7 @@ func runDocs(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 		Root:       repository.Root,
 		Project:    config,
 		Vocabulary: state.Vocabulary,
+		Priorities: state.Priorities,
 		User:       user,
 		Generator:  release.Version,
 		Create:     create.values,

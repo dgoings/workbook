@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"math/big"
 	"sort"
 	"strings"
@@ -171,11 +172,30 @@ func (vocabulary PriorityVocabulary) IsZero() bool {
 	return len(vocabulary.definitions) == 0 && len(vocabulary.aliases) == 0 && len(vocabulary.retired) == 0
 }
 
-// builtInPriorityVocabulary is what every accessor but Validate substitutes
-// for the zero value. It is cached behind sync.OnceValue the way
+// BuiltInPriorityVocabulary is the priority vocabulary every project is using
+// until something changes one: today's three, medium carrying the default
+// tag the service used to hardcode.
+//
+// Unlike statuses, there is no DefaultVocabulary/LegacyVocabulary split here.
+// A freshly minted project and one that predates the configuration ledger
+// entirely are both, today, using the same built-in three — nothing has ever
+// shipped a different starting set the way `blocked` once diverged from
+// legacyStatusDefinitions. Should the built-ins ever need to diverge the way
+// the status ones did, that is the day this splits into two, mirroring
+// vocabulary.go's pair.
+//
+// It is exported so gitstore can record it durably in every genesis it
+// writes — seedConfigLedger and MintConfigLedger both call this at project
+// creation, the same moment DefaultVocabulary and LegacyVocabulary are
+// recorded — so a genesis's priorities section states a fact about the
+// project from the start rather than being synthesized later from an absence.
+// That every genesis now carries the section, and so carries the
+// compatibility marker ConfigPackMinReader stamps for it, is an accepted
+// cost, not an oversight: see that function's comment for why firing on
+// presence is the safe reading. It is cached behind sync.OnceValue the way
 // DefaultVocabulary is, rather than rebuilt — with its two maps — on every
 // accessor call a rendering path makes per task.
-var builtInPriorityVocabulary = sync.OnceValue(func() PriorityVocabulary {
+var BuiltInPriorityVocabulary = sync.OnceValue(func() PriorityVocabulary {
 	return newPriorityVocabularyFromCanonical(PriorityDocument{Priorities: builtInPriorityDefinitions()})
 })
 
@@ -184,7 +204,7 @@ var builtInPriorityVocabulary = sync.OnceValue(func() PriorityVocabulary {
 // substitution the doc comment on PriorityVocabulary describes.
 func (vocabulary PriorityVocabulary) effective() PriorityVocabulary {
 	if vocabulary.IsZero() {
-		return builtInPriorityVocabulary()
+		return BuiltInPriorityVocabulary()
 	}
 	return vocabulary
 }
@@ -199,6 +219,25 @@ func (vocabulary PriorityVocabulary) Definitions() []PriorityDefinition {
 		definitions[index] = definition
 	}
 	return definitions
+}
+
+// PriorityNameList names a vocabulary's live priorities, most urgent first,
+// for a message that has to tell a caller what this project actually accepts.
+func PriorityNameList(vocabulary PriorityVocabulary) string {
+	definitions := vocabulary.Definitions()
+	names := make([]string, 0, len(definitions))
+	for _, definition := range definitions {
+		names = append(names, string(definition.Priority))
+	}
+	return strings.Join(names, ", ")
+}
+
+// UnknownPriorityMessage explains a priority this project does not define,
+// naming the ones it does. It is the priority half of UnknownStatusMessage and
+// exists for the reason given there.
+func UnknownPriorityMessage(vocabulary PriorityVocabulary, priority Priority) string {
+	return fmt.Sprintf("no priority %q in this project; the priorities are: %s",
+		priority, PriorityNameList(vocabulary))
 }
 
 // copyPriorityTags copies a tag list, keeping an empty list empty rather than
@@ -321,6 +360,28 @@ func (vocabulary PriorityVocabulary) Color(priority Priority) string {
 func (vocabulary PriorityVocabulary) Resolve(priority Priority) (Priority, bool) {
 	vocabulary = vocabulary.effective()
 	return resolveForward(vocabulary.forward, vocabulary.Has, priority)
+}
+
+// Forwarding reports the one hop a retired priority takes, and how it was
+// retired, so a caller can say "renamed to" or "removed into" rather than the
+// vaguer "resolves to". It is Vocabulary.Forwarding's mirror for priorities.
+//
+// It answers about the first hop only, deliberately. A chain's later hops are
+// somebody else's later decisions, and the message a person needs names what
+// happened to the value they typed.
+func (vocabulary PriorityVocabulary) Forwarding(priority Priority) (Priority, ConfigOperationType, bool) {
+	vocabulary = vocabulary.effective()
+	for _, alias := range vocabulary.aliases {
+		if alias.From == priority {
+			return alias.To, ConfigPriorityRename, true
+		}
+	}
+	for _, entry := range vocabulary.retired {
+		if entry.Priority == priority {
+			return entry.Destination, ConfigPriorityRemove, true
+		}
+	}
+	return "", "", false
 }
 
 // AppendRank returns the rank a priority added after every existing one
@@ -630,6 +691,19 @@ func normalizeRetiredPriorities(retired []RetiredPriority) ([]RetiredPriority, e
 		result[index] = RetiredPriority{Priority: pair.From, Destination: pair.To}
 	}
 	return result, nil
+}
+
+// DerivedPriorityLabel is the display label a priority name implies: hyphens
+// become spaces and every word is title-cased. It is DerivedStatusLabel's rule
+// for priorities, and exists for the same reason that one does.
+//
+// It reproduces all three built-in labels from their tokens, which is the
+// property that makes it a rule rather than a convenience: `priority rename`
+// can ask whether the current label is still the one the old name implied and
+// re-derive only in that case, so a project that never chose a label keeps
+// getting sensible ones and a project that chose "Drop Everything" keeps it.
+func DerivedPriorityLabel(priority Priority) string {
+	return DerivedStatusLabel(Status(priority))
 }
 
 // builtInPriorityDefinitions is the set a project that configured none is read

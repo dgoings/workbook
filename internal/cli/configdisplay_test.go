@@ -2,11 +2,13 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/testrepo"
 )
 
 func decodeDisplayResult(t *testing.T, output, command string) configDisplayResult {
@@ -152,12 +154,17 @@ const configLedgerRefName = "refs/workbook/config"
 // anything at all is written.
 //
 // This is the rule the status family already applies — `workbook status untag`
-// on a tag a status does not carry exits 5 and moves no ref — and here it
-// carries a second weight. Every display pack stamps generation two into the
-// project's checkpoint permanently, so a `config unset` of a setting nobody has
+// on a tag a status does not carry exits 5 and moves no ref.
+//
+// It once carried a second weight: a display pack stamps generation two into
+// the checkpoint permanently, so a `config unset` of a setting nobody had
 // configured that authored a pack anyway would park every un-upgraded clone
-// forever in exchange for recording nothing. The cost of the marker is only
-// opt-in while a command that changes nothing writes nothing.
+// forever in exchange for recording nothing, and the refusal was what kept that
+// cost opt-in. That argument is retired — every project this build creates now
+// stamps its genesis, so the cost is universal from creation, and
+// TestAGenerationOneReaderParksOnEveryProjectThisBuildCreates is where that is
+// pinned. What survives is the plain rule: a command that changes nothing
+// writes nothing, whatever the marker is doing.
 func TestConfigRefusesADisplayChangeThatChangesNothing(t *testing.T) {
 	repository := initializedRepository(t)
 
@@ -363,12 +370,23 @@ func TestAGenerationOneReaderParksOnADisplayConfiguredProject(t *testing.T) {
 	}
 
 	// The marker really is on the documents the older build will read.
+	//
+	// The two halves ask for different numbers, and the difference is the
+	// point. The display pack asks for exactly two, because that is what a
+	// display setting costs and nothing more; this is the only execution-level
+	// check of that entry, so it stays exact — a display verb quietly asking
+	// for three is a regression nothing else would catch. The checkpoint beside
+	// it is a running maximum over the whole ledger, and every ledger this
+	// build writes starts from a genesis stamped with the current generation,
+	// so the checkpoint carries that instead.
 	head := cliGitOutput(t, writer, "rev-parse", "refs/workbook/config")
-	for _, name := range []string{"operation.json", "state.json"} {
-		document := cliGitOutput(t, writer, "show", head+":"+name)
-		if !strings.Contains(document, `"minReader":2`) {
-			t.Fatalf("%s carries no generation-two marker: %s", name, document)
-		}
+	pack := cliGitOutput(t, writer, "show", head+":operation.json")
+	if !strings.Contains(pack, `"minReader":2`) {
+		t.Fatalf("operation.json carries no generation-two marker: %s", pack)
+	}
+	checkpoint := cliGitOutput(t, writer, "show", head+":state.json")
+	if want := fmt.Sprintf(`"minReader":%d`, core.SupportedFormatGeneration); !strings.Contains(checkpoint, want) {
+		t.Fatalf("state.json carries no %s marker: %s", want, checkpoint)
 	}
 
 	// Synchronization advances what it can. The configuration ledger is a
@@ -430,25 +448,118 @@ func TestAGenerationOneReaderParksOnADisplayConfiguredProject(t *testing.T) {
 	}
 }
 
-// The other half of the opt-in claim, against the same real generation-one
-// process: a project that only ever ran a display command that changed nothing
-// is a project an un-upgraded clone can still configure.
+// cliSetupPublishedProject returns a repository whose project this build
+// created with `setup` and published, and a fresh clone of it.
 //
-// The parking test above proves the marker does what it exists to do. This
-// proves it is not spent by accident. The two together are what makes "the cost
-// is per project and opt-in" a statement about behavior rather than about
-// intent — before the refusal existed, a single `config unset` of a setting
-// nobody had configured parked every v0.5.0 clone on the project permanently.
-func TestARefusedNoOpUnsetLeavesAGenerationOneReaderWriting(t *testing.T) {
-	binary := buildPatchedGenerationBinary(t, 1)
-	writer, older := cliSyncRepositories(t)
+// It differs from cliSyncRepositories in the one way this test needs: `setup`
+// runs in the repository that keeps the remote, so the configuration genesis it
+// mints is pushed to origin and reaches the clone. cliSyncRepositories runs
+// `setup` in a scratch seed and pushes only `main`, which leaves both clones on
+// the pre-ledger path where the genesis is seeded lazily by the first
+// configuration command — the opposite of the project shape under test.
+func cliSetupPublishedProject(t *testing.T) (string, string) {
+	t.Helper()
+	bare := cliBareOrigin(t)
 
-	cliCreateTask(t, writer, "Ordinary task")
+	writer := testrepo.New(t)
+	cliGit(t, writer, "branch", "-M", "main")
+	if code, _, stderr := run(t, writer, "setup"); code != 0 {
+		t.Fatalf("setup code = %d; stderr = %q", code, stderr)
+	}
+	cliGit(t, writer, "add", ".workbook/config.json")
+	cliGit(t, writer, "commit", "--quiet", "-m", "Initialize Workbook")
+	cliGit(t, writer, "remote", "add", "origin", bare)
+	cliGit(t, writer, "push", "--quiet", "-u", "origin", "main")
+	cliGit(t, bare, "symbolic-ref", "HEAD", "refs/heads/main")
+	if code, _, stderr := run(t, writer, "sync"); code != 0 {
+		t.Fatalf("publishing the new project's refs code = %d; stderr = %q", code, stderr)
+	}
+	return writer, cliClone(t, bare)
+}
+
+// The scope of the cost, stated as it now is: a generation-one clone is parked
+// on a project's configuration from the genesis onward, before anybody runs a
+// `config` or `priority` command at all.
+//
+// This used to assert the opposite, and the difference is a decision rather
+// than a drift. Every configuration ledger this build writes opens with a
+// genesis carrying the built-in priorities, and a genesis carrying a section an
+// older build has never heard of has to be marked — an older build does not
+// ignore an unknown section and fall back to its own defaults, it refuses the
+// checkpoint, so an unmarked one would report the project corrupt instead of
+// out of date. The cost is therefore universal and automatic, not per project
+// and opt-in, and this test is what pins that.
+//
+// What it does not cost is everything else: reads still work, synchronization
+// still advances, and tasks are a different ref the older clone still writes.
+func TestAGenerationOneReaderParksOnEveryProjectThisBuildCreates(t *testing.T) {
+	binary := buildPatchedGenerationBinary(t, 1)
+	writer, older := cliSetupPublishedProject(t)
+
+	task := cliCreateTask(t, writer, "Ordinary task")
 	if code, _, stderr := run(t, writer, "sync"); code != 0 {
 		t.Fatalf("writer sync code = %d; stderr = %q", code, stderr)
 	}
 	if code, _, stderr := runBinary(t, binary, older, "sync"); code != 0 {
 		t.Fatalf("older clone initial sync code = %d; stderr = %q", code, stderr)
+	}
+
+	// No configuration command has run in this test, and the genesis carries
+	// the marker anyway.
+	root := cliGitOutput(t, writer, "rev-list", "--max-parents=0", "refs/workbook/config")
+	genesis := cliGitOutput(t, writer, "show", root+":operation.json")
+	if !strings.Contains(genesis, `"type":"config.genesis"`) {
+		t.Fatalf("the ledger's root commit is not a genesis: %s", genesis)
+	}
+	if want := fmt.Sprintf(`"minReader":%d`, core.SupportedFormatGeneration); !strings.Contains(genesis, want) {
+		t.Fatalf("the genesis pack carries no %s marker: %s", want, genesis)
+	}
+
+	// Reading and synchronizing are untouched.
+	if code, _, stderr := runBinary(t, binary, older, "sync", "--json"); code != 0 {
+		t.Fatalf("older clone sync code = %d, want 0; stderr = %q", code, stderr)
+	}
+	code, stdout, stderr := runBinary(t, binary, older, "status", "list", "--json")
+	if code != 0 {
+		t.Fatalf("older clone status list code = %d, want 0; stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stdout, "backlog") {
+		t.Fatalf("older clone status list = %q, want it to still name the project's statuses", stdout)
+	}
+
+	// Changing the configuration is refused with the upgrade signal, not with a
+	// corruption report.
+	code, _, stderr = runBinary(t, binary, older, "status", "add", "triage", "--no-sync", "--json")
+	if code != 9 {
+		t.Fatalf("older clone status add code = %d, want 9 (newer-writer); stderr = %q", code, stderr)
+	}
+	assertJSONError(t, stderr, core.CategoryNewerWriter, "")
+	for _, forbidden := range []string{"corrupt", "damaged", "invalid history"} {
+		if strings.Contains(strings.ToLower(stderr), forbidden) {
+			t.Fatalf("refusal = %q, want no claim that the repository is %s", stderr, forbidden)
+		}
+	}
+
+	// And the scope is the configuration alone.
+	if code, _, stderr := runBinary(t, binary, older, "update", task.ID, "--title", "Still editable", "--json"); code != 0 {
+		t.Fatalf("older clone update code = %d, want 0; stderr = %q", code, stderr)
+	}
+}
+
+// A `config unset` of a setting nobody had configured is refused, and a refused
+// command writes nothing.
+//
+// This is a property about refusals, not about mixed versions: the ledger is
+// append-only shared history, so a command that changes nothing must leave the
+// ref exactly where it found it. Before the refusal existed, this no-op wrote a
+// commit — and a commit on the configuration ledger is a commit every clone
+// fetches forever.
+func TestARefusedNoOpUnsetDoesNotMoveTheLedger(t *testing.T) {
+	writer, _ := cliSyncRepositories(t)
+
+	cliCreateTask(t, writer, "Ordinary task")
+	if code, _, stderr := run(t, writer, "sync"); code != 0 {
+		t.Fatalf("writer sync code = %d; stderr = %q", code, stderr)
 	}
 
 	before := configLedgerTip(t, writer)
@@ -461,15 +572,8 @@ func TestARefusedNoOpUnsetLeavesAGenerationOneReaderWriting(t *testing.T) {
 	if code, _, stderr := run(t, writer, "sync"); code != 0 {
 		t.Fatalf("writer sync after the refusal code = %d; stderr = %q", code, stderr)
 	}
-
-	// Nothing was published that raises what a reader must be, so the older
-	// clone changes the configuration exactly as it always could.
-	if code, _, stderr := runBinary(t, binary, older, "sync", "--json"); code != 0 {
-		t.Fatalf("older clone sync code = %d, want 0; stderr = %q", code, stderr)
-	}
-	code, _, stderr := runBinary(t, binary, older, "status", "add", "triage", "--no-sync", "--json")
-	if code != 0 {
-		t.Fatalf("older clone status add code = %d, want 0; stderr = %q", code, stderr)
+	if got := configLedgerTip(t, writer); got != before {
+		t.Fatalf("the configuration ref moved from %q to %q across a sync; nothing was authored", before, got)
 	}
 }
 

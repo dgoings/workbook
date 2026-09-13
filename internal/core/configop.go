@@ -307,10 +307,25 @@ var configOperationMinReader = map[ConfigOperationType]int{
 // which is the one place the table above is not the whole answer. A genesis
 // carries a whole ConfigData as data, so one carrying a display or priorities
 // section is a document an older reader cannot read even though no display or
-// priority operation appears in the pack. Nothing this build writes seeds a
-// genesis that way — each section is only ever reached by an operation — and
-// the check is here so that a build which one day does cannot ship the marker
-// off by one.
+// priority operation appears in the pack — decoding is strict, so an unknown
+// section is a corruption report to a build that has never heard of it,
+// unless the marker turns that report into an upgrade notice first; see
+// operation.go's comment on the same trade for display.
+//
+// Every genesis this build writes now carries a priorities section:
+// seedConfigLedger and MintConfigLedger both record
+// core.BuiltInPriorityVocabulary() at creation, so every project this build
+// creates or first configures is marked, whether or not anyone ever touches
+// priorities. That is deliberate rather than incidental. The alternative —
+// narrowing this guard to fire only when the recorded set differs from the
+// built-ins — was tried and reverted: an older build does not ignore a
+// section it does not recognize and fall back to its own defaults, it
+// refuses the checkpoint outright, so an unmarked genesis carrying the
+// section would tell that build the project is corrupt rather than that it
+// needs to upgrade. Firing on presence, the same rule the display guard
+// applies beside it, is what keeps that failure graceful. Workbook targets
+// teams working closely together on one project; asking everyone to upgrade
+// together once anyone has is the accepted cost.
 func ConfigPackMinReader(operations []ConfigOperation) int {
 	generation := 0
 	for _, operation := range operations {
@@ -685,14 +700,45 @@ func newConfigFold(config ConfigData) (configFold, error) {
 // section is corrupt data, which is what stops a build from folding a future
 // generation's operation as if it were an older one.
 func (folded configFold) apply(operation ConfigOperation) error {
-	switch operation.Type {
-	case ConfigDisplaySet, ConfigDisplayUnset:
+	switch {
+	case operation.Type == ConfigDisplaySet || operation.Type == ConfigDisplayUnset:
 		return folded.display.apply(operation)
-	case ConfigPriorityAdd, ConfigPriorityRename, ConfigPriorityRelabel, ConfigPriorityRemove,
-		ConfigPriorityReorder, ConfigPriorityTag, ConfigPriorityUntag, ConfigPriorityRecolor:
+	case operation.Type.TouchesPriorities():
 		return folded.priorities.apply(operation)
 	default:
 		return folded.vocabulary.apply(operation)
+	}
+}
+
+// TouchesPriorities reports whether an operation type belongs to the priority
+// section. It is the single answer to which section owns a type — not the
+// only place in this file that lists the priority operations, which is the
+// point of the warning below.
+//
+// It is exported because a reader outside this package depends on agreeing
+// with the fold exactly: gitstore backfills the built-in priorities into the
+// same pack as a project's first priority change, for ledgers whose genesis
+// predates the section. Were that trigger to keep its own copy of this list,
+// adding a ninth priority operation would route correctly here while going
+// unnoticed there — and that project's first priority change would land
+// without the three priorities every one of its tasks is still filed under,
+// stranding all of them.
+//
+// Three other places in this file enumerate the same eight types, and adding
+// a ninth means adding it to all of them: configPriorities.apply decides what
+// each type does, configOperationShapes says which members it may carry, and
+// configOperationMinReader says what generation a reader needs. The last is
+// the one to get right — a type missing from that map takes the zero value,
+// so its pack ships unstamped and an older build folds it as though it
+// understood it, which is worse than any routing mistake. The compiler
+// catches none of the four; priorityoptype_test.go does.
+func (operationType ConfigOperationType) TouchesPriorities() bool {
+	switch operationType {
+	case ConfigPriorityAdd, ConfigPriorityRename, ConfigPriorityRelabel, ConfigPriorityRemove,
+		ConfigPriorityReorder, ConfigPriorityTag, ConfigPriorityUntag, ConfigPriorityRecolor:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -1155,27 +1201,33 @@ type configPriorityEntry struct {
 // folds against an empty configPriorities and produces a vocabulary of
 // exactly {critical}. Every task still stored as high, medium, or low is now
 // unresolvable: not live, not forwarded, sorted last by Order's stranded-token
-// fallback, and invisible to any priority filter. The vocabulary was never
-// wrong by the fold's own rules — normalizeArity has nothing to repair,
-// because a single live default-tagged priority is a perfectly valid
-// vocabulary — but it is wrong for the project, because the fold was never
-// told about the three priorities every existing task actually depends on.
+// fallback, and refused by name from any priority filter that names it (List
+// refuses a filter token that resolves to nothing, priority and status alike;
+// see its comment). The vocabulary was never wrong by the
+// fold's own rules — normalizeArity has nothing to repair, because a single
+// live default-tagged priority is a perfectly valid vocabulary — but it is
+// wrong for the project, because the fold was never told about the three
+// priorities every existing task actually depends on.
 //
-// This is unreachable in this stage: nothing here authors a priority
-// operation, so no fold anywhere is asked to take this step. It is stage 2's
-// problem, and it has to be solved before stage 2 ships any authoring path
-// (a CLI command, an agent tool, anything that can produce a first
-// ConfigPriorityAdd against a project that has never had one) — not discovered
-// after. The fix is not obviously "seed the built-ins into the ledger"; that
-// begs the question of when, since a genesis-time seed would give every prior
-// stage-1 project a retroactive priorities section it never asked for, and a
-// lazy seed on first-write has to decide atomically with that same write or
-// reintroduce the identical race between two clones. Whatever the mechanism,
-// it has to guarantee that the fold a first priority.add runs against already
-// contains the three priorities every task in the project is depending on —
-// not trust that the built-in substitution a *reader* performs will somehow
-// also cover a *fold in progress*, which is precisely the confusion this
-// comment exists to head off.
+// Two of the three ways a project reaches its first priority.add are handled:
+// a project with no configuration ledger at all gets the built-in three
+// written into its genesis (seedConfigLedger), and so does a brand-new one
+// (MintConfigLedger) — both pass core.BuiltInPriorityVocabulary() to
+// writeConfigGenesis, so the fold a first priority.add runs against already
+// contains them before any authoring path exists to add a fourth. The
+// remaining gap is the project that already has a configuration ledger — from
+// before this build — but whose genesis predates the priorities section and
+// so carries none: that genesis is immutable, so the built-in three cannot be
+// backfilled into it, and have to be written as operations inside the same
+// pack as that project's first priority change instead. This must be closed
+// before any authoring path ships (a CLI command, an agent tool, anything
+// that can produce a first ConfigPriorityAdd against such a project) — not
+// discovered after. Whatever the mechanism, it has to guarantee that the fold
+// runs against a configPriorities that already contains the three priorities
+// every task in the project is depending on — not trust that the built-in
+// substitution a *reader* performs will somehow also cover a *fold in
+// progress*, which is precisely the confusion this comment exists to head
+// off.
 type configPriorities struct {
 	priorities map[Priority]*configPriorityEntry
 	aliases    map[Priority]Priority

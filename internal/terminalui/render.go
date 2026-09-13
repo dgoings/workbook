@@ -109,6 +109,75 @@ func writeStatusRow(output *strings.Builder, positionWidth, statusWidth, labelWi
 	output.WriteByte('\n')
 }
 
+// PriorityRow is one line of the priority table, StatusRow's counterpart for
+// `workbook priority list`.
+//
+// It is a separate shape rather than StatusRow reused with a different heading,
+// because a priority carries a color and a status does not: sharing the row
+// would mean either a column statuses always leave blank or a heading that
+// lies about one of the two tables.
+type PriorityRow struct {
+	Position int
+	Priority string
+	Label    string
+	Tags     string
+	// Color is the priority's stored ink, blank when nothing is stored and the
+	// board derives one from the position. Blank is the honest rendering of
+	// that: printing a derived value here would make an automatic color look
+	// like a recorded decision.
+	Color string
+	Tasks string
+}
+
+// RenderPriorityList writes the priority table in RenderStatusList's style, and
+// inherits every trade that function's comment describes, including the
+// byte-counted padding.
+func RenderPriorityList(w io.Writer, rows []PriorityRow, _ int) error {
+	positionWidth := len("#")
+	priorityWidth := len("PRIORITY")
+	labelWidth := len("LABEL")
+	tagsWidth := len("TAGS")
+	colorWidth := len("COLOR")
+	positions := make([]string, len(rows))
+	for index, row := range rows {
+		positions[index] = itoa(row.Position)
+		positionWidth = max(positionWidth, len(positions[index]))
+		priorityWidth = max(priorityWidth, len(row.Priority))
+		labelWidth = max(labelWidth, len(row.Label))
+		tagsWidth = max(tagsWidth, len(row.Tags))
+		colorWidth = max(colorWidth, len(row.Color))
+	}
+
+	var output strings.Builder
+	writePriorityRow(&output, positionWidth, priorityWidth, labelWidth, tagsWidth, colorWidth,
+		"#", "PRIORITY", "LABEL", "TAGS", "COLOR", "TASKS")
+	for index, row := range rows {
+		writePriorityRow(&output, positionWidth, priorityWidth, labelWidth, tagsWidth, colorWidth,
+			positions[index], row.Priority, row.Label, row.Tags, row.Color, row.Tasks)
+	}
+	_, err := io.WriteString(w, output.String())
+	return err
+}
+
+func writePriorityRow(
+	output *strings.Builder,
+	positionWidth, priorityWidth, labelWidth, tagsWidth, colorWidth int,
+	position, priority, label, tags, color, tasks string,
+) {
+	output.WriteString(pad(position, positionWidth))
+	output.WriteString("  ")
+	output.WriteString(pad(priority, priorityWidth))
+	output.WriteString("  ")
+	output.WriteString(pad(label, labelWidth))
+	output.WriteString("  ")
+	output.WriteString(pad(tags, tagsWidth))
+	output.WriteString("  ")
+	output.WriteString(pad(color, colorWidth))
+	output.WriteString("  ")
+	output.WriteString(tasks)
+	output.WriteByte('\n')
+}
+
 func RenderBoard(w io.Writer, board presentation.Board, layout Layout, width int) error {
 	switch layout {
 	case LayoutWide:

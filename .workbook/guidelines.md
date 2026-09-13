@@ -1,4 +1,4 @@
-<!-- workbook:begin generator=d1a6fc2 sha256=18959083026841ce054953b648026f6cb9234cc1d36757c1a7d44e24735ae36b -->
+<!-- workbook:begin generator=123fd1c sha256=6a4b4ea4b346280ee7e7fce8a1af7df1d23ddba7c99d312b05fb1da96ba71cc4 -->
 # Workbook guidelines
 
 Workbook tracks this project's tasks in Git refs under `refs/workbook/tasks/`.
@@ -44,13 +44,28 @@ These statuses belong to this project and another project's are different, so
 read them here or with `workbook status list --json` rather than assuming the
 ones you have seen elsewhere. This section is rewritten whenever they change.
 
-## Canonical priorities
+## Priorities
 
-| Machine value | Display label |
+This project's priorities, most urgent first. Pass the machine value, never
+the display label.
+
+| # | Machine value | Display label | Tags |
+| --- | --- | --- | --- |
+| 1 | `high` | High | none |
+| 2 | `medium` | Medium | `default` |
+| 3 | `low` | Low | none |
+
+| Tag | What it makes Workbook do |
 | --- | --- |
-| `low` | Low |
-| `medium` | Medium |
-| `high` | High |
+| `default` | A task created without `--priority` lands here. Exactly one priority carries it. |
+
+A priority carrying no tag is an ordinary level of urgency: its position in
+the table is the whole of what it means.
+
+These priorities belong to this project and another project's are different,
+so read them here or with `workbook priority list --json` rather than assuming
+the ones you have seen elsewhere. This section is rewritten whenever they
+change.
 
 ## Task lifecycle
 

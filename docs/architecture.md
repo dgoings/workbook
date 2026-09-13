@@ -287,6 +287,19 @@ configuration ledger, that carries it:
   and a clone with nothing local on the task simply fast-forwards onto the newer
   tip.
 
+**Every project this build creates starts marked.** A configuration ledger opens
+with a `config.genesis` that records the project's statuses and its priorities,
+and a genesis carrying a priorities section has to carry the marker as well: a
+build that has never heard of that section does not ignore it and fall back to
+its own defaults, it refuses the checkpoint outright, so an unmarked genesis
+would tell that build the project is corrupt rather than out of date. The
+refusals above therefore apply to every project created from this release
+onward, from its first commit, before anyone runs a `config` or `priority`
+command at all — a v0.5.0 clone reads such a project and synchronizes it, and is
+told to upgrade the moment it tries to rename a status. That is a deliberate
+trade: Workbook is built for teams working closely together on one project, so
+when one of them upgrades, all of them do.
+
 **Divergence is the hard edge**, and the answer is deliberate. If a clone has
 unpublished operations on a task whose `origin` history has since gained a
 newer-generation pack, replay is impossible by definition: the local operations

@@ -1735,3 +1735,53 @@ func TestStatusOnlyPackStillRequiresGenerationZero(t *testing.T) {
 		t.Errorf("ConfigPackMinReader = %d, want 0", got)
 	}
 }
+
+// A genesis carrying the built-in three still requires generation 3, the same
+// as any other priorities section: the guard fires on presence, not on
+// content, because an older reader does not fall back to its own built-ins
+// for a section it does not recognize — it refuses the checkpoint as
+// corrupt. Recording the built-in three at creation (writeConfigGenesis) does
+// not soften that; it is the same section any customised project would
+// carry, and this pins that a genesis using it is marked exactly like one
+// that is not.
+func TestGenesisCarryingBuiltInPrioritiesRequiresGenerationThree(t *testing.T) {
+	document := BuiltInPriorityVocabulary().Document()
+	operation := ConfigOperation{Type: ConfigGenesis, Config: &ConfigData{Priorities: &document}}
+	if got := ConfigPackMinReader([]ConfigOperation{operation}); got != 3 {
+		t.Errorf("ConfigPackMinReader = %d, want 3", got)
+	}
+}
+
+// A genesis carrying both a display section and a priorities section built
+// from the built-in three still reports 3, not 2: the two guards compose as
+// a running maximum, and using a real, valid priorities document here (rather
+// than the empty stub TestGenesisCarryingDisplayAndPrioritiesRequiresGenerationThree
+// uses) rules out a guard that special-cases "looks like the built-ins" back
+// down to the display generation alone.
+func TestGenesisCarryingDisplayAndBuiltInPrioritiesRequiresGenerationThree(t *testing.T) {
+	document := BuiltInPriorityVocabulary().Document()
+	operation := ConfigOperation{
+		Type: ConfigGenesis,
+		Config: &ConfigData{
+			Display:    &DisplayDocument{Name: "Atlas"},
+			Priorities: &document,
+		},
+	}
+	if got := ConfigPackMinReader([]ConfigOperation{operation}); got != 3 {
+		t.Errorf("ConfigPackMinReader = %d, want 3", got)
+	}
+}
+
+// A pack containing a priority operation stamps generation 3 unconditionally,
+// even over a genesis whose carried priorities are the built-in three:
+// operations are judged by type alone (configOperationMinReader), the same
+// table a genesis's carried sections are judged against, so there is no path
+// by which one lowers what the other requires.
+func TestPriorityOperationRequiresGenerationThreeOverBuiltInGenesis(t *testing.T) {
+	document := BuiltInPriorityVocabulary().Document()
+	genesis := ConfigOperation{Type: ConfigGenesis, Config: &ConfigData{Priorities: &document}}
+	add := ConfigOperation{Type: ConfigPriorityAdd, Name: "blocker"}
+	if got := ConfigPackMinReader([]ConfigOperation{genesis, add}); got != 3 {
+		t.Errorf("ConfigPackMinReader = %d, want 3", got)
+	}
+}

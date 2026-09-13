@@ -137,6 +137,14 @@ The usual path. Open a pull request that adds a `CHANGELOG.md` entry describing
 the release, and label it `release:patch`, `release:minor`, or `release:major`.
 Merging it cuts the release.
 
+Work that needs prose may write it as it lands, under an `## Unreleased`
+heading, rather than reconstructing it later from a pile of merged pull
+requests. The release pull request then retitles that heading to the version
+being cut. Leave it as `## Unreleased` until then: the check below reads the
+topmost `## vX.Y.Z` heading and refuses a label that disagrees with it, so an
+early version heading would block every patch release until that version was
+cut.
+
 ```markdown
 ## v0.5.0 — 2026-08-08
 

@@ -174,7 +174,7 @@ func section(t *testing.T, guidelines, heading string) string {
 }
 
 func TestRenderGuidelinesPinsTheDefaultVocabularyRendering(t *testing.T) {
-	guidelines := RenderGuidelines(testProject(), core.DefaultVocabulary())
+	guidelines := RenderGuidelines(testProject(), core.DefaultVocabulary(), core.PriorityVocabulary{})
 
 	if got := section(t, guidelines, "## Statuses"); got != defaultVocabularySections {
 		t.Errorf("statuses section =\n%s\nwant\n%s", got, defaultVocabularySections)
@@ -196,7 +196,7 @@ func TestRenderGuidelinesPinsTheDefaultVocabularyRendering(t *testing.T) {
 // from tags: `blocked` never carried one, so removing it from the default set
 // changed a table row and nothing a reader is told to do.
 func TestRenderGuidelinesPinsTheLegacyVocabularyRendering(t *testing.T) {
-	guidelines := RenderGuidelines(testProject(), core.LegacyVocabulary())
+	guidelines := RenderGuidelines(testProject(), core.LegacyVocabulary(), core.PriorityVocabulary{})
 
 	if got := section(t, guidelines, "## Statuses"); got != legacyVocabularySections {
 		t.Errorf("statuses section =\n%s\nwant\n%s", got, legacyVocabularySections)
@@ -210,7 +210,7 @@ func TestRenderGuidelinesPinsTheLegacyVocabularyRendering(t *testing.T) {
 	// A caller that configured no vocabulary documents these six statuses,
 	// because that is what such a project is using — not the five this build
 	// would mint a new project with.
-	if unconfigured := RenderGuidelines(testProject(), core.Vocabulary{}); unconfigured != guidelines {
+	if unconfigured := RenderGuidelines(testProject(), core.Vocabulary{}, core.PriorityVocabulary{}); unconfigured != guidelines {
 		t.Errorf("the zero vocabulary renders differently from the pre-ledger one:\n%s", unconfigured)
 	}
 }
@@ -219,7 +219,7 @@ func TestRenderGuidelinesPinsTheLegacyVocabularyRendering(t *testing.T) {
 // its own lifecycle prose. Every value here is one the built-in vocabulary does
 // not contain, so a rendering that fell back to the default fails.
 func TestRenderGuidelinesRendersACustomVocabulary(t *testing.T) {
-	guidelines := RenderGuidelines(testProject(), customVocabulary(t))
+	guidelines := RenderGuidelines(testProject(), customVocabulary(t), core.PriorityVocabulary{})
 
 	for _, want := range []string{
 		"| 1 | `icebox` | Icebox | none |",
@@ -256,7 +256,7 @@ func TestRenderGuidelinesSaysWhenATagIsUnheld(t *testing.T) {
 		t.Fatalf("NewVocabulary() error = %v", err)
 	}
 
-	guidelines := RenderGuidelines(testProject(), vocabulary)
+	guidelines := RenderGuidelines(testProject(), vocabulary, core.PriorityVocabulary{})
 
 	for _, want := range []string{
 		"No status is tagged `default`, so a new task has nowhere to land.",
@@ -289,7 +289,7 @@ func TestRenderGuidelinesKeepsAHostileLabelInsideItsCell(t *testing.T) {
 		t.Fatalf("NewVocabulary() error = %v", err)
 	}
 
-	guidelines := RenderGuidelines(testProject(), vocabulary)
+	guidelines := RenderGuidelines(testProject(), vocabulary, core.PriorityVocabulary{})
 
 	if !strings.Contains(guidelines, "| 1 | `todo` | Next \\| Up and more | `default`, `next` |") {
 		t.Fatalf("the label escaped its cell:\n%s", guidelines)
@@ -330,7 +330,7 @@ func TestRenderGuidelinesNeutralizesMarkersAndBackticksInALabel(t *testing.T) {
 		t.Fatalf("NewVocabulary() error = %v", err)
 	}
 
-	guidelines := RenderGuidelines(testProject(), vocabulary)
+	guidelines := RenderGuidelines(testProject(), vocabulary, core.PriorityVocabulary{})
 
 	if strings.Contains(guidelines, endMarker) {
 		t.Fatalf("the rendered body carries this block's end marker:\n%s", guidelines)
@@ -366,7 +366,7 @@ func TestRenderGuidelinesNeutralizesAnOpenerThatCompletesNoMarkerInALabel(t *tes
 			t.Fatalf("NewVocabulary() error = %v", err)
 		}
 
-		guidelines := RenderGuidelines(testProject(), vocabulary)
+		guidelines := RenderGuidelines(testProject(), vocabulary, core.PriorityVocabulary{})
 
 		// The rendered body is the block's contents, so it may carry no comment
 		// opener at all: the two the file ends up with are the markers wrapped
@@ -419,22 +419,103 @@ func customVocabulary(t *testing.T) core.Vocabulary {
 func TestRenderGuidelinesStatesEveryCanonicalStatus(t *testing.T) {
 	// Production mutation: hardcoding a status list here instead of deriving it
 	// from core would let generated documentation drift from CLI validation.
-	guidelines := RenderGuidelines(testProject(), core.Vocabulary{})
+	guidelines := RenderGuidelines(testProject(), core.Vocabulary{}, core.PriorityVocabulary{})
 
 	for _, definition := range core.LegacyVocabulary().Definitions() {
 		if !strings.Contains(guidelines, string(definition.Status)) {
 			t.Errorf("guidelines missing status %q:\n%s", definition.Status, guidelines)
 		}
 	}
-	for _, definition := range core.Priorities() {
+	for _, definition := range core.BuiltInPriorityVocabulary().Definitions() {
 		if !strings.Contains(guidelines, string(definition.Priority)) {
 			t.Errorf("guidelines missing priority %q:\n%s", definition.Priority, guidelines)
 		}
 	}
 }
 
+// A project that configured its own priorities gets its own "Canonical
+// priorities" table, the same way a project that renamed its statuses gets its
+// own statuses table. Every value here is one the built-in three does not
+// contain, so a rendering that fell back to the built-in set fails.
+func TestRenderGuidelinesRendersTheProjectsOwnPriorities(t *testing.T) {
+	guidelines := RenderGuidelines(testProject(), core.Vocabulary{}, customPriorities(t))
+
+	for _, want := range []string{"`critical`", "`normal`"} {
+		if !strings.Contains(guidelines, want) {
+			t.Errorf("guidelines missing priority %q:\n%s", want, guidelines)
+		}
+	}
+	for _, unwanted := range []string{"`high`", "`medium`", "`low`"} {
+		if strings.Contains(guidelines, unwanted) {
+			t.Errorf("guidelines still document the built-in priority %q:\n%s", unwanted, guidelines)
+		}
+	}
+}
+
+// A project that configured no priorities is using the built-in three, so the
+// zero PriorityVocabulary must render exactly what it always has.
+func TestRenderGuidelinesRendersTheBuiltInPrioritiesForTheZeroValue(t *testing.T) {
+	guidelines := RenderGuidelines(testProject(), core.Vocabulary{}, core.PriorityVocabulary{})
+
+	for _, want := range []string{"`high`", "`medium`", "`low`"} {
+		if !strings.Contains(guidelines, want) {
+			t.Errorf("guidelines missing built-in priority %q:\n%s", want, guidelines)
+		}
+	}
+}
+
+func customPriorities(t *testing.T) core.PriorityVocabulary {
+	t.Helper()
+	vocabulary, err := core.NewPriorityVocabulary([]core.PriorityDefinition{
+		{Priority: "critical", Label: "Critical", Rank: "1/1", Tags: []core.PriorityTag{}},
+		{Priority: "normal", Label: "Normal", Rank: "2/1", Tags: []core.PriorityTag{core.PriorityTagDefault}},
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("NewPriorityVocabulary() error = %v", err)
+	}
+	return vocabulary
+}
+
+// builtInPrioritiesSection is the priorities section a project that has never
+// configured one renders, pinned whole the way the statuses sections above it
+// are: the table's position column, the tag legend and the prose are what tell
+// an agent which priority a task lands on and which way the rows run, and a
+// tag added to core and left undescribed here renders an empty cell this pin
+// fails on.
+const builtInPrioritiesSection = `## Priorities
+
+This project's priorities, most urgent first. Pass the machine value, never
+the display label.
+
+| # | Machine value | Display label | Tags |
+| --- | --- | --- | --- |
+| 1 | ` + "`high`" + ` | High | none |
+| 2 | ` + "`medium`" + ` | Medium | ` + "`default`" + ` |
+| 3 | ` + "`low`" + ` | Low | none |
+
+| Tag | What it makes Workbook do |
+| --- | --- |
+| ` + "`default`" + ` | A task created without ` + "`--priority`" + ` lands here. Exactly one priority carries it. |
+
+A priority carrying no tag is an ordinary level of urgency: its position in
+the table is the whole of what it means.
+
+These priorities belong to this project and another project's are different,
+so read them here or with ` + "`workbook priority list --json`" + ` rather than assuming
+the ones you have seen elsewhere. This section is rewritten whenever they
+change.
+`
+
+func TestRenderGuidelinesPinsTheBuiltInPrioritiesRendering(t *testing.T) {
+	guidelines := RenderGuidelines(testProject(), core.Vocabulary{}, core.PriorityVocabulary{})
+
+	if got := section(t, guidelines, "## Priorities"); got != builtInPrioritiesSection {
+		t.Errorf("priorities section =\n%s\nwant\n%s", got, builtInPrioritiesSection)
+	}
+}
+
 func TestRenderGuidelinesWarnsAgainstDisplayLabels(t *testing.T) {
-	guidelines := RenderGuidelines(testProject(), core.Vocabulary{})
+	guidelines := RenderGuidelines(testProject(), core.Vocabulary{}, core.PriorityVocabulary{})
 
 	if !strings.Contains(guidelines, "in-progress") {
 		t.Errorf("guidelines missing the canonical in-progress value:\n%s", guidelines)
@@ -445,7 +526,7 @@ func TestRenderGuidelinesWarnsAgainstDisplayLabels(t *testing.T) {
 }
 
 func TestRenderGuidelinesIncludesProjectIdentity(t *testing.T) {
-	guidelines := RenderGuidelines(testProject(), core.Vocabulary{})
+	guidelines := RenderGuidelines(testProject(), core.Vocabulary{}, core.PriorityVocabulary{})
 
 	for _, want := range []string{"01KY8964C8TQVBKVACB45DYTNY", "WB-"} {
 		if !strings.Contains(guidelines, want) {
@@ -455,7 +536,7 @@ func TestRenderGuidelinesIncludesProjectIdentity(t *testing.T) {
 }
 
 func TestRenderGuidelinesDocumentsExitCodesFromCore(t *testing.T) {
-	guidelines := RenderGuidelines(testProject(), core.Vocabulary{})
+	guidelines := RenderGuidelines(testProject(), core.Vocabulary{}, core.PriorityVocabulary{})
 
 	for _, category := range []core.Category{
 		core.CategoryInvocation,
@@ -470,7 +551,7 @@ func TestRenderGuidelinesDocumentsExitCodesFromCore(t *testing.T) {
 }
 
 func TestRenderGuidelinesNamesTheRefreshCommand(t *testing.T) {
-	guidelines := RenderGuidelines(testProject(), core.Vocabulary{})
+	guidelines := RenderGuidelines(testProject(), core.Vocabulary{}, core.PriorityVocabulary{})
 
 	if !strings.Contains(guidelines, "workbook docs update") {
 		t.Errorf("guidelines do not name the refresh command:\n%s", guidelines)

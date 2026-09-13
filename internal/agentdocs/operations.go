@@ -21,6 +21,12 @@ type Options struct {
 	// means the caller configured none and renders the built-in default, which
 	// is what a project with no configuration ledger is using.
 	Vocabulary core.Vocabulary
+	// Priorities supplies the priorities the guidelines document, mirroring
+	// Vocabulary above. The zero value means the caller configured none and
+	// renders the built-in three, which is what a project with no priorities
+	// section is using; PriorityVocabulary's own accessors make that
+	// substitution, so there is no LegacyVocabulary-style split to mirror here.
+	Priorities core.PriorityVocabulary
 	// User supplies the documentation targets and skill destination.
 	User userconfig.Config
 	// Generator is the Workbook version recorded in each stamp.
@@ -86,7 +92,7 @@ func guidelinesTarget(options Options) target {
 		display: GuidelinesPath,
 		document: Document{
 			Generator: options.Generator,
-			Body:      RenderGuidelines(options.Project, options.Vocabulary),
+			Body:      RenderGuidelines(options.Project, options.Vocabulary, options.Priorities),
 		},
 		owned: true,
 	}

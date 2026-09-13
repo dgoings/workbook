@@ -2,6 +2,8 @@ package gitstore
 
 import (
 	"context"
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -447,10 +449,16 @@ func TestConfigSyncReportsPriorityArityRepair(t *testing.T) {
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 
+	// The genesis now carries the built-in three outright (medium tagged
+	// default; see writeConfigGenesis), so adding high, medium and low here
+	// would be three no-ops under applyAdd's idempotency rule — the names are
+	// already live — and would never move the default onto high the way this
+	// test's precondition needs. Moving it explicitly is what actually
+	// establishes "high is the default" before the rest of the test relies on
+	// it.
 	writeConfig(t, first, config,
-		addPriorityOperation(core.PriorityHigh, "High", "1/1", core.PriorityTagDefault),
-		addPriorityOperation(core.PriorityMedium, "Medium", "2/1"),
-		addPriorityOperation(core.PriorityLow, "Low", "3/1"),
+		untagPriorityOperation(core.PriorityMedium, core.PriorityTagDefault),
+		tagPriorityOperation(core.PriorityHigh, core.PriorityTagDefault),
 	)
 	if _, err := first.Sync(ctx, config); err != nil {
 		t.Fatalf("first Sync() (seed) error = %v", err)
@@ -488,5 +496,287 @@ func TestConfigSyncReportsPriorityArityRepair(t *testing.T) {
 	if conflict.Priority != core.PriorityHigh {
 		t.Fatalf("arity conflict priority = %q, want %q, the lowest-ranked survivor the repair picked by position",
 			conflict.Priority, core.PriorityHigh)
+	}
+}
+
+// MintConfigLedger records core.BuiltInPriorityVocabulary() into the genesis
+// alongside the vocabulary, the priority counterpart to
+// TestMintConfigLedgerRecordsTheDefaultVocabulary. The written pack's minimum
+// version is 3, the same as any other priorities section: an older reader
+// does not fall back to its own built-ins for a section it does not
+// recognize, it refuses the checkpoint, so recording priorities at creation
+// marks every project this build creates — the deliberate trade
+// ConfigPackMinReader's comment describes.
+func TestMintConfigLedgerRecordsBuiltInPriorities(t *testing.T) {
+	repo, config := writeRepository(t)
+	ctx := context.Background()
+
+	seeded, err := repo.MintConfigLedger(ctx, config, core.CryptoULIDSource{})
+	if err != nil {
+		t.Fatalf("MintConfigLedger() error = %v", err)
+	}
+	if !seeded {
+		t.Fatal("MintConfigLedger() = false, want a genesis written for a project with no ledger")
+	}
+
+	records := configChain(t, repo, config)
+	if len(records) != 1 {
+		t.Fatalf("ledger holds %d commit(s), want the genesis alone", len(records))
+	}
+	root := records[0]
+	genesis := root.Operation.Operations[0]
+	if genesis.Type != core.ConfigGenesis || genesis.Config.Priorities == nil {
+		t.Fatalf("root pack = %#v, want one config.genesis carrying a priorities section", root.Operation.Operations)
+	}
+	if got := *genesis.Config.Priorities; !reflect.DeepEqual(got, core.BuiltInPriorityVocabulary().Document()) {
+		t.Fatalf("genesis priorities = %#v, want the built-in three", got)
+	}
+	if got := root.Operation.MinReader; got != 3 {
+		t.Fatalf("genesis pack MinReader = %d, want 3", got)
+	}
+}
+
+// A project with no ledger whose first authored change is an ordinary status
+// operation still gets a genesis recording the built-in three priorities —
+// the lazy-seed counterpart to TestMintConfigLedgerRecordsBuiltInPriorities —
+// and the genesis pack it seeds with still carries a minimum version of 3:
+// an ordinary status change is what triggers the seed, but the genesis it
+// produces is marked on its own terms because it, too, now carries a
+// priorities section.
+func TestWriteConfigOperationSeedsGenesisWithBuiltInPriorities(t *testing.T) {
+	repo, config := writeRepository(t)
+
+	result := writeConfig(t, repo, config, configOperations(renameOperation("ready", "todo"))...)
+	if !result.Seeded {
+		t.Fatal("WriteConfigOperation() did not report seeding the ledger")
+	}
+
+	records := configChain(t, repo, config)
+	if len(records) != 2 {
+		t.Fatalf("ledger holds %d commit(s), want a genesis root and the author's pack", len(records))
+	}
+	root := records[0]
+	genesis := root.Operation.Operations[0]
+	if genesis.Type != core.ConfigGenesis || genesis.Config.Priorities == nil {
+		t.Fatalf("root pack = %#v, want one config.genesis carrying a priorities section", root.Operation.Operations)
+	}
+	if got := *genesis.Config.Priorities; !reflect.DeepEqual(got, core.BuiltInPriorityVocabulary().Document()) {
+		t.Fatalf("genesis priorities = %#v, want the built-in three", got)
+	}
+	if got := root.Operation.MinReader; got != 3 {
+		t.Fatalf("genesis pack MinReader = %d, want 3", got)
+	}
+}
+
+// writeLegacyConfigGenesis seeds a ledger the way a project created before
+// this build's priorities section existed would have one: a genesis whose
+// ConfigData carries a vocabulary but no priorities section at all. No path
+// in this build produces such a genesis anymore — seedConfigLedger and
+// MintConfigLedger both record core.BuiltInPriorityVocabulary() now — so this
+// exists purely to give the tests below the tip Task 2 has to backfill
+// against: a real, already-existing ledger whose immutable root predates
+// priorities.
+func writeLegacyConfigGenesis(t *testing.T, repo *Repository, config core.ProjectConfig) {
+	t.Helper()
+	ctx := context.Background()
+	ids := core.CryptoULIDSource{}
+	generation, err := ids.New()
+	if err != nil {
+		t.Fatalf("generation ID error = %v", err)
+	}
+	genesisID, err := ids.New()
+	if err != nil {
+		t.Fatalf("genesis ID error = %v", err)
+	}
+	actor, err := repo.Actor(ctx)
+	if err != nil {
+		t.Fatalf("Actor() error = %v", err)
+	}
+	pack, err := core.NewConfigOperationPack(config.ProjectID, generation, actor, 1, configWallTime(),
+		[]core.ConfigOperation{{
+			ID:   genesisID,
+			Type: core.ConfigGenesis,
+			Config: &core.ConfigData{
+				Vocabulary: core.LegacyVocabulary().Document(),
+			},
+		}})
+	if err != nil {
+		t.Fatalf("NewConfigOperationPack() error = %v", err)
+	}
+	state, err := core.ApplyConfig(nil, pack)
+	if err != nil {
+		t.Fatalf("ApplyConfig() error = %v", err)
+	}
+	head, err := repo.writeConfigObjects(ctx, "", pack, state, configGenesisSubject)
+	if err != nil {
+		t.Fatalf("writeConfigObjects() error = %v", err)
+	}
+	if err := repo.createRefWithReason(ctx, configRef, head, configRefLogReason); err != nil {
+		t.Fatalf("createRefWithReason() error = %v", err)
+	}
+}
+
+// A project whose ledger predates the priorities section entirely — the
+// state writeLegacyConfigGenesis recreates — gets the built-in three
+// backfilled into the very same pack as its first priority.* operation, so
+// the tasks that were always high/medium/low keep resolving under a section
+// that, until this write, did not exist.
+func TestAppendConfigOperationBackfillsBuiltInPrioritiesOnFirstPriorityChange(t *testing.T) {
+	repo, config := writeRepository(t)
+	writeLegacyConfigGenesis(t, repo, config)
+
+	result := writeConfig(t, repo, config, addPriorityOperation("critical", "Critical", "4/1"))
+
+	document := result.State.Config.Priorities
+	if document == nil {
+		t.Fatal("state.Config.Priorities = nil, want the built-in three plus the added priority")
+	}
+	if len(document.Priorities) != 4 {
+		t.Fatalf("priorities = %#v, want the built-in three plus one added", document.Priorities)
+	}
+	for _, want := range core.BuiltInPriorityVocabulary().Definitions() {
+		found := false
+		for _, got := range document.Priorities {
+			if got.Priority == want.Priority {
+				found = true
+				if got.Label != want.Label || got.Rank != want.Rank || !reflect.DeepEqual(got.Tags, want.Tags) {
+					t.Fatalf("backfilled priority %q = %#v, want %#v", want.Priority, got, want)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("priorities = %#v, missing built-in %q", document.Priorities, want.Priority)
+		}
+	}
+
+	// A task filed under low before this project ever touched priorities
+	// still resolves: low is live, not stranded by an unrelated add.
+	vocabulary := result.State.PriorityVocabulary()
+	if !vocabulary.Has(core.PriorityLow) {
+		t.Fatalf("PriorityVocabulary().Has(low) = false, want the built-in low to still resolve")
+	}
+}
+
+// A project whose priorities section is already configured — whether seeded
+// at genesis by this build or backfilled by an earlier priority change of its
+// own — does not get a second helping of the built-in three merely because
+// another priority.* operation is authored against it.
+func TestAppendConfigOperationDoesNotDuplicateBuiltInsWhenPrioritiesAlreadyConfigured(t *testing.T) {
+	repo, config := writeRepository(t)
+
+	seeded, err := repo.MintConfigLedger(context.Background(), config, core.CryptoULIDSource{})
+	if err != nil {
+		t.Fatalf("MintConfigLedger() error = %v", err)
+	}
+	if !seeded {
+		t.Fatal("MintConfigLedger() = false, want a genesis written for a project with no ledger")
+	}
+
+	result := writeConfig(t, repo, config, addPriorityOperation("critical", "Critical", "4/1"))
+
+	document := result.State.Config.Priorities
+	if document == nil {
+		t.Fatal("state.Config.Priorities = nil, want the built-in three plus the added priority")
+	}
+	if len(document.Priorities) != 4 {
+		t.Fatalf("priorities = %#v, want exactly the built-in three plus one added, not a second helping of built-ins",
+			document.Priorities)
+	}
+
+	// The folded document alone cannot tell a correctly-skipped backfill apart
+	// from a backfill that ran anyway and no-oped against priorities already
+	// live (applyAdd is idempotent by name) — so the pack actually written to
+	// the ledger is what this test has to inspect: it must carry the one
+	// operation the caller authored, not that operation preceded by three
+	// redundant priority.add operations nobody asked for.
+	records := configChain(t, repo, config)
+	last := records[len(records)-1]
+	if len(last.Operation.Operations) != 1 {
+		t.Fatalf("written pack operations = %#v, want only the caller's priority.add: the section was already "+
+			"configured, so nothing should have been prepended", last.Operation.Operations)
+	}
+}
+
+// The invariant the whole task protects: a project whose ledger predates
+// priorities, given an ordinary STATUS change, must come out with no
+// priorities section at all — the backfill trigger is priority.* operations
+// only, never widened to "any configuration write."
+func TestAppendConfigOperationStatusChangeLeavesPrioritiesSectionAbsent(t *testing.T) {
+	repo, config := writeRepository(t)
+	writeLegacyConfigGenesis(t, repo, config)
+
+	result := writeConfig(t, repo, config, renameOperation(core.StatusReady, "todo"))
+
+	if result.State.Config.Priorities != nil {
+		t.Fatalf("state.Config.Priorities = %#v, want nil: a status change must not fill the priorities section",
+			result.State.Config.Priorities)
+	}
+
+	// The stored bytes carry no priorities section either — not just the
+	// decoded struct — the same check TestWriteConfigOperationRecordsDisplaySettings
+	// makes for a display-blind genesis.
+	stateJSON := gitOutput(t, repo, "show", result.Head+":state.json")
+	if strings.Contains(stateJSON, "priorities") {
+		t.Fatalf("stored state.json = %s, want no priorities section for an unrelated status change", stateJSON)
+	}
+}
+
+// The backfill adds to the pack, so the pack-size ceiling has to hold against
+// what is written rather than against what the caller asked for.
+//
+// This is the one failure in this area that cannot be walked back. A ledger is
+// append-only: an oversized pack passes the write path, gets a commit, and is
+// then refused by the budget check every reader runs — including the reader in
+// the clone that wrote it — so the project's configuration becomes unfoldable
+// forever. Refusing the write costs the caller one error message.
+func TestAppendConfigOperationRefusesAWriteTheBackfillWouldPushOverTheCeiling(t *testing.T) {
+	repo, config := writeRepository(t)
+	writeLegacyConfigGenesis(t, repo, config)
+
+	operations := make([]core.ConfigOperation, 0, core.MaxConfigOperationsPerPack)
+	for i := 0; i < core.MaxConfigOperationsPerPack; i++ {
+		operations = append(operations, relabelPriorityOperation(core.PriorityHigh, fmt.Sprintf("High %d", i)))
+	}
+
+	_, err := repo.WriteConfigOperation(context.Background(), config, core.CryptoULIDSource{}, operations, "")
+	if err == nil {
+		t.Fatal("WriteConfigOperation() error = nil, want a refusal: 64 authored operations plus the three " +
+			"backfilled built-ins is 67, over the pack ceiling")
+	}
+	if got := core.CategoryOf(err); got != core.CategoryValidation {
+		t.Fatalf("WriteConfigOperation() error category = %v, want %v", got, core.CategoryValidation)
+	}
+
+	// The refusal has to come before anything is written. A ledger that gained
+	// a commit here is the unrepairable state this test exists to prevent, so
+	// the tip must still be the genesis.
+	records := configChain(t, repo, config)
+	if len(records) != 1 {
+		t.Fatalf("configuration ledger has %d commits, want only the genesis: the refused write must not have "+
+			"appended anything", len(records))
+	}
+}
+
+// A write that fits once the backfill is counted still goes through, so the
+// check above is a ceiling rather than a new, lower one.
+func TestAppendConfigOperationAcceptsAWriteThatFitsWithTheBackfill(t *testing.T) {
+	repo, config := writeRepository(t)
+	writeLegacyConfigGenesis(t, repo, config)
+
+	operations := make([]core.ConfigOperation, 0, core.MaxConfigOperationsPerPack-3)
+	for i := 0; i < core.MaxConfigOperationsPerPack-3; i++ {
+		operations = append(operations, relabelPriorityOperation(core.PriorityHigh, fmt.Sprintf("High %d", i)))
+	}
+
+	result := writeConfig(t, repo, config, operations...)
+
+	records := configChain(t, repo, config)
+	last := records[len(records)-1]
+	if got := len(last.Operation.Operations); got != core.MaxConfigOperationsPerPack {
+		t.Fatalf("written pack carries %d operations, want exactly the ceiling of %d",
+			got, core.MaxConfigOperationsPerPack)
+	}
+	if result.State.Config.Priorities == nil {
+		t.Fatal("state.Config.Priorities = nil, want the backfilled built-ins")
 	}
 }

@@ -70,15 +70,29 @@ const WarningProjectionUpdate = "projection-update-failed"
 // behind, such as a ref on origin it could not validate.
 const WarningAutoSync = "auto-sync-incomplete"
 
-// WarningStatusFilter reports that a status filter did not name a live status
-// of this project: either nothing at all, or a value that had to be forwarded
+// WarningStatusFilter reports that a status filter had to be forwarded through
+// a rename or a removal to select anything.
+//
+// It never accompanies an empty result from a status nothing resolves to: List
+// refuses that case outright, so a caller sees this warning only alongside
+// tasks that came back under a different name than the one it typed — which is
+// the part of the answer the answer itself does not show.
+//
+// The code was spelled "status-filter-unresolved" until 0.6.0, when the
+// refusal took that case away and left the name describing the one thing this
+// warning no longer reports. It is a value callers match on, so renaming it is
+// a breaking change, and it rides the release that broke the behavior anyway
+// rather than leaving a permanent mismatch with its priority sibling.
+const WarningStatusFilter = "status-filter-forwarded"
+
+// WarningPriorityFilter reports that a priority filter had to be forwarded
 // through a rename or a removal to select anything.
 //
-// It is a warning rather than a refusal because a filter authors nothing, and a
-// warning rather than silence because the result it accompanies is usually
-// empty, and an empty table with a zero exit status is exactly the answer a
-// script cannot tell from "there is genuinely nothing here".
-const WarningStatusFilter = "status-filter-unresolved"
+// It is WarningStatusFilter's mirror and carries the same rule: a priority
+// nothing resolves to is refused by List rather than warned about, so a caller
+// sees this warning only alongside tasks that came back under a different name
+// than the one it typed.
+const WarningPriorityFilter = "priority-filter-forwarded"
 
 // WarningDocsRefresh reports that generated documentation this change
 // invalidated could not be rewritten — usually because somebody edited the

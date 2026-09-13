@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -26,6 +27,45 @@ import (
 // reasons that will not hold when the real one arrives.
 const futureGeneration = core.SupportedFormatGeneration + 1
 
+// markGeneration sets a stored document's writer-format marker: it replaces the
+// marker the document already carries, or inserts one after the envelope
+// version if it carries none. It is the same helper, in the same shape, as
+// internal/gitstore's markGeneration; the two packages cannot share a test file,
+// so they share a shape instead.
+//
+// Replace-if-present is the whole point. The insert-only form this replaced was
+// written when a configuration checkpoint carried no marker of its own. Now that
+// every ledger starts from a genesis stamped with one, a bare insert produced a
+// document with two minReader members, and Go's decoder takes the last — so the
+// forgery quietly claimed the generation it was trying to exceed, the
+// newer-writer path was never selected, and three tests read a working mechanism
+// as corruption.
+var storedMarkerPattern = regexp.MustCompile(`"minReader":\d+`)
+
+// Generation zero is forged explicitly, as `"minReader":0`, rather than by
+// leaving the member out. The two are different documents to a reader — absence
+// is the canonical spelling and an explicit zero is one this build refuses —
+// and a forge that silently returned the document untouched for zero would
+// produce an unforged document, failing whatever test used it with a shape
+// complaint rather than the refusal it was checking for.
+func markGeneration(document string, generation int) string {
+	marker := fmt.Sprintf(`"minReader":%d`, generation)
+	if storedMarkerPattern.MatchString(document) {
+		return storedMarkerPattern.ReplaceAllString(document, marker)
+	}
+	return strings.Replace(document, `"version":1,`, `"version":1,`+marker+`,`, 1)
+}
+
+// assertOneMarker fails loudly when a forged document carries anything but one
+// writer-format marker. A silent duplicate is what made the last shape change
+// read as a production bug; this guard is what makes the next one honest.
+func assertOneMarker(t *testing.T, what, document string) {
+	t.Helper()
+	if count := strings.Count(document, `"minReader"`); count != 1 {
+		t.Fatalf("%s carries %d minReader members, want exactly 1: %s", what, count, document)
+	}
+}
+
 // writeFutureTaskCommit appends one commit to a task ref that only a newer
 // Workbook could have written, and returns its object ID.
 func writeFutureTaskCommit(t *testing.T, repository, taskID string) string {
@@ -45,8 +85,7 @@ func writeFutureTaskCommit(t *testing.T, repository, taskID string) string {
 		futureGeneration, state.ProjectID, state.TaskID, state.History.Generation, state.LogicalClock+1)
 
 	stored := cliGitOutput(t, repository, "show", head+":state.json")
-	marked := strings.Replace(stored, `"version":1,`,
-		fmt.Sprintf(`"version":1,"minReader":%d,`, futureGeneration), 1)
+	marked := markGeneration(stored, futureGeneration)
 	marked = strings.Replace(marked,
 		fmt.Sprintf(`"logicalClock":%d,`, state.LogicalClock),
 		fmt.Sprintf(`"logicalClock":%d,`, state.LogicalClock+1), 1)
@@ -54,6 +93,7 @@ func writeFutureTaskCommit(t *testing.T, repository, taskID string) string {
 	if marked == stored {
 		t.Fatal("the checkpoint substitutions matched nothing; the stored document changed shape")
 	}
+	assertOneMarker(t, "the forged task checkpoint", marked)
 
 	operationBlob := hashObject(t, repository, operation)
 	stateBlob := hashObject(t, repository, marked+"\n")
@@ -83,8 +123,7 @@ func writeFutureConfigCommit(t *testing.T, repository string) string {
 		futureGeneration, state.ProjectID, state.History.Generation, state.LogicalClock+1)
 
 	stored := cliGitOutput(t, repository, "show", head+":state.json")
-	marked := strings.Replace(stored, `"version":1,`,
-		fmt.Sprintf(`"version":1,"minReader":%d,`, futureGeneration), 1)
+	marked := markGeneration(stored, futureGeneration)
 	marked = strings.Replace(marked,
 		fmt.Sprintf(`"logicalClock":%d,`, state.LogicalClock),
 		fmt.Sprintf(`"logicalClock":%d,`, state.LogicalClock+1), 1)
@@ -92,6 +131,7 @@ func writeFutureConfigCommit(t *testing.T, repository string) string {
 	if marked == stored {
 		t.Fatal("the ledger substitutions matched nothing; the stored document changed shape")
 	}
+	assertOneMarker(t, "the forged configuration checkpoint", marked)
 
 	operationBlob := hashObject(t, repository, operation)
 	stateBlob := hashObject(t, repository, marked+"\n")

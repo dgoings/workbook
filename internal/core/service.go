@@ -233,12 +233,12 @@ func (s Service) CreateMutation(ctx context.Context, input CreateInput) (Mutatio
 
 // StatusFilterResolution reports what a status filter turned out to mean.
 //
-// A filter is not a mutation: it never authors anything, so refusing an
-// unrecognized one buys nothing and costs the ordinary case of naming a status
-// this clone has not fetched yet. But an empty table and a zero exit status is
-// a worse answer than a clear refusal if nothing says why, so List reports what
-// it did with the value and the CLI turns that into a warning beside the empty
-// result. Nothing here decides how loudly to say it; that is the caller's.
+// A value that resolves to nothing is refused by List, so what this reports is
+// how a value that does resolve got there: as itself, or through a rename or a
+// removal. The CLI turns the forwarded case into a warning beside the tasks
+// that came back, because those tasks are not stored under the value that was
+// asked for and nothing else in the answer says so. Nothing here decides how
+// loudly to say it; that is the caller's.
 type StatusFilterResolution struct {
 	// Requested is the value the caller typed.
 	Requested Status
@@ -286,35 +286,93 @@ func (s Service) ResolveStatusFilter(status Status) StatusFilterResolution {
 	return resolution
 }
 
+// PriorityFilterResolution reports what a priority filter turned out to mean,
+// mirroring StatusFilterResolution's members and read the same way: a value
+// that resolves to nothing (Known false) is refused by List — see List's own
+// comment for why — so this exists to let that refusal and a forwarded-name
+// report agree by construction about what the filter selected.
+type PriorityFilterResolution struct {
+	// Requested is the value the caller typed.
+	Requested Priority
+	// Resolved is the live priority the filter was applied as. It equals
+	// Requested for a live priority, and is empty when the value resolves to
+	// nothing at all.
+	Resolved Priority
+	// Via is the one hop the requested value takes, which is what actually
+	// happened to it. It differs from Resolved when the chain continues —
+	// renamed, then the new name removed — and a message that paired this
+	// hop's verb with Resolved's destination would describe a change nobody
+	// made.
+	Via Priority
+	// Known reports that the filter names a live priority, directly or
+	// through the forwarding chains.
+	Known bool
+	// Forwarded reports that the requested value is not itself live, so the
+	// filter was applied to the priority it now means.
+	Forwarded bool
+	// Operation names how the value was retired — a rename or a removal — for
+	// a Forwarded resolution, so a message can say which.
+	Operation ConfigOperationType
+}
+
+// ResolvePriorityFilter reports what a priority filter names in this project.
+//
+// It is exported so a caller can explain the answer List gives without
+// re-deriving the vocabulary's chains itself, and so both agree by
+// construction about which priority a filter selected — the same reason
+// ResolveStatusFilter is exported. List calls this for the resolution it
+// already performs, rather than walking the chain a second time.
+func (s Service) ResolvePriorityFilter(priority Priority) PriorityFilterResolution {
+	resolution := PriorityFilterResolution{Requested: priority}
+	resolved, live := s.Priorities.Resolve(priority)
+	if !live {
+		return resolution
+	}
+	resolution.Resolved = resolved
+	resolution.Known = true
+	if resolved != priority {
+		resolution.Forwarded = true
+		via, operation, _ := s.Priorities.Forwarding(priority)
+		resolution.Via = via
+		resolution.Operation = operation
+	}
+	return resolution
+}
+
+// unfetchedFilterClause is what the filter boundary adds to the message the
+// mutation boundary shares with it.
+//
+// The two refusals are the same fact — this project does not define that
+// value — reached for different reasons. A caller supplying a status to a task
+// is choosing one, and the likely mistake is the value; a caller filtering by
+// one is naming something they expect to exist, and the likely cause is a
+// clone that has not fetched the configuration a teammate published. So the
+// filter names the fix and the mutation does not, and neither invents its own
+// words for the part they agree on.
+const unfetchedFilterClause = "; fetch if a teammate added it"
+
 // List returns the project's tasks, filtered and ordered.
 //
-// A status filter outside its vocabulary is accepted and returns the tasks it
-// selects, which is usually none. That relaxation is PR-C's half of a
-// decision PR-B deferred: under a distributed vocabulary, naming a status
-// this clone has not fetched yet is an ordinary thing to type, and failing
-// tells the caller their repository is broken when it is merely behind. It is
-// only honest because the result envelope now carries the miss — see
-// ResolveStatusFilter and the CLI's warning path — so a script that greps the
-// output is told why it found nothing rather than left to infer it.
+// A status or a priority filter that resolves to nothing is refused with
+// CategoryValidation, and the two are refused by one rule rather than by two
+// that disagree. An empty list is indistinguishable from a genuinely empty
+// column, so answering with one throws away the only interesting fact there
+// was: this clone has never heard of the name that was typed. A checkout that
+// has not fetched a teammate's new status does not have that status, and
+// saying so names the value and points at the fix, which is to fetch; a
+// zero-task answer instead tells the caller their column is empty when what is
+// empty is their vocabulary.
 //
-// A priority filter outside its vocabulary is refused, the same as it always
-// has been. Priority has no equivalent resolution report to carry the miss —
-// PriorityVocabulary has no Forwarding() sibling for a caller to build one
-// from — so relaxing this filter the way the status one was relaxed would
-// replace a refusal with silence nobody could explain: a script would read
-// "no tasks" and have no way to tell an empty priority from a mistyped one.
-// This filter can be relaxed the same way once that reporting exists; until
-// then, refusing is the honest answer.
-//
-// A filter that names a retired status or priority is applied to the value it
-// now means rather than to nothing. A task's status and priority are resolved
-// before either is compared, so a filter argument has to be resolved too, or
-// the comparison would ask "is this task's live value equal to a token nobody
-// carries any more" — the same wrong answer resolving only one side would give
-// for "no tasks are in ready" about a project whose ready column was merely
-// renamed. A priority filter argument is resolved the same way, but only after
-// this refusal: a token that resolves to a live priority is never the one
-// being refused, since resolving it is exactly how it is found to be live.
+// A filter that names a retired status or priority is not that case. It is
+// applied to the value it now means rather than to nothing. A task's status and
+// priority are resolved before either is compared, so a filter argument has to
+// be resolved too, or the comparison would ask "is this task's live value equal
+// to a token nobody carries any more" — the same wrong answer resolving only
+// one side would give for "no tasks are in ready" about a project whose ready
+// column was merely renamed. Resolving is also what decides the refusal above
+// rather than something that happens after it: a token that resolves to a live
+// value is never one being refused, since resolving it is exactly how it is
+// found to be live.
 func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
 	snapshots, err := s.Reader.List(ctx, s.Config)
 	if err != nil {
@@ -324,20 +382,22 @@ func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
 	wanted := Status("")
 	if filter.Status != nil {
 		wanted = *filter.Status
-		if resolution := s.ResolveStatusFilter(wanted); resolution.Known {
-			wanted = resolution.Resolved
+		resolution := s.ResolveStatusFilter(wanted)
+		if !resolution.Known {
+			return nil, Errorf(CategoryValidation, "%s%s",
+				UnknownStatusMessage(vocabulary, wanted), unfetchedFilterClause)
 		}
+		wanted = resolution.Resolved
 	}
 	wantedPriority := Priority("")
 	if filter.Priority != nil {
 		wantedPriority = *filter.Priority
-		if !s.Priorities.Has(wantedPriority) {
-			resolved, live := s.Priorities.Resolve(wantedPriority)
-			if !live {
-				return nil, Errorf(CategoryValidation, "invalid task priority %q", wantedPriority)
-			}
-			wantedPriority = resolved
+		resolution := s.ResolvePriorityFilter(wantedPriority)
+		if !resolution.Known {
+			return nil, Errorf(CategoryValidation, "%s%s",
+				UnknownPriorityMessage(s.Priorities, wantedPriority), unfetchedFilterClause)
 		}
+		wantedPriority = resolution.Resolved
 	}
 	tasks := make([]Task, 0, len(snapshots))
 	for _, snapshot := range snapshots {
