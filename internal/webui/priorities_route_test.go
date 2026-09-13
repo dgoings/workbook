@@ -640,6 +640,194 @@ func TestClientPrioritiesSectionReordersByNamingANeighbor(t *testing.T) {
 `)
 }
 
+// A drag reorders too, and it is the same decision the neighbor-naming controls
+// make.
+//
+// The move route takes one anchor rather than a whole order, and that is what a
+// drop already is. The rule the statuses read a drop by — a row dropped on
+// another takes that row's place, landing after it when it came from above and
+// before it when it came from below — names exactly one neighbor and one side,
+// which is {after: target} one way and {before: target} the other. So the
+// absence of a whole-order counterpart costs this section nothing: a drag sends
+// the same one PATCH Up and Down send.
+func TestClientPrioritiesSectionReordersByDraggingARow(t *testing.T) {
+	vocabulary := handlerVocabulary(t)
+	priorities := configuredPriorities(t)
+	// Dropped on the last row from above, the priority lands after it.
+	dropped, err := core.NewPriorityVocabulary([]core.PriorityDefinition{
+		{Priority: "soon", Label: "Soon", Rank: "2/1", Tags: []core.PriorityTag{core.PriorityTagDefault}},
+		{Priority: core.PriorityLow, Label: "Low", Rank: "3/1", Tags: []core.PriorityTag{}},
+		{Priority: "urgent", Label: "Drop everything", Rank: "4/1", Tags: []core.PriorityTag{}, Color: "#b42318"},
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("NewPriorityVocabulary() error = %v", err)
+	}
+	runPriorityPanelClient(t, "dragging a priority into place", vocabulary, priorities, "head-7", nil, `
+  vocabularyRead = `+priorityVocabularyJSON(t, vocabulary, priorities, "head-7")+`;
+  priorityAnswers.push({ body: `+priorityMutationJSON(t, vocabulary, dropped, "head-8", VocabularyPriorityTaskCounts{}, nil)+` });
+  await openStatuses();
+
+  // A row whose form is open is not draggable, for the reason a status row's is
+  // not: selecting the text in an input is a press and a drag, and inside a
+  // draggable row that is the gesture that reorders the list. Up and Down still
+  // move it, which is the path a keyboard has always taken.
+  await openPriorityForm("urgent", "Edit Drop everything");
+  if (priorityRow("urgent").draggable !== false) throw new Error("a priority being edited is still draggable");
+  if (priorityRow("soon").draggable !== true) throw new Error("an ordinary priority row is not draggable");
+  await panelControl(priorityForm("urgent", "priorityEdit"), "Stop editing Drop everything").eventListeners.click();
+  await settle();
+
+  // Downward: dropped on the row below it, it lands after that row.
+  const dataTransfer = { effectAllowed: "", dropEffect: "", setData() {} };
+  const falling = priorityRow("urgent");
+  const below = priorityRow("low");
+  falling.eventListeners.dragstart({ target: falling, dataTransfer });
+  if (falling.dataset.dragging !== "true") throw new Error("the dragged row does not say it is being dragged");
+  below.eventListeners.dragover({ target: below, dataTransfer, preventDefault() {} });
+  if (below.dataset.dropTarget !== "true") throw new Error("the row under the cursor is not marked");
+  await below.eventListeners.drop({ target: below, dataTransfer, preventDefault() {} });
+  await settle();
+
+  if (priorityCalls.length !== 1) throw new Error("one drag sent " + priorityCalls.length + " requests");
+  const first = priorityCalls[0];
+  if (first.method !== "PATCH" || first.url !== "/api/vocabulary/priorities/urgent/position") {
+    throw new Error("the drag went to " + first.method + " " + first.url);
+  }
+  const wantFirst = { after: "low", expectedHead: "head-7" };
+  if (JSON.stringify(first.body) !== JSON.stringify(wantFirst)) {
+    throw new Error("the downward drag sent " + JSON.stringify(first.body) + ", want " + JSON.stringify(wantFirst));
+  }
+  if (panelPriorities().join(",") !== "soon,low,urgent") {
+    throw new Error("the section is drawing " + panelPriorities().join(","));
+  }
+
+  // Upward: dropped on the row above it, it lands before that row — and with no
+  // dragover anywhere in the gesture, because a dragenter is the one word a
+  // browser sends once what is under the cursor churns.
+  priorityAnswers.push({ body: `+priorityMutationJSON(t, vocabulary, priorities, "head-9", VocabularyPriorityTaskCounts{}, nil)+` });
+  const rising = priorityRow("urgent");
+  const above = priorityRow("soon");
+  rising.eventListeners.dragstart({ target: rising, dataTransfer });
+  let answered = false;
+  above.eventListeners.dragenter({ target: above, dataTransfer, preventDefault() { answered = true; } });
+  if (!answered) throw new Error("a dragenter over a row the move may land on was not answered");
+  if (above.dataset.dropTarget !== "true") throw new Error("a dragenter drew no mark on the row under the cursor");
+  await above.eventListeners.drop({ target: above, dataTransfer, preventDefault() {} });
+  await settle();
+
+  if (priorityCalls.length !== 2) throw new Error("the second drag sent " + (priorityCalls.length - 1) + " requests");
+  const second = priorityCalls[1];
+  if (second.url !== "/api/vocabulary/priorities/urgent/position") {
+    throw new Error("the upward drag went to " + second.method + " " + second.url);
+  }
+  const wantSecond = { before: "soon", expectedHead: "head-8" };
+  if (JSON.stringify(second.body) !== JSON.stringify(wantSecond)) {
+    throw new Error("the upward drag sent " + JSON.stringify(second.body) + ", want " + JSON.stringify(wantSecond));
+  }
+  if (panelPriorities().join(",") !== "urgent,soon,low") {
+    throw new Error("the section is drawing " + panelPriorities().join(","));
+  }
+`)
+}
+
+// A drop this section refuses is left alone entirely: not marked, not
+// prevented, and above all not turned into a move.
+//
+// The flag that says "I will take this" is the same flag that stops the drop
+// reaching whatever else on the page wants it, so a section that accepted a
+// file drag would take a reader's file and do nothing with it. And a drag this
+// section believes is live — a gesture whose dragend never arrived — is exactly
+// how a file dropped here would otherwise become a reorder of a priority nobody
+// touched. The statuses' rows are asked the same question by their own rule, so
+// neither list answers for the other's gesture.
+func TestClientPrioritiesSectionLeavesARefusedDropAlone(t *testing.T) {
+	vocabulary := handlerVocabulary(t)
+	priorities := configuredPriorities(t)
+	runPriorityPanelClient(t, "a drop the priorities refuse", vocabulary, priorities, "head-7", nil, `
+  vocabularyRead = `+priorityVocabularyJSON(t, vocabulary, priorities, "head-7")+`;
+  await openStatuses();
+
+  const dataTransfer = { effectAllowed: "", dropEffect: "", setData() {} };
+  const withFiles = { effectAllowed: "", dropEffect: "", setData() {}, types: ["Files"] };
+  const answer = (name, row, transfer) => {
+    let prevented = false;
+    transfer.dropEffect = "";
+    row.eventListeners[name]({ target: row, dataTransfer: transfer, preventDefault() { prevented = true; } });
+    return prevented + "/" + transfer.dropEffect;
+  };
+
+  const dragged = priorityRow("urgent");
+  dragged.eventListeners.dragstart({ target: dragged, dataTransfer });
+
+  // Every priority row is a drop target. The rows below that answer "false/"
+  // are the ones a handler asking the easier question — "is there a row here?"
+  // — would wrongly accept.
+  [
+    ["another row, with a move in flight", priorityRow("soon"), dataTransfer, "true/move"],
+    ["the row being dragged, which has nowhere to arrive", dragged, dataTransfer, "false/"],
+    ["a row while files are being dragged in", priorityRow("soon"), withFiles, "false/"],
+    ["a status row, which this gesture is no business of", panelRow("icebox"), dataTransfer, "false/"],
+  ].forEach(([what, row, transfer, want]) => {
+    const entered = answer("dragenter", row, transfer);
+    const over = answer("dragover", row, transfer);
+    if (entered !== want) throw new Error("dragenter on " + what + " answered " + entered + ", want " + want);
+    if (over !== want) throw new Error("dragover on " + what + " answered " + over + ", want " + want);
+  });
+
+  // A file dropped over a move the page still believes is live.
+  let prevented = false;
+  const soon = priorityRow("soon");
+  await soon.eventListeners.drop({ target: soon, dataTransfer: withFiles, preventDefault() { prevented = true; } });
+  await settle();
+  if (prevented) throw new Error("the section took the drop of a file");
+
+  // A row dropped on itself is refused rather than half-handled, and the
+  // gesture's own dragend is what clears the drag.
+  await dragged.eventListeners.drop({ target: dragged, dataTransfer, preventDefault() { prevented = true; } });
+  await settle();
+  if (prevented) throw new Error("a row dropped on itself was taken as a move");
+
+  dragged.eventListeners.dragend({ target: dragged });
+  ["urgent", "soon", "low"].forEach((priority) => {
+    if (priorityRow(priority).dataset.dropTarget === "true") {
+      throw new Error("dragend left " + priority + " marked as a drop target");
+    }
+  });
+
+  // And with no move in flight at all — somebody else's gesture passing over
+  // the list, a status row's drag among them — every row refuses.
+  ["urgent", "soon", "low"].forEach((priority) => {
+    const row = priorityRow(priority);
+    const entered = answer("dragenter", row, dataTransfer);
+    const over = answer("dragover", row, dataTransfer);
+    if (entered !== "false/") throw new Error("dragenter on " + priority + " with no move in flight answered " + entered);
+    if (over !== "false/") throw new Error("dragover on " + priority + " with no move in flight answered " + over);
+  });
+
+  const column = panelRow("shipped");
+  column.eventListeners.dragstart({ target: column, dataTransfer });
+  const landing = priorityRow("soon");
+  if (answer("dragenter", landing, dataTransfer) !== "false/") {
+    throw new Error("a column being dragged was offered a priority row to land on");
+  }
+  await landing.eventListeners.drop({ target: landing, dataTransfer, preventDefault() { prevented = true; } });
+  await settle();
+  if (prevented) throw new Error("a column dropped on a priority row was taken as a move");
+  column.eventListeners.dragend({ target: column });
+
+  // Nothing was sent, by either section, and the order stands as it was read.
+  if (priorityCalls.length !== 0) {
+    throw new Error("a refused drop sent " + JSON.stringify(priorityCalls.map((call) => call.method + " " + call.url)));
+  }
+  if (vocabularyCalls.filter((call) => call.method !== "GET").length !== 0) {
+    throw new Error("a refused drop sent a statuses request");
+  }
+  if (panelPriorities().join(",") !== "urgent,soon,low") {
+    throw new Error("a refused drop reordered the priorities: " + panelPriorities().join(","));
+  }
+`)
+}
+
 // Moving the role on its own is one request and carries a head and nothing else:
 // the priority is the address and the role is the route. The priority that holds
 // it has nothing to offer, because there is no operation that clears the role.
