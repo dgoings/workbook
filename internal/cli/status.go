@@ -1914,8 +1914,7 @@ func requireLiveStatus(
 	}
 	via, operation, forwarded := vocabulary.Forwarding(status)
 	if !forwarded {
-		return "", core.Errorf(core.CategoryNotFound,
-			"no status %q in this project; the statuses are: %s", status, statusNameList(vocabulary))
+		return "", core.Errorf(core.CategoryNotFound, "%s", core.UnknownStatusMessage(vocabulary, status))
 	}
 	resolved, _ := vocabulary.Resolve(status)
 	return "", core.Errorf(core.CategoryNotFound, "no status %q; it was %s %q%s%s",
@@ -1956,13 +1955,11 @@ func statusForwardedOn(ctx context.Context, scope statusScope, status core.Statu
 	return " on " + when.UTC().Format("2006-01-02")
 }
 
+// statusNameList names this project's statuses for a message. The list lives
+// in core so that the refusals built from it here and the filter's refusal
+// there cannot drift apart.
 func statusNameList(vocabulary core.Vocabulary) string {
-	definitions := vocabulary.Definitions()
-	names := make([]string, 0, len(definitions))
-	for _, definition := range definitions {
-		names = append(names, string(definition.Status))
-	}
-	return strings.Join(names, ", ")
+	return core.StatusNameList(vocabulary)
 }
 
 // parseStatusTags turns the repeated --tag values into a set, refusing an

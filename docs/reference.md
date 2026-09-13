@@ -555,15 +555,25 @@ published. A project that has never changed a status has no ledger at all, which
 `workbook status list --json` reports as `"seeded": false`.
 
 Reading with a status this project does not have is refused the same way
-supplying one is: `workbook list --status <value>` exits `5` and names the
-value. An empty table cannot be told apart from an empty column, so answering
-with one would throw away the only interesting fact there was — that this
-checkout has never heard of that name. If you expected the status because a
-teammate mentioned it, you are out of sync rather than looking at an empty
-column, and the error points at the fix, which is to fetch. A value a rename or
-a removal still forwards is not this case: it resolves, the tasks come back, and
-a warning says what the name now means. `--priority` answers an unknown priority
-the same way.
+supplying one is: `workbook list --status <value>` exits `5`. An empty table
+cannot be told apart from an empty column, so answering with one would throw
+away the only interesting fact there was — that this checkout has never heard
+of that name. If you expected the status because a teammate mentioned it, you
+are out of sync rather than looking at an empty column, so the refusal says so
+rather than reporting bad input: it names the value, lists the statuses this
+project does define, and names the fix, which is to fetch.
+
+```
+$ workbook list --status shipped
+workbook: no status "shipped" in this project; the statuses are: backlog, ready, in-progress, in-review, done; fetch if a teammate added it
+```
+
+Supplying the same value to a task — `workbook update <id> --status shipped` —
+is refused as `invalid task status "shipped"` instead, because there the caller
+is choosing a value and the value is the news. A value a rename or a removal
+still forwards is neither case: it resolves, the tasks come back, and a warning
+says what the name now means. `--priority` answers an unknown priority the same
+way, naming this project's priorities.
 
 `.workbook/guidelines.md` is a generated rendering of this configuration, not a
 document to maintain. Its status table lists each status's position, machine
@@ -593,6 +603,75 @@ and is still published, and the result envelope's `docs` member reports the file
 as `modified` and unwritten alongside a `docs-refresh-incomplete` warning naming
 `workbook docs update --force`. Edit the project's statuses to change what that
 file says; there is nothing to write in it by hand.
+
+## Project priorities
+
+A project's priorities are configuration too, and the whole of the section
+above applies to them. `workbook priority list` shows them with the tasks at
+each; `add`, `rename`, `label`, `move`, `tag`, `delete` and `color` change
+them; and `workbook priority log` lists what has been changed, oldest first,
+with the command that reverses each entry. There is no undo verb here either,
+and for the same reason.
+
+A priority has a machine value — the lowercase token typed as `--priority
+high` — a display label, a position, one optional tag, and an optional color.
+Position is urgency and nothing else: the most urgent priority is first
+everywhere it is listed or drawn, and `--before` and `--after` are how a
+priority is placed against the others rather than an index anybody counts.
+`default` is the only tag, and it is where a task created without `--priority`
+lands. Exactly one priority carries it, so giving it to another priority takes
+it away in the same operation, and a command that would leave none is refused
+with the command that fixes it — including `workbook priority delete` on the
+priority that holds it.
+
+`high`, `medium` and `low` are not the priorities there are. They are the ones
+a project that has configured none is using, `medium` carrying `default`, and a
+project that never runs a `workbook priority` verb keeps exactly those three
+with its stored history unchanged to the byte.
+
+What the first change writes depends on when the project was created. A project
+this release created records its priorities in its configuration from its first
+commit, so there is nothing to backfill. A project created before this release
+has no priorities section at all, and the first `workbook priority` verb run
+against it writes the built-in three into the same commit, ahead of the change
+itself — the section then states what the project was already using rather than
+a starting point this release invented, and the change on top of it is the one
+somebody made. That commit is also what marks the configuration as needing a
+v0.6.0 clone to change; see
+[Mixed versions and forks](#mixed-versions-and-forks).
+
+A color is optional. `workbook priority color <priority> "#rrggbb"` records one
+and the same command with no value clears it, returning that priority to a
+color the board derives from its position. There is no stored default to go
+back to, which is why clearing is what it is: nothing was written, so nothing
+is written back. Recording the color a priority already has, or clearing one it
+does not have, is refused rather than recorded — a priority operation against a
+pre-0.6.0 project is never free, and a command that changes nothing should not
+be what costs a team its compatibility with an older clone.
+
+`workbook priority delete` requires `--into`, naming the priority the removed
+one's tasks belong at, and reports how many tasks that moves. It is never
+guessed: where a task's urgency goes is a judgment, not an inference from
+adjacent positions. Removing the last remaining priority is refused
+outright — every task is at one — and so is removing the one tagged `default`,
+until another carries the tag.
+
+Changing a priority never rewrites a task, exactly as changing a status does
+not. A rename or a removal leaves a forwarding pointer, a task stored under the
+old value keeps resolving to the right priority in every clone, and each one
+settles the next time anything writes to it. Supplying a retired priority to a
+task is refused; filtering by one resolves and returns the tasks with a
+`priority-filter-forwarded` warning saying what the name now means. A priority
+that resolves to nothing refuses the filter, and names this project's
+priorities in doing so, exactly as a status does under
+[Project statuses](#project-statuses).
+
+`workbook priority list` is how a project's priorities are discovered rather
+than assumed, the way `workbook status list` is for its columns: it shows each
+priority's position, machine value, display label, tag, color and task count.
+`.workbook/guidelines.md` carries the same table, and every mutating priority
+verb rewrites it; `--no-docs` skips that for one command and `workbook docs
+update` catches up afterwards.
 
 ## Board display settings
 
@@ -996,7 +1075,7 @@ family that colour implies — the darker steps a filled control takes, the pale
 surfaces, the hairlines, the focus rings — and serves it as a stylesheet
 override, so a board named and coloured per project is distinguishable from
 another one in a strip of browser tabs. The semantic colours do not move: the
-danger red, the warning amber and the priority triad mean what they mean
+danger red, the warning amber and the priority inks mean what they mean
 whatever accent a project picks.
 
 The `Config` link in the board's header goes to `/config`, a page with two

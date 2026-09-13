@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"math/big"
 	"sort"
 	"strings"
@@ -218,6 +219,25 @@ func (vocabulary PriorityVocabulary) Definitions() []PriorityDefinition {
 		definitions[index] = definition
 	}
 	return definitions
+}
+
+// PriorityNameList names a vocabulary's live priorities, most urgent first,
+// for a message that has to tell a caller what this project actually accepts.
+func PriorityNameList(vocabulary PriorityVocabulary) string {
+	definitions := vocabulary.Definitions()
+	names := make([]string, 0, len(definitions))
+	for _, definition := range definitions {
+		names = append(names, string(definition.Priority))
+	}
+	return strings.Join(names, ", ")
+}
+
+// UnknownPriorityMessage explains a priority this project does not define,
+// naming the ones it does. It is the priority half of UnknownStatusMessage and
+// exists for the reason given there.
+func UnknownPriorityMessage(vocabulary PriorityVocabulary, priority Priority) string {
+	return fmt.Sprintf("no priority %q in this project; the priorities are: %s",
+		priority, PriorityNameList(vocabulary))
 }
 
 // copyPriorityTags copies a tag list, keeping an empty list empty rather than

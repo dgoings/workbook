@@ -339,6 +339,18 @@ func (s Service) ResolvePriorityFilter(priority Priority) PriorityFilterResoluti
 	return resolution
 }
 
+// unfetchedFilterClause is what the filter boundary adds to the message the
+// mutation boundary shares with it.
+//
+// The two refusals are the same fact — this project does not define that
+// value — reached for different reasons. A caller supplying a status to a task
+// is choosing one, and the likely mistake is the value; a caller filtering by
+// one is naming something they expect to exist, and the likely cause is a
+// clone that has not fetched the configuration a teammate published. So the
+// filter names the fix and the mutation does not, and neither invents its own
+// words for the part they agree on.
+const unfetchedFilterClause = "; fetch if a teammate added it"
+
 // List returns the project's tasks, filtered and ordered.
 //
 // A status or a priority filter that resolves to nothing is refused with
@@ -372,7 +384,8 @@ func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
 		wanted = *filter.Status
 		resolution := s.ResolveStatusFilter(wanted)
 		if !resolution.Known {
-			return nil, Errorf(CategoryValidation, "invalid task status %q", wanted)
+			return nil, Errorf(CategoryValidation, "%s%s",
+				UnknownStatusMessage(vocabulary, wanted), unfetchedFilterClause)
 		}
 		wanted = resolution.Resolved
 	}
@@ -381,7 +394,8 @@ func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
 		wantedPriority = *filter.Priority
 		resolution := s.ResolvePriorityFilter(wantedPriority)
 		if !resolution.Known {
-			return nil, Errorf(CategoryValidation, "invalid task priority %q", wantedPriority)
+			return nil, Errorf(CategoryValidation, "%s%s",
+				UnknownPriorityMessage(s.Priorities, wantedPriority), unfetchedFilterClause)
 		}
 		wantedPriority = resolution.Resolved
 	}

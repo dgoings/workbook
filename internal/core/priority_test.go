@@ -33,6 +33,33 @@ func TestBuiltInPrioritiesAreTodaysThree(t *testing.T) {
 	}
 }
 
+// The built-in three carry the display labels they have always carried, and
+// BuiltInPriorityVocabulary hands back a copy rather than the set it caches.
+//
+// Both assertions came off the deleted core.Priorities, whose whole job was to
+// report the built-in three to the guidelines renderer in a fixed order. The
+// renderer reads a project's own priorities now, so the order that function
+// froze is gone with it; what is still worth pinning is that the labels are
+// what a reader has seen since before ranks existed, and that a caller cannot
+// tamper with a vocabulary every other caller shares — BuiltInPriorityVocabulary
+// is cached behind sync.OnceValue, so handing out the backing array would
+// corrupt the built-in set process-wide.
+func TestBuiltInPriorityVocabularyLabelsAndCopies(t *testing.T) {
+	want := map[Priority]string{PriorityHigh: "High", PriorityMedium: "Medium", PriorityLow: "Low"}
+	for _, definition := range BuiltInPriorityVocabulary().Definitions() {
+		if got := definition.Label; got != want[definition.Priority] {
+			t.Errorf("label of %q = %q, want %q", definition.Priority, got, want[definition.Priority])
+		}
+	}
+
+	// Production mutation: returning the backing array would let one caller
+	// corrupt the built-in priority set for every other caller.
+	BuiltInPriorityVocabulary().Definitions()[0].Priority = "tampered"
+	if got := BuiltInPriorityVocabulary().Definitions()[0].Priority; got != PriorityHigh {
+		t.Fatalf("first built-in priority = %q, want %q", got, PriorityHigh)
+	}
+}
+
 // Color is omitted when unset, so a definition that chose no color encodes to
 // the same bytes it would have before the field existed. The "tags":null this
 // pins is a bare literal marshaled directly, without passing through
@@ -706,7 +733,14 @@ func TestServiceListFilterOnAnUnconfiguredProjectRefusesAnUndefinedPriority(t *t
 	if got := CategoryOf(err); got != CategoryValidation {
 		t.Fatalf("List(%q) category = %q, want %q", urgent, got, CategoryValidation)
 	}
-	if got, want := err.Error(), `invalid task priority "urgent"`; got != want {
+	// The filter names this project's priorities and the fix, where the
+	// mutation boundary's `invalid task priority %q` names neither: a filter's
+	// likeliest cause is a clone that has not fetched a teammate's new
+	// priority, and the old message was the same words for that, for a typo,
+	// and for a display label.
+	want := `no priority "urgent" in this project; the priorities are: high, medium, low; ` +
+		`fetch if a teammate added it`
+	if got := err.Error(); got != want {
 		t.Fatalf("List(%q) error = %q, want %q", urgent, got, want)
 	}
 	if tasks != nil {

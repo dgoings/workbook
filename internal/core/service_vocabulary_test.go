@@ -139,7 +139,15 @@ func TestServiceListRefusesAStatusOutsideTheVocabulary(t *testing.T) {
 		if got := CategoryOf(err); got != CategoryValidation {
 			t.Fatalf("List(%q) category = %q, want %q", status, got, CategoryValidation)
 		}
-		if got, want := err.Error(), fmt.Sprintf("invalid task status %q", status); got != want {
+		// The filter says more than the mutation boundary does, and has to:
+		// all three values here are refused for the same reason and the old
+		// `invalid task status %q` was the same sentence for a typo, a display
+		// label, and a status a teammate added that this clone has not
+		// fetched. Naming the project's statuses and the fix separates them.
+		want := fmt.Sprintf(
+			"no status %q in this project; the statuses are: triage, queued, released; "+
+				"fetch if a teammate added it", status)
+		if got := err.Error(); got != want {
 			t.Fatalf("List(%q) error = %q, want %q", status, got, want)
 		}
 		if tasks != nil {

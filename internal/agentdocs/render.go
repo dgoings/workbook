@@ -24,9 +24,12 @@ const GuidelinesPath = ".workbook/guidelines.md"
 // than the five this build would mint a new project with.
 //
 // The priorities come from the project's own priority vocabulary the same
-// way, so a project that configured its own gets its own "Canonical
-// priorities" table rather than the built-in high/medium/low every project
-// used to be documented as having regardless of what it actually configured.
+// way, so a project that configured its own gets its own "Priorities" table
+// rather than the built-in high/medium/low every project used to be
+// documented as having regardless of what it actually configured. The heading
+// says "Priorities" rather than "Canonical priorities" for the reason the
+// statuses one says "Statuses": there is no canonical set any more to
+// distinguish a project's own from.
 // The zero PriorityVocabulary needs no substitution here the way the zero
 // Vocabulary above does: PriorityVocabulary.Definitions() already reads its
 // own zero value as "this caller configured none" and substitutes the
@@ -73,12 +76,30 @@ func RenderGuidelines(project core.ProjectConfig, vocabulary core.Vocabulary, pr
 	builder.WriteString("read them here or with `workbook status list --json` rather than assuming the\n")
 	builder.WriteString("ones you have seen elsewhere. This section is rewritten whenever they change.\n\n")
 
-	builder.WriteString("## Canonical priorities\n\n")
-	builder.WriteString("| Machine value | Display label |\n| --- | --- |\n")
-	for _, definition := range priorities.Definitions() {
-		builder.WriteString("| `" + string(definition.Priority) + "` | " + tableCell(definition.Label) + " |\n")
+	builder.WriteString("## Priorities\n\n")
+	builder.WriteString("This project's priorities, most urgent first. Pass the machine value, never\n")
+	builder.WriteString("the display label.\n\n")
+	builder.WriteString("| # | Machine value | Display label | Tags |\n| --- | --- | --- | --- |\n")
+	priorityDefinitions := priorities.Definitions()
+	for index, definition := range priorityDefinitions {
+		builder.WriteString("| " + strconv.Itoa(index+1) +
+			" | `" + string(definition.Priority) + "` | " + tableCell(definition.Label) +
+			" | " + renderPriorityTags(definition.Tags) + " |\n")
 	}
 	builder.WriteString("\n")
+	builder.WriteString("| Tag | What it makes Workbook do |\n| --- | --- |\n")
+	// Driven by the tag set core defines, for the same reason the status tag
+	// table above is: a tag added there and left undescribed here renders an
+	// empty cell the pinned test fails on.
+	for _, tag := range core.PriorityTags() {
+		builder.WriteString("| `" + string(tag) + "` | " + priorityTagMeaning(tag) + " |\n")
+	}
+	builder.WriteString("\nA priority carrying no tag is an ordinary level of urgency: its position in\n")
+	builder.WriteString("the table is the whole of what it means.\n\n")
+	builder.WriteString("These priorities belong to this project and another project's are different,\n")
+	builder.WriteString("so read them here or with `workbook priority list --json` rather than assuming\n")
+	builder.WriteString("the ones you have seen elsewhere. This section is rewritten whenever they\n")
+	builder.WriteString("change.\n\n")
 
 	builder.WriteString("## Task lifecycle\n\n")
 	// Every sentence here is read off the tags rather than off a status name,
@@ -281,6 +302,35 @@ func statusTagMeaning(tag core.StatusTag) string {
 		return "`workbook next` may return a task sitting here."
 	case core.StatusTagDone:
 		return "A dependency sitting here is satisfied, so the work waiting on it can be claimed."
+	default:
+		return ""
+	}
+}
+
+// renderPriorityTags renders a priority's tag set for the table, saying "none"
+// where there is nothing, exactly as renderStatusTags does for a status.
+func renderPriorityTags(tags []core.PriorityTag) string {
+	if len(tags) == 0 {
+		return "none"
+	}
+	rendered := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		rendered = append(rendered, "`"+string(tag)+"`")
+	}
+	return strings.Join(rendered, ", ")
+}
+
+// priorityTagMeaning says what a priority's tag makes Workbook do, phrased for
+// the agent reading these guidelines.
+//
+// The switch is exhaustive over core.PriorityTags by construction, the same way
+// statusTagMeaning is: the table above iterates that list, so a tag added to
+// core and not described here renders an empty cell the pinned rendering test
+// fails on.
+func priorityTagMeaning(tag core.PriorityTag) string {
+	switch tag {
+	case core.PriorityTagDefault:
+		return "A task created without `--priority` lands here. Exactly one priority carries it."
 	default:
 		return ""
 	}

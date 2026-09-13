@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"math/big"
 	"sort"
 	"strings"
@@ -182,6 +183,34 @@ func (vocabulary Vocabulary) Definitions() []StatusDefinition {
 		definitions[index] = definition
 	}
 	return definitions
+}
+
+// StatusNameList names a vocabulary's live statuses, in order, for a message
+// that has to tell a caller what this project actually accepts.
+func StatusNameList(vocabulary Vocabulary) string {
+	definitions := vocabulary.Definitions()
+	names := make([]string, 0, len(definitions))
+	for _, definition := range definitions {
+		names = append(names, string(definition.Status))
+	}
+	return strings.Join(names, ", ")
+}
+
+// UnknownStatusMessage explains a status this project does not define, naming
+// the ones it does.
+//
+// It is one sentence in one place because two boundaries say it: the `workbook
+// status` verbs, where a caller named a subject that is not a status, and
+// List's filter, where a caller asked for a column this clone has never heard
+// of. Phrasing them separately produced two vocabularies for one idea — and
+// left the filter saying only `invalid task status "nope"`, which is the same
+// words for a typo, a display label, and a status a teammate added that this
+// checkout has not fetched. Naming the project's statuses distinguishes all
+// three without the message having to guess which one happened. Callers add
+// the clause their boundary earns; see List for the filter's.
+func UnknownStatusMessage(vocabulary Vocabulary, status Status) string {
+	return fmt.Sprintf("no status %q in this project; the statuses are: %s",
+		status, StatusNameList(vocabulary))
 }
 
 // copyStatusTags copies a tag list, keeping an empty list empty rather than

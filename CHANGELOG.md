@@ -46,7 +46,10 @@ of the changes below break scripts; both are described under Changed.
 - `.workbook/guidelines.md` documents the priorities a project actually uses.
   Its "Canonical priorities" table always printed the built-in three, so the one
   document an agent reads to learn a project's vocabulary described a different
-  project.
+  project. That table is now headed "Priorities" and carries what the statuses
+  table above it carries — each priority's position, machine value, display
+  label and tag, with a legend saying that a task created without `--priority`
+  lands on the tagged one.
 
 ### Changed
 - **Every project created by this release records its priorities, and so
@@ -64,7 +67,18 @@ of the changes below break scripts; both are described under Changed.
   heard of that name, which usually means it has not fetched. A name that a
   rename or a removal still forwards is unaffected — it resolves, the tasks
   come back, and a warning says what the name now means. `--priority` has
-  always answered an unknown priority this way.
+  always answered an unknown priority this way. Both refusals now say which
+  statuses — or priorities — this project does define, and that fetching is
+  what fixes a name a teammate has and this clone does not; supplying a value
+  to a task is still answered with the shorter `invalid task status "…"`,
+  because there the value is the news rather than the clone.
+- **The priorities table in `.workbook/guidelines.md` is now most urgent
+  first**, where it read Low, Medium, High. Every existing project's copy
+  flips to High, Medium, Low the first time anything regenerates it — a
+  priority verb, a status verb, `workbook docs update`, or `workbook setup` —
+  so expect a diff in a generated file nobody edited. It is the order
+  `workbook priority list` and both boards have always used, and the order the
+  statuses table beside it uses; the two now agree.
 - **The warning code `status-filter-unresolved` is now
   `status-filter-forwarded`.** It was minted when that warning also covered the
   case the refusal above has taken away, so its name described the one thing it

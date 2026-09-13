@@ -8,11 +8,11 @@ import (
 	"github.com/dgoings/workbook/internal/agentdocs"
 )
 
-// urgentPriorityRow is the "Canonical priorities" row a project that added
-// `urgent` must see in its generated guidelines. Every test below looks for
-// this exact row rather than the bare word, because the word also appears in
-// prose the renderer writes for every project.
-const urgentPriorityRow = "| `urgent` | Urgent |"
+// urgentPriorityRow is the "Priorities" row a project that added `urgent`
+// before `high` must see in its generated guidelines. Every test below looks
+// for this exact row rather than the bare word, because the word also appears
+// in prose the renderer writes for every project.
+const urgentPriorityRow = "| 1 | `urgent` | Urgent | none |"
 
 // configuredPriorityProject is an initialized project that has named a
 // priority of its own, which is the whole precondition these tests share: a

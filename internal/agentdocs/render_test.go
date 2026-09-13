@@ -426,7 +426,7 @@ func TestRenderGuidelinesStatesEveryCanonicalStatus(t *testing.T) {
 			t.Errorf("guidelines missing status %q:\n%s", definition.Status, guidelines)
 		}
 	}
-	for _, definition := range core.Priorities() {
+	for _, definition := range core.BuiltInPriorityVocabulary().Definitions() {
 		if !strings.Contains(guidelines, string(definition.Priority)) {
 			t.Errorf("guidelines missing priority %q:\n%s", definition.Priority, guidelines)
 		}
@@ -474,6 +474,44 @@ func customPriorities(t *testing.T) core.PriorityVocabulary {
 		t.Fatalf("NewPriorityVocabulary() error = %v", err)
 	}
 	return vocabulary
+}
+
+// builtInPrioritiesSection is the priorities section a project that has never
+// configured one renders, pinned whole the way the statuses sections above it
+// are: the table's position column, the tag legend and the prose are what tell
+// an agent which priority a task lands on and which way the rows run, and a
+// tag added to core and left undescribed here renders an empty cell this pin
+// fails on.
+const builtInPrioritiesSection = `## Priorities
+
+This project's priorities, most urgent first. Pass the machine value, never
+the display label.
+
+| # | Machine value | Display label | Tags |
+| --- | --- | --- | --- |
+| 1 | ` + "`high`" + ` | High | none |
+| 2 | ` + "`medium`" + ` | Medium | ` + "`default`" + ` |
+| 3 | ` + "`low`" + ` | Low | none |
+
+| Tag | What it makes Workbook do |
+| --- | --- |
+| ` + "`default`" + ` | A task created without ` + "`--priority`" + ` lands here. Exactly one priority carries it. |
+
+A priority carrying no tag is an ordinary level of urgency: its position in
+the table is the whole of what it means.
+
+These priorities belong to this project and another project's are different,
+so read them here or with ` + "`workbook priority list --json`" + ` rather than assuming
+the ones you have seen elsewhere. This section is rewritten whenever they
+change.
+`
+
+func TestRenderGuidelinesPinsTheBuiltInPrioritiesRendering(t *testing.T) {
+	guidelines := RenderGuidelines(testProject(), core.Vocabulary{}, core.PriorityVocabulary{})
+
+	if got := section(t, guidelines, "## Priorities"); got != builtInPrioritiesSection {
+		t.Errorf("priorities section =\n%s\nwant\n%s", got, builtInPrioritiesSection)
+	}
 }
 
 func TestRenderGuidelinesWarnsAgainstDisplayLabels(t *testing.T) {

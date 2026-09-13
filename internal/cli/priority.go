@@ -533,8 +533,7 @@ func requireLivePriority(
 	}
 	via, operation, forwarded := vocabulary.Forwarding(priority)
 	if !forwarded {
-		return "", core.Errorf(core.CategoryNotFound,
-			"no priority %q in this project; the priorities are: %s", priority, priorityNameList(vocabulary))
+		return "", core.Errorf(core.CategoryNotFound, "%s", core.UnknownPriorityMessage(vocabulary, priority))
 	}
 	resolved, _ := vocabulary.Resolve(priority)
 	return "", core.Errorf(core.CategoryNotFound, "no priority %q; it was %s %q%s%s",
@@ -557,13 +556,10 @@ func priorityForwardedOn(ctx context.Context, scope priorityScope, priority core
 	return " on " + when.UTC().Format("2006-01-02")
 }
 
+// priorityNameList names this project's priorities for a message, from core
+// for the reason statusNameList is.
 func priorityNameList(vocabulary core.PriorityVocabulary) string {
-	definitions := vocabulary.Definitions()
-	names := make([]string, 0, len(definitions))
-	for _, definition := range definitions {
-		names = append(names, string(definition.Priority))
-	}
-	return strings.Join(names, ", ")
+	return core.PriorityNameList(vocabulary)
 }
 
 // parsePriorityTag turns one --tag value into a role, refusing an unknown one

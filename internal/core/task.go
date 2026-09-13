@@ -146,35 +146,6 @@ const (
 	PriorityHigh   Priority = "high"
 )
 
-// Priorities returns the three built-in priorities in the order and shape
-// this function has reported since before ranks existed: ascending urgency
-// (Low, Medium, High), with only Priority and Label set.
-//
-// builtInPriorityDefinitions orders most urgent first because that is what
-// the vocabulary sorts by — rank order means urgency. Priorities does not
-// follow it there: its one caller, agentdocs/render.go, renders exactly this
-// order into the "Canonical priorities" table in .workbook/guidelines.md, a
-// file people read, so changing the order — or handing back the ranks and
-// tags builtInPriorityDefinitions now carries — would rewrite that file for
-// every project that has never touched its priority vocabulary. It still
-// derives its names and labels from builtInPriorityDefinitions rather than
-// restating them, so there is one source of truth for what the three
-// built-in priorities are called; only the order and the shape exposed here
-// differ, deliberately, until the stage that teaches guidelines.md to read a
-// project's configured priorities converges the two.
-func Priorities() []PriorityDefinition {
-	order := [...]Priority{PriorityLow, PriorityMedium, PriorityHigh}
-	labels := make(map[Priority]string, len(order))
-	for _, definition := range builtInPriorityDefinitions() {
-		labels[definition.Priority] = definition.Label
-	}
-	result := make([]PriorityDefinition, len(order))
-	for index, priority := range order {
-		result[index] = PriorityDefinition{Priority: priority, Label: labels[priority]}
-	}
-	return result
-}
-
 type TaskData struct {
 	Title        string    `json:"title"`
 	Description  string    `json:"description"`

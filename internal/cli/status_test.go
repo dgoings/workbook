@@ -2108,6 +2108,14 @@ func TestStatusListReportsTheOverCeilingAdvisory(t *testing.T) {
 // table is indistinguishable from an empty column, so the refusal is what
 // reports the one fact worth reporting: this checkout has never heard of that
 // name, which means it is out of sync rather than looking at an empty column.
+// unknownFilterStatusRefusal is what this fixture's project says about a status
+// it does not define: the statuses it does have, and the fix. A bare `invalid
+// task status "typoo"` was the same sentence for a typo, for a display label,
+// and for a status a teammate added that this checkout has not fetched — the
+// last of which is the case this refusal exists to report at all.
+const unknownFilterStatusRefusal = `no status "typoo" in this project; ` +
+	`the statuses are: backlog, queued, in-progress, in-review, done; fetch if a teammate added it`
+
 func TestListStatusFilterRefusesAnUnknownStatusAndFollowsAResolvableOne(t *testing.T) {
 	repository := initializedRepository(t)
 	task := cliCreateTask(t, repository, "Alpha")
@@ -2122,7 +2130,7 @@ func TestListStatusFilterRefusesAnUnknownStatusAndFollowsAResolvableOne(t *testi
 		if stdout != "" {
 			t.Fatalf("list --status typoo stdout = %q, want nothing listed", stdout)
 		}
-		assertJSONError(t, stderr, core.CategoryValidation, `invalid task status "typoo"`)
+		assertJSONError(t, stderr, core.CategoryValidation, unknownFilterStatusRefusal)
 	})
 
 	t.Run("unknown status in text", func(t *testing.T) {
@@ -2133,7 +2141,7 @@ func TestListStatusFilterRefusesAnUnknownStatusAndFollowsAResolvableOne(t *testi
 		if strings.Contains(stdout, task.ID) {
 			t.Fatalf("list --status typoo listed %q", stdout)
 		}
-		if stderr != "workbook: invalid task status \"typoo\"\n" {
+		if stderr != "workbook: "+unknownFilterStatusRefusal+"\n" {
 			t.Fatalf("stderr = %q, want one refusal line naming the status", stderr)
 		}
 	})
