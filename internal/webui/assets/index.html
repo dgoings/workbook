@@ -1171,8 +1171,14 @@
          its label, its tags and its ink, as JSON because a priority is more
          facts than a space-separated list can carry. A project that renamed
          its priorities or added a fourth is described here and nowhere in the
-         script. -->
-    <div class="board-view" data-board-view data-priorities="{{ .Priorities }}" data-project-name="{{ .ProjectName }}" data-default-project-name="{{ .DefaultProjectName }}" data-title-suffix="{{ .TitleSuffix }}" data-default-status="{{ .DefaultStatus }}" data-vocabulary-head="{{ .VocabularyHead }}" data-attachment-limit="{{ .AttachmentFileLimit }}" data-attachment-total-limit="{{ .AttachmentTotalLimit }}" data-attachment-name-limit="{{ .AttachmentNameLimit }}" data-attachment-label-limit="{{ .AttachmentLabelLimit }}" data-attachment-url-limit="{{ .AttachmentURLLimit }}" data-inline-media="{{ .InlineImageMediaTypes }}" data-assign-identity="{{ .AssignIdentity }}">
+         script.
+
+         data-default-priority is where a new task lands, and it sits beside
+         data-default-status for the same reason: which priority carries the
+         default role is the server's answer, and a script that went looking for
+         that role among the published tags would be spelling the name of a role
+         core owns. -->
+    <div class="board-view" data-board-view data-priorities="{{ .Priorities }}" data-default-priority="{{ .DefaultPriority }}" data-project-name="{{ .ProjectName }}" data-default-project-name="{{ .DefaultProjectName }}" data-title-suffix="{{ .TitleSuffix }}" data-default-status="{{ .DefaultStatus }}" data-vocabulary-head="{{ .VocabularyHead }}" data-attachment-limit="{{ .AttachmentFileLimit }}" data-attachment-total-limit="{{ .AttachmentTotalLimit }}" data-attachment-name-limit="{{ .AttachmentNameLimit }}" data-attachment-label-limit="{{ .AttachmentLabelLimit }}" data-attachment-url-limit="{{ .AttachmentURLLimit }}" data-inline-media="{{ .InlineImageMediaTypes }}" data-assign-identity="{{ .AssignIdentity }}">
       <p class="stale" data-stale role="status">Task refresh failed. Showing the last successful board.</p>
       <!-- data-board is where the client appends the Deleted column, after the
            last vocabulary column the server rendered. It is a client-built
@@ -1301,7 +1307,6 @@
   {{ end }}
   <script>
     (() => {
-      const priorityOrder = new Map([["high", 0], ["medium", 1], ["low", 2]]);
       const dropMarker = document.createElement("div");
       dropMarker.className = "drop-marker";
       dropMarker.setAttribute("aria-hidden", "true");
@@ -1332,6 +1337,49 @@
       // first column keeps a page served by an older build usable rather than
       // sending it to a status that may not exist.
       const defaultStatus = boardView.dataset.defaultStatus || (statusDefinitions.length ? statusDefinitions[0][0] : "");
+      // The project's priorities, read out of the attribute the server
+      // published them in rather than kept as a list of its own.
+      //
+      // There used to be three answers here to questions the server had already
+      // answered on this page: an order, a set of options and a default, all
+      // three naming the priorities Workbook ships with. A project may define
+      // any priorities it likes, so each of those was wrong for every project
+      // that added or renamed one — a fourth priority could not be assigned from
+      // the board at all, sorted against nothing when a card was dragged, and a
+      // new task landed on a priority the project may not even define.
+      //
+      // A page carrying no such attribute — served by an older build — leaves
+      // this empty rather than substituting three. Offering priorities nobody
+      // has been told this project has is the defect, not the cure.
+      const publishedPriorities = (() => {
+        try {
+          const published = JSON.parse(boardView.dataset.priorities || "[]");
+          if (!Array.isArray(published)) return [];
+          return published.filter((definition) => definition && typeof definition.priority === "string" && definition.priority !== "");
+        } catch (error) {
+          return [];
+        }
+      })();
+      // [token, label] pairs, the shape statusDefinitions has, because the form
+      // builds both selects the same way and a select is where a person reads a
+      // name rather than a token.
+      const priorityDefinitions = publishedPriorities.map((definition) => [definition.priority, definition.label || definition.priority]);
+      // Where a priority sits, for the one thing that needs to know: placing a
+      // dragged card in a column that holds no card of its own priority.
+      //
+      // The position in the published array is the whole of it. The server
+      // deliberately publishes no rank — the array is already in the
+      // vocabulary's order — so this is the order the client was handed rather
+      // than one it re-derived and could disagree with the server about.
+      const priorityOrder = new Map(publishedPriorities.map((definition, index) => [definition.priority, index]));
+      // Where a new task lands when nothing named a priority: the priority this
+      // project tagged default, which is the server's answer for the reason
+      // defaultStatus is. The role is among the tags published above, and going
+      // looking for it there would mean spelling the name of a role core owns —
+      // the same rule that keeps this script from naming a status tag. Falling
+      // back to the first keeps a page served by an older build usable rather
+      // than creating tasks at no priority at all.
+      const defaultPriority = boardView.dataset.defaultPriority || (priorityDefinitions.length ? priorityDefinitions[0][0] : "");
       const counts = new Map([...boardView.querySelectorAll("[data-count]")].map((element) => [element.dataset.count, element]));
       const stale = boardView.querySelector("[data-stale]");
       // The region for tasks whose status matches no column. It is part of the
@@ -2072,6 +2120,13 @@
         parts.restore.hidden = !task.deleted;
         parts.restore.setAttribute("aria-label", "Restore task " + task.title);
         if (parts.idText) text(parts.idText, view.idPrefix);
+        // The chip is the priority's token, not this project's label for it,
+        // and the server's card template says the same so the two never
+        // disagree about a card the poll redraws. The token is what `--priority`
+        // takes, it sits beside the ID prefix a person copies into a command,
+        // and the chip is a compact uppercase element that a label chosen as
+        // prose would not fit. A project reads its own label in the form's
+        // select and on the configuration page, where a name is what is wanted.
         parts.priority.className = "priority priority--" + task.priority; text(parts.priority, task.priority);
         text(parts.link, task.title);
         text(parts.failure.message, report);
@@ -5768,7 +5823,7 @@
         });
         const status = select("status", statusDefinitions, task.status); status.required = true;
         showStatus(status, task.status);
-        const priority = select("priority", [["high", "High"], ["medium", "Medium"], ["low", "Low"]], task.priority);
+        const priority = select("priority", priorityDefinitions, task.priority);
         const labels = labelEditor(task.labels || []);
         // Named, because the relationship region carries a form-status of its
         // own and "the first .form-status in the route" is the wrong element
@@ -5915,8 +5970,8 @@
           // that would turn a refused value into an edit the next save sends.
           // Status is always showable — showStatus builds an option for a
           // status this client does not know — so what is left here is a
-          // priority from outside this client's three, which nothing in the
-          // board renders either.
+          // priority from outside this project's vocabulary, which the select
+          // has no option for and the served ink no color for either.
           if (!("priority" in edited) && !showSelected(controls.priority, held.priority)) {
             adopted.priority = task.priority;
           }
@@ -8426,7 +8481,7 @@
           const draft = pendingNewTaskDraft;
           pendingNewTaskDraft = null;
           const form = taskForm("new", draft ||
-            { title: "", description: "", status: current.status, priority: "medium", labels: [] });
+            { title: "", description: "", status: current.status, priority: defaultPriority, labels: [] });
           main.replaceChildren(form);
           focusRearmedNewTask(form);
           return;

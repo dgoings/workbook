@@ -695,6 +695,15 @@ type pageData struct {
 	// template derivation and the comment on pageFuncs says why; see
 	// pagePriorities for what it carries.
 	Priorities string
+	// DefaultPriority is what a new task is created at when nothing named a
+	// priority, rendered as its own attribute for the reason DefaultStatus is.
+	//
+	// The role is also among each priority's published tags, and the client is
+	// deliberately not left to find it there: which tag means "this is where a
+	// task with none lands" is the server's to know, exactly as the status tags
+	// are, and a script spelling the name of a role would be keeping a copy of a
+	// set core owns.
+	DefaultPriority core.Priority
 	// AttachmentFileLimit is core's ceiling on one attached file, rendered into
 	// the page for the same reason StatusTags is: the upload control refuses a
 	// file this large before it spends a minute encoding and sending one the
@@ -1314,6 +1323,7 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 		DefaultStatus:         vocabulary.Vocabulary.Default(),
 		VocabularyHead:        vocabulary.Head,
 		Priorities:            pagePriorities(vocabulary.Priorities),
+		DefaultPriority:       vocabulary.Priorities.Default(),
 		AttachmentFileLimit:   core.MaxAttachmentFileBytes,
 		AttachmentTotalLimit:  core.MaxLiveAttachmentBytes,
 		AttachmentNameLimit:   core.MaxAttachmentNameBytes,

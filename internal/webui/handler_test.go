@@ -4424,6 +4424,15 @@ func clientDOMHarnessWith(path, taskDocument string, vocabulary core.Vocabulary,
 const boardStatusTags = ` + strconv.Quote(strings.Join(tagNames, " ")) + `;
 const boardStatusDefinitions = ` + string(encoded) + `;
 const boardDefaultStatus = ` + strconv.Quote(string(vocabulary.Default())) + `;
+// This project's priorities, as the served page publishes them: token, label,
+// role, in configured order. It is written by the encoder the page itself uses,
+// so the harness cannot drift from the wire format, and it answers for a
+// project that has configured no priorities — the built-in three — because that
+// is what a handler built without a priority vocabulary renders and what every
+// test that is not about priorities wants. A test that is about them overrides
+// the attribute after this harness.
+const boardPriorities = ` + strconv.Quote(pagePriorities(core.PriorityVocabulary{})) + `;
+const boardDefaultPriority = ` + strconv.Quote(string(core.PriorityVocabulary{}.Default())) + `;
 const boardVocabularyHead = ` + strconv.Quote(vocabularyHead) + `;
 const boardProjectName = ` + strconv.Quote(core.DefaultProjectName) + `;
 const boardDefaultProjectName = ` + strconv.Quote(core.DefaultProjectName) + `;
@@ -4677,6 +4686,8 @@ const boardLists = boardStatusDefinitions.map(([status, label]) => {
   return element;
 });
 boardView.dataset.defaultStatus = boardDefaultStatus;
+boardView.dataset.priorities = boardPriorities;
+boardView.dataset.defaultPriority = boardDefaultPriority;
 boardView.dataset.vocabularyHead = boardVocabularyHead;
 // What the board is called and what every other route's title ends in, as the
 // server resolves them. A harness that invented either would be testing a
