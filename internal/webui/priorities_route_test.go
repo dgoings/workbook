@@ -3,6 +3,7 @@ package webui
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -144,6 +145,16 @@ async function submitPriorityForm(form) {
 // runPriorityPanelClient renders a board wired for all three configuration sections
 // and executes its client script. The reader starts on the board, which is where
 // the link to the configuration page is.
+//
+// The board behind the page is drawn from the same priorities the panel is
+// about. The shared DOM harness states the built-in three, which is what a board
+// served without a priority vocabulary publishes and what every test that is not
+// about priorities wants; every test in this file is about them, and a board
+// drawing a different set from the one its handler serves would answer questions
+// about what the page is already showing by accident. So the three attributes
+// the server renders from the project's priorities — the priorities themselves,
+// the default, and the digest of what the page is drawing — are restated here
+// from the vocabulary this handler was built with.
 func runPriorityPanelClient(
 	t *testing.T,
 	purpose string,
@@ -154,8 +165,14 @@ func runPriorityPanelClient(
 	body string,
 ) {
 	t.Helper()
+	state := VocabularyState{Vocabulary: vocabulary, Head: head, Priorities: priorities}
+	prelude := priorityFetchHarness + `
+boardView.dataset.priorities = ` + strconv.Quote(pagePriorities(priorities)) + `;
+boardView.dataset.defaultPriority = ` + strconv.Quote(string(priorities.Default())) + `;
+boardView.dataset.vocabularyShape = ` + strconv.Quote(vocabularyShape(state)) + `;
+`
 	runClientOverHandler(t, prioritiesAdministrableHandler(vocabulary, priorities, head, tasks),
-		purpose, "/", priorityFetchHarness, vocabulary, head, tasks, body)
+		purpose, "/", prelude, vocabulary, head, tasks, body)
 }
 
 // configuredPriorities is a project that named its own: three of them, in its own
@@ -1109,12 +1126,18 @@ func TestClientPrioritiesSectionSetsThePriorityColor(t *testing.T) {
   if (findElement(again, (element) => element.id === "priority-color-urgent").value !== "#7c3aed") {
     throw new Error("the re-opened form is still holding the color the recolor replaced");
   }
-  // The board's per-priority ink is a stylesheet the server rendered for the
-  // priorities this page was served with, so a recolor moves it out from under
-  // the columns the reader left behind. The standing notice is what says so,
-  // and it is the same notice a change to the project's accent color raises.
-  if (vocabularyNotice.hidden !== false) {
-    throw new Error("a recolor left the board with no notice that its ink has moved on");
+  // The board's per-priority ink is still a stylesheet rendered for the
+  // priorities the page was served with — but it is no longer only the server
+  // that renders it. The recolor's answer carries the stylesheet the server
+  // would have served now, and the page swaps it in place without touching a
+  // card, so the ink under the columns the reader left behind is already the new
+  // one. The standing notice is for what only a reload can redraw, which a color
+  // is not, so a recolor says nothing.
+  if (boardPriorityInkStyle.textContent.indexOf("#7c3aed") < 0) {
+    throw new Error("the recolor never reached the board's ink, so the silence below proves nothing");
+  }
+  if (vocabularyNotice.hidden !== true) {
+    throw new Error("a recolor told the reader to reload for ink the page had already swapped in");
   }
 `)
 }
