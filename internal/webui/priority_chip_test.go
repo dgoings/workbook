@@ -25,8 +25,9 @@ import (
 // So there are two claims here rather than one, and which of them applies is
 // itself the thing being tested:
 //
-//   - Where no chip is drawn, the label clears WCAG AA against the card. That is
-//     the measurement that decided it, so it is asserted rather than assumed.
+//   - Where no chip is drawn, the label clears the threshold against the card.
+//     That is the measurement that decided it, so it is asserted rather than
+//     assumed.
 //   - Where a chip is drawn, the label clears the stronger target the chip is
 //     composed to, and the chip is far enough from the card that a reader can
 //     see there is one.
@@ -37,10 +38,20 @@ import (
 // badge is how the defect shipped, so nothing here is eyeballed.
 
 const (
-	// The floor, wherever a label is drawn: WCAG 2 AA for text below 18pt, which
-	// a .64rem label certainly is. It is also the threshold — a label that clears
-	// it against the card is left on the card.
+	// The threshold: a label that clears this against the card is left on the
+	// card, and one that does not is given a chip. It is 3:1 rather than AA, and
+	// priorityInkContrast is where that is argued — this line decides whether a
+	// color somebody chose needs help, not whether text is compliant.
+	chipDecisionBar = 3.
+	// The floor a label drawn *on a chip* clears against it: WCAG 2 AA for text
+	// below 18pt, which a .64rem label certainly is. A chip is composed by this
+	// project rather than chosen by a person, so it is held to the bar the
+	// threshold is deliberately lenient about.
 	chipContrastBar = 4.5
+	// And the bar every color this project itself ships clears against its card,
+	// which is the same AA number for the same reason. See
+	// TestShippedPriorityColorsClearAAAgainstTheCard.
+	shippedColorBar = 4.5
 	// What a chip, where one is drawn at all, is composed to: WCAG AAA. See
 	// priorityChipContrast for why a chip aims past the bar that called for it.
 	chipTarget = 7.
@@ -58,12 +69,17 @@ const (
 
 // The colors the board was reviewed on, and the branch each of them takes.
 //
-// The first four are the acceptance cases: the red a project set Critical to,
-// the pale yellow from the report, the board's own amber, and a violet-blue of
-// this file's choosing — which is here because it is the one shape the other
-// three do not cover, a color that reads on a white card and is lost on a
-// near-black one, so the decision is shown running both ways. The last two are
-// the ends of the lightness range, where the search has least room.
+// The first five are the acceptance cases: the red a project set Critical to,
+// the pale yellow from the report, pure red — the color that moved the
+// threshold, legible to the eye and refused by AA at 3.998:1 — the board's own
+// amber, and a violet-blue whose dark reading sits at 3.74:1, nearest the
+// threshold of anything here. The last two are the ends of the lightness range,
+// where the chip search has least room.
+//
+// Only the light scheme now answers both ways. The violet-blue was here to show
+// the dark card losing a color, and at this threshold the dark card loses none:
+// see the sweep below for why that is a fact about the lift rather than a thin
+// table.
 //
 // The branches are stated rather than logged. The complaint that produced this
 // rule was that every priority looked alike; a change that quietly went back to
@@ -77,8 +93,9 @@ var chipColorCases = []struct {
 }{
 	{"a red, set to Critical — reads on the card in both schemes", "#d92d20", false, false},
 	{"the pale yellow the report was written about", "#f5e6a3", true, false},
+	{"pure red, 3.998:1 on white — under AA, over the threshold, and left bare", "#ff0000", false, false},
 	{"the built-in amber, which needs nothing in either scheme", "#b45309", false, false},
-	{"a violet-blue, which the near-black card loses", "#3b3bd4", false, true},
+	{"a violet-blue, whose lifted dark reading is the closest call in this table", "#3b3bd4", false, false},
 	{"a near-white", "#fbfbf7", true, false},
 	{"a near-black", "#06070b", false, false},
 }
@@ -111,10 +128,18 @@ func TestPriorityChipIsDrawnOnlyForAColorTheCardCannotCarry(t *testing.T) {
 // that nothing about the old rule depended on the color, so nothing about the
 // new one may depend on the color either.
 //
-// Both branches have to appear in both schemes. A sweep this wide that took one
-// branch throughout would mean the threshold is not where this file thinks it
-// is — either every color is being given a background again, which is the
-// complaint this answers, or none is, which is the defect it answers.
+// Both branches have to appear — in the light scheme. The dark scheme takes one
+// branch throughout, and that is a measured property of the lift rather than a
+// hole in the sweep, so it is asserted as such instead of being papered over
+// with a color picked to manufacture the other branch.
+//
+// A chosen color is lifted to a fixed lightness before the dark card draws it,
+// and the darkest color that transform can produce anywhere in sRGB is #5c5cff
+// — from a pure #0000a3 — at 3.61:1 on the #161c26 card. Nothing a person can
+// choose lands under 3:1 there. So at this threshold the dark board draws no
+// chips at all, and the light board is where the decision actually runs both
+// ways: a sweep that found dark chips would mean the lift or the threshold had
+// moved.
 func TestPriorityChipDecidesEachHueOnItsOwn(t *testing.T) {
 	for _, scheme := range []string{"light", "dark"} {
 		card := schemePalette(scheme)["--wb-surface"]
@@ -145,9 +170,26 @@ func TestPriorityChipDecidesEachHueOnItsOwn(t *testing.T) {
 				}
 			}
 		}
-		if bare == 0 || chips == 0 {
-			t.Errorf("the %s sweep drew %d labels on the card and %d on a chip — one branch of the rule is never taken",
-				scheme, bare, chips)
+		if bare == 0 {
+			t.Errorf("the %s sweep drew every one of its %d labels on a chip — the board of identical pills this rule exists to end",
+				scheme, chips)
+		}
+		switch scheme {
+		case "light":
+			if chips == 0 {
+				t.Errorf("the light sweep drew all %d labels bare — at %.0f:1 a pale color on a white card still has to earn a chip",
+					bare, chipDecisionBar)
+			}
+		default:
+			if chips != 0 {
+				t.Errorf("the dark sweep drew %d labels on a chip; the lift leaves the worst color anyone can choose at 3.61:1 "+
+					"on the dark card, so at %.0f:1 none of them should need one — the lift or the threshold has moved",
+					chips, chipDecisionBar)
+			}
+		}
+		if chips == 0 {
+			t.Logf("%s: %d bare (worst %.2f:1 on the card, %s), no chips", scheme, bare, worstBare, barest)
+			continue
 		}
 		t.Logf("%s: %d bare (worst %.2f:1 on the card, %s), %d chips (worst label %.2f:1, %s; closest to the card %.2f:1, %s)",
 			scheme, bare, worstBare, barest, chips, worstLabel, faintest, worstSeparation, closest)
@@ -164,6 +206,11 @@ func TestPriorityChipDecidesEachHueOnItsOwn(t *testing.T) {
 // is also what keeps this family out of the guards that count every literal the
 // page writes: there is nothing to compose in Go, because there is nothing to
 // compose.
+//
+// How far above the threshold each of them sits is asserted next door, by
+// TestShippedPriorityColorsClearAAAgainstTheCard, and not twice here: clearing
+// the threshold is what "no chip" means, and clearing AA is a separate and
+// stricter promise this project makes about the colors it ships.
 func TestPriorityChipLeavesADerivedInkOnTheCard(t *testing.T) {
 	worst := math.Inf(1)
 	var worstCase string
@@ -183,15 +230,76 @@ func TestPriorityChipLeavesADerivedInkOnTheCard(t *testing.T) {
 				if ratio < worst {
 					worst, worstCase = ratio, fmt.Sprintf("%d of %d in %s: %s on %s", index+1, count, scheme, drawn.ink, card)
 				}
-				if ratio < chipContrastBar {
-					t.Errorf("priority %d of %d in %s draws %s on the %s card, %.2f:1, under the %.1f:1 bar — "+
-						"a derived ink that needs a chip is one this family cannot compose",
-						index+1, count, scheme, drawn.ink, card, ratio, chipContrastBar)
-				}
 			}
 		}
 	}
 	t.Logf("worst of the derived family: %.2f:1 (%s)", worst, worstCase)
+}
+
+// Every color this project ships clears WCAG AA against the card it is drawn on,
+// in both schemes.
+//
+// This is deliberately stricter than priorityInkContrast, the 3:1 threshold a
+// few hundred lines from here that decides whether a label gets a chip, and the
+// two are not in tension: leniency there is about a color a person chose for
+// their own board, and strictness here is about the colors this project hands
+// somebody who chose nothing. We are standards-compliant in what we ship and
+// lenient about what a person selects. A default that only cleared the threshold
+// would be this project using, on someone else's behalf, a latitude that exists
+// for their choices and not for ours.
+//
+// Nothing needs recoloring as this is written — the tightest reading below is
+// over 5:1. The test is here because with the threshold at 3 nothing else would
+// notice a shipped color drifting to 3.2, and a default nobody chose is exactly
+// the color that has to be right without anybody looking.
+//
+// What "ships" covers is both families, because a project gets either without
+// choosing anything:
+//
+//   - The built-in three. A project that has configured no priorities is drawn
+//     in high, medium and low, which is the zero vocabulary below.
+//   - The derived ramp, which is what a project with four or ten priorities gets
+//     at every position: the triad, or an oklab mix of two of it. Every position
+//     at every vocabulary size is measured, the way the hue sweep measures every
+//     hue, because a mix between two colors that each clear AA need not.
+func TestShippedPriorityColorsClearAAAgainstTheCard(t *testing.T) {
+	tightest, tightestCase := math.Inf(1), ""
+	measure := func(t *testing.T, what, block, token, scheme string) {
+		t.Helper()
+		card := schemePalette(scheme)["--wb-surface"]
+		drawn := drawnPriority(t, block, token, scheme)
+		ratio := contrastRatio(t, drawn.ink, card)
+		if ratio < tightest {
+			tightest, tightestCase = ratio, fmt.Sprintf("%s in %s: %s on %s", what, scheme, drawn.ink, card)
+		}
+		if ratio < shippedColorBar {
+			t.Errorf("%s draws %s on the %s card %s at %.2f:1, under the %.1f:1 this project holds its own colors to — "+
+				"the %.0f:1 threshold beside it is latitude for a color somebody chose, not for one we ship",
+				what, drawn.ink, scheme, card, ratio, shippedColorBar, chipDecisionBar)
+		}
+	}
+
+	t.Run("the built-in three", func(t *testing.T) {
+		block := string(priorityInk(core.PriorityVocabulary{}))
+		for _, priority := range []core.Priority{core.PriorityHigh, core.PriorityMedium, core.PriorityLow} {
+			for _, scheme := range []string{"light", "dark"} {
+				measure(t, string(priority), block, string(priority), scheme)
+			}
+		}
+	})
+
+	t.Run("the derived ramp", func(t *testing.T) {
+		for count := 1; count <= core.MaxPriorityCount; count++ {
+			block := string(priorityInk(uncoloredPriorities(t, count)))
+			for index := range count {
+				for _, scheme := range []string{"light", "dark"} {
+					measure(t, fmt.Sprintf("position %d of %d", index+1, count), block, fmt.Sprintf("p%d", index), scheme)
+				}
+			}
+		}
+	})
+
+	t.Logf("tightest color this project ships: %.2f:1 (%s)", tightest, tightestCase)
 }
 
 // measurePriority holds one drawn priority to whichever claim its branch makes,
@@ -201,9 +309,9 @@ func measurePriority(t *testing.T, drawn drawnChip, scheme string) string {
 	card := schemePalette(scheme)["--wb-surface"]
 	if !drawn.chipped {
 		ratio := contrastRatio(t, drawn.ink, card)
-		if ratio < chipContrastBar {
+		if ratio < chipDecisionBar {
 			t.Errorf("%s is drawn bare on the %s card %s at %.2f:1, under the %.1f:1 bar that decides it",
-				drawn.ink, scheme, card, ratio, chipContrastBar)
+				drawn.ink, scheme, card, ratio, chipDecisionBar)
 		}
 		return fmt.Sprintf("bare, %s on the card %s = %.2f:1", drawn.ink, card, ratio)
 	}

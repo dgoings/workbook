@@ -771,20 +771,41 @@ func priorityChipProperty(priority core.Priority) string {
 // The contrast a priority's label has to clear against the card it is drawn on
 // before the board leaves it there with no chip behind it.
 //
-// WCAG AA for text below 18pt, which the .64rem label certainly is, and the bar
-// this project states. It is the whole question a chip answers: a label drawn
-// straight onto the card's own surface is legible for a color chosen against
-// that surface and illegible for the pale ones a project can now choose — the
-// report this answers was a pale yellow at 1.4:1 on a white card.
-const priorityInkContrast = 4.5
+// Three, and not the 4.5 WCAG AA asks of text this size. The gap is the
+// decision, not a lapse, and a later reader who finds a 3 where a standard says
+// 4.5 should read the rest of this before changing it.
+//
+// This line does not decide whether text is compliant. It decides whether a
+// color a person chose for their own board needs help being read, and answering
+// that question with the compliance bar overrules a choice that is theirs to
+// make: pure red at #ff0000 measures 3.998:1 on a white card, reads perfectly
+// well, and under AA was handed a chip nobody asked for — #ee0000 at 4.53 went
+// bare and #ef0000 at 4.497 did not, a boundary no one looking at a board could
+// see the sense of. A priority is also named in more places than this label: the
+// same card's detail view spells it out, and the board filters and orders by it.
+// The chip is a small signal and not the only one, so a color that is merely
+// readable rather than certified costs less here than overriding the person who
+// picked it.
+//
+// What this project itself ships is held to the stricter bar all the same — the
+// built-in three, and every color the derived ramp hands a priority nobody has
+// colored. TestShippedPriorityColorsClearAAAgainstTheCard is that bar, and it is
+// deliberately stricter than this constant beside it: standards-compliant in
+// what we ship, lenient about what a person selects.
+//
+// One lever is held in reserve rather than spent here. The label is .64rem; at
+// 18pt, or 14pt bold, WCAG's bar for large text is 3:1, so making the label
+// bigger would make this very number the compliant one for every color on the
+// board. That is the move to reach for before tightening this line again.
+const priorityInkContrast = 3
 
 // The contrast a label has to clear against a chip, where a chip is drawn at
-// all: WCAG AAA, not the AA bar above.
+// all: WCAG AAA, far past the threshold above.
 //
 // The two bars are deliberately different, and the difference is the whole
-// shape of this. AA decides a question — can this color be read where it is? —
-// and a chip is what answers it when it cannot. An answer that stopped at AA
-// again would be the least that passes, which on a real board reads as a wash
+// shape of this. The threshold decides a question — can this color be read where
+// it is? — and a chip is what answers it when it cannot. An answer that stopped
+// at the least that passes would be exactly that, which on a real board reads as a wash
 // nobody can see the point of: the light-mode chip behind a pale yellow landed
 // at #6a654e, a mid grey-brown, and the verdict on it was that it "doesn't
 // provide enough distinction". At AAA the same yellow gets #4e4932 — half the
@@ -794,6 +815,18 @@ const priorityInkContrast = 4.5
 // the white card than the ink was, well past the 3:1 WCAG asks of a non-text
 // boundary.
 const priorityChipContrast = 7
+
+// The contrast a label has to clear against its own chip for that chip to be
+// worth drawing at all — the floor applied where the search ran off the end of
+// the ramp and the two ends of it are all that is left to choose between.
+//
+// WCAG AA for text below 18pt. It used to be priorityInkContrast, and it is
+// written out here because the two stopped meaning the same thing when that one
+// moved to 3. This is not a bar somebody's chosen color has to clear to be left
+// alone; it is the floor under a background this file composed, and what this
+// file composes is held to the stricter bar for the same reason the colors this
+// project ships are.
+const priorityChipFloor = 4.5
 
 // How far past the bar a chip is taken before the search stops. A step is a
 // whole 8-bit color either way, so landing exactly on the target leaves a chip
@@ -930,11 +963,18 @@ func priorityChip(ink, card themeColor) string {
 	// rather than paler than it. Legibility is the floor here and separation is
 	// what is traded — a black chip on a #161c26 card is 1.2:1, a well rather
 	// than a badge, and it is still the best reading available for that color.
+	//
+	// That arm is unreached as this stands: at the 3:1 threshold no dark reading
+	// is chipped at all, because the lift puts the worst color anyone can choose
+	// at 3.61:1 on the dark card — #5c5cff, from a pure #0000a3. It is kept
+	// because it is the right answer the moment either the threshold or the lift
+	// moves, and because this function should be correct over the colors it could
+	// be handed rather than over the ones it happens to be handed today.
 	far, near := ink.tonedColor(priorityChipChroma, 1), ink.tonedColor(priorityChipChroma, 0)
 	if away < 0 {
 		far, near = near, far
 	}
-	if contrastBetween(ink, far) >= priorityInkContrast {
+	if contrastBetween(ink, far) >= priorityChipFloor {
 		return far.hex()
 	}
 	return near.hex()
