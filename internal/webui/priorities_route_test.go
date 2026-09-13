@@ -43,9 +43,20 @@ func prioritiesAdministrableHandler(
 	head string,
 	tasks []core.Task,
 ) http.Handler {
+	return NewHandler(prioritiesAdministrableOptions(vocabulary, priorities, head, tasks))
+}
+
+// prioritiesAdministrableOptions is that board's wiring, held out so a test can
+// withhold one capability from it and ask what the configuration page does then.
+func prioritiesAdministrableOptions(
+	vocabulary core.Vocabulary,
+	priorities core.PriorityVocabulary,
+	head string,
+	tasks []core.Task,
+) Options {
 	unreachedStatus := func() (VocabularyMutation, error) { return VocabularyMutation{}, nil }
 	unreached := func() (VocabularyPriorityMutation, error) { return VocabularyPriorityMutation{}, nil }
-	return NewHandler(Options{
+	return Options{
 		Vocabulary: func(context.Context) (VocabularyState, error) {
 			return VocabularyState{Vocabulary: vocabulary, Head: head, Priorities: priorities}, nil
 		},
@@ -83,7 +94,7 @@ func prioritiesAdministrableHandler(
 		RecolorPriority: func(context.Context, core.Priority, VocabularyPriorityRecolor) (VocabularyPriorityMutation, error) {
 			return unreached()
 		},
-	})
+	}
 }
 
 // priorityFetchHarness answers the six priority routes from a queue, so one test
@@ -1008,5 +1019,294 @@ func TestClientPrioritiesSectionWaitsForPendingBoardChanges(t *testing.T) {
   if (priorityCalls[0].body.expectedHead !== "head-7") {
     throw new Error("the change named the head " + JSON.stringify(priorityCalls[0].body.expectedHead));
   }
+`)
+}
+
+// recoloredPriorities is configuredPriorities with urgent drawn in `color`. An
+// empty one is the priority with nothing stored, which is what clearing leaves:
+// there is no stored default to go back to, so the board derives an ink from
+// the position instead.
+func recoloredPriorities(t *testing.T, color string) core.PriorityVocabulary {
+	t.Helper()
+	priorities, err := core.NewPriorityVocabulary([]core.PriorityDefinition{
+		{Priority: "urgent", Label: "Drop everything", Rank: "1/1", Tags: []core.PriorityTag{}, Color: color},
+		{Priority: "soon", Label: "Soon", Rank: "2/1", Tags: []core.PriorityTag{core.PriorityTagDefault}},
+		{Priority: core.PriorityLow, Label: "Low", Rank: "3/1", Tags: []core.PriorityTag{}},
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("NewPriorityVocabulary() error = %v", err)
+	}
+	return priorities
+}
+
+// The section draws a color control now, so the recolor joins the capabilities
+// its gate counts. A board wired for the other five but not for this one would
+// serve a form with a field on it that could only ever answer "this board has no
+// such capability", which is the thing the gate exists to prevent.
+func TestHandlerConfigWithholdsThePrioritiesSectionFromABoardThatCannotRecolor(t *testing.T) {
+	vocabulary := handlerVocabulary(t)
+	options := prioritiesAdministrableOptions(vocabulary, configuredPriorities(t), "head-1", nil)
+	options.RecolorPriority = nil
+
+	served := request(t, NewHandler(options), http.MethodGet, "/config")
+	if served.Code != http.StatusOK {
+		t.Fatalf("GET /config status = %d, want %d", served.Code, http.StatusOK)
+	}
+	if body := served.Body.String(); strings.Contains(body, priorityPanelMarkup) {
+		t.Error("a board that cannot recolor a priority served the priorities section anyway")
+	}
+}
+
+// Choosing what color a priority is drawn in, which is what this section was
+// built toward.
+//
+// The field is the change and the well is the way into it, exactly as the board
+// settings form's two color fields work: picking writes into the field, and the
+// Save reads the field. The color is its own route against its own head, so a
+// Save that only recolors is one request.
+func TestClientPrioritiesSectionSetsThePriorityColor(t *testing.T) {
+	vocabulary := handlerVocabulary(t)
+	priorities := configuredPriorities(t)
+	runPriorityPanelClient(t, "recoloring a priority", vocabulary, priorities, "head-7", nil, `
+  vocabularyRead = `+priorityVocabularyJSON(t, vocabulary, priorities, "head-7")+`;
+  priorityAnswers.push({ body: `+priorityMutationJSON(t, vocabulary, recoloredPriorities(t, "#7c3aed"), "head-8", VocabularyPriorityTaskCounts{}, nil)+` });
+  await openStatuses();
+
+  await openPriorityForm("urgent", "Edit Drop everything");
+  const form = priorityForm("urgent", "priorityEdit");
+  const color = findElement(form, (element) => element.id === "priority-color-urgent");
+  if (!color) throw new Error("the edit form offers no way to change the color");
+  if (color.value !== "#b42318") throw new Error("the color field opened on " + JSON.stringify(color.value));
+  const well = findElement(form, (element) => element.dataset.displayWell === "priority-color-urgent");
+  if (!well) throw new Error("the color field has no well beside it");
+  if (well.type !== "color") throw new Error("the well is a " + well.type + " input rather than a color input");
+  if (well.value !== "#b42318") throw new Error("the well opened on " + JSON.stringify(well.value));
+  // Picking writes into the field, which stays what the Save reads.
+  well.value = "#7c3aed";
+  well.eventListeners.input();
+  if (color.value !== "#7c3aed") throw new Error("picking left the field at " + JSON.stringify(color.value));
+  await submitPriorityForm(form);
+
+  if (priorityCalls.length !== 1) {
+    throw new Error("the Save sent " + JSON.stringify(priorityCalls.map((call) => call.method + " " + call.url)));
+  }
+  const recolor = priorityCalls[0];
+  if (recolor.method !== "PATCH" || recolor.url !== "/api/vocabulary/priorities/urgent/color") {
+    throw new Error("the recolor went to " + recolor.method + " " + recolor.url);
+  }
+  const want = { color: "#7c3aed", expectedHead: "head-7" };
+  if (JSON.stringify(recolor.body) !== JSON.stringify(want)) {
+    throw new Error("the recolor sent " + JSON.stringify(recolor.body) + ", want " + JSON.stringify(want));
+  }
+  const said = priorityMessages();
+  if (said.length !== 1 || said[0].indexOf("Drop everything") < 0) {
+    throw new Error("the section said " + JSON.stringify(said) + " about a recolor that landed");
+  }
+  // Re-opening the row offers the color the answer carried, not the one the
+  // form was opened with — the row was redrawn from the adopted document.
+  await openPriorityForm("urgent", "Edit Drop everything");
+  const again = priorityForm("urgent", "priorityEdit");
+  if (findElement(again, (element) => element.id === "priority-color-urgent").value !== "#7c3aed") {
+    throw new Error("the re-opened form is still holding the color the recolor replaced");
+  }
+  // The board's per-priority ink is a stylesheet the server rendered for the
+  // priorities this page was served with, so a recolor moves it out from under
+  // the columns the reader left behind. The standing notice is what says so,
+  // and it is the same notice a change to the project's accent color raises.
+  if (vocabularyNotice.hidden !== false) {
+    throw new Error("a recolor left the board with no notice that its ink has moved on");
+  }
+`)
+}
+
+// Clearing takes the priority back to the color its position derives. The route
+// requires the member and reads an empty one as the clearing, so an emptied
+// field is sent rather than withheld — a Save that dropped the member would be
+// refused for naming no color at all.
+func TestClientPrioritiesSectionClearsAColorBackToTheOneItsPositionDerives(t *testing.T) {
+	vocabulary := handlerVocabulary(t)
+	priorities := configuredPriorities(t)
+	runPriorityPanelClient(t, "clearing a priority's color", vocabulary, priorities, "head-7", nil, `
+  vocabularyRead = `+priorityVocabularyJSON(t, vocabulary, priorities, "head-7")+`;
+  priorityAnswers.push({ body: `+priorityMutationJSON(t, vocabulary, recoloredPriorities(t, ""), "head-8", VocabularyPriorityTaskCounts{}, nil)+` });
+  await openStatuses();
+
+  await openPriorityForm("urgent", "Edit Drop everything");
+  const form = priorityForm("urgent", "priorityEdit");
+  findElement(form, (element) => element.id === "priority-color-urgent").value = "";
+  await submitPriorityForm(form);
+
+  if (priorityCalls.length !== 1) {
+    throw new Error("the Save sent " + JSON.stringify(priorityCalls.map((call) => call.method + " " + call.url)));
+  }
+  const cleared = priorityCalls[0];
+  if (cleared.url !== "/api/vocabulary/priorities/urgent/color") {
+    throw new Error("the clearing went to " + cleared.method + " " + cleared.url);
+  }
+  const want = { color: "", expectedHead: "head-7" };
+  if (JSON.stringify(cleared.body) !== JSON.stringify(want)) {
+    throw new Error("the clearing sent " + JSON.stringify(cleared.body) + ", want " + JSON.stringify(want));
+  }
+  const said = priorityMessages();
+  if (said.length !== 1 || said[0].indexOf("position") < 0) {
+    throw new Error("the section said " + JSON.stringify(said) + " about a color it cleared");
+  }
+  // The re-opened row holds nothing, and its well is back at the control's own
+  // black default rather than at a color of the board's: the derived ink is the
+  // stylesheet's, and this script keeps no copy of it.
+  await openPriorityForm("urgent", "Edit Drop everything");
+  const again = priorityForm("urgent", "priorityEdit");
+  if (findElement(again, (element) => element.id === "priority-color-urgent").value !== "") {
+    throw new Error("the re-opened form is still holding the color that was cleared");
+  }
+  if (findElement(again, (element) => element.dataset.displayWell === "priority-color-urgent").value !== "#000000") {
+    throw new Error("the well of a cleared color opened on a color of the board's own");
+  }
+`)
+}
+
+// The decision resolution 4 left open: a color field holding nothing but spaces
+// is the clearing the writer would make of it, not a refusal this client
+// invents.
+//
+// The writer trims before it reads, so "   " on a colored priority already
+// clears it and answers 200; a panel that refused it here would be refusing in
+// words of its own, which is the one thing this section does not do. What the
+// field does decide for itself is whether the Save is a change at all, and it
+// decides that on the trimmed value — so spaces typed into the empty field of a
+// priority that has no color are not a clearing of nothing, and send nothing.
+func TestClientPrioritiesSectionTreatsABlankColorFieldAsTheClearTheWriterMakesOfIt(t *testing.T) {
+	vocabulary := handlerVocabulary(t)
+	priorities := configuredPriorities(t)
+	runPriorityPanelClient(t, "blanking a priority's color", vocabulary, priorities, "head-7", nil, `
+  vocabularyRead = `+priorityVocabularyJSON(t, vocabulary, priorities, "head-7")+`;
+  priorityAnswers.push({ body: `+priorityMutationJSON(t, vocabulary, recoloredPriorities(t, ""), "head-8", VocabularyPriorityTaskCounts{}, nil)+` });
+  await openStatuses();
+
+  await openPriorityForm("urgent", "Edit Drop everything");
+  const form = priorityForm("urgent", "priorityEdit");
+  findElement(form, (element) => element.id === "priority-color-urgent").value = "   ";
+  await submitPriorityForm(form);
+
+  if (priorityCalls.length !== 1) {
+    throw new Error("the Save sent " + JSON.stringify(priorityCalls.map((call) => call.method + " " + call.url)));
+  }
+  if (priorityCalls[0].url !== "/api/vocabulary/priorities/urgent/color") {
+    throw new Error("the Save went to " + priorityCalls[0].url);
+  }
+  if (panelPriorities().join(",") !== "urgent,soon,low") {
+    throw new Error("the section is drawing " + panelPriorities().join(","));
+  }
+
+  // And the same spaces in the field of a priority that has no color are no
+  // change at all: there is nothing to clear, and the first priority write on a
+  // project costs it the compatibility marker, so a Save that changes nothing
+  // must not become one.
+  await openPriorityForm("urgent", "Edit Drop everything");
+  const again = priorityForm("urgent", "priorityEdit");
+  findElement(again, (element) => element.id === "priority-color-urgent").value = "  ";
+  await submitPriorityForm(again);
+  if (priorityCalls.length !== 1) {
+    throw new Error("a blank field over a priority with no color sent " +
+      JSON.stringify(priorityCalls.slice(1).map((call) => call.method + " " + call.url)));
+  }
+  const said = priorityMessages();
+  if (said.length !== 1 || said[0].indexOf("Nothing about") !== 0) {
+    throw new Error("the section said " + JSON.stringify(said) + " about a Save with nothing in it");
+  }
+`)
+}
+
+// Setting the color a priority already has is refused, and the refusal is the
+// reader's own to read.
+//
+// The client does not route around it. The first priority write on a project
+// backfills the built-in three and stamps a compatibility marker that parks
+// every teammate on an older build, so a change that changes nothing must not
+// cost a team that — the 400 is the writer protecting them, and it reaches the
+// page in the writer's own sentence rather than as a failure this client worded.
+//
+// It is reachable because the field is compared as it was typed: the writer
+// lowercases before it compares, this panel does not canonicalize before it
+// sends, and so a differently-cased spelling of the stored color is a change to
+// the form and no change to the ledger.
+func TestClientPrioritiesSectionQuotesTheRefusalOfAColorAPriorityAlreadyHas(t *testing.T) {
+	vocabulary := handlerVocabulary(t)
+	priorities := configuredPriorities(t)
+	runPriorityPanelClient(t, "re-sending the color a priority has", vocabulary, priorities, "head-7", nil, `
+  vocabularyRead = `+priorityVocabularyJSON(t, vocabulary, priorities, "head-7")+`;
+  priorityAnswers.push({ ok: false, body: `+panelRefusalJSON(t, core.CategoryInvocation,
+		`priority "urgent" already has that color`)+` });
+  await openStatuses();
+
+  await openPriorityForm("urgent", "Edit Drop everything");
+  const form = priorityForm("urgent", "priorityEdit");
+  findElement(form, (element) => element.id === "priority-color-urgent").value = "#B42318";
+  await submitPriorityForm(form);
+
+  if (priorityCalls.length !== 1) {
+    throw new Error("the Save sent " + JSON.stringify(priorityCalls.map((call) => call.method + " " + call.url)));
+  }
+  // As typed. Nothing here canonicalizes: what a color is belongs to the verb
+  // family that validates it.
+  if (priorityCalls[0].body.color !== "#B42318") {
+    throw new Error("the recolor sent " + JSON.stringify(priorityCalls[0].body.color));
+  }
+  const said = priorityMessages();
+  if (said.length !== 1 || said[0] !== 'priority "urgent" already has that color') {
+    throw new Error("the section said " + JSON.stringify(said) + " instead of what the server said");
+  }
+  if (panelPriorities().join(",") !== "urgent,soon,low") {
+    throw new Error("the section is drawing " + panelPriorities().join(","));
+  }
+`)
+}
+
+// A color that is not one is refused before anything is written.
+//
+// That is what the recolor being the first of this Save's requests buys. The
+// color field is the only free-form value in this form whose shape the writer
+// checks, and a Save carrying a typo alongside a rename would otherwise record
+// the rename and then be refused — a half-landed change, with no compensating
+// write, over a mistyped hex code. Sending the color first means a typo costs
+// the reader a second press and nothing else.
+//
+// The sentence is the writer's, because nothing here knows what a color is.
+func TestClientPrioritiesSectionWritesNothingWhenTheColorIsMalformed(t *testing.T) {
+	vocabulary := handlerVocabulary(t)
+	priorities := configuredPriorities(t)
+	runPriorityPanelClient(t, "a malformed color beside a rename", vocabulary, priorities, "head-7", nil, `
+  vocabularyRead = `+priorityVocabularyJSON(t, vocabulary, priorities, "head-7")+`;
+  priorityAnswers.push({ ok: false, body: `+panelRefusalJSON(t, core.CategoryInvocation,
+		`color "puce" must be six hexadecimal digits behind a hash, as in #1a7f4b`)+` });
+  await openStatuses();
+
+  await openPriorityForm("urgent", "Edit Drop everything");
+  const form = priorityForm("urgent", "priorityEdit");
+  findElement(form, (element) => element.id === "priority-name-urgent").value = "critical";
+  findElement(form, (element) => element.id === "priority-label-urgent").value = "Critical";
+  findElement(form, (element) => element.dataset.priorityDefault === "urgent").checked = true;
+  findElement(form, (element) => element.id === "priority-color-urgent").value = "puce";
+  await submitPriorityForm(form);
+
+  // One request, and it is the color. The rename and the role never went.
+  if (priorityCalls.length !== 1) {
+    throw new Error("the Save sent " + JSON.stringify(priorityCalls.map((call) => call.method + " " + call.url)));
+  }
+  if (priorityCalls[0].url !== "/api/vocabulary/priorities/urgent/color") {
+    throw new Error("the first request of the Save was " + priorityCalls[0].method + " " + priorityCalls[0].url);
+  }
+  const said = priorityMessages();
+  if (said.length !== 1 || said[0] !== 'color "puce" must be six hexadecimal digits behind a hash, as in #1a7f4b') {
+    throw new Error("the section said " + JSON.stringify(said) + " instead of what the server said");
+  }
+  if (priorityPanelStatus.dataset.kind !== "error") throw new Error("a refusal was reported as a success");
+  // Nothing moved: the ledger was not written to, and the section is drawing
+  // what it read.
+  if (panelPriorities().join(",") !== "urgent,soon,low") {
+    throw new Error("the section is drawing " + panelPriorities().join(","));
+  }
+  const held = findElements(priorityRow("soon"), (element) => Boolean(element.dataset.priorityTag));
+  if (held.length !== 1) throw new Error("the role moved on a Save that was refused");
 `)
 }

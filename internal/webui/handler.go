@@ -966,12 +966,11 @@ type pageData struct {
 	// without the status mutations and a section served onto a page nobody can
 	// reach is a section that is never seen.
 	//
-	// The recolor is deliberately not among the capabilities counted here. This
-	// section offers no color control yet, so a board wired for the other five
-	// can serve every control it draws, and a gate that asked for a sixth would
-	// withhold a working section over a capability nothing on it uses. The
-	// control that changes that belongs in the row's edit form, and the gate
-	// grows a term when it lands.
+	// All six, the recolor included: the row's edit form carries a color field,
+	// so a board wired for the other five would draw a control that could only
+	// ever answer "this board has no such capability". That term was added when
+	// the field landed; before it, counting the recolor would have withheld a
+	// working section over a capability nothing on it used.
 	PrioritiesAdministrable bool
 }
 
@@ -1657,7 +1656,8 @@ func (handler *handler) serveBoard(writer http.ResponseWriter, request *http.Req
 		DisplayAdministrable:  handler.administrable() && handler.SetDisplay != nil,
 		PrioritiesAdministrable: handler.administrable() && handler.AddPriority != nil &&
 			handler.EditPriority != nil && handler.RemovePriority != nil &&
-			handler.MovePriority != nil && handler.SetDefaultPriority != nil,
+			handler.MovePriority != nil && handler.SetDefaultPriority != nil &&
+			handler.RecolorPriority != nil,
 	}); err != nil {
 		return
 	}
