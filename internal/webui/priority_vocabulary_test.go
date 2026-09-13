@@ -88,9 +88,18 @@ func runPriorityClientReporting(t *testing.T, purpose, url string, priorities co
 		Format: "workbook.tasks", Version: 1, VocabularyHead: "head-1",
 		Tasks: tasks, Presentation: presentationForTasks(tasks),
 	})
+	// The shape is restated with the priorities rather than left as the
+	// harness composed it. The harness digests a state carrying no priorities,
+	// which reads as the built-in three; overriding the attribute below without
+	// the digest would leave the page drawing one vocabulary and announcing
+	// another, so the first poll would report a change nobody made. Nothing
+	// here asserts on the notice today, which is exactly why it would go
+	// unnoticed until something did.
+	shaped := VocabularyState{Vocabulary: core.LegacyVocabulary(), Head: "head-1", Priorities: priorities}
 	program := clientDOMHarnessWith(url, string(document), core.LegacyVocabulary(), "head-1") + `
 boardView.dataset.priorities = ` + strconv.Quote(pagePriorities(priorities)) + `;
 boardView.dataset.defaultPriority = ` + strconv.Quote(string(priorities.Default())) + `;
+boardView.dataset.vocabularyShape = ` + strconv.Quote(vocabularyShape(shaped)) + `;
 ` + script + `
 setTimeout(async () => {
 ` + body + `
