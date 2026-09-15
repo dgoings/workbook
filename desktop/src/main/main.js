@@ -1,12 +1,10 @@
 'use strict'
 
 const { app, BaseWindow, WebContentsView, ipcMain, dialog, shell, nativeTheme } = require('electron')
-const fs = require('node:fs')
 const path = require('node:path')
 
 const { Registry } = require('./registry')
 const { Supervisor } = require('./supervisor')
-const { darkPrimaryRamp, DEFAULT_PRIMARY } = require('./boardtheme')
 const discovery = require('./discovery')
 const repoinfo = require('./repoinfo')
 const people = require('./people')
@@ -24,16 +22,6 @@ let chromeView = null
 /** Board views, one per project, kept warm once opened. @type {Map<string, WebContentsView>} */
 const boardViews = new Map()
 let activeProjectId = null
-
-// The dark overlay for the boards. Read once: it is injected into and removed
-// from every board view as the theme changes, and re-reading it per view would
-// only add a filesystem round trip to a theme switch.
-const BOARD_DARK_CSS = fs.readFileSync(
-  path.join(__dirname, '..', 'renderer', 'board-dark.css'), 'utf8'
-)
-
-/** Keys returned by insertCSS, so the overlay can be removed again. */
-const boardDarkKeys = new Map()
 
 const registry = new Registry(app.getPath('userData'))
 const supervisor = new Supervisor(app.getPath('userData'))
@@ -126,52 +114,21 @@ function resolveDark () {
 }
 
 /**
- * Put one board view in the current mode.
+ * Tell Electron which scheme the app is in.
  *
- * The overlay is inserted and removed rather than toggled by a class, because
- * the board's own document is not ours to add classes to: it is re-rendered by
- * its own client on every poll, and anything written into it would be lost.
- * Injected CSS survives that, and survives a reload.
+ * The boards are the board's own document, served by `workbook serve`, and
+ * they draw themselves dark under `prefers-color-scheme: dark`. Electron
+ * reports that media query from nativeTheme.themeSource, so one assignment
+ * here is what puts every board view, and the shell, in the chosen mode:
+ * 'system' follows the OS, the other two override it.
  */
-async function applyThemeToBoard (projectId, view) {
-  const dark = resolveDark()
-  const existing = boardDarkKeys.get(projectId)
-
-  if (dark && !existing) {
-    try {
-      // Read the colour this project chose before overriding anything, so the
-      // derived ramp is built from the board's own accent rather than replacing
-      // it. A board that never set one reports Workbook's default.
-      let primary = DEFAULT_PRIMARY
-      try {
-        primary = await view.webContents.executeJavaScript(
-          `getComputedStyle(document.documentElement).getPropertyValue('--wb-primary').trim()`
-        ) || DEFAULT_PRIMARY
-      } catch {
-        // A board that cannot be queried yet gets the default ramp; the
-        // did-finish-load pass re-derives it against the loaded document.
-      }
-      const css = `${BOARD_DARK_CSS}\n${darkPrimaryRamp(primary)}`
-      boardDarkKeys.set(projectId, await view.webContents.insertCSS(css))
-    } catch (error) {
-      // A view still loading gets the overlay from did-finish-load instead, so
-      // this is recoverable — but it is reported rather than swallowed, because
-      // a silent failure here looks exactly like a board that ignored the theme.
-      console.warn(`workbench: could not darken board ${projectId}: ${error.message}`)
-    }
-  } else if (!dark && existing) {
-    try {
-      await view.webContents.removeInsertedCSS(existing)
-    } catch (error) {
-      // The view reloaded and dropped it already, which is the outcome we want.
-      console.warn(`workbench: could not undarken board ${projectId}: ${error.message}`)
-    }
-    boardDarkKeys.delete(projectId)
-  }
+function syncNativeTheme () {
+  if (nativeTheme.themeSource !== registry.theme) nativeTheme.themeSource = registry.theme
 }
 
 /** Put the whole app in the current mode: the window, the shell, the boards. */
 async function applyTheme () {
+  syncNativeTheme()
   const dark = resolveDark()
   window?.setBackgroundColor(dark ? '#0f141c' : '#e9eef5')
   if (process.platform === 'win32' && window?.setTitleBarOverlay) {
@@ -184,19 +141,6 @@ async function applyTheme () {
     })
   }
   toChrome('theme:changed', { theme: registry.theme, dark })
-  await Promise.all(
-    [...boardViews].map(([projectId, view]) => applyThemeToBoard(projectId, view))
-  )
-}
-
-// A board reloads on navigation and on a server restart, and injected CSS is
-// dropped when it does. Re-inserting on load is what keeps a board dark across
-// its own lifecycle rather than only at the moment it was opened.
-function watchBoardReloads (projectId, view) {
-  view.webContents.on('did-finish-load', () => {
-    boardDarkKeys.delete(projectId)
-    applyThemeToBoard(projectId, view)
-  })
 }
 
 /**
@@ -228,10 +172,8 @@ async function openProject (projectId, taskId = null) {
       return { action: 'deny' }
     })
     boardViews.set(projectId, view)
-    watchBoardReloads(projectId, view)
     window.contentView.addChildView(view)
     await view.webContents.loadURL(target)
-    await applyThemeToBoard(projectId, view)
   } else if (view.webContents.getURL() !== target) {
     // A warm view showing something else — another task, or the board root, or
     // an address from a server that has since restarted on a new port.
@@ -254,7 +196,6 @@ function closeProject (projectId) {
     window.contentView.removeChildView(view)
     view.webContents.close()
     boardViews.delete(projectId)
-    boardDarkKeys.delete(projectId)
   }
   supervisor.stop(projectId)
   if (activeProjectId === projectId) showChrome()
@@ -732,6 +673,10 @@ app.whenReady().then(async () => {
   }
 
   await registry.load()
+
+  // Before the first window and the first board, so neither draws in the wrong
+  // mode and then flips.
+  syncNativeTheme()
 
   // Seed the default assignee from git's own identity. `--assign self` already
   // records this address, so adopting it makes "mine" correct before the user
