@@ -9,7 +9,6 @@
 
 const { execFile } = require('node:child_process')
 const fs = require('node:fs/promises')
-const os = require('node:os')
 const path = require('node:path')
 
 // A runaway git call must not hang a scan of a hundred repositories, and no
@@ -291,17 +290,6 @@ async function describeAll (repoPaths, { concurrency = 8, onProgress } = {}) {
   return results
 }
 
-/**
- * The identity git would use outside any repository.
- *
- * This is what `workbook --assign self` records in a checkout that sets no
- * user.email of its own, which makes it the right seed for "me".
- */
-async function globalGitEmail () {
-  const email = await git(os.homedir(), ['config', '--global', 'user.email'])
-  return email ? email.trim().toLowerCase() : null
-}
-
 module.exports = {
-  describe, describeAll, detectStacks, readGitInfo, shortDate, globalGitEmail
+  describe, describeAll, detectStacks, readGitInfo, shortDate
 }

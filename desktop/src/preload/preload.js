@@ -25,17 +25,6 @@ contextBridge.exposeInMainWorld('workbench', {
   closeProject: (projectId) => ipcRenderer.invoke('project:close', { projectId }),
   forgetProject: (projectId) => ipcRenderer.invoke('project:forget', { projectId }),
 
-  assignTask: (projectId, taskId, email) =>
-    ipcRenderer.invoke('task:assign', { projectId, taskId, email }),
-  unassignTask: (projectId, taskId, email) =>
-    ipcRenderer.invoke('task:unassign', { projectId, taskId, email }),
-
-  listPeople: (refresh = false) => ipcRenderer.invoke('people:list', { refresh }),
-  setDefaultAssignee: (email) => ipcRenderer.invoke('people:setDefault', { email }),
-  mergePeople: (emails) => ipcRenderer.invoke('people:merge', { emails }),
-  splitPerson: (email) => ipcRenderer.invoke('people:split', { email }),
-  renamePerson: (id, displayName) => ipcRenderer.invoke('people:rename', { id, displayName }),
-
   checkForUpdates: () => ipcRenderer.invoke('update:check'),
   installUpdate: () => ipcRenderer.invoke('update:install'),
 

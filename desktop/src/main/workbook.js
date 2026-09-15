@@ -192,46 +192,6 @@ async function setup (repoPath, key, { binary, sync = false } = {}) {
   return runJSON(repoPath, args, { binary })
 }
 
-// Workbook's exit code for "somebody else holds this task and you do not".
-// The write is refused and nothing is recorded; --force records yours beside
-// theirs. It is a code rather than a message because it is a decision for the
-// caller, not an error.
-const EXIT_ASSIGNED = 10
-
-/**
- * Assign a task to an email address, or to `self`.
- *
- * One assignment per invocation is the CLI's rule, so this takes one principal.
- * `taken` comes back instead of an error when the task is already held by
- * somebody else: the caller decides whether to record theirs alongside, because
- * that is a question about people rather than about software.
- *
- * @param {{force?: boolean, binary?: string}} [options]
- */
-async function assign (repoPath, taskId, principal, options = {}) {
-  const args = ['update', taskId, '--assign', principal]
-  if (options.force) args.push('--force')
-  try {
-    return { ok: true, data: await runJSON(repoPath, args, options) }
-  } catch (error) {
-    if (error.exitCode === EXIT_ASSIGNED) {
-      return { ok: false, taken: true, message: error.message }
-    }
-    throw error
-  }
-}
-
-/**
- * Remove an assignment.
- *
- * Workbook allows this only for the person the assignment names or the person
- * who recorded it, and that refusal arrives as an ordinary error — it is a rule
- * about who may act, so it is reported rather than worked around.
- */
-async function unassign (repoPath, taskId, principal, options = {}) {
-  return runJSON(repoPath, ['update', taskId, '--unassign', principal], options)
-}
-
 module.exports = {
-  resolveBinary, runJSON, version, setup, assign, unassign, BINARY, EXIT_ASSIGNED
+  resolveBinary, runJSON, version, setup, BINARY
 }

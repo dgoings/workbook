@@ -45,9 +45,6 @@
       <button class="rail-item" data-view="import" type="button">
         <span class="glyph">+</span> Import repositories
       </button>
-      <button class="rail-item" data-view="people" type="button">
-        <span class="glyph">@</span> People
-      </button>
     </nav>
 
     <div class="rail-label">Projects</div>
@@ -114,26 +111,6 @@
         <span id="import-status" class="import-status"></span>
         <button id="do-import" class="primary" type="button">Import selected</button>
       </footer>
-    </section>
-
-    <!-- The assignee picker, one popover reused by every row: a menu per task
-         would be four hundred hidden menus on a busy queue. -->
-    <div id="assign-menu" class="menu assign-menu" role="menu" hidden></div>
-
-    <!-- Who works on these repositories, read out of their commit history. -->
-    <section id="view-people" class="view" hidden>
-      <header class="view-head">
-        <h1>People</h1>
-        <p class="subtitle">
-          Built from the commit history of every imported project. Workbook
-          assigns against an email address, so these are the addresses a task
-          can be assigned to.
-        </p>
-      </header>
-
-      <div id="identity-warning" class="failures" hidden></div>
-
-      <div id="people-body" class="people view-scroll"></div>
     </section>
 
     <!-- Shown while a board is loading or after it fails. The board itself is a

@@ -15,16 +15,7 @@ const EMPTY = {
   version: 1,
   scanRoots: [],
   projects: [],
-  theme: 'system',
-  // The email Workbook assigns against for "me". Seeded from git's own
-  // user.email on first run, because that is what `--assign self` already
-  // records; it is a setting only so that a machine shared by two people, or a
-  // person with two addresses, can say which one this is.
-  defaultAssignee: null,
-  // Corrections to what the commit history implies: identities that belong to
-  // one person, and the names to show them under. Only what the user changed is
-  // stored — the directory itself is derived on demand.
-  people: { merges: [], names: {} }
+  theme: 'system'
 }
 
 class Registry {
@@ -80,55 +71,6 @@ class Registry {
 
   get scanRoots () {
     return this.state.scanRoots
-  }
-
-  get defaultAssignee () {
-    return this.state.defaultAssignee ?? null
-  }
-
-  async setDefaultAssignee (email) {
-    this.state.defaultAssignee = email ? String(email).trim().toLowerCase() : null
-    await this.save()
-  }
-
-  get peopleMapping () {
-    return { merges: [], names: {}, ...(this.state.people ?? {}) }
-  }
-
-  /** Record that these addresses are one person. */
-  async mergePeople (emails) {
-    const group = emails.map((email) => String(email).trim().toLowerCase()).filter(Boolean)
-    if (group.length < 2) return
-    const mapping = this.peopleMapping
-    // Fold into any existing group that already shares an address, so merging
-    // A+B and then B+C leaves one person rather than two overlapping ones.
-    const overlapping = mapping.merges.filter((existing) =>
-      existing.some((email) => group.includes(email)))
-    const rest = mapping.merges.filter((existing) => !overlapping.includes(existing))
-    const combined = [...new Set([...group, ...overlapping.flat()])]
-    this.state.people = { ...mapping, merges: [...rest, combined] }
-    await this.save()
-  }
-
-  async splitPerson (email) {
-    const needle = String(email).trim().toLowerCase()
-    const mapping = this.peopleMapping
-    this.state.people = {
-      ...mapping,
-      merges: mapping.merges
-        .map((group) => group.filter((member) => member !== needle))
-        .filter((group) => group.length > 1)
-    }
-    await this.save()
-  }
-
-  async renamePerson (id, displayName) {
-    const mapping = this.peopleMapping
-    const names = { ...mapping.names }
-    if (displayName) names[id] = displayName
-    else delete names[id]
-    this.state.people = { ...mapping, names }
-    await this.save()
   }
 
   /** 'system' | 'light' | 'dark' */
