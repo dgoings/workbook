@@ -46,7 +46,13 @@ for (const file of sources) {
 // covered by the parse check above.
 for (const name of fs.readdirSync(main)) {
   if (name === 'main.js' || name === 'updater.js') continue
-  const module = require(path.join(main, name))
+  let module
+  try {
+    module = require(path.join(main, name))
+  } catch (error) {
+    fail(`${name} does not load outside Electron: ${error.message}`)
+    continue
+  }
   const missing = Object.entries(module)
     .filter(([, value]) => value === undefined)
     .map(([key]) => key)
