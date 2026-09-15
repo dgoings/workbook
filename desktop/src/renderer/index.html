@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:">
+  <title>Workbench</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <aside id="sidebar">
+    <header class="sidebar-head">
+      <div class="sidebar-identity">
+        <div class="wordmark">Workbench</div>
+        <div class="version" id="version">—</div>
+      </div>
+      <button id="menu-button" class="icon-button" type="button"
+              aria-haspopup="menu" aria-expanded="false" aria-controls="menu"
+              aria-label="Menu" title="Menu">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor"
+                stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+        <!-- A quiet announcement still has to be noticeable. -->
+        <span id="update-dot" class="update-dot" hidden title="An update is available"></span>
+      </button>
+
+      <div id="menu" class="menu" role="menu" hidden>
+        <button class="menu-item" role="menuitem" id="refresh" type="button">Refresh</button>
+        <button class="menu-item menu-item--update" role="menuitem" id="install-update" type="button" hidden></button>
+        <button class="menu-item" role="menuitem" id="check-updates" type="button">Check for updates…</button>
+        <!-- No appearance control here: the Dark Mode switch on any board
+             sets the whole window, shell included. -->
+        <div class="menu-separator" role="separator"></div>
+        <div class="menu-note" id="binary-note">—</div>
+      </div>
+    </header>
+
+    <nav class="rail">
+      <button class="rail-item" data-view="import" type="button">
+        <span class="glyph">+</span> Import repositories
+      </button>
+    </nav>
+
+    <div class="rail-label">Projects</div>
+    <ul id="project-list" class="project-list"></ul>
+
+  </aside>
+
+  <main id="main">
+    <!-- The discovery + selection wizard. Controls are anchored at the top and
+         the import action at the bottom; only the repository list scrolls, so
+         neither the search nor the button is ever scrolled out of reach. -->
+    <section id="view-import" class="view">
+      <header class="view-head view-head--split">
+        <div class="view-head__lead">
+          <h1>Import repositories</h1>
+          <p class="subtitle">
+            Point Workbench at a folder. Every Git repository under it is listed;
+            choose which to bootstrap as Workbook projects.
+          </p>
+        </div>
+
+        <!-- The one irreversible step in the wizard, set beside the heading
+             rather than above the list: it is a caution to read once, not a
+             banner to scroll past every time. -->
+        <aside class="key-note" id="key-note" hidden>
+          <button class="key-note__dismiss" id="dismiss-key-note" type="button"
+                  aria-label="Dismiss">&times;</button>
+          A project key is minted once and <strong>cannot be changed</strong>
+          afterwards without deleting the project's refs by hand. Edit it now if
+          the suggestion is wrong.
+        </aside>
+      </header>
+
+      <div class="import-controls">
+        <div class="scan-bar">
+          <button id="pick-folder" class="primary" type="button">Choose folder…</button>
+          <span id="scan-root" class="scan-root">No folder chosen</span>
+          <label class="depth">
+            Depth
+            <input id="scan-depth" type="number" min="1" max="8" value="4">
+          </label>
+          <button id="rescan" class="ghost inline" type="button" disabled>Rescan</button>
+        </div>
+
+        <div class="filter-bar" id="filter-bar" hidden>
+          <input id="search" class="search" type="search" autocomplete="off"
+                 placeholder="Search name, path, stack, author or key…"
+                 aria-label="Search repositories">
+          <div class="chips" role="group" aria-label="Filter">
+            <button class="chip active" data-filter="all" type="button">All</button>
+            <button class="chip" data-filter="new" type="button">New</button>
+            <button class="chip" data-filter="imported" type="button">Imported</button>
+          </div>
+          <span id="result-count" class="result-count"></span>
+        </div>
+
+      </div>
+
+      <div id="scan-results" class="scan-results view-scroll"></div>
+
+      <footer class="import-actions" id="import-actions" hidden>
+        <button id="select-visible" class="ghost inline" type="button">Select all shown</button>
+        <button id="select-none" class="ghost inline" type="button">Clear</button>
+        <span id="import-status" class="import-status"></span>
+        <button id="do-import" class="primary" type="button">Import selected</button>
+      </footer>
+    </section>
+
+    <!-- Shown while a board is loading or after it fails. The board itself is a
+         separate top-level view, not part of this document. -->
+    <section id="view-project" class="view" hidden>
+      <div class="board-state" id="board-state"></div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
