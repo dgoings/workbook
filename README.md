@@ -57,6 +57,14 @@ To modify Workbook itself, see [CONTRIBUTING.md](CONTRIBUTING.md) — it covers
 the two-build development environment, the test suite, and how releases are
 cut.
 
+### The desktop app
+
+Workbench, under [`desktop/`](desktop/README.md), is a desktop shell for
+Workbook: one window with every imported project's board in a sidebar, with
+the CLI bundled so an install is self-contained. It is built from this
+checkout and released separately from the CLI; see its README for building it
+from source.
+
 ## Getting started
 
 After cloning a repository, bootstrap Workbook with one command. It creates or

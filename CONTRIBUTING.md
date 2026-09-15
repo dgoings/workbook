@@ -16,6 +16,24 @@ A Go toolchain (1.26 or newer) and Git are the only requirements:
 ./scripts/install.sh ~/bin wb   # or pick your own destination and name
 ```
 
+## Building the desktop app
+
+The desktop app under `desktop/` needs Node 22 as well as Go and Git:
+
+```sh
+cd desktop
+npm ci
+npm run stage      # builds the CLI from this checkout into desktop/build
+npm start          # runs the shell against the staged or installed CLI
+npm run check      # the shell's own checks; see desktop/README.md
+npm run dist       # packages this machine's platform
+```
+
+`npm run stage` delegates to `scripts/install.sh`, so the bundled binary is
+stamped like any source build. Nothing under `desktop/` is Go: `gofmt`,
+`go vet` and `go test ./...` do not see it, and `scripts/desktop_stage_test.go`
+is what exercises the stage script from the Go suite.
+
 ## Setting up a development environment
 
 Working on Workbook with Workbook needs a build that survives a broken working

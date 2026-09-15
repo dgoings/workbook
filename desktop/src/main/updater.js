@@ -20,9 +20,12 @@ const fs = require('node:fs')
 const path = require('node:path')
 const { autoUpdater } = require('electron-updater')
 
-const OWNER = 'tylerkilgore'
-const REPO = 'workbench'
-const RELEASES_PAGE = `https://github.com/${OWNER}/${REPO}/releases/latest`
+// Desktop releases live in this repository beside the CLI's, under their own
+// desktop-v* tags, and a rolling desktop-latest release carries the current
+// installers and feed files at a fixed address. That address is what
+// package.json's publish block names, and what the manual macOS download reads.
+const DOWNLOAD_BASE = 'https://github.com/dgoings/workbook/releases/download/desktop-latest'
+const RELEASES_PAGE = 'https://github.com/dgoings/workbook/releases'
 
 // Long enough that the first window is drawn and the boards the user came for
 // are already starting; an update prompt is never the point of launching.
@@ -48,12 +51,11 @@ function log (message) {
  */
 async function downloadAndOpenMacDmg (version, onProgress) {
   // Must match electron-builder's mac artifactName,
-  // '${productName}-${version}-${arch}.${ext}' — which suffixes *every* arch,
-  // x64 included. Assuming a bare name for x64 asks GitHub for a file that was
-  // never published.
-  const filename = `Workbench-${version}-${process.arch}.dmg`
-  const url = `https://github.com/${OWNER}/${REPO}/releases/download/v${version}/${filename}`
-  const destination = path.join(app.getPath('downloads'), filename)
+  // '${productName}-${arch}.${ext}' — which carries no version, because the
+  // rolling release's URLs have to stay stable from one release to the next.
+  const filename = `Workbench-${process.arch}.dmg`
+  const url = `${DOWNLOAD_BASE}/${filename}`
+  const destination = path.join(app.getPath('downloads'), `Workbench-${version}-${process.arch}.dmg`)
 
   const response = await net.fetch(url)
   if (!response.ok) throw new Error(`Download failed: HTTP ${response.status}`)

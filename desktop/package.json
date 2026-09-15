@@ -1,7 +1,7 @@
 {
   "name": "workbench",
-  "version": "0.3.2",
-  "private": false,
+  "version": "0.0.0",
+  "private": true,
   "description": "Desktop shell for Workbook: discover repositories, import them as projects, and switch between their boards in one window.",
   "main": "src/main/main.js",
   "scripts": {
@@ -12,7 +12,6 @@
     "dist": "npm run stage && electron-builder --mac --arm64",
     "dist:mac": "npm run stage && electron-builder --mac",
     "dist:win": "npm run stage && electron-builder --win",
-    "release": "npm run stage && electron-builder --publish always",
     "dist:linux": "npm run stage && electron-builder --linux",
     "check:styles": "node scripts/check-styles.js",
     "check:shell": "node scripts/check-shell.js",
@@ -37,13 +36,10 @@
         "to": "WORKBOOK-LICENSE"
       }
     ],
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "tylerkilgore",
-        "repo": "workbench"
-      }
-    ],
+    "publish": {
+      "provider": "generic",
+      "url": "https://github.com/dgoings/workbook/releases/download/desktop-latest"
+    },
     "mac": {
       "target": [
         {
@@ -65,7 +61,7 @@
       "icon": "assets/icon.icns",
       "darkModeSupport": true,
       "identity": null,
-      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "artifactName": "${productName}-${arch}.${ext}",
       "extendInfo": {
         "LSMinimumSystemVersion": "11.0",
         "NSHumanReadableCopyright": "Bundles the Workbook CLI (MIT). See WORKBOOK-LICENSE in Resources."
@@ -79,7 +75,7 @@
     },
     "win": {
       "icon": "assets/icon.ico",
-      "artifactName": "${productName}-Setup-${version}-${arch}.${ext}",
+      "artifactName": "${productName}-Setup-${arch}.${ext}",
       "target": [
         {
           "target": "nsis",
@@ -129,7 +125,7 @@
       "category": "Development",
       "icon": "assets/icon.png",
       "maintainer": "Tyler Kilgore",
-      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "artifactName": "${productName}-${arch}.${ext}",
       "synopsis": "Desktop shell for Workbook",
       "description": "Discover Git repositories, import them as Workbook projects, and switch between their boards in one window.",
       "extraResources": [
@@ -152,7 +148,8 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/tylerkilgore/workbench.git"
+    "url": "https://github.com/dgoings/workbook.git",
+    "directory": "desktop"
   },
-  "homepage": "https://github.com/tylerkilgore/workbench"
+  "homepage": "https://github.com/dgoings/workbook"
 }
