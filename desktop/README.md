@@ -39,7 +39,7 @@ each catches a mistake this project has actually made.
 ## Building
 
 ```
-npm run dist         # macOS, this machine's architecture
+npm run dist         # macOS arm64
 npm run dist:mac     # macOS, arm64 + x64
 npm run dist:linux   # Linux, x64 + arm64 (AppImage + deb)
 npm run dist:win     # Windows, x64 + arm64 (NSIS)
@@ -158,7 +158,7 @@ The wizard suggests one per repository, validates it against Workbook's own
 | --- | --- |
 | macOS (arm64, x64) | Builds. Ad-hoc signed, not notarized. |
 | Linux (x64, arm64) | Builds as AppImage and deb. |
-| Windows (x64, arm64) | Builds as an NSIS installer; signed when the Azure Trusted Signing secrets are present. |
+| Windows (x64, arm64) | Builds as an NSIS installer; unsigned until the publish workflow adds Azure Trusted Signing. |
 
 ## Known gaps
 

@@ -25,7 +25,7 @@ const { autoUpdater } = require('electron-updater')
 // installers and feed files at a fixed address. That address is what
 // package.json's publish block names, and what the manual macOS download reads.
 const DOWNLOAD_BASE = 'https://github.com/dgoings/workbook/releases/download/desktop-latest'
-const RELEASES_PAGE = 'https://github.com/dgoings/workbook/releases'
+const RELEASES_PAGE = 'https://github.com/dgoings/workbook/releases/tag/desktop-latest'
 
 // Long enough that the first window is drawn and the boards the user came for
 // are already starting; an update prompt is never the point of launching.

@@ -124,7 +124,7 @@
       ],
       "category": "Development",
       "icon": "assets/icon.png",
-      "maintainer": "Tyler Kilgore",
+      "maintainer": "dgoings/workbook",
       "artifactName": "${productName}-${arch}.${ext}",
       "synopsis": "Desktop shell for Workbook",
       "description": "Discover Git repositories, import them as Workbook projects, and switch between their boards in one window.",

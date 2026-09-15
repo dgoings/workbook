@@ -58,9 +58,9 @@ if [ -n "${WORKBOOK_REPO:-}" ]; then
 		exit 1
 	fi
 	if [ -n "${WORKBOOK_REF:-}" ]; then
-		echo "build-workbook: using local checkout ${repo} as it stands (WORKBOOK_REF ${WORKBOOK_REF} not applied)"
+		echo "build-workbook: using local checkout ${repo} as it stands (WORKBOOK_REF ${WORKBOOK_REF} not applied)" >&2
 	else
-		echo "build-workbook: using local checkout ${repo}"
+		echo "build-workbook: using local checkout ${repo}" >&2
 	fi
 elif [ -n "${WORKBOOK_REF:-}" ]; then
 	repo="${output_directory}/workbook-src"

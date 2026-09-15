@@ -125,7 +125,11 @@ function resolveDark () {
  * 'system' follows the OS, the other two override it.
  */
 function syncNativeTheme () {
-  if (nativeTheme.themeSource !== registry.theme) nativeTheme.themeSource = registry.theme
+  // A registry edited by hand can hold anything; Electron throws on a value
+  // it does not know, and this runs before the first window exists, so an
+  // unknown choice falls back to the OS rather than taking the window with it.
+  const source = ['system', 'light', 'dark'].includes(registry.theme) ? registry.theme : 'system'
+  if (nativeTheme.themeSource !== source) nativeTheme.themeSource = source
 }
 
 /** Put the whole app in the current mode: the window, the shell, the boards. */

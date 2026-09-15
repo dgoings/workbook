@@ -225,11 +225,14 @@ async function readGitInfo (repoPath) {
 
   return {
     bare: bare === 'true',
-    // Every contributor in the sample, for the people directory. The row only
-    // shows the top few, but the directory wants them all.
+    // Kept for the people directory a follow-up task restores (commit 67870c5
+    // removed it from this tree). The row only shows the top few, but the
+    // directory wants them all.
     allAuthors,
-    // Workbook records an assignment against this checkout's user.email, so a
-    // repository configured with a different one assigns to a different person.
+    // Kept for the same follow-up: Workbook records an assignment against this
+    // checkout's user.email, so a directory needs to know it. With no reader
+    // yet, this is one `git config` read per repository per scan spent on
+    // fields nothing consumes.
     configuredEmail: configuredEmail || null,
     configuredName: configuredName || null,
     branch: head && head !== 'HEAD' ? head : null,
