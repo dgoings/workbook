@@ -153,14 +153,5 @@
     "type": "git",
     "url": "https://github.com/tylerkilgore/workbench.git"
   },
-  "homepage": "https://github.com/tylerkilgore/workbench",
-  "workbook": {
-    "repository": "https://github.com/tylerkilgore/workbook.git",
-    "ref": "f01514d4fb0dae586a66d0b96cd56939f6024519",
-    "upstream": "https://github.com/dgoings/workbook.git",
-    "branches": [
-      "feat/windows-support",
-      "feat/relative-sync-indicator"
-    ]
-  }
+  "homepage": "https://github.com/tylerkilgore/workbench"
 }
