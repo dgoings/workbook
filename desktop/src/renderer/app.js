@@ -353,18 +353,17 @@ function setMenu (open) {
 /**
  * Reflect the chosen mode on the document.
  *
- * The attribute is set for an explicit choice only. 'system' removes it, which
- * leaves the stylesheet's prefers-color-scheme rule to answer — the difference
- * between "follow the OS" and "be light", which a boolean could not express.
+ * The choice is made on a board, with its Dark Mode switch, and arrives here
+ * from the main process; the shell has no control of its own. The attribute
+ * is set for an explicit choice only. 'system' removes it, which leaves the
+ * stylesheet's prefers-color-scheme rule to answer — the difference between
+ * "follow the OS" and "be light", which a boolean could not express.
  */
 function paintTheme ({ theme }) {
   if (theme === 'system') {
     document.documentElement.removeAttribute('data-theme')
   } else {
     document.documentElement.setAttribute('data-theme', theme)
-  }
-  for (const option of document.querySelectorAll('.theme-option')) {
-    option.classList.toggle('active', option.dataset.theme === theme)
   }
 }
 
@@ -387,12 +386,6 @@ document.addEventListener('keydown', (event) => {
     el('menu-button').focus()
   }
 })
-
-for (const option of document.querySelectorAll('.theme-option')) {
-  option.addEventListener('click', async () => {
-    paintTheme(await api.setTheme(option.dataset.theme))
-  })
-}
 
 api.onThemeChanged(paintTheme)
 

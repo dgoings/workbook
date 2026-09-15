@@ -20,9 +20,10 @@ npm install
 npm start
 ```
 
-A development run drives whatever `workbook` is installed on the machine (see
-"Finding the workbook binary" below). `npm run dev` also opens the shell's
-developer tools.
+A development run drives the CLI staged under `build/` by `npm run stage` when
+there is one, and otherwise whatever `workbook` is installed on the machine
+(see "Finding the workbook binary" below). `npm run dev` also opens the
+shell's developer tools.
 
 ## Checks
 
@@ -107,13 +108,16 @@ it opened once from the Finder context menu.
 
 ## Finding the workbook binary
 
-An explicit override first, then **the build bundled in the app**, then `PATH`,
-then `~/.local/bin`, `~/go/bin`, `/opt/homebrew/bin`, `/usr/local/bin`.
+An explicit override first, then **the build bundled in the app**, then a
+build staged under `build/`, then `PATH`, then `~/.local/bin`, `~/go/bin`,
+`/opt/homebrew/bin`, `/usr/local/bin`.
 
 The bundled build wins because the app ships it: that makes an install
 self-contained, and makes the app's behavior a property of the app rather than
-of the host, which is what makes a bug report reproducible. The fallbacks are
-what a development run (`npm start`) uses, since there is no bundled copy there.
+of the host, which is what makes a bug report reproducible. A development run
+(`npm start`) has no bundled copy, so it takes the staged build next: "stage,
+then start" tests the shell against the CLI from this checkout, which is what
+a change to both sides needs. The rest are fallbacks for a run with no stage.
 
 This does mean a packaged app and your terminal can drive different builds if
 your installed CLI is older. The sidebar's menu names the binary in use.
@@ -133,9 +137,14 @@ Board servers are recorded in `running-boards.json` and any left by a run that
 ended without warning, a crash or a Force Quit, are stopped at the next start,
 since no in-process handler can cover a SIGKILL.
 
-The boards draw their own dark mode. The shell's Appearance choice is passed
-to Electron as `nativeTheme.themeSource`, which is what every board's
-`prefers-color-scheme` reads.
+The boards draw their own dark mode, and the choice is theirs. The Dark Mode
+switch on any board sets the whole window: a small preload in each board view
+reports the click to the main process, which repaints the shell and tells
+every other board to align by clicking its own switch. The board's rule that
+choosing the scheme your system already shows means "follow the system" is
+kept, so that state is reachable the way it always was, and a board opened
+later starts in the current mode. The shell has no appearance control of its
+own.
 
 ## Importing
 

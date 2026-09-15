@@ -78,9 +78,16 @@ async function resolveBinary (override) {
     }
   }
 
-  // No bundled copy: a development run, or a build staged without one. Fall back
-  // to whatever is installed.
-  //
+  // No bundled copy: a development run. A build staged with `npm run stage`
+  // comes next, so "stage, then start" runs the shell against the CLI from this
+  // checkout, which is the one a change to both sides has to be tested with.
+  // Without one, fall back to whatever is installed.
+  const staged = path.join(__dirname, '..', '..', 'build', BINARY)
+  if (await isExecutable(staged)) {
+    cachedBinary = staged
+    return cachedBinary
+  }
+
   // Walked directly rather than through a shell: `command -v` would need
   // shell:true, which concatenates rather than escapes its arguments.
   for (const directory of (process.env.PATH ?? '').split(path.delimiter)) {

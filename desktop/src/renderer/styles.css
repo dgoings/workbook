@@ -5,8 +5,8 @@
 
    Light is Workbook's palette unchanged. Dark moves only the token values, so
    both modes are the same design lit differently. The boards draw their own
-   dark mode under `prefers-color-scheme`, and the shell drives which one they
-   see through Electron's `nativeTheme.themeSource`. */
+   dark mode, and the choice is theirs: the Dark Mode switch on any board sets
+   the shell too, through the main process, which writes data-theme here. */
 
 :root {
   /* Workbook's own ramp, verbatim. The board ships these as --wb-* custom
@@ -291,16 +291,6 @@ body {
   background: var(--wb-divider);
 }
 
-.menu-label {
-  padding: .2rem .5rem .35rem;
-  color: var(--wb-muted);
-  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
-  font-size: .66rem;
-  font-weight: 800;
-  letter-spacing: .08em;
-  text-transform: uppercase;
-}
-
 .wordmark {
   margin: 0 0 .2rem;
   color: var(--wb-primary);
@@ -433,37 +423,6 @@ body {
 
 .dot.running { background: var(--wb-ok); }
 .dot.failed, .dot.exited { background: var(--wb-danger); }
-
-/* A segmented control in the board's own button vocabulary: one hairline box,
-   the live segment filled with the primary tint the rail uses for its route. */
-.theme-toggle {
-  margin: 0 .15rem .15rem;
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  border: 1px solid var(--wb-control);
-  border-radius: 4px;
-  overflow: hidden;
-}
-
-.theme-option {
-  border: 0;
-  border-left: 1px solid var(--wb-control);
-  background: var(--wb-surface);
-  color: var(--wb-text-3);
-  cursor: pointer;
-  font: inherit;
-  font-size: .72rem;
-  font-weight: 700;
-  padding: .3rem .2rem;
-}
-
-.theme-option:first-child { border-left: 0; }
-.theme-option:hover { background: var(--wb-primary-tint-4); }
-
-.theme-option.active {
-  background: var(--wb-primary-tint-1);
-  color: var(--wb-primary);
-}
 
 /* --- main --------------------------------------------------------------- */
 

@@ -116,25 +116,15 @@ function resolveDark () {
 }
 
 /**
- * Tell Electron which scheme the app is in.
+ * Put the window and the shell in the current mode.
  *
- * The boards are the board's own document, served by `workbook serve`, and
- * they draw themselves dark under `prefers-color-scheme: dark`. Electron
- * reports that media query from nativeTheme.themeSource, so one assignment
- * here is what puts every board view, and the shell, in the chosen mode:
- * 'system' follows the OS, the other two override it.
+ * The boards are not painted from here. Each board has a Dark Mode switch and
+ * a stored preference of its own, and the choice the app carries is that
+ * preference, made once and copied to every board: see `board:scheme` below
+ * and src/preload/board.js. Electron's own theme source is left on the OS, so
+ * "follow the system" means the same thing in every view.
  */
-function syncNativeTheme () {
-  // A registry edited by hand can hold anything; Electron throws on a value
-  // it does not know, and this runs before the first window exists, so an
-  // unknown choice falls back to the OS rather than taking the window with it.
-  const source = ['system', 'light', 'dark'].includes(registry.theme) ? registry.theme : 'system'
-  if (nativeTheme.themeSource !== source) nativeTheme.themeSource = source
-}
-
-/** Put the whole app in the current mode: the window, the shell, the boards. */
 async function applyTheme () {
-  syncNativeTheme()
   const dark = resolveDark()
   window?.setBackgroundColor(dark ? '#0f141c' : '#e9eef5')
   if (process.platform === 'win32' && window?.setTitleBarOverlay) {
@@ -169,7 +159,13 @@ async function openProject (projectId, taskId = null) {
   let view = boardViews.get(projectId)
   if (!view) {
     view = new WebContentsView({
-      webPreferences: { contextIsolation: true, nodeIntegration: false }
+      webPreferences: {
+        // Carries the board's Dark Mode choice to the shell and the other
+        // boards, and nothing else; the board's page never sees it.
+        preload: path.join(__dirname, '..', 'preload', 'board.js'),
+        contextIsolation: true,
+        nodeIntegration: false
+      }
     })
     // Links out of the board (a repository URL, say) belong in the browser, not
     // in a view that has no chrome to get back from.
@@ -324,13 +320,36 @@ ipcMain.handle('update:install', async () => {
   return updater.install()
 })
 
+const THEMES = ['system', 'light', 'dark']
+
 ipcMain.handle('theme:get', async () => ({ theme: registry.theme, dark: resolveDark() }))
 
-ipcMain.handle('theme:set', async (_event, { theme }) => {
-  if (!['system', 'light', 'dark'].includes(theme)) throw new Error(`unknown theme: ${theme}`)
+// A board's preload asks this before the board's own script runs, so a board
+// opened after a choice was made starts in that mode. Synchronous on purpose:
+// the page script runs the moment the preload ends, and a promise would land
+// after the board had already read its preference.
+ipcMain.on('theme:current', (event) => {
+  event.returnValue = THEMES.includes(registry.theme) ? registry.theme : 'system'
+})
+
+/**
+ * A board's Dark Mode switch was clicked: its choice becomes the window's.
+ *
+ * The board reports its stored preference, in its own terms: 'light', 'dark',
+ * or '' for "follow the system", which the shell has always spelled 'system'.
+ * The shell repaints itself and every other open board is told to align. The
+ * reporting board is not told; it is already there, and a board that is told
+ * and finds itself already aligned does nothing, which is what stops the
+ * alignment's own click from reporting back into a loop.
+ */
+ipcMain.on('board:scheme', async (event, { scheme }) => {
+  const theme = scheme === '' ? 'system' : scheme
+  if (!THEMES.includes(theme) || theme === registry.theme) return
   await registry.setTheme(theme)
   await applyTheme()
-  return { theme, dark: resolveDark() }
+  for (const [, view] of boardViews) {
+    if (view.webContents !== event.sender) view.webContents.send('board:align', { theme })
+  }
 })
 
 ipcMain.handle('project:open', async (_event, { projectId, taskId }) =>
@@ -379,10 +398,6 @@ app.whenReady().then(async () => {
   }
 
   await registry.load()
-
-  // Before the first window and the first board, so neither draws in the wrong
-  // mode and then flips.
-  syncNativeTheme()
 
   createWindow()
   updater = setupUpdater({

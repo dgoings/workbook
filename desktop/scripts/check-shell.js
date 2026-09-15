@@ -25,9 +25,11 @@ function fail (message) {
 }
 
 // Every source file parses.
+const boardPreload = path.join(root, 'src', 'preload', 'board.js')
 const sources = [
   ...fs.readdirSync(main).map((name) => path.join(main, name)),
   preload,
+  boardPreload,
   path.join(renderer, 'app.js'),
   ...fs.readdirSync(path.join(root, 'scripts'))
     .filter((name) => name.endsWith('.js'))
@@ -77,8 +79,18 @@ if (orphans.length > 0) fail(`invoked but not handled: ${orphans.join(', ')}`)
 const unused = [...handled].filter((channel) => !invoked.has(channel))
 if (unused.length > 0) fail(`handled but never invoked: ${unused.join(', ')}`)
 
+// The board preload speaks the fire-and-forget half of IPC: channels it sends
+// must have an ipcMain.on listener, and every listener must have a sender.
+const boardSource = fs.readFileSync(boardPreload, 'utf8')
+const listened = new Set([...mainSource.matchAll(/ipcMain\.on\('([^']+)'/g)].map((m) => m[1]))
+const sent = new Set([...boardSource.matchAll(/ipcRenderer\.send(?:Sync)?\('([^']+)'/g)].map((m) => m[1]))
+const unheard = [...sent].filter((channel) => !listened.has(channel))
+if (unheard.length > 0) fail(`sent but not listened for: ${unheard.join(', ')}`)
+const silent = [...listened].filter((channel) => !sent.has(channel))
+if (silent.length > 0) fail(`listened for but never sent: ${silent.join(', ')}`)
+
 if (failures > 0) {
   console.error(`\n${failures} check(s) failed`)
   process.exit(1)
 }
-console.log(`${sources.length} files parse, ${used.size} element ids exist, ${invoked.size} channels line up`)
+console.log(`${sources.length} files parse, ${used.size} element ids exist, ${invoked.size + sent.size} channels line up`)

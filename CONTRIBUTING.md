@@ -24,7 +24,7 @@ The desktop app under `desktop/` needs Node 22 as well as Go and Git:
 cd desktop
 npm ci
 npm run stage      # builds the CLI from this checkout into desktop/build
-npm start          # runs the shell against the installed CLI (see desktop/README.md)
+npm start          # runs the shell against the staged CLI, or the installed one without a stage
 npm run check      # the shell's own checks; see desktop/README.md
 npm run dist       # packages macOS arm64; see desktop/README.md for the others
 ```

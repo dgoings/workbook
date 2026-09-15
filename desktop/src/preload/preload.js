@@ -29,7 +29,6 @@ contextBridge.exposeInMainWorld('workbench', {
   installUpdate: () => ipcRenderer.invoke('update:install'),
 
   getTheme: () => ipcRenderer.invoke('theme:get'),
-  setTheme: (theme) => ipcRenderer.invoke('theme:set', { theme }),
 
   onImportProgress: (handler) => {
     const listener = (_event, payload) => handler(payload)
