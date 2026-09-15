@@ -42,7 +42,9 @@ jobs:
       # program behaves: nothing builds site/ or render.yaml, no package embeds
       # them, and no test reads them, so the whole matrix spends six to eight
       # minutes per runner proving something an HTML edit could not have
-      # broken.
+      # broken. A change confined to the desktop app under desktop/ is the same
+      # story with a different answer: the Go program cannot see it either, but
+      # the app has checks of its own, which run at the end of this job instead.
       #
       # The obvious fix, paths-ignore on the triggers, is the wrong one here.
       # `Verify on ubuntu-24.04` and `Verify on macos-15` are required status
@@ -70,6 +72,7 @@ jobs:
           run_everything() {
             echo "verifying everything: $1"
             echo "code_changed=true" >> "${GITHUB_OUTPUT}"
+            echo "desktop_changed=true" >> "${GITHUB_OUTPUT}"
             exit 0
           }
 
@@ -122,19 +125,33 @@ jobs:
           echo "changed files:"
           printf '%s\n' "${changed}"
 
-          # These two paths are the whole exemption and nothing joins them.
-          # Prose is not inert here: the suite asserts on the contents of the
-          # top-level guides and of the reference and architecture documents,
-          # so a writing change is a change this workflow has to verify.
+          # These three paths are the whole exemption from the Go verification
+          # and nothing joins them. The site and its blueprint are inert to the
+          # Go program; the desktop app is Node and has checks of its own below,
+          # which is the only reason it may skip the matrix. Prose is not inert:
+          # the suite asserts on the contents of the top-level guides and of the
+          # reference and architecture documents, so a writing change is a
+          # change this workflow has to verify.
           #
           # grep exits 1 when it matches nothing, which here is precisely the
-          # site-only case, so it is asked inside an if rather than left to
+          # exempt-only case, so it is asked inside an if rather than left to
           # kill the step under set -e.
-          if printf '%s\n' "${changed}" | grep -qvE '^(site/|render\.yaml$)'; then
+          if printf '%s\n' "${changed}" | grep -qvE '^(site/|render\.yaml$|desktop/)'; then
             echo "code_changed=true" >> "${GITHUB_OUTPUT}"
           else
             echo "code_changed=false" >> "${GITHUB_OUTPUT}"
-            echo "only the static site changed; skipping the Go verification"
+            echo "nothing outside the static site and the desktop app changed; skipping the Go verification"
+          fi
+
+          # The desktop decision is the mirror image: any change under desktop/
+          # runs the shell's checks, and only a diff that positively avoids it
+          # skips them. Every failure to establish a diff has already decided
+          # to run everything above.
+          if printf '%s\n' "${changed}" | grep -qE '^desktop/'; then
+            echo "desktop_changed=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "desktop_changed=false" >> "${GITHUB_OUTPUT}"
+            echo "the desktop app did not change; skipping its checks"
           fi
 
       - name: Set up Go
@@ -183,3 +200,29 @@ jobs:
         run: |
           set -o pipefail
           go test ./... -json -timeout 45m | go run ./scripts/skipreport
+
+      # The desktop app under desktop/ is Node, not Go, and nothing in the
+      # matrix above can see a bug in it. Its own checks run here, inside this
+      # job so the required checks keep reporting, and on one runner because
+      # nothing in them depends on the platform: every renderer class styled,
+      # every export defined, element ids and IPC channels lining up on both
+      # sides, every source file parsing. The stage script that builds the CLI
+      # the app bundles is exercised by the Go suite, since its test lives
+      # under scripts/.
+      - name: Set up Node for the desktop app
+        if: steps.scope.outputs.desktop_changed == 'true' && matrix.os == 'ubuntu-24.04'
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install the desktop app's dependencies
+        if: steps.scope.outputs.desktop_changed == 'true' && matrix.os == 'ubuntu-24.04'
+        working-directory: desktop
+        run: npm ci
+
+      - name: Check the desktop shell
+        if: steps.scope.outputs.desktop_changed == 'true' && matrix.os == 'ubuntu-24.04'
+        working-directory: desktop
+        run: npm run check
