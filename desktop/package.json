@@ -15,7 +15,9 @@
     "dist:win": "npm run stage && electron-builder --win",
     "release": "npm run stage && electron-builder --publish always",
     "dist:linux": "npm run stage && electron-builder --linux",
-    "check:styles": "node scripts/check-styles.js"
+    "check:styles": "node scripts/check-styles.js",
+    "check:shell": "node scripts/check-shell.js",
+    "check": "npm run check:styles && npm run check:shell"
   },
   "license": "MIT",
   "build": {
