@@ -21,15 +21,9 @@ contextBridge.exposeInMainWorld('workbench', {
 
   openProject: (projectId, taskId = null) =>
     ipcRenderer.invoke('project:open', { projectId, taskId }),
-  listStatuses: (projectId, refresh = false) =>
-    ipcRenderer.invoke('project:statuses', { projectId, refresh }),
-  setTaskStatus: (projectId, taskId, status) =>
-    ipcRenderer.invoke('task:status', { projectId, taskId, status }),
   showChrome: () => ipcRenderer.invoke('project:showChrome'),
   closeProject: (projectId) => ipcRenderer.invoke('project:close', { projectId }),
   forgetProject: (projectId) => ipcRenderer.invoke('project:forget', { projectId }),
-
-  loadQueue: () => ipcRenderer.invoke('queue:load'),
 
   assignTask: (projectId, taskId, email) =>
     ipcRenderer.invoke('task:assign', { projectId, taskId, email }),

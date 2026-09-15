@@ -3,7 +3,7 @@
 const api = window.workbench
 
 const state = {
-  view: 'queue',
+  view: 'import',
   projects: [],
   activeProjectId: null,
   scan: { root: null, repositories: [] },
@@ -11,18 +11,6 @@ const state = {
   // they survive a rescan, so refining a search does not lose the filter.
   query: '',
   filter: 'all',
-  queueSort: 'priority',
-  queueSortDesc: false,
-  // A set per group. Empty means the group constrains nothing, so the default
-  // state and the cleared state are the same thing.
-  filters: {
-    priority: new Set(),
-    status: new Set(),
-    project: new Set(),
-    assignee: new Set(),
-    deps: new Set()
-  },
-  tasks: [],
   people: [],
   myEmails: [],
   // Selections are keyed by path so they survive re-rendering under a filter —
@@ -39,7 +27,7 @@ function setView (view, projectId = null) {
   state.view = view
   state.activeProjectId = projectId
 
-  for (const name of ['queue', 'import', 'people', 'project']) {
+  for (const name of ['import', 'people', 'project']) {
     el(`view-${name}`).hidden = name !== view
   }
   for (const button of document.querySelectorAll('.rail-item')) {
@@ -52,7 +40,6 @@ function setView (view, projectId = null) {
   // The board is a separate top-level view owned by the main process. Any view
   // that is not a project must hide it, or it would cover this document.
   if (view !== 'project') api.showChrome()
-  if (view === 'queue') loadQueue()
   if (view === 'people') loadPeople()
 }
 
@@ -115,368 +102,13 @@ async function openProject (projectId) {
   loadProjects()
 }
 
-// --- the merged queue ------------------------------------------------------
-
-async function loadQueue () {
-  const body = el('queue-body')
-  body.innerHTML = '<tr><td colspan="7" class="empty">Loading…</td></tr>'
-
-  const { tasks, failures: problems, myEmails } = await api.loadQueue()
-  state.tasks = tasks
-  state.myEmails = myEmails ?? []
-
-  const failures = el('queue-failures')
-  if (problems.length > 0) {
-    failures.hidden = false
-    failures.textContent = problems
-      .map((problem) => `${problem.project}: ${problem.error}`)
-      .join('\n')
-  } else {
-    failures.hidden = true
-  }
-
-  renderFilterGroups()
-  renderQueue()
-}
-
-/** Count how often each value occurs, so an option can show its size. */
-function tally (pick) {
-  const counts = new Map()
-  for (const task of state.tasks) {
-    for (const value of [pick(task)].flat()) {
-      if (value === undefined || value === null) continue
-      counts.set(value, (counts.get(value) ?? 0) + 1)
-    }
-  }
-  return [...counts.entries()]
-}
-
-const UNASSIGNED = '\u0000unassigned'
-
-const DEPENDENCY_OPTIONS = [
-  ['blocked', 'Blocked', (task) => task.blocked],
-  ['ready', 'Ready', (task) => !task.blocked],
-  ['blocking', 'Blocks others', (task) => (task.blocks ?? []).length > 0],
-  ['independent', 'No dependencies',
-    (task) => !task.blocked && (task.blocks ?? []).length === 0]
-]
-
-/**
- * Build the modal's groups from the data actually present.
- *
- * Offering a status or a project the list does not contain invites a filter
- * that returns nothing and explains nothing, so every option here is one that
- * matches at least one task.
- */
-function renderFilterGroups () {
-  const container = el('filter-groups')
-  container.innerHTML = ''
-
-  const groups = [
-    ['priority', 'Priority',
-      tally((task) => task.priority)
-        .sort((a, b) => (PRIORITY_ORDER[a[0]] ?? 3) - (PRIORITY_ORDER[b[0]] ?? 3)),
-      (value) => value],
-    ['status', 'Status',
-      tally((task) => task.status).sort((a, b) => a[0].localeCompare(b[0])),
-      (value) => value],
-    ['assignee', 'Assignee',
-      tally((task) => (task.assignees ?? []).length === 0 ? UNASSIGNED : task.assignees)
-        .sort((a, b) => b[1] - a[1]),
-      (value) => value === UNASSIGNED ? 'Unassigned' : assigneeLabel(value)],
-    ['deps', 'Dependencies',
-      DEPENDENCY_OPTIONS.map(([value, , match]) =>
-        [value, state.tasks.filter(match).length]),
-      (value) => DEPENDENCY_OPTIONS.find(([key]) => key === value)?.[1] ?? value],
-    ['project', 'Project',
-      tally((task) => task.projectId).sort((a, b) => b[1] - a[1]),
-      (id) => {
-        const task = state.tasks.find((candidate) => candidate.projectId === id)
-        return task ? `${task.projectKey} · ${task.projectName}` : id
-      }]
-  ]
-
-  for (const [name, label, values, describe] of groups) {
-    if (values.length === 0) continue
-    const group = document.createElement('section')
-    group.className = 'filter-group'
-    const heading = document.createElement('div')
-    heading.className = 'filter-group__name'
-    heading.textContent = label
-    const options = document.createElement('div')
-    options.className = 'filter-group__options'
-
-    for (const [value, count] of values) {
-      if (!count) continue
-      const option = document.createElement('label')
-      option.className = 'filter-option'
-      const box = document.createElement('input')
-      box.type = 'checkbox'
-      box.checked = state.filters[name].has(value)
-      box.addEventListener('change', () => {
-        if (box.checked) state.filters[name].add(value)
-        else state.filters[name].delete(value)
-        renderQueue()
-        updateFilterSummary()
-      })
-      const text = document.createElement('span')
-      text.textContent = describe(value)
-      const size = document.createElement('span')
-      size.className = 'count'
-      size.textContent = count
-      option.append(box, text, size)
-      options.append(option)
-    }
-    group.append(heading, options)
-    container.append(group)
-  }
-  updateFilterSummary()
-}
-
-/** How many groups are constraining the list. */
-function activeGroupCount () {
-  return Object.values(state.filters).filter((set) => set.size > 0).length
-}
-
-function updateFilterSummary () {
-  const groups = activeGroupCount()
-  const badge = el('filter-badge')
-  badge.hidden = groups === 0
-  badge.textContent = groups
-  el('filter-button').setAttribute('aria-expanded',
-    el('filter-modal').open ? 'true' : 'false')
-  const chosen = Object.values(state.filters).reduce((total, set) => total + set.size, 0)
-  el('filter-summary').textContent = chosen === 0
-    ? 'No filters — showing everything'
-    : `${chosen} selected across ${groups} group${groups === 1 ? '' : 's'}`
-}
-
-function matchesTaskQuery (task, query) {
-  if (!query) return true
-  const haystack = [task.title, ...(task.labels ?? [])].filter(Boolean).join(' ').toLowerCase()
-  return query.toLowerCase().split(/\s+/).filter(Boolean)
-    .every((term) => haystack.includes(term))
-}
-
-const PRIORITY_ORDER = { high: 0, medium: 1, low: 2 }
-
-function visibleTasks () {
-  const { priority, status, project, assignee, deps } = state.filters
-  const query = el('f-title').value.trim()
-
-  const filtered = state.tasks.filter((task) => {
-    // An empty set is not a filter. Within a group the options are alternatives
-    // — "high or medium" — and the groups then narrow each other.
-    if (priority.size > 0 && !priority.has(task.priority)) return false
-    if (status.size > 0 && !status.has(task.status)) return false
-    if (project.size > 0 && !project.has(task.projectId)) return false
-
-    if (assignee.size > 0) {
-      const held = task.assignees ?? []
-      const matches = held.length === 0
-        ? assignee.has(UNASSIGNED)
-        : held.some((email) => assignee.has(email))
-      if (!matches) return false
-    }
-
-    if (deps.size > 0) {
-      const matches = DEPENDENCY_OPTIONS
-        .filter(([value]) => deps.has(value))
-        .some(([, , match]) => match(task))
-      if (!matches) return false
-    }
-
-    return matchesTaskQuery(task, query)
-  })
-
-  const key = {
-    priority: (task) => PRIORITY_ORDER[task.priority] ?? 3,
-    title: (task) => task.title.toLowerCase(),
-    assignee: (task) => (task.assignees ?? []).map(assigneeLabel).sort()[0] ?? '\uffff',
-    // Ordered by consequence: what most other work waits on comes first.
-    deps: (task) => -((task.blocks ?? []).length * 10 - (task.blockedBy ?? []).length),
-    status: (task) => task.status,
-    project: (task) => task.projectKey,
-    updated: (task) => String(task.updatedAt)
-  }[state.queueSort] ?? ((task) => PRIORITY_ORDER[task.priority] ?? 3)
-
-  const direction = state.queueSortDesc ? -1 : 1
-  return filtered.sort((a, b) => {
-    const left = key(a)
-    const right = key(b)
-    if (left < right) return -1 * direction
-    if (left > right) return 1 * direction
-    // A stable secondary order, so equal keys do not shuffle between renders.
-    return String(b.updatedAt).localeCompare(String(a.updatedAt))
-  })
-}
-
-/**
- * Which colour a status gets.
- *
- * Driven by Workbook's own tags rather than by the status name, because a
- * project can rename its columns and the tags are what the tool itself reasons
- * about: `next` is what `next` picks from, `done` is what satisfies a
- * dependency. Anything untagged is work in flight, and takes its shade from
- * where it sits in the project's order so two in-flight columns do not come out
- * the same colour.
- */
-function statusClass (task) {
-  const tags = task.statusTags ?? []
-  if (tags.includes('done')) return 'status-chip--done'
-  if (tags.includes('next')) return 'status-chip--next'
-  if (tags.includes('default')) return 'status-chip--default'
-  return (task.statusOrder ?? 0) % 2 === 0
-    ? 'status-chip--active-b'
-    : 'status-chip--active-a'
-}
-
-function chipFor (text, className, title) {
-  const node = document.createElement('span')
-  node.className = className
-  node.textContent = text
-  if (title) node.title = title
-  return node
-}
+// --- assigning --------------------------------------------------------------
 
 /** The name to show for an assignee, falling back to the address itself. */
 function assigneeLabel (email) {
   const person = state.people.find((candidate) => candidate.emails.includes(String(email).toLowerCase()))
   return person ? person.displayName : email
 }
-
-function renderQueue () {
-  closeAssignMenu()
-  const body = el('queue-body')
-  body.innerHTML = ''
-
-  const visible = visibleTasks()
-  el('queue-count').textContent = state.tasks.length === 0
-    ? ''
-    : `${visible.length} of ${state.tasks.length} tasks`
-
-  updateFilterSummary()
-
-  // The header arrows are drawn from the sort state rather than set by the
-  // click handler, so they cannot claim an order the table is not in.
-  for (const header of document.querySelectorAll('.task-table__headers th')) {
-    if (header.dataset.sort === state.queueSort) {
-      header.setAttribute('aria-sort', state.queueSortDesc ? 'descending' : 'ascending')
-    } else {
-      header.removeAttribute('aria-sort')
-    }
-  }
-
-  if (visible.length === 0) {
-    const row = document.createElement('tr')
-    const cell = document.createElement('td')
-    cell.colSpan = 7
-    cell.className = 'empty'
-    cell.textContent = state.tasks.length === 0
-      ? 'No open tasks. Import a repository to get started.'
-      : 'Nothing matches these filters.'
-    row.append(cell)
-    body.append(row)
-    return
-  }
-
-  for (const task of visible) {
-    const row = document.createElement('tr')
-    row.title = task.id
-    // The task, not the board it lives on.
-    row.addEventListener('click', () => openTask(task))
-
-    const priority = document.createElement('td')
-    priority.append(chipFor(task.priority, `priority priority--${task.priority}`))
-
-    const title = document.createElement('td')
-    const titleText = document.createElement('span')
-    titleText.className = 'cell-title'
-    titleText.textContent = task.title
-    title.append(titleText)
-    if ((task.labels ?? []).length > 0) {
-      const labels = document.createElement('span')
-      labels.className = 'cell-labels'
-      for (const label of task.labels) labels.append(chipFor(label, 'label'))
-      title.append(labels)
-    }
-
-    const assignees = document.createElement('td')
-    const holder = document.createElement('span')
-    holder.className = 'task-assignees'
-    holder.setAttribute('role', 'button')
-    holder.tabIndex = 0
-    holder.title = 'Change who this is assigned to'
-    for (const email of task.assignees ?? []) {
-      holder.append(chipFor(assigneeLabel(email),
-        'assignee' + (state.myEmails.includes(String(email).toLowerCase()) ? ' assignee--me' : ''),
-        email))
-    }
-    if ((task.assignees ?? []).length === 0) {
-      holder.append(chipFor('assign', 'assign-add'))
-    }
-    const openPicker = (event) => { event.stopPropagation(); showAssignMenu(task, holder) }
-    holder.addEventListener('click', openPicker)
-    holder.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter' || event.key === ' ') openPicker(event)
-    })
-    assignees.append(holder)
-
-    // Both directions: what holds this up, and what it holds up.
-    const deps = document.createElement('td')
-    const depCell = document.createElement('div')
-    depCell.className = 'dep-cell'
-    if (task.blocked) {
-      depCell.append(chipFor(`blocked ×${task.blockedBy.length}`, 'blocked-chip',
-        'Waiting on:\n' + task.blockedBy
-          .map((d) => d.title ? `  ${d.title} (${d.status})` : `  ${d.id} (not in this project)`)
-          .join('\n')))
-    }
-    if ((task.blocks ?? []).length > 0) {
-      depCell.append(chipFor(`blocks ×${task.blocks.length}`, 'blocks-chip',
-        'Blocking:\n' + task.blocks.map((d) => `  ${d.title} (${d.status})`).join('\n')))
-    }
-    if (depCell.childElementCount === 0) depCell.append(chipFor('—', 'cell-muted'))
-    deps.append(depCell)
-
-    const status = document.createElement('td')
-    const statusHolder = document.createElement('span')
-    statusHolder.className = 'task-status'
-    statusHolder.setAttribute('role', 'button')
-    statusHolder.tabIndex = 0
-    statusHolder.title = 'Change this task\u2019s status'
-    statusHolder.append(chipFor(task.status, `status-chip ${statusClass(task)}`))
-    const openStatus = (event) => { event.stopPropagation(); showStatusMenu(task, statusHolder) }
-    statusHolder.addEventListener('click', openStatus)
-    statusHolder.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter' || event.key === ' ') openStatus(event)
-    })
-    status.append(statusHolder)
-
-    const project = document.createElement('td')
-    project.append(chipFor(`${task.projectKey} · ${task.projectName}`, 'cell-muted'))
-
-    const updated = document.createElement('td')
-    updated.append(chipFor(relativeDate(task.updatedAt), 'cell-muted', task.updatedAt))
-
-    row.append(priority, title, assignees, deps, status, project, updated)
-    body.append(row)
-  }
-}
-
-/** Short relative age, matching how the repository rows read. */
-function relativeDate (iso) {
-  const then = new Date(iso)
-  if (Number.isNaN(then.getTime())) return ''
-  const days = Math.floor((Date.now() - then.getTime()) / 86400000)
-  if (days <= 0) return 'today'
-  if (days === 1) return 'yesterday'
-  if (days < 30) return `${days}d ago`
-  if (days < 365) return `${Math.floor(days / 30)}mo ago`
-  return `${Math.floor(days / 365)}y ago`
-}
-
-// --- assigning --------------------------------------------------------------
 
 function closeAssignMenu () {
   el('assign-menu').hidden = true
@@ -500,12 +132,12 @@ function showAssignMenu (task, anchor) {
     try {
       const result = await run()
       if (result && result.cancelled) return
-      await loadQueue()
     } catch (error) {
       // A refusal here is a rule, not a fault — Workbook lets only the person
-      // an assignment names or the one who recorded it remove it.
-      el('queue-failures').hidden = false
-      el('queue-failures').textContent = error.message
+      // an assignment names or the one who recorded it remove it. Nothing in
+      // this build opens the picker, so there is no list to redraw and nowhere
+      // on screen to say so yet.
+      console.error(`workbench: ${error.message}`)
     }
   }
 
@@ -652,82 +284,6 @@ function positionMenu (menu, anchor) {
     : below
   menu.style.left = `${Math.max(8, left)}px`
   menu.style.top = `${top}px`
-}
-
-/**
- * Open the status picker for one task.
- *
- * The choices are that project's own statuses, in that project's own order,
- * because a vocabulary is per project: offering a column another repository
- * happens to define would produce a refusal, not a move.
- */
-async function showStatusMenu (task, anchorElement) {
-  const menu = el('assign-menu')
-  menu.innerHTML = ''
-  menu.hidden = false
-
-  let vocabulary
-  try {
-    vocabulary = await api.listStatuses(task.projectId)
-  } catch (error) {
-    closeAssignMenu()
-    showQueueError(error.message)
-    return
-  }
-
-  menu.innerHTML = ''
-  for (const status of vocabulary.statuses) {
-    const item = document.createElement('button')
-    item.type = 'button'
-    item.className = 'menu-item'
-    item.setAttribute('role', 'menuitem')
-    const name = document.createElement('span')
-    name.textContent = status.label
-    item.append(name)
-    // The tags are what Workbook itself reasons about — `next` is what `next`
-    // picks from, `done` is what satisfies a dependency — so they are shown
-    // rather than left as a name that happens to mean something.
-    if (status.tags.length > 0) {
-      const tags = document.createElement('small')
-      tags.textContent = status.tags.join(', ')
-      item.append(tags)
-    }
-    if (status.status === task.status) {
-      item.classList.add('menu-item--active')
-      item.disabled = true
-      item.title = 'Already in this status'
-    } else {
-      item.addEventListener('click', async () => {
-        closeAssignMenu()
-        try {
-          await api.setTaskStatus(task.projectId, task.id, status.status)
-          await loadQueue()
-        } catch (error) {
-          showQueueError(error.message)
-        }
-      })
-    }
-    menu.append(item)
-  }
-  positionMenu(menu, anchorElement)
-}
-
-function showQueueError (message) {
-  el('queue-failures').hidden = false
-  el('queue-failures').textContent = message
-}
-
-/** Open the board on this task, rather than on the board it lives in. */
-async function openTask (task) {
-  setView('project', task.projectId)
-  el('board-state').textContent = `Opening ${task.title}…`
-  try {
-    await api.openProject(task.projectId, task.id)
-    el('board-state').textContent = ''
-  } catch (error) {
-    el('board-state').textContent = `Could not open this board: ${error.message}`
-  }
-  loadProjects()
 }
 
 // --- people ------------------------------------------------------------------
@@ -1123,43 +679,6 @@ api.onThemeChanged(paintTheme)
 for (const button of document.querySelectorAll('.rail-item')) {
   button.addEventListener('click', () => setView(button.dataset.view))
 }
-// Column headers sort; clicking the active column reverses it.
-for (const header of document.querySelectorAll('.task-table__headers th[data-sort]')) {
-  header.querySelector('button').addEventListener('click', () => {
-    const column = header.dataset.sort
-    if (state.queueSort === column) state.queueSortDesc = !state.queueSortDesc
-    else { state.queueSort = column; state.queueSortDesc = false }
-    renderQueue()
-  })
-}
-
-el('f-title').addEventListener('input', renderQueue)
-
-el('filter-button').addEventListener('click', () => {
-  // showModal, not show: it takes focus, traps it, dims the page behind, and
-  // closes on Escape without any of that being written here.
-  el('filter-modal').showModal()
-  updateFilterSummary()
-})
-
-el('filter-close').addEventListener('click', () => el('filter-modal').close())
-el('filter-done').addEventListener('click', () => el('filter-modal').close())
-
-el('filter-clear').addEventListener('click', () => {
-  for (const set of Object.values(state.filters)) set.clear()
-  // Rebuilt rather than unticked one by one, so the boxes and the sets cannot
-  // disagree about what is selected.
-  renderFilterGroups()
-  renderQueue()
-})
-
-// Clicking the backdrop closes it: a dialog's own box is the only thing inside
-// its bounds, so a click landing on the dialog itself landed outside the box.
-el('filter-modal').addEventListener('click', (event) => {
-  if (event.target === el('filter-modal')) el('filter-modal').close()
-})
-
-el('filter-modal').addEventListener('close', updateFilterSummary)
 
 el('dismiss-key-note').addEventListener('click', dismissKeyNote)
 el('pick-folder').addEventListener('click', pickFolder)
@@ -1226,7 +745,6 @@ el('refresh').addEventListener('click', async () => {
   // commit — so the explicit refresh is what re-reads history.
   await api.listPeople(true).then((r) => { state.people = r.people }).catch(() => {})
   await loadProjects()
-  if (state.view === 'queue') loadQueue()
   if (state.view === 'people') loadPeople()
 })
 
@@ -1264,14 +782,12 @@ async function boot () {
     el('binary-note').textContent = error.message
   }
   await loadProjects()
-  // The directory is what turns an address on a task into a name, so it is
-  // loaded before the queue draws rather than after.
   try {
     state.people = (await api.listPeople()).people
   } catch {
     // A directory that cannot be built is not a reason to have no queue.
   }
-  setView('queue')
+  setView('import')
 }
 
 boot()

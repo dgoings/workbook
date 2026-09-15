@@ -232,37 +232,6 @@ async function unassign (repoPath, taskId, principal, options = {}) {
   return runJSON(repoPath, ['update', taskId, '--unassign', principal], options)
 }
 
-/**
- * The statuses this project defines.
- *
- * Per project, not global: Workbook lets a project rename, reorder and retire
- * its own columns, so the choices a task can move between are the choices that
- * project actually has.
- */
-async function listStatuses (repoPath, options = {}) {
-  const data = await runJSON(repoPath, ['status', 'list'], options)
-  return {
-    default: data.default ?? null,
-    statuses: (data.statuses ?? []).map((status) => ({
-      status: status.status,
-      label: status.label ?? status.status,
-      tags: status.tags ?? [],
-      order: status.order ?? 0
-    }))
-  }
-}
-
-/** Move a task to a status. An unknown one is refused, not guessed at. */
-async function setStatus (repoPath, taskId, status, options = {}) {
-  return runJSON(repoPath, ['update', taskId, '--status', status], options)
-}
-
-/** Every live task in a repository. */
-async function listTasks (repoPath, { binary } = {}) {
-  return runJSON(repoPath, ['list'], { binary })
-}
-
 module.exports = {
-  resolveBinary, runJSON, version, setup, listTasks, assign, unassign,
-  listStatuses, setStatus, BINARY, EXIT_ASSIGNED
+  resolveBinary, runJSON, version, setup, assign, unassign, BINARY, EXIT_ASSIGNED
 }

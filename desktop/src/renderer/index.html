@@ -42,9 +42,6 @@
     </header>
 
     <nav class="rail">
-      <button class="rail-item" data-view="queue" type="button">
-        <span class="glyph">≡</span> Tasks
-      </button>
       <button class="rail-item" data-view="import" type="button">
         <span class="glyph">+</span> Import repositories
       </button>
@@ -59,61 +56,10 @@
   </aside>
 
   <main id="main">
-    <!-- The merged cross-project queue. -->
-    <section id="view-queue" class="view">
-      <header class="view-head view-head--split">
-        <div class="view-head__lead">
-          <h1>Tasks</h1>
-          <p class="subtitle">Open tasks across every imported project.</p>
-        </div>
-
-        <div class="head-controls">
-          <input id="f-title" type="search" class="search head-search"
-                 placeholder="Search tasks and labels…" aria-label="Search tasks">
-          <button id="filter-button" class="icon-button filter-button" type="button"
-                  aria-haspopup="dialog" aria-expanded="false" title="Filter tasks">
-            <!-- A funnel, drawn here rather than sourced: it is three tapering
-                 bars, and an original shape carries no licence question. -->
-            <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
-              <path d="M2 3.2h12L9.4 8.4v4.2l-2.8 1.4V8.4z" fill="none"
-                    stroke="currentColor" stroke-width="1.5"
-                    stroke-linejoin="round" stroke-linecap="round"/>
-            </svg>
-            <span id="filter-badge" class="filter-badge" hidden></span>
-          </button>
-        </div>
-      </header>
-      <div class="table-bar">
-        <span id="queue-count" class="result-count"></span>
-      </div>
-
-      <div id="queue-failures" class="failures" hidden></div>
-
-      <!-- A real table: the columns are the filters and the sort, so there is
-           one place to narrow a list rather than a bar above it that has to
-           name every column in prose. -->
-      <div class="table-scroll view-scroll">
-        <table class="task-table" id="task-table">
-          <thead>
-            <tr class="task-table__headers">
-              <th data-sort="priority" class="col-priority"><button type="button">Priority</button></th>
-              <th data-sort="title" class="col-title"><button type="button">Task</button></th>
-              <th data-sort="assignee" class="col-assignee"><button type="button">Assignee</button></th>
-              <th data-sort="deps" class="col-deps"><button type="button">Depends</button></th>
-              <th data-sort="status" class="col-status"><button type="button">Status</button></th>
-              <th data-sort="project" class="col-project"><button type="button">Project</button></th>
-              <th data-sort="updated" class="col-updated"><button type="button">Updated</button></th>
-            </tr>
-          </thead>
-          <tbody id="queue-body"></tbody>
-        </table>
-      </div>
-    </section>
-
     <!-- The discovery + selection wizard. Controls are anchored at the top and
          the import action at the bottom; only the repository list scrolls, so
          neither the search nor the button is ever scrolled out of reach. -->
-    <section id="view-import" class="view" hidden>
+    <section id="view-import" class="view">
       <header class="view-head view-head--split">
         <div class="view-head__lead">
           <h1>Import repositories</h1>
@@ -169,23 +115,6 @@
         <button id="do-import" class="primary" type="button">Import selected</button>
       </footer>
     </section>
-
-    <!-- Filters. Checkboxes rather than single-choice menus, because "high or
-         medium" is an ordinary thing to want and a select cannot say it. No box
-         ticked in a group means that group constrains nothing, so the empty
-         state is also the default. -->
-    <dialog id="filter-modal" class="filter-modal" aria-label="Filter tasks">
-      <header class="filter-modal__head">
-        <h2>Filter tasks</h2>
-        <button id="filter-close" class="icon-button" type="button" aria-label="Close">&times;</button>
-      </header>
-      <div id="filter-groups" class="filter-groups"></div>
-      <footer class="filter-modal__foot">
-        <button id="filter-clear" class="ghost inline" type="button">Clear all</button>
-        <span id="filter-summary" class="import-status"></span>
-        <button id="filter-done" class="primary" type="button">Done</button>
-      </footer>
-    </dialog>
 
     <!-- The assignee picker, one popover reused by every row: a menu per task
          would be four hundred hidden menus on a busy queue. -->

@@ -102,9 +102,12 @@ function createWindow () {
 /**
  * Whether the app is currently dark.
  *
- * 'system' defers to the OS, which is why nativeTheme is consulted rather than
- * remembered: the OS can flip while the app runs, and a remembered answer would
- * leave the shell and the boards disagreeing with each other.
+ * This answers for the two pieces of chrome no stylesheet reaches: the window's
+ * own background color and, on Windows, the native title bar overlay. 'system'
+ * defers to the OS, which is why nativeTheme is consulted rather than
+ * remembered — the OS can flip while the app runs, and a remembered answer
+ * would leave the window background and those controls painted for the mode the
+ * app started in.
  */
 function resolveDark () {
   const choice = registry.theme
@@ -340,176 +343,6 @@ ipcMain.handle('project:forget', async (_event, { projectId }) => {
   closeProject(projectId)
   await registry.remove(projectId)
   invalidateDirectory()
-})
-
-/**
- * The merged queue: every project's tasks in one ranked list.
- *
- * This is the read Workbook has no single command for, because `list` is bound
- * to the repository at the working directory. Running it once per repository
- * and merging is the whole trick, and distinct project keys are what make the
- * merged rows tell you where each task lives.
- */
-ipcMain.handle('queue:load', async () => {
-  const projects = registry.projects
-  const settled = await Promise.all(projects.map(async (project) => {
-    try {
-      // The vocabulary comes along on the first load of each project and is
-      // cached after: a status means something by its tags — `next` is what
-      // `next` picks from, `done` is what satisfies a dependency — and a name
-      // alone cannot say which, since a project may rename its own columns.
-      const [tasks] = await Promise.all([
-        workbook.listTasks(project.path),
-        cachedStatuses(project).catch(() => null)
-      ])
-      return { project, tasks, error: null }
-    } catch (error) {
-      return { project, tasks: [], error: error.message }
-    }
-  }))
-
-  const tasks = []
-  const failures = []
-  for (const entry of settled) {
-    if (entry.error) {
-      failures.push({ project: entry.project.name, error: entry.error })
-      continue
-    }
-
-    // Every task in the project, including the done ones, so a dependency can
-    // be resolved to a title and a status. The done ones are then dropped from
-    // the queue itself — they are context for what blocks, not work to show.
-    const byId = new Map(entry.tasks.map((task) => [task.id, task]))
-
-    // And the reverse: who is waiting on each task. A task's own dependencies
-    // say why it cannot start; this says what starts when it finishes, which is
-    // the half that decides what to pick up first.
-    const blocking = new Map()
-    for (const task of entry.tasks) {
-      if (task.deleted) continue
-      for (const dependencyId of task.dependencies ?? []) {
-        if (!blocking.has(dependencyId)) blocking.set(dependencyId, [])
-        blocking.get(dependencyId).push({ id: task.id, title: task.title, status: task.status })
-      }
-    }
-
-    for (const task of entry.tasks) {
-      if (task.status === 'done' || task.deleted) continue
-
-      // What is actually holding this task up. Workbook's own `next` considers
-      // a task eligible when every dependency sits in a status tagged done, so
-      // an unfinished dependency is the difference between "queued" and
-      // "cannot be started" — which is worth saying on the row rather than
-      // leaving to whoever opens the board.
-      const blockedBy = []
-      for (const dependencyId of task.dependencies ?? []) {
-        const dependency = byId.get(dependencyId)
-        if (!dependency) {
-          // A dependency in another project, or one since deleted: it cannot be
-          // resolved here, and claiming it is satisfied would be a guess.
-          blockedBy.push({ id: dependencyId, title: null, status: 'unknown' })
-          continue
-        }
-        if (dependency.status !== 'done') {
-          blockedBy.push({
-            id: dependencyId, title: dependency.title, status: dependency.status
-          })
-        }
-      }
-      tasks.push({
-        id: task.id,
-        title: task.title,
-        status: task.status,
-        priority: task.priority,
-        labels: task.labels ?? [],
-        updatedAt: task.updatedAt,
-        dependencies: (task.dependencies ?? []).length,
-        blockedBy,
-        blocked: blockedBy.length > 0,
-        // Only the unfinished waiters count: a done task is not waiting.
-        blocks: (blocking.get(task.id) ?? []).filter((waiter) => waiter.status !== 'done'),
-        // Workbook records an assignment as an email address; the principal is
-        // the person it names, the creator the person who recorded it.
-        assignees: (task.assignments ?? []).map((assignment) => assignment.principal),
-        statusTags: statusCache.get(entry.project.id)?.byName.get(task.status)?.tags ?? [],
-        statusOrder: statusCache.get(entry.project.id)?.byName.get(task.status)?.order ?? 0,
-        projectId: entry.project.id,
-        projectName: entry.project.name,
-        projectKey: entry.project.key
-      })
-    }
-  }
-
-  const order = { high: 0, medium: 1, low: 2 }
-  tasks.sort((a, b) =>
-    (order[a.priority] ?? 3) - (order[b.priority] ?? 3) ||
-    String(b.updatedAt).localeCompare(String(a.updatedAt))
-  )
-
-  // "Mine" has to mean every address that is me, not just the one configured:
-  // a task assigned from a repository whose user.email differs is still mine.
-  const directory = await peopleDirectory()
-  const me = registry.defaultAssignee
-    ? people.findPerson(directory, registry.defaultAssignee)
-    : null
-  const myEmails = me ? me.emails : (registry.defaultAssignee ? [registry.defaultAssignee] : [])
-
-  for (const task of tasks) {
-    task.mine = task.assignees.some((email) => myEmails.includes(email.toLowerCase()))
-  }
-  return { tasks, failures, myEmails }
-})
-
-/**
- * Assign a task, asking about a collision rather than deciding one.
- *
- * Workbook refuses with exit 10 when somebody else already holds the task, and
- * that refusal is deliberate: whether a second person should hold it too is a
- * question about people, not about software. So it is put to the user, and
- * --force is only ever sent because they said yes.
- *
- * The command runs in the project's own checkout, which is also what decides
- * the creator recorded against the assignment — the repository's user.email,
- * not Workbench's idea of who you are.
- */
-// A project's statuses, read the first time a picker needs them.
-//
-// Cached because a vocabulary is edited rarely and read often, and lazily
-// because most sessions never open a status picker at all — reading twelve
-// projects' statuses on every queue load would undo the work that got the queue
-// down to one subprocess per project.
-const statusCache = new Map()
-
-async function cachedStatuses (project, refresh = false) {
-  if (!refresh && statusCache.has(project.id)) return statusCache.get(project.id)
-  const vocabulary = await workbook.listStatuses(project.path)
-  // Indexed by name as well, so a task can find its own status without a scan.
-  vocabulary.byName = new Map(vocabulary.statuses.map((status) => [status.status, status]))
-  statusCache.set(project.id, vocabulary)
-  return vocabulary
-}
-
-ipcMain.handle('project:statuses', async (_event, { projectId, refresh }) => {
-  const project = registry.find(projectId)
-  if (!project) throw new Error(`unknown project: ${projectId}`)
-  const vocabulary = await cachedStatuses(project, refresh)
-  // byName is a Map and does not survive the IPC boundary; the array does.
-  return { default: vocabulary.default, statuses: vocabulary.statuses }
-})
-
-/**
- * Move a task to a status.
- *
- * Workbook refuses a status the project does not define, which is the whole
- * validation this needs: the picker offers that project's own vocabulary, so a
- * refusal here means the vocabulary changed underneath it and the cache is
- * stale — worth reporting rather than retrying.
- */
-ipcMain.handle('task:status', async (_event, { projectId, taskId, status }) => {
-  const project = registry.find(projectId)
-  if (!project) throw new Error(`unknown project: ${projectId}`)
-  await workbook.setStatus(project.path, taskId, status)
-  return { ok: true }
 })
 
 ipcMain.handle('task:assign', async (_event, { projectId, taskId, email }) => {
