@@ -1,0 +1,442 @@
+/* Dark mode for a Workbook board — GENERATED, do not edit by hand.
+ *
+ * Regenerate with:  node scripts/generate-board-dark.js
+ *
+ * The board ships no dark mode: its stylesheet is light-only, with no
+ * prefers-color-scheme rule anywhere in it. Workbench injects this sheet into
+ * each board's WebContents when it is dark and removes it when it is not.
+ *
+ * Every declaration carries !important because Electron's insertCSS injects at
+ * the *user* origin, which loses to the page's own author rules at equal
+ * specificity. Without it the sheet parses and then does nothing.
+ *
+ * Generated from workbook/internal/webui/assets/index.html by mapping each
+ * declaration that uses a known light colour onto a dark counterpart. It is
+ * generated rather than written because the hand-written version covered the
+ * board columns and silently missed the entire task-detail route.
+ *
+ * Only colour is mapped — never a size, a radius, or a layout — so the worst a
+ * drift can do is leave a light patch, never a broken board.
+ *
+ * The primary ramp is NOT here: it is derived per project at inject time from
+ * the colour that project chose (see src/main/boardtheme.js), so a themed board
+ * keeps its own accent instead of being flattened to one blue.
+ *
+ * 111 rules, 139 declarations.
+ */
+
+/* Roots and the page ground, which the generated rules deliberately skip. */
+:root {
+  --wb-hairline: #262f3d !important;
+  --wb-text: #e4e9f2 !important;
+  --wb-text-shadow-strong: rgba(0, 0, 0, .55) !important;
+  --wb-text-shadow: rgba(0, 0, 0, .45) !important;
+  --wb-text-shadow-soft: rgba(0, 0, 0, .35) !important;
+  --wb-text-shadow-faint: rgba(0, 0, 0, .3) !important;
+  color-scheme: dark !important;
+  background: #0f141c !important;
+}
+
+body { background: #0f141c !important; }
+
+/* Translucent column grounds resolve against a light page; restate them
+   against a dark one. */
+.column { background: rgba(22, 28, 38, .36) !important; }
+.column--deleted { background: rgba(15, 20, 28, .5) !important; }
+
+/* Form controls render with the platform light theme unless told otherwise. */
+input, textarea, select, button { color-scheme: dark !important; }
+
+body {
+  background: #0f141c !important;
+}
+.app-header {
+  border-bottom: 1px solid #2f3a4a !important;
+  background: #161c26 !important;
+}
+.updated {
+  color: #8593ab !important;
+}
+.header-link {
+  color: #c2ccdc !important;
+}
+.nav-switch {
+  color: #c2ccdc !important;
+}
+.nav-switch__track {
+  border: 1px solid #3d4b5f !important;
+  background: #0f141c !important;
+}
+.nav-switch__knob {
+  background: #161c26 !important;
+}
+.nav-switch[aria-disabled="true"] {
+  color: #9aa7bd !important;
+}
+.nav-switch[aria-disabled="true"] .nav-switch__track {
+  border-color: #3d4b5f !important;
+}
+.nav-switch[aria-disabled="true"]:hover .nav-switch__track {
+  border-color: #3d4b5f !important;
+}
+.notice {
+  background: #161c26 !important;
+}
+.notice__report {
+  background: #241d12 !important;
+  color: #e8c07a !important;
+}
+.notice__report[data-kind="error"] {
+  color: #e08a7c !important;
+}
+.admin__note {
+  color: #8593ab !important;
+}
+.admin__note strong {
+  color: #c2ccdc !important;
+}
+.admin__status[data-kind="error"] {
+  color: #e08a7c !important;
+}
+.admin__status [data-panel-warning] {
+  color: #e8c07a !important;
+}
+.admin-status {
+  background: #161c26 !important;
+}
+.admin-tag {
+  border: 1px solid #2f3a4a !important;
+  color: #c2ccdc !important;
+}
+.admin-button {
+  border: 1px solid #3d4b5f !important;
+  background: #161c26 !important;
+  color: #c2ccdc !important;
+}
+.admin input, .admin select {
+  border: 1px solid #3d4b5f !important;
+  background: #161c26 !important;
+}
+.admin-form {
+  border-top: 1px dashed #2f3a4a !important;
+}
+.admin-field label {
+  color: #c2ccdc !important;
+}
+.admin-tags legend {
+  color: #c2ccdc !important;
+}
+.admin-tag-choice {
+  color: #c2ccdc !important;
+}
+.admin-note {
+  color: #e8c07a !important;
+}
+.stale {
+  background: #241d12 !important;
+  color: #e8c07a !important;
+}
+.unknown-status {
+  background: #241d12 !important;
+}
+.unknown-status__heading {
+  color: #e8c07a !important;
+}
+.unknown-status__heading .count {
+  color: #e8c07a !important;
+}
+.unknown-status__note {
+  color: #e8c07a !important;
+}
+.column {
+  border: 1px solid #2f3a4a !important;
+}
+.column__header {
+  border-bottom: 1px solid #2f3a4a !important;
+}
+.task-card {
+  border: 1px solid #2f3a4a !important;
+  background: #161c26 !important;
+}
+.task-card__pending {
+  color: #e8c07a !important;
+}
+.copy-status[data-kind="error"] {
+  color: #e08a7c !important;
+}
+.priority--high {
+  color: #f0806c !important;
+}
+.priority--medium {
+  color: #e0a45c !important;
+}
+.task-card p {
+  color: #8593ab !important;
+}
+.task-card p code {
+  background: #1b222e !important;
+}
+.label {
+  color: #9aa7bd !important;
+}
+.assignee {
+  color: #c2ccdc !important;
+}
+.assignee--more {
+  color: #8593ab !important;
+}
+.dependency-progress {
+  color: #9aa7bd !important;
+}
+.dependency-progress strong {
+  color: #f0806c !important;
+}
+.task-card__failure {
+  background: #241d12 !important;
+  color: #e8c07a !important;
+}
+.column--deleted .column__header {
+  border-top-color: #3d4b5f !important;
+  background: #1b222e !important;
+}
+.column--deleted .column__heading {
+  color: #9aa7bd !important;
+}
+.column--deleted .count {
+  color: #9aa7bd !important;
+}
+.column--deleted .task-card {
+  border-color: #2f3a4a !important;
+  background: #1b222e !important;
+}
+.column--deleted .task-card h3 a {
+  color: #9aa7bd !important;
+}
+.column__empty {
+  color: #8593ab !important;
+}
+.restore-button {
+  border: 1px solid #3d4b5f !important;
+  background: #161c26 !important;
+  color: #c2ccdc !important;
+}
+.task-route {
+  border: 1px solid #2f3a4a !important;
+  background: #161c26 !important;
+}
+.task-sidebar {
+  background: #1b222e !important;
+}
+.field label {
+  color: #c2ccdc !important;
+}
+.field input, .field textarea, .field select {
+  border: 1px solid #3d4b5f !important;
+  background: #161c26 !important;
+}
+.description-edit-toggle {
+  border: 1px solid #3d4b5f !important;
+  background: #161c26 !important;
+  color: #c2ccdc !important;
+}
+.description-read {
+  background: #1b222e !important;
+}
+.description-read__empty {
+  color: #8593ab !important;
+}
+.label-chip {
+  border: 1px solid #2f3a4a !important;
+  color: #c2ccdc !important;
+}
+.label-editor__hint, .label-editor__status {
+  color: #8593ab !important;
+}
+.form-status {
+  color: #f0806c !important;
+}
+.create-more {
+  color: #c2ccdc !important;
+}
+.board-link {
+  color: #c2ccdc !important;
+}
+.route-message {
+  color: #8593ab !important;
+}
+.relationship-row__metadata, .relationship-row__note {
+  color: #8593ab !important;
+}
+.relationship-state {
+  color: #f0806c !important;
+}
+.relationship-editor input {
+  border: 1px solid #3d4b5f !important;
+  background: #161c26 !important;
+}
+.relationship-listbox {
+  border: 1px solid #3d4b5f !important;
+  background: #161c26 !important;
+}
+.relationship-row--compact {
+  border-top: 1px solid #232c39 !important;
+}
+.relationship-option {
+  border-bottom: 1px solid #232c39 !important;
+}
+.relationship-option span {
+  color: #8593ab !important;
+}
+.relationship-empty {
+  color: #8593ab !important;
+}
+.relationship-message {
+  color: #f0806c !important;
+}
+.task-panel--comments {
+  background: #161c26 !important;
+}
+.task-panel--attachments {
+  background: #1b222e !important;
+}
+.task-panel__count {
+  color: #8593ab !important;
+}
+.task-panel__empty {
+  color: #8593ab !important;
+}
+.task-panel--assignments {
+  background: #1b222e !important;
+}
+.assignment {
+  background: #161c26 !important;
+}
+.assignment__meta {
+  color: #8593ab !important;
+}
+.assignment-add label {
+  color: #c2ccdc !important;
+}
+.assignment-add input {
+  border: 1px solid #3d4b5f !important;
+  background: #161c26 !important;
+}
+.assignment-add__hint {
+  color: #8593ab !important;
+}
+.comment {
+  background: #161c26 !important;
+}
+.comment__attribution {
+  color: #8593ab !important;
+}
+.comment__note {
+  color: #e8c07a !important;
+}
+.comment__editor textarea, .comment-add textarea {
+  border: 1px solid #3d4b5f !important;
+  background: #161c26 !important;
+}
+.comment-add label, .attachment-add label {
+  color: #c2ccdc !important;
+}
+.attachment {
+  background: #161c26 !important;
+}
+.attachment__meta {
+  color: #8593ab !important;
+}
+.attachment__failure {
+  color: #f0806c !important;
+}
+.attachment-add__hint {
+  color: #8593ab !important;
+}
+.attachment-add input[type="text"], .attachment-add input[type="url"] {
+  border: 1px solid #3d4b5f !important;
+  background: #161c26 !important;
+}
+.thread-button {
+  border: 1px solid #3d4b5f !important;
+  background: #161c26 !important;
+  color: #c2ccdc !important;
+}
+.markdown h6 {
+  color: #c2ccdc !important;
+}
+.markdown blockquote {
+  border-left: 3px solid #2f3a4a !important;
+  color: #9aa7bd !important;
+}
+.markdown code {
+  background: #1b222e !important;
+}
+.task-history {
+  background: #1b222e !important;
+}
+.lifecycle__stop {
+  background: #161c26 !important;
+}
+.lifecycle__meta {
+  color: #8593ab !important;
+}
+.history-state {
+  color: #8593ab !important;
+}
+.history-state[data-kind="error"] {
+  color: #f0806c !important;
+}
+.history-truncation {
+  background: #241d12 !important;
+  color: #e8c07a !important;
+}
+.change-summary {
+  color: #8593ab !important;
+}
+.change-row {
+  background: #161c26 !important;
+}
+.change-row__when, .change-row__who {
+  color: #8593ab !important;
+}
+.change-comparison {
+  border-top: 1px solid #232c39 !important;
+}
+.field-change__label {
+  color: #c2ccdc !important;
+}
+.field-change del {
+  color: #e08a7c !important;
+}
+
+/* The switch track is recessed and the knob rides on it, so the two must not
+   land on the same colour — which mapping #e9eef5 and #fff separately does. */
+.nav-switch__track {
+  background: #1b222e !important;
+  border-color: #46566d !important;
+}
+
+.nav-switch__knob {
+  background: #c2ccdc !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .6) !important;
+}
+
+.nav-switch:hover .nav-switch__track { border-color: var(--wb-primary) !important; }
+
+/* Checked, the track carries the project's primary, which the derived ramp
+   lifts to a light colour — so the knob has to darken to stay visible on it. */
+.nav-switch[aria-checked="true"] .nav-switch__track {
+  background: var(--wb-primary) !important;
+  border-color: var(--wb-primary) !important;
+}
+
+.nav-switch[aria-checked="true"] .nav-switch__knob {
+  background: #0f141c !important;
+}
+
+.nav-switch[aria-disabled="true"] .nav-switch__track {
+  background: #171d27 !important;
+  border-color: #333f4f !important;
+}
+
+.nav-switch[aria-disabled="true"] .nav-switch__knob { background: #55627a !important; }

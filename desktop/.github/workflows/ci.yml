@@ -1,0 +1,148 @@
+name: CI
+
+# Every module must parse and the generated board overlay must match its
+# source. Neither is a substitute for a test suite; both catch the mistakes
+# this project has actually made — a bad edit that removed a function, and a
+# hand-maintained stylesheet drifting from the one it overlays.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Workflow files are well formed
+        run: node scripts/check-workflows.js
+
+      # Four edits in this project removed a CSS rule as collateral while
+      # replacing an adjacent one. The page still renders, just wrongly, so
+      # nothing else here would notice.
+      - name: Every renderer class is styled
+        run: node scripts/check-styles.js
+
+      - name: Every source file parses
+        run: |
+          for file in src/main/*.js src/preload/*.js src/renderer/app.js scripts/*.js; do
+            node --check "$file"
+          done
+
+      # Catches the mistake this project actually made twice: an edit that
+      # removed a function while leaving it in module.exports, which throws only
+      # when something first calls it.
+      - name: Every export is defined
+        run: |
+          node -e "
+            for (const m of ['workbook','discovery','registry','supervisor','boardtheme','repoinfo']) {
+              const mod = require('./src/main/' + m)
+              const missing = Object.entries(mod).filter(([, v]) => v === undefined).map(([k]) => k)
+              if (missing.length) { console.error(m, 'exports undefined:', missing); process.exit(1) }
+              console.log(m, '->', Object.keys(mod).join(', '))
+            }
+          "
+
+      - name: Renderer references only elements that exist
+        run: |
+          node -e "
+            const fs = require('fs')
+            const html = fs.readFileSync('src/renderer/index.html', 'utf8')
+            const js = fs.readFileSync('src/renderer/app.js', 'utf8')
+            const ids = new Set([...html.matchAll(/id=\"([\w-]+)\"/g)].map(m => m[1]))
+            const used = new Set([...js.matchAll(/el\('([\w-]+)'\)/g)].map(m => m[1]))
+            const missing = [...used].filter(id => !ids.has(id))
+            if (missing.length) { console.error('missing element ids:', missing); process.exit(1) }
+            console.log('all', used.size, 'referenced ids exist')
+          "
+
+      - name: IPC channels line up
+        run: |
+          node -e "
+            const fs = require('fs')
+            const main = fs.readFileSync('src/main/main.js', 'utf8')
+            const pre = fs.readFileSync('src/preload/preload.js', 'utf8')
+            const handled = new Set([...main.matchAll(/ipcMain\.handle\('([^']+)'/g)].map(m => m[1]))
+            const invoked = new Set([...pre.matchAll(/ipcRenderer\.invoke\('([^']+)'/g)].map(m => m[1]))
+            const orphans = [...invoked].filter(c => !handled.has(c))
+            if (orphans.length) { console.error('invoked but not handled:', orphans); process.exit(1) }
+            console.log('all', invoked.size, 'channels handled')
+          "
+
+      - name: Board overlay matches its source
+        run: |
+          # `clone --branch` takes a branch or a tag, never a commit, and the
+          # pin may be any of the three. Clone, then resolve the ref the same
+          # way scripts/build-workbook.sh does.
+          ref=$(node -p 'require("./package.json").workbook.ref')
+          git clone --quiet "$(node -p 'require("./package.json").workbook.repository')" /tmp/workbook
+          git -C /tmp/workbook fetch --quiet --tags origin || true
+          git -C /tmp/workbook fetch --quiet origin "$ref" 2>/dev/null || true
+          git -C /tmp/workbook checkout --quiet --detach "$ref"
+          WORKBOOK_REPO=/tmp/workbook node scripts/generate-board-dark.js
+          if ! git diff --quiet -- src/renderer/board-dark.css; then
+            echo "board-dark.css is stale. Run: npm run gen:board-dark"
+            git diff -- src/renderer/board-dark.css | head -40
+            exit 1
+          fi
+          echo "board-dark.css is current"
+
+  # Staging the CLI is the only part of the build that is genuinely
+  # platform-specific, and every Windows problem so far has been in it: npm
+  # choosing cmd.exe, Git Bash handing POSIX paths to a native node, the
+  # extension Go does not add. Finding those at tag time costs a whole release
+  # cycle each, so the step runs here on every push instead.
+  stage-windows:
+    name: Stage the CLI on Windows
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: false
+
+      - run: npm ci
+
+      - name: Build and stage the Workbook CLI
+        shell: bash
+        run: npm run stage
+
+      - name: The staged binary is named and runnable as Windows expects
+        shell: bash
+        run: |
+          test -f build/workbook.exe || { echo "build/workbook.exe missing"; ls -la build; exit 1; }
+          ./build/workbook.exe version
+
+      # Staging being correct did not make packaging correct: extraResources
+      # merges across platform blocks rather than replacing, so Windows went
+      # looking for the POSIX binary name and copied the licence twice at once,
+      # which it answers with EBUSY. Packaging is checked here so that class of
+      # thing is found on a push rather than on a tag. --dir only: this proves
+      # the bundle assembles, and publishes nothing.
+      - name: The Windows bundle assembles with its resources
+        shell: bash
+        run: |
+          npx electron-builder --win --dir
+          resources=dist/win-unpacked/resources
+          test -f "$resources/workbook.exe" || { echo "workbook.exe missing from resources"; ls -la "$resources"; exit 1; }
+          test -f "$resources/WORKBOOK-LICENSE" || { echo "licence missing from resources"; ls -la "$resources"; exit 1; }
+          test -f dist/win-unpacked/Workbench.exe || { echo "Workbench.exe missing"; exit 1; }
+          echo "bundle assembled with:"
+          ls -1 "$resources" | grep -iE 'workbook|license'

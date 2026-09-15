@@ -1,0 +1,1235 @@
+/* Workbench adopts the board's design vocabulary so that the shell and the
+   board it frames read as one application. Every value here is taken from
+   workbook/internal/webui/assets/index.html: the palette, the two font
+   families, the 3-4px radii, and the #b9c6d8 hairline.
+
+   Light is Workbook's palette unchanged. Dark is this app's addition — the
+   board has no dark mode of its own — and moves only the token values, so both
+   modes are the same design lit differently. The boards are darkened to match
+   by board-dark.css, which the main process injects into each one. */
+
+:root {
+  /* Workbook's own ramp, verbatim. The board ships these as --wb-* custom
+     properties and re-serves the :root block with different values when a
+     project has chosen a colour, which is the hook for per-project theming
+     here later. */
+  --wb-primary: #2457d6;
+  --wb-primary-hover: #1d49b7;
+  --wb-primary-edge: #173f9e;
+  --wb-primary-tint-1: #edf3ff;
+  --wb-primary-tint-4: #f8faff;
+  --wb-primary-ink: #526b9b;
+  --wb-on-primary: #fff;
+
+  --wb-text: #172033;
+  --wb-text-2: #34425a;
+  --wb-text-3: #4e5d73;
+  --wb-muted: #56647a;
+
+  --wb-canvas: #e9eef5;
+  --wb-surface: #fff;
+  --wb-surface-2: #fbfcfe;
+  --wb-rule: #b9c6d8;
+  --wb-hairline: #d5deea;
+  --wb-control: #9eafc5;
+  --wb-divider: #e1e7f0;
+
+  --wb-ok: #1a7f4b;
+  --wb-danger: #b42318;
+  --wb-danger-edge: #8f1d1d;
+  --wb-danger-surface: #fdf0ef;
+  --wb-warn: #7c3b08;
+  --wb-warn-surface: #fdf6ea;
+  --wb-warn-edge: #e2c9a0;
+
+  --wb-priority-high: #b42318;
+  --wb-priority-medium: #b45309;
+  --wb-priority-low: #2457d6;
+
+  --wb-shadow-faint: rgba(23, 32, 51, .05);
+  --wb-shadow: rgba(23, 32, 51, .12);
+
+  color-scheme: light;
+  font-family: ui-rounded, "Avenir Next", system-ui, sans-serif;
+  color: var(--wb-text);
+  background: var(--wb-canvas);
+}
+
+/* Dark is Workbench's own: the board is light-only upstream, with no
+   prefers-color-scheme rule anywhere in its stylesheet. Only the token values
+   move — every radius, weight, font and rule below is shared, so the two modes
+   are the same design lit differently.
+
+   Hues are held and lightness inverted rather than recoloured: the primary
+   keeps Workbook's blue but lifts to stay legible on a dark ground, where
+   #2457d6 would not. Declared in two blocks so an explicit choice wins in both
+   directions and the untouched default still follows the system. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --wb-primary: #6e9bff;
+    --wb-primary-hover: #86adff;
+    --wb-primary-edge: #4d7ce0;
+    --wb-primary-tint-1: #18233a;
+    --wb-primary-tint-4: #131a28;
+    --wb-primary-ink: #8fa6cf;
+    --wb-on-primary: #0f141c;
+
+    --wb-text: #e4e9f2;
+    --wb-text-2: #c2ccdc;
+    --wb-text-3: #9aa7bd;
+    --wb-muted: #8593ab;
+
+    --wb-canvas: #0f141c;
+    --wb-surface: #161c26;
+    --wb-surface-2: #1b222e;
+    --wb-rule: #2f3a4a;
+    --wb-hairline: #262f3d;
+    --wb-control: #3d4b5f;
+    --wb-divider: #232c39;
+
+    --wb-ok: #5fc98d;
+    --wb-danger: #f0806c;
+    --wb-danger-edge: #b8483a;
+    --wb-danger-surface: #2a1a18;
+    --wb-warn: #e8c07a;
+    --wb-warn-surface: #241d12;
+    --wb-warn-edge: #4a3a22;
+
+    --wb-priority-high: #f0806c;
+    --wb-priority-medium: #e0a45c;
+    --wb-priority-low: #6e9bff;
+
+    --wb-shadow-faint: rgba(0, 0, 0, .3);
+    --wb-shadow: rgba(0, 0, 0, .45);
+
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --wb-primary: #6e9bff;
+  --wb-primary-hover: #86adff;
+  --wb-primary-edge: #4d7ce0;
+  --wb-primary-tint-1: #18233a;
+  --wb-primary-tint-4: #131a28;
+  --wb-primary-ink: #8fa6cf;
+  --wb-on-primary: #0f141c;
+
+  --wb-text: #e4e9f2;
+  --wb-text-2: #c2ccdc;
+  --wb-text-3: #9aa7bd;
+  --wb-muted: #8593ab;
+
+  --wb-canvas: #0f141c;
+  --wb-surface: #161c26;
+  --wb-surface-2: #1b222e;
+  --wb-rule: #2f3a4a;
+  --wb-hairline: #262f3d;
+  --wb-control: #3d4b5f;
+  --wb-divider: #232c39;
+
+  --wb-ok: #5fc98d;
+  --wb-danger: #f0806c;
+  --wb-danger-edge: #b8483a;
+  --wb-danger-surface: #2a1a18;
+  --wb-warn: #e8c07a;
+  --wb-warn-surface: #241d12;
+  --wb-warn-edge: #4a3a22;
+
+  --wb-priority-high: #f0806c;
+  --wb-priority-medium: #e0a45c;
+  --wb-priority-low: #6e9bff;
+
+  --wb-shadow-faint: rgba(0, 0, 0, .3);
+  --wb-shadow: rgba(0, 0, 0, .45);
+
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+/* An author `display` beats the UA stylesheet's [hidden] rule whatever its
+   specificity, so any element given one — .view is a flex column — stays
+   visible when hidden unless this restates it. */
+[hidden] { display: none !important; }
+
+/* macOS paints native chrome on a <button> and it survives `background:
+   transparent` — a header button came out as a grey pill on a dark row. Every
+   button here is styled, so none of them want the platform's own drawing. */
+button {
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+html, body { height: 100%; }
+
+body {
+  display: flex;
+  margin: 0;
+  overflow: hidden;
+  background: var(--wb-canvas);
+}
+
+/* The board sets these five in monospace; the shell follows so that a key or a
+   priority reads the same on either side of the divider. */
+.project-key, .priority, .label, .repo-path, .scan-root, .task-meta, code {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+
+/* --- sidebar ------------------------------------------------------------ */
+
+/* White against the canvas, the way .app-header separates itself from the
+   board it sits above — same surface, same hairline, turned ninety degrees. */
+#sidebar {
+  width: 260px;
+  flex: 0 0 260px;
+  display: flex;
+  flex-direction: column;
+  background: var(--wb-surface);
+  border-right: 1px solid var(--wb-rule);
+}
+
+.sidebar-head {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: .5rem;
+  /* Clears the traffic lights, which titleBarStyle 'hiddenInset' floats over
+     the top-left of this pane. Windows draws its overlay controls at the top
+     *right*, over the main area rather than the sidebar, and Linux gets
+     ordinary decorations — neither needs the inset, and on both it would read
+     as a stray gap. The platform class is set by the renderer at boot. */
+  padding: 34px 1rem .75rem;
+}
+
+:root:not(.is-mac) .sidebar-head {
+  padding-top: .85rem;
+  -webkit-app-region: drag;
+}
+
+.sidebar-identity { flex: 1; min-width: 0; }
+
+/* The menu button and its popover opt out of the drag region: a control inside
+   one is dragged rather than clicked. */
+.icon-button,
+.menu {
+  -webkit-app-region: no-drag;
+}
+
+.icon-button {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--wb-text-3);
+  cursor: pointer;
+}
+
+.icon-button:hover { background: var(--wb-primary-tint-1); color: var(--wb-primary); }
+
+/* The update marker: present enough to notice, quiet enough to ignore — which
+   is the whole point of not making it a dialog. */
+.update-dot {
+  position: absolute;
+  top: .25rem;
+  right: .25rem;
+  width: .4rem;
+  height: .4rem;
+  border-radius: 50%;
+  background: var(--wb-primary);
+}
+
+.menu-item--update { color: var(--wb-primary); font-weight: 800; }
+
+.icon-button[aria-expanded="true"] {
+  border-color: var(--wb-hairline);
+  background: var(--wb-primary-tint-1);
+  color: var(--wb-primary);
+}
+
+/* A popover rather than an inline panel: the sidebar's list is the sidebar's
+   job, and a menu that pushed it down would move the projects every time it
+   opened. */
+.menu {
+  position: absolute;
+  top: calc(34px + 2rem);
+  right: .75rem;
+  z-index: 10;
+  width: 13rem;
+  padding: .3rem;
+  border: 1px solid var(--wb-control);
+  border-radius: 4px;
+  background: var(--wb-surface);
+  box-shadow: 0 8px 20px var(--wb-shadow);
+}
+
+.menu-item {
+  display: block;
+  width: 100%;
+  padding: .35rem .5rem;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--wb-text-2);
+  cursor: pointer;
+  font: inherit;
+  font-size: .82rem;
+  font-weight: 700;
+  text-align: left;
+}
+
+.menu-item:hover { background: var(--wb-primary-tint-1); color: var(--wb-primary); }
+
+.menu-separator {
+  height: 1px;
+  margin: .3rem .15rem;
+  background: var(--wb-divider);
+}
+
+.menu-label {
+  padding: .2rem .5rem .35rem;
+  color: var(--wb-muted);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: .66rem;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.wordmark {
+  margin: 0 0 .2rem;
+  color: var(--wb-primary);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: .7rem;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.version {
+  color: var(--wb-muted);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: .75rem;
+  cursor: default;
+  /* One line always: a wrapped version pushes the rail down and collides with
+     the menu. Which binary it is lives in the menu, which has room for it. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.version.missing { color: var(--wb-danger); }
+
+/* Which Workbook is driving these repositories — the answer to "why does the
+   app disagree with my terminal". */
+.menu-note {
+  padding: .1rem .5rem .3rem;
+  color: var(--wb-muted);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: .66rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.menu-note strong { color: var(--wb-text-3); font-weight: 700; }
+
+.rail { padding: .35rem .5rem; display: flex; flex-direction: column; gap: 2px; }
+
+.rail-item {
+  display: flex;
+  align-items: center;
+  gap: .55rem;
+  width: 100%;
+  padding: .4rem .55rem;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--wb-text-2);
+  font: inherit;
+  font-size: .86rem;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rail-item:hover { background: var(--wb-primary-tint-4); }
+
+/* The board marks a live column with a 3px primary edge on .column__header.
+   The same edge, rotated to the inline start, marks the live route here. */
+.rail-item.active {
+  border-color: var(--wb-hairline);
+  border-left: 3px solid var(--wb-primary);
+  padding-left: calc(.55rem - 2px);
+  background: var(--wb-primary-tint-1);
+  color: var(--wb-primary);
+}
+
+.glyph { width: 1rem; text-align: center; color: var(--wb-primary-ink); }
+.rail-item.active .glyph { color: var(--wb-primary); }
+
+.rail-label {
+  padding: 1rem .95rem .35rem;
+  color: var(--wb-primary);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: .7rem;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.project-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 .5rem;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.project-item {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .4rem .55rem;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: .86rem;
+}
+
+.project-item:hover { background: var(--wb-primary-tint-4); }
+
+.project-item.active {
+  border-color: var(--wb-hairline);
+  border-left: 3px solid var(--wb-primary);
+  padding-left: calc(.55rem - 2px);
+  background: var(--wb-primary-tint-1);
+}
+
+/* .admin-tag: the board's own way of setting a short token beside a name. */
+.project-key {
+  flex: 0 0 auto;
+  padding: .08rem .32rem;
+  border: 1px solid var(--wb-rule);
+  border-radius: 3px;
+  color: var(--wb-text-2);
+  font-size: .66rem;
+  font-weight: 400;
+}
+
+.project-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.dot {
+  width: .4rem;
+  height: .4rem;
+  border-radius: 50%;
+  background: var(--wb-control);
+  flex: 0 0 auto;
+}
+
+.dot.running { background: var(--wb-ok); }
+.dot.failed, .dot.exited { background: var(--wb-danger); }
+
+/* A segmented control in the board's own button vocabulary: one hairline box,
+   the live segment filled with the primary tint the rail uses for its route. */
+.theme-toggle {
+  margin: 0 .15rem .15rem;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  border: 1px solid var(--wb-control);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.theme-option {
+  border: 0;
+  border-left: 1px solid var(--wb-control);
+  background: var(--wb-surface);
+  color: var(--wb-text-3);
+  cursor: pointer;
+  font: inherit;
+  font-size: .72rem;
+  font-weight: 700;
+  padding: .3rem .2rem;
+}
+
+.theme-option:first-child { border-left: 0; }
+.theme-option:hover { background: var(--wb-primary-tint-4); }
+
+.theme-option.active {
+  background: var(--wb-primary-tint-1);
+  color: var(--wb-primary);
+}
+
+/* --- main --------------------------------------------------------------- */
+
+/* #main no longer scrolls: each view is a column whose middle section does, so
+   a view's controls and its primary action stay anchored while its list moves
+   underneath them. */
+#main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 2.1rem 2rem 0;
+}
+
+/* min-height:0 is what lets a flex child scroll rather than grow past the
+   window; without it the list pushes the footer off the bottom. */
+.view-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 1.5rem;
+}
+
+.view-head { flex: 0 0 auto; margin-bottom: 1.25rem; }
+
+/* Heading on the left, the key caution on the right. */
+.view-head--split {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1.5rem;
+}
+
+.view-head__lead { min-width: 0; }
+
+h1 {
+  margin: 0 0 .25rem;
+  font-size: clamp(1.25rem, 2vw, 1.65rem);
+  letter-spacing: -.03em;
+}
+
+.subtitle { color: var(--wb-muted); margin: 0; max-width: 62ch; font-size: .84rem; }
+
+/* --- queue -------------------------------------------------------------- */
+
+.queue { display: flex; flex-direction: column; gap: .4rem; }
+
+/* .task-card, flattened into a row: same border, radius, surface and the same
+   one-pixel shadow the board draws under every card. */
+.task {
+  display: grid;
+  grid-template-columns: 4rem minmax(0, 1fr) auto auto auto auto;
+  align-items: center;
+  gap: .75rem;
+  padding: .55rem .7rem;
+  border: 1px solid var(--wb-rule);
+  border-radius: 4px;
+  background: var(--wb-surface);
+  box-shadow: 0 1px 0 var(--wb-shadow-faint);
+  cursor: pointer;
+}
+
+.task:hover { border-color: var(--wb-primary); box-shadow: inset 0 0 0 1px var(--wb-primary); }
+
+.task-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .88rem; }
+
+.task-meta {
+  color: var(--wb-text-3);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: .7rem;
+}
+
+.priority { flex: 0 0 auto; font-size: .64rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.priority--high { color: var(--wb-priority-high); }
+.priority--medium { color: var(--wb-priority-medium); }
+.priority--low { color: var(--wb-priority-low); }
+
+/* .label: the board's chip for a task's labels. */
+.label {
+  max-width: 100%;
+  overflow: hidden;
+  padding: .14rem .28rem;
+  border: 1px solid var(--wb-hairline);
+  border-radius: 3px;
+  color: var(--wb-text-3);
+  font-size: .64rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- filtering ---------------------------------------------------------- */
+
+.head-controls { display: flex; align-items: center; gap: .5rem; flex: 0 0 auto; }
+.head-search { width: 18rem; }
+
+.filter-button { position: relative; width: 2rem; height: 2rem; }
+
+/* How many groups are constraining the list, so a filtered table cannot look
+   like an empty one. */
+.filter-badge {
+  position: absolute;
+  top: -.2rem;
+  right: -.2rem;
+  min-width: 1rem;
+  padding: 0 .2rem;
+  border-radius: 999px;
+  background: var(--wb-primary);
+  color: var(--wb-on-primary);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: .6rem;
+  font-weight: 700;
+  line-height: 1rem;
+  text-align: center;
+}
+
+.filter-modal {
+  width: min(38rem, calc(100vw - 4rem));
+  max-height: min(34rem, calc(100vh - 6rem));
+  padding: 0;
+  border: 1px solid var(--wb-rule);
+  border-radius: 6px;
+  background: var(--wb-surface);
+  color: var(--wb-text);
+  box-shadow: 0 18px 44px var(--wb-shadow);
+}
+
+.filter-modal::backdrop { background: rgba(0, 0, 0, .45); }
+
+.filter-modal__head,
+.filter-modal__foot {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  padding: .7rem .9rem;
+}
+
+.filter-modal__head { border-bottom: 1px solid var(--wb-divider); }
+.filter-modal__head h2 { flex: 1; margin: 0; font-size: .95rem; font-weight: 650; }
+.filter-modal__foot { border-top: 1px solid var(--wb-divider); }
+
+.filter-groups {
+  max-height: 22rem;
+  overflow-y: auto;
+  padding: .3rem .9rem .9rem;
+}
+
+.filter-group { padding-top: .8rem; }
+
+.filter-group__name {
+  margin-bottom: .35rem;
+  color: var(--wb-primary);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: .68rem;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.filter-group__options { display: flex; flex-wrap: wrap; gap: .3rem .5rem; }
+
+.filter-option {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  padding: .22rem .5rem .22rem .35rem;
+  border: 1px solid var(--wb-hairline);
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: .8rem;
+}
+
+.filter-option:hover { border-color: var(--wb-control); background: var(--wb-primary-tint-4); }
+
+.filter-option:has(input:checked) {
+  border-color: var(--wb-primary);
+  background: var(--wb-primary-tint-1);
+  color: var(--wb-primary);
+}
+
+.filter-option input { margin: 0; }
+.filter-option .count { color: var(--wb-muted); font-size: .72rem; }
+.filter-option:has(input:checked) .count { color: inherit; }
+
+/* --- the task table ----------------------------------------------------- */
+
+.table-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  margin-bottom: .5rem;
+}
+
+/* The scroll container, so the header can stick to the top of it. */
+.table-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--wb-rule);
+  border-radius: 4px;
+  background: var(--wb-surface);
+}
+
+.task-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: .84rem;
+}
+
+.task-table thead th {
+  position: sticky;
+  background: var(--wb-surface-2);
+  text-align: left;
+  font-weight: 700;
+  z-index: 1;
+}
+
+.task-table__headers th { top: 0; border-bottom: 1px solid var(--wb-rule); }
+
+.task-table__headers th button {
+  display: flex;
+  align-items: center;
+  gap: .3rem;
+  width: 100%;
+  padding: .45rem .55rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--wb-text-2);
+  cursor: pointer;
+  font: inherit;
+  font-size: .74rem;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  text-align: left;
+}
+
+.task-table__headers th button:hover { color: var(--wb-primary); }
+.task-table__headers th[aria-sort] button { color: var(--wb-primary); }
+
+/* The arrow is drawn from the sort state, so a header cannot claim an order
+   the table is not in. */
+.task-table__headers th[aria-sort="ascending"] button::after { content: "▲"; font-size: .6em; }
+.task-table__headers th[aria-sort="descending"] button::after { content: "▼"; font-size: .6em; }
+
+.task-table tbody td {
+  padding: .45rem .55rem;
+  border-bottom: 1px solid var(--wb-divider);
+  vertical-align: middle;
+}
+
+.task-table tbody tr { cursor: pointer; }
+.task-table tbody tr:hover td { background: var(--wb-primary-tint-4); }
+.task-table tbody tr:last-child td { border-bottom: 0; }
+
+.col-title { width: auto; }
+.col-priority { width: 6.5rem; }
+.col-assignee { width: 11rem; }
+.col-deps { width: 9rem; }
+.col-status { width: 7.5rem; }
+.col-project { width: 11rem; }
+.col-updated { width: 6.5rem; }
+
+.cell-title { color: var(--wb-text); }
+
+.cell-labels {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: .2rem;
+  margin-left: .4rem;
+}
+
+.cell-muted {
+  color: var(--wb-muted);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: .7rem;
+}
+
+/* What a task waits on, and what waits on it. Amber for blocked because it is
+   an ordinary state for queued work; primary for blocking because it is a
+   reason to pick something up, not a warning. */
+.blocks-chip {
+  padding: .1rem .3rem;
+  border: 1px solid var(--wb-primary-muted, var(--wb-hairline));
+  border-radius: 3px;
+  background: var(--wb-primary-tint-1);
+  color: var(--wb-primary);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: .64rem;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.dep-cell { display: flex; flex-wrap: wrap; gap: .25rem; }
+
+/* Status colour comes from what the status means, not what it is called. */
+.status-chip {
+  padding: .1rem .4rem;
+  border: 1px solid currentcolor;
+  border-radius: 3px;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: .66rem;
+  white-space: nowrap;
+}
+
+/* Not started: present, but the quietest thing in the row. */
+.status-chip--default { color: var(--wb-text-3); background: var(--wb-surface-2); }
+
+/* Tagged `next` — what Workbook's own `next` would hand you. */
+.status-chip--next { color: var(--wb-primary); background: var(--wb-primary-tint-1); }
+
+/* In flight, two shades so adjacent columns stay distinguishable. */
+.status-chip--active-a { color: var(--wb-warn); background: var(--wb-warn-surface); }
+.status-chip--active-b { color: #a774d8; background: rgba(167, 116, 216, .12); }
+
+/* Tagged `done` — what satisfies a dependency. */
+.status-chip--done { color: var(--wb-ok); background: rgba(31, 138, 87, .14); }
+
+
+/* --- import ------------------------------------------------------------- */
+
+.import-controls { flex: 0 0 auto; }
+
+.scan-bar { display: flex; align-items: center; gap: .75rem; margin-bottom: .7rem; }
+
+/* --- search and filters --- */
+
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  margin-bottom: .8rem;
+}
+
+.search {
+  flex: 1;
+  min-width: 0;
+  padding: .38rem .6rem;
+  border: 1px solid var(--wb-control);
+  border-radius: 4px;
+  background: var(--wb-surface);
+  color: var(--wb-text);
+  font: inherit;
+  font-size: .82rem;
+}
+
+.search::placeholder { color: var(--wb-muted); }
+
+.chips { display: flex; }
+
+.chip {
+  border: 1px solid var(--wb-control);
+  border-left-width: 0;
+  background: var(--wb-surface);
+  color: var(--wb-text-3);
+  cursor: pointer;
+  font: inherit;
+  font-size: .74rem;
+  font-weight: 700;
+  padding: .3rem .6rem;
+}
+
+.chip:first-child { border-left-width: 1px; border-radius: 4px 0 0 4px; }
+.chip:last-child { border-radius: 0 4px 4px 0; }
+.chip:hover { background: var(--wb-primary-tint-4); }
+.chip.active { background: var(--wb-primary-tint-1); color: var(--wb-primary); }
+
+.filter-bar--second { margin-top: -.3rem; }
+
+.select-label {
+  display: flex;
+  align-items: center;
+  gap: .35rem;
+  color: var(--wb-muted);
+  font-size: .78rem;
+  white-space: nowrap;
+}
+
+.select-label select {
+  padding: .3rem .4rem;
+  border: 1px solid var(--wb-control);
+  border-radius: 4px;
+  background: var(--wb-surface);
+  color: var(--wb-text);
+  font: inherit;
+  font-size: .78rem;
+}
+
+/* What is actually holding a task up. Amber rather than red: blocked is an
+   ordinary state for queued work, not a fault. */
+.blocked-chip {
+  padding: .1rem .3rem;
+  border: 1px solid var(--wb-warn-edge);
+  border-radius: 3px;
+  background: var(--wb-warn-surface);
+  color: var(--wb-warn);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: .64rem;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.result-count {
+  flex: 0 0 auto;
+  color: var(--wb-muted);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: .72rem;
+}
+
+.scan-root {
+  color: var(--wb-muted);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: .75rem;
+}
+
+.depth { color: var(--wb-muted); display: flex; align-items: center; gap: .4rem; font-size: .8rem; }
+
+.depth input {
+  width: 3.5rem;
+  border: 1px solid var(--wb-control);
+  border-radius: 4px;
+  background: var(--wb-surface);
+  color: var(--wb-text);
+  font: inherit;
+  font-size: .82rem;
+  padding: .3rem .4rem;
+}
+
+/* The one irreversible step in the wizard gets the board's warning ink. */
+.key-note {
+  position: relative;
+  flex: 0 1 auto;
+  width: 25rem;
+  max-width: 40%;
+  padding: .55rem 2rem .55rem .7rem;
+  border: 1px solid var(--wb-warn-edge);
+  border-radius: 4px;
+  background: var(--wb-warn-surface);
+  color: var(--wb-warn);
+  margin: 0;
+  font-size: .78rem;
+  line-height: 1.45;
+}
+
+.key-note__dismiss {
+  position: absolute;
+  top: .25rem;
+  right: .3rem;
+  width: 1.25rem;
+  height: 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: 1rem;
+  line-height: 1;
+  opacity: .65;
+}
+
+.key-note__dismiss:hover { opacity: 1; background: rgba(127, 127, 127, .18); }
+
+/* Narrow windows put it back above the list rather than squeezing the title. */
+@media (max-width: 900px) {
+  .view-head--split { flex-direction: column; }
+  .key-note { width: auto; max-width: none; }
+}
+
+.scan-results { display: flex; flex-direction: column; gap: .3rem; }
+
+.repo {
+  display: grid;
+  grid-template-columns: 1.2rem minmax(0, 1fr) 7.5rem auto;
+  align-items: center;
+  gap: .75rem;
+  padding: .55rem .7rem;
+  border: 1px solid var(--wb-rule);
+  border-radius: 4px;
+  background: var(--wb-surface);
+  box-shadow: 0 1px 0 var(--wb-shadow-faint);
+}
+
+.repo-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .25rem .4rem;
+  margin-top: .22rem;
+}
+
+/* Stack chips reuse .label, the board's own chip, so a repository's stack reads
+   the way a task's labels do. */
+.repo-meta .label { flex: 0 0 auto; }
+
+.repo-fact {
+  color: var(--wb-muted);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: .66rem;
+}
+
+.repo-fact::before { content: "· "; }
+.repo-meta > .repo-fact:first-child::before { content: ""; }
+
+.repo.done { background: var(--wb-surface-2); border-color: var(--wb-hairline); color: var(--wb-text-3); }
+
+.repo-name { font-size: .86rem; }
+
+.repo-path {
+  color: var(--wb-muted);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: .7rem;
+}
+
+.repo input[type="text"] {
+  width: 100%;
+  padding: .28rem .45rem;
+  border: 1px solid var(--wb-control);
+  border-radius: 4px;
+  background: var(--wb-surface);
+  color: var(--wb-text);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: .74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.repo input[type="text"].invalid { border-color: var(--wb-danger); color: var(--wb-danger); }
+.repo input[type="text"]:disabled { background: var(--wb-surface-2); color: var(--wb-text-3); }
+
+/* Anchored: the import action is the point of this screen and must not be
+   scrolled away by a long list of repositories. */
+.import-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  margin: 0 -2rem;
+  padding: .7rem 2rem;
+  border-top: 1px solid var(--wb-rule);
+  background: var(--wb-surface);
+}
+
+.import-status {
+  flex: 1;
+  min-width: 0;
+  color: var(--wb-muted);
+  font-size: .78rem;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+button.ghost.inline { width: auto; }
+
+/* --- shared ------------------------------------------------------------- */
+
+/* .save-button */
+button.primary {
+  border: 1px solid var(--wb-primary-edge);
+  border-radius: 4px;
+  background: var(--wb-primary);
+  color: var(--wb-on-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: .86rem;
+  font-weight: 750;
+  padding: .45rem .8rem;
+}
+
+button.primary:hover:enabled { background: var(--wb-primary-hover); }
+button.primary:disabled { opacity: .5; cursor: default; }
+
+/* .admin-button */
+button.ghost {
+  width: 100%;
+  border: 1px solid var(--wb-control);
+  border-radius: 4px;
+  background: var(--wb-surface);
+  color: var(--wb-text-2);
+  cursor: pointer;
+  font: inherit;
+  font-size: .78rem;
+  font-weight: 700;
+  padding: .35rem .65rem;
+}
+
+button.ghost:hover { background: var(--wb-primary-tint-1); }
+
+:focus-visible { outline: 3px solid var(--wb-primary); outline-offset: 2px; border-radius: 4px; }
+
+.empty { color: var(--wb-muted); padding: 1.75rem 0; font-size: .84rem; }
+
+/* --- people ------------------------------------------------------------- */
+
+.people { display: flex; flex-direction: column; gap: .4rem; }
+
+.person {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: .75rem;
+  padding: .55rem .7rem;
+  border: 1px solid var(--wb-rule);
+  border-radius: 4px;
+  background: var(--wb-surface);
+  box-shadow: 0 1px 0 var(--wb-shadow-faint);
+}
+
+.person--me { border-color: var(--wb-primary); box-shadow: inset 0 0 0 1px var(--wb-primary); }
+.person--bot { opacity: .6; }
+
+.person-name { font-size: .88rem; }
+.person-name input {
+  width: 100%;
+  padding: .1rem .25rem;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: .88rem;
+}
+.person-name input:hover { border-color: var(--wb-hairline); }
+.person-name input:focus { border-color: var(--wb-control); background: var(--wb-surface-2); }
+
+.person-emails {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .25rem .4rem;
+  margin-top: .22rem;
+}
+
+.person-email {
+  padding: .1rem .3rem;
+  border: 1px solid var(--wb-hairline);
+  border-radius: 3px;
+  color: var(--wb-text-3);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: .66rem;
+}
+
+.person-email--primary { border-color: var(--wb-control); color: var(--wb-text-2); }
+
+.person-stat {
+  color: var(--wb-muted);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: .7rem;
+  white-space: nowrap;
+}
+
+.assignee {
+  padding: .1rem .3rem;
+  border: 1px solid var(--wb-primary-muted, var(--wb-hairline));
+  border-radius: 3px;
+  background: var(--wb-primary-tint-1);
+  color: var(--wb-text-2);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: .64rem;
+  white-space: nowrap;
+}
+
+.assignee--me { border-color: var(--wb-primary); color: var(--wb-primary); }
+
+/* The whole assignee cell is a control, so it needs to look like one without
+   competing with the task title beside it. */
+.task-status,
+.task-assignees {
+  display: flex;
+  align-items: center;
+  gap: .25rem;
+  padding: .1rem .2rem;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.task-status:hover,
+.task-assignees:hover { border-color: var(--wb-control); background: var(--wb-primary-tint-4); }
+
+.assign-menu .menu-item:disabled { cursor: default; opacity: .8; }
+
+.assign-add {
+  color: var(--wb-muted);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: .66rem;
+  white-space: nowrap;
+}
+
+.task-assignees:hover .assign-add { color: var(--wb-primary); }
+
+/* Positioned per invocation, so it only needs to be taken out of the flow. */
+.assign-menu {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 15rem;
+  max-height: 18rem;
+  overflow-y: auto;
+}
+
+.assign-menu .menu-item { display: flex; align-items: baseline; gap: .4rem; }
+
+.assign-menu .menu-item small {
+  color: var(--wb-muted);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: .64rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assign-menu .menu-item--remove { color: var(--wb-danger); }
+
+/* The row Enter would pick. */
+.assign-menu .menu-item--active {
+  background: var(--wb-primary-tint-1);
+  color: var(--wb-primary);
+}
+
+.assign-custom {
+  width: calc(100% - .3rem);
+  margin: .15rem;
+  padding: .3rem .5rem;
+  border: 1px solid var(--wb-control);
+  border-radius: 4px;
+  background: var(--wb-surface);
+  color: var(--wb-text);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: .74rem;
+}
+
+.assign-custom::placeholder { color: var(--wb-muted); }
+.assign-custom.invalid { border-color: var(--wb-danger); color: var(--wb-danger); }
+
+.failures {
+  padding: .6rem .7rem;
+  border: 1px solid var(--wb-danger-edge);
+  border-radius: 4px;
+  background: var(--wb-danger-surface);
+  color: var(--wb-danger);
+  margin-bottom: .9rem;
+  font-size: .8rem;
+  white-space: pre-wrap;
+}
+
+.board-state { color: var(--wb-muted); padding: 2.5rem 0; font-size: .84rem; }
