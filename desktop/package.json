@@ -15,7 +15,6 @@
     "dist:win": "npm run stage && electron-builder --win",
     "release": "npm run stage && electron-builder --publish always",
     "dist:linux": "npm run stage && electron-builder --linux",
-    "check:workflows": "node scripts/check-workflows.js",
     "check:styles": "node scripts/check-styles.js"
   },
   "license": "MIT",
