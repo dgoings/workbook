@@ -53,13 +53,14 @@ type ciJob struct {
 }
 
 type ciStep struct {
-	Name string            `yaml:"name"`
-	ID   string            `yaml:"id"`
-	If   string            `yaml:"if"`
-	Uses string            `yaml:"uses"`
-	Run  string            `yaml:"run"`
-	With map[string]any    `yaml:"with"`
-	Env  map[string]string `yaml:"env"`
+	Name             string            `yaml:"name"`
+	ID               string            `yaml:"id"`
+	If               string            `yaml:"if"`
+	Uses             string            `yaml:"uses"`
+	Run              string            `yaml:"run"`
+	WorkingDirectory string            `yaml:"working-directory"`
+	With             map[string]any    `yaml:"with"`
+	Env              map[string]string `yaml:"env"`
 }
 
 // steps returns the single verification job's steps, failing when the workflow
@@ -371,10 +372,12 @@ func TestCIWorkflowGatesTheExpensiveStepsRatherThanTheJob(t *testing.T) {
 // tempting next edit, because prose looks as inert as the site's HTML. It is
 // not. The suite asserts on what README.md, CONTRIBUTING.md, docs/reference.md
 // and docs/architecture.md say, so a documentation change that skipped it would
-// land exactly the divergence those tests exist to catch. The static site and
-// its Render blueprint are the whole exemption, and nothing else in the
-// repository may join them.
-func TestCIWorkflowExemptsOnlyTheStaticSiteFromVerification(t *testing.T) {
+// land exactly the divergence those tests exist to catch. The static site, its
+// Render blueprint, and the desktop app are the whole exemption from the Go
+// verification, and nothing else in the repository may join them. The desktop
+// app is exempt only because it has a verification of its own in the same job;
+// see TestCIWorkflowChecksTheDesktopShellWhenItChanges.
+func TestCIWorkflowExemptsOnlyTheSiteAndDesktopFromGoVerification(t *testing.T) {
 	gate, _ := ciWorkflowGate(t, readCIWorkflow(t).job(t))
 	// Only the executable part is examined: the prose above it explains which
 	// paths are deliberately absent, and naming them there is not exempting
@@ -383,9 +386,9 @@ func TestCIWorkflowExemptsOnlyTheStaticSiteFromVerification(t *testing.T) {
 	// gate names, not how it spells them.
 	script := strings.ReplaceAll(shellWithoutComments(gate.Run), `\`, "")
 
-	for _, want := range []string{"site/", "render.yaml"} {
+	for _, want := range []string{"site/", "render.yaml", "desktop/"} {
 		if !strings.Contains(script, want) {
-			t.Errorf("the gate never mentions %q, so it cannot recognise a site-only change:\n%s", want, script)
+			t.Errorf("the gate never mentions %q, so it cannot recognise a change confined to it:\n%s", want, script)
 		}
 	}
 	entries, err := os.ReadDir(repositoryRootForCI(t))
@@ -397,12 +400,76 @@ func TestCIWorkflowExemptsOnlyTheStaticSiteFromVerification(t *testing.T) {
 		// Tooling directories are not part of the shipped tree and are named
 		// nowhere in the gate; skipping them keeps the check to the paths a
 		// contributor could plausibly want exempted.
-		if strings.HasPrefix(name, ".") || name == "site" || name == "render.yaml" {
+		if strings.HasPrefix(name, ".") || name == "site" || name == "render.yaml" || name == "desktop" {
 			continue
 		}
 		if strings.Contains(script, name) {
-			t.Errorf("the gate names %q, which is not part of the static site; only "+
-				"site/ and render.yaml may skip the verification:\n%s", name, script)
+			t.Errorf("the gate names %q, which is neither the static site nor the desktop app; only "+
+				"site/, render.yaml and desktop/ may skip the Go verification:\n%s", name, script)
+		}
+	}
+}
+
+// desktopCIWorkflowSteps names the steps that verify the desktop app: a Node
+// toolchain, its dependencies, and the shell's own checks. They are gated on
+// the desktop decision, not the Go one, so a change confined to desktop/ pays
+// for these and nothing else, and a Go change pays for nothing here.
+var desktopCIWorkflowSteps = []string{
+	"Set up Node for the desktop app",
+	"Install the desktop app's dependencies",
+	"Check the desktop shell",
+}
+
+// Production mutation: exempting desktop/ from the Go verification without
+// verifying it some other way lands desktop changes behind a green tick that
+// checked nothing. The checks are the shell's own (`npm run check`), they run
+// inside the single verification job so the required checks still report, and
+// they run on one runner because nothing in them depends on the platform.
+func TestCIWorkflowChecksTheDesktopShellWhenItChanges(t *testing.T) {
+	job := readCIWorkflow(t).job(t)
+	gate, _ := ciWorkflowGate(t, job)
+	desktop := ciWorkflowDesktopDecision(t, job, gate)
+	if desktop == "" {
+		t.Fatal("no step is conditional on a desktop decision of the deciding step")
+	}
+	want := "steps." + gate.ID + ".outputs." + desktop + " == 'true' && matrix.os == 'ubuntu-24.04'"
+
+	gateIndex, _ := ciWorkflowStep(t, job, gate.Name)
+	for _, name := range desktopCIWorkflowSteps {
+		index, step := ciWorkflowStep(t, job, name)
+		if step.If != want {
+			t.Errorf("step %q is conditional on %q, want %q", name, step.If, want)
+		}
+		if index < gateIndex {
+			t.Errorf("step %q runs before the deciding step, so its condition reads an "+
+				"output that does not exist yet", name)
+		}
+	}
+
+	_, setupNode := ciWorkflowStep(t, job, desktopCIWorkflowSteps[0])
+	if !strings.HasPrefix(setupNode.Uses, "actions/setup-node@") || setupNode.With["node-version"] == nil {
+		t.Errorf("the desktop Node step is %+v, want actions/setup-node with a pinned node-version", setupNode)
+	}
+	for _, name := range desktopCIWorkflowSteps[1:] {
+		_, step := ciWorkflowStep(t, job, name)
+		if step.WorkingDirectory != "desktop" {
+			t.Errorf("step %q runs in %q, want the desktop directory", name, step.WorkingDirectory)
+		}
+	}
+	_, install := ciWorkflowStep(t, job, desktopCIWorkflowSteps[1])
+	if !strings.Contains(install.Run, "npm ci") {
+		t.Errorf("the install step runs %q, want npm ci so the lockfile is honored", install.Run)
+	}
+	_, check := ciWorkflowStep(t, job, desktopCIWorkflowSteps[2])
+	if !strings.Contains(check.Run, "npm run check") {
+		t.Errorf("the check step runs %q, want the shell's own npm run check", check.Run)
+	}
+	// The Go verification stays gated on the Go decision alone: a desktop-only
+	// change must not drag the matrix along.
+	for _, name := range expensiveCIWorkflowSteps {
+		_, step := ciWorkflowStep(t, job, name)
+		if strings.Contains(step.If, desktop) {
+			t.Errorf("Go step %q is conditional on the desktop decision (%q)", name, step.If)
 		}
 	}
 }
@@ -413,14 +480,19 @@ func TestCIWorkflowExemptsOnlyTheStaticSiteFromVerification(t *testing.T) {
 // base commit, the all-zero commit a branch-creating push reports, a base that
 // a force push removed from the history, an empty diff, an event this does not
 // model -- has to resolve to running everything, and only a diff positively
-// confined to site/ and render.yaml may skip. Reading the script cannot show
-// which way it falls, so the workflow's own script is executed here against a
-// repository built to pose each question.
-func TestCIWorkflowSiteOnlyGateFailsOpen(t *testing.T) {
+// confined to site/, render.yaml and desktop/ may skip the Go verification.
+// The desktop decision is the mirror image: it runs for any diff touching
+// desktop/ and for every failure to establish a diff, and skips only when a
+// diff positively avoids desktop/. Reading the script cannot show which way it
+// falls, so the workflow's own script is executed here against a repository
+// built to pose each question.
+func TestCIWorkflowGateFailsOpen(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		testenv.MissingCapability(t, "bash is required to execute the CI workflow's gate script")
 	}
-	gate, decision := ciWorkflowGate(t, readCIWorkflow(t).job(t))
+	job := readCIWorkflow(t).job(t)
+	gate, decision := ciWorkflowGate(t, job)
+	desktop := ciWorkflowDesktopDecision(t, job, gate)
 	script := filepath.Join(t.TempDir(), "gate.sh")
 	if err := os.WriteFile(script, []byte(gate.Run), 0o700); err != nil {
 		t.Fatalf("write the gate script: %v", err)
@@ -431,76 +503,92 @@ func TestCIWorkflowSiteOnlyGateFailsOpen(t *testing.T) {
 	absent := strings.Repeat("abcdef0123456789", 3)[:40]
 
 	for _, testCase := range []struct {
-		name  string
-		event string
-		base  string
-		head  string
-		want  string
+		name        string
+		event       string
+		base        string
+		head        string
+		want        string
+		wantDesktop string
 	}{
 		{
-			name:  "a pull request touching only the site skips the verification",
-			event: "pull_request", base: commits["base"], head: commits["site"], want: "false",
+			name:  "a pull request touching only the site skips both verifications",
+			event: "pull_request", base: commits["base"], head: commits["site"], want: "false", wantDesktop: "false",
 		},
 		{
-			name:  "a pull request touching Go code runs it",
-			event: "pull_request", base: commits["base"], head: commits["code"], want: "true",
+			name:  "a pull request touching Go code runs the Go verification alone",
+			event: "pull_request", base: commits["base"], head: commits["code"], want: "true", wantDesktop: "false",
 		},
 		{
-			name:  "a pull request touching documentation runs it",
-			event: "pull_request", base: commits["base"], head: commits["documentation"], want: "true",
+			name:  "a pull request touching documentation runs the Go verification alone",
+			event: "pull_request", base: commits["base"], head: commits["documentation"], want: "true", wantDesktop: "false",
+		},
+		{
+			name:  "a pull request touching only the desktop app runs the desktop checks alone",
+			event: "pull_request", base: commits["base"], head: commits["desktop"], want: "false", wantDesktop: "true",
+		},
+		{
+			name:  "a pull request touching the desktop app and Go code runs both",
+			event: "pull_request", base: commits["base"], head: commits["desktop-and-code"], want: "true", wantDesktop: "true",
 		},
 		{
 			// The exemption is the site directory, not every path that starts
 			// with those four letters.
-			name:  "a pull request touching a file merely named like the site runs it",
-			event: "pull_request", base: commits["base"], head: commits["site-adjacent"], want: "true",
+			name:  "a pull request touching a file merely named like the site runs the Go verification",
+			event: "pull_request", base: commits["base"], head: commits["site-adjacent"], want: "true", wantDesktop: "false",
 		},
 		{
 			// Three-dot semantics: the branch is judged from where it left main,
 			// so commits main gathered meanwhile -- already verified by their own
 			// push runs -- are not read as this branch's work.
 			name:  "a site-only pull request is judged from where it branched",
-			event: "pull_request", base: commits["main-ahead"], head: commits["site"], want: "false",
+			event: "pull_request", base: commits["main-ahead"], head: commits["site"], want: "false", wantDesktop: "false",
 		},
 		{
-			name:  "a push of a site-only commit skips the verification",
-			event: "push", base: commits["base"], head: commits["site"], want: "false",
+			name:  "a push of a site-only commit skips both verifications",
+			event: "push", base: commits["base"], head: commits["site"], want: "false", wantDesktop: "false",
+		},
+		{
+			name:  "a push of a desktop-only commit runs the desktop checks alone",
+			event: "push", base: commits["base"], head: commits["desktop"], want: "false", wantDesktop: "true",
 		},
 		{
 			// Two-dot semantics for pushes: a force push replaces one state of the
 			// branch with an unrelated one, and the tree that results is what has
 			// to be verified, merge base or no merge base.
 			name:  "a force push that rewrites code is verified",
-			event: "push", base: commits["code"], head: commits["site"], want: "true",
+			event: "push", base: commits["code"], head: commits["site"], want: "true", wantDesktop: "false",
 		},
 		{
 			name:  "a push reporting the all-zero previous commit runs everything",
-			event: "push", base: strings.Repeat("0", 40), head: commits["site"], want: "true",
+			event: "push", base: strings.Repeat("0", 40), head: commits["site"], want: "true", wantDesktop: "true",
 		},
 		{
 			name:  "a pull request carrying no base commit runs everything",
-			event: "pull_request", base: "", head: commits["site"], want: "true",
+			event: "pull_request", base: "", head: commits["site"], want: "true", wantDesktop: "true",
 		},
 		{
 			name:  "a base commit missing from the history runs everything",
-			event: "pull_request", base: absent, head: commits["site"], want: "true",
+			event: "pull_request", base: absent, head: commits["site"], want: "true", wantDesktop: "true",
 		},
 		{
 			name:  "an empty diff runs everything",
-			event: "pull_request", base: commits["site"], head: commits["site"], want: "true",
+			event: "pull_request", base: commits["site"], head: commits["site"], want: "true", wantDesktop: "true",
 		},
 		{
 			name:  "an event the gate does not model runs everything",
-			event: "workflow_dispatch", base: commits["base"], head: commits["site"], want: "true",
+			event: "workflow_dispatch", base: commits["base"], head: commits["site"], want: "true", wantDesktop: "true",
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			runCommand(t, repository, nil, "git", "-c", "advice.detachedHead=false",
 				"checkout", "--quiet", testCase.head)
 
-			got, log := runCIWorkflowGate(t, script, repository, decision, testCase.event, testCase.base)
-			if got != testCase.want {
-				t.Errorf("gate decided %s=%q, want %q\n%s", decision, got, testCase.want, log)
+			got, log := runCIWorkflowGate(t, script, repository, testCase.event, testCase.base)
+			if got[decision] != testCase.want {
+				t.Errorf("gate decided %s=%q, want %q\n%s", decision, got[decision], testCase.want, log)
+			}
+			if got[desktop] != testCase.wantDesktop {
+				t.Errorf("gate decided %s=%q, want %q\n%s", desktop, got[desktop], testCase.wantDesktop, log)
 			}
 		})
 	}
@@ -535,6 +623,24 @@ func ciWorkflowGate(t *testing.T, job ciJob) (ciStep, string) {
 	}
 	t.Fatalf("no step is conditional on the decision of step %q, so nothing is gated", gate.ID)
 	return ciStep{}, ""
+}
+
+// ciWorkflowDesktopDecision returns the name of the deciding step's second
+// output, the one the desktop steps read. It is found from the check step's
+// condition rather than assumed, like the Go decision, and is "" when no step
+// reads a second output at all.
+func ciWorkflowDesktopDecision(t *testing.T, job ciJob, gate ciStep) string {
+	t.Helper()
+	_, goDecision := ciWorkflowGate(t, job)
+	reference := regexp.MustCompile(`steps\.` + regexp.QuoteMeta(gate.ID) + `\.outputs\.([A-Za-z0-9_]+)`)
+	for _, step := range job.Steps {
+		for _, match := range reference.FindAllStringSubmatch(step.If, -1) {
+			if match[1] != goDecision {
+				return match[1]
+			}
+		}
+	}
+	return ""
 }
 
 // ciWorkflowStep returns the named step and its position in the job.
@@ -590,11 +696,12 @@ func ciWorkflowGateRepository(t *testing.T) (string, map[string]string) {
 	}
 
 	commit("base", map[string]string{
-		"internal/cli/run.go": "package cli\n",
-		"docs/reference.md":   "# Reference\n",
-		"site/index.html":     "<!doctype html>\n",
-		"render.yaml":         "services: []\n",
-		"sitemap.txt":         "/\n",
+		"internal/cli/run.go":      "package cli\n",
+		"docs/reference.md":        "# Reference\n",
+		"site/index.html":          "<!doctype html>\n",
+		"render.yaml":              "services: []\n",
+		"sitemap.txt":              "/\n",
+		"desktop/src/main/main.js": "'use strict'\n",
 	})
 	for _, branch := range []struct {
 		name  string
@@ -610,6 +717,11 @@ func ciWorkflowGateRepository(t *testing.T) (string, map[string]string) {
 		{name: "site-adjacent", files: map[string]string{"sitemap.txt": "/\n/docs\n"}},
 		{name: "code", files: map[string]string{"internal/cli/run.go": "package cli\n\nfunc Run() {}\n"}},
 		{name: "documentation", files: map[string]string{"docs/reference.md": "# Reference\n\n## Commands\n"}},
+		{name: "desktop", files: map[string]string{"desktop/src/main/main.js": "'use strict'\n\nconst x = 1\n"}},
+		{name: "desktop-and-code", files: map[string]string{
+			"desktop/src/main/main.js": "'use strict'\n\nconst y = 2\n",
+			"internal/cli/run.go":      "package cli\n\nfunc Run() {}\n",
+		}},
 		{name: "main-ahead", files: map[string]string{"internal/cli/board.go": "package cli\n"}},
 	} {
 		runCommand(t, repository, nil, "git", "-c", "advice.detachedHead=false",
@@ -620,9 +732,9 @@ func ciWorkflowGateRepository(t *testing.T) (string, map[string]string) {
 }
 
 // runCIWorkflowGate executes the gate script the way a runner does, with the
-// event's environment set and a fresh $GITHUB_OUTPUT, and returns the decision
-// it recorded together with the log it printed.
-func runCIWorkflowGate(t *testing.T, script, repository, decision, event, base string) (string, string) {
+// event's environment set and a fresh $GITHUB_OUTPUT, and returns every
+// decision it recorded, by name, together with the log it printed.
+func runCIWorkflowGate(t *testing.T, script, repository, event, base string) (map[string]string, string) {
 	t.Helper()
 	output := filepath.Join(t.TempDir(), "github-output")
 	if err := os.WriteFile(output, nil, 0o600); err != nil {
@@ -655,17 +767,19 @@ func runCIWorkflowGate(t *testing.T, script, repository, decision, event, base s
 	if err != nil {
 		t.Fatalf("read the output file: %v", err)
 	}
-	var decisions []string
+	decisions := make(map[string]string)
 	for _, line := range strings.Split(string(recorded), "\n") {
-		if value, found := strings.CutPrefix(line, decision+"="); found {
-			decisions = append(decisions, value)
+		name, value, found := strings.Cut(line, "=")
+		if !found {
+			continue
 		}
+		// Two values for one decision would leave the gated steps reading
+		// whichever GitHub took last, which is not a thing worth guessing about
+		// in a merge gate.
+		if _, twice := decisions[name]; twice {
+			t.Fatalf("gate recorded %s more than once (%q), want exactly one value\n%s", name, recorded, log)
+		}
+		decisions[name] = value
 	}
-	// Two decisions would leave the gated steps reading whichever GitHub took
-	// last, which is not a thing worth guessing about in a merge gate.
-	if len(decisions) != 1 {
-		t.Fatalf("gate recorded %d values for %s (%q), want exactly one\n%s",
-			len(decisions), decision, recorded, log)
-	}
-	return decisions[0], string(log)
+	return decisions, string(log)
 }

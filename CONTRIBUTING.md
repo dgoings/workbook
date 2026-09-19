@@ -110,6 +110,16 @@ commit that is missing or all zeros, a force push, a failed diff, or an empty
 diff all verify everything. Documentation is not exempt, because the suite
 asserts on what these guides say.
 
+The desktop app under `desktop/` is the other exemption, with a different
+answer. The Go program cannot see a change confined to it, so such a change
+skips the Go matrix by the same gate; but the app is not inert, so the gate's
+second decision, `desktop_changed`, runs the shell's own checks instead:
+`npm ci` and `npm run check` in `desktop/`, on the Ubuntu runner only, since
+nothing in them depends on the platform. A change touching both `desktop/`
+and the Go program runs both; every uncertainty runs both. The stage script
+that builds the CLI the app bundles is covered by the Go suite through
+`scripts/desktop_stage_test.go`.
+
 A suite that skips is the failure this workflow is built to prevent. The
 embedded web board tests execute the rendered client with `node`, and the
 cross-object-format tests need a Git that can create SHA-256 repositories;
