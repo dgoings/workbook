@@ -59,6 +59,27 @@ func TestDeleteReleaseTagAcceptsTheTagForm(t *testing.T) {
 	}
 }
 
+// A pre-release strands its version exactly as a stable release does, so
+// recovery has to reach an -rcN tag too.
+func TestDeleteReleaseTagAcceptsAPreReleaseTag(t *testing.T) {
+	clone, remote, fakeBin := newTagDeletionRepository(t)
+	runCommand(t, clone, nil, "git", "tag", "--annotate", "v0.6.0-rc1", "--message", "Workbook v0.6.0-rc1")
+	runCommand(t, clone, nil, "git", "push", "--quiet", "origin", "refs/tags/v0.6.0-rc1")
+
+	output, err := runDeleteReleaseTag(t, clone, environmentWithFakeCLI(fakeBin),
+		"0.6.0-rc1", "--repo", "dgoings/workbook")
+	if err != nil {
+		t.Fatalf("delete pre-release tag: %v\n%s", err, output)
+	}
+
+	if got := gitOutput(t, clone, "tag", "--list", "v0.6.0-rc1"); got != "" {
+		t.Errorf("local tags = %q, want v0.6.0-rc1 gone", got)
+	}
+	if got := gitOutput(t, remote, "tag", "--list", "v0.6.0-rc1"); got != "" {
+		t.Errorf("remote tags = %q, want v0.6.0-rc1 gone", got)
+	}
+}
+
 func TestDeleteReleaseTagDryRunChangesNothing(t *testing.T) {
 	clone, remote, fakeBin := newTagDeletionRepository(t)
 

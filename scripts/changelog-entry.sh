@@ -1,7 +1,8 @@
 #!/bin/sh
 set -eu
 
-# Prints the CHANGELOG entry body for a version.
+# Prints the CHANGELOG entry body for a version, or the Unreleased section when
+# asked for `unreleased`, which is what a pre-release publishes as its notes.
 #
 # The release workflow publishes this as the GitHub release notes when it
 # exists. Writing notes by hand and then publishing different generated ones is
@@ -24,13 +25,25 @@ if [ ! -f "${changelog}" ]; then
 	exit 1
 fi
 
-# The version reaches grep as a pattern, and its dots would otherwise match any
-# character, so 0.1.0 would find an entry headed 0x1y0.
-escaped_version=$(printf '%s' "${version}" | sed 's/\./\\./g')
-heading_pattern="^## v${escaped_version}( .*)?$"
+if [ "${version}" = unreleased ]; then
+	# A pre-release has no entry of its own; what it publishes is everything
+	# that has landed since the last release, which is this section.
+	heading='## Unreleased'
+	heading_pattern='^## Unreleased( .*)?$'
+	missing_message="workbook release: no Unreleased section in ${changelog}"
+	empty_message="workbook release: the Unreleased section in ${changelog} is empty"
+else
+	# The version reaches grep as a pattern, and its dots would otherwise match
+	# any character, so 0.1.0 would find an entry headed 0x1y0.
+	escaped_version=$(printf '%s' "${version}" | sed 's/\./\\./g')
+	heading="## v${version}"
+	heading_pattern="^## v${escaped_version}( .*)?$"
+	missing_message="workbook release: no changelog entry for v${version}"
+	empty_message="workbook release: changelog entry for v${version} is empty"
+fi
 
 if ! grep -Eq "${heading_pattern}" "${changelog}"; then
-	echo "workbook release: no changelog entry for v${version}" >&2
+	echo "${missing_message}" >&2
 	exit 1
 fi
 
@@ -41,7 +54,6 @@ fi
 #
 # Command substitution strips trailing newlines, so only the blank lines between
 # the heading and the first line of prose need removing.
-heading="## v${version}"
 body=$(awk -v heading="${heading}" '
 	!found && index($0, heading) == 1 &&
 		(length($0) == length(heading) || substr($0, length(heading) + 1, 1) == " ") {
@@ -53,7 +65,7 @@ body=$(awk -v heading="${heading}" '
 ' "${changelog}" | sed -e '/./,$!d')
 
 if [ -z "${body}" ]; then
-	echo "workbook release: changelog entry for v${version} is empty" >&2
+	echo "${empty_message}" >&2
 	exit 1
 fi
 

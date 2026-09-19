@@ -144,6 +144,32 @@ func TestChangelogEntryReportsAMissingChangelog(t *testing.T) {
 	}
 }
 
+// A pre-release's notes are whatever has landed since the last release, which
+// is exactly the Unreleased section.
+func TestChangelogEntryPrintsTheUnreleasedSection(t *testing.T) {
+	path := writeChangelog(t, "# Changelog\n\n## Unreleased\n\n### Added\n- a thing in progress\n\n## v0.5.1 — 2026-09-01\n\n- the last release\n")
+
+	output, err := runChangelogEntry(t, "unreleased", path)
+	if err != nil {
+		t.Fatalf("unreleased entry: %v\n%s", err, output)
+	}
+	if got, want := output, "### Added\n- a thing in progress\n"; got != want {
+		t.Errorf("unreleased body = %q, want %q", got, want)
+	}
+}
+
+func TestChangelogEntryReportsAMissingUnreleasedSection(t *testing.T) {
+	path := writeChangelog(t, "# Changelog\n\n## v0.5.1\n\n- the last release\n")
+
+	output, err := runChangelogEntry(t, "unreleased", path)
+	if err == nil {
+		t.Fatalf("unreleased entry succeeded without a section:\n%s", output)
+	}
+	if !strings.Contains(output, "no Unreleased section") {
+		t.Errorf("output = %q, want the missing section reported", output)
+	}
+}
+
 func runChangelogEntry(t *testing.T, version, path string) (string, error) {
 	t.Helper()
 	return runReleaseScript(t, "", "changelog-entry.sh", "", version, path)

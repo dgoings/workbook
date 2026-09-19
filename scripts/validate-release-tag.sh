@@ -17,7 +17,7 @@ tag=$1
 case "${tag}" in
 	v*) version=${tag#v} ;;
 	*)
-		echo "workbook release: tag must be vMAJOR.MINOR.PATCH" >&2
+		echo "workbook release: tag must be vMAJOR.MINOR.PATCH, optionally -rcN" >&2
 		exit 2
 		;;
 esac

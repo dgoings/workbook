@@ -19,6 +19,13 @@ esac
 . "${script_directory}/release-version.sh"
 require_safe_release_version "${version}" "workbook formula"
 
+# The tap serves brew upgrade to everyone who installed a release. A
+# pre-release never reaches it, whatever the caller asked for.
+if is_prerelease_version "${version}"; then
+	echo "workbook formula: pre-release versions are never published to the tap" >&2
+	exit 2
+fi
+
 if [ ! -f "${checksums_file}" ]; then
 	echo "workbook formula: checksums file does not exist: ${checksums_file}" >&2
 	exit 2
