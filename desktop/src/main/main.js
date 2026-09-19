@@ -11,6 +11,10 @@ const workbook = require('./workbook')
 const { setupUpdater } = require('./updater')
 
 const SIDEBAR_WIDTH = 260
+// The collapsed sidebar is a rail rather than nothing at all, and 76 is the
+// narrowest it can be while the macOS inset traffic lights still sit over shell
+// chrome instead of over the board.
+const RAIL_WIDTH = 76
 const MIN_WIDTH = 1000
 const MIN_HEIGHT = 680
 
@@ -28,9 +32,14 @@ const supervisor = new Supervisor(app.getPath('userData'))
 /** @type {{check: (options?: {silent?: boolean}) => Promise<object>}|null} */
 let updater = null
 
+function sidebarWidth () {
+  return registry.sidebarCollapsed ? RAIL_WIDTH : SIDEBAR_WIDTH
+}
+
 function boardBounds () {
   const { width, height } = window.getContentBounds()
-  return { x: SIDEBAR_WIDTH, y: 0, width: Math.max(0, width - SIDEBAR_WIDTH), height }
+  const sidebar = sidebarWidth()
+  return { x: sidebar, y: 0, width: Math.max(0, width - sidebar), height }
 }
 
 function layout () {
@@ -87,6 +96,7 @@ function createWindow () {
   })
   window.contentView.addChildView(chromeView)
   chromeView.webContents.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'))
+  watchSidebarShortcut(chromeView.webContents)
 
   window.on('resize', layout)
   layout()
@@ -139,6 +149,55 @@ async function applyTheme () {
   toChrome('theme:changed', { theme: registry.theme, dark })
 }
 
+// --- sidebar ---------------------------------------------------------------
+
+/**
+ * Collapse the sidebar to a rail, or expand it again.
+ *
+ * The main process owns this the way it owns the theme, and for a sharper
+ * reason: a board is a native view positioned from here, so a sidebar that
+ * changed width in the page alone would leave every board sitting over the new
+ * width or short of it. The state is stored, the views are moved, and only then
+ * is the shell told, so the page restyles against bounds that already match.
+ */
+async function setSidebarCollapsed (collapsed) {
+  if (collapsed === registry.sidebarCollapsed) return
+  await registry.setSidebarCollapsed(collapsed)
+  layout()
+  toChrome('sidebar:changed', { collapsed })
+}
+
+function toggleSidebar () {
+  return setSidebarCollapsed(!registry.sidebarCollapsed)
+}
+
+/**
+ * Watch one view's web contents for the collapse chord.
+ *
+ * Every view needs its own listener, which is why this is a function and not a
+ * single hook. It cannot live in the shell page: when a board is showing,
+ * keyboard focus is inside that board's native view, and a listener on the
+ * shell's page would never hear the chord. An application menu would reach both
+ * but would also put a menu on Windows and Linux, which this window does not
+ * have.
+ */
+function watchSidebarShortcut (webContents) {
+  webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || input.key.toLowerCase() !== 'b') return
+    // A held-down chord would otherwise flap the sidebar open and shut.
+    if (input.isAutoRepeat) return
+    // Cmd+B on macOS, Ctrl+B elsewhere, and nothing near it: any other modifier,
+    // the other platform's modifier included, means a different chord was meant.
+    if (input.shift || input.alt) return
+    const chord = process.platform === 'darwin'
+      ? input.meta && !input.control
+      : input.control && !input.meta
+    if (!chord) return
+    event.preventDefault()
+    toggleSidebar()
+  })
+}
+
 /**
  * Show one project's board, starting its server if it is not already running.
  *
@@ -174,6 +233,7 @@ async function openProject (projectId, taskId = null) {
       return { action: 'deny' }
     })
     boardViews.set(projectId, view)
+    watchSidebarShortcut(view.webContents)
     window.contentView.addChildView(view)
     await view.webContents.loadURL(target)
   } else if (view.webContents.getURL() !== target) {
@@ -323,6 +383,13 @@ ipcMain.handle('update:install', async () => {
 const THEMES = ['system', 'light', 'dark']
 
 ipcMain.handle('theme:get', async () => ({ theme: registry.theme, dark: resolveDark() }))
+
+ipcMain.handle('sidebar:get', async () => ({ collapsed: registry.sidebarCollapsed }))
+
+ipcMain.handle('sidebar:toggle', async () => {
+  await toggleSidebar()
+  return { collapsed: registry.sidebarCollapsed }
+})
 
 // A board's preload asks this before the board's own script runs, so a board
 // opened after a choice was made starts in that mode. Synchronous on purpose:

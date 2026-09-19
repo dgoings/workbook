@@ -30,6 +30,11 @@ contextBridge.exposeInMainWorld('workbench', {
 
   getTheme: () => ipcRenderer.invoke('theme:get'),
 
+  // The sidebar's collapsed state lives in the main process, which positions the
+  // board views against it; the shell asks for it and asks for it to change.
+  getSidebar: () => ipcRenderer.invoke('sidebar:get'),
+  toggleSidebar: () => ipcRenderer.invoke('sidebar:toggle'),
+
   onImportProgress: (handler) => {
     const listener = (_event, payload) => handler(payload)
     ipcRenderer.on('import:progress', listener)
@@ -49,6 +54,11 @@ contextBridge.exposeInMainWorld('workbench', {
     const listener = (_event, payload) => handler(payload)
     ipcRenderer.on('theme:changed', listener)
     return () => ipcRenderer.removeListener('theme:changed', listener)
+  },
+  onSidebarChanged: (handler) => {
+    const listener = (_event, payload) => handler(payload)
+    ipcRenderer.on('sidebar:changed', listener)
+    return () => ipcRenderer.removeListener('sidebar:changed', listener)
   },
   onProjectExited: (handler) => {
     const listener = (_event, payload) => handler(payload)

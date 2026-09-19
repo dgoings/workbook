@@ -15,7 +15,8 @@ const EMPTY = {
   version: 1,
   scanRoots: [],
   projects: [],
-  theme: 'system'
+  theme: 'system',
+  sidebarCollapsed: false
 }
 
 class Registry {
@@ -80,6 +81,21 @@ class Registry {
 
   async setTheme (theme) {
     this.state.theme = theme
+    await this.save()
+  }
+
+  /**
+   * Whether the sidebar is showing as a narrow rail.
+   *
+   * Read strictly: a registry written by an older build has no such field at
+   * all, and a missing answer means the sidebar is expanded.
+   */
+  get sidebarCollapsed () {
+    return this.state.sidebarCollapsed === true
+  }
+
+  async setSidebarCollapsed (collapsed) {
+    this.state.sidebarCollapsed = collapsed
     await this.save()
   }
 
