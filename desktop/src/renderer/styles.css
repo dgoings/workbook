@@ -207,14 +207,10 @@ body {
 
 .sidebar-identity { flex: 1; min-width: 0; }
 
-/* The menu button and its popover opt out of the drag region: a control inside
-   one is dragged rather than clicked. */
-.icon-button,
-.menu {
-  -webkit-app-region: no-drag;
-}
-
+/* The chevron opts out of the drag region: a control inside one is dragged
+   rather than clicked. */
 .icon-button {
+  -webkit-app-region: no-drag;
   position: relative;
   flex: 0 0 auto;
   display: flex;
@@ -232,65 +228,6 @@ body {
 
 .icon-button:hover { background: var(--wb-primary-tint-1); color: var(--wb-primary); }
 
-/* The update marker: present enough to notice, quiet enough to ignore — which
-   is the whole point of not making it a dialog. */
-.update-dot {
-  position: absolute;
-  top: .25rem;
-  right: .25rem;
-  width: .4rem;
-  height: .4rem;
-  border-radius: 50%;
-  background: var(--wb-primary);
-}
-
-.menu-item--update { color: var(--wb-primary); font-weight: 800; }
-
-.icon-button[aria-expanded="true"] {
-  border-color: var(--wb-hairline);
-  background: var(--wb-primary-tint-1);
-  color: var(--wb-primary);
-}
-
-/* A popover rather than an inline panel: the sidebar's list is the sidebar's
-   job, and a menu that pushed it down would move the projects every time it
-   opened. */
-.menu {
-  position: absolute;
-  top: calc(34px + 2rem);
-  right: .75rem;
-  z-index: 10;
-  width: 13rem;
-  padding: .3rem;
-  border: 1px solid var(--wb-control);
-  border-radius: 4px;
-  background: var(--wb-surface);
-  box-shadow: 0 8px 20px var(--wb-shadow);
-}
-
-.menu-item {
-  display: block;
-  width: 100%;
-  padding: .35rem .5rem;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--wb-text-2);
-  cursor: pointer;
-  font: inherit;
-  font-size: .82rem;
-  font-weight: 700;
-  text-align: left;
-}
-
-.menu-item:hover { background: var(--wb-primary-tint-1); color: var(--wb-primary); }
-
-.menu-separator {
-  height: 1px;
-  margin: .3rem .15rem;
-  background: var(--wb-divider);
-}
-
 .wordmark {
   margin: 0 0 .2rem;
   color: var(--wb-primary);
@@ -306,27 +243,15 @@ body {
   font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
   font-size: .75rem;
   cursor: default;
-  /* One line always: a wrapped version pushes the rail down and collides with
-     the menu. Which binary it is lives in the menu, which has room for it. */
+  /* One line always: a wrapped version pushes the rail down and crowds the
+     chevron beside it. Which build it is lives on this line's own tooltip,
+     which has room for the words and the path both. */
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .version.missing { color: var(--wb-danger); }
-
-/* Which Workbook is driving these repositories — the answer to "why does the
-   app disagree with my terminal". */
-.menu-note {
-  padding: .1rem .5rem .3rem;
-  color: var(--wb-muted);
-  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
-  font-size: .66rem;
-  line-height: 1.45;
-  overflow-wrap: anywhere;
-}
-
-.menu-note strong { color: var(--wb-text-3); font-weight: 700; }
 
 .rail { padding: .35rem .5rem; display: flex; flex-direction: column; gap: 2px; }
 
@@ -450,10 +375,10 @@ body {
   flex: 0 0 76px;
 }
 
-/* The two icon buttons stack where the wordmark and the menu button sat side
-   by side. Only the side padding goes: the top inset is the head's own, so
-   macOS keeps its 34px under the traffic lights and the :root:not(.is-mac)
-   override keeps answering for everyone else. */
+/* The chevron takes the whole head to itself, centered, where it sat beside
+   the wordmark before. Only the side padding goes: the top inset is the head's
+   own, so macOS keeps its 34px under the traffic lights and the
+   :root:not(.is-mac) override keeps answering for everyone else. */
 :root.sidebar-collapsed .sidebar-head {
   flex-direction: column;
   align-items: center;

@@ -29,9 +29,6 @@ let activeProjectId = null
 const registry = new Registry(app.getPath('userData'))
 const supervisor = new Supervisor(app.getPath('userData'))
 
-/** @type {{check: (options?: {silent?: boolean}) => Promise<object>}|null} */
-let updater = null
-
 function sidebarWidth () {
   return registry.sidebarCollapsed ? RAIL_WIDTH : SIDEBAR_WIDTH
 }
@@ -381,18 +378,6 @@ ipcMain.handle('import:apply', async (_event, { selections }) => {
   return { results }
 })
 
-ipcMain.handle('update:check', async () => {
-  if (!updater) return { skipped: 'not ready' }
-  // Not silent: this one was asked for, so "you are up to date" is an answer,
-  // not noise.
-  return updater.check({ silent: false })
-})
-
-ipcMain.handle('update:install', async () => {
-  if (!updater) return { skipped: 'not ready' }
-  return updater.install()
-})
-
 const THEMES = ['system', 'light', 'dark']
 
 ipcMain.handle('theme:get', async () => ({ theme: registry.theme, dark: resolveDark() }))
@@ -480,10 +465,17 @@ app.whenReady().then(async () => {
   await registry.load()
 
   createWindow()
-  updater = setupUpdater({
-    // A quiet announcement: the interface decides how to show it, and nothing
-    // is put in front of the user until they act on it.
-    onAvailable: ({ version }) => toChrome('update:available', { version })
+  // The launch check still runs, but the shell page has nowhere to show what it
+  // finds and no action to offer: when an update action returns it belongs in
+  // the native application menu, which reaches a board's view as well as this
+  // page. Until then the finding goes to the console, and the updater itself is
+  // set up for that side effect alone — nothing can drive it, so nothing holds
+  // on to what it returns.
+  setupUpdater({
+    onAvailable: ({ version }) => {
+      console.log(`workbench: update available: v${version} ` +
+        '(no update action yet; it will live in the application menu)')
+    }
   })
   app.on('activate', () => {
     if (BaseWindow.getAllWindows().length === 0) createWindow()

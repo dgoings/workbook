@@ -25,9 +25,6 @@ contextBridge.exposeInMainWorld('workbench', {
   closeProject: (projectId) => ipcRenderer.invoke('project:close', { projectId }),
   forgetProject: (projectId) => ipcRenderer.invoke('project:forget', { projectId }),
 
-  checkForUpdates: () => ipcRenderer.invoke('update:check'),
-  installUpdate: () => ipcRenderer.invoke('update:install'),
-
   getTheme: () => ipcRenderer.invoke('theme:get'),
 
   // The sidebar's collapsed state lives in the main process, which positions the
@@ -44,11 +41,6 @@ contextBridge.exposeInMainWorld('workbench', {
     const listener = (_event, payload) => handler(payload)
     ipcRenderer.on('discovery:progress', listener)
     return () => ipcRenderer.removeListener('discovery:progress', listener)
-  },
-  onUpdateAvailable: (handler) => {
-    const listener = (_event, payload) => handler(payload)
-    ipcRenderer.on('update:available', listener)
-    return () => ipcRenderer.removeListener('update:available', listener)
   },
   onThemeChanged: (handler) => {
     const listener = (_event, payload) => handler(payload)
