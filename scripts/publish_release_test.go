@@ -34,7 +34,7 @@ func TestPublishReleasePublishesTheChangelogEntryAsTheReleaseNotes(t *testing.T)
 	}
 	// The notes file is a body, not a release asset. Uploading it would leave
 	// the release with an asset the rerun check refuses to recognise.
-	if _, err := os.Stat(filepath.Join(fakeGitHub, "assets", "notes.md")); err == nil {
+	if _, err := os.Stat(filepath.Join(fakeReleaseAssetsPath(fakeGitHub, "v0.1.0"), "notes.md")); err == nil {
 		t.Error("notes file was uploaded as a release asset")
 	}
 }
@@ -70,7 +70,7 @@ func TestPublishReleaseCreatesAssetsOnceAndRejectsMismatchedRerun(t *testing.T) 
 
 	runPublishRelease(t, root, fakeBin, fakeGitHub, tap, dist, nil)
 	firstRemoteHead := gitOutput(t, tap, "rev-parse", "origin/main")
-	firstAsset, err := os.ReadFile(filepath.Join(fakeGitHub, "assets", "workbook_0.1.0_darwin_arm64.tar.gz"))
+	firstAsset, err := os.ReadFile(filepath.Join(fakeReleaseAssetsPath(fakeGitHub, "v0.1.0"), "workbook_0.1.0_darwin_arm64.tar.gz"))
 	if err != nil {
 		t.Fatalf("read published fixture asset: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestPublishReleaseCreatesAssetsOnceAndRejectsMismatchedRerun(t *testing.T) 
 	if got := gitOutput(t, tap, "rev-parse", "origin/main"); got != firstRemoteHead {
 		t.Fatalf("mismatched rerun changed tap head from %s to %s", firstRemoteHead, got)
 	}
-	storedAsset, err := os.ReadFile(filepath.Join(fakeGitHub, "assets", "workbook_0.1.0_darwin_arm64.tar.gz"))
+	storedAsset, err := os.ReadFile(filepath.Join(fakeReleaseAssetsPath(fakeGitHub, "v0.1.0"), "workbook_0.1.0_darwin_arm64.tar.gz"))
 	if err != nil {
 		t.Fatalf("read stored release asset: %v", err)
 	}
@@ -141,10 +141,10 @@ func TestPublishReleaseRollsBackTapAndNewDraftWhenPublicationFails(t *testing.T)
 	if err == nil {
 		t.Fatalf("publisher succeeded despite release publication failure; output = %q", output)
 	}
-	if _, statErr := os.Stat(filepath.Join(fakeGitHub, "state")); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(fakeReleaseStatePath(fakeGitHub, "v0.1.0")); !os.IsNotExist(statErr) {
 		t.Fatalf("new draft release was not deleted during rollback: %v", statErr)
 	}
-	if _, statErr := os.Stat(filepath.Join(fakeGitHub, "assets")); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(fakeReleaseAssetsPath(fakeGitHub, "v0.1.0")); !os.IsNotExist(statErr) {
 		t.Fatalf("new draft assets were not deleted during rollback: %v", statErr)
 	}
 	if _, showErr := exec.Command("git", "-C", remote, "show", "main:Formula/workbook.rb").CombinedOutput(); showErr == nil {
@@ -179,14 +179,14 @@ func TestPublishReleaseNeverDeletesPublicReleaseAfterAmbiguousPublishFailure(t *
 	if err == nil {
 		t.Fatalf("publisher reported success after ambiguous publication failure; output = %q", output)
 	}
-	state, readErr := os.ReadFile(filepath.Join(fakeGitHub, "state"))
+	state, readErr := os.ReadFile(fakeReleaseStatePath(fakeGitHub, "v0.1.0"))
 	if readErr != nil {
 		t.Fatalf("read release state after ambiguous publication failure: %v", readErr)
 	}
 	if strings.TrimSpace(string(state)) != "published" {
 		t.Fatalf("release state = %q, want published release preserved", state)
 	}
-	if _, statErr := os.Stat(filepath.Join(fakeGitHub, "assets")); statErr != nil {
+	if _, statErr := os.Stat(fakeReleaseAssetsPath(fakeGitHub, "v0.1.0")); statErr != nil {
 		t.Fatalf("public release assets were deleted: %v", statErr)
 	}
 	if _, showErr := exec.Command("git", "-C", remote, "show", "main:Formula/workbook.rb").CombinedOutput(); showErr == nil {
@@ -400,20 +400,29 @@ if [ "$1" != release ]; then
 	exit 2
 fi
 command=$2
-shift 2
+# Every gh release subcommand names its release as the third argument, and the
+# desktop publisher touches two of them in one run. Keying state by that name
+# keeps the versioned release and the rolling one apart; a caller that only
+# ever uses one name sees the fake it always did, one directory down.
+name=${3:-}
+if [ -z "${name}" ]; then
+	echo "fake gh: release ${command} needs a release name" >&2
+	exit 2
+fi
+release_root="${FAKE_GH_ROOT}/${name}"
+shift 3
 case "${command}" in
 	view)
-		if [ ! -f "${FAKE_GH_ROOT}/state" ]; then
+		if [ ! -f "${release_root}/state" ]; then
 			exit 1
 		fi
-		if [ "$(cat "${FAKE_GH_ROOT}/state")" = draft ]; then
+		if [ "$(cat "${release_root}/state")" = draft ]; then
 			echo true
 		else
 			echo false
 		fi
 		;;
 	download)
-		shift
 		destination=
 		while [ "$#" -gt 0 ]; do
 			case "$1" in
@@ -427,28 +436,33 @@ case "${command}" in
 			esac
 		done
 		mkdir -p "${destination}"
-		cp "${FAKE_GH_ROOT}"/assets/* "${destination}/"
+		cp "${release_root}"/assets/* "${destination}/"
 		;;
-	create)
-		shift
-		mkdir -p "${FAKE_GH_ROOT}/assets"
+	create | upload)
+		mkdir -p "${release_root}/assets"
+		created_state=published
 		while [ "$#" -gt 0 ]; do
 			# gh reads the notes body out of this file rather than uploading it.
-			# Copying it would add a sixth asset the rerun check would reject.
+			# Copying it would add an asset the rerun check would reject.
 			if [ "$1" = --notes-file ] && [ "$#" -ge 2 ]; then
 				shift 2
 				continue
 			fi
+			if [ "$1" = --draft ]; then
+				created_state=draft
+			fi
 			if [ -f "$1" ]; then
-				cp "$1" "${FAKE_GH_ROOT}/assets/"
+				cp "$1" "${release_root}/assets/"
 			fi
 			shift
 		done
-		echo draft > "${FAKE_GH_ROOT}/state"
+		if [ "${command}" = create ]; then
+			echo "${created_state}" > "${release_root}/state"
+		fi
 		;;
 	edit)
 		if [ "${FAKE_GH_PUBLISH_THEN_FAIL:-0}" = 1 ]; then
-			echo published > "${FAKE_GH_ROOT}/state"
+			echo published > "${release_root}/state"
 			echo "simulated ambiguous publish failure" >&2
 			exit 1
 		fi
@@ -456,11 +470,10 @@ case "${command}" in
 			echo "simulated publish failure" >&2
 			exit 1
 		fi
-		echo published > "${FAKE_GH_ROOT}/state"
+		echo published > "${release_root}/state"
 		;;
 	delete)
-		rm -rf "${FAKE_GH_ROOT}/assets"
-		rm -f "${FAKE_GH_ROOT}/state"
+		rm -rf "${release_root}"
 		;;
 	*)
 		echo "unsupported gh release command: ${command}" >&2
@@ -473,6 +486,16 @@ esac
 		t.Fatalf("write fake gh: %v", err)
 	}
 	return fakeBin, stateRoot
+}
+
+// The fake gh keys each release's state by name, so a test names the release it
+// is inspecting rather than reaching for one well-known directory.
+func fakeReleaseStatePath(fakeGitHub, name string) string {
+	return filepath.Join(fakeGitHub, name, "state")
+}
+
+func fakeReleaseAssetsPath(fakeGitHub, name string) string {
+	return filepath.Join(fakeGitHub, name, "assets")
 }
 
 func readFakeGitHubLog(t *testing.T, fakeGitHub string) string {
