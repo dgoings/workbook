@@ -89,8 +89,62 @@ if (unheard.length > 0) fail(`sent but not listened for: ${unheard.join(', ')}`)
 const silent = [...listened].filter((channel) => !sent.has(channel))
 if (silent.length > 0) fail(`listened for but never sent: ${silent.join(', ')}`)
 
+// The same pairing the other way round: what the main process pushes at the
+// shell page has to be listened for in the preload, and a listener with nothing
+// sending it is a feature that quietly never arrives. Only the chrome view's
+// channels are counted here — a board view is a separate page with its own
+// preload, so `board:align` is not this file's business.
+const pushed = new Set([
+  ...mainSource.matchAll(/toChrome\('([^']+)'/g),
+  ...mainSource.matchAll(/chromeView\??\.webContents\.send\('([^']+)'/g)
+].map((m) => m[1]))
+const awaited = new Set([...preloadSource.matchAll(/ipcRenderer\.on\('([^']+)'/g)].map((m) => m[1]))
+const ignored = [...pushed].filter((channel) => !awaited.has(channel))
+if (ignored.length > 0) fail(`sent to the shell but not listened for: ${ignored.join(', ')}`)
+const expected = [...awaited].filter((channel) => !pushed.has(channel))
+if (expected.length > 0) fail(`listened for in the shell but never sent: ${expected.join(', ')}`)
+
+// The sidebar's two widths are one measurement written in two files: main.js
+// positions every board view at the current width, styles.css draws the sidebar
+// at it. Neither file refers to the other, so changing one alone leaves the
+// boards overlapping the sidebar or short of it — and in the rail the sidebar
+// ends up under a board, where the project list cannot be clicked at all.
+const stylesheet = fs.readFileSync(path.join(renderer, 'styles.css'), 'utf8')
+const widths = [
+  ['SIDEBAR_WIDTH', '#sidebar'],
+  ['RAIL_WIDTH', ':root.sidebar-collapsed #sidebar']
+]
+for (const [name, selector] of widths) {
+  const declared = mainSource.match(new RegExp(`const ${name} = (\\d+)`))
+  const rule = stylesheet.match(new RegExp(`^${selector.replace(/[.:#]/g, '\\$&')}\\s*\\{([^}]*)\\}`, 'm'))
+  if (!declared) {
+    fail(`src/main/main.js no longer declares ${name}`)
+    continue
+  }
+  if (!rule) {
+    fail(`src/renderer/styles.css has no ${selector} rule to match ${name}`)
+    continue
+  }
+  // Every declaration that gives the sidebar a width, not just one of them: the
+  // rule sets both a width and a flex basis, and one of the two agreeing while
+  // the other does not is exactly the half-done edit this is here to catch. The
+  // border is a length in the same rule and is none of this check's business.
+  const lengths = []
+  for (const declaration of rule[1].split(';')) {
+    const [, property, value] = declaration.match(/\s*([\w-]+)\s*:([\s\S]*)/) ?? []
+    if (!/^(?:min-|max-)?width$|^flex(?:-basis)?$/.test(property ?? '')) continue
+    for (const length of value.matchAll(/(\d+)px/g)) lengths.push(length[1])
+  }
+  if (lengths.length === 0 || lengths.some((value) => value !== declared[1])) {
+    fail(`${name} is ${declared[1]} in src/main/main.js but the ${selector} rule in ` +
+      `src/renderer/styles.css is ${lengths.length === 0 ? 'set in no px at all' : lengths.map((value) => `${value}px`).join(', ')}`)
+  }
+}
+
 if (failures > 0) {
   console.error(`\n${failures} check(s) failed`)
   process.exit(1)
 }
-console.log(`${sources.length} files parse, ${used.size} element ids exist, ${invoked.size + sent.size} channels line up`)
+console.log(`${sources.length} files parse, ${used.size} element ids exist, ` +
+  `${invoked.size + sent.size + pushed.size} channels line up, ` +
+  `${widths.length} sidebar widths match the stylesheet`)
