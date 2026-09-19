@@ -482,9 +482,19 @@ body {
 }
 
 /* The hidden "Projects" label took its own space above the list; this stands in
-   for it. The narrow side padding is what buys the key its characters. */
+   for it. The narrow side padding is what buys the key its characters.
+
+   And the scrollbar gives them back. The list still scrolls when it outgrows
+   the pane, but Windows and Linux draw a classic ~15px bar to say so, and 15px
+   is half of what the key has to spell itself in — enough projects to make the
+   list scroll would turn every tile into a dot and an ellipsis. macOS floats an
+   overlay bar over the content and costs nothing, which is exactly why this is
+   easy to miss. The wheel and the trackpad still scroll; what goes is the
+   drawn bar, affordable here because the tiles are few and identical in size,
+   so there is little to judge a position against anyway. */
 :root.sidebar-collapsed .project-list {
   padding: .35rem .35rem 0;
+  scrollbar-width: none;
 }
 
 :root.sidebar-collapsed .project-item {
