@@ -197,6 +197,19 @@ p:last-child { margin-bottom: 0; }
 .method p { font-size: .93rem; color: var(--ink-soft); margin: 0; }
 .method .terminal { box-shadow: none; min-width: 0; }
 .method .terminal pre { font-size: .82rem; padding: .85rem 1rem; }
+/* The desktop app has no command to copy, only a file to fetch per platform.
+   The links sit where the other rows keep their terminal, one pill each, so a
+   reader picks by platform and architecture without reading a filename. The
+   URLs point at the rolling desktop-latest release, which every desktop release
+   refreshes, so nothing here changes per release. */
+.downloads { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: .5rem; min-width: 0; }
+.downloads a {
+  display: inline-flex; align-items: baseline; gap: .35rem; border: 1px solid var(--hairline); border-radius: 8px;
+  padding: .45rem .7rem; font-size: .88rem; font-weight: 600; color: var(--ink); text-decoration: none; background: var(--card);
+}
+.downloads a span { font-weight: 500; color: var(--ink-soft); font-size: .82rem; }
+.downloads a:hover { border-color: var(--blue); color: var(--blue); }
+.downloads a:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 @media (max-width: 46rem) { .method { grid-template-columns: 1fr; gap: .9rem; align-items: start; } }
 
 /* ---------- footer ---------- */
@@ -397,6 +410,23 @@ p:last-child { margin-bottom: 0; }
       </div>
 
       <div class="install-methods">
+
+        <div class="method">
+          <div>
+            <h3>Desktop app</h3>
+            <p>Workbench discovers repositories, imports them as projects, and puts every board in one window. Installing it installs the CLI it bundles. macOS builds are not notarized yet: open the app once from the Finder context menu.</p>
+          </div>
+          <ul class="downloads" aria-label="Desktop app downloads">
+            <li><a href="https://github.com/dgoings/workbook/releases/download/desktop-latest/Workbench-arm64.dmg">macOS <span>Apple Silicon</span></a></li>
+            <li><a href="https://github.com/dgoings/workbook/releases/download/desktop-latest/Workbench-x64.dmg">macOS <span>Intel</span></a></li>
+            <li><a href="https://github.com/dgoings/workbook/releases/download/desktop-latest/Workbench-x86_64.AppImage">Linux <span>x64 AppImage</span></a></li>
+            <li><a href="https://github.com/dgoings/workbook/releases/download/desktop-latest/Workbench-amd64.deb">Linux <span>x64 deb</span></a></li>
+            <li><a href="https://github.com/dgoings/workbook/releases/download/desktop-latest/Workbench-arm64.AppImage">Linux <span>arm64 AppImage</span></a></li>
+            <li><a href="https://github.com/dgoings/workbook/releases/download/desktop-latest/Workbench-arm64.deb">Linux <span>arm64 deb</span></a></li>
+            <li><a href="https://github.com/dgoings/workbook/releases/download/desktop-latest/Workbench-Setup-x64.exe">Windows <span>x64</span></a></li>
+            <li><a href="https://github.com/dgoings/workbook/releases/download/desktop-latest/Workbench-Setup-arm64.exe">Windows <span>arm64</span></a></li>
+          </ul>
+        </div>
 
         <div class="method">
           <div>
