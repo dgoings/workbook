@@ -194,7 +194,11 @@ function watchSidebarShortcut (webContents) {
       : input.control && !input.meta
     if (!chord) return
     event.preventDefault()
-    toggleSidebar()
+    // Nothing awaits this listener, so a failed save would otherwise be an
+    // unhandled rejection and the chord would look like it simply did nothing.
+    toggleSidebar().catch((error) => {
+      console.error('workbench: could not toggle the sidebar', error)
+    })
   })
 }
 

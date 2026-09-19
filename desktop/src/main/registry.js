@@ -24,6 +24,8 @@ class Registry {
   constructor (directory) {
     this.file = path.join(directory, 'registry.json')
     this.state = structuredClone(EMPTY)
+    /** The tail of the save queue; see save(). @type {Promise<void>} */
+    this.saving = Promise.resolve()
   }
 
   async load () {
@@ -59,7 +61,28 @@ class Registry {
     }
   }
 
+  /**
+   * Persist the registry, one save at a time.
+   *
+   * The write itself is atomic, but two of them overlapping are not: both use
+   * the one temp path, so the first rename takes the file the second is still
+   * filling. That loses the second save to ENOENT, and in the worse
+   * interleaving renames a half-written file into place, which the next load()
+   * can only quarantine — the project list looks gone until a rescan. Saves are
+   * therefore queued rather than run as they arrive. The queue lives here, not
+   * at the call site, because every caller needs it: the sidebar shortcut is
+   * only the first one a user can fire twice in a moment.
+   */
   async save () {
+    const done = this.saving.then(() => this.#write())
+    // The next save waits on a promise that always settles. Waiting on this one
+    // would hand it a failed save's rejection and break the queue for good.
+    this.saving = done.catch(() => {})
+    return done
+  }
+
+  /** The actual write. Only save() calls it, and only one call at a time. */
+  async #write () {
     await fs.mkdir(path.dirname(this.file), { recursive: true })
     const temporary = `${this.file}.tmp`
     await fs.writeFile(temporary, JSON.stringify(this.state, null, 2))
