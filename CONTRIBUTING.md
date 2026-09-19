@@ -268,8 +268,9 @@ exists.
 It publishes the same four archives and checksums, on a GitHub release flagged
 as a pre-release, with the `## Unreleased` section of the changelog as its notes
 when there is one. It does not touch the Homebrew tap, so `brew upgrade` never
-serves a pre-release. The changelog is not consulted: leave `## Unreleased`
-where it is.
+serves a pre-release. A pre-release needs no changelog entry of its own and the
+entry check is not run, so leave `## Unreleased` where it is: it is what the
+pre-release publishes as its notes.
 
 The next stable release ignores pre-release tags when it computes its version,
 so after `v0.6.0-rc2` a `release:minor` merge still cuts `v0.6.0` from `v0.5.1`,
@@ -278,13 +279,15 @@ and a `release:patch` still cuts `v0.5.2`.
 ### What the workflow publishes
 
 A version tag such as `v0.1.0` runs the release workflow. It revalidates the
-strict SemVer tag, publishes the four archives and checksums to GitHub Releases,
-and updates the `dgoings/homebrew-tap` formula from those generated checksums.
-The protected release environment exposes a credential scoped only to that tap
-repository after validation. New assets are staged in a draft, the tap update is
-pushed first, and the draft is published last. A rerun verifies existing assets
-byte-for-byte and never overwrites them; a failed final publication reverts the
-tap update and removes only a draft created by that run.
+SemVer tag, publishes the four archives and checksums to GitHub Releases, and,
+for a stable release, updates the `dgoings/homebrew-tap` formula from those
+generated checksums; a pre-release leaves the tap alone, as Pre-releases above
+describes. The protected release environment exposes a credential scoped only to
+that tap repository after validation. New assets are staged in a draft, the tap
+update is pushed first, and the draft is published last. A rerun verifies
+existing assets byte-for-byte and never overwrites them; a failed final
+publication reverts the tap update a stable release made and removes only a
+draft created by that run.
 
 The release notes are the `CHANGELOG.md` entry when the version has one, and
 generated from the commit log when it does not.
