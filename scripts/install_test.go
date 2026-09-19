@@ -164,6 +164,65 @@ func TestInstallStampsVersionAndCommit(t *testing.T) {
 	if !strings.Contains(reported, strings.TrimSpace(string(expectedCommit))) {
 		t.Fatalf("workbook version = %q, want commit %q", reported, expectedCommit)
 	}
+	// The stamped version is the describe the installer runs, restricted to the
+	// CLI's own v* tags for the reason the next test pins down.
+	expectedVersion := gitOutput(t, root, "describe", "--tags", "--match", "v*", "--always", "--dirty")
+	if !strings.Contains(reported, expectedVersion) {
+		t.Fatalf("workbook version = %q, want version %q", reported, expectedVersion)
+	}
+}
+
+// Production mutation: a describe with no --match takes whichever tag git
+// orders first, and for two annotated tags on one commit that is the later
+// tagger date. A cascaded desktop release tags the CLI's released commit
+// second, so the CLI bundled in the app would report the app's own version.
+func TestInstallStampsTheCLITagWhenADesktopTagSharesTheCommit(t *testing.T) {
+	root, script := paths(t)
+	fixture := filepath.Join(t.TempDir(), "workbook")
+	// A clone rather than the checkout itself: the tags below are the point of
+	// the fixture, and this test has no business creating them in the tree it
+	// is run from. The clone carries the committed installer, so the one under
+	// test is copied over it; otherwise this would measure HEAD's script and
+	// pass or fail for the wrong reason.
+	gitOutput(t, root, "clone", "--quiet", root, fixture)
+	installer, err := os.ReadFile(script)
+	if err != nil {
+		t.Fatalf("read installer: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(fixture, "scripts", "install.sh"), installer, 0o700); err != nil {
+		t.Fatalf("write fixture installer: %v", err)
+	}
+	runCommand(t, fixture, nil, "git", "config", "user.name", "Release Test")
+	runCommand(t, fixture, nil, "git", "config", "user.email", "release-test@example.com")
+	// Committed before the tags, so the fixture tree is clean and the stamp is
+	// the bare tag rather than a "-dirty" one that would hide it. --allow-empty
+	// because the copy above changes nothing whenever the installer under test
+	// is the committed one, which is the ordinary case.
+	runCommand(t, fixture, nil, "git", "commit", "--quiet", "--allow-empty", "--all", "--message", "installer under test")
+	runCommand(t, fixture, nil, "git", "tag", "--annotate", "v1.0.0", "--message", "Workbook v1.0.0")
+	// Created second, so its tagger date is later: this is the tie an unmatched
+	// describe breaks the wrong way.
+	runCommand(t, fixture, nil, "git", "tag", "--annotate", "desktop-v1.0.0", "--message", "Workbench desktop-v1.0.0")
+	if unmatched := gitOutput(t, fixture, "describe", "--tags"); unmatched != "desktop-v1.0.0" {
+		t.Fatalf("unmatched describe = %q, want desktop-v1.0.0 so the fixture reproduces the ambiguity", unmatched)
+	}
+
+	destination := filepath.Join(t.TempDir(), "bin")
+	command := exec.Command(filepath.Join(fixture, "scripts", "install.sh"), destination)
+	command.Dir = fixture
+	if output, installErr := command.CombinedOutput(); installErr != nil {
+		t.Fatalf("install: %v\n%s", installErr, output)
+	}
+
+	stdout, versionErr := exec.Command(filepath.Join(destination, "workbook"), "version").Output()
+	if versionErr != nil {
+		t.Fatalf("workbook version: %v", versionErr)
+	}
+	reported := strings.TrimSpace(string(stdout))
+	fixtureCommit := gitOutput(t, fixture, "rev-parse", "HEAD")
+	if want := "workbook v1.0.0 (" + fixtureCommit + ")"; reported != want {
+		t.Fatalf("workbook version = %q, want %q", reported, want)
+	}
 }
 
 func TestInstallAcceptsAnAlternateBinaryName(t *testing.T) {

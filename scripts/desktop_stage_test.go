@@ -46,8 +46,9 @@ func TestDesktopStageBuildsFromThisCheckout(t *testing.T) {
 		t.Fatalf("default stage cloned the checkout; want it to build in place (err=%v)", err)
 	}
 
-	// Stamped from this checkout, the way install.sh stamps a source build.
-	described := gitOutput(t, root, "describe", "--tags", "--always", "--dirty")
+	// Stamped from this checkout, the way install.sh stamps a source build:
+	// from the CLI's own v* tags, never the desktop app's desktop-v* ones.
+	described := gitOutput(t, root, "describe", "--tags", "--match", "v*", "--always", "--dirty")
 	version, err := exec.Command(binary, "version").Output()
 	if err != nil {
 		t.Fatalf("workbook version: %v", err)
