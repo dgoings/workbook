@@ -322,11 +322,14 @@ did not ask for: it exits naming the manual cut instead, which fails the
 desktop release by hand and the sequences are back in step.
 
 A desktop release builds on all three runners, because each installer can only
-be made on its own platform. Each build stages the CLI release sitting on the
-same commit — built for every architecture that runner's bundles cover, so the
-app ships the CLI it was released with rather than whatever the host had — and
-stamps the package's version from the tag. The checked-in version stays
-`0.0.0`; the tag is the one statement of what shipped.
+be made on its own platform. Each build stages the newest CLI release reachable
+from the released commit — which is the release just published when a CLI
+release cascaded into this one, and the last CLI release when the desktop tag
+was cut by hand, since a desktop-only tag has no CLI release of its own. It is
+built for every architecture that runner's bundles cover, so the app ships the
+CLI it was released with rather than whatever the host had, and the package's
+version is stamped from the tag. The checked-in version stays `0.0.0`; the tag
+is the one statement of what shipped.
 
 It publishes two releases from that one build. The versioned one, such as
 `desktop-v0.6.0`, is the record of what shipped, and is written once: a rerun
@@ -353,6 +356,11 @@ tag, or:
 ```sh
 gh workflow run desktop-release.yml -f tag=desktop-v0.6.1
 ```
+
+A rerun builds the tag as it was, so a fix that has landed on `main` since needs
+a new tag, or a new candidate, before it can reach anyone. This is the same rule
+the CLI's releases follow: a rerun republishes, it never rebuilds from something
+newer.
 
 A desktop pre-release is a `desktop-vX.Y.Z-rcN` tag. A CLI pre-release cascades
 into one, and one can be cut by hand the same way a stable desktop release is.

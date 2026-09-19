@@ -59,14 +59,21 @@ jobs:
 
       # The tag decides the version stamped into the package, so it is checked
       # before anything is built from it. The CLI tag is resolved here too: the
-      # desktop tag sits on the same commit as the CLI release it bundles, so
-      # the newest v* tag reachable from it names that release.
+      # newest v* tag reachable from the released commit names the CLI release
+      # this build bundles, which is the one just published when a CLI release
+      # cascaded into this and the last CLI release when the desktop tag was cut
+      # by hand, since such a tag has no CLI release of its own.
       - name: Validate desktop release tag
         shell: bash
         run: |
+          # Each value is assigned before it is printed. A command substitution
+          # inside printf's arguments fails into an empty string that set -e
+          # never sees, so a describe that found no CLI tag would write
+          # CLI_TAG= and the stage would silently bundle the working tree.
           VERSION=$(scripts/validate-desktop-release-tag.sh "${DESKTOP_TAG}")
+          CLI_TAG=$(git describe --tags --match 'v*' --abbrev=0)
           printf 'VERSION=%s\n' "${VERSION}" >> "${GITHUB_ENV}"
-          printf 'CLI_TAG=%s\n' "$(git describe --tags --match 'v*' --abbrev=0)" >> "${GITHUB_ENV}"
+          printf 'CLI_TAG=%s\n' "${CLI_TAG}" >> "${GITHUB_ENV}"
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -144,6 +151,14 @@ jobs:
     name: Publish
     needs: build
     runs-on: ubuntu-24.04
+    # The workflow group above is per desktop tag, which is what keeps two runs
+    # of the same release apart. This one is global, because desktop-latest is:
+    # one tag and one release for the whole repository. Two different tags
+    # publishing at once would each move it and each replace its assets, and
+    # the result would serve half of one build and half of the other.
+    concurrency:
+      group: desktop-latest
+      cancel-in-progress: false
     timeout-minutes: 30
     permissions:
       contents: write

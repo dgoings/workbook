@@ -44,7 +44,14 @@ type releaseJob struct {
 	Needs       any               `yaml:"needs"`
 	Environment any               `yaml:"environment"`
 	Permissions map[string]string `yaml:"permissions"`
-	Strategy    struct {
+	// Concurrency is a job's own group, which narrows the workflow's. Its
+	// CancelInProgress is `any` for the same reason the workflow's is: an absent
+	// key must not read as the safe value.
+	Concurrency struct {
+		Group            string `yaml:"group"`
+		CancelInProgress any    `yaml:"cancel-in-progress"`
+	} `yaml:"concurrency"`
+	Strategy struct {
 		Matrix struct {
 			OS []string `yaml:"os"`
 		} `yaml:"matrix"`
@@ -313,7 +320,7 @@ func TestReleaseWorkflowsPinActionsAndRunners(t *testing.T) {
 				}
 			}
 			contents := readReleaseWorkflowFile(t, name)
-			for _, forbidden := range []string{"ubuntu-latest", "macos-latest"} {
+			for _, forbidden := range []string{"ubuntu-latest", "macos-latest", "windows-latest"} {
 				if strings.Contains(contents, forbidden) {
 					t.Errorf("%s pins the moving runner label %q", name, forbidden)
 				}
@@ -412,6 +419,22 @@ func TestDesktopReleaseWorkflowGroupsConcurrencyByTag(t *testing.T) {
 	}
 	if cancel, ok := workflow.Concurrency.CancelInProgress.(bool); !ok || cancel {
 		t.Errorf("cancel-in-progress = %v, want an explicit false so a publication is never interrupted", workflow.Concurrency.CancelInProgress)
+	}
+
+	// Production mutation: the per-tag group keeps two runs of one release
+	// apart and nothing else, while desktop-latest is one tag and one release
+	// for the whole repository. Without a global group on the publishing job,
+	// two different desktop tags publishing at once would each move that tag
+	// and each replace its assets.
+	publish, ok := workflow.Jobs["publish"]
+	if !ok {
+		t.Fatalf("desktop-release jobs = %v, want a publish job", keysOf(workflow.Jobs))
+	}
+	if publish.Concurrency.Group != "desktop-latest" {
+		t.Errorf("publish job concurrency group = %q, want desktop-latest", publish.Concurrency.Group)
+	}
+	if cancel, ok := publish.Concurrency.CancelInProgress.(bool); !ok || cancel {
+		t.Errorf("publish job cancel-in-progress = %v, want an explicit false so a publication is never interrupted", publish.Concurrency.CancelInProgress)
 	}
 }
 
