@@ -54,6 +54,11 @@ npm run dist:linux   # Linux, x64 + arm64 (AppImage + deb)
 npm run dist:win     # Windows, x64 + arm64 (NSIS)
 ```
 
+Windows ships one installer per architecture, `Workbench-Setup-x64.exe` and
+`Workbench-Setup-arm64.exe`, and no combined one: `buildUniversalInstaller` is
+off, because a third installer carrying both would double the download for
+everyone to spare one choice.
+
 Each build:
 
 1. **Staging** builds the Workbook CLI from this checkout with the repository's
@@ -117,16 +122,26 @@ the download links and the update checks below are pinned to.
 
 `.github/workflows/desktop-release.yml` does this. A pushed `desktop-v*` tag
 builds on a macOS, a Linux and a Windows runner, because each installer can
-only be made on its own platform; each build stages the CLI release sitting on
-the same commit for every architecture its bundles cover, and stamps the
-package's version from the tag. The version checked in here stays `0.0.0`: the
-tag says what shipped, so nothing has to be bumped in git.
+only be made on its own platform; each build stages the newest CLI release
+reachable from the released commit — the one just published when a CLI release
+cascaded into this, and the last CLI release when the desktop tag was cut by
+hand — for every architecture its bundles cover, and stamps the package's
+version from the tag. The version checked in here stays `0.0.0`: the tag says
+what shipped, so nothing has to be bumped in git.
 
 Every CLI release cascades into a desktop one, and a desktop-only release is
 cut by pushing a `desktop-vX.Y.Z` tag on `main` yourself. CONTRIBUTING's
 "Desktop releases" has both paths, and what the two releases each hold.
 
 ## Updating
+
+Every release publishes on the `latest` channel, pre-release or not. JSON has
+no comments, so the reason for `detectUpdateChannel: false` in `package.json`
+lives here: electron-builder otherwise reads the channel out of the version, so
+a `0.6.0-rc1` build would write `rc1-mac.yml` and no `latest-mac.yml` at all.
+The site link and the update check both follow the newest desktop release,
+which is whatever `desktop-latest` currently holds, so they would find nothing
+there.
 
 **Windows** uses electron-updater's native flow: download in the background,
 install on restart.
@@ -208,7 +223,7 @@ The wizard suggests one per repository, validates it against Workbook's own
 | --- | --- |
 | macOS (arm64, x64) | Builds. Ad-hoc signed, not notarized. |
 | Linux (x64, arm64) | Builds as AppImage and deb. |
-| Windows (x64, arm64) | Builds as an NSIS installer; unsigned until the publish workflow adds Azure Trusted Signing. |
+| Windows (x64, arm64) | Builds one NSIS installer per architecture, and no combined one; unsigned until the publish workflow adds Azure Trusted Signing. |
 
 ## Known gaps
 

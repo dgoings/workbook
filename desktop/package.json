@@ -31,6 +31,7 @@
       "package.json",
       "!**/*.map"
     ],
+    "detectUpdateChannel": false,
     "publish": {
       "provider": "generic",
       "url": "https://github.com/dgoings/workbook/releases/download/desktop-latest"
@@ -77,6 +78,7 @@
       "verifyUpdateCodeSignature": false
     },
     "nsis": {
+      "buildUniversalInstaller": false,
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
