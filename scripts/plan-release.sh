@@ -101,13 +101,21 @@ case $0 in
 	*/*) script_directory=${0%/*} ;;
 	*) script_directory=. ;;
 esac
+# shellcheck source=scripts/release-version.sh
+. "${script_directory}/release-version.sh"
 
 if [ -z "${requested_bump}" ] && [ -z "${requested_version}" ]; then
 	usage >&2
 	fail "either --bump or --version is required" 2
 fi
 if [ "${previous_given}" = no ]; then
-	previous_tag=$(git tag --list 'v[0-9]*' --sort=-v:refname | head -n 1)
+	# A stable release follows the newest stable release and never sees a
+	# pre-release tag; a pre-release has to clear every tag there is.
+	if [ -n "${requested_version}" ] && is_safe_release_version "${requested_version}" && is_prerelease_version "${requested_version}"; then
+		previous_tag=$(newest_release_tag any)
+	else
+		previous_tag=$(newest_release_tag stable)
+	fi
 fi
 
 # A previous release that never published leaves its changelog entry describing
@@ -126,6 +134,15 @@ version=$("${script_directory}/resolve-release-version.sh" \
 	--version "${requested_version}" \
 	--previous "${previous_tag}")
 
+# A pre-release is not a release. The changelog keeps its Unreleased heading
+# until the stable version is cut, so there is no entry to agree with and the
+# check is not run.
+if is_prerelease_version "${version}"; then
+	echo "workbook release: pre-release v${version} needs no CHANGELOG entry" >&2
+	echo "${version}"
+	exit 0
+fi
+
 # An explicit version's changelog requirement follows the distance it actually
 # travels, not the bump kind it was typed beside. Choosing "patch" and typing
 # 1.0.0 would otherwise skip the entry a major release has to carry.
@@ -133,6 +150,7 @@ effective_bump=${requested_bump:-patch}
 if [ -n "${requested_version}" ]; then
 	if [ -n "${previous_tag}" ]; then
 		previous_number=${previous_tag#v}
+		previous_number=${previous_number%%-rc*}
 	else
 		previous_number=0.0.0
 	fi
