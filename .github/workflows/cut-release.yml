@@ -17,7 +17,7 @@ on:
           - minor
           - major
       version:
-        description: Exact version such as 0.5.0, overriding the bump when set
+        description: Exact version such as 0.5.0, or 0.6.0-rc1 for a pre-release, overriding the bump when set
         type: string
         required: false
 
