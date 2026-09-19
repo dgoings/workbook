@@ -17,13 +17,15 @@ usage() {
 	cat <<'USAGE'
 usage: scripts/resolve-release-version.sh [--bump KIND] [--version VERSION] [--previous TAG]
 
-Prints the resolved MAJOR.MINOR.PATCH version.
+Prints the resolved version: MAJOR.MINOR.PATCH, or MAJOR.MINOR.PATCH-rcN for a pre-release named explicitly.
 
 Options:
   --bump KIND       patch, minor, or major, applied to the previous release
   --version VER     explicit version; overrides --bump when non-empty
   --previous TAG    previous release tag (default: newest v* tag in this repository)
   -h, --help        show this message
+
+A --bump never produces a pre-release; only an explicit --version can.
 
 At least one of --bump and --version must be non-empty. Callers that accept
 both from a user pass both unconditionally and let --version win here, so the
@@ -102,8 +104,23 @@ fi
 # Discovering the previous release is a convenience for interactive use. Every
 # workflow passes it explicitly, which keeps the resolution a pure function of
 # its arguments and lets the tests exercise it without building a repository.
+#
+# Which tag counts as previous depends on what is being cut. A stable version
+# only has to follow the newest stable release, and pre-release tags are
+# invisible to it, so v0.6.0 after v0.6.0-rc2 still computes from v0.5.1. A
+# pre-release has to follow every tag there is, so a stale rc number is refused.
+#
+# is_prerelease_version assumes a version that already passed the grammar, and
+# an explicit version is not checked until below, so guard the question with it.
+# An unsafe version then discovers the stable previous and is rejected there.
 if [ "${previous_given}" = no ]; then
-	previous_tag=$(git tag --list 'v[0-9]*' --sort=-v:refname | head -n 1)
+	if [ -n "${requested_version}" ] &&
+		is_safe_release_version "${requested_version}" &&
+		is_prerelease_version "${requested_version}"; then
+		previous_tag=$(newest_release_tag any)
+	else
+		previous_tag=$(newest_release_tag stable)
+	fi
 fi
 
 # No release yet orders everything after 0.0.0, so a first bump lands on 0.0.1,
@@ -113,8 +130,15 @@ if [ -z "${previous_tag}" ]; then
 else
 	previous_number=${previous_tag#v}
 	if ! is_safe_release_version "${previous_number}"; then
-		fail "previous release ${previous_tag} is not a MAJOR.MINOR.PATCH tag"
+		fail "previous release ${previous_tag} is not a release version tag"
 	fi
+fi
+
+# Bumps are computed from stable releases only. Handing a bump a pre-release to
+# bump from means the caller looked up the wrong tag, and bumping the core
+# number would silently skip the release the rc is a candidate for.
+if [ -z "${requested_version}" ] && [ -n "${previous_tag}" ] && is_prerelease_version "${previous_number}"; then
+	fail "bumps are computed from the newest stable release, not the pre-release ${previous_tag}"
 fi
 
 if [ -n "${requested_version}" ]; then
@@ -136,9 +160,9 @@ fi
 require_safe_release_version "${resolved}" "workbook release"
 
 # Version numbers only ever move forward, so catch a version that would order
-# below or equal to a release that already shipped.
-ordered_last=$(printf '%s\n%s\n' "${previous_number}" "${resolved}" | sort -V | tail -n 1)
-if [ "${ordered_last}" != "${resolved}" ] || [ "${previous_number}" = "${resolved}" ]; then
+# below or equal to a release that already shipped. The comparison is the
+# shared one: sort -V would put 0.6.0-rc1 after 0.6.0.
+if ! release_version_before "${previous_number}" "${resolved}"; then
 	if [ -z "${previous_tag}" ]; then
 		fail "version ${resolved} does not come after 0.0.0"
 	fi
