@@ -29,7 +29,12 @@ if is_prerelease_version "${version}"; then
 fi
 
 distribution_directory=$(CDPATH='' cd -- "${distribution_directory}" && pwd -P)
-tap_directory=$(CDPATH='' cd -- "${tap_directory}" && pwd -P)
+# Only a stable release reads or writes the tap, and the workflow checks it out
+# only for one, so a pre-release is handed a path that need not exist. Resolving
+# it here would fail the run over a repository it never touches.
+if [ "${prerelease}" = no ]; then
+	tap_directory=$(CDPATH='' cd -- "${tap_directory}" && pwd -P)
+fi
 
 # Must match the platforms scripts/release.sh builds and the formula serves.
 archive_names=
@@ -190,7 +195,13 @@ else
 fi
 
 if [ "${release_is_draft}" = true ]; then
-	gh release edit "${tag}" --repo "${repository}" --draft=false
+	set -- --draft=false
+	# gh patches only the flags it is given, so restate the pre-release one here
+	# rather than trust that publishing the draft leaves it alone.
+	if [ "${prerelease}" = yes ]; then
+		set -- "$@" --prerelease
+	fi
+	gh release edit "${tag}" --repo "${repository}" "$@"
 fi
 
 completed=1

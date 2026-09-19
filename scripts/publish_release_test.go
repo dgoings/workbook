@@ -229,6 +229,20 @@ func TestPublishReleasePublishesAPreReleaseWithoutTouchingTheTap(t *testing.T) {
 	if !strings.Contains(logContents, "--notes-file") {
 		t.Errorf("gh log = %q, want the Unreleased section supplied as notes", logContents)
 	}
+	if strings.Contains(logContents, "--generate-notes") {
+		t.Errorf("gh log = %q, want no generated notes alongside the Unreleased section", logContents)
+	}
+	// Publishing the draft must not drop the flag: a candidate listed as a
+	// release is one brew and every reader takes for a finished version.
+	editLine := ""
+	for _, line := range strings.Split(logContents, "\n") {
+		if strings.HasPrefix(line, "release edit ") {
+			editLine = line
+		}
+	}
+	if !strings.Contains(editLine, "--prerelease") {
+		t.Errorf("gh edit line = %q, want the pre-release flag restated when the draft is published", editLine)
+	}
 	if got := gitOutput(t, tap, "rev-parse", "origin/main"); got != tapHeadBefore {
 		t.Errorf("tap head moved from %s to %s for a pre-release", tapHeadBefore, got)
 	}
@@ -257,6 +271,45 @@ func TestPublishReleaseGeneratesPreReleaseNotesWithoutAnUnreleasedSection(t *tes
 	}
 	if !strings.Contains(logContents, "--prerelease") {
 		t.Errorf("gh log = %q, want the release flagged as a pre-release", logContents)
+	}
+}
+
+// The workflow checks the tap out only for a stable release, so a pre-release
+// run is handed a tap path that does not exist. It has to publish anyway.
+func TestPublishReleasePublishesAPreReleaseWithoutATapCheckout(t *testing.T) {
+	root, _ := renderFormulaPaths(t)
+	dist := writeReleaseFixture(t, "0.6.0-rc1")
+	fakeBin, fakeGitHub := newFakeGitHubCLI(t)
+	changelog := writeChangelog(t, "# Changelog\n\n## Unreleased\n\n- a candidate\n\n## v0.5.1\n\n- the last release\n")
+	absentTap := filepath.Join(t.TempDir(), "homebrew-tap")
+
+	output, err := runPublishReleaseWithChangelog(root, fakeBin, fakeGitHub, absentTap, dist, "v0.6.0-rc1", changelog, nil)
+	if err != nil {
+		t.Fatalf("publish pre-release without a tap checkout: %v\n%s", err, output)
+	}
+
+	if logContents := readFakeGitHubLog(t, fakeGitHub); !strings.Contains(logContents, "--prerelease") {
+		t.Errorf("gh log = %q, want the release created as a pre-release", logContents)
+	}
+	if _, statErr := os.Stat(absentTap); !os.IsNotExist(statErr) {
+		t.Errorf("pre-release created the tap directory it was told to leave alone: %v", statErr)
+	}
+}
+
+// A stable release does need the tap, so a missing checkout is a broken run and
+// has to stop before anything is published rather than after.
+func TestPublishReleaseFailsFastWhenAStableReleaseHasNoTapCheckout(t *testing.T) {
+	root, _ := renderFormulaPaths(t)
+	dist := writeReleaseFixture(t, "0.1.0")
+	fakeBin, fakeGitHub := newFakeGitHubCLI(t)
+	absentTap := filepath.Join(t.TempDir(), "homebrew-tap")
+
+	output, err := runPublishReleaseCommand(root, fakeBin, fakeGitHub, absentTap, dist, nil)
+	if err == nil {
+		t.Fatalf("stable release published without a tap checkout; output = %q", output)
+	}
+	if _, statErr := os.Stat(filepath.Join(fakeGitHub, "commands.log")); !os.IsNotExist(statErr) {
+		t.Errorf("stable release reached gh before failing on the missing tap: %v", statErr)
 	}
 }
 
