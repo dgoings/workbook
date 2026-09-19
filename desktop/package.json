@@ -30,12 +30,6 @@
       "package.json",
       "!**/*.map"
     ],
-    "extraResources": [
-      {
-        "from": "build/WORKBOOK-LICENSE",
-        "to": "WORKBOOK-LICENSE"
-      }
-    ],
     "publish": {
       "provider": "generic",
       "url": "https://github.com/dgoings/workbook/releases/download/desktop-latest"
@@ -65,13 +59,7 @@
       "extendInfo": {
         "LSMinimumSystemVersion": "11.0",
         "NSHumanReadableCopyright": "Bundles the Workbook CLI (MIT). See WORKBOOK-LICENSE in Resources."
-      },
-      "extraResources": [
-        {
-          "from": "build/workbook",
-          "to": "workbook"
-        }
-      ]
+      }
     },
     "win": {
       "icon": "assets/icon.ico",
@@ -85,13 +73,7 @@
           ]
         }
       ],
-      "verifyUpdateCodeSignature": false,
-      "extraResources": [
-        {
-          "from": "build/workbook.exe",
-          "to": "workbook.exe"
-        }
-      ]
+      "verifyUpdateCodeSignature": false
     },
     "nsis": {
       "oneClick": false,
@@ -127,13 +109,7 @@
       "maintainer": "dgoings/workbook",
       "artifactName": "${productName}-${arch}.${ext}",
       "synopsis": "Desktop shell for Workbook",
-      "description": "Discover Git repositories, import them as Workbook projects, and switch between their boards in one window.",
-      "extraResources": [
-        {
-          "from": "build/workbook",
-          "to": "workbook"
-        }
-      ]
+      "description": "Discover Git repositories, import them as Workbook projects, and switch between their boards in one window."
     }
   },
   "devDependencies": {

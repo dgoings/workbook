@@ -14,6 +14,11 @@
 #
 #   build-workbook.sh [output-dir]   stage into output-dir (default: desktop/build)
 #
+#   GOOS, GOARCH   build for that target instead of the host. They reach
+#                  `go build` through install.sh, so one runner can stage a CLI
+#                  for every target a release bundles; the binary is named from
+#                  GOOS, and the version banner is skipped for a target that
+#                  cannot run here.
 #   WORKBOOK_REPO  use this checkout as it stands instead of the enclosing one.
 #                  Its checked-out revision is never changed: reaching into
 #                  someone's working tree is not this script's business.
@@ -81,8 +86,12 @@ fi
 
 # `go build -o <name>` writes exactly the name it is given, and does not append
 # .exe on Windows, so the name is decided here rather than left to the toolchain.
-case "$(uname -s)" in
-	MINGW* | MSYS* | CYGWIN*) binary_name=workbook.exe ;;
+# GOOS names the target when it is set, the host otherwise; naming from the
+# target rather than from `uname` is what lets one runner stage every target.
+target_os=${GOOS:-$(go env GOHOSTOS)}
+target_arch=${GOARCH:-$(go env GOHOSTARCH)}
+case "${target_os}" in
+	windows) binary_name=workbook.exe ;;
 	*) binary_name=workbook ;;
 esac
 
@@ -92,4 +101,10 @@ echo "build-workbook: building from $(git -C "${repo}" rev-parse --short HEAD) a
 # The MIT license travels with the binary: the app redistributes it.
 cp -- "${repo}/LICENSE" "${output_directory}/WORKBOOK-LICENSE"
 
-echo "build-workbook: staged $("${output_directory}/${binary_name}" version)"
+# The banner runs the binary to print its version, which a binary built for
+# another platform cannot do here; say what was staged instead.
+if [ "${target_os}" = "$(go env GOHOSTOS)" ] && [ "${target_arch}" = "$(go env GOHOSTARCH)" ]; then
+	echo "build-workbook: staged $("${output_directory}/${binary_name}" version)"
+else
+	echo "build-workbook: staged ${binary_name} for ${target_os}/${target_arch}"
+fi

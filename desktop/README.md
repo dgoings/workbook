@@ -61,12 +61,28 @@ Each build:
    rather than calling `go build` here, so the binary is stamped exactly as an
    official source install is: `-trimpath`, with version and commit from
    `git describe`. Requires Go and Git.
-2. **`electron-builder`** packages the app with that binary in `Resources/`,
-   ad-hoc signing the macOS bundle in an `afterPack` hook. That has to happen
-   *during* packaging: signing the leftover `.app` afterwards fixes nothing,
-   because the DMG and ZIP were already built from the unsigned bundle. macOS
-   on Apple Silicon refuses to launch an arm64 bundle whose signature
-   repackaging invalidated.
+
+   A release stages one CLI per target rather than a single one: `GOOS` and
+   `GOARCH` reach `go build` through `install.sh`, so
+   `GOOS=windows GOARCH=arm64 scripts/build-workbook.sh build/windows-arm64`
+   stages that target's CLI beside the others, under `build/<goos>-<goarch>/`.
+   The binary is named from `GOOS` — `workbook.exe` for Windows — and the
+   banner that prints its version is skipped for a target the machine doing
+   the building cannot run.
+2. **`electron-builder`** packages the app, and its `afterPack` hook puts the
+   CLI matching that bundle's own platform and architecture into `Resources/`:
+   from `build/<goos>-<goarch>/` when a release staged one there, and
+   otherwise from `build/`, which is what a local `npm run dist` stages. The
+   hook does this rather than electron-builder's `extraResources`, which
+   copies one named file into every bundle and so gave both architectures of a
+   Mac build the host's binary.
+
+   The hook then ad-hoc signs the macOS bundle, after the copy, since the
+   resources are part of what gets signed. Signing has to happen *during*
+   packaging too: signing the leftover `.app` afterwards fixes nothing, because
+   the DMG and ZIP were already built from the unsigned bundle. macOS on Apple
+   Silicon refuses to launch an arm64 bundle whose signature repackaging
+   invalidated.
 
 So installing the app installs a matching Workbook. There is no separate CLI
 install step, and no dependency on what happens to be on the machine.
