@@ -298,6 +298,71 @@ the release workflow directly. A tag pushed from a checkout starts it through
 the `push` trigger as before. Publication has one implementation and three
 entrances.
 
+### Desktop releases
+
+The desktop app carries its own tag sequence, `desktop-vX.Y.Z`, beside the
+CLI's `vX.Y.Z`. They are separate because the app can ship a fix of its own
+without a CLI release behind it, and one sequence would make every such fix
+claim a CLI version that published nothing.
+
+Every CLI release still cascades into a desktop one. After the release job
+publishes, `desktop-tag` plans the companion tag with
+`scripts/plan-desktop-release.sh` and pushes it, and `desktop-publish` calls
+the desktop workflow with it. The two jobs sit inside the release run, so the
+one environment approval already given covers them; and the tag is pushed and
+the workflow called directly, for the same reason the cut workflows do it — a
+tag pushed with the default token starts no run.
+
+The cascade takes the CLI's own number, so `v0.6.0` becomes `desktop-v0.6.0`.
+That works while the two sequences agree, and they stay equal until a
+desktop-only release is cut. Once the newest desktop tag no longer orders
+before the CLI's number, the planner refuses rather than invent a bump the app
+did not ask for: it exits naming the manual cut instead, which fails the
+`desktop-tag` job and leaves the CLI release published and whole. Cut the
+desktop release by hand and the sequences are back in step.
+
+A desktop release builds on all three runners, because each installer can only
+be made on its own platform. Each build stages the CLI release sitting on the
+same commit — built for every architecture that runner's bundles cover, so the
+app ships the CLI it was released with rather than whatever the host had — and
+stamps the package's version from the tag. The checked-in version stays
+`0.0.0`; the tag is the one statement of what shipped.
+
+It publishes two releases from that one build. The versioned one, such as
+`desktop-v0.6.0`, is the record of what shipped, and is written once: a rerun
+verifies the existing assets byte-for-byte and refuses to replace them. The
+rolling `desktop-latest` is the fixed address the download links and the app's
+updater point at, so it is moved to the new commit and its assets replaced on
+every release, including a rerun that created nothing. Both carry the macOS
+disk images and zips, the Linux AppImage and deb, the Windows installer, and
+electron-builder's update manifests and blockmaps, which the updater reads.
+
+To cut a desktop-only release, tag `main` and push it yourself:
+
+```sh
+git tag --annotate desktop-v0.6.1 --message "Workbench desktop-v0.6.1"
+git push origin refs/tags/desktop-v0.6.1
+```
+
+A tag pushed by a person does start a run, so that push is the whole cut.
+
+To publish an existing tag again — a run that died after tagging, or one whose
+upload failed — run **Desktop Release** from the Actions tab and give it the
+tag, or:
+
+```sh
+gh workflow run desktop-release.yml -f tag=desktop-v0.6.1
+```
+
+A desktop pre-release is a `desktop-vX.Y.Z-rcN` tag. A CLI pre-release cascades
+into one, and one can be cut by hand the same way a stable desktop release is.
+Its versioned release is flagged as a pre-release, and it still refreshes
+`desktop-latest`, which is flagged alongside it: the rolling release is an
+address, and an address that skips a release stops being one. The next stable
+release clears the flag again. This is where the desktop app differs from the
+CLI, whose pre-release deliberately leaves the Homebrew tap alone so
+`brew upgrade` never serves one.
+
 ### When a release fails
 
 A tag has to exist before a release can be published against it, so both

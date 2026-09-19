@@ -112,9 +112,19 @@ the repository's test suite keeps its builds out of the tree.
 
 Desktop releases are cut from this repository under `desktop-vX.Y.Z` tags,
 separately from the CLI's `vX.Y.Z` releases, and a rolling `desktop-latest`
-release carries the current installers at a fixed address. The workflow that
-does this is a separate task; until it lands, the checked-in version is
-`0.0.0` and no release exists for the app to find.
+release carries the current installers at a fixed address, which is the address
+the download links and the update checks below are pinned to.
+
+`.github/workflows/desktop-release.yml` does this. A pushed `desktop-v*` tag
+builds on a macOS, a Linux and a Windows runner, because each installer can
+only be made on its own platform; each build stages the CLI release sitting on
+the same commit for every architecture its bundles cover, and stamps the
+package's version from the tag. The version checked in here stays `0.0.0`: the
+tag says what shipped, so nothing has to be bumped in git.
+
+Every CLI release cascades into a desktop one, and a desktop-only release is
+cut by pushing a `desktop-vX.Y.Z` tag on `main` yourself. CONTRIBUTING's
+"Desktop releases" has both paths, and what the two releases each hold.
 
 ## Updating
 
