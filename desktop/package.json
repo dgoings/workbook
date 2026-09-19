@@ -8,9 +8,10 @@
     "start": "electron .",
     "dev": "electron . --dev",
     "stage": "bash scripts/build-workbook.sh",
+    "stage:mac": "GOARCH=arm64 bash scripts/build-workbook.sh build/darwin-arm64 && GOARCH=amd64 bash scripts/build-workbook.sh build/darwin-amd64",
     "gen:ico": "node scripts/make-ico.js",
-    "dist": "npm run stage && electron-builder --mac --arm64",
-    "dist:mac": "npm run stage && electron-builder --mac",
+    "dist": "npm run stage:mac && electron-builder --mac --arm64",
+    "dist:mac": "npm run stage:mac && electron-builder --mac",
     "dist:win": "npm run stage && electron-builder --win",
     "dist:linux": "npm run stage && electron-builder --linux",
     "check:styles": "node scripts/check-styles.js",
@@ -30,12 +31,7 @@
       "package.json",
       "!**/*.map"
     ],
-    "extraResources": [
-      {
-        "from": "build/WORKBOOK-LICENSE",
-        "to": "WORKBOOK-LICENSE"
-      }
-    ],
+    "detectUpdateChannel": false,
     "publish": {
       "provider": "generic",
       "url": "https://github.com/dgoings/workbook/releases/download/desktop-latest"
@@ -65,13 +61,7 @@
       "extendInfo": {
         "LSMinimumSystemVersion": "11.0",
         "NSHumanReadableCopyright": "Bundles the Workbook CLI (MIT). See WORKBOOK-LICENSE in Resources."
-      },
-      "extraResources": [
-        {
-          "from": "build/workbook",
-          "to": "workbook"
-        }
-      ]
+      }
     },
     "win": {
       "icon": "assets/icon.ico",
@@ -85,15 +75,10 @@
           ]
         }
       ],
-      "verifyUpdateCodeSignature": false,
-      "extraResources": [
-        {
-          "from": "build/workbook.exe",
-          "to": "workbook.exe"
-        }
-      ]
+      "verifyUpdateCodeSignature": false
     },
     "nsis": {
+      "buildUniversalInstaller": false,
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
@@ -127,13 +112,7 @@
       "maintainer": "dgoings/workbook",
       "artifactName": "${productName}-${arch}.${ext}",
       "synopsis": "Desktop shell for Workbook",
-      "description": "Discover Git repositories, import them as Workbook projects, and switch between their boards in one window.",
-      "extraResources": [
-        {
-          "from": "build/workbook",
-          "to": "workbook"
-        }
-      ]
+      "description": "Discover Git repositories, import them as Workbook projects, and switch between their boards in one window."
     }
   },
   "devDependencies": {

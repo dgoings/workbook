@@ -318,3 +318,19 @@ func TestResolveReleaseVersionDiscoversTheRightPreviousTagForEachKind(t *testing
 		})
 	}
 }
+
+// Production mutation: dropping the prefix filter from the tag listing, or
+// widening it, would let the desktop app's own sequence steer the CLI's next
+// version. The two sequences share a repository and must never see each
+// other's tags.
+func TestResolveReleaseVersionIgnoresTheDesktopTagSequence(t *testing.T) {
+	repository := newTaggedRepository(t, "v0.9.0", "desktop-v0.3.0", "desktop-v1.2.0")
+
+	output, err := runResolveReleaseVersionIn(t, repository, "--bump", "patch")
+	if err != nil {
+		t.Fatalf("resolve beside desktop tags: %v\n%s", err, output)
+	}
+	if got := strings.TrimSpace(output); got != "0.9.1" {
+		t.Errorf("resolved %q, want 0.9.1 from the newest CLI release v0.9.0", got)
+	}
+}

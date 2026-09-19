@@ -42,8 +42,12 @@ repository_root=$(CDPATH='' cd -- "${script_directory}/.." && pwd)
 
 # Stamp the build so a source install reports which commit it came from. A
 # leading "v" distinguishes these from released artifacts, which report a bare
-# MAJOR.MINOR.PATCH, and "-dirty" marks a build from a modified tree.
-version=$(git -C "${repository_root}" describe --tags --always --dirty 2>/dev/null || echo dev)
+# MAJOR.MINOR.PATCH, and "-dirty" marks a build from a modified tree. Only the
+# CLI's own v* tags count: the desktop app tags the very commits the CLI
+# releases with desktop-v*, and an unmatched describe breaks that tie by tagger
+# date, so the CLI bundled in a desktop release would report the app's version
+# as its own.
+version=$(git -C "${repository_root}" describe --tags --match 'v*' --always --dirty 2>/dev/null || echo dev)
 commit=$(git -C "${repository_root}" rev-parse HEAD 2>/dev/null || echo unknown)
 
 mkdir -p -- "${destination}"

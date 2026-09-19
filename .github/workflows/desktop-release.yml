@@ -1,0 +1,187 @@
+name: Desktop Release
+
+# Publishes the desktop app. Reached three ways, like release.yml: a pushed
+# desktop-v* tag, a call from the cascade in release.yml (which tags the same
+# commit and calls here because a tag pushed with the default token starts no
+# run), and a dispatch naming an existing tag to rerun a publication.
+on:
+  push:
+    tags: ["desktop-v*"]
+  workflow_call:
+    inputs:
+      tag:
+        description: Desktop release tag to publish, such as desktop-v0.6.0
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing desktop release tag to publish, such as desktop-v0.6.0
+        required: true
+        type: string
+
+# A called run's github.ref is the caller's branch, so keying on it would group
+# every cascaded desktop release together. Cancelling is refused outright: an
+# interrupted publication can leave the rolling release holding part of one
+# build and part of another.
+concurrency:
+  group: desktop-release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  REPOSITORY: dgoings/workbook
+  DESKTOP_TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  # Each installer can only be made on its own platform, so the build fans out
+  # and the artifacts are gathered for one publication below.
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      # One missing platform is a release publish-desktop-release.sh refuses, so
+      # there is nothing to gain from letting the other runners finish.
+      fail-fast: true
+      matrix:
+        os: [macos-15, ubuntu-24.04, windows-2025]
+    steps:
+      - name: Check out desktop release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          # The CLI release this build bundles is read from the tag history, and
+          # a shallow checkout carries none of it.
+          fetch-depth: 0
+
+      # The tag decides the version stamped into the package, so it is checked
+      # before anything is built from it. The CLI tag is resolved here too: the
+      # newest v* tag reachable from the released commit names the CLI release
+      # this build bundles, which is the one just published when a CLI release
+      # cascaded into this and the last CLI release when the desktop tag was cut
+      # by hand, since such a tag has no CLI release of its own.
+      - name: Validate desktop release tag
+        shell: bash
+        run: |
+          # Each value is assigned before it is printed. A command substitution
+          # inside printf's arguments fails into an empty string that set -e
+          # never sees, so a describe that found no CLI tag would write
+          # CLI_TAG= and the stage would silently bundle the working tree.
+          VERSION=$(scripts/validate-desktop-release-tag.sh "${DESKTOP_TAG}")
+          CLI_TAG=$(git describe --tags --match 'v*' --abbrev=0)
+          printf 'VERSION=%s\n' "${VERSION}" >> "${GITHUB_ENV}"
+          printf 'CLI_TAG=%s\n' "${CLI_TAG}" >> "${GITHUB_ENV}"
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.5"
+
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install and check the desktop app
+        shell: bash
+        working-directory: desktop
+        run: |
+          npm ci
+          npm run check
+
+      # Every architecture the runner's bundles cover is staged, because
+      # after-pack.js picks the matching build per bundle rather than taking
+      # whatever the host happens to be.
+      - name: Stage the CLI for each target
+        shell: bash
+        working-directory: desktop
+        run: |
+          case "${{ matrix.os }}" in
+            macos-*) targets='darwin/arm64 darwin/amd64' ;;
+            ubuntu-*) targets='linux/amd64 linux/arm64' ;;
+            windows-*) targets='windows/amd64 windows/arm64' ;;
+          esac
+          for target in ${targets}; do
+            GOOS=${target%/*} GOARCH=${target#*/} WORKBOOK_REF="${CLI_TAG}" scripts/build-workbook.sh "build/${target%/*}-${target#*/}"
+          done
+
+      # The checked-in version is 0.0.0 and stays that way: the tag is the one
+      # statement of what this release is, and the package is stamped from it.
+      - name: Stamp the version
+        shell: bash
+        working-directory: desktop
+        run: npm version "${VERSION}" --no-git-tag-version
+
+      - name: Package
+        shell: bash
+        working-directory: desktop
+        run: |
+          case "${{ matrix.os }}" in
+            macos-*) npx electron-builder --mac --arm64 --x64 --publish never ;;
+            ubuntu-*) npx electron-builder --linux --x64 --arm64 --publish never ;;
+            windows-*) npx electron-builder --win --x64 --arm64 --publish never ;;
+          esac
+
+      # The update manifests and blockmaps travel with the installers: the app's
+      # updater reads them, and a release carrying installers without them
+      # serves downloads that no installed copy can find.
+      - name: Upload the platform's installers
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: desktop-${{ matrix.os }}
+          path: |
+            desktop/dist/*.dmg
+            desktop/dist/*.zip
+            desktop/dist/*.AppImage
+            desktop/dist/*.deb
+            desktop/dist/*.exe
+            desktop/dist/*.yml
+            desktop/dist/*.blockmap
+          if-no-files-found: error
+
+  # One publication, after every platform has built. Publishing per platform
+  # would let a release exist with half its installers, and the rolling release
+  # would point at it.
+  publish:
+    name: Publish
+    needs: build
+    runs-on: ubuntu-24.04
+    # The workflow group above is per desktop tag, which is what keeps two runs
+    # of the same release apart. This one is global, because desktop-latest is:
+    # one tag and one release for the whole repository. Two different tags
+    # publishing at once would each move it and each replace its assets, and
+    # the result would serve half of one build and half of the other.
+    concurrency:
+      group: desktop-latest
+      cancel-in-progress: false
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Check out desktop release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          # publish-desktop-release.sh moves desktop-latest through this
+          # checkout, and names the CLI release the build bundles.
+          fetch-depth: 0
+
+      - name: Download every platform's installers
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: desktop-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish the desktop release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          CLI_TAG=$(git describe --tags --match 'v*' --abbrev=0)
+          scripts/publish-desktop-release.sh "${DESKTOP_TAG}" dist "${REPOSITORY}" --bundles "${CLI_TAG}"

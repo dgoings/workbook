@@ -26,17 +26,40 @@ type releaseWorkflow struct {
 	} `yaml:"on"`
 	Concurrency struct {
 		Group string `yaml:"group"`
+		// CancelInProgress is `any` so an absent key stays distinguishable from
+		// an explicit false; a missing one would otherwise read as the safe
+		// value and the assertion would pass on a workflow that never set it.
+		CancelInProgress any `yaml:"cancel-in-progress"`
 	} `yaml:"concurrency"`
 	Jobs map[string]releaseJob `yaml:"jobs"`
 }
 
 type releaseJob struct {
-	Name        string            `yaml:"name"`
-	If          string            `yaml:"if"`
-	Uses        string            `yaml:"uses"`
+	Name string `yaml:"name"`
+	If   string `yaml:"if"`
+	Uses string `yaml:"uses"`
+	// Needs and Environment are `any` because each is valid as a scalar or as a
+	// collection, and an absent Environment has to stay distinguishable from an
+	// empty one.
 	Needs       any               `yaml:"needs"`
+	Environment any               `yaml:"environment"`
 	Permissions map[string]string `yaml:"permissions"`
-	Steps       []releaseStep     `yaml:"steps"`
+	// Concurrency is a job's own group, which narrows the workflow's. Its
+	// CancelInProgress is `any` for the same reason the workflow's is: an absent
+	// key must not read as the safe value.
+	Concurrency struct {
+		Group            string `yaml:"group"`
+		CancelInProgress any    `yaml:"cancel-in-progress"`
+	} `yaml:"concurrency"`
+	Strategy struct {
+		Matrix struct {
+			OS []string `yaml:"os"`
+		} `yaml:"matrix"`
+	} `yaml:"strategy"`
+	With struct {
+		Tag string `yaml:"tag"`
+	} `yaml:"with"`
+	Steps []releaseStep `yaml:"steps"`
 }
 
 type releaseStep struct {
@@ -283,7 +306,7 @@ func TestCutWorkflowsPlanThroughOneScript(t *testing.T) {
 func TestReleaseWorkflowsPinActionsAndRunners(t *testing.T) {
 	pinned := regexp.MustCompile(`^[^@]+@[0-9a-f]{40}$`)
 
-	for _, name := range []string{"release.yml", "cut-release.yml", "release-pr.yml"} {
+	for _, name := range []string{"release.yml", "desktop-release.yml", "cut-release.yml", "release-pr.yml"} {
 		t.Run(name, func(t *testing.T) {
 			workflow := readReleaseWorkflow(t, name)
 			for jobName, job := range workflow.Jobs {
@@ -297,7 +320,7 @@ func TestReleaseWorkflowsPinActionsAndRunners(t *testing.T) {
 				}
 			}
 			contents := readReleaseWorkflowFile(t, name)
-			for _, forbidden := range []string{"ubuntu-latest", "macos-latest"} {
+			for _, forbidden := range []string{"ubuntu-latest", "macos-latest", "windows-latest"} {
 				if strings.Contains(contents, forbidden) {
 					t.Errorf("%s pins the moving runner label %q", name, forbidden)
 				}
@@ -312,7 +335,7 @@ func TestReleaseWorkflowsCallScriptsThatExist(t *testing.T) {
 	root, _ := renderFormulaPaths(t)
 	referenced := regexp.MustCompile(`scripts/[a-z-]+\.sh`)
 
-	for _, name := range []string{"release.yml", "cut-release.yml", "release-pr.yml"} {
+	for _, name := range []string{"release.yml", "desktop-release.yml", "cut-release.yml", "release-pr.yml"} {
 		t.Run(name, func(t *testing.T) {
 			contents := readReleaseWorkflowFile(t, name)
 			matches := referenced.FindAllString(contents, -1)
@@ -320,9 +343,16 @@ func TestReleaseWorkflowsCallScriptsThatExist(t *testing.T) {
 				t.Fatalf("%s references no scripts", name)
 			}
 			for _, match := range matches {
+				// The desktop workflow stages the CLI by running the app's own
+				// script from working-directory desktop, so a reference resolves
+				// against either scripts directory. A typo still fails, because
+				// it exists in neither.
 				info, err := os.Stat(filepath.Join(root, match))
 				if err != nil {
-					t.Errorf("%s calls %s, which does not exist: %v", name, match, err)
+					info, err = os.Stat(filepath.Join(root, "desktop", match))
+				}
+				if err != nil {
+					t.Errorf("%s calls %s, which exists in neither scripts directory: %v", name, match, err)
 					continue
 				}
 				if info.Mode()&0o111 == 0 {
@@ -330,6 +360,167 @@ func TestReleaseWorkflowsCallScriptsThatExist(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The desktop workflow is reached the same three ways the CLI's is: a tag
+// pushed by a person, a call from the cascade (a tag pushed with the default
+// token starts no run), and a dispatch naming an existing tag to republish. A
+// pull_request trigger would hand a contributor's branch a run ending in a job
+// that holds write permission.
+func TestDesktopReleaseWorkflowIsReachableByTagCallAndDispatch(t *testing.T) {
+	workflow := readReleaseWorkflow(t, "desktop-release.yml")
+
+	if len(workflow.On.Push.Tags) != 1 || workflow.On.Push.Tags[0] != "desktop-v*" {
+		t.Errorf("push tags = %v, want exactly the desktop-v* sequence", workflow.On.Push.Tags)
+	}
+	if workflow.On.WorkflowCall == nil {
+		t.Error("desktop release workflow has no workflow_call trigger, so the cascade's tag would publish nothing")
+	}
+	if workflow.On.WorkflowDispatch == nil {
+		t.Error("desktop release workflow has no workflow_dispatch trigger, so a failed publication could not be rerun")
+	}
+	if strings.Contains(readReleaseWorkflowFile(t, "desktop-release.yml"), "pull_request") {
+		t.Error("desktop release workflow mentions pull_request, which must never reach a job holding write permission")
+	}
+}
+
+// Production mutation: publishing the caller's branch rather than the tag would
+// package whatever main happened to contain and publish it under the tag's name.
+func TestDesktopReleaseWorkflowChecksOutTheTagItPublishes(t *testing.T) {
+	workflow := readReleaseWorkflow(t, "desktop-release.yml")
+
+	var checkouts int
+	for jobName, job := range workflow.Jobs {
+		for _, step := range job.Steps {
+			if !strings.HasPrefix(step.Uses, "actions/checkout@") {
+				continue
+			}
+			checkouts++
+			if !strings.Contains(step.With.Ref, "inputs.tag") {
+				t.Errorf("job %q checkout ref = %q, want the called tag to win over the pushed ref", jobName, step.With.Ref)
+			}
+		}
+	}
+	if checkouts == 0 {
+		t.Fatal("desktop release workflow never checks out a ref")
+	}
+}
+
+// A called run's github.ref is the caller's branch, so grouping on it would put
+// every cascaded desktop release in one group named for main. Cancelling is
+// worse still: a publication interrupted part way can leave desktop-latest
+// serving half of one build and half of another.
+func TestDesktopReleaseWorkflowGroupsConcurrencyByTag(t *testing.T) {
+	workflow := readReleaseWorkflow(t, "desktop-release.yml")
+
+	if !strings.Contains(workflow.Concurrency.Group, "inputs.tag") {
+		t.Errorf("concurrency group = %q, want it keyed on the desktop tag", workflow.Concurrency.Group)
+	}
+	if cancel, ok := workflow.Concurrency.CancelInProgress.(bool); !ok || cancel {
+		t.Errorf("cancel-in-progress = %v, want an explicit false so a publication is never interrupted", workflow.Concurrency.CancelInProgress)
+	}
+
+	// Production mutation: the per-tag group keeps two runs of one release
+	// apart and nothing else, while desktop-latest is one tag and one release
+	// for the whole repository. Without a global group on the publishing job,
+	// two different desktop tags publishing at once would each move that tag
+	// and each replace its assets.
+	publish, ok := workflow.Jobs["publish"]
+	if !ok {
+		t.Fatalf("desktop-release jobs = %v, want a publish job", keysOf(workflow.Jobs))
+	}
+	if publish.Concurrency.Group != "desktop-latest" {
+		t.Errorf("publish job concurrency group = %q, want desktop-latest", publish.Concurrency.Group)
+	}
+	if cancel, ok := publish.Concurrency.CancelInProgress.(bool); !ok || cancel {
+		t.Errorf("publish job cancel-in-progress = %v, want an explicit false so a publication is never interrupted", publish.Concurrency.CancelInProgress)
+	}
+}
+
+// Each installer can only be built on its own platform: electron-builder makes
+// a DMG on macOS, an AppImage and a deb on Linux, and an NSIS installer on
+// Windows. A missing platform is a release publish-desktop-release.sh refuses
+// outright, so all three runners are named, and each is pinned rather than a
+// moving label that could change what a release was built on.
+func TestDesktopReleaseWorkflowBuildsOnPinnedRunnersPerPlatform(t *testing.T) {
+	workflow := readReleaseWorkflow(t, "desktop-release.yml")
+	build, ok := workflow.Jobs["build"]
+	if !ok {
+		t.Fatalf("desktop-release jobs = %v, want a build job", keysOf(workflow.Jobs))
+	}
+
+	want := []string{"macos-15", "ubuntu-24.04", "windows-2025"}
+	if len(build.Strategy.Matrix.OS) != len(want) {
+		t.Fatalf("build matrix os = %v, want %v", build.Strategy.Matrix.OS, want)
+	}
+	for index, runner := range want {
+		if build.Strategy.Matrix.OS[index] != runner {
+			t.Errorf("build matrix os = %v, want %v", build.Strategy.Matrix.OS, want)
+			break
+		}
+	}
+}
+
+// Every CLI release reaches desktop users, which is what the cascade is for:
+// without it the app would keep bundling whichever CLI its last hand-cut
+// release happened to carry. The tag is pushed and the desktop workflow called
+// directly, because a tag pushed with the default token starts no run.
+func TestReleaseWorkflowCascadesIntoADesktopRelease(t *testing.T) {
+	workflow := readReleaseWorkflow(t, "release.yml")
+
+	var tagJobName string
+	var tagJob releaseJob
+	for name, job := range workflow.Jobs {
+		for _, step := range job.Steps {
+			if strings.Contains(step.Run, "plan-desktop-release.sh") {
+				tagJobName, tagJob = name, job
+			}
+		}
+	}
+	if tagJobName == "" {
+		t.Fatalf("release workflow jobs = %v, want one planning a desktop tag", keysOf(workflow.Jobs))
+	}
+
+	if !containsString(needsNames(tagJob.Needs), "release") {
+		t.Errorf("job %q needs = %v, want it to wait for the CLI release it bundles", tagJobName, tagJob.Needs)
+	}
+	if got := tagJob.Permissions["contents"]; got != "write" {
+		t.Errorf("job %q contents permission = %q, want write so it can push the tag", tagJobName, got)
+	}
+	// The release job's environment approval already gated this run. A second
+	// one here would park the cascade waiting on a reviewer who has approved.
+	if tagJob.Environment != nil {
+		t.Errorf("job %q environment = %v, want none; the release job's approval covers this run", tagJobName, tagJob.Environment)
+	}
+	var pushes bool
+	for _, step := range tagJob.Steps {
+		if strings.Contains(step.Run, "git tag") && strings.Contains(step.Run, "git push") {
+			pushes = true
+		}
+	}
+	if !pushes {
+		t.Errorf("job %q plans a desktop tag without creating and pushing one", tagJobName)
+	}
+
+	var publishName string
+	var publish releaseJob
+	for name, job := range workflow.Jobs {
+		if job.Uses == "./.github/workflows/desktop-release.yml" {
+			publishName, publish = name, job
+		}
+	}
+	if publishName == "" {
+		t.Fatalf("release workflow jobs = %v, want one calling the desktop release workflow", keysOf(workflow.Jobs))
+	}
+	if !containsString(needsNames(publish.Needs), tagJobName) {
+		t.Errorf("job %q needs = %v, want it to wait for %q to push the tag", publishName, publish.Needs, tagJobName)
+	}
+	if !strings.Contains(publish.With.Tag, tagJobName) {
+		t.Errorf("job %q passes tag %q, want the tag %q planned", publishName, publish.With.Tag, tagJobName)
+	}
+	if publish.Environment != nil {
+		t.Errorf("job %q environment = %v, want none; the release job's approval covers this run", publishName, publish.Environment)
 	}
 }
 
@@ -350,6 +541,25 @@ func readReleaseWorkflowFile(t *testing.T, name string) string {
 		t.Fatalf("read %s: %v", name, err)
 	}
 	return string(contents)
+}
+
+// needs is a scalar for one dependency and a sequence for several, and a job
+// that waits on the wrong thing is exactly the failure these tests exist to
+// catch, so both shapes are read here rather than one of them assumed.
+func needsNames(needs any) []string {
+	switch value := needs.(type) {
+	case string:
+		return []string{value}
+	case []any:
+		names := make([]string, 0, len(value))
+		for _, item := range value {
+			if name, ok := item.(string); ok {
+				names = append(names, name)
+			}
+		}
+		return names
+	}
+	return nil
 }
 
 func keysOf(jobs map[string]releaseJob) []string {

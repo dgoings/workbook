@@ -54,19 +54,48 @@ npm run dist:linux   # Linux, x64 + arm64 (AppImage + deb)
 npm run dist:win     # Windows, x64 + arm64 (NSIS)
 ```
 
+Windows ships one installer per architecture, `Workbench-Setup-x64.exe` and
+`Workbench-Setup-arm64.exe`, and no combined one: `buildUniversalInstaller` is
+off, because a third installer carrying both would double the download for
+everyone to spare one choice.
+
 Each build:
 
-1. **`npm run stage`** builds the Workbook CLI from this checkout and stages it
-   under `build/`. It delegates to the repository's own `scripts/install.sh`
-   rather than calling `go build` here, so the binary is stamped exactly as an
-   official source install is: `-trimpath`, with version and commit from
-   `git describe`. Requires Go and Git.
-2. **`electron-builder`** packages the app with that binary in `Resources/`,
-   ad-hoc signing the macOS bundle in an `afterPack` hook. That has to happen
-   *during* packaging: signing the leftover `.app` afterwards fixes nothing,
-   because the DMG and ZIP were already built from the unsigned bundle. macOS
-   on Apple Silicon refuses to launch an arm64 bundle whose signature
-   repackaging invalidated.
+1. **Staging** builds the Workbook CLI from this checkout with the repository's
+   own `scripts/install.sh` rather than calling `go build` here, so the binary
+   is stamped exactly as an official source install is: `-trimpath`, with
+   version and commit from `git describe`. Requires Go and Git.
+
+   There is one CLI per target, not one for all of them: `GOOS` and `GOARCH`
+   reach `go build` through `install.sh`, so
+   `GOOS=windows GOARCH=arm64 scripts/build-workbook.sh build/windows-arm64`
+   stages that target's CLI beside the others, under `build/<goos>-<goarch>/`.
+   The binary is named from `GOOS` — `workbook.exe` for Windows — and the
+   banner that prints its version is skipped for a target that is not the host,
+   which cannot be run to ask it.
+
+   The Mac builds stage both architectures this way with `npm run stage:mac`,
+   because they package both. `npm run stage` stages only the host's, under
+   `build/`; that is the one a development run (`npm start`) uses.
+2. **`electron-builder`** packages the app, and its `afterPack` hook puts the
+   CLI matching that bundle's own platform and architecture into `Resources/`:
+   from `build/<goos>-<goarch>/` when one was staged there, and otherwise from
+   `build/`, the host-only stage. The hook does this rather than
+   electron-builder's `extraResources`, which copies one named file into every
+   bundle and so gave both architectures of a Mac build the host's binary.
+
+   The hook then ad-hoc signs the macOS bundle, after the copy, since the
+   resources are part of what gets signed. Signing has to happen *during*
+   packaging too: signing the leftover `.app` afterwards fixes nothing, because
+   the DMG and ZIP were already built from the unsigned bundle. macOS on Apple
+   Silicon refuses to launch an arm64 bundle whose signature repackaging
+   invalidated.
+
+   `npm run dist:linux` and `npm run dist:win` expect to run on a host of that
+   platform, which is how the release workflow runs them. Building one from a
+   Mac needs its targets staged into `build/<goos>-<goarch>/` first: otherwise
+   the Windows build stops on a missing `workbook.exe`, and the Linux one would
+   take the host-only stage.
 
 So installing the app installs a matching Workbook. There is no separate CLI
 install step, and no dependency on what happens to be on the machine.
@@ -88,11 +117,31 @@ the repository's test suite keeps its builds out of the tree.
 
 Desktop releases are cut from this repository under `desktop-vX.Y.Z` tags,
 separately from the CLI's `vX.Y.Z` releases, and a rolling `desktop-latest`
-release carries the current installers at a fixed address. The workflow that
-does this is a separate task; until it lands, the checked-in version is
-`0.0.0` and no release exists for the app to find.
+release carries the current installers at a fixed address, which is the address
+the download links and the update checks below are pinned to.
+
+`.github/workflows/desktop-release.yml` does this. A pushed `desktop-v*` tag
+builds on a macOS, a Linux and a Windows runner, because each installer can
+only be made on its own platform; each build stages the newest CLI release
+reachable from the released commit — the one just published when a CLI release
+cascaded into this, and the last CLI release when the desktop tag was cut by
+hand — for every architecture its bundles cover, and stamps the package's
+version from the tag. The version checked in here stays `0.0.0`: the tag says
+what shipped, so nothing has to be bumped in git.
+
+Every CLI release cascades into a desktop one, and a desktop-only release is
+cut by pushing a `desktop-vX.Y.Z` tag on `main` yourself. CONTRIBUTING's
+"Desktop releases" has both paths, and what the two releases each hold.
 
 ## Updating
+
+Every release publishes on the `latest` channel, pre-release or not. JSON has
+no comments, so the reason for `detectUpdateChannel: false` in `package.json`
+lives here: electron-builder otherwise reads the channel out of the version, so
+a `0.6.0-rc1` build would write `rc1-mac.yml` and no `latest-mac.yml` at all.
+The site link and the update check both follow the newest desktop release,
+which is whatever `desktop-latest` currently holds, so they would find nothing
+there.
 
 **Windows** uses electron-updater's native flow: download in the background,
 install on restart.
@@ -174,7 +223,7 @@ The wizard suggests one per repository, validates it against Workbook's own
 | --- | --- |
 | macOS (arm64, x64) | Builds. Ad-hoc signed, not notarized. |
 | Linux (x64, arm64) | Builds as AppImage and deb. |
-| Windows (x64, arm64) | Builds as an NSIS installer; unsigned until the publish workflow adds Azure Trusted Signing. |
+| Windows (x64, arm64) | Builds one NSIS installer per architecture, and no combined one; unsigned until the publish workflow adds Azure Trusted Signing. |
 
 ## Known gaps
 

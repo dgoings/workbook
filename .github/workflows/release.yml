@@ -76,3 +76,48 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: scripts/publish-release.sh "${RELEASE_TAG}" dist homebrew-tap "${REPOSITORY}"
+
+  # Every CLI release reaches desktop users: the companion desktop release is
+  # cut from the same commit, bundling the CLI just published. The one
+  # environment approval above covers this run; the desktop tag is pushed and
+  # the desktop workflow called directly, since a tag pushed with the default
+  # token starts no run of its own.
+  desktop-tag:
+    needs: release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      # The planner refuses rather than guess when the desktop sequence has
+      # moved ahead of the CLI's number, and says how to cut that release by
+      # hand. A failure here leaves the CLI release published and intact.
+      - name: Plan and push the desktop tag
+        id: plan
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -eu
+          version=$(scripts/validate-release-tag.sh "${RELEASE_TAG}")
+          tag=$(scripts/plan-desktop-release.sh --cli-version "${version}")
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag --annotate "${tag}" --message "Workbench ${tag}"
+          git push origin "refs/tags/${tag}"
+          printf 'tag=%s\n' "${tag}" >> "${GITHUB_OUTPUT}"
+
+  desktop-publish:
+    needs: desktop-tag
+    permissions:
+      contents: write
+    uses: ./.github/workflows/desktop-release.yml
+    with:
+      tag: ${{ needs.desktop-tag.outputs.tag }}

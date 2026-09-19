@@ -46,8 +46,9 @@ func TestDesktopStageBuildsFromThisCheckout(t *testing.T) {
 		t.Fatalf("default stage cloned the checkout; want it to build in place (err=%v)", err)
 	}
 
-	// Stamped from this checkout, the way install.sh stamps a source build.
-	described := gitOutput(t, root, "describe", "--tags", "--always", "--dirty")
+	// Stamped from this checkout, the way install.sh stamps a source build:
+	// from the CLI's own v* tags, never the desktop app's desktop-v* ones.
+	described := gitOutput(t, root, "describe", "--tags", "--match", "v*", "--always", "--dirty")
 	version, err := exec.Command(binary, "version").Output()
 	if err != nil {
 		t.Fatalf("workbook version: %v", err)
@@ -113,5 +114,71 @@ func TestDesktopStageUsesAGivenCheckoutAsItStands(t *testing.T) {
 	}
 	if !strings.Contains(string(combined), "using local checkout") {
 		t.Fatalf("stage output = %q, want it to say the local checkout was used", combined)
+	}
+}
+
+// goEnv reads one of the Go toolchain's own settings, which is what the script
+// compares GOOS/GOARCH against to decide whether the binary it just built can
+// run here.
+func goEnv(t *testing.T, root string, name string) string {
+	t.Helper()
+	command := exec.Command("go", "env", name)
+	command.Dir = root
+	out, err := command.Output()
+	if err != nil {
+		t.Fatalf("go env %s: %v", name, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// The workflow stages one CLI per target on one runner. A cross-compiled
+// binary cannot run on the host, so the banner that prints its version has
+// to be skipped rather than crash the stage.
+func TestDesktopStageCrossCompilesAndSkipsTheBanner(t *testing.T) {
+	root, script := desktopStagePaths(t)
+	output := t.TempDir()
+	hostArch := goEnv(t, root, "GOHOSTARCH")
+	otherArch := "arm64"
+	if hostArch == "arm64" {
+		otherArch = "amd64"
+	}
+
+	command := exec.Command(script, output)
+	command.Dir = root
+	command.Env = append(os.Environ(), "WORKBOOK_REPO=", "WORKBOOK_REF=", "GOARCH="+otherArch)
+	combined, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage: %v\n%s", err, combined)
+	}
+	if _, err := os.Stat(filepath.Join(output, "workbook")); err != nil {
+		t.Fatalf("stat staged binary: %v", err)
+	}
+	// Naming the target is the only evidence that the cross-compile branch ran.
+	// A banner that ran the binary says "staged" too: the version it failed to
+	// read is a command substitution inside echo's arguments, so the failure
+	// prints to stderr, leaves the line empty, and does not even end the script.
+	banner := "build-workbook: staged workbook for " + goEnv(t, root, "GOHOSTOS") + "/" + otherArch
+	if !strings.Contains(string(combined), banner) {
+		t.Fatalf("stage output = %q, want %q", combined, banner)
+	}
+}
+
+func TestDesktopStageNamesAWindowsBinary(t *testing.T) {
+	root, script := desktopStagePaths(t)
+	output := t.TempDir()
+	command := exec.Command(script, output)
+	command.Dir = root
+	command.Env = append(os.Environ(), "WORKBOOK_REPO=", "WORKBOOK_REF=", "GOOS=windows", "GOARCH=amd64")
+	combined, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage: %v\n%s", err, combined)
+	}
+	if _, err := os.Stat(filepath.Join(output, "workbook.exe")); err != nil {
+		t.Fatalf("stat staged windows binary: %v", err)
+	}
+	// The name is the whole point: a Windows build staged as `workbook` is what
+	// the packaged app would fail to find.
+	if _, err := os.Stat(filepath.Join(output, "workbook")); !os.IsNotExist(err) {
+		t.Fatalf("stage also wrote a suffix-less workbook (err=%v)\n%s", err, combined)
 	}
 }
