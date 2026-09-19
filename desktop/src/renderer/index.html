@@ -49,7 +49,11 @@
     </header>
 
     <nav class="rail">
-      <button class="rail-item" data-view="import" type="button">
+      <!-- Named on the button itself because the rail hides .rail-text, and
+           display: none takes the words out of the accessibility tree as well
+           as off the screen: without these the rail item is a bare "+". -->
+      <button class="rail-item" data-view="import" type="button"
+        title="Import repositories" aria-label="Import repositories">
         <span class="glyph">+</span> <span class="rail-text">Import repositories</span>
       </button>
     </nav>

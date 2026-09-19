@@ -67,12 +67,16 @@ function renderProjects () {
     item.dataset.projectId = project.id
     if (project.id === state.activeProjectId) item.classList.add('active')
     // In the rail the tile is the key and nothing else, so the whole of what
-    // the row says when expanded has to be reachable by hovering it.
-    item.title = `${project.name}\n${project.path}`
+    // the row says when expanded has to be reachable by hovering it. The status
+    // is part of that and goes on the tile too: a title of its own on the dot
+    // would win the hover over the dot and show the status alone, hiding the
+    // name and path exactly where the pointer is most likely to land.
+    const status = project.status ?? 'stopped'
+    const health = project.error ? `${status} — ${project.error}` : status
+    item.title = `${project.name}\n${project.path}\n${health}`
 
     const dot = document.createElement('span')
-    dot.className = `dot ${project.status ?? 'stopped'}`
-    dot.title = project.error ?? project.status ?? 'stopped'
+    dot.className = `dot ${status}`
 
     const key = document.createElement('span')
     key.className = 'project-key'
@@ -372,6 +376,17 @@ function paintTheme ({ theme }) {
 // --- sidebar ---------------------------------------------------------------
 
 /**
+ * Whether a menu-button click is already expanding the sidebar.
+ *
+ * The root still says collapsed until the main process answers, and that answer
+ * waits behind every other queued registry save — an import writes once per
+ * repository — so it is a window a second click can easily land in. Without
+ * this, that click reads the same collapsed root and toggles the sidebar back
+ * to a rail, and both handlers then open the menu into it.
+ */
+let expanding = false
+
+/**
  * Reflect the collapsed state on the document.
  *
  * One class carries it: every rail rule hangs off `.sidebar-collapsed` on the
@@ -402,11 +417,15 @@ el('menu-button').addEventListener('click', async (event) => {
   // the width it needs; the await is what keeps the menu from appearing for a
   // frame at rail width.
   if (document.documentElement.classList.contains('sidebar-collapsed')) {
+    if (expanding) return
+    expanding = true
     try {
       await api.toggleSidebar()
     } catch (error) {
       console.error('workbench: could not expand the sidebar', error)
       return
+    } finally {
+      expanding = false
     }
     setMenu(true)
     return
