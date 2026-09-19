@@ -224,9 +224,11 @@ gh workflow run cut-release.yml -f bump=patch
 ```
 
 Pick `patch`, `minor`, or `major` and the version is computed from the newest
-tag; fill in the optional exact version to override it. The same changelog rule
-applies, so a `minor` or `major` cut this way still needs an entry. Releases are
-cut from `main`, and a run on any other branch is refused.
+tag; fill in the optional exact version to override it. A pre-release is cut
+here too, by giving the exact version in the form `0.6.0-rc1`; see Pre-releases
+below. The same changelog rule applies, so a `minor` or `major` cut this way
+still needs an entry. Releases are cut from `main`, and a run on any other
+branch is refused.
 
 ### From a checkout
 
@@ -235,10 +237,11 @@ cut from `main`, and a run on any other branch is refused.
 ```
 
 It refuses to publish anything until the release is one that can be reproduced:
-the version is strict `MAJOR.MINOR.PATCH` and orders after the latest release,
-`HEAD` is on `main` with nothing uncommitted, `main` matches the remote, and the
-tag is unused both locally and on the remote. It then runs `go test ./...`,
-creates the annotated tag, and pushes only that tag.
+the version is `MAJOR.MINOR.PATCH`, or `MAJOR.MINOR.PATCH-rcN` for a
+pre-release, and orders after the latest release, `HEAD` is on `main` with
+nothing uncommitted, `main` matches the remote, and the tag is unused both
+locally and on the remote. It then runs `go test ./...`, creates the annotated
+tag, and pushes only that tag.
 
 Check a release without publishing it with `--dry-run`, which runs every check
 and stops before tagging:
@@ -251,16 +254,40 @@ and stops before tagging:
 `origin` and `main` defaults. This path does not consult the changelog: it takes
 an exact version and trusts the person typing it.
 
+### Pre-releases
+
+A pre-release is a version such as `v0.6.0-rc1`: the next version with `-rcN`
+after it, where N counts from 1 with no leading zero. That is the only
+pre-release form. Only an exact version cuts one, from the Actions button or
+from a checkout; a bump label or a bump kind can only ever name a stable
+version, so the release pull request path never produces one by accident. A
+pre-release has to order after every existing tag, stable or pre-release, so
+`0.6.0-rc2` follows `0.6.0-rc1`, and `0.6.0-rc1` cannot be cut once `v0.6.0`
+exists.
+
+It publishes the same four archives and checksums, on a GitHub release flagged
+as a pre-release, with the `## Unreleased` section of the changelog as its notes
+when there is one. It does not touch the Homebrew tap, so `brew upgrade` never
+serves a pre-release. A pre-release needs no changelog entry of its own and the
+entry check is not run, so leave `## Unreleased` where it is: it is what the
+pre-release publishes as its notes.
+
+The next stable release ignores pre-release tags when it computes its version,
+so after `v0.6.0-rc2` a `release:minor` merge still cuts `v0.6.0` from `v0.5.1`,
+and a `release:patch` still cuts `v0.5.2`.
+
 ### What the workflow publishes
 
 A version tag such as `v0.1.0` runs the release workflow. It revalidates the
-strict SemVer tag, publishes the four archives and checksums to GitHub Releases,
-and updates the `dgoings/homebrew-tap` formula from those generated checksums.
-The protected release environment exposes a credential scoped only to that tap
-repository after validation. New assets are staged in a draft, the tap update is
-pushed first, and the draft is published last. A rerun verifies existing assets
-byte-for-byte and never overwrites them; a failed final publication reverts the
-tap update and removes only a draft created by that run.
+SemVer tag, publishes the four archives and checksums to GitHub Releases, and,
+for a stable release, updates the `dgoings/homebrew-tap` formula from those
+generated checksums; a pre-release leaves the tap alone, as Pre-releases above
+describes. The protected release environment exposes a credential scoped only to
+that tap repository after validation. New assets are staged in a draft, the tap
+update is pushed first, and the draft is published last. A rerun verifies
+existing assets byte-for-byte and never overwrites them; a failed final
+publication reverts the tap update a stable release made and removes only a
+draft created by that run.
 
 The release notes are the `CHANGELOG.md` entry when the version has one, and
 generated from the commit log when it does not.
@@ -327,7 +354,8 @@ match the platform blocks in the published Homebrew formula, which serves
 the `workbook` executable. The script cross-compiles with the requested version
 and the current Git commit injected into `workbook version`; source builds
 report `dev` and `unknown` instead. Release versions must use the exact
-`MAJOR.MINOR.PATCH` form without leading zeroes.
+`MAJOR.MINOR.PATCH` form without leading zeroes, or `MAJOR.MINOR.PATCH-rcN` for
+a pre-release.
 
 The rendered formula declares no `version`. Homebrew derives one from the URL of
 whichever platform block it selects, by matching

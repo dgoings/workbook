@@ -120,18 +120,51 @@ func TestRenderHomebrewFormulaRejectsUnsafeVersionsBeforeWritingOutput(t *testin
 	}
 }
 
+// The tap serves brew upgrade to everyone who installed a release, so a
+// pre-release never reaches it, even if a caller asks.
+func TestRenderHomebrewFormulaRefusesAPreRelease(t *testing.T) {
+	root, script := renderFormulaPaths(t)
+	checksums := filepath.Join(t.TempDir(), "checksums.txt")
+	if err := os.WriteFile(checksums, []byte(fixtureChecksums("0.6.0-rc1")), 0o600); err != nil {
+		t.Fatalf("write checksums: %v", err)
+	}
+	output := filepath.Join(t.TempDir(), "workbook.rb")
+
+	command := exec.Command(script, "0.6.0-rc1", checksums, output, "dgoings/workbook")
+	command.Dir = root
+	combined, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatalf("render accepted a pre-release:\n%s", combined)
+	}
+	if !strings.Contains(string(combined), "pre-release") {
+		t.Errorf("output = %q, want the pre-release refusal", combined)
+	}
+	if _, statErr := os.Stat(output); !errors.Is(statErr, os.ErrNotExist) {
+		t.Errorf("render wrote a formula for a pre-release (stat err = %v)", statErr)
+	}
+}
+
+// The tag grammar is core SemVer plus the one pre-release form the release
+// scripts know, -rcN; every other spelling is still refused.
 func TestValidateReleaseTagAcceptsOnlySafeCoreSemVer(t *testing.T) {
 	root, _ := renderFormulaPaths(t)
 	script := filepath.Join(root, "scripts", "validate-release-tag.sh")
 
-	command := exec.Command(script, "v0.1.0")
-	command.Dir = root
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("validate safe release tag: %v\n%s", err, output)
-	}
-	if string(output) != "0.1.0\n" {
-		t.Fatalf("validated version = %q, want 0.1.0", output)
+	for tag, want := range map[string]string{
+		"v0.1.0":     "0.1.0\n",
+		"v0.6.0-rc1": "0.6.0-rc1\n",
+	} {
+		t.Run(tag, func(t *testing.T) {
+			command := exec.Command(script, tag)
+			command.Dir = root
+			output, err := command.CombinedOutput()
+			if err != nil {
+				t.Fatalf("validate safe release tag: %v\n%s", err, output)
+			}
+			if string(output) != want {
+				t.Fatalf("validated version = %q, want %q", output, want)
+			}
+		})
 	}
 
 	for _, tag := range []string{
@@ -143,6 +176,8 @@ func TestValidateReleaseTagAcceptsOnlySafeCoreSemVer(t *testing.T) {
 		"v1.2.3-alpha",
 		"v1.2.3+build",
 		"v1.2.3/../../release",
+		"v0.6.0-rc",
+		"v0.6.0-rc.1",
 	} {
 		t.Run(tag, func(t *testing.T) {
 			command := exec.Command(script, tag)

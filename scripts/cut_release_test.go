@@ -172,6 +172,66 @@ func TestCutReleaseDryRunPublishesNothing(t *testing.T) {
 	}
 }
 
+// A pre-release is cut the same way as a release, by naming it, and the
+// script says the tap will be left alone so the releaser is not surprised.
+func TestCutReleaseTagsAPreRelease(t *testing.T) {
+	clone, remote := newReleaseRepository(t)
+	runCommand(t, clone, nil, "git", "tag", "v0.5.1")
+	runCommand(t, clone, nil, "git", "push", "--quiet", "origin", "refs/tags/v0.5.1")
+	head := gitOutput(t, clone, "rev-parse", "HEAD")
+
+	output, err := runCutRelease(clone, "0.6.0-rc1", "--skip-tests")
+	if err != nil {
+		t.Fatalf("cut pre-release: %v\n%s", err, output)
+	}
+	if got := gitOutput(t, remote, "rev-parse", "v0.6.0-rc1^{commit}"); got != head {
+		t.Errorf("remote tag points at %s, want %s", got, head)
+	}
+	if !strings.Contains(output, "previous release  v0.5.1") {
+		t.Errorf("output = %q, want the previous stable release named", output)
+	}
+	if !strings.Contains(output, "Homebrew tap is left alone") {
+		t.Errorf("output = %q, want the tap skip announced", output)
+	}
+}
+
+// The stable release after an rc ignores it, so the next patch after v0.5.1
+// is still v0.5.2 while v0.6.0-rc1 exists.
+func TestCutReleaseIgnoresPreReleaseTagsForAStableVersion(t *testing.T) {
+	clone, _ := newReleaseRepository(t)
+	for _, tag := range []string{"v0.5.1", "v0.6.0-rc1"} {
+		runCommand(t, clone, nil, "git", "tag", tag)
+		runCommand(t, clone, nil, "git", "push", "--quiet", "origin", "refs/tags/"+tag)
+	}
+
+	output, err := runCutRelease(clone, "0.5.2", "--skip-tests", "--dry-run")
+	if err != nil {
+		t.Fatalf("cut stable after rc: %v\n%s", err, output)
+	}
+	if !strings.Contains(output, "previous release  v0.5.1") {
+		t.Errorf("output = %q, want v0.5.1 as the previous release, not the rc", output)
+	}
+}
+
+// Production mutation: cutting an rc below the newest tag would publish a
+// pre-release that orders before one already out.
+func TestCutReleaseRefusesAStalePreRelease(t *testing.T) {
+	clone, remote := newReleaseRepository(t)
+	for _, tag := range []string{"v0.5.1", "v0.6.0-rc2"} {
+		runCommand(t, clone, nil, "git", "tag", tag)
+		runCommand(t, clone, nil, "git", "push", "--quiet", "origin", "refs/tags/"+tag)
+	}
+	tagsBefore := gitOutput(t, remote, "tag", "--list")
+
+	output, err := runCutRelease(clone, "0.6.0-rc1", "--skip-tests")
+	if err == nil {
+		t.Fatalf("cut accepted a stale rc:\n%s", output)
+	}
+	if got := gitOutput(t, remote, "tag", "--list"); got != tagsBefore {
+		t.Errorf("remote tags changed from %q to %q", tagsBefore, got)
+	}
+}
+
 func assertNoTagsPublished(t *testing.T, clone, remote string) {
 	t.Helper()
 	if got := gitOutput(t, clone, "tag", "--list"); got != "" {

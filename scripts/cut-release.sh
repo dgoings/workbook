@@ -13,8 +13,9 @@ usage() {
 	cat <<'USAGE'
 usage: scripts/cut-release.sh <version> [options]
 
-Tags the current default-branch commit as vMAJOR.MINOR.PATCH and pushes the
-tag, which starts the release workflow.
+Tags the current default-branch commit as vMAJOR.MINOR.PATCH, or as
+vMAJOR.MINOR.PATCH-rcN for a pre-release, and pushes the tag, which starts the
+release workflow.
 
 Options:
   --dry-run        report every check and stop before tagging or pushing
@@ -25,6 +26,9 @@ Options:
 
 The release workflow builds and publishes the archives and the Homebrew
 formula, so nothing else has to be run by hand after this succeeds.
+
+A pre-release publishes its archives flagged as a pre-release and leaves the
+Homebrew tap alone.
 USAGE
 }
 
@@ -141,7 +145,13 @@ fi
 # rather than repeating the comparison here keeps this path and the two cut
 # workflows from disagreeing about which version follows which. It reports its
 # own refusal, so there is nothing to add to it.
-previous_tag=$(git_command tag --list 'v[0-9]*' --sort=-v:refname | head -n 1)
+# A stable version follows the newest stable release and never sees a
+# pre-release tag; a pre-release has to clear every tag there is.
+if is_prerelease_version "${version}"; then
+	previous_tag=$(newest_release_tag any "${repository_root}")
+else
+	previous_tag=$(newest_release_tag stable "${repository_root}")
+fi
 if ! "${script_directory}/resolve-release-version.sh" \
 	--version "${version}" --previous "${previous_tag}" >/dev/null; then
 	exit 1
@@ -153,6 +163,11 @@ if [ -n "${previous_tag}" ]; then
 	echo "  changes since     $(git_command rev-list --count "${previous_tag}..HEAD") commits"
 else
 	echo "  previous release  none"
+fi
+# The tap is the one thing a pre-release deliberately does not touch, so say it
+# before tagging rather than leaving the releaser to notice it afterwards.
+if is_prerelease_version "${version}"; then
+	echo "  pre-release       the Homebrew tap is left alone"
 fi
 
 if [ "${skip_tests}" = no ]; then
@@ -183,7 +198,11 @@ fi
 echo
 echo "Pushed ${tag}. The release workflow now builds and publishes:"
 echo "  - the four platform archives and checksums.txt on the GitHub release"
-echo "  - the Homebrew formula in the tap"
+if is_prerelease_version "${version}"; then
+	echo "  - nothing in the Homebrew tap: this is a pre-release"
+else
+	echo "  - the Homebrew formula in the tap"
+fi
 # Derive the Actions URL from the remote rather than hardcoding the owner, so
 # a fork's operator is pointed at their own workflow runs.
 remote_url=$(git_command remote get-url "${remote}" 2>/dev/null || echo "")

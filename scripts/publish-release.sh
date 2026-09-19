@@ -10,6 +10,8 @@ case $0 in
 	*/*) script_directory=${0%/*} ;;
 	*) script_directory=. ;;
 esac
+# shellcheck source=scripts/release-version.sh
+. "${script_directory}/release-version.sh"
 
 tag=$1
 distribution_directory=$2
@@ -19,9 +21,20 @@ repository=$4
 # with no entry falls back to generated notes.
 changelog=${5:-${script_directory}/../CHANGELOG.md}
 version=$("${script_directory}/validate-release-tag.sh" "${tag}")
+# A pre-release is published as one and stops there: the tap serves brew upgrade
+# to everyone who installed a release, and a candidate must never reach them.
+prerelease=no
+if is_prerelease_version "${version}"; then
+	prerelease=yes
+fi
 
 distribution_directory=$(CDPATH='' cd -- "${distribution_directory}" && pwd -P)
-tap_directory=$(CDPATH='' cd -- "${tap_directory}" && pwd -P)
+# Only a stable release reads or writes the tap, and the workflow checks it out
+# only for one, so a pre-release is handed a path that need not exist. Resolving
+# it here would fail the run over a repository it never touches.
+if [ "${prerelease}" = no ]; then
+	tap_directory=$(CDPATH='' cd -- "${tap_directory}" && pwd -P)
+fi
 
 # Must match the platforms scripts/release.sh builds and the formula serves.
 archive_names=
@@ -134,12 +147,22 @@ else
 	# A hand-written entry is the release's notes. Publishing generated notes
 	# beside prose someone wrote for this version is the divergence that makes a
 	# changelog stop being worth reading; a release with no entry has nothing to
-	# diverge from and keeps the generated ones.
+	# diverge from and keeps the generated ones. A pre-release has no entry of
+	# its own and publishes the Unreleased section instead, the changes it is a
+	# candidate release of.
 	notes_file="${temporary_directory}/notes.md"
-	if "${script_directory}/changelog-entry.sh" "${version}" "${changelog}" > "${notes_file}" 2>/dev/null; then
+	if [ "${prerelease}" = yes ]; then
+		notes_entry=unreleased
+	else
+		notes_entry=${version}
+	fi
+	if "${script_directory}/changelog-entry.sh" "${notes_entry}" "${changelog}" > "${notes_file}" 2>/dev/null; then
 		set -- "$@" --notes-file "${notes_file}"
 	else
 		set -- "$@" --generate-notes
+	fi
+	if [ "${prerelease}" = yes ]; then
+		set -- "$@" --prerelease
 	fi
 	gh release create "${tag}" \
 		"$@" \
@@ -151,24 +174,34 @@ else
 	release_is_draft=true
 fi
 
-"${script_directory}/render-homebrew-formula.sh" \
-	"${version}" \
-	"${distribution_directory}/checksums.txt" \
-	"${tap_directory}/Formula/workbook.rb" \
-	"${repository}"
+if [ "${prerelease}" = no ]; then
+	"${script_directory}/render-homebrew-formula.sh" \
+		"${version}" \
+		"${distribution_directory}/checksums.txt" \
+		"${tap_directory}/Formula/workbook.rb" \
+		"${repository}"
 
-git -C "${tap_directory}" config user.name "github-actions[bot]"
-git -C "${tap_directory}" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-git -C "${tap_directory}" add Formula/workbook.rb
-if ! git -C "${tap_directory}" diff --cached --quiet; then
-	git -C "${tap_directory}" commit -m "workbook ${version}"
-	tap_commit=$(git -C "${tap_directory}" rev-parse HEAD)
-	git -C "${tap_directory}" push origin HEAD
-	tap_pushed=1
+	git -C "${tap_directory}" config user.name "github-actions[bot]"
+	git -C "${tap_directory}" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+	git -C "${tap_directory}" add Formula/workbook.rb
+	if ! git -C "${tap_directory}" diff --cached --quiet; then
+		git -C "${tap_directory}" commit -m "workbook ${version}"
+		tap_commit=$(git -C "${tap_directory}" rev-parse HEAD)
+		git -C "${tap_directory}" push origin HEAD
+		tap_pushed=1
+	fi
+else
+	echo "workbook release: pre-release ${tag}; leaving the Homebrew tap alone" >&2
 fi
 
 if [ "${release_is_draft}" = true ]; then
-	gh release edit "${tag}" --repo "${repository}" --draft=false
+	set -- --draft=false
+	# gh patches only the flags it is given, so restate the pre-release one here
+	# rather than trust that publishing the draft leaves it alone.
+	if [ "${prerelease}" = yes ]; then
+		set -- "$@" --prerelease
+	fi
+	gh release edit "${tag}" --repo "${repository}" "$@"
 fi
 
 completed=1

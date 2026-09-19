@@ -172,3 +172,20 @@ func runCheckReleaseChangelog(t *testing.T, args ...string) (string, error) {
 	t.Helper()
 	return runReleaseScript(t, "", "check-release-changelog.sh", "", args...)
 }
+
+// The check reads the previous release from the repository when none is
+// given. A pre-release tag is not a release, so it must not become the
+// previous one: a patch after v0.5.0-rc1 is 0.4.2, cut with no entry.
+func TestCheckReleaseChangelogDiscoversTheNewestStableRelease(t *testing.T) {
+	repository := newTaggedRepository(t, "v0.4.1", "v0.5.0-rc1")
+	path := writeChangelog(t, changelogWithoutANewEntry)
+
+	output, err := runReleaseScript(t, repository, "check-release-changelog.sh", "",
+		"--bump", "patch", "--version", "0.4.2", "--changelog", path)
+	if err != nil {
+		t.Fatalf("check with discovered previous: %v\n%s", err, output)
+	}
+	if !strings.Contains(output, "cuts v0.4.2") {
+		t.Errorf("output = %q, want the patch cut against v0.4.1", output)
+	}
+}

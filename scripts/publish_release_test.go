@@ -20,7 +20,7 @@ func TestPublishReleasePublishesTheChangelogEntryAsTheReleaseNotes(t *testing.T)
 	fakeBin, fakeGitHub := newFakeGitHubCLI(t)
 	changelog := writeChangelog(t, "# Changelog\n\n## v0.1.0 — 2026-08-08\n\n### Added\n- the first release\n")
 
-	output, err := runPublishReleaseWithChangelog(root, fakeBin, fakeGitHub, tap, dist, changelog, nil)
+	output, err := runPublishReleaseWithChangelog(root, fakeBin, fakeGitHub, tap, dist, "v0.1.0", changelog, nil)
 	if err != nil {
 		t.Fatalf("publish release: %v\n%s", err, output)
 	}
@@ -48,7 +48,7 @@ func TestPublishReleaseGeneratesNotesWithoutAChangelogEntry(t *testing.T) {
 	// An entry for a different release, which this one must not borrow.
 	changelog := writeChangelog(t, "# Changelog\n\n## v0.2.0\n\n- a later release\n")
 
-	output, err := runPublishReleaseWithChangelog(root, fakeBin, fakeGitHub, tap, dist, changelog, nil)
+	output, err := runPublishReleaseWithChangelog(root, fakeBin, fakeGitHub, tap, dist, "v0.1.0", changelog, nil)
 	if err != nil {
 		t.Fatalf("publish release: %v\n%s", err, output)
 	}
@@ -203,6 +203,128 @@ func TestPublishReleaseNeverDeletesPublicReleaseAfterAmbiguousPublishFailure(t *
 	}
 	if count := strings.Count(log, "release view v0.1.0"); count < 2 {
 		t.Fatalf("release state lookup count = %d, want fresh rollback confirmation; log:\n%s", count, log)
+	}
+}
+
+// A pre-release is flagged as one on the release page, takes its notes from the
+// Unreleased section, and leaves the tap alone: brew upgrade must never serve an
+// rc to someone who installed a release.
+func TestPublishReleasePublishesAPreReleaseWithoutTouchingTheTap(t *testing.T) {
+	root, _ := renderFormulaPaths(t)
+	dist := writeReleaseFixture(t, "0.6.0-rc1")
+	tap, _ := newTapRepository(t)
+	fakeBin, fakeGitHub := newFakeGitHubCLI(t)
+	changelog := writeChangelog(t, "# Changelog\n\n## Unreleased\n\n- a candidate\n\n## v0.5.1\n\n- the last release\n")
+	tapHeadBefore := gitOutput(t, tap, "rev-parse", "origin/main")
+
+	output, err := runPublishReleaseWithChangelog(root, fakeBin, fakeGitHub, tap, dist, "v0.6.0-rc1", changelog, nil)
+	if err != nil {
+		t.Fatalf("publish pre-release: %v\n%s", err, output)
+	}
+
+	logContents := readFakeGitHubLog(t, fakeGitHub)
+	if !strings.Contains(logContents, "--prerelease") {
+		t.Errorf("gh log = %q, want the release created as a pre-release", logContents)
+	}
+	if !strings.Contains(logContents, "--notes-file") {
+		t.Errorf("gh log = %q, want the Unreleased section supplied as notes", logContents)
+	}
+	if strings.Contains(logContents, "--generate-notes") {
+		t.Errorf("gh log = %q, want no generated notes alongside the Unreleased section", logContents)
+	}
+	// Publishing the draft must not drop the flag: a candidate listed as a
+	// release is one brew and every reader takes for a finished version.
+	editLine := ""
+	for _, line := range strings.Split(logContents, "\n") {
+		if strings.HasPrefix(line, "release edit ") {
+			editLine = line
+		}
+	}
+	if !strings.Contains(editLine, "--prerelease") {
+		t.Errorf("gh edit line = %q, want the pre-release flag restated when the draft is published", editLine)
+	}
+	if got := gitOutput(t, tap, "rev-parse", "origin/main"); got != tapHeadBefore {
+		t.Errorf("tap head moved from %s to %s for a pre-release", tapHeadBefore, got)
+	}
+	if got := gitOutput(t, tap, "rev-parse", "HEAD"); got != tapHeadBefore {
+		t.Errorf("tap checkout moved from %s to %s for a pre-release", tapHeadBefore, got)
+	}
+}
+
+// With nothing under Unreleased there is nothing to publish as notes, so the
+// generated ones stay, as for a stable release with no entry.
+func TestPublishReleaseGeneratesPreReleaseNotesWithoutAnUnreleasedSection(t *testing.T) {
+	root, _ := renderFormulaPaths(t)
+	dist := writeReleaseFixture(t, "0.6.0-rc1")
+	tap, _ := newTapRepository(t)
+	fakeBin, fakeGitHub := newFakeGitHubCLI(t)
+	changelog := writeChangelog(t, "# Changelog\n\n## v0.5.1\n\n- the last release\n")
+
+	output, err := runPublishReleaseWithChangelog(root, fakeBin, fakeGitHub, tap, dist, "v0.6.0-rc1", changelog, nil)
+	if err != nil {
+		t.Fatalf("publish pre-release: %v\n%s", err, output)
+	}
+
+	logContents := readFakeGitHubLog(t, fakeGitHub)
+	if !strings.Contains(logContents, "--generate-notes") {
+		t.Errorf("gh log = %q, want generated notes", logContents)
+	}
+	if !strings.Contains(logContents, "--prerelease") {
+		t.Errorf("gh log = %q, want the release flagged as a pre-release", logContents)
+	}
+}
+
+// The workflow checks the tap out only for a stable release, so a pre-release
+// run is handed a tap path that does not exist. It has to publish anyway.
+func TestPublishReleasePublishesAPreReleaseWithoutATapCheckout(t *testing.T) {
+	root, _ := renderFormulaPaths(t)
+	dist := writeReleaseFixture(t, "0.6.0-rc1")
+	fakeBin, fakeGitHub := newFakeGitHubCLI(t)
+	changelog := writeChangelog(t, "# Changelog\n\n## Unreleased\n\n- a candidate\n\n## v0.5.1\n\n- the last release\n")
+	absentTap := filepath.Join(t.TempDir(), "homebrew-tap")
+
+	output, err := runPublishReleaseWithChangelog(root, fakeBin, fakeGitHub, absentTap, dist, "v0.6.0-rc1", changelog, nil)
+	if err != nil {
+		t.Fatalf("publish pre-release without a tap checkout: %v\n%s", err, output)
+	}
+
+	if logContents := readFakeGitHubLog(t, fakeGitHub); !strings.Contains(logContents, "--prerelease") {
+		t.Errorf("gh log = %q, want the release created as a pre-release", logContents)
+	}
+	if _, statErr := os.Stat(absentTap); !os.IsNotExist(statErr) {
+		t.Errorf("pre-release created the tap directory it was told to leave alone: %v", statErr)
+	}
+}
+
+// A stable release does need the tap, so a missing checkout is a broken run and
+// has to stop before anything is published rather than after.
+func TestPublishReleaseFailsFastWhenAStableReleaseHasNoTapCheckout(t *testing.T) {
+	root, _ := renderFormulaPaths(t)
+	dist := writeReleaseFixture(t, "0.1.0")
+	fakeBin, fakeGitHub := newFakeGitHubCLI(t)
+	absentTap := filepath.Join(t.TempDir(), "homebrew-tap")
+
+	output, err := runPublishReleaseCommand(root, fakeBin, fakeGitHub, absentTap, dist, nil)
+	if err == nil {
+		t.Fatalf("stable release published without a tap checkout; output = %q", output)
+	}
+	if _, statErr := os.Stat(filepath.Join(fakeGitHub, "commands.log")); !os.IsNotExist(statErr) {
+		t.Errorf("stable release reached gh before failing on the missing tap: %v", statErr)
+	}
+}
+
+// Production mutation: flagging every release as a pre-release would hide each
+// stable one from brew and from anyone reading the releases page.
+func TestPublishReleaseDoesNotFlagAStableReleaseAsAPreRelease(t *testing.T) {
+	root, _ := renderFormulaPaths(t)
+	dist := writeReleaseFixture(t, "0.1.0")
+	tap, _ := newTapRepository(t)
+	fakeBin, fakeGitHub := newFakeGitHubCLI(t)
+
+	runPublishRelease(t, root, fakeBin, fakeGitHub, tap, dist, nil)
+
+	if logContents := readFakeGitHubLog(t, fakeGitHub); strings.Contains(logContents, "--prerelease") {
+		t.Errorf("gh log = %q, want no pre-release flag on a stable release", logContents)
 	}
 }
 
@@ -374,16 +496,17 @@ func runPublishReleaseCommand(root, fakeBin, fakeGitHub, tap, dist string, extra
 	// generated-notes path regardless of what the repository's own CHANGELOG.md
 	// happens to contain. Notes selection is covered on its own below.
 	return runPublishReleaseWithChangelog(
-		root, fakeBin, fakeGitHub, tap, dist,
+		root, fakeBin, fakeGitHub, tap, dist, "v0.1.0",
 		filepath.Join(root, "scripts", "testdata-absent-changelog.md"),
 		extraEnvironment,
 	)
 }
 
-func runPublishReleaseWithChangelog(root, fakeBin, fakeGitHub, tap, dist, changelog string, extraEnvironment []string) ([]byte, error) {
+// The tag carries the version, so it has to match the fixture the caller built.
+func runPublishReleaseWithChangelog(root, fakeBin, fakeGitHub, tap, dist, tag, changelog string, extraEnvironment []string) ([]byte, error) {
 	command := exec.Command(
 		filepath.Join(root, "scripts", "publish-release.sh"),
-		"v0.1.0",
+		tag,
 		dist,
 		tap,
 		"dgoings/workbook",

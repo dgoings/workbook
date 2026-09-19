@@ -18,7 +18,7 @@ usage() {
 	cat <<'USAGE'
 usage: scripts/delete-release-tag.sh <version> [options]
 
-Deletes vMAJOR.MINOR.PATCH locally and on the remote.
+Deletes vMAJOR.MINOR.PATCH, or vMAJOR.MINOR.PATCH-rcN, locally and on the remote.
 
 Options:
   --repo REPOSITORY  owner/name to query for release state (default: $GITHUB_REPOSITORY,

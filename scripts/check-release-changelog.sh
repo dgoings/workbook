@@ -116,6 +116,8 @@ case $0 in
 	*/*) script_directory=${0%/*} ;;
 	*) script_directory=. ;;
 esac
+# shellcheck source=scripts/release-version.sh
+. "${script_directory}/release-version.sh"
 
 case ${requested_bump} in
 	patch | minor | major) ;;
@@ -140,7 +142,8 @@ if [ -z "${changelog}" ]; then
 	changelog="${repository_root}/CHANGELOG.md"
 fi
 if [ "${previous_given}" = no ]; then
-	previous_tag=$(git tag --list 'v[0-9]*' --sort=-v:refname | head -n 1)
+	# The changelog only ever describes stable releases, so only those count.
+	previous_tag=$(newest_release_tag stable)
 fi
 previous_number=${previous_tag#v}
 
