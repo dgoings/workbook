@@ -11,6 +11,10 @@ const workbook = require('./workbook')
 const { setupUpdater } = require('./updater')
 
 const SIDEBAR_WIDTH = 260
+// The collapsed sidebar is a rail rather than nothing at all, and 76 is the
+// narrowest it can be while the macOS inset traffic lights still sit over shell
+// chrome instead of over the board.
+const RAIL_WIDTH = 76
 const MIN_WIDTH = 1000
 const MIN_HEIGHT = 680
 
@@ -25,12 +29,14 @@ let activeProjectId = null
 const registry = new Registry(app.getPath('userData'))
 const supervisor = new Supervisor(app.getPath('userData'))
 
-/** @type {{check: (options?: {silent?: boolean}) => Promise<object>}|null} */
-let updater = null
+function sidebarWidth () {
+  return registry.sidebarCollapsed ? RAIL_WIDTH : SIDEBAR_WIDTH
+}
 
 function boardBounds () {
   const { width, height } = window.getContentBounds()
-  return { x: SIDEBAR_WIDTH, y: 0, width: Math.max(0, width - SIDEBAR_WIDTH), height }
+  const sidebar = sidebarWidth()
+  return { x: sidebar, y: 0, width: Math.max(0, width - sidebar), height }
 }
 
 function layout () {
@@ -87,6 +93,7 @@ function createWindow () {
   })
   window.contentView.addChildView(chromeView)
   chromeView.webContents.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'))
+  watchSidebarShortcut(chromeView.webContents)
 
   window.on('resize', layout)
   layout()
@@ -139,6 +146,68 @@ async function applyTheme () {
   toChrome('theme:changed', { theme: registry.theme, dark })
 }
 
+// --- sidebar ---------------------------------------------------------------
+
+/**
+ * Collapse the sidebar to a rail, or expand it again.
+ *
+ * The main process owns this the way it owns the theme, and for a sharper
+ * reason: a board is a native view positioned from here, so a sidebar that
+ * changed width in the page alone would leave every board sitting over the new
+ * width or short of it. The state is stored, the views are moved, and only then
+ * is the shell told, so the page restyles against bounds that already match.
+ */
+async function setSidebarCollapsed (collapsed) {
+  if (collapsed === registry.sidebarCollapsed) return
+  await registry.setSidebarCollapsed(collapsed)
+  layout()
+  // Announced from the store rather than from the argument: the setter rolls
+  // back if the write fails, and the shell must never be painted for a state
+  // the registry refused.
+  toChrome('sidebar:changed', { collapsed: registry.sidebarCollapsed })
+}
+
+function toggleSidebar () {
+  return setSidebarCollapsed(!registry.sidebarCollapsed)
+}
+
+/**
+ * Watch one view's web contents for the collapse chord.
+ *
+ * Every view needs its own listener, which is why this is a function and not a
+ * single hook. It cannot live in the shell page: when a board is showing,
+ * keyboard focus is inside that board's native view, and a listener on the
+ * shell's page would never hear the chord. An application menu would reach both
+ * but would also put a menu on Windows and Linux, which this window does not
+ * have.
+ */
+function watchSidebarShortcut (webContents) {
+  webContents.on('before-input-event', (event, input) => {
+    // `key` is what the layout produces, so on a Cyrillic, Greek, Hebrew or
+    // Arabic layout the physical B key reports another character entirely and
+    // the chord would never match. `code` names the physical key instead. Both
+    // are accepted rather than just the code, so someone on Dvorak who reaches
+    // for the letter still gets it.
+    if (input.type !== 'keyDown') return
+    if (input.code !== 'KeyB' && input.key.toLowerCase() !== 'b') return
+    // A held-down chord would otherwise flap the sidebar open and shut.
+    if (input.isAutoRepeat) return
+    // Cmd+B on macOS, Ctrl+B elsewhere, and nothing near it: any other modifier,
+    // the other platform's modifier included, means a different chord was meant.
+    if (input.shift || input.alt) return
+    const chord = process.platform === 'darwin'
+      ? input.meta && !input.control
+      : input.control && !input.meta
+    if (!chord) return
+    event.preventDefault()
+    // Nothing awaits this listener, so a failed save would otherwise be an
+    // unhandled rejection and the chord would look like it simply did nothing.
+    toggleSidebar().catch((error) => {
+      console.error('workbench: could not toggle the sidebar', error)
+    })
+  })
+}
+
 /**
  * Show one project's board, starting its server if it is not already running.
  *
@@ -174,6 +243,7 @@ async function openProject (projectId, taskId = null) {
       return { action: 'deny' }
     })
     boardViews.set(projectId, view)
+    watchSidebarShortcut(view.webContents)
     window.contentView.addChildView(view)
     await view.webContents.loadURL(target)
   } else if (view.webContents.getURL() !== target) {
@@ -308,21 +378,16 @@ ipcMain.handle('import:apply', async (_event, { selections }) => {
   return { results }
 })
 
-ipcMain.handle('update:check', async () => {
-  if (!updater) return { skipped: 'not ready' }
-  // Not silent: this one was asked for, so "you are up to date" is an answer,
-  // not noise.
-  return updater.check({ silent: false })
-})
-
-ipcMain.handle('update:install', async () => {
-  if (!updater) return { skipped: 'not ready' }
-  return updater.install()
-})
-
 const THEMES = ['system', 'light', 'dark']
 
 ipcMain.handle('theme:get', async () => ({ theme: registry.theme, dark: resolveDark() }))
+
+ipcMain.handle('sidebar:get', async () => ({ collapsed: registry.sidebarCollapsed }))
+
+ipcMain.handle('sidebar:toggle', async () => {
+  await toggleSidebar()
+  return { collapsed: registry.sidebarCollapsed }
+})
 
 // A board's preload asks this before the board's own script runs, so a board
 // opened after a choice was made starts in that mode. Synchronous on purpose:
@@ -400,10 +465,17 @@ app.whenReady().then(async () => {
   await registry.load()
 
   createWindow()
-  updater = setupUpdater({
-    // A quiet announcement: the interface decides how to show it, and nothing
-    // is put in front of the user until they act on it.
-    onAvailable: ({ version }) => toChrome('update:available', { version })
+  // The launch check still runs, but the shell page has nowhere to show what it
+  // finds and no action to offer: when an update action returns it belongs in
+  // the native application menu, which reaches a board's view as well as this
+  // page. Until then the finding goes to the console, and the updater itself is
+  // set up for that side effect alone — nothing can drive it, so nothing holds
+  // on to what it returns.
+  setupUpdater({
+    onAvailable: ({ version }) => {
+      console.log(`workbench: update available: v${version} ` +
+        '(no update action yet; it will live in the application menu)')
+    }
   })
   app.on('activate', () => {
     if (BaseWindow.getAllWindows().length === 0) createWindow()

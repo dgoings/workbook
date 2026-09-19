@@ -66,10 +66,17 @@ function renderProjects () {
     item.className = 'project-item'
     item.dataset.projectId = project.id
     if (project.id === state.activeProjectId) item.classList.add('active')
+    // In the rail the tile is the key and nothing else, so the whole of what
+    // the row says when expanded has to be reachable by hovering it. The status
+    // is part of that and goes on the tile too: a title of its own on the dot
+    // would win the hover over the dot and show the status alone, hiding the
+    // name and path exactly where the pointer is most likely to land.
+    const status = project.status ?? 'stopped'
+    const health = project.error ? `${status} — ${project.error}` : status
+    item.title = `${project.name}\n${project.path}\n${health}`
 
     const dot = document.createElement('span')
-    dot.className = `dot ${project.status ?? 'stopped'}`
-    dot.title = project.error ?? project.status ?? 'stopped'
+    dot.className = `dot ${status}`
 
     const key = document.createElement('span')
     key.className = 'project-key'
@@ -78,7 +85,6 @@ function renderProjects () {
     const name = document.createElement('span')
     name.className = 'project-name'
     name.textContent = project.name
-    name.title = project.path
 
     item.append(dot, key, name)
     item.addEventListener('click', () => openProject(project.id))
@@ -337,17 +343,6 @@ function dismissKeyNote () {
   }
 }
 
-// --- menu ------------------------------------------------------------------
-
-function menuOpen () {
-  return !el('menu').hidden
-}
-
-function setMenu (open) {
-  el('menu').hidden = !open
-  el('menu-button').setAttribute('aria-expanded', String(open))
-}
-
 // --- theme -----------------------------------------------------------------
 
 /**
@@ -367,27 +362,39 @@ function paintTheme ({ theme }) {
   }
 }
 
+// --- sidebar ---------------------------------------------------------------
+
+/**
+ * Reflect the collapsed state on the document.
+ *
+ * One class carries it: every rail rule hangs off `.sidebar-collapsed` on the
+ * root element, so collapsing is a single toggle rather than a walk over the
+ * sidebar's parts. The button's label names what the next click will do, not
+ * what the sidebar currently is, and names the chord with it — the chord works
+ * from a board, where this button is not even on screen.
+ */
+function paintSidebar ({ collapsed }) {
+  document.documentElement.classList.toggle('sidebar-collapsed', collapsed)
+  const chord = api.platform === 'mac' ? '⌘B' : 'Ctrl+B'
+  const label = `${collapsed ? 'Expand' : 'Collapse'} sidebar (${chord})`
+  el('sidebar-toggle').setAttribute('aria-label', label)
+  el('sidebar-toggle').title = label
+}
+
 // --- wiring ----------------------------------------------------------------
 
-el('menu-button').addEventListener('click', (event) => {
-  event.stopPropagation() // Or the document handler below closes it again.
-  setMenu(!menuOpen())
-})
-
-// Any click outside dismisses, and Escape returns focus to the button — the
-// two ways out a menu is expected to have.
-document.addEventListener('click', (event) => {
-  if (menuOpen() && !el('menu').contains(event.target)) setMenu(false)
-})
-
-document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && menuOpen()) {
-    setMenu(false)
-    el('menu-button').focus()
-  }
+// The click only asks. The main process owns the collapsed state and moves
+// every board view before it announces the change, so painting here would
+// restyle the page against bounds the boards have not reached yet; the paint
+// arrives from onSidebarChanged below instead.
+el('sidebar-toggle').addEventListener('click', () => {
+  api.toggleSidebar().catch((error) => {
+    console.error('workbench: could not toggle the sidebar', error)
+  })
 })
 
 api.onThemeChanged(paintTheme)
+api.onSidebarChanged(paintSidebar)
 
 for (const button of document.querySelectorAll('.rail-item')) {
   button.addEventListener('click', () => setView(button.dataset.view))
@@ -431,31 +438,6 @@ el('select-none').addEventListener('click', () => {
 api.onScanProgress(({ done, total }) => {
   el('scan-root').textContent = `Reading repositories… ${done}/${total}`
 })
-// The background check announces itself here rather than in a dialog: a native
-// dialog is application-modal, and while one is open the app cannot quit.
-api.onUpdateAvailable(({ version }) => {
-  el('update-dot').hidden = false
-  const item = el('install-update')
-  item.hidden = false
-  item.textContent = `Update to ${version}`
-})
-
-el('install-update').addEventListener('click', async () => {
-  setMenu(false)
-  // From here dialogs are fine: the user asked for this one.
-  await api.installUpdate()
-})
-
-el('check-updates').addEventListener('click', async () => {
-  setMenu(false)
-  const result = await api.checkForUpdates()
-  if (result?.skipped) el('import-status').textContent = ''
-})
-
-el('refresh').addEventListener('click', async () => {
-  setMenu(false)
-  await loadProjects()
-})
 
 api.onImportProgress(({ done, total }) => {
   el('import-status').textContent = `Importing ${done}/${total}…`
@@ -473,22 +455,20 @@ async function boot () {
   // needs above the sidebar for its inset traffic lights.
   document.documentElement.classList.add(`is-${api.platform}`)
   paintTheme(await api.getTheme())
+  paintSidebar(await api.getSidebar())
   try {
     const version = await api.version()
     el('version').textContent = `workbook ${version.version ?? ''}`.trim()
-    el('version').title = version.path
     // Which binary is driving these repositories is the first thing worth
-    // knowing when the app and a terminal disagree about a project.
-    el('binary-note').innerHTML = ''
-    const label = document.createElement('strong')
-    label.textContent = version.bundled ? 'Bundled build' : 'Installed build'
-    el('binary-note').append(label, document.createElement('br'),
-      document.createTextNode(version.path))
+    // knowing when the app and a terminal disagree about a project, and the
+    // version line is the only place left that can say so: the build on one
+    // line, where it came from on the next.
+    const build = version.bundled ? 'Bundled build' : 'Installed build'
+    el('version').title = `${build}\n${version.path}`
   } catch (error) {
     el('version').textContent = 'workbook not found'
     el('version').title = error.message
     el('version').classList.add('missing')
-    el('binary-note').textContent = error.message
   }
   await loadProjects()
   setView('import')

@@ -14,31 +14,26 @@
         <div class="wordmark">Workbench</div>
         <div class="version" id="version">—</div>
       </div>
-      <button id="menu-button" class="icon-button" type="button"
-              aria-haspopup="menu" aria-expanded="false" aria-controls="menu"
-              aria-label="Menu" title="Menu">
+      <!-- The chevron points at the edge the sidebar is headed for: left to
+           collapse, and the stylesheet mirrors it in the rail. The label names
+           the chord as well, since the same click has a keyboard twin. -->
+      <button id="sidebar-toggle" class="icon-button sidebar-toggle" type="button"
+              aria-label="Collapse sidebar" title="Collapse sidebar">
         <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
-          <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor"
-                stroke-width="1.6" stroke-linecap="round"/>
+          <!-- Centered on x=8 so that mirroring it leaves it where it was. -->
+          <path d="M10.5 3L5.5 8L10.5 13" stroke="currentColor" fill="none"
+                stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
-        <!-- A quiet announcement still has to be noticeable. -->
-        <span id="update-dot" class="update-dot" hidden title="An update is available"></span>
       </button>
-
-      <div id="menu" class="menu" role="menu" hidden>
-        <button class="menu-item" role="menuitem" id="refresh" type="button">Refresh</button>
-        <button class="menu-item menu-item--update" role="menuitem" id="install-update" type="button" hidden></button>
-        <button class="menu-item" role="menuitem" id="check-updates" type="button">Check for updates…</button>
-        <!-- No appearance control here: the Dark Mode switch on any board
-             sets the whole window, shell included. -->
-        <div class="menu-separator" role="separator"></div>
-        <div class="menu-note" id="binary-note">—</div>
-      </div>
     </header>
 
     <nav class="rail">
-      <button class="rail-item" data-view="import" type="button">
-        <span class="glyph">+</span> Import repositories
+      <!-- Named on the button itself because the rail hides .rail-text, and
+           display: none takes the words out of the accessibility tree as well
+           as off the screen: without these the rail item is a bare "+". -->
+      <button class="rail-item" data-view="import" type="button"
+        title="Import repositories" aria-label="Import repositories">
+        <span class="glyph">+</span> <span class="rail-text">Import repositories</span>
       </button>
     </nav>
 

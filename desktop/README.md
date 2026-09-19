@@ -25,6 +25,14 @@ there is one, and otherwise whatever `workbook` is installed on the machine
 (see "Finding the workbook binary" below). `npm run dev` also opens the
 shell's developer tools.
 
+## The sidebar
+
+The sidebar collapses to a narrow rail, with the chevron in its header or Cmd+B
+on macOS and Ctrl+B elsewhere; the chord works from a board too, not only from
+the shell. The choice is remembered across launches. The rail keeps every route
+it had: the import glyph, and each project as its key with its status dot, with
+the name and path on the tile's tooltip.
+
 ## Checks
 
 ```
@@ -96,12 +104,10 @@ believes they upgraded. So the Mac path never calls it. It downloads the DMG
 itself and opens it in Finder for a drag into Applications, which is what the
 user did to install in the first place.
 
-Checks run once on launch, and on demand from the menu, but the launch check
-never opens a dialog. A native dialog is application-modal: while one is open
-the app cannot quit and Cmd+Q does nothing, so an update prompt six seconds
-after launch, landing behind the window or on another Space, makes the app look
-hung. The automatic check marks the menu instead; dialogs are shown only in
-answer to something the user asked for.
+Checks run once on launch and log what they find. There is no update action in
+the shell yet: when one returns it will live in the native application menu
+rather than on the shell page. The menu also reaches a user who is looking at a
+board rather than at the sidebar.
 
 The app is unsigned by any identity and unnotarized, so Gatekeeper will need
 it opened once from the Finder context menu.
@@ -120,7 +126,8 @@ then start" tests the shell against the CLI from this checkout, which is what
 a change to both sides needs. The rest are fallbacks for a run with no stage.
 
 This does mean a packaged app and your terminal can drive different builds if
-your installed CLI is older. The sidebar's menu names the binary in use.
+your installed CLI is older. The version line in the sidebar names the build in
+use on its tooltip: bundled or installed, and the path it was found at.
 
 ## How the boards run
 

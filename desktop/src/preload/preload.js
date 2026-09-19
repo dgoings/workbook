@@ -25,10 +25,12 @@ contextBridge.exposeInMainWorld('workbench', {
   closeProject: (projectId) => ipcRenderer.invoke('project:close', { projectId }),
   forgetProject: (projectId) => ipcRenderer.invoke('project:forget', { projectId }),
 
-  checkForUpdates: () => ipcRenderer.invoke('update:check'),
-  installUpdate: () => ipcRenderer.invoke('update:install'),
-
   getTheme: () => ipcRenderer.invoke('theme:get'),
+
+  // The sidebar's collapsed state lives in the main process, which positions the
+  // board views against it; the shell asks for it and asks for it to change.
+  getSidebar: () => ipcRenderer.invoke('sidebar:get'),
+  toggleSidebar: () => ipcRenderer.invoke('sidebar:toggle'),
 
   onImportProgress: (handler) => {
     const listener = (_event, payload) => handler(payload)
@@ -40,15 +42,15 @@ contextBridge.exposeInMainWorld('workbench', {
     ipcRenderer.on('discovery:progress', listener)
     return () => ipcRenderer.removeListener('discovery:progress', listener)
   },
-  onUpdateAvailable: (handler) => {
-    const listener = (_event, payload) => handler(payload)
-    ipcRenderer.on('update:available', listener)
-    return () => ipcRenderer.removeListener('update:available', listener)
-  },
   onThemeChanged: (handler) => {
     const listener = (_event, payload) => handler(payload)
     ipcRenderer.on('theme:changed', listener)
     return () => ipcRenderer.removeListener('theme:changed', listener)
+  },
+  onSidebarChanged: (handler) => {
+    const listener = (_event, payload) => handler(payload)
+    ipcRenderer.on('sidebar:changed', listener)
+    return () => ipcRenderer.removeListener('sidebar:changed', listener)
   },
   onProjectExited: (handler) => {
     const listener = (_event, payload) => handler(payload)
