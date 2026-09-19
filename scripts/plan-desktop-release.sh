@@ -93,9 +93,20 @@ fi
 # No desktop release yet means nothing to order against, and the first
 # companion release simply takes the CLI's number.
 if [ -n "${previous_tag}" ]; then
-	previous_number=${previous_tag#desktop-v}
+	# The previous tag has to come from the desktop sequence. Stripping a
+	# prefix that is not there would leave a bare number to compare against,
+	# or a CLI tag, and either would answer a question about the desktop
+	# sequence with something that never belonged to it. A tag without the
+	# prefix leaves an empty number, which fails the grammar below beside
+	# desktop-vnonsense and reports once.
+	case "${previous_tag}" in
+		desktop-v*) previous_number=${previous_tag#desktop-v} ;;
+		*) previous_number= ;;
+	esac
+	# A previous tag the caller got wrong is bad input, not the deliberate
+	# refusal below; the workflow turns only the refusal into a manual cut.
 	if ! is_safe_release_version "${previous_number}"; then
-		fail "previous desktop release ${previous_tag} is not a desktop release version tag"
+		fail "previous desktop release ${previous_tag} is not a desktop release version tag" 2
 	fi
 	if ! release_version_before "${previous_number}" "${cli_version}"; then
 		fail "the newest desktop release ${previous_tag} does not order before the CLI's ${cli_version}; cut the desktop release by hand with a chosen version:
