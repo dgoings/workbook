@@ -112,20 +112,32 @@ release_version_before() {
 	[ "${rv_last_key}" = "${rv_second_key}" ]
 }
 
-# Prints the newest v* tag by release order, or nothing when there is none.
-# KIND is "stable", which ignores pre-release tags, or "any". A tag whose number
-# is not a release version (v2026-08-08, say) is skipped rather than an error.
-# DIRECTORY names the repository; it defaults to the current directory.
+# Prints the newest release tag by release order, or nothing when there is
+# none. KIND is "stable", which ignores pre-release tags, or "any". A tag whose
+# number is not a release version (v2026-08-08, say) is skipped rather than an
+# error. DIRECTORY names the repository; it defaults to the current directory.
+# PREFIX is the tag prefix, "v" for the CLI and "desktop-v" for the desktop
+# app, so the two sequences never see each other's tags.
 newest_release_tag() {
 	rv_kind=$1
 	rv_directory=${2:-}
+	rv_prefix=${3:-v}
+	# A mistyped kind would otherwise fall through to "any", handing a caller
+	# that asked for stable releases the pre-releases as well.
+	case ${rv_kind} in
+		stable | any) ;;
+		*)
+			echo "release-version: newest_release_tag KIND must be stable or any" >&2
+			return 2
+			;;
+	esac
 	if [ -n "${rv_directory}" ]; then
-		set -- git -C "${rv_directory}" tag --list 'v[0-9]*'
+		set -- git -C "${rv_directory}" tag --list "${rv_prefix}[0-9]*"
 	else
-		set -- git tag --list 'v[0-9]*'
+		set -- git tag --list "${rv_prefix}[0-9]*"
 	fi
 	"$@" | while IFS= read -r rv_tag; do
-		rv_number=${rv_tag#v}
+		rv_number=${rv_tag#"${rv_prefix}"}
 		is_safe_release_version "${rv_number}" || continue
 		if [ "${rv_kind}" = stable ] && is_prerelease_version "${rv_number}"; then
 			continue
