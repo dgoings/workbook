@@ -123,33 +123,37 @@ done
 # A build missing a platform is broken, not partial, and the check runs before
 # anything reaches GitHub: finding out half-way through leaves a draft release
 # for a build that can never ship, and the rerun then refuses to publish over
-# it. The two disk images are required by exact name because those are the
-# names the updater's manifests point at. The Linux and Windows installers
-# carry electron-builder's own naming, which is not pinned here, so each is
-# required by kind instead; a whole missing platform is the failure worth
-# catching, and a renamed installer is caught by the manifest that names it.
-for required_name in Workbench-arm64.dmg Workbench-x64.dmg; do
+# it.
+#
+# Every name is required exactly as electron-builder writes it, one installer
+# per platform and architecture. A by-kind glob would pass a build that made
+# one architecture and skipped the other, which is a whole set of users with
+# nothing to download; and it would pass a renamed installer, which the update
+# manifests then point at by a name that is not there. The three manifests are
+# required for the same reason: they are what an installed copy reads, and a
+# release without them is one nobody can update from. Their Linux arm64 sibling
+# and the blockmaps are uploaded when present but not required, because neither
+# is what a download or an update check asks for first.
+for required_name in \
+	Workbench-arm64.dmg \
+	Workbench-x64.dmg \
+	Workbench-x86_64.AppImage \
+	Workbench-arm64.AppImage \
+	Workbench-amd64.deb \
+	Workbench-arm64.deb \
+	Workbench-Setup-x64.exe \
+	Workbench-Setup-arm64.exe \
+	latest-mac.yml \
+	latest-linux.yml \
+	latest.yml; do
 	if [ ! -f "${distribution_directory}/${required_name}" ]; then
 		fail "missing release asset ${required_name}"
-	fi
-done
-for required_pattern in '*.AppImage' '*.deb' '*.exe'; do
-	pattern_matched=no
-	for asset_name in ${asset_names}; do
-		# The pattern names a kind of installer rather than one file, so it
-		# stays unquoted here and matches as the glob it is.
-		# shellcheck disable=SC2254
-		case "${asset_name}" in
-			${required_pattern}) pattern_matched=yes ;;
-		esac
-	done
-	if [ "${pattern_matched}" = no ]; then
-		fail "missing release asset matching ${required_pattern}"
 	fi
 done
 
 temporary_directory=$(mktemp -d "${TMPDIR:-/tmp}/workbench-publish.XXXXXX")
 created_release=0
+rolling_tag_moved=0
 completed=0
 
 rollback() {
@@ -159,13 +163,25 @@ rollback() {
 		# have landed, and deleting a public release to tidy up after an error
 		# is worse than leaving the error behind.
 		rollback_release_is_draft=
-		if rollback_release_is_draft=$(gh release view "${tag}" --repo "${repository}" --json isDraft --jq .isDraft 2>/dev/null) &&
-			[ "${rollback_release_is_draft}" = true ]; then
-			echo "workbench release: deleting confirmed draft ${tag}" >&2
-			if gh release delete "${tag}" --repo "${repository}" --yes; then
-				:
+		if rollback_release_is_draft=$(gh release view "${tag}" --repo "${repository}" --json isDraft --jq .isDraft 2>/dev/null); then
+			if [ "${rollback_release_is_draft}" = true ]; then
+				echo "workbench release: deleting confirmed draft ${tag}" >&2
+				if gh release delete "${tag}" --repo "${repository}" --yes; then
+					:
+				else
+					echo "workbench release: automatic draft deletion failed" >&2
+				fi
 			else
-				echo "workbench release: automatic draft deletion failed" >&2
+				# The release this run created is published, so the failure came
+				# after that: almost always the rolling refresh. Reporting it as
+				# a draft that could not be confirmed says the opposite of what
+				# happened, and sends whoever reads it hunting for a draft that
+				# is not there. Say what shipped and what is left to repair.
+				echo "workbench release: ${tag} is published and stays that way" >&2
+				if [ "${rolling_tag_moved}" -eq 1 ]; then
+					echo "workbench release: the desktop-latest tag already points at ${tag}, but its release was not refreshed" >&2
+				fi
+				echo "workbench release: rerun this publication for ${tag}; it leaves the versioned release alone and repairs the rolling one" >&2
 			fi
 		else
 			echo "workbench release: preserving ${tag}; rollback could not confirm it is still a draft" >&2
@@ -268,6 +284,7 @@ fi
 released_commit=$(git rev-parse "refs/tags/${tag}^{commit}")
 git tag --force desktop-latest "${released_commit}"
 git push --force origin refs/tags/desktop-latest
+rolling_tag_moved=1
 
 set --
 for asset_name in ${asset_names}; do
@@ -293,9 +310,14 @@ else
 	if [ "${prerelease}" = yes ]; then
 		set -- "$@" --prerelease
 	fi
+	# --verify-tag here for the same reason as above: the rolling tag was just
+	# pushed, so a create that cannot find it means the push did not land, and
+	# a release against a tag GitHub invents would serve these binaries from
+	# whatever commit it chose.
 	gh release create desktop-latest \
 		"$@" \
 		--repo "${repository}" \
+		--verify-tag \
 		--title "Workbench (latest)" \
 		--notes "Rolling release; currently ${tag}."
 fi

@@ -411,6 +411,15 @@ if [ -z "${name}" ]; then
 fi
 release_root="${FAKE_GH_ROOT}/${name}"
 shift 3
+# The desktop publisher touches two releases in one run, so a test that wants
+# one operation on one of them to fail names both: FAKE_GH_FAIL_RELEASE is the
+# release and FAKE_GH_FAIL_OP the subcommand. The blunt switches below stay as
+# they are, because they say "fail whatever is published next", which is what
+# their callers mean.
+if [ "${FAKE_GH_FAIL_RELEASE:-}" = "${name}" ] && [ "${FAKE_GH_FAIL_OP:-}" = "${command}" ]; then
+	echo "simulated ${command} failure for ${name}" >&2
+	exit 1
+fi
 case "${command}" in
 	view)
 		if [ ! -f "${release_root}/state" ]; then

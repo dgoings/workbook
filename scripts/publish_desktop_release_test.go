@@ -49,8 +49,12 @@ func TestPublishDesktopReleaseCreatesTheVersionedReleaseThenTheRollingOne(t *tes
 	if strings.Index(log, "release create desktop-latest") < strings.Index(log, "release edit desktop-v0.6.0") {
 		t.Errorf("rolling release was refreshed before the versioned one was published:\n%s", log)
 	}
-	if !strings.Contains(log, "release create desktop-latest") {
-		t.Errorf("gh log = %q, want the rolling release created on the first run", log)
+	// Production mutation: creating the rolling release without --verify-tag
+	// would let GitHub invent desktop-latest on a commit of its own choosing
+	// whenever the force-push of that tag had not landed.
+	rollingCreateLine := fakeGitHubLine(t, log, "release create desktop-latest")
+	if !strings.Contains(rollingCreateLine, "--verify-tag") {
+		t.Errorf("rolling create line = %q, want --verify-tag", rollingCreateLine)
 	}
 	// Production mutation: leaving the rolling tag where it was would serve the
 	// previous build from a release page announcing this one.
@@ -210,12 +214,15 @@ func TestPublishDesktopReleaseRefusesARerunWithChangedAssets(t *testing.T) {
 		wantMessage: "existing release is missing asset Workbench-extra.dmg",
 	}, {
 		name: "an asset this build does not have",
+		// A blockmap, so the rerun reaches the comparison at all: a required
+		// name removed here is refused by the missing-asset gate first, which
+		// is a different refusal covered on its own below.
 		tamper: func(t *testing.T, distribution string) {
-			if err := os.Remove(filepath.Join(distribution, "latest-linux.yml")); err != nil {
+			if err := os.Remove(filepath.Join(distribution, "Workbench-arm64.dmg.blockmap")); err != nil {
 				t.Fatalf("remove asset: %v", err)
 			}
 		},
-		wantMessage: "existing release has unexpected asset latest-linux.yml",
+		wantMessage: "existing release has unexpected asset Workbench-arm64.dmg.blockmap",
 	}} {
 		t.Run(testCase.name, func(t *testing.T) {
 			clone, _ := newDesktopReleaseRepository(t, "desktop-v0.6.0")
@@ -249,16 +256,28 @@ func TestPublishDesktopReleaseRefusesARerunWithChangedAssets(t *testing.T) {
 	}
 }
 
-// Every platform's installer has to be in the build. A release missing one is a
-// broken build, not a partial one, and finding that out after half the release
-// is published leaves a page nobody can fix by rerunning.
+// Every installer and every manifest the app reads has to be in the build. A
+// release missing one is a broken build, not a partial one, and finding that
+// out after half the release is published leaves a page nobody can fix by
+// rerunning.
+//
+// Production mutation: requiring the installers by kind rather than by name
+// would accept a build that made one architecture and skipped the other, so
+// every architecture is named here; and dropping latest-mac.yml would publish
+// a release no installed Mac could update from, so the manifests are named too.
 func TestPublishDesktopReleaseFailsBeforeGitHubWhenAPlatformIsMissing(t *testing.T) {
 	for _, missing := range []string{
 		"Workbench-arm64.dmg",
 		"Workbench-x64.dmg",
-		"Workbench-x64.AppImage",
+		"Workbench-x86_64.AppImage",
+		"Workbench-arm64.AppImage",
 		"Workbench-amd64.deb",
+		"Workbench-arm64.deb",
 		"Workbench-Setup-x64.exe",
+		"Workbench-Setup-arm64.exe",
+		"latest-mac.yml",
+		"latest-linux.yml",
+		"latest.yml",
 	} {
 		t.Run("without "+missing, func(t *testing.T) {
 			clone, _ := newDesktopReleaseRepository(t, "desktop-v0.6.0")
@@ -278,8 +297,8 @@ func TestPublishDesktopReleaseFailsBeforeGitHubWhenAPlatformIsMissing(t *testing
 			if err == nil {
 				t.Fatalf("publisher accepted a build without %s; output = %q", missing, output)
 			}
-			if !strings.Contains(output, "missing release asset") {
-				t.Errorf("output = %q, want a missing-asset error", output)
+			if !strings.Contains(output, "missing release asset "+missing) {
+				t.Errorf("output = %q, want the missing asset %q named", output, missing)
 			}
 			// Production mutation: checking the assets after the release is
 			// created leaves a draft behind for a build that can never ship.
@@ -354,19 +373,104 @@ func TestPublishDesktopReleaseRollsBackItsDraftWhenPublicationFails(t *testing.T
 	}
 }
 
-// desktopAssetNames lists one installer per platform plus the update manifests
-// and the side files electron-builder leaves beside them in dist/.
+// A failure in the rolling refresh comes after the versioned release is
+// published, so there is nothing to roll back and the run has to say so. The
+// old message said the rollback could not confirm a draft, which describes the
+// opposite of what happened and sends whoever reads it looking for a draft that
+// is not there.
+func TestPublishDesktopReleaseReportsAPublishedReleaseWhenTheRollingRefreshFails(t *testing.T) {
+	clone, remote := newDesktopReleaseRepository(t, "desktop-v0.6.0")
+	distribution := writeDesktopFixture(t, "", desktopAssetNames()...)
+	fakeBin, fakeGitHub := newFakeGitHubCLI(t)
+	releasedCommit := gitOutput(t, clone, "rev-parse", "HEAD")
+
+	output, err := runPublishDesktopRelease(
+		t, clone, fakeBin, fakeGitHub,
+		[]string{"FAKE_GH_FAIL_RELEASE=desktop-latest", "FAKE_GH_FAIL_OP=create"},
+		"desktop-v0.6.0", distribution, "dgoings/workbook", "--bundles", "v0.6.0",
+	)
+	if err == nil {
+		t.Fatalf("publisher succeeded despite a failed rolling refresh; output = %q", output)
+	}
+
+	// Production mutation: deleting the versioned release here, or reporting it
+	// as an unconfirmed draft, would take a published release away from anyone
+	// who had already downloaded it, or send its rescuer after the wrong thing.
+	for _, want := range []string{
+		"desktop-v0.6.0 is published and stays that way",
+		"the desktop-latest tag already points at desktop-v0.6.0",
+		"rerun this publication for desktop-v0.6.0",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("output = %q, want it to contain %q", output, want)
+		}
+	}
+	if strings.Contains(output, "could not confirm it is still a draft") {
+		t.Errorf("output = %q, want no draft message for a published release", output)
+	}
+	if log := readFakeGitHubLog(t, fakeGitHub); strings.Contains(log, "release delete desktop-v0.6.0") {
+		t.Errorf("publisher deleted the published versioned release:\n%s", log)
+	}
+	state, readErr := os.ReadFile(fakeReleaseStatePath(fakeGitHub, "desktop-v0.6.0"))
+	if readErr != nil {
+		t.Fatalf("read versioned release state: %v", readErr)
+	}
+	if strings.TrimSpace(string(state)) != "published" {
+		t.Errorf("versioned release state = %q, want it left published", state)
+	}
+
+	// The rerun is the repair the message promises: it leaves the versioned
+	// release alone and creates the rolling one it never got to.
+	if output, err := runPublishDesktopRelease(
+		t, clone, fakeBin, fakeGitHub, nil,
+		"desktop-v0.6.0", distribution, "dgoings/workbook", "--bundles", "v0.6.0",
+	); err != nil {
+		t.Fatalf("rerun after a failed rolling refresh: %v\n%s", err, output)
+	}
+	log := readFakeGitHubLog(t, fakeGitHub)
+	if count := strings.Count(log, "release create desktop-v0.6.0"); count != 1 {
+		t.Errorf("versioned release create count = %d, want exactly one across both runs; log:\n%s", count, log)
+	}
+	if _, statErr := os.Stat(fakeReleaseStatePath(fakeGitHub, "desktop-latest")); statErr != nil {
+		t.Errorf("the rerun did not create the rolling release: %v", statErr)
+	}
+	for _, name := range desktopAssetNames() {
+		if _, statErr := os.Stat(filepath.Join(fakeReleaseAssetsPath(fakeGitHub, "desktop-latest"), name)); statErr != nil {
+			t.Errorf("%s is missing from desktop-latest after the rerun: %v", name, statErr)
+		}
+	}
+	if got := gitOutput(t, remote, "rev-parse", "desktop-latest^{commit}"); got != releasedCommit {
+		t.Errorf("remote desktop-latest points at %s, want the released commit %s", got, releasedCommit)
+	}
+}
+
+// desktopAssetNames lists dist/ as electron-builder 26 really leaves it for a
+// build of all three platforms: every installer named from its own
+// architecture, the macOS zips the updater downloads, the update manifests, and
+// the blockmaps. The names are the real ones down to the last suffix, because
+// the publisher requires most of them by exact name and the app's manifests
+// point at them; a fixture that invented its own would agree with nothing.
 func desktopAssetNames() []string {
 	return []string{
 		"Workbench-arm64.dmg",
 		"Workbench-x64.dmg",
 		"Workbench-arm64.dmg.blockmap",
+		"Workbench-x64.dmg.blockmap",
+		"Workbench-arm64.zip",
 		"Workbench-x64.zip",
-		"Workbench-x64.AppImage",
+		"Workbench-arm64.zip.blockmap",
+		"Workbench-x64.zip.blockmap",
+		"Workbench-x86_64.AppImage",
+		"Workbench-arm64.AppImage",
 		"Workbench-amd64.deb",
+		"Workbench-arm64.deb",
 		"Workbench-Setup-x64.exe",
+		"Workbench-Setup-arm64.exe",
+		"Workbench-Setup-x64.exe.blockmap",
+		"Workbench-Setup-arm64.exe.blockmap",
 		"latest-mac.yml",
 		"latest-linux.yml",
+		"latest-linux-arm64.yml",
 		"latest.yml",
 	}
 }
