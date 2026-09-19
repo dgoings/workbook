@@ -164,7 +164,10 @@ async function setSidebarCollapsed (collapsed) {
   if (collapsed === registry.sidebarCollapsed) return
   await registry.setSidebarCollapsed(collapsed)
   layout()
-  toChrome('sidebar:changed', { collapsed })
+  // Announced from the store rather than from the argument: the setter rolls
+  // back if the write fails, and the shell must never be painted for a state
+  // the registry refused.
+  toChrome('sidebar:changed', { collapsed: registry.sidebarCollapsed })
 }
 
 function toggleSidebar () {
@@ -183,7 +186,13 @@ function toggleSidebar () {
  */
 function watchSidebarShortcut (webContents) {
   webContents.on('before-input-event', (event, input) => {
-    if (input.type !== 'keyDown' || input.key.toLowerCase() !== 'b') return
+    // `key` is what the layout produces, so on a Cyrillic, Greek, Hebrew or
+    // Arabic layout the physical B key reports another character entirely and
+    // the chord would never match. `code` names the physical key instead. Both
+    // are accepted rather than just the code, so someone on Dvorak who reaches
+    // for the letter still gets it.
+    if (input.type !== 'keyDown') return
+    if (input.code !== 'KeyB' && input.key.toLowerCase() !== 'b') return
     // A held-down chord would otherwise flap the sidebar open and shut.
     if (input.isAutoRepeat) return
     // Cmd+B on macOS, Ctrl+B elsewhere, and nothing near it: any other modifier,

@@ -117,9 +117,24 @@ class Registry {
     return this.state.sidebarCollapsed === true
   }
 
+  /**
+   * Store the collapsed state, or leave it exactly as it was.
+   *
+   * The caller moves native board views to match this value, so a rejected
+   * write that still changed it in memory would be worse than no write at all:
+   * the next layout would position every board for a width the sidebar is not
+   * drawn at, and the sidebar would end up underneath a board. Rolling back
+   * keeps the stored answer and the painted one the same answer.
+   */
   async setSidebarCollapsed (collapsed) {
-    this.state.sidebarCollapsed = collapsed
-    await this.save()
+    const previous = this.state.sidebarCollapsed
+    this.state.sidebarCollapsed = collapsed === true
+    try {
+      await this.save()
+    } catch (error) {
+      this.state.sidebarCollapsed = previous
+      throw error
+    }
   }
 
   find (projectId) {
