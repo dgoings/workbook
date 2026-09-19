@@ -106,8 +106,8 @@ user did to install in the first place.
 
 Checks run once on launch and log what they find. There is no update action in
 the shell yet: when one returns it will live in the native application menu
-rather than on the shell page, which is also where it can reach a user who is
-looking at a board rather than at the sidebar.
+rather than on the shell page. The menu also reaches a user who is looking at a
+board rather than at the sidebar.
 
 The app is unsigned by any identity and unnotarized, so Gatekeeper will need
 it opened once from the Finder context menu.

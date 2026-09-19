@@ -188,7 +188,6 @@ body {
 }
 
 .sidebar-head {
-  position: relative;
   display: flex;
   align-items: flex-start;
   gap: .5rem;
@@ -211,7 +210,6 @@ body {
    rather than clicked. */
 .icon-button {
   -webkit-app-region: no-drag;
-  position: relative;
   flex: 0 0 auto;
   display: flex;
   align-items: center;
@@ -243,9 +241,9 @@ body {
   font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
   font-size: .75rem;
   cursor: default;
-  /* One line always: a wrapped version pushes the rail down and crowds the
-     chevron beside it. Which build it is lives on this line's own tooltip,
-     which has room for the words and the path both. */
+  /* One line always: a wrapped version pushes the rail down. Which build it is
+     lives on this line's own tooltip, which has room for the words and the
+     path both. */
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
