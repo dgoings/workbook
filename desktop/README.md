@@ -56,26 +56,28 @@ npm run dist:win     # Windows, x64 + arm64 (NSIS)
 
 Each build:
 
-1. **`npm run stage`** builds the Workbook CLI from this checkout and stages it
-   under `build/`. It delegates to the repository's own `scripts/install.sh`
-   rather than calling `go build` here, so the binary is stamped exactly as an
-   official source install is: `-trimpath`, with version and commit from
-   `git describe`. Requires Go and Git.
+1. **Staging** builds the Workbook CLI from this checkout with the repository's
+   own `scripts/install.sh` rather than calling `go build` here, so the binary
+   is stamped exactly as an official source install is: `-trimpath`, with
+   version and commit from `git describe`. Requires Go and Git.
 
-   A release stages one CLI per target rather than a single one: `GOOS` and
-   `GOARCH` reach `go build` through `install.sh`, so
+   There is one CLI per target, not one for all of them: `GOOS` and `GOARCH`
+   reach `go build` through `install.sh`, so
    `GOOS=windows GOARCH=arm64 scripts/build-workbook.sh build/windows-arm64`
    stages that target's CLI beside the others, under `build/<goos>-<goarch>/`.
    The binary is named from `GOOS` — `workbook.exe` for Windows — and the
-   banner that prints its version is skipped for a target the machine doing
-   the building cannot run.
+   banner that prints its version is skipped for a target that is not the host,
+   which cannot be run to ask it.
+
+   The Mac builds stage both architectures this way with `npm run stage:mac`,
+   because they package both. `npm run stage` stages only the host's, under
+   `build/`; that is the one a development run (`npm start`) uses.
 2. **`electron-builder`** packages the app, and its `afterPack` hook puts the
    CLI matching that bundle's own platform and architecture into `Resources/`:
-   from `build/<goos>-<goarch>/` when a release staged one there, and
-   otherwise from `build/`, which is what a local `npm run dist` stages. The
-   hook does this rather than electron-builder's `extraResources`, which
-   copies one named file into every bundle and so gave both architectures of a
-   Mac build the host's binary.
+   from `build/<goos>-<goarch>/` when one was staged there, and otherwise from
+   `build/`, the host-only stage. The hook does this rather than
+   electron-builder's `extraResources`, which copies one named file into every
+   bundle and so gave both architectures of a Mac build the host's binary.
 
    The hook then ad-hoc signs the macOS bundle, after the copy, since the
    resources are part of what gets signed. Signing has to happen *during*
@@ -83,6 +85,12 @@ Each build:
    the DMG and ZIP were already built from the unsigned bundle. macOS on Apple
    Silicon refuses to launch an arm64 bundle whose signature repackaging
    invalidated.
+
+   `npm run dist:linux` and `npm run dist:win` expect to run on a host of that
+   platform, which is how the release workflow runs them. Building one from a
+   Mac needs its targets staged into `build/<goos>-<goarch>/` first: otherwise
+   the Windows build stops on a missing `workbook.exe`, and the Linux one would
+   take the host-only stage.
 
 So installing the app installs a matching Workbook. There is no separate CLI
 install step, and no dependency on what happens to be on the machine.

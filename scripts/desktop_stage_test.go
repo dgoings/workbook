@@ -152,11 +152,13 @@ func TestDesktopStageCrossCompilesAndSkipsTheBanner(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(output, "workbook")); err != nil {
 		t.Fatalf("stat staged binary: %v", err)
 	}
-	if !strings.Contains(string(combined), "build-workbook: staged") {
-		t.Fatalf("stage output = %q, want the staged banner", combined)
-	}
-	if strings.Contains(string(combined), "exec format error") {
-		t.Fatalf("stage tried to run a cross-compiled binary:\n%s", combined)
+	// Naming the target is the only evidence that the cross-compile branch ran.
+	// A banner that ran the binary says "staged" too: the version it failed to
+	// read is a command substitution inside echo's arguments, so the failure
+	// prints to stderr, leaves the line empty, and does not even end the script.
+	banner := "build-workbook: staged workbook for " + goEnv(t, root, "GOHOSTOS") + "/" + otherArch
+	if !strings.Contains(string(combined), banner) {
+		t.Fatalf("stage output = %q, want %q", combined, banner)
 	}
 }
 
@@ -172,5 +174,10 @@ func TestDesktopStageNamesAWindowsBinary(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(output, "workbook.exe")); err != nil {
 		t.Fatalf("stat staged windows binary: %v", err)
+	}
+	// The name is the whole point: a Windows build staged as `workbook` is what
+	// the packaged app would fail to find.
+	if _, err := os.Stat(filepath.Join(output, "workbook")); !os.IsNotExist(err) {
+		t.Fatalf("stage also wrote a suffix-less workbook (err=%v)\n%s", err, combined)
 	}
 }

@@ -31,7 +31,8 @@ const GOARCH = { [Arch.x64]: 'amd64', [Arch.arm64]: 'arm64' }
 function placeWorkbook (context) {
   const goos = GOOS[context.electronPlatformName]
   const goarch = GOARCH[context.arch]
-  if (!goos || !goarch) throw new Error(`no CLI target for ${context.electronPlatformName}/${context.arch}`)
+  // Arch is a numeric enum, and `linux/2` names nothing a reader can act on.
+  if (!goos || !goarch) throw new Error(`no CLI target for ${context.electronPlatformName}/${Arch[context.arch] ?? context.arch}`)
   const binary = goos === 'windows' ? 'workbook.exe' : 'workbook'
   const build = path.join(__dirname, '..', 'build')
   const candidates = [path.join(build, `${goos}-${goarch}`), build]
