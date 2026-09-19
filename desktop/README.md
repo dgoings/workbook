@@ -25,6 +25,17 @@ there is one, and otherwise whatever `workbook` is installed on the machine
 (see "Finding the workbook binary" below). `npm run dev` also opens the
 shell's developer tools.
 
+## The sidebar
+
+The sidebar collapses to a narrow rail, with the chevron beside the menu button
+or Cmd+B on macOS and Ctrl+B elsewhere; the chord works from a board too, not
+only from the shell. The choice is remembered across launches. The rail keeps
+every route it had: the import glyph, and each project as its key with its
+status dot, with the name and path on the tile's tooltip. The menu button in
+the rail expands the sidebar before it opens the menu, because the popover is
+wider than the rail and a popover wider than the rail would open underneath the
+board's view rather than over it.
+
 ## Checks
 
 ```

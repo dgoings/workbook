@@ -424,6 +424,96 @@ body {
 .dot.running { background: var(--wb-ok); }
 .dot.failed, .dot.exited { background: var(--wb-danger); }
 
+/* The words of a rail item, in an element of their own so the rail can hide
+   them and keep the glyph. Expanded, it is the whole of the item's label, and
+   it shrinks rather than widening the item a longer one could not fit in. */
+.rail-text { min-width: 0; }
+
+/* The toggle is an .icon-button and wants nothing beyond one, in either state.
+   It is named here because the markup applies the class, and a class the
+   renderer applies with no rule of its own is what check-styles is for. */
+.sidebar-toggle { flex: 0 0 auto; }
+
+/* --- sidebar rail ------------------------------------------------------- */
+
+/* Collapsed, the sidebar is a 76px rail: the same controls and the same list,
+   kept to the parts that still read at that width. Everything below hangs off
+   the one class the renderer sets on the root element, and nothing outside
+   this block touches the expanded layout.
+
+   Nothing here may be wider than the rail. The main process positions each
+   board's native view at this same 76 — the two numbers are one measurement in
+   two files — so a rail item that overflowed would not spill onto the canvas,
+   it would slide under a board and be invisible. */
+:root.sidebar-collapsed #sidebar {
+  width: 76px;
+  flex: 0 0 76px;
+}
+
+/* The two icon buttons stack where the wordmark and the menu button sat side
+   by side. Only the side padding goes: the top inset is the head's own, so
+   macOS keeps its 34px under the traffic lights and the :root:not(.is-mac)
+   override keeps answering for everyone else. */
+:root.sidebar-collapsed .sidebar-head {
+  flex-direction: column;
+  align-items: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* The chevron is one glyph pointing at the edge the click moves the sidebar
+   towards, so expanding mirrors it rather than swapping in a second path. */
+:root.sidebar-collapsed .sidebar-toggle svg { transform: scaleX(-1); }
+
+/* Wordmark, version, section label, item words, project names: each needs more
+   room than the rail has, and each is one click away again. */
+:root.sidebar-collapsed .sidebar-identity,
+:root.sidebar-collapsed .rail-label,
+:root.sidebar-collapsed .rail-text,
+:root.sidebar-collapsed .project-name {
+  display: none;
+}
+
+/* With the words gone, what is left is a glyph or a key, and a row that still
+   started at the left edge would read as a column of stray marks. */
+:root.sidebar-collapsed .rail-item,
+:root.sidebar-collapsed .project-item {
+  justify-content: center;
+}
+
+/* The hidden "Projects" label took its own space above the list; this stands in
+   for it. The narrow side padding is what buys the key its characters. */
+:root.sidebar-collapsed .project-list {
+  padding: .35rem .35rem 0;
+}
+
+:root.sidebar-collapsed .project-item {
+  gap: .25rem;
+  padding-left: .25rem;
+  padding-right: .25rem;
+}
+
+/* The 3px primary edge is how both lists say which route is showing, and the
+   rail needs that more than the sidebar does, not less: the key alone is all
+   that is left to tell the tiles apart. The active rail item keeps the edge
+   and the padding it already had; only the tighter tile restates the trade of
+   two padding pixels for the wider border. */
+:root.sidebar-collapsed .project-item.active {
+  padding-left: calc(.25rem - 2px);
+}
+
+/* A key runs to ten characters, which a 76px tile cannot hold. It truncates:
+   the dot beside it keeps its size, the tile keeps the rail's width, and the
+   whole name and path are on the tile's own tooltip. */
+:root.sidebar-collapsed .project-key {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* --- main --------------------------------------------------------------- */
 
 /* #main no longer scrolls: each view is a column whose middle section does, so

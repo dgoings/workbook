@@ -66,6 +66,9 @@ function renderProjects () {
     item.className = 'project-item'
     item.dataset.projectId = project.id
     if (project.id === state.activeProjectId) item.classList.add('active')
+    // In the rail the tile is the key and nothing else, so the whole of what
+    // the row says when expanded has to be reachable by hovering it.
+    item.title = `${project.name}\n${project.path}`
 
     const dot = document.createElement('span')
     dot.className = `dot ${project.status ?? 'stopped'}`
@@ -78,7 +81,6 @@ function renderProjects () {
     const name = document.createElement('span')
     name.className = 'project-name'
     name.textContent = project.name
-    name.title = project.path
 
     item.append(dot, key, name)
     item.addEventListener('click', () => openProject(project.id))
@@ -367,11 +369,59 @@ function paintTheme ({ theme }) {
   }
 }
 
+// --- sidebar ---------------------------------------------------------------
+
+/**
+ * Reflect the collapsed state on the document.
+ *
+ * One class carries it: every rail rule hangs off `.sidebar-collapsed` on the
+ * root element, so collapsing is a single toggle rather than a walk over the
+ * sidebar's parts. The button's label names what the next click will do, not
+ * what the sidebar currently is, and names the chord with it — the chord works
+ * from a board, where this button is not even on screen.
+ */
+function paintSidebar ({ collapsed }) {
+  document.documentElement.classList.toggle('sidebar-collapsed', collapsed)
+  // The popover has no room in the rail, which is why the menu button expands
+  // first; a menu already open when the chord collapses is the same problem
+  // arriving from the other side, so it closes.
+  if (collapsed) setMenu(false)
+  const chord = api.platform === 'mac' ? '⌘B' : 'Ctrl+B'
+  const label = `${collapsed ? 'Expand' : 'Collapse'} sidebar (${chord})`
+  el('sidebar-toggle').setAttribute('aria-label', label)
+  el('sidebar-toggle').title = label
+}
+
 // --- wiring ----------------------------------------------------------------
 
-el('menu-button').addEventListener('click', (event) => {
+el('menu-button').addEventListener('click', async (event) => {
   event.stopPropagation() // Or the document handler below closes it again.
+  // The popover is 13rem wide and the rail is 76px, and anything wider than the
+  // rail is covered by the board's own native view when a board is showing. So
+  // in the rail this button expands the sidebar first and opens the menu into
+  // the width it needs; the await is what keeps the menu from appearing for a
+  // frame at rail width.
+  if (document.documentElement.classList.contains('sidebar-collapsed')) {
+    try {
+      await api.toggleSidebar()
+    } catch (error) {
+      console.error('workbench: could not expand the sidebar', error)
+      return
+    }
+    setMenu(true)
+    return
+  }
   setMenu(!menuOpen())
+})
+
+// The click only asks. The main process owns the collapsed state and moves
+// every board view before it announces the change, so painting here would
+// restyle the page against bounds the boards have not reached yet; the paint
+// arrives from onSidebarChanged below instead.
+el('sidebar-toggle').addEventListener('click', () => {
+  api.toggleSidebar().catch((error) => {
+    console.error('workbench: could not toggle the sidebar', error)
+  })
 })
 
 // Any click outside dismisses, and Escape returns focus to the button — the
@@ -388,6 +438,7 @@ document.addEventListener('keydown', (event) => {
 })
 
 api.onThemeChanged(paintTheme)
+api.onSidebarChanged(paintSidebar)
 
 for (const button of document.querySelectorAll('.rail-item')) {
   button.addEventListener('click', () => setView(button.dataset.view))
@@ -473,6 +524,7 @@ async function boot () {
   // needs above the sidebar for its inset traffic lights.
   document.documentElement.classList.add(`is-${api.platform}`)
   paintTheme(await api.getTheme())
+  paintSidebar(await api.getSidebar())
   try {
     const version = await api.version()
     el('version').textContent = `workbook ${version.version ?? ''}`.trim()
