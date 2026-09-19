@@ -9,9 +9,10 @@ set -eu
 # request. The arithmetic deciding which version follows which therefore exists
 # once, and the three cannot drift apart.
 #
-# release-version.sh's helpers assign version, major, minor, and patch without
-# declaring them local, which POSIX sh has no way to do. Every variable here is
-# named so that sourcing and calling them cannot overwrite it.
+# POSIX sh has no way to declare a variable local, so release-version.sh's
+# helpers prefix every variable they assign with rv_ and cannot overwrite a
+# caller's. The distinct names here are kept anyway: they say at a glance which
+# variables belong to this script.
 
 usage() {
 	cat <<'USAGE'

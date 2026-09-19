@@ -150,7 +150,6 @@ effective_bump=${requested_bump:-patch}
 if [ -n "${requested_version}" ]; then
 	if [ -n "${previous_tag}" ]; then
 		previous_number=${previous_tag#v}
-		previous_number=${previous_number%%-rc*}
 	else
 		previous_number=0.0.0
 	fi
