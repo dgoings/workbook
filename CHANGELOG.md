@@ -69,7 +69,7 @@ affect scripts; all three are described under Changed.
   project.** A clone of an existing project no longer needs `--key` to join
   it; the flag is now a claim that has to agree with the project's key. A new
   project on a terminal is prompted, with a key derived from the directory
-  name (`my-app` becomes `MYAPP`) as the default; setup asks only when stdin
+  name (`my-app` becomes `MA`) as the default; setup asks only when stdin
   and stdout are both terminals and `--json` was not passed, and otherwise
   takes that derived key silently. The old silent `WB` survives only as the
   fallback for a directory name that yields no key, so a script that never

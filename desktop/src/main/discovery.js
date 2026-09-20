@@ -38,6 +38,9 @@ function isValidKey (key) {
  * minted, and changing it later means deleting refs/workbook/project and
  * refs/workbook/config, then removing .git/workbook and .workbook by hand. The
  * wizard shows this and lets the user edit it before anything is written.
+ *
+ * The CLI's core.DeriveProjectKey (internal/core/id.go) is a port of this same
+ * rule, minus the taken-set collision handling below; the two must change together.
  */
 function suggestKey (repoPath, taken = new Set()) {
   const name = path.basename(repoPath)

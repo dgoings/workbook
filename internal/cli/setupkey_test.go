@@ -177,7 +177,7 @@ func TestSetupDerivesTheKeyFromTheDirectoryWhenNothingAsks(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("setup code = %d, want 0; stderr = %q", code, stderr)
 	}
-	if !strings.Contains(stdout, "Key:\tACMESITE\n") {
+	if !strings.Contains(stdout, "Key:\tAS\n") {
 		t.Fatalf("setup stdout = %q, want the key derived from the directory", stdout)
 	}
 	if strings.Contains(stdout, "Project key [") {
@@ -188,7 +188,7 @@ func TestSetupDerivesTheKeyFromTheDirectoryWhenNothingAsks(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("create code = %d, want 0; stderr = %q", code, stderr)
 	}
-	if task := decodeMutationTask(t, stdout, "create"); !strings.HasPrefix(task.ID, "ACMESITE-") {
+	if task := decodeMutationTask(t, stdout, "create"); !strings.HasPrefix(task.ID, "AS-") {
 		t.Fatalf("task ID = %q, want the derived key as its prefix", task.ID)
 	}
 }
@@ -204,13 +204,13 @@ func TestSetupJSONTakesTheDerivedKeyWithoutAsking(t *testing.T) {
 	if err := json.Unmarshal(assertJSONResult(t, stdout, "setup").Data, &result); err != nil {
 		t.Fatalf("decode setup result: %v", err)
 	}
-	if result.Key != "MYAPP" {
-		t.Fatalf("setup key = %q, want %q", result.Key, "MYAPP")
+	if result.Key != "MA" {
+		t.Fatalf("setup key = %q, want %q", result.Key, "MA")
 	}
 }
 
 func TestSetupFallsBackToTheDefaultKeyForAMeaninglessDirectory(t *testing.T) {
-	repository := testrepo.New(t, testrepo.WithName("2024"))
+	repository := testrepo.New(t, testrepo.WithName("---"))
 
 	code, stdout, stderr := run(t, repository, "setup", "--no-docs")
 	if code != 0 {
