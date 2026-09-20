@@ -71,12 +71,23 @@ setup creates a new project. A clone joining a project that already exists, in
 the working tree or on `origin`, takes that project's key, and `--key` is then
 a claim that has to agree with it. For a new project on a terminal, setup
 prompts `Project key [MYAPP]:` with a key derived from the repository's
-directory name (`my-app` becomes `MYAPP`; letters and digits only, uppercased,
-at most ten, and `WB` when the name yields nothing); Enter accepts it, and an
-answer is trimmed and uppercased before the grammar `^[A-Z][A-Z0-9]{1,9}$` is
-checked. With no terminal on either side, or under `--json`, setup takes the
-derived key without asking, so scripts and the desktop app get a key that
-names the project. Pass `--key` to choose without being asked.
+directory name, and an answer is trimmed and uppercased before the grammar
+`^[A-Z][A-Z0-9]{1,9}$` is checked. Enter accepts the suggestion, an answer the
+grammar refuses is explained and asked again up to five times, and Ctrl-D or
+Ctrl-C ends setup without creating anything. Setup asks only when stdin and
+stdout are both terminals and `--json` was not passed; otherwise, including
+`workbook setup > setup.log` from a terminal, it takes the derived key without
+asking, so scripts and the desktop app get a key that names the project. Pass
+`--key` to choose without being asked.
+
+The derived key is the ASCII letters and digits of the last path element,
+uppercased, with leading digits dropped and cut to ten characters; accented and
+non-Latin characters are discarded, and a name that yields nothing falls back
+to `WB`. So `my-app` becomes `MYAPP`, `2024-planning` becomes `PLANNING`,
+`café` becomes `CAF` and `日本語` becomes `WB`, and the cut to ten can land
+mid-word: `workbook-desktop-shell` becomes `WORKBOOKDE`. A long or non-ASCII
+directory name, and any script or CI job, is a reason to pass `--key` rather
+than inherit a key that cannot be changed later.
 
 A checkout whose working tree has no `.workbook/config.json` does not
 necessarily mean the project is new: a branch cut before the project adopted

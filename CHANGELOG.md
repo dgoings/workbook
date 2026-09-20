@@ -23,8 +23,9 @@ version was cut.
 
 ## Unreleased
 
-Priorities become a per-project vocabulary, the way statuses already are. Two
-of the changes below break scripts; both are described under Changed.
+Priorities become a per-project vocabulary, the way statuses already are, and
+`workbook setup` stops assuming a project key. Three of the changes below
+affect scripts; all three are described under Changed.
 
 ### Added
 - **A project defines its own priorities.** `high`, `medium` and `low` stop
@@ -68,10 +69,11 @@ of the changes below break scripts; both are described under Changed.
   project.** A clone of an existing project no longer needs `--key` to join
   it; the flag is now a claim that has to agree with the project's key. A new
   project on a terminal is prompted, with a key derived from the directory
-  name (`my-app` becomes `MYAPP`) as the default; without a terminal, or under
-  `--json`, that derived key is taken silently. The old silent `WB` survives
-  only as the fallback for a directory name that yields no key, so a script
-  that never passed `--key` now gets a key that names its project.
+  name (`my-app` becomes `MYAPP`) as the default; setup asks only when stdin
+  and stdout are both terminals and `--json` was not passed, and otherwise
+  takes that derived key silently. The old silent `WB` survives only as the
+  fallback for a directory name that yields no key, so a script that never
+  passed `--key` now gets a key that names its project.
 - **Every project created by this release records its priorities, and so
   requires a v0.6.0 or newer clone to change its configuration at all** — not
   only its priorities, because the configuration ledger carries one version
