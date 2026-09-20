@@ -66,6 +66,34 @@ func TestPromptProjectKeyExplainsAndAsksAgain(t *testing.T) {
 	}
 }
 
+func TestPromptProjectKeyTakesTheSuggestionAfterABadAnswerWithNoTrailingNewline(t *testing.T) {
+	var out bytes.Buffer
+	key, err := promptProjectKey(strings.NewReader("1bad"), &out, "ACME")
+	if err != nil {
+		t.Fatalf("promptProjectKey() error = %v", err)
+	}
+	if key != "ACME" {
+		t.Fatalf("promptProjectKey() = %q, want the suggestion %q", key, "ACME")
+	}
+	if !strings.Contains(out.String(), `project key "1BAD" must match`) {
+		t.Fatalf("prompt %q does not say why the answer was refused", out.String())
+	}
+}
+
+func TestPromptProjectKeyTakesTheSuggestionAfterABadAnswerWithATrailingNewline(t *testing.T) {
+	var out bytes.Buffer
+	key, err := promptProjectKey(strings.NewReader("1bad\n"), &out, "ACME")
+	if err != nil {
+		t.Fatalf("promptProjectKey() error = %v", err)
+	}
+	if key != "ACME" {
+		t.Fatalf("promptProjectKey() = %q, want the suggestion %q", key, "ACME")
+	}
+	if !strings.Contains(out.String(), `project key "1BAD" must match`) {
+		t.Fatalf("prompt %q does not say why the answer was refused", out.String())
+	}
+}
+
 func TestPromptProjectKeyGivesUpAfterRepeatedBadAnswers(t *testing.T) {
 	var out bytes.Buffer
 	_, err := promptProjectKey(strings.NewReader(strings.Repeat("1\n", projectKeyAttempts+3)), &out, "ACME")
@@ -83,6 +111,12 @@ func TestPromptProjectKeyGivesUpAfterRepeatedBadAnswers(t *testing.T) {
 func TestInteractiveTerminalIsFalseForBuffers(t *testing.T) {
 	if interactiveTerminal(strings.NewReader(""), &bytes.Buffer{}) {
 		t.Fatal("interactiveTerminal() = true for a reader and a buffer")
+	}
+}
+
+func TestInteractiveTerminalIsFalseForANilReader(t *testing.T) {
+	if interactiveTerminal(nil, &bytes.Buffer{}) {
+		t.Fatal("interactiveTerminal() = true for a nil reader")
 	}
 }
 

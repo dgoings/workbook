@@ -2286,7 +2286,9 @@ func waitForHTTP(t *testing.T, url string) {
 func initializedRepository(t *testing.T) string {
 	t.Helper()
 	repository := testrepo.New(t)
-	code, _, stderr := run(t, repository, "setup")
+	// --key WB is explicit: this suite's WB- task-ID assertions must not
+	// depend on t.TempDir()'s last path element deriving to WB by chance.
+	code, _, stderr := run(t, repository, "setup", "--key", "WB")
 	if code != 0 {
 		t.Fatalf("setup code = %d, want 0; stderr = %q", code, stderr)
 	}

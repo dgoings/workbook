@@ -2,6 +2,7 @@ package gitstore
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -73,6 +74,45 @@ func TestHasProjectIdentity(t *testing.T) {
 	}
 	if !has {
 		t.Fatal("HasProjectIdentity() = false after Init")
+	}
+}
+
+func TestHasProjectIdentityIsTrueForTrackedConfigAlone(t *testing.T) {
+	repoDir := testrepo.New(t)
+	repo, err := Open(context.Background(), repoDir)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	want := core.ProjectConfig{
+		Format: projectFormat, Version: projectVersion, ProjectID: fixedProjectID, Key: "WB",
+	}
+	writeProjectConfigFile(t, filepath.Join(repo.Root, configPath), want)
+
+	has, err := repo.HasProjectIdentity(context.Background())
+	if err != nil {
+		t.Fatalf("HasProjectIdentity() error = %v", err)
+	}
+	if !has {
+		t.Fatal("HasProjectIdentity() = false with only a tracked configuration on disk")
+	}
+}
+
+func TestHasProjectIdentityIsTrueForTheCommonProjectGuardAlone(t *testing.T) {
+	repo, err := Open(context.Background(), testrepo.New(t))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	want := core.ProjectConfig{
+		Format: projectFormat, Version: projectVersion, ProjectID: fixedProjectID, Key: "WB",
+	}
+	writeProjectConfigFile(t, filepath.Join(repo.CommonGitDir, "workbook", "project.json"), want)
+
+	has, err := repo.HasProjectIdentity(context.Background())
+	if err != nil {
+		t.Fatalf("HasProjectIdentity() error = %v", err)
+	}
+	if !has {
+		t.Fatal("HasProjectIdentity() = false with only the common project guard on disk")
 	}
 }
 

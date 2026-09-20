@@ -32,7 +32,7 @@ func TestVersionCommandReportsInjectedBuildMetadataAsJSON(t *testing.T) {
 	release.Commit = "abc123"
 
 	var stdout, stderr bytes.Buffer
-	code := cli.Run(context.Background(), []string{"version", "--json"}, t.TempDir(), &stdout, &stderr)
+	code := cli.Run(context.Background(), []string{"version", "--json"}, t.TempDir(), strings.NewReader(""), &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("workbook version --json exit code = %d, stderr = %q", code, stderr.String())
 	}
@@ -62,7 +62,7 @@ func TestVersionCommandReportsInjectedBuildMetadataAsJSON(t *testing.T) {
 
 func TestVersionCommandReportsDevelopmentDefaultsAsJSON(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := cli.Run(context.Background(), []string{"version", "--json"}, t.TempDir(), &stdout, &stderr)
+	code := cli.Run(context.Background(), []string{"version", "--json"}, t.TempDir(), strings.NewReader(""), &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("workbook version --json exit code = %d, stderr = %q", code, stderr.String())
 	}

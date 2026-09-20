@@ -7,8 +7,6 @@ import (
 	"io"
 	"strings"
 
-	"golang.org/x/term"
-
 	"github.com/dgoings/workbook/internal/core"
 )
 
@@ -18,29 +16,18 @@ import (
 // stream that keeps supplying garbage must not keep the command alive.
 const projectKeyAttempts = 5
 
-// interactiveTerminal reports whether both ends of a conversation are
-// terminals: a person typing on stdin and a screen on stdout. Either side
-// being a pipe means a script or another program, and a prompt written into
-// a pipe hangs the caller waiting for an answer nobody is there to give.
-func interactiveTerminal(stdin io.Reader, stdout io.Writer) bool {
-	return isTerminal(stdin) && isTerminal(stdout)
-}
-
-func isTerminal(stream any) bool {
-	descriptor, ok := stream.(fileDescriptor)
-	if !ok {
-		return false
-	}
-	return term.IsTerminal(int(descriptor.Fd()))
-}
-
 // promptProjectKey asks for the project key a new project will mint under,
 // offering suggested as the answer Enter gives. An answer is trimmed and
 // uppercased before the grammar sees it, because a key is uppercase by
 // definition and typing "myapp" for MYAPP is what anyone would do. An answer
-// the grammar still refuses is explained and asked again, and end of input
-// takes the suggestion, so a person who closes the stream gets the default
-// rather than a failure.
+// the grammar still refuses is explained and asked again.
+//
+// End of input always takes the suggestion, whatever came before it on that
+// last line: an empty final line and an invalid final line are treated alike,
+// because a closed stream means the person has stopped typing, and the
+// suggestion is always a valid key. An invalid final line is still explained
+// before the suggestion is returned, so the person sees why their last answer
+// did not count.
 func promptProjectKey(stdin io.Reader, stdout io.Writer, suggested string) (string, error) {
 	reader := bufio.NewReader(stdin)
 	for attempt := 0; attempt < projectKeyAttempts; attempt++ {
@@ -49,9 +36,10 @@ func promptProjectKey(stdin io.Reader, stdout io.Writer, suggested string) (stri
 		if err != nil && !errors.Is(err, io.EOF) {
 			return "", core.Wrap(core.CategoryOperational, "cannot read the project key", err)
 		}
+		atEOF := errors.Is(err, io.EOF)
 		answer := strings.ToUpper(strings.TrimSpace(line))
 		if answer == "" {
-			if errors.Is(err, io.EOF) {
+			if atEOF {
 				// A closed stream with nothing typed is an Enter that will never
 				// arrive; the newline the terminal did not get is written so
 				// the report starts on its own line.
@@ -61,8 +49,8 @@ func promptProjectKey(stdin io.Reader, stdout io.Writer, suggested string) (stri
 		}
 		if validationErr := core.ValidateProjectKey(answer); validationErr != nil {
 			fmt.Fprintf(stdout, "%s\n", validationErr)
-			if errors.Is(err, io.EOF) {
-				break
+			if atEOF {
+				return suggested, nil
 			}
 			continue
 		}

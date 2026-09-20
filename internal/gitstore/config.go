@@ -148,14 +148,10 @@ func (r *Repository) AdoptOriginProject(ctx context.Context, key string) (core.P
 			return core.ProjectConfig{}, false, err
 		}
 	}
-	if _, exists, err := r.readIdentityRef(ctx, identityRef); err != nil || exists {
+	if hasIdentity, err := r.HasProjectIdentity(ctx); err != nil {
 		return core.ProjectConfig{}, false, err
-	}
-	if _, exists, err := r.readConfig(); err != nil || exists {
-		return core.ProjectConfig{}, false, err
-	}
-	if _, exists, err := r.readProjectGuard(); err != nil || exists {
-		return core.ProjectConfig{}, false, err
+	} else if hasIdentity {
+		return core.ProjectConfig{}, false, nil
 	}
 	if _, err := r.Git(ctx, nil, "remote", "get-url", "origin"); err != nil {
 		return core.ProjectConfig{}, false, nil
