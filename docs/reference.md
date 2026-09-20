@@ -73,10 +73,10 @@ a claim that has to agree with it. For a new project on a terminal, setup
 prompts `Project key [MYAPP]:` with a key derived from the repository's
 directory name (`my-app` becomes `MYAPP`; letters and digits only, uppercased,
 at most ten, and `WB` when the name yields nothing); Enter accepts it, and an
-answer is uppercased before the grammar `^[A-Z][A-Z0-9]{1,9}$` is checked. With
-no terminal on either side, or under `--json`, setup takes the derived key
-without asking, so scripts and the desktop app get a key that names the
-project. Pass `--key` to choose without being asked.
+answer is trimmed and uppercased before the grammar `^[A-Z][A-Z0-9]{1,9}$` is
+checked. With no terminal on either side, or under `--json`, setup takes the
+derived key without asking, so scripts and the desktop app get a key that
+names the project. Pass `--key` to choose without being asked.
 
 A checkout whose working tree has no `.workbook/config.json` does not
 necessarily mean the project is new: a branch cut before the project adopted

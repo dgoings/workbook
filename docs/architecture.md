@@ -446,7 +446,7 @@ dgoings/tap/workbook`, or `./scripts/install.sh` to build from source.
 2. resolve the project identity — adopt `origin`'s `refs/workbook/project` if it
    publishes one, otherwise the identity ref, tracked configuration or private
    guard this checkout already has, and only then mint a new one, asking for the
-   project key on a terminal and deriving it from the directory name otherwise, —
+   project key on a terminal and deriving it from the directory name otherwise —
    publishing `refs/workbook/project` and writing `.workbook/config.json` when it
    is absent;
 3. repair or write the private common-directory guard from that identity;
