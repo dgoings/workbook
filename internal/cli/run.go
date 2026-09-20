@@ -38,7 +38,7 @@ type helpRequest struct {
 	Target []string
 }
 
-func Run(ctx context.Context, args []string, cwd string, stdout, stderr io.Writer) int {
+func Run(ctx context.Context, args []string, cwd string, stdin io.Reader, stdout, stderr io.Writer) int {
 	help, handled, helpErr := parseHelpRequest(args)
 	if handled {
 		if helpErr == nil {
@@ -63,7 +63,7 @@ func Run(ctx context.Context, args []string, cwd string, stdout, stderr io.Write
 	var err error
 	switch command {
 	case "setup":
-		err = runSetup(ctx, commandArgs, cwd, stdout)
+		err = runSetup(ctx, commandArgs, cwd, stdin, stdout)
 	case "create":
 		err = runCreate(ctx, commandArgs, cwd, stdout, stderr)
 	case "list":

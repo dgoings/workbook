@@ -32,18 +32,29 @@ const (
 // written only when it is absent. An existing document's identity fields are
 // never rewritten, because a v0.4.x teammate reads them and a bootstrap must
 // not change what they see.
+//
+// An empty key is no request: whatever identity exists is adopted under its
+// own key, and a repository with none refuses to mint rather than invent one.
+// A key that is given has to agree with an existing identity, so a bootstrap
+// cannot silently join a project under a name other than the one it asked for.
 func (r *Repository) Init(ctx context.Context, key string, ids core.IDSource) (core.ProjectConfig, bool, error) {
 	if err := r.verifyIdentity(ctx); err != nil {
 		return core.ProjectConfig{}, false, err
 	}
-	if err := core.ValidateProjectKey(key); err != nil {
-		return core.ProjectConfig{}, false, err
+	if key != "" {
+		if err := core.ValidateProjectKey(key); err != nil {
+			return core.ProjectConfig{}, false, err
+		}
 	}
 	if err := r.ensurePrivateCache(); err != nil {
 		return core.ProjectConfig{}, false, err
 	}
 
 	resolution, err := r.resolveIdentity(ctx, func() (core.ProjectIdentity, error) {
+		if key == "" {
+			return core.ProjectIdentity{}, core.Errorf(core.CategoryInvocation,
+				"this repository has no Workbook project yet; a project key is needed to create one")
+		}
 		return mintProjectIdentity(key, ids)
 	})
 	if err != nil {
@@ -68,6 +79,22 @@ func (r *Repository) Init(ctx context.Context, key string, ids core.IDSource) (c
 	}
 	r.rememberIdentity(resolution)
 	return r.rememberConfig(config), resolution.Minted, nil
+}
+
+// HasProjectIdentity reports whether this repository already knows which
+// project it is, by any of the records Init would resolve before minting: the
+// identity ref, the tracked configuration, or the private guard. It is the
+// question bootstrap asks before it needs a key at all, so a clone joining an
+// existing project is never asked to name one.
+func (r *Repository) HasProjectIdentity(ctx context.Context) (bool, error) {
+	if _, found, err := r.readIdentityRef(ctx, identityRef); err != nil || found {
+		return found, err
+	}
+	if _, exists, err := r.readConfig(); err != nil || exists {
+		return exists, err
+	}
+	_, exists, err := r.readProjectGuard()
+	return exists, err
 }
 
 func mintProjectIdentity(key string, ids core.IDSource) (core.ProjectIdentity, error) {
@@ -108,12 +135,18 @@ func mintProjectIdentity(key string, ids core.IDSource) (core.ProjectIdentity, e
 // The probe runs only when the identity ref, the tracked configuration, and
 // the guard are all absent locally; callers skip it entirely when the user
 // asked for --no-sync.
+//
+// An empty key joins whatever project origin has. A key that is given has to
+// match it, because a bootstrap that asked for one name and quietly joined
+// another would leave the person holding a key their task IDs never carry.
 func (r *Repository) AdoptOriginProject(ctx context.Context, key string) (core.ProjectConfig, bool, error) {
 	if err := r.verifyIdentity(ctx); err != nil {
 		return core.ProjectConfig{}, false, err
 	}
-	if err := core.ValidateProjectKey(key); err != nil {
-		return core.ProjectConfig{}, false, err
+	if key != "" {
+		if err := core.ValidateProjectKey(key); err != nil {
+			return core.ProjectConfig{}, false, err
+		}
 	}
 	if _, exists, err := r.readIdentityRef(ctx, identityRef); err != nil || exists {
 		return core.ProjectConfig{}, false, err
@@ -161,7 +194,7 @@ func (r *Repository) AdoptOriginProject(ctx context.Context, key string) (core.P
 		}
 		return core.ProjectConfig{}, false, nil
 	}
-	if discovered.Key != key {
+	if key != "" && discovered.Key != key {
 		return core.ProjectConfig{}, false, core.Errorf(core.CategoryValidation,
 			"origin already has a Workbook project with key %q; rerun workbook setup --key %q to join it", discovered.Key, discovered.Key)
 	}
@@ -188,7 +221,7 @@ func (r *Repository) adoptOriginIdentityRef(ctx context.Context, key string) (co
 		return core.ProjectConfig{}, core.Errorf(core.CategoryOperational,
 			"origin listed %s but did not deliver it; rerun workbook setup", identityRef)
 	}
-	if record.Identity.Key != key {
+	if key != "" && record.Identity.Key != key {
 		return core.ProjectConfig{}, core.Errorf(core.CategoryValidation,
 			"origin already has a Workbook project with key %q; rerun workbook setup --key %q to join it",
 			record.Identity.Key, record.Identity.Key)
@@ -557,7 +590,7 @@ func syncDirectory(path string) error {
 }
 
 func validateRequestedProjectKey(requested string, config core.ProjectConfig) error {
-	if config.Key != requested {
+	if requested != "" && config.Key != requested {
 		return core.Errorf(core.CategoryValidation, "repository is already initialized with project key %q", config.Key)
 	}
 	return nil

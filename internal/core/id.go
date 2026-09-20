@@ -52,6 +52,58 @@ func ValidateProjectKey(key string) error {
 	return nil
 }
 
+// ProjectKeyPattern is the grammar a project key has to match, for a message
+// that tells someone what to type.
+func ProjectKeyPattern() string {
+	return projectKeyPattern.String()
+}
+
+// DefaultProjectKey is the key a project gets when nothing better can be
+// derived from where it lives. It was every project's key before setup began
+// asking, so an old script that never passed --key still lands here when its
+// directory name offers nothing.
+const DefaultProjectKey = "WB"
+
+// projectKeyMaximum is the longest key projectKeyPattern admits.
+const projectKeyMaximum = 10
+
+// DeriveProjectKey proposes a project key from a directory name: the ASCII
+// letters and digits of its last path element, uppercased, with leading digits
+// dropped so the result starts with a letter, and cut to the longest key the
+// grammar allows. A name that leaves nothing usable falls back to
+// DefaultProjectKey rather than returning a key that would fail validation.
+//
+// Only ASCII survives. A key is typed into task IDs and shell commands by
+// every collaborator, and a project named in another script is better served
+// by choosing its key at the prompt than by a transliteration this cannot get
+// right for every language.
+func DeriveProjectKey(name string) string {
+	name = strings.TrimRight(name, "/\\")
+	if index := strings.LastIndexAny(name, "/\\"); index >= 0 {
+		name = name[index+1:]
+	}
+	var key strings.Builder
+	for _, r := range strings.ToUpper(name) {
+		switch {
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+			if key.Len() == 0 {
+				continue
+			}
+		default:
+			continue
+		}
+		key.WriteRune(r)
+		if key.Len() == projectKeyMaximum {
+			break
+		}
+	}
+	if err := ValidateProjectKey(key.String()); err != nil {
+		return DefaultProjectKey
+	}
+	return key.String()
+}
+
 // ValidateProjectID reports whether a project ID is a canonical uppercase
 // ULID. It is the one rule for a project ID wherever one is stored: the
 // tracked configuration, the private guard, and the identity document all

@@ -75,9 +75,16 @@ type setupSyncResult struct {
 // runSetup bootstraps Workbook in a clone: create or validate project
 // identity, install managed agent documentation, and synchronize shared task
 // refs with origin.
-func runSetup(ctx context.Context, args []string, cwd string, stdout io.Writer) error {
+//
+// The project key is asked for only when a project is about to be minted. A
+// clone joining a project that exists, locally or on origin, takes that
+// project's key, and --key is then a claim that has to agree with it. A new
+// project on a terminal is asked, with a key derived from the directory name
+// as the answer Enter gives; a new project with no terminal to ask, or asked
+// for JSON, takes that derived key without asking.
+func runSetup(ctx context.Context, args []string, cwd string, stdin io.Reader, stdout io.Writer) error {
 	flags := newFlagSet("setup")
-	key := flags.String("key", "WB", "project key")
+	key := flags.String("key", "", "project key for a new project")
 	noDocs := flags.Bool("no-docs", false, "skip managed agent documentation")
 	noSync := flags.Bool("no-sync", false, "skip synchronizing task refs with origin")
 	skillDir := flags.String("skill-dir", "", "install the Workbook skill here")
@@ -102,6 +109,26 @@ func runSetup(ctx context.Context, args []string, cwd string, stdout io.Writer) 
 	if !*noSync {
 		if _, _, err := repository.AdoptOriginProject(ctx, *key); err != nil {
 			return err
+		}
+	}
+	// Only a project about to be minted needs a key; origin has been asked by
+	// now, so a repository still without an identity is genuinely new.
+	if *key == "" {
+		known, err := repository.HasProjectIdentity(ctx)
+		if err != nil {
+			return err
+		}
+		if !known {
+			suggested := core.DeriveProjectKey(repository.Root)
+			if !*jsonMode && interactiveTerminal(stdin, stdout) {
+				chosen, err := promptProjectKey(stdin, stdout, suggested)
+				if err != nil {
+					return err
+				}
+				*key = chosen
+			} else {
+				*key = suggested
+			}
 		}
 	}
 	config, minted, err := repository.Init(ctx, *key, core.CryptoULIDSource{})
