@@ -66,6 +66,18 @@ refreshes managed agent documentation, and synchronizes shared task refs with
 solo local project needs no remote. Use `--no-sync` to bootstrap without
 exchanging refs and `--no-docs` to create project identity alone.
 
+The project key, the prefix every task ID carries, is asked for only when
+setup creates a new project. A clone joining a project that already exists, in
+the working tree or on `origin`, takes that project's key, and `--key` is then
+a claim that has to agree with it. For a new project on a terminal, setup
+prompts `Project key [MYAPP]:` with a key derived from the repository's
+directory name (`my-app` becomes `MYAPP`; letters and digits only, uppercased,
+at most ten, and `WB` when the name yields nothing); Enter accepts it, and an
+answer is uppercased before the grammar `^[A-Z][A-Z0-9]{1,9}$` is checked. With
+no terminal on either side, or under `--json`, setup takes the derived key
+without asking, so scripts and the desktop app get a key that names the
+project. Pass `--key` to choose without being asked.
+
 A checkout whose working tree has no `.workbook/config.json` does not
 necessarily mean the project is new: a branch cut before the project adopted
 Workbook looks exactly like that. Before minting a fresh identity, setup
