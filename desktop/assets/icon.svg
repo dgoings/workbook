@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <title>Workbench icon, oak, JuliaMono ExtraBold</title>
+  <defs>
+    <clipPath id="block"><rect x="100" y="100" width="824" height="824" rx="185"/></clipPath>
+    <linearGradient id="base" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F4DDB3"/><stop offset=".55" stop-color="#EACB96"/><stop offset="1" stop-color="#DEB982"/>
+    </linearGradient>
+    <linearGradient id="polish" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".22"/><stop offset=".42" stop-color="#fff" stop-opacity="0"/>
+      <stop offset=".7" stop-color="#2a1405" stop-opacity="0"/><stop offset="1" stop-color="#2a1405" stop-opacity=".2"/>
+    </linearGradient>
+    <linearGradient id="gloss" gradientUnits="userSpaceOnUse" x1="180" y1="100" x2="560" y2="760">
+      <stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".3" stop-color="#fff" stop-opacity=".17"/>
+      <stop offset=".42" stop-color="#fff" stop-opacity=".04"/><stop offset=".5" stop-color="#fff" stop-opacity=".1"/>
+      <stop offset=".62" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="edge" gradientUnits="userSpaceOnUse" x1="0" y1="100" x2="0" y2="924">
+      <stop offset="0" stop-color="#fff6e0" stop-opacity=".85"/><stop offset=".3" stop-color="#fff6e0" stop-opacity=".1"/>
+      <stop offset=".7" stop-color="#2a1405" stop-opacity=".1"/><stop offset="1" stop-color="#2a1405" stop-opacity=".5"/>
+    </linearGradient>
+    <filter id="soft" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024"><feGaussianBlur stdDeviation="9"/></filter>
+    <filter id="drop" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024"><feGaussianBlur stdDeviation="14"/></filter>
+    <filter id="lipblur" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024"><feGaussianBlur stdDeviation="1.2"/></filter>
+    <filter id="figure" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024" color-interpolation-filters="sRGB">
+      <feTurbulence type="fractalNoise" baseFrequency="0.0011 0.0105" numOctaves="3" seed="11"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.47  0 0 0 0 0.29  0 0 0 0 0.12  1 0 0 0 0"/>
+      <feComponentTransfer><feFuncA type="table" tableValues="0 0 .55 .1 0 .7 .15 0 .6 .85 .1 0 .65 .1 0 .75 .2 0 .5 0 0"/></feComponentTransfer>
+    </filter>
+    <filter id="fibre" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024" color-interpolation-filters="sRGB">
+      <feTurbulence type="fractalNoise" baseFrequency="0.003 0.24" numOctaves="4" seed="3"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.4  0 0 0 0 0.24  0 0 0 0 0.1  1 0 0 0 0"/>
+      <feComponentTransfer><feFuncA type="linear" slope="3" intercept="-1.2"/></feComponentTransfer>
+    </filter>
+    <filter id="light" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024" color-interpolation-filters="sRGB">
+      <feTurbulence type="fractalNoise" baseFrequency="0.004 0.17" numOctaves="3" seed="29"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 1.0  0 0 0 0 0.93  0 0 0 0 0.78  1 0 0 0 0"/>
+      <feComponentTransfer><feFuncA type="linear" slope="3.2" intercept="-1.35"/></feComponentTransfer>
+    </filter>
+    <filter id="pore" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024" color-interpolation-filters="sRGB">
+      <feTurbulence type="fractalNoise" baseFrequency="0.014 0.62" numOctaves="2" seed="5"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.3  0 0 0 0 0.17  0 0 0 0 0.07  1 0 0 0 0"/>
+      <feComponentTransfer><feFuncA type="linear" slope="9" intercept="-5.1"/></feComponentTransfer>
+    </filter>
+    <filter id="carve" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024" color-interpolation-filters="sRGB">
+      <feFlood flood-color="#3F2411" flood-opacity="0.8"/>
+      <feComposite operator="in" in2="SourceAlpha" result="fill"/>
+      <feFlood flood-color="#000"/>
+      <feComposite operator="out" in2="SourceAlpha" result="outside"/>
+      <feGaussianBlur in="outside" stdDeviation="7"/>
+      <feOffset dx="3" dy="10" result="shOff"/>
+      <feFlood flood-color="#1C0E04" flood-opacity=".85"/>
+      <feComposite operator="in" in2="shOff"/>
+      <feComposite operator="in" in2="SourceAlpha" result="innerShadow"/>
+      <feGaussianBlur in="outside" stdDeviation="5"/>
+      <feOffset dx="-2" dy="-8" result="ltOff"/>
+      <feFlood flood-color="#F6CF93" flood-opacity=".42"/>
+      <feComposite operator="in" in2="ltOff"/>
+      <feComposite operator="in" in2="SourceAlpha" result="innerLight"/>
+      <feMerge><feMergeNode in="fill"/><feMergeNode in="innerLight"/><feMergeNode in="innerShadow"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect x="112" y="122" width="800" height="806" rx="180" fill="#1a0d04" opacity=".38" filter="url(#drop)"/>
+
+  <g clip-path="url(#block)">
+    <rect x="100" y="100" width="824" height="824" fill="url(#base)"/>
+    <rect width="1024" height="1024" filter="url(#figure)" opacity="0.42"/>
+    <rect width="1024" height="1024" filter="url(#light)" opacity="0.38"/>
+    <rect width="1024" height="1024" filter="url(#fibre)" opacity="0.3"/>
+    <rect width="1024" height="1024" filter="url(#pore)" opacity="0.45"/>
+
+    <g fill="#FFF1D4" fill-opacity=".62" transform="translate(-1 4)" filter="url(#lipblur)"><g transform="translate(197.59 711.49) scale(0.5503 -0.5503)"><path d="M28.0,725.0 L158.0,725.0 L195.5,237.5 L208.5,233.5 L259.5,534.0 L341.5,534.0 L391.0,233.5 L403.0,237.5 L439.5,725.0 L568.5,725.0 L503.5,0.0 L351.5,0.0 L307.5,241.5 L303.5,258.0 L293.5,258.0 L290.0,241.5 L242.0,0.0 L91.0,0.0 Z"/><path transform="translate(600.0 0)" d="M50.0,725.0 L257.0,725.0 Q331.0,725.0 384.5,702.8 Q438.0,680.5 466.5,637.2 Q495.0,594.0 495.0,532.0 Q495.0,467.5 470.8,432.8 Q446.5,398.0 399.5,383.0 Q437.5,378.5 471.8,359.0 Q506.0,339.5 528.5,298.8 Q551.0,258.0 551.0,195.5 Q551.0,126.5 516.0,82.8 Q481.0,39.0 423.0,19.5 Q365.0,0.0 293.0,0.0 L50.0,0.0 Z M283.0,114.5 Q327.5,114.5 357.2,134.0 Q387.0,153.5 387.0,209.5 Q387.0,266.0 357.5,288.0 Q328.0,310.0 285.5,310.0 L198.5,310.0 L198.5,114.5 L283.0,114.5 Z M252.0,424.0 Q300.5,424.0 324.8,444.5 Q349.0,465.0 349.0,516.0 Q349.0,560.0 327.0,583.0 Q305.0,606.0 264.0,606.0 L197.5,606.0 L197.5,424.0 L252.0,424.0 Z"/></g></g>
+    <g fill="#000" filter="url(#carve)"><g transform="translate(197.59 711.49) scale(0.5503 -0.5503)"><path d="M28.0,725.0 L158.0,725.0 L195.5,237.5 L208.5,233.5 L259.5,534.0 L341.5,534.0 L391.0,233.5 L403.0,237.5 L439.5,725.0 L568.5,725.0 L503.5,0.0 L351.5,0.0 L307.5,241.5 L303.5,258.0 L293.5,258.0 L290.0,241.5 L242.0,0.0 L91.0,0.0 Z"/><path transform="translate(600.0 0)" d="M50.0,725.0 L257.0,725.0 Q331.0,725.0 384.5,702.8 Q438.0,680.5 466.5,637.2 Q495.0,594.0 495.0,532.0 Q495.0,467.5 470.8,432.8 Q446.5,398.0 399.5,383.0 Q437.5,378.5 471.8,359.0 Q506.0,339.5 528.5,298.8 Q551.0,258.0 551.0,195.5 Q551.0,126.5 516.0,82.8 Q481.0,39.0 423.0,19.5 Q365.0,0.0 293.0,0.0 L50.0,0.0 Z M283.0,114.5 Q327.5,114.5 357.2,134.0 Q387.0,153.5 387.0,209.5 Q387.0,266.0 357.5,288.0 Q328.0,310.0 285.5,310.0 L198.5,310.0 L198.5,114.5 L283.0,114.5 Z M252.0,424.0 Q300.5,424.0 324.8,444.5 Q349.0,465.0 349.0,516.0 Q349.0,560.0 327.0,583.0 Q305.0,606.0 264.0,606.0 L197.5,606.0 L197.5,424.0 L252.0,424.0 Z"/></g></g>
+
+    <rect x="100" y="100" width="824" height="824" fill="url(#polish)"/>
+    <rect x="100" y="100" width="824" height="824" fill="url(#gloss)"/>
+    <rect x="100" y="100" width="824" height="824" rx="185" fill="none" stroke="url(#edge)" stroke-width="36" filter="url(#soft)"/>
+    <rect x="102" y="102" width="820" height="820" rx="183" fill="none" stroke="url(#edge)" stroke-width="4"/>
+  </g>
+</svg>
