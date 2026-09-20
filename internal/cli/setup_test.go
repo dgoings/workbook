@@ -276,7 +276,9 @@ func TestSetupWithNoDocsSkipsDocumentation(t *testing.T) {
 func TestSetupEmitsAJSONEnvelope(t *testing.T) {
 	repository := testrepo.New(t)
 
-	code, stdout, stderr := run(t, repository, "setup", "--json")
+	// --key WB is explicit: this suite's WB- task-ID assertions must not
+	// depend on t.TempDir()'s last path element deriving to WB by chance.
+	code, stdout, stderr := run(t, repository, "setup", "--key", "WB", "--json")
 
 	if code != 0 {
 		t.Fatalf("setup code = %d, want 0; stderr = %q", code, stderr)

@@ -66,6 +66,31 @@ refreshes managed agent documentation, and synchronizes shared task refs with
 solo local project needs no remote. Use `--no-sync` to bootstrap without
 exchanging refs and `--no-docs` to create project identity alone.
 
+The project key, the prefix every task ID carries, is asked for only when
+setup creates a new project. A clone joining a project that already exists, in
+the working tree or on `origin`, takes that project's key, and `--key` is then
+a claim that has to agree with it. For a new project on a terminal, setup
+prompts `Project key [WORK]:` with a key derived from the repository's
+directory name, and an answer is trimmed and uppercased before the grammar
+`^[A-Z][A-Z0-9]{1,9}$` is checked. Enter accepts the suggestion, an answer the
+grammar refuses is explained and asked again up to five times, and Ctrl-D or
+Ctrl-C ends setup without creating anything. Setup asks only when stdin and
+stdout are both terminals and `--json` was not passed; otherwise, including
+`workbook setup > setup.log` from a terminal, it takes the derived key without
+asking, so scripts and the desktop app get a key that names the project. Pass
+`--key` to choose without being asked.
+
+The derived key is the initials of the directory name's words when it has
+more than one (`my-app` becomes `MA`, `workbook-desktop-shell` becomes `WDS`,
+`MyAppService` becomes `MAS`), or the first four letters of the one word there
+is (`workbook` becomes `WORK`), uppercased. A result shorter than two
+characters is padded with `WB`, one that does not start with a letter gets `W`
+in front (`2024-planning` becomes `W2P`), and a name with no ASCII letters or
+digits gives `WB`; accented and non-Latin characters are treated as word
+breaks rather than kept (`café` becomes `CAF`). A long or unusual directory
+name, and any script or CI job, is a reason to pass `--key` rather than
+inherit a key that cannot be changed later.
+
 A checkout whose working tree has no `.workbook/config.json` does not
 necessarily mean the project is new: a branch cut before the project adopted
 Workbook looks exactly like that. Before minting a fresh identity, setup

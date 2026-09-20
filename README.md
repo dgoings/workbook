@@ -77,6 +77,10 @@ cd <repository>
 workbook setup
 ```
 
+Setup asks for the project key, the prefix on every task ID, only when it
+creates a new project, and suggests one from the directory name; a clone of an
+existing project takes that project's key without asking.
+
 Then work with tasks from the terminal:
 
 ```sh

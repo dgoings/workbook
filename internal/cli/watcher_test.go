@@ -464,7 +464,7 @@ func TestWatcherPublishesUnsyncedWorkOnShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	finished := make(chan int, 1)
 	go func() {
-		finished <- Run(ctx, []string{"sync", "--watch", "--interval", "1h"}, second, output, output)
+		finished <- Run(ctx, []string{"sync", "--watch", "--interval", "1h"}, second, nil, output, output)
 	}()
 	waitForWatcherReady(t, output)
 
@@ -497,7 +497,7 @@ func TestServeShutdownStaysWithinBudget(t *testing.T) {
 	output := &watcherOutput{}
 	finished := make(chan int, 1)
 	go func() {
-		finished <- Run(ctx, []string{"serve", "--addr", address}, second, output, output)
+		finished <- Run(ctx, []string{"serve", "--addr", address}, second, nil, output, output)
 	}()
 	waitForHTTP(t, "http://"+address+"/healthz")
 
@@ -543,7 +543,7 @@ func startServeCapturing(t *testing.T, repository, address string) (*watcherOutp
 	ctx, cancel := context.WithCancel(context.Background())
 	finished := make(chan int, 1)
 	go func() {
-		finished <- Run(ctx, []string{"serve", "--addr", address}, repository, output, output)
+		finished <- Run(ctx, []string{"serve", "--addr", address}, repository, nil, output, output)
 	}()
 	waitForHTTP(t, "http://"+address+"/healthz")
 	stopped := false
@@ -713,7 +713,7 @@ func startCLIWatcher(t *testing.T, repository, interval string) *watcherOutput {
 	ctx, cancel := context.WithCancel(context.Background())
 	finished := make(chan int, 1)
 	go func() {
-		finished <- Run(ctx, []string{"sync", "--watch", "--interval", interval}, repository, output, output)
+		finished <- Run(ctx, []string{"sync", "--watch", "--interval", interval}, repository, nil, output, output)
 	}()
 	t.Cleanup(func() {
 		cancel()

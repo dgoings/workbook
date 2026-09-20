@@ -2286,7 +2286,9 @@ func waitForHTTP(t *testing.T, url string) {
 func initializedRepository(t *testing.T) string {
 	t.Helper()
 	repository := testrepo.New(t)
-	code, _, stderr := run(t, repository, "setup")
+	// --key WB is explicit: this suite's WB- task-ID assertions must not
+	// depend on t.TempDir()'s last path element deriving to WB by chance.
+	code, _, stderr := run(t, repository, "setup", "--key", "WB")
 	if code != 0 {
 		t.Fatalf("setup code = %d, want 0; stderr = %q", code, stderr)
 	}
@@ -2318,9 +2320,17 @@ func dropConfigLedger(t *testing.T, repository string) {
 
 func run(t *testing.T, cwd string, args ...string) (int, string, string) {
 	t.Helper()
+	return runWithInput(t, cwd, strings.NewReader(""), args...)
+}
+
+// runWithInput runs a command with the given standard input. A buffer is
+// never a terminal, so nothing run this way is ever prompted; the input is
+// what a piped caller would have supplied.
+func runWithInput(t *testing.T, cwd string, stdin io.Reader, args ...string) (int, string, string) {
+	t.Helper()
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	code := Run(context.Background(), args, cwd, &stdout, &stderr)
+	code := Run(context.Background(), args, cwd, stdin, &stdout, &stderr)
 	return code, stdout.String(), stderr.String()
 }
 

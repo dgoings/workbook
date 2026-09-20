@@ -156,7 +156,7 @@ var commandSchemas = map[string]commandMetadata{
 		Synopsis:    "workbook setup [options]",
 		Description: "Bootstrap Workbook in the current Git repository: create or validate\nproject identity, install managed agent documentation, and synchronize\nshared task refs with origin.",
 		Options: []optionMetadata{
-			{Name: "key", Kind: stringFlag, Value: "<key>", Description: "project key"},
+			{Name: "key", Kind: stringFlag, Value: "<key>", Description: "project key for a new project"},
 			{Name: "no-docs", Kind: boolFlag, Description: "skip managed agent documentation"},
 			{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing task refs with origin"},
 			{Name: "skill-dir", Kind: stringFlag, Value: "<dir>", Description: "install the Workbook skill here"},

@@ -2,7 +2,9 @@
 package testrepo
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 
 	"github.com/dgoings/workbook/internal/testenv"
@@ -19,10 +21,18 @@ const (
 
 type settings struct {
 	objectFormat string
+	name         string
 }
 
 // Option adjusts how New creates a repository.
 type Option func(*settings)
+
+// WithName creates the repository in a directory of this name inside the
+// test's temporary directory, for a test whose subject is the directory name
+// itself. The default is the temporary directory, whose name means nothing.
+func WithName(name string) Option {
+	return func(s *settings) { s.name = name }
+}
 
 // WithObjectFormat creates the repository with the named Git object format.
 // SHA-256 support landed in Git 2.29, so an environment without it reports a
@@ -42,6 +52,12 @@ func New(t *testing.T, options ...Option) string {
 	}
 
 	dir := t.TempDir()
+	if resolved.name != "" {
+		dir = filepath.Join(dir, resolved.name)
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatalf("create repository directory %s: %v", dir, err)
+		}
+	}
 	args := []string{"init", "--quiet"}
 	// The default path stays a plain init so a Git too old to know
 	// --object-format still runs every SHA-1 test.

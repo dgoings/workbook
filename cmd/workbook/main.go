@@ -17,5 +17,5 @@ func main() {
 	// publishes work the watcher was still holding.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	os.Exit(cli.Run(ctx, os.Args[1:], ".", os.Stdout, os.Stderr))
+	os.Exit(cli.Run(ctx, os.Args[1:], ".", os.Stdin, os.Stdout, os.Stderr))
 }
