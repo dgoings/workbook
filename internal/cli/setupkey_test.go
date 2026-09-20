@@ -2,9 +2,12 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/testrepo"
@@ -12,7 +15,7 @@ import (
 
 func TestPromptProjectKeyTakesTheSuggestionOnEnter(t *testing.T) {
 	var out bytes.Buffer
-	key, err := promptProjectKey(strings.NewReader("\n"), &out, "ACME")
+	key, err := promptProjectKey(context.Background(), strings.NewReader("\n"), &out, "ACME")
 	if err != nil {
 		t.Fatalf("promptProjectKey() error = %v", err)
 	}
@@ -24,23 +27,26 @@ func TestPromptProjectKeyTakesTheSuggestionOnEnter(t *testing.T) {
 	}
 }
 
-func TestPromptProjectKeyTakesTheSuggestionAtEndOfInput(t *testing.T) {
+func TestPromptProjectKeyAbortsAtEndOfInput(t *testing.T) {
 	var out bytes.Buffer
-	key, err := promptProjectKey(strings.NewReader(""), &out, "ACME")
-	if err != nil {
-		t.Fatalf("promptProjectKey() error = %v", err)
+	key, err := promptProjectKey(context.Background(), strings.NewReader(""), &out, "ACME")
+	if core.CategoryOf(err) != core.CategoryValidation {
+		t.Fatalf("promptProjectKey() error = %v, want a validation failure", err)
 	}
-	if key != "ACME" {
-		t.Fatalf("promptProjectKey() = %q, want the suggestion %q", key, "ACME")
+	if key != "" {
+		t.Fatalf("promptProjectKey() = %q, want no key", key)
+	}
+	if !strings.Contains(err.Error(), "nothing was created") {
+		t.Fatalf("error %q does not say nothing was created", err)
 	}
 	if !strings.HasSuffix(out.String(), "\n") {
-		t.Fatalf("prompt %q left the report on the prompt's line", out.String())
+		t.Fatalf("prompt %q left the refusal on the prompt's line", out.String())
 	}
 }
 
 func TestPromptProjectKeyUppercasesAndTrimsTheAnswer(t *testing.T) {
 	var out bytes.Buffer
-	key, err := promptProjectKey(strings.NewReader("  myapp \n"), &out, "ACME")
+	key, err := promptProjectKey(context.Background(), strings.NewReader("  myapp \n"), &out, "ACME")
 	if err != nil {
 		t.Fatalf("promptProjectKey() error = %v", err)
 	}
@@ -51,7 +57,7 @@ func TestPromptProjectKeyUppercasesAndTrimsTheAnswer(t *testing.T) {
 
 func TestPromptProjectKeyExplainsAndAsksAgain(t *testing.T) {
 	var out bytes.Buffer
-	key, err := promptProjectKey(strings.NewReader("1bad\nok\n"), &out, "ACME")
+	key, err := promptProjectKey(context.Background(), strings.NewReader("1bad\nok\n"), &out, "ACME")
 	if err != nil {
 		t.Fatalf("promptProjectKey() error = %v", err)
 	}
@@ -66,39 +72,82 @@ func TestPromptProjectKeyExplainsAndAsksAgain(t *testing.T) {
 	}
 }
 
-func TestPromptProjectKeyTakesTheSuggestionAfterABadAnswerWithNoTrailingNewline(t *testing.T) {
+func TestPromptProjectKeyAbortsAfterABadAnswerWithNoTrailingNewline(t *testing.T) {
 	var out bytes.Buffer
-	key, err := promptProjectKey(strings.NewReader("1bad"), &out, "ACME")
-	if err != nil {
-		t.Fatalf("promptProjectKey() error = %v", err)
+	key, err := promptProjectKey(context.Background(), strings.NewReader("1bad"), &out, "ACME")
+	if core.CategoryOf(err) != core.CategoryValidation {
+		t.Fatalf("promptProjectKey() error = %v, want a validation failure", err)
 	}
-	if key != "ACME" {
-		t.Fatalf("promptProjectKey() = %q, want the suggestion %q", key, "ACME")
+	if key != "" {
+		t.Fatalf("promptProjectKey() = %q, want no key", key)
 	}
 	if !strings.Contains(out.String(), `project key "1BAD" must match`) {
 		t.Fatalf("prompt %q does not say why the answer was refused", out.String())
+	}
+	if !strings.HasSuffix(out.String(), "\n") {
+		t.Fatalf("prompt %q left the refusal on the prompt's line", out.String())
 	}
 }
 
-func TestPromptProjectKeyTakesTheSuggestionAfterABadAnswerWithATrailingNewline(t *testing.T) {
+func TestPromptProjectKeyAbortsAfterABadAnswerWithATrailingNewline(t *testing.T) {
 	var out bytes.Buffer
-	key, err := promptProjectKey(strings.NewReader("1bad\n"), &out, "ACME")
-	if err != nil {
-		t.Fatalf("promptProjectKey() error = %v", err)
+	key, err := promptProjectKey(context.Background(), strings.NewReader("1bad\n"), &out, "ACME")
+	if core.CategoryOf(err) != core.CategoryValidation {
+		t.Fatalf("promptProjectKey() error = %v, want a validation failure", err)
 	}
-	if key != "ACME" {
-		t.Fatalf("promptProjectKey() = %q, want the suggestion %q", key, "ACME")
+	if key != "" {
+		t.Fatalf("promptProjectKey() = %q, want no key", key)
 	}
 	if !strings.Contains(out.String(), `project key "1BAD" must match`) {
 		t.Fatalf("prompt %q does not say why the answer was refused", out.String())
+	}
+	if !strings.HasSuffix(out.String(), "\n") {
+		t.Fatalf("prompt %q left the refusal on the prompt's line", out.String())
+	}
+}
+
+// TestPromptProjectKeyStopsWhenTheContextIsCanceled is Ctrl-C at the prompt:
+// the read never finishes, and the prompt has to return anyway.
+func TestPromptProjectKeyStopsWhenTheContextIsCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	reader, writer := io.Pipe()
+	t.Cleanup(func() {
+		_ = writer.Close()
+		_ = reader.Close()
+	})
+
+	var out bytes.Buffer
+	done := make(chan error, 1)
+	go func() {
+		_, err := promptProjectKey(ctx, reader, &out, "ACME")
+		done <- err
+	}()
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("promptProjectKey() did not return on a canceled context")
+	}
+	if err == nil {
+		t.Fatal("promptProjectKey() on a canceled context returned no error")
+	}
+	if core.CategoryOf(err) != core.CategoryOperational {
+		t.Fatalf("promptProjectKey() error = %v, want an operational failure", err)
+	}
+	if !strings.Contains(err.Error(), "nothing was created") {
+		t.Fatalf("error %q does not say nothing was created", err)
+	}
+	if got := out.String(); got != "Project key [ACME]: " {
+		t.Fatalf("prompt wrote %q, want nothing after the prompt itself", got)
 	}
 }
 
 func TestPromptProjectKeyGivesUpAfterRepeatedBadAnswers(t *testing.T) {
 	var out bytes.Buffer
-	_, err := promptProjectKey(strings.NewReader(strings.Repeat("1\n", projectKeyAttempts+3)), &out, "ACME")
-	if core.CategoryOf(err) != core.CategoryInvocation {
-		t.Fatalf("promptProjectKey() error = %v, want an invocation failure", err)
+	_, err := promptProjectKey(context.Background(), strings.NewReader(strings.Repeat("1\n", projectKeyAttempts+3)), &out, "ACME")
+	if core.CategoryOf(err) != core.CategoryValidation {
+		t.Fatalf("promptProjectKey() error = %v, want a validation failure", err)
 	}
 	if got := strings.Count(out.String(), "Project key [ACME]: "); got != projectKeyAttempts {
 		t.Fatalf("prompt asked %d times, want %d", got, projectKeyAttempts)
@@ -201,6 +250,21 @@ func TestSetupStillRefusesAKeyThatDisagreesWithTheProject(t *testing.T) {
 	}
 	if !strings.Contains(stderr, `project key "PROJ"`) {
 		t.Fatalf("setup stderr = %q, want it to name the project's key", stderr)
+	}
+}
+
+func TestSetupRejectsAnExplicitlyEmptyKey(t *testing.T) {
+	repository := testrepo.New(t)
+
+	code, _, stderr := run(t, repository, "setup", "--key", "", "--no-docs")
+	if code != 5 {
+		t.Fatalf("setup --key '' code = %d, want 5; stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stderr, "must match") {
+		t.Fatalf("setup stderr = %q, want the key grammar", stderr)
+	}
+	if code, _, _ := run(t, repository, "list"); code != 3 {
+		t.Fatalf("list after a refused setup code = %d, want 3 (not initialized)", code)
 	}
 }
 

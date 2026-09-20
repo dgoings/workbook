@@ -74,15 +74,14 @@ func writerIsTerminal(writer io.Writer) bool {
 }
 
 func terminalWidth(output io.Writer) (int, bool) {
+	if !writerIsTerminal(output) {
+		return 0, false
+	}
 	descriptor, ok := output.(fileDescriptor)
 	if !ok {
 		return 0, false
 	}
-	fd := int(descriptor.Fd())
-	if !term.IsTerminal(fd) {
-		return 0, false
-	}
-	width, _, err := term.GetSize(fd)
+	width, _, err := term.GetSize(int(descriptor.Fd()))
 	if err != nil || width <= 0 {
 		return 0, false
 	}

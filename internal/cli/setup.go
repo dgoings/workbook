@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
 
@@ -79,9 +80,10 @@ type setupSyncResult struct {
 // The project key is asked for only when a project is about to be minted. A
 // clone joining a project that exists, locally or on origin, takes that
 // project's key, and --key is then a claim that has to agree with it. A new
-// project on a terminal is asked, with a key derived from the directory name
-// as the answer Enter gives; a new project with no terminal to ask, or asked
-// for JSON, takes that derived key without asking.
+// project is asked only when stdin and stdout are both terminals and --json
+// was not passed, with a key derived from the directory name as the answer
+// Enter gives; any other run takes that derived key without asking. Ctrl-D or
+// Ctrl-C at the prompt ends setup with nothing created.
 func runSetup(ctx context.Context, args []string, cwd string, stdin io.Reader, stdout io.Writer) error {
 	flags := newFlagSet("setup")
 	key := flags.String("key", "", "project key for a new project")
@@ -96,6 +98,19 @@ func runSetup(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 	}
 	if err := validateSkillFlags(*skillDir, *noSkill); err != nil {
 		return err
+	}
+	// An absent --key means "no request"; --key '' is a request for the empty
+	// string, which is not a key. Only the flag set can tell the two apart, and
+	// the difference has to be settled before the repository is touched so a
+	// refusal leaves nothing behind.
+	keyRequested := false
+	flags.Visit(func(item *flag.Flag) {
+		if item.Name == "key" {
+			keyRequested = true
+		}
+	})
+	if keyRequested && *key == "" {
+		return core.ValidateProjectKey("")
 	}
 
 	repository, err := gitstore.Open(ctx, cwd)
@@ -121,7 +136,7 @@ func runSetup(ctx context.Context, args []string, cwd string, stdin io.Reader, s
 		if !known {
 			suggested := core.DeriveProjectKey(repository.Root)
 			if !*jsonMode && interactiveTerminal(stdin, stdout) {
-				chosen, err := promptProjectKey(stdin, stdout, suggested)
+				chosen, err := promptProjectKey(ctx, stdin, stdout, suggested)
 				if err != nil {
 					return err
 				}

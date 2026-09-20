@@ -44,8 +44,8 @@ func TestInitWithNoRequestedKeyRefusesToMint(t *testing.T) {
 		t.Fatal("Init() minted without a key to mint under")
 		return "", nil
 	}))
-	if core.CategoryOf(err) != core.CategoryInvocation {
-		t.Fatalf("Init() with no key on an empty repository error = %v, want an invocation failure", err)
+	if core.CategoryOf(err) != core.CategoryValidation {
+		t.Fatalf("Init() with no key on an empty repository error = %v, want a validation failure", err)
 	}
 	if _, exists, _ := repo.readConfig(); exists {
 		t.Fatal("a refused mint must not write the tracked configuration")

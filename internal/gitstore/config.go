@@ -52,7 +52,7 @@ func (r *Repository) Init(ctx context.Context, key string, ids core.IDSource) (c
 
 	resolution, err := r.resolveIdentity(ctx, func() (core.ProjectIdentity, error) {
 		if key == "" {
-			return core.ProjectIdentity{}, core.Errorf(core.CategoryInvocation,
+			return core.ProjectIdentity{}, core.Errorf(core.CategoryValidation,
 				"this repository has no Workbook project yet; a project key is needed to create one")
 		}
 		return mintProjectIdentity(key, ids)
