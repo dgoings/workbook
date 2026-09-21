@@ -191,16 +191,21 @@ affect scripts; all three are described under Changed.
   collapsing the sidebar moves each board to the new width, and moving a view
   whose window has been destroyed fails, so the chord did nothing at all. A
   closed window now lets go of its boards and its own chrome, and the window
-  that replaces it starts with nothing borrowed. The board servers are left
-  running, so reopening a board is still as quick as switching to one.
-- **A board's Dark Mode switch no longer fails in silence.** The switch hands
-  its choice to Workbench, which stores it once for the shell and every other
-  board; a write that failed — a full disk, a preferences directory that is not
-  writable — went unreported in the app's main process and the switch looked
-  like it had simply done nothing. The failure is now said out loud, and a
-  choice that could not be stored is no longer kept in memory either: it used to
-  sit there until the next save of anything at all, a sidebar collapse or an
-  import, wrote it out and handed the user a mode they were never given.
+  that replaces it starts with nothing borrowed — including from a board that
+  was still starting up as the window went. The board servers are left running,
+  so reopening a board afterwards is as quick as opening one whose server is
+  already up, which is the part of the wait worth saving.
+- **A Dark Mode choice Workbench could not store no longer turns up later
+  anyway.** A board's switch is the whole window's: the board that was clicked
+  changes at once, and Workbench stores the choice and passes it to the shell
+  and to every other open board. When that write failed — a full disk, a
+  preferences directory that is not writable — the clicked board went dark and
+  everything around it quietly stayed behind, and the refused choice was still
+  held in memory, so the next save of anything at all, a sidebar collapse or an
+  import, wrote it out: the rest of the window adopted, at some unrelated
+  moment, a mode that had been asked for once and denied. A refused write is now
+  rolled back, and the failure is reported instead of going unhandled in the
+  app's main process.
 
 ## v0.5.1 — 2026-08-23
 

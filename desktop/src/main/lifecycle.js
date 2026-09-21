@@ -78,11 +78,10 @@ function releaseClosedWindow ({ boardViews, chromeView }) {
 /**
  * Close one view's web contents, and report rather than throw.
  *
- * Electron has usually torn the contents down along with the window before this
- * runs, so `isDestroyed()` is the ordinary path and not an edge case; closing
- * contents that are already gone throws. A view with no contents at all — one
- * whose open failed partway — is nothing to close and nothing to complain
- * about either.
+ * A view's contents may already have been destroyed by the time this runs, and
+ * closing contents that are gone throws, so they are asked first. A view with
+ * no contents at all — one whose open failed partway — is nothing to close and
+ * nothing to complain about either.
  */
 function closeContents (view) {
   try {

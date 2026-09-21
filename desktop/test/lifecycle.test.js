@@ -5,8 +5,8 @@
 // and so is testable only through scripts/check-shell.js's parse check. Every
 // view below is a hand-written object with the two methods the module actually
 // calls, which is why nothing in this file loads Electron and why a case can
-// arrange a view whose close throws — something a real WebContentsView will
-// only do on a machine having a bad day.
+// arrange a view whose close throws, or whose contents have already gone —
+// neither of which a real WebContentsView can be asked for on demand.
 
 const { describe, test } = require('node:test')
 const assert = require('node:assert/strict')
@@ -16,10 +16,10 @@ const lifecycle = require('../src/main/lifecycle')
 /**
  * A stand-in for a WebContentsView, counting what was asked of it.
  *
- * `destroyed` is the view whose renderer has already gone — the ordinary case
- * on a window close, where Electron tears the contents down itself — and
- * `throws` is the one whose close fails, which is the case the module exists
- * to survive.
+ * `destroyed` is the view whose contents have already gone, which a window
+ * close may or may not have done for us by then, and `throws` is the one whose
+ * close fails — the case the module exists to survive. Being right either way
+ * is the point of covering both.
  */
 function fakeView ({ destroyed = false, throws = null } = {}) {
   const view = {

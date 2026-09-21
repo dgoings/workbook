@@ -123,12 +123,18 @@ function createWindow () {
     window = null
     chromeView = null
     activeProjectId = null
-    // The board servers are left running on purpose: reopening from the dock is
-    // meant to be quick, and quitting is what stops them (see `before-quit`).
-    console.log(`workbench: window closed; released ${dropped.length} board view(s)`)
-    // One line per failure, like the reaping log and the PATH install: a view
-    // that would not close has already been let go of, and is still worth
-    // seeing.
+    // Said only when there was something to let go of, the way the reaping log
+    // speaks only when it reaped: every ordinary quit closes the window too,
+    // and on Windows and Linux that makes this the last line of every session.
+    // The board servers are left running on purpose — reopening from the dock
+    // is meant to be quick, and quitting is what stops them (see
+    // `before-quit`).
+    if (dropped.length > 0) {
+      console.log(`workbench: window closed; released ${dropped.length} board view(s): ` +
+        dropped.join(', '))
+    }
+    // One line per failure, like the PATH install: a view that would not close
+    // has already been let go of, and is still worth seeing.
     for (const error of errors) {
       console.error(`workbench: ${error}`)
     }
@@ -284,6 +290,15 @@ async function openProject (projectId, taskId = null) {
   // rather than the board it lives on.
   const target = taskId ? new URL(`/tasks/${encodeURIComponent(taskId)}`, url).href : url
 
+  // A first open spawns `workbook serve` and waits for the address it bound,
+  // which is the one await here long enough for a user to close the window
+  // inside it. The window is checked rather than the view being added to
+  // nothing: the invoke rejects into a renderer that has gone, which is the
+  // right ending, where carrying on would put a view in boardViews that no
+  // window holds — precisely the state the `closed` handler exists to prevent,
+  // arriving just after it ran.
+  if (!window) throw new Error('the window closed while the board was starting')
+
   let view = boardViews.get(projectId)
   if (!view) {
     view = new WebContentsView({
@@ -301,9 +316,13 @@ async function openProject (projectId, taskId = null) {
       shell.openExternal(target)
       return { action: 'deny' }
     })
-    boardViews.set(projectId, view)
     watchSidebarShortcut(view.webContents)
+    // Into the window first and into the map second, so that a failure to
+    // attach leaves nothing behind: an entry in boardViews is a promise that
+    // the window holds that view, and the next window would inherit and lay
+    // out anything that broke the promise.
     window.contentView.addChildView(view)
+    boardViews.set(projectId, view)
     await view.webContents.loadURL(target)
   } else if (view.webContents.getURL() !== target) {
     // A warm view showing something else — another task, or the board root, or
@@ -602,8 +621,10 @@ ipcMain.on('theme:current', (event) => {
  * adoptBoardScheme's. Synchronous over an async function, the way the sidebar
  * chord is, for the reason in the body.
  */
-ipcMain.on('board:scheme', (event, { scheme }) => {
-  const theme = lifecycle.schemeToTheme(scheme, registry.theme)
+ipcMain.on('board:scheme', (event, payload) => {
+  // Read rather than destructured: a message with no payload would throw
+  // inside Electron's own dispatch, where nothing catches it.
+  const theme = lifecycle.schemeToTheme(payload?.scheme, registry.theme)
   if (!theme) return
   // Nothing awaits an ipcMain.on listener, so a save that rejects — a full
   // disk, an unwritable userData directory — would otherwise be an unhandled
@@ -645,10 +666,19 @@ if (!isPrimaryInstance) {
   app.quit()
 } else {
   app.on('second-instance', () => {
-    if (window) {
-      if (window.isMinimized()) window.restore()
-      window.focus()
-    }
+    // Letting go of the window on close makes "running with no window" a real
+    // state, and this deliberately does not answer it by building one. This
+    // handler is armed from module scope, before `ready`, so it would have to
+    // ask whether the app is up — and even then it races the startup's own
+    // createWindow(): a copy arriving while registry.load() is awaited finds
+    // the app ready and no window, both build one, and the orphan's `closed`
+    // handler would later let go of the surviving window's views. Nothing is
+    // lost by declining. Closing the window quits the app everywhere but
+    // macOS, and on macOS the way back is the dock icon, which fires
+    // `activate` and builds a window there.
+    if (!window) return
+    if (window.isMinimized()) window.restore()
+    window.focus()
   })
 }
 
