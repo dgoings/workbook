@@ -181,6 +181,13 @@ func (board *boardVocabulary) apply(
 	// configured no name and no colors" — and the reader's next Save, pressed
 	// without touching a field, would record that over the board they named.
 	display := written.Display()
+	// And this project's keys, off the same result once more. They ride here for
+	// the reason the display settings do rather than because a status change
+	// touches them: the client adopts this answer wholesale, the create form's
+	// key chooser and its default are drawn out of it, and a state that left
+	// them zero would tell a page that this project has no keys on the strength
+	// of a column rename.
+	keys := written.KeySet(board.config.Key)
 	return webui.VocabularyMutation{
 		// The priorities travel with the statuses because the answer is the
 		// whole vocabulary and the client adopts it wholesale: a state that
@@ -188,14 +195,14 @@ func (board *boardVocabulary) apply(
 		// would say "this project's priorities are the built-in three", and a
 		// project that named its own would watch a status rename replace them.
 		State: webui.VocabularyState{
-			Vocabulary: after, Head: written.Head, Display: display, Priorities: priorities,
+			Vocabulary: after, Head: written.Head, Display: display, Priorities: priorities, Keys: keys,
 		},
 		Tasks: webui.VocabularyTaskCounts{
 			Affected:       plan.tasks.Affected,
 			ClaimableAfter: plan.tasks.ClaimableAfter,
 		},
 		Warnings: append(board.publisher.publishConfig(ctx),
-			staleGuidelinesWarnings(board, after, priorities, written.KeySet(board.config.Key))...),
+			staleGuidelinesWarnings(board, after, priorities, keys)...),
 	}, nil
 }
 

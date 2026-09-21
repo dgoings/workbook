@@ -354,13 +354,18 @@ func (board *boardPriorities) apply(
 	// colors", and the reader's next Save would record that over the board they
 	// named.
 	display := written.Display()
+	// And this project's keys, off the same result once more, for the reason the
+	// display settings ride here: the client adopts this answer wholesale, and a
+	// state that left them zero would tell a page that this project has no keys
+	// on the strength of a priority move.
+	keys := written.KeySet(board.config.Key)
 	return boardPriorityMutation{
 		State: webui.VocabularyState{
-			Vocabulary: vocabulary, Head: written.Head, Display: display, Priorities: after,
+			Vocabulary: vocabulary, Head: written.Head, Display: display, Priorities: after, Keys: keys,
 		},
 		Tasks: plan.tasks,
 		Warnings: append(board.publisher.publishConfig(ctx),
-			stalePriorityGuidelinesWarnings(board, vocabulary, after, written.KeySet(board.config.Key))...),
+			stalePriorityGuidelinesWarnings(board, vocabulary, after, keys)...),
 	}, nil
 }
 

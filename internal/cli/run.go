@@ -1572,6 +1572,12 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 			Head:       state.Head,
 			Display:    state.Display,
 			Priorities: state.Priorities,
+			// And this project's keys from the same read, for the reason every
+			// other section travels in this state: a board open for hours meets
+			// a teammate's `workbook key add`, and a set read once at startup
+			// would go on offering a key chooser the project had moved off and a
+			// default it no longer mints under.
+			Keys: state.Keys,
 		}, nil
 	}
 	current := func(requestContext context.Context) (core.Service, error) {
@@ -1593,6 +1599,13 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 		// hour ago. The single-command paths refresh both together and say so;
 		// see taskSession.refreshConfiguration.
 		fresh.Priorities = state.Priorities
+		// And the keys from the same read, for the same reason again. This is
+		// the half that decides where a new task goes: a service left holding
+		// the set this process opened with would mint a task under a key the
+		// project retired at lunchtime, and refuse the key the board had just
+		// offered the reader. The single-command paths refresh all three
+		// together; see taskSession.refreshConfiguration.
+		fresh.Keys = state.Keys
 		return fresh, nil
 	}
 	// The board's status administration goes through the verb family's own
@@ -1624,6 +1637,11 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 			return reader
 		},
 	}
+	// The board's key administration goes through the key verb family's own
+	// planners, for the reason its status and priority administration go through
+	// theirs: what the page refuses and what it records are what `workbook key`
+	// refuses and records.
+	keys := &boardKeys{repository: repository, config: service.Config, publisher: publisher}
 	// The board's display settings go through a writer of their own rather than
 	// through the status planners, because a save is not a status change: what it
 	// records is the difference between what it proposes and what the ledger
@@ -1684,6 +1702,25 @@ func runServeWith(ctx context.Context, listen func(network, address string) (net
 		RecolorPriority: func(requestContext context.Context, priority core.Priority, change webui.VocabularyPriorityRecolor) (webui.VocabularyPriorityMutation, error) {
 			return boardPriorityAnswer(priorities.recolor(requestContext, priority, boardPriorityRecolor{
 				Color:        change.Color,
+				ExpectedHead: change.ExpectedHead,
+			}))
+		},
+		// The two key mutations, each adapting the writer's answer to the
+		// board's envelope, the way the priority mutations above do. See
+		// boardKeyAnswer for why the adaptation is written out rather than
+		// replaced by one shared type.
+		AddKey: func(requestContext context.Context, addition webui.VocabularyKeyAddition) (webui.VocabularyKeyMutation, error) {
+			return boardKeyAnswer(keys.add(requestContext, boardKeyAddition{
+				Key:          addition.Key,
+				Current:      addition.Current,
+				ExpectedHead: addition.ExpectedHead,
+			}))
+		},
+		EditKey: func(requestContext context.Context, key string, change webui.VocabularyKeyEdit) (webui.VocabularyKeyMutation, error) {
+			return boardKeyAnswer(keys.edit(requestContext, key, boardKeyEdit{
+				Current:      change.Current,
+				Retire:       change.Retire,
+				Reactivate:   change.Reactivate,
 				ExpectedHead: change.ExpectedHead,
 			}))
 		},
@@ -1932,6 +1969,28 @@ func boardPriorityAnswer(mutation boardPriorityMutation, err error) (webui.Vocab
 		Tasks:    webui.VocabularyPriorityTaskCounts{Affected: mutation.Tasks.Affected},
 		Warnings: mutation.Warnings,
 	}, nil
+}
+
+// boardKeyAnswer carries a key writer's result across to the board's own
+// envelope.
+//
+// Both of these envelopes are the same two facts — the configuration as it now
+// stands, and what could not be done about the generated guidelines — and
+// neither prices anything, because a key change moves no task: a task ID is a
+// permanent name and the key it carries is part of it. So this adapter is two
+// field copies where boardPriorityAnswer is three, and it is written out rather
+// than replaced by one shared type for the reason that one is: webui owns the
+// shape it answers with, and the day these two part company should be a compile
+// error here rather than a silent change to an HTTP contract.
+//
+// It takes the writer's error as its second argument so a caller is one
+// expression rather than four lines of the same check, and so there is no path
+// where a failed change is adapted into an answer.
+func boardKeyAnswer(mutation boardKeyMutation, err error) (webui.VocabularyKeyMutation, error) {
+	if err != nil {
+		return webui.VocabularyKeyMutation{}, err
+	}
+	return webui.VocabularyKeyMutation{State: mutation.State, Warnings: mutation.Warnings}, nil
 }
 
 // boardFallbackNotice says why the board is not at the address the user

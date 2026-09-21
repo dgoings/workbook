@@ -71,6 +71,7 @@ func (board *boardDisplay) set(
 				Vocabulary: state.Vocabulary,
 				Display:    state.Display,
 				Priorities: state.Priorities,
+				Keys:       state.Keys,
 			},
 		}, nil
 	}
@@ -103,6 +104,12 @@ func (board *boardDisplay) set(
 			Vocabulary: written.Vocabulary(),
 			Display:    written.State.Display(),
 			Priorities: written.State.PriorityVocabulary(),
+			// And this project's keys, which this route's own document does not
+			// carry either — but its shape does, and the keys are in that. A
+			// save that read its state without them would answer with a digest
+			// naming no keys, and the page would raise its reload notice for a
+			// change nobody made.
+			Keys: written.KeySet(board.config.Key),
 		},
 		Warnings: board.publisher.publishConfig(ctx),
 	}, nil
