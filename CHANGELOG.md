@@ -126,11 +126,11 @@ affect scripts; all three are described under Changed.
   directory used to be joined onto the project root with no check, so a
   mistyped or copied user-global configuration file could have `workbook docs`
   write documentation, or install the skill, outside the repository —
-  `docTargets: ["../../.bashrc"]` really did refresh a dotfile one directory
-  up. Such a value is now refused, and the error names the offending value and
-  whether it came from the user configuration file or `--skill-dir`. An
-  absolute `skillDir` still works, since keeping one personal copy of the skill
-  across projects is documented.
+  `docTargets: ["../../.bashrc"]` really did refresh a dotfile above the
+  repository. Such a value is now refused, and the error names the offending
+  value and whether it came from the user configuration file or `--skill-dir`.
+  An absolute `skillDir` still works, since keeping one personal copy of the
+  skill across projects is documented.
 - **Moving a priority to the position it already holds is refused** rather than
   recorded. On a project that had never configured its priorities, that empty
   change wrote a configuration section and required every teammate to
