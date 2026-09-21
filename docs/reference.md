@@ -1804,7 +1804,8 @@ is the same array of strings it always was.
 
 Missing prerequisite IDs remain visible and removable. Tombstoned
 prerequisites are also removable because the active dependent owns that edge;
-deleted blocked tasks remain read-only because tombstones cannot be changed.
+a deleted blocked task's row is read-only, because that edge is stored on the
+deleted task's own record and restoring it is what makes it editable.
 Dependency warnings and failures stay beside the initiating group, and
 dependency refreshes leave unsaved task-form fields mounted.
 
