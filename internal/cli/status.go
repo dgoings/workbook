@@ -1764,30 +1764,34 @@ func runStatusMutation(
 	if position := result.Change.Position; position != nil {
 		position.Order = after.Order(plan.change.Status) + 1
 	}
-	docs, docsErr := regenerateGuidelines(session, after, session.service.Priorities, noDocs)
+	docs, docsErr := regenerateGuidelines(session, after, session.service.Priorities, session.service.KeySet(), noDocs)
 	result.Docs = docs
 	writeStatusMutation(stdout, stderr, command, result, session, docsErr, jsonMode)
 	return nil
 }
 
-// regenerateGuidelines rewrites the generated guidelines against the statuses
-// and priorities this change produced.
+// regenerateGuidelines rewrites the generated guidelines against the statuses,
+// priorities, and keys this change produced.
 //
-// The guidelines state a project's statuses and priorities, so every status
-// change and every priority change makes them stale, and a generated file
-// that has to be refreshed by hand is a generated file that is wrong most of
-// the time. It goes through the same Reconcile the documentation commands
-// use, which is what keeps the one promise that matters about a generated
-// file: Workbook rewrites what it wrote, and never overwrites what somebody
-// edited.
+// The guidelines state a project's statuses, priorities, and keys, so every
+// status change, every priority change, and every key change makes them
+// stale, and a generated file that has to be refreshed by hand is a generated
+// file that is wrong most of the time. It goes through the same Reconcile the
+// documentation commands use, which is what keeps the one promise that
+// matters about a generated file: Workbook rewrites what it wrote, and never
+// overwrites what somebody edited.
 //
-// This is called from status mutations as well as priority ones, so both
-// parameters are required at every call site regardless of which vocabulary
-// the caller's own change touched: a status rename that passed only the
-// statuses and let priorities default to the zero value would silently
-// overwrite a project's configured priorities with the built-in three the
-// moment somebody renamed a column. Passing the priorities a caller did not
-// itself change is exactly what keeps that half of the document accurate.
+// This is called from status mutations, priority mutations, and key
+// mutations, so all three parameters are required at every call site
+// regardless of which section the caller's own change touched: a status
+// rename that passed only the statuses and let priorities default to the zero
+// value would silently overwrite a project's configured priorities with the
+// built-in three the moment somebody renamed a column, and the same is true of
+// a key change that let the statuses or priorities default. Passing the
+// sections a caller did not itself change is exactly what keeps the rest of
+// the document accurate; each caller passes its own freshly-written section
+// and reads the other two off the session's own service, which is what it
+// opened the fetch-then-refresh with.
 //
 // It returns its failure rather than raising it. The configuration change is
 // already recorded and published by the time this runs, so a documentation
@@ -1797,6 +1801,7 @@ func regenerateGuidelines(
 	session *taskSession,
 	vocabulary core.Vocabulary,
 	priorities core.PriorityVocabulary,
+	keys core.KeySet,
 	noDocs bool,
 ) (*agentdocs.Report, error) {
 	if noDocs {
@@ -1807,13 +1812,8 @@ func regenerateGuidelines(
 		Project:    session.config,
 		Vocabulary: vocabulary,
 		Priorities: priorities,
-		// Keys travels off the session's own service, from the same read every
-		// other boundary opened this session with, rather than off either
-		// parameter above: neither a status change nor a priority change touches
-		// the key set, so there is no "as this write left it" value to take it
-		// from the way vocabulary and priorities are taken above.
-		Keys:      session.service.Keys,
-		Generator: release.Version,
+		Keys:       keys,
+		Generator:  release.Version,
 	})
 	return &report, err
 }

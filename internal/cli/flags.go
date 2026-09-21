@@ -475,7 +475,7 @@ var commandSchemas = map[string]commandMetadata{
 			},
 			"add": {
 				Name:     "add",
-				Synopsis: "workbook key add <key> [--current] [--no-sync] [--json]",
+				Synopsis: "workbook key add <key> [--current] [--no-sync] [--no-docs] [--json]",
 				Description: "Add a key new tasks may be minted under.\n\n" +
 					"The key is added last and is not current unless --current says so. Adding a\n" +
 					"retired key back makes it active again in the place it already had.",
@@ -483,28 +483,31 @@ var commandSchemas = map[string]commandMetadata{
 				Options: []optionMetadata{
 					{Name: "current", Kind: boolFlag, Description: "also make it the key new tasks are minted under"},
 					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "no-docs", Kind: boolFlag, Description: "skip regenerating .workbook/guidelines.md"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
 			},
 			"current": {
 				Name:        "current",
-				Synopsis:    "workbook key current <key> [--no-sync] [--json]",
+				Synopsis:    "workbook key current <key> [--no-sync] [--no-docs] [--json]",
 				Description: "Mint new tasks under this key.\n\nThe key that held it gives it up in the same change; exactly one key is current.",
 				Positionals: []string{"<key>"},
 				Options: []optionMetadata{
 					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "no-docs", Kind: boolFlag, Description: "skip regenerating .workbook/guidelines.md"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
 			},
 			"retire": {
 				Name:     "retire",
-				Synopsis: "workbook key retire <key> [--no-sync] [--json]",
+				Synopsis: "workbook key retire <key> [--no-sync] [--no-docs] [--json]",
 				Description: "Stop minting new tasks under a key.\n\n" +
 					"Its tasks are untouched and stay this project's. The current key and the last\n" +
 					"active key cannot be retired.",
 				Positionals: []string{"<key>"},
 				Options: []optionMetadata{
 					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with origin"},
+					{Name: "no-docs", Kind: boolFlag, Description: "skip regenerating .workbook/guidelines.md"},
 					{Name: "json", Kind: boolFlag, Description: "emit JSON"},
 				},
 			},

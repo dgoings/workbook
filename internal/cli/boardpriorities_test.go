@@ -479,6 +479,62 @@ func TestBoardPriorityChangeLeavesTheGuidelinesAloneAndSaysSo(t *testing.T) {
 	}
 }
 
+// Recolor is the one board write that leaves the guidelines' rendered content
+// untouched — the color is stored but never rendered — so it is the one real
+// write that can prove the staleness check's key threading without the
+// priority change itself making the file stale on its own account, the way
+// every other priority write does by the board's own "never rewrites it"
+// design.
+func TestBoardPriorityRecolorDoesNotCallTheGuidelinesStaleAfterTheProjectMovedItsKey(t *testing.T) {
+	repository := initializedRepository(t)
+	if code, _, stderr := run(t, repository, "key", "add", "NEW", "--current", "--no-sync"); code != 0 {
+		t.Fatalf("key add NEW --current = code %d; stderr = %q", code, stderr)
+	}
+
+	ctx := context.Background()
+	board := openBoardPriorities(t, ctx, repository)
+	mutation, err := board.recolor(ctx, "high", boardPriorityRecolor{
+		Color: "#FF0000", ExpectedHead: boardPriorityHead(t, ctx, board),
+	})
+	if err != nil {
+		t.Fatalf("recolor a priority through the board: %v", err)
+	}
+
+	for _, warning := range mutation.Warnings {
+		if warning.Code == core.WarningDocsRefresh {
+			t.Fatalf("warnings = %#v, want no stale-guidelines warning: recolor changes nothing the guidelines render, "+
+				"key included", mutation.Warnings)
+		}
+	}
+}
+
+// The same comparison has to use this project's real keys, not the founding
+// one, for the reason it has to use this project's own priorities: otherwise
+// a project that moved its current key is told its guidelines are stale on
+// every board write, forever, even though the installed file already names
+// the key `key add --current` put there.
+func TestBoardDoesNotCallTheProjectsOwnKeysStaleThroughThePriorityBoard(t *testing.T) {
+	repository := initializedRepository(t)
+	if code, _, stderr := run(t, repository, "key", "add", "NEW", "--current", "--no-sync"); code != 0 {
+		t.Fatalf("key add NEW --current = code %d; stderr = %q", code, stderr)
+	}
+	ctx := context.Background()
+	board := openBoardPriorities(t, ctx, repository)
+	state, err := board.repository.LoadVocabularyState(ctx, board.config)
+	if err != nil {
+		t.Fatalf("load the project's configuration: %v", err)
+	}
+	if state.Keys.Current() != "NEW" {
+		t.Fatalf("current key = %q, want NEW", state.Keys.Current())
+	}
+
+	warnings := stalePriorityGuidelinesWarnings(board, state.Vocabulary, state.Priorities, state.Keys)
+
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %#v, want none for guidelines that already name the moved key", warnings)
+	}
+}
+
 // openBoardPriorities builds the board's priority administration over a real
 // repository, the way runServe does.
 func openBoardPriorities(t *testing.T, ctx context.Context, repository string) *boardPriorities {

@@ -680,4 +680,21 @@ func TestSetupReportsTheCurrentKeyAfterKeyCurrent(t *testing.T) {
 	if result.Key != "NEW" {
 		t.Fatalf("setup key = %q, want NEW", result.Key)
 	}
+
+	// Setup's pre-fetch read of this clone's OWN local ledger already knows
+	// NEW is current, since the key change above was local: a run that let
+	// that read's Keys default would render the founding key over an already
+	// correct file and, with nothing for --no-sync's second pass to notice
+	// changed, leave the wrong one standing.
+	guidelines := readProjectFile(t, repository, agentdocs.GuidelinesPath)
+	if !strings.Contains(guidelines, "| Task ID prefix | `NEW-` |") {
+		t.Fatalf("setup did not keep the locally moved key in the guidelines:\n%s", guidelines)
+	}
+	code, stdout, stderr = run(t, repository, "docs", "status")
+	if code != 0 {
+		t.Fatalf("docs status = code %d; stderr = %q", code, stderr)
+	}
+	if strings.Contains(stdout, string(agentdocs.StateStale)) {
+		t.Fatalf("docs status after setup = %q, want the guidelines current", stdout)
+	}
 }

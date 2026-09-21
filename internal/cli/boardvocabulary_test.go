@@ -594,6 +594,61 @@ func TestBoardLeavesTheWorkingTreeAloneAndSaysSo(t *testing.T) {
 	}
 }
 
+// The board never writes the guidelines, so no board status write can leave
+// them matching the file by itself — proving the staleness check's key
+// threading needs a file that already describes the write's own result, which
+// this test builds without hand-rolling the renderer: it performs the same
+// rename once through the CLI (which regenerates correctly, settling the file
+// on the new status name under the moved key), then authors the identical
+// rename again — from the same starting state, since the first pass is
+// undone with --no-docs so only the ledger reverts — this time through the
+// board. If the board's comparison uses this project's real current key, that
+// second write's rendered content is byte-for-byte the file the first pass
+// already installed, and nothing is reported stale.
+func TestBoardDoesNotCallTheGuidelinesStaleAfterTheProjectMovedItsKey(t *testing.T) {
+	repository := initializedRepository(t)
+	if code, _, stderr := run(t, repository, "key", "add", "NEW", "--current", "--no-sync"); code != 0 {
+		t.Fatalf("key add NEW --current = code %d; stderr = %q", code, stderr)
+	}
+	if code, _, stderr := run(t, repository, "status", "rename", "in-progress", "doing", "--no-sync"); code != 0 {
+		t.Fatalf("status rename = code %d; stderr = %q", code, stderr)
+	}
+	settled := readProjectFile(t, repository, agentdocs.GuidelinesPath)
+	if !strings.Contains(settled, "| 3 | `doing` | Doing | none |") || !strings.Contains(settled, "`NEW-`") {
+		t.Fatalf("the settled guidelines do not name doing under NEW:\n%s", settled)
+	}
+	// Undo on the ledger alone, leaving the just-settled file in place: it now
+	// describes exactly the state the board is about to reach again.
+	if code, _, stderr := run(t, repository, "status", "rename", "doing", "in-progress", "--no-sync", "--no-docs"); code != 0 {
+		t.Fatalf("status rename back --no-docs = code %d; stderr = %q", code, stderr)
+	}
+	unsettled := readProjectFile(t, repository, agentdocs.GuidelinesPath)
+	if unsettled != settled {
+		t.Fatalf("--no-docs regenerated the guidelines anyway")
+	}
+
+	ctx := context.Background()
+	board := openBoardVocabulary(t, ctx, repository)
+	state, err := board.repository.LoadVocabularyState(ctx, board.config)
+	if err != nil {
+		t.Fatalf("load the project's configuration: %v", err)
+	}
+	renamed := core.Status("doing")
+	mutation, err := board.edit(ctx, "in-progress", webui.VocabularyStatusEdit{
+		Name: &renamed, ExpectedHead: state.Head,
+	})
+	if err != nil {
+		t.Fatalf("rename a status through the board: %v", err)
+	}
+
+	for _, warning := range mutation.Warnings {
+		if warning.Code == core.WarningDocsRefresh {
+			t.Fatalf("warnings = %#v, want no stale-guidelines warning for a write whose own rendering "+
+				"is exactly the file already on disk", mutation.Warnings)
+		}
+	}
+}
+
 // A project that predates the configuration ledger has no head, reports none,
 // and can still be administered: the client sends back the nothing it read, and
 // the first change seeds the ledger — which is exactly what a status verb does

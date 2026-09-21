@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dgoings/workbook/internal/agentdocs"
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
 	"github.com/dgoings/workbook/internal/projection"
@@ -74,16 +75,20 @@ type keySetView struct {
 }
 
 // keyMutationResult is the data member of every mutating key envelope.
-//
-// There is no docs member, and that is a decision rather than an omission: the
-// generated guidelines document this project's statuses and priorities, not its
-// keys, so a key change does not invalidate them and runKeyMutation does not
-// regenerate them. A verb that rewrote a file it had not made stale would be
-// reporting work nobody needed.
 type keyMutationResult struct {
 	Change  keyChange     `json:"change"`
 	Keys    keySetView    `json:"keys"`
 	Inverse statusInverse `json:"inverse"`
+	// Docs reports what happened to the generated documentation this change
+	// invalidated, in the shape `workbook setup` and `workbook status`/`workbook
+	// priority` already report. The generated guidelines name the current key
+	// (`RenderGuidelines`'s "Task ID prefix" row), so `key add --current`, `key
+	// current`, and `key retire` — every verb that can move the current key or
+	// change the set the row and the active-keys sentence describe — invalidate
+	// them exactly as a status or priority change does. Docs is omitted when
+	// --no-docs skipped the regeneration, which is the same distinction setup
+	// draws between "nothing was managed" and "these files were".
+	Docs *agentdocs.Report `json:"docs,omitempty"`
 }
 
 // keyLogResult mirrors statusLogResult and priorityLogResult, because it answers
@@ -416,6 +421,7 @@ func runKeyAdd(ctx context.Context, args []string, cwd string, stdout, stderr io
 	flags := newFlagSet("key", "add")
 	makeCurrent := flags.Bool("current", false, "also make it the key new tasks are minted under")
 	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with origin")
+	noDocs := flags.Bool("no-docs", false, "skip regenerating the generated guidelines")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
@@ -424,7 +430,7 @@ func runKeyAdd(ctx context.Context, args []string, cwd string, stdout, stderr io
 	if err := core.ValidateProjectKey(key); err != nil {
 		return err
 	}
-	return runKeyMutation(ctx, cwd, "key add", *noSync, *jsonMode, stdout, stderr,
+	return runKeyMutation(ctx, cwd, "key add", *noSync, *noDocs, *jsonMode, stdout, stderr,
 		func(keys core.KeySet) (keyPlan, error) { return planKeyAdd(keys, key, *makeCurrent) })
 }
 
@@ -435,6 +441,7 @@ func runKeyCurrent(ctx context.Context, args []string, cwd string, stdout, stder
 	}
 	flags := newFlagSet("key", "current")
 	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with origin")
+	noDocs := flags.Bool("no-docs", false, "skip regenerating the generated guidelines")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
@@ -443,7 +450,7 @@ func runKeyCurrent(ctx context.Context, args []string, cwd string, stdout, stder
 	if err := core.ValidateProjectKey(key); err != nil {
 		return err
 	}
-	return runKeyMutation(ctx, cwd, "key current", *noSync, *jsonMode, stdout, stderr,
+	return runKeyMutation(ctx, cwd, "key current", *noSync, *noDocs, *jsonMode, stdout, stderr,
 		func(keys core.KeySet) (keyPlan, error) { return planKeyCurrent(keys, key) })
 }
 
@@ -454,6 +461,7 @@ func runKeyRetire(ctx context.Context, args []string, cwd string, stdout, stderr
 	}
 	flags := newFlagSet("key", "retire")
 	noSync := flags.Bool("no-sync", false, "skip synchronizing refs with origin")
+	noDocs := flags.Bool("no-docs", false, "skip regenerating the generated guidelines")
 	jsonMode := flags.Bool("json", false, "emit JSON")
 	if err := parseFlags(flags, args); err != nil {
 		return err
@@ -462,7 +470,7 @@ func runKeyRetire(ctx context.Context, args []string, cwd string, stdout, stderr
 	if err := core.ValidateProjectKey(key); err != nil {
 		return err
 	}
-	return runKeyMutation(ctx, cwd, "key retire", *noSync, *jsonMode, stdout, stderr,
+	return runKeyMutation(ctx, cwd, "key retire", *noSync, *noDocs, *jsonMode, stdout, stderr,
 		func(keys core.KeySet) (keyPlan, error) { return planKeyRetire(keys, key) })
 }
 
@@ -486,10 +494,13 @@ type keyPlan struct {
 // sync member; and the same publish-after of the configuration ledger, which
 // has no task ref to name.
 //
-// It does not regenerate the guidelines, which is the one step it drops. Those
-// document this project's statuses and priorities; a key change leaves every
-// sentence in them true, so rewriting the file would report work that was not
-// needed and could be refused for a file somebody had edited.
+// It does regenerate the guidelines, through the same regenerateGuidelines
+// status and priority mutations use. The generated guidelines name the current
+// key in their "Task ID prefix" row, and every verb here can change what that
+// row says — `add --current` and `current` move it, `retire` can take the last
+// key a caller might expect it to stay at away — so a key change leaves the
+// file exactly as stale as a status or priority change does, and skips the
+// regeneration for the same reason and the same flag: --no-docs.
 //
 // The refresh between the fetch and the build is the step worth understanding
 // rather than copying. The key set the fetch settled on is the one this change
@@ -500,7 +511,7 @@ func runKeyMutation(
 	ctx context.Context,
 	cwd string,
 	command string,
-	noSync bool,
+	noSync, noDocs bool,
 	jsonMode bool,
 	stdout, stderr io.Writer,
 	build func(core.KeySet) (keyPlan, error),
@@ -540,7 +551,15 @@ func runKeyMutation(
 		},
 		Inverse: keyInverse(before, plan.operations),
 	}
-	writeKeyMutation(stdout, stderr, command, result, session, jsonMode)
+	// The statuses and priorities the guidelines also document are unmoved by a
+	// key change, so they travel off the session's own service exactly as
+	// regenerateGuidelines's other two callers pass the half of the document
+	// their own change did not touch. Keys is the fresh set this write just
+	// produced, not the session's pre-write one, for the reason status and
+	// priority mutations pass their own freshly-written vocabulary.
+	docs, docsErr := regenerateGuidelines(session, session.service.Vocabulary, session.service.Priorities, after, noDocs)
+	result.Docs = docs
+	writeKeyMutation(stdout, stderr, command, result, session, docsErr, jsonMode)
 	return nil
 }
 
@@ -883,6 +902,7 @@ func writeKeyMutation(
 	command string,
 	result keyMutationResult,
 	session *taskSession,
+	docsErr error,
 	jsonMode bool,
 ) {
 	var warnings []core.Warning
@@ -892,6 +912,7 @@ func writeKeyMutation(
 			Message: "the key change was recorded locally, but " + session.report.Detail,
 		})
 	}
+	warnings = append(warnings, docsWarning(result.Docs, docsErr)...)
 	if jsonMode {
 		writeKeyEnvelope(stdout, command, result, session, warnings)
 		return
@@ -948,6 +969,13 @@ func writeKeyChange(output io.Writer, result keyMutationResult) {
 		if result.Inverse.Note != "" {
 			fmt.Fprintf(output, "\tnote:\t%s\n", singleLine(result.Inverse.Note))
 		}
+	}
+	if result.Docs == nil {
+		fmt.Fprintf(output, "\tdocs:\tskipped\n")
+		return
+	}
+	for _, artifact := range result.Docs.Artifacts {
+		fmt.Fprintf(output, "\tdocs:\t%s\t%s\n", artifact.Path, artifactAction(artifact))
 	}
 }
 

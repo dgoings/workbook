@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dgoings/workbook/internal/agentdocs"
 	"github.com/dgoings/workbook/internal/core"
 )
 
@@ -712,6 +713,68 @@ func TestListRefusesAnUnknownKeyNamingTheKnownOnes(t *testing.T) {
 	}
 	assertJSONError(t, stderr, core.CategoryValidation,
 		`no project key "ZZ" in this project; its keys are: WB, NEW; fetch if a teammate added it`)
+}
+
+// The generated guidelines name the current key in their "Task ID prefix"
+// row, so `key current` invalidates them exactly as a status or priority
+// change does: `docs status` has to call the file stale until it is
+// regenerated, and current once it is. `--no-docs` is the same escape hatch
+// `status add`/`priority add` already use for the same decision.
+func TestKeyCurrentRegeneratesTheGuidelinesAndNoDocsSkipsIt(t *testing.T) {
+	repository := initializedRepository(t)
+	mustRunKey(t, repository, "key", "add", "NEW", "--no-sync")
+
+	mustRunKey(t, repository, "key", "current", "NEW", "--no-sync")
+
+	guidelines := readProjectFile(t, repository, agentdocs.GuidelinesPath)
+	if !strings.Contains(guidelines, "| Task ID prefix | `NEW-` |") {
+		t.Fatalf("key current did not regenerate the guidelines with the new current key:\n%s", guidelines)
+	}
+	code, stdout, stderr := run(t, repository, "docs", "status")
+	if code != 0 {
+		t.Fatalf("docs status = code %d; stderr = %q", code, stderr)
+	}
+	if strings.Contains(stdout, string(agentdocs.StateStale)) {
+		t.Fatalf("docs status after key current = %q, want the guidelines current", stdout)
+	}
+
+	// Move it back with --no-docs: the file is left describing the key that
+	// just stopped being current, and docs status has to say so.
+	mustRunKey(t, repository, "key", "current", "WB", "--no-sync", "--no-docs")
+
+	stillNew := readProjectFile(t, repository, agentdocs.GuidelinesPath)
+	if !strings.Contains(stillNew, "| Task ID prefix | `NEW-` |") {
+		t.Fatalf("--no-docs regenerated the guidelines anyway:\n%s", stillNew)
+	}
+	code, stdout, stderr = run(t, repository, "docs", "status")
+	if code != 0 {
+		t.Fatalf("docs status = code %d; stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stdout, string(agentdocs.StateStale)) {
+		t.Fatalf("docs status after key current --no-docs = %q, want the guidelines reported stale", stdout)
+	}
+}
+
+// A status or priority mutation regenerates the guidelines against the key
+// set the session already holds, not the founding key — a project that moved
+// its current key must see that key in the file a status change rewrites,
+// the same way it sees the statuses and priorities that change touched.
+func TestStatusChangeWritesTheGuidelinesUnderTheMovedKey(t *testing.T) {
+	repository := initializedRepository(t)
+	mustRunKey(t, repository, "key", "add", "NEW", "--current", "--no-sync")
+
+	code, _, stderr := run(t, repository, "status", "add", "triage", "--no-sync")
+	if code != 0 {
+		t.Fatalf("status add = code %d; stderr = %q", code, stderr)
+	}
+
+	guidelines := readProjectFile(t, repository, agentdocs.GuidelinesPath)
+	if !strings.Contains(guidelines, "| Task ID prefix | `NEW-` |") {
+		t.Fatalf("status add did not carry the project's moved key into the guidelines:\n%s", guidelines)
+	}
+	if strings.Contains(guidelines, "| Task ID prefix | `WB-` |") {
+		t.Fatalf("status add wrote the founding key instead of the current one:\n%s", guidelines)
+	}
 }
 
 func TestKeyHelpDocumentsTheFamily(t *testing.T) {
