@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -139,10 +140,19 @@ func TestSetupWritesTheKeyTheFetchDelivered(t *testing.T) {
 	if code, _, stderr := run(t, author, "key", "add", "NEW", "--current"); code != 0 {
 		t.Fatalf("key add NEW --current = code %d; stderr = %q", code, stderr)
 	}
+	origin := gitOutput(t, author, "remote", "get-url", "origin")
 
-	joining := cliClone(t, gitOutput(t, author, "remote", "get-url", "origin"))
-	if code, stdout, stderr := run(t, joining, "setup"); code != 0 {
+	joining := cliClone(t, origin)
+	code, stdout, stderr := run(t, joining, "setup")
+	if code != 0 {
 		t.Fatalf("setup = code %d; stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	// The report is read by a human on this very run, before any second
+	// `setup` would find the fetched key locally regardless of when this run
+	// itself read it — so the assertion has to be against this run's own
+	// output, not a later re-read.
+	if !strings.Contains(stdout, "Key:\tNEW\n") {
+		t.Fatalf("setup in a joining clone reported = %q, want the fetched current key NEW", stdout)
 	}
 
 	guidelines := readProjectFile(t, joining, agentdocs.GuidelinesPath)
@@ -156,12 +166,30 @@ func TestSetupWritesTheKeyTheFetchDelivered(t *testing.T) {
 
 	// And the clone agrees with itself afterwards, rather than reporting the
 	// file it just installed as stale.
-	code, stdout, stderr := run(t, joining, "docs", "status")
+	code, stdout, stderr = run(t, joining, "docs", "status")
 	if code != 0 {
 		t.Fatalf("docs status = code %d; stderr = %q", code, stderr)
 	}
 	if strings.Contains(stdout, string(agentdocs.StateStale)) {
 		t.Fatalf("docs status in a joining clone called the installed guidelines stale:\n%s", stdout)
+	}
+
+	// The JSON surface says the same thing, on a second clone joining fresh:
+	// this is the same property the text report above pins, on the surface a
+	// script reads to learn what `workbook create` will mint under.
+	secondJoining := cliClone(t, origin)
+	code, stdout, stderr = run(t, secondJoining, "setup", "--json")
+	if code != 0 {
+		t.Fatalf("setup --json = code %d; stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	var result struct {
+		Key string `json:"key"`
+	}
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "setup").Data, &result); err != nil {
+		t.Fatalf("decode setup: %v; output = %s", err, stdout)
+	}
+	if result.Key != "NEW" {
+		t.Fatalf("setup --json key = %q, want the fetched current key NEW", result.Key)
 	}
 }
 

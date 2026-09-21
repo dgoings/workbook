@@ -39,6 +39,7 @@ type keyMutationDocument struct {
 	Change  keyChangeDocument `json:"change"`
 	Keys    keySetDocument    `json:"keys"`
 	Inverse inverseDocument   `json:"inverse"`
+	Docs    *docsDocument     `json:"docs"`
 }
 
 type keyLogDocument struct {
@@ -724,7 +725,17 @@ func TestKeyCurrentRegeneratesTheGuidelinesAndNoDocsSkipsIt(t *testing.T) {
 	repository := initializedRepository(t)
 	mustRunKey(t, repository, "key", "add", "NEW", "--no-sync")
 
-	mustRunKey(t, repository, "key", "current", "NEW", "--no-sync")
+	// The JSON envelope carries the same docs member a status or priority
+	// mutation's does (status_test.go's TestStatusChangesRegenerateTheGuidelines
+	// pins the shape), so a caller that already reads one does not need a
+	// second parser for the other.
+	document := cliKeyMutation(t, repository, "key current", "key", "current", "NEW", "--no-sync", "--json")
+	if document.Docs == nil || len(document.Docs.Artifacts) != 1 {
+		t.Fatalf("key current docs = %#v, want the guidelines alone", document.Docs)
+	}
+	if artifact := document.Docs.Artifacts[0]; artifact.Path != agentdocs.GuidelinesPath || !artifact.Written {
+		t.Fatalf("key current docs artifact = %#v, want %s rewritten", artifact, agentdocs.GuidelinesPath)
+	}
 
 	guidelines := readProjectFile(t, repository, agentdocs.GuidelinesPath)
 	if !strings.Contains(guidelines, "| Task ID prefix | `NEW-` |") {
@@ -738,13 +749,29 @@ func TestKeyCurrentRegeneratesTheGuidelinesAndNoDocsSkipsIt(t *testing.T) {
 		t.Fatalf("docs status after key current = %q, want the guidelines current", stdout)
 	}
 
-	// Move it back with --no-docs: the file is left describing the key that
-	// just stopped being current, and docs status has to say so.
-	mustRunKey(t, repository, "key", "current", "WB", "--no-sync", "--no-docs")
+	// The text surface reports the file it rewrote, the same way `status add`
+	// and `setup` do.
+	code, stdout, stderr = run(t, repository, "key", "current", "WB", "--no-sync")
+	if code != 0 {
+		t.Fatalf("key current WB = code %d; stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stdout, "\tdocs:\t"+agentdocs.GuidelinesPath+"\twritten") {
+		t.Errorf("key current text = %q, want the regenerated guidelines line", stdout)
+	}
 
-	stillNew := readProjectFile(t, repository, agentdocs.GuidelinesPath)
-	if !strings.Contains(stillNew, "| Task ID prefix | `NEW-` |") {
-		t.Fatalf("--no-docs regenerated the guidelines anyway:\n%s", stillNew)
+	// Move it again with --no-docs: the file is left describing the key that
+	// just stopped being current, and docs status has to say so.
+	code, stdout, stderr = run(t, repository, "key", "current", "NEW", "--no-sync", "--no-docs")
+	if code != 0 {
+		t.Fatalf("key current --no-docs = code %d; stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stdout, "\tdocs:\tskipped") {
+		t.Errorf("key current --no-docs text = %q, want the skipped line", stdout)
+	}
+
+	stillWB := readProjectFile(t, repository, agentdocs.GuidelinesPath)
+	if !strings.Contains(stillWB, "| Task ID prefix | `WB-` |") {
+		t.Fatalf("--no-docs regenerated the guidelines anyway:\n%s", stillWB)
 	}
 	code, stdout, stderr = run(t, repository, "docs", "status")
 	if code != 0 {
