@@ -369,3 +369,124 @@ func TestStatusReportsTheOverriddenSkillDirectory(t *testing.T) {
 		t.Fatalf("overridden skill state = %q, want %q", got, StateCurrent)
 	}
 }
+
+func TestApplyRefusesADocumentationTargetThatEscapesTheProject(t *testing.T) {
+	// Production mutation: joining a configured target against the root
+	// unchecked lets a copied user configuration refresh a file above the
+	// repository.
+	options := testOptions(t)
+	options.User.DocTargets = []string{"AGENTS.md", "../../.bashrc"}
+
+	_, err := Apply(options)
+
+	if err == nil {
+		t.Fatal("Apply() accepted a documentation target outside the project")
+	}
+	if got := core.CategoryOf(err); got != core.CategoryValidation {
+		t.Fatalf("Apply() category = %q, want %q", got, core.CategoryValidation)
+	}
+	if got := err.Error(); !strings.Contains(got, "../../.bashrc") || !strings.Contains(got, "user configuration") {
+		t.Fatalf("Apply() error = %q, want it to name the value and the user configuration", got)
+	}
+}
+
+func TestApplyRefusesAnAbsoluteDocumentationTarget(t *testing.T) {
+	// Production mutation: an absolute target silently meant <root>/etc/motd,
+	// so honoring it wrote somewhere other than what the configuration said.
+	options := testOptions(t)
+	absolute := filepath.Join(t.TempDir(), "motd")
+	options.User.DocTargets = []string{absolute}
+
+	_, err := Apply(options)
+
+	if err == nil {
+		t.Fatal("Apply() accepted an absolute documentation target")
+	}
+	if got := core.CategoryOf(err); got != core.CategoryValidation {
+		t.Fatalf("Apply() category = %q, want %q", got, core.CategoryValidation)
+	}
+	if got := err.Error(); !strings.Contains(got, absolute) {
+		t.Fatalf("Apply() error = %q, want it to name %q", got, absolute)
+	}
+}
+
+func TestApplyRefusesAConfiguredSkillDirectoryThatEscapesTheProject(t *testing.T) {
+	// Production mutation: a relative skillDir is joined against the root, so
+	// an unchecked one installs a skill tree outside the repository.
+	options := testOptions(t)
+	options.User.SkillDir = filepath.Join("..", "..", "evil")
+
+	_, err := Apply(options)
+
+	if err == nil {
+		t.Fatal("Apply() accepted a skill directory outside the project")
+	}
+	if got := core.CategoryOf(err); got != core.CategoryValidation {
+		t.Fatalf("Apply() category = %q, want %q", got, core.CategoryValidation)
+	}
+	if got := err.Error(); !strings.Contains(got, "../../evil") || !strings.Contains(got, "user configuration") {
+		t.Fatalf("Apply() error = %q, want it to name the value and the user configuration", got)
+	}
+}
+
+func TestApplyRefusesAnOverriddenSkillDirectoryThatEscapesTheProject(t *testing.T) {
+	// Production mutation: naming the wrong layer sends the reader to edit a
+	// file that does not hold the offending value.
+	options := testOptions(t)
+	options.SkillDir = filepath.Join("..", "..", "evil")
+
+	_, err := Apply(options)
+
+	if err == nil {
+		t.Fatal("Apply() accepted an overridden skill directory outside the project")
+	}
+	if got := core.CategoryOf(err); got != core.CategoryValidation {
+		t.Fatalf("Apply() category = %q, want %q", got, core.CategoryValidation)
+	}
+	got := err.Error()
+	if !strings.Contains(got, "--skill-dir") || !strings.Contains(got, "../../evil") {
+		t.Fatalf("Apply() error = %q, want it to name --skill-dir and the value", got)
+	}
+	if strings.Contains(got, "user configuration") {
+		t.Fatalf("Apply() error = %q, want it not to blame the user configuration file", got)
+	}
+}
+
+func TestStatusRefusesADocumentationTargetThatEscapesTheProject(t *testing.T) {
+	// Status is the one operation that writes nothing even when it succeeds,
+	// so its refusal is the proof the check sits in plan() and is therefore
+	// shared by Apply, Status and Remove alike rather than guarding a write.
+	options := testOptions(t)
+	options.User.DocTargets = []string{"../../.bashrc"}
+
+	_, err := Status(options)
+
+	if err == nil {
+		t.Fatal("Status() accepted a documentation target outside the project")
+	}
+	if got := core.CategoryOf(err); got != core.CategoryValidation {
+		t.Fatalf("Status() category = %q, want %q", got, core.CategoryValidation)
+	}
+}
+
+func TestApplyWritesNothingWhenADocumentationTargetEscapesTheProject(t *testing.T) {
+	// Production mutation: a refusal that lands after the first write is not a
+	// refusal, it is a half-finished install plus an error message.
+	options := testOptions(t)
+	options.User.DocTargets = []string{"AGENTS.md", "../../.bashrc"}
+	writeFile(t, filepath.Join(options.Root, "AGENTS.md"), "# AGENTS.md\n\nMy own rules.\n")
+
+	if _, err := Apply(options); err == nil {
+		t.Fatal("Apply() accepted a documentation target outside the project")
+	}
+
+	if _, err := os.Stat(filepath.Join(options.Root, GuidelinesPath)); !os.IsNotExist(err) {
+		t.Fatalf("Apply() wrote the guidelines before refusing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(options.Root, ".claude")); !os.IsNotExist(err) {
+		t.Fatalf("Apply() installed the skill before refusing: %v", err)
+	}
+	if got, want := readFile(t, filepath.Join(options.Root, "AGENTS.md")), "# AGENTS.md\n\nMy own rules.\n"; got != want {
+		t.Fatalf("AGENTS.md after refusal = %q, want %q", got, want)
+	}
+}
