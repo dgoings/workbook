@@ -166,25 +166,32 @@ func TestKeyRetireRefusesTheCurrentKeyAndTheLastActiveKeyInTheFold(t *testing.T)
 	}
 }
 
-// Every key operation raises the reader bar, and this build claims it can fold
-// that bar. The two move in the same commit: a pack this build would refuse to
-// fold is a pack it must not write.
-func TestKeyOperationsCarryGenerationFour(t *testing.T) {
+// Every key operation raises the reader bar to three, the generation the
+// priority operations already ask for: both families ship in one release, so a
+// key operation asks a reader for nothing a priority operation has not asked
+// for already. Three and not zero, because a generation-two build that folded
+// `key.add` by ignoring it would compute a different key set from the same
+// bytes.
+//
+// This build claims it can fold what it writes, which is the other half: a pack
+// this build would refuse to fold is a pack it must not write.
+func TestKeyOperationsCarryGenerationThree(t *testing.T) {
 	for _, operationType := range []ConfigOperationType{ConfigKeyAdd, ConfigKeyCurrent, ConfigKeyRetire} {
-		if got := ConfigPackMinReader([]ConfigOperation{{Type: operationType, Key: "NEW"}}); got != 4 {
-			t.Errorf("ConfigPackMinReader(%s) = %d, want 4", operationType, got)
+		if got := ConfigPackMinReader([]ConfigOperation{{Type: operationType, Key: "NEW"}}); got != 3 {
+			t.Errorf("ConfigPackMinReader(%s) = %d, want 3", operationType, got)
 		}
 	}
-	if SupportedFormatGeneration < 4 {
-		t.Fatalf("SupportedFormatGeneration = %d, want at least 4: this build folds key operations", SupportedFormatGeneration)
+	if SupportedFormatGeneration < 3 {
+		t.Fatalf("SupportedFormatGeneration = %d, want at least 3: this build folds key operations", SupportedFormatGeneration)
 	}
 }
 
 // The compatibility guarantee. Nothing seeds the key section, so a project this
-// build creates records no keys, encodes no `keys` member, and stays readable by
-// every generation-3 clone on the team. A genesis that recorded the founding key
-// here would push every new project to generation 4 for a fact its identity ref
-// already states.
+// build creates records no keys and encodes no `keys` member, and its genesis
+// keeps asking for exactly the generation its priorities section asks for —
+// three, the same as before keys existed. A genesis that recorded the founding
+// key here would say in a second ref what the identity ref already says, and
+// would change the bytes of every checkpoint this build writes.
 func TestAGenesisWithoutKeysKeepsItsExactBytes(t *testing.T) {
 	priorities := BuiltInPriorityVocabulary().Document()
 	config := ConfigData{Vocabulary: testVocabulary(t).Document(), Priorities: &priorities}
@@ -205,7 +212,7 @@ func TestAGenesisWithoutKeysKeepsItsExactBytes(t *testing.T) {
 		t.Fatalf("a checkpoint with no key operations encoded %s, want no keys member", encoded)
 	}
 	if got := ConfigPackMinReader(genesisOperations); got != 3 {
-		t.Fatalf("genesis minReader = %d, want 3: recording no keys must not push a project to generation 4", got)
+		t.Fatalf("genesis minReader = %d, want 3: a genesis recording no keys asks for what its priorities ask for", got)
 	}
 }
 
@@ -356,8 +363,8 @@ func TestEveryKeyOperationTypeIsAccountedFor(t *testing.T) {
 		if !operationType.TouchesKeys() {
 			t.Errorf("TouchesKeys(%q) = false, want true", operationType)
 		}
-		if got := configOperationMinReader[operationType]; got != 4 {
-			t.Errorf("configOperationMinReader[%q] = %d, want 4; an unstamped pack is misfolded "+
+		if got := configOperationMinReader[operationType]; got != 3 {
+			t.Errorf("configOperationMinReader[%q] = %d, want 3; an unstamped pack is misfolded "+
 				"by builds that predate the key section", operationType, got)
 		}
 	}

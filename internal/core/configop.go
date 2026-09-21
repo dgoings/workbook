@@ -269,10 +269,11 @@ type ConfigData struct {
 	//
 	// Unlike the priorities section, nothing seeds this one. A project's
 	// founding key lives in its identity ref, and a genesis that recorded it
-	// here would push every project this build creates to generation 4 for a
-	// fact the identity already states. The fold reads nil as "the founding key
-	// alone", and the first key.add records the founding key explicitly — see
-	// gitstore.prependFoundingKey.
+	// here would put a second copy of that fact in a second ref, where the two
+	// can disagree — and it would spend bytes in every project's checkpoint to
+	// say what every one of that project's task IDs already spells out. The
+	// fold reads nil as "the founding key alone", and the first key.add records
+	// the founding key explicitly — see gitstore.prependFoundingKey.
 	Keys *KeyDocument `json:"keys,omitempty"`
 }
 
@@ -317,12 +318,14 @@ type ConfigStateDocument struct {
 // checkpoint carrying a `priorities` section, so it is told to upgrade rather
 // than left to misfold silently.
 //
-// The key entries are four, the generation project keys as configuration
-// introduced, for the identical reason the priority entries are three: a build
-// that folds a priority vocabulary does not thereby know what `key.add` means,
-// and a build that folded one by ignoring it would compute a different key set
-// from the same bytes — so it is told to upgrade rather than left to read a
-// teammate's new tasks as another project's refs.
+// The key entries are three as well, and ride the priority operations'
+// generation rather than opening a fourth, because both families ship in one
+// release: no build folds a priority vocabulary without also folding a key set,
+// so a fourth number would describe a reader that never exists. What the
+// entries have to say is what a generation-two build cannot do, and that is the
+// same thing for both — a build that folded `key.add` by ignoring it would
+// compute a different key set from the same bytes, so it is told to upgrade
+// rather than left to read a teammate's new tasks as another project's refs.
 var configOperationMinReader = map[ConfigOperationType]int{
 	ConfigGenesis:         0,
 	ConfigStatusAdd:       0,
@@ -342,9 +345,9 @@ var configOperationMinReader = map[ConfigOperationType]int{
 	ConfigPriorityTag:     3,
 	ConfigPriorityUntag:   3,
 	ConfigPriorityRecolor: 3,
-	ConfigKeyAdd:          4,
-	ConfigKeyCurrent:      4,
-	ConfigKeyRetire:       4,
+	ConfigKeyAdd:          3,
+	ConfigKeyCurrent:      3,
+	ConfigKeyRetire:       3,
 }
 
 // ConfigPackMinReader returns the generation a reader needs to fold these
@@ -447,9 +450,8 @@ func (state ConfigStateDocument) PriorityVocabulary() PriorityVocabulary {
 //
 // It takes the founding key because the ledger deliberately does not record it
 // until somebody adds a second one: the identity ref is where a project's first
-// key lives, and a section that duplicated it would mark every project this
-// build creates as needing a generation-4 reader for a fact the identity
-// already states.
+// key lives, and a section that duplicated it would keep the same fact in two
+// refs that can disagree. See ConfigData.Keys.
 func (state ConfigStateDocument) KeySet(founding string) KeySet {
 	if state.Config.Keys == nil {
 		return FoundingKeySet(founding)

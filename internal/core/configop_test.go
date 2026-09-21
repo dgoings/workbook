@@ -1729,31 +1729,32 @@ func TestGenesisCarryingDisplayAndPrioritiesRequiresGenerationThree(t *testing.T
 	}
 }
 
-// And a genesis carrying the key section is marked four, even though no key
+// And a genesis carrying the key section is marked three, even though no key
 // operation appears in the pack — the guard display and priorities each have,
-// for the fourth section.
+// for the fourth section. The number is the priorities' own, because both
+// families ship in one release; the guard still has work to do, because a
+// genesis carrying keys and nothing else would otherwise go out unmarked.
 //
-// Nothing this build writes reaches this case: no genesis records keys, which
-// is what keeps every new project readable by a generation-three clone. The
+// Nothing this build writes reaches this case: no genesis records keys. The
 // guard is here for a genesis some later build writes, or one a person
-// hand-assembles, and an unmarked one would tell a generation-three reader that
+// hand-assembles, and an unmarked one would tell a generation-two reader that
 // the project is corrupt rather than that it needs to upgrade — the failure the
 // marker exists to turn graceful.
-func TestGenesisCarryingKeysRequiresGenerationFour(t *testing.T) {
+func TestGenesisCarryingKeysRequiresGenerationThree(t *testing.T) {
 	operation := ConfigOperation{Type: ConfigGenesis, Config: &ConfigData{
 		Keys: &KeyDocument{Keys: []KeyDefinition{{Key: "WB"}}, Current: "WB"},
 	}}
-	if got := ConfigPackMinReader([]ConfigOperation{operation}); got != 4 {
-		t.Errorf("ConfigPackMinReader = %d, want 4", got)
+	if got := ConfigPackMinReader([]ConfigOperation{operation}); got != 3 {
+		t.Errorf("ConfigPackMinReader = %d, want 3", got)
 	}
 }
 
-// A genesis carrying all three optional sections reports 4, not 2 or 3: the
-// three guards compose as a running maximum over one operation, and this pins
-// that composition against the regression the priorities version of this test
-// names — an if/else-if chain between them, which would stop at the display
-// section and report 2.
-func TestGenesisCarryingDisplayPrioritiesAndKeysRequiresGenerationFour(t *testing.T) {
+// A genesis carrying all three optional sections reports 3, not 2: the three
+// guards compose as a running maximum over one operation, and this pins that
+// composition against the regression the priorities version of this test names
+// — an if/else-if chain between them, which would stop at the display section
+// and report 2.
+func TestGenesisCarryingDisplayPrioritiesAndKeysRequiresGenerationThree(t *testing.T) {
 	priorities := BuiltInPriorityVocabulary().Document()
 	operation := ConfigOperation{
 		Type: ConfigGenesis,
@@ -1763,8 +1764,8 @@ func TestGenesisCarryingDisplayPrioritiesAndKeysRequiresGenerationFour(t *testin
 			Keys:       &KeyDocument{Keys: []KeyDefinition{{Key: "WB"}}, Current: "WB"},
 		},
 	}
-	if got := ConfigPackMinReader([]ConfigOperation{operation}); got != 4 {
-		t.Errorf("ConfigPackMinReader = %d, want 4", got)
+	if got := ConfigPackMinReader([]ConfigOperation{operation}); got != 3 {
+		t.Errorf("ConfigPackMinReader = %d, want 3", got)
 	}
 }
 

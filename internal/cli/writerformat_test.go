@@ -8,23 +8,6 @@ import (
 	"github.com/dgoings/workbook/internal/core"
 )
 
-// configGenesisGeneration is the writer-format generation a ledger this build
-// creates actually spends: the highest one any section its genesis records
-// requires, which is the priorities section's three.
-//
-// It is a literal rather than core.SupportedFormatGeneration because the two
-// parted company when the key section arrived. Nothing seeds that section — a
-// project's founding key lives in its identity ref, so a genesis records no
-// keys and no project this build creates asks a reader for generation four —
-// while the constant names what this build can fold, which is four. Comparing
-// a stored marker against the constant would now assert that every new project
-// parks every generation-three clone on the team, which is exactly the
-// regression these assertions exist to catch, so it is named here rather than
-// relaxed to "at least": an under-marked genesis is invisible to ">=".
-//
-// Whoever adds the next section a genesis does record raises this line with it.
-const configGenesisGeneration = 3
-
 // storedDocument is one operation.json or state.json as a clone will fetch it,
 // together with the ref it belongs to — the marker's rules differ per ref, so
 // the ref is part of the fact.
@@ -102,11 +85,14 @@ func storedMinReader(t *testing.T, document storedDocument) (int, bool) {
 // checkpoint carries the running maximum, so it is never absent once the
 // genesis has stamped one and never above what this build can read back.
 //
-// Both genesis assertions below read configGenesisGeneration rather than
-// core.SupportedFormatGeneration, because the key section made the two
-// different numbers: a genesis records no keys, so a ledger this build creates
-// still spends exactly three. That constant's comment says what raising it
-// costs and why the comparison stays exact.
+// A note for whoever raises the generation next. Both genesis assertions below
+// read core.SupportedFormatGeneration, and that is right only while the newest
+// section is one a genesis records — today the priorities. Add a generation
+// that a genesis does not carry and the genesis will keep asking for the older
+// number, and these will fail. The fix then is to name the generation the
+// genesis's own sections require, not to relax the comparison to "at least": an
+// under-marked genesis is exactly what this test is here to catch, and ">="
+// cannot see one.
 func TestTheWriterFormatMarkerIsSpentOnlyAtTheConfigurationGenesis(t *testing.T) {
 	repository := initializedRepository(t)
 
@@ -169,9 +155,9 @@ func TestTheWriterFormatMarkerIsSpentOnlyAtTheConfigurationGenesis(t *testing.T)
 			}
 		case document.name == "operation.json" && strings.Contains(document.contents, `"type":"`+string(core.ConfigGenesis)+`"`):
 			genesisPacks++
-			if !marked || generation != configGenesisGeneration {
+			if !marked || generation != core.SupportedFormatGeneration {
 				t.Fatalf("%s is the genesis pack and carries marker %d (present = %v), want exactly %d: %s",
-					document.label, generation, marked, configGenesisGeneration, document.contents)
+					document.label, generation, marked, core.SupportedFormatGeneration, document.contents)
 			}
 		case document.name == "operation.json":
 			if marked {
@@ -179,16 +165,9 @@ func TestTheWriterFormatMarkerIsSpentOnlyAtTheConfigurationGenesis(t *testing.T)
 					document.label, generation, document.contents)
 			}
 		default:
-			// Both halves of the checkpoint rule, and the second is not
-			// implied by the first only because the first is the half that
-			// moves: configGenesisGeneration rises whenever a genesis records
-			// a new section, and "never above what this build can read back"
-			// has to keep holding after it does.
-			if !marked || generation != configGenesisGeneration || generation > core.SupportedFormatGeneration {
-				t.Fatalf("%s is a configuration checkpoint and carries marker %d (present = %v), want exactly %d "+
-					"and no more than this build folds (%d): %s",
-					document.label, generation, marked, configGenesisGeneration,
-					core.SupportedFormatGeneration, document.contents)
+			if !marked || generation != core.SupportedFormatGeneration {
+				t.Fatalf("%s is a configuration checkpoint and carries marker %d (present = %v), want exactly %d: %s",
+					document.label, generation, marked, core.SupportedFormatGeneration, document.contents)
 			}
 		}
 	}
