@@ -1220,8 +1220,21 @@
          data-default-status for the same reason: which priority carries the
          default role is the server's answer, and a script that went looking for
          that role among the published tags would be spelling the name of a role
-         core owns. -->
-    <div class="board-view" data-board-view data-priorities="{{ .Priorities }}" data-default-priority="{{ .DefaultPriority }}" data-project-name="{{ .ProjectName }}" data-default-project-name="{{ .DefaultProjectName }}" data-title-suffix="{{ .TitleSuffix }}" data-default-status="{{ .DefaultStatus }}" data-vocabulary-head="{{ .VocabularyHead }}" data-vocabulary-shape="{{ .VocabularyShape }}" data-attachment-limit="{{ .AttachmentFileLimit }}" data-attachment-total-limit="{{ .AttachmentTotalLimit }}" data-attachment-name-limit="{{ .AttachmentNameLimit }}" data-attachment-label-limit="{{ .AttachmentLabelLimit }}" data-attachment-url-limit="{{ .AttachmentURLLimit }}" data-inline-media="{{ .InlineImageMediaTypes }}" data-assign-identity="{{ .AssignIdentity }}">
+         core owns.
+
+         data-keys is this project's task-ID keys in add order, each with its
+         state and whether new tasks are minted under it, as JSON because a key
+         is more facts than a space-separated list can carry. The create form's
+         chooser is drawn from it before anything has been fetched, and it is the
+         server's answer for the reason the priorities are: a project that added
+         a key is described here and nowhere in the script.
+
+         data-current-key is the key a new task is minted under when nobody
+         chooses one, and it sits beside data-default-priority for the same
+         reason: which key that is belongs to the server, and a client
+         re-deriving it from the list could disagree about where the task it
+         just created went. -->
+    <div class="board-view" data-board-view data-priorities="{{ .Priorities }}" data-default-priority="{{ .DefaultPriority }}" data-project-name="{{ .ProjectName }}" data-default-project-name="{{ .DefaultProjectName }}" data-title-suffix="{{ .TitleSuffix }}" data-default-status="{{ .DefaultStatus }}" data-vocabulary-head="{{ .VocabularyHead }}" data-vocabulary-shape="{{ .VocabularyShape }}" data-attachment-limit="{{ .AttachmentFileLimit }}" data-attachment-total-limit="{{ .AttachmentTotalLimit }}" data-attachment-name-limit="{{ .AttachmentNameLimit }}" data-attachment-label-limit="{{ .AttachmentLabelLimit }}" data-attachment-url-limit="{{ .AttachmentURLLimit }}" data-inline-media="{{ .InlineImageMediaTypes }}" data-assign-identity="{{ .AssignIdentity }}" data-keys="{{ .Keys }}" data-current-key="{{ .CurrentKey }}">
       <p class="stale" data-stale role="status">Task refresh failed. Showing the last successful board.</p>
       <!-- data-board is where the client appends the Deleted column, after the
            last vocabulary column the server rendered. It is a client-built
@@ -1367,6 +1380,25 @@
     <p class="admin__note">These are this project's own name for this board and the colors it is drawn in, recorded in the same configuration every clone fetches. Every field is optional: an empty <strong>name</strong> is the generic heading every Workbook board carries, and an empty color is this board's own palette. Colors are written as <code>#rrggbb</code>. Saving sends all three at once, and only what actually changed is recorded — a save you have not edited records nothing at all. Saving draws this board in its new colors at once; its name, and a board already open elsewhere, keep what they were opened with until reloaded.</p>
     <div class="admin__status" data-display-panel-status role="status" aria-live="polite"></div>
     <div data-display-panel-body></div>
+  </div>
+  {{ end }}
+  {{ if .KeysAdministrable }}
+  <!-- This project's task-ID keys: the fourth section of the configuration
+       route, served beside the statuses and the priorities and mounted into main
+       by the same render.
+
+       It is its own element with its own live region for the reason the
+       priorities are: the two are separate writes against separate endpoints,
+       and a refused key change must not blank a label somebody is typing into a
+       status row.
+
+       There is no reordering here and no drag. The order is add order — a key
+       has no rank, and the ledger only ever appends — so the list is the history
+       rather than an arrangement anybody chose. -->
+  <div class="admin" data-key-panel role="group" aria-labelledby="keys-title" tabindex="-1" hidden>
+    <p class="admin__note">These are this project's task-ID keys, in the order they were added. A key is the prefix on every task ID, as in <code>WB-01K0M6…</code>. Exactly one key is <strong>current</strong>: it is where a new task is minted, and making another key current moves it. A key that has stopped minting is <strong>retired</strong>; its tasks are untouched and stay this project's, because a task ID is a permanent name. Nothing here renames or deletes a key, and a retired key can be brought back. Adding a key needs everyone on the team to be running a Workbook that understands keys.</p>
+    <div class="admin__status" data-key-panel-status role="status" aria-live="polite"></div>
+    <div data-key-panel-body></div>
   </div>
   {{ end }}
   <script>
@@ -1517,6 +1549,69 @@
       const displayPanel = document.querySelector("[data-display-panel]");
       const displayPanelBody = document.querySelector("[data-display-panel-body]");
       const displayPanelStatus = document.querySelector("[data-display-panel-status]");
+      // The keys section, beside the statuses and the priorities on the same
+      // route and asked for separately for the same reason: a board may be
+      // built with the status mutations and without the key ones, in which case
+      // the page has columns to administer and no keys to change.
+      const keyPanel = document.querySelector("[data-key-panel]");
+      const keyPanelBody = document.querySelector("[data-key-panel-body]");
+      const keyPanelStatus = document.querySelector("[data-key-panel-status]");
+      // This project's keys, read out of the attribute the server published
+      // them in rather than kept as a list of its own — the same rule the
+      // priorities follow, and for the same reason: a project that added a key
+      // is described by the server and nowhere in this script.
+      //
+      // They are variables where the priorities are constants, and that is the
+      // one way this reading differs. The keys are deliberately not part of the
+      // vocabulary shape: a key change moves no column and no priority, so no
+      // board is ever asked to reload for one. That makes this attribute the
+      // page's only copy of them — so every vocabulary this page receives
+      // replaces it, and the create form's chooser reads it at the moment it is
+      // drawn. Nothing polls for a key; the reads are the ones the page already
+      // makes, which is the configuration route's read on entry and the answer
+      // to every change made there.
+      let publishedKeys = readPublishedKeys(boardView.dataset.keys);
+      let currentKey = boardView.dataset.currentKey || "";
+      // A key entry is a name, a state and whether new tasks are minted under
+      // it. An entry without a name is not a key, whatever else it carries, so
+      // it is dropped here rather than drawn as a row nothing can address.
+      function keyEntries(published) {
+        if (!Array.isArray(published)) return [];
+        return published.filter((entry) => entry && typeof entry.key === "string" && entry.key !== "");
+      }
+      // A page carrying no such attribute — served by an older build — leaves
+      // this empty rather than inventing a key. Offering a key nobody has been
+      // told this project has is the defect, not the cure; with none the create
+      // form offers no choice and a task is minted under the current key, which
+      // is what the server does with a create that names none.
+      function readPublishedKeys(encoded) {
+        try {
+          return keyEntries(JSON.parse(encoded || "[]"));
+        } catch (error) {
+          return [];
+        }
+      }
+      // The keys that can mint, which is the only set the create form offers: a
+      // retired key mints nothing and the service refuses a create naming one in
+      // core's own words, so listing it would be offering a refusal.
+      //
+      // "retired" is the one state word this script spells. The set is core's
+      // (core.KeyState), there are two of them, and a page that asked the server
+      // to publish the list would be carrying an attribute to distinguish a key
+      // that mints from one that does not.
+      function activeKeyEntries() {
+        return publishedKeys.filter((entry) => entry.state !== "retired");
+      }
+      // Takes the keys out of a vocabulary document, wholesale, the way the rest
+      // of that document is adopted. A document with no keys member is a board
+      // built by something that does not serve them, which is not an answer that
+      // this project has none — so the page keeps what it was served with, the
+      // rule redrawBoardStyle follows for the same reason.
+      function adoptKeys(keys) {
+        if (!keys || typeof keys !== "object") return;
+        publishedKeys = keyEntries(keys.keys);
+        currentKey = typeof keys.current === "string" ? keys.current : "";
+      }
       // What this board is called, and what every route that is not the board
       // appends to its own name. Both are the server's answers rather than
       // derived here: the fallbacks are core's, and a client that spelled them
@@ -5885,6 +5980,35 @@
         wrapper.append(control, caption);
         return wrapper;
       }
+      // The key a new task is minted under, when more than one of this
+      // project's keys can mint it — and nothing at all when one can.
+      //
+      // That gate is the whole rule. A project with one active key has one
+      // answer, and a select with a single option asks a question nobody can
+      // answer differently, so a project that has never added a key is drawn
+      // exactly the form it has always been drawn. Retired keys are not offered
+      // either: a retired key mints nothing and the service refuses a create
+      // naming one in core's own words, so listing it would be offering a
+      // refusal.
+      //
+      // It reads the keys at the moment it is drawn rather than a set captured
+      // when the page loaded, because a key change deliberately does not move
+      // the vocabulary shape and so no board is ever asked to reload for one.
+      // Every vocabulary this page receives replaces them — the read the
+      // configuration route makes on entry, and the answer to every change made
+      // there — so the next form opened offers the keys the page has heard
+      // about. Nothing polls for them.
+      //
+      // `requested` is the key a form is being re-armed with, which is a refused
+      // create's own choice: it stands if it can still mint, exactly as the
+      // status and the priority that came back with it do.
+      function newTaskKeyChooser(requested) {
+        const active = activeKeyEntries();
+        if (active.length < 2) return null;
+        const wanted = requested || currentKey;
+        const chosen = active.some((entry) => entry.key === wanted) ? wanted : active[0].key;
+        return select("key", active.map((entry) => [entry.key, entry.key]), chosen);
+      }
       function taskForm(mode, task) {
         const isNew = mode === "new";
         const relationshipDrafts = isNew
@@ -5978,6 +6102,10 @@
         showStatus(status, task.status);
         const priority = select("priority", priorityDefinitions, task.priority);
         showPriority(priority, task.priority);
+        // Only a create chooses a key. A task that exists was minted under one
+        // and its ID carries that key forever, so there is nothing here for a
+        // task's own page to offer.
+        const key = isNew ? newTaskKeyChooser(task.key) : null;
         const labels = labelEditor(task.labels || []);
         // Named, because the relationship region carries a form-status of its
         // own and "the first .form-status in the route" is the wrong element
@@ -6040,9 +6168,10 @@
         properties.append(
           propertiesHeading,
           field("Status", status),
-          field("Priority", priority),
-          field("Labels", labels.region, true, "field--labels")
+          field("Priority", priority)
         );
+        if (key) properties.append(field("Key", key));
+        properties.append(field("Labels", labels.region, true, "field--labels"));
         const relationshipMount = document.createElement("div"); relationshipMount.dataset.relationshipMount = "";
         // Attachments between the properties and the relationships, because they
         // are part of composing this task and the relationships are about other
@@ -6082,7 +6211,7 @@
         // and a refusal re-bases it so a deliberate retry lands on the version
         // that exists.
         let expectedHead = isNew ? "" : task.head || "";
-        const controls = { title, description, status, priority, labels };
+        const controls = { title, description, status, priority, labels, key };
         // Published for the length of this render, so a restore that is about to
         // replace this form can save what is in it. renderRoute clears it, so
         // the reader never outlives the node it reads from.
@@ -6554,13 +6683,23 @@
         return section;
       }
       function allTaskValues(controls) {
-        return {
+        const values = {
           title: controls.title.value,
           description: controls.description.value,
           status: controls.status.value,
           priority: controls.priority.value,
           labels: controls.labels.values()
         };
+        // The key, and only when the reader chose one other than the current
+        // key. An absent key is the current key — that is what the route does
+        // with a create naming none, and what every client predating several
+        // keys sends — so a form that offered no choice, and one whose choice
+        // was the standing default, send byte for byte the create they always
+        // sent.
+        if (controls.key && controls.key.value && controls.key.value !== currentKey) {
+          values.key = controls.key.value;
+        }
+        return values;
       }
       // An update carries the fields this form changed and no others. Sending
       // all five on every save is last-writer-wins even when the heads agree:
@@ -7222,6 +7361,14 @@
         // on here, and nothing this panel does with what it reads may amount to
         // writing it back.
         renderPriorityPanel();
+        // The keys ride in the same document too, from the same commit, and are
+        // adopted with it for the reason the priorities are — with one thing
+        // more riding on it. They are deliberately not part of the shape above,
+        // so no board is asked to reload for a key change; this is therefore the
+        // only way a key a teammate added reaches a page that is already open,
+        // and it is what the create form's chooser reads.
+        adoptKeys(vocabulary.keys);
+        renderKeyPanel();
         // And the board behind this page is redrawn in the colors the document
         // carries. Every priority change moves this stylesheet, not only a
         // recolor: the color a priority with none of its own is drawn in is
@@ -7235,6 +7382,7 @@
         panelReading = true;
         renderVocabularyPanel();
         renderPriorityPanel();
+        renderKeyPanel();
         try {
           const response = await fetch("/api/vocabulary", { cache: "no-store" });
           const payload = await response.json();
@@ -7250,14 +7398,16 @@
           panelVocabulary = null;
           renderVocabularyPanel();
           renderPriorityPanel();
+          renderKeyPanel();
           const said = error instanceof Error
             ? error.message
             : "This project's statuses could not be read.";
           panelReport("error", said);
-          // Both sections come out of this one read, so both have to say that it
+          // Every section comes out of this one read, so each has to say that it
           // failed. A section left silent over an empty list is a section that
           // looks like a project with nothing in it.
           priorityReport("error", said);
+          keyReport("error", said);
         }
       }
       // The two sections a vocabulary change can be sent from, and everything
@@ -7288,6 +7438,19 @@
         unsent: "This priority change could not be sent. Nothing about this project's priorities has changed.",
         stale: "This project's priorities changed in another clone, so this change was not applied. This page now shows them as they stand; review them and make the change again.",
         refused: "This priority change was not applied."
+      };
+      // The keys are the third, and the only difference is that it has no form
+      // to close: a key row holds no editor, because there is nothing about a
+      // key to edit — a key is added and then only ever changes state — and the
+      // add form is rebuilt by the render every answer triggers.
+      const keyChanges = {
+        format: "workbook.key-mutation",
+        report: (kind, message, warnings) => keyReport(kind, message, warnings),
+        busy: (running) => { keyBusy = running; },
+        closeForm: () => {},
+        unsent: "This key change could not be sent. Nothing about this project's keys has changed.",
+        stale: "This project's keys changed in another clone, so this change was not applied. This page now shows them as they stand; review them and make the change again.",
+        refused: "This key change was not applied."
       };
       // The one path every change either panel makes takes.
       //
@@ -8507,6 +8670,232 @@
         priorityPanelStatus.replaceChildren();
         priorityPanelStatus.dataset.kind = "";
       }
+      // This project's task-ID keys: the statuses section's third sibling, built
+      // out of the same parts and differing where a key differs from a status.
+      //
+      // Three differences, and every one of them shows on the page.
+      //
+      // NOTHING IS RENAMED, REORDERED OR REMOVED. A key is added, and after
+      // that the only changes are which one mints new tasks and whether a key
+      // mints at all. A task ID is a permanent name — every task minted under a
+      // key keeps it forever — so there is no rename to forward and no removal
+      // to price, and the list has no rank to move a row up and down through.
+      // What the section draws instead is the order the keys were added, which
+      // is the history rather than an arrangement anybody chose.
+      //
+      // BEING CURRENT IS NOT A STATE, AND IT IS GIVEN RATHER THAN TAKEN. The
+      // document names the current key once, beside each key's active/retired
+      // word, so the row that holds it is drawn holding it with nothing to
+      // offer: there is no operation that stops a key minting without handing
+      // the minting to another, because a project with no current key is a
+      // project where a new task has nowhere to go.
+      //
+      // AND A KEY CHANGE COSTS NO TASKS. The answer carries no `tasks` member
+      // at all, where a status or priority change prices the tasks it moved, so
+      // nothing here reports a cost — and nothing here may invent one.
+      let keyBusy = false;
+      let keyControls = [];
+      const keySendingMessage = "Sending a change to this project's keys.";
+      function keyReport(kind, message, warnings = []) {
+        reportInto(keyPanelStatus, kind, message, warnings);
+      }
+      function applyKeyBusy() {
+        keyControls.forEach((control) => {
+          control.disabled = configBusy() || control.dataset.blocked === "true";
+        });
+      }
+      function keyPath(key) {
+        return "/api/vocabulary/keys/" + encodeURIComponent(key);
+      }
+      // The three changes a key can undergo, each its own PATCH naming exactly
+      // one intent — which is what the route takes, and it refuses a body naming
+      // two or none.
+      function makeKeyCurrent(entry) {
+        return changeVocabulary("PATCH", keyPath(entry.key), { current: true },
+          () => "New tasks are now minted under " + entry.key + ".", keyChanges);
+      }
+      function retireKey(entry) {
+        return changeVocabulary("PATCH", keyPath(entry.key), { retire: true },
+          () => "Retired " + entry.key + ". The tasks already minted under it keep their IDs.",
+          keyChanges);
+      }
+      function reactivateKey(entry) {
+        return changeVocabulary("PATCH", keyPath(entry.key), { reactivate: true },
+          () => "Reactivated " + entry.key + ". It can mint new tasks again once it is made current.",
+          keyChanges);
+      }
+      function keyRow(entry, entries) {
+        const item = document.createElement("li");
+        item.className = "admin-status";
+        item.dataset.vocabularyKey = entry.key;
+        // Not draggable, where a status row and a priority row both are: there
+        // is no order here for a drag to ask for.
+        const name = document.createElement("div");
+        name.className = "admin-status__name";
+        // A key has no label beside its token, because the key IS the name: it
+        // is the prefix every task ID minted under it carries, and there is no
+        // second word a project could give it. So the row draws the token where
+        // its siblings draw a label and a token.
+        const token = document.createElement("code");
+        token.className = "admin-status__token";
+        text(token, entry.key);
+        name.append(token);
+        // What this key is, in the document's own word, drawn as the chips the
+        // status and priority roles are drawn as. Nothing here decides the word.
+        const state = document.createElement("span");
+        state.className = "admin-tag";
+        state.dataset.keyState = entry.state;
+        text(state, entry.state);
+        name.append(state);
+        if (entry.current) {
+          const badge = document.createElement("span");
+          badge.className = "admin-tag";
+          badge.dataset.keyCurrent = "";
+          text(badge, "current");
+          name.append(badge);
+        }
+        const controls = document.createElement("div");
+        controls.className = "admin-status__controls";
+        const active = entry.state !== "retired";
+        const activeCount = entries.filter((candidate) => candidate.state !== "retired").length;
+        if (active && !entry.current) {
+          controls.append(panelButton("Make current", "Mint new tasks under " + entry.key,
+            () => makeKeyCurrent(entry), { controls: keyControls }));
+          // Retire is blocked when this is the only key that can mint, and says
+          // why in a title rather than being withheld: a reader looking for the
+          // control finds it saying what stands in its way, as the only-priority
+          // removal does.
+          //
+          // The current key is always active, so a non-current active key means
+          // there is a second one and this cannot be reached from a document
+          // core produced. It is rendered rather than assumed, because the
+          // server refusing it in one sentence and the page assuming it cannot
+          // happen is exactly the pair that leaves a reader pressing a control
+          // that fails.
+          const retire = panelButton("Retire", "Stop minting new tasks under " + entry.key,
+            () => retireKey(entry), { blocked: activeCount <= 1, controls: keyControls });
+          if (activeCount <= 1) {
+            retire.title = "This is this project's only active key, and a project must keep one to mint new tasks under.";
+          }
+          controls.append(retire);
+        }
+        if (!active) {
+          controls.append(panelButton("Reactivate", "Let " + entry.key + " mint new tasks again",
+            () => reactivateKey(entry), { controls: keyControls }));
+        }
+        item.append(name, controls);
+        return item;
+      }
+      // Adding a key, with the one setting the add route takes.
+      //
+      // "Mint new tasks under it" is a checkbox on this form rather than a
+      // control of its own, because that is what `workbook key add --current`
+      // is: one write that adds the key and moves the minting to it. Two
+      // controls would be two ledger commits for one decision.
+      //
+      // Nothing here says what a key may be called. core.ValidateProjectKey is
+      // the one reading of that, and the route answers a name that is not a key
+      // in the sentence `workbook key add` prints — so a client that refused
+      // first would be refusing in words of its own.
+      function addKeyForm() {
+        const region = document.createElement("div");
+        region.className = "admin-add";
+        const heading = document.createElement("h3");
+        heading.className = "admin-add__title";
+        text(heading, "Add a key");
+        const form = document.createElement("form");
+        form.className = "admin-form";
+        form.dataset.keyAdd = "";
+        const name = panelTextInput("key-new-name", "", "NEW", keyControls);
+        // The wrapping label the status tag checkboxes are drawn in, so the
+        // caption is associated with the box without an id to point at and the
+        // section needs no styling of its own for a shape it already has.
+        const choice = document.createElement("label");
+        choice.className = "admin-tag-choice";
+        const box = document.createElement("input");
+        box.type = "checkbox";
+        box.id = "key-new-current";
+        const caption = document.createElement("span");
+        text(caption, "Mint new tasks under it");
+        choice.append(box, caption);
+        keyControls.push(box);
+        const add = panelSubmitButton("Add key", "",
+          { modifier: "admin-button--primary", blocked: true, controls: keyControls });
+        const guard = () => blockPanelControl(add, !name.value.trim());
+        name.addEventListener("input", guard);
+        function submit() {
+          const key = name.value.trim();
+          if (!key) return;
+          // Read here rather than in the sentence below, because the render this
+          // change triggers rebuilds this form: the node would still answer,
+          // being detached rather than gone, but a report reading state out of a
+          // control nobody can see any more is a report waiting to be wrong.
+          const minting = box.checked;
+          const wasCurrent = currentKey;
+          const addition = { key };
+          if (minting) addition.current = true;
+          changeVocabulary("POST", "/api/vocabulary/keys", addition,
+            () => minting
+              ? "Added " + key + ". New tasks are now minted under it."
+              : "Added " + key + ". New tasks are still minted under " + wasCurrent + ".",
+            keyChanges);
+        }
+        form.addEventListener("submit", (event) => { event.preventDefault(); submit(); });
+        form.append(panelField("Key", name), choice, add);
+        region.append(heading, form);
+        return region;
+      }
+      function renderKeyPanel() {
+        if (!keyPanel || !keyPanelBody) return;
+        // Focus is caught and parked the way the statuses section catches it:
+        // the control the reader pressed is one of the nodes this drops.
+        const held = document.activeElement;
+        const inside = Boolean(held && keyPanel.contains(held));
+        keyControls = [];
+        // Gated on the read rather than on the attribute the page was served
+        // with, for the reason the priorities section is gated: every change
+        // this section sends names the head that read returned, so a list drawn
+        // before it landed would be a list whose every control is dead.
+        if (!panelVocabulary) {
+          const message = document.createElement("p");
+          message.className = "admin-note";
+          message.dataset.keyPanelEmpty = "";
+          text(message, panelReading
+            ? "Reading this project's keys."
+            : "This project's keys are not available.");
+          keyPanelBody.replaceChildren(message);
+          restoreKeyFocus(inside);
+          return;
+        }
+        const entries = publishedKeys;
+        const list = document.createElement("ul");
+        list.className = "admin-statuses";
+        list.setAttribute("role", "list");
+        entries.forEach((entry) => list.append(keyRow(entry, entries)));
+        keyPanelBody.replaceChildren(list, addKeyForm());
+        applyKeyBusy();
+        restoreKeyFocus(inside);
+      }
+      function restoreKeyFocus(inside) {
+        if (!inside || !keyPanel || keyPanel.contains(document.activeElement)) return;
+        if (typeof keyPanel.focus === "function") keyPanel.focus();
+      }
+      // Leaving the route takes this section's list with it, for the reason it
+      // takes the statuses: the next visit reads them again rather than offering
+      // a change composed against values that may be minutes old.
+      //
+      // What it does not take is the keys themselves. publishedKeys is what the
+      // create form's chooser reads, on every route, and the page's most recent
+      // reading of them is better than the one it was loaded with — which is the
+      // whole reason they are adopted rather than re-read.
+      function leaveKeySection() {
+        if (!keyPanel || keyPanel.hidden) return;
+        keyPanel.hidden = true;
+        keyPanel.remove();
+        keyPanelBody.replaceChildren();
+        keyPanelStatus.replaceChildren();
+        keyPanelStatus.dataset.kind = "";
+      }
       // The board's own settings: what this project calls itself, and the two
       // colors it is drawn in.
       //
@@ -8539,7 +8928,7 @@
       let displayFields = null;
       const displaySendingMessage = "Sending this project's board settings.";
       function configBusy() {
-        return panelBusy || priorityBusy || displayBusy;
+        return panelBusy || priorityBusy || displayBusy || keyBusy;
       }
       function displayReport(kind, message, warnings = []) {
         reportInto(displayPanelStatus, kind, message, warnings);
@@ -8551,6 +8940,7 @@
         applyPanelBusy();
         applyPriorityBusy();
         applyDisplayBusy();
+        applyKeyBusy();
       }
       function adoptDisplay(settings) {
         displaySettings = settings;
@@ -8823,6 +9213,14 @@
           displayPanel.hidden = false;
           section.append(displayPanel);
         }
+        // This project's keys, on a board that was given the capabilities to
+        // change them. A board without them is served no section and gets no
+        // heading, rather than a heading over nothing.
+        if (keyPanel) {
+          section.append(sectionHeading("keys-title", "Keys"));
+          keyPanel.hidden = false;
+          section.append(keyPanel);
+        }
         // A change the reader left in flight is still in flight, and the render
         // below will draw its list with every control disabled. Leaving cleared
         // what the last visit had to say, so the reason is said again here
@@ -8835,6 +9233,9 @@
           priorityReport("", pendingIntents.size > 0 ? panelWaitingMessage : prioritySendingMessage);
         }
         if (displayBusy) displayReport("", displaySendingMessage);
+        if (keyBusy) {
+          keyReport("", pendingIntents.size > 0 ? panelWaitingMessage : keySendingMessage);
+        }
         return section;
       }
       function sectionHeading(id, caption) {
@@ -8857,6 +9258,7 @@
       function leaveConfigRoute() {
         leavePrioritySection();
         leaveDisplaySection();
+        leaveKeySection();
         if (!vocabularyPanel || vocabularyPanel.hidden) return;
         vocabularyPanel.hidden = true;
         vocabularyPanel.remove();
