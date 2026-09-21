@@ -16,7 +16,8 @@
     "dist:linux": "npm run stage && electron-builder --linux",
     "check:styles": "node scripts/check-styles.js",
     "check:shell": "node scripts/check-shell.js",
-    "check": "npm run check:styles && npm run check:shell"
+    "test": "node --test \"test/**/*.test.js\"",
+    "check": "npm run check:styles && npm run check:shell && npm test"
   },
   "license": "MIT",
   "build": {
