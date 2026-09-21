@@ -309,7 +309,8 @@ on its own, so listing a file here is safe. An entry must name a file inside the
 project, given as a path relative to it — an escaping value such as
 `../../.bashrc`, an absolute path, and a directory listed by mistake such as
 `docs` or `.claude` are all refused, with the error naming the offending value
-and where it came from. A relative `skillDir` follows the same rule, but an
+and where it came from: the user configuration file, by its path, or
+`--skill-dir`. A relative `skillDir` follows the same escape rule, but an
 absolute one remains honored, as the documented way to keep one personal copy of
 the skill across projects. `preferences` is reserved for future settings and is
 deliberately untyped, so adding one later needs no format version bump.
