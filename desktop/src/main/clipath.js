@@ -141,21 +141,52 @@ async function syncBinary ({ bundled, directory }) {
 // ---------------------------------------------------------------------------
 
 /**
+ * Quote `value` as a single POSIX shell word.
+ *
+ * Double quotes still let $(...) and backtick command substitution run —
+ * `PATH="${PATH}:/tmp/$(rm -rf ~)"` executes rm the moment the profile is
+ * sourced — so a value that ends up in a profile from outside the app (a
+ * directory name, in this module) has to be quoted where nothing inside it
+ * can be reinterpreted. Single quotes are that: the only thing they cannot
+ * express literally is a single quote itself, escaped here with the standard
+ * close-escape-reopen trick ('\'').
+ */
+function quotePosix (value) {
+  return `'${value.replace(/'/g, "'\\''")}'`
+}
+
+/**
+ * Quote `value` as a single fish shell word.
+ *
+ * fish's double quotes do not run command substitutions, but they do expand
+ * `$variable` references — a directory containing one would silently splice
+ * an unrelated value into PATH. Single quotes fix that; inside them fish
+ * recognizes exactly two escapes, \\ and \', so the backslash has to be
+ * escaped before the quote or a value ending in `\'` would double-escape.
+ */
+function quoteFish (value) {
+  const escaped = value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+  return `'${escaped}'`
+}
+
+/**
  * A POSIX profile fragment that appends `directory` to PATH once.
  *
  * Mirrors setup-dev-env.sh's own `case` guard, but appends rather than
  * prepends: prepending would let the app's own copy shadow a Homebrew install
  * the user chose deliberately, and the ruling here is that Homebrew keeps
- * winning. Both the pattern and the assignment quote the directory, so a space
- * (the default macOS path has one, in "Application Support") or a glob
- * character in it is literal rather than re-interpreted by the shell.
+ * winning. The directory is single-quoted in both the pattern and the
+ * assignment (see quotePosix) — `${PATH}` itself stays double-quoted and
+ * expanding, since it is the trusted half of the line.
  */
 function posixBlock (directory) {
+  const quotedPattern = quotePosix(`:${directory}:`)
+  const quotedDirectory = quotePosix(directory)
   const lines = [
     MARK_BEGIN,
     'case ":${PATH}:" in',
-    `\t*":${directory}:"*) ;;`,
-    `\t*) PATH="\${PATH}:${directory}" ;;`,
+    `\t*${quotedPattern}*) ;;`,
+    `\t*) PATH="\${PATH}:"${quotedDirectory} ;;`,
     'esac',
     'export PATH',
     MARK_END
@@ -172,10 +203,11 @@ function posixBlock (directory) {
  * whose shell is fish with nothing on PATH at all, hence this second builder.
  */
 function fishBlock (directory) {
+  const quoted = quoteFish(directory)
   const lines = [
     MARK_BEGIN,
-    `if not contains "${directory}" $PATH`,
-    `    set -gx PATH $PATH "${directory}"`,
+    `if not contains ${quoted} $PATH`,
+    `    set -gx PATH $PATH ${quoted}`,
     'end',
     MARK_END
   ]
@@ -211,7 +243,11 @@ async function writeBlock (file, block) {
   const directory = path.dirname(file)
 
   let existing = ''
+  let previousMode = null
   try {
+    // Captured together: the mode has to describe the same file the content
+    // comparison is about to be based on.
+    previousMode = (await fs.stat(file)).mode & 0o777
     existing = await fs.readFile(file, 'utf8')
   } catch (error) {
     if (error.code !== 'ENOENT') throw error
@@ -233,9 +269,14 @@ async function writeBlock (file, block) {
   await fs.writeFile(temp, next)
   try {
     // copyFile rather than rename: a profile that already exists keeps its own
-    // mode and owner this way, exactly as setup-dev-env.sh's write_path_block
-    // ends with `cat` instead of `mv` for the same reason.
+    // owner this way, exactly as setup-dev-env.sh's write_path_block ends with
+    // `cat` instead of `mv` for the same reason. Mode is a separate story:
+    // fs.copyFile does not reliably leave an existing destination's mode
+    // alone (observed widening a 0600 profile to the temp file's own mode), so
+    // it is captured above and restored explicitly rather than trusted to the
+    // copy — a profile is exactly the kind of file people keep secrets in.
     await fs.copyFile(temp, file)
+    if (previousMode !== null) await fs.chmod(file, previousMode)
   } finally {
     await fs.unlink(temp).catch(() => {})
   }
@@ -319,9 +360,23 @@ function parseRegQuery (stdout) {
  */
 async function updateWindowsPath ({ directory, run = defaultRun }) {
   const query = await run('reg', ['query', 'HKCU\\Environment', '/v', 'Path'])
-  const parsed = query.code === 0 ? parseRegQuery(query.stdout) : null
-  const currentValue = parsed?.value ?? ''
-  const type = parsed?.type ?? 'REG_SZ'
+
+  // A non-zero exit is reg.exe's way of saying the value does not exist at
+  // all, which is a legitimate empty PATH. Exit 0 means the value IS there,
+  // so failing to parse it (a REG_MULTI_SZ Path, or any output shape this
+  // regex does not know) must not collapse to that same empty PATH — that
+  // would make the `reg add` below overwrite the user's whole PATH with just
+  // this one directory. Thrown here, it lands in install()'s `errors` instead.
+  let currentValue = ''
+  let type = 'REG_SZ'
+  if (query.code === 0) {
+    const parsed = parseRegQuery(query.stdout)
+    if (!parsed) {
+      throw new Error(`could not parse the existing user PATH from 'reg query': ${query.stdout || query.stderr}`)
+    }
+    currentValue = parsed.value
+    type = parsed.type
+  }
 
   const segments = currentValue.split(';').map((segment) => segment.trim()).filter(Boolean)
   const already = segments.some((segment) => segment.toLowerCase() === directory.toLowerCase())

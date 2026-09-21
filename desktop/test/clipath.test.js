@@ -21,6 +21,30 @@ async function tempDirectory (prefix) {
   return fs.mkdtemp(path.join(os.tmpdir(), `clipath-${prefix}-`))
 }
 
+// The one case that needs a real fish to prove anything, and fish is not
+// installed everywhere — CI runs these on a Linux runner that has sh and
+// nothing else. Skipped rather than failed there: a missing shell is not a
+// finding about this code, and the block's text is asserted exactly by the
+// case above it either way.
+function findFish () {
+  const candidates = [
+    ...(process.env.PATH ?? '').split(path.delimiter).filter(Boolean).map((directory) => path.join(directory, 'fish')),
+    '/opt/homebrew/bin/fish',
+    '/usr/local/bin/fish',
+    '/usr/bin/fish'
+  ]
+  return candidates.find((candidate) => {
+    try {
+      fsSync.accessSync(candidate, fsSync.constants.X_OK)
+      return true
+    } catch {
+      return false
+    }
+  }) ?? null
+}
+
+const fish = findFish()
+
 describe('syncBinary', () => {
   test('a missing installed copy is created, executable, byte-identical', async () => {
     const root = await tempDirectory('missing')
@@ -92,6 +116,25 @@ describe('syncBinary', () => {
     assert.ok(!entries.some((name) => name.endsWith('.tmp')), `left behind: ${entries}`)
   })
 
+  test('a failed rename leaves no .tmp file behind', async () => {
+    const root = await tempDirectory('rename-fails')
+    const bundled = path.join(root, 'bundled', 'workbook')
+    await fs.mkdir(path.dirname(bundled), { recursive: true })
+    await fs.writeFile(bundled, 'bundled contents')
+    const directory = path.join(root, 'installed')
+    // Occupy the destination path with a non-empty directory: fs.rename(file,
+    // thisPath) can never succeed, which is what forces syncBinary's rename
+    // step to fail after the temp file has already been written.
+    const destination = path.join(directory, 'workbook')
+    await fs.mkdir(destination, { recursive: true })
+    await fs.writeFile(path.join(destination, 'occupied'), 'x')
+
+    await assert.rejects(() => clipath.syncBinary({ bundled, directory }))
+
+    const entries = await fs.readdir(directory)
+    assert.ok(!entries.some((name) => name.endsWith('.tmp')), `left behind: ${entries}`)
+  })
+
   test('a bundled binary that does not exist is skipped by install(), with no directory created', async () => {
     const root = await tempDirectory('absent')
     const home = path.join(root, 'home')
@@ -108,33 +151,95 @@ describe('syncBinary', () => {
 })
 
 describe('posixBlock', () => {
-  test('appends to PATH, quoted, never prepends', () => {
+  test('appends to PATH, single-quoted, never prepends', () => {
     const block = clipath.posixBlock('/opt/workbench/bin')
     const expected = [
       clipath.MARK_BEGIN,
       'case ":${PATH}:" in',
-      '\t*":/opt/workbench/bin:"*) ;;',
-      '\t*) PATH="${PATH}:/opt/workbench/bin" ;;',
+      "\t*':/opt/workbench/bin:'*) ;;",
+      '\t*) PATH="${PATH}:"\'/opt/workbench/bin\' ;;',
       'esac',
       'export PATH',
       clipath.MARK_END
     ].join('\n') + '\n'
     assert.equal(block, expected)
   })
+
+  test('escapes an embedded single quote so the directory stays one literal word', () => {
+    const block = clipath.posixBlock("/tmp/o'brien")
+    // The standard POSIX trick: close the quote, escape a literal quote, reopen.
+    assert.ok(block.includes("':/tmp/o'\\''brien:'"), block)
+    assert.ok(block.includes('PATH="${PATH}:"\'/tmp/o\'\\\'\'brien\''), block)
+  })
+
+  test('a directory holding a literal single quote still sources cleanly and lands on PATH intact', async () => {
+    const root = await tempDirectory('posix-quote')
+    const directory = "/tmp/o'brien"
+    const block = clipath.posixBlock(directory)
+    const scriptFile = path.join(root, 'block.sh')
+    await fs.writeFile(scriptFile, block)
+    const fakeHome = path.join(root, 'fake-home')
+    await fs.mkdir(fakeHome, { recursive: true })
+
+    const output = execFileSync('/bin/sh', ['-c', `. "${scriptFile}"; printf '%s' "$PATH"`],
+      { env: { PATH: '/usr/bin:/bin', HOME: fakeHome } }).toString()
+
+    assert.ok(output.split(':').includes(directory), `PATH was: ${output}`)
+  })
+
+  test('a directory holding a command substitution or backtick does not execute when sourced', async () => {
+    const root = await tempDirectory('posix-injection')
+    const marker = path.join(root, 'marker')
+    const maliciousDirectory = `/tmp/$(touch ${marker})\`touch ${marker}2\``
+    const block = clipath.posixBlock(maliciousDirectory)
+    const scriptFile = path.join(root, 'block.sh')
+    await fs.writeFile(scriptFile, block)
+    const fakeHome = path.join(root, 'fake-home')
+    await fs.mkdir(fakeHome, { recursive: true })
+
+    execFileSync('/bin/sh', ['-c', `. "${scriptFile}"; printf '%s' "$PATH"`],
+      { env: { PATH: '/usr/bin:/bin', HOME: fakeHome } })
+
+    assert.equal(fsSync.existsSync(marker), false, 'command substitution must not have run')
+    assert.equal(fsSync.existsSync(`${marker}2`), false, 'the backtick form must not have run either')
+  })
 })
 
 describe('fishBlock', () => {
-  test('is fish syntax, not the posix block', () => {
+  test('is fish syntax, single-quoted, not the posix block', () => {
     const block = clipath.fishBlock('/opt/workbench/bin')
     const expected = [
       clipath.MARK_BEGIN,
-      'if not contains "/opt/workbench/bin" $PATH',
-      '    set -gx PATH $PATH "/opt/workbench/bin"',
+      "if not contains '/opt/workbench/bin' $PATH",
+      "    set -gx PATH $PATH '/opt/workbench/bin'",
       'end',
       clipath.MARK_END
     ].join('\n') + '\n'
     assert.equal(block, expected)
     assert.notEqual(block, clipath.posixBlock('/opt/workbench/bin'))
+  })
+
+  test('escapes a backslash before a single quote, in that order', () => {
+    const block = clipath.fishBlock('/tmp/back\\slash\'quote')
+    // fish single quotes: only \ and ' are special, and the backslash itself
+    // has to be escaped first or escaping the quote would double-escape it.
+    assert.ok(block.includes("'/tmp/back\\\\slash\\'quote'"), block)
+  })
+
+  test('a directory holding a fish variable reference does not expand when sourced', { skip: fish ? false : 'fish is not installed here' }, async () => {
+    const root = await tempDirectory('fish-injection')
+    const maliciousDirectory = '/tmp/$HOME'
+    const block = clipath.fishBlock(maliciousDirectory)
+    const scriptFile = path.join(root, 'block.fish')
+    await fs.writeFile(scriptFile, block)
+    const fakeHome = path.join(root, 'fake-home')
+    await fs.mkdir(fakeHome, { recursive: true })
+
+    const output = execFileSync(fish, ['-c', `source "${scriptFile}"; printf '%s' "$PATH"`],
+      { env: { PATH: '/usr/bin:/bin', HOME: fakeHome } }).toString()
+
+    assert.ok(output.split(':').includes('/tmp/$HOME'), `PATH was: ${output}`)
+    assert.ok(!output.includes(fakeHome), `$HOME must not have expanded into PATH: ${output}`)
   })
 })
 
@@ -183,8 +288,22 @@ describe('writeBlock', () => {
 
     const content = await fs.readFile(profile, 'utf8')
     assert.equal(content.split(clipath.MARK_BEGIN).length - 1, 1, 'exactly one block')
-    assert.ok(!content.includes('/opt/workbench/bin"'), 'the old directory is gone')
+    assert.ok(!content.includes("'/opt/workbench/bin'"), 'the old directory is gone')
     assert.ok(content.includes('/opt/workbench/bin-2'))
+  })
+
+  test('preserves an existing profile\'s exact mode, across a write and a repeat write', async () => {
+    const root = await tempDirectory('write-mode')
+    const profile = path.join(root, '.profile')
+    await fs.writeFile(profile, '# secrets live near here\n')
+    await fs.chmod(profile, 0o600)
+    const block = clipath.posixBlock('/opt/workbench/bin')
+
+    await clipath.writeBlock(profile, block)
+    assert.equal((await fs.stat(profile)).mode & 0o777, 0o600, 'mode after the first write')
+
+    await clipath.writeBlock(profile, block) // no-op write; mode must still hold
+    assert.equal((await fs.stat(profile)).mode & 0o777, 0o600, 'mode after the second (no-op) write')
   })
 
   test('lines above and below the block are untouched, including another tool\'s block', async () => {
@@ -322,6 +441,23 @@ describe('updateWindowsPath (fake runner only)', () => {
     const result = await clipath.updateWindowsPath({ directory: 'C:\\Workbench\\bin', run })
 
     assert.equal(result.changed, false)
+  })
+
+  test('an exit-0 query whose output does not parse throws rather than wiping the PATH', async () => {
+    let addCalled = false
+    const run = async (file, args) => {
+      if (args[0] === 'query') {
+        // A shape reg.exe can genuinely produce (a REG_MULTI_SZ Path, or any
+        // future format this parser doesn't know) — code 0, but no line this
+        // regex recognizes as "Path    REG_SZ    value".
+        return { code: 0, stdout: '    Path    REG_MULTI_SZ    C:\\A\\0C:\\B\\0\n', stderr: '' }
+      }
+      addCalled = true
+      return { code: 0, stdout: '', stderr: '' }
+    }
+
+    await assert.rejects(() => clipath.updateWindowsPath({ directory: 'C:\\Workbench\\bin', run }))
+    assert.equal(addCalled, false, 'reg add must never run against an unparsed value')
   })
 
   test('the command is reg add, never setx', async () => {
