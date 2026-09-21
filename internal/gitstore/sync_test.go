@@ -610,9 +610,14 @@ func TestFetchReloadsTheKeySetWhenTheLedgerMovedOutOfBand(t *testing.T) {
 
 // And the negative, which is what keeps the reload above from being an
 // indiscriminate welcome: a ref under a key origin's ledger never added is
-// still ignored, still flagged as possibly another Workbook's history, and now
-// reported with the key that would adopt it.
-func TestFetchReportsTheKeyThatWouldAdoptAnIgnoredRef(t *testing.T) {
+// still ignored, still flagged as possibly another Workbook's history, and
+// reported with the key this project does not have.
+//
+// What it is not reported with is advice to add that key. Every reachable case
+// of such a ref is a ref from another project identity, and its documents name
+// that project — which the tip check refuses whatever this project's key set
+// says — so `workbook key add` would not make it readable.
+func TestFetchReportsTheKeyAnIgnoredRefCarries(t *testing.T) {
 	ctx := context.Background()
 	first, second, config := syncRepositories(t)
 	task := createSyncTask(t, first, config, "Adoptable")
@@ -632,15 +637,133 @@ func TestFetchReportsTheKeyThatWouldAdoptAnIgnoredRef(t *testing.T) {
 		if !ignored.PlausibleTask {
 			t.Errorf("plausibleTask = false, want true")
 		}
-		if ignored.AdoptableKey != "OTHER" {
-			t.Errorf("adoptableKey = %q, want OTHER", ignored.AdoptableKey)
-		}
 		if !strings.Contains(ignored.Reason, `project key "OTHER", which this project does not have`) {
 			t.Errorf("reason = %q, want it to name the key this project does not have", ignored.Reason)
 		}
 		return
 	}
 	t.Fatalf("Fetch() ignored = %#v, want an entry for %s", fetched.Ignored, foreign)
+}
+
+// A ref under a key this project *does* have, whose documents name another
+// project, is the other half of the same situation — and it is not this
+// project's corruption. Somebody added the key a stranger's tasks are minted
+// under, by mistake or hoping to adopt them, and from then on every fetch met a
+// tracking tip whose documents name a project this clone is not.
+//
+// Reporting that as a failed validation made the mistake permanent: the fetch
+// exited nonzero on every synchronization forever, and `key retire` did not
+// undo it, because a retired key is still one of this project's keys and its
+// refs are still read. Classifying it here, at the boundary where a fetched
+// name enters, is what makes the retirement a real inverse of the addition.
+//
+// The local canonical namespace is not given the same treatment, and must not
+// be: only this tool writes it, so documents naming another project there are
+// corruption rather than somebody else's history.
+func TestFetchIgnoresAFetchedRefWhoseDocumentsNameAnotherProject(t *testing.T) {
+	ctx := context.Background()
+	first, second, config := syncRepositories(t)
+
+	// The mistaken addition: this project takes QQ as one of its own keys, so
+	// the listing below recognizes the stranger's ref as a name to read.
+	writeConfig(t, second, config, core.ConfigOperation{Type: core.ConfigKeyAdd, Key: "QQ"})
+	foreignID := publishForeignProjectTask(t, first, "QQ")
+
+	// A task of this project's own, so the run has real work beside the ref it
+	// has to step over.
+	own := createSyncTask(t, first, config, "Our own task")
+	publishTaskRefs(t, first)
+
+	fetched, err := second.Fetch(ctx, config)
+	if err != nil {
+		t.Fatalf("Fetch() error = %v; result = %#v", err, fetched)
+	}
+	assertSyncOutcome(t, fetched, own.ID, SyncCreated)
+	assertForeignProjectIgnored(t, fetched, foreignID, config.ProjectID)
+	if refExists(t, second, taskRefPrefix+foreignID) {
+		t.Fatalf("another project's ref reached the canonical namespace at %s", taskRefPrefix+foreignID)
+	}
+	for _, outcome := range fetched.Tasks {
+		if outcome.TaskID == foreignID {
+			t.Fatalf("Fetch() reported %s as a task outcome (%s): it is an ignored ref, not a task of this project's",
+				foreignID, outcome.Status)
+		}
+	}
+
+	// And retiring the key that let the ref in leaves the fetch exactly as
+	// tolerant, which is the whole point: a retired key is still this
+	// project's, so its refs are still read, and the classification cannot
+	// depend on the key's state.
+	writeConfig(t, second, config, core.ConfigOperation{Type: core.ConfigKeyRetire, Key: "QQ"})
+	retired, err := second.Fetch(ctx, config)
+	if err != nil {
+		t.Fatalf("Fetch() after key.retire error = %v; result = %#v", err, retired)
+	}
+	assertForeignProjectIgnored(t, retired, foreignID, config.ProjectID)
+
+	// The asymmetry, asserted rather than assumed: the same tip in the local
+	// canonical namespace is still a refusal. Nothing but this tool writes
+	// there, so documents naming another project are not a stranger's push but
+	// a repository somebody has to repair.
+	syncGit(t, second.Root, "update-ref", taskRefPrefix+foreignID,
+		refValue(t, second, remoteTaskRefPrefix+foreignID))
+	planted, err := second.Fetch(ctx, config)
+	if err == nil {
+		t.Fatalf("Fetch() with another project's documents at a canonical ref error = nil; result = %#v", planted)
+	}
+	assertSyncOutcome(t, planted, foreignID, SyncInvalid)
+}
+
+// publishForeignProjectTask builds a whole second Workbook project and pushes
+// one of its task refs into the origin the named repository shares.
+//
+// A second project rather than edited bytes, because the case is about
+// documents that name another project ID, and nothing short of another project
+// writes those: a hand-built tree would prove the check fires without proving
+// it fires on what a stranger's push actually delivers.
+func publishForeignProjectTask(t *testing.T, beside *Repository, key string) string {
+	t.Helper()
+	ctx := context.Background()
+	path := testrepo.New(t)
+	syncGit(t, path, "branch", "-M", "main")
+	stranger, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	strangerConfig, _, err := stranger.Init(ctx, key, core.CryptoULIDSource{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := createSyncTask(t, stranger, strangerConfig, "Another project's task")
+	origin := syncGit(t, beside.Root, "config", "remote.origin.url")
+	syncGit(t, path, "push", "--quiet", origin, taskRefPrefix+task.ID+":"+taskRefPrefix+task.ID)
+	return task.ID
+}
+
+// assertForeignProjectIgnored requires one ignored-ref entry for the named task
+// whose reason says what is actually wrong with it — the project ID its
+// documents carry, beside this project's — and which keeps the flag that stands
+// between it and advice to delete real history.
+func assertForeignProjectIgnored(t *testing.T, result SyncResult, taskID, projectID string) {
+	t.Helper()
+	for _, ignored := range result.Ignored {
+		if ignored.Ref != taskRefPrefix+taskID {
+			continue
+		}
+		if !ignored.PlausibleTask {
+			t.Errorf("plausibleTask = false for %s, want true: it is another project's task ref", taskID)
+		}
+		for _, want := range []string{taskID, projectID} {
+			if !strings.Contains(ignored.Reason, want) {
+				t.Errorf("reason = %q, want it to name %q", ignored.Reason, want)
+			}
+		}
+		if !strings.Contains(ignored.Reason, "project ID") {
+			t.Errorf("reason = %q, want it to name the project-ID mismatch", ignored.Reason)
+		}
+		return
+	}
+	t.Fatalf("Fetch() ignored = %#v, want an entry for %s", result.Ignored, taskID)
 }
 
 func TestPushPublishesAllTaskRefsAndReportsUpToDate(t *testing.T) {

@@ -510,7 +510,8 @@ func (r *Repository) fetch(
 	// ledger again here makes the ordering a property of this function rather
 	// than of what the stage happened to have to do.
 	r.forgetKeySet()
-	if _, err := r.keySet(ctx, config); err != nil {
+	keys, err := r.keySet(ctx, config)
+	if err != nil {
 		result, err = failedSyncPhase(result, "fetch failed before completion", err)
 		return state, result, err
 	}
@@ -545,6 +546,9 @@ func (r *Repository) fetch(
 
 	invalidCanonical := 0
 	invalidTracking := 0
+	// Collected rather than appended straight to the report, so the whole
+	// listing can be put back in ref-name order once, after the pass.
+	var foreignIgnored []IgnoredRef
 	invalidCanonicalTasks := make(map[string]struct{})
 	for index, tip := range partial {
 		if index < len(canonicalRefs) {
@@ -558,11 +562,33 @@ func (r *Repository) fetch(
 			continue
 		}
 		if tip.Err != nil {
+			// A fetched tip whose documents name another project is the one
+			// refusal here that says nothing about this repository. Origin's
+			// task namespace is shared, this project has the key the name
+			// carries — somebody added it — and what arrived is intact history
+			// belonging to whoever owns that project ID. Counting it as a
+			// failed validation made a mistaken `key add` permanent: every
+			// synchronization from then on exited nonzero, and `key retire` did
+			// not undo it, because a retired key is still one of this project's
+			// keys and its refs are still read. So it joins the ignored refs,
+			// which is the report that already exists for a name on origin this
+			// clone will not read, and the run completes.
+			if projectID, foreign := foreignProjectOf(tip.Err); foreign {
+				foreignIgnored = append(foreignIgnored, ignoredForeignProjectRef(keys, config, tip.Head.TaskID, projectID))
+				continue
+			}
 			invalidTracking++
 			state.Outcomes[tip.Head.TaskID] = SyncTaskResult{TaskID: tip.Head.TaskID, Status: SyncInvalid, Detail: tip.Err.Error()}
 			continue
 		}
 		state.Tracking[tip.Head.TaskID] = tip.Snapshot
+	}
+	if len(foreignIgnored) > 0 {
+		// Reported beside the names the listing above could not read at all,
+		// in the one order this report promises: by ref name, so one run's
+		// report reads the same as the next whichever pass found an entry.
+		result.Ignored = append(result.Ignored, foreignIgnored...)
+		sort.Slice(result.Ignored, func(i, j int) bool { return result.Ignored[i].Ref < result.Ignored[j].Ref })
 	}
 
 	pairs := make([]taskHeadPair, 0, len(state.Tracking))

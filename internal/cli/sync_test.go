@@ -228,13 +228,12 @@ func TestRunSyncToleratesAndReportsUnrecognizedRemoteTaskRef(t *testing.T) {
 	}
 	fetched := decodeSyncResult(t, stdout, "fetch")
 	assertCLIIgnoredRefs(t, fetched, wantIgnored)
-	// The envelope names the key that would adopt the ref, so a script can put
-	// the same choice in front of somebody as the human report below does, and
-	// names nothing for a ref no key explains.
-	assertCLIAdoptableKeys(t, fetched, map[string]string{
-		"refs/workbook/tasks/EVIL": "",
-		foreignRef:                 "OPS",
-	})
+	// And the envelope offers no key to adopt either name under. A ref under a
+	// key this project does not have is a ref from another project identity,
+	// whose documents the tip check refuses whatever this project's keys say,
+	// so a member naming a key to add would have described a remedy that is
+	// not one.
+	assertCLIOffersNoAdoption(t, stdout)
 
 	code, stdout, stderr = run(t, second, "push", "--json")
 	if code != 0 || stderr != "" {
@@ -260,13 +259,13 @@ func TestRunSyncToleratesAndReportsUnrecognizedRemoteTaskRef(t *testing.T) {
 	// thing telling the reader which of these two refs it may be filled with is
 	// the verdict on the ref's line.
 	//
-	// The foreign ref's whole line is asserted, because three things have to
+	// The foreign ref's whole line is asserted, because two things have to
 	// reach a person there at once: the verdict that keeps the deletion command
-	// away from it, the command that would adopt it instead, and the refusal's
-	// own sentence naming the key this project does not have.
+	// away from it, and the refusal's own sentence naming the key this project
+	// does not have.
 	for _, want := range []string{
 		"Ignored:\trefs/workbook/tasks/EVIL\t" + ignoredRefRemovable + "\t",
-		"Ignored:\t" + foreignRef + "\t" + ignoredRefPlausible + adoptAdvice("OPS") +
+		"Ignored:\t" + foreignRef + "\t" + ignoredRefPlausible +
 			"\ttask ID \"OPS-01K0M6B8A4FTT8C39MXXYTW7D9\" carries project key \"OPS\", " +
 			"which this project does not have",
 		removalAdvice,
@@ -276,6 +275,7 @@ func TestRunSyncToleratesAndReportsUnrecognizedRemoteTaskRef(t *testing.T) {
 			t.Fatalf("human sync stdout = %q, want it to contain %q", stdout, want)
 		}
 	}
+	assertCLIOffersNoAdoption(t, stdout)
 
 	cliGit(t, second, "push", "origin", "--delete", "refs/workbook/tasks/EVIL", foreignRef)
 	code, stdout, stderr = run(t, second, "sync", "--json")
@@ -303,17 +303,17 @@ func assertCLIIgnoredRefs(t *testing.T, result gitstore.SyncResult, want map[str
 	}
 }
 
-// assertCLIAdoptableKeys requires exactly the named refs and, for each, the
-// project key the report would offer to adopt it under — empty for a name no
-// key would make readable.
-func assertCLIAdoptableKeys(t *testing.T, result gitstore.SyncResult, want map[string]string) {
+// assertCLIOffersNoAdoption requires that no ignored-ref report — envelope or
+// human line — names a `workbook key add` as the answer to a ref it skipped.
+// It is asserted over the whole output rather than over one member, because the
+// point is that no surface says it.
+func assertCLIOffersNoAdoption(t *testing.T, output string) {
 	t.Helper()
-	got := make(map[string]string, len(result.Ignored))
-	for _, ignored := range result.Ignored {
-		got[ignored.Ref] = ignored.AdoptableKey
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("adoptable keys = %#v, want %#v", got, want)
+	for _, absent := range []string{"workbook key add", "adoptableKey", "would adopt"} {
+		if strings.Contains(output, absent) {
+			t.Fatalf("ignored-ref report = %q, want no %q: adding a key cannot make another project's ref readable",
+				output, absent)
+		}
 	}
 }
 

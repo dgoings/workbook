@@ -631,7 +631,7 @@ func TestSetupNamesTheRefsItsSynchronizationIgnored(t *testing.T) {
 	for _, want := range []string{
 		"Sync:\tcompleted",
 		"Ignored:\trefs/workbook/tasks/EVIL\t" + ignoredRefRemovable + "\t",
-		"Ignored:\t" + foreignRef + "\t" + ignoredRefPlausible + adoptAdvice("OPS") + "\t",
+		"Ignored:\t" + foreignRef + "\t" + ignoredRefPlausible + "\t",
 		removalAdvice,
 		keepWarning,
 	} {

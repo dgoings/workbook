@@ -37,8 +37,11 @@ described under Changed.
   the statuses and the priorities, with the new-task form offering the key to
   mint under once there is more than one. Existing task IDs never change, a
   retired key's tasks stay this project's, and nothing renames or deletes a
-  key. A ref under a key this project does not have is reported with the
-  `workbook key add` that would adopt it rather than as junk to delete. A
+  key. A ref on `origin` under a key this project does not have is reported as
+  another project's rather than as junk to delete, and a fetched ref whose key
+  this project has but whose documents name another project is reported the
+  same way instead of failing the synchronization, so adding a key by mistake
+  is undone by retiring it. A
   project that adds a key records a configuration a Workbook older than this
   release cannot fold: it reads the ledger as newer than it can read and sees
   tasks under the new key as another project's refs, so everyone on the team

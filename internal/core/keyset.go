@@ -305,21 +305,6 @@ func (set KeySet) PlausibleTaskID(name string) bool {
 	return ValidateProjectKey(foreignKey) == nil && ulidShapePattern.MatchString(body)
 }
 
-// AdoptableKey names the key `workbook key add` would adopt an ignored ref
-// under, or nothing when adopting it is not the answer.
-//
-// It is narrower than PlausibleTaskID on purpose. Advice to adopt is only
-// honest for a name that is exactly a task ID under a key this project does not
-// have: a name under a key it already has needs no adoption, and a name this
-// build merely cannot parse would not become readable by adding a key.
-func (set KeySet) AdoptableKey(name string) string {
-	key, _, ok := ParseTaskID(strings.TrimSuffix(name, peeledRefSuffix))
-	if !ok || set.Contains(key) {
-		return ""
-	}
-	return key
-}
-
 // KeyNameList names every key this project has, in add order, marking the ones
 // that are retired, for a message that has to tell somebody what exists.
 func KeyNameList(set KeySet) string {

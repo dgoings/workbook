@@ -827,9 +827,12 @@ and for the same reason.
 
 Which task IDs belong to this project is decided by the key set, so a ref under
 a key the project does not have is another project's as far as this clone is
-concerned — and adding the key is how such a ref is adopted rather than deleted.
+concerned. Adding the key does not make it this project's: the ref's documents
+name the project that wrote them, and that is what every read compares against.
 The ignored-ref report under [Explicit task sharing](#explicit-task-sharing)
-names the `workbook key add` that would do it.
+names such a ref, offers nothing to run against it, and says the same thing
+about a ref under a key this project *does* have whose documents name another
+project.
 
 Recording a key raises what the configuration history requires of a reader, the
 way recording a display setting or a priority does. `key.add`, `key.current` and
@@ -1056,23 +1059,36 @@ another version's task is reported as kept, together with what deleting it would
 cost. Judge such a ref yourself before removing it.
 
 Which names are this project's is decided by its whole key set, active and
-retired keys alike, rather than by the key in its identity record. An entry
-whose name is a task ID under a key this project does *not* have — the ID
-itself, or the peeled `…^{}` form of it — is the one case where there is
-something to do besides judging it: the JSON entry carries an `adoptableKey`
-member naming that key, and human output names the command that would take the
-ref on, beside the verdict rather than instead of it.
+retired keys alike, rather than by the key in its identity record. A ref under a
+key this project does *not* have — the ID itself, or the peeled `…^{}` form of
+it — is reported with the key it carries and with the keys this project has:
 
 ```
-Ignored:	refs/workbook/tasks/OPS-01M32R58CBNDXTAAQBCQFSXYAZ	may be another Workbook's task; `workbook key add OPS` would adopt it	task ID "OPS-01M32R58CBNDXTAAQBCQFSXYAZ" carries project key "OPS", which this project does not have; its keys are: WB (retired), NEW
+Ignored:	refs/workbook/tasks/OPS-01M32R58CBNDXTAAQBCQFSXYAZ	may be another Workbook's task	task ID "OPS-01M32R58CBNDXTAAQBCQFSXYAZ" carries project key "OPS", which this project does not have; its keys are: WB (retired), NEW
 ```
 
-`workbook key add OPS` makes those tasks this project's rather than another's,
-and the next fetch takes them. Whether they are this project's is the reader's
-call — every known case of a second key on one origin is one project that ended
-up with two, through a split, a re-initialization, or an older build reading a
-newer format — so the report says the decision exists and how it is made, and
-makes none of it.
+No command is offered for such a ref, and `workbook key add OPS` is not one: the
+ref carries another project's task documents, which every read refuses whatever
+this project's keys say, so adding the key would change the report's wording and
+nothing else. A second key on one origin is a second project identity — a split,
+a re-initialization, or another project pushing into the same remote — and the
+report's job is to name it and leave it alone.
+
+Adding a key a stranger's tasks are minted under is therefore a mistake the
+report absorbs rather than one that breaks synchronization. A fetched ref whose
+name this project's keys do cover, but whose documents carry another project ID,
+is reported the same way, with that mismatch as its reason, and the fetch
+completes:
+
+```
+Ignored:	refs/workbook/tasks/QQ-01M32X6CZRQNKG4QYJVHM3162K	may be another Workbook's task	task ID "QQ-01M32X6CZRQNKG4QYJVHM3162K" carries this project's key, but its documents carry project ID 01M32X6BJ6T19THJJVDBA407HG rather than this project's 01M32X6A5MF3JQF2TZ2S5VFC28, so the ref belongs to another project sharing this origin
+```
+
+`workbook key retire QQ` — or leaving the key where it is — costs nothing but
+the line, because a key is never deleted and its refs are read whatever its
+state. The local canonical namespace is stricter: only Workbook writes there, so
+documents naming another project under `refs/workbook/tasks/*` are corruption
+and are refused as such.
 
 `workbook push` publishes validated local `refs/workbook/tasks/*` refs to
 `origin` without force or deletion. One bounded, non-atomic publication retains

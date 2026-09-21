@@ -113,19 +113,6 @@ func TestNormalizeKeyDocumentRefusesIncoherentDocuments(t *testing.T) {
 	}
 }
 
-func TestKeySetAdoptAdviceNamesAForeignKeyOnce(t *testing.T) {
-	set := FoundingKeySet("WB")
-	if got := set.AdoptableKey("NEW-01K0M6B8A4FTT8C39MXXYTW7C1"); got != "NEW" {
-		t.Fatalf("AdoptableKey(NEW-…) = %q, want NEW", got)
-	}
-	if got := set.AdoptableKey("WB-01K0M6B8A4FTT8C39MXXYTW7C1"); got != "" {
-		t.Fatalf("AdoptableKey(own key) = %q, want empty", got)
-	}
-	if got := set.AdoptableKey("scratch"); got != "" {
-		t.Fatalf("AdoptableKey(non-task) = %q, want empty", got)
-	}
-}
-
 // KeySet.PlausibleTaskID is the gate in front of advice to delete a ref from a
 // shared remote, so it must keep saying yes to the two names that a stranger's
 // junk is easily mistaken for: a task written under one of this project's keys

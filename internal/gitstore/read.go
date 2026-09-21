@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
 	"sort"
 	"strings"
@@ -169,16 +170,6 @@ type IgnoredRef struct {
 	// must never suggest deleting such a ref; only a name no project's format
 	// can produce is safe to offer for removal.
 	PlausibleTask bool `json:"plausibleTask"`
-	// AdoptableKey names the project key `workbook key add` would adopt this
-	// ref under, and is empty for every ref adoption is not the answer for.
-	//
-	// It is narrower than PlausibleTask: that member gates destructive advice
-	// and is true for anything some Workbook could have written, while this is
-	// only set for a name that is exactly a task ID under a key this project
-	// does not have. Every known case of a second key on one origin is one
-	// project that ended up with two — a split, a re-initialization, an older
-	// build — and for those the ref is not junk to delete but history to adopt.
-	AdoptableKey string `json:"adoptableKey,omitempty"`
 }
 
 func (r *Repository) listTaskRefs(ctx context.Context) ([]taskRefRecord, error) {
@@ -354,8 +345,28 @@ func ignoredTaskRef(keys core.KeySet, prefix, refName, reason string) IgnoredRef
 		Ref:           taskRefPrefix + name,
 		Reason:        reason,
 		PlausibleTask: keys.PlausibleTaskID(name),
-		AdoptableKey:  keys.AdoptableKey(name),
 	}
+}
+
+// ignoredForeignProjectRef restates a fetched task ref whose documents name
+// another project as one entry of the ignored-ref report.
+//
+// The reason names both project IDs rather than saying only that they differ,
+// because the reader's question is whose ref this is, and the answer is a
+// project they may well be able to identify. It also says the key is this
+// project's, since that is the fact a reader will otherwise contradict from
+// `workbook key list`: the key was added here, and the ref still is not ours.
+//
+// It goes through ignoredTaskRef so this entry is named the way every other one
+// is — under the canonical prefix origin holds it at, and with the flag that
+// stands between a ref and advice to delete it. That flag is true here for the
+// most literal possible reason: the ref is another Workbook's task.
+func ignoredForeignProjectRef(keys core.KeySet, config core.ProjectConfig, taskID, projectID string) IgnoredRef {
+	reason := fmt.Sprintf(
+		"task ID %q carries this project's key, but its documents carry project ID %s rather than this project's %s, "+
+			"so the ref belongs to another project sharing this origin",
+		taskID, projectID, config.ProjectID)
+	return ignoredTaskRef(keys, remoteTaskRefPrefix, remoteTaskRefPrefix+taskID, reason)
 }
 
 // readTip reads one tip through the batch reader, which is deliberately the
@@ -509,6 +520,52 @@ func validateReadConfig(config core.ProjectConfig) error {
 	return nil
 }
 
+// foreignProjectDocumentsError is the one tip refusal that is not necessarily a
+// statement about this project's repository: documents naming a different
+// project.
+//
+// Every other check in validateTipIdentity compares a document against the ref
+// it hangs from or against its own twin, so failing one means somebody wrote a
+// tip that does not follow from what Workbook writes. This one is different.
+// Origin's task namespace is shared, and a ref there whose documents name
+// another project is that project's history, arriving intact. Whether it is
+// corruption depends entirely on where the ref was read: in the local canonical
+// namespace, which only this tool writes, it is corruption; in the tracking
+// mirror of a shared origin it is somebody else's work, and the fetch
+// classifies it as an ignored ref rather than refusing the whole run.
+//
+// It carries the category the message always had, so every caller that does not
+// ask keeps the exit code and the wording it had before this type existed. What
+// it adds is the project ID, so the one caller that does ask can say in its
+// report which project the ref belongs to.
+type foreignProjectDocumentsError struct {
+	// ProjectID is the project the documents name, which is the one fact a
+	// report about such a ref has that the reader does not.
+	ProjectID string
+	cause     error
+}
+
+func (e *foreignProjectDocumentsError) Error() string { return e.cause.Error() }
+
+func (e *foreignProjectDocumentsError) Unwrap() error { return e.cause }
+
+func foreignProjectDocuments(projectID string) error {
+	return &foreignProjectDocumentsError{
+		ProjectID: projectID,
+		cause:     core.Errorf(core.CategoryCorruptData, "task documents do not match the configured project"),
+	}
+}
+
+// foreignProjectOf reports the project a refused tip's documents name, and
+// whether the refusal was that one at all.
+func foreignProjectOf(err error) (string, bool) {
+	var foreign *foreignProjectDocumentsError
+	if errors.As(err, &foreign) {
+		return foreign.ProjectID, true
+	}
+	return "", false
+}
+
 func (r *Repository) validateRepositoryConfig(config core.ProjectConfig) error {
 	if err := validateReadConfig(config); err != nil {
 		return err
@@ -525,7 +582,7 @@ func (r *Repository) validateRepositoryConfig(config core.ProjectConfig) error {
 
 func validateTipIdentity(config core.ProjectConfig, taskID string, pack core.OperationPack, state core.StateDocument) error {
 	if pack.ProjectID != config.ProjectID || state.ProjectID != config.ProjectID {
-		return core.Errorf(core.CategoryCorruptData, "task documents do not match the configured project")
+		return foreignProjectDocuments(pack.ProjectID)
 	}
 	if pack.TaskID != taskID || state.TaskID != taskID {
 		return core.Errorf(core.CategoryCorruptData, "task documents do not match the task ref")
