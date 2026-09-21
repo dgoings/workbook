@@ -277,12 +277,19 @@ func (set KeySet) Document() KeyDocument {
 // PlausibleTaskID reports whether a ref name could be some Workbook's task,
 // which is the gate in front of destructive advice.
 //
-// It is PlausibleTaskID(key, name)'s two rules with this project's whole key
-// set in place of its one key: a name under any key this project has, which a
-// version writing an ID format this build predates would produce, and a name
-// shaped like <KEY>-<ULID> under any valid key, which a second project sharing
-// origin's namespace produces. A true answer means only "do not offer to delete
-// this".
+// Two names qualify: one under any key this project has, which a version
+// writing an ID format this build predates would produce, and one shaped like
+// <KEY>-<ULID> under any valid key, which a second project sharing origin's
+// namespace produces. A name nested under either is judged by the segment it
+// hangs from, so a child ref is as protected as its parent, and Git's
+// peeled-tag suffix is dropped before either rule runs, so a peeled name is
+// judged as the task it points at under any key rather than only under this
+// project's.
+//
+// It exists to gate destructive advice, never to widen what Workbook reads as a
+// task: a true answer means only "do not offer to delete this". Every name that
+// fails both rules belongs to no project's ID format and can be named as
+// removable; Owns remains the authority on what this project's tasks are.
 func (set KeySet) PlausibleTaskID(name string) bool {
 	name = strings.TrimSuffix(name, peeledRefSuffix)
 	for _, definition := range set.definitions {

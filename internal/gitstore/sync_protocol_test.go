@@ -21,7 +21,7 @@ func TestParseRemoteTaskHeadsAcceptsFullSHA1AndSHA256Records(t *testing.T) {
 			output := []byte(objectID + "\trefs/workbook/tasks/" + firstTask + "\n" +
 				objectID + "\trefs/workbook/tasks/" + secondTask + "\n")
 
-			got, ignored, err := repository.parseRemoteTaskHeads(core.ProjectConfig{Key: "WB"}, output)
+			got, ignored, err := repository.parseRemoteTaskHeads(core.FoundingKeySet("WB"), output)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -55,7 +55,7 @@ func TestParseRemoteTaskHeadsRejectsInvalidRecords(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			repository := &Repository{objectIDBytes: 20}
 			if _, _, err := repository.parseRemoteTaskHeads(
-				core.ProjectConfig{Key: "WB"},
+				core.FoundingKeySet("WB"),
 				[]byte(test.output),
 			); err == nil {
 				t.Fatalf("parseRemoteTaskHeads(%q) error = nil", test.output)
@@ -93,7 +93,7 @@ func TestParseRemoteTaskHeadsSkipsAndReportsUnrecognizedNames(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			repository := &Repository{objectIDBytes: 20}
 			heads, ignored, err := repository.parseRemoteTaskHeads(
-				core.ProjectConfig{Key: "WB"},
+				core.FoundingKeySet("WB"),
 				[]byte(valid+test.output),
 			)
 			if err != nil {

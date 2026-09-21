@@ -2516,7 +2516,18 @@ func (handler *handler) createTask(writer http.ResponseWriter, request *http.Req
 		handler.writeError(writer, core.Errorf(core.CategoryOperational, "task creation is not configured"))
 		return
 	}
-	result, err := handler.Create(request.Context(), core.CreateInput(body))
+	// Field by field rather than a struct conversion: CreateInput now carries a
+	// key a task may be minted under, and this route does not offer that choice
+	// yet. A conversion would make adding any member to either type a compile
+	// error in the other, which is the wrong coupling between a wire body and
+	// the service's input.
+	result, err := handler.Create(request.Context(), core.CreateInput{
+		Title:       body.Title,
+		Description: body.Description,
+		Status:      body.Status,
+		Priority:    body.Priority,
+		Labels:      body.Labels,
+	})
 	if err != nil {
 		handler.writeError(writer, err)
 		return

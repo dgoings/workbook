@@ -210,7 +210,7 @@ func TestOwnedRefsValidateCanonicalAndTrackingNamespaces(t *testing.T) {
 
 	for _, prefix := range []string{taskRefPrefix, trackingTaskRefPrefix} {
 		t.Run(prefix, func(t *testing.T) {
-			refs, ignored, err := repository.parseOwnedRefRecords(config, prefix, validRecord(prefix), "")
+			refs, ignored, err := repository.parseOwnedRefRecords(core.FoundingKeySet(config.Key), prefix, validRecord(prefix), "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -238,7 +238,7 @@ func TestOwnedRefsValidateCanonicalAndTrackingNamespaces(t *testing.T) {
 		{name: "abbreviated object ID", contents: []byte(taskRefPrefix + pack.TaskID + "\x00" + snapshot.Head[:len(snapshot.Head)-2] + "\x00\n")},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, _, err := repository.parseOwnedRefRecords(config, taskRefPrefix, test.contents, "")
+			_, _, err := repository.parseOwnedRefRecords(core.FoundingKeySet(config.Key), taskRefPrefix, test.contents, "")
 			if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
 				t.Fatalf("parseOwnedRefRecords() category = %q, want %q; error = %v", got, want, err)
 			}
@@ -295,7 +295,7 @@ func TestOwnedRefsSkipUnrecognizedNamesOnlyInTheTrackingNamespace(t *testing.T) 
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			contents := append(append([]byte(nil), valid...), test.record...)
-			refs, ignored, err := repository.parseOwnedRefRecords(config, trackingTaskRefPrefix, contents, "")
+			refs, ignored, err := repository.parseOwnedRefRecords(core.FoundingKeySet(config.Key), trackingTaskRefPrefix, contents, "")
 			if err != nil {
 				t.Fatalf("parseOwnedRefRecords() error = %v", err)
 			}
@@ -329,7 +329,7 @@ func TestOwnedRefsSkipUnrecognizedNamesOnlyInTheTrackingNamespace(t *testing.T) 
 		{name: "unterminated", contents: []byte(trackingTaskRefPrefix + pack.TaskID + "\x00" + snapshot.Head + "\x00")},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, _, err := repository.parseOwnedRefRecords(config, trackingTaskRefPrefix, test.contents, "")
+			_, _, err := repository.parseOwnedRefRecords(core.FoundingKeySet(config.Key), trackingTaskRefPrefix, test.contents, "")
 			if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
 				t.Fatalf("parseOwnedRefRecords() category = %q, want %q; error = %v", got, want, err)
 			}
@@ -343,7 +343,7 @@ func TestOwnedRefsCannotLearnObjectIDWidthFromUntrustedRecords(t *testing.T) {
 	abbreviated := strings.Repeat("a", 38)
 	contents := []byte(taskRefPrefix + "WB-01K0M6B8A4FTT8C39MXXYTW7D1\x00" + abbreviated + "\x00\n")
 
-	_, _, err := repository.parseOwnedRefRecords(config, taskRefPrefix, contents, "")
+	_, _, err := repository.parseOwnedRefRecords(core.FoundingKeySet(config.Key), taskRefPrefix, contents, "")
 	if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
 		t.Fatalf("parseOwnedRefRecords() category = %q, want %q; error = %v", got, want, err)
 	}
@@ -1141,5 +1141,75 @@ func TestGetRejectsNonCanonicalStateBytes(t *testing.T) {
 	_, err := repo.Get(context.Background(), config, writeTaskID)
 	if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
 		t.Fatalf("Get() category = %q, want %q; error = %v", got, want, err)
+	}
+}
+
+// Ownership is the key set's answer, and the key set comes from the
+// configuration ledger, so one `key.add` turns the same ref name from a foreign
+// ref into this project's task with nothing else about the repository changed.
+//
+// It asks all three boundaries at once — the canonical namespace, the tracking
+// mirror, and a pack this clone is about to author — because they are three
+// places one question used to be asked against config.Key.
+func TestRefsUnderASecondKeyAreOwnedOnceTheKeyIsAdded(t *testing.T) {
+	repository, config := writeRepository(t)
+	ctx := context.Background()
+	snapshot, pack, _ := writeRoot(t, repository, config)
+	const secondKeyRefID = "NEW-01K0M6B8A4FTT8C39MXXYTW7D9"
+	const secondKeyWriteID = "NEW-01K0M6B8A4FTT8C39MXXYTW7E1"
+
+	// The canonical namespace is under this tool's exclusive control, so a name
+	// it does not own there fails the whole listing.
+	gitOutput(t, repository, "update-ref", taskRefPrefix+secondKeyRefID, snapshot.Head)
+	_, err := repository.ListTaskHeads(ctx, config)
+	if got, want := core.CategoryOf(err), core.CategoryCorruptData; got != want {
+		t.Fatalf("ListTaskHeads() category = %q, want %q; error = %v", got, want, err)
+	}
+
+	// The tracking mirror holds whatever collaborators pushed, so the same name
+	// is skipped and reported there rather than fatal.
+	gitOutput(t, repository, "update-ref", trackingTaskRefPrefix+secondKeyRefID, snapshot.Head)
+	refs, ignored, err := repository.listOwnedTaskRefs(ctx, config, trackingTaskRefPrefix)
+	if err != nil {
+		t.Fatalf("listOwnedTaskRefs(tracking) error = %v", err)
+	}
+	if len(refs) != 0 || len(ignored) != 1 {
+		t.Fatalf("listOwnedTaskRefs(tracking) = (%#v, %#v), want no refs and one ignored name", refs, ignored)
+	}
+	if !ignored[0].PlausibleTask {
+		t.Fatal("ignored ref plausible = false, want true: a task ID under a valid key may be another Workbook's")
+	}
+	if !strings.Contains(ignored[0].Reason, "NEW") {
+		t.Fatalf("ignored reason = %q, want it to name the key this project does not have", ignored[0].Reason)
+	}
+
+	// And a pack this clone is about to author under the key is refused, which
+	// is the boundary that keeps an unowned ref from being created at all.
+	secondKeyPack := writeCreatePack()
+	secondKeyPack.TaskID = secondKeyWriteID
+	secondKeyState := writeState(t, nil, secondKeyPack)
+	_, err = repository.Write(ctx, config, nil, secondKeyPack, secondKeyState, "create task")
+	if got, want := core.CategoryOf(err), core.CategoryValidation; got != want {
+		t.Fatalf("Write(second key) category = %q, want %q; error = %v", got, want, err)
+	}
+
+	writeConfig(t, repository, config, core.ConfigOperation{Type: core.ConfigKeyAdd, Key: "NEW"})
+
+	heads, err := repository.ListTaskHeads(ctx, config)
+	if err != nil {
+		t.Fatalf("ListTaskHeads() after key.add error = %v", err)
+	}
+	if len(heads) != 2 || heads[0].TaskID != secondKeyRefID || heads[1].TaskID != pack.TaskID {
+		t.Fatalf("heads = %#v, want the second key's ref beside %q", heads, pack.TaskID)
+	}
+	if _, stillIgnored, err := repository.listOwnedTaskRefs(ctx, config, trackingTaskRefPrefix); err != nil || len(stillIgnored) != 0 {
+		t.Fatalf("listOwnedTaskRefs(tracking) = (%#v, %v), want nothing ignored", stillIgnored, err)
+	}
+	head, found, err := repository.InspectTaskHead(ctx, config, secondKeyRefID)
+	if err != nil || !found || head.TaskID != secondKeyRefID {
+		t.Fatalf("InspectTaskHead(%q) = (%#v, %t, %v), want the ref", secondKeyRefID, head, found, err)
+	}
+	if _, err := repository.Write(ctx, config, nil, secondKeyPack, secondKeyState, "create task"); err != nil {
+		t.Fatalf("Write(second key) after key.add error = %v", err)
 	}
 }

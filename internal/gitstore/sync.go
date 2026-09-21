@@ -155,7 +155,13 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 	} else if published != nil {
 		result.Config = published
 	}
-	remoteHeads, ignored, err := r.parseRemoteTaskHeads(config, remoteOutput)
+	// The keys are read after the configuration ledger went out, so a key this
+	// push just published classifies the refs it published beside it.
+	keys, err := r.keySet(ctx, config)
+	if err != nil {
+		return failedPushTransport(result, refs, items, invalid, "push failed before completion", err)
+	}
+	remoteHeads, ignored, err := r.parseRemoteTaskHeads(keys, remoteOutput)
 	if err != nil {
 		return failedPushTransport(result, refs, items, invalid, "push failed before completion", err)
 	}

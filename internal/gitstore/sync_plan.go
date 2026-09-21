@@ -159,9 +159,6 @@ func validateCompleteParentGraph(graph map[string][]string) error {
 }
 
 func (r *Repository) validateClassifiableTaskHead(config core.ProjectConfig, taskID string, snapshot core.Snapshot) error {
-	if err := core.ValidateTaskID(config.Key, taskID); err != nil {
-		return core.Wrap(core.CategoryCorruptData, "task head ID is invalid", err)
-	}
 	if err := r.validateFullObjectID(snapshot.Head); err != nil {
 		return core.Wrap(core.CategoryCorruptData, "task head object ID is invalid", err)
 	}
@@ -215,9 +212,6 @@ func (r *Repository) updateCanonicalRefsFromValidated(
 		if _, duplicate := observed[ref.taskID]; duplicate {
 			return core.Errorf(core.CategoryCorruptData, "validated canonical refs contain duplicate task ID %q", ref.taskID)
 		}
-		if err := core.ValidateTaskID(config.Key, ref.taskID); err != nil {
-			return core.Wrap(core.CategoryCorruptData, "validated canonical task ref ID is invalid", err)
-		}
 		if err := r.validateFullObjectID(ref.objectID); err != nil {
 			return core.Wrap(core.CategoryCorruptData, "validated canonical task ref target is invalid", err)
 		}
@@ -230,9 +224,6 @@ func (r *Repository) updateCanonicalRefsFromValidated(
 			return core.Errorf(core.CategoryCorruptData, "canonical ref updates contain duplicate task ID %q", update.TaskID)
 		}
 		seenTaskIDs[update.TaskID] = struct{}{}
-		if err := core.ValidateTaskID(config.Key, update.TaskID); err != nil {
-			return core.Wrap(core.CategoryCorruptData, "canonical task ref ID is invalid", err)
-		}
 		if err := r.validateFullObjectID(update.Next); err != nil {
 			return core.Wrap(core.CategoryCorruptData, "canonical task ref target is invalid", err)
 		}

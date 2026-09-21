@@ -83,102 +83,39 @@ func TestValidateProjectKey(t *testing.T) {
 	}
 }
 
-func TestValidateTaskID(t *testing.T) {
+func TestValidateTaskIDShapeRefusesEveryNameThatIsNotATaskID(t *testing.T) {
 	const id = "WB-01K0M6B8A4FTT8C39MXXYTW7C2"
 
-	if err := ValidateTaskID("WB", id); err != nil {
-		t.Fatalf("ValidateTaskID() canonical ID error = %v", err)
+	if err := ValidateTaskIDShape(id); err != nil {
+		t.Fatalf("ValidateTaskIDShape() canonical ID error = %v", err)
+	}
+	if key, body, ok := ParseTaskID(id); !ok || key != "WB" || body != "01K0M6B8A4FTT8C39MXXYTW7C2" {
+		t.Fatalf("ParseTaskID() = (%q, %q, %v), want the ID split in two", key, body, ok)
 	}
 
+	// A key this project does not have is not on this list: that is ownership,
+	// which KeySet.Owns answers, and a name under another project's key is a
+	// well-formed task ID.
 	for name, candidate := range map[string]string{
 		"lowercase":         strings.ToLower(id),
-		"wrong key":         "OTHER-01K0M6B8A4FTT8C39MXXYTW7C2",
+		"lowercase key":     "wb-01K0M6B8A4FTT8C39MXXYTW7C2",
 		"missing separator": "WB01K0M6B8A4FTT8C39MXXYTW7C2",
 		"invalid ULID":      "WB-01K0M6B8A4FTT8C39MXXYTW7C!",
+		"lowercase body":    "WB-01k0m6b8a4ftt8c39mxxytw7c2",
+		"mixed-case body":   "WB-01K0m6B8A4FTT8C39MXXYTW7C2",
+		"no body":           "WB-",
+		"empty":             "",
 	} {
 		t.Run(name, func(t *testing.T) {
-			if got := CategoryOf(ValidateTaskID("WB", candidate)); got != CategoryValidation {
-				t.Fatalf("ValidateTaskID(%q) category = %q, want %q", candidate, got, CategoryValidation)
+			if got := CategoryOf(ValidateTaskIDShape(candidate)); got != CategoryValidation {
+				t.Fatalf("ValidateTaskIDShape(%q) category = %q, want %q", candidate, got, CategoryValidation)
+			}
+			if _, _, ok := ParseTaskID(candidate); ok {
+				t.Fatalf("ParseTaskID(%q) = true, want false", candidate)
 			}
 		})
 	}
-}
-
-func TestValidateTaskIDRejectsNonCanonicalULIDBody(t *testing.T) {
-	for name, taskID := range map[string]string{
-		"lowercase":  "WB-01k0m6b8a4ftt8c39mxxytw7c2",
-		"mixed case": "WB-01K0m6B8A4FTT8C39MXXYTW7C2",
-	} {
-		t.Run(name, func(t *testing.T) {
-			if got := CategoryOf(ValidateTaskID("WB", taskID)); got != CategoryValidation {
-				t.Fatalf("ValidateTaskID(%q) category = %q, want %q", taskID, got, CategoryValidation)
-			}
-		})
-	}
-}
-
-// PlausibleTaskID is the gate in front of advice to delete a ref from a shared
-// remote, so it must keep saying yes to the two names that a stranger's junk is
-// easily mistaken for: a task written under this project's key in an ID format
-// this build predates, and a task of a second project sharing the namespace.
-func TestPlausibleTaskIDAcceptsNamesThisBuildCannotOwn(t *testing.T) {
-	const id = "WB-01K0M6B8A4FTT8C39MXXYTW7C2"
-
-	for name, candidate := range map[string]string{
-		"canonical ID":                     id,
-		"non-canonical body":               "WB-01k0m6b8a4ftt8c39mxxytw7c2",
-		"unparsable body under our key":    "WB-NEXT-FORMAT",
-		"empty body under our key":         "WB-",
-		"nested under our key":             id + "/attachment",
-		"peeled under our key":             id + "^{}",
-		"another project's key":            "OPS-01K0M6B8A4FTT8C39MXXYTW7C2",
-		"another project's lowercase body": "OPS-01k0m6b8a4ftt8c39mxxytw7c2",
-		"nested under another key":         "OPS-01K0M6B8A4FTT8C39MXXYTW7C2/attachment",
-		// A peeled name is judged by the task it points at under any key. It
-		// answered for this project's key and not another's while the suffix
-		// counted as part of the ID body, which made a second project's history
-		// the one shape the gate would have offered for deletion.
-		"peeled under another key": "OPS-01K0M6B8A4FTT8C39MXXYTW7C2^{}",
-	} {
-		t.Run(name, func(t *testing.T) {
-			if !PlausibleTaskID("WB", candidate) {
-				t.Fatalf("PlausibleTaskID(%q) = false, want true", candidate)
-			}
-		})
-	}
-}
-
-// Only a name that carries neither this project's key prefix nor the
-// <KEY>-<ULID> shape names nobody's task, and only such a name may be offered
-// for deletion.
-func TestPlausibleTaskIDRejectsNamesNoProjectCanOwn(t *testing.T) {
-	for name, candidate := range map[string]string{
-		"empty":                             "",
-		"bare word":                         "EVIL",
-		"nested bare word":                  "team/EVIL",
-		"key with no body":                  "OPS-",
-		"short body":                        "OPS-01K0M6B8A4FTT8C39MXXYTW7C",
-		"long body":                         "OPS-01K0M6B8A4FTT8C39MXXYTW7C22",
-		"lowercase key":                     "ops-01K0M6B8A4FTT8C39MXXYTW7C2",
-		"body outside Crockford's alphabet": "OPS-01K0M6B8A4FTT8C39MXXYTW7CI",
-		"our key without its separator":     "WB01K0M6B8A4FTT8C39MXXYTW7C2",
-	} {
-		t.Run(name, func(t *testing.T) {
-			if PlausibleTaskID("WB", candidate) {
-				t.Fatalf("PlausibleTaskID(%q) = true, want false", candidate)
-			}
-		})
-	}
-}
-
-// A key this build cannot use disables only the rule that depends on it. The
-// name is still judged against every valid project key's shape, because a
-// misconfigured clone must not start recommending deletions.
-func TestPlausibleTaskIDToleratesAnInvalidProjectKey(t *testing.T) {
-	if !PlausibleTaskID("bad key", "OPS-01K0M6B8A4FTT8C39MXXYTW7C2") {
-		t.Fatalf("PlausibleTaskID() = false for a well-shaped foreign task ID, want true")
-	}
-	if PlausibleTaskID("bad key", "bad key-EVIL") {
-		t.Fatalf("PlausibleTaskID() = true for an invalid key's own name, want false")
+	if err := ValidateTaskIDShape("OTHER-01K0M6B8A4FTT8C39MXXYTW7C2"); err != nil {
+		t.Fatalf("ValidateTaskIDShape(another project's key) = %v, want nil: shape is not ownership", err)
 	}
 }

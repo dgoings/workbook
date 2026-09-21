@@ -137,7 +137,7 @@ func (r *Repository) ReadTaskHistoriesStream(
 	if len(requests) == 0 {
 		return nil
 	}
-	if err := r.validateHistoryRequests(ctx, config, requests, core.CategoryCorruptData); err != nil {
+	if err := r.validateHistoryRequests(ctx, requests, core.CategoryCorruptData); err != nil {
 		return err
 	}
 

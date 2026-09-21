@@ -660,6 +660,10 @@ func (r *Repository) prunableParkedRefs(ctx context.Context, config core.Project
 // disposable local bookkeeping, and a stray hand-written ref must not be able to
 // stop synchronization.
 func (r *Repository) listParkedRefs(ctx context.Context, config core.ProjectConfig, prefix string) ([]parkedRef, error) {
+	keys, err := r.keySet(ctx, config)
+	if err != nil {
+		return nil, err
+	}
 	contents, err := r.Git(ctx, nil, "for-each-ref", "--format=%(refname)%00%(objectname)", prefix)
 	if err != nil {
 		return nil, err
@@ -681,7 +685,7 @@ func (r *Repository) listParkedRefs(ctx context.Context, config core.ProjectConf
 			return nil, core.Errorf(core.CategoryCorruptData, "Git returned a ref outside %q", reconciledRefPrefix)
 		}
 		taskID, suffix, found := strings.Cut(strings.TrimPrefix(name, reconciledRefPrefix), "/")
-		if !found || core.ValidateTaskID(config.Key, taskID) != nil {
+		if !found || !keys.Owns(taskID) {
 			continue
 		}
 		index, err := strconv.Atoi(suffix)

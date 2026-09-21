@@ -379,7 +379,7 @@ func (session *taskSession) conflictFor(ctx context.Context, target string) *cor
 		return nil
 	}
 	taskID := target
-	if core.ValidateTaskID(session.config.Key, taskID) != nil {
+	if !session.service.KeySet().Owns(taskID) {
 		resolved, err := session.service.Reader.Resolve(ctx, session.config, target)
 		if err != nil {
 			return nil

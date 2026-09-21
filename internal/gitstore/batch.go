@@ -104,10 +104,6 @@ func (r *Repository) readTaskHeadsPartialBatch(
 	validRequests := make([]batchRequest, 0, len(heads))
 	for i, head := range heads {
 		results[i].Head = head
-		if err := core.ValidateTaskID(config.Key, head.TaskID); err != nil {
-			results[i].Err = core.Wrap(core.CategoryCorruptData, "task head ID is invalid", err)
-			continue
-		}
 		decoded, err := decodeObjectID(head.ObjectID)
 		if err != nil {
 			results[i].Err = core.Wrap(core.CategoryCorruptData, "task head object ID is invalid", err)
@@ -607,9 +603,6 @@ func (r *Repository) ValidateTaskHeadAdvances(
 			return core.Errorf(core.CategoryCorruptData, "task head advance contains duplicate task ID %q", taskID)
 		}
 		seenTaskIDs[taskID] = struct{}{}
-		if err := core.ValidateTaskID(config.Key, taskID); err != nil {
-			return core.Wrap(core.CategoryCorruptData, "current task head ID is invalid", err)
-		}
 		if taskID != advance.Previous.Operation.TaskID ||
 			taskID != advance.Previous.State.TaskID {
 			return core.Errorf(core.CategoryCorruptData, "task head advance IDs do not match")

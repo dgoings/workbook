@@ -39,9 +39,6 @@ func (r *Repository) ListTaskHeads(ctx context.Context, config core.ProjectConfi
 
 	heads := make([]TaskHead, 0, len(refs))
 	for _, ref := range refs {
-		if err := core.ValidateTaskID(config.Key, ref.taskID); err != nil {
-			return nil, core.Wrap(core.CategoryCorruptData, "task ref ID is invalid", err)
-		}
 		heads = append(heads, TaskHead{TaskID: ref.taskID, ObjectID: ref.objectID})
 	}
 	return heads, nil
@@ -54,7 +51,14 @@ func (r *Repository) InspectTaskHead(
 	config core.ProjectConfig,
 	taskID string,
 ) (TaskHead, bool, error) {
-	if err := core.ValidateTaskID(config.Key, taskID); err != nil {
+	// The caller named this task, so this is the boundary where a name that is
+	// not one of this project's is refused. It is asked in two steps because
+	// only the second needs the repository: a name that is not a task ID at all
+	// is refused before any Git process runs — see
+	// TestInspectTaskHeadRejectsInvalidFullIDBeforeRunningGit — while whether
+	// this project has the key is the configuration ledger's answer, and the
+	// refusal names the keys it does have.
+	if err := core.ValidateTaskIDShape(taskID); err != nil {
 		return TaskHead{}, false, core.Wrap(core.CategoryValidation, "task ID is invalid", err)
 	}
 	if err := r.verifyIdentity(ctx); err != nil {
@@ -62,6 +66,13 @@ func (r *Repository) InspectTaskHead(
 	}
 	if err := r.validateRepositoryConfig(config); err != nil {
 		return TaskHead{}, false, err
+	}
+	keys, err := r.keySet(ctx, config)
+	if err != nil {
+		return TaskHead{}, false, err
+	}
+	if err := keys.RequireOwned(taskID); err != nil {
+		return TaskHead{}, false, core.Wrap(core.CategoryValidation, "task ID is invalid", err)
 	}
 
 	ref, found, err := r.taskRef(ctx, taskID)
@@ -179,6 +190,10 @@ func (r *Repository) listOwnedTaskRefs(
 	config core.ProjectConfig,
 	prefix string,
 ) ([]taskRefRecord, []IgnoredRef, error) {
+	keys, err := r.keySet(ctx, config)
+	if err != nil {
+		return nil, nil, err
+	}
 	contents, err := r.Git(ctx, nil, "for-each-ref", "--format="+taskRefFormat, prefix)
 	if err != nil {
 		return nil, nil, err
@@ -186,11 +201,15 @@ func (r *Repository) listOwnedTaskRefs(
 	if err := r.rememberObjectIDWidthFromOwnedRefOutput(contents); err != nil {
 		return nil, nil, err
 	}
-	return r.parseOwnedRefRecords(config, prefix, contents, "")
+	return r.parseOwnedRefRecords(keys, prefix, contents, "")
 }
 
 func (r *Repository) taskRef(ctx context.Context, taskID string) (taskRefRecord, bool, error) {
 	config, err := r.LoadConfig()
+	if err != nil {
+		return taskRefRecord{}, false, err
+	}
+	keys, err := r.keySet(ctx, config)
 	if err != nil {
 		return taskRefRecord{}, false, err
 	}
@@ -201,7 +220,7 @@ func (r *Repository) taskRef(ctx context.Context, taskID string) (taskRefRecord,
 	if err := r.rememberObjectIDWidthFromOwnedRefOutput(contents); err != nil {
 		return taskRefRecord{}, false, err
 	}
-	refs, _, err := r.parseOwnedRefRecords(config, taskRefPrefix, contents, taskID)
+	refs, _, err := r.parseOwnedRefRecords(keys, taskRefPrefix, contents, taskID)
 	if err != nil {
 		return taskRefRecord{}, false, err
 	}
@@ -246,7 +265,7 @@ func (r *Repository) rememberObjectIDWidthFromOwnedRefOutput(contents []byte) er
 // task IDs — stays fatal in both namespaces, because none of it is something a
 // collaborator can write by choosing a ref name.
 func (r *Repository) parseOwnedRefRecords(
-	config core.ProjectConfig,
+	keys core.KeySet,
 	prefix string,
 	contents []byte,
 	expectedTaskID string,
@@ -255,11 +274,6 @@ func (r *Repository) parseOwnedRefRecords(
 		return nil, nil, core.Errorf(core.CategoryCorruptData, "unsupported Workbook task ref namespace %q", prefix)
 	}
 	tolerateUnrecognizedNames := prefix == trackingTaskRefPrefix
-	if expectedTaskID != "" {
-		if err := core.ValidateTaskID(config.Key, expectedTaskID); err != nil {
-			return nil, nil, core.Wrap(core.CategoryCorruptData, "expected task ref ID is invalid", err)
-		}
-	}
 	if len(contents) == 0 {
 		return nil, nil, nil
 	}
@@ -283,14 +297,14 @@ func (r *Repository) parseOwnedRefRecords(
 		taskID := strings.TrimPrefix(refName, prefix)
 		if taskID == "" || strings.Contains(taskID, "/") {
 			if tolerateUnrecognizedNames {
-				ignored = append(ignored, ignoredTaskRef(config, prefix, refName, "the ref does not name one task"))
+				ignored = append(ignored, ignoredTaskRef(keys, prefix, refName, "the ref does not name one task"))
 				continue
 			}
 			return nil, nil, core.Errorf(core.CategoryCorruptData, "task ref %q does not name one task", refName)
 		}
-		if err := core.ValidateTaskID(config.Key, taskID); err != nil {
+		if err := keys.RequireOwned(taskID); err != nil {
 			if tolerateUnrecognizedNames {
-				ignored = append(ignored, ignoredTaskRef(config, prefix, refName, err.Error()))
+				ignored = append(ignored, ignoredTaskRef(keys, prefix, refName, err.Error()))
 				continue
 			}
 			return nil, nil, core.Wrap(core.CategoryCorruptData, "task ref ID is invalid", err)
@@ -324,12 +338,12 @@ func (r *Repository) parseOwnedRefRecords(
 // It also records whether the name could still be another Workbook's task, so
 // no caller has to re-derive that from the reason text before deciding what to
 // advise.
-func ignoredTaskRef(config core.ProjectConfig, prefix, refName, reason string) IgnoredRef {
+func ignoredTaskRef(keys core.KeySet, prefix, refName, reason string) IgnoredRef {
 	name := strings.TrimPrefix(refName, prefix)
 	return IgnoredRef{
 		Ref:           taskRefPrefix + name,
 		Reason:        reason,
-		PlausibleTask: core.PlausibleTaskID(config.Key, name),
+		PlausibleTask: keys.PlausibleTaskID(name),
 	}
 }
 

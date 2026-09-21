@@ -124,9 +124,76 @@ func TestKeySetAdoptAdviceNamesAForeignKeyOnce(t *testing.T) {
 	if got := set.AdoptableKey("scratch"); got != "" {
 		t.Fatalf("AdoptableKey(non-task) = %q, want empty", got)
 	}
-	if !set.PlausibleTaskID("NEW-01K0M6B8A4FTT8C39MXXYTW7C1") ||
-		!set.PlausibleTaskID("WB-whatever-this-is") ||
-		set.PlausibleTaskID("scratch") {
-		t.Fatal("PlausibleTaskID disagrees with the two rules it inherited from PlausibleTaskID(key, name)")
+}
+
+// KeySet.PlausibleTaskID is the gate in front of advice to delete a ref from a
+// shared remote, so it must keep saying yes to the two names that a stranger's
+// junk is easily mistaken for: a task written under one of this project's keys
+// in an ID format this build predates, and a task of a second project sharing
+// the namespace.
+func TestPlausibleTaskIDAcceptsNamesThisBuildCannotOwn(t *testing.T) {
+	const id = "WB-01K0M6B8A4FTT8C39MXXYTW7C2"
+	set := FoundingKeySet("WB")
+
+	for name, candidate := range map[string]string{
+		"canonical ID":                     id,
+		"non-canonical body":               "WB-01k0m6b8a4ftt8c39mxxytw7c2",
+		"unparsable body under our key":    "WB-NEXT-FORMAT",
+		"empty body under our key":         "WB-",
+		"nested under our key":             id + "/attachment",
+		"peeled under our key":             id + "^{}",
+		"another project's key":            "OPS-01K0M6B8A4FTT8C39MXXYTW7C2",
+		"another project's lowercase body": "OPS-01k0m6b8a4ftt8c39mxxytw7c2",
+		"nested under another key":         "OPS-01K0M6B8A4FTT8C39MXXYTW7C2/attachment",
+		// A peeled name is judged by the task it points at under any key. It
+		// answered for this project's key and not another's while the suffix
+		// counted as part of the ID body, which made a second project's history
+		// the one shape the gate would have offered for deletion.
+		"peeled under another key": "OPS-01K0M6B8A4FTT8C39MXXYTW7C2^{}",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if !set.PlausibleTaskID(candidate) {
+				t.Fatalf("PlausibleTaskID(%q) = false, want true", candidate)
+			}
+		})
+	}
+
+	// Every key the project has protects its own names, retired ones included:
+	// the tasks minted under a retired key are exactly the history retirement
+	// keeps.
+	twoKeys, err := NewKeySet(KeyDocument{
+		Keys:    []KeyDefinition{{Key: "WB"}, {Key: "OLD", Retired: true}},
+		Current: "WB",
+	})
+	if err != nil {
+		t.Fatalf("NewKeySet() error = %v", err)
+	}
+	if !twoKeys.PlausibleTaskID("OLD-NEXT-FORMAT") {
+		t.Fatal("PlausibleTaskID(OLD-NEXT-FORMAT) = false, want true for a retired key of this project")
+	}
+}
+
+// Only a name that carries neither one of this project's key prefixes nor the
+// <KEY>-<ULID> shape names nobody's task, and only such a name may be offered
+// for deletion.
+func TestPlausibleTaskIDRejectsNamesNoProjectCanOwn(t *testing.T) {
+	set := FoundingKeySet("WB")
+
+	for name, candidate := range map[string]string{
+		"empty":                             "",
+		"bare word":                         "EVIL",
+		"nested bare word":                  "team/EVIL",
+		"key with no body":                  "OPS-",
+		"short body":                        "OPS-01K0M6B8A4FTT8C39MXXYTW7C",
+		"long body":                         "OPS-01K0M6B8A4FTT8C39MXXYTW7C22",
+		"lowercase key":                     "ops-01K0M6B8A4FTT8C39MXXYTW7C2",
+		"body outside Crockford's alphabet": "OPS-01K0M6B8A4FTT8C39MXXYTW7CI",
+		"our key without its separator":     "WB01K0M6B8A4FTT8C39MXXYTW7C2",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if set.PlausibleTaskID(candidate) {
+				t.Fatalf("PlausibleTaskID(%q) = true, want false", candidate)
+			}
+		})
 	}
 }

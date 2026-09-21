@@ -203,7 +203,12 @@ func (s *Store) Get(ctx context.Context, config core.ProjectConfig, taskID strin
 	if err := s.validateConfig(config); err != nil {
 		return core.Snapshot{}, err
 	}
-	if err := core.ValidateTaskID(config.Key, taskID); err != nil {
+	// Shape, not ownership. Whoever handed this ID over decided ownership —
+	// the service's key set for an ID somebody typed, a ref listing for every
+	// row this cache holds — and the exact-ref inspection below is what settles
+	// that the task exists at all. What is worth refusing here is a name no
+	// row could ever carry.
+	if err := core.ValidateTaskIDShape(taskID); err != nil {
 		return core.Snapshot{}, core.Wrap(core.CategoryValidation, "task ID is invalid", err)
 	}
 	var snapshot core.Snapshot
@@ -224,7 +229,7 @@ func (s *Store) TaskHistory(ctx context.Context, config core.ProjectConfig, task
 	if err := s.validateConfig(config); err != nil {
 		return core.TaskHistory{}, err
 	}
-	if err := core.ValidateTaskID(config.Key, taskID); err != nil {
+	if err := core.ValidateTaskIDShape(taskID); err != nil {
 		return core.TaskHistory{}, core.Wrap(core.CategoryValidation, "task ID is invalid", err)
 	}
 	var history core.TaskHistory
@@ -259,7 +264,7 @@ func (s *Store) CommitHistory(ctx context.Context, config core.ProjectConfig, ta
 	if err := s.validateConfig(config); err != nil {
 		return core.TaskHistory{}, err
 	}
-	if err := core.ValidateTaskID(config.Key, taskID); err != nil {
+	if err := core.ValidateTaskIDShape(taskID); err != nil {
 		return core.TaskHistory{}, core.Wrap(core.CategoryValidation, "task ID is invalid", err)
 	}
 	var history core.TaskHistory

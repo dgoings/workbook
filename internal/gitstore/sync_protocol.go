@@ -19,7 +19,7 @@ import (
 // bad framing, a bad object ID, a ref outside the namespace, or the same task
 // twice — remains an error, because it means the answer cannot be trusted.
 func (r *Repository) parseRemoteTaskHeads(
-	config core.ProjectConfig,
+	keys core.KeySet,
 	output []byte,
 ) (map[string]string, []IgnoredRef, error) {
 	heads := make(map[string]string)
@@ -52,11 +52,11 @@ func (r *Repository) parseRemoteTaskHeads(
 		}
 		taskID := strings.TrimPrefix(refName, taskRefPrefix)
 		if taskID == "" || strings.Contains(taskID, "/") || strings.HasSuffix(taskID, "^{}") {
-			ignored = append(ignored, ignoredTaskRef(config, taskRefPrefix, refName, "the ref does not name one task"))
+			ignored = append(ignored, ignoredTaskRef(keys, taskRefPrefix, refName, "the ref does not name one task"))
 			continue
 		}
-		if err := core.ValidateTaskID(config.Key, taskID); err != nil {
-			ignored = append(ignored, ignoredTaskRef(config, taskRefPrefix, refName, err.Error()))
+		if err := keys.RequireOwned(taskID); err != nil {
+			ignored = append(ignored, ignoredTaskRef(keys, taskRefPrefix, refName, err.Error()))
 			continue
 		}
 		if _, duplicate := heads[taskID]; duplicate {
