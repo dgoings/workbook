@@ -634,7 +634,26 @@
     .relationship-row h4 a { color: var(--wb-text); text-decoration-color: var(--wb-border-underline); text-underline-offset: .16em; }
     .relationship-row h4 a:hover { color: var(--wb-primary); text-decoration-color: currentcolor; }
     .relationship-row__metadata, .relationship-row__note { color: var(--wb-ink-muted); font-size: .75rem; overflow-wrap: anywhere; }
-    .relationship-remove { align-self: center; grid-column: 2; grid-row: 1 / span 2; }
+    /* A row has these two items and no others, because it used to have as many
+       as the branch that built it happened to append. Only the Remove button
+       named a column, so the rest were dealt in row-major: a read-only row
+       appends four parts and no button, which put the heading and the badge in
+       column one and the metadata and the note in column two. Column two is an
+       auto track, and an auto track is maximized to its max-content before the
+       1fr column is given anything, so sizing it to two sentences left the
+       title column at 0px — and overflow-wrap: anywhere took the title down to
+       one character per line rather than letting it overflow. Naming the two
+       columns is the whole of the fix: a read-only row now has no item in
+       column two at all, so that track resolves to 0 and the text gets the row.
+       min-width: 0 is belt and braces. It cannot widen anything — the title
+       column's min sizing function is already a fixed 0, so no item's automatic
+       minimum ever reaches that track's base size — it only keeps this stack
+       from overflowing its own track if the sidebar were ever narrower than the
+       word "Deleted", the one run in here that does not carry overflow-wrap. */
+    .relationship-row__text { display: grid; gap: .35rem; min-width: 0; }
+    /* Stacked, because a draft whose save was refused offers Retry as well as
+       Remove, and centered against the text as the lone Remove button was. */
+    .relationship-row__controls { display: grid; align-self: center; gap: .35rem; grid-column: 2; }
     .relationship-state { color: var(--wb-danger-ink); font-size: .75rem; }
     .relationship-editor { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .3rem .45rem; align-items: end; }
     /* The caption used to hold a row of the sidebar to itself, in each of the
@@ -651,6 +670,7 @@
     .relationship-listbox { position: fixed; z-index: 20; max-height: 18rem; overflow-y: auto; border: 1px solid var(--wb-border-strong); border-radius: 4px; background: var(--wb-surface); box-shadow: 0 8px 20px var(--wb-text-shadow); }
     .relationship-listbox[hidden] { display: none; }
     .relationship-row--compact { grid-template-columns: minmax(0, 1fr) auto; gap: .16rem .45rem; padding: .38rem 0; border: 0; border-top: 1px solid var(--wb-border-muted); border-radius: 0; }
+    .relationship-row--compact .relationship-row__text { gap: .16rem; }
     .relationship-option { display: grid; gap: .18rem; padding: .55rem .62rem; border-bottom: 1px solid var(--wb-border-muted); cursor: pointer; }
     .relationship-option:last-child { border-bottom: 0; }
     .relationship-option[aria-selected="true"], .relationship-option.is-active { background: var(--wb-primary-tint-1); }
@@ -3433,23 +3453,34 @@
         }
         metadataParts.push(relationship.id);
         text(metadata, metadataParts.join(" · "));
-        row.append(heading, metadata);
+        // Everything there is to read goes in one grid item, and everything
+        // there is to press goes in the other. The row is a two-column grid,
+        // and it used to hand each part to that grid loose: only the Remove
+        // button named a column, so which part landed where came out of how
+        // many parts this branch appended. A read-only row appends four and no
+        // button, so half of them auto-placed into the controls column and
+        // crushed the title into a vertical line of single characters.
+        const textColumn = document.createElement("div");
+        textColumn.className = "relationship-row__text";
+        textColumn.append(heading, metadata);
+        const controls = document.createElement("div");
+        controls.className = "relationship-row__controls";
         if (isDraft) {
           const draft = document.createElement("strong");
           draft.className = "relationship-state";
           text(draft, "Not saved");
-          row.append(draft);
+          textColumn.append(draft);
           if (relationship.error) {
             const error = document.createElement("p");
             error.className = "relationship-row__note";
             text(error, relationship.error);
-            row.append(error);
+            textColumn.append(error);
           }
         } else if (relationship.task && relationship.task.deleted) {
           const deleted = document.createElement("strong");
           deleted.className = "relationship-state";
           text(deleted, "Deleted");
-          row.append(deleted);
+          textColumn.append(deleted);
         }
         if (isDraft && onRetry) {
           const retry = document.createElement("button");
@@ -3457,7 +3488,7 @@
           retry.className = "relationship-retry";
           text(retry, "Retry");
           retry.addEventListener("click", () => onRetry(relationship));
-          row.append(retry);
+          controls.append(retry);
           row.retryButton = retry;
         }
         if (isDraft || relationship.removable) {
@@ -3466,14 +3497,26 @@
           remove.className = "relationship-remove";
           text(remove, "Remove");
           remove.addEventListener("click", () => onRemove(relationship));
-          row.append(remove);
+          controls.append(remove);
           row.removeButton = remove;
         } else {
+          // A Blocks row is an edge recorded on the other task, so a tombstoned
+          // one is not this task's to drop. Saying only that it is read-only
+          // read as a Remove button that had stopped working, so the note names
+          // the record the edge lives on and where to go to reopen it. It has
+          // to name the place as well as the move: a deleted task's heading is
+          // plain text rather than a link and its detail route is refused, so
+          // the only Restore the reader can reach is the one on its card in the
+          // Deleted column — which is itself behind a switch they may have off.
           const explanation = document.createElement("p");
           explanation.className = "relationship-row__note";
-          text(explanation, "Read-only because deleted tasks cannot be changed.");
-          row.append(explanation);
+          text(explanation, "This dependency is stored on the deleted task. Restore that task from the board's Deleted column to change it.");
+          textColumn.append(explanation);
         }
+        // The controls only exist when there is a control, so a read-only row
+        // is one grid item rather than one item beside an empty track.
+        row.append(textColumn);
+        if (controls.children.length) row.append(controls);
         return row;
       }
       function taskRelationships(taskID, draftState = null) {

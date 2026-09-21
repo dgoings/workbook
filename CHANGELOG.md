@@ -150,6 +150,26 @@ affect scripts; all three are described under Changed.
   before it is published, so quitting in the middle of a publish leaves the
   project where a failed publish leaves it — recorded, and picked up by the next
   sync.
+- **A deleted dependency no longer wrecks the layout of the board's task
+  panel.** A relationship row is a two-column grid, but only its Remove button
+  said which column it belonged in; every other part landed wherever the order
+  of appending put it. A row with no Remove button — a Blocks row whose task is
+  deleted — pushed its metadata line and its explanation into the second
+  column, which is sized to its own content, and that squeezed the title's
+  column to nothing: the title wrapped one character per line into a wall of
+  text hundreds of pixels tall, with the badge overlapping the text beside it.
+  Each part of the row now sits inside one of two items that name their own
+  columns, so nothing appended later can move them. A draft row carrying an
+  error was broken the same way and is fixed with it.
+- A dependency that cannot be removed now says why and what to do about it. The
+  note read "Read-only because deleted tasks cannot be changed", which named
+  neither whose record was in the way nor the way out; it now names the deleted
+  task the relationship is stored on and points at the Restore control in the
+  board's Deleted column. Removing a deleted task from a live task's
+  dependencies has always worked — it is only that mirror relationship, stored
+  on the deleted task itself, that Workbook will not touch — and the rule is now
+  covered by tests, including when the deleted dependency is named by a prefix
+  rather than its full ID.
 
 ## v0.5.1 — 2026-08-23
 

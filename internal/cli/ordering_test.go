@@ -146,6 +146,91 @@ func TestRunOrderingCommandsExposeCoreTargetErrors(t *testing.T) {
 	})
 }
 
+// TestRunFreeToleratesTombstonedDependencyButDependRefusesOne exercises the
+// stated rule end to end through the CLI verbs rather than through core
+// directly: once a dependency task is deleted, `free` must still be able to
+// remove it from a dependent — whether it's named by its full ID or by a
+// prefix — while `depend` must go on refusing to attach it to anything else.
+//
+// The rule is asymmetric by design: removal has to tolerate a tombstone or a
+// task that once depended on something now-deleted could never be freed of
+// it, leaving it permanently (and wrongly) blocked; addition has to refuse a
+// tombstone or a brand-new dependency edge could point at a task that will
+// never become ready. Asymmetric rules like this are exactly what an
+// incautious refactor "tidies" into a symmetric one — reject both endpoints
+// everywhere, say — so this test drives both halves against the same deleted
+// task in one place to make that regression visible immediately.
+func TestRunFreeToleratesTombstonedDependencyButDependRefusesOne(t *testing.T) {
+	repository := initializedRepository(t)
+	dependency := createOrderingTask(t, repository, "Dependency", "high")
+	byFullID := createOrderingTask(t, repository, "Freed by full ID", "high")
+	byPrefix := createOrderingTask(t, repository, "Freed by prefix", "high")
+	other := createOrderingTask(t, repository, "Blocked from depending", "high")
+
+	// Both dependents pick up the dependency while it is still alive; only
+	// `dependency` itself is deleted afterward, so this reaches free and
+	// depend against the same tombstoned task the rule is about.
+	for _, dependent := range []core.Task{byFullID, byPrefix} {
+		code, _, stderr := run(t, repository, "depend", dependent.ID, dependency.ID, "--json")
+		if code != 0 {
+			t.Fatalf("depend %s code = %d, want 0; stderr = %q", dependent.ID, code, stderr)
+		}
+	}
+	code, _, stderr := run(t, repository, "delete", dependency.ID, "--json")
+	if code != 0 {
+		t.Fatalf("delete dependency code = %d, want 0; stderr = %q", code, stderr)
+	}
+
+	t.Run("free removes a tombstoned dependency named by its full ID", func(t *testing.T) {
+		code, stdout, stderr := run(t, repository, "free", byFullID.ID, dependency.ID, "--json")
+		if code != 0 {
+			t.Fatalf("free code = %d, want 0; stderr = %q", code, stderr)
+		}
+		task := decodeMutationTask(t, stdout, "free")
+		if len(task.Dependencies) != 0 {
+			t.Fatalf("dependencies after free = %q, want empty", task.Dependencies)
+		}
+	})
+
+	t.Run("free removes a tombstoned dependency named by a prefix", func(t *testing.T) {
+		// Naming the dependency by a prefix instead of its full canonical ID
+		// forces free through Resolve rather than the exact-canonical-ID fast
+		// path Free takes when the argument is already a literal member of
+		// the dependency set. Resolve is the branch where a future "skip
+		// deleted tasks" filter could plausibly land (to mirror the
+		// depend-side guard below) and would silently break this half of the
+		// rule without ever failing the full-ID case above.
+		//
+		// Long enough to reach past the ULID's timestamp into its random
+		// suffix. A ULID spends its first ten characters on the millisecond it
+		// was minted in, so a shorter prefix would ask only that no two of
+		// this test's four tasks were created in the same 32ms bucket — true
+		// today, because every create writes Git objects and refs, but true by
+		// accident rather than by construction.
+		prefix := dependency.ID[:16]
+		code, stdout, stderr := run(t, repository, "free", byPrefix.ID, prefix, "--json")
+		if code != 0 {
+			t.Fatalf("free(prefix) code = %d, want 0; stderr = %q", code, stderr)
+		}
+		task := decodeMutationTask(t, stdout, "free")
+		if len(task.Dependencies) != 0 {
+			t.Fatalf("dependencies after free(prefix) = %q, want empty", task.Dependencies)
+		}
+	})
+
+	t.Run("depend still refuses to add the same tombstoned task", func(t *testing.T) {
+		// Run against the very same task the two subtests above just proved
+		// removable, so this isn't just "depend rejects some other deleted
+		// task" — it confirms freeing a tombstoned dependency never
+		// reclassifies it as addable again.
+		code, stdout, stderr := run(t, repository, "depend", other.ID, dependency.ID, "--json")
+		if code != 5 || stdout != "" {
+			t.Fatalf("depend(tombstoned) code/stdout = %d/%q, want 5/empty; stderr = %q", code, stdout, stderr)
+		}
+		assertJSONError(t, stderr, core.CategoryValidation, "cannot add a dependency involving a tombstoned task")
+	})
+}
+
 func createOrderingTask(t *testing.T, repository, title, priority string) core.Task {
 	t.Helper()
 	code, stdout, stderr := run(t, repository, "create", title, "--status", "ready", "--priority", priority, "--json")
