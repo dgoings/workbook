@@ -65,6 +65,14 @@ type Repository struct {
 	// task path.
 	vocabularyLoaded bool
 	vocabulary       core.Vocabulary
+	// keysLoaded and keys memoize the project's task-ID keys on the same terms
+	// as the vocabulary above, and for a sharper reason: the key set is what
+	// every ref listing classifies names against, so a fresh read per listing
+	// would add a Git process to every command that touches more than one task.
+	// It is dropped, not replaced, wherever this process moves the ledger — see
+	// forgetKeySet.
+	keysLoaded bool
+	keys       core.KeySet
 	// stateHead and stateConfig memoize the last checkpoint
 	// LoadVocabularyState decoded, keyed by the commit it came from.
 	//

@@ -671,3 +671,223 @@ func TestLoadVocabularyStateFollowsTheLedgerPastItsMemo(t *testing.T) {
 		t.Fatalf("LoadVocabularyState() label = %q, want the relabelled Deep Freeze", got)
 	}
 }
+
+// A project that has recorded nothing about keys still has one. Its founding
+// key lives in the identity ref, every task ID it has ever minted carries that
+// key, and the ledger deliberately does not keep a second copy — so the state
+// this read reports is the founding key alone rather than the zero set, which
+// would classify every one of that project's own refs as somebody else's.
+func TestLoadVocabularyStateReportsTheFoundingKeyWithoutALedger(t *testing.T) {
+	repo, config := writeRepository(t)
+	state, err := repo.LoadVocabularyState(context.Background(), config)
+	if err != nil {
+		t.Fatalf("LoadVocabularyState() error = %v", err)
+	}
+	if got := state.Keys.Current(); got != config.Key {
+		t.Fatalf("Keys.Current() = %q, want the founding key %q", got, config.Key)
+	}
+	if got := state.Keys.Keys(); len(got) != 1 {
+		t.Fatalf("Keys() = %#v, want the founding key alone", got)
+	}
+}
+
+// The hazard this whole backfill exists to close: the moment a pack writes the
+// key section, the fold stops substituting the founding key and every later
+// reader reads only what has been folded. A pack recording `key.add NEW` alone
+// would therefore tell the next reader that NEW is this project's only key, and
+// every task already minted under the founding key would become a foreign ref.
+func TestFirstKeyAddRecordsTheFoundingKeyBesideIt(t *testing.T) {
+	repo, config := writeRepository(t)
+	written := writeConfig(t, repo, config, core.ConfigOperation{Type: core.ConfigKeyAdd, Key: "NEW"})
+	keys := written.KeySet(config.Key)
+	if got := keys.Keys(); len(got) != 2 || got[0].Key != config.Key || got[1].Key != "NEW" {
+		t.Fatalf("Keys() = %#v, want %q then NEW", got, config.Key)
+	}
+	if got := keys.Current(); got != config.Key {
+		t.Fatalf("Current() = %q, want the founding key %q until key.current moves it", got, config.Key)
+	}
+	// The pack records the founding key, so a clone folding this commit alone
+	// reaches the same set without consulting the identity ref.
+	if got := len(written.State.Config.Keys.Keys); got != 2 {
+		t.Fatalf("stored keys = %d, want 2", got)
+	}
+}
+
+// The same hazard, driven end to end through a real repository and read back by
+// a handle that did not do the write: `Init` with WB, a key pack adding NEW
+// through the store's own write path, and then the question every boundary will
+// ask — does this project still own the task IDs it has already minted.
+func TestARecordedKeySectionStillOwnsTheFoundingKeysTaskIDs(t *testing.T) {
+	repo, config := writeRepository(t)
+	ctx := context.Background()
+	writeConfig(t, repo, config, core.ConfigOperation{Type: core.ConfigKeyAdd, Key: "NEW"})
+
+	// A second handle holds none of the writer's memos, so what it reports is
+	// what a clone folding this ledger cold would report.
+	reader, err := Open(ctx, repo.Root)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	state, err := reader.LoadVocabularyState(ctx, config)
+	if err != nil {
+		t.Fatalf("LoadVocabularyState() error = %v", err)
+	}
+	definitions := state.Keys.Keys()
+	if len(definitions) != 2 {
+		t.Fatalf("Keys() = %#v, want the founding key and NEW", definitions)
+	}
+	if definitions[0].Key != config.Key || definitions[0].Retired {
+		t.Fatalf("Keys()[0] = %#v, want %q active and first in add order", definitions[0], config.Key)
+	}
+	if definitions[1].Key != "NEW" || definitions[1].Retired {
+		t.Fatalf("Keys()[1] = %#v, want NEW active", definitions[1])
+	}
+	if got := state.Keys.Current(); got != config.Key {
+		t.Fatalf("Current() = %q, want the founding key %q: key.add does not move it", got, config.Key)
+	}
+	if !state.Keys.Owns(writeTaskID) {
+		t.Fatalf("Owns(%q) = false, want true: the project's own task IDs must survive its first key change", writeTaskID)
+	}
+	if state.Keys.Owns("OTHER-01K0M6B8A4FTT8C39MXXYTW7C2") {
+		t.Fatal("Owns(OTHER-…) = true, want false: a key this project never had is another project's ref")
+	}
+}
+
+// A key change is the only thing that may write the key section. A status
+// change against a project that has recorded no keys must come out with no key
+// section at all, exactly as it must come out with no priorities section.
+func TestAStatusChangeLeavesTheKeySectionAbsent(t *testing.T) {
+	repo, config := writeRepository(t)
+	written := writeConfig(t, repo, config, relabelOperation("todo", "To Do"))
+	if written.State.Config.Keys != nil {
+		t.Fatalf("keys = %#v, want nil: only a key operation may write the section", written.State.Config.Keys)
+	}
+}
+
+// `key.current` and `key.retire` are first key changes too. Neither can name a
+// key the section does not yet hold, so each on its own folds to nothing — but
+// the backfill runs on any key operation, which is what keeps the rule one
+// sentence long instead of three: a project's first key change records the key
+// its existing task IDs carry.
+func TestAFirstKeyChangeWithoutAnAddStillRecordsTheFoundingKey(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		operation core.ConfigOperation
+	}{
+		{"key.current alone", core.ConfigOperation{Type: core.ConfigKeyCurrent, Key: "WB"}},
+		{"key.retire alone", core.ConfigOperation{Type: core.ConfigKeyRetire, Key: "WB"}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			repo, config := writeRepository(t)
+			written := writeConfig(t, repo, config, testCase.operation)
+			keys := written.KeySet(config.Key)
+			if got := keys.Keys(); len(got) != 1 || got[0].Key != config.Key || got[0].Retired {
+				t.Fatalf("Keys() = %#v, want the founding key %q alone and active", got, config.Key)
+			}
+			if got := keys.Current(); got != config.Key {
+				t.Fatalf("Current() = %q, want the founding key %q", got, config.Key)
+			}
+			if written.State.Config.Keys == nil {
+				t.Fatal("keys = nil, want the founding key recorded: the section is written the moment a key " +
+					"operation lands, and it must not land empty")
+			}
+		})
+	}
+}
+
+// The write result and the next read agree. A key change reports the set its
+// own write produced, and the state read afterwards reports the same one.
+func TestKeySetRefreshesAfterAConfigurationWrite(t *testing.T) {
+	repo, config := writeRepository(t)
+	writeConfig(t, repo, config, core.ConfigOperation{Type: core.ConfigKeyAdd, Key: "NEW"},
+		core.ConfigOperation{Type: core.ConfigKeyCurrent, Key: "NEW"})
+	state, err := repo.LoadVocabularyState(context.Background(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := state.Keys.Current(); got != "NEW" {
+		t.Fatalf("Keys.Current() = %q, want NEW", got)
+	}
+}
+
+// The memo the boundaries read through: resolved once per opened repository,
+// and dropped exactly where this process moves the ledger. Both halves matter
+// — a memo that never held would put a Git process on every ref listing, and a
+// memo that outlived a write would classify refs against a configuration the
+// same command had already superseded.
+func TestKeySetMemoHoldsUntilThisProcessMovesTheLedger(t *testing.T) {
+	repo, config := writeRepository(t)
+	ctx := context.Background()
+
+	first, err := repo.keySet(ctx, config)
+	if err != nil {
+		t.Fatalf("keySet() error = %v", err)
+	}
+	if got := first.Keys(); len(got) != 1 || got[0].Key != config.Key {
+		t.Fatalf("keySet() = %#v, want the founding key alone", got)
+	}
+
+	// Another handle moves the ledger. This one did not, so it answers from its
+	// memo rather than paying an enumeration per ref it classifies.
+	writer, err := Open(ctx, repo.Root)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	writeConfig(t, writer, config, core.ConfigOperation{Type: core.ConfigKeyAdd, Key: "NEW"})
+	memoized, err := repo.keySet(ctx, config)
+	if err != nil {
+		t.Fatalf("keySet() error = %v", err)
+	}
+	if got := memoized.Keys(); len(got) != 1 {
+		t.Fatalf("keySet() = %#v, want the memoized founding key alone: the memo is not per call", got)
+	}
+
+	repo.forgetKeySet()
+	dropped, err := repo.keySet(ctx, config)
+	if err != nil {
+		t.Fatalf("keySet() error = %v", err)
+	}
+	if got := dropped.Keys(); len(got) != 2 {
+		t.Fatalf("keySet() after forgetKeySet() = %#v, want both keys", got)
+	}
+
+	// A write through this handle drops it too, so later work in the same
+	// command reads what that command just wrote.
+	writeConfig(t, repo, config, core.ConfigOperation{Type: core.ConfigKeyCurrent, Key: "NEW"})
+	refreshed, err := repo.keySet(ctx, config)
+	if err != nil {
+		t.Fatalf("keySet() error = %v", err)
+	}
+	if got := refreshed.Current(); got != "NEW" {
+		t.Fatalf("keySet().Current() = %q after a write through this handle, want NEW", got)
+	}
+}
+
+// The backfill adds to the pack, so the ceiling has to hold against what is
+// written. It is the same unrepairable failure the priority backfill's ceiling
+// guards: a ledger is append-only, and a pack written past the reader's budget
+// is a configuration no clone can ever fold again, the writer's included.
+func TestAFirstKeyChangeRefusedWhenTheBackfillWouldPushItOverTheCeiling(t *testing.T) {
+	repo, config := writeRepository(t)
+	operations := make([]core.ConfigOperation, 0, core.MaxConfigOperationsPerPack)
+	for i := 0; i < core.MaxConfigOperationsPerPack; i++ {
+		operations = append(operations, core.ConfigOperation{Type: core.ConfigKeyCurrent, Key: config.Key})
+	}
+
+	_, err := repo.WriteConfigOperation(context.Background(), config, core.CryptoULIDSource{}, operations, "")
+	if err == nil {
+		t.Fatal("WriteConfigOperation() error = nil, want a refusal: the ceiling of authored operations plus the " +
+			"backfilled founding key is one over the pack ceiling")
+	}
+	if got := core.CategoryOf(err); got != core.CategoryValidation {
+		t.Fatalf("error category = %v, want %v; error = %v", got, core.CategoryValidation, err)
+	}
+	if !strings.Contains(err.Error(), "first key change") {
+		t.Fatalf("error = %q, want it to name the backfill that pushed the pack over", err)
+	}
+	if _, found, readErr := repo.readConfigRef(context.Background(), config, configRef); readErr != nil {
+		t.Fatalf("readConfigRef() error = %v", readErr)
+	} else if found {
+		t.Fatal("the refused write seeded a ledger; a refusal must leave the project exactly as it was")
+	}
+}
