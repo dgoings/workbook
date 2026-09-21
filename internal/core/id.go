@@ -204,6 +204,51 @@ func PlausibleTaskID(key, name string) bool {
 	return ValidateProjectKey(foreignKey) == nil && ulidShapePattern.MatchString(body)
 }
 
+// ParseTaskID splits a task ID into its project key and its ULID body, and
+// reports whether it is shaped like a task ID at all.
+//
+// It answers about shape and never about ownership: the key has to match the
+// project-key grammar and the body has to be a canonical uppercase ULID, and
+// which keys this project actually has is core.KeySet's question. That split is
+// what lets the task fold stay total over a teammate's history — a pack naming a
+// key this clone has not fetched the ledger for is unfamiliar, not corrupt, the
+// same reading NormalizeTask already gives a stored status and a stored
+// priority.
+func ParseTaskID(taskID string) (string, string, bool) {
+	key, body, separated := strings.Cut(taskID, "-")
+	if !separated {
+		return "", "", false
+	}
+	if err := ValidateProjectKey(key); err != nil {
+		return "", "", false
+	}
+	parsed, err := ulid.ParseStrict(body)
+	if err != nil || parsed.String() != body {
+		return "", "", false
+	}
+	return key, body, true
+}
+
+// ValidateTaskIDShape is ParseTaskID with a message, for the durable documents
+// and the plumbing that has to say why a name was refused.
+func ValidateTaskIDShape(taskID string) error {
+	key, body, separated := strings.Cut(taskID, "-")
+	if !separated {
+		return Errorf(CategoryValidation, "task ID %q must be <KEY>-<ULID>", taskID)
+	}
+	if err := ValidateProjectKey(key); err != nil {
+		return err
+	}
+	parsed, err := ulid.ParseStrict(body)
+	if err != nil {
+		return Wrap(CategoryValidation, "task ID must contain a canonical ULID", err)
+	}
+	if parsed.String() != body {
+		return Errorf(CategoryValidation, "task ID must contain a canonical uppercase ULID")
+	}
+	return nil
+}
+
 func ValidateTaskID(key, taskID string) error {
 	if err := ValidateProjectKey(key); err != nil {
 		return err
