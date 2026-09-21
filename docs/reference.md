@@ -837,17 +837,19 @@ way recording a display setting or a priority does. `key.add`, `key.current` and
 introduces, so a teammate running a released Workbook reads the ledger as newer
 than it can read: every read and every task synchronization still works, a
 configuration change is refused with the message that says to upgrade rather
-than one that says the project is corrupt, and — because that clone cannot fold
-the key section — tasks minted under a key added since it last upgraded are
-reported as another project's refs rather than as this project's tasks. Everyone
-on the team upgrades together; see
+than one that says the project is corrupt, and — because that clone drops a key
+section it has no field for and decides what a task ref is from the key in the
+identity record alone — tasks minted under a key added since it last upgraded
+are reported as another project's refs rather than as this project's tasks.
+Everyone on the team upgrades together; see
 [Mixed versions and forks](#mixed-versions-and-forks).
 
-The web board's **Keys** section administers the same key set from the browser —
-add a key, make one current, retire one, reactivate one — beside the statuses
-and the priorities it already administered, and its new-task form offers the key
-to mint under when there is more than one to choose from; see
-[Local web board](#local-web-board).
+The web board's **Keys** section administers the same key set from the
+browser — add a key, make one current, retire one, reactivate one — against
+this same ledger and with these same refusals, the way its **Statuses** section
+administers the columns; see [Terminal board](#terminal-board). Its new-task
+form offers the key to mint under when there is more than one to choose from;
+see [Local web board](#local-web-board).
 
 ## Board display settings
 
@@ -1054,11 +1056,12 @@ another version's task is reported as kept, together with what deleting it would
 cost. Judge such a ref yourself before removing it.
 
 Which names are this project's is decided by its whole key set, active and
-retired keys alike, rather than by the key in its identity record. An entry that
-is exactly a task ID under a key this project does *not* have is the one case
-where there is something to do besides judging it: the JSON entry carries an
-`adoptableKey` member naming that key, and human output names the command that
-would take the ref on, beside the verdict rather than instead of it.
+retired keys alike, rather than by the key in its identity record. An entry
+whose name is a task ID under a key this project does *not* have — the ID
+itself, or the peeled `…^{}` form of it — is the one case where there is
+something to do besides judging it: the JSON entry carries an `adoptableKey`
+member naming that key, and human output names the command that would take the
+ref on, beside the verdict rather than instead of it.
 
 ```
 Ignored:	refs/workbook/tasks/OPS-01M32R58CBNDXTAAQBCQFSXYAZ	may be another Workbook's task; `workbook key add OPS` would adopt it	task ID "OPS-01M32R58CBNDXTAAQBCQFSXYAZ" carries project key "OPS", which this project does not have; its keys are: WB (retired), NEW
@@ -1306,12 +1309,12 @@ they were added: each row shows the key, whether it is active or retired, a
 badge on the one that is current, and the controls that key can have —
 **Make current** and **Retire** on an active key, **Reactivate** on a retired
 one — with a form below to add a key and a box to mint new tasks under it at
-once. There is no reorder, no rename and
-no removal, because a key has no rank, is never renamed, and is a permanent
-name; retiring one is what the page offers instead, and the current row carries
-no control at all, since the way it stops being current is another key becoming
-so. Every refusal is the `workbook key` verb's own sentence, the grammar a name
-must match included, which the page does not spell out for itself.
+once. There is no reorder, no rename and no removal, because a key has no rank,
+is never renamed, and is a permanent name; retiring one is what the page offers
+instead, and the current row carries no control at all, since the way it stops
+being current is another key becoming so. Every refusal is the `workbook key`
+verb's own sentence, the grammar a name must match included, which the page
+does not spell out for itself.
 **Board settings** is the project's name and its two colors, as three fields and
 one Save; an empty field is a setting cleared, and a save records only the
 settings that actually changed — a Save you have not edited records nothing at
@@ -1328,18 +1331,17 @@ same rules, the same refusals, in the same words — and everything it refuses i
 refused by the vocabulary or by the configuration rather than by the page, so an
 unknown tag, a name that is already taken, a color that is not six hexadecimal
 digits, or a color a priority already has reads exactly as it does in the
-terminal. A removal
-reports how many tasks it moved and how many of those `workbook next` can claim
-where they landed, and any warning a change carries, such as generated
-guidelines the server did not rewrite, is shown rather than swallowed. A board
-served without the four vocabulary mutations has no such page: no link, and
-`/config` is a 404; one served without the display writer has the page and not
-its Board settings section; and one served without all six priority
-mutations — the addition, the rename-and-relabel, the recolor, the `default`
-role, the move and the removal — has the page and not its Priorities section.
-One served without both key mutations — the addition and the edit that makes a
-key current, retires it or reactivates it — has the page and not its Keys
-section, and still mints tasks under the project's current key.
+terminal. A removal reports how many tasks it moved and how many of those
+`workbook next` can claim where they landed, and any warning a change carries,
+such as generated guidelines the server did not rewrite, is shown rather than
+swallowed. A board served without the four vocabulary mutations has no such
+page: no link, and `/config` is a 404; one served without the display writer
+has the page and not its Board settings section; and one served without all six
+priority mutations — the addition, the rename-and-relabel, the recolor, the
+`default` role, the move and the removal — has the page and not its Priorities
+section. One served without both key mutations — the addition and the edit that
+makes a key current, retires it or reactivates it — has the page and not its
+Keys section, and still mints tasks under the project's current key.
 
 The route was `/statuses` before it held more than statuses, and nothing
 forwards the old address: a bookmark to it now lands on this board's
@@ -1951,9 +1953,9 @@ than one active [key](#project-keys) also offers the key to mint under, standing
 at the current one; a project with a single key draws no such field, and a form
 whose reader took the default sends the create every client sent before keys
 could be chosen. New Task stages both Depends On and Blocks without writing task
-refs; relationship mutations run after the task receives its durable ID. If only
-some edges succeed, successful relationships
-remain durable while failed relationships remain available to retry or remove.
+refs; relationship mutations run after the task receives its durable ID. If
+only some edges succeed, successful relationships remain durable while failed
+relationships remain available to retry or remove.
 On narrow screens, the task editor, Properties, Relationships, and actions
 stack in that order.
 
@@ -2030,8 +2032,8 @@ polite live announcements identify the full task ID.
 The shared new-task and detail form creates or edits title, description, status,
 priority, and labels through the versioned APIs, and a create may name the key
 as well. Saving returns to the board and refreshes it. A failed save leaves the
-entered values in place and shows the
-server error in the form; Back returns to the board without mutating a task.
+entered values in place and shows the server error in the form; Back returns to
+the board without mutating a task.
 
 An edit to an existing task sends only the fields that form changed, together
 with the task tip it rendered. A change someone else made to a field you did not

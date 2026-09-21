@@ -34,10 +34,15 @@ function isValidKey (key) {
 /**
  * Propose a project key from a directory name.
  *
- * The suggestion matters more than it looks: a project key is immutable once
- * minted, and changing it later means deleting refs/workbook/project and
- * refs/workbook/config, then removing .git/workbook and .workbook by hand. The
- * wizard shows this and lets the user edit it before anything is written.
+ * The suggestion matters more than it looks: this is the project's founding
+ * key, it is immutable once minted, and every task ID minted under it keeps
+ * that prefix. What a project does instead of changing it is add keys —
+ * `workbook key add` and `workbook key current` move where new tasks are
+ * minted — while the founding key stays in refs/workbook/project. Changing
+ * that record itself would still mean deleting refs/workbook/project and
+ * refs/workbook/config, then removing .git/workbook and .workbook by hand, so
+ * the wizard shows the suggestion and lets the user edit it before anything is
+ * written.
  *
  * The CLI's core.DeriveProjectKey (internal/core/id.go) is a port of this same
  * rule, minus the taken-set collision handling below; the two must change together.

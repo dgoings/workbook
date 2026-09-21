@@ -312,10 +312,13 @@ rather than by the identity record, which is why a fetch applies the
 configuration ref before it classifies task refs: a push that delivers a new key
 and the first task minted under it has to arrive as one fetch. A `key.*`
 operation carries generation 3, like a priority operation, so a project that
-adds a key is in exactly the position the paragraph above describes — and a
-clone that cannot fold the key section reads that project's newest tasks as
-another project's refs, because the keys it would need are in the section it
-skipped.
+adds a key is in exactly the position the paragraph above describes. A clone
+released before keys existed reads such a checkpoint the way it reads any
+newer-generation one — leniently, dropping the section it has no field for
+rather than refusing it, so the project still has statuses and columns — and
+then decides what a task ref is against the key in the identity record alone.
+That project's newest tasks therefore read to it as another project's refs,
+which is the signal to upgrade rather than a judgment about the refs.
 
 **Divergence is the hard edge**, and the answer is deliberate. If a clone has
 unpublished operations on a task whose `origin` history has since gained a

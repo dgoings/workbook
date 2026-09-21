@@ -77,7 +77,7 @@ cd <repository>
 workbook setup
 ```
 
-Setup asks for the project key, the prefix on every task ID, only when it
+Setup asks for the project key, the prefix a task ID carries, only when it
 creates a new project, and suggests one from the directory name; a clone of an
 existing project takes that project's key without asking. A project can add
 keys later — `workbook key add`, `workbook key current` — so a repository made

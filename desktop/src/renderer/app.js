@@ -213,11 +213,13 @@ function renderScan () {
     key.type = 'text'
     key.value = state.keys.get(repository.path) ?? repository.suggestedKey ?? ''
     key.maxLength = 10
-    // A repository that already carries an identity has a key that cannot be
-    // changed: `setup` with a different one is refused outright. Showing it as
-    // editable would only offer an import that fails.
+    // A repository that already carries an identity has a founding key that
+    // cannot be changed: `setup` with a different one is refused outright.
+    // Showing it as editable would only offer an import that fails. The
+    // project can still add keys and move which one new tasks are minted
+    // under; that is `workbook key`, not an import decision.
     key.disabled = alreadyImported || repository.initialized
-    if (repository.initialized) key.title = 'Already minted — a project key cannot be changed'
+    if (repository.initialized) key.title = 'Already minted — a founding key cannot be changed; workbook key add and workbook key current move where new tasks are minted'
     key.addEventListener('input', () => {
       key.value = key.value.toUpperCase()
       key.classList.toggle('invalid', !/^[A-Z][A-Z0-9]{1,9}$/.test(key.value))
