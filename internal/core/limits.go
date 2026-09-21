@@ -145,6 +145,14 @@ const (
 	// because a hundred bytes is already past where a name stops fitting a
 	// browser tab, which is the place it exists to be read.
 	MaxProjectNameBytes = 100
+
+	// MaxProjectKeys bounds how many task-ID keys one project may carry.
+	//
+	// A key is a prefix a person types and reads, and a project with dozens of
+	// them has a labeling problem rather than a key problem. The ceiling is
+	// checked where every other one is — at the authoring boundary, in
+	// ValidateConfigAuthoring — so a fold never fails on a count.
+	MaxProjectKeys = 16
 )
 
 // Ceilings on a task's thread and its attachments.

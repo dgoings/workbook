@@ -92,8 +92,17 @@ func TestNormalizeKeyDocumentRefusesIncoherentDocuments(t *testing.T) {
 		"malformed key":   {Keys: []KeyDefinition{{Key: "wb"}}, Current: "wb"},
 		"unknown current": {Keys: []KeyDefinition{{Key: "WB"}}, Current: "NEW"},
 		"retired current": {Keys: []KeyDefinition{{Key: "WB", Retired: true}}, Current: "WB"},
-		"no active key":   {Keys: []KeyDefinition{{Key: "WB", Retired: true}}, Current: ""},
-		"blank current":   {Keys: []KeyDefinition{{Key: "WB"}}, Current: ""},
+		// The retired-current rule needs a document that still has an active
+		// key, or the no-active-key rule above refuses it first and the branch
+		// that names the current key is never reached. A project with two keys
+		// whose current one is retired is the shape a hand-edited section or a
+		// corrupted peer actually produces.
+		"retired current beside an active key": {
+			Keys:    []KeyDefinition{{Key: "WB"}, {Key: "NEW", Retired: true}},
+			Current: "NEW",
+		},
+		"no active key": {Keys: []KeyDefinition{{Key: "WB", Retired: true}}, Current: ""},
+		"blank current": {Keys: []KeyDefinition{{Key: "WB"}}, Current: ""},
 	} {
 		if _, err := normalizeKeyDocument(&document); err == nil {
 			t.Errorf("normalizeKeyDocument(%s) = nil, want an error", name)
