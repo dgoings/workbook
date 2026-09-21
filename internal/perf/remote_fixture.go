@@ -229,7 +229,7 @@ func constructRemoteTopology(ctx context.Context, sourceRoot, localRoot, peerRoo
 		if err := populateSynchronizedFixture(ctx, sourceRoot, localRoot, peerRoot, originRoot); err != nil {
 			return err
 		}
-		return writeBuriedCheckpointCorruption(ctx, localRoot, config, taskRefName(activeTaskIDs[0]))
+		return writeBuriedCheckpointCorruption(ctx, localRoot, taskRefName(activeTaskIDs[0]))
 	default:
 		return fmt.Errorf("unsupported remote topology %q", topology)
 	}
@@ -359,7 +359,7 @@ func replaceFixtureRefWithMalformedCommit(ctx context.Context, root, ref string)
 	return updateFixtureRef(ctx, root, ref, commit, head)
 }
 
-func writeBuriedCheckpointCorruption(ctx context.Context, root string, config core.ProjectConfig, ref string) error {
+func writeBuriedCheckpointCorruption(ctx context.Context, root string, ref string) error {
 	head, err := fixtureRefObjectID(ctx, root, ref)
 	if err != nil {
 		return err

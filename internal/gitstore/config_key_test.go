@@ -3,6 +3,7 @@ package gitstore
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -113,6 +114,32 @@ func TestHasProjectIdentityIsTrueForTheCommonProjectGuardAlone(t *testing.T) {
 	}
 	if !has {
 		t.Fatal("HasProjectIdentity() = false with only the common project guard on disk")
+	}
+}
+
+// And a key that is not origin's is refused with the key to join with, called
+// the *founding* key.
+//
+// The word carries the whole fact: the identity record holds the key the
+// project was created with, and a project may have added others since. Setup's
+// own report names the current key — the one a new task would get — so a bare
+// "with key AB" here would read as a contradiction to the `Key:` line printed
+// by the very command this sentence tells the reader to run.
+func TestAdoptOriginProjectRefusesAnotherKeyAndNamesTheFoundingOne(t *testing.T) {
+	ctx := context.Background()
+	stale, _ := adoptOrigin(t, "AB")
+
+	_, _, err := stale.AdoptOriginProject(ctx, "ZZ")
+	if err == nil {
+		t.Fatal("AdoptOriginProject(ZZ) error = nil, want a refusal naming origin's key")
+	}
+	if got := core.CategoryOf(err); got != core.CategoryValidation {
+		t.Fatalf("category = %q, want %q", got, core.CategoryValidation)
+	}
+	for _, want := range []string{`founding key is "AB"`, `workbook setup --key "AB"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to contain %q", err.Error(), want)
+		}
 	}
 }
 

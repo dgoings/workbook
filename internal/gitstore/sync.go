@@ -157,6 +157,13 @@ func (r *Repository) Push(ctx context.Context, config core.ProjectConfig) (SyncR
 	}
 	// The keys are read after the configuration ledger went out, so a key this
 	// push just published classifies the refs it published beside it.
+	//
+	// The memo is dropped first, for the reason the fetch path drops it
+	// (sync.go's fetch, above): this handle's memoized set can predate a ledger
+	// another handle on the same repository moved, and a push that classified
+	// origin's namespace against it would report a teammate's refs as another
+	// project's in its own report.
+	r.forgetKeySet()
 	keys, err := r.keySet(ctx, config)
 	if err != nil {
 		return failedPushTransport(result, refs, items, invalid, "push failed before completion", err)

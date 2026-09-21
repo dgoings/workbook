@@ -227,8 +227,18 @@ func TestKeyAddPrintsTheReverseCommandAndMintsUnderTheCurrentKey(t *testing.T) {
 	if got, want := document.Inverse.Command, "workbook key retire NEW"; got != want {
 		t.Fatalf("inverse = %q, want %q", got, want)
 	}
-	if !document.Inverse.Exact || document.Inverse.Note != "" {
-		t.Fatalf("inverse = %#v, want an exact reversal with nothing left over", document.Inverse)
+	// Not exact, and the note says why: retiring NEW stops it minting but does
+	// not take it off the list. A key is never deleted — a task ID minted under
+	// it would lose its name — so nothing this command can be given puts the
+	// project back in the state the add found, and an inverse claiming
+	// otherwise is a claim a reader acts on.
+	if document.Inverse.Exact {
+		t.Fatalf("inverse = %#v, want exact false: a retired NEW is still on this project's list", document.Inverse)
+	}
+	for _, want := range []string{"NEW", "retired key"} {
+		if !strings.Contains(document.Inverse.Note, want) {
+			t.Fatalf("inverse note = %q, want it to mention %q", document.Inverse.Note, want)
+		}
 	}
 	if got, want := keyStates(t, repository), []string{"WB current", "NEW active"}; !equalStrings(got, want) {
 		t.Fatalf("keys = %v, want %v", got, want)
@@ -365,11 +375,16 @@ func TestKeyAddReactivatesARetiredKey(t *testing.T) {
 	}
 }
 
-// A retired key cannot become current, and the refusal names the keys that can:
-// naming what exists is what turns a dead end into the command somebody wanted.
+// A retired key cannot become current, and the refusal names the way to the
+// command somebody wanted: bring the key back. That is the remedy for this verb
+// and for no other — `create --key` on a retired key is told the active keys,
+// because minting elsewhere is what a create wants, while somebody who typed
+// `key current OLD` has already said which key they mean and needs the one
+// command that makes it possible.
+//
 // An unknown key names every key instead, including the retired ones, because a
 // typo against a retired key is explained by seeing it listed.
-func TestKeyCurrentRefusesARetiredKeyAndNamesTheActiveOnes(t *testing.T) {
+func TestKeyCurrentRefusesARetiredKeyAndNamesTheWayBack(t *testing.T) {
 	repository := initializedRepository(t)
 	mustRunKey(t, repository, "key", "add", "OLD", "--no-sync")
 	mustRunKey(t, repository, "key", "retire", "OLD", "--no-sync")
@@ -378,10 +393,8 @@ func TestKeyCurrentRefusesARetiredKeyAndNamesTheActiveOnes(t *testing.T) {
 	if code != 5 {
 		t.Fatalf("code = %d, want 5; stderr = %q", code, stderr)
 	}
-	for _, want := range []string{`project key "OLD" is retired`, "the active keys are: WB"} {
-		if !strings.Contains(stderr, want) {
-			t.Errorf("stderr = %q, want %q", stderr, want)
-		}
+	if want := `project key "OLD" is retired; bring it back first: workbook key add OLD`; !strings.Contains(stderr, want) {
+		t.Errorf("stderr = %q, want %q", stderr, want)
 	}
 
 	code, _, stderr = run(t, repository, "key", "current", "ZZ", "--no-sync")
@@ -496,6 +509,7 @@ func TestKeyAddRefusesPastTheKeyCeiling(t *testing.T) {
 	}
 	for _, want := range []string{
 		fmt.Sprintf("at most %d", core.MaxProjectKeys),
+		"active",
 		"workbook key retire",
 	} {
 		if !strings.Contains(stderr, want) {
@@ -506,6 +520,21 @@ func TestKeyAddRefusesPastTheKeyCeiling(t *testing.T) {
 	// A reactivation does not grow the set, so the ceiling does not refuse it.
 	mustRunKey(t, repository, "key", "retire", "K1", "--no-sync")
 	mustRunKey(t, repository, "key", "add", "K1", "--no-sync")
+
+	// And the advice above is true, which is the whole reason the ceiling
+	// counts active keys: retiring one makes room for the add it just refused,
+	// although the project now holds one key more than the ceiling names. A key
+	// is never deleted, so a ceiling on the whole list would be one a project
+	// reaches once and can never come back under.
+	mustRunKey(t, repository, "key", "retire", "K2", "--no-sync")
+	mustRunKey(t, repository, "key", "add", "LAST", "--no-sync")
+	listed := cliKeyList(t, repository)
+	if len(listed.Keys) != core.MaxProjectKeys+1 {
+		t.Fatalf("keys = %d, want %d: a retired key stays on the list", len(listed.Keys), core.MaxProjectKeys+1)
+	}
+	if code, _, stderr := run(t, repository, "key", "add", "AGAIN", "--no-sync"); code != 5 {
+		t.Fatalf("code = %d, want 5 at the ceiling again; stderr = %q", code, stderr)
+	}
 }
 
 // `key log` mirrors `status log`: one entry per commit that changed a key,
@@ -567,6 +596,69 @@ func TestKeyLogListsKeyOperationsWithTheirInverses(t *testing.T) {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("key log text = %q, want %q", stdout, want)
 		}
+	}
+}
+
+// `status log` is the whole ledger's log, so a key change appears there too —
+// and it has to describe the change somebody ran. A project's first key change
+// carries the founding key ahead of itself, and that entry used to be named,
+// summarized and counted as the news: `status log` reported "added project key
+// WB (+1 more change(s) in this commit)" with the identifier of an operation
+// nobody authored, while the inverse beside it correctly said `workbook key
+// retire SEC`. One entry described two different changes.
+func TestStatusLogDescribesTheAuthoredKeyOperation(t *testing.T) {
+	repository := initializedRepository(t)
+	// A status change first, so the ledger exists and the key commit is not the
+	// project's first — the backfill rides on the first *key* change, whatever
+	// else the ledger holds.
+	mustRunKey(t, repository, "status", "add", "triage", "--no-sync", "--no-docs")
+	mustRunKey(t, repository, "key", "add", "SEC", "--no-sync")
+
+	logged := cliStatusLog(t, repository)
+	if len(logged.Entries) == 0 {
+		t.Fatalf("status log = %#v, want the key commit", logged)
+	}
+	newest := logged.Entries[len(logged.Entries)-1]
+	if newest.Summary != "added project key SEC" {
+		t.Errorf("summary = %q, want %q: the back-filled founding key is not what was run",
+			newest.Summary, "added project key SEC")
+	}
+	if newest.Operation != string(core.ConfigKeyAdd) {
+		t.Errorf("operation = %q, want %q", newest.Operation, core.ConfigKeyAdd)
+	}
+	if newest.Collapsed != 0 {
+		t.Errorf("collapsed = %d, want 0: one key was added, and the backfill is not a second change",
+			newest.Collapsed)
+	}
+	if newest.Inverse == nil || newest.Inverse.Command != "workbook key retire SEC" {
+		t.Fatalf("inverse = %#v, want `workbook key retire SEC`", newest.Inverse)
+	}
+	// And the operation the entry is named by is the one the key log names for
+	// the same commit, so a caller cross-referencing the two logs finds one
+	// operation rather than two.
+	keyed := cliKeyLog(t, repository)
+	if len(keyed.Entries) != 1 {
+		t.Fatalf("key log = %#v, want the one key commit", keyed)
+	}
+	if newest.OperationID != keyed.Entries[0].OperationID {
+		t.Errorf("status log operationId = %q, key log = %q, want one commit to carry one operation name",
+			newest.OperationID, keyed.Entries[0].OperationID)
+	}
+	if newest.Commit != keyed.Entries[0].Commit {
+		t.Fatalf("the two logs named different commits (%q, %q)", newest.Commit, keyed.Entries[0].Commit)
+	}
+
+	code, stdout, stderr := run(t, repository, "status", "log")
+	if code != 0 || stderr != "" {
+		t.Fatalf("status log = code %d, stderr %q", code, stderr)
+	}
+	for _, want := range []string{"added project key SEC", "inverse:\tworkbook key retire SEC"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("status log text = %q, want %q", stdout, want)
+		}
+	}
+	if strings.Contains(stdout, "added project key WB") {
+		t.Errorf("status log text = %q, want no entry for the back-filled founding key", stdout)
 	}
 }
 
@@ -695,6 +787,42 @@ func TestListFiltersByKeyIncludingARetiredOne(t *testing.T) {
 	}
 	if len(listed) != 1 || listed[0].ID != underNew.ID {
 		t.Fatalf("list --key NEW = %#v, want the one task minted under NEW", listed)
+	}
+}
+
+// A key typed in lowercase is the key. Keys are uppercase by grammar, and a
+// shell history full of lowercase task IDs is how somebody arrives at `--key
+// api` — so the two flags that name an existing key uppercase what they were
+// given rather than refusing a name whose only fault is its case. The refusal
+// that is left is the honest one: no such key.
+func TestKeyFiltersAcceptALowercaseKey(t *testing.T) {
+	repository := initializedRepository(t)
+	mustRunKey(t, repository, "key", "add", "API", "--no-sync")
+	under := cliCreateTaskWithKey(t, repository, "Under API", "api")
+	if !strings.HasPrefix(under.ID, "API-") {
+		t.Fatalf("task ID = %q, want a task minted under API", under.ID)
+	}
+
+	code, stdout, stderr := run(t, repository, "list", "--key", "api", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("list --key api = code %d, stderr %q", code, stderr)
+	}
+	var listed []core.Task
+	if err := json.Unmarshal(assertJSONResult(t, stdout, "list").Data, &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].ID != under.ID {
+		t.Fatalf("list --key api = %#v, want the one task under API", listed)
+	}
+
+	// And a lowercase name for a key that does not exist is still refused, by
+	// the key it names rather than by its case.
+	code, _, stderr = run(t, repository, "list", "--key", "zz", "--json")
+	if code != 5 {
+		t.Fatalf("list --key zz = code %d, want 5; stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stderr, `no project key \"ZZ\"`) {
+		t.Fatalf("stderr = %q, want the refusal to name the key it looked for", stderr)
 	}
 }
 

@@ -244,14 +244,19 @@ func TestConfigStateKeySetFallsBackToTheFoundingKey(t *testing.T) {
 // The ceiling is asked at the authoring boundary, never in the fold, for the
 // reason every other ceiling is: a fold that can fail on a count can be made to
 // fail forever by two clones each doing something they were allowed to do.
-func TestValidateConfigAuthoringRefusesMoreKeysThanTheCeiling(t *testing.T) {
+//
+// It counts the keys that can mint, which is what makes its own advice true. A
+// key is never deleted, so retiring one is the only thing anybody can do about
+// a full project — and a ceiling on every key a project has ever had would make
+// that answer false the moment it was taken.
+func TestValidateConfigAuthoringRefusesMoreActiveKeysThanTheCeiling(t *testing.T) {
 	parent := genesisState(t, testVocabulary(t))
-	operations := make([]ConfigOperation, 0, MaxProjectKeys+1)
-	operations = append(operations, keyAdd("WB"))
+	fill := make([]ConfigOperation, 0, MaxProjectKeys+2)
+	fill = append(fill, keyAdd("WB"))
 	for index := 0; index < MaxProjectKeys; index++ {
-		operations = append(operations, keyAdd("K"+string(rune('A'+index))))
+		fill = append(fill, keyAdd("K"+string(rune('A'+index))))
 	}
-	pack := keyPack(t, parent, operations...)
+	pack := keyPack(t, parent, fill...)
 
 	if err := ValidateConfigAuthoring(&parent, pack); err == nil {
 		t.Fatal("ValidateConfigAuthoring() error = nil, want a refusal naming the ceiling")
@@ -260,6 +265,13 @@ func TestValidateConfigAuthoringRefusesMoreKeysThanTheCeiling(t *testing.T) {
 	}
 	if _, err := ApplyConfig(&parent, pack); err != nil {
 		t.Fatalf("ApplyConfig() error = %v, want the fold to accept what authoring refused", err)
+	}
+
+	// The same project with one of those keys retired is under the ceiling and
+	// is authored, although it holds one key more than the ceiling names.
+	room := append(append([]ConfigOperation{}, fill...), keyRetire("KA"))
+	if err := ValidateConfigAuthoring(&parent, keyPack(t, parent, room...)); err != nil {
+		t.Fatalf("ValidateConfigAuthoring() error = %v, want a retirement to make room for the key above", err)
 	}
 }
 

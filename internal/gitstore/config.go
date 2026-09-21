@@ -191,13 +191,27 @@ func (r *Repository) AdoptOriginProject(ctx context.Context, key string) (core.P
 		return core.ProjectConfig{}, false, nil
 	}
 	if key != "" && discovered.Key != key {
-		return core.ProjectConfig{}, false, core.Errorf(core.CategoryValidation,
-			"origin already has a Workbook project with key %q; rerun workbook setup --key %q to join it", discovered.Key, discovered.Key)
+		return core.ProjectConfig{}, false, foundingKeyMismatch(discovered.Key)
 	}
 	if err := r.writeConfig(discovered); err != nil {
 		return core.ProjectConfig{}, false, err
 	}
 	return discovered, true, nil
+}
+
+// foundingKeyMismatch refuses a `setup --key` that names something other than
+// the key origin's project was founded with, and names the key to join with.
+//
+// It says *founding* key rather than "key", because that is the only key this
+// refusal knows: the identity record holds the key the project was created
+// with, and a project may have added others since. Setup's own report shows the
+// current key — the one a new task would get — so a bare "with key WB" here
+// would read as a contradiction to the `Key:` line printed a moment later by
+// the very command this sentence tells the reader to run.
+func foundingKeyMismatch(founding string) error {
+	return core.Errorf(core.CategoryValidation,
+		"origin already has a Workbook project; its founding key is %q, so rerun workbook setup --key %q to join it",
+		founding, founding)
 }
 
 // adoptOriginIdentityRef fetches origin's canonical identity and makes it this
@@ -218,9 +232,7 @@ func (r *Repository) adoptOriginIdentityRef(ctx context.Context, key string) (co
 			"origin listed %s but did not deliver it; rerun workbook setup", identityRef)
 	}
 	if key != "" && record.Identity.Key != key {
-		return core.ProjectConfig{}, core.Errorf(core.CategoryValidation,
-			"origin already has a Workbook project with key %q; rerun workbook setup --key %q to join it",
-			record.Identity.Key, record.Identity.Key)
+		return core.ProjectConfig{}, foundingKeyMismatch(record.Identity.Key)
 	}
 
 	if err := r.createRef(ctx, identityRef, record.Head); err != nil {

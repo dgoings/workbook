@@ -283,13 +283,21 @@ func fetchSharingWarnings(
 	if err != nil {
 		return nil
 	}
-	vocabulary, err := repository.LoadVocabulary(ctx)
+	// All three configured sections, from one read, exactly as the service
+	// constructors above open on them. Reading the statuses alone left this
+	// service deciding which task IDs are this project's from the founding key
+	// in the identity record, so on a project that has added a key the warning
+	// beside a replayed task under that key had to be read out of a service
+	// that does not think the task is ours.
+	state, err := repository.LoadVocabularyState(ctx, config)
 	if err != nil {
 		return nil
 	}
 	service := core.Service{
 		Config:     config,
-		Vocabulary: vocabulary,
+		Vocabulary: state.Vocabulary,
+		Priorities: state.Priorities,
+		Keys:       state.Keys,
 		Reader:     store,
 		History:    store,
 		IDs:        core.CryptoULIDSource{},
@@ -536,7 +544,7 @@ func runCreate(ctx context.Context, args []string, cwd string, stdout, stderr io
 			Status:      core.Status(*status),
 			Priority:    core.Priority(*priority),
 			Labels:      labels.values,
-			Key:         *key,
+			Key:         namedProjectKey(*key),
 		})
 	})
 	return writeMutationOutcome(stdout, stderr, "create", session, result, err, *jsonMode)
@@ -558,7 +566,7 @@ func runList(ctx context.Context, args []string, cwd string, stdout, stderr io.W
 	if err != nil {
 		return err
 	}
-	filter := core.ListFilter{Label: *label, All: *all, Key: *key}
+	filter := core.ListFilter{Label: *label, All: *all, Key: namedProjectKey(*key)}
 	if *status != "" {
 		value := core.Status(*status)
 		filter.Status = &value

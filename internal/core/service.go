@@ -438,13 +438,18 @@ func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
 		}
 		wantedPriority = resolution.Resolved
 	}
+	// Resolved once, beside the vocabulary above, rather than per task: the
+	// substitution behind keys() is the same answer every time, and asking it
+	// inside the loop below built a founding key set per task on every project
+	// whose ledger records nothing about keys.
+	keys := s.keys()
 	// An unknown key is refused rather than answered with an empty list, the
 	// same way a status filter that resolves to nothing is: a caller cannot tell
 	// "no such key" from "no tasks under it" from an empty table. A retired key
 	// is perfectly askable — its tasks still exist.
-	if filter.Key != "" && !s.keys().Contains(filter.Key) {
+	if filter.Key != "" && !keys.Contains(filter.Key) {
 		return nil, Errorf(CategoryValidation, "no project key %q in this project; its keys are: %s%s",
-			filter.Key, KeyNameList(s.keys()), unfetchedFilterClause)
+			filter.Key, KeyNameList(keys), unfetchedFilterClause)
 	}
 	tasks := make([]Task, 0, len(snapshots))
 	for _, snapshot := range snapshots {
@@ -453,7 +458,7 @@ func (s Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
 			continue
 		}
 		if filter.Key != "" {
-			key, _, ok := s.keys().Parse(task.ID)
+			key, _, ok := keys.Parse(task.ID)
 			if !ok || key != filter.Key {
 				continue
 			}

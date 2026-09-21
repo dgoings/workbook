@@ -408,6 +408,43 @@ func TestClientKeysSectionSaysNothingOfTheSortWithSeveralKeys(t *testing.T) {
 `)
 }
 
+// The boundary the sentence actually turns on: one active key and one retired
+// one. Only one key can mint, so a rule about minting would print the sentence
+// here — and it would be false, because the Reactivate on the retired row is
+// exactly the move the sentence says to go and make. One key, not one active
+// key, is the question, and this is the fixture that tells the two apart.
+func TestClientKeysSectionSaysNothingWithOneActiveAndOneRetiredKey(t *testing.T) {
+	keys := oneActiveOneRetiredProject(t)
+	runKeyPanelClient(t, "a project whose second key is retired", "/", keys, nil, `
+  vocabularyRead = `+keyPanelVocabularyJSON(t, keys, "head-1")+`;
+  await openStatuses();
+  if (panelKeys().join(",") !== "WB,OLD") {
+    throw new Error("the section listed " + JSON.stringify(panelKeys()) + ", want both keys");
+  }
+  if (keyRowControls("OLD").join(",") !== "Reactivate") {
+    throw new Error("the retired row offered " + JSON.stringify(keyRowControls("OLD")) +
+      ", want the move the note would otherwise claim does not exist");
+  }
+  if (findElement(keyPanelBody, (element) => hasDataKey(element, "keyPanelOnlyKey"))) {
+    throw new Error("a project with a retired second key was told it has only one key");
+  }
+`)
+}
+
+// oneActiveOneRetiredProject is the boundary fixture: the founding key minting
+// alone, with one retired key beside it. One key can mint and two are listed.
+func oneActiveOneRetiredProject(t *testing.T) core.KeySet {
+	t.Helper()
+	keys, err := core.NewKeySet(core.KeyDocument{
+		Keys:    []core.KeyDefinition{{Key: "WB"}, {Key: "OLD", Retired: true}},
+		Current: "WB",
+	})
+	if err != nil {
+		t.Fatalf("NewKeySet() error = %v", err)
+	}
+	return keys
+}
+
 // Making another key current is one PATCH naming one intent, against the head
 // the section read, and the answer is adopted whole — so the badge moves without
 // the page re-reading anything.

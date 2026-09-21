@@ -853,19 +853,29 @@ func forwardingTimes(ledger configLedgerWindow) map[core.Status]time.Time {
 func buildStatusLog(ledger configLedgerWindow) statusLogResult {
 	entries := make([]statusLogEntry, 0, len(ledger.Commits))
 	for _, commit := range ledger.Commits {
-		if len(commit.Pack.Operations) == 0 {
+		// The authored operations, not the recorded pack. Two sections record a
+		// backfill ahead of a project's first change to them — the founding key
+		// and the built-in priorities — and an entry built from operations[0]
+		// names, summarizes, counts and identifies that prefix while the
+		// inverse beside it, which already strips, describes the change
+		// somebody ran. One entry then says two different things about one
+		// commit. Both strippings are idempotent and neither can fire on the
+		// other's prefix, since each is identified by its own first operation.
+		operations := authoredKeyOperations(commit.Before.keys, commit.Pack.Operations)
+		operations = authoredPriorityOperations(commit.Before, operations)
+		if len(operations) == 0 {
 			continue
 		}
-		primary := commit.Pack.Operations[0]
+		primary := operations[0]
 		entries = append(entries, statusLogEntry{
 			Commit:      commit.Commit,
 			OperationID: primary.ID,
 			WallTime:    commit.Pack.WallTime,
 			Actor:       commit.Pack.Actor.ID,
 			Operation:   primary.Type,
-			Summary:     configPackSummary(commit.Pack.Operations),
-			Collapsed:   len(commit.Pack.Operations) - 1,
-			Inverse:     statusPackInverse(commit.Before, commit.Pack.Operations),
+			Summary:     configPackSummary(operations),
+			Collapsed:   len(operations) - 1,
+			Inverse:     statusPackInverse(commit.Before, operations),
 		})
 	}
 	return statusLogResult{

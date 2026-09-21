@@ -622,7 +622,7 @@ func TestKeyRefusalsReachTheClientInTheVerbsOwnWords(t *testing.T) {
 			method: http.MethodPatch, target: "/api/vocabulary/keys/WB",
 			body: `{"current":true,"expectedHead":"head-current"}`,
 			err: core.Errorf(core.CategoryValidation,
-				`project key "WB" is retired, so no new task is minted under it; the active keys are: NEW, SPARE`),
+				`project key "WB" is retired; bring it back first: workbook key add WB`),
 			wantStatus: http.StatusBadRequest,
 		},
 	} {

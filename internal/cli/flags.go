@@ -463,7 +463,10 @@ var commandSchemas = map[string]commandMetadata{
 			"and its tasks stay this project's.\n\n" +
 			"Keys are project configuration, recorded in the same synchronized history as\n" +
 			"the statuses and shared with everyone who fetches. Every change prints the\n" +
-			"command that reverses it.",
+			"command that reverses it.\n\n" +
+			"Every change regenerates `.workbook/guidelines.md`, which documents the key a\n" +
+			"new task is minted under for agents; `--no-docs` leaves it alone, and a file\n" +
+			"somebody edited is reported rather than overwritten.",
 		Positionals:     []string{"<command>"},
 		SubcommandOrder: []string{"list", "add", "current", "retire", "log"},
 		Subcommands: map[string]commandMetadata{

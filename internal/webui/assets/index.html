@@ -298,6 +298,8 @@
     .admin-status[data-drop-target="true"] { border-color: var(--wb-primary); box-shadow: inset 0 0 0 1px var(--wb-primary); }
     .admin-status__name { display: flex; flex-wrap: wrap; align-items: baseline; gap: .45rem; min-width: 0; font-size: .9rem; font-weight: 750; }
     .admin-status__token { color: var(--wb-primary-ink); font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .74rem; font-weight: 400; overflow-wrap: anywhere; }
+    /* A key row's token IS its name — a key has no label beside it, because the key is the prefix every task ID minted under it carries — so it takes the size and weight its siblings give a label, rather than the quieter treatment a token earns when it sits beside one. Without this the Keys section read as a list of annotations instead of the administrable list it is. The selector is the attribute keyRow writes for the key it addresses, which no other row carries. */
+    .admin-status[data-vocabulary-key] .admin-status__token { font-size: .9rem; font-weight: 750; }
     .admin-tag { padding: .08rem .32rem; border: 1px solid var(--wb-border); border-radius: 3px; color: var(--wb-ink); font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .66rem; font-weight: 400; }
     .admin-status__controls { display: flex; flex-wrap: wrap; gap: .35rem; }
     .admin-button { border: 1px solid var(--wb-border-strong); border-radius: 4px; background: var(--wb-surface); color: var(--wb-ink); cursor: pointer; font: inherit; font-size: .78rem; font-weight: 700; padding: .35rem .65rem; }

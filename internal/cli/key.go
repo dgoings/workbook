@@ -564,6 +564,20 @@ func runKeyMutation(
 	return nil
 }
 
+// namedProjectKey is a key a flag was given, in the case keys are written in.
+//
+// It is for the flags that name a key that already exists — `create --key` and
+// `list --key` — and not for `key add`, which names the key a project will read
+// from then on and should record exactly what its author typed or be told the
+// grammar. A filter has nothing to record: `--key api` can only mean API, since
+// no other key could match, and refusing it teaches a reader the grammar in
+// place of answering their question. The one refusal left for these flags is
+// the one worth having — no such key — and it names the key it looked for, so
+// the uppercasing is visible rather than silent.
+func namedProjectKey(key string) string {
+	return strings.ToUpper(strings.TrimSpace(key))
+}
+
 // planKeyAdd adds a key, or brings a retired one back.
 //
 // The refusals are the author's, not the fold's: the fold converges on a key
@@ -578,6 +592,12 @@ func runKeyMutation(
 // core.ValidateConfigAuthoring asks the same question at the boundary and is
 // what actually holds the ceiling; this asks first so the answer is a sentence
 // naming the verb that makes room.
+//
+// It counts the active keys, and it counts them for a reactivation too, because
+// both this verb's outcomes end with one more key that can mint. Counting every
+// key a project has ever had would make this refusal's own advice false: a key
+// is never deleted, so a project at such a ceiling could retire keys all day
+// and never add another.
 func planKeyAdd(keys core.KeySet, key string, makeCurrent bool) (keyPlan, error) {
 	if err := core.ValidateProjectKey(key); err != nil {
 		return keyPlan{}, err
@@ -590,10 +610,10 @@ func planKeyAdd(keys core.KeySet, key string, makeCurrent bool) (keyPlan, error)
 	case known && state == core.KeyStateActive:
 		return keyPlan{}, core.Errorf(core.CategoryValidation,
 			"project key %q is already active; to mint new tasks under it: workbook key current %s", key, key)
-	case !known && len(keys.Keys())+1 > core.MaxProjectKeys:
+	case len(keys.Active())+1 > core.MaxProjectKeys:
 		return keyPlan{}, core.Errorf(core.CategoryValidation,
-			"this project has %d keys and may have at most %d; retire one instead of adding another: workbook key retire <key>",
-			len(keys.Keys()), core.MaxProjectKeys)
+			"this project has %d active keys and may have at most %d; retire one instead of adding another: workbook key retire <key>",
+			len(keys.Active()), core.MaxProjectKeys)
 	}
 	operations := []core.ConfigOperation{{Type: core.ConfigKeyAdd, Key: key}}
 	change := keyChange{
@@ -613,8 +633,15 @@ func planKeyAdd(keys core.KeySet, key string, makeCurrent bool) (keyPlan, error)
 //
 // An unknown key is answered with every key this project has, retired ones
 // marked, because the likeliest reason somebody named a key that cannot become
-// current is that they are looking at a key that was retired; a retired key is
-// answered with the active ones, which are exactly what this verb accepts.
+// current is that they are looking at a key that was retired.
+//
+// A retired key is answered with the command that brings it back, which is this
+// verb's own remedy rather than core's. `create --key` on a retired key is told
+// the active keys, and rightly: a create wants a key to mint under, and any
+// active one will do. Somebody who typed `key current OLD` has already said
+// which key they mean, so a list of the others is a list of things they did not
+// ask for — `key add OLD` is the one command that makes what they asked for
+// possible, and it is two commands from there, not a dead end.
 func planKeyCurrent(keys core.KeySet, key string) (keyPlan, error) {
 	if err := core.ValidateProjectKey(key); err != nil {
 		return keyPlan{}, err
@@ -625,9 +652,8 @@ func planKeyCurrent(keys core.KeySet, key string) (keyPlan, error) {
 		return keyPlan{}, core.Errorf(core.CategoryValidation,
 			"no project key %q in this project; its keys are: %s", key, core.KeyNameList(keys))
 	case state == core.KeyStateRetired:
-		// core's own refusal, which names the active keys: one sentence about
-		// minting under a retired key, wherever the attempt comes from.
-		return keyPlan{}, keys.RequireActive(key)
+		return keyPlan{}, core.Errorf(core.CategoryValidation,
+			"project key %q is retired; bring it back first: workbook key add %s", key, key)
 	case keys.Current() == key:
 		return keyPlan{}, core.Errorf(core.CategoryValidation,
 			"project key %q is already this project's current key; workbook key list shows every key this project has", key)
@@ -759,7 +785,18 @@ func keyPackInverse(before core.KeySet, pack []core.ConfigOperation) *statusInve
 					operation.Key),
 			}
 		}
-		return &statusInverse{Command: "workbook key retire " + operation.Key, Exact: true}
+		// Not exact, whatever else the commit did. Retiring a key stops it
+		// minting; it does not take it off the list, because a key is never
+		// deleted — every task ID minted under it carries it forever, so the
+		// list is history rather than a setting. So no command reverses an add
+		// into the set the add found, and the note says what is left behind
+		// rather than letting a reader discover it in `key list`.
+		return &statusInverse{
+			Command: "workbook key retire " + operation.Key,
+			Exact:   false,
+			Note: fmt.Sprintf("%s stays on this project's list as a retired key; a key is never deleted",
+				operation.Key),
+		}
 	case core.ConfigKeyCurrent:
 		if before.Current() == "" || before.Current() == operation.Key {
 			return nil

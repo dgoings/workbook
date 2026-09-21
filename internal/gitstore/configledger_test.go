@@ -849,6 +849,64 @@ func TestKeySetMemoHoldsUntilThisProcessMovesTheLedger(t *testing.T) {
 	}
 }
 
+// keySetMemoized reports whether a handle is holding a resolved key set. It
+// reads the field under the lock that guards it rather than asking keySet,
+// which would install one and answer about its own call.
+func keySetMemoized(repo *Repository) bool {
+	repo.metadataMu.Lock()
+	defer repo.metadataMu.Unlock()
+	return repo.keysLoaded
+}
+
+// ForgetKeySetUnlessAt is the memo drop for the caller that outlives the
+// ledger: `workbook serve` resolves the configuration on every request and
+// meets a teammate's key change between two of them, and nothing in this
+// process moved anything.
+//
+// It is conditional on purpose — the head the caller just read against the head
+// the memo was resolved at — so the common request, where the ledger has not
+// moved, costs a mutex and a string comparison and the memo survives. What it
+// must never do is install: a caller hands over a head it observed, not a set,
+// and dropping is monotone where installing could put a superseded set where
+// every ref listing reads it.
+func TestForgetKeySetUnlessAtKeepsTheMemoAtTheHeadItWasResolvedAt(t *testing.T) {
+	repo, config := writeRepository(t)
+	ctx := context.Background()
+
+	writeConfig(t, repo, config, core.ConfigOperation{Type: core.ConfigKeyAdd, Key: "NEW"})
+	state, err := repo.LoadVocabularyState(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.keySet(ctx, config); err != nil {
+		t.Fatalf("keySet() error = %v", err)
+	}
+
+	// The head the memo was resolved at: nothing to drop, and the memo answers
+	// the next read without touching Git.
+	repo.ForgetKeySetUnlessAt(state.Head)
+	if !keySetMemoized(repo) {
+		t.Fatal("ForgetKeySetUnlessAt(head) dropped the memo resolved at that very head")
+	}
+
+	// Any other head is a ledger that moved where this process could not see
+	// it, so the memo goes.
+	repo.ForgetKeySetUnlessAt(state.Head + "0")
+	if keySetMemoized(repo) {
+		t.Fatal("ForgetKeySetUnlessAt(other head) kept a memo resolved at a superseded tip")
+	}
+
+	// And it re-reads rather than being left empty, which is what makes
+	// dropping safe to do from a request.
+	reloaded, err := repo.keySet(ctx, config)
+	if err != nil {
+		t.Fatalf("keySet() error = %v", err)
+	}
+	if got := reloaded.Keys(); len(got) != 2 {
+		t.Fatalf("keySet() after the drop = %#v, want both keys", got)
+	}
+}
+
 // The backfill adds to the pack, so the ceiling has to hold against what is
 // written. It is the same unrepairable failure the priority backfill's ceiling
 // guards: a ledger is append-only, and a pack written past the reader's budget

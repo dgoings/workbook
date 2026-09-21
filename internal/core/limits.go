@@ -146,12 +146,17 @@ const (
 	// browser tab, which is the place it exists to be read.
 	MaxProjectNameBytes = 100
 
-	// MaxProjectKeys bounds how many task-ID keys one project may carry.
+	// MaxProjectKeys bounds how many task-ID keys one project may mint under.
 	//
 	// A key is a prefix a person types and reads, and a project with dozens of
 	// them has a labeling problem rather than a key problem. The ceiling is
 	// checked where every other one is — at the authoring boundary, in
 	// ValidateConfigAuthoring — so a fold never fails on a count.
+	//
+	// It counts the active keys, not every key the project has ever had. A key
+	// is never deleted, so a ceiling on the whole list would be a ceiling a
+	// project could reach and never leave, and the refusal's own advice —
+	// retire one instead — would name a command that does not help.
 	MaxProjectKeys = 16
 )
 

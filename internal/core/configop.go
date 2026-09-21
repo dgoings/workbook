@@ -648,10 +648,21 @@ func ValidateConfigAuthoring(parent *ConfigStateDocument, pack ConfigOperationPa
 		return err
 	}
 	if keyDocument != nil {
-		if len(keyDocument.Keys) > MaxProjectKeys {
+		// The ceiling counts the keys that can mint, which is what makes the
+		// advice beside it true. A key is never deleted — a task ID is a
+		// permanent name — so retiring one is the whole of what a project at
+		// the ceiling can do about it, and counting retired keys too would make
+		// the sentence name a remedy that changes nothing.
+		active := 0
+		for _, definition := range keyDocument.Keys {
+			if !definition.Retired {
+				active++
+			}
+		}
+		if active > MaxProjectKeys {
 			return Errorf(CategoryValidation,
-				"this project would have %d keys and may have at most %d; retire one instead of adding another",
-				len(keyDocument.Keys), MaxProjectKeys)
+				"this project would have %d active keys and may have at most %d; retire one instead of adding another",
+				active, MaxProjectKeys)
 		}
 		set, err := NewKeySet(*keyDocument)
 		if err != nil {

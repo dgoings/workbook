@@ -763,16 +763,24 @@ workbook: project key "ops" must match ^[A-Z][A-Z0-9]{1,9}$
 
 Adding a **retired** key back is how it is reactivated: it becomes active again
 in the place it already had rather than as a new entry at the end, so the order
-a project reads is still the order it added things in. Sixteen keys is the
-ceiling, and the seventeenth is refused with the retirement that would make room
-rather than recorded.
+a project reads is still the order it added things in. Sixteen **active** keys
+is the ceiling, and the seventeenth is refused with the retirement that would
+make room rather than recorded. Retired keys are not counted: a key is never
+deleted, so a ceiling on the whole list would be one a project could reach and
+never come back under, and retiring one really does make room for the add that
+was refused.
 
 `workbook key current <KEY>` moves where new tasks are minted. The key that held
 it gives it up in the same operation, so exactly one key is ever current. A
-retired key is refused naming the active ones, an unknown key is refused naming
-every key this project has, and the key that is already current is refused
-rather than recorded — a configuration change that would change nothing is not
-written here either.
+retired key is refused naming the command that brings it back, an unknown key is
+refused naming every key this project has, and the key that is already current
+is refused rather than recorded — a configuration change that would change
+nothing is not written here either.
+
+```
+$ workbook key current WB
+workbook: project key "WB" is retired; bring it back first: workbook key add WB
+```
 
 `workbook key retire <KEY>` stops minting under an active key. The current key is
 refused, because new tasks would have nowhere to go, and so is the last active
@@ -788,9 +796,20 @@ workbook: project key "WB" is this project's only active key, and a project must
 
 Every one of the three prints the command that reverses it. An addition reverses
 with `workbook key retire`, a retirement with `workbook key add`, and
-`workbook key current` with the key that was current before. `workbook key add
---current` is the one change no single command undoes, and it says so rather
-than printing a command that only half works:
+`workbook key current` with the key that was current before.
+
+An addition's reversal is marked **not exact**, because a key is never deleted:
+retiring it stops it minting and leaves it on the list, which is not the state
+the addition found.
+
+```
+	inverse:	workbook key retire THIRD	(not exact)
+	note:	THIRD stays on this project's list as a retired key; a key is never deleted
+```
+
+`workbook key add --current` is inexact for a second reason — no single command
+undoes both halves — and says which half it undoes rather than printing a
+command that only half works:
 
 ```
 	inverse:	workbook key current NEW	(not exact)
@@ -807,7 +826,10 @@ the current one. A retired or unknown key is refused, naming the keys a task may
 be minted under. `workbook list --key <KEY>` lists the tasks whose IDs carry one
 key: a retired key is accepted there, because its tasks still exist, and an
 unknown one is refused naming this project's keys and saying that fetching is
-what fixes a name a teammate has and this clone does not.
+what fixes a name a teammate has and this clone does not. Both flags name a key
+that already exists, so both accept it in any case — `--key api` means `API` —
+and the refusal names the key it looked for. `workbook key add` does not: it
+records the name a project reads from then on, so it is held to the grammar.
 
 ```
 $ workbook create "Under retired" --key WB
