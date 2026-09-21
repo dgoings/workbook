@@ -85,7 +85,11 @@
             <span id="path-note-terminal-windows" hidden>Sign out and back in to use
               <code>workbook</code> there — until then Windows hands even a new
               terminal the old PATH.</span>
-            An existing Homebrew install keeps precedence.
+            <!-- Not "a Homebrew install": Homebrew is not a Windows thing, and
+                 the rule is about position on PATH rather than about how the
+                 other build was installed. -->
+            An existing <code>workbook</code> earlier on your PATH keeps
+            precedence.
           </aside>
 
           <!-- The one irreversible step in the wizard. -->

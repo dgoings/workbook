@@ -253,8 +253,11 @@ a new terminal once. **On Windows a new terminal is not enough:** `reg add`
 changes the stored user PATH but cannot broadcast the `WM_SETTINGCHANGE` that
 tells running processes to re-read it, so Explorer keeps handing every terminal
 it launches the environment it cached — sign out and back in, or restart
-Explorer. The app says which of the two you need, once, the first time it
-changes anything.
+Explorer. The app says which of the two you need, once — on the first launch
+that puts the directory on your PATH without a single failure. A launch that
+managed some of your profiles and not others stays quiet and logs what it could
+not write, since a notice about PATH would be false for the shell it missed and
+there is no second one to correct it.
 
 The directory is *appended*, not prepended, which is the one difference from
 `setup-dev-env.sh`. An existing `workbook` earlier on your PATH — a Homebrew

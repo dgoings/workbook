@@ -658,4 +658,21 @@ describe('install (orchestrator)', () => {
       await fs.chmod(profile, 0o600) // restore so cleanup can remove the temp directory
     }
   })
+
+  test('a profile whose block was left unterminated is refused, not rewritten', async () => {
+    const { home, bundled } = await scenario('unterminated-block')
+    const profile = path.join(home, '.profile')
+    // A hand-edited profile: the begin marker is there, the end marker is gone.
+    // Mirroring setup-dev-env.sh's awk here would drop every line after it, so
+    // install() has to report the file and leave it exactly as it is.
+    const original = `# mine\n${clipath.MARK_BEGIN}\nexport HALF=1\nexport IMPORTANT=yes\n`
+    await fs.writeFile(profile, original)
+
+    const result = await clipath.install({ platform: 'darwin', env: {}, home, bundled })
+
+    assert.equal(result.copied, true, 'the binary copy is independent of the profile')
+    assert.equal(result.pathChanged, false, 'nothing was written to any profile')
+    assert.ok(result.errors.some((message) => message.includes(profile)), result.errors.join('; '))
+    assert.equal(await fs.readFile(profile, 'utf8'), original)
+  })
 })

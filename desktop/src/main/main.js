@@ -334,7 +334,15 @@ async function installCli () {
   // Arm the notice, on the launch that earned it, for whichever launch's page
   // gets around to asking. The registry refuses to re-arm once the notice has
   // been shown, so an app update that re-copies the binary stays quiet.
-  if (result.pathChanged) {
+  //
+  // Only a launch that wrote every target it chose gets to say it. A partial
+  // write — `.zshrc` taken and fish's config refused, say — would otherwise
+  // get the same sentence about PATH while the shell the user actually types
+  // in was the one that was missed, and the notice is not repeatable: it would
+  // be wrong once and then silent forever. A launch that tries again and
+  // succeeds arms it then, since a target already carrying the block reports no
+  // change and only the failed one has anything left to do.
+  if (result.pathChanged && errors.length === 0) {
     try {
       await registry.setPendingPathNotice(result.directory)
     } catch (error) {
