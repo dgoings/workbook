@@ -13,12 +13,26 @@ import (
 
 func testOptions(t *testing.T) Options {
 	t.Helper()
+	// A refusal names the user configuration file by path, so point the lookup
+	// at a scratch directory: the assertions are then deterministic, and no
+	// test can reach the developer's real configuration.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	return Options{
 		Root:      t.TempDir(),
 		Project:   testProject(),
 		User:      userconfig.Default(),
 		Generator: "0.2.0",
 	}
+}
+
+// userConfigPath is the file a refusal about the user-global layer must name.
+func userConfigPath(t *testing.T) string {
+	t.Helper()
+	path, err := userconfig.Path()
+	if err != nil {
+		t.Fatalf("userconfig.Path() error = %v", err)
+	}
+	return path
 }
 
 func readFile(t *testing.T, path string) string {
@@ -386,8 +400,12 @@ func TestApplyRefusesADocumentationTargetThatEscapesTheProject(t *testing.T) {
 	if got := core.CategoryOf(err); got != core.CategoryValidation {
 		t.Fatalf("Apply() category = %q, want %q", got, core.CategoryValidation)
 	}
-	if got := err.Error(); !strings.Contains(got, "../../.bashrc") || !strings.Contains(got, "user configuration") {
-		t.Fatalf("Apply() error = %q, want it to name the value and the user configuration", got)
+	got := err.Error()
+	if !strings.Contains(got, "../../.bashrc") {
+		t.Fatalf("Apply() error = %q, want it to name the offending value", got)
+	}
+	if !strings.Contains(got, userConfigPath(t)) {
+		t.Fatalf("Apply() error = %q, want it to name the user configuration file %q", got, userConfigPath(t))
 	}
 }
 
@@ -406,8 +424,38 @@ func TestApplyRefusesAnAbsoluteDocumentationTarget(t *testing.T) {
 	if got := core.CategoryOf(err); got != core.CategoryValidation {
 		t.Fatalf("Apply() category = %q, want %q", got, core.CategoryValidation)
 	}
-	if got := err.Error(); !strings.Contains(got, absolute) {
+	got := err.Error()
+	if !strings.Contains(got, absolute) {
 		t.Fatalf("Apply() error = %q, want it to name %q", got, absolute)
+	}
+	if !strings.Contains(got, "is an absolute path") {
+		t.Fatalf("Apply() error = %q, want it to say the target is an absolute path", got)
+	}
+}
+
+func TestApplyRefusesAnAbsoluteDocumentationTargetInsideTheProject(t *testing.T) {
+	// Production mutation: filepath.IsLocal rejects every absolute path, so
+	// reporting these as an escape tells a reader whose path plainly points
+	// into their own project to hunt for a ".." they never typed.
+	options := testOptions(t)
+	absolute := filepath.Join(options.Root, "AGENTS.md")
+	options.User.DocTargets = []string{absolute}
+	writeFile(t, absolute, "# AGENTS.md\n")
+
+	_, err := Apply(options)
+
+	if err == nil {
+		t.Fatal("Apply() accepted an absolute documentation target")
+	}
+	if got := core.CategoryOf(err); got != core.CategoryValidation {
+		t.Fatalf("Apply() category = %q, want %q", got, core.CategoryValidation)
+	}
+	got := err.Error()
+	if !strings.Contains(got, "is an absolute path") {
+		t.Fatalf("Apply() error = %q, want it to say the target is an absolute path", got)
+	}
+	if strings.Contains(got, "escapes") {
+		t.Fatalf("Apply() error = %q, want it not to claim a path inside the project escapes it", got)
 	}
 }
 
@@ -425,8 +473,12 @@ func TestApplyRefusesAConfiguredSkillDirectoryThatEscapesTheProject(t *testing.T
 	if got := core.CategoryOf(err); got != core.CategoryValidation {
 		t.Fatalf("Apply() category = %q, want %q", got, core.CategoryValidation)
 	}
-	if got := err.Error(); !strings.Contains(got, "../../evil") || !strings.Contains(got, "user configuration") {
-		t.Fatalf("Apply() error = %q, want it to name the value and the user configuration", got)
+	got := err.Error()
+	if !strings.Contains(got, "../../evil") {
+		t.Fatalf("Apply() error = %q, want it to name the offending value", got)
+	}
+	if !strings.Contains(got, userConfigPath(t)) {
+		t.Fatalf("Apply() error = %q, want it to name the user configuration file %q", got, userConfigPath(t))
 	}
 }
 
@@ -448,8 +500,14 @@ func TestApplyRefusesAnOverriddenSkillDirectoryThatEscapesTheProject(t *testing.
 	if !strings.Contains(got, "--skill-dir") || !strings.Contains(got, "../../evil") {
 		t.Fatalf("Apply() error = %q, want it to name --skill-dir and the value", got)
 	}
-	if strings.Contains(got, "user configuration") {
-		t.Fatalf("Apply() error = %q, want it not to blame the user configuration file", got)
+	// The flag layer has no file, so the message must send the reader to the
+	// flag and nowhere else — naming the configuration file here would point
+	// at a value that is not in it.
+	if strings.Contains(got, "configuration") {
+		t.Fatalf("Apply() error = %q, want it not to blame the user configuration", got)
+	}
+	if strings.Contains(got, userConfigPath(t)) {
+		t.Fatalf("Apply() error = %q, want it not to name the user configuration file", got)
 	}
 }
 
@@ -522,6 +580,9 @@ func TestApplyRefusesADocumentationTargetThatNamesTheProjectDirectory(t *testing
 			if !strings.Contains(got, fmt.Sprintf("%q", value)) {
 				t.Fatalf("Apply() error = %q, want it to quote %q as configured", got, value)
 			}
+			if !strings.Contains(got, userConfigPath(t)) {
+				t.Fatalf("Apply() error = %q, want it to name the user configuration file", got)
+			}
 			if strings.Contains(got, "escapes") {
 				t.Fatalf("Apply() error = %q, want it not to claim the target escapes the project", got)
 			}
@@ -542,5 +603,136 @@ func TestApplyHonorsASkillDirectoryNamingTheProjectRoot(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(options.Root, "workbook", "SKILL.md")); err != nil {
 		t.Fatalf("skill not installed at the project root: %v", err)
+	}
+}
+
+func TestApplyRefusesADocumentationTargetThatIsADirectory(t *testing.T) {
+	// Production mutation: the Stat result was tested for existence and then
+	// discarded, so an existing directory became a write target and surfaced
+	// as the operating system's "is a directory" — and only after the
+	// guidelines, the skill and the valid target ahead of it had been written.
+	options := testOptions(t)
+	options.User.DocTargets = []string{"AGENTS.md", "docs"}
+	writeFile(t, filepath.Join(options.Root, "AGENTS.md"), "# AGENTS.md\n\nMy own rules.\n")
+	if err := os.MkdirAll(filepath.Join(options.Root, "docs"), 0o755); err != nil {
+		t.Fatalf("create docs directory: %v", err)
+	}
+
+	_, err := Apply(options)
+
+	if err == nil {
+		t.Fatal("Apply() accepted a directory as a documentation target")
+	}
+	if got := core.CategoryOf(err); got != core.CategoryValidation {
+		t.Fatalf("Apply() category = %q, want %q", got, core.CategoryValidation)
+	}
+	got := err.Error()
+	if !strings.Contains(got, `"docs"`) || !strings.Contains(got, "is a directory, not a documentation file") {
+		t.Fatalf("Apply() error = %q, want it to say the entry names a directory", got)
+	}
+	if !strings.Contains(got, userConfigPath(t)) {
+		t.Fatalf("Apply() error = %q, want it to name the user configuration file", got)
+	}
+	// The refusal has to land before the first write, or it is a half-finished
+	// install carrying an error message rather than a refusal.
+	if _, err := os.Stat(filepath.Join(options.Root, GuidelinesPath)); !os.IsNotExist(err) {
+		t.Fatalf("Apply() wrote the guidelines before refusing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(options.Root, ".claude")); !os.IsNotExist(err) {
+		t.Fatalf("Apply() installed the skill before refusing: %v", err)
+	}
+	if got, want := readFile(t, filepath.Join(options.Root, "AGENTS.md")), "# AGENTS.md\n\nMy own rules.\n"; got != want {
+		t.Fatalf("AGENTS.md after refusal = %q, want %q", got, want)
+	}
+}
+
+func TestStatusRefusesADocumentationTargetThatIsADirectory(t *testing.T) {
+	// The reader whose configuration names a directory needs `docs status` to
+	// keep working well enough to say so, since that is the command they reach
+	// for to find out what is wrong.
+	options := testOptions(t)
+	options.User.DocTargets = []string{"docs"}
+	if err := os.MkdirAll(filepath.Join(options.Root, "docs"), 0o755); err != nil {
+		t.Fatalf("create docs directory: %v", err)
+	}
+
+	_, err := Status(options)
+
+	if err == nil {
+		t.Fatal("Status() accepted a directory as a documentation target")
+	}
+	if got := core.CategoryOf(err); got != core.CategoryValidation {
+		t.Fatalf("Status() category = %q, want %q", got, core.CategoryValidation)
+	}
+}
+
+func TestApplyRefreshesADocumentationTargetInsideADirectory(t *testing.T) {
+	// Guard on the directory refusal: it must judge the target itself, not the
+	// directories on the way to it, or a perfectly good nested target breaks.
+	options := testOptions(t)
+	options.User.DocTargets = []string{"docs/AGENTS.md"}
+	nested := filepath.Join(options.Root, "docs", "AGENTS.md")
+	writeFile(t, nested, "# AGENTS.md\n\nMy own rules.\n")
+
+	if _, err := Apply(options); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+
+	contents := readFile(t, nested)
+	if !strings.HasPrefix(contents, "# AGENTS.md\n\nMy own rules.\n") {
+		t.Fatalf("nested target lost user content:\n%s", contents)
+	}
+	if !strings.Contains(contents, GuidelinesPath) {
+		t.Fatalf("nested target missing the managed reference:\n%s", contents)
+	}
+}
+
+func TestApplyRefusesACreatedDocumentationTargetThatNamesTheProjectDirectory(t *testing.T) {
+	// --create skips the Stat entirely, so the lexical check is the only thing
+	// standing between "." and a write against the project root. This is why
+	// that check cannot be replaced by the IsDir refusal.
+	options := testOptions(t)
+	options.User.DocTargets = []string{"."}
+	options.Create = []string{"."}
+
+	_, err := Apply(options)
+
+	if err == nil {
+		t.Fatal("Apply() accepted a created documentation target naming the project directory")
+	}
+	if got := core.CategoryOf(err); got != core.CategoryValidation {
+		t.Fatalf("Apply() category = %q, want %q", got, core.CategoryValidation)
+	}
+	if got := err.Error(); !strings.Contains(got, "names the project directory itself") {
+		t.Fatalf("Apply() error = %q, want the project-directory refusal", got)
+	}
+}
+
+func TestApplyStillRefusesWhenTheUserConfigurationPathIsUnknown(t *testing.T) {
+	// Being unable to name the file is no reason to turn a validation refusal
+	// into an operational failure about the home directory: that would bury
+	// the configuration mistake that is the actual problem.
+	options := testOptions(t)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", "")
+	if _, err := userconfig.Path(); err == nil {
+		t.Skip("this platform resolves a configuration path without XDG_CONFIG_HOME or HOME")
+	}
+	options.User.DocTargets = []string{"../../.bashrc"}
+
+	_, err := Apply(options)
+
+	if err == nil {
+		t.Fatal("Apply() accepted a documentation target outside the project")
+	}
+	if got := core.CategoryOf(err); got != core.CategoryValidation {
+		t.Fatalf("Apply() category = %q, want %q", got, core.CategoryValidation)
+	}
+	got := err.Error()
+	if !strings.Contains(got, "../../.bashrc") {
+		t.Fatalf("Apply() error = %q, want it to name the offending value", got)
+	}
+	if !strings.Contains(got, "in the user configuration file") {
+		t.Fatalf("Apply() error = %q, want it to fall back to naming the file generically", got)
 	}
 }
