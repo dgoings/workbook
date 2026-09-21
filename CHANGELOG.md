@@ -122,6 +122,15 @@ affect scripts; all three are described under Changed.
   silently moved. The form had no way to show such a value, so it fell to the
   first one in the list and saving reassigned the task; it now says what the
   task is at and leaves it alone until somebody chooses.
+- A relative `docTargets` entry or `skillDir` that escaped the project
+  directory used to be joined onto the project root with no check, so a
+  mistyped or copied user-global configuration file could have `workbook docs`
+  write documentation, or install the skill, outside the repository —
+  `docTargets: ["../../.bashrc"]` really did refresh a dotfile one directory
+  up. Such a value is now refused, and the error names the offending value and
+  whether it came from the user configuration file or `--skill-dir`. An
+  absolute `skillDir` still works, since keeping one personal copy of the skill
+  across projects is documented.
 - **Moving a priority to the position it already holds is refused** rather than
   recorded. On a project that had never configured its priorities, that empty
   change wrote a configuration section and required every teammate to
