@@ -1,4 +1,4 @@
-<!-- workbook:begin generator=123fd1c sha256=6a4b4ea4b346280ee7e7fce8a1af7df1d23ddba7c99d312b05fb1da96ba71cc4 -->
+<!-- workbook:begin generator=d8dad1e sha256=73d44057f1c75f8579ce05200d95ea7d1e50c1cccd9e973b802d4c4c47c2e0c7 -->
 # Workbook guidelines
 
 Workbook tracks this project's tasks in Git refs under `refs/workbook/tasks/`.
@@ -11,6 +11,11 @@ the SQLite projection, or `.workbook/config.json` directly.
 | --- | --- |
 | Project ID | `01KY8964C8TQVBKVACB45DYTNY` |
 | Task ID prefix | `WB-` |
+
+A task ID is `<KEY>-<ULID>`. A project may have more than one key, so IDs in
+one project can carry different prefixes; all of them are this project's.
+`workbook create --key <KEY>` mints a task under another of this project's
+active keys; without it, a task is minted under the current key.
 
 ## Statuses
 
@@ -51,9 +56,10 @@ the display label.
 
 | # | Machine value | Display label | Tags |
 | --- | --- | --- | --- |
-| 1 | `high` | High | none |
-| 2 | `medium` | Medium | `default` |
-| 3 | `low` | Low | none |
+| 1 | `critical` | Critical | none |
+| 2 | `high` | High | `default` |
+| 3 | `medium` | Medium | none |
+| 4 | `low` | Low | none |
 
 | Tag | What it makes Workbook do |
 | --- | --- |

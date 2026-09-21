@@ -326,17 +326,25 @@ ipcMain.handle('discovery:scan', async (_event, { root, maxDepth }) => {
  *
  * A repository that is already initialized is *adopted*, not bootstrapped: it
  * is registered from the identity it already carries and `setup` is never run.
- * That matters for two reasons. Its key cannot be changed — `setup` with a
- * different one fails with "repository is already initialized with project key"
- * — so re-running it can only either no-op or fail. And `setup` also rewrites
- * the managed agent documentation and the skill directory, which is not
- * something adding a repository to a list should do to a checkout the user
- * already configured by hand.
+ * That matters for two reasons. Its founding key cannot be changed — `setup`
+ * with a different one fails with "repository is already initialized with
+ * project key" — so re-running it can only either no-op or fail. And `setup`
+ * also rewrites the managed agent documentation and the skill directory, which
+ * is not something adding a repository to a list should do to a checkout the
+ * user already configured by hand.
  *
  * Only a repository with no identity yet is bootstrapped, with
  * `--no-sync`: adding a repository to a list must not push refs to its remote
  * as a side effect. Failures are collected rather than thrown, so one bad
  * repository does not abandon the rest of the batch half-done.
+ *
+ * `project.key` is a label, not an identity. For a bootstrapped repository it
+ * is the key `setup` reports, which is the project's current key — the one a
+ * new task is minted under. For an adopted repository it is the key in
+ * `.workbook/config.json`, which is the project's founding key and stays that
+ * whatever the configuration ledger later makes current. A project with
+ * several keys therefore shows one of them in the sidebar; refreshing it from
+ * the project's configuration is a follow-up, and nothing here depends on it.
  */
 ipcMain.handle('import:apply', async (_event, { selections }) => {
   const results = []

@@ -79,7 +79,10 @@ workbook setup
 
 Setup asks for the project key, the prefix on every task ID, only when it
 creates a new project, and suggests one from the directory name; a clone of an
-existing project takes that project's key without asking.
+existing project takes that project's key without asking. A project can add
+keys later — `workbook key add`, `workbook key current` — so a repository made
+of several subprojects can give each one its own prefix. Existing task IDs
+never change.
 
 Then work with tasks from the terminal:
 
