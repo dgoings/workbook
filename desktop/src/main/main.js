@@ -1,6 +1,7 @@
 'use strict'
 
 const { app, BaseWindow, WebContentsView, ipcMain, dialog, shell, nativeTheme } = require('electron')
+const fs = require('node:fs/promises')
 const path = require('node:path')
 
 const { Registry } = require('./registry')
@@ -302,25 +303,73 @@ async function installCli () {
   const result = await clipath.install({
     bundled: path.join(process.resourcesPath, workbook.BINARY)
   })
+  const errors = result.errors ?? []
 
   if (result.skipped) {
     console.log(`workbench: did not put workbook on PATH (${result.reason})`)
-  } else if (result.changed) {
-    const written = result.profiles.filter((profile) => profile.changed).map((profile) => profile.file)
-    if (result.windows?.changed) written.push('the user PATH in the registry')
-    console.log(`workbench: ${result.copied ? 'copied' : 'kept'} workbook at ${result.binary}` +
-      (written.length > 0
-        ? `; added ${result.directory} to ${written.join(', ')}`
-        : '; PATH was already set up'))
   } else {
-    console.log(`workbench: workbook at ${result.binary} was already on PATH`)
+    // `pathChanged`, not `changed`: `changed` is true for a binary copy alone,
+    // and a launch that copied the binary but had every profile write fail must
+    // not be logged as though PATH were now set up. The three endings below are
+    // the three things that can actually have happened.
+    const copy = result.copied
+      ? `copied workbook to ${result.binary}`
+      : `workbook at ${result.binary} was already current`
+    let ending
+    if (result.pathChanged) {
+      ending = `added ${result.directory} to ${(await writtenForLog(result)).join(', ')}`
+    } else if (errors.length > 0) {
+      ending = `could not add ${result.directory} to PATH`
+    } else {
+      ending = `${result.directory} was already on PATH`
+    }
+    console.log(`workbench: ${copy}; ${ending}`)
   }
   // One line per failure, like the reaping log: a profile that could not be
   // written is worth seeing even though it did not stop anything.
-  for (const error of result.errors ?? []) {
+  for (const error of errors) {
     console.error(`workbench: could not finish putting workbook on PATH: ${error}`)
   }
+
+  // Arm the notice, on the launch that earned it, for whichever launch's page
+  // gets around to asking. The registry refuses to re-arm once the notice has
+  // been shown, so an app update that re-copies the binary stays quiet.
+  if (result.pathChanged) {
+    try {
+      await registry.setPendingPathNotice(result.directory)
+    } catch (error) {
+      // Logged rather than thrown: the PATH work itself succeeded and is worth
+      // reporting above, and the only casualty is the sentence about it.
+      console.error('workbench: could not record that the PATH notice is owed', error)
+    }
+  }
   return result
+}
+
+/**
+ * The files a write actually landed in, named as the log should name them.
+ *
+ * A profile is very often a symlink into a dotfiles repository — the owner's
+ * own `~/.zshrc` and `~/.config/fish/config.fish` both are — and the write
+ * follows it, so the block appears as a change inside that repository. Naming
+ * the resolved file is how someone reads the log and knows which file to go
+ * look at. Best effort by construction: realpath failing, or a path vanishing
+ * between the write and this line, falls back to the name we asked for rather
+ * than turning a successful install into an error.
+ */
+async function writtenForLog (result) {
+  const written = []
+  for (const profile of result.profiles.filter((profile) => profile.changed)) {
+    let real = profile.file
+    try {
+      real = await fs.realpath(profile.file)
+    } catch {
+      // Keep the name we wrote to.
+    }
+    written.push(real === profile.file ? profile.file : `${profile.file} (really ${real})`)
+  }
+  if (result.windows?.changed) written.push('the user PATH in the registry')
+  return written
 }
 
 // --- IPC -------------------------------------------------------------------
@@ -333,33 +382,36 @@ ipcMain.handle('workbook:version', async () => {
 /**
  * What, if anything, to tell the user about the CLI being on their PATH.
  *
- * `{ directory }` the one time there is something to say, and `null` every
- * other time: already said, nothing installed, or nothing changed because a
- * previous launch had already done it.
+ * Answered from the registry's pending directory rather than from this
+ * launch's install result, which is what makes the notice reliable in both
+ * directions. A launch whose `reg add` failed changed no PATH, armed nothing,
+ * and says nothing — where reading `changed` would have claimed a profile was
+ * edited and then never corrected itself. And a launch that did change PATH but
+ * never got as far as answering this leaves the directory armed, so the next
+ * launch says it instead of losing it.
  *
  * The renderer asks rather than being pushed to, because the install races the
  * shell page's load: a push can arrive before the page is listening, and a
- * question cannot. And the flag is marked here, as the answer is handed over,
- * rather than when the dismiss button is clicked — the user who quits without
- * dismissing it has still been told, and a dismissal must not be the thing that
- * records it.
+ * question cannot. The awaited promise is only about *this* launch's arming
+ * landing before the question is answered; an older launch's is already stored.
+ * Marking it as the answer is handed over, rather than when the dismiss button
+ * is clicked, is what makes it once: a user who quits without dismissing it has
+ * still been told, and a dismissal must not be the thing that records it.
  */
 ipcMain.handle('path:notice', async () => {
   if (registry.pathNoticeShown) return null
-  // Null only if the window somehow outran app.whenReady(); awaiting it is the
-  // whole reason the promise is kept rather than the result.
-  const result = await cliPathInstall
-  if (!result || result.skipped || !result.changed) return null
+  await cliPathInstall
+  const directory = registry.pendingPathNotice
+  if (!directory) return null
   try {
     await registry.setPathNoticeShown()
   } catch (error) {
-    // Costs nothing the user sees: the next launch changes nothing, so the
-    // `!result.changed` branch above answers null whether the flag was stored
-    // or not. And not worth rejecting an invoke the page does not guard —
-    // boot() would stop where it asked.
+    // Not worth rejecting an invoke the page does not guard — boot() would stop
+    // where it asked. The directory stays armed, so the next launch says it
+    // again rather than never: one repeat beats one silence.
     console.error('workbench: could not record that the PATH notice was shown', error)
   }
-  return { directory: result.directory }
+  return { directory }
 })
 
 ipcMain.handle('registry:list', async () => ({

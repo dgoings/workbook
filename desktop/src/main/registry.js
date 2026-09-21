@@ -17,7 +17,8 @@ const EMPTY = {
   projects: [],
   theme: 'system',
   sidebarCollapsed: false,
-  pathNoticeShown: false
+  pathNoticeShown: false,
+  pendingPathNotice: null
 }
 
 class Registry {
@@ -153,16 +154,55 @@ class Registry {
   }
 
   /**
-   * Record that the notice has been handed to the renderer.
+   * The directory a notice is still owed for, or null.
    *
-   * One-way and argumentless: there is no reason to un-say it, and the main
-   * process marks it as it answers `path:notice` rather than waiting for the
-   * dismissal — a user who quits without clicking the × has still been told.
-   * A rejected write is not swallowed; the caller decides, and the worst case
-   * is the notice appearing once more on the next launch.
+   * This is the part that makes the notice survive the launch that earned it.
+   * The install is what knows PATH changed, and it finishes whenever it
+   * finishes; the page that has to say so may never get the chance — the user
+   * quits while it is still loading, or the renderer throws on the way up. A
+   * fact about the conversation ("we have said it") cannot recover from that,
+   * because the next launch changes nothing and so has nothing to report. A
+   * fact about the machine ("this directory was added and nobody has been told
+   * yet") can: it sits here until some launch's page asks for it.
+   *
+   * Read defensively — anything but a non-empty string means nothing is owed.
+   */
+  get pendingPathNotice () {
+    const pending = this.state.pendingPathNotice
+    return typeof pending === 'string' && pending !== '' ? pending : null
+  }
+
+  /**
+   * Arm the notice for `directory`, unless it has already been said.
+   *
+   * The "once ever" rule lives here rather than at the call site so that no
+   * caller can break it: an app update that copies a fresh binary and adds its
+   * directory again must not re-raise a notice the user has already read and
+   * dismissed. Storing the same pending directory twice is a harmless no-op and
+   * is skipped, so a second launch that is still waiting to say it does not
+   * rewrite the registry for nothing.
+   */
+  async setPendingPathNotice (directory) {
+    if (this.pathNoticeShown) return
+    if (this.state.pendingPathNotice === directory) return
+    this.state.pendingPathNotice = directory
+    await this.save()
+  }
+
+  /**
+   * Record that the notice has been handed to the renderer, and disarm it.
+   *
+   * Both halves in one save: "said it" and "nothing is owed" are two spellings
+   * of the same fact, and a write that landed one without the other would
+   * either say it twice or lose it. One-way and argumentless — there is no
+   * reason to un-say it, and the main process marks it as it answers
+   * `path:notice` rather than waiting for the dismissal, so a user who quits
+   * without clicking the dismiss button has still been told. A rejected write
+   * is not swallowed; the caller decides.
    */
   async setPathNoticeShown () {
     this.state.pathNoticeShown = true
+    this.state.pendingPathNotice = null
     await this.save()
   }
 

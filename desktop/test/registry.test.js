@@ -89,3 +89,108 @@ test('setPathNoticeShown survives a reload', async () => {
     assert.equal(second.pathNoticeShown, true)
   })
 })
+
+const INSTALLED = '/tmp/not-a-real-place/Workbench/bin'
+
+test('pendingPathNotice is null until something arms it', async () => {
+  await withUserData(async (directory) => {
+    const registry = new Registry(directory)
+    await registry.load()
+    assert.equal(registry.pendingPathNotice, null)
+  })
+})
+
+test('pendingPathNotice reads null for a stored value that is not a non-empty string', async () => {
+  await withUserData(async (directory) => {
+    // Nothing is owed unless a real directory is named: an empty string would
+    // otherwise reach the renderer as a notice with a blank path in it.
+    await fs.writeFile(
+      path.join(directory, 'registry.json'),
+      JSON.stringify({ version: 1, projects: [], pendingPathNotice: '' })
+    )
+    const registry = new Registry(directory)
+    await registry.load()
+    assert.equal(registry.pendingPathNotice, null)
+  })
+})
+
+test('an armed notice is handed over, and setPathNoticeShown disarms it', async () => {
+  await withUserData(async (directory) => {
+    const registry = new Registry(directory)
+    await registry.load()
+    await registry.setPendingPathNotice(INSTALLED)
+    assert.equal(registry.pendingPathNotice, INSTALLED)
+    assert.equal(registry.pathNoticeShown, false)
+
+    await registry.setPathNoticeShown()
+    // Both halves of the one fact: said, and nothing owed.
+    assert.equal(registry.pathNoticeShown, true)
+    assert.equal(registry.pendingPathNotice, null)
+  })
+})
+
+test('an armed notice survives a reload while it is still pending', async () => {
+  await withUserData(async (directory) => {
+    // The whole reason the pending directory exists: this is the launch that
+    // changed PATH and then quit before its page could say so.
+    const first = new Registry(directory)
+    await first.load()
+    await first.setPendingPathNotice(INSTALLED)
+
+    const second = new Registry(directory)
+    await second.load()
+    assert.equal(second.pendingPathNotice, INSTALLED)
+    assert.equal(second.pathNoticeShown, false)
+  })
+})
+
+test('a disarmed notice stays disarmed across a reload', async () => {
+  await withUserData(async (directory) => {
+    const first = new Registry(directory)
+    await first.load()
+    await first.setPendingPathNotice(INSTALLED)
+    await first.setPathNoticeShown()
+
+    const second = new Registry(directory)
+    await second.load()
+    assert.equal(second.pathNoticeShown, true)
+    assert.equal(second.pendingPathNotice, null)
+  })
+})
+
+test('setPendingPathNotice does not re-arm once the notice has been shown', async () => {
+  await withUserData(async (directory) => {
+    const registry = new Registry(directory)
+    await registry.load()
+    await registry.setPendingPathNotice(INSTALLED)
+    await registry.setPathNoticeShown()
+
+    // An app update re-copies the binary and adds its directory again. The user
+    // has already read the notice; raising it a second time is a bug.
+    await registry.setPendingPathNotice(INSTALLED)
+    assert.equal(registry.pendingPathNotice, null)
+
+    // And not even for a different directory, which is what a move of the
+    // install location would look like.
+    await registry.setPendingPathNotice('/tmp/not-a-real-place/elsewhere/bin')
+    assert.equal(registry.pendingPathNotice, null)
+
+    const reloaded = new Registry(directory)
+    await reloaded.load()
+    assert.equal(reloaded.pendingPathNotice, null)
+  })
+})
+
+test('arming the same directory twice does not rewrite the registry', async () => {
+  await withUserData(async (directory) => {
+    const registry = new Registry(directory)
+    await registry.load()
+    await registry.setPendingPathNotice(INSTALLED)
+
+    const file = path.join(directory, 'registry.json')
+    const before = (await fs.stat(file)).mtimeMs
+    await registry.setPendingPathNotice(INSTALLED)
+    assert.equal((await fs.stat(file)).mtimeMs, before)
+    assert.equal(registry.pendingPathNotice, INSTALLED)
+  })
+})

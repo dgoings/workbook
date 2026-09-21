@@ -67,13 +67,16 @@ affect scripts; all three are described under Changed.
   the CLI it bundles into a directory of its own — `~/Library/Application
   Support/Workbench/bin` on macOS, `%LOCALAPPDATA%\Workbench\bin` on Windows,
   `~/.local/share/workbench/bin` on Linux — and appends that directory to your
-  PATH in a marked block in `~/.bashrc`, `~/.zshrc`, `~/.profile` and, in fish
-  syntax, `~/.config/fish/config.fish`, or to the user PATH in the registry on
-  Windows. It says once that a new terminal is needed. The directory is
-  appended rather than prepended, so an existing Homebrew or `go install` build
-  earlier on your PATH keeps winning; `WORKBENCH_SKIP_PATH_SETUP` turns the
-  whole thing off, and a development run does nothing because it has no bundled
-  binary to copy.
+  PATH. On macOS and Linux that is a marked block written into each of
+  `~/.bashrc`, `~/.zshrc` and `~/.profile` that exists, or into `~/.profile`,
+  created, if none of them does, plus `~/.config/fish/config.fish` in fish's
+  own syntax when fish is indicated; on Windows it is the user PATH in the
+  registry instead. The app says once what it takes to see the change: a new
+  terminal, or on Windows signing out and back in, since the stored PATH cannot
+  be broadcast to running processes. The directory is appended rather than
+  prepended, so an existing Homebrew or `go install` build earlier on your PATH
+  keeps winning; `WORKBENCH_SKIP_PATH_SETUP` turns the whole thing off, and a
+  development run does nothing because it has no bundled binary to copy.
 
 ### Changed
 - **`workbook setup` asks for the project key only when it creates a

@@ -367,6 +367,12 @@ async function showPathNotice () {
   }
   if (!notice?.directory) return
   el('path-note-directory').textContent = notice.directory
+  // A new terminal is enough everywhere except Windows, which caches the
+  // environment until the user signs out: the two sentences are both in the
+  // markup and the platform picks one, so neither is assembled in a string.
+  const windows = api.platform === 'windows'
+  el('path-note-terminal').hidden = windows
+  el('path-note-terminal-windows').hidden = !windows
   el('path-note').hidden = false
 }
 

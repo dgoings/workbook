@@ -69,11 +69,23 @@
           <aside class="path-note" id="path-note" hidden>
             <button class="path-note__dismiss" id="dismiss-path-note" type="button"
                     aria-label="Dismiss">&times;</button>
+            <!-- "to your PATH" rather than naming files: which files were
+                 written depends on the platform and on which profiles exist,
+                 and on Windows there is no profile at all — the user PATH in
+                 the registry is what changed. The startup log names the exact
+                 files; this sentence must be true everywhere. -->
             <strong><code>workbook</code> is installed.</strong> Workbench keeps its
             own copy of the CLI in <code id="path-note-directory"></code> and added
-            that directory to your shell profile. Open a new terminal to use
-            <code>workbook</code> there. An existing Homebrew install keeps
-            precedence.
+            that directory to your PATH.
+            <!-- Windows caches the environment per process tree: reg add does
+                 not broadcast WM_SETTINGCHANGE, so Explorer hands every new
+                 terminal the old PATH until the user signs out. -->
+            <span id="path-note-terminal">Open a new terminal to use
+              <code>workbook</code> there.</span>
+            <span id="path-note-terminal-windows" hidden>Sign out and back in to use
+              <code>workbook</code> there — until then Windows hands even a new
+              terminal the old PATH.</span>
+            An existing Homebrew install keeps precedence.
           </aside>
 
           <!-- The one irreversible step in the wizard. -->

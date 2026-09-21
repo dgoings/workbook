@@ -37,7 +37,6 @@ the name and path on the tile's tooltip.
 
 ```
 npm run check
-npm test
 ```
 
 `check-styles.js` verifies every class the renderer applies has a rule, and
@@ -46,12 +45,15 @@ the renderer references only element ids that exist, and the channels the
 preload invokes are the channels the main process handles. They are cheap and
 each catches a mistake this project has actually made.
 
-`npm test` is Node's own runner over `test/`, covering the main-process modules
-that can be exercised without Electron: the registry's stored state and the
-PATH install's copy, block writer, profile targets and Windows registry edit.
-Every case runs against a temporary directory — no test reads or writes your
-real HOME, your profiles, or the app's userData. `npm run check` runs it too,
-since that is the one command CI runs for the desktop app.
+That one command also runs the tests, which is why it is the only one listed:
+CI runs `npm run check` and nothing else for the desktop app, so anything
+outside it would never run. `npm test` on its own is Node's runner over `test/`
+when you want the tests without the linters — it covers the main-process
+modules that can be exercised without Electron: the registry's stored state and
+the PATH install's copy, block writer, profile targets and Windows registry
+edit. Every case runs against a temporary directory, so no test reads or writes
+your real HOME, your profiles, or the app's userData, and nothing in the suite
+launches Electron.
 
 ## Building
 
@@ -199,7 +201,7 @@ Where the copy lives:
 | Platform | Directory |
 | --- | --- |
 | macOS | `~/Library/Application Support/Workbench/bin` |
-| Windows | `%LOCALAPPDATA%\Workbench\bin` |
+| Windows | `%LOCALAPPDATA%\Workbench\bin`, or `~\AppData\Local\Workbench\bin` when `LOCALAPPDATA` is unset |
 | Linux | `$XDG_DATA_HOME/workbench/bin`, or `~/.local/share/workbench/bin` |
 
 On macOS and Linux the directory is added by a marked block written into every
@@ -239,8 +241,20 @@ configuration for someone who does not use fish. On Windows there are no
 profiles: the user PATH in `HKCU\Environment` is edited instead, with `reg add`
 rather than `setx`, which truncates a PATH longer than 1024 characters.
 
-**A shell already running does not see any of this.** Open a new terminal once;
-the app says so itself, once, the first time it changes anything.
+A profile that is a symlink is followed, and the real file behind it is the one
+edited. That is very often a dotfiles repository — `~/.zshrc` and
+`~/.config/fish/config.fish` are symlinks into one on this project's own
+machine — so the block can turn up as an uncommitted change in a repository
+you track, rather than in your home directory. The startup log names the
+resolved path for each file it wrote, so it says which file to go and look at.
+
+**A shell already running does not see any of this.** On macOS and Linux, open
+a new terminal once. **On Windows a new terminal is not enough:** `reg add`
+changes the stored user PATH but cannot broadcast the `WM_SETTINGCHANGE` that
+tells running processes to re-read it, so Explorer keeps handing every terminal
+it launches the environment it cached — sign out and back in, or restart
+Explorer. The app says which of the two you need, once, the first time it
+changes anything.
 
 The directory is *appended*, not prepended, which is the one difference from
 `setup-dev-env.sh`. An existing `workbook` earlier on your PATH — a Homebrew
@@ -249,12 +263,18 @@ never silently takes over a CLI you manage yourself.
 
 To undo it: delete the marked block from each profile it is in (on Windows,
 remove the directory from your user PATH), and delete the directory. Nothing
-else refers to it.
+else refers to it — but the next launch of a packaged app puts both back, since
+undoing it by hand looks exactly like a machine that has never had it. To undo
+it and keep it undone, set `WORKBENCH_SKIP_PATH_SETUP` as well.
 
 A development run does nothing at all: `npm start` has no bundled binary under
 `process.resourcesPath` to copy, so the install skips, and your own profiles are
-left alone. `WORKBENCH_SKIP_PATH_SETUP=1` in the app's environment turns the
-whole thing off explicitly, for a packaged app as well.
+left alone. `WORKBENCH_SKIP_PATH_SETUP=1` turns the whole thing off explicitly,
+for a packaged app as well — but it is read from *the app's own* environment,
+and a macOS app launched from the Finder or the Dock inherits nothing from your
+shell rc: exporting it in `~/.zshrc` has no effect on the app you double-click.
+Launch the app from a terminal that has it set, or set it for the login session
+with `launchctl setenv WORKBENCH_SKIP_PATH_SETUP 1`.
 
 Failures never block startup. A read-only `.zshrc` costs you that one profile,
 not the binary copy and not the window: every step's failure is collected, the
