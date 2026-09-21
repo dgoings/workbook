@@ -500,12 +500,15 @@ func (r *Repository) fetch(
 	// this clone opened with and report a teammate's work as another project's
 	// ref until somebody fetched a second time.
 	//
-	// The reload is explicit rather than inherited from the stage's own memo
-	// drop, because the memo is not a barrier: keySet publishes a set it read
-	// before taking the metadata lock, so a set superseded by the stage above
-	// can still be the memoized one afterwards. Dropping it and reading the
-	// ledger again here makes the ordering a property of this function instead
-	// of a side effect of another one.
+	// The reload is explicit rather than inherited from the configuration
+	// stage's own memo drop, because that drop happens only when the stage
+	// moves the ledger. A ledger that moved out of band — another handle on
+	// this repository fetched it, a second command or the watcher beside an
+	// ordinary one — leaves this stage with nothing to do and the memo
+	// untouched, and a long-lived handle would then classify a teammate's new
+	// key against the set it opened with for as long as it lived. Reading the
+	// ledger again here makes the ordering a property of this function rather
+	// than of what the stage happened to have to do.
 	r.forgetKeySet()
 	if _, err := r.keySet(ctx, config); err != nil {
 		result, err = failedSyncPhase(result, "fetch failed before completion", err)

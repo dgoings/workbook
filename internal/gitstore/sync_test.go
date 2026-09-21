@@ -538,6 +538,76 @@ func TestFetchAcceptsTasksUnderAKeyTheSameFetchIntroduces(t *testing.T) {
 	}
 }
 
+// The ledger can also move without the handle that classifies refs against it
+// ever hearing: another handle on the same repository — a second command, or
+// the watcher beside an ordinary one — fetches it, and the next fetch through
+// the first handle finds the local ledger already equal to origin's. The
+// configuration stage then has nothing to do and drops nothing, so a long-lived
+// handle would classify a teammate's new key against the set it opened with for
+// as long as it lived. This is the case the explicit reload exists for, and the
+// only one no other code path covers.
+func TestFetchReloadsTheKeySetWhenTheLedgerMovedOutOfBand(t *testing.T) {
+	ctx := context.Background()
+	first, second, config := syncRepositories(t)
+
+	writeConfig(t, first, config,
+		core.ConfigOperation{Type: core.ConfigKeyAdd, Key: "NEW"},
+		core.ConfigOperation{Type: core.ConfigKeyCurrent, Key: "NEW"})
+	if _, err := first.Push(ctx, config); err != nil {
+		t.Fatalf("Push(ledger) error = %v", err)
+	}
+
+	// The handle under test warms its key set on the way past, which is what
+	// any handle that has written or listed anything has done.
+	local := createSyncTask(t, second, config, "Local task")
+	if !strings.HasPrefix(local.ID, config.Key+"-") {
+		t.Fatalf("local task ID = %q, want the founding key %s", local.ID, config.Key)
+	}
+
+	// A second handle on the same repository moves the local ledger. Nothing
+	// tells the first handle: its memo is another object's field.
+	other, err := Open(ctx, second.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adopted, err := other.Fetch(ctx, config); err != nil {
+		t.Fatalf("Fetch(second handle) error = %v; result = %#v", err, adopted)
+	}
+
+	keys, err := first.LoadVocabularyState(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := syncService(first, config)
+	service.Keys = keys.Keys
+	created, err := service.CreateMutation(ctx, core.CreateInput{Title: "Second key task"})
+	if err != nil {
+		t.Fatalf("CreateMutation() error = %v", err)
+	}
+	if !strings.HasPrefix(created.Task.ID, "NEW-") {
+		t.Fatalf("task ID = %q, want the current key NEW", created.Task.ID)
+	}
+	if _, err := first.Push(ctx, config); err != nil {
+		t.Fatalf("Push(task) error = %v", err)
+	}
+
+	fetched, err := second.Fetch(ctx, config)
+	if err != nil {
+		t.Fatalf("Fetch() error = %v; result = %#v", err, fetched)
+	}
+	if fetched.Config != nil && fetched.Config.Moved {
+		t.Fatalf("Fetch() config = %#v, want a stage that moved nothing: a stage that moves the ledger "+
+			"drops the memo by itself, which is not the case under test", fetched.Config)
+	}
+	assertSyncOutcome(t, fetched, created.Task.ID, SyncCreated)
+	if len(fetched.Ignored) != 0 {
+		t.Fatalf("Fetch() ignored = %#v, want none: this handle's key set is stale, not wrong", fetched.Ignored)
+	}
+	if !refExists(t, second, taskRefPrefix+created.Task.ID) {
+		t.Fatalf("%s was not created locally", taskRefPrefix+created.Task.ID)
+	}
+}
+
 // And the negative, which is what keeps the reload above from being an
 // indiscriminate welcome: a ref under a key origin's ledger never added is
 // still ignored, still flagged as possibly another Workbook's history, and now
