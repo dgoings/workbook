@@ -529,7 +529,7 @@ func TestApplyRefusesADocumentationTargetThatNamesTheProjectDirectory(t *testing
 	}
 }
 
-func TestApplyHonoursASkillDirectoryNamingTheProjectRoot(t *testing.T) {
+func TestApplyHonorsASkillDirectoryNamingTheProjectRoot(t *testing.T) {
 	// A skillDir of "." is not the same mistake as a doc target of ".": it
 	// installs the skill at <root>/workbook/SKILL.md, which is inside the
 	// project and works, so the doc-target refusal must not spread to it.
