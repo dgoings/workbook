@@ -28,12 +28,6 @@ func keyPack(t *testing.T, parent ConfigStateDocument, operations ...ConfigOpera
 	return configPack(parent.LogicalClock+1, identify(0, operations)...)
 }
 
-// keyNames reports the section in add order, marking the retired ones, so a
-// table can say what it wants in one readable string.
-func keyNames(set KeySet) string {
-	return KeyNameList(set)
-}
-
 // The founding key is not in the ledger until somebody records it, so the pack
 // that adds a project's second key prepends the first — and the prepend has to
 // land first in add order, because add order is what every later reader shows a
@@ -64,12 +58,12 @@ func TestKeyAddReactivatesARetiredKeyInPlace(t *testing.T) {
 	parent := genesisState(t, testVocabulary(t))
 	state := fold(t, parent, []ConfigOperation{keyAdd("WB"), keyAdd("NEW"), keyAdd("THIRD")})
 	state = fold(t, state, []ConfigOperation{keyRetire("NEW")})
-	if got, want := keyNames(state.KeySet("WB")), "WB, NEW (retired), THIRD"; got != want {
+	if got, want := KeyNameList(state.KeySet("WB")), "WB, NEW (retired), THIRD"; got != want {
 		t.Fatalf("after retiring, keys = %q, want %q", got, want)
 	}
 
 	state = fold(t, state, []ConfigOperation{keyAdd("NEW")})
-	if got, want := keyNames(state.KeySet("WB")), "WB, NEW, THIRD"; got != want {
+	if got, want := KeyNameList(state.KeySet("WB")), "WB, NEW, THIRD"; got != want {
 		t.Fatalf("after re-adding, keys = %q, want %q", got, want)
 	}
 	if got := state.KeySet("WB").Current(); got != "WB" {
@@ -85,7 +79,7 @@ func TestKeyAddOnAnActiveKeyIsANoOp(t *testing.T) {
 	once := fold(t, parent, []ConfigOperation{keyAdd("WB"), keyAdd("NEW")})
 	twice := fold(t, once, []ConfigOperation{keyAdd("NEW")})
 
-	if got, want := keyNames(twice.KeySet("WB")), keyNames(once.KeySet("WB")); got != want {
+	if got, want := KeyNameList(twice.KeySet("WB")), KeyNameList(once.KeySet("WB")); got != want {
 		t.Fatalf("replaying an add changed the keys to %q, want %q", got, want)
 	}
 	if got := twice.KeySet("WB").Current(); got != "WB" {
@@ -109,7 +103,7 @@ func TestKeyCurrentMovesTheCurrentKeyAndIsIdempotent(t *testing.T) {
 	if got := again.KeySet("WB").Current(); got != "NEW" {
 		t.Fatalf("Current() = %q after a redelivered key.current, want NEW", got)
 	}
-	if got, want := keyNames(again.KeySet("WB")), "WB, NEW"; got != want {
+	if got, want := KeyNameList(again.KeySet("WB")), "WB, NEW"; got != want {
 		t.Fatalf("keys = %q, want %q: key.current adds nothing", got, want)
 	}
 }
@@ -121,7 +115,7 @@ func TestKeyCurrentMovesTheCurrentKeyAndIsIdempotent(t *testing.T) {
 func TestKeyCurrentOnARetiredOrUnknownKeyIsANoOp(t *testing.T) {
 	parent := genesisState(t, testVocabulary(t))
 	seeded := fold(t, parent, []ConfigOperation{keyAdd("WB"), keyAdd("NEW"), keyRetire("NEW")})
-	if got, want := keyNames(seeded.KeySet("WB")), "WB, NEW (retired)"; got != want {
+	if got, want := KeyNameList(seeded.KeySet("WB")), "WB, NEW (retired)"; got != want {
 		t.Fatalf("keys = %q, want %q", got, want)
 	}
 
@@ -154,14 +148,14 @@ func TestKeyRetireRefusesTheCurrentKeyAndTheLastActiveKeyInTheFold(t *testing.T)
 	} {
 		t.Run(name, func(t *testing.T) {
 			state := fold(t, seeded, []ConfigOperation{operation})
-			if got, want := keyNames(state.KeySet("WB")), "WB, NEW"; got != want {
+			if got, want := KeyNameList(state.KeySet("WB")), "WB, NEW"; got != want {
 				t.Fatalf("keys = %q, want %q: retiring the %s key is a no-op", got, want, name)
 			}
 		})
 	}
 
 	retired := fold(t, seeded, []ConfigOperation{keyRetire("NEW")})
-	if got, want := keyNames(retired.KeySet("WB")), "WB, NEW (retired)"; got != want {
+	if got, want := KeyNameList(retired.KeySet("WB")), "WB, NEW (retired)"; got != want {
 		t.Fatalf("keys = %q, want %q: a key that is neither current nor the last active one retires", got, want)
 	}
 
@@ -221,7 +215,7 @@ func TestAGenesisWithoutKeysKeepsItsExactBytes(t *testing.T) {
 // the fallback entirely.
 func TestConfigStateKeySetFallsBackToTheFoundingKey(t *testing.T) {
 	parent := genesisState(t, testVocabulary(t))
-	if got, want := keyNames(parent.KeySet("WB")), "WB"; got != want {
+	if got, want := KeyNameList(parent.KeySet("WB")), "WB"; got != want {
 		t.Fatalf("keys = %q, want %q", got, want)
 	}
 	if got := parent.KeySet("WB").Current(); got != "WB" {
@@ -262,12 +256,13 @@ func TestValidateConfigAuthoringRefusesMoreKeysThanTheCeiling(t *testing.T) {
 	}
 }
 
-// A stored key section has to be canonical, the same rule the vocabulary, the
-// display settings and the priorities are held to: a peer's ref carrying a
-// section with a duplicate key, or with a current key that is retired, is
-// corrupt data rather than a configuration anybody folded.
-func TestValidateConfigStateDocumentRefusesANonCanonicalKeySection(t *testing.T) {
-	for name, document := range map[string]*KeyDocument{
+// nonCanonicalKeySections are the stored key sections no document may carry:
+// three normalizeKeyDocument refuses outright, and one — the empty-but-present
+// section — it merely rewrites, to the absent member. Both gates below read
+// this one table, because a checkpoint and the genesis that produced it are
+// held to the same rule, and a table per gate would eventually hold two.
+func nonCanonicalKeySections() map[string]*KeyDocument {
+	return map[string]*KeyDocument{
 		"duplicate key": {
 			Keys:    []KeyDefinition{{Key: "WB"}, {Key: "WB"}},
 			Current: "WB",
@@ -284,7 +279,15 @@ func TestValidateConfigStateDocumentRefusesANonCanonicalKeySection(t *testing.T)
 			Keys:    []KeyDefinition{{Key: "wb"}},
 			Current: "wb",
 		},
-	} {
+	}
+}
+
+// A stored key section has to be canonical, the same rule the vocabulary, the
+// display settings and the priorities are held to: a peer's ref carrying a
+// section with a duplicate key, or with a current key that is retired, is
+// corrupt data rather than a configuration anybody folded.
+func TestValidateConfigStateDocumentRefusesANonCanonicalKeySection(t *testing.T) {
+	for name, document := range nonCanonicalKeySections() {
 		t.Run(name, func(t *testing.T) {
 			state := genesisState(t, testVocabulary(t))
 			state.Config.Keys = document
@@ -292,6 +295,35 @@ func TestValidateConfigStateDocumentRefusesANonCanonicalKeySection(t *testing.T)
 				t.Fatal("validateConfigStateDocument() error = nil, want a corrupt-data refusal")
 			} else if got := CategoryOf(err); got != CategoryCorruptData {
 				t.Fatalf("validateConfigStateDocument() category = %q, want %q", got, CategoryCorruptData)
+			}
+		})
+	}
+}
+
+// And so does the genesis that carries one. A genesis is the one operation that
+// records a whole configuration as data, so it is the one place a key section
+// enters the ledger without any key operation having been folded — and this
+// check is the only gate in front of it. Without it a ledger could be rooted on
+// a section every later reader refuses the checkpoint computed from.
+func TestGenesisRefusesANonCanonicalKeySection(t *testing.T) {
+	genesisCarrying := func(keys *KeyDocument) ConfigOperation {
+		return ConfigOperation{
+			ID:     configOperationID(1),
+			Type:   ConfigGenesis,
+			Config: &ConfigData{Vocabulary: testVocabulary(t).Document(), Keys: keys},
+		}
+	}
+	// The same genesis carrying no key section validates, which is what makes
+	// each refusal below the key check talking rather than the vocabulary's.
+	if err := validateConfigOperationDocument(genesisCarrying(nil)); err != nil {
+		t.Fatalf("validateConfigOperationDocument(genesis without keys) = %v, want nil", err)
+	}
+	for name, document := range nonCanonicalKeySections() {
+		t.Run(name, func(t *testing.T) {
+			if err := validateConfigOperationDocument(genesisCarrying(document)); err == nil {
+				t.Fatal("validateConfigOperationDocument() error = nil, want a corrupt-data refusal")
+			} else if got := CategoryOf(err); got != CategoryCorruptData {
+				t.Fatalf("validateConfigOperationDocument() category = %q, want %q", got, CategoryCorruptData)
 			}
 		})
 	}

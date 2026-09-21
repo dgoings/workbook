@@ -179,9 +179,16 @@ func TestTheWriterFormatMarkerIsSpentOnlyAtTheConfigurationGenesis(t *testing.T)
 					document.label, generation, document.contents)
 			}
 		default:
-			if !marked || generation != configGenesisGeneration {
-				t.Fatalf("%s is a configuration checkpoint and carries marker %d (present = %v), want exactly %d: %s",
-					document.label, generation, marked, configGenesisGeneration, document.contents)
+			// Both halves of the checkpoint rule, and the second is not
+			// implied by the first only because the first is the half that
+			// moves: configGenesisGeneration rises whenever a genesis records
+			// a new section, and "never above what this build can read back"
+			// has to keep holding after it does.
+			if !marked || generation != configGenesisGeneration || generation > core.SupportedFormatGeneration {
+				t.Fatalf("%s is a configuration checkpoint and carries marker %d (present = %v), want exactly %d "+
+					"and no more than this build folds (%d): %s",
+					document.label, generation, marked, configGenesisGeneration,
+					core.SupportedFormatGeneration, document.contents)
 			}
 		}
 	}

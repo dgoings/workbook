@@ -1878,14 +1878,25 @@ func (keys *configKeys) activeCount() int {
 	return count
 }
 
-// normalizeArity repairs the one invariant a fold may break: a current key that
-// is not active, or none at all. It picks the first active key by position, the
-// same way configVocabulary.normalizeArity picks by rank, so two clones folding
-// the same history reach the same answer without consulting anything outside
-// the section.
+// normalizeArity keeps one invariant: the current key is one of the active
+// ones. It picks the first active key by position, the same way
+// configVocabulary.normalizeArity picks by rank, so two clones folding the same
+// history reach the same answer without consulting anything outside the section.
 //
-// A section holding nothing has nothing to repair: that is the project whose
-// key set is its founding key alone.
+// Unlike the vocabulary's and the priorities' repairs, this one is prophylactic
+// rather than load-bearing. Those two exist because their folds really do break
+// their invariants — untagging the last done status, or a genesis carrying two
+// defaults, are states an author can reach. Nothing reaches this one today:
+// applyCurrent refuses a key that is not active, applyRetire refuses the current
+// key, and a parent's section arrives through normalizeKeyDocument already
+// holding an active current key. It is here because it is the fourth section's
+// share of a rule ApplyConfig applies to all of them — repair, do not refuse —
+// and because a fifth key operation, a compaction, or a hand-built genesis that
+// slips past the canonicality checks would each land here rather than on a
+// section nobody can mint under.
+//
+// A section holding nothing has nothing to keep: that is the project whose key
+// set is its founding key alone.
 func (keys *configKeys) normalizeArity() {
 	if len(keys.order) == 0 {
 		return
@@ -1899,14 +1910,16 @@ func (keys *configKeys) normalizeArity() {
 			return
 		}
 	}
-	// Every key is retired, which nothing can currently produce: applyRetire
-	// keeps one active, and a stored section arrives through
-	// normalizeKeyDocument, which refuses an all-retired one. The arm stays
-	// because the alternative to repairing that state is returning a section
-	// with no key to mint under, and the day a fifth kind of key operation or a
-	// compaction reaches this function, silently unmintable is the one outcome
-	// that must not be available. The oldest key comes back, deterministically,
-	// so two clones that got here agree.
+	// Every key is retired, so there was no active key to promote above. The
+	// choice here is not between repairing and doing nothing: without this arm
+	// document() hands the retired or blank current key to
+	// normalizeKeyDocument, which refuses it, and ApplyConfig turns that into a
+	// CategoryCorruptData "configuration pack produced an invalid key set" —
+	// silent repair against loud refusal. Refusal is the wrong half of that
+	// trade for a fold: the pack has already happened somewhere, so refusing it
+	// strands the clone that fetched it rather than the person who wrote it,
+	// which is the rule ApplyConfig's own comment states. The oldest key comes
+	// back, deterministically, so two clones that got here agree.
 	keys.retired[keys.order[0]] = false
 	keys.current = keys.order[0]
 }

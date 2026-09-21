@@ -1729,6 +1729,45 @@ func TestGenesisCarryingDisplayAndPrioritiesRequiresGenerationThree(t *testing.T
 	}
 }
 
+// And a genesis carrying the key section is marked four, even though no key
+// operation appears in the pack — the guard display and priorities each have,
+// for the fourth section.
+//
+// Nothing this build writes reaches this case: no genesis records keys, which
+// is what keeps every new project readable by a generation-three clone. The
+// guard is here for a genesis some later build writes, or one a person
+// hand-assembles, and an unmarked one would tell a generation-three reader that
+// the project is corrupt rather than that it needs to upgrade — the failure the
+// marker exists to turn graceful.
+func TestGenesisCarryingKeysRequiresGenerationFour(t *testing.T) {
+	operation := ConfigOperation{Type: ConfigGenesis, Config: &ConfigData{
+		Keys: &KeyDocument{Keys: []KeyDefinition{{Key: "WB"}}, Current: "WB"},
+	}}
+	if got := ConfigPackMinReader([]ConfigOperation{operation}); got != 4 {
+		t.Errorf("ConfigPackMinReader = %d, want 4", got)
+	}
+}
+
+// A genesis carrying all three optional sections reports 4, not 2 or 3: the
+// three guards compose as a running maximum over one operation, and this pins
+// that composition against the regression the priorities version of this test
+// names — an if/else-if chain between them, which would stop at the display
+// section and report 2.
+func TestGenesisCarryingDisplayPrioritiesAndKeysRequiresGenerationFour(t *testing.T) {
+	priorities := BuiltInPriorityVocabulary().Document()
+	operation := ConfigOperation{
+		Type: ConfigGenesis,
+		Config: &ConfigData{
+			Display:    &DisplayDocument{Name: "Atlas"},
+			Priorities: &priorities,
+			Keys:       &KeyDocument{Keys: []KeyDefinition{{Key: "WB"}}, Current: "WB"},
+		},
+	}
+	if got := ConfigPackMinReader([]ConfigOperation{operation}); got != 4 {
+		t.Errorf("ConfigPackMinReader = %d, want 4", got)
+	}
+}
+
 // A project that configured nothing still writes no marker at all.
 func TestStatusOnlyPackStillRequiresGenerationZero(t *testing.T) {
 	if got := ConfigPackMinReader([]ConfigOperation{{Type: ConfigStatusAdd, Name: "triage"}}); got != 0 {
