@@ -122,6 +122,20 @@ affect scripts; all three are described under Changed.
   silently moved. The form had no way to show such a value, so it fell to the
   first one in the list and saving reassigned the task; it now says what the
   task is at and leaves it alone until somebody chooses.
+- A `docTargets` entry that didn't name a file inside the project used to be
+  joined onto the project root with no check. `docTargets: ["AGENTS.md",
+  "docs"]` — an easy entry to list by mistake — wrote the guidelines, the skill
+  and `AGENTS.md`, then failed on `docs` itself with the operating system's
+  generic "is a directory." A value that escaped the project, such as
+  `../../.bashrc`, fared no better, writing without ever failing at all. An
+  absolute path was different: `filepath.Join(root, "/etc/motd")` is
+  `<root>/etc/motd`, which usually doesn't exist, so the entry was silently
+  skipped, and on a project where it did exist, `workbook docs` wrote there
+  while reporting the absolute path as the file it touched. All three mistakes
+  are now refused up front, before anything is written, naming the offending
+  value and where it came from. A relative `skillDir` follows the same escape
+  rule; an absolute `skillDir` still works, since keeping one personal copy of
+  the skill across projects is a documented, separate feature.
 - **Moving a priority to the position it already holds is refused** rather than
   recorded. On a project that had never configured its priorities, that empty
   change wrote a configuration section and required every teammate to
