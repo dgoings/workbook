@@ -623,6 +623,15 @@ h1 {
   max-width: 40%;
 }
 
+/* An empty column must take no room at all. `hidden` lands on the notices, not
+   on the column that holds them, so without this the column keeps its 25rem of
+   flex basis and `space-between` pushes it to the right as dead space — in the
+   *default* state of this view, since the key caution is hidden until a scan
+   and the PATH notice appears on exactly one launch ever. Each note used to
+   carry that width itself, and hiding it gave the heading the whole row back;
+   this is what keeps that true now that the width moved up a level. */
+.view-head__notes:not(:has(> :not([hidden]))) { display: none; }
+
 /* The one irreversible step in the wizard gets the board's warning ink. */
 .key-note {
   position: relative;

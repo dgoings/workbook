@@ -353,8 +353,10 @@ ipcMain.handle('path:notice', async () => {
   try {
     await registry.setPathNoticeShown()
   } catch (error) {
-    // Worth one more showing on the next launch, and not worth rejecting an
-    // invoke the page does not guard: boot() would stop where it asked.
+    // Costs nothing the user sees: the next launch changes nothing, so the
+    // `!result.changed` branch above answers null whether the flag was stored
+    // or not. And not worth rejecting an invoke the page does not guard —
+    // boot() would stop where it asked.
     console.error('workbench: could not record that the PATH notice was shown', error)
   }
   return { directory: result.directory }
@@ -523,7 +525,8 @@ nativeTheme.on('updated', () => {
 // A second copy would start a second server per project and both would write
 // the same refs. Git's compare-and-swap keeps that safe, but it is still two of
 // everything for no benefit.
-if (!app.requestSingleInstanceLock()) {
+const isPrimaryInstance = app.requestSingleInstanceLock()
+if (!isPrimaryInstance) {
   app.quit()
 } else {
   app.on('second-instance', () => {
@@ -535,6 +538,16 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 app.whenReady().then(async () => {
+  // A second copy of the app has already called quit() above, but quit() is not
+  // instant: 'ready' can fire first, and everything below it would then run in
+  // a process that is on its way out. Both of the things it starts with reach
+  // outside this process — reapOrphans() would kill the *winning* instance's
+  // board servers, and the PATH install would copy the binary and rewrite the
+  // user's shell profiles alongside the winner doing the same, with two
+  // setPathNoticeShown() writes racing for one registry file. Nothing here is
+  // the losing instance's business.
+  if (!isPrimaryInstance) return
+
   // Before anything else starts a server: clear out any left by a run that did
   // not get to shut down.
   const reaped = supervisor.reapOrphans()

@@ -211,20 +211,24 @@ and neither will delete the other:
 ```sh
 # >>> workbench app PATH >>>
 case ":${PATH}:" in
-	*":/Users/you/Library/Application Support/Workbench/bin:"*) ;;
-	*) PATH="${PATH}:/Users/you/Library/Application Support/Workbench/bin" ;;
+	*':/Users/you/Library/Application Support/Workbench/bin:'*) ;;
+	*) PATH="${PATH}:"'/Users/you/Library/Application Support/Workbench/bin' ;;
 esac
 export PATH
 # <<< workbench app PATH <<<
 ```
+
+The directory is in *single* quotes, and `${PATH}` alone is left expanding.
+Double quotes would still run a `$(…)` or a backtick inside the directory name
+the moment the profile was sourced; single quotes make it one literal word.
 
 fish is not POSIX — `PATH="${PATH}:x"` is a syntax error there — so
 `~/.config/fish/config.fish` gets the same thing in fish's own syntax:
 
 ```fish
 # >>> workbench app PATH >>>
-if not contains "/Users/you/Library/Application Support/Workbench/bin" $PATH
-    set -gx PATH $PATH "/Users/you/Library/Application Support/Workbench/bin"
+if not contains '/Users/you/Library/Application Support/Workbench/bin' $PATH
+    set -gx PATH $PATH '/Users/you/Library/Application Support/Workbench/bin'
 end
 # <<< workbench app PATH <<<
 ```
