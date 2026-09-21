@@ -37,6 +37,7 @@ the name and path on the tile's tooltip.
 
 ```
 npm run check
+npm test
 ```
 
 `check-styles.js` verifies every class the renderer applies has a rule, and
@@ -44,6 +45,13 @@ npm run check
 the renderer references only element ids that exist, and the channels the
 preload invokes are the channels the main process handles. They are cheap and
 each catches a mistake this project has actually made.
+
+`npm test` is Node's own runner over `test/`, covering the main-process modules
+that can be exercised without Electron: the registry's stored state and the
+PATH install's copy, block writer, profile targets and Windows registry edit.
+Every case runs against a temporary directory — no test reads or writes your
+real HOME, your profiles, or the app's userData. `npm run check` runs it too,
+since that is the one command CI runs for the desktop app.
 
 ## Building
 
@@ -177,6 +185,76 @@ a change to both sides needs. The rest are fallbacks for a run with no stage.
 This does mean a packaged app and your terminal can drive different builds if
 your installed CLI is older. The version line in the sidebar names the build in
 use on its tooltip: bundled or installed, and the path it was found at.
+
+## Putting workbook on your PATH
+
+On launch the app copies its bundled `workbook` into a directory it owns and
+appends that directory to your PATH, so the CLI the app ships is also the CLI
+you can type. The copy is kept current by content — size, then a sha256 of both
+files, never the mtime, which travels with a download and says nothing — so an
+app update replaces it and an unchanged launch writes nothing at all.
+
+Where the copy lives:
+
+| Platform | Directory |
+| --- | --- |
+| macOS | `~/Library/Application Support/Workbench/bin` |
+| Windows | `%LOCALAPPDATA%\Workbench\bin` |
+| Linux | `$XDG_DATA_HOME/workbench/bin`, or `~/.local/share/workbench/bin` |
+
+On macOS and Linux the directory is added by a marked block written into every
+one of `~/.bashrc`, `~/.zshrc` and `~/.profile` that exists — and into
+`~/.profile`, created, if none of them does. The markers are the app's own, not
+the ones `scripts/setup-dev-env.sh` writes, so a profile can carry both blocks
+and neither will delete the other:
+
+```sh
+# >>> workbench app PATH >>>
+case ":${PATH}:" in
+	*":/Users/you/Library/Application Support/Workbench/bin:"*) ;;
+	*) PATH="${PATH}:/Users/you/Library/Application Support/Workbench/bin" ;;
+esac
+export PATH
+# <<< workbench app PATH <<<
+```
+
+fish is not POSIX — `PATH="${PATH}:x"` is a syntax error there — so
+`~/.config/fish/config.fish` gets the same thing in fish's own syntax:
+
+```fish
+# >>> workbench app PATH >>>
+if not contains "/Users/you/Library/Application Support/Workbench/bin" $PATH
+    set -gx PATH $PATH "/Users/you/Library/Application Support/Workbench/bin"
+end
+# <<< workbench app PATH <<<
+```
+
+That file is only written when fish is indicated — `~/.config/fish` already
+exists, or `$SHELL` ends in `fish`. The app does not invent a fish
+configuration for someone who does not use fish. On Windows there are no
+profiles: the user PATH in `HKCU\Environment` is edited instead, with `reg add`
+rather than `setx`, which truncates a PATH longer than 1024 characters.
+
+**A shell already running does not see any of this.** Open a new terminal once;
+the app says so itself, once, the first time it changes anything.
+
+The directory is *appended*, not prepended, which is the one difference from
+`setup-dev-env.sh`. An existing `workbook` earlier on your PATH — a Homebrew
+install, a `go install` build in `~/go/bin` — therefore keeps winning, and this
+never silently takes over a CLI you manage yourself.
+
+To undo it: delete the marked block from each profile it is in (on Windows,
+remove the directory from your user PATH), and delete the directory. Nothing
+else refers to it.
+
+A development run does nothing at all: `npm start` has no bundled binary under
+`process.resourcesPath` to copy, so the install skips, and your own profiles are
+left alone. `WORKBENCH_SKIP_PATH_SETUP=1` in the app's environment turns the
+whole thing off explicitly, for a packaged app as well.
+
+Failures never block startup. A read-only `.zshrc` costs you that one profile,
+not the binary copy and not the window: every step's failure is collected, the
+rest still runs, and what went wrong is logged.
 
 ## How the boards run
 

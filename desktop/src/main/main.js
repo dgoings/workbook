@@ -8,6 +8,7 @@ const { Supervisor } = require('./supervisor')
 const discovery = require('./discovery')
 const repoinfo = require('./repoinfo')
 const workbook = require('./workbook')
+const clipath = require('./clipath')
 const { setupUpdater } = require('./updater')
 
 const SIDEBAR_WIDTH = 260
@@ -25,6 +26,11 @@ let chromeView = null
 /** Board views, one per project, kept warm once opened. @type {Map<string, WebContentsView>} */
 const boardViews = new Map()
 let activeProjectId = null
+/**
+ * The PATH install, started at launch and asked about once by `path:notice`.
+ * @type {Promise<object>|null}
+ */
+let cliPathInstall = null
 
 const registry = new Registry(app.getPath('userData'))
 const supervisor = new Supervisor(app.getPath('userData'))
@@ -273,11 +279,85 @@ function closeProject (projectId) {
   if (activeProjectId === projectId) showChrome()
 }
 
+// --- the CLI on PATH -------------------------------------------------------
+
+/**
+ * Copy the bundled CLI somewhere permanent and put that somewhere on PATH.
+ *
+ * All of the deciding lives in clipath.js, which never throws: every step's
+ * failure lands in `errors` and the rest still runs, so a read-only `.zshrc`
+ * does not cost the user the binary copy. This wrapper exists to name the one
+ * input the module cannot work out for itself — where the bundle put the
+ * binary — and to say out loud what happened, the way the supervisor says what
+ * it reaped.
+ */
+async function installCli () {
+  // A development run (`npm start`) has no packaged Resources directory with a
+  // `workbook` in it, so there is nothing to copy — which is also what keeps a
+  // development run from writing to the developer's own shell profiles.
+  if (!process.resourcesPath) {
+    return { skipped: true, reason: 'not a packaged app', errors: [] }
+  }
+
+  const result = await clipath.install({
+    bundled: path.join(process.resourcesPath, workbook.BINARY)
+  })
+
+  if (result.skipped) {
+    console.log(`workbench: did not put workbook on PATH (${result.reason})`)
+  } else if (result.changed) {
+    const written = result.profiles.filter((profile) => profile.changed).map((profile) => profile.file)
+    if (result.windows?.changed) written.push('the user PATH in the registry')
+    console.log(`workbench: ${result.copied ? 'copied' : 'kept'} workbook at ${result.binary}` +
+      (written.length > 0
+        ? `; added ${result.directory} to ${written.join(', ')}`
+        : '; PATH was already set up'))
+  } else {
+    console.log(`workbench: workbook at ${result.binary} was already on PATH`)
+  }
+  // One line per failure, like the reaping log: a profile that could not be
+  // written is worth seeing even though it did not stop anything.
+  for (const error of result.errors ?? []) {
+    console.error(`workbench: could not finish putting workbook on PATH: ${error}`)
+  }
+  return result
+}
+
 // --- IPC -------------------------------------------------------------------
 
 ipcMain.handle('workbook:version', async () => {
   const data = await workbook.version()
   return data
+})
+
+/**
+ * What, if anything, to tell the user about the CLI being on their PATH.
+ *
+ * `{ directory }` the one time there is something to say, and `null` every
+ * other time: already said, nothing installed, or nothing changed because a
+ * previous launch had already done it.
+ *
+ * The renderer asks rather than being pushed to, because the install races the
+ * shell page's load: a push can arrive before the page is listening, and a
+ * question cannot. And the flag is marked here, as the answer is handed over,
+ * rather than when the dismiss button is clicked — the user who quits without
+ * dismissing it has still been told, and a dismissal must not be the thing that
+ * records it.
+ */
+ipcMain.handle('path:notice', async () => {
+  if (registry.pathNoticeShown) return null
+  // Null only if the window somehow outran app.whenReady(); awaiting it is the
+  // whole reason the promise is kept rather than the result.
+  const result = await cliPathInstall
+  if (!result || result.skipped || !result.changed) return null
+  try {
+    await registry.setPathNoticeShown()
+  } catch (error) {
+    // Worth one more showing on the next launch, and not worth rejecting an
+    // invoke the page does not guard: boot() would stop where it asked.
+    console.error('workbench: could not record that the PATH notice was shown', error)
+  }
+  return { directory: result.directory }
 })
 
 ipcMain.handle('registry:list', async () => ({
@@ -463,6 +543,20 @@ app.whenReady().then(async () => {
   }
 
   await registry.load()
+
+  // Started here and deliberately not awaited: copying a binary and rewriting
+  // shell profiles is filesystem work that has nothing to do with drawing the
+  // window, and a slow or busy disk must not hold the window shut. The promise
+  // is kept so `path:notice` can ask for an answer that may not have arrived by
+  // the time the page boots. It runs after registry.load() because the notice's
+  // "said it once" flag comes from the loaded registry, and before
+  // createWindow() so the work is already under way when the page asks.
+  cliPathInstall = installCli().catch((error) => {
+    // clipath.install() collects its own failures and does not throw, so this
+    // is the module itself failing to run at all.
+    console.error('workbench: could not put workbook on PATH', error)
+    return { skipped: true, reason: error.message, errors: [] }
+  })
 
   createWindow()
   // The launch check still runs, but the shell page has nowhere to show what it

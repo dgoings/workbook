@@ -343,6 +343,33 @@ function dismissKeyNote () {
   }
 }
 
+// --- the PATH notice --------------------------------------------------------
+
+/**
+ * Say, once, that the CLI was copied somewhere permanent and put on PATH.
+ *
+ * Asked for rather than pushed: the install runs while this page is loading, so
+ * a message sent the moment it finished could arrive before anything here was
+ * listening. The main process answers null whenever there is nothing to say —
+ * already said, nothing bundled to install, or nothing changed because an
+ * earlier launch had already done it — and records that it has been said as it
+ * answers. Dismissal therefore only hides it, and needs no storage of its own.
+ */
+async function showPathNotice () {
+  let notice
+  try {
+    notice = await api.pathNotice()
+  } catch (error) {
+    // The least important thing on the page. Not being able to read it is not a
+    // reason for anything else to go unpainted.
+    console.error('workbench: could not read the PATH notice', error)
+    return
+  }
+  if (!notice?.directory) return
+  el('path-note-directory').textContent = notice.directory
+  el('path-note').hidden = false
+}
+
 // --- theme -----------------------------------------------------------------
 
 /**
@@ -401,6 +428,9 @@ for (const button of document.querySelectorAll('.rail-item')) {
 }
 
 el('dismiss-key-note').addEventListener('click', dismissKeyNote)
+// Nothing is stored: the main process recorded "said it" when it handed the
+// notice over, so this launch is the only one that could ever show it anyway.
+el('dismiss-path-note').addEventListener('click', () => { el('path-note').hidden = true })
 el('pick-folder').addEventListener('click', pickFolder)
 el('rescan').addEventListener('click', () => {
   if (state.scan.root) runScan(state.scan.root)
@@ -470,6 +500,10 @@ async function boot () {
     el('version').title = error.message
     el('version').classList.add('missing')
   }
+  // Not awaited: the answer waits on the PATH install, which is copying a
+  // binary and rewriting shell profiles, and the project list must not queue
+  // behind a busy disk. It unhides itself whenever it arrives.
+  showPathNotice()
   await loadProjects()
   setView('import')
 }

@@ -56,16 +56,35 @@
           </p>
         </div>
 
-        <!-- The one irreversible step in the wizard, set beside the heading
-             rather than above the list: it is a caution to read once, not a
-             banner to scroll past every time. -->
-        <aside class="key-note" id="key-note" hidden>
-          <button class="key-note__dismiss" id="dismiss-key-note" type="button"
-                  aria-label="Dismiss">&times;</button>
-          A project key is minted once and <strong>cannot be changed</strong>
-          afterwards without deleting the project's refs by hand. Edit it now if
-          the suggestion is wrong.
-        </aside>
+        <!-- Notices, set beside the heading rather than above the list: things
+             to read once, not banners to scroll past every time. They stack in
+             their own column because the first launch after an install can
+             raise both of them at once. -->
+        <div class="view-head__notes">
+          <!-- Said once, on the launch that put the bundled CLI on the user's
+               PATH; the main process decides whether there is anything to say
+               and records that it was said as it answers. Neutral rather than
+               the caution's warning colors: this reports something done, not
+               something to be careful about. -->
+          <aside class="path-note" id="path-note" hidden>
+            <button class="path-note__dismiss" id="dismiss-path-note" type="button"
+                    aria-label="Dismiss">&times;</button>
+            <strong><code>workbook</code> is installed.</strong> Workbench keeps its
+            own copy of the CLI in <code id="path-note-directory"></code> and added
+            that directory to your shell profile. Open a new terminal to use
+            <code>workbook</code> there. An existing Homebrew install keeps
+            precedence.
+          </aside>
+
+          <!-- The one irreversible step in the wizard. -->
+          <aside class="key-note" id="key-note" hidden>
+            <button class="key-note__dismiss" id="dismiss-key-note" type="button"
+                    aria-label="Dismiss">&times;</button>
+            A project key is minted once and <strong>cannot be changed</strong>
+            afterwards without deleting the project's refs by hand. Edit it now if
+            the suggestion is wrong.
+          </aside>
+        </div>
       </header>
 
       <div class="import-controls">

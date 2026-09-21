@@ -610,12 +610,22 @@ h1 {
   padding: .3rem .4rem;
 }
 
+/* The import head's notices. Both are one-time reads set beside the heading
+   rather than above the list, and they stack in a column of their own: the
+   first launch after an install can raise the PATH notice and the key caution
+   at the same time, and sharing the row would squeeze both of them and the
+   title. The column carries the width each note used to carry alone. */
+.view-head__notes {
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+  flex: 0 1 25rem;
+  max-width: 40%;
+}
+
 /* The one irreversible step in the wizard gets the board's warning ink. */
 .key-note {
   position: relative;
-  flex: 0 1 auto;
-  width: 25rem;
-  max-width: 40%;
   padding: .55rem 2rem .55rem .7rem;
   border: 1px solid var(--wb-warn-edge);
   border-radius: 4px;
@@ -626,7 +636,34 @@ h1 {
   line-height: 1.45;
 }
 
-.key-note__dismiss {
+/* The same box as the caution above in neutral tokens, because it reports
+   something the app has already done: nothing about it needs care, and warning
+   colors would make a completed install read as a problem. */
+.path-note {
+  position: relative;
+  padding: .55rem 2rem .55rem .7rem;
+  border: 1px solid var(--wb-hairline);
+  border-radius: 4px;
+  background: var(--wb-surface-2);
+  color: var(--wb-text-3);
+  margin: 0;
+  font-size: .78rem;
+  line-height: 1.45;
+}
+
+.path-note strong { color: var(--wb-text-2); font-weight: 600; }
+
+/* A path and a command name, in the monospace the repository facts use. The
+   directory has a space in it on macOS and is long everywhere, so it breaks
+   anywhere rather than pushing the notice wider than its column. */
+.path-note code {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: .72rem;
+  overflow-wrap: anywhere;
+}
+
+.key-note__dismiss,
+.path-note__dismiss {
   position: absolute;
   top: .25rem;
   right: .3rem;
@@ -647,12 +684,13 @@ h1 {
   opacity: .65;
 }
 
-.key-note__dismiss:hover { opacity: 1; background: rgba(127, 127, 127, .18); }
+.key-note__dismiss:hover,
+.path-note__dismiss:hover { opacity: 1; background: rgba(127, 127, 127, .18); }
 
-/* Narrow windows put it back above the list rather than squeezing the title. */
+/* Narrow windows put them back above the list rather than squeezing the title. */
 @media (max-width: 900px) {
   .view-head--split { flex-direction: column; }
-  .key-note { width: auto; max-width: none; }
+  .view-head__notes { flex-basis: auto; max-width: none; }
 }
 
 .scan-results { display: flex; flex-direction: column; gap: .3rem; }

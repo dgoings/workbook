@@ -14,6 +14,11 @@ contextBridge.exposeInMainWorld('workbench', {
 
   version: () => ipcRenderer.invoke('workbook:version'),
 
+  // `{ directory }` the one launch on which the CLI was put on the user's PATH,
+  // and null on every other one. Asked for during boot rather than pushed: the
+  // install races this page's load.
+  pathNotice: () => ipcRenderer.invoke('path:notice'),
+
   listProjects: () => ipcRenderer.invoke('registry:list'),
   pickFolder: () => ipcRenderer.invoke('discovery:pickFolder'),
   scan: (root, maxDepth) => ipcRenderer.invoke('discovery:scan', { root, maxDepth }),

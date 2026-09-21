@@ -63,6 +63,17 @@ affect scripts; all three are described under Changed.
   table above it carries — each priority's position, machine value, display
   label and tag, with a legend saying that a task created without `--priority`
   lands on the tagged one.
+- **The desktop app puts `workbook` on your PATH.** On launch Workbench copies
+  the CLI it bundles into a directory of its own — `~/Library/Application
+  Support/Workbench/bin` on macOS, `%LOCALAPPDATA%\Workbench\bin` on Windows,
+  `~/.local/share/workbench/bin` on Linux — and appends that directory to your
+  PATH in a marked block in `~/.bashrc`, `~/.zshrc`, `~/.profile` and, in fish
+  syntax, `~/.config/fish/config.fish`, or to the user PATH in the registry on
+  Windows. It says once that a new terminal is needed. The directory is
+  appended rather than prepended, so an existing Homebrew or `go install` build
+  earlier on your PATH keeps winning; `WORKBENCH_SKIP_PATH_SETUP` turns the
+  whole thing off, and a development run does nothing because it has no bundled
+  binary to copy.
 
 ### Changed
 - **`workbook setup` asks for the project key only when it creates a

@@ -16,7 +16,8 @@ const EMPTY = {
   scanRoots: [],
   projects: [],
   theme: 'system',
-  sidebarCollapsed: false
+  sidebarCollapsed: false,
+  pathNoticeShown: false
 }
 
 class Registry {
@@ -135,6 +136,34 @@ class Registry {
       this.state.sidebarCollapsed = previous
       throw error
     }
+  }
+
+  /**
+   * Whether the user has already been told the CLI is on their PATH.
+   *
+   * Read strictly, like sidebarCollapsed: a registry written by a build from
+   * before the PATH install has no such field, and a missing answer means the
+   * notice has not been shown. The fact lives here rather than in the
+   * renderer's localStorage — where the project-key caution's dismissal lives —
+   * because it is the app's own fact about something it did to the machine
+   * once, and it has to survive a cleared renderer storage.
+   */
+  get pathNoticeShown () {
+    return this.state.pathNoticeShown === true
+  }
+
+  /**
+   * Record that the notice has been handed to the renderer.
+   *
+   * One-way and argumentless: there is no reason to un-say it, and the main
+   * process marks it as it answers `path:notice` rather than waiting for the
+   * dismissal — a user who quits without clicking the × has still been told.
+   * A rejected write is not swallowed; the caller decides, and the worst case
+   * is the notice appearing once more on the next launch.
+   */
+  async setPathNoticeShown () {
+    this.state.pathNoticeShown = true
+    await this.save()
   }
 
   find (projectId) {
