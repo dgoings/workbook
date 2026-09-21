@@ -305,13 +305,14 @@ it is missing, and a missing file always means defaults rather than an error:
 
 `docTargets` names the agent documentation files Workbook manages. A target is
 refreshed only when the project already contains it; Workbook never creates one
-on its own, so listing a file here is safe. A relative `docTargets` entry or
-`skillDir` must stay inside the project directory — a value that escapes it,
-such as `../../.bashrc`, is refused with an error that names the offending value
-and whether it came from the user configuration file or `--skill-dir`, while an
-absolute `skillDir` remains honored as the documented way to keep one personal
-copy of the skill across projects. `preferences` is reserved for future settings
-and is deliberately untyped, so adding one later needs no format version bump.
+on its own, so listing a file here is safe. An entry must name a file inside the
+project, given as a path relative to it — an escaping value such as
+`../../.bashrc`, an absolute path, and a directory listed by mistake such as
+`docs` or `.claude` are all refused, with the error naming the offending value
+and where it came from. A relative `skillDir` follows the same rule, but an
+absolute one remains honored, as the documented way to keep one personal copy of
+the skill across projects. `preferences` is reserved for future settings and is
+deliberately untyped, so adding one later needs no format version bump.
 
 Project identity and task data stay in the repository. Nothing in this file
 affects what Workbook records.

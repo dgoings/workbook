@@ -122,15 +122,17 @@ affect scripts; all three are described under Changed.
   silently moved. The form had no way to show such a value, so it fell to the
   first one in the list and saving reassigned the task; it now says what the
   task is at and leaves it alone until somebody chooses.
-- A relative `docTargets` entry or `skillDir` that escaped the project
-  directory used to be joined onto the project root with no check, so a
-  mistyped or copied user-global configuration file could have `workbook docs`
-  write documentation, or install the skill, outside the repository —
-  `docTargets: ["../../.bashrc"]` really did refresh a dotfile above the
-  repository. Such a value is now refused, and the error names the offending
-  value and whether it came from the user configuration file or `--skill-dir`.
-  An absolute `skillDir` still works, since keeping one personal copy of the
-  skill across projects is documented.
+- A `docTargets` entry that didn't name a file inside the project used to be
+  joined onto the project root with no check. `docTargets: ["AGENTS.md",
+  "docs"]` — an easy entry to list by mistake — wrote the guidelines, the skill
+  and `AGENTS.md`, then failed on `docs` itself with the operating system's
+  generic "is a directory." A value that escaped the project, such as
+  `../../.bashrc`, or was given as an absolute path fared no better, writing
+  without ever failing at all. All three are now refused up front, before
+  anything is written, naming the offending value and where it came from. A
+  relative `skillDir` follows the same escape rule; an absolute `skillDir`
+  still works, since keeping one personal copy of the skill across projects is
+  a documented, separate feature.
 - **Moving a priority to the position it already holds is refused** rather than
   recorded. On a project that had never configured its priorities, that empty
   change wrote a configuration section and required every teammate to
