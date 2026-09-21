@@ -367,11 +367,17 @@ func (r *Repository) replaceVocabulary(vocabulary core.Vocabulary, head string) 
 // to every command. The memo is dropped exactly where the ledger moves — a
 // configuration write, and the configuration stage of a fetch — so no caller
 // can classify a ref against a key set the same command has already superseded.
+//
+// The founding key is part of the memo's key for the reason it is part of the
+// decoded tip's: a project that has recorded no key section has the set its
+// founding key implies, so the answer depends on the caller's argument and not
+// on the ledger alone. A memo keyed on "this repository" would answer a
+// question about one project's keys out of a substitution made for another's.
 func (r *Repository) keySet(ctx context.Context, config core.ProjectConfig) (core.KeySet, error) {
 	r.metadataMu.RLock()
-	loaded, keys := r.keysLoaded, r.keys
+	loaded, founding, keys := r.keysLoaded, r.keysFounding, r.keys
 	r.metadataMu.RUnlock()
-	if loaded {
+	if loaded && founding == config.Key {
 		return keys, nil
 	}
 	state, err := r.LoadVocabularyState(ctx, config)
@@ -380,8 +386,8 @@ func (r *Repository) keySet(ctx context.Context, config core.ProjectConfig) (cor
 	}
 	r.metadataMu.Lock()
 	defer r.metadataMu.Unlock()
-	if !r.keysLoaded {
-		r.keys, r.keysLoaded = state.Keys, true
+	if !r.keysLoaded || r.keysFounding != config.Key {
+		r.keys, r.keysFounding, r.keysLoaded = state.Keys, config.Key, true
 	}
 	return r.keys, nil
 }
@@ -398,7 +404,7 @@ func (r *Repository) forgetKeySet() {
 // lock, so that a write which also replaces another memo can do both in one
 // critical section rather than leaving a window between them.
 func (r *Repository) forgetKeySetLocked() {
-	r.keys, r.keysLoaded = core.KeySet{}, false
+	r.keys, r.keysFounding, r.keysLoaded = core.KeySet{}, "", false
 }
 
 // WriteConfigOperation records one batch of configuration changes as the
@@ -905,13 +911,17 @@ func checkBackfilledPackBudget(operations []core.ConfigOperation, authored int) 
 			keys = true
 		}
 	}
+	// Each clause is a bare predicate, so one of them completes "and this
+	// project's …" exactly as the single-backfill sentence always read, and two
+	// of them join into one sentence about one project rather than two
+	// sentences stapled together.
 	var clauses []string
 	if priorities > 0 {
-		clauses = append(clauses, fmt.Sprintf("this project's first priority change also records the %d built-in "+
+		clauses = append(clauses, fmt.Sprintf("first priority change also records the %d built-in "+
 			"priorities its existing tasks depend on", priorities))
 	}
 	if keys {
-		clauses = append(clauses, "this project's first key change also records the key its existing task IDs carry")
+		clauses = append(clauses, "first key change also records the key its existing task IDs carry")
 	}
 	if len(clauses) == 0 {
 		// No backfill fired, so the batch itself is over the ceiling — which
@@ -923,9 +933,9 @@ func checkBackfilledPackBudget(operations []core.ConfigOperation, authored int) 
 			len(operations), core.MaxConfigOperationsPerPack)
 	}
 	return core.Errorf(core.CategoryValidation,
-		"a configuration write carries %d operations and must not exceed %d: %d were authored, and %s; "+
-			"split it into several commands",
-		len(operations), core.MaxConfigOperationsPerPack, authored, strings.Join(clauses, ", and "))
+		"a configuration write carries %d operations and must not exceed %d: %d were authored, and this project's "+
+			"%s; split it into several commands",
+		len(operations), core.MaxConfigOperationsPerPack, authored, strings.Join(clauses, " and its "))
 }
 
 // prependFoundingKey records the project's founding key in the same pack as its

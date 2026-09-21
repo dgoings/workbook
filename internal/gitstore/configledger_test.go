@@ -732,22 +732,7 @@ func TestARecordedKeySectionStillOwnsTheFoundingKeysTaskIDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadVocabularyState() error = %v", err)
 	}
-	definitions := state.Keys.Keys()
-	if len(definitions) != 2 {
-		t.Fatalf("Keys() = %#v, want the founding key and NEW", definitions)
-	}
-	if definitions[0].Key != config.Key || definitions[0].Retired {
-		t.Fatalf("Keys()[0] = %#v, want %q active and first in add order", definitions[0], config.Key)
-	}
-	if definitions[1].Key != "NEW" || definitions[1].Retired {
-		t.Fatalf("Keys()[1] = %#v, want NEW active", definitions[1])
-	}
-	if got := state.Keys.Current(); got != config.Key {
-		t.Fatalf("Current() = %q, want the founding key %q: key.add does not move it", got, config.Key)
-	}
-	if !state.Keys.Owns(writeTaskID) {
-		t.Fatalf("Owns(%q) = false, want true: the project's own task IDs must survive its first key change", writeTaskID)
-	}
+	assertFoundingKeyBesideNEW(t, state.Keys, config.Key)
 	if state.Keys.Owns("OTHER-01K0M6B8A4FTT8C39MXXYTW7C2") {
 		t.Fatal("Owns(OTHER-…) = true, want false: a key this project never had is another project's ref")
 	}
@@ -771,15 +756,16 @@ func TestAStatusChangeLeavesTheKeySectionAbsent(t *testing.T) {
 // its existing task IDs carry.
 func TestAFirstKeyChangeWithoutAnAddStillRecordsTheFoundingKey(t *testing.T) {
 	for _, testCase := range []struct {
-		name      string
-		operation core.ConfigOperation
+		name          string
+		operationType core.ConfigOperationType
 	}{
-		{"key.current alone", core.ConfigOperation{Type: core.ConfigKeyCurrent, Key: "WB"}},
-		{"key.retire alone", core.ConfigOperation{Type: core.ConfigKeyRetire, Key: "WB"}},
+		{"key.current alone", core.ConfigKeyCurrent},
+		{"key.retire alone", core.ConfigKeyRetire},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			repo, config := writeRepository(t)
-			written := writeConfig(t, repo, config, testCase.operation)
+			written := writeConfig(t, repo, config,
+				core.ConfigOperation{Type: testCase.operationType, Key: config.Key})
 			keys := written.KeySet(config.Key)
 			if got := keys.Keys(); len(got) != 1 || got[0].Key != config.Key || got[0].Retired {
 				t.Fatalf("Keys() = %#v, want the founding key %q alone and active", got, config.Key)
@@ -889,5 +875,197 @@ func TestAFirstKeyChangeRefusedWhenTheBackfillWouldPushItOverTheCeiling(t *testi
 		t.Fatalf("readConfigRef() error = %v", readErr)
 	} else if found {
 		t.Fatal("the refused write seeded a ledger; a refusal must leave the project exactly as it was")
+	}
+}
+
+// The same hazard on the other call site. Every test above starts from a
+// project with no ledger at all, so the seed path composes their packs; this
+// one gives the project a ledger first — an ordinary status change, which
+// leaves the key section absent — so the key change is authored against an
+// existing tip and composed by appendConfigOperation instead.
+//
+// The two paths compose a pack in two different functions, and a backfill wired
+// into one of them would leave the other writing the pack this whole task
+// exists to make unwritable.
+func TestAppendConfigOperationRecordsTheFoundingKeyOnAFirstKeyChange(t *testing.T) {
+	repo, config := writeRepository(t)
+	ctx := context.Background()
+
+	seeded := writeConfig(t, repo, config, relabelOperation(core.StatusBacklog, "Inbox"))
+	if !seeded.Seeded {
+		t.Fatal("the first write did not seed a ledger; this test needs an existing tip to append onto")
+	}
+	if seeded.State.Config.Keys != nil {
+		t.Fatalf("keys = %#v after a status change, want nil: the tip this appends onto must carry no key section",
+			seeded.State.Config.Keys)
+	}
+
+	written := writeConfig(t, repo, config, core.ConfigOperation{Type: core.ConfigKeyAdd, Key: "NEW"})
+	if written.Seeded {
+		t.Fatal("the key change seeded a ledger; this test is about the append path, and it took the seed path")
+	}
+	assertFoundingKeyBesideNEW(t, written.KeySet(config.Key), config.Key)
+
+	// The pack itself carries both operations, so a clone folding this one
+	// commit reaches the same set without consulting the identity ref.
+	records := configChain(t, repo, config)
+	appended := records[len(records)-1].Operation.Operations
+	if len(appended) != 2 {
+		t.Fatalf("appended pack = %#v, want the founding key.add prepended to the caller's key.add", appended)
+	}
+	if appended[0].Type != core.ConfigKeyAdd || appended[0].Key != config.Key {
+		t.Fatalf("appended pack[0] = %#v, want key.add %q first", appended[0], config.Key)
+	}
+	if appended[1].Type != core.ConfigKeyAdd || appended[1].Key != "NEW" {
+		t.Fatalf("appended pack[1] = %#v, want the caller's key.add NEW", appended[1])
+	}
+
+	// And a handle that did not do the write reads the same set cold.
+	reader, err := Open(ctx, repo.Root)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	state, err := reader.LoadVocabularyState(ctx, config)
+	if err != nil {
+		t.Fatalf("LoadVocabularyState() error = %v", err)
+	}
+	assertFoundingKeyBesideNEW(t, state.Keys, config.Key)
+}
+
+// assertFoundingKeyBesideNEW is the answer both call sites and both handles owe:
+// the founding key first and active, NEW after it, the founding key still
+// current, and the project's existing task IDs still its own.
+func assertFoundingKeyBesideNEW(t *testing.T, keys core.KeySet, founding string) {
+	t.Helper()
+	definitions := keys.Keys()
+	if len(definitions) != 2 {
+		t.Fatalf("Keys() = %#v, want the founding key and NEW", definitions)
+	}
+	if definitions[0].Key != founding || definitions[0].Retired {
+		t.Fatalf("Keys()[0] = %#v, want %q active and first in add order", definitions[0], founding)
+	}
+	if definitions[1].Key != "NEW" || definitions[1].Retired {
+		t.Fatalf("Keys()[1] = %#v, want NEW active", definitions[1])
+	}
+	if got := keys.Current(); got != founding {
+		t.Fatalf("Current() = %q, want the founding key %q: key.add does not move it", got, founding)
+	}
+	if !keys.Owns(writeTaskID) {
+		t.Fatalf("Owns(%q) = false, want true: the project's own task IDs must survive its first key change",
+			writeTaskID)
+	}
+}
+
+// The founding key is part of the memo's key, not part of its answer. A project
+// that has recorded no key section has the set its founding key implies, so the
+// answer depends on the caller's argument as well as on the ledger — and a memo
+// that ignored the argument would answer a question about one project's keys out
+// of a substitution made for another's.
+func TestKeySetMemoIsKeyedOnTheFoundingKey(t *testing.T) {
+	repo, config := writeRepository(t)
+	ctx := context.Background()
+
+	first, err := repo.keySet(ctx, config)
+	if err != nil {
+		t.Fatalf("keySet() error = %v", err)
+	}
+	if got := first.Current(); got != config.Key {
+		t.Fatalf("keySet().Current() = %q, want the founding key %q", got, config.Key)
+	}
+
+	other := config
+	other.Key = "ZZ"
+	second, err := repo.keySet(ctx, other)
+	if err != nil {
+		t.Fatalf("keySet() error = %v", err)
+	}
+	if got := second.Current(); got != "ZZ" {
+		t.Fatalf("keySet().Current() = %q for founding key ZZ, want ZZ: the memo answered out of %q's substitution",
+			got, config.Key)
+	}
+	if second.Owns(writeTaskID) {
+		t.Fatalf("Owns(%q) = true for a project founded on ZZ, want false", writeTaskID)
+	}
+}
+
+// The oversize refusal reads as one sentence whichever backfills fired. The
+// single-backfill wording is the one this message has always had — a caller who
+// has seen it once must not have to re-read it — and two backfills compose into
+// one clause list about one project rather than two sentences stapled together.
+func TestBackfilledPackBudgetRefusalReadsAsOneSentence(t *testing.T) {
+	over := core.MaxConfigOperationsPerPack + 1
+	filler := func(prepended []core.ConfigOperation) []core.ConfigOperation {
+		operations := append([]core.ConfigOperation{}, prepended...)
+		for len(operations) < over {
+			operations = append(operations, core.ConfigOperation{Type: core.ConfigStatusRelabel})
+		}
+		return operations
+	}
+	priorityAdds := []core.ConfigOperation{
+		{Type: core.ConfigPriorityAdd}, {Type: core.ConfigPriorityAdd}, {Type: core.ConfigPriorityAdd},
+	}
+	keyAdd := []core.ConfigOperation{{Type: core.ConfigKeyAdd}}
+
+	for _, testCase := range []struct {
+		name      string
+		prepended []core.ConfigOperation
+		want      string
+	}{
+		{
+			name:      "the priority backfill alone",
+			prepended: priorityAdds,
+			want: "and this project's first priority change also records the 3 built-in priorities its existing " +
+				"tasks depend on; split it into several commands",
+		},
+		{
+			name:      "the key backfill alone",
+			prepended: keyAdd,
+			want: "and this project's first key change also records the key its existing task IDs carry; " +
+				"split it into several commands",
+		},
+		{
+			name:      "both backfills",
+			prepended: append(append([]core.ConfigOperation{}, keyAdd...), priorityAdds...),
+			want: "and this project's first priority change also records the 3 built-in priorities its existing " +
+				"tasks depend on and its first key change also records the key its existing task IDs carry; " +
+				"split it into several commands",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			operations := filler(testCase.prepended)
+			err := checkBackfilledPackBudget(operations, len(operations)-len(testCase.prepended))
+			if err == nil {
+				t.Fatal("checkBackfilledPackBudget() error = nil, want a refusal")
+			}
+			if got := core.CategoryOf(err); got != core.CategoryValidation {
+				t.Fatalf("category = %v, want %v", got, core.CategoryValidation)
+			}
+			prefix := fmt.Sprintf("a configuration write carries %d operations and must not exceed %d: %d were "+
+				"authored, ", len(operations), core.MaxConfigOperationsPerPack,
+				len(operations)-len(testCase.prepended))
+			if got, want := err.Error(), prefix+testCase.want; got != want {
+				t.Fatalf("error = %q,\n want %q", got, want)
+			}
+		})
+	}
+
+	// Nothing prepended and still over the ceiling is unreachable from the write
+	// path, which refuses that batch before composing a pack. It must not promise
+	// a backfill nobody made.
+	plain := filler(nil)
+	err := checkBackfilledPackBudget(plain, len(plain))
+	if err == nil {
+		t.Fatal("checkBackfilledPackBudget() error = nil, want a refusal")
+	}
+	want := fmt.Sprintf("a configuration write carries %d operations and must not exceed %d; "+
+		"split it into several commands", len(plain), core.MaxConfigOperationsPerPack)
+	if got := err.Error(); got != want {
+		t.Fatalf("error = %q,\n want %q", got, want)
+	}
+
+	// A pack exactly at the ceiling is not refused, so this is the same bound the
+	// reader's budget check uses rather than a new, lower one.
+	if err := checkBackfilledPackBudget(plain[:core.MaxConfigOperationsPerPack], 0); err != nil {
+		t.Fatalf("a pack exactly at the bound was refused: %v", err)
 	}
 }
