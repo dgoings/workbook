@@ -92,6 +92,22 @@ async function filesEqual (a, b) {
 }
 
 /**
+ * The installed copy's filename for a given platform.
+ *
+ * workbook.js's own BINARY is reused for the real host platform, so there is
+ * still exactly one place that spells "workbook.exe on win32, workbook
+ * elsewhere" for an actual run. A test simulating a different platform (this
+ * module's `platform` arguments exist entirely for that) needs the same
+ * formula without being able to change what `require('./workbook')` computed
+ * at load time from the real process.platform — hence recomputing it here
+ * for any platform other than the host's own.
+ */
+function binaryName (platform) {
+  if (platform === process.platform) return BINARY
+  return platform === 'win32' ? 'workbook.exe' : 'workbook'
+}
+
+/**
  * Copy `bundled` into `directory` if it is missing or different there.
  *
  * Callers are expected to have already confirmed `bundled` exists — install()
@@ -100,12 +116,11 @@ async function filesEqual (a, b) {
  *
  * @returns {Promise<{path: string, copied: boolean, reason: 'missing'|'differs'|'current'}>}
  */
-async function syncBinary ({ bundled, directory }) {
+async function syncBinary ({ bundled, directory, platform = process.platform }) {
   await fs.mkdir(directory, { recursive: true })
-  // Named BINARY rather than after whatever `bundled` is called, so this is
-  // the one place that decides what the installed copy is named — the same
-  // reason workbook.js exports BINARY instead of every caller inventing it.
-  const destination = path.join(directory, BINARY)
+  // Named by platform rather than after whatever `bundled` is called, so this
+  // is the one place that decides what the installed copy is named.
+  const destination = path.join(directory, binaryName(platform))
 
   let reason
   try {
@@ -218,9 +233,13 @@ function fishBlock (directory) {
  * Remove a previous marked block from `text`, in place of the lines it
  * occupied.
  *
- * Same shape as setup-dev-env.sh's awk: a begin marker with no matching end
- * (only possible from a hand-edited profile) swallows every line after it,
- * because there is no signal left to say where the block was meant to stop.
+ * setup-dev-env.sh's awk equivalent lets a begin marker with no matching end
+ * (only possible from a hand-edited or truncated profile) silently swallow
+ * every line after it — awk has no way to say "actually, stop." This function
+ * does: it throws instead, because destroying the rest of a user's shell
+ * profile without a word is worse than doing nothing. writeBlock() lets the
+ * error propagate, and install() catches it into `errors`; the file itself is
+ * never opened for writing in that case.
  */
 function stripBlock (text) {
   if (!text) return ''
@@ -230,6 +249,12 @@ function stripBlock (text) {
     if (line === MARK_BEGIN) skipping = true
     if (!skipping) kept.push(line)
     if (line === MARK_END) skipping = false
+  }
+  if (skipping) {
+    throw new Error(
+      `found '${MARK_BEGIN}' with no matching '${MARK_END}'; refusing to edit the file rather than ` +
+      'silently dropping everything after it'
+    )
   }
   return kept.join('\n')
 }
@@ -266,7 +291,11 @@ async function writeBlock (file, block) {
 
   await fs.mkdir(directory, { recursive: true })
   const temp = path.join(directory, `.workbook-profile.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`)
-  await fs.writeFile(temp, next)
+  // mode 0o600, the same as mktemp (which setup-dev-env.sh's write_path_block
+  // uses): the temp file briefly holds the whole profile, and a profile is
+  // exactly the kind of file people keep secrets in — it must not be
+  // world-readable even for the moment before its mode is fixed up below.
+  await fs.writeFile(temp, next, { mode: 0o600 })
   try {
     // copyFile rather than rename: a profile that already exists keeps its own
     // owner this way, exactly as setup-dev-env.sh's write_path_block ends with
@@ -423,6 +452,12 @@ async function install ({
     profiles: [],
     windows: null,
     changed: false,
+    // Distinct from `changed`: a copy alone can make `changed` true, but the
+    // launch notice tells the user their shell profile was edited, and that
+    // must only fire when a profile write or the Windows registry write
+    // actually reported changed:true — never merely because the binary was
+    // (re)copied.
+    pathChanged: false,
     errors: []
   }
 
@@ -444,7 +479,7 @@ async function install ({
   result.directory = directory
 
   try {
-    const sync = await syncBinary({ bundled, directory })
+    const sync = await syncBinary({ bundled, directory, platform })
     result.binary = sync.path
     result.copied = sync.copied
     result.reason = sync.reason
@@ -457,7 +492,10 @@ async function install ({
     try {
       const outcome = await updateWindowsPath({ directory, run })
       result.windows = outcome
-      if (outcome.changed) result.changed = true
+      if (outcome.changed) {
+        result.changed = true
+        result.pathChanged = true
+      }
     } catch (error) {
       result.errors.push(`updating the Windows PATH: ${error.message}`)
     }
@@ -469,7 +507,10 @@ async function install ({
       const block = target.syntax === 'fish' ? fishBlock(directory) : posixBlock(directory)
       const outcome = await writeBlock(target.file, block)
       result.profiles.push(outcome)
-      if (outcome.changed) result.changed = true
+      if (outcome.changed) {
+        result.changed = true
+        result.pathChanged = true
+      }
     } catch (error) {
       result.errors.push(`updating ${target.file}: ${error.message}`)
     }
@@ -486,6 +527,11 @@ module.exports = {
   writeBlock,
   profileTargets,
   updateWindowsPath,
+  // Exported so its own non-numeric-error branch (a launch failure like
+  // ENOENT, which carries a string error.code rather than an exit code) can
+  // be tested directly, against a command that does not exist — never `reg`
+  // or `setx` on this machine.
+  defaultRun,
   install,
   MARK_BEGIN,
   MARK_END

@@ -135,6 +135,18 @@ describe('syncBinary', () => {
     assert.ok(!entries.some((name) => name.endsWith('.tmp')), `left behind: ${entries}`)
   })
 
+  test('the installed copy is named for the given platform, not the real host', async () => {
+    const root = await tempDirectory('platform-name')
+    const bundled = path.join(root, 'bundled', 'workbook')
+    await fs.mkdir(path.dirname(bundled), { recursive: true })
+    await fs.writeFile(bundled, 'contents')
+    const directory = path.join(root, 'installed')
+
+    const result = await clipath.syncBinary({ bundled, directory, platform: 'win32' })
+
+    assert.equal(path.basename(result.path), 'workbook.exe')
+  })
+
   test('a bundled binary that does not exist is skipped by install(), with no directory created', async () => {
     const root = await tempDirectory('absent')
     const home = path.join(root, 'home')
@@ -306,6 +318,45 @@ describe('writeBlock', () => {
     assert.equal((await fs.stat(profile)).mode & 0o777, 0o600, 'mode after the second (no-op) write')
   })
 
+  test('the temp file that briefly holds the whole profile is created at mode 0600', async () => {
+    const root = await tempDirectory('write-temp-mode')
+    const profile = path.join(root, '.profile')
+    const block = clipath.posixBlock('/opt/workbench/bin')
+
+    // fs.copyFile is the step writeBlock uses to land the temp file's content
+    // onto the real profile; intercepting it here (the exact same
+    // node:fs/promises singleton clipath.js itself calls) is the only way to
+    // observe the temp file's mode before writeBlock unlinks it.
+    const originalCopyFile = fs.copyFile
+    let observedMode = null
+    fs.copyFile = async (source, destination) => {
+      observedMode = (await fs.stat(source)).mode & 0o777
+      return originalCopyFile(source, destination)
+    }
+    try {
+      await clipath.writeBlock(profile, block)
+    } finally {
+      fs.copyFile = originalCopyFile
+    }
+
+    assert.equal(observedMode, 0o600)
+  })
+
+  test('an unterminated block refuses the write rather than silently dropping the rest of the file', async () => {
+    const root = await tempDirectory('write-unterminated')
+    const profile = path.join(root, '.profile')
+    const original = [
+      '# kept',
+      clipath.MARK_BEGIN,
+      'export IMPORTANT=yes' // no matching MARK_END: a hand-edited or truncated profile
+    ].join('\n') + '\n'
+    await fs.writeFile(profile, original)
+
+    await assert.rejects(() => clipath.writeBlock(profile, clipath.posixBlock('/opt/workbench/bin')))
+
+    assert.equal(await fs.readFile(profile, 'utf8'), original, 'the file must be byte-identical afterward')
+  })
+
   test('lines above and below the block are untouched, including another tool\'s block', async () => {
     const root = await tempDirectory('write-surrounding')
     const profile = path.join(root, '.profile')
@@ -389,6 +440,19 @@ describe('profileTargets', () => {
   test('win32 has no profile targets', () => {
     const targets = clipath.profileTargets({ platform: 'win32', env: {}, home: '/fake/home', exists: () => true })
     assert.deepEqual(targets, [])
+  })
+})
+
+describe('defaultRun', () => {
+  test('a command that cannot be launched reports a generic non-zero code, not a crash', async () => {
+    // execFile's spawn-time error carries a string error.code (ENOENT), not a
+    // process exit code — defaultRun's fallback-to-1 branch is what turns
+    // that into the same {code, stdout, stderr} shape every caller expects.
+    // Never `reg` or `setx`: this binary does not exist anywhere on PATH.
+    const result = await clipath.defaultRun('workbench-clipath-test-nonexistent-command', ['--version'])
+
+    assert.equal(result.code, 1)
+    assert.equal(result.stdout, '')
   })
 })
 
@@ -496,14 +560,21 @@ describe('install (orchestrator)', () => {
     assert.equal(result.copied, true)
     assert.equal(result.reason, 'missing')
     assert.equal(result.changed, true)
+    assert.equal(result.pathChanged, true, 'a profile actually changed, so the notice may fire')
     assert.ok(result.profiles.length > 0)
     assert.ok(result.profiles.some((profile) => profile.changed))
     assert.deepEqual(result.errors, [])
   })
 
-  test('a second run against the same home does nothing further', async () => {
+  test('a second run against the same home does nothing further, down to the bytes on disk', async () => {
     const { home, bundled } = await scenario('second-run')
-    await clipath.install({ platform: 'darwin', env: {}, home, bundled })
+    const first = await clipath.install({ platform: 'darwin', env: {}, home, bundled })
+    const binaryBefore = { stat: await fs.stat(first.binary), bytes: await fs.readFile(first.binary) }
+    const profilesBefore = await Promise.all(first.profiles.map(async (profile) => ({
+      file: profile.file,
+      stat: await fs.stat(profile.file),
+      bytes: await fs.readFile(profile.file)
+    })))
 
     const result = await clipath.install({ platform: 'darwin', env: {}, home, bundled })
 
@@ -511,6 +582,51 @@ describe('install (orchestrator)', () => {
     assert.equal(result.reason, 'current')
     assert.ok(result.profiles.every((profile) => profile.changed === false))
     assert.equal(result.changed, false)
+    assert.equal(result.pathChanged, false)
+    assert.deepEqual(result.errors, [])
+
+    const binaryAfter = { stat: await fs.stat(result.binary), bytes: await fs.readFile(result.binary) }
+    assert.equal(binaryAfter.stat.mtimeMs, binaryBefore.stat.mtimeMs, 'binary mtime untouched')
+    assert.deepEqual(binaryAfter.bytes, binaryBefore.bytes, 'binary bytes untouched')
+
+    for (const before of profilesBefore) {
+      const statAfter = await fs.stat(before.file)
+      const bytesAfter = await fs.readFile(before.file)
+      assert.equal(statAfter.mtimeMs, before.stat.mtimeMs, `${before.file} mtime untouched`)
+      assert.deepEqual(bytesAfter, before.bytes, `${before.file} bytes untouched`)
+    }
+  })
+
+  test('pathChanged stays false when only the binary copied and the Windows PATH write failed', async () => {
+    // Proves the split: copying the CLI alone must never tell the user their
+    // PATH was edited when it was not.
+    const { home, bundled } = await scenario('win32-copy-only')
+    const run = async (file, args) => {
+      if (args[0] === 'query') return { code: 1, stdout: '', stderr: '' } // no existing value
+      return { code: 1, stdout: '', stderr: 'access denied' } // reg add fails
+    }
+
+    const result = await clipath.install({ platform: 'win32', env: {}, home, bundled, run })
+
+    assert.equal(result.copied, true)
+    assert.equal(path.basename(result.binary), 'workbook.exe')
+    assert.equal(result.windows, null, 'updateWindowsPath threw, so no outcome was ever recorded')
+    assert.equal(result.changed, true, 'the launch still did something: it copied the CLI')
+    assert.equal(result.pathChanged, false, 'no PATH was actually written')
+    assert.ok(result.errors.some((message) => message.includes('Windows PATH')))
+  })
+
+  test('pathChanged is true when the Windows registry write actually succeeds', async () => {
+    const { home, bundled } = await scenario('win32-path-changed')
+    const run = async (file, args) => {
+      if (args[0] === 'query') return { code: 1, stdout: '', stderr: '' }
+      return { code: 0, stdout: '', stderr: '' } // reg add succeeds
+    }
+
+    const result = await clipath.install({ platform: 'win32', env: {}, home, bundled, run })
+
+    assert.equal(result.windows.changed, true)
+    assert.equal(result.pathChanged, true)
     assert.deepEqual(result.errors, [])
   })
 
