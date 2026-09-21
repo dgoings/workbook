@@ -292,6 +292,8 @@
     .admin-statuses { display: grid; gap: .4rem; margin: 0; padding: 0; list-style: none; }
     .admin-status { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .45rem .75rem; padding: .6rem .7rem; border: 1px solid var(--wb-hairline); border-radius: 4px; background: var(--wb-surface); cursor: grab; }
     .admin-status:active { cursor: grabbing; }
+    /* A key row is not draggable — a key has no rank, so there is no order a drag here could ask for — and it must not offer the grab cursor its status and priority siblings earn. draggable is a reflected attribute, so the selector tracks the property the client sets, exactly as .task-card[draggable="false"] does for the stand-in card a create has not placed yet. */
+    .admin-status[draggable="false"], .admin-status[draggable="false"]:active { cursor: default; }
     .admin-status[data-dragging="true"] { opacity: .5; }
     .admin-status[data-drop-target="true"] { border-color: var(--wb-primary); box-shadow: inset 0 0 0 1px var(--wb-primary); }
     .admin-status__name { display: flex; flex-wrap: wrap; align-items: baseline; gap: .45rem; min-width: 0; font-size: .9rem; font-weight: 750; }
@@ -8724,12 +8726,16 @@
           () => "Reactivated " + entry.key + ". It can mint new tasks again once it is made current.",
           keyChanges);
       }
-      function keyRow(entry, entries) {
+      function keyRow(entry) {
         const item = document.createElement("li");
         item.className = "admin-status";
         item.dataset.vocabularyKey = entry.key;
-        // Not draggable, where a status row and a priority row both are: there
-        // is no order here for a drag to ask for.
+        // Said rather than merely left unset, where a status row and a priority
+        // row are both draggable: there is no order here for a drag to ask for,
+        // and the shared row class carries the grab cursor those two earn. The
+        // stylesheet takes the cursor back off the attribute this writes, the way
+        // it does for the stand-in card a create has not placed yet.
+        item.draggable = false;
         const name = document.createElement("div");
         name.className = "admin-status__name";
         // A key has no label beside its token, because the key IS the name: it
@@ -8757,27 +8763,18 @@
         const controls = document.createElement("div");
         controls.className = "admin-status__controls";
         const active = entry.state !== "retired";
-        const activeCount = entries.filter((candidate) => candidate.state !== "retired").length;
+        // A row offers what its key can undergo and nothing else. The current
+        // key offers neither: there is no operation that stops a key minting
+        // without handing the minting to another, and retiring it would leave a
+        // new task nowhere to go. What a project down to one key needs to read
+        // is not a disabled control on the row — the current key is always
+        // active, so "this is the only active key" can never be the reason a row
+        // withholds one — it is the sentence renderKeyPanel draws under the list.
         if (active && !entry.current) {
           controls.append(panelButton("Make current", "Mint new tasks under " + entry.key,
             () => makeKeyCurrent(entry), { controls: keyControls }));
-          // Retire is blocked when this is the only key that can mint, and says
-          // why in a title rather than being withheld: a reader looking for the
-          // control finds it saying what stands in its way, as the only-priority
-          // removal does.
-          //
-          // The current key is always active, so a non-current active key means
-          // there is a second one and this cannot be reached from a document
-          // core produced. It is rendered rather than assumed, because the
-          // server refusing it in one sentence and the page assuming it cannot
-          // happen is exactly the pair that leaves a reader pressing a control
-          // that fails.
-          const retire = panelButton("Retire", "Stop minting new tasks under " + entry.key,
-            () => retireKey(entry), { blocked: activeCount <= 1, controls: keyControls });
-          if (activeCount <= 1) {
-            retire.title = "This is this project's only active key, and a project must keep one to mint new tasks under.";
-          }
-          controls.append(retire);
+          controls.append(panelButton("Retire", "Stop minting new tasks under " + entry.key,
+            () => retireKey(entry), { controls: keyControls }));
         }
         if (!active) {
           controls.append(panelButton("Reactivate", "Let " + entry.key + " mint new tasks again",
@@ -8871,8 +8868,29 @@
         const list = document.createElement("ul");
         list.className = "admin-statuses";
         list.setAttribute("role", "list");
-        entries.forEach((entry) => list.append(keyRow(entry, entries)));
-        keyPanelBody.replaceChildren(list, addKeyForm());
+        entries.forEach((entry) => list.append(keyRow(entry)));
+        // The one row that offers nothing, explained where the reader is looking.
+        //
+        // A project that has never added a key has one key, it is current, and a
+        // current key has no change to offer — so the list is a single row with
+        // an empty control column, which reads as a section that is somehow
+        // unavailable. This says what is actually true and what to do about it,
+        // the way the only-priority removal says there is nowhere for its tasks
+        // to go. It is drawn between the list and the form it points at.
+        //
+        // Exactly one key, rather than one active key: a project whose second key
+        // is retired can reactivate it from the row above, so it has the move
+        // this sentence is about.
+        const parts = [list];
+        if (entries.length === 1) {
+          const note = document.createElement("p");
+          note.className = "admin-note";
+          note.dataset.keyPanelOnlyKey = "";
+          text(note, "This is the only key this project has, so every new task is minted under it. " +
+            "Add another key below to move the minting, or to retire this one.");
+          parts.push(note);
+        }
+        keyPanelBody.replaceChildren(...parts, addKeyForm());
         applyKeyBusy();
         restoreKeyFocus(inside);
       }

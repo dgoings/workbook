@@ -4446,9 +4446,11 @@ const boardDefaultPriority = ` + strconv.Quote(string(core.PriorityVocabulary{}.
 // add order with its state and whether new tasks are minted under it, and the
 // current key beside them. It is written by the encoder the page itself uses, so
 // the harness cannot drift from the wire format, and it answers for a board
-// built without a key resolver — no keys at all, no current key — because that
-// is what such a board renders and what every test that is not about keys
-// wants. A test that is about them overrides both attributes after this harness.
+// built without a key resolver: no keys at all and no current key, which is what
+// such a board renders. That is what every test that is not about keys wants —
+// with no keys published the create form offers no chooser and sends no key,
+// which is the form and the request they have always asserted against. A test
+// that is about keys overrides both attributes after this harness.
 const boardKeys = ` + strconv.Quote(pageKeys(core.KeySet{})) + `;
 const boardCurrentKey = ` + strconv.Quote(core.KeySet{}.Current()) + `;
 const boardVocabularyHead = ` + strconv.Quote(vocabularyHead) + `;

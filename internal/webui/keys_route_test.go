@@ -248,7 +248,13 @@ func TestHandlerConfigCarriesTheKeysSectionOnlyWhenItCanChangeThem(t *testing.T)
 		if !expected.carried {
 			continue
 		}
+		// The section's own opening tag, not the whole document: `hidden`,
+		// `tabindex="-1"` and `role="group"` are all words this page carries
+		// elsewhere, so an assertion against the body could not fail.
+		section := elementTag(t, body, "data-key-panel ")
 		for _, attribute := range []string{
+			`<div`,
+			`class="admin"`,
 			// Shipped hidden and outside main, like its three siblings: the
 			// render for the route is what mounts it.
 			`hidden`,
@@ -257,11 +263,19 @@ func TestHandlerConfigCarriesTheKeysSectionOnlyWhenItCanChangeThem(t *testing.T)
 			`tabindex="-1"`,
 			`role="group"`,
 			`aria-labelledby="keys-title"`,
-			`data-key-panel-status`,
-			`data-key-panel-body`,
 		} {
-			if !strings.Contains(body, attribute) {
-				t.Errorf("%s: the keys section does not carry %q", name, attribute)
+			if !strings.Contains(section, attribute) {
+				t.Errorf("%s: the keys section %q does not carry %q", name, section, attribute)
+			}
+		}
+		if at := strings.Index(body, "</main>"); at < 0 || at > strings.Index(body, "data-key-panel ") {
+			t.Errorf("%s: the keys section is rendered inside main, which the board occupies", name)
+		}
+		// The live region and the list mount inside it are the client's, drawn
+		// from what the server answers rather than from the served markup.
+		for _, mount := range []string{`data-key-panel-status`, `data-key-panel-body`} {
+			if !strings.Contains(body, mount) {
+				t.Errorf("%s: the keys section drew no %s", name, mount)
 			}
 		}
 	}
@@ -328,8 +342,69 @@ func TestClientKeysSectionListsEveryKeyWithItsState(t *testing.T) {
       throw new Error("the keys section offers a " + absent + " control; a key has no rank and is never renamed or deleted");
     }
   }
+  // Said, not merely absent. The shared row class carries the grab cursor its
+  // status and priority siblings earn, and the stylesheet takes it back off the
+  // reflected attribute — so a row that left draggable unset would promise a
+  // drag it does not have.
   const row = keyPanelRow("SPARE");
-  if (row.draggable) throw new Error("a key row is draggable; add order is history, not an arrangement");
+  if (row.draggable !== false) {
+    throw new Error("a key row's draggable = " + JSON.stringify(row.draggable) +
+      ", want false; add order is history, not an arrangement");
+  }
+`)
+}
+
+// A project that has never added a key has one key, it is current, and a current
+// key has nothing to offer — so the row's control column is empty. Left at that
+// the section reads as unavailable, so it says what is true and what to do about
+// it, the way the only-priority removal says there is nowhere for its tasks to
+// go.
+//
+// The sentence is the answer to the case a reader actually reaches. A disabled
+// Retire saying "this is the only active key" is not: the current key is always
+// active, so a row that offers Retire at all is a row on a project that has a
+// second active key.
+func TestClientKeysSectionSaysWhenThereIsOnlyOneKey(t *testing.T) {
+	runKeyPanelClient(t, "a project with one key", "/", oneKeyProject(), nil, `
+  vocabularyRead = `+keyPanelVocabularyJSON(t, oneKeyProject(), "head-1")+`;
+  await openStatuses();
+  if (panelKeys().join(",") !== "WB") {
+    throw new Error("the section listed " + JSON.stringify(panelKeys()) + ", want the project's one key");
+  }
+  if (keyRowControls("WB").length !== 0) {
+    throw new Error("the only key offered " + JSON.stringify(keyRowControls("WB")) + ", want nothing");
+  }
+  const note = findElement(keyPanelBody, (element) => hasDataKey(element, "keyPanelOnlyKey"));
+  if (!note) throw new Error("a project with one key is shown an empty row and no explanation");
+  if (note.tagName !== "P" || !hasClassToken(note, "admin-note")) {
+    throw new Error("the sentence is not drawn as the section's own note");
+  }
+  for (const said of ["only key this project has", "minted under it", "Add another key"]) {
+    if (!note.textContent.includes(said)) {
+      throw new Error("the note says " + JSON.stringify(note.textContent) + ", which does not mention " + said);
+    }
+  }
+  // It stands between the list it explains and the form it points at.
+  const list = findElement(keyPanelBody, (element) => element.tagName === "UL");
+  const region = keyAdd().parentElement;
+  const order = keyPanelBody.children;
+  if (order.indexOf(note) < order.indexOf(list) || order.indexOf(note) > order.indexOf(region)) {
+    throw new Error("the note is not between the list and the add form");
+  }
+`)
+}
+
+// And a project with more than one key is shown no such sentence: it has the
+// move the sentence is about. A project whose second key is retired has it too,
+// through the Reactivate on that row, which is why the sentence asks how many
+// keys there are rather than how many can mint.
+func TestClientKeysSectionSaysNothingOfTheSortWithSeveralKeys(t *testing.T) {
+	runKeyPanelClient(t, "a project with several keys", "/", projectKeys(t), nil, `
+  vocabularyRead = `+keyPanelVocabularyJSON(t, projectKeys(t), "head-1")+`;
+  await openStatuses();
+  if (findElement(keyPanelBody, (element) => hasDataKey(element, "keyPanelOnlyKey"))) {
+    throw new Error("a project with three keys was told it has only one");
+  }
 `)
 }
 
@@ -505,6 +580,22 @@ func TestClientKeysSectionAddsAKeyAndCanMakeItCurrent(t *testing.T) {
 `)
 }
 
+// The other half of that: the rule that takes the grab cursor back off a row
+// which says it is not draggable. It is asserted against the served stylesheet
+// because a fake DOM has no layout engine to read a cursor with, exactly as the
+// form layout rules are.
+func TestHandlerKeyRowsOfferNoDragCursor(t *testing.T) {
+	response := request(t, keysAdministrableHandler(t, handlerVocabulary(t), projectKeys(t), "head-1", nil),
+		http.MethodGet, "/config")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /config status = %d, want %d", response.Code, http.StatusOK)
+	}
+	const rule = `.admin-status[draggable="false"], .admin-status[draggable="false"]:active { cursor: default; }`
+	if !strings.Contains(response.Body.String(), rule) {
+		t.Errorf("the stylesheet does not carry %q, so a key row draws the grab cursor its class carries", rule)
+	}
+}
+
 // A refusal is quoted exactly as the command would have printed it, in this
 // section's own live region — which is where the statuses' refusals go, and why
 // each section has one: a refused key change must not blank a label somebody is
@@ -545,7 +636,7 @@ func TestClientKeysSectionQuotesARefusalItDidNotMake(t *testing.T) {
 // is no chooser at all — and the create sends no key, which is what every client
 // predating several keys sends and what the server reads as the current one.
 func TestClientNewTaskFormOffersNoKeyChooserForAProjectWithOneKey(t *testing.T) {
-	task := clientPlacementTask("WB-01J0000000000000000000FF01", "Neighbour task", core.StatusReady, core.PriorityMedium)
+	task := clientPlacementTask("WB-01J0000000000000000000FF01", "Neighbor task", core.StatusReady, core.PriorityMedium)
 	runKeyPanelClient(t, "a one-key project's create form", "/tasks/new", oneKeyProject(), []core.Task{task}, `
   await settle();
   const form = findElement(main, (element) => element.tagName === "FORM");
@@ -574,7 +665,7 @@ func TestClientNewTaskFormOffersNoKeyChooserForAProjectWithOneKey(t *testing.T) 
 // Retired keys are not offered. A retired key mints nothing, so listing it would
 // be offering a choice the service refuses in core's own words.
 func TestClientNewTaskFormChoosesAKeyAndSendsItOnCreate(t *testing.T) {
-	task := clientPlacementTask("WB-01J0000000000000000000FF01", "Neighbour task", core.StatusReady, core.PriorityMedium)
+	task := clientPlacementTask("WB-01J0000000000000000000FF01", "Neighbor task", core.StatusReady, core.PriorityMedium)
 	runKeyPanelClient(t, "choosing a key on create", "/tasks/new", projectKeys(t), []core.Task{task}, `
   await settle();
   const form = findElement(main, (element) => element.tagName === "FORM");
@@ -608,7 +699,7 @@ func TestClientNewTaskFormChoosesAKeyAndSendsItOnCreate(t *testing.T) {
 // The chooser left standing at the current key sends nothing, so a project with
 // several keys still sends the create every older client sends.
 func TestClientNewTaskFormSendsNoKeyWhenTheReaderTookTheDefault(t *testing.T) {
-	task := clientPlacementTask("WB-01J0000000000000000000FF01", "Neighbour task", core.StatusReady, core.PriorityMedium)
+	task := clientPlacementTask("WB-01J0000000000000000000FF01", "Neighbor task", core.StatusReady, core.PriorityMedium)
 	runKeyPanelClient(t, "creating under the current key", "/tasks/new", projectKeys(t), []core.Task{task}, `
   await settle();
   const form = findElement(main, (element) => element.tagName === "FORM");
@@ -649,7 +740,7 @@ func TestClientNewTaskChooserReadsTheKeysThePageLastHeardAbout(t *testing.T) {
 		}
 		return keys
 	}
-	task := clientPlacementTask("WB-01J0000000000000000000FF01", "Neighbour task", core.StatusReady, core.PriorityMedium)
+	task := clientPlacementTask("WB-01J0000000000000000000FF01", "Neighbor task", core.StatusReady, core.PriorityMedium)
 	runKeyPanelClient(t, "a key added while the page was open", "/", projectKeys(t), []core.Task{task}, `
   vocabularyRead = `+keyPanelVocabularyJSON(t, projectKeys(t), "head-1")+`;
   await openStatuses();
